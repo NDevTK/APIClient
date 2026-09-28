@@ -298,10 +298,16 @@ lxb_dom_node_t *block_flow_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t 
    box's closing edge, under "the border would be drawn around C1 (open at the end of the line) and C2 (open at
    the start of the line)". There is no node at that position, so only the break can name it. Naming the break
    also names the OPEN ANCESTORS the run inherits, whose opening edges belong to an earlier box.
-   A SIBLING RANGE IS THE DEGENERATE CASE AND NEEDS NO SECOND SHAPE: `{ first->prev, end }` is exactly the
-   half-open sibling range `[first, end)` whenever `first` is a child of the container, because this pair is
-   read as `after`'s next sibling inside `after`'s parent. css-flexbox-1 §4 "Flex Items"' child text
-   sequence is delimited that way and is expressed like that at its own call site. */
+   A SIBLING RANGE IS THE DEGENERATE CASE AND NEEDS NO SECOND SHAPE: `{ first->prev, end }` is the half-open
+   range `[first, end)` whenever `first` is a member of the container's own box-tree child sequence, because
+   this pair is read as `after`'s next BOX-TREE sibling inside `after`'s BOX parent. css-flexbox-1 §4 "Flex
+   Items"' child text sequence is delimited that way and is expressed like that at its own call site.
+   THAT SENTENCE READ `next sibling inside after's parent` AND IS REWRITTEN RATHER THAN DELETED, because the
+   DOM reading is the one a caller composing `first->prev` re-derives and the two agree for every tree
+   css-display-3 §2.5 "Box Generation: the none and contents keywords" has not spliced. Where it has, `->prev`
+   names a node in a different box's sequence and the composed range is a range in no box's content: a caller
+   delimiting one that way must take the member BEFORE `first` in the sequence core/layout/box_tree.h answers,
+   which is why that composition belongs at a site that can state which box it is enumerating. */
 typedef struct {
     lxb_dom_node_t *after;   /* the in-flow block-level box this run FOLLOWS; NULL is the start of the content */
     lxb_dom_node_t *end;     /* the one it ENDS BEFORE; NULL is the end of the content */
@@ -327,18 +333,32 @@ typedef struct {
    2.1 §E.2's step 7.2.1 already asserts agreement between, so a fifth reading of where a run starts was a way
    for that assert to fire about a document rather than about a defect. The DCHECK two of them carried about
    `after`'s parent is here for the same reason — it was one precondition stated twice.
-   NOT COVERED: this answers where a run BEGINS and each walk still STEPS through it with `->next`, so §2.5's
-   splice is unbuilt at those walks. WHAT THE NEXT DIFF BUILDS: the run's own step, over
-   core/layout/box_tree.h's spliced child sequence, so the position after `at` is a position in the box tree
-   rather than a DOM sibling. HOW ITS ABSENCE WOULD SHOW: a `contents` element among a block container's
-   content reaches one of those walks' own `display: contents` aborts, each of which names box_tree.h as the
-   sequence it is owed, instead of being enumerated. */
+   THIS PAIR USED TO CARRY A RESIDUAL SAYING EACH WALK STILL STEPPED THROUGH THE RUN WITH `->next`, AND IT IS
+   REWRITTEN RATHER THAN DELETED because the reading it warned against is the one a reader re-derives from the
+   struct: `at` looks like a node whose successor is `at->next`, and it is not. The step is the ENTRY BELOW and
+   the position it answers is a position in core/layout/box_tree.h's spliced sequence. */
 typedef struct {
     lxb_dom_node_t *at;       /* the run's first content position; NULL where the run holds no node at all */
     lxb_dom_element_t *open;  /* the box whose fragment it continues — the container where it follows no break */
 } BlockFlowRunStart;
 
 BlockFlowRunStart block_flow_run_start(lxb_dom_element_t *el, BlockFlowRun run);
+
+/* THE NEXT POSITION IN THE RUN AFTER `at`, INSIDE THE FRAGMENT `open` — NULL at the end of that fragment's own
+   content, which is where a walk over a run STEPS OUT of `open` and continues after it in ITS box parent.
+   IT IS THE SECOND HALF OF THE PAIR ABOVE AND EXISTS FOR THE SAME REASON: css-display-3 §2.5 "Box Generation:
+   the none and contents keywords" makes "the element … be treated as if it had been replaced in the element
+   tree by its contents", so the position after a node inside a `contents` element is OUTSIDE that element and
+   `at->next` is a position in no box's content. Four walks step one run — the FILL, the two MEASUREMENTS and
+   the PAINT — and a step spelled at each of them is four places §2.5 has to be taught and four chances for two
+   of them to disagree about what one box's content holds, which is the very set CSS 2.1 §E.2's step 7.2.1
+   already asserts agreement between.
+   IT IS A NAMED ENTRY AND NOT A DIRECT CALL TO `box_tree_next_sibling` AT EACH WALK BECAUSE THE PRECONDITION
+   IS THE RUN'S AND NOT THE BOX TREE'S: `open` is the fragment the run is currently inside, which the pair
+   above answers and which a walk may not compose, and stepping the CONTAINER's sequence from a position inside
+   an inline box is exactly the half-converted shape core/layout/box_tree.h refuses by name.
+   `open` MUST GENERATE A BOX and `at` MUST BE A POSITION IN ITS CONTENT; both are asserted there. */
+lxb_dom_node_t *block_flow_run_next(lxb_dom_element_t *open, lxb_dom_node_t *at);
 
 /* §9.2.1.1's PRECONDITION about ONE CHILD: is it an INLINE BOX that the section BREAKS — "when an inline box
    contains an in-flow block-level box, the inline box (and its inline ancestors within the same line box) is

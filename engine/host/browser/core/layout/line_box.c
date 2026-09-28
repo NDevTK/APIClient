@@ -13,6 +13,7 @@
 #include "core/css/css_length.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/box_tree.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/line_box.h"
 #include "core/layout/phrasing_break.h"
@@ -805,9 +806,13 @@ static void lb_child(LbRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
 
 static void lb_walk(LbRun *r, lxb_dom_element_t *el)
 {
-    lxb_dom_node_t *n = lxb_dom_interface_node(el), *c;
+    lxb_dom_node_t *c;
 
-    for (c = n->first_child; c != NULL && !r->past_end; c = c->next) lb_child(r, el, c);
+    /* THE INLINE BOX'S BOX-TREE CHILDREN — css-display-3 §2.5 "Box Generation: the none and contents
+       keywords" puts a `contents` child's own children in THIS box's content, and core/layout/box_tree.h's
+       sequence never yields the `contents` element itself, so `lb_child` has no arm to learn. */
+    for (c = box_tree_first_child(el); c != NULL && !r->past_end; c = box_tree_next_sibling(el, c))
+        lb_child(r, el, c);
 }
 
 /* ---- §10.8 OVER ONE OF THE FILL'S LINE BOXES -------------------------------------------------------------
@@ -989,7 +994,9 @@ static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun 
     for (;;) {
         lxb_dom_node_t *c, *box;
 
-        for (c = at; c != NULL && !r.past_end; c = c->next) lb_child(&r, open, c);
+        lxb_dom_element_t *up;
+
+        for (c = at; c != NULL && !r.past_end; c = block_flow_run_next(open, c)) lb_child(&r, open, c);
         if (r.past_end) break;
         box = lxb_dom_interface_node(open);
         if (box == root) break;
@@ -997,12 +1004,16 @@ static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun 
            "C2 (open at the start of the line)" is open at the START and closed at the end. The step out is to
            the ancestor's NEXT SIBLING and never to the ancestor, which would re-fill the fragment just closed. */
         text_run_measure_add_box_edge(m, open, used_inline_box_edge_px(open, true));
-        DCHECK(box->parent != NULL && box->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
-               "CSS 2.2 §9.2.1.1's run was inside a box whose parent is not an element, so the fill cannot "
-               "leave it — the ancestors of every position in a container's content are inline boxes up to the "
-               "container itself, and this chain does not reach it");
-        at = box->next;
-        open = lxb_dom_interface_element(box->parent);
+        /* THE STEP OUT IS OVER THE BOX TREE IN BOTH HALVES, exactly as the two MEASUREMENTS of this same run
+           step out: css-display-3 §2.5's splice makes a `contents` element between this fragment and its box
+           parent no box to leave into, and the position after this box a position outside every such element. */
+        up = box_tree_parent(box);
+        DCHECK(up != NULL,
+               "CSS 2.2 §9.2.1.1's run was inside a box with no BOX parent, so the fill cannot leave it — the "
+               "box ancestors of every position in a container's content are inline boxes up to the container "
+               "itself, and this chain does not reach it");
+        at = box_tree_next_sibling(up, box);
+        open = up;
     }
     DCHECK(run.end == NULL || r.past_end,
            "the run handed to CSS 2.2 §9.4.2's inline formatting context ran off the end of the container's "
@@ -1705,10 +1716,21 @@ static const char *lb_el_display(lxb_dom_element_t *el)
    projects one back onto the child list, which is the level the lookup below is stated over. */
 static lxb_dom_node_t *lb_container_child_of(lxb_dom_element_t *container, lxb_dom_node_t *n)
 {
-    lxb_dom_node_t *root = lxb_dom_interface_node(container);
+    /* THE MEMBER OF `container`'s BOX-TREE CHILD SEQUENCE THAT `n` IS INSIDE, which is not the DOM child
+       wherever css-display-3 §2.5 "Box Generation: the none and contents keywords"' splice has run: a
+       `contents` element is not a member of anybody's sequence, so projecting onto it would name a node no
+       box list contains and the range comparison below would order it against members it is not among. */
+    /* THE ASCENT IS BOX PARENT TO BOX PARENT AND NEVER `->parent`, which is not a refinement but a
+       precondition: `box_tree_parent` refuses a node that generates no box, so a DOM step would land ON a
+       `contents` element and ask the next question of a node this component has no answer for. Stepping to the
+       box parent keeps every position in the chain a box, which is also what makes the result a member of
+       `container`'s sequence rather than merely a descendant of it. */
+    while (n != NULL) {
+        lxb_dom_element_t *p = box_tree_parent(n);
 
-    for (; n != NULL && n->parent != root; n = n->parent)
-        ;
+        if (p == container) break;
+        n = p == NULL ? NULL : lxb_dom_interface_node(p);
+    }
     DCHECK(n != NULL,
            "CSS 2.2 §9.2.1.1's run is bounded by a node that is not a descendant of the container whose box "
            "list it came from, so the two came from different trees");
@@ -1753,8 +1775,11 @@ static bool lb_run_holds_child(lxb_dom_element_t *container, BlockFlowRun run, l
     if (run.after != NULL) {
         a = lb_container_child_of(container, run.after);
         if (a != child) {
-            /* `child` must be STRICTLY AFTER the projected bound, which `after`'s exclusivity is. */
-            for (c = a->next; c != NULL && c != child; c = c->next)
+            /* `child` must be STRICTLY AFTER the projected bound, which `after`'s exclusivity is. The scan is
+               over the CONTAINER's box-tree sequence, which both operands are members of by the projection
+               above — a `->next` scan would step onto a `contents` element and out of the list entirely. */
+            for (c = box_tree_next_sibling(container, a); c != NULL && c != child;
+                 c = box_tree_next_sibling(container, c))
                 ;
             if (c == NULL) return false;
         }
@@ -1763,7 +1788,7 @@ static bool lb_run_holds_child(lxb_dom_element_t *container, BlockFlowRun run, l
         e = lb_container_child_of(container, run.end);
         if (e != child) {
             /* … and STRICTLY BEFORE the other one, which `end`'s exclusivity is. */
-            for (c = child; c != NULL && c != e; c = c->next)
+            for (c = child; c != NULL && c != e; c = box_tree_next_sibling(container, c))
                 ;
             if (c == NULL) return false;
         }
@@ -1879,11 +1904,21 @@ static LbContext lb_establishing_context(lxb_dom_element_t *el)
     ctx.style = NULL;
     ctx.box = NULL;
     ctx.n = 0;
-    for (a = child->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; child = a, a = a->parent) {
+    /* THE TWO ANCESTORS THIS WALK STEPS OVER ARE NOT STEPPED OVER THE SAME WAY, AND THE DIFFERENCE IS WHICH
+       NODE ENDS UP NAMED AS THE CONTAINER'S CHILD. An `inline` ancestor GENERATES A BOX, so it is itself a
+       member of the container's box list and becomes the child the lookup below is keyed on. A `contents`
+       ancestor generates NONE — css-display-3 §2.5 "Box Generation: the none and contents keywords" replaces
+       it by its contents — so the member of the container's list is whatever was already in `child`, and
+       advancing past it would key the lookup on a node that is in NO box's child sequence. The advance is
+       therefore conditional and no longer in the increment clause; `lb_run_holds_child` states the same
+       sequence on the other side and refuses such a node by name rather than ordering it against members it
+       is not among. */
+    for (a = child->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
         lxb_dom_element_t *anc = lxb_dom_interface_element(a);
         char *d = lb_computed(anc, "display");
         bool container = block_flow_display_is_block_container(d);
-        bool step_over = strcmp(d, "inline") == 0 || strcmp(d, "contents") == 0;
+        bool inline_box = strcmp(d, "inline") == 0;
+        bool step_over = inline_box || strcmp(d, "contents") == 0;
 
         /* THE CRASH BELOW READS `d`, SO THE FREE MOVES UNDER IT AND STAYS A SINGLE ONE. The condition gains
            `!container` and says the same thing it did: the `container` arm returns out of this function, so
@@ -1930,6 +1965,7 @@ static LbContext lb_establishing_context(lxb_dom_element_t *el)
             lb_anon_run(anc, child, &ctx);
             return ctx;
         }
+        if (inline_box) child = a;
     }
     /* THE ONE ABORT ON THIS WALK WHOSE REMEDY'S OBJECT IS THE CALLER AND NOT THE BOX, which is why it names the
        element's own connectedness rather than a `display`: the fix is that some entry asked for a position

@@ -12,6 +12,7 @@
 #include "core/css/css_length.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/box_tree.h"
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_intrinsic_size.h"
 #include "core/layout/flex_item.h"
@@ -481,14 +482,20 @@ static BlockFlowChildKind bf_element_child(lxb_dom_element_t *el)
               "child's children spliced into this list at its position. THE SPLICE IS BUILT — "
               "core/layout/box_tree.h is §2.5's \"the element must be treated as if it had been replaced in "
               "the element tree by its contents\" as a child sequence — so what is owed here is ROUTING this "
-              "walk to it and NOT a second copy of the rule. ROUTING IT ALONE IS NOT ENOUGH AND THAT IS THIS "
-              "FILE's OWN COUPLING: the five walks over a container's content share this classification and "
-              "`bf_content_next`, and `block_flow_run_generates_box` reads a `BlockFlowRun`'s bounds as "
-              "SIBLINGS of the container — it answers TRUE for a bound whose parent is not the container, on "
-              "the ground that such a bound is a FRAGMENT of an inline box §9.2.1.1 broke, which a SPLICED "
-              "bound is not. So converting the iterator without the run type would put a spurious anonymous "
-              "block box on §9.4.1's stack for every run bounded inside a `contents` child, which is a "
-              "plausible box tree and not a crash. The run type and these walks are ONE landing");
+              "walk to it and NOT a second copy of the rule. "
+              "THIS FILE'S OWN WALKS ARE ROUTED, WHICH IS WHY REACHING THIS LINE NOW MEANS A CALLER OUTSIDE "
+              "THEM: `bf_content_next`, `bf_content_kind`, `bf_inline_box_breaks`, the run's start and step "
+              "and `block_flow_run_generates_box` all take that sequence, so nothing this file enumerates can "
+              "hand this classification a `contents` element any more. A caller that still composes a child "
+              "list with `->first_child` and `->next`, or a box parent with `->parent`, is what gets here — "
+              "and `block_flow_child_kind`'s own box-parent precondition names that caller directly. "
+              "THE COUPLING THAT MADE THE ROUTING ONE LANDING RATHER THAN SEVERAL IS RECORDED BECAUSE A "
+              "READER CONVERTING A REMAINING WALK MEETS IT AGAIN: `block_flow_run_generates_box` used to read "
+              "a `BlockFlowRun`'s bounds as SIBLINGS of the container — answering TRUE for a bound whose "
+              "parent is not the container, on the ground that such a bound is a FRAGMENT of an inline box "
+              "§9.2.1.1 broke, which a SPLICED bound is not — so converting an iterator without the run's own "
+              "step would put a spurious anonymous block box on §9.4.1's stack for every run bounded inside a "
+              "`contents` child, which is a plausible box tree and not a crash");
     /* §9.7's SECOND arm. §9.3.1 states what it means for every caller of this classification at once —
        "Absolutely positioned boxes are taken out of the normal flow. This means they have no impact on the
        layout of later siblings" — and §10.6.3 says the same thing for the one walk in this file: "Only children
@@ -586,16 +593,19 @@ BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, lxb_dom_node
        core/layout/block_flow.h's predicate now derives for itself. The retired reason is recorded rather than
        dropped because it is the one a reader re-derives from the container being in hand — and because it is
        what the equality below is about to stop being able to assume. */
-    DCHECK(n->parent == lxb_dom_interface_node(parent),
+    DCHECK(box_tree_parent(n) == parent,
            "CSS 2 §9.2's box generation was asked about a node that is not a CHILD of the block container it "
            "was asked with. §9.2.1's level and §9.7's three-property order are stated over the box this node "
            "is a child of, so a node from elsewhere in the tree would be classified against a formatting "
-           "context it is not in. THIS EQUALITY IS WHAT css-display-3 §2.5 "
-           "\"Box Generation: the none and contents keywords\"'s SPLICE BREAKS, and it is the "
-           "signal that this walk is one of the four core/layout/box_tree.h is still waiting for: a box-tree "
-           "child of `parent` need not be a DOM child of it, so converting this walk RETIRES this assert "
-           "rather than satisfying it. §9.2.2.1's collapsing used to be named here as a third answer stated "
-           "over `parent`'s child list and is no longer one of them");
+           "context it is not in. "
+           "THIS EQUALITY USED TO READ `n->parent == parent` AND IS REWRITTEN RATHER THAN DELETED, WHICH IS "
+           "WHAT THE SPLICE DOES TO IT rather than retiring it: css-display-3 §2.5 \"Box Generation: the none "
+           "and contents keywords\" makes a box-tree child of `parent` need not be a DOM child of it, so the "
+           "DOM equality was the right precondition read through the wrong relation and the box-tree one is "
+           "the same precondition stated over the tree §9.2 is actually about. A CALLER THAT COMPOSED "
+           "`n->parent` FOR THE ARGUMENT IS EXACTLY WHAT THIS NOW CATCHES — a `contents` element is not a box "
+           "and cannot be the `parent` any classification is stated against. §9.2.2.1's collapsing used to be "
+           "named here as a third answer stated over `parent`'s child list and is no longer one of them");
     switch (n->type) {
     case LXB_DOM_NODE_TYPE_ELEMENT:
         return bf_element_child(lxb_dom_interface_element(n));
@@ -658,9 +668,13 @@ bool block_flow_child_breaks_inline_box(lxb_dom_element_t *parent, lxb_dom_node_
 
 static bool bf_inline_box_breaks(lxb_dom_element_t *el)
 {
-    lxb_dom_node_t *n = lxb_dom_interface_node(el), *c;
+    lxb_dom_node_t *c;
 
-    for (c = n->first_child; c != NULL; c = c->next) {
+    /* THE INLINE BOX'S OWN BOX-TREE CHILDREN, which is css-display-3 §2.5's sequence and not `el`'s DOM child
+       list: a `contents` element INSIDE an inline box puts its own children in that inline box's content, so a
+       block-level box under one still breaks the box it is spliced into. Walking `->next` here would have
+       asked `block_flow_child_kind` about a node that generates no box. */
+    for (c = box_tree_first_child(el); c != NULL; c = box_tree_next_sibling(el, c)) {
         switch (block_flow_child_kind(el, c)) {
         /* §9.2.1.1's "an in-flow block-level box", met. */
         case BLOCK_FLOW_CHILD_BLOCK:
@@ -718,32 +732,37 @@ bool block_flow_child_breaks_inline_box(lxb_dom_element_t *parent, lxb_dom_node_
    THE TWO SHAPES IT REFUSES ARE THE TWO §10.1's WALK STEPS OVER AND THIS SECTION DOES NOT PUT HERE. CSS 2.2
    §9.2.2 "Inline-level elements and inline boxes"' ATOMIC inline-level box — a replaced `display: inline`
    element — KEEPS its own block-level children, because it "participate[s] in their inline formatting
-   context as a single opaque box"; and a `display: contents` element is css-display-3 §2.5 "Box Generation:
-   the none and contents keywords"' splice, which `bf_element_child` refuses by name, so no enumeration in
-   this file reaches through one yet. */
+   context as a single opaque box".
+   THE `display: contents` HALF OF THAT SENTENCE IS RETIRED AND IS REWRITTEN RATHER THAN DELETED, because a
+   reader who re-derives the chain from the element tree will re-add it: it said such an element is a splice
+   `bf_element_child` refuses by name, "so no enumeration in this file reaches through one yet". The ascent is
+   over BOX PARENTS now, so a `contents` element between `el` and `container` is not an intervening box at all
+   — it is skipped by `box_tree_parent`, exactly as css-display-3 §2.5 "Box Generation: the none and contents
+   keywords" replaces it by its contents — and the chain this loop tests is the chain of INLINE BOXES the
+   section is about. Refusing it here would have been §2.5's splice read as §9.2.2's atomic box, which is the
+   one confusion this file's own child classification keeps the two keywords apart to prevent. */
 static bool bf_on_box_list_of(lxb_dom_element_t *el, lxb_dom_element_t *container)
 {
-    lxb_dom_node_t *root, *n;
+    lxb_dom_element_t *q, *qp;
 
     DCHECK(el != NULL && container != NULL,
            "CSS 2.2 §9.2.1.1's box-list membership was asked with no box or no container. The question is "
            "about a PAIR — whether THIS box is on THAT container's list — so either half missing makes it a "
            "question about nothing rather than a question with an unknown answer");
-    root = lxb_dom_interface_node(container);
-    for (n = lxb_dom_interface_node(el)->parent; n != NULL && n != root; n = n->parent) {
-        lxb_dom_node_t *p = n->parent;
-
-        /* An intervening node that is not an ELEMENT, or whose own parent is not one, is not a box §9.2's
-           generation can even be asked about — `block_flow_child_kind` states both requirements over the
-           pair it is handed, so the question stops here rather than being asked of a node it is not about. */
-        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
-        if (p == NULL || p->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
-        if (block_flow_child_kind(lxb_dom_interface_element(p), n) != BLOCK_FLOW_CHILD_INLINE) return false;
-        if (!block_flow_child_breaks_inline_box(lxb_dom_interface_element(p), n)) return false;
+    /* `q` RANGES OVER THE BOXES STRICTLY BETWEEN `el` AND `container`, each tested against its OWN box parent,
+       which is the same enumeration the DOM-parent form made and is the reason `el` itself is never tested:
+       the question is about the chain ABOVE it. */
+    for (q = box_tree_parent(lxb_dom_interface_node(el)); q != container; q = qp) {
+        /* An ascent that leaves the element tree was asked about a box in another subtree. */
+        if (q == NULL) return false;
+        qp = box_tree_parent(lxb_dom_interface_node(q));
+        if (qp == NULL) return false;
+        if (block_flow_child_kind(qp, lxb_dom_interface_node(q)) != BLOCK_FLOW_CHILD_INLINE) return false;
+        if (!block_flow_child_breaks_inline_box(qp, lxb_dom_interface_node(q))) return false;
     }
-    /* THE LOOP ENDING IS NOT THE ANSWER — it ends both at `container` and at the top of the tree, and only
-       the first is membership. A walk that ran out of ancestors was asked about a box in another subtree. */
-    return n == root;
+    /* THE LOOP ENDS ONLY AT `container`, which the other exits return FALSE from — a walk that ran out of
+       ancestors, or met a box the section does not break, was asked about a box on another list. */
+    return true;
 }
 
 /* ---- the walk ---------------------------------------------------------------------------------------------- */
@@ -817,10 +836,13 @@ typedef enum {
 
 static BfContent bf_content_kind(lxb_dom_element_t *el)
 {
-    lxb_dom_node_t *n = lxb_dom_interface_node(el), *c;
+    lxb_dom_node_t *c;
     bool block = false, inl = false;
 
-    for (c = n->first_child; c != NULL; c = c->next) {
+    /* css-display-3 §2.5's SPLICED SEQUENCE, because this walk and `block_flow_next_block_box` are REQUIRED to
+       agree — core/layout/intrinsic_size.c asserts that agreement by name — and a `contents` child would put
+       its children on one walk's list and not the other's. */
+    for (c = box_tree_first_child(el); c != NULL; c = box_tree_next_sibling(el, c)) {
         switch (block_flow_child_kind(el, c)) {
         case BLOCK_FLOW_CHILD_NO_BOX: break;
         /* §9.4.2's condition is "a block container box that CONTAINS NO BLOCK-LEVEL BOXES" and §9.2.1.1's
@@ -960,8 +982,11 @@ static bool bf_content_child_is_breaking_inline_box(lxb_dom_node_t *n)
     lxb_dom_element_t *parent;
 
     DCHECK(n != NULL, "CSS 2.2 §9.2.1.1's content order was stepped from no node");
-    if (n->parent == NULL || n->parent->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
-    parent = lxb_dom_interface_element(n->parent);
+    /* THE BOX THIS POSITION IS A CHILD OF, which css-display-3 §2.5's splice makes a different element from
+       its DOM parent wherever a `contents` element stands between them — and `block_flow_child_kind` is
+       stated over the BOX, so composing `n->parent` here would hand it a pair it now refuses. */
+    parent = box_tree_parent(n);
+    if (parent == NULL) return false;
     if (block_flow_child_kind(parent, n) != BLOCK_FLOW_CHILD_INLINE) return false;
     return block_flow_child_breaks_inline_box(parent, n);
 }
@@ -975,10 +1000,31 @@ static lxb_dom_node_t *bf_content_next(lxb_dom_element_t *el, lxb_dom_node_t *n)
     DCHECK(n != root,
            "CSS 2.2 §9.2.1.1's content order was stepped from the CONTAINER itself, which is not a position in "
            "its own content — the container brackets this sequence, it is not a member of it");
-    if (bf_content_child_is_breaking_inline_box(n) && n->first_child != NULL) return n->first_child;
-    for (; n != root; n = n->parent)
-        if (n->next != NULL) return n->next;
-    return NULL;
+    /* THE DESCENT AND THE ASCENT ARE BOTH OVER core/layout/box_tree.h's SPLICED SEQUENCE. css-display-3 §2.5
+       "Box Generation: the none and contents keywords" replaces a `contents` element by its contents, so such
+       an element is not a position in anybody's content — the sequence steps THROUGH it in both directions,
+       and neither half of this step may read a DOM pointer. The descent is `box_tree_first_child` rather than
+       `->first_child` for the case of an inline box whose first child is spliced; the ascent asks each
+       position's BOX parent, which is the container itself for a position inside a chain of `contents`
+       elements and is what makes the chain cost no step of its own. */
+    if (bf_content_child_is_breaking_inline_box(n)) {
+        lxb_dom_node_t *into = box_tree_first_child(lxb_dom_interface_element(n));
+
+        if (into != NULL) return into;
+    }
+    for (;;) {
+        lxb_dom_element_t *p = box_tree_parent(n);
+        lxb_dom_node_t *nx;
+
+        DCHECK(p != NULL,
+               "CSS 2.2 §9.2.1.1's content order was stepped out of the top of the tree without ever reaching "
+               "the container it was asked about, so the position it was stepped from is not in that "
+               "container's content at all");
+        nx = box_tree_next_sibling(p, n);
+        if (nx != NULL) return nx;
+        if (lxb_dom_interface_node(p) == root) return NULL;
+        n = lxb_dom_interface_node(p);
+    }
 }
 
 static lxb_dom_node_t *bf_block_box_at(lxb_dom_element_t *el, lxb_dom_node_t *at)
@@ -986,11 +1032,13 @@ static lxb_dom_node_t *bf_block_box_at(lxb_dom_element_t *el, lxb_dom_node_t *at
     lxb_dom_node_t *n;
 
     for (n = at; n != NULL; n = bf_content_next(el, n)) {
-        DCHECK(n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
-               "CSS 2.2 §9.2.1.1's content order reached a node whose parent is not an element, so §9.2's box "
-               "generation cannot be asked about it — every position in a container's content is a child of "
-               "the container or of an inline box inside it");
-        switch (block_flow_child_kind(lxb_dom_interface_element(n->parent), n)) {
+        lxb_dom_element_t *box = box_tree_parent(n);
+
+        DCHECK(box != NULL,
+               "CSS 2.2 §9.2.1.1's content order reached a node with no BOX parent, so §9.2's box generation "
+               "cannot be asked about it — every position in a container's content is a child of the "
+               "container's own spliced sequence or of one inside an inline box in it");
+        switch (block_flow_child_kind(box, n)) {
         /* §9.2.1.1's "an in-flow block-level box", whether it is a child of the container or was reached
            through an inline box it breaks. Either way it is a box on §9.4.1's stack: the section says so of
            the second case in as many words ("becomes a sibling of those anonymous boxes"), and of the first by
@@ -1020,19 +1068,34 @@ BlockFlowRunStart block_flow_run_start(lxb_dom_element_t *el, BlockFlowRun run)
     DCHECK(el != NULL, "CSS 2.2 §9.2.1.1's run was asked where it begins with no container to begin inside");
     if (run.after == NULL) {
         /* A RUN THAT FOLLOWS NO BREAK BEGINS AT THE CONTAINER'S OWN CONTENT and continues no fragment, so the
-           box whose style its content carries is the container itself. */
+           box whose style its content carries is the container itself. The first position is the container's
+           BOX-TREE first child: css-display-3 §2.5 "Box Generation: the none and contents keywords" puts a
+           `contents` first child's own children there instead of it, and `->first_child` would have named a
+           node that generates nothing for the run to begin at. */
         out.open = el;
-        out.at = lxb_dom_interface_node(el)->first_child;
+        out.at = box_tree_first_child(el);
         return out;
     }
-    DCHECK(run.after->parent != NULL && run.after->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
-           "CSS 2.2 §9.2.1.1's run was started after a node with no element parent, so there is no box for the "
+    out.open = box_tree_parent(run.after);
+    DCHECK(out.open != NULL,
+           "CSS 2.2 §9.2.1.1's run was started after a node with no BOX parent, so there is no box for the "
            "run to be a fragment OF and no style for its content to be measured with — the node a run follows is "
-           "a child of the container or of an inline box the break itself split, and either way its parent is an "
-           "element whose opening edge belongs to an earlier one of these boxes");
-    out.open = lxb_dom_interface_element(run.after->parent);
-    out.at = run.after->next;
+           "in the container's own spliced sequence or in one inside an inline box the break itself split, and "
+           "either way it has a box whose opening edge belongs to an earlier one of these boxes");
+    /* AND THE POSITION AFTER IT IS A POSITION IN THE BOX TREE RATHER THAN A DOM SIBLING, which is the whole of
+       what this entry stopped its four callers composing for themselves: §2.5's splice puts the next position
+       after a node inside a `contents` element OUTSIDE that element, and `run.after->next` is a position in no
+       box's content there. */
+    out.at = box_tree_next_sibling(out.open, run.after);
     return out;
+}
+
+/* THE NEXT POSITION IN THE RUN AFTER `at`, INSIDE THE FRAGMENT `open` — see block_flow.h. */
+lxb_dom_node_t *block_flow_run_next(lxb_dom_element_t *open, lxb_dom_node_t *at)
+{
+    DCHECK(open != NULL && at != NULL,
+           "CSS 2.2 §9.2.1.1's run was stepped with no open fragment, or from no position");
+    return box_tree_next_sibling(open, at);
 }
 
 /* DOES §9.2.1.1 GENERATE AN ANONYMOUS BLOCK BOX FOR THIS RUN? The section generates one only to wrap
@@ -1049,18 +1112,26 @@ BlockFlowRunStart block_flow_run_start(lxb_dom_element_t *el, BlockFlowRun run)
    would be a second box list that happens to give the same answer, free to stop doing so. */
 bool block_flow_run_generates_box(lxb_dom_element_t *el, BlockFlowRun run)
 {
-    lxb_dom_node_t *root, *c;
+    lxb_dom_node_t *c;
 
     DCHECK(el != NULL, "CSS 2.2 §9.2.1.1's box generation was asked about a run with no container");
-    root = lxb_dom_interface_node(el);
-    if (run.after != NULL && run.after->parent != root) return true;
-    if (run.end != NULL && run.end->parent != root) return true;
+    /* A BOUND IS DEEP WHEN ITS BOX PARENT IS NOT THE CONTAINER, AND THAT IS NOT THE SAME TEST AS ITS DOM
+       PARENT NOT BEING IT — which is the defect `bf_element_child`'s own crash names as the reason the run
+       type and these walks are one landing. This test asks whether the run is a FRAGMENT of an inline box
+       §9.2.1.1 broke, and the section makes such a fragment a box "even if either side is empty". A bound
+       inside a `contents` element is NOT that: css-display-3 §2.5 "Box Generation: the none and contents
+       keywords" gives that element no box to be a fragment of, and the bound is an ordinary member of the
+       container's own spliced sequence. Reading the DOM pointer would have answered TRUE for it and put a
+       spurious anonymous block box on §9.4.1's stack for every run so bounded — a plausible box tree rather
+       than a crash. */
+    if (run.after != NULL && box_tree_parent(run.after) != el) return true;
+    if (run.end != NULL && box_tree_parent(run.end) != el) return true;
     /* NEITHER BOUND IS DEEP BY THE TWO TESTS ABOVE, so the run begins at a CHILD of the container and the
        `open` half of this answer is the container itself — which is why the scan below reads only `at`. Asking
        for the pair rather than composing the first position here is what keeps this walk and the two that
        MEASURE the same run agreeing about where it starts. */
     c = block_flow_run_start(el, run).at;
-    for (; c != NULL && c != run.end; c = c->next)
+    for (; c != NULL && c != run.end; c = block_flow_run_next(el, c))
         if (block_flow_child_kind(el, c) == BLOCK_FLOW_CHILD_INLINE) return true;
     return false;
 }
@@ -1072,7 +1143,7 @@ lxb_dom_node_t *block_flow_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t 
        consumer seeds each call with the box the last one returned, so the two answers cannot be the same node
        and the walk cannot revisit a position. A NULL `after` is the start of the content and not "no
        constraint" — the two would differ for a container whose FIRST content position is a block-level box. */
-    if (after == NULL) return bf_block_box_at(el, lxb_dom_interface_node(el)->first_child);
+    if (after == NULL) return bf_block_box_at(el, box_tree_first_child(el));
     return bf_block_box_at(el, bf_content_next(el, after));
 }
 
@@ -1203,7 +1274,11 @@ static void bf_require_want_on_the_stack(lxb_dom_element_t *el, lxb_dom_element_
 
     if (want == NULL) return;
     n = lxb_dom_interface_node(want);
-    if (n->parent != lxb_dom_interface_node(el)) return;
+    /* THE GUARD IS THE CLASSIFICATION'S OWN PRECONDITION AND IS ASKED OVER THE BOX TREE, because
+       `block_flow_child_kind` refuses a pair whose box relation is not the one it is stated over — and
+       css-display-3 §2.5's splice makes a box-tree child of `el` need not be a DOM child of it, so the DOM
+       equality would have skipped exactly the spliced boxes this refusal is about. */
+    if (box_tree_parent(n) != el) return;
     if (block_flow_child_kind(el, n) != BLOCK_FLOW_CHILD_INLINE) return;
     DFAIL("CSS 2 §9.4.1's vertical placement was asked for a box CSS 2.2 §9.2.1.1 puts INSIDE an "
           "anonymous block box: it is an inline-level child of a block container that also holds a "
@@ -2531,12 +2606,15 @@ static lxb_dom_node_t *bf_static_run_after(lxb_dom_element_t *cb, lxb_dom_node_t
     lxb_dom_node_t *n, *last = NULL;
 
     *reached = false;
-    for (n = lxb_dom_interface_node(cb)->first_child; n != NULL; n = bf_content_next(cb, n)) {
+    for (n = box_tree_first_child(cb); n != NULL; n = bf_content_next(cb, n)) {
+        lxb_dom_element_t *box;
+
         if (n == target) { *reached = true; return last; }
-        DCHECK(n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
-               "CSS 2.2 §9.2.1.1's content order reached a node whose parent is not an element, so §9.2's box "
-               "generation cannot be asked about it");
-        if (block_flow_child_kind(lxb_dom_interface_element(n->parent), n) == BLOCK_FLOW_CHILD_BLOCK) last = n;
+        box = box_tree_parent(n);
+        DCHECK(box != NULL,
+               "CSS 2.2 §9.2.1.1's content order reached a node with no BOX parent, so §9.2's box generation "
+               "cannot be asked about it");
+        if (block_flow_child_kind(box, n) == BLOCK_FLOW_CHILD_BLOCK) last = n;
     }
     return last;
 }

@@ -81,13 +81,13 @@ static lxb_dom_node_t *bt_resolve(lxb_dom_element_t *box, lxb_dom_node_t *n)
 static void bt_require_in_sequence(lxb_dom_element_t *box, lxb_dom_node_t *child)
 {
 #if APICLIENT_DEV
-    lxb_dom_node_t *root = lxb_dom_interface_node(box), *p;
     char nbuf[160], bbuf[160];
 
-    for (p = child->parent; p != NULL; p = p->parent) {
-        if (p == root) return;
-        if (!bt_is_spliced(p)) break;
-    }
+    /* THE MEMBERSHIP TEST IS THE ASCENT'S OWN ANSWER AND IS NOT A SECOND WALK OF IT. `box_tree_parent` is the
+       nearest ancestor that GENERATES a box, so "child is in box's sequence" and "box is child's box parent"
+       are one equality — and writing the loop twice is how the step and the refusal would come to disagree
+       about a tree only one of them had been taught about. */
+    if (box_tree_parent(child) == box) return;
     DFAILF("%s, stepped as a child of %s: css-display-3 §2.5 \"Box Generation: the none and contents "
            "keywords\"' spliced child sequence was stepped from a node that is not IN it. Between that node and "
            "this box stands an element that GENERATES A BOX, so the node is a child of THAT box's sequence and "
@@ -100,6 +100,22 @@ static void bt_require_in_sequence(lxb_dom_element_t *box, lxb_dom_node_t *child
     (void) box;
     (void) child;
 #endif
+}
+
+lxb_dom_element_t *box_tree_parent(lxb_dom_node_t *n)
+{
+    lxb_dom_node_t *p;
+
+    DCHECK(n != NULL, "css-display-3 §2.5's box parent was asked of no node");
+    /* A SPLICED `n` IS ANSWERED RATHER THAN REFUSED — see box_tree.h for why this entry differs from its two
+       siblings there, and for the crash that refusing it would have masked.
+       §2.5's replacement, read upward: an ancestor the section replaced by its contents is not a box, so the
+       box this node's boxes are children of is the first ancestor past every such element. The loop ends at
+       the root at the latest — css-display-3 §2.8 "The Root Element's Principal Box" computes a root
+       `contents` to `block` — and at a non-element parent, which is the root's own case. */
+    for (p = n->parent; p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT; p = p->parent)
+        if (!bt_is_spliced(p)) return lxb_dom_interface_element(p);
+    return NULL;
 }
 
 lxb_dom_node_t *box_tree_first_child(lxb_dom_element_t *box)

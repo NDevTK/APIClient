@@ -13,6 +13,12 @@
  * which children a box has. Those walks are REQUIRED to agree and say so: core/layout/intrinsic_size.c
  * asserts one such agreement by name, and core/paint/box_paint.c asserts another.
  *
+ * WHICH OF THEM HAVE BEEN ROUTED IS NOT RECORDED HERE, AND THE OMISSION IS DELIBERATE RATHER THAN AN
+ * OVERSIGHT: it is a count of what is missing, it shrinks as the work is done, and its only reader is the
+ * person about to invalidate it. The DERIVATION is one command — `git grep -n box_tree_first_child` names
+ * every converted walk, and `bf_element_child`'s `contents` crash is what an unconverted one reaches — and
+ * that answers about the tree in hand rather than about the tree somebody was looking at.
+ *
  * IT PIERCES `contents` AND NOTHING ELSE, because §2.5's other keyword is the opposite sentence — `none` is
  * "The element and its descendants generate no boxes or text sequences", so a `none` element IS yielded here
  * and each walk goes on skipping it under its own CSS 2 §9.2 arm. Piercing it too would delete that arm from
@@ -68,5 +74,34 @@ lxb_dom_node_t *box_tree_first_child(lxb_dom_element_t *box);
    than assumed, because a walk half-converted from `->next` hands this a node out of a DIFFERENT box's sequence and
    would otherwise be answered plausibly. */
 lxb_dom_node_t *box_tree_next_sibling(lxb_dom_element_t *box, lxb_dom_node_t *child);
+
+/* THE BOX `n`'s BOXES ARE CHILDREN OF — the nearest ancestor ELEMENT that generates a box, which is `n`'s DOM
+   parent wherever no splice has run and is the first ancestor past a chain of `contents` elements where one
+   has. NULL when the ascent leaves the element tree (a Document or a plain DocumentFragment parent, or no
+   parent at all), which is the same answer core/css/css_computed_value.h's `css_parent_element` gives at a
+   root.
+   IT IS THE ASCENT OF THE SEQUENCE ABOVE AND NOT A SECOND WALK, which is the whole reason it is here rather
+   than at the walks that need it: `box_tree_next_sibling(box_tree_parent(n), n)` is the step that continues
+   `n`'s own sequence, and the membership refusal that entry makes is spelled AS this equality, so the two
+   cannot come apart. A walk that derived a box parent for itself would be §2.5's predicate written a sixth
+   time, and the copies would disagree about exactly the tree they were written for.
+   IT READS THE COMPUTED `display`, for the reason stated at the top of this file:
+   core/css/css_computed_value.h's `css_box_parent_display` answers the same RELATION over a SPECIFIED value
+   because it is INSIDE the computation and cannot ask for a computed one, and it returns that ancestor's
+   `display` rather than the ancestor — so it is not this entry under another name and neither is derivable
+   from the other. css-display-3 §2.8 "The Root Element's Principal Box" is what makes this walk terminate at
+   the root rather than by a bound: "a display of contents computes to block on the root element", so no
+   ascent can pass a root whose computed value this entry reads.
+   IT ANSWERS FOR A SPLICED `n` AND ITS TWO SIBLINGS REFUSE ONE, AND THE ASYMMETRY IS THE QUESTION AND NOT A
+   RELAXATION. A POSITION in a `contents` element's sequence is meaningless — the element has no box for those
+   nodes to be the children of, which is what `box_tree_first_child` and `box_tree_next_sibling` refuse. Its
+   BOX PARENT is §2.5's own sentence read directly: the element "must be treated as if it had been replaced in
+   the element tree by its contents", so the box its contents are spliced INTO is exactly what this walk
+   returns, and it is the same box every one of those contents answers. REFUSING IT WOULD MASK THE CRASH THAT
+   NAMES THE WORK: core/layout/block_flow.c's child classification states its precondition as this equality,
+   and a half-converted walk handing it a `contents` element would abort HERE — "a box parent was asked of an
+   element that has none" — instead of at `bf_element_child`'s `display: contents` arm, which is the one that
+   tells its reader which walk to route and to what. */
+lxb_dom_element_t *box_tree_parent(lxb_dom_node_t *n);
 
 #endif

@@ -11,6 +11,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/layout/block_flow.h"
+#include "core/layout/box_tree.h"
 #include "core/layout/flex_intrinsic_size.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/intrinsic_size.h"
@@ -370,10 +371,15 @@ static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, Intr
 
 static void is_walk(IsRun *r, lxb_dom_element_t *el)
 {
-    lxb_dom_node_t *n = lxb_dom_interface_node(el), *c;
+    lxb_dom_node_t *c;
 
-    /* THE ONLY CALLER IS THE INLINE-BOX DESCENT BELOW, so every child this reaches is inside one. */
-    for (c = n->first_child; c != NULL && !r->past_end; c = c->next) is_child(r, el, c);
+    /* THE ONLY CALLER IS THE INLINE-BOX DESCENT BELOW, so every child this reaches is inside one.
+       THE SEQUENCE IS THE BOX TREE'S AND NOT THE DOM'S, which is core/layout/box_tree.h's contract and is what
+       keeps `is_child`'s own classification assert true: css-display-3 §2.5 "Box Generation: the none and
+       contents keywords" puts a `contents` child's children in THIS box's content, and this sequence never
+       yields the `contents` element itself — so no arm below has to know about it. */
+    for (c = box_tree_first_child(el); c != NULL && !r->past_end; c = box_tree_next_sibling(el, c))
+        is_child(r, el, c);
 }
 
 static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
@@ -650,17 +656,24 @@ static IntrinsicInlineSizes is_run_sizes(lxb_dom_element_t *el, lxb_dom_element_
     for (;;) {
         lxb_dom_node_t *c, *box;
 
-        for (c = at; c != NULL && !r.past_end; c = c->next) is_child(&r, open, c);
+        lxb_dom_element_t *up;
+
+        for (c = at; c != NULL && !r.past_end; c = block_flow_run_next(open, c)) is_child(&r, open, c);
         if (r.past_end) break;
         box = lxb_dom_interface_node(open);
         if (box == root) break;
         text_run_measure_add_box_edge(&m, open, is_intrinsic_edge_px(open, INTRINSIC_AXIS_HORIZONTAL, true));
-        DCHECK(box->parent != NULL && box->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
-               "CSS 2.2 §9.2.1.1's run was inside a box whose parent is not an element, so the walk cannot "
-               "leave it — the ancestors of every position in a container's content are inline boxes up to "
-               "the container itself, and this chain does not reach it");
-        at = box->next;
-        open = lxb_dom_interface_element(box->parent);
+        /* THE STEP OUT IS OVER THE BOX TREE IN BOTH HALVES — which box this fragment is inside, and where its
+           content continues after it. css-display-3 §2.5's splice makes neither of those a DOM pointer: a
+           `contents` element between this inline box and its box parent is not a box to step out INTO, and the
+           position after this box is outside every such element. */
+        up = box_tree_parent(box);
+        DCHECK(up != NULL,
+               "CSS 2.2 §9.2.1.1's run was inside a box with no BOX parent, so the walk cannot leave it — the "
+               "box ancestors of every position in a container's content are inline boxes up to the container "
+               "itself, and this chain does not reach it");
+        at = box_tree_next_sibling(up, box);
+        open = up;
     }
     /* THE MEASUREMENT DOES NOT EXIST UNTIL THIS RUNS, and that is [UAX14]'s doing rather than a lifecycle
        anybody chose: its rules read forward past the boundary they decide (LB25's `PO × OP IS NU` by three

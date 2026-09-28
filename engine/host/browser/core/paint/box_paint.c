@@ -24,6 +24,7 @@
 #include "core/html/html_image.h"    /* html_image_decoded_rgba — CSS 2.1 §E.2's "the replaced content", for
                                         the one replaced element that fetches its own */
 #include "core/layout/block_flow.h"  /* CSS 2.2 §9.2.1.1's TWO shapes of one inline formatting context */
+#include "core/layout/box_tree.h"   /* css-display-3 §2.5's spliced child sequence — the range this walk steps */
 #include "core/layout/line_box.h"    /* line_box_glyphs — CSS 2.1 §E.2 step 7.2.1's "the text", placed */
 #include "core/layout/replaced_element.h" /* the `replaced` bit that separates item 4's THIRD arm from
                                             its second — an inline-block is atomic and is not replaced */
@@ -761,8 +762,14 @@ static bool bp_inline_box_marks(BpState *st, lxb_dom_element_t *el)
  * core/layout/block_flow.h defines it and is why the top-level call cannot simply walk every child. §9.2.1.1
  * puts a MIXED container's inline content in one anonymous block box PER MAXIMAL RUN, so a container's child
  * list holds the boxes of SEVERAL contexts; a walk that took the whole list would lay every inline box's
- * background once per run. The recursion passes `first_child` and NULL because an inline box's children are all
- * in the one run its own box is in.
+ * background once per run. The recursion passes the nested box's own FIRST BOX-TREE CHILD and NULL because an
+ * inline box's children are all in the one run its own box is in.
+ *
+ * THE RANGE IS STEPPED OVER core/layout/box_tree.h's SPLICED SEQUENCE AND NOT WITH `->next`, which is
+ * css-display-3 §2.5 "Box Generation: the none and contents keywords" and is load-bearing for the cursor
+ * assert below rather than cosmetic: the FILL this walk is re-tracing steps the same sequence, so a `contents`
+ * child whose children this walk did not reach would leave characters `line_box_glyphs` placed with no box to
+ * lay them under, and the two enumerations of one context would differ by exactly that subtree.
  *
  * THE GLYPH CURSOR IS THE SECOND HALF OF THE ENUMERATION AND IS WHY THIS IS ONE WALK AND NOT TWO. §E.2's item 4
  * interleaves BOXES with RUNS OF TEXT — "all the element's in-flow, non-positioned, inline-level children that
@@ -795,7 +802,7 @@ static bool bp_step_7_2_1(BpState *st, lxb_dom_element_t *parent, lxb_dom_node_t
 {
     lxb_dom_node_t *child;
 
-    for (child = from; child != to && child != NULL; child = child->next) {
+    for (child = from; child != to && child != NULL; child = block_flow_run_next(parent, child)) {
         if (child->type == LXB_DOM_NODE_TYPE_TEXT) {
             while (*cursor < n && g[*cursor].style == parent) {
                 if (!bp_glyph(st, &g[*cursor], origin_x, origin_y)) return false;
@@ -870,7 +877,7 @@ static bool bp_step_7_2_1(BpState *st, lxb_dom_element_t *parent, lxb_dom_node_t
                 st->why = outer_why;
                 if (!sub_ok) return false;
             }
-            if (!bp_step_7_2_1(st, box, child->first_child, NULL, g, n, cursor, origin_x, origin_y))
+            if (!bp_step_7_2_1(st, box, box_tree_first_child(box), NULL, g, n, cursor, origin_x, origin_y))
                 return false;
         }
     }
@@ -904,7 +911,19 @@ static bool bp_context_step_7_2_1(BpState *st, lxb_dom_element_t *style, BlockFl
        wrong position, and the walk that FILLS this context, the two that MEASURE it and this one that PAINTS it
        would each have had to be taught that separately. The `open` half of the answer is not read here because
        this walk takes the container as its own style operand and enumerates from `at` downward; that is the one
-       thing about this site the DCHECK below is two-sided about. */
+       thing about this site the DCHECK below is two-sided about.
+       AND THAT SENTENCE IS A PRE-EXISTING DEFECT THAT THE STEP NOW NAMES RATHER THAN A PROPERTY OF THIS WALK.
+       CSS 2.2 §9.2.1.1 splits an inline box around an in-flow block-level box, so a run that FOLLOWS such a
+       break begins INSIDE that box — `open` is then the inline box and not `style` — and this walk both laid
+       the run's characters under the container's style and stepped the container's sequence from a position
+       that is not in it. The DOM step answered that plausibly (`at->next` inside the fragment, then NULL) and
+       the mismatch surfaced, when it surfaced at all, as the cursor assert below reporting a count. The
+       box-tree step refuses it AT THE STEP, by name, which is the same defect made loud one call earlier.
+       WHAT THE NEXT DIFF BUILDS: this walk taking the `open` half of the pair as the box it enumerates and as
+       the style its own marks carry, so a run that continues a fragment is painted in the box it is a fragment
+       OF. HOW ITS ABSENCE WOULD SHOW: a container whose inline box holds a block-level box and more content
+       after it — `<div><a>t<div>x</div>more</a></div>` — reaches core/layout/box_tree.h's membership refusal
+       naming `more` as stepped out of the wrong box's sequence. */
     lxb_dom_node_t *from = block_flow_run_start(style, run).at;
     bool ok;
 
