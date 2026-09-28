@@ -2119,11 +2119,17 @@ const HOT_RAM_BUDGET = 512 * 1024 * 1024;   // bytes of summed live WASM memory 
    that HAVE reported, and `_admissionHasHeadroom` — not this function — is where a reservation says "not
    yet", by COUNTING ITSELF rather than by contributing a byte count nobody said. The states are enumerated
    rather than defaulted past: a fourth one has to be classified here before it can be silently summed or
-   silently skipped. */
+   silently skipped.
+   AND THE FOURTH ONE ARRIVED, WHICH IS WHY THAT SENTENCE IS A CLASSIFICATION AND NOT A WARNING. `loading` is a
+   seat taken for an admission whose DOCUMENT is still on the network — a declared route's §7.4 navigation, or a
+   shed residue's re-derivation — and it is skipped here on the identical sentence a reservation is skipped on:
+   it has reported nothing, there is no honest figure to stand in, and `_admissionHasHeadroom` is where it says
+   "not yet" by COUNTING ITSELF. A response body being read IS memory, so the sum is a LOWER BOUND while such a
+   seat stands, which is exactly the reading `booting` already has. */
 function _residentBytes() {
   let b = 0;
   for (const e of _pool) {
-    if (e.state === "booting") continue;   // has reported nothing; _admissionHasHeadroom reads the state instead
+    if (e.state === "booting" || e.state === "loading") continue;   // has reported nothing; _admissionHasHeadroom reads the state instead
     DCHECK(e.state === "hot" || e.state === "fetching",
            "an engine is in the pool in state `" + e.state + "`, which the RAM floor has no classification " +
            "for — it would be summed as if it had reported or skipped as if it never will, and neither is a " +
@@ -2142,6 +2148,17 @@ function _bootingCount() {
   for (const e of _pool) if (e.state === "booting") n++;
   return n;
 }
+/* AND THE ADMISSIONS WHOSE DOCUMENT IS STILL ARRIVING, WHICH IS A SECOND FACT AND THEREFORE A SECOND FUNCTION.
+   It is not a widening of the count above, and the reason is that `_bootingCount` HAS THREE OTHER READERS that
+   mean RESERVATIONS by name — `engineReserve`'s `peakBooting` high-water mark, the Level-1 census's `booting`
+   row, and that row's own `<= pool` assert — so teaching it a second state would be one name answering two
+   questions, which is the defect the split below exists to avoid rather than a shorter spelling of it. The two
+   are disjoint subsets of the pool by construction (a member holds one state), and the census asserts that. */
+function _loadingCount() {
+  let n = 0;
+  for (const e of _pool) if (e.state === "loading") n++;
+  return n;
+}
 /* WHETHER ANOTHER INSTANCE MAY BE BUILT, ASKED IN THE ONE PLACE THAT DECIDES IT. This condition was written out
    three times (the waiting-document loop, the cold-rehydration gate, and that gate's inner break) — three
    copies of a rule that has just gained a term, and a term is exactly what a copy forgets.
@@ -2149,10 +2166,36 @@ function _bootingCount() {
    one: while an instance is being provisioned the working set is a LOWER BOUND, so admitting against it is
    admitting against memory that is already spoken for and merely not yet counted. It is not a stall —
    provisioning always settles (a reservation that fails leaves the pool), hostSchedule's wait arm waits on the
-   very promise that clears this, and the next iteration re-asks. */
+   very promise that clears this, and the next iteration re-asks.
+   AND A DOCUMENT ON THE NETWORK BLOCKS IT ON THAT SAME SENTENCE, WHICH IS WHAT THE SECOND TERM IS. A `loading`
+   seat has spent its fetch and will spend RAM the instant the bytes land, so admitting against the sum while it
+   stands is admitting against memory already spoken for — identically to a reservation, and for the identical
+   reason. IT IS NOT A BOUND. Nothing is decided not to happen: the seat's own `_readyP` is what the wait arm
+   waits on, the next round re-asks, and what changed is that the round no longer SUSPENDS on that fetch — every
+   hot engine is still ranked, stepped and serviced while it is in flight, which is the whole of the repair.
+   NAMED RESIDUAL — AND IT IS THE HALF OF THE FREEZE THIS DIFF NARROWS RATHER THAN ENDS, SAID OUT LOUD BECAUSE
+   THE NARROWING IS WHAT MAKES IT EASY TO MISS. WHAT IS NOT COVERED: a `loading` seat holds ADMISSION for as
+   long as its load takes, so a document body a remote party never ends still closes admission for the rest of
+   the session — no waiting tab and no parked residue is seated behind it — where before this diff it closed the
+   LEVEL-1 LOOP and every healthy instance with it. That is the same shape as the refusal `ops.evictee` replaced
+   (a lone over-budget engine closing admission for the whole extension), reached by a fetch instead of by a
+   heap, and it is narrower only because the loop itself keeps running.
+   WHAT THE NEXT DIFF BUILDS: a seat that does NOT hold admission, which is TWO exclusions the candidate order
+   does not have and one wake it cannot take. A cold seat must carry its frontier key so `_bestCandidate`'s
+   `resident.some((p) => p.fkey === row.key)` takes its row out of the order, and a seed seat must carry its
+   address into that walk's `live` set — without both, an unblocked admission re-picks the item already being
+   fetched and spends one request per round on it, which is why the term below is the conservative half and not
+   an oversight (the seed arm's `_seeds.delete` is unconditional and covers only the seed). And `hostSchedule`'s
+   wait arm must become releasable by an ARRIVAL, because a round blocked in `Promise.race` refuses `_hostKick`
+   on `_hostDriving`, so a document arriving while nothing is rankable would wait even with admission open.
+   HOW ITS ABSENCE WOULD SHOW: `rendererPoolProbe` reports `loadingSeats` at 1 or more with `waiting` climbing
+   and `reservations.seeded`/`rehydrated` frozen, while the Level-1 census keeps being written EVERY round with
+   `loading` at 1 or more, `cands` absent and `atFloor: 0` — which is the pair that separates this from the
+   defect this diff closed, where no round began and no census was written at all. */
 function _admissionHasHeadroom() {
   if (_pool.length === 0) return true;     // always admit >= 1 so a lone document runs
   if (_bootingCount() > 0) return false;   // an instance that has not reported is a term the sum is missing
+  if (_loadingCount() > 0) return false;   // a document already fetched FOR is memory this sum has not counted
   return !_atRamFloor();
 }
 /* THE FLOOR ITSELF, WHICH IS A DIFFERENT FACT FROM "MAY ANOTHER INSTANCE BE BUILT" AND IS NOW ASKED SEPARATELY.
@@ -5998,8 +6041,11 @@ function macroYield() {
      · `self._level1 === undefined` — this file did not load; the relay is broken.
      · `self._level1 === null`      — no round has completed in this session.
      · `cands` ABSENT               — the round never ASKED the non-resident order (it spent its advance on a
-                                      navigation, or a reservation in flight held admission and the resident
-                                      set was under the floor, so neither arm asked).
+                                      navigation, or on SEATING a document a previous round's fetch had already
+                                      landed, or a reservation or a document-load in flight held admission and
+                                      the resident set was under the floor, so neither arm asked). `booting` and
+                                      `loading` are what say WHICH of those held it, so a `cands`-absent round
+                                      is never three reasons behind one silence.
      · `cands: 0`                   — the order WAS asked and ranked nothing; `exclSub`/`exclLive`/`exclHeld`/
                                       `exclStranded` stand beside it and say what was taken out of it.
      · `cands: n` with rows         — a reading.
@@ -6026,6 +6072,11 @@ function macroYield() {
 let _level1Round = 0;
 function _level1Record(pool, rd) {
   const r = { round: ++_level1Round, pool: pool.length, booting: _bootingCount(),
+              /* AND THE SEATS WHOSE DOCUMENT IS STILL ON THE NETWORK, WHICH IS A SECOND REASON ADMISSION WAS
+                 NOT ASKED AND THEREFORE A SECOND ROW. Folded into `booting` it would say a reservation was
+                 provisioning when none was; left out it would leave `cands` absent beside `atFloor: 0` and
+                 `booting: 0`, which reads as a round that asked nothing for no reason at all. */
+              loading: _loadingCount(),
               waiting: _waiting.length, hot: rd.hot === null ? 0 : rd.hot.n,
               /* WHICH OF THE TWO ARMS COULD HAVE ASKED THE ORDER, AND THE ONLY THING THAT MAKES
                  `candWMax` AGAINST `wMin` READ AS A DECISION RATHER THAN AS A COINCIDENCE OF TWO NUMBERS:
@@ -6071,10 +6122,16 @@ function _level1Record(pool, rd) {
      kinds: an instrument built so a census could not go quiet, killing the loop it measures, on correct code.
      The relation it wanted is structural and holds where it is computed — `hot` is a FILTER of `pool`, a
      subset at the line that makes it, with nothing there left to assert. */
-  DCHECK(r.booting <= r.pool,
-         "the Level-1 census reports " + r.booting + " booting record(s) in a pool of " + r.pool + " — both " +
-         "are read at the same instant, at the end of the round, and a reservation is a member of the pool " +
-         "it is counted against, so a booting count that outruns it is a reading taken across a mutation");
+  /* AND THE TWO NOT-YET-AN-INSTANCE POPULATIONS ARE ASSERTED AS ONE STATEMENT RATHER THAN AS TWO `<=`s,
+     because what makes them readable together is that they are DISJOINT: a pool member holds exactly one
+     state, so their sum is a subset of the pool and a sum that outruns it is a seat counted in both — which is
+     the one failure a per-row bound cannot see and which would make `loading` look like a reason admission was
+     held when the reservation beside it was the reason. All three are read on the same line above. */
+  DCHECK(r.booting + r.loading <= r.pool,
+         "the Level-1 census reports " + r.booting + " booting record(s) and " + r.loading + " loading seat(s) " +
+         "in a pool of " + r.pool + " — all three are read at the same instant, at the end of the round, and " +
+         "both populations are DISJOINT members of the pool they are counted against, so a sum that outruns it " +
+         "is either a reading taken across a mutation or one seat counted as two reasons admission was held");
   DCHECK(("wTop" in r) === ("wMin" in r) && ("wTop" in r) === (r.drained !== undefined && r.hot - r.drained > 0),
          "the Level-1 census reports a resident order whose extrema and whose rankable population disagree — " +
          "the weights exist exactly when there is a rankable engine to have them, and a `wTop` beside a " +
@@ -6172,13 +6229,23 @@ async function hostSchedule(pool, ops) {
     const hot = pool.filter((e) => e.state === "hot");
     if (!hot.length) {   // every live engine is mid-something: wait for the earliest to become hot, then re-rank
       rd.hot = { n: 0, drained: 0 };   // a rankable set of none is a READING; the census omits the weights, not the row
-      /* TWO STATES REACH THIS ARM AND THEY ARE ONE KIND OF THING: not rankable YET, on a promise that says
+      /* THREE STATES REACH THIS ARM AND THEY ARE ONE KIND OF THING: not rankable YET, on a promise that says
          when. An engine awaiting a reply body is one; a RESERVATION whose instance is still being provisioned
-         is the other, and it was missing. Without it an empty hot set with a booting engine in the pool fell
+         is the second, and it was missing. Without it an empty hot set with a booting engine in the pool fell
          through to the `break` below — and the pool is NOT empty (the reservation is in it), so _hostKick's
          `finally` re-entered immediately: a full-speed spin through admit on a condition that only the boot
-         it refused to wait for could change. */
-      const pending = pool.filter((e) => e.state === "fetching" || e.state === "booting");
+         it refused to wait for could change.
+         THE THIRD IS AN ADMISSION WHOSE DOCUMENT IS STILL ON THE NETWORK (`loading`), AND ADDING IT IS WHAT
+         MOVED A REMOTE BODY OFF THIS ROUND. `ops.admit()` used to AWAIT a declared route's §7.4 navigation and a
+         shed residue's re-derivation, one level above any service round, so a seeded address whose server holds
+         its body open froze THIS LOOP rather than one instance: no engine ranked, stepped or serviced again for
+         the rest of the session, including every instance that was perfectly healthy, and the census stopped
+         being written at all because no round began. The fetch is a pool member now, so the round returns, the
+         hot set is ranked and stepped, and only when NOTHING is rankable does the loop wait here — on a promise
+         that resolves whether the bytes arrive or the load refuses. Nothing is bounded: the wait is the same
+         wait a reservation gets, and the next iteration re-asks. */
+      const pending = pool.filter((e) => e.state === "fetching" || e.state === "booting" ||
+                                         e.state === "loading");
       if (!pending.length) break;
       for (const e of pending)
         DCHECK(e._readyP && typeof e._readyP.then === "function",
@@ -6473,6 +6540,260 @@ function engineLiveDocumentIds(eng) {
     return String(w.msg.documentId);
   });
 }
+/* THE SEAT FOR AN ADMISSION WHOSE DOCUMENT IS STILL ON THE NETWORK — the fourth pool state, and the one thing
+   that keeps a remote body out of the Level-1 round. `ops.admit()` is called at the TOP of every round, so any
+   suspension inside it is a suspension of the whole across-documents loop: while it stands nothing is ranked,
+   nothing is stepped, nothing is serviced and `_level1Record` is not reached, because the round that would have
+   written it has not begun. Two of admission's arms fetched a DOCUMENT there — a declared route's §7.4
+   navigation and a shed residue's re-derivation — and a body a remote party never ends is therefore the one
+   stall in this zone that takes every healthy instance down with it. §NO BOUNDS forbids the deadline that would
+   have hidden it: a deadline could only ever truncate a reply that was merely slow.
+   A SEAT IS NOT A RESERVATION AND IT DELIBERATELY ANSWERS FOR NO DOCUMENT. It carries no cluster and no
+   document id, because neither is known until the response has landed (`clusterKeyOf` reads the message and the
+   message's address is the RESPONSE's after a redirect) — so `hostClusterOf` and `hostHolderOf` cannot match it,
+   which is correct rather than a gap: both kinds mint a group id nothing else can key to, and `admitSeatLand`
+   asserts that where the message finally exists. What it DOES carry is the three fields every pool walk reads
+   without asking the state first (`_resolvers` for a Clear, `joinedDocIds` for the routing walk, `_readyP` for
+   the wait arm), so no walk has to learn about it in order not to crash on it.
+   IT NEVER REJECTS, AND THE ERROR IS RELAYED RATHER THAN SWALLOWED. A throw out of the load is an invariant
+   abort — `navigationLoad` DCHECKs its principal and `safeFetch` asserts its own contract — and today it
+   travels out of `ops.admit()` into `hostSchedule`'s failure arm, which latches `_hostDead` and banners once.
+   Rejecting HERE would reach nobody: the wait arm races this promise only when nothing is rankable, so on every
+   other round it would be an unhandled rejection with the loop still re-kicking, which is the 23,163-abort
+   shape `_hostKick`'s split exists to prevent. So it is stored and re-thrown BY THE ROUND that lands the seat,
+   at which point the failure path is byte-identical to the one the await had. */
+function admitLoadSeat(what, load) {
+  DCHECK(what !== null && typeof what === "object" && (what.kind === "seed" || what.kind === "cold"),
+         "an admission seat was taken for a work item this zone has no landing arm for — `admitSeatLand` " +
+         "dispatches on that word, so a seat outside the two kinds is a slot that blocks admission and can " +
+         "never be finished by anybody");
+  DCHECK(typeof load === "function",
+         "an admission seat was taken with no load to perform — the seat exists so the round can RETURN while " +
+         "a document arrives, so one with nothing arriving is a slot nothing will ever clear");
+  const seat = { state: "loading", what: what, landed: null, failed: null, settled: false,
+                 /* ABSENT BY VALUE RATHER THAN OMITTED, so a walk that reads one gets `null` and not a
+                    TypeError: `hostHolderOf` compares `docId` and indexes `joinedDocIds`, `hostClusterOf`
+                    compares `cluster`, `_bestCandidate` reads `msg && msg.sourceUrl`, and hostClear iterates
+                    `_resolvers`. None of them asks the state first, and none of them may match a seat. */
+                 cluster: null, docId: null, topDocId: null, joinedDocIds: [], msg: null, r: null,
+                 _resolvers: [], _cold: true, _readyP: null };
+  seat._readyP = (async () => {
+    try { seat.landed = await load(); }
+    catch (e) { seat.failed = e; }
+    finally { seat.settled = true; }
+  })();
+  _pool.push(seat);
+  return seat;
+}
+/* AND THE LANDING, WHICH IS EVERY DECISION THE AWAIT USED TO MAKE, MADE ON A ROUND. It runs at the top of
+   `admit` ahead of the candidate order, because the seat's fetch is ALREADY SPENT: the order chose this work
+   item, the request went out, and refusing to seat the document now would waste it and re-rank an address whose
+   cost has been paid. That is the same sentence the seed arm's `_seeds.delete` is unconditional for.
+   IT RETURNS `null` FOR THE CENSUS, WHICH IS A STATEMENT AND NOT A MISSING READING. This round spent its
+   advance on the admission and never ASKED the non-resident order, exactly as the navigation-swap arm above it
+   does — so a census of that order would be a reading of a walk that did not run, and `_level1Record` keeps
+   that apart from a walk that ran and found nothing. */
+async function admitSeatLand(seat) {
+  const i = _pool.indexOf(seat);
+  DCHECK(i >= 0,
+         "an admission seat was landed while no longer in the pool — the pool is the register of who holds " +
+         "what and this is the only thing that takes a seat out of it, so a seat that is not there is one a " +
+         "Clear removed and whose document is about to be seated into a session the person asked to forget");
+  _pool.splice(i, 1);
+  /* THE SEAT SETTLED EXACTLY ONE WAY, ASSERTED BECAUSE THE TWO OUTCOMES TAKE OPPOSITE ARMS AND `null` IS A
+     LEGITIMATE VALUE OF NEITHER. A seat with both is a load that answered and threw; a seat with neither is
+     one this round is landing before its promise settled, which would read `landed === null` as a document of
+     no bytes and seat a page this zone never fetched. */
+  DCHECK(seat.settled && ((seat.landed === null) !== (seat.failed === null)),
+         "an admission seat was landed in a state it cannot be in (settled=" + seat.settled + ", landed=" +
+         (seat.landed === null ? "absent" : "present") + ", failed=" +
+         (seat.failed === null ? "absent" : "present") + ") — the load stores exactly one of the two and the " +
+         "round lands the seat only after `settled`, so anything else is a document about to be built out of " +
+         "an answer nobody gave");
+  if (seat.failed !== null) throw seat.failed;   // relayed, not swallowed: the round owns this failure (see above)
+  if (seat.what.kind === "seed") {
+    const seed = seat.what.seed;
+    /* THE SEED'S OWN §7.4 NAVIGATION, THROUGH THE ONE CHOKEPOINT — the same call a live document's seed and
+       a peer's child navigable both make. The PRIVATE-NETWORK principal and the CREDENTIALED-READ principal
+       are the DECLARING document's, taken when the route was declared and carried on the work item, because
+       §scheduler's "an operation that becomes a work item takes its inputs with it" is exactly the rule a
+       read of the pool here would break: the engine that declared this route may be gone by now. */
+    /* AND SO IS THE PROVENANCE, for the identical sentence: the engine that declared this route stated
+       what its path made the address, and the load is decided from that word and not from the address. */
+    /* THE BYTES, WHICH ARRIVED ON AN EARLIER ROUND AND ARE READ HERE RATHER THAN AWAITED. The residual
+       that stood at the await is RETIRED, and it is rewritten rather than deleted because its reasoning is
+       what a reader re-derives from `engineIssue`'s table: that table answers the three doors INSIDE a
+       service round — the pending-fetch seam, `xhr.send` and `document.fetch` — so an engine no longer
+       leaves the rankable set because a server holds a reply open, and this door was the one left, held one
+       level ABOVE any round by `hostSchedule`'s own `ops.admit()`. Its cost clause was that a declared
+       route whose body never ends froze the LEVEL-1 LOOP rather than one instance.
+       ITS NEXT-DIFF CLAUSE WAS RIGHT ABOUT THE SEAT AND WRONG ABOUT THE FOURTH STATE'S READERS, WHICH IS
+       WORTH KEEPING BECAUSE IT IS THE CLAUSE A LANE WOULD HAVE BUILT. It said the seat had to be read by
+       `_waiting` and by `hostClusterOf`'s "a cluster being provisioned answers exactly as a provisioned one
+       does". Neither: a seat holds no `_waiting` entry (a seed has no job and a cold row is not one either),
+       and it may not answer `hostClusterOf` at all, because the cluster key is not known until the response
+       has landed — `clusterKeyOf` reads the message, and the message's `sourceUrl` is `loaded.url` after a
+       redirect. What the state IS read by is the RAM accounting, the wait arm and the probe, each of which
+       enumerates its states and would have crashed rather than defaulted; and the reason nothing needs a
+       cluster answer is that both kinds mint a group id no other arrival can key to (`seed:` from a
+       counter, `cold:` from the frontier key), which the DCHECK below states as an invariant. */
+    const loaded = seat.landed;
+    /* AND THE SAME THREE REFUSALS A SEEDED DOCUMENT ALWAYS OWES ITS READER, in the same order and for the
+       same reasons stated at the live seed: the chokepoint's own `unavailable`; a response that landed on
+       ANOTHER ORIGIN (which is a Document of origin B about to be seated in a cluster keyed on origin A,
+       and is also evidence that this server answers this request differently from the one the person's own
+       navigation made); and an EMPTY body, which is a perfectly ordinary Document under §7.4.5 and cannot
+       be the bundle this run exists to explore. Each costs the one fetch and nothing more. */
+    const _landed = originOf(loaded.url);
+    if (loaded.unavailable !== null || _landed === "" || _landed !== originOf(seed.principalUrl) ||
+        loaded.bytes.length === 0) {
+      console.warn("[bridge] a declared route could not be seeded: " + seed.url + " — " +
+                   (loaded.unavailable !== null ? JSON.stringify(loaded.unavailable)
+                    : _landed !== originOf(seed.principalUrl) ? "landed cross-origin at " + (_landed || "an unparseable URL")
+                    : "the response carried no bytes"));
+      return null;
+    }
+    /* A CLUSTER OF ONE, WHICH IS THE TRUTH ABOUT IT RATHER THAN A CONVENIENCE. The declared page is not
+       nested in the document that declared it and shares no heap with it: nothing holds a WindowProxy for
+       it, no element presents it, and it is reached the way a person reaches a route — by navigating a tab
+       of the custom browser's own. So it is a TOP-LEVEL TRAVERSABLE in a browsing-context group this zone
+       mints, which is §7.3.2.3's own sentence read for a navigation nobody's opener survives.
+       THE PRINCIPAL IS THE DECLARING DOCUMENT'S AND IS NEVER RE-DERIVED FROM THIS ADDRESS. It is the
+       browser's `MessageSender.origin` for the document whose router declared the route, carried on the
+       work item, and SECURITY.md's credentialed-read principal is exactly that and never `originOf(url)` —
+       a sandboxed document has an ordinary address and an OPAQUE origin, so parsing the address would hand
+       its declared route same-origin access to authenticated bytes the browser refused it. The two
+       ADDRESSES were compared above (which is what HTML §7.2.5's can-have-its-URL-rewritten guarantees and
+       what a redirect could still break); this is the other question and it takes the other fact.
+       `credentialed` IS THEREFORE COMPUTED FROM THAT SAME PRINCIPAL — the identical predicate
+       `navigationLoad` used to decide whether to ask for cookies, so the field STATES the load that
+       happened rather than re-deciding it from the address that came back.
+       `topLevelUrl` IS ITS OWN ADDRESS because a top-level traversable's environment is its own top
+       (§8.1.3.1), and it is `loaded.url` rather than the requested address for §7.5.1's `creationURL`
+       reason: after a redirect the Document is AT where the response came from. */
+    /* AND THE WORD THE DECLARING ENGINE STATED, CARRIED ON INTO THE RESIDUE THIS RUN WILL PARK. It is
+       `seed.provenance` and not a literal for the reason the work item carries it at all: the load above
+       was decided from that word, and an entry whose stored grade disagreed with the load that fetched it
+       would have the cold tier re-fetch under a permission nobody granted. It is `derived` BY
+       CONSTRUCTION only while no origin is widened: at a widened one `_seedRefusal` passes a FORCED
+       declaration, and that entry is exactly what this field exists to keep honest. */
+    const msg = { type: "AST_ANALYZE", sourceUrl: loaded.url, origin: seed.principalOrigin,
+                  groupId: "seed:" + (_nextSeedGroup++), responseHeaders: loaded.headers,
+                  topLevelUrl: loaded.url,
+                  credentialed: navigationCarriesSession(loaded.url, seed.principalOrigin),
+                  /* AND IT IS THE JOIN, FOR THE REASON THE CHILD-NAVIGABLE RECORD STATES: a route only
+                     the bundle names, declared from a document this zone chose to open, is reached under
+                     both. At every setting reachable today the declaring document is `observed` and the
+                     join is the identity, so the stored grade is unchanged — the pairs it separates are
+                     the ones a widening creates. */
+                  provenance: self.safeFetchReachJoin(seed.reach, seed.provenance),
+                  persist: true };
+    DCHECK(hostClusterOf(clusterKeyOf(msg)) === null,
+           "a declared route minted a browsing-context group this pool already runs an instance for — the " +
+           "group id is a fresh counter, so a hit means two seeds were given one id and the second would " +
+           "JOIN the heap the first built, which is two documents behind one agent");
+    _reserveStats.seeded++;
+    /* NULL: a declared route has NO CREATOR — nothing embedded it and nothing opened it, so HTML §7.1.7 has
+       no container to clone and this Document is judged against its own response alone. `u`/`null`/`none`:
+       §7.3.1.3 gives it no parent and no container element, and §3.1.3's steps 2-3 return the empty list
+       for a Document with no container document — three statements of one fact about a top-level page.
+       `cold: true` — it has no caller. Nothing awaited this document, so its findings MERGE to the moat
+       rather than being returned to a requester, which is the same arm a rehydrated recipe takes.
+       AND NOT REFERENCED, WHICH IS THE SAME SENTENCE THE CLUSTER-OF-ONE PARAGRAPH ABOVE ALREADY MAKES:
+       nothing holds a WindowProxy for a route the bundle merely DECLARED — no element presents it and no
+       page opened it, which is precisely why this zone had to mint its group and its name. Its frontier
+       is entitled to drain, and draining is what produces the findings this arm exists to collect. */
+    await engineCreate("", loaded.bytes, msg, true, null, loaded.url, true, null, "u", "null",
+                       "none", "none", 0)._readyP;
+    return null;
+  }
+  DCHECK(seat.what.kind === "cold",
+         "an admission seat reached the landing with a kind neither arm above builds — `admitLoadSeat` " +
+         "refuses any word but the two, so a third here is a kind added at the seat and not at the landing, " +
+         "and the document would be dropped with its fetch spent and nothing said");
+  {
+    /* THE WHOLE PARKED DOCUMENT COMES BACK THROUGH ONE READER, and the recipe's flows resume inside it.
+       `frontierDoc` is the same shape the park wrote, asserted the same way in the other direction, so
+       the field the tier was missing (`responseHeaders` — the policy container) cannot go missing again
+       from one end only.
+       THE CONTENT IS READ FOR THE PICKED ITEM AND NOT AT THE RANKING, which is the other half of why the cold
+       tier has a ranking VIEW. The order reads two numbers; only the item it PICKS is deserialized — and since
+       the read is a suspension it happens on the SEAT, one round earlier, so this line takes what landed. */
+    const stored = seat.landed.stored;
+    DCHECK(stored,
+           "the cold tier's ranking view named an entry the store does not hold — this zone is the store's " +
+           "only writer and frontierPut updates the view on its way through, so a row with no entry is the " +
+           "projection and the store having drifted apart");
+    /* A SHED RESIDUE'S DOCUMENT IS ON THE NETWORK RATHER THAN IN THE STORE, so it was fetched back — the
+       same request the shed decision was PROVED against, performed for real. THE ARGUMENT FOR AWAITING IT
+       INSIDE THE ROUND IS RETIRED AND IS KEPT BECAUSE IT IS THE ONE A READER RE-DERIVES: it said this arm
+       "already suspends on the store and then on a whole wasm instantiation, so a fetch ahead of them is the
+       same shape and not a new one". Every clause of that is true about the SHAPE and false about the COST.
+       A store read and a wasm instantiation are LOCAL and settle; a response body's arrival is a remote
+       party's to decide, and this arm sits in `ops.admit()`, one level above every service round — so a shed
+       entry whose server holds the body open froze the LEVEL-1 LOOP and not this admission. "The same shape"
+       is exactly the reasoning that makes an unbounded wait look like a bounded one.
+       A re-derivation that fails strands the entry and this round seats nothing — it is not offered again
+       (see `_bestCandidate`), so the failure costs one fetch in total rather than one per round. */
+    let doc;
+    if (stored.shed) {
+      const back = seat.landed.back;
+      if (!back) return null;
+      doc = frontierDoc({ key: stored.key, sourceUrl: stored.sourceUrl, topLevelUrl: stored.topLevelUrl,
+                          origin: stored.origin, responseHeaders: back.headers, html: back.bytes, code: "",
+                          recipes: stored.recipes, emit: stored.emit, visits: stored.visits,
+                          credentialed: stored.credentialed, provenance: frontierProvenance(stored) },
+                        "was re-derived for the cold tier");
+    } else {
+      doc = frontierDoc(stored, "came back from the cold tier");
+    }
+    /* THE PRINCIPAL RESUMES WITH THE RECIPE. A parked flow's world is only the same world if the
+       document it resumes into is the same PRINCIPAL — and this zone cannot re-derive one from
+       c.sourceUrl without re-fabricating the tuple origin a sandboxed document does not have. The stamp
+       site refuses to deliver a message for an empty one rather than inventing one. */
+    /* A RESUMED RECIPE IS A CLUSTER OF ONE, and its GROUP says so rather than borrowing a tab's. The
+       browsing-context group it parked in is gone — the tab was closed, or the session was — so there is
+       no live document it may share a heap with, and the frontier key (address|bundle, already unique per
+       recipe and never equal to a tab id) is the honest name for the group it resumes into. That is also
+       what lets the origin half stay "" for a recipe whose principal is empty: an empty origin on a key
+       whose group is unique collides with nothing, so nothing is invented. */
+    const msg = { type: "AST_ANALYZE", pageHtml: doc.html, code: doc.code, sourceUrl: doc.sourceUrl,
+                  origin: doc.origin, groupId: "cold:" + seat.what.key,
+                  responseHeaders: doc.responseHeaders,
+                  topLevelUrl: doc.topLevelUrl, credentialed: stored.credentialed,
+                  /* THE WORD THIS RESIDUE WAS PARKED UNDER, RE-STATED SO THE ENTRY IT PARKS AGAIN KEEPS IT.
+                     A rehydration does not re-decide how the address was first reached; it replays it. */
+                  provenance: frontierProvenance(stored), persist: true };
+    /* THE `try {} catch` AROUND THIS IS GONE WITH THE REPORTING IT DID. A rehydration whose engine ABORTS
+       is now bannered by engineBootFailed, at the reservation, together with the pool slot it releases —
+       one place on every creation path rather than one arm per call site. What was left in the catch was
+       an invariant abort, which `RETHROW_FATAL` was already rethrowing, so the arm could only ever have
+       caught something it immediately gave back. A rehydrated cold recipe always participates in the
+       frontier and never has a caller, which is the `cold` argument. */
+    /* THE STORED DOCUMENT IS PASSED AS IT WAS PARKED. `c.html || ""` stood here and it defeated
+       engineRoot's own assert: an entry carrying no document became a page that parses to nothing, which
+       reads as an origin whose parked flows found nothing rather than one that was never rebuilt. */
+    _reserveStats.rehydrated++;
+    /* NULL: a rehydrated cold recipe replays a document that had no creator in this session either. */
+    /* `u`: a rehydrated recipe carries the DOCUMENT its session recorded and no embedder — the frontier
+       key is a document's, and a parked child navigable resumes through the create notice its creator's
+       replay re-emits rather than through this path.
+       `none`: and §3.1.3's list arrives on that same re-emitted notice for the same reason, so what is
+       replayed HERE is a document with no embedder and therefore no ancestors. */
+    /* AND NOT REFERENCED, ON THAT SAME SENTENCE. A resumed recipe is a CLUSTER OF ONE in a group this zone
+       mints from the frontier key: the browsing-context group it parked in is gone, so there is no live
+       instance anywhere holding a WindowProxy for the document being rebuilt. If this document creates a
+       child navigable again, that child arrives as a create notice and is provisioned referenced by the arm
+       above — which is the same route the parked child took the first time.
+       THIS IS THE ONE ARM WITH NO NATIVE COUNTERPART, and it is worth saying why it does not contradict
+       `qjs_set_referenced` surviving a teardown: what survives a teardown is one INSTANCE's statement about
+       itself across a park, and what happens here is a NEW instance for a document whose peers no longer
+       exist. Carrying the old session's `1` forward would hold a frontier open for a proxy nothing holds. */
+    await engineCreate(doc.code, doc.html, msg, true, null, null, true, null, "u", "null",
+                       "none", "none", 0)._readyP;
+    return null;
+  }
+}
 const _hostOps = {
   weight: engineWeight,
   /* THE VALUE YIELD FLOOR — run until outranked by the runner-up. The `try {} catch (_) {}` around it is gone
@@ -6675,6 +6996,15 @@ const _hostOps = {
        uninterrupted turn, which is what makes "the pool is the register of who holds what" true at the moment
        the register is consulted. */
     const _coldRanking = await frontierIndex();
+    /* AND A DOCUMENT THAT HAS ALREADY ARRIVED IS SEATED BEFORE ANYTHING ELSE IS CONSIDERED, because its fetch
+       is spent. A `loading` seat whose load has settled is a work item the order already chose and already paid
+       for, so ranking anything against it would be ranking against a cost that cannot be unspent; and taking it
+       FIRST is also what makes the wait arm unable to spin — a settled seat's `_readyP` resolves immediately, so
+       a round that left it in the pool would re-enter that arm at full speed on a condition only this line
+       changes. ONE PER ROUND like every other advance: `admitSeatLand` returns, so the pick below is not reached
+       and the round goes on to rank and step the hot set it already has. */
+    const _landing = _pool.find((e) => e.state === "loading" && e.settled);
+    if (_landing) return admitSeatLand(_landing);
     /* AN INDEX WALK RATHER THAN A SHIFT, because one waiting document can be legitimately UNSEATABLE YET (the
        defer below) and a shift would either drop it or spin this loop forever re-reading it. */
     let i = 0, swap = null;
@@ -6876,100 +7206,20 @@ const _hostOps = {
                "register having parted, and the address about to be loaded would be one nothing named");
         _seeds.delete(cand.addr);
         if (!seed) return pick.census;
-        /* THE SEED'S OWN §7.4 NAVIGATION, THROUGH THE ONE CHOKEPOINT — the same call a live document's seed and
-           a peer's child navigable both make. The PRIVATE-NETWORK principal and the CREDENTIALED-READ principal
-           are the DECLARING document's, taken when the route was declared and carried on the work item, because
-           §scheduler's "an operation that becomes a work item takes its inputs with it" is exactly the rule a
-           read of the pool here would break: the engine that declared this route may be gone by now. */
-        /* AND SO IS THE PROVENANCE, for the identical sentence: the engine that declared this route stated
-           what its path made the address, and the load is decided from that word and not from the address. */
-        /* NAMED RESIDUAL — AND IT IS THE ONE DOOR OF THIS ZONE THAT STILL AWAITS A BODY WITH NO END, HELD HERE
-           RATHER THAN IN A ROUND, WHICH IS WORSE AND IS WHY IT IS SAID OUT LOUD RATHER THAN QUIETLY LEFT.
-           WHAT IS NOT COVERED: `engineIssue`'s table answers the three doors inside a service round — the
-           pending-fetch seam, `xhr.send` and `document.fetch` — so an engine no longer leaves the rankable set
-           because a server holds a reply open. THIS call is awaited by `hostSchedule`'s OWN `ops.admit()`, one
-           level above any round, so a declared route or an ambient seed whose document body never ends does not
-           freeze one instance, it freezes the LEVEL-1 LOOP: no engine is ranked, stepped or serviced again for
-           the rest of the session, including every instance that is perfectly healthy.
-           WHAT THE NEXT DIFF BUILDS: admission that takes the pool SEAT and issues the seed's load through the
-           same in-flight table, with the bytes arriving on a later round — which is a real design and not a
-           relocation, because `engineCreate` takes its document as a PARAMETER (`html`) and a seat whose bytes
-           have not landed is a fourth state this pool does not have; the seat, `_waiting`, the RAM-floor
-           accounting and `hostClusterOf`'s "a cluster being provisioned answers exactly as a provisioned one
-           does" all read that state. It is a subproblem in its own right and is NOT started here.
-           HOW ITS ABSENCE WOULD SHOW: a person navigating to an endpoint that holds its body open sees the
-           extension stop analysing EVERY tab, not only that one — the Level-1 census stops being written at
-           all (`_level1Record` runs in the round's `finally`, and no round begins), where the round-side freeze
-           this diff closes left every other document's census advancing normally. */
-        const loaded = await navigationLoad(seed.url, seed.principalUrl, seed.principalUrl,
-                                            seed.principalOrigin, seed.provenance, seed.reach);
-        /* AND THE SAME THREE REFUSALS A SEEDED DOCUMENT ALWAYS OWES ITS READER, in the same order and for the
-           same reasons stated at the live seed: the chokepoint's own `unavailable`; a response that landed on
-           ANOTHER ORIGIN (which is a Document of origin B about to be seated in a cluster keyed on origin A,
-           and is also evidence that this server answers this request differently from the one the person's own
-           navigation made); and an EMPTY body, which is a perfectly ordinary Document under §7.4.5 and cannot
-           be the bundle this run exists to explore. Each costs the one fetch and nothing more. */
-        const _landed = originOf(loaded.url);
-        if (loaded.unavailable !== null || _landed === "" || _landed !== originOf(seed.principalUrl) ||
-            loaded.bytes.length === 0) {
-          console.warn("[bridge] a declared route could not be seeded: " + seed.url + " — " +
-                       (loaded.unavailable !== null ? JSON.stringify(loaded.unavailable)
-                        : _landed !== originOf(seed.principalUrl) ? "landed cross-origin at " + (_landed || "an unparseable URL")
-                        : "the response carried no bytes"));
-          return pick.census;
-        }
-        /* A CLUSTER OF ONE, WHICH IS THE TRUTH ABOUT IT RATHER THAN A CONVENIENCE. The declared page is not
-           nested in the document that declared it and shares no heap with it: nothing holds a WindowProxy for
-           it, no element presents it, and it is reached the way a person reaches a route — by navigating a tab
-           of the custom browser's own. So it is a TOP-LEVEL TRAVERSABLE in a browsing-context group this zone
-           mints, which is §7.3.2.3's own sentence read for a navigation nobody's opener survives.
-           THE PRINCIPAL IS THE DECLARING DOCUMENT'S AND IS NEVER RE-DERIVED FROM THIS ADDRESS. It is the
-           browser's `MessageSender.origin` for the document whose router declared the route, carried on the
-           work item, and SECURITY.md's credentialed-read principal is exactly that and never `originOf(url)` —
-           a sandboxed document has an ordinary address and an OPAQUE origin, so parsing the address would hand
-           its declared route same-origin access to authenticated bytes the browser refused it. The two
-           ADDRESSES were compared above (which is what HTML §7.2.5's can-have-its-URL-rewritten guarantees and
-           what a redirect could still break); this is the other question and it takes the other fact.
-           `credentialed` IS THEREFORE COMPUTED FROM THAT SAME PRINCIPAL — the identical predicate
-           `navigationLoad` used to decide whether to ask for cookies, so the field STATES the load that
-           happened rather than re-deciding it from the address that came back.
-           `topLevelUrl` IS ITS OWN ADDRESS because a top-level traversable's environment is its own top
-           (§8.1.3.1), and it is `loaded.url` rather than the requested address for §7.5.1's `creationURL`
-           reason: after a redirect the Document is AT where the response came from. */
-        /* AND THE WORD THE DECLARING ENGINE STATED, CARRIED ON INTO THE RESIDUE THIS RUN WILL PARK. It is
-           `seed.provenance` and not a literal for the reason the work item carries it at all: the load above
-           was decided from that word, and an entry whose stored grade disagreed with the load that fetched it
-           would have the cold tier re-fetch under a permission nobody granted. It is `derived` BY
-           CONSTRUCTION only while no origin is widened: at a widened one `_seedRefusal` passes a FORCED
-           declaration, and that entry is exactly what this field exists to keep honest. */
-        const msg = { type: "AST_ANALYZE", sourceUrl: loaded.url, origin: seed.principalOrigin,
-                      groupId: "seed:" + (_nextSeedGroup++), responseHeaders: loaded.headers,
-                      topLevelUrl: loaded.url,
-                      credentialed: navigationCarriesSession(loaded.url, seed.principalOrigin),
-                      /* AND IT IS THE JOIN, FOR THE REASON THE CHILD-NAVIGABLE RECORD STATES: a route only
-                         the bundle names, declared from a document this zone chose to open, is reached under
-                         both. At every setting reachable today the declaring document is `observed` and the
-                         join is the identity, so the stored grade is unchanged — the pairs it separates are
-                         the ones a widening creates. */
-                      provenance: self.safeFetchReachJoin(seed.reach, seed.provenance),
-                      persist: true };
-        DCHECK(hostClusterOf(clusterKeyOf(msg)) === null,
-               "a declared route minted a browsing-context group this pool already runs an instance for — the " +
-               "group id is a fresh counter, so a hit means two seeds were given one id and the second would " +
-               "JOIN the heap the first built, which is two documents behind one agent");
-        _reserveStats.seeded++;
-        /* NULL: a declared route has NO CREATOR — nothing embedded it and nothing opened it, so HTML §7.1.7 has
-           no container to clone and this Document is judged against its own response alone. `u`/`null`/`none`:
-           §7.3.1.3 gives it no parent and no container element, and §3.1.3's steps 2-3 return the empty list
-           for a Document with no container document — three statements of one fact about a top-level page.
-           `cold: true` — it has no caller. Nothing awaited this document, so its findings MERGE to the moat
-           rather than being returned to a requester, which is the same arm a rehydrated recipe takes.
-           AND NOT REFERENCED, WHICH IS THE SAME SENTENCE THE CLUSTER-OF-ONE PARAGRAPH ABOVE ALREADY MAKES:
-           nothing holds a WindowProxy for a route the bundle merely DECLARED — no element presents it and no
-           page opened it, which is precisely why this zone had to mint its group and its name. Its frontier
-           is entitled to drain, and draining is what produces the findings this arm exists to collect. */
-        await engineCreate("", loaded.bytes, msg, true, null, loaded.url, true, null, "u", "null",
-                           "none", "none", 0)._readyP;
+        /* AND THE FETCH IS ISSUED RATHER THAN AWAITED, WHICH IS THE WHOLE OF WHY THIS ARM IS THREE LINES. The
+           load used to be awaited HERE, inside `ops.admit()`, one level above any service round — so a declared
+           route whose server holds its body open did not freeze one instance, it froze the LEVEL-1 LOOP: no
+           engine ranked, no engine stepped, no engine serviced again for the rest of the session, including
+           every instance that was perfectly healthy, and no round began so nothing recorded that either. The
+           seat is a member of the pool, `_admissionHasHeadroom` counts it, and `hostSchedule`'s wait arm waits
+           on its promise only when NOTHING is rankable — so the round returns and the hot set keeps running.
+           THE ADMISSION FINISHES ON A LATER ROUND, AND EVERY DECISION STAYS ON A ROUND. What the seat carries
+           off-round is exactly the network body; the refusals, the message, the cluster check and the boot are
+           all performed by `admitSeatLand` at the top of a round, so an invariant abort out of any of them
+           reaches `hostSchedule`'s own failure arm exactly as it did when the load was awaited here. */
+        admitLoadSeat({ kind: "seed", seed: seed },
+                      () => navigationLoad(seed.url, seed.principalUrl, seed.principalUrl,
+                                           seed.principalOrigin, seed.provenance, seed.reach));
         return pick.census;
       }
       if (cand.kind === "doc") {
@@ -7013,79 +7263,17 @@ const _hostOps = {
         await eng._readyP;
         return pick.census;
       }
-      /* THE WHOLE PARKED DOCUMENT COMES BACK THROUGH ONE READER, and the recipe's flows resume inside it.
-         `frontierDoc` is the same shape the park wrote, asserted the same way in the other direction, so
-         the field the tier was missing (`responseHeaders` — the policy container) cannot go missing again
-         from one end only.
-         THE CONTENT IS FETCHED HERE AND NOT AT THE RANKING, which is the other half of why the cold tier has a
-         ranking VIEW. The order reads two numbers; only the item it PICKS is deserialized. */
-      const stored = await frontierGet(cand.row.key);
-      DCHECK(stored,
-             "the cold tier's ranking view named an entry the store does not hold — this zone is the store's " +
-             "only writer and frontierPut updates the view on its way through, so a row with no entry is the " +
-             "projection and the store having drifted apart");
-      /* A SHED RESIDUE'S DOCUMENT IS ON THE NETWORK RATHER THAN IN THE STORE, so it is fetched back here —
-         the same request the shed decision was PROVED against, performed for real. It is awaited inside the
-         round for the same reason the boot below it is: this arm already suspends on the store and then on a
-         whole wasm instantiation, so a fetch ahead of them is the same shape and not a new one. A
-         re-derivation that fails strands the entry and this round seats nothing — it is not offered again
-         (see `_bestCandidate`), so the failure costs one fetch in total rather than one per round. */
-      let doc;
-      if (stored.shed) {
-        const back = await frontierRederive(stored);
-        if (!back) return pick.census;
-        doc = frontierDoc({ key: stored.key, sourceUrl: stored.sourceUrl, topLevelUrl: stored.topLevelUrl,
-                            origin: stored.origin, responseHeaders: back.headers, html: back.bytes, code: "",
-                            recipes: stored.recipes, emit: stored.emit, visits: stored.visits,
-                            credentialed: stored.credentialed, provenance: frontierProvenance(stored) },
-                          "was re-derived for the cold tier");
-      } else {
-        doc = frontierDoc(stored, "came back from the cold tier");
-      }
-      /* THE PRINCIPAL RESUMES WITH THE RECIPE. A parked flow's world is only the same world if the
-         document it resumes into is the same PRINCIPAL — and this zone cannot re-derive one from
-         c.sourceUrl without re-fabricating the tuple origin a sandboxed document does not have. The stamp
-         site refuses to deliver a message for an empty one rather than inventing one. */
-      /* A RESUMED RECIPE IS A CLUSTER OF ONE, and its GROUP says so rather than borrowing a tab's. The
-         browsing-context group it parked in is gone — the tab was closed, or the session was — so there is
-         no live document it may share a heap with, and the frontier key (address|bundle, already unique per
-         recipe and never equal to a tab id) is the honest name for the group it resumes into. That is also
-         what lets the origin half stay "" for a recipe whose principal is empty: an empty origin on a key
-         whose group is unique collides with nothing, so nothing is invented. */
-      const msg = { type: "AST_ANALYZE", pageHtml: doc.html, code: doc.code, sourceUrl: doc.sourceUrl,
-                    origin: doc.origin, groupId: "cold:" + cand.row.key,
-                    responseHeaders: doc.responseHeaders,
-                    topLevelUrl: doc.topLevelUrl, credentialed: stored.credentialed,
-                    /* THE WORD THIS RESIDUE WAS PARKED UNDER, RE-STATED SO THE ENTRY IT PARKS AGAIN KEEPS IT.
-                       A rehydration does not re-decide how the address was first reached; it replays it. */
-                    provenance: frontierProvenance(stored), persist: true };
-      /* THE `try {} catch` AROUND THIS IS GONE WITH THE REPORTING IT DID. A rehydration whose engine ABORTS
-         is now bannered by engineBootFailed, at the reservation, together with the pool slot it releases —
-         one place on every creation path rather than one arm per call site. What was left in the catch was
-         an invariant abort, which `RETHROW_FATAL` was already rethrowing, so the arm could only ever have
-         caught something it immediately gave back. A rehydrated cold recipe always participates in the
-         frontier and never has a caller, which is the `cold` argument. */
-      /* THE STORED DOCUMENT IS PASSED AS IT WAS PARKED. `c.html || ""` stood here and it defeated
-         engineRoot's own assert: an entry carrying no document became a page that parses to nothing, which
-         reads as an origin whose parked flows found nothing rather than one that was never rebuilt. */
-      _reserveStats.rehydrated++;
-      /* NULL: a rehydrated cold recipe replays a document that had no creator in this session either. */
-      /* `u`: a rehydrated recipe carries the DOCUMENT its session recorded and no embedder — the frontier
-         key is a document's, and a parked child navigable resumes through the create notice its creator's
-         replay re-emits rather than through this path.
-         `none`: and §3.1.3's list arrives on that same re-emitted notice for the same reason, so what is
-         replayed HERE is a document with no embedder and therefore no ancestors. */
-      /* AND NOT REFERENCED, ON THAT SAME SENTENCE. A resumed recipe is a CLUSTER OF ONE in a group this zone
-         mints from the frontier key: the browsing-context group it parked in is gone, so there is no live
-         instance anywhere holding a WindowProxy for the document being rebuilt. If this document creates a
-         child navigable again, that child arrives as a create notice and is provisioned referenced by the arm
-         above — which is the same route the parked child took the first time.
-         THIS IS THE ONE ARM WITH NO NATIVE COUNTERPART, and it is worth saying why it does not contradict
-         `qjs_set_referenced` surviving a teardown: what survives a teardown is one INSTANCE's statement about
-         itself across a park, and what happens here is a NEW instance for a document whose peers no longer
-         exist. Carrying the old session's `1` forward would hold a frontier open for a proxy nothing holds. */
-      await engineCreate(doc.code, doc.html, msg, true, null, null, true, null, "u", "null",
-                         "none", "none", 0)._readyP;
+      /* AND THE STORE READ AND THE RE-DERIVATION ARE ISSUED RATHER THAN AWAITED, FOR THE REASON THE SEED ARM
+         STATES AND FOR ONE MORE OF ITS OWN. A shed residue's document is on the NETWORK — the same request the
+         shed decision was proved against — so awaiting it here put a remote body one level above every service
+         round exactly as the seed's load did; and the `frontierGet` beside it rides the same seat rather than
+         being split from it, because the two are one question (`shed` is a field of the entry, so which of the
+         two reads is needed is not known until the first has answered) and splitting them would be two seats
+         for one admission. Both are relayed to `admitSeatLand`, which performs every DECISION on a round. */
+      admitLoadSeat({ kind: "cold", key: cand.row.key }, async () => {
+        const stored = await frontierGet(cand.row.key);
+        return { stored: stored, back: stored && stored.shed ? await frontierRederive(stored) : null };
+      });
     }
     return pick ? pick.census : null;
   },
@@ -7358,6 +7546,23 @@ self.rendererPoolProbe = function rendererPoolProbe() {
        can be a page of four documents — and without this the ones a `qjs_join` added are invisible from
        outside, which is exactly the shape of number that reads identically whether the join happened or the
        child was silently never hosted. */
+    /* A SEAT WHOSE DOCUMENT IS STILL ON THE NETWORK IS REPORTED AS ITSELF, AND IT IS NOT COUNTED AS A
+       RESERVATION. It has no renderer, no agent cluster and no document — the load has not landed, so there is
+       nothing yet to key or to name — and every Level-1 fact it could carry is ABSENT for the reason the
+       reservation arm states one line down: a `heapBytes: 0` is the default that admits another engine against
+       RAM about to be spent. `booting` is deliberately NOT incremented: the arithmetic below is a claim about
+       `engineCreate`'s own made/rooted/failed ledger, and a seat that never called it would make a correct
+       pool read as one holding a phantom reservation — an assert firing on the repair that put the seat there. */
+    if (eng.state === "loading") {
+      DCHECK(eng.what !== null && typeof eng.what === "object" && typeof eng.what.kind === "string",
+             "a loading seat is in the pool naming no work item — the seat exists so a LATER round can finish " +
+             "the admission its fetch was spent on, and one that cannot say which kind of work it is holding " +
+             "is a slot that blocks admission and can never be landed by anybody");
+      return { name: null, docId: null, topDocId: null, state: "loading",
+               framed: false, routingId: null, heapBytes: null, topWeight: null,
+               cold: !!eng._cold, joined: eng._resolvers.length, joinedDocIds: eng.joinedDocIds.slice(),
+               loadKind: eng.what.kind, settled: !!eng.settled };
+    }
     if (eng.state === "booting") {
       booting++;
       DCHECK(typeof eng.cluster === "string" && eng.cluster !== "" && typeof eng.docId === "string" && eng.docId !== "",
@@ -7456,6 +7661,10 @@ self.rendererPoolProbe = function rendererPoolProbe() {
            scheduler: { alive: !_hostDead, driving: _hostDriving, kicksRefused: _hostKicksRefused,
                         diedOf: _hostDead ? String((_hostDead && _hostDead.message) || _hostDead) : null },
            pool: pool, waiting: _waiting.length, residentBytes: _residentBytes(),
+           /* AND THE ADMISSIONS WHOSE DOCUMENT IS STILL ON THE NETWORK, WHICH IS THE ONE THING ABOUT THIS
+              STATE THAT CAN BE OBSERVED FROM OUTSIDE. It is NOT folded into `reservations.booting`: that
+              block is an accounting of `engineCreate`'s own ledger and a seat has never called it. */
+           loadingSeats: _loadingCount(),
            reservations: { made: _reserveStats.made, rooted: _reserveStats.rooted, failed: _reserveStats.failed,
                            booting: booting, inFlight: inFlight, peakBooting: _reserveStats.peakBooting,
                            joinedBooting: _reserveStats.joinedBooting, joinedRooted: _reserveStats.joinedRooted,
