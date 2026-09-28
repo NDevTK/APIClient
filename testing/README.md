@@ -137,9 +137,44 @@ a witness built that way goes silent in exact proportion to how well the engine 
 `testing/fixtures/GATE` does not exist and cannot yet. `engine/gate_collect.mjs`'s claim mechanism —
 the thing that makes an uncollected file a NAMED FAILURE rather than a silent exclusion — requires the
 runner a claim names to EXIST, and no runner enumerates this directory; `collectFixtures` walks
-`engine/tests`. Two tracked scripts do compose fixture URLs from a variable, `testing/moat_survey.sh`
-and `testing/scale_survey.sh`, and every name in their arrays is absent from the directory, so the one
-shape a collector would have to cover currently covers nothing.
+`engine/tests`. TWO TRACKED SCRIPTS USED TO COMPOSE FIXTURE URLS FROM A VARIABLE — `moat_survey.sh` and
+`scale_survey.sh` — AND THEY ARE DELETED, which is recorded here rather than left as a silence because the
+shape they had is the one a reader re-invents the moment they want a served fixture scored in bulk.
+
+Between them they named NINE documents, and no revision of this repository has ever contained one of them:
+`git ls-files | grep -ci <name>` answers 0 for every one of `sdk_supabase`, `sdk_pocketbase`, `sdk_firebase`,
+`sentry_cdn`, `esm_cdn_main2`, `prune_helper_gate`, `sdk_appwrite`, `sdk_algolia` and `sdk_directus`, and the
+directory holds exactly its tracked set with nothing untracked beside it. That is worse than the
+untracked-input case CLAUDE.md names — those inputs existed on somebody's disk, and these were never tracked
+at all — so neither script was a gate whose corpus had gone missing. Neither was ever runnable here.
+
+THE SUBJECT IS NOT RESTORABLE AND THAT IS A DECISION RATHER THAN A GAP. The nine are third-party CDN SDK
+bundles, which is a copy of somebody else's program, and this repository carries none; the same retirement
+is recorded in `.gitignore`'s `testing/fixtures/*` block, in the rule above about run-to-run variance, and by
+content — `git cat-file -e origin/main:testing/corpus/serve-faithful.mjs` answers that the path does not
+exist. (The commit those three cite is not reachable from this shallow clone, so the retirement is
+established by CONTENT here and never by ancestry.)
+
+EACH WAS ALSO BROKEN IN WAYS THE MISSING CORPUS HID, which is the part worth keeping, because both are
+failures a replacement would inherit. `moat_survey.sh` polled `node testing/harness.js learnstate`, and
+`CMDS` in harness.js has no such command — harness.js's own comment records `learnstate` going with five
+siblings for one root, that they searched `offscreenPage.workers()` for a worker `ast-worker.html`'s policy
+forbids — so its wait loop could never match and every fixture burned its full sixteen polls. It also read
+`_lastGrindStatsByDoc`, a name that occurs NOWHERE in the tracked tree. And its baselines were stamped
+`RE-MEASURED 2026-06-14 at submodule HEAD 3ec3b92`, against an `engine/qjs` that is no longer a submodule.
+
+WHAT THEY MEASURED IS MEASURED TODAY BY THINGS THAT RUN. `moat_survey.sh` was a per-document `netdiff`
+regression check against a committed baseline table; `netdiff` is above, is hand-driven, and CLAUDE.md names
+`--unused` a DIAGNOSTIC and never the thing to optimize — so a pass/fail gate keyed on it, carrying stored
+per-document expected counts, is a banned shape independently of the missing corpus, being both a change
+detector and a second hand-kept copy of what the engine emits. `scale_survey.sh` asked whether a late
+document is STARVED behind an accumulating backlog; `multitab` is that measurement at the document grain,
+and `testing/live-wfq.js` plus the `_wfq` series is it at the flow grain, where `starvedPicks`,
+`neverPicked` and `neverPickedAtTop` say what a per-document endpoint delta cannot — live-wfq refuses to
+divide two of those for a stated reason, which is a stronger instrument than `delta <= 0 -> STARVED`.
+
+So the one shape a collector would have to cover is now covered by nothing at all, and the honest reading of
+that is that nothing in this directory is collected rather than that a collector is owed.
 
 ## Rules that are not style
 
