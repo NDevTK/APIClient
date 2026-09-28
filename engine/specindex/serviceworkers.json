@@ -1,0 +1,975 @@
+{
+ "spec": "Service Workers",
+ "key": "serviceworkers",
+ "base": "https://w3c.github.io/ServiceWorker/",
+ "specUpdated": "17 September 2026",
+ "fetched": "2026-09-28",
+ "sections": {
+  "1": {
+   "title": "Motivations",
+   "page": "",
+   "id": "motivations"
+  },
+  "2": {
+   "title": "Model",
+   "page": "",
+   "id": "model"
+  },
+  "3": {
+   "title": "Client Context",
+   "page": "",
+   "id": "document-context"
+  },
+  "4": {
+   "title": "Execution Context",
+   "page": "",
+   "id": "execution-context"
+  },
+  "5": {
+   "title": "Caches",
+   "page": "",
+   "id": "cache-objects"
+  },
+  "6": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security-considerations"
+  },
+  "7": {
+   "title": "Extensibility",
+   "page": "",
+   "id": "extensibility"
+  },
+  "8": {
+   "title": "Acknowledgements",
+   "page": "",
+   "id": "acknowledgements"
+  },
+  "2.1": {
+   "title": "Service Worker",
+   "page": "",
+   "id": "service-worker-concept"
+  },
+  "2.1.1": {
+   "title": "Lifetime",
+   "page": "",
+   "id": "service-worker-lifetime"
+  },
+  "2.1.2": {
+   "title": "Events",
+   "page": "",
+   "id": "service-worker-events"
+  },
+  "2.2": {
+   "title": "Service Worker Timing",
+   "page": "",
+   "id": "service-worker-timing"
+  },
+  "2.3": {
+   "title": "Service Worker Registration",
+   "page": "",
+   "id": "service-worker-registration-concept"
+  },
+  "2.3.1": {
+   "title": "Lifetime",
+   "page": "",
+   "id": "service-worker-registration-lifetime"
+  },
+  "2.4": {
+   "title": "Service Worker Client",
+   "page": "",
+   "id": "service-worker-client-concept"
+  },
+  "2.5": {
+   "title": "Control and Use",
+   "page": "",
+   "id": "control-and-use"
+  },
+  "2.5.1": {
+   "title": "The window client case",
+   "page": "",
+   "id": "control-and-use-window-client"
+  },
+  "2.5.2": {
+   "title": "The worker client case",
+   "page": "",
+   "id": "control-and-use-worker-client"
+  },
+  "2.6": {
+   "title": "Task Sources",
+   "page": "",
+   "id": "task-sources"
+  },
+  "2.7": {
+   "title": "User Agent Shutdown",
+   "page": "",
+   "id": "user-agent-shutdown"
+  },
+  "3.1": {
+   "title": "ServiceWorker",
+   "page": "",
+   "id": "serviceworker-interface"
+  },
+  "3.1.1": {
+   "title": "Getting ServiceWorker instances",
+   "page": "",
+   "id": "service-worker-creation"
+  },
+  "3.1.2": {
+   "title": "scriptURL",
+   "page": "",
+   "id": "service-worker-url"
+  },
+  "3.1.3": {
+   "title": "state",
+   "page": "",
+   "id": "service-worker-state"
+  },
+  "3.1.4": {
+   "title": "postMessage(message, transfer)",
+   "page": "",
+   "id": "service-worker-postmessage"
+  },
+  "3.1.5": {
+   "title": "postMessage(message, options)",
+   "page": "",
+   "id": "service-worker-postmessage-options"
+  },
+  "3.1.6": {
+   "title": "Event handler",
+   "page": "",
+   "id": "service-worker-event-handler"
+  },
+  "3.2": {
+   "title": "ServiceWorkerRegistration",
+   "page": "",
+   "id": "serviceworkerregistration-interface"
+  },
+  "3.2.1": {
+   "title": "Getting ServiceWorkerRegistration instances",
+   "page": "",
+   "id": "service-worker-registration-creation"
+  },
+  "3.2.2": {
+   "title": "installing",
+   "page": "",
+   "id": "navigator-service-worker-installing"
+  },
+  "3.2.3": {
+   "title": "waiting",
+   "page": "",
+   "id": "navigator-service-worker-waiting"
+  },
+  "3.2.4": {
+   "title": "active",
+   "page": "",
+   "id": "navigator-service-worker-active"
+  },
+  "3.2.5": {
+   "title": "navigationPreload",
+   "page": "",
+   "id": "service-worker-registration-navigationpreload"
+  },
+  "3.2.6": {
+   "title": "scope",
+   "page": "",
+   "id": "service-worker-registration-scope"
+  },
+  "3.2.7": {
+   "title": "updateViaCache",
+   "page": "",
+   "id": "service-worker-registration-updateviacache"
+  },
+  "3.2.8": {
+   "title": "update()",
+   "page": "",
+   "id": "service-worker-registration-update"
+  },
+  "3.2.9": {
+   "title": "unregister()",
+   "page": "",
+   "id": "navigator-service-worker-unregister"
+  },
+  "3.2.10": {
+   "title": "Event handler",
+   "page": "",
+   "id": "service-worker-registration-event-handler"
+  },
+  "3.3": {
+   "title": "navigator.serviceWorker",
+   "page": "",
+   "id": "navigator-serviceworker"
+  },
+  "3.4": {
+   "title": "ServiceWorkerContainer",
+   "page": "",
+   "id": "serviceworkercontainer-interface"
+  },
+  "3.4.1": {
+   "title": "controller",
+   "page": "",
+   "id": "navigator-service-worker-controller"
+  },
+  "3.4.2": {
+   "title": "ready",
+   "page": "",
+   "id": "navigator-service-worker-ready"
+  },
+  "3.4.3": {
+   "title": "register(scriptURL, options)",
+   "page": "",
+   "id": "navigator-service-worker-register"
+  },
+  "3.4.4": {
+   "title": "getRegistration(clientURL)",
+   "page": "",
+   "id": "navigator-service-worker-getRegistration"
+  },
+  "3.4.5": {
+   "title": "getRegistrations()",
+   "page": "",
+   "id": "navigator-service-worker-getRegistrations"
+  },
+  "3.4.6": {
+   "title": "startMessages()",
+   "page": "",
+   "id": "navigator-service-worker-startMessages"
+  },
+  "3.4.7": {
+   "title": "Event handlers",
+   "page": "",
+   "id": "service-worker-container-event-handlers"
+  },
+  "3.5": {
+   "title": "Events",
+   "page": "",
+   "id": "document-context-events"
+  },
+  "3.6": {
+   "title": "NavigationPreloadManager",
+   "page": "",
+   "id": "navigation-preload-manager"
+  },
+  "3.6.1": {
+   "title": "enable()",
+   "page": "",
+   "id": "navigation-preload-manager-enable"
+  },
+  "3.6.2": {
+   "title": "disable()",
+   "page": "",
+   "id": "navigation-preload-manager-disable"
+  },
+  "3.6.3": {
+   "title": "setHeaderValue(value)",
+   "page": "",
+   "id": "navigation-preload-manager-setheadervalue"
+  },
+  "3.6.4": {
+   "title": "getState()",
+   "page": "",
+   "id": "navigation-preload-manager-getstate"
+  },
+  "4.1": {
+   "title": "ServiceWorkerGlobalScope",
+   "page": "",
+   "id": "serviceworkerglobalscope-interface"
+  },
+  "4.1.1": {
+   "title": "clients",
+   "page": "",
+   "id": "service-worker-global-scope-clients"
+  },
+  "4.1.2": {
+   "title": "registration",
+   "page": "",
+   "id": "service-worker-global-scope-registration"
+  },
+  "4.1.3": {
+   "title": "serviceWorker",
+   "page": "",
+   "id": "service-worker-global-scope-serviceworker"
+  },
+  "4.1.4": {
+   "title": "skipWaiting()",
+   "page": "",
+   "id": "service-worker-global-scope-skipwaiting"
+  },
+  "4.1.5": {
+   "title": "Event handlers",
+   "page": "",
+   "id": "service-worker-global-scope-event-handlers"
+  },
+  "4.2": {
+   "title": "Client",
+   "page": "",
+   "id": "client-interface"
+  },
+  "4.2.1": {
+   "title": "url",
+   "page": "",
+   "id": "client-url"
+  },
+  "4.2.2": {
+   "title": "frameType",
+   "page": "",
+   "id": "client-frametype"
+  },
+  "4.2.3": {
+   "title": "id",
+   "page": "",
+   "id": "client-id"
+  },
+  "4.2.4": {
+   "title": "type",
+   "page": "",
+   "id": "client-type"
+  },
+  "4.2.5": {
+   "title": "postMessage(message, transfer)",
+   "page": "",
+   "id": "client-postmessage"
+  },
+  "4.2.6": {
+   "title": "postMessage(message, options)",
+   "page": "",
+   "id": "client-postmessage-options"
+  },
+  "4.2.7": {
+   "title": "visibilityState",
+   "page": "",
+   "id": "client-visibilitystate"
+  },
+  "4.2.8": {
+   "title": "focused",
+   "page": "",
+   "id": "client-focused"
+  },
+  "4.2.9": {
+   "title": "ancestorOrigins",
+   "page": "",
+   "id": "client-ancestororigins"
+  },
+  "4.2.10": {
+   "title": "focus()",
+   "page": "",
+   "id": "client-focus"
+  },
+  "4.2.11": {
+   "title": "navigate(url)",
+   "page": "",
+   "id": "client-navigate"
+  },
+  "4.3": {
+   "title": "Clients",
+   "page": "",
+   "id": "clients-interface"
+  },
+  "4.3.1": {
+   "title": "get(id)",
+   "page": "",
+   "id": "clients-get"
+  },
+  "4.3.2": {
+   "title": "matchAll(options)",
+   "page": "",
+   "id": "clients-matchall"
+  },
+  "4.3.3": {
+   "title": "openWindow(url)",
+   "page": "",
+   "id": "clients-openwindow"
+  },
+  "4.3.4": {
+   "title": "claim()",
+   "page": "",
+   "id": "clients-claim"
+  },
+  "4.4": {
+   "title": "ExtendableEvent",
+   "page": "",
+   "id": "extendableevent-interface"
+  },
+  "4.4.1": {
+   "title": "event.waitUntil(f)",
+   "page": "",
+   "id": "wait-until-method"
+  },
+  "4.5": {
+   "title": "InstallEvent",
+   "page": "",
+   "id": "installevent-interface"
+  },
+  "4.5.1": {
+   "title": "event.addRoutes(rules)",
+   "page": "",
+   "id": "register-router-method"
+  },
+  "4.6": {
+   "title": "FetchEvent",
+   "page": "",
+   "id": "fetchevent-interface"
+  },
+  "4.6.1": {
+   "title": "event.request",
+   "page": "",
+   "id": "fetch-event-request"
+  },
+  "4.6.2": {
+   "title": "event.preloadResponse",
+   "page": "",
+   "id": "fetch-event-preloadresponse"
+  },
+  "4.6.3": {
+   "title": "event.clientId",
+   "page": "",
+   "id": "fetch-event-clientid"
+  },
+  "4.6.4": {
+   "title": "event.resultingClientId",
+   "page": "",
+   "id": "fetch-event-resultingclientid"
+  },
+  "4.6.5": {
+   "title": "event.replacesClientId",
+   "page": "",
+   "id": "fetch-event-replacesClientId"
+  },
+  "4.6.6": {
+   "title": "event.handled",
+   "page": "",
+   "id": "fetch-event-handled"
+  },
+  "4.6.7": {
+   "title": "event.respondWith(r)",
+   "page": "",
+   "id": "fetch-event-respondwith"
+  },
+  "4.7": {
+   "title": "ExtendableMessageEvent",
+   "page": "",
+   "id": "extendablemessageevent-interface"
+  },
+  "4.7.1": {
+   "title": "event.data",
+   "page": "",
+   "id": "extendablemessage-event-data"
+  },
+  "4.7.2": {
+   "title": "event.origin",
+   "page": "",
+   "id": "extendablemessage-event-origin"
+  },
+  "4.7.3": {
+   "title": "event.lastEventId",
+   "page": "",
+   "id": "extendablemessage-event-lasteventid"
+  },
+  "4.7.4": {
+   "title": "event.source",
+   "page": "",
+   "id": "extendablemessage-event-source"
+  },
+  "4.7.5": {
+   "title": "event.ports",
+   "page": "",
+   "id": "extendablemessage-event-ports"
+  },
+  "4.8": {
+   "title": "Events",
+   "page": "",
+   "id": "execution-context-events"
+  },
+  "5.1": {
+   "title": "Constructs",
+   "page": "",
+   "id": "cache-constructs"
+  },
+  "5.2": {
+   "title": "Understanding Cache Lifetimes",
+   "page": "",
+   "id": "cache-lifetimes"
+  },
+  "5.3": {
+   "title": "self.caches",
+   "page": "",
+   "id": "self-caches"
+  },
+  "5.3.1": {
+   "title": "caches",
+   "page": "",
+   "id": "global-caches"
+  },
+  "5.4": {
+   "title": "Cache",
+   "page": "",
+   "id": "cache-interface"
+  },
+  "5.4.1": {
+   "title": "match(request, options)",
+   "page": "",
+   "id": "cache-match"
+  },
+  "5.4.2": {
+   "title": "matchAll(request, options)",
+   "page": "",
+   "id": "cache-matchall"
+  },
+  "5.4.3": {
+   "title": "add(request)",
+   "page": "",
+   "id": "cache-add"
+  },
+  "5.4.4": {
+   "title": "addAll(requests)",
+   "page": "",
+   "id": "cache-addAll"
+  },
+  "5.4.5": {
+   "title": "put(request, response)",
+   "page": "",
+   "id": "cache-put"
+  },
+  "5.4.6": {
+   "title": "delete(request, options)",
+   "page": "",
+   "id": "cache-delete"
+  },
+  "5.4.7": {
+   "title": "keys(request, options)",
+   "page": "",
+   "id": "cache-keys"
+  },
+  "5.5": {
+   "title": "CacheStorage",
+   "page": "",
+   "id": "cachestorage-interface"
+  },
+  "5.5.1": {
+   "title": "match(request, options)",
+   "page": "",
+   "id": "cache-storage-match"
+  },
+  "5.5.2": {
+   "title": "has(cacheName)",
+   "page": "",
+   "id": "cache-storage-has"
+  },
+  "5.5.3": {
+   "title": "open(cacheName)",
+   "page": "",
+   "id": "cache-storage-open"
+  },
+  "5.5.4": {
+   "title": "delete(cacheName)",
+   "page": "",
+   "id": "cache-storage-delete"
+  },
+  "5.5.5": {
+   "title": "keys()",
+   "page": "",
+   "id": "cache-storage-keys"
+  },
+  "6.1": {
+   "title": "Secure Context",
+   "page": "",
+   "id": "secure-context"
+  },
+  "6.2": {
+   "title": "Content Security Policy",
+   "page": "",
+   "id": "content-security-policy"
+  },
+  "6.3": {
+   "title": "Origin Relativity",
+   "page": "",
+   "id": "origin-relativity"
+  },
+  "6.3.1": {
+   "title": "Origin restriction",
+   "page": "",
+   "id": "origin-restriction"
+  },
+  "6.3.2": {
+   "title": "importScripts(urls)",
+   "page": "",
+   "id": "importscripts"
+  },
+  "6.4": {
+   "title": "Cross-Origin Resources and CORS",
+   "page": "",
+   "id": "cross-origin-resources"
+  },
+  "6.5": {
+   "title": "Path restriction",
+   "page": "",
+   "id": "path-restriction"
+  },
+  "6.6": {
+   "title": "Service worker script request",
+   "page": "",
+   "id": "script-request"
+  },
+  "6.7": {
+   "title": "Implementer Concerns",
+   "page": "",
+   "id": "implementer-concerns"
+  },
+  "6.8": {
+   "title": "Privacy",
+   "page": "",
+   "id": "privacy"
+  },
+  "7.1": {
+   "title": "Define API bound to Service Worker Registration",
+   "page": "",
+   "id": "extension-to-service-worker-registration"
+  },
+  "7.2": {
+   "title": "Define Functional Event",
+   "page": "",
+   "id": "extension-to-extendable-event"
+  },
+  "7.3": {
+   "title": "Define Event Handler",
+   "page": "",
+   "id": "extension-to-service-worker-global-scope"
+  },
+  "7.4": {
+   "title": "Firing Functional Events",
+   "page": "",
+   "id": "firing-functional-events"
+  }
+ },
+ "dfns": {
+  "active worker": [
+   "2.3"
+  ],
+  "add lifetime promise": [
+   "4.4.1"
+  ],
+  "cache batch operation": [
+   "5.4"
+  ],
+  "classic scripts imported flag": [
+   "2.1"
+  ],
+  "client message queue": [
+   "3.4"
+  ],
+  "containing service worker registration": [
+   "2.1"
+  ],
+  "dedicated worker client": [
+   "2.4"
+  ],
+  "discarded flag": [
+   "2.4"
+  ],
+  "extend lifetime promises": [
+   "4.4"
+  ],
+  "fetch event dispatch time": [
+   "2.2"
+  ],
+  "fire a functional event": [
+   "7.4"
+  ],
+  "fire functional event": [
+   "7.4"
+  ],
+  "functional events": [
+   "2.1.2"
+  ],
+  "global object": [
+   "2.1"
+  ],
+  "handle fetch": [
+   "7.4"
+  ],
+  "handle fetch task source": [
+   "2.6"
+  ],
+  "handle functional event task source": [
+   "2.6"
+  ],
+  "has ever been evaluated flag": [
+   "2.1"
+  ],
+  "installing worker": [
+   "2.3"
+  ],
+  "last update check time": [
+   "2.3"
+  ],
+  "lifecycle events": [
+   "2.1.2"
+  ],
+  "lookup race response": [
+   "7.4"
+  ],
+  "match service worker registration": [
+   "7.4"
+  ],
+  "navigation preload enabled flag": [
+   "2.3"
+  ],
+  "navigation preload header value": [
+   "2.3"
+  ],
+  "policy container": [
+   "2.1"
+  ],
+  "request matches cached item": [
+   "7.4"
+  ],
+  "request soft update": [
+   "7.4"
+  ],
+  "routed response": [
+   "7.4"
+  ],
+  "scope url": [
+   "2.3"
+  ],
+  "script resource": [
+   "2.1"
+  ],
+  "script resource map": [
+   "2.1"
+  ],
+  "script url": [
+   "2.1"
+  ],
+  "service worker": [
+   "2.1",
+   "4.1"
+  ],
+  "service worker client": [
+   "2.4"
+  ],
+  "service worker events": [
+   "2.1.2"
+  ],
+  "service worker registration": [
+   "2.3",
+   "3.2"
+  ],
+  "service worker timing info": [
+   "2.2"
+  ],
+  "set of event types to handle": [
+   "2.1"
+  ],
+  "set of extended events": [
+   "2.1"
+  ],
+  "set of used scripts": [
+   "2.1"
+  ],
+  "shared worker client": [
+   "2.4"
+  ],
+  "skip waiting flag": [
+   "2.1"
+  ],
+  "start time": [
+   "2.2"
+  ],
+  "storage key": [
+   "2.3"
+  ],
+  "task queues": [
+   "2.3"
+  ],
+  "timed out flag": [
+   "4.4"
+  ],
+  "update via cache mode": [
+   "2.3"
+  ],
+  "used route": [
+   "7.4"
+  ],
+  "waiting worker": [
+   "2.3"
+  ],
+  "window client": [
+   "2.4"
+  ],
+  "worker cache lookup start": [
+   "2.2"
+  ],
+  "worker client": [
+   "2.4"
+  ],
+  "worker final router source": [
+   "2.2"
+  ],
+  "worker matched router source": [
+   "2.2"
+  ],
+  "worker router evaluation start": [
+   "2.2"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "active worker": {
+   "3.2.1": 2,
+   "3.4.2": 2,
+   "7.4": 39
+  },
+  "containing service worker registration": {
+   "8": 2,
+   "4.1.4": 3,
+   "4.3.4": 3,
+   "4.8": 2,
+   "7.4": 5
+  },
+  "extend lifetime promises": {
+   "4.4.1": 5,
+   "7.4": 3
+  },
+  "fire functional event": {
+   "8": 2
+  },
+  "functional events": {
+   "4.8": 7
+  },
+  "global object": {
+   "7.4": 20
+  },
+  "handle fetch": {
+   "4.6.7": 2,
+   "4.8": 2
+  },
+  "handle fetch task source": {
+   "7.4": 3
+  },
+  "handle functional event task source": {
+   "7.4": 3
+  },
+  "has ever been evaluated flag": {
+   "7.4": 2
+  },
+  "installing worker": {
+   "2.7": 2,
+   "3.2.1": 2,
+   "7.4": 18
+  },
+  "last update check time": {
+   "7.4": 2
+  },
+  "lifecycle events": {
+   "4.8": 2
+  },
+  "policy container": {
+   "7.4": 2
+  },
+  "scope url": {
+   "3.4.3": 2,
+   "7.4": 9
+  },
+  "script resource": {
+   "6.2": 2,
+   "7.4": 8
+  },
+  "script resource map": {
+   "7.4": 4
+  },
+  "script url": {
+   "7.4": 10
+  },
+  "service worker": {
+   "1": 14,
+   "8": 2,
+   "2.1.1": 2,
+   "2.3": 4,
+   "2.5": 2,
+   "2.6": 3,
+   "3.1": 4,
+   "3.1.1": 2,
+   "3.1.5": 2,
+   "3.5": 4,
+   "4.1.4": 4,
+   "4.2.11": 2,
+   "4.3.2": 2,
+   "4.3.4": 6,
+   "4.4": 2,
+   "4.4.1": 8,
+   "4.6": 2,
+   "4.7": 2,
+   "4.8": 3,
+   "5.2": 2,
+   "6.1": 5,
+   "6.3.1": 3,
+   "6.7": 3,
+   "6.8": 2,
+   "7.4": 24
+  },
+  "service worker client": {
+   "2.5": 5,
+   "2.5.1": 2,
+   "3.2.9": 2,
+   "3.5": 2,
+   "4.3.2": 2,
+   "6.1": 2,
+   "7.4": 17
+  },
+  "service worker registration": {
+   "8": 2,
+   "2.3.1": 4,
+   "2.7": 3,
+   "3.2.1": 3,
+   "3.2.9": 3,
+   "3.4": 2,
+   "3.4.3": 2,
+   "3.5": 3,
+   "6.1": 2,
+   "7.4": 22
+  },
+  "service worker timing info": {
+   "7.4": 6
+  },
+  "set of event types to handle": {
+   "7.4": 6
+  },
+  "set of extended events": {
+   "7.4": 5
+  },
+  "set of used scripts": {
+   "6.3.2": 2,
+   "7.4": 2
+  },
+  "storage key": {
+   "7.4": 8
+  },
+  "task queues": {
+   "7.4": 2
+  },
+  "update via cache mode": {
+   "7.4": 8
+  },
+  "waiting worker": {
+   "3.2.1": 2,
+   "7.4": 20
+  },
+  "window client": {
+   "2.5.1": 7,
+   "2.5.2": 2,
+   "4.3.2": 3,
+   "7.4": 2
+  },
+  "worker client": {
+   "2.5.2": 10,
+   "4.3.2": 2
+  },
+  "worker final router source": {
+   "7.4": 7
+  },
+  "worker matched router source": {
+   "7.4": 3
+  }
+ }
+}

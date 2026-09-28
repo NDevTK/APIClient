@@ -1258,6 +1258,120 @@ const SPECS = [
      tree actually produces — asked of a refusal and of a resolution. */
   { key: "xml", label: "Extensible Markup Language (XML) 1.0 (Fifth Edition)", kind: "xmlspec",
     base: "https://www.w3.org/TR/xml/", edition: "final", anchors: ["xml", "xml-1-0"] },
+  /* SERVICE WORKERS, AND THE ROW WAS ASKED FOR BY NAME BY A COMPONENT THAT REFUSED TO WRITE A CITATION WITHOUT
+     IT. `core/workers/worker_global_scope.c` carries a record whose own words are that no number for this
+     standard is written there DELIBERATELY: the standard had no row here and no foreign row either, its
+     numbers for `ServiceWorker` and `ServiceWorkerContainer` are low ones HTML also carries, and that file's
+     vote is HTML — so a citation of them would not have been SHIELDED but ACCUSED, with a quoted title beside
+     it being exactly what the mismatch channel judges. That record names the repair as a corpus or foreign row
+     in THIS tool, measured over the whole corpus rather than over the standard being added, and says it is not
+     that component's to make. This is it, and it is an INDEX rather than a foreign row for the reason the
+     `file system` and `sri` rows already argue: a foreign row STOPS a wrong answer and only an index ANSWERS,
+     and there is a citation here to answer.
+     THE POPULATION IS ONE SITE AND IT IS THE STRONGEST FORM A CITATION TAKES — `testing/static_surface.mjs`
+     writes this standard's name, a levelled number and a QUOTED title, and the title is the heading verbatim.
+     That site's own comment records that it cited a NON-EXISTENT section of HTML for one commit, written from
+     memory, and was repaired by a fetch; with this row the repair is CONFIRMED by the tool on every run
+     instead of resting on that one reading.
+     THE ANCHOR IS THE TWO-WORD PLURAL NAME AND NOTHING SHORTER, which is the `mathml`/`database`/`core` hazard
+     both lists already record from the other end. `serviceworker` as one word is written constantly here — an
+     IDL interface name, a Fetch destination string, an exposure-set flag, a CSP directive key — so a one-word
+     anchor would be consulted at sites discussing none of this and is the coincidence generator `keepTerm`
+     refuses for terms. The SINGULAR is left off too: this tree writes it as ordinary prose about a kind of
+     worker rather than as a document's name, and the two sites where it stands nearest a number are both
+     naming HTML. Derived rather than eyeballed over the audited tree: the only place a spelling of this
+     standard is the token immediately before a number is the one site above.
+     AND `test_forced.c`'S PARENTHESISED GLOBAL-NAME LIST IS WHY THE SHORTER ANCHOR WOULD HAVE COST SOMETHING
+     RATHER THAN MERELY BOUGHT NOTHING. It writes a worker realm's global names as a tuple and then a number of
+     the XMLHttpRequest Standard immediately after the closing bracket, so the token nearest that number is an
+     interface name this standard owns and the number belongs to a different document — and this standard HAS a
+     section at it. anchorTokens cannot reach that site at all, because its tail regex must end on a letter or
+     digit and that text ends on a colon; the tuple is still the shape the one-word anchor would have been
+     wrong about, so it is recorded here rather than discovered later. */
+  { key: "serviceworkers", label: "Service Workers", kind: "bikeshed",
+    base: "https://w3c.github.io/ServiceWorker/", edition: "maintained", anchors: ["service workers"] },
+  /* WEB ANIMATIONS LEVEL ONE, AND THE LEVEL IS THE WHOLE OF WHAT HAD TO BE ESTABLISHED BEFORE A ROW COULD BE
+     WRITTEN AT ALL. Two levels of one module are two documents with two numberings — the rule the Grid and
+     Positioned Layout rows above state — and here they do not merely renumber against each other: LEVEL TWO IS
+     A DELTA SPECIFICATION whose first chapter is titled `Delta specification`, so the two heading lists
+     diverge at chapter one and share almost nothing. The number this tree writes carries the title
+     `Animation Frames` in Level One and `The EffectTiming and OptionalEffectTiming dictionaries` in Level Two,
+     which is the ambiguity those rows warn about, arriving at a pair that is not an insertion shift.
+     WHAT SETTLES IT IS THE TREE'S OWN DECLARATION AND THE CITATION'S OWN TERM EVIDENCE, NEITHER OF THEM A
+     PREFERENCE. `engine/host/SPEC_STEPS.md` names the document it read in a table of bases, and it is Level
+     One's editor's draft. And the term every one of these sites is about — `update animations and send events`
+     — is DEFINED in Level One, in the very section they cite, and is defined NOWHERE in Level Two: the delta
+     references it six times and declares it not once. So the citation's own evidence names this document, which
+     is the standard this tool's header demands a resolution rest on.
+     SO THE UNLEVELLED NAME IS AN ANCHOR HERE WHERE IT IS NOT ONE FOR GRID, AND THE DIFFERENCE IS WHICH
+     DOCUMENTS ARE INDEXED. Grid has both levels in this table, so an unlevelled spelling there names neither of
+     two rows and the repair is at the site. Only Level One is here, so the unlevelled spelling names the one
+     document the tree declares it read, and the levelled shortname is listed beside it because that is what a
+     later reader writing the disambiguated form will type.
+     RESIDUAL. NOT COVERED: a citation that MEANS Level Two and writes the unlevelled name is judged against
+     Level One by this row. WHAT THE NEXT DIFF BUILDS: a second row for the delta, at which point the
+     unlevelled anchor comes OFF this one and both levels are named at their sites, which is exactly what the
+     Positioned Layout rows did. HOW ITS ABSENCE WOULD SHOW: a reader would observe a citation whose quoted
+     title is a heading of the delta reported as belonging to a section of this document.
+     LEVEL TWO IS NOT INDEXED RATHER THAN UNINDEXABLE, and the distinction is worth the line: it fetches, it is
+     bikeshed-rendered with numbered headings and a dt-updated, and it would regen with no reader of its own. It
+     is absent because no site in the audited tree names it, and a row's neighbours are a cost this table pays
+     over the whole corpus — the same reason the rows above are not all the levels their modules have. */
+  { key: "webanimations1", label: "Web Animations Module Level 1", kind: "bikeshed",
+    base: "https://drafts.csswg.org/web-animations-1/", edition: "maintained",
+    anchors: ["web animations", "web-animations-1"] },
+  /* WEB AUTHENTICATION AND CREDENTIAL MANAGEMENT WERE MEASURED AND REFUSED, AND THE CATEGORY IS NO POPULATION
+     RATHER THAN ANY OF THE FOUR A ROW IS NORMALLY REFUSED FOR. Both fetch, both are bikeshed-rendered with
+     numbered headings and a dt-updated, both regen with no reader of their own, and neither document announces
+     itself as moved or emptied — so FOREIGN, UNRENDERED, HUSK and NO-MAINTAINED-EDITION are each refuted by
+     measurement rather than left as a guess. What they lack is a citation to answer.
+     THE DERIVATION IS A COMMAND AND NOT A FIGURE: search the set `defaultTargets` reads, case-insensitively,
+     for every spelling of each name and read the branch around each hit. Web Authentication answers at two
+     components and neither answer is a citation — one is HTML's own autofill field token, in a table row and in
+     a comparison whose surrounding comment says the checks run against the PRECEDING token, and one is a prose
+     clause in the absence ranking about a passkey pair. Credential Management answers at no site at all under
+     any spelling. Neither name is ever the token immediately before a number, which is the only position an
+     anchor is consulted from.
+     AND THE COST WAS MEASURED RATHER THAN ARGUED, on the same frozen pair as the two rows above: adding both
+     rows on top of them moved the judged population down by twelve, VERIFIED down by four and the quotations
+     compared down by four, and moved the audited count of both new standards not at all — they stood at zero
+     sites. Every finding channel was byte-identical. So the trade is a coverage loss for no answers, which is
+     the one shape a row here can never justify, and it is the trade this table's own neighbours argument
+     predicts: a row buys NEIGHBOURS whether or not it buys answers. The predicted mechanism matched the
+     measurement — Credential Management flips no unique title and collides with no term at all, while Web
+     Authentication turns three titles that exactly one other standard used into shared ones.
+     THEY ARE NOT ADDED TO OTHER_SPECS EITHER, AND THAT IS THE SAME MEASUREMENT READ ONCE MORE. A foreign row
+     buys SILENCE for citations a vote would otherwise hand to whoever shares a number, and there are no such
+     citations: the names classify at no site, so a foreign entry would be one the matcher can never produce,
+     which both lists already record as an entry that protects nothing. When a site cites either standard, the
+     row to write is an INDEX and the derivation above is what says so. */
+  /* AND THE COVERAGE ARITHMETIC OF BOTH ROWS ABOVE IS NEGATIVE, WHICH IS REPORTED HERE RATHER THAN SMOOTHED,
+     BECAUSE THE CAUSE IS A GATE IN THIS FILE AND NOT A PROPERTY OF EITHER STANDARD. Measured over the WHOLE
+     corpus on one frozen state, five runs, the citations read IDENTICAL at every one of them so the subject
+     population never moved: the judged population went down by thirty-six for Service Workers alone, by
+     sixty-three for Web Animations alone and by seventy-seven for the pair, with VERIFIED down by seven,
+     quotations compared down by six and step references compared down by six. THE FINDINGS DID NOT MOVE AT ALL
+     — every channel and every one of the four category headers was byte-identical across all five runs, so no
+     defect was introduced and none was retired, which is the direction the whole-corpus rule most cares about.
+     WHERE THE LOSS COMES FROM IS ONE LINE AND IT IS NOT THE ANCHORS. Almost all of it is the TITLE channel:
+     resolution by a stated title fell by sixty-five while resolution by an anchor ROSE. The gate is
+     `c.titleEv.length === 1` standing BEFORE `titlePlaces`, so a title used by two indexed standards is refused
+     outright even where the neighbourhood half would have kept exactly one of them. Both new indexes carry real
+     headings that exactly one older index already used — `Animation Frames` is a heading of HTML and of Web
+     Animations, `URL` of Fetch and of Service Workers, `Specification conventions` of Web Cryptography and of
+     Web Animations — and the moment a second standard uses one, every site resolving on it drops to its file's
+     vote, taking the whole group in that file with it. Read at the sites: the HTML animation-frame cluster is
+     still filed under HTML and is still correct, and it is now placed by a GUESS where it used to be placed by
+     evidence.
+     RESIDUAL. NOT COVERED: a title the cited number's own standard places in the cited neighbourhood is refused
+     as evidence whenever any OTHER indexed standard uses the same words anywhere, however far from any number
+     the site could be citing. WHAT THE NEXT DIFF BUILDS: filter `titleEv` through `titlePlaces` FIRST and
+     require exactly one SURVIVOR, which is strictly stronger evidence than either half alone and which this
+     paragraph's own neighbourhood argument already justifies — measured over the whole corpus, both directions
+     reported, because widening a CONFIRMING channel is the direction that certifies what nothing can refute.
+     HOW ITS ABSENCE WOULD SHOW: a reader would observe the resolved-by-title count FALL whenever a standard is
+     added, with the finding total flat and the added standard's own audited count small, and would find the
+     displaced sites still filed under the right standard and newly marked as this audit's guess. */
 ];
 const SPEC_BY_KEY = new Map(SPECS.map((s) => [s.key, s]));
 const indexFileOf = (key) => join(INDEX_DIR, key + ".json");

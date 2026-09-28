@@ -1,0 +1,880 @@
+{
+ "spec": "Web Animations Module Level 1",
+ "key": "webanimations1",
+ "base": "https://drafts.csswg.org/web-animations-1/",
+ "specUpdated": "23 September 2026",
+ "fetched": "2026-09-28",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Specification conventions",
+   "page": "",
+   "id": "spec-conventions"
+  },
+  "3": {
+   "title": "Web Animations model overview",
+   "page": "",
+   "id": "web-animations-model-overview"
+  },
+  "4": {
+   "title": "Timing model",
+   "page": "",
+   "id": "timing-model"
+  },
+  "5": {
+   "title": "Animation model",
+   "page": "",
+   "id": "animation-model"
+  },
+  "6": {
+   "title": "Programming interface",
+   "page": "",
+   "id": "programming-interface"
+  },
+  "7": {
+   "title": "Integration with Media Fragments",
+   "page": "",
+   "id": "integration-with-media-fragments"
+  },
+  "8": {
+   "title": "Implementation requirements",
+   "page": "",
+   "id": "implementation-requirements"
+  },
+  "9": {
+   "title": "Acknowledgements",
+   "page": "",
+   "id": "acknowledgements"
+  },
+  "10": {
+   "title": "Changes since last publication",
+   "page": "",
+   "id": "changes-since-last-publication"
+  },
+  "11": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "priv"
+  },
+  "12": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "sec"
+  },
+  "1.1": {
+   "title": "Use cases",
+   "page": "",
+   "id": "use-cases"
+  },
+  "1.2": {
+   "title": "Relationship to other specifications",
+   "page": "",
+   "id": "relationship-to-other-specifications"
+  },
+  "1.3": {
+   "title": "Overview of this specification",
+   "page": "",
+   "id": "overview-of-this-specification"
+  },
+  "4.1": {
+   "title": "Timing model characteristics",
+   "page": "",
+   "id": "timing-model-overview"
+  },
+  "4.1.1": {
+   "title": "Stateless",
+   "page": "",
+   "id": "stateless"
+  },
+  "4.1.2": {
+   "title": "Hierarchical",
+   "page": "",
+   "id": "hierarchical"
+  },
+  "4.2": {
+   "title": "Time values",
+   "page": "",
+   "id": "time-value-section"
+  },
+  "4.3": {
+   "title": "Timelines",
+   "page": "",
+   "id": "timelines"
+  },
+  "4.3.1": {
+   "title": "Document timelines",
+   "page": "",
+   "id": "document-timelines"
+  },
+  "4.3.1.1": {
+   "title": "The default document timeline",
+   "page": "",
+   "id": "the-documents-default-timeline"
+  },
+  "4.3.1.2": {
+   "title": "Relationship to wall-clock time",
+   "page": "",
+   "id": "document-wallclock-time"
+  },
+  "4.4": {
+   "title": "Animation Frames",
+   "page": "",
+   "id": "animation-frame-loop"
+  },
+  "4.5": {
+   "title": "Animations",
+   "page": "",
+   "id": "animations"
+  },
+  "4.5.1": {
+   "title": "Calculating the current time of an animation",
+   "page": "",
+   "id": "the-current-time-of-an-animation"
+  },
+  "4.5.2": {
+   "title": "Setting the timeline of an animation",
+   "page": "",
+   "id": "setting-the-timeline"
+  },
+  "4.5.3": {
+   "title": "Setting the associated effect of an animation",
+   "page": "",
+   "id": "setting-the-associated-effect"
+  },
+  "4.5.4": {
+   "title": "Setting the current time of an animation",
+   "page": "",
+   "id": "setting-the-current-time-of-an-animation"
+  },
+  "4.5.5": {
+   "title": "Setting the start time of an animation",
+   "page": "",
+   "id": "setting-the-start-time-of-an-animation"
+  },
+  "4.5.6": {
+   "title": "Waiting for the associated effect",
+   "page": "",
+   "id": "waiting-for-the-associated-effect"
+  },
+  "4.5.7": {
+   "title": "The current ready promise",
+   "page": "",
+   "id": "the-current-ready-promise"
+  },
+  "4.5.8": {
+   "title": "Playing an animation",
+   "page": "",
+   "id": "playing-an-animation-section"
+  },
+  "4.5.9": {
+   "title": "Pausing an animation",
+   "page": "",
+   "id": "pausing-an-animation-section"
+  },
+  "4.5.10": {
+   "title": "Reaching the end",
+   "page": "",
+   "id": "reaching-the-end"
+  },
+  "4.5.11": {
+   "title": "The current finished promise",
+   "page": "",
+   "id": "the-current-finished-promise"
+  },
+  "4.5.12": {
+   "title": "Updating the finished state",
+   "page": "",
+   "id": "updating-the-finished-state"
+  },
+  "4.5.13": {
+   "title": "Finishing an animation",
+   "page": "",
+   "id": "finishing-an-animation-section"
+  },
+  "4.5.14": {
+   "title": "Canceling an animation",
+   "page": "",
+   "id": "canceling-an-animation-section"
+  },
+  "4.5.15": {
+   "title": "Speed control",
+   "page": "",
+   "id": "speed-control"
+  },
+  "4.5.15.1": {
+   "title": "Setting the playback rate of an animation",
+   "page": "",
+   "id": "setting-the-playback-rate-of-an-animation"
+  },
+  "4.5.15.2": {
+   "title": "Seamlessly updating the playback rate of an animation",
+   "page": "",
+   "id": "seamlessly-updating-the-playback-rate-of-an-animation"
+  },
+  "4.5.16": {
+   "title": "Reversing an animation",
+   "page": "",
+   "id": "reversing-an-animation-section"
+  },
+  "4.5.17": {
+   "title": "Play states",
+   "page": "",
+   "id": "play-states"
+  },
+  "4.5.18": {
+   "title": "Animation events",
+   "page": "",
+   "id": "animation-events-section"
+  },
+  "4.5.18.1": {
+   "title": "Sorting animation events",
+   "page": "",
+   "id": "sorting-animation-events"
+  },
+  "4.5.18.2": {
+   "title": "Animation playback events",
+   "page": "",
+   "id": "animation-playback-events-section"
+  },
+  "4.5.18.3": {
+   "title": "Types of animation playback events",
+   "page": "",
+   "id": "animation-playback-event-types"
+  },
+  "4.6": {
+   "title": "Animation effects",
+   "page": "",
+   "id": "animation-effects"
+  },
+  "4.6.1": {
+   "title": "Types of animation effects",
+   "page": "",
+   "id": "types-of-animation-effects"
+  },
+  "4.6.2": {
+   "title": "Associated animation and timeline",
+   "page": "",
+   "id": "animation-effects-and-animations"
+  },
+  "4.6.3": {
+   "title": "Local time",
+   "page": "",
+   "id": "local-time-section"
+  },
+  "4.6.4": {
+   "title": "Time spaces",
+   "page": "",
+   "id": "effect-time-spaces"
+  },
+  "4.6.5": {
+   "title": "The active interval",
+   "page": "",
+   "id": "the-active-interval"
+  },
+  "4.6.5.1": {
+   "title": "The start delay",
+   "page": "",
+   "id": "the-start-delay"
+  },
+  "4.6.5.2": {
+   "title": "The active duration",
+   "page": "",
+   "id": "the-active-duration"
+  },
+  "4.6.5.3": {
+   "title": "The end delay and animation effect end time",
+   "page": "",
+   "id": "the-end-delay"
+  },
+  "4.6.6": {
+   "title": "Animation effect phases and states",
+   "page": "",
+   "id": "animation-effect-phases-and-states"
+  },
+  "4.6.7": {
+   "title": "Relevant animations",
+   "page": "",
+   "id": "relevant-animations-section"
+  },
+  "4.6.8": {
+   "title": "Fill behavior and fill modes",
+   "page": "",
+   "id": "fill-behavior"
+  },
+  "4.6.9": {
+   "title": "Repeating",
+   "page": "",
+   "id": "repeating"
+  },
+  "4.6.9.1": {
+   "title": "Iteration intervals",
+   "page": "",
+   "id": "iteration-intervals"
+  },
+  "4.6.9.2": {
+   "title": "Controlling iteration",
+   "page": "",
+   "id": "controlling-iteration"
+  },
+  "4.6.9.3": {
+   "title": "Interval timing",
+   "page": "",
+   "id": "interval-timing"
+  },
+  "4.6.10": {
+   "title": "Direction control",
+   "page": "",
+   "id": "direction-control"
+  },
+  "4.6.11": {
+   "title": "Easing (effect timing transformations)",
+   "page": "",
+   "id": "time-transformations"
+  },
+  "4.7": {
+   "title": "Calculating progress",
+   "page": "",
+   "id": "core-animation-effect-calculations"
+  },
+  "4.7.1": {
+   "title": "Overview",
+   "page": "",
+   "id": "animation-effect-calculations-overview"
+  },
+  "4.7.2": {
+   "title": "Calculating the active time",
+   "page": "",
+   "id": "calculating-the-active-time"
+  },
+  "4.7.3": {
+   "title": "Calculating the overall progress",
+   "page": "",
+   "id": "calculating-the-overall-progress"
+  },
+  "4.7.4": {
+   "title": "Calculating the simple iteration progress",
+   "page": "",
+   "id": "calculating-the-simple-iteration-progress"
+  },
+  "4.7.5": {
+   "title": "Calculating the current iteration index",
+   "page": "",
+   "id": "calculating-the-current-iteration"
+  },
+  "4.7.6": {
+   "title": "Calculating the directed progress",
+   "page": "",
+   "id": "calculating-the-directed-progress"
+  },
+  "4.7.7": {
+   "title": "Calculating the transformed progress",
+   "page": "",
+   "id": "calculating-the-transformed-progress"
+  },
+  "4.7.8": {
+   "title": "Yielding the iteration progress",
+   "page": "",
+   "id": "the-iteration-progress"
+  },
+  "5.1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction-to-the-animation-model"
+  },
+  "5.2": {
+   "title": "Animating properties",
+   "page": "",
+   "id": "animating-properties"
+  },
+  "5.2.1": {
+   "title": "Custom Properties",
+   "page": "",
+   "id": "custom-properties"
+  },
+  "5.3": {
+   "title": "Keyframe effects",
+   "page": "",
+   "id": "keyframe-effects"
+  },
+  "5.3.1": {
+   "title": "Keyframes",
+   "page": "",
+   "id": "keyframes-section"
+  },
+  "5.3.2": {
+   "title": "Computing property values",
+   "page": "",
+   "id": "computing-property-values"
+  },
+  "5.3.3": {
+   "title": "Calculating computed keyframes",
+   "page": "",
+   "id": "calculating-computed-keyframes"
+  },
+  "5.3.4": {
+   "title": "The effect value of a keyframe effect",
+   "page": "",
+   "id": "the-effect-value-of-a-keyframe-animation-effect"
+  },
+  "5.4": {
+   "title": "Combining effects",
+   "page": "",
+   "id": "combining-effects"
+  },
+  "5.4.1": {
+   "title": "Animation classes",
+   "page": "",
+   "id": "animation-classes"
+  },
+  "5.4.2": {
+   "title": "The effect stack",
+   "page": "",
+   "id": "the-effect-stack"
+  },
+  "5.4.3": {
+   "title": "Calculating the result of an effect stack",
+   "page": "",
+   "id": "calculating-the-result-of-an-effect-stack"
+  },
+  "5.4.4": {
+   "title": "Effect composition",
+   "page": "",
+   "id": "effect-composition"
+  },
+  "5.4.5": {
+   "title": "Applying the composited result",
+   "page": "",
+   "id": "applying-the-composited-result"
+  },
+  "5.5": {
+   "title": "Replacing animations",
+   "page": "",
+   "id": "replacing-animations"
+  },
+  "5.5.1": {
+   "title": "Replace state",
+   "page": "",
+   "id": "animation-replace-state"
+  },
+  "5.5.2": {
+   "title": "Removing replaced animations",
+   "page": "",
+   "id": "removing-replaced-animations"
+  },
+  "5.6": {
+   "title": "Side effects of animation",
+   "page": "",
+   "id": "side-effects-section"
+  },
+  "6.1": {
+   "title": "Time values in the programming interface",
+   "page": "",
+   "id": "time-values-in-the-programming-interface"
+  },
+  "6.2": {
+   "title": "The AnimationTimeline interface",
+   "page": "",
+   "id": "the-animationtimeline-interface"
+  },
+  "6.3": {
+   "title": "The DocumentTimeline interface",
+   "page": "",
+   "id": "the-documenttimeline-interface"
+  },
+  "6.4": {
+   "title": "The Animation interface",
+   "page": "",
+   "id": "the-animation-interface"
+  },
+  "6.4.1": {
+   "title": "The AnimationPlayState enumeration",
+   "page": "",
+   "id": "the-animationplaystate-enumeration"
+  },
+  "6.4.2": {
+   "title": "The AnimationReplaceState enumeration",
+   "page": "",
+   "id": "the-animationreplacestate-enumeration"
+  },
+  "6.5": {
+   "title": "The AnimationEffect interface",
+   "page": "",
+   "id": "the-animationeffect-interface"
+  },
+  "6.5.1": {
+   "title": "The EffectTiming and OptionalEffectTiming dictionaries",
+   "page": "",
+   "id": "the-effecttiming-dictionaries"
+  },
+  "6.5.2": {
+   "title": "The FillMode enumeration",
+   "page": "",
+   "id": "the-fillmode-enumeration"
+  },
+  "6.5.3": {
+   "title": "The PlaybackDirection enumeration",
+   "page": "",
+   "id": "the-playbackdirection-enumeration"
+  },
+  "6.5.4": {
+   "title": "Updating the timing of an AnimationEffect",
+   "page": "",
+   "id": "updating-animationeffect-timing"
+  },
+  "6.5.5": {
+   "title": "The ComputedEffectTiming dictionary",
+   "page": "",
+   "id": "the-computedeffecttiming-dictionary"
+  },
+  "6.6": {
+   "title": "The KeyframeEffect interface",
+   "page": "",
+   "id": "the-keyframeeffect-interface"
+  },
+  "6.6.1": {
+   "title": "Creating a new KeyframeEffect object",
+   "page": "",
+   "id": "creating-a-new-keyframeeffect-object"
+  },
+  "6.6.2": {
+   "title": "Property names and IDL names",
+   "page": "",
+   "id": "property-name-conversion"
+  },
+  "6.6.3": {
+   "title": "Processing a keyframes argument",
+   "page": "",
+   "id": "processing-a-keyframes-argument"
+  },
+  "6.6.4": {
+   "title": "The KeyframeEffectOptions dictionary",
+   "page": "",
+   "id": "the-keyframeeffectoptions-dictionary"
+  },
+  "6.7": {
+   "title": "The CompositeOperation and CompositeOperationOrAuto enumerations",
+   "page": "",
+   "id": "the-compositeoperation-enumeration"
+  },
+  "6.8": {
+   "title": "The Animatable interface mixin",
+   "page": "",
+   "id": "the-animatable-interface-mixin"
+  },
+  "6.9": {
+   "title": "Extensions to the Document interface",
+   "page": "",
+   "id": "extensions-to-the-document-interface"
+  },
+  "6.10": {
+   "title": "Extensions to the DocumentOrShadowRoot interface mixin",
+   "page": "",
+   "id": "extensions-to-the-documentorshadowroot-interface-mixin"
+  },
+  "6.11": {
+   "title": "Extensions to the Element interface",
+   "page": "",
+   "id": "extensions-to-the-element-interface"
+  },
+  "6.12": {
+   "title": "The AnimationPlaybackEvent interface",
+   "page": "",
+   "id": "the-animationplaybackevent-interface"
+  },
+  "6.13": {
+   "title": "Model liveness",
+   "page": "",
+   "id": "model-liveness"
+  },
+  "8.1": {
+   "title": "Precision of time values",
+   "page": "",
+   "id": "precision-of-time-values"
+  },
+  "8.2": {
+   "title": "Conformance criteria",
+   "page": "",
+   "id": "conformance-criteria"
+  }
+ },
+ "dfns": {
+  "active phase": [
+   "4.6.6"
+  ],
+  "active timeline": [
+   "4.3"
+  ],
+  "after phase": [
+   "4.6.6"
+  ],
+  "animation composite order": [
+   "5.4.2"
+  ],
+  "animation frame": [
+   "4.4"
+  ],
+  "animation type": [
+   "5.2"
+  ],
+  "associated effect": [
+   "4.5"
+  ],
+  "before phase": [
+   "4.6.6"
+  ],
+  "by computed value": [
+   "5.2"
+  ],
+  "combining shadow lists": [
+   "10"
+  ],
+  "composite order": [
+   "5.4.2"
+  ],
+  "conforming scripted web animations user agent": [
+   "8.2"
+  ],
+  "convert a timeline time to an origin relative time": [
+   "4.3"
+  ],
+  "current time": [
+   "4.3",
+   "4.5"
+  ],
+  "default document timeline": [
+   "4.3.1.1"
+  ],
+  "document for timing": [
+   "4.5"
+  ],
+  "document timeline": [
+   "4.3.1"
+  ],
+  "effect target": [
+   "5.3"
+  ],
+  "global animation list": [
+   "4.5"
+  ],
+  "hold time": [
+   "4.5"
+  ],
+  "idle phase": [
+   "4.6.6"
+  ],
+  "inactive timeline": [
+   "4.3"
+  ],
+  "monotonically increasing": [
+   "4.3"
+  ],
+  "monotonically increasing timeline": [
+   "4.3"
+  ],
+  "not animatable": [
+   "5.2"
+  ],
+  "pending animation event queue": [
+   "4.5.18"
+  ],
+  "play state": [
+   "4.5.17"
+  ],
+  "play states": [
+   "4.5.17"
+  ],
+  "relevant animations": [
+   "4.6.7"
+  ],
+  "relevant animations for a subtree": [
+   "4.6.7"
+  ],
+  "repeatable list": [
+   "5.2"
+  ],
+  "reset an animation pending tasks": [
+   "4.5.14"
+  ],
+  "set the associated effect of an animation": [
+   "4.5.3"
+  ],
+  "set the current time": [
+   "4.5.4"
+  ],
+  "set the timeline of an animation": [
+   "4.5.2"
+  ],
+  "shadow lists": [
+   "10"
+  ],
+  "silently set the current time": [
+   "4.5.4"
+  ],
+  "start time": [
+   "4.5"
+  ],
+  "target element": [
+   "5.3"
+  ],
+  "target pseudo selector": [
+   "5.3"
+  ],
+  "timeline time to origin relative time": [
+   "4.3"
+  ],
+  "transformed progress": [
+   "4.7.7"
+  ],
+  "update animations and send events": [
+   "4.4"
+  ],
+  "web animations api": [
+   "1"
+  ],
+  "web animations model": [
+   "1"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "active timeline": {
+   "4.5.14": 2
+  },
+  "after phase": {
+   "4.6.8": 2
+  },
+  "animation type": {
+   "10": 2,
+   "5.3.4": 3,
+   "5.4.4": 2
+  },
+  "associated effect": {
+   "4.5.3": 3,
+   "4.5.9": 2,
+   "4.5.10": 5,
+   "4.5.12": 2,
+   "4.6.7": 2,
+   "5.5.2": 3,
+   "6.4": 3
+  },
+  "before phase": {
+   "4.6.8": 2
+  },
+  "by computed value": {
+   "10": 3
+  },
+  "composite order": {
+   "12": 2
+  },
+  "convert a timeline time to an origin relative time": {
+   "4.5.18.1": 2
+  },
+  "current time": {
+   "12": 2,
+   "4.4": 4,
+   "4.5.1": 4,
+   "4.5.4": 3,
+   "4.5.5": 3,
+   "4.5.8": 3,
+   "4.5.9": 3,
+   "4.5.10": 5,
+   "4.5.12": 7,
+   "4.5.14": 2,
+   "4.5.15": 2,
+   "4.5.15.2": 3,
+   "4.5.17": 10,
+   "4.6.3": 2,
+   "5.5.2": 3,
+   "6.4": 4,
+   "6.13": 2
+  },
+  "default document timeline": {
+   "6.4": 2
+  },
+  "effect target": {
+   "4.6.7": 2,
+   "5.3.3": 2,
+   "5.5.2": 2,
+   "5.6": 2,
+   "6.4": 6,
+   "6.6": 3
+  },
+  "hold time": {
+   "4.5.1": 2,
+   "4.5.4": 4,
+   "4.5.5": 4,
+   "4.5.8": 9,
+   "4.5.9": 3,
+   "4.5.12": 9,
+   "4.5.13": 2,
+   "4.5.17": 5
+  },
+  "inactive timeline": {
+   "4.3.1": 2,
+   "4.5.4": 2
+  },
+  "monotonically increasing": {
+   "12": 2,
+   "4.5.15.1": 2
+  },
+  "pending animation event queue": {
+   "4.4": 2
+  },
+  "play states": {
+   "4.5.12": 2
+  },
+  "set the associated effect of an animation": {
+   "6.4": 2
+  },
+  "set the current time": {
+   "4.5.12": 2
+  },
+  "set the timeline of an animation": {
+   "6.4": 2
+  },
+  "shadow lists": {
+   "12": 2
+  },
+  "start time": {
+   "4.5.1": 2,
+   "4.5.4": 6,
+   "4.5.5": 2,
+   "4.5.8": 8,
+   "4.5.9": 5,
+   "4.5.12": 3,
+   "4.5.13": 3,
+   "4.5.15.1": 3,
+   "4.5.15.2": 2,
+   "4.5.17": 8,
+   "4.5.18.1": 3,
+   "4.6.4": 2,
+   "4.6.5": 2
+  },
+  "target element": {
+   "6.6": 3,
+   "6.8": 2
+  },
+  "target pseudo selector": {
+   "6.6": 5
+  },
+  "transformed progress": {
+   "4.7.1": 2
+  },
+  "update animations and send events": {
+   "6.13": 2
+  },
+  "web animations api": {
+   "1.1": 4,
+   "1.2": 3,
+   "6.13": 2
+  },
+  "web animations model": {
+   "3": 2,
+   "1.2": 2
+  }
+ }
+}
