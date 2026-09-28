@@ -27,6 +27,9 @@
 #include "core/xml/xml_document.h"/* XML §2.1's [1] document with §2.8's [22] prolog and [27] Misc */
 #include "core/xml/xml_tree.h"   /* Namespaces §6 expansion INTO a tree, and §6.3 over expanded names */
 #include "core/xml/xml_parse.h"  /* the entry §7.5.3, §8.5.1 and XHR §3.6.6 share, and §8.5.1's parsererror */
+#include "core/layout/box_tree.h"   /* css-display-3 §2.5's spliced child sequence — the tree §4's items
+                                      are drawn from, and the one @FLEX contents-splice walks */
+#include "core/layout/flex_item.h"  /* css-flexbox-1 §4 "Flex Items"' classification over that sequence */
 #include "core/dom/attr_list.h"  /* dom_attr_get_ns — the §6.3 rows read back the EXPANDED name */
 #include "core/frame/csp_source_list.h"
 #include "core/frame/navigable.h"
@@ -28278,6 +28281,191 @@ static void document_paint_boxless_root_selftest(JSContext *ctx)
            contents_count.complete ? 1 : 0, opaque);
 }
 
+/* ONE FLEX CONTAINER'S §4 CHILD LIST, MEASURED OVER css-display-3 §2.5's SPLICE — see
+ * `flex_contents_splice_selftest` for what the pair is and why the numbers below are the two that separate
+ * them. Every field is a count or an identity this function derived from a string literal in this file. */
+typedef struct {
+    size_t members;         /* nodes in the container's BOX-TREE child sequence */
+    size_t items;           /* §4's flex items: each in-flow child plus ONE per child text sequence */
+    size_t first_seq_texts; /* TEXT nodes §4 wraps in the FIRST anonymous item */
+} FlexSpliceCount;
+
+static FlexSpliceCount flex_splice_count(JSContext *ctx, const char *html, const char *span_display)
+{
+    lxb_html_document_t *dom = bp_scratch_document(ctx, html);
+    lxb_dom_element_t   *body;
+    lxb_dom_node_t      *c, *first, *end;
+    FlexSpliceCount      out;
+    char                *display;
+
+    out.members = out.items = out.first_seq_texts = 0;
+    body = lxb_dom_interface_element(lxb_html_document_body_element(dom));
+    CHECK(body != NULL,
+          "the markup this file wrote for css-flexbox-1 §4 \"Flex Items\" parsed into a document with no "
+          "`body` — HTML §13.2.6 \"Tree construction\" generates one for markup that names none, and this "
+          "markup names one");
+    display = css_computed_value(body, "display");
+    CHECK(display != NULL && strcmp(display, "flex") == 0,
+          "the element this file declared `display:flex` on has some other computed value, so the sequence "
+          "measured below is not a FLEX container's child list at all and the two rows would differ for a "
+          "reason that is not the keyword this pair varies");
+    free(display);
+
+    /* THE ARM IS ARMED, ASSERTED AND NOT ASSUMED. §4's items are read off core/layout/box_tree.h's sequence
+       and a `contents` element is exactly what that sequence replaces, so the whole of this pair rests on the
+       cascade KEEPING that keyword: css-display-3 §2.7 "Automatic Box Type Transformations" is why it does —
+       "This has no effect on display types that generate no box at all, such as none or contents" — so §4's
+       own blockification of a flex item leaves it as the attribute wrote it. Were it blockified away, both
+       documents below would measure an ordinary inline box and agree for a reason that has nothing to do with
+       the splice, which is the unarmed control this assertion exists to refuse. */
+    first = lxb_dom_interface_node(body)->first_child;
+    CHECK(first != NULL && first->next != NULL && first->next->type == LXB_DOM_NODE_TYPE_ELEMENT,
+          "the markup this file wrote for css-flexbox-1 §4 did not parse into text followed by an element — "
+          "the second DOM child of the container is what carries the one keyword this pair varies");
+    display = css_computed_value(lxb_dom_interface_element(first->next), "display");
+    CHECKF(display != NULL && strcmp(display, span_display) == 0,
+           "the element this file declared `display:%s` on computed `%s`. The two documents this pair "
+           "measures differ in that keyword and in nothing else, so a third value here means the row below is "
+           "not the measurement its own name claims",
+           span_display, display != NULL ? display : "(none)");
+    free(display);
+
+    /* §2.5's SPLICED SEQUENCE, WALKED — "the element must be treated as if it had been replaced in the element
+       tree by its contents". This is the walk core/layout/flex_line.c, core/layout/flex_intrinsic_size.c's two
+       and core/layout/flex_cross_size.c all make; a walk that still stepped `->next` would never reach this
+       count, because core/layout/flex_item.c's classification aborts on the `contents` element ITSELF one call
+       earlier. */
+    for (c = box_tree_first_child(body); c != NULL; c = box_tree_next_sibling(body, c)) {
+        CHECKF(out.members < 8,
+               "css-display-3 §2.5's spliced child sequence for the container this file wrote yielded more "
+               "than 8 members. The markup is a string literal here, so this is the walk not terminating "
+               "rather than a document");
+        out.members++;
+    }
+    CHECKF(out.members >= 2,
+           "css-display-3 §2.5's spliced child sequence for the container this file wrote holds %zu members, "
+           "where this file's own markup puts at least two in it under either keyword: text, an element "
+           "carrying the keyword, and text. §2.5 replaces that element by its CONTENTS rather than by "
+           "nothing, so a shorter sequence is the walk and not the document — and the round trip below needs "
+           "two members to be a round trip at all, which is why this is asserted rather than guarded",
+           out.members);
+
+    /* THE BACKWARD STEP, WHICH IS WHAT §4's SEQUENCE NEEDS AND WHICH NO `->prev` CAN ANSWER: the member before
+       the second one is the first, and where the splice has run those two sit in DIFFERENT DOM child lists. */
+    c = box_tree_first_child(body);
+    CHECK(box_tree_prev_sibling(body, c) == NULL,
+          "css-display-3 §2.5's spliced child sequence answered a predecessor for its own FIRST member, so "
+          "the backward step and the forward one disagree about where this container's content begins");
+    CHECK(box_tree_prev_sibling(body, box_tree_next_sibling(body, c)) == c,
+          "css-display-3 §2.5's spliced child sequence read one way forward and another way back: the member "
+          "after the first is not one the first PRECEDES. The two directions descend into a spliced element at "
+          "opposite ends, which is the one way they can come apart");
+
+    /* §4's ITEM LIST — "Each in-flow child of a flex container becomes a flex item, and each child text
+       sequence is wrapped in an anonymous block container flex item" — collected exactly as
+       core/layout/flex_line.c collects it. */
+    for (c = box_tree_first_child(body); c != NULL; ) {
+        lxb_dom_node_t     *next = box_tree_next_sibling(body, c);
+        FlexItemChildKind   kind = flex_item_child_kind(body, c);
+
+        if (kind == FLEX_ITEM_CHILD_TEXT) {
+            lxb_dom_node_t *t;
+
+            end = flex_item_text_sequence_end(body, c);
+            if (out.items == 0)
+                for (t = c; t != end; t = box_tree_next_sibling(body, t))
+                    if (t->type == LXB_DOM_NODE_TYPE_TEXT) out.first_seq_texts++;
+            next = end;
+        }
+        if (kind != FLEX_ITEM_CHILD_NONE) out.items++;
+        CHECK(next != c,
+              "css-flexbox-1 §4's item walk did not advance past the child it had just classified");
+        c = next;
+    }
+    return out;
+}
+
+/* css-flexbox-1 §4 "Flex Items"' CHILD LIST OVER css-display-3 §2.5 "Box Generation: the none and contents
+ * keywords"' SPLICE — the one statement about this routing a reader can take off a RUN rather than off a
+ * diff, and a NONZERO one. An artifact whose flex walks still enumerate a DOM child list does not answer the
+ * numbers below differently: it ABORTS at core/layout/flex_item.c's `contents` arm before the first of them
+ * is taken, so `grep -c '@FLEX contents-splice'` answers 0 there and a count rather than an absent crash is
+ * what says the routing ran.
+ *
+ * WHY IT IS A PAIR ONE KEYWORD APART, which is `document_paint_boxless_root_selftest`'s shape above and for
+ * its reason: a single document's member count is a number with nothing to compare it against, and the two
+ * keywords §2.5 declares are exactly the variable this landing is about. `inline` is the control rather than
+ * `none` because `none` removes the element's CHILDREN as well — "The element and its descendants generate no
+ * boxes or text sequences" — so it would vary two things at once.
+ *
+ * WHAT THE SECOND NUMBER MEASURES THAT NO DOM WALK CAN STATE AT ALL. §4 wraps "each child text sequence" in
+ * ONE anonymous block container flex item; css-display-3 §1 "Introduction" defines that term in the BOX tree
+ * — "while each text sequence in the box tree likewise represents the corresponding contents of its text
+ * nodes" — and §2.5 puts a `contents` element's children in its box parent's sequence. So the text BEFORE such
+ * an element and the text INSIDE it are one sequence there, and `->next` cannot reach the second from the
+ * first: a DOM walk reports TWO anonymous items where §4 makes one, which is a plausible item list and not a
+ * crash. `first_seq_texts` is 2 under `contents` and 1 under `inline`, and that difference is the whole claim.
+ *
+ * IT RUNS NO LAYOUT AND READS NO FONT, deliberately: every number is an identity or a count over a string
+ * literal in this file, through the four entries this landing routed. A row that needed a viewport or a face
+ * would be measuring those as well, and the block above already records what a scratch document's rectangle
+ * is and is not. */
+static void flex_contents_splice_selftest(JSContext *ctx)
+{
+    /* TWO MARKUPS THAT DIFFER IN ONE KEYWORD AND IN NOTHING ELSE. The container's children are, in DOM order,
+       the text `A`, the element carrying that keyword (holding `B`, an element, and `C`) and the text `D`. */
+    static const char SPLICED[] =
+        "<!DOCTYPE html><html><body style=\"display:flex\">"
+        "A<span style=\"display:contents\">B<i>x</i>C</span>D</body></html>";
+    static const char INLINE_[] =
+        "<!DOCTYPE html><html><body style=\"display:flex\">"
+        "A<span style=\"display:inline\">B<i>x</i>C</span>D</body></html>";
+    FlexSpliceCount spliced = flex_splice_count(ctx, SPLICED, "contents");
+    FlexSpliceCount plain   = flex_splice_count(ctx, INLINE_, "inline");
+
+    CHECKF(plain.members == 3 && plain.items == 3 && plain.first_seq_texts == 1,
+           "the CONTROL document reported members=%zu items=%zu first_seq_texts=%zu where 3/3/1 is what "
+           "css-flexbox-1 §4 \"Flex Items\" gives a flex container whose three children are text, an inline "
+           "element and text: \"Each in-flow child of a flex container becomes a flex item, and each child "
+           "text sequence is wrapped in an anonymous block container flex item.\" This document has NO "
+           "css-display-3 §2.5 splice in it at all, so a wrong number here is about the classification or the "
+           "walk and not about the splice — which is what makes it the control",
+           plain.members, plain.items, plain.first_seq_texts);
+    CHECKF(spliced.members == 5,
+           "the SPLICED document's box-tree child sequence holds %zu members where css-display-3 §2.5 \"Box "
+           "Generation: the none and contents keywords\" makes it 5. \"The element itself does not generate "
+           "any boxes, but its children and pseudo-elements still generate boxes and text sequences as "
+           "normal\", and \"the element must be treated as if it had been replaced in the element tree by its "
+           "contents\" — so the container's sequence is the text `A`, the spliced element's own three "
+           "children, and the text `D`. THREE would be the DOM child list, which is the list this landing "
+           "replaced",
+           spliced.members);
+    CHECKF(spliced.items == 3,
+           "the SPLICED document reported %zu flex items where css-flexbox-1 §4 gives 3. Its five sequence "
+           "members are two child text sequences with one element between them, and §4 wraps each SEQUENCE — "
+           "not each text node — in one anonymous block container flex item. FOUR is the count a walk that "
+           "delimited those sequences with `->prev`/`->next` reports, because the text on either side of the "
+           "spliced element is then two sequences instead of one",
+           spliced.items);
+    CHECKF(spliced.first_seq_texts == 2 && spliced.first_seq_texts == plain.first_seq_texts + 1,
+           "the SPLICED document's FIRST child text sequence holds %zu text nodes against the control's %zu, "
+           "where css-display-3 §1 \"Introduction\" makes it 2 against 1: a text sequence is a box-tree "
+           "object — \"while each text sequence in the box tree likewise represents the corresponding "
+           "contents of its text nodes\" — so the text before a `contents` element and the text inside it are "
+           "ONE sequence. This is the number no DOM walk can state, because `->next` cannot reach the second "
+           "from the first. §4's white-space rule and every §9.9 sum are stated over \"the entire text "
+           "sequence\", so splitting one in two turns a maximum into a sum",
+           spliced.first_seq_texts, plain.first_seq_texts);
+
+    /* THE ROW. Two documents, one keyword apart, and the three numbers that separate them. ON AN ARTIFACT
+       WHOSE FLEX WALKS ARE UNROUTED THE ROW IS ABSENT ENTIRELY, because the spliced document aborts at
+       core/layout/flex_item.c's `contents` arm before the printf — `grep -c '@FLEX contents-splice'` answers
+       0 rather than a row of wrong numbers, which is this row's own control. */
+    printf("@FLEX contents-splice members=%zu items=%zu seq1=%zu ctl_members=%zu ctl_items=%zu ctl_seq1=%zu\n",
+           spliced.members, spliced.items, spliced.first_seq_texts,
+           plain.members, plain.items, plain.first_seq_texts);
+}
+
 static void message_source_selftest(void)
 {
     const char *kind = NULL, *enc;
@@ -30770,6 +30958,11 @@ int main(int argc, char **argv) {
        After them because it uses the same scratch-document helper and the same realm; see the function for
        why it is two documents one keyword apart and what each of the two aborts it arms would say. */
     document_paint_boxless_root_selftest(ctx);
+    /* AND THE SAME SCRATCH-DOCUMENT HELPER OVER css-flexbox-1 §4 "Flex Items"' CHILD LIST — the box-tree half
+       of css-display-3 §2.5's splice rather than the paint half, and the row that says this engine's flex
+       walks enumerate that sequence rather than a DOM child list. It runs no layout, so it is safe anywhere
+       after the realm exists; it is here because it uses the same helper as the two above. */
+    flex_contents_splice_selftest(ctx);
     /* AFTER the platform init above, because the two rows it checks are declared by window_message_init. */
     message_source_selftest();   /* §9.3.3's sources, and the unforgeable-origin rule that decides their findings */
     /* AT THE BASELINE, where no flow has narrowed anything — the pins it writes are cleared after each one,

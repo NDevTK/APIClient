@@ -12,6 +12,7 @@
 #include "core/css/css_length.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/box_tree.h"
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_line.h"
@@ -440,10 +441,16 @@ static CssPx fx_anonymous_outer_hypothetical_cross(lxb_dom_element_t *container,
     char nbuf[160];
 
     /* §4's CHILD TEXT SEQUENCE AS core/layout/block_flow.h's HALF-OPEN RUN, built in ONE place and from the
-       two nodes the caller's own walk already holds: `after` is the sibling BEFORE the sequence (NULL where it
-       opens the container's content) and `end` is one past its last text node, which is exactly the form
-       core/layout/flex_line.c hands the same sequence to the intrinsic pass. */
-    seq.after = first->prev;
+       two nodes the caller's own walk already holds: `after` is the member BEFORE the sequence in the
+       container's BOX-TREE child sequence (NULL where it opens the container's content) and `end` is one past
+       its last text node, which is exactly the form core/layout/flex_line.c hands the same sequence to the
+       intrinsic pass.
+       IT IS THE BOX-TREE MEMBER AND NOT `first->prev`, which is what core/layout/block_flow.h's own contract
+       says the pair is read as: css-display-3 §2.5 "Box Generation: the none and contents keywords" puts a
+       `contents` element's children in this container's sequence, so the DOM predecessor of such a sequence's
+       first node is NULL at the start of that element's children — and a run claiming to begin at the
+       container's own content would be measured over every earlier item on the line as well. */
+    seq.after = box_tree_prev_sibling(container, first);
     seq.end = end;
     inner = line_box_content_height(container, seq, line_box_available_width_stated(used_main),
                                     &any_line_box, &first_baseline, &last_baseline);
@@ -636,8 +643,12 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
        declaration would have fired on that page and named a defect that is not there.
        WHAT DOES DECIDE IT IS §9.6's OWN CONDITIONAL and it is the caller's to read: "If a content-based cross
        size is needed, use the sum of the flex lines' cross sizes." Both callers need one. */
-    for (c = lxb_dom_interface_node(container)->first_child; c != NULL; ) {
-        lxb_dom_node_t *next = c->next;
+    /* §4's CHILD LIST IS css-display-3 §2.5's SPLICED SEQUENCE, enumerated the same way
+       core/layout/flex_line.c and core/layout/flex_intrinsic_size.c enumerate it — the same entries over the
+       same sequence, because §9.4's step 8 takes a maximum over exactly the item list §9.3's step 5 collected
+       and a second reading of that list is a second answer to which boxes are on the line. */
+    for (c = box_tree_first_child(container); c != NULL; ) {
+        lxb_dom_node_t *next = box_tree_next_sibling(container, c);
         FlexItemChildKind kind = flex_item_child_kind(container, c);
 
         if (kind == FLEX_ITEM_CHILD_NONE) { c = next; continue; }
@@ -677,7 +688,7 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
         case FLEX_ITEM_CHILD_ELEMENT: {
             lxb_dom_element_t *item = lxb_dom_interface_element(c);
 
-            next = c->next;
+            next = box_tree_next_sibling(container, c);
             /* §9.4's step 10 is this component's own and it is unbuilt, which is why the refusal is here and
                not a second copy of core/layout/flex_line.c's: that file refuses a collapsed item because the
                used main size it would answer is the FIRST round's, and this one refuses it because step 8
@@ -760,13 +771,17 @@ CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_elem
     vertical = flex_container_axis_is_vertical(container, FLEX_AXIS_CROSS);
     DCHECK(item != NULL,
            "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 11 was asked for with no item element");
-    DCHECK(lxb_dom_interface_node(item)->parent == lxb_dom_interface_node(container),
+    DCHECK(box_tree_parent(lxb_dom_interface_node(item)) == container,
            "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 11 was asked for an item that is not a "
            "child of the container it was asked about. Step 11's operand is \"the flex line's cross size\", "
            "so a subject drawn from one container and a line drawn from another is an item sized against a "
-           "line it is not on — the same precondition core/layout/flex_line.h states for the main axis, and "
-           "the one that makes `css-display-3 §2.5 \"Box Generation: the none and contents keywords\"' "
-           "`contents` splice a case this component has not been handed rather than one it answers wrongly");
+           "line it is not on — the same precondition core/layout/flex_line.h states for the main axis. "
+           "THIS EQUALITY USED TO READ THE DOM PARENT AND TO SAY THAT css-display-3 §2.5 \"Box Generation: "
+           "the none and contents keywords\"' SPLICE WAS A CASE THIS COMPONENT HAD NOT BEEN HANDED. IT IS "
+           "HANDED IT NOW and the sentence is rewritten rather than deleted, because a reader who re-derives "
+           "the refusal from the DOM reading will re-add it: the walk above enumerates this container's "
+           "box-tree child sequence, so an item spliced out of a `contents` child IS on this line and the DOM "
+           "equality would refuse exactly those items");
     /* css-sizing-3 §3.2.1 "“Behaving as auto”" IS ONE QUESTION WITH TWO SPELLINGS AND THE AXIS PICKS THE
        SPELLING, which is a fact about §3.2.1 rather than a narrowing here: it exists "to have a common term
        for both when width/height computes to auto and when it is defined to behave as if auto were specified

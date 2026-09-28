@@ -132,6 +132,17 @@ FlexItemChildKind flex_item_child_kind(lxb_dom_element_t *container, lxb_dom_nod
    exist". §2.5 "Box Generation: the none and contents keywords" adds the other interruption that is not one,
    for `display: none`, in the words this delimiter needs: "anonymous box generation rules will ignore the
    elided elements entirely, as if they did not exist in the box tree".
+   AND `sibling` IN THAT SENTENCE IS A BOX-TREE RELATION, WHICH IS §2.5's OTHER KEYWORD AND NOT THE SAME CASE.
+   `none` leaves a node in the list and makes it invisible to contiguity; `contents` REMOVES the element and
+   puts its children in the sequence at its position — "the element must be treated as if it had been replaced
+   in the element tree by its contents" — so two text nodes on opposite sides of such an element are siblings
+   in the tree this sentence is about and are `->next`-unreachable from each other. That sequence is
+   core/layout/box_tree.h's, and both this delimiter and the classification above are stated over it. THIS
+   PARAGRAPH USED TO NAME §2.5 FOR `none` ALONE, and the omission is recorded rather than quietly repaired
+   because the reading it licensed is the one a reader re-derives from the keyword's own note: §2.5's note
+   covers BOTH values under one word, so a delimiter written from the note alone treats them as one case — and
+   they are opposite ones here, since a `contents` element holding a box ENDS a sequence through that box
+   while an empty one leaves its neighbours contiguous.
    IT IS NOT COSMETIC AND THE TWO ANSWERS ARE DIFFERENT NUMBERS. §9.9.1.2 "Web-compatible Intrinsic Sizing
    Algorithm: Max-content Size and Min-content Single-line Size" SUMS the items' min-content contributions,
    while one item's own min-content size is the MAXIMUM over its segments — so splitting one sequence into two

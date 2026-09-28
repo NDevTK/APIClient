@@ -11,6 +11,7 @@
 #include "core/css/css_logical.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/box_tree.h"
 #include "core/layout/flex_item.h"
 
 static char *fi_computed(lxb_dom_element_t *el, const char *name)
@@ -143,10 +144,18 @@ bool flex_container_is_multi_line(lxb_dom_element_t *el)
 
 /* css-display-3 §1 "Introduction"' NODES THAT ARE NOT THERE — "for the purposes of CSS, all of these
    additional types of nodes are ignored, as if they didn't exist" — plus §2.5 "Box Generation: the none and
-   contents keywords"' elided element, whose note states the same fact in the words a text sequence needs:
-   "anonymous box generation rules will ignore the elided elements entirely, as if they did not exist in the
-   box tree". Both are INVISIBLE TO CONTIGUITY, so a comment or a `display: none` element between two text
-   nodes leaves them one sequence. Anything else that generates a box ENDS the sequence. */
+   contents keywords"' `none`, whose note states the same fact in the words a text sequence needs: "anonymous
+   box generation rules will ignore the elided elements entirely, as if they did not exist in the box tree".
+   Both are INVISIBLE TO CONTIGUITY, so a comment or a `display: none` element between two text nodes leaves
+   them one sequence. Anything else that generates a box ENDS the sequence.
+   §2.5's OTHER KEYWORD IS NOT A THIRD ANSWER HERE AND IT USED TO LOOK LIKE ONE, which is worth recording
+   because the dilemma is what a reader re-derives from §2.5's note covering both values. Asked of a `contents`
+   element this predicate has no right answer: TRUE joins two runs across a box-generating child of the elided
+   element, and FALSE splits a sequence §4 makes ONE. It dissolves because the walk below no longer enumerates
+   a DOM child list — core/layout/box_tree.h's sequence replaces a `contents` element BY its contents, so the
+   members this predicate is asked about are that element's own children and each is judged on itself: a
+   `contents` element holding a box ENDS the sequence through that box, and an empty one is not a member at all
+   so its neighbours stay contiguous. Two correct answers out of one rule, and no third question. */
 static bool fi_invisible_to_a_text_sequence(lxb_dom_node_t *n)
 {
     switch (n->type) {
@@ -165,17 +174,26 @@ static bool fi_invisible_to_a_text_sequence(lxb_dom_node_t *n)
    BOTH directions because §4's rule is about "the entire text sequence" and this component is asked about ONE
    node: a caller iterating a child list meets the sequence at its first text node, but the classification has
    to answer the same way for every member or two walks over one list would disagree about which anonymous
-   item a node is inside. */
-static void fi_text_sequence(lxb_dom_node_t *n, lxb_dom_node_t **first, lxb_dom_node_t **last)
+   item a node is inside.
+   THE LIST IS `container`'s BOX-TREE CHILD SEQUENCE AND NOT ITS DOM CHILD LIST, which is what makes a TEXT
+   SEQUENCE a sequence at all: css-display-3 §1 "Introduction" defines the term in the box tree — "while each
+   text sequence in the box tree likewise represents the corresponding contents of its text nodes" — and
+   css-display-3 §2.5 "Box Generation: the none and contents keywords" puts a `contents` element's children in
+   its own box parent's sequence, so two text nodes on opposite sides of such an element are ONE sequence there
+   and are `->next`-unreachable from each other. The container is a parameter rather than derived here because
+   the caller holds it and has already asserted the relation this walk is stated over; deriving it would be
+   §2.5's ascent written a second time. */
+static void fi_text_sequence(lxb_dom_element_t *container, lxb_dom_node_t *n,
+                             lxb_dom_node_t **first, lxb_dom_node_t **last)
 {
     lxb_dom_node_t *c;
 
     *first = *last = n;
-    for (c = n->prev; c != NULL; c = c->prev) {
+    for (c = box_tree_prev_sibling(container, n); c != NULL; c = box_tree_prev_sibling(container, c)) {
         if (c->type == LXB_DOM_NODE_TYPE_TEXT) { *first = c; continue; }
         if (!fi_invisible_to_a_text_sequence(c)) break;
     }
-    for (c = n->next; c != NULL; c = c->next) {
+    for (c = box_tree_next_sibling(container, n); c != NULL; c = box_tree_next_sibling(container, c)) {
         if (c->type == LXB_DOM_NODE_TYPE_TEXT) { *last = c; continue; }
         if (!fi_invisible_to_a_text_sequence(c)) break;
     }
@@ -187,17 +205,23 @@ static void fi_text_sequence(lxb_dom_node_t *n, lxb_dom_node_t **first, lxb_dom_
    core/layout/block_flow.h's one derivation from css-text-3 §4 "White Space Processing Rules" and is asked
    rather than restated; the CONDITION is this section's and reads no declaration at all, which is the whole of
    the difference from CSS 2.2 §9.2.2.1 "Anonymous inline boxes"' rule over the same characters. */
-static bool fi_sequence_is_all_white_space(lxb_dom_node_t *first, lxb_dom_node_t *last)
+static bool fi_sequence_is_all_white_space(lxb_dom_element_t *container, lxb_dom_node_t *first,
+                                           lxb_dom_node_t *last)
 {
     lxb_dom_node_t *c = first;
 
     for (;;) {
         if (c->type == LXB_DOM_NODE_TYPE_TEXT && !block_flow_text_is_all_document_white_space(c)) return false;
         if (c == last) return true;
-        c = c->next;
+        /* THE SAME SEQUENCE THE TWO ENDS WERE FOUND IN, STEPPED THE SAME WAY — `->next` would leave this walk
+           inside whichever DOM child list `first` happens to sit in, and where css-display-3 §2.5's splice has
+           run that is not the list `last` was found in. The DCHECK below is then not a should-never-happen but
+           the ordinary end of a `contents` element's children, reached with §4's sequence only half read. */
+        c = box_tree_next_sibling(container, c);
         DCHECK(c != NULL,
-               "css-flexbox-1 §4's text sequence ran off the end of the child list before reaching the last "
-               "node the same walk had just found, so the two ends came from different lists");
+               "css-flexbox-1 §4's text sequence ran off the end of the box-tree child sequence before "
+               "reaching the last node the same walk had just found, so the two ends came from different "
+               "sequences");
     }
 }
 
@@ -210,11 +234,18 @@ FlexItemChildKind flex_item_child_kind(lxb_dom_element_t *container, lxb_dom_nod
            "css-flexbox-1 §4's flex-item classification was asked about a child with no node, or with no flex "
            "container for it to be a child OF — the container is not decoration here, since §4's rule is "
            "stated over ITS child list and §4.1 reads the child's own out-of-flow status against it");
-    DCHECK(child->parent == lxb_dom_interface_node(container),
+    DCHECK(box_tree_parent(child) == container,
            "css-flexbox-1 §4's flex-item classification was asked about a node that is not a CHILD of the flex "
            "container it was asked with. §4's sentence is \"Each in-flow child of a flex container becomes a "
            "flex item\" and its text-sequence rule is over sibling nodes of that same list, so a node from "
-           "elsewhere in the tree would be classified against a formatting context it is not in");
+           "elsewhere in the tree would be classified against a formatting context it is not in. "
+           "THIS EQUALITY USED TO READ `child->parent == container` AND IS REWRITTEN RATHER THAN DELETED, "
+           "which is what css-display-3 §2.5 \"Box Generation: the none and contents keywords\" does to it "
+           "rather than retiring it: \"the element must be treated as if it had been replaced in the element "
+           "tree by its contents\" makes a box-tree child of a flex container need not be a DOM child of it, "
+           "so the DOM equality was the right precondition read through the wrong relation. A CALLER THAT "
+           "COMPOSED `n->parent` FOR THE ARGUMENT IS EXACTLY WHAT THIS NOW CATCHES — a `contents` element "
+           "generates no box and cannot be the container any flex item is classified against");
     switch (child->type) {
     case LXB_DOM_NODE_TYPE_ELEMENT: {
         lxb_dom_element_t *el = lxb_dom_interface_element(child);
@@ -227,18 +258,24 @@ FlexItemChildKind flex_item_child_kind(lxb_dom_element_t *container, lxb_dom_nod
                    "`display: contents`: \"The element itself does not generate any boxes, but its children "
                    "and pseudo-elements still generate boxes and text sequences as normal.\" So this element "
                    "is not a flex item and its CHILDREN are — css-flexbox-1 §4's \"Each in-flow child of a "
-                   "flex container becomes a flex item\" is stated over a child list this one is not yet, "
-                   "because §2.5's splice has not run: \"the element must be treated as if it had been "
-                   "replaced in the element tree by its contents\". THAT SPLICE IS BUILT, as "
-                   "core/layout/box_tree.h's child sequence, so what is owed here is ROUTING and not an arm. "
-                   "WHAT THE ROUTING STILL OWES IS §4's TEXT SEQUENCE, WHOSE ANSWER IS NEITHER BOOLEAN: "
-                   "`fi_invisible_to_a_text_sequence` decides contiguity and a `contents` element is INVISIBLE "
-                   "to it only where its own children are — answering TRUE would join two runs across a "
-                   "box-generating child of the elided element, and answering FALSE splits a sequence §4 makes "
-                   "ONE — so `fi_text_sequence` must be delimited over the box-tree order in BOTH directions "
-                   "rather than over `->prev`/`->next`. The four walks that step this classification "
-                   "(core/layout/flex_line.c, core/layout/flex_intrinsic_size.c's two, "
-                   "core/layout/flex_cross_size.c) step `->next` themselves and are part of the same landing",
+                   "flex container becomes a flex item\" is stated over the child list §2.5's splice produces, "
+                   "\"the element must be treated as if it had been replaced in the element tree by its "
+                   "contents\", and core/layout/box_tree.h is that splice as a child sequence. "
+                   "THIS FILE'S OWN WALKS ARE ROUTED TO IT, WHICH IS WHY REACHING THIS LINE NOW MEANS A "
+                   "CALLER OUTSIDE THEM: this classification's own box-parent precondition, §4's text "
+                   "sequence in BOTH directions, that sequence's white-space test and its end are all taken "
+                   "over that sequence, which never yields a `contents` element — and so are the four walks "
+                   "that step this classification (core/layout/flex_line.c, "
+                   "core/layout/flex_intrinsic_size.c's two, core/layout/flex_cross_size.c). A caller that "
+                   "still composes a child list with `->first_child` and `->next`, or a run bound with "
+                   "`->prev`, is what gets here. "
+                   "THE COUPLING THAT MADE THE ROUTING ONE LANDING RATHER THAN SEVERAL IS RECORDED BECAUSE A "
+                   "READER CONVERTING A REMAINING WALK MEETS IT AGAIN: §4's text sequence is a MAXIMAL run "
+                   "and the classification is asked about ONE member, so a walk converted without the "
+                   "sequence's own two steps would delimit a run with `->prev`/`->next` and answer §4's "
+                   "\"if the entire text sequences contains only document white space characters\" over a "
+                   "DIFFERENT run from the one it then measures — two anonymous flex items where §4 makes "
+                   "one, which is a plausible item list and not a crash",
                    box_subject(el, nbuf, sizeof nbuf));
             return FLEX_ITEM_CHILD_NONE;
         }
@@ -254,8 +291,9 @@ FlexItemChildKind flex_item_child_kind(lxb_dom_element_t *container, lxb_dom_nod
         return FLEX_ITEM_CHILD_ELEMENT;
     }
     case LXB_DOM_NODE_TYPE_TEXT:
-        fi_text_sequence(child, &first, &last);
-        return fi_sequence_is_all_white_space(first, last) ? FLEX_ITEM_CHILD_NONE : FLEX_ITEM_CHILD_TEXT;
+        fi_text_sequence(container, child, &first, &last);
+        return fi_sequence_is_all_white_space(container, first, last) ? FLEX_ITEM_CHILD_NONE
+                                                                     : FLEX_ITEM_CHILD_TEXT;
     case LXB_DOM_NODE_TYPE_COMMENT:
     case LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION:
     case LXB_DOM_NODE_TYPE_DOCUMENT_TYPE:
@@ -279,12 +317,18 @@ lxb_dom_node_t *flex_item_text_sequence_end(lxb_dom_element_t *container, lxb_do
            "css-flexbox-1 §4's child text sequence was delimited from a node that is not inside one. §4 wraps "
            "a sequence in an anonymous flex item only where it has content, so a run started anywhere else "
            "would be an EMPTY anonymous item — a box in every sum in §9.9 that no section generates");
-    fi_text_sequence(first, &a, &b);
-    /* ONE PAST THE LAST TEXT NODE, which is not the same as one past the last node this sequence swallowed:
-       a comment or an elided element BEFORE that text node is inside the jump and is never revisited, while
-       one AFTER it is left for the caller's own loop to classify as FLEX_ITEM_CHILD_NONE. Ending the run at
-       the last TEXT node rather than at the first non-text node is what keeps those two cases one rule. */
-    return b->next;
+    fi_text_sequence(container, first, &a, &b);
+    /* ONE PAST THE LAST TEXT NODE, IN THE CONTAINER'S BOX-TREE CHILD SEQUENCE — which is not the same as one
+       past the last node this sequence swallowed: a comment or an elided element BEFORE that text node is
+       inside the jump and is never revisited, while one AFTER it is left for the caller's own loop to classify
+       as FLEX_ITEM_CHILD_NONE. Ending the run at the last TEXT node rather than at the first non-text node is
+       what keeps those two cases one rule.
+       IT IS A POSITION AND NOT A DOM SIBLING, and both of this answer's uses need it to be: every caller
+       advances its own walk to it, and every caller also hands it to core/layout/block_flow.h's `BlockFlowRun`
+       as the run's `end` — which that type reads as a position in core/layout/box_tree.h's sequence. `b->next`
+       is NULL at the end of a `contents` element's children, so it would both cut the run short and restart
+       the caller's walk from the container's own next child, skipping every later member of the splice. */
+    return box_tree_next_sibling(container, b);
 }
 
 bool flex_item_is_collapsed(lxb_dom_element_t *item)

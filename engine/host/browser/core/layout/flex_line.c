@@ -11,6 +11,7 @@
 #include "core/css/css_length.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/box_tree.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_line.h"
 #include "core/layout/intrinsic_block_size.h"
@@ -654,12 +655,18 @@ static void fl_require_horizontal_tb(lxb_dom_element_t *el, const char *what)
    half-built list would have to carry that delimiting decision across. */
 static size_t fl_collect(lxb_dom_element_t *container, CssPx inner_main, bool vertical, FlItem *out)
 {
-    lxb_dom_node_t *c = lxb_dom_interface_node(container)->first_child;
+    /* §4's CHILD LIST IS css-display-3 §2.5 "Box Generation: the none and contents keywords"' SPLICED
+       SEQUENCE — "the element must be treated as if it had been replaced in the element tree by its contents"
+       — which core/layout/box_tree.h answers and core/layout/flex_item.h's classification is now stated over.
+       `->first_child` would hand that classification a `contents` element, which is not a flex item and has
+       no box for §9.7's free space to be shared with, and would leave its children out of every sum on the
+       line. */
+    lxb_dom_node_t *c = box_tree_first_child(container);
     size_t n = 0;
     char nbuf[160];
 
     while (c != NULL) {
-        lxb_dom_node_t *next = c->next;
+        lxb_dom_node_t *next = box_tree_next_sibling(container, c);
         FlexItemChildKind kind = flex_item_child_kind(container, c);
         FlItem it;
 
@@ -670,7 +677,11 @@ static size_t fl_collect(lxb_dom_element_t *container, CssPx inner_main, bool ve
             lxb_dom_node_t *end = flex_item_text_sequence_end(container, c);
             BlockFlowRun seq;
 
-            seq.after = c->prev;
+            /* §4's SEQUENCE AS core/layout/block_flow.h's HALF-OPEN RUN, whose `after` bound that type
+               reads as a position in the BOX-TREE sequence: `->prev` is NULL at the start of a `contents`
+               element's children, so a run delimited that way would claim to begin at the container's own
+               content and swallow every earlier item on the line. */
+            seq.after = box_tree_prev_sibling(container, c);
             seq.end = end;
             next = end;
             it.el = NULL;
@@ -679,7 +690,7 @@ static size_t fl_collect(lxb_dom_element_t *container, CssPx inner_main, bool ve
             break;
         }
         case FLEX_ITEM_CHILD_ELEMENT:
-            next = c->next;
+            next = box_tree_next_sibling(container, c);
             it.el = lxb_dom_interface_element(c);
             it.first = c;
             /* css-flexbox-1 §4.4 "Collapsed Items" gives this item a SECOND layout round and this component
@@ -920,11 +931,16 @@ CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *ite
     DCHECK(container != NULL && item != NULL,
            "css-flexbox-1 §9.3 \"Main Size Determination\"'s used main size was asked for with no container "
            "or no item");
-    DCHECK(item->parent == lxb_dom_interface_node(container),
+    DCHECK(box_tree_parent(item) == container,
            "css-flexbox-1 §9.7 \"Resolving Flexible Lengths\"' used main size was asked for an item that is "
            "not a child of the container it was asked about. §9.7's every sum is over \"all items on the "
            "line\", so a subject drawn from one container and a free space drawn from another is an item "
-           "flexed against a rectangle it is not in");
+           "flexed against a rectangle it is not in. "
+           "THIS EQUALITY USED TO READ `item->parent == container` AND IS REWRITTEN RATHER THAN DELETED: "
+           "css-display-3 §2.5 \"Box Generation: the none and contents keywords\" makes an item on this "
+           "container's line need not be a DOM child of it, so the DOM reading refused exactly the items "
+           "`fl_collect` now collects, and the box-tree one is the same precondition stated over the tree §4 "
+           "is about");
     /* §5.1's mapping, asked FIRST and over the whole container, for core/layout/flex_intrinsic_size.c's
        reason: §9.3 and §9.4 "Cross Size Determination" share no step, so which of the two owns a PHYSICAL
        axis is a fact about this container's `flex-direction` and never a case discovered part way through.

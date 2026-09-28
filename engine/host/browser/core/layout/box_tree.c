@@ -66,6 +66,39 @@ static lxb_dom_node_t *bt_resolve(lxb_dom_element_t *box, lxb_dom_node_t *n)
     return n;
 }
 
+/* WHERE `box`'s SEQUENCE CONTINUES BEFORE `n` — `n`'s own previous sibling, or, when `n` is the FIRST child of
+   an element the sequence was spliced THROUGH, that element's previous sibling, out to `box` itself. NULL is
+   the start. It is `bt_continue_after` read the other way and is a MIRROR rather than a second design: §2.5
+   replaces the element BY its contents, so the position before its first child is the position before the
+   element exactly as the position after its last child is the position after it. */
+static lxb_dom_node_t *bt_continue_before(lxb_dom_element_t *box, lxb_dom_node_t *n)
+{
+    lxb_dom_node_t *root = lxb_dom_interface_node(box);
+
+    for (; n != root; n = n->parent) {
+        if (n->prev != NULL) return n->prev;
+        DCHECK(n->parent != NULL,
+               "css-display-3 §2.5's spliced child sequence was stepped BACKWARD out of the top of the tree "
+               "without ever reaching the box it was asked about, so the node it was stepped from is not in "
+               "that box's sequence at all — the ascent only ever passes through elements §2.5 replaced by "
+               "their contents");
+    }
+    return NULL;
+}
+
+/* THE FIRST POSITION AT OR BEFORE `n` THAT IS A MEMBER of the sequence rather than a splice into it —
+   `bt_resolve` read the other way, and it descends to a spliced element's LAST child where that one descends
+   to its first, which is the same sentence read from the other end: the contents occupy the element's place in
+   order, so the last of them stands where the element ended. AN EMPTY `contents` ELEMENT IS REPLACED BY NOTHING
+   here too and the walk continues before it, which is why this is a loop and not one test. It terminates
+   because every arm moves strictly BACKWARD in document order over a finite tree. */
+static lxb_dom_node_t *bt_resolve_back(lxb_dom_element_t *box, lxb_dom_node_t *n)
+{
+    while (n != NULL && bt_is_spliced(n))
+        n = n->last_child != NULL ? n->last_child : bt_continue_before(box, n);
+    return n;
+}
+
 /* REFUSES A STEP FROM A NODE THAT IS NOT IN `box`'s SEQUENCE — one that is neither a DOM child of `box` nor a
    child of a chain of elements §2.5 replaced by their contents inside it. It is the relation the step below
    would otherwise ASSUME, and it is asked at the ENTRY rather than inside the ascent because the ascent returns
@@ -139,4 +172,31 @@ lxb_dom_node_t *box_tree_next_sibling(lxb_dom_element_t *box, lxb_dom_node_t *ch
            "caller holding one did not get it here, and is stepping a DOM child list with this entry");
     bt_require_in_sequence(box, child);
     return bt_resolve(box, bt_continue_after(box, child));
+}
+
+lxb_dom_node_t *box_tree_prev_sibling(lxb_dom_element_t *box, lxb_dom_node_t *child)
+{
+    lxb_dom_node_t *prev;
+
+    DCHECK(box != NULL && child != NULL,
+           "css-display-3 §2.5's spliced child sequence was stepped backward with no box, or from no node");
+    DCHECK(!bt_is_spliced(child),
+           "css-display-3 §2.5's spliced child sequence was stepped BACKWARD from an element whose own "
+           "computed `display` is `contents`. This sequence never yields one — §2.5 replaces it by its "
+           "contents — so a caller holding one did not get it here, and is stepping a DOM child list with "
+           "this entry");
+    bt_require_in_sequence(box, child);
+    prev = bt_resolve_back(box, bt_continue_before(box, child));
+    /* THE ROUND TRIP, ASSERTED AND NOT ARGUED — see box_tree.h. The two directions descend into a spliced
+       element at OPPOSITE ends, so they are the pair that can be taught about a tree separately, and this
+       equality is what makes a disagreement a crash rather than a sequence that reads one way forward and
+       another way back. A NULL answer is exempt because it names the start of the sequence, which the forward
+       step has no node to be asked about. */
+    DCHECK(prev == NULL || box_tree_next_sibling(box, prev) == child,
+           "css-display-3 §2.5's spliced child sequence disagreed with itself: the node BEFORE this one is not "
+           "a node this one FOLLOWS. The backward step descends into an element §2.5 replaced by its contents "
+           "at its LAST child and the forward step at its FIRST, so the two answers are one sequence only "
+           "while both read the same splice — and a walk delimited with one direction and stepped with the "
+           "other would then run over a range that is a range in no box's content");
+    return prev;
 }

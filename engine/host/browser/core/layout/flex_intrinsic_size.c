@@ -11,6 +11,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/box_tree.h"
 #include "core/layout/flex_intrinsic_size.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/intrinsic_block_size.h"
@@ -85,18 +86,25 @@ static IntrinsicInlineSizes fis_item_cross_contribution(lxb_dom_element_t *conta
            contexts" over the sequence, which is core/layout/intrinsic_size.h's run entry, and its edges are
            zero because §4 makes the box unstyleable — the NULL that entry reads as an anonymous box. */
         lxb_dom_node_t *end = flex_item_text_sequence_end(container, child);
-        /* §4's SEQUENCE IS A SIBLING RANGE AND `BlockFlowRun` IS HOW THAT IS SAID. The pair is read as
-           `after`'s next sibling inside `after`'s parent, so `{ child->prev, end }` is exactly the half-open
-           `[child, end)` — including when `child` is the container's first child, where a NULL `after` means
-           the start of its content and that IS `child`. It cannot be anything else here: §4 blockifies every
-           flex item ("if the computed display value of an element's nearest ancestor element (skipping
-           display:contents ancestors) is flex or inline-flex, the element's own display value is blockified"),
-           so a flex container has no inline box among its children for a run to begin inside — which is the
-           whole of why CSS 2.2 §9.2.1.1's runs and these can share one entry. */
+        /* §4's SEQUENCE IS A SIBLING RANGE IN THE BOX TREE AND `BlockFlowRun` IS HOW THAT IS SAID. The
+           pair is read as `after`'s next BOX-TREE sibling inside `after`'s BOX parent, so
+           `{ box_tree_prev_sibling(container, child), end }` is exactly the half-open `[child, end)` —
+           including where `child` opens the container's content, at which a NULL `after` means the start of it
+           and that IS `child`. IT CANNOT BE `child->prev`: css-display-3 §2.5 "Box Generation: the none and
+           contents keywords" replaces a `contents` element by its contents, so the DOM predecessor of a
+           sequence beginning inside one is NULL and the range would open at the container's own content,
+           swallowing every earlier item.
+           IT CANNOT BE A FRAGMENT EITHER, which is a different question and still has §4's answer: §4
+           blockifies every flex item ("if the computed display value of an element's nearest ancestor element
+           (skipping display:contents ancestors) is flex or inline-flex, the element's own display value is
+           blockified"), and that parenthesis is §2.5's splice read the other way — the ancestor a `contents`
+           element hides is still the flex container — so a flex container has no inline box among its children
+           for a run to begin inside, which is the whole of why CSS 2.2 §9.2.1.1's runs and these can share one
+           entry. */
         BlockFlowRun seq;
         IntrinsicInlineSizes run;
 
-        seq.after = child->prev;
+        seq.after = box_tree_prev_sibling(container, child);
         seq.end = end;
         run = intrinsic_inline_run_sizes(container, seq);
         *next = end;
@@ -106,7 +114,7 @@ static IntrinsicInlineSizes fis_item_cross_contribution(lxb_dom_element_t *conta
         lxb_dom_element_t *item = lxb_dom_interface_element(child);
 
         fis_require_parallel(container, item);
-        *next = child->next;
+        *next = box_tree_next_sibling(container, child);
         return intrinsic_outer_contribution(item, intrinsic_inline_sizes(item));
     }
     case FLEX_ITEM_CHILD_NONE:
@@ -127,7 +135,7 @@ static IntrinsicInlineSizes fis_item_cross_contribution(lxb_dom_element_t *conta
            where the other items put it and cannot invent a width for a box no section generates. */
         none.min_content = css_px(0.0);
         none.max_content = css_px(0.0);
-        *next = child->next;
+        *next = box_tree_next_sibling(container, child);
         return none;
     }
 }
@@ -463,7 +471,9 @@ static FisMainSizes fis_child_main_contribution(lxb_dom_element_t *container, lx
         lxb_dom_node_t *end = flex_item_text_sequence_end(container, child);
         BlockFlowRun seq;
 
-        seq.after = child->prev;
+        /* THE BOX-TREE MEMBER BEFORE THE SEQUENCE, for the reason the cross walk above states in full: this
+           pair is read as a position in css-display-3 §2.5's spliced sequence and never as a DOM sibling. */
+        seq.after = box_tree_prev_sibling(container, child);
         seq.end = end;
         *next = end;
         return fis_outer_main(NULL, vertical, fis_measure_run(container, seq, vertical));
@@ -471,7 +481,7 @@ static FisMainSizes fis_child_main_contribution(lxb_dom_element_t *container, lx
     case FLEX_ITEM_CHILD_ELEMENT: {
         lxb_dom_element_t *item = lxb_dom_interface_element(child);
 
-        *next = child->next;
+        *next = box_tree_next_sibling(container, child);
         if (flex_item_is_collapsed(item)) {
             FisMainSizes none;
 
@@ -501,14 +511,17 @@ static FisMainSizes fis_child_main_contribution(lxb_dom_element_t *container, lx
         *counts = false;
         none.min_content = css_px(0.0);
         none.max_content = css_px(0.0);
-        *next = child->next;
+        *next = box_tree_next_sibling(container, child);
         return none;
     }
 }
 
 static FisMainSizes fis_main_sizes(lxb_dom_element_t *el, bool vertical, bool multi_line)
 {
-    lxb_dom_node_t *c = lxb_dom_interface_node(el)->first_child;
+    /* §4's CHILD LIST IS css-display-3 §2.5 "Box Generation: the none and contents keywords"' SPLICED
+       SEQUENCE, enumerated through the same two entries core/layout/flex_line.c collects the line with,
+       because §9.9's sums and maxima are over exactly the item list that section collects. */
+    lxb_dom_node_t *c = box_tree_first_child(el);
     FisMainSizes out;
     bool any = false;
 
@@ -521,7 +534,7 @@ static FisMainSizes fis_main_sizes(lxb_dom_element_t *el, bool vertical, bool mu
     out.min_content = css_px(0.0);
     out.max_content = css_px(0.0);
     while (c != NULL) {
-        lxb_dom_node_t *next = c->next;
+        lxb_dom_node_t *next = box_tree_next_sibling(el, c);
         FlexItemChildKind kind = flex_item_child_kind(el, c);
         FisMainSizes one;
         bool counts;
@@ -561,7 +574,7 @@ static FisMainSizes fis_main_sizes(lxb_dom_element_t *el, bool vertical, bool mu
    nothing, and a walk over §9.9.1 will have to. */
 static IntrinsicInlineSizes fis_cross_sizes(lxb_dom_element_t *el, bool multi_line)
 {
-    lxb_dom_node_t *c = lxb_dom_interface_node(el)->first_child;
+    lxb_dom_node_t *c = box_tree_first_child(el);
     IntrinsicInlineSizes out;
     bool any = false;
     char nbuf[160];
@@ -572,7 +585,7 @@ static IntrinsicInlineSizes fis_cross_sizes(lxb_dom_element_t *el, bool multi_li
     out.min_content = css_px(0.0);
     out.max_content = css_px(0.0);
     while (c != NULL) {
-        lxb_dom_node_t *next = c->next;
+        lxb_dom_node_t *next = box_tree_next_sibling(el, c);
         FlexItemChildKind kind = flex_item_child_kind(el, c);
         IntrinsicInlineSizes one;
 

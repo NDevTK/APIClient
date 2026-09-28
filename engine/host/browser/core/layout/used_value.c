@@ -16,6 +16,7 @@
 #include "core/frame/viewport.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/box_tree.h"
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_line.h"
@@ -3233,30 +3234,46 @@ static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep,
    §9.4 "Cross Size Determination"' step 11 answers in one sentence. What each caller needs is not a shared
    bit but its OWN axis question, which `flex_container_axis_is_vertical` (core/layout/flex_item.h) now
    answers by composing §5.1 with css-writing-modes-4 §6.4 "Abstract-to-Physical Mappings". Opposite answers
-   from one question is what that entry is for. */
+   from one question is what that entry is for.
+   THE CONTAINER IS THIS BOX'S *BOX* PARENT AND THE PAIR OF READS THAT STOOD HERE IS RECORDED RATHER THAN
+   DROPPED, BECAUSE THE REFUSAL IT SPELLED IS THE ONE A READER RE-DERIVES. It read the BOX parent's `display`
+   (`css_box_parent_display`) to decide this box is a flex item at all, took the DOM parent as the container,
+   and then required THAT element's own `display` to be a flex container too — a conjunction which is FALSE
+   exactly where css-display-3 §2.5 "Box Generation: the none and contents keywords"' splice stands between
+   the two, so every item spliced out of a `contents` child answered NULL here and fell through to
+   CSS 2.1 §10. `uv_flex_item_main_size`'s own third bullet named that as the refusal, and named what it was
+   waiting for: "the walk that collects them has to splice too". IT DOES NOW — core/layout/flex_item.h's
+   classification, core/layout/flex_line.c's collection and core/layout/flex_cross_size.c's step-8 walk are
+   all stated over core/layout/box_tree.h's spliced child sequence — so the refusal is not merely stale, it is
+   the wrong answer in the direction that is silent: the container's line ALREADY holds such an item and
+   shares §9.7's free space with it, while this box's own used size would come from a section that never heard
+   of the line. Both entries this predicate routes to assert the box-tree equality at their own door, so a DOM
+   reading here would abort there rather than answer.
+   IT IS ONE READ WHERE THERE WERE TWO, AND THAT IS THE POINT RATHER THAN A SAVING: the two questions were
+   "which element is the box parent" and "is it a flex container", and composing them out of a DOM pointer and
+   a separate display read is that relation written twice, free to disagree about exactly the tree §2.5
+   describes. `box_tree_parent` answers the first and this reads the second off the element it returns.
+   IT READS THE COMPUTED `display` WHERE `uv_box_kind` READS `css_box_parent_display`'s SPECIFIED ONE, which
+   core/layout/box_tree.h states as two readings of one relation rather than a disagreement — that entry is
+   inside the cascade and cannot ask for a computed value, and this one is not. The computed reading is also
+   the one core/layout/flex_item.c's `fi_require_container` asserts of every container it is handed, so a
+   container found here by the other reading would abort there. The two can differ only where §2.5's last
+   sentence suppresses `contents` to `none` on a replaced element, and a subtree under a computed `none`
+   generates no box for this walk to be asked about. */
 static lxb_dom_element_t *uv_flex_item_container(lxb_dom_element_t *el, UvBox box)
 {
-    lxb_dom_node_t *parent = lxb_dom_interface_node(el)->parent;
     lxb_dom_element_t *container;
-    char *bpd;
+    char *own;
     bool is_flex;
 
     if (box != UV_BOX_ITEM) return NULL;
-    if (parent == NULL || parent->type != LXB_DOM_NODE_TYPE_ELEMENT) return NULL;
-    bpd = css_box_parent_display(lxb_dom_interface_node(el));
-    if (bpd == NULL) return NULL;
-    is_flex = flex_item_display_is_flex_container(bpd);
-    free(bpd);
-    container = lxb_dom_interface_element(parent);
-    if (!is_flex) return NULL;
-    {
-        char *own = css_computed_value(container, "display");
-        bool same = own != NULL && flex_item_display_is_flex_container(own);
-
-        free(own);
-        if (!same) return NULL;
-    }
-    return container;
+    container = box_tree_parent(lxb_dom_interface_node(el));
+    if (container == NULL) return NULL;
+    own = css_computed_value(container, "display");
+    if (own == NULL) return NULL;
+    is_flex = flex_item_display_is_flex_container(own);
+    free(own);
+    return is_flex ? container : NULL;
 }
 
 /* css-flexbox-1 §9.4 "Cross Size Determination"' STEP 11 OWNS THIS BOX'S SIZE ON THIS AXIS — the CROSS twin
@@ -3308,11 +3325,15 @@ static bool uv_flex_item_cross_axis(lxb_dom_element_t *el, UvBox box, bool verti
        `flex_line_used_main_size` reads is named in the inline dimension, and that component refuses the
        shape BY NAME at its own entry. One convergence point, one refusal, and a capability test here would
        be a second copy of it free to disagree.
-     - A BOX PARENT that is not the DOM parent is css-display-3 §2.5 "Box Generation: the none and contents
-       keywords"' `contents` splice, where the flex container is an ancestor and the item list this box is in
-       is not its parent's child list. §9's algorithms are all stated over the CONTAINER's items, so the walk
-       that collects them has to splice too, which core/layout/block_flow.c names as the same absent box-tree
-       step for §9.2.1.1's runs. */
+     - A BOX PARENT THAT IS NOT THE DOM PARENT USED TO BE THE THIRD CONDITION AND IS NOT ONE ANY MORE, and
+       it is written out rather than deleted because the refusal reads as sound and a reader re-derives it
+       from the DOM pointer. It said: css-display-3 §2.5 "Box Generation: the none and contents keywords"'
+       `contents` splice puts the flex container an ancestor away, "the item list this box is in is not its
+       parent's child list", and "§9's algorithms are all stated over the CONTAINER's items, so the walk that
+       collects them has to splice too". Every clause is true and the last one is the condition: the walks DO
+       splice now, so this box IS on that container's line, and refusing it here would leave §9.7 sharing
+       free space with an item whose own used size CSS 2.1 §10 had answered. `uv_flex_item_container` above
+       takes the box parent, which is what makes that clause a fact rather than a wait. */
 static bool uv_flex_item_main_size(lxb_dom_element_t *el, UvBox box, bool vertical, CssPx *out)
 {
     lxb_dom_element_t *container;

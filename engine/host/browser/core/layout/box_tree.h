@@ -75,6 +75,24 @@ lxb_dom_node_t *box_tree_first_child(lxb_dom_element_t *box);
    would otherwise be answered plausibly. */
 lxb_dom_node_t *box_tree_next_sibling(lxb_dom_element_t *box, lxb_dom_node_t *child);
 
+/* THE PREVIOUS NODE before `child` in that sequence, or NULL at its start — the entry above read the other way,
+   with the same membership requirement on `child` and the same refusal of a spliced one.
+   A SEQUENCE IS NOT A SEQUENCE IN ONE DIRECTION ONLY, AND THE CALLER THAT NEEDS THE OTHER ONE IS THE ONE THE
+   FORWARD STEP CANNOT SERVE: css-flexbox-1 §4 "Flex Items"' child text sequence is a MAXIMAL run, and §4's
+   rule is stated over the whole of it — "if the entire text sequences contains only document white space
+   characters (i.e. characters that can be affected by the white-space property) it is instead not rendered" —
+   while the classification that answers it is asked about ONE member. A walk that could only step forward
+   would answer that sentence differently depending on which member it was handed, which is two anonymous flex
+   items where §4 makes one. core/layout/block_flow.h's `BlockFlowRun` wants the same direction for a different
+   question: its `after` bound is the member BEFORE a run's first node, which every caller used to compose as
+   `first->prev` — a node in a DIFFERENT box's sequence wherever §2.5 has spliced.
+   IT IS THE FORWARD STEP'S INVERSE AND SAYS SO RATHER THAN MEANING TO BE:
+   `box_tree_next_sibling(box, box_tree_prev_sibling(box, c))` is `c` for every member that has a predecessor,
+   and that round trip is ASSERTED at the site. Two directions of one sequence are exactly the pair that can be
+   taught about a tree separately and come apart on it — one descending into a spliced element's FIRST child
+   and the other out of its LAST — and an equality is what makes that impossible rather than merely unintended. */
+lxb_dom_node_t *box_tree_prev_sibling(lxb_dom_element_t *box, lxb_dom_node_t *child);
+
 /* THE BOX `n`'s BOXES ARE CHILDREN OF — the nearest ancestor ELEMENT that generates a box, which is `n`'s DOM
    parent wherever no splice has run and is the first ancestor past a chain of `contents` elements where one
    has. NULL when the ascent leaves the element tree (a Document or a plain DocumentFragment parent, or no
