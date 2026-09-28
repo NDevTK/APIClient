@@ -1,0 +1,143 @@
+<!doctype html><meta charset="utf-8"><title>a reloaded iframe srcdoc document's about base URL</title>
+<!-- CONFORMANCE FIXTURE (kept, not a regression test): every reading below is a SPEC-DEFINED OBSERVABLE of an
+     unmodified page. Nothing here names a symbol, a file or a commit, and there is no stored expected output
+     anywhere — the document carries its own oracle, the way a test262 file does.
+
+     WHAT IS UNDER TEST, AND IT IS ONE SENTENCE OF THE STANDARD RATHER THAN A PROPERTY OF ANY ENGINE. HTML
+     §7.4.5 "Populating a session history entry"'s create navigation params from a srcdoc resource returns
+     navigation params whose about base URL is "entry's document state's about base URL", and that field is
+     written ONCE, by HTML §7.4.2.2 "Beginning navigation": "Set initiatorBaseURLSnapshot to sourceDocument's
+     document base URL", then "If url matches about:blank or is about:srcdoc: … Set documentState's about base
+     URL to initiatorBaseURLSnapshot." HTML §7.4.3 "Reloading and traversing"'s reload a navigable takes NO
+     documentResource and no source document at all — it re-populates "navigable's active session history
+     entry", sets that entry's document state's reload pending to true, and applies the reload history step —
+     so the about base URL a reload populates with is the one the FIRST navigation snapshotted, and it does not
+     move. A browser therefore resolves the same relative reference in a srcdoc frame to the same address on
+     every reload, for ever.
+
+     WHY THAT IS OBSERVABLE FROM A PAGE AT ALL, which is the half a reader should check rather than take. HTML
+     §2.4.3 "Document base URLs" makes the about base URL the ONLY thing a srcdoc document can resolve against:
+     its fallback base URL step 1 is "If document is an iframe srcdoc document: Assert: document's about base
+     URL is non-null. Return document's about base URL." — `about:srcdoc` has an opaque path and cannot be a
+     base — and HTML §4.2.3 "The base element"'s set the frozen base URL parses `href` "with document's
+     fallback base URL … (Thus, the base element isn't affected by itself.)" So a `<base href>` inside a srcdoc
+     frame freezes AGAINST the about base URL, and §2.4.3's document base URL then answers that frozen URL for
+     every relative reference in the frame. One markup `<img src>` therefore reports which about base URL the
+     document was populated with, in its own resolved path, with no script involved.
+
+     THE DEFECT SHAPE THIS SEPARATES, stated as behaviour so it survives whatever the code looks like: an
+     engine that answers a reload's about base URL from the DOCUMENT BEING REPLACED rather than from the entry
+     re-freezes each `<base href>` against the PREVIOUS freeze's answer, so a relative reference gains one base
+     segment per reload and the frame's addresses walk away from the page. It is a wrong answer rather than a
+     narrower one, and it is silent: nothing is missing, nothing throws, and the requests that go out are
+     well-formed addresses of a document nobody asked for.
+
+     THE ORACLE IS THE FIXTURE SERVER'S OWN ACCESS LOG — `testing/fixtures_access.<port>.log`, which
+     testing/fixtures_server.cjs truncates and stamps at startup and writes BEFORE it decides a status, so a
+     404 path is recorded exactly as a 200 one is. That is evidence from OUTSIDE the engine, which is what
+     CLAUDE.md §A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE-UNKNOWN asks of a channel. No
+     witness path below needs to exist on disk and none does.
+
+     EVERY WITNESS PATH IS A CONSTANT, AND THE DRIFT IS READ OFF THE PATH'S SHAPE RATHER THAN OFF A NUMBER THE
+     PAGE COMPUTED. This engine's whole purpose is to make values unknown, so a path composed from a computed
+     value is not a concrete string and a witness built that way goes silent in exact proportion to how well
+     the engine is working. `da/` and `db/` are literal base tokens and `a-rel.png`/`b-rel.png` are literal
+     relative names; the resolved path is the ENGINE's answer to §2.4.3 composed out of two literals, which is
+     the one thing being asked. The reload COUNTER is in the parent and is never part of a path.
+
+     FRAME A IS THE ARMED CONTROL AND IS NOT A SECOND ARM OF THE SUBJECT. What has to be shown before frame B's
+     rows mean anything is that a srcdoc `<base href>` resolves at all in this run — CLAUDE.md
+     §A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE — and A shows it with nothing reloaded anywhere.
+     A run in which `/da/a-rel.png` is absent has established nothing about B.
+
+     WHAT EACH ROW READS IN EACH STATE — grep the access log for the path; the figure is an OCCURRENCE COUNT.
+     "spec" is the answer a browser gives. The columns are the states this document is built to tell apart, and
+     no two of them agree on every row.
+
+       row                              spec  walks  no-child  no-reload  no-base  no-about-base
+       /sdrbase-parent-parsed.png         1      1       1         1         1          1
+       /sdrbase-parent-script-ran.png     1      1       1         1         1          1
+       /sdrbase-a-abs.png                 1      1       1         1         1          0
+       /da/a-rel.png                      1      1       1         1         0          0
+       /a-rel.png                         0      0       0         0         1          0
+       /sdrbase-arm-first.png             1      1       0         1         1          1
+       /sdrbase-arm-again.png             1      1       0         0         1          1
+       /sdrbase-b-abs.png                 2      2       1         1         2          0
+       /db/b-rel.png                      2      1       1         1         0          0
+       /db/db/b-rel.png                   0      1       0         0         0          0
+       /b-rel.png                         0      0       0         0         2          0
+
+     THE COLUMNS, NAMED IN FULL. `spec` is the answer a browser gives. `walks` is the base walking one segment
+     deeper per reload. `no-child` is a frame whose inline script never ran. `no-reload` is a reload the page
+     ASKED FOR and the engine did not populate. `no-base` is `<base href>` not being honoured. `no-about-base`
+     is a srcdoc document populated with a null about base URL.
+
+     HOW TO READ THE TWO COLUMNS THAT ARE EASIEST TO CONFUSE. `no-reload` loaded the document once, so its
+     script ran once, so the arm function was called once and answered FIRST — which is why `-arm-again` is the
+     row that separates it from a correct run, and why `-b-abs` at 1 rather than 2 says the second population
+     never happened. `walks` is the defect: the second load DID happen (`-b-abs` at 2, `-arm-again` present)
+     and its relative reference landed one base segment deeper.
+
+     THE RELOAD IS ASKED DURING THE FRAME'S OWN PARSE, WHICH IS A STATED PROPERTY OF THE EXPERIMENT AND NOT AN
+     ACCIDENT. Both of frame B's `<img>` elements sit BEFORE its script in tree order, so the parser has already
+     issued their loads by the time the reload is requested and no row of load #1 can be lost to it. Asking from
+     a timer or a `load` handler instead would make every row above depend on a second subsystem; asking inline
+     depends on nothing but the parser, and an engine that cannot reload from there reads as `no-reload`, which
+     the table separates. A reader who moves the script above the images is changing the experiment.
+
+     THE LAST COLUMN IS A DEV-BUILD ABORT AND NOT A SET OF ROWS TO WAIT FOR. A srcdoc document whose about base
+     URL is null cannot resolve a relative OR a root-relative reference — `about:srcdoc` has an opaque path, so
+     there is no host to hang `/…` off either — and §2.4.3's own step 1 is an assert, so a dev build stops
+     there by name. The column is written down because in a RELEASE build those rows really do read zero, and
+     zero-for-every-path is otherwise indistinguishable from a run in which no srcdoc document was built at
+     all: the two parent rows are what separate them, since the parent's own witnesses do not depend on any
+     frame.
+
+     THE PARENT'S `sdrFirst` IS READ THROUGH `parent` AND THAT IS DELIBERATE. An unsandboxed `<iframe srcdoc>`
+     is SAME-ORIGIN with its creator — HTML §7.3.2.1 "Creating browsing contexts"' determine the origin
+     answers a srcdoc destination with the source origin — so the frame is a second realm of ONE agent and the
+     read is in-heap. The counter has to live in the parent because the parent is the document that is NOT
+     reloaded; a counter inside the frame would be reset by the very act it is bounding, and a frame that
+     reloads unconditionally never stops. If `parent.sdrFirst` is not there the frame throws, which is loud and
+     is the honest signal — a guard past it would hide the one thing that went wrong.
+
+     WHICH HALF OF THE CITATIONS ABOVE IS MACHINE-CHECKED. `node engine/citegen.mjs` collects by extension and
+     its set admits no `.html`, so no whole-tree run reads this file: the NUMBERS, TITLES and QUOTATIONS here
+     were verified by fetching the document this tree's committed corpus names as its base
+     (`engine/specindex/html.json`'s `base`), and a reader who edits one owes that fetch again. No instrument
+     here will say so.
+-->
+
+<!-- WITNESS: the PARENT parsed. Markup rather than script, so this row is true even if no script runs. -->
+<img src="/sdrbase-parent-parsed.png" alt="">
+
+<script>
+"use strict";
+/* THE RELOAD BOUND, IN THE ONE DOCUMENT THAT IS NOT RELOADED. It answers true exactly once per session, so
+   frame B is populated twice and no more; both witnesses are constants so the answer itself never reaches a
+   path. Defined BEFORE the frames below because §4.8.5's srcdoc navigation is queued by the insertion and the
+   frame's own scripts run after this parse, but the ordering is stated rather than relied on: a reader who
+   moves the frames above this script is changing the experiment. */
+var sdrCalls = 0;
+function sdrFirst() {
+  if (sdrCalls === 0) { sdrCalls = 1; fetch("/sdrbase-arm-first.png"); return true; }
+  fetch("/sdrbase-arm-again.png");
+  return false;
+}
+fetch("/sdrbase-parent-script-ran.png");
+</script>
+
+<!-- FRAME A — THE ARMED CONTROL. One srcdoc load, no reload, one `<base href>`: `/da/a-rel.png` firing is the
+     proof that §4.2.3's freeze against §2.4.3's about base URL happens at all in this run. The attribute value
+     is wrapped across lines, which is whitespace between elements in the document it becomes. -->
+<iframe id="a" srcdoc="<base href='da/'>
+<img src='/sdrbase-a-abs.png' alt=''>
+<img src='a-rel.png' alt=''>"></iframe>
+
+<!-- FRAME B — THE SUBJECT. The ABSOLUTE path is invariant under §2.4.3 and counts the LOADS; the relative one
+     carries the about base URL each load was populated with. The inline script asks the parent whether this is
+     the first load and reloads if it is, so the frame is populated exactly twice. -->
+<iframe id="b" srcdoc="<base href='db/'>
+<img src='/sdrbase-b-abs.png' alt=''>
+<img src='b-rel.png' alt=''>
+<script>if(parent.sdrFirst())location.reload();</script>"></iframe>
