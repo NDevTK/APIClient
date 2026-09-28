@@ -101,6 +101,26 @@
      reloads unconditionally never stops. If `parent.sdrFirst` is not there the frame throws, which is loud and
      is the honest signal — a guard past it would hide the one thing that went wrong.
 
+     THE PREDICTION FOR THE FIRST RUN OF THIS DOCUMENT IN A DEV BUILD IS THE `no-about-base` COLUMN, AND IT IS
+     NAMED HERE SO NOBODY READS THAT ABORT AS A FAULT IN THE FIXTURE. §7.4's about base URL for a same-agent
+     `about:`-addressed child Document is written by the party that CREATED it, and in this engine that write
+     happens AFTER the install which walks the parsed tree — while §4.2.3's parsed-tree freeze and §4.8.4.3.2's
+     image walk both run INSIDE that install and both resolve a URL through §2.4.3's document base URL. So the
+     first resolution in a srcdoc document reaches §2.4.3's fallback base URL with a NULL about base URL and an
+     address of `about:srcdoc`, which is that section's own step 1 assert. The read that establishes it is a
+     chain of call sites and needs no run: core/frame/navigable.c's realm builder calls the host's builder and
+     THEN sets the about base URL; the host's builder installs through core/browser/core/platform.c's list,
+     whose `document` row is LAST because installing it runs the insertion steps; and core/dom/document.c's
+     install runs `html_base_element_parsed` and then `html_image_parsed`. The setter's OWN third assert says
+     the same thing from the other side and names the remedy in its own words — "Set the about base URL where
+     the Document is CREATED, before its tree is walked, rather than after".
+     THAT IS A DEFECT STRICTLY BEFORE THIS DOCUMENT'S SUBJECT AND IT IS REACHABLE ONLY THROUGH SRCDOC, which is
+     why no existing fixture has met it: an initial `about:blank` Document has no markup to resolve anything
+     with, and a srcdoc frame is the one `about:` URL that HAS content. So `no-about-base` is not a hypothetical
+     column kept for symmetry — on this engine it is the column to expect first, frame A alone is enough to
+     produce it, and the two parent rows are what say the run happened at all. When it is fixed, the same
+     document reads one of the five columns to its left without a byte changing here.
+
      WHICH HALF OF THE CITATIONS ABOVE IS MACHINE-CHECKED. `node engine/citegen.mjs` collects by extension and
      its set admits no `.html`, so no whole-tree run reads this file: the NUMBERS, TITLES and QUOTATIONS here
      were verified by fetching the document this tree's committed corpus names as its base
