@@ -30,6 +30,11 @@
 #include "core/layout/box_tree.h"   /* css-display-3 §2.5's spliced child sequence — the tree §4's items
                                       are drawn from, and the one @FLEX contents-splice walks */
 #include "core/layout/flex_item.h"  /* css-flexbox-1 §4 "Flex Items"' classification over that sequence */
+#include "core/layout/block_flow.h" /* CSS 2.2 §9.2.1.1 "Anonymous block boxes"' own box list, which is the
+                                      ONE statement that says a markup IS that section's shape rather than
+                                      merely looking like it — see box_paint_inline_break_selftest's arming
+                                      check for why a count of TWO there is what makes its mark counts about
+                                      the document they claim to be about */
 #include "core/dom/attr_list.h"  /* dom_attr_get_ns — the §6.3 rows read back the EXPANDED name */
 #include "core/frame/csp_source_list.h"
 #include "core/frame/navigable.h"
@@ -28269,6 +28274,421 @@ static void box_paint_inline_box_selftest(JSContext *ctx, lxb_html_document_t *d
     display_list_free(&base);
 }
 
+/* CSS 2.2 §9.2.1.1 "Anonymous block boxes"' BREAK, AS TWO RUNS OF ONE FORMATTING CONTEXT — the population
+ * every other row in this file structurally lacks, and the two COUNTS that separate a step-7.2.1 walk which
+ * stops at its run's end from one that walks out of it.
+ *
+ * WHAT THIS ROW EXISTS FOR, STATED AS THE THING NO DOCUMENT IN THIS TREE COULD REACH. There is exactly one
+ * shape in which ONE inline box's content sits in TWO of CSS 2.1 §E.2 "Painting order"'s step-7.2.1
+ * enumerations, and CSS 2.2 §9.2.1.1 "Anonymous block boxes"' second paragraph is it:
+ * "When an inline box contains an in-flow block-level box, the inline box (and its inline
+ * ancestors within the same line box) is broken around the block-level box …, splitting the inline box into
+ * two boxes (even if either side is empty), one on each side of the block-level box(es). The line boxes
+ * before the break and after the break are enclosed in anonymous block boxes, and the block-level box becomes
+ * a sibling of those anonymous boxes." Until this row landed, no markup anywhere in this tree put a
+ * block-level box inside an in-flow `display: inline` element that any gate or driver LOADS:
+ * `box_paint_inline_box_selftest` above nests `span` in `span` and `em` in `span`, both of them inline, and
+ * `box_paint_text_selftest` writes one `p` of text. THE DERIVATION IS A COMMAND AND NOT THIS COUNT, because
+ * the population is a property of a tree that moves: scan every tracked file for an inline element's open tag
+ * followed, before its own close tag, by a block-level one, and read what comes back. AT THE REVISION THIS
+ * LANDED that scan returned twenty spans and every one of them is PROSE — a `.c` or `.h` comment arguing about
+ * this very shape, a spec index's stored example, a minified bundle's `i<p.length` read as markup — with
+ * exactly TWO exceptions, neither of them a document under any instrument: `test-forms.html`'s
+ * `<label>…<div>`, which `git grep test-forms` shows nothing in this tree loads, and `engine/specindex`'s copy
+ * of an HTML §13.2 parse example. The NEAREST thing any fixture drives is an `inline-block` parent, which
+ * css-display-3 §2.7 "Automatic Box Type Transformations" makes ATOMIC and which §9.2.1.1 therefore never
+ * breaks — core/layout/block_flow.c's own walk says so in its own words, that an `inline-block` holding a
+ * `div` "breaks no ancestor and this walk must not enter it". So the whole of the walk below was reasoned and
+ * none of it had ever been run over the document it is about.
+ *
+ * WHY TWO DOCUMENTS AND WHAT EACH ONE'S NUMBER IS. The two are `<p><span>t<em>x</em>more</span></p>` and the
+ * same with `<span>B</span>` in place of the text `more` — one CHILD apart in the run that FOLLOWS the break,
+ * which is the run whose two ends this row is about:
+ *   THE START. §9.2.1.1 puts the second run INSIDE the broken `span`, so the box whose own sequence that run
+ *   is enumerated over is the `span` and not the container, and the characters `line_box_glyphs` places for
+ *   it carry the `span` as their style. A walk that took the CONTAINER as both would lay none of them (the
+ *   style test matches nothing) and would step the container's sequence from a position that is not in it,
+ *   which core/layout/box_tree.h refuses BY NAME. The TEXT document's cyan glyph count is that end: FIVE
+ *   characters carry the `span`'s declared colour — `t` in the first run and `more` in the second — where a
+ *   walk that lost the second run lays ONE.
+ *   THE END. §9.2.1.1 makes the block-level box that ends the first run "a sibling of those anonymous boxes"
+ *   while leaving it a DOM child of the inline box it broke, so that node is met BELOW the depth the first
+ *   run was entered at and a walk with no end to test at that depth steps straight over it into the second
+ *   run's content. The BOX document's red fill count is that end: `bp_inline_box_marks` lays EVERY fragment
+ *   of an element in ONE call, so a first run that reached the tail `span` lays its background and the second
+ *   run — which is where that `span` actually is — lays it AGAIN. ONE is the count; TWO is the double-paint.
+ *
+ * BOTH WITNESSES ARE COUNTS AND NEITHER IS AN ABSENCE, which is the property that makes this row scorable at
+ * all. CLAUDE.md's §THE-SAME-HOLE-SWALLOWS-A-PREDICTION is why: a predicted ABSENCE is confirmed identically
+ * by a correct walk and by a path nobody took, so "the abort does not fire" would be satisfied by a run that
+ * never reached this markup. Five against one and one against two are both NON-ZERO on both sides, so each of
+ * them says the walk RAN as well as what it did.
+ *
+ * EVERY PAYLOAD IS A CONSTANT OF THIS FILE AND NOTHING HERE IS COMPUTED BY THE ENGINE. CLAUDE.md's
+ * §A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE-UNKNOWN is the rule: this engine exists to
+ * make values unknown, so a witness whose payload came off a measurement can itself be unknown and never be
+ * written, and its silence reads as the path not being taken. The three colours are `#RRGGBB` literals in the
+ * string constants below, the four texts are C string literals, and every number asserted is a `size_t`
+ * counted over a display list this file walked. THE CHANNEL HAS A READER THAT IS NOT THE THING UNDER TEST:
+ * the marks are counted out of `DisplayList`, which core/paint/display_list.c appends to and this row reads,
+ * and the row lands on the stdout the build log captures.
+ *
+ * WHY THE COLOURS MAY BE REUSED AND WHAT PROVES IT. `#00ffff` and `#ff0000` are declared by
+ * `box_paint_inline_box_selftest`'s paragraphs above and `#ffff00` by nothing; every one of those paragraphs
+ * is REMOVED by its own builder before that function returns, so none of them is in the tree while this row
+ * paints. That is asserted rather than trusted: the base paint below is the same document with no paragraph
+ * in it, and this row's first check is that it holds ZERO marks of each of the three colours — which is this
+ * row's own negative control, taken with the same probe that answers non-zero a line later.
+ *
+ * WHY `p`, `span` AND `em` AND WHY NOT A `div`, which is a fact about this fixture's markup and not about
+ * CSS. `box_paint_inline_box_selftest`'s banner states it: `HTML`'s first author sheet declares
+ * `div { display: none }`, so a `div` appended to THAT document generates no box and every count here would
+ * be zero over whichever of this host's four documents the run selected. `p` is made block-level by
+ * core/css/css_style_declaration.c's `UA_DEFAULT` and neither `span` nor `em` is named there at all, so both
+ * are `display: inline` by css-display-3's initial value — which is why the `em` DECLARES `display: block`
+ * rather than relying on a name.
+ *
+ * THE ARMING CHECK READS WHAT THE CASCADE COMPUTES AND NEVER WHAT THE MARKUP DECLARED, which is
+ * `flex_contents_splice_selftest`'s lesson one section down and is the way a control fails by construction:
+ * css-display-3 §2.7 "Automatic Box Type Transformations" blockifies a flex container's child, so a fixture
+ * that asserted a declared keyword would be wrong about exactly the arm meant to be its control. Nothing here
+ * is under a flex container and the two values therefore agree — which is a DERIVATION and is why the
+ * COMPUTED one is the one read.
+ * AND IT ASKS core/layout/block_flow.h FOR THE BOX LIST, which is the one statement that says this markup IS
+ * §9.2.1.1's shape rather than merely looking like it. `block_flow_anonymous_boxes` answers TWO for this
+ * container — the run before the break and the run after it, each a box because "splitting the inline box
+ * into two boxes (even if either side is empty)" makes the split itself one — and the `em` between them is
+ * the block-level box that is their sibling. A ONE here is a container this walk reads as ordinary
+ * inline content, at which point every count below would be about a document this row is not for.
+ *
+ * NAMED RESIDUAL — THE BROKEN INLINE BOX'S OWN FRAGMENT COUNT IS NOT ASSERTED ANYWHERE HERE.
+ * WHAT IS NOT COVERED: no count in this row is over a mark the BROKEN `span` laid for itself. §9.2.1.1 splits
+ * that box "into two boxes (even if either side is empty)" and `bp_inline_box_marks` lays one mark per
+ * fragment in ONE call, so an element broken by the section owes TWO. This row declares no background and no
+ * border on it — deliberately, because the counts above would then depend on a fragment count this file has
+ * not derived — so it lays nothing, and a `line_box_inline_fragments` answering ONE fragment for a broken
+ * inline box satisfies every assertion below. The tail `span` of the BOX document lies wholly inside the
+ * second run and is therefore one fragment whatever the section does.
+ * WHAT THE NEXT DIFF BUILDS: a `background-color` on the broken `span` and a third count held to TWO, with
+ * the two rectangles read against each other — the first fragment ending at or before the `em`'s own box and
+ * the second beginning at or after it, which is CSSOM VIEW §6 "Extensions to the Element Interface"'
+ * `getClientRects()` step 3's "one for each box fragment" and is what a single union rectangle cannot
+ * produce.
+ * HOW ITS ABSENCE WOULD SHOW: no row this host prints states how many fragments §9.2.1.1's break gives an
+ * inline box, so nothing here would report a painter that laid a broken box's background once, over the union
+ * of its two halves, covering the block-level box between them.
+ * RETIREMENT: this record goes when a count in this row is asserted over the broken box's own marks.
+ *
+ * NOT RUN. No number below has been observed; the first build is what turns them into measurements, and the
+ * derivations above are what a reader checks them against. WHAT WAS NOT ESTABLISHED, stated as a reading
+ * rather than as a result: whether CSS 2.2 §9.4.1 "Block formatting contexts"' placement of the three boxes
+ * is reached at all before CSS 2.1 §E.2 "Painting order"'s step 7.2.1 is. The roads were READ and each of
+ * them is built for this shape — `block_flow_anonymous_boxes` asks `bf_content_kind` and runs §9.4.1's
+ * stack over `block_flow_next_block_box`'s content order, and core/layout/used_value.c's §10.1 SECOND case
+ * steps OVER an
+ * `inline` ancestor by name, with that section's own `em1`/`strong1` example quoted at the step — so the `em`
+ * here resolves against the `p` and not against the `span`. None of that was RUN. If an abort in layout is
+ * met first, the mechanism above is unchanged and only WHERE IT FIRST SHOWS has moved: the arming check is
+ * the first thing this row does, so such an abort lands there, names its own section, and the row is absent
+ * rather than wrong. */
+#define TF_BB_BROKEN "display:inline;color:#00ffff"   /* the inline box §9.2.1.1 breaks — cyan characters */
+#define TF_BB_BLOCK  "display:block;color:#ffff00"    /* the in-flow block-level box that breaks it — yellow */
+#define TF_BB_TAIL   "display:inline;background-color:#ff0000"  /* the second run's own inline box — red fill */
+
+/* THE THREE ELEMENTS §9.2.1.1's SECOND PARAGRAPH NAMES, HELD TOGETHER because the arming check below asks a
+   different question of each and a builder handing back one of them would leave the other two unasserted. */
+typedef struct {
+    lxb_dom_element_t *container;  /* the `p` the section forces to hold only block-level boxes */
+    lxb_dom_element_t *broken;     /* the `span` it splits "into two boxes … one on each side" */
+    lxb_dom_element_t *block;      /* the `em` that "becomes a sibling of those anonymous boxes" */
+} TfBbShape;
+
+/* THE PART BOTH DOCUMENTS SHARE — `<p><span>t<em>x</em>` — with the tail left to the caller. It is a shared
+   PREFIX and not a flag on one builder, for the reason `tf_ib_paint_nested` above states: the two documents
+   differ in SHAPE, and a predicate deciding which shape gets built is one predicate answering two questions.
+   NOT ONE CHARACTER OF THIS MARKUP IS WHITE SPACE, which is load-bearing exactly as it is for the row above:
+   [UAX14] gives a run of ASCII letters no break opportunity, so each of these inline boxes is ONE fragment at
+   every available width and the counts below are derivations rather than a bet on how the text wrapped. */
+static TfBbShape tf_bb_prefix(lxb_dom_document_t *d, lxb_dom_node_t *body)
+{
+    TfBbShape s;
+
+    s.container = tf_ib_box(d, body, "p", NULL);
+    s.broken = tf_ib_box(d, lxb_dom_interface_node(s.container), "span", TF_BB_BROKEN);
+    tf_ib_text(d, lxb_dom_interface_node(s.broken), "t");
+    s.block = tf_ib_box(d, lxb_dom_interface_node(s.broken), "em", TF_BB_BLOCK);
+    tf_ib_text(d, lxb_dom_interface_node(s.block), "x");
+    return s;
+}
+
+/* WHAT THE CASCADE COMPUTED AND WHAT CSS 2.2 §9.2.1.1 MADE OF IT, asked of the tree as it stands and before
+   any paint — so a run in which this markup is NOT the section's shape says so here rather than reporting a
+   plausible mark count for some other document. */
+static void tf_bb_arm(TfBbShape s)
+{
+    BlockFlowAnonBox *v = NULL;
+    char *broken = css_computed_value(s.broken, "display");
+    char *block = css_computed_value(s.block, "display");
+    char *container = css_computed_value(s.container, "display");
+    size_t n;
+    bool ok = broken != NULL && block != NULL && container != NULL && strcmp(broken, "inline") == 0 &&
+              strcmp(block, "block") == 0 && strcmp(container, "block") == 0;
+
+    CHECKF(ok,
+           "the three elements this row writes computed `%s`, `%s` and `%s` where CSS 2.2 §9.2.1.1 "
+           "\"Anonymous block boxes\" needs an `inline` box holding a `block` box inside a `block` container "
+           "— its own sentence is \"when an inline box contains an in-flow block-level box\", and an ATOMIC "
+           "inline-level box breaks nothing. THE COMPUTED VALUE IS READ AND NOT THE DECLARED KEYWORD: "
+           "css-display-3 §2.7 \"Automatic Box Type Transformations\" blockifies a flex container's child, so "
+           "a check on what this file wrote would pass for a document whose cascade answers something else, "
+           "which is the one way the control here can fail by construction",
+           broken == NULL ? "(none)" : broken, block == NULL ? "(none)" : block,
+           container == NULL ? "(none)" : container);
+    free(broken);
+    free(block);
+    free(container);
+    n = block_flow_anonymous_boxes(s.container, &v);
+    free(v);
+    CHECKF(n == 2u,
+           "CSS 2.2 §9.2.1.1 \"Anonymous block boxes\" generated %zu anonymous block box(es) for this "
+           "container where the section derives TWO. It breaks the inline box \"around the block-level box "
+           "…, splitting the inline box into two boxes (even if either side is empty), one on each side of "
+           "the block-level box(es)\", and \"the line boxes before the break and after the break are enclosed "
+           "in anonymous block boxes\" — so the container's box list is the run before the `em`, the `em` "
+           "itself, and the run after it. ONE is this markup having been read as ordinary inline content, at "
+           "which point CSS 2.1 §E.2 \"Painting order\"'s step 7.2.1 is asked about ONE context and every "
+           "count below is about a document this row is not for",
+           n);
+}
+
+/* THE TEXT TAIL — `<p><span style=…>t<em style=…>x</em>more</span></p>`. The second run holds a run of TEXT
+   whose characters `line_box_glyphs` reports under the BROKEN `span`, which is the START half of what this
+   row measures. */
+static bool tf_bb_paint_text(JSContext *ctx, lxb_html_document_t *dom, DisplayList *out, unsigned *offers)
+{
+    lxb_dom_document_t *d = lxb_dom_interface_document(dom);
+    lxb_dom_element_t *root = lxb_dom_document_element(d);
+    TfBbShape s;
+    BoxPaintCensus census;
+    bool ok;
+
+    CHECK(root != NULL, "the fixture's own active document has no root element for CSS 2.1 §E.2 \"Painting "
+                        "order\"'s walk to start at");
+    s = tf_bb_prefix(d, tf_ib_body(dom));
+    tf_ib_text(d, lxb_dom_interface_node(s.broken), "more");
+    tf_bb_arm(s);
+    display_list_init(out);
+    ok = box_paint_stacking_context(ctx, root, out, &census);
+    *offers = census.offers;
+    /* OUT AGAIN BEFORE ANYTHING IS ASSERTED, which is `tf_pt_paint`'s own rule and is what makes the removal
+       CHECKED rather than trusted: both documents are counted against ONE base, so a paragraph left in puts
+       the next pass's marks past its derived count and that pass's own assertion reports it. */
+    dom_cow_remove_baseline(lxb_dom_interface_node(s.container));
+    return ok;
+}
+
+/* AND THE BOX TAIL — the same document with `<span style="…background-color:#ff0000">B</span>` in place of
+   the text `more`. Its own builder rather than a flag on the one above, for `tf_ib_paint_nested`'s reason:
+   the two differ in SHAPE. The second run now holds an inline BOX, which is the END half —
+   `bp_inline_box_marks` lays every fragment of an element in one call, so a first run that walked past the
+   `em` lays this
+   background and the run that actually holds it lays the same background again. */
+static bool tf_bb_paint_box(JSContext *ctx, lxb_html_document_t *dom, DisplayList *out, unsigned *offers)
+{
+    lxb_dom_document_t *d = lxb_dom_interface_document(dom);
+    lxb_dom_element_t *root = lxb_dom_document_element(d);
+    lxb_dom_element_t *tail;
+    TfBbShape s;
+    BoxPaintCensus census;
+    bool ok;
+
+    CHECK(root != NULL, "the fixture's own active document has no root element for CSS 2.1 §E.2 \"Painting "
+                        "order\"'s walk to start at");
+    s = tf_bb_prefix(d, tf_ib_body(dom));
+    tail = tf_ib_box(d, lxb_dom_interface_node(s.broken), "span", TF_BB_TAIL);
+    tf_ib_text(d, lxb_dom_interface_node(tail), "B");
+    tf_bb_arm(s);
+    display_list_init(out);
+    ok = box_paint_stacking_context(ctx, root, out, &census);
+    *offers = census.offers;
+    dom_cow_remove_baseline(lxb_dom_interface_node(s.container));
+    return ok;
+}
+
+/* THE MARKS OF ONE KIND CARRYING ONE COLOUR, from `from` to the end of the list. The colour is the key
+   because core/paint/display_list.h's `DisplayMark` carries NO element — which is a deliberate statement of
+   that header's and not a gap — so a count keyed on anything else would be this file re-deriving which box a
+   mark came off. Every component compared is 0 or 1, which CSS Color 4 §5.2 "The RGB Hexadecimal Notations:
+   #RRGGBB" makes exact in binary for the three `#RRGGBB` literals above, so these are equalities and not
+   tolerances. */
+static size_t tf_bb_count(const DisplayList *dl, size_t from, DisplayMarkKind kind,
+                          double r, double g, double b)
+{
+    size_t i, n = 0;
+
+    for (i = from; i < dl->n; i++)
+        if (dl->v[i].kind == kind && dl->v[i].color.space == CSS_COLOR_SPACE_SRGB &&
+            dl->v[i].color.a == 1.0 && dl->v[i].color.c[0] == r && dl->v[i].color.c[1] == g &&
+            dl->v[i].color.c[2] == b) n++;
+    return n;
+}
+
+static void box_paint_inline_break_selftest(JSContext *ctx, lxb_html_document_t *dom)
+{
+    DisplayList base, text, box;
+    unsigned obase = 0, text_offers = 0, box_offers = 0;
+    size_t nbase;
+    size_t base_cyan, base_yellow, base_red;
+    size_t text_cyan, text_yellow, text_red, box_cyan, box_yellow, box_red;
+    bool base_ok, text_ok, box_ok;
+
+    /* ALL THREE PAINTS FIRST, each of which puts the tree back before it returns. The base is `tf_pt_paint`'s
+       own NULL-style arm, reused rather than re-spelled: "paint this document with nothing added" is one
+       concept, and two right answers to one question is the shape that drifts. */
+    base_ok = tf_pt_paint(ctx, dom, NULL, NULL, &base, &obase);
+    nbase = base.n;
+    text_ok = tf_bb_paint_text(ctx, dom, &text, &text_offers);
+    box_ok = tf_bb_paint_box(ctx, dom, &box, &box_offers);
+
+    base_cyan = tf_bb_count(&base, 0, DISPLAY_MARK_GLYPH, 0.0, 1.0, 1.0);
+    base_yellow = tf_bb_count(&base, 0, DISPLAY_MARK_GLYPH, 1.0, 1.0, 0.0);
+    base_red = tf_bb_count(&base, 0, DISPLAY_MARK_FILL_RECT, 1.0, 0.0, 0.0);
+    text_cyan = tf_bb_count(&text, nbase, DISPLAY_MARK_GLYPH, 0.0, 1.0, 1.0);
+    text_yellow = tf_bb_count(&text, nbase, DISPLAY_MARK_GLYPH, 1.0, 1.0, 0.0);
+    text_red = tf_bb_count(&text, nbase, DISPLAY_MARK_FILL_RECT, 1.0, 0.0, 0.0);
+    box_cyan = tf_bb_count(&box, nbase, DISPLAY_MARK_GLYPH, 0.0, 1.0, 1.0);
+    box_yellow = tf_bb_count(&box, nbase, DISPLAY_MARK_GLYPH, 1.0, 1.0, 0.0);
+    box_red = tf_bb_count(&box, nbase, DISPLAY_MARK_FILL_RECT, 1.0, 0.0, 0.0);
+
+    /* 0. THE NEGATIVE CONTROL, TAKEN WITH THE PROBE THAT ANSWERS NON-ZERO BELOW — and taken over the WHOLE
+       base list rather than past any offset, which is what makes it a statement about the document and not
+       about an index. CLAUDE.md's §A-CONTROL-ARMS-ONLY-ON-A-SITE is why it is here at all: a count of zero
+       for a colour nothing in this fixture declares would be indistinguishable from a probe that never
+       reached a mark, and the same three calls answering 5, 1 and 1 one assertion later is what separates
+       them. The paragraphs `box_paint_inline_box_selftest` above declares `#00ffff` and `#ff0000` on are
+       removed by their own builders before that function returns, which is the fact this asserts. */
+    CHECKF(base_cyan == 0u && base_yellow == 0u && base_red == 0u,
+           "the base paint of this fixture's own active document — the same document with none of this row's "
+           "markup in it — already holds %zu cyan glyph(s), %zu yellow glyph(s) and %zu red fill(s). All "
+           "three colours are declared ONLY by the two paragraphs this row appends and takes out again, so a "
+           "non-zero here is another row's paragraph still standing in the tree, and every count below would "
+           "then be a difference between two lists of a document this row did not write",
+           base_cyan, base_yellow, base_red);
+
+    /* 1. CSS 2.2 §9.2.1.1's SECOND RUN, AS THE CHARACTERS IT CARRIES. The broken `span` holds `t` before the
+       break and `more` after it — FIVE characters, none of them white space css-text-3 §4.1.1 "Phase I:
+       Collapsing and Transformation" could collapse — and every one of them carries the `span`'s own declared
+       colour, because CSS 2.1 §14.1 "Foreground color: the 'color' property" is inherited and
+       core/paint/box_paint.c reads it off the character's own inline box. ONE is the count a walk that laid
+       the second run's characters under the CONTAINER's style produces: `line_box_glyphs` reports them under
+       the fragment's own element, so the style test matches nothing and the cursor never advances. */
+    CHECKF(text_cyan == 5u,
+           "CSS 2.1 §E.2 \"Painting order\"'s step 7.2.1 laid %zu character(s) carrying the broken inline "
+           "box's colour where this markup holds FIVE — `t` in the run before CSS 2.2 §9.2.1.1 \"Anonymous "
+           "block boxes\"' break and `more` in the run after it. ONE is the second run having been "
+           "enumerated over the CONTAINER instead of over the `span` the section splits: that run BEGINS "
+           "inside the inline box, so its characters are reported under the `span` and a walk holding the "
+           "container as its style operand matches none of them. A number between the two is a run of text "
+           "consumed at the wrong position in the sequence",
+           text_cyan);
+    CHECKF(box_cyan == 2u,
+           "the BOX document laid %zu character(s) carrying the broken inline box's colour where it holds "
+           "TWO — `t` in the first run and `B` in the tail `span`, which inherits the colour through CSS "
+           "Cascade 5 §7.2 \"Inheritance\" because it declares none of its own. This is the same statement "
+           "the count above makes with the second run's content being a BOX rather than a run of text, so a "
+           "five here would be the two documents' tails having been confused and a one is the second run "
+           "reaching neither",
+           box_cyan);
+
+    /* 2. AND THE END OF THE FIRST RUN, WHICH IS THE HALF A CHARACTER COUNT IS SILENT ABOUT. §9.2.1.1 makes
+       the block-level box that ends a run "a sibling of those anonymous boxes" while leaving it a DOM child
+       of the inline box it broke, so that node is met BELOW the depth the run was entered at. A walk with no
+       end to test at that depth steps over it and into the next run's content — and `bp_inline_box_marks`
+       lays EVERY fragment of an element in ONE call, so the tail `span`'s background goes down once for the
+       first run and once for the second. TWO IS THE DOUBLE-PAINT and is what this document is for; ZERO is an
+       inline box's background painted nowhere, which is the state `box_paint_inline_box_selftest` above
+       exists for and would make this count vacuous. */
+    CHECKF(box_red == 1u && text_red == 0u,
+           "CSS 2.1 §E.2's step 7.2.1 item 1 laid %zu background(s) for the tail inline box of the run that "
+           "FOLLOWS CSS 2.2 §9.2.1.1's break, and %zu in the document whose tail is a run of text instead, "
+           "against ONE and ZERO. TWO is the first run having walked out of its own range: that run ends AT "
+           "the block-level box, which §9.2.1.1 makes \"a sibling of those anonymous boxes\" while leaving it "
+           "a child of the inline box it broke, so the end is reached one level down from where the run was "
+           "entered and a walk that only compares siblings at the top level never meets it. A NON-ZERO in the "
+           "second document is a fill this engine invented for markup that declares no background at all",
+           box_red, text_red);
+
+    /* 3. THE BLOCK-LEVEL BOX'S OWN CONTEXT IS UNTOUCHED BY EITHER TAIL, which is the two-sided half: the `em`
+       holds one character in its own inline formatting context — CSS 2.2 §9.4.2 "Inline formatting contexts"'
+       container "that contains no block-level boxes" — and the two documents differ only in what follows it.
+       An inequality here is a tail that changed a context it is not in, and a zero is the `em` having
+       generated no box at all, which would make §9.2.1.1's break unreachable and every count above about
+       something else. */
+    CHECKF(text_yellow == 1u && box_yellow == 1u,
+           "the block-level box that BREAKS the inline one laid %zu and %zu character(s) of its own across "
+           "the two documents, where each holds exactly ONE and the two tails are the only difference "
+           "between them. A ZERO is that box having generated none — at which point CSS 2.2 §9.2.1.1 "
+           "\"Anonymous block boxes\" splits nothing and the container is an ordinary inline formatting "
+           "context — and an inequality is one document's tail having reached a context it is not part of",
+           text_yellow, box_yellow);
+
+    /* 4. AND THE WHOLE OF WHAT EACH PARAGRAPH ADDED, so no mark of either is left unaccounted for. The TEXT
+       document adds five cyan characters, the `em`'s one yellow character and nothing else — neither the `p`
+       nor the `span` nor the `em` declares a background or a border, and css-backgrounds-3 §2.2 "Base Color:
+       the background-color property"' `Initial: transparent` gives §E.2's steps 2, 4 and 7.2.1 nothing to lay
+       for any of them. The BOX document trades four of those characters for one character and one fill. */
+    CHECKF(text.n == nbase + 6u && box.n == nbase + 4u,
+           "CSS 2.1 §E.2's walk laid %zu and %zu marks over two paragraphs this file appended to a document "
+           "that laid %zu with neither of them in it, where this file derives SIX and FOUR. Each paragraph is "
+           "the body's LAST child, so §E.2's step 7 \"in tree order\" puts its content step last and the "
+           "difference between the lists is the whole of what it added. A mark this row has not accounted "
+           "for is one laid for an element this file did not write, or the previous pass's paragraph still "
+           "standing in the tree",
+           text.n, box.n, nbase);
+
+    /* 5. AND THE OFFER COUNT MOVED BY FOUR, which is the statement that §9.2.1.1's break did not turn the
+       runs into offers of the WALK. CSS 2.1 §E.2's step 4 is stated "for all its in-flow, non-positioned,
+       block-level descendants in tree order" and its step 7 over that same set, one each — and this markup
+       adds TWO such boxes, the `p` and the `em`. The `span`s are inline-level and are in neither list;
+       §9.2.1.1's two anonymous boxes are not elements at all and core/paint/paint_order.h's own retired
+       residual records why they cannot be offers. A SIX is those boxes having become members of the walk. */
+    CHECKF(text_offers == obase + 4u && box_offers == obase + 4u,
+           "CSS 2.1 §E.2 \"Painting order\"'s walk offered %u and %u steps for two paragraphs this file "
+           "appended to a document it offers %u steps for, where each derives to %u. Each markup adds TWO "
+           "in-flow non-positioned block-level boxes — the `p` and the `em` css-display-3's initial value "
+           "would otherwise have made inline — and §E.2's step 4 and step 7 member lists each hold both once. "
+           "A HIGHER number is CSS 2.2 §9.2.1.1's anonymous block boxes having become offers of the walk, "
+           "which cannot name them: CSS 2.1 §E.1 \"Definitions\" says \"element\" there \"refers to actual "
+           "elements, pseudo-elements, and anonymous boxes\", and only the first of those three has a "
+           "`PaintOrderVisit` to be offered as",
+           text_offers, box_offers, obase, obase + 4u);
+
+    /* AND THE WALK COMPLETED FOR ALL THREE PAINTS. A false answer is the painter meeting an operand it could
+       not compute; every road to one over a document declaring `#RRGGBB` colours has its own crash in front
+       of it in a DEV build — core/css/css_computed_value.h's `css_used_color` owns the two a colour can
+       produce — so this is reachable in a release build and unreachable here. */
+    DCHECK(base_ok && text_ok && box_ok,
+           "CSS 2.1 §E.2's walk stopped short over the fixture's own active document with one of this row's "
+           "two paragraphs in it. core/paint/box_paint.h's contract is that a false answer LEAVES `out` AND "
+           "`offers` AS THEY STOOD, so every count above would then be a difference between two lists of a "
+           "walk that did not finish");
+
+    /* THE ROW. Two documents one child apart, and the counts that separate a walk which stops at its run's
+       end from one that does not. ON AN ARTIFACT BUILT BEFORE THIS FUNCTION EXISTED THE ROW IS ABSENT
+       ENTIRELY — `grep -c '@INLINEBREAK'` answers 0 rather than a row of zeros, which is this row's own
+       control, and the same grep on an artifact whose step 7.2.1 walks a SIBLING range answers 0 too because
+       the arming check or the counts abort before the printf. Every field is a plain C counter this file
+       derived from a list it walked, so none of them can become concolic and silently never be written. */
+    printf("@INLINEBREAK base=%zu text_marks=%zu text_cyan=%zu text_yellow=%zu text_red=%zu "
+           "box_marks=%zu box_cyan=%zu box_yellow=%zu box_red=%zu offers=%u ok=%d/%d/%d\n",
+           nbase, text.n - nbase, text_cyan, text_yellow, text_red, box.n - nbase, box_cyan, box_yellow,
+           box_red, text_offers - obase, base_ok ? 1 : 0, text_ok ? 1 : 0, box_ok ? 1 : 0);
+
+    display_list_free(&base);
+    display_list_free(&text);
+    display_list_free(&box);
+}
+
 /* A ROOT ELEMENT THAT GENERATES NO BOX — core/paint/document_paint.h's own arm, and the ONE keyword that can
  * reach it.
  *
@@ -31149,6 +31569,12 @@ int main(int argc, char **argv) {
        document and takes out again. Safe HERE, after a caller that derives counts over the same document,
        for the same reason that one is safe before it: it restores the tree it borrowed. */
     box_paint_inline_box_selftest(ctx, dom);
+    /* AND THE SHAPE NEITHER THAT ROW NOR ANY OTHER DOCUMENT IN THIS TREE HAS — CSS 2.2 §9.2.1.1 "Anonymous
+       block boxes"' BREAK, an in-flow block-level box inside an in-flow `display: inline` element, which is
+       the one markup that puts ONE inline box's content in TWO of CSS 2.1 §E.2's step-7.2.1 enumerations.
+       Immediately after the row above because it borrows the same document through the same two baseline-write
+       entries and puts it back, and because its negative control asserts that row's paragraphs are gone. */
+    box_paint_inline_break_selftest(ctx, dom);
     /* AND THE ARM NEITHER OF THE TWO ABOVE CAN REACH — a ROOT that generates no box, which is
        core/paint/document_paint.h's own and is the one state a page's own `display` declaration selects.
        After them because it uses the same scratch-document helper and the same realm; see the function for
