@@ -146,9 +146,19 @@ shape a collector would have to cover currently covers nothing.
 * **One targeted minimal test at a time.** Never a bulk sweep against live sites.
 * **Clear storage before concluding any bug.**
 * **One run of a live site is not a measurement.** The bytes, the server's answers and the
-  order orphans are reached all move under you. A before/after belongs on frozen bytes — a
-  mirror, a fixture, a recorded payload replayed. Report a live number with its run count and
-  its spread or do not report it as a comparison.
+  order orphans are reached all move under you. Report a live number with its run count, its
+  spread, the ENGINE's revision and the HOUR, or do not report it as a comparison — the
+  subject's own revision is not ours to state.
+  This bullet used to answer that with `a before/after belongs on frozen bytes — a mirror, a
+  fixture, a recorded payload replayed`, and the MIRROR half is RETIRED by the project owner:
+  a page's scripts and styles are computed and fetched at runtime, so a frozen copy of somebody
+  else's site is a program no visitor is served, and this repository carries none. The retired
+  wording is kept because a reader who re-derives it from run-to-run variance will re-propose a
+  mirror; `.gitignore`'s `testing/fixtures/*` block records the same retirement and the reason
+  it does NOT reach a fixture this project WROTE, which is an instrument rather than a capture.
+  What replaces the mirror needs no new mechanism: compare on the quantities that do not move
+  with reach — a crash's IDENTITY, a conservation identity read WITHIN one sample, a count that
+  cannot be true, a value that is wrong rather than small.
 * **On a site that aborts, the endpoint count beside the crash is noise.** How much a run
   learned before it died is a function of where the crash landed. The crash record is the
   stable fact.
