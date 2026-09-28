@@ -2409,36 +2409,22 @@ void document_set_frozen_base_url(lxb_dom_document_t *dom, lxb_dom_element_t *el
            "pair has had one of them written outside this setter");
 }
 
-/* §7.4's ABOUT BASE URL, which HTML §7.3.2.1 "Creating browsing contexts"' "create a new browsing context
- * and document" gives the initial `about:blank` as
- * `creatorBaseURL` and §7.4.5 gives an `about:` navigation from its initiator. WRITE-ONCE, at creation, by the
- * operation that created the Document — never by anything the page can reach.
+/* §7.4's ABOUT BASE URL HAS NO SETTER, AND THAT IS THE FIX RATHER THAN AN OMISSION. It used to have one,
+ * called by core/frame/navigable.c AFTER the host's realm builder returned — which is after this file's own
+ * document_install has run every parsed walk over the finished tree. Two of those walks ask §2.4.3 "Document
+ * base URLs" for a base URL: §4.2.3's freeze, which runs FIRST among them and reads the FALLBACK base URL, and
+ * §4.8.5's iframe walk, which resolves a nested frame's `src` against the DOCUMENT base URL. For a Document
+ * addressed `about:srcdoc` both reach document_fallback_base_url_of with a null about base URL and fire
+ * §2.4.3 step 1's assert — so `<iframe srcdoc="<base href=/x/>">` and `<iframe srcdoc="<iframe src=/y>">`
+ * aborted a dev build on ordinary markup, and in release resolved every relative URL in the frame against
+ * `about:srcdoc`, whose opaque path makes the parse FAIL.
  *
- * IT IS AN INPUT OF THE OPERATION AND NOT A READ OFF THE TARGET, which is why the caller states it: whose base
- * URL it is depends on WHICH operation is running (the CREATOR's for a create, the INITIATOR's for a
- * navigation) and never on the state of the navigable being filled — the same sentence §7.2.6's inherited
- * policy container is stated with, one field over. */
-void document_set_about_base_url(JSContext *ctx, const char *url)
-{
-    Document *d = doc_here(ctx);
-
-    DCHECK(url != NULL && url[0] != '\0',
-           "§7.4's about base URL was set to nothing — a null one is the ABSENCE of this call, which is what "
-           "every Document created from a response has, rather than a value to write");
-    DCHECK(d->base.about == NULL,
-           "§7.4's about base URL was written twice for one Document — it is a CREATION item, decided by the "
-           "operation that made the Document and fixed for its life, so a second writer is a second answer to "
-           "which document created this one");
-    DCHECK(d->base.frozen_el == NULL,
-           "§7.4's about base URL was set for a Document that has ALREADY FROZEN a base element's URL — §4.2.3 "
-           "freezes AGAINST the fallback base URL, which this call changes, so that element is frozen to an "
-           "answer this Document never had. Set the about base URL where the Document is CREATED, before its "
-           "tree is walked, rather than after");
-    DCHECK(JS_IsObject(d->doc_obj),
-           "§7.4's about base URL was set before the document's `document` object existed");
-    cow_capture_host_state(ctx, d->doc_obj, &d->base.about, sizeof d->base.about);
-    d->base.about = doc_addr_intern(d, url);
-}
+ * THE SETTER'S OWN THIRD DCHECK WAS WRITTEN FOR EXACTLY THAT HAZARD AND COULD NOT FIRE ON IT — it asserted
+ * that no base element's URL had been frozen yet, and for a srcdoc Document the freeze that would have
+ * violated it aborts UPSTREAM, inside the fallback read, before it can store anything. A guard shadowed by an
+ * earlier abort reads as a guard and is not one, which is why the ordering is fixed by construction here
+ * instead: the value is an argument of doc_rec_new, so the record is BORN with it and there is no later
+ * moment for a caller to choose. */
 
 /* DOM §4.5's encoding, of this realm's active document — see document.h. ONE component owns what a
    document's encoding is, for the same reason it owns what its URL is: two answers to that question is how
@@ -5035,7 +5021,7 @@ DocumentKind document_kind_initial_about_blank(void)
  * the record instead answers that question and every other per-document one through one indirection, with no
  * registry to keep in step — a registry is a second list of documents whose failure mode is a stale row. */
 static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, DocumentInterface iface,
-                             DocumentKind kind)
+                             DocumentKind kind, const char *about_base_url)
 {
     lxb_dom_document_t *dd = lxb_dom_interface_document(dom);
     Document *d;
@@ -5094,6 +5080,34 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
     d->addr.value = JS_NewString(ctx, url ? url : "");
     CHECK(!JS_IsException(d->addr.value), "document: OOM naming a document's address");
     doc_addr_assert_agrees(ctx, d);
+    /* HTML §7.4's ABOUT BASE URL, WRITTEN AT THE BIRTH OF THE RECORD AND NOT AFTERWARDS. §7.5.1 "Shared
+       document creation infrastructure"'s create-and-initialize-a-Document-object gives it as ONE ROW of the
+       same table that gives the address two lines up — the row beside `URL`, `policy container` and `final
+       sandboxing flag set` — so it is a CREATION item in the standard's own structure and not a field a later
+       caller fills in.
+       IT USED TO BE A SETTER CALLED AFTER THE REALM WAS BUILT, and that is rewritten here rather than deleted
+       because the argument for it was sound about OWNERSHIP and wrong about ORDER, and a reader who re-derives
+       the ownership half will re-propose the setter. The argument was that whose base URL a created Document
+       inherits is a fact about the OPERATION §7.4 "Navigation and session history" is performing, which
+       core/frame/navigable.c owns, so it must not be answered by the host's realm builder. That is exactly
+       right and is UNCHANGED: the value still comes from that component and the host still answers nothing —
+       it CARRIES it, which is what it already does for the address, for §7.1.7 "Policy containers"' container
+       and for §7.1.5's sandboxing flags, every one of them a fact about the operation that the builder is TOLD.
+       What the argument got wrong is that a fact cannot be written onto a record that does not exist yet: the
+       record is built HERE, inside the builder, and document_install's parsed walks run before the builder
+       returns — so a write afterwards is a write after §4.2.3's freeze and after §4.8.5's iframe walk have
+       already asked §2.4.3 "Document base URLs" for a fallback base URL this Document did not have. For an
+       `about:srcdoc` Document that is §2.4.3 step 1's own assert, firing on ordinary markup.
+       NO COW CAPTURE, and that is the ordering being load-bearing rather than an omission: a capture exists so
+       that a flow that overwrites a field can put the old one back, and at this line the record has no
+       `document` object for a delta to hang off and no flow has ever been able to read the field. */
+    DCHECK(about_base_url == NULL || about_base_url[0] != '\0',
+           "§7.4's about base URL was stated as the EMPTY STRING at a Document's creation — a null one is the "
+           "ABSENCE of the fact, which is what every Document created from a response has, and §2.4.3 "
+           "\"Document base URLs\" tests the stored value for null rather than for emptiness, so an empty one "
+           "would be returned as this Document's fallback base URL and every relative URL in it would resolve "
+           "against nothing");
+    if (about_base_url) d->base.about = doc_addr_intern(d, about_base_url);
     /* BOTH OF §4.5's CREATION FACTS, FROM THE ONE VALUE THAT CARRIES THEM. `document_kind` has already
        asserted the content type is non-empty and fits, so this copy cannot be the one that truncates. */
     snprintf(d->content_type, sizeof d->content_type, "%s", type);
@@ -5197,7 +5211,11 @@ static JSValue doc_finish(JSContext *ctx, Document *d)
 JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, DocumentInterface iface,
                      DocumentKind kind)
 {
-    Document *d = doc_rec_new(ctx, dom, url, iface, kind);
+    /* NO ABOUT BASE URL: §7.4 gives one to a Document whose creating operation addressed it `about:blank`
+       or `about:srcdoc`, and a second Document in this realm (§4.5.1's factories, DOMParser, XHR's
+       responseXML) is created by none of those operations — §2.4.3 "Document base URLs" answers for it
+       with its own address, which is step 3. */
+    Document *d = doc_rec_new(ctx, dom, url, iface, kind, /*about_base_url*/ NULL);
 
     /* WHO DESTROYS IT. A document a FLOW created is that flow's, exactly like a node it created: the COW delta
        owns it and destroys it when the delta is discarded, so the frontier does not accumulate one document per
@@ -5269,7 +5287,8 @@ lxb_html_document_t *document_template_contents_owner(JSContext *ctx, lxb_dom_do
            algorithm that does NOT copy the source and is why the interface is stated here rather than read off
            `d`. */
         inert = doc_rec_new(d->realm, dom, "about:blank", DOCUMENT_IFACE_DOCUMENT,
-                            document_kind(d->is_xml, d->is_xml ? "application/xml" : "text/html"));
+                            document_kind(d->is_xml, d->is_xml ? "application/xml" : "text/html"),
+                            /*about_base_url*/ NULL);
         inert->is_inert_template = 1;
         doc_realm_owns(d->realm, inert);
         /* The wrapper the record itself holds is the one that outlives this: nothing here has a use for a
@@ -5364,7 +5383,7 @@ lxb_dom_element_t *document_create_element_html(lxb_dom_document_t *dom, const c
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
                       DocumentKind kind, SerializedPolicyContainer policy,
                       SerializedResponsePermissionsPolicy permissions_policy, SandboxFlags sandbox_flags,
-                      uint32_t doc_id, JSValueConst nav_proxy)
+                      uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url)
 {
     Document *d;
     JSValue doc;
@@ -5392,7 +5411,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        exactly where a reader expects XMLDocument: its text is "create and initialize a Document object
        document, given \"xml\", type, and navigationParams", so the `xml` there is DOM §4.5's TYPE and nothing
        else. */
-    d = doc_rec_new(ctx, dom, url, DOCUMENT_IFACE_DOCUMENT, kind);
+    d = doc_rec_new(ctx, dom, url, DOCUMENT_IFACE_DOCUMENT, kind, about_base_url);
     d->doc = doc_id;
     /* CSP §2.2's SELF-ORIGIN BECOMES A RECORD HERE, at the one point a document's facts stop being the bytes a
        host stated and start being the types the algorithms are written over. origin_parse is the transport

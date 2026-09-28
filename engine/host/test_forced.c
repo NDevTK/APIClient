@@ -9689,12 +9689,12 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
                              SerializedPolicyContainer policy,
                              SerializedResponsePermissionsPolicy permissions_policy,
                              SandboxFlags sandbox_flags,
-                             uint32_t doc_id, JSValueConst nav_proxy)
+                             uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url)
 {
     JSValue g = JS_GetGlobalObject(ctx);
 
     platform_document_install(ctx, g, dom, url, origin, kind, policy, permissions_policy, sandbox_flags,
-                              doc_id, nav_proxy);
+                              doc_id, nav_proxy, about_base_url);
 
     /* THE FIXTURE'S OWN SURFACE — the @S sinks and the host-edge stand-ins the probes drive. Every one of
        these is this fixture's, which is why it is here and not in the list. */
@@ -9757,7 +9757,7 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
                                  SerializedPolicyContainer policy,
                                  SerializedResponsePermissionsPolicy permissions_policy,
                                  SandboxFlags sandbox_flags,
-                                 uint32_t doc_id, JSValueConst nav_proxy)
+                                 uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -9771,7 +9771,7 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
     /* §3.3.7 step 1: a child navigable is a Window; §8.1.3.5 step 1.2.1: a Window has no owner set. */
     realm_install_intrinsics(ctx, top_level_url, "Window", false);
     tf_realm_install(ctx, dom, url, origin, kind, policy, permissions_policy, sandbox_flags, doc_id,
-                     nav_proxy);
+                     nav_proxy, about_base_url);
     return ctx;
 }
 
@@ -30674,7 +30674,12 @@ int main(int argc, char **argv) {
                          /* NO RESPONSE, so Permissions Policy §9.1 step 3's empty ordered map — this fixture's
                             markup is a C string literal and no server said anything about its policy. */
                          serialized_response_permissions_policy(NULL, NULL), 0,
-                         world_local_doc(), root_proxy);
+                         world_local_doc(), root_proxy,
+                         /* §7.4's ABOUT BASE URL: NULL. This fixture's root document has an address of its
+                            own, which is the arm §2.4.3 "Document base URLs" answers with that address; only
+                            an `about:blank` or `about:srcdoc` Document inherits one, and those arrive through
+                            tf_child_realm above. */
+                         /*about_base_url*/ NULL);
         JS_FreeValue(ctx, root_proxy);
     }
 

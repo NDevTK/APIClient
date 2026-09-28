@@ -202,12 +202,18 @@ void platform_worker_agent_init(JSContext *ctx, const char *origin, const char *
  * host that stated it itself would be the second entry asking a question the loader already answered — which
  * is exactly how every Document this engine installed came to report the literal "text/html".
  * `doc_id` is the world registry's name for this document.
- * `nav_proxy` is §7.2.3's ONE WindowProxy for the navigable this document is active in. */
+ * `nav_proxy` is §7.2.3's ONE WindowProxy for the navigable this document is active in.
+ * `about_base_url` is HTML §7.4's ABOUT BASE URL for this Document, or NULL — the fact §2.4.3 "Document base
+ * URLs"' fallback base URL answers with for a Document addressed `about:blank` or `about:srcdoc`, and NULL for
+ * every Document created from a response. IT IS CARRIED LIKE `url` AND `policy` AND FOR THE SAME REASON: it is
+ * a fact about the OPERATION that created the Document (core/frame/navigable.c's), which a host does not have
+ * and must not derive, and it reaches document_install as an ARGUMENT because §7.5.1 "Shared document creation
+ * infrastructure" gives it as a row of the creation table and that entry's own parsed walks read it. */
 void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
                                const char *origin, DocumentKind kind, SerializedPolicyContainer policy,
                                SerializedResponsePermissionsPolicy permissions_policy,
                                SandboxFlags sandbox_flags,
-                               uint32_t doc_id, JSValueConst nav_proxy);
+                               uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url);
 
 /* THE AGENT HALF, UNDONE — every component's agent-lifetime release, in the reverse of the declaration order,
  * before the runtime is freed.

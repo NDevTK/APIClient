@@ -2713,7 +2713,7 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
                               SerializedPolicyContainer policy,
                               SerializedResponsePermissionsPolicy permissions_policy,
                               SandboxFlags sandbox_flags,
-                              uint32_t doc_id, JSValueConst nav_proxy)
+                              uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url)
 {
     JSValue global = JS_GetGlobalObject(ctx);
 
@@ -2740,7 +2740,7 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
        THE ADDRESS, NOT THE ORIGIN, is what a Window is installed at — this host passed `origin` where the
        other two passed the address, which is the substitution two separate facts make unspellable. */
     platform_document_install(ctx, global, dom, url, origin, kind, policy, permissions_policy, sandbox_flags,
-                              doc_id, nav_proxy);
+                              doc_id, nav_proxy, about_base_url);
 
     JS_FreeValue(ctx, global);
 }
@@ -2753,7 +2753,7 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
                                   SerializedPolicyContainer policy,
                                   SerializedResponsePermissionsPolicy permissions_policy,
                                   SandboxFlags sandbox_flags,
-                                  uint32_t doc_id, JSValueConst nav_proxy)
+                                  uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -2767,7 +2767,7 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
     /* §3.3.7 step 1: a child navigable is a Window; §8.1.3.5 step 1.2.1: a Window has no owner set. */
     realm_install_intrinsics(ctx, top_level_url, "Window", false);
     wpt_realm_install(ctx, dom, url, origin, kind, policy, permissions_policy, sandbox_flags, doc_id,
-                      nav_proxy);
+                      nav_proxy, about_base_url);
     /* THE CHILD'S SCRIPTS ARE THE CHILD'S, run in ITS realm — they are what make a popup a participant rather
        than an empty frame, since message-opener.html's whole body is one script that posts to its opener.
        THEY ARE QUEUED ONTO THE FRONTIER, NOT RUN HERE. A realm is built from inside §7.4 step 14's load job —
@@ -3103,7 +3103,11 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
         wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, root_kind, policy,
                           serialized_response_permissions_policy(np.permissions_policy,
                                                                  np.permissions_policy_report_only),
-                          np.sandbox_flags, world_local_doc(), root_proxy);
+                          np.sandbox_flags, world_local_doc(), root_proxy,
+                          /* §7.4's ABOUT BASE URL: NULL. The runner's root document is created from a RESPONSE
+                             it read off disk, which is the arm §2.4.3 "Document base URLs" answers with the
+                             document's own address; a child navigable's arrives on the builder above. */
+                          /*about_base_url*/ NULL);
         /* AND HTML §13.2.3.2 "Determining the character encoding"'s ANSWER ONTO THE DOCUMENT IT IS ABOUT —
            here, for the reason core/frame/navigable.c and main.c both write it here: the Document record is
            the install's product, so this is the first moment there is anything to write it on. -1 is the

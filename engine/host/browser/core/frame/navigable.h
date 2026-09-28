@@ -132,12 +132,21 @@
    could derive them FROM: they are a fact about the response, which the builder does not have, and §9.5's
    «[], []» — what a builder would fall back to — is the MOST PERMISSIVE declared policy there is, so a builder
    guessing here would answer `Enabled` for every feature the framed server withheld. */
+/* `about_base_url` is HTML §7.4's ABOUT BASE URL for the Document this builds, or NULL. A builder NEVER
+   derives it and there is nothing it could derive it FROM: §7.4.2.2 "Beginning navigation" takes it from the
+   INITIATOR, so it is a fact about the operation this component is performing and not about the navigable
+   being filled — the same sentence `policy` two lines up is carried with, and the same reason.
+   IT CROSSES HERE RATHER THAN BEING WRITTEN AFTERWARDS because the Document RECORD does not exist until the
+   builder has returned: core/dom/document.c builds it inside document_install and then runs §4.2.3's freeze
+   and §4.8.5's iframe walk over the finished tree, both of which ask §2.4.3 "Document base URLs" for a base
+   URL. A value written after the builder is a value written after those two have already been answered, which
+   for an `about:srcdoc` Document is §2.4.3 step 1's assert on ordinary markup. */
 typedef JSContext *(*RealmBuilder)(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                    const char *top_level_url, const char *origin, DocumentKind kind,
                                    SerializedPolicyContainer policy,
                                    SerializedResponsePermissionsPolicy permissions_policy,
                                    SandboxFlags sandbox_flags,
-                                   uint32_t doc_id, JSValueConst nav_proxy);
+                                   uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url);
 void navigable_set_realm_builder(RealmBuilder b);
 
 /* BUILD THE REALM OF A SAME-ORIGIN NAVIGABLE THIS AGENT HOLDS. The answer is BORROWED, and that is a statement

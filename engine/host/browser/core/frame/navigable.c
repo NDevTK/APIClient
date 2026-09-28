@@ -986,27 +986,36 @@ static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueCon
                                          w->integrity_policy);
     /* THE HOST IS HANDED THE SERIALIZATION, because a host builds a platform surface and does not decide a
        principal — and because the identity it would have to carry is this agent's, asserted at the begin. */
+    /* HTML §7.4's ABOUT BASE URL TRAVELS WITH THE CREATION, which is why it is an argument of this call and
+       not a write that follows it. §7.5.1 "Shared document creation infrastructure" gives it as a row of the
+       table that creates the Document — the row beside the address and the policy container already here —
+       and core/dom/document.c builds that Document's RECORD inside this call and then runs §4.2.3's freeze
+       and §4.8.5's iframe walk over the finished tree before returning. Both of those ask §2.4.3 "Document
+       base URLs" for a base URL, so a value written AFTERWARDS is a value written after the two readers that
+       most need it: `<iframe srcdoc="<base href=/x/>">` and `<iframe srcdoc="<iframe src=/y>">` reached
+       §2.4.3 step 1's assert on ordinary markup, and in release resolved against `about:srcdoc`, whose opaque
+       path makes the parse fail.
+       THIS DOES NOT ASK THE HOST TO ANSWER ANYTHING, and the argument that used to stand here — that the
+       builder is the HOST's, so routing the base URL through it would be a second protocol for a fact this
+       component owns — is rewritten rather than dropped, because its OWNERSHIP half is correct and a reader
+       will re-derive it. Whose base URL a created Document inherits is decided HERE, by §7.4.2.2 "Beginning
+       navigation" reading the INITIATOR, and the host neither computes it nor may. What the argument got
+       wrong is that the builder's parameter list is not a protocol for a host's ANSWERS, it is a protocol for
+       the creation's FACTS: `w->url`, `policy` and `w->sandbox_flags` on this very line are all decided by
+       this component and merely carried, and the about base URL is the fourth of them — so it is the SAME
+       protocol rather than a second one. */
     cctx = g_realm_builder(JS_GetRuntime(ctx), w->dom, w->url, w->top_level_url, origin_serialized(w->origin),
                            w->kind, policy,
                            serialized_response_permissions_policy(w->permissions_policy,
                                                                   w->permissions_policy_report_only),
-                           w->sandbox_flags, w->doc, nav_proxy);
+                           w->sandbox_flags, w->doc, nav_proxy,
+                           w->about_base_url && *w->about_base_url ? w->about_base_url : NULL);
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
     /* AND §13.2.3.2's ANSWER ONTO THE DOCUMENT IT IS ABOUT, for the same reason and in the same place as the
        about base URL below: it is a fact the OPERATION determined and the host's realm builder cannot answer.
        It is written here rather than before the parse because the Document RECORD is what carries it and the
        record is the realm builder's product — the bytes the parse consumed were already decoded with it. */
     if (w->encoding >= 0) document_set_encoding(cctx, w->encoding);
-    /* HTML §7.4's ABOUT BASE URL, WRITTEN BEFORE ANYTHING RESOLVES A URL IN THIS DOCUMENT. It is §2.4.3's
-       fallback base URL for a Document addressed `about:blank`, so §4.2.3's freeze and every relative
-       reference read it — which is why it is set here, between the realm's construction and the scripts
-       seeded below, rather than left for the first reader. document_set_about_base_url asserts the half of
-       that ordering it can see (nothing has frozen a base element's URL yet).
-       IT DOES NOT GO THROUGH THE RealmBuilder, and that is deliberate rather than a shortcut: the builder is
-       the HOST's — it declares which platform surface a document of this build gets — and whose base URL a
-       created Document inherits is a fact about the OPERATION §7.4 is performing, which is this component's.
-       A host cannot answer it and would have to be told, which is a second protocol for one fact. */
-    if (w->about_base_url && *w->about_base_url) document_set_about_base_url(cctx, w->about_base_url);
     if (g_realms_n == g_realms_cap) {
         int cap = g_realms_cap ? g_realms_cap * 2 : 8;
         JSContext **g = realloc(g_realms, (size_t)cap * sizeof *g);
@@ -3630,11 +3639,16 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            `git grep -nw navigable_load_enqueue -- engine` answers THREE call sites, all of them here (the
            navigate, the reload and the same-agent arm below). A peer's host does NOT route its root document
            through it — main.c's qjs_init parses with engine_parse_document and installs with
-           engine_realm_install, whose nine parameters hold no about base URL and whose path calls nothing that
-           writes one: `git grep -nw document_set_about_base_url -- engine` answers ONE caller, this file's own
-           realm builder, which is the CHILD-realm path in THIS agent and not a root's. So a peer handed the
-           resource alone still reaches core/dom/document.c's §2.4.3 step 1 assert — the relocation that clause
-           says is closed — and the FIELD is not the only thing owed.
+           engine_realm_install. THAT ARGUMENT USED TO READ `whose nine parameters hold no about base URL and
+           whose path calls nothing that writes one: document_set_about_base_url answers ONE caller, this
+           file's own realm builder`, and it is rewritten rather than deleted because its CONCLUSION is
+           unchanged and its EVIDENCE now names a function that does not exist — a reader greping the old
+           spelling gets zero and reads that as a fabricated citation rather than as a retired one. There is no
+           setter any more: HTML §7.4's about base URL is an ARGUMENT of document_install, carried from this
+           file's own builder call, and main.c's root install passes it explicitly as NULL because a root
+           document is created FROM A RESPONSE. So the conclusion is now stated by the code rather than derived
+           from a caller count — a peer handed the resource alone still reaches core/dom/document.c's §2.4.3
+           step 1 assert — and the FIELD is not the only thing owed.
            WHAT IS ALSO OWED IS AN ABI PARAMETER, WHICH IS WHY THE TWO HALVES OF THE `BUILD` ABOVE ARE NOT
            SYMMETRIC AND MUST NOT BE PRICED AS ONE. The RESOURCE has a whole path already: it is the bytes field
            the provisioning record carries, which reaches qjs_init as `(html, html_len)` and is parsed, so the
@@ -3671,10 +3685,12 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                   "which is the record's remainder. THE TWO HALVES COST DIFFERENT AMOUNTS AND THE COMMENT "
                   "ABOVE HOLDS THE LEDGER: the RESOURCE reaches a peer's qjs_init as the provisioning record's "
                   "own bytes and needs nothing but this field, while the ABOUT BASE URL reaches nothing — "
-                  "qjs_init takes sixteen parameters and no about base URL, engine_realm_install takes nine and "
-                  "no about base URL, and document_set_about_base_url has exactly ONE caller, this file's own "
-                  "realm builder, which is a CHILD realm of THIS agent and not a peer's root. So it is an ABI "
-                  "SIGNATURE and every hop to it, not a field. A PREVIOUS CLAUSE HERE SAID THE REFUSAL WAS "
+                  "qjs_init takes no about base URL at all, and main.c's root install states NULL for the one "
+                  "document_install now takes, because a root document is created FROM A RESPONSE and §2.4.3 "
+                  "answers for one with its own address. The value reaches a Document only through THIS file's "
+                  "realm-builder call, which is a CHILD realm of THIS agent and not a peer's root. So it is an "
+                  "ABI SIGNATURE and every hop to it, not a field — and the last hop, document_install's own "
+                  "parameter, is the one that already exists. A PREVIOUS CLAUSE HERE SAID THE REFUSAL WAS "
                   "navigable_load_enqueue's, `the load a peer's host provisions included`, and THAT IS FALSE: "
                   "that function is static in this file, is in no header, and has three call sites all here, "
                   "so a peer handed the resource alone still reaches core/dom/document.c's §2.4.3 step 1 "

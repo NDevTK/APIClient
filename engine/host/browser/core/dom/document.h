@@ -125,10 +125,22 @@ void document_install_proto(JSContext *ctx);
    written into every Document this engine installed whatever had been fetched — so an XHTML document reported
    `text/html`, §4.5's "is this an HTML document" answered yes for it, and the HTML parse-boundary correction
    ran over a tree an XML parser built. */
+/* `about_base_url` is HTML §7.4's ABOUT BASE URL for the Document this install creates — `creatorBaseURL`
+   for the initial `about:blank` a navigable is created with, and §7.4.5 "Populating a session history
+   entry"'s initiator base URL for an `about:` navigation. NULL for every Document created from a
+   RESPONSE, which is §2.4.3 "Document base URLs"' null, and never the empty string.
+   IT IS AN ARGUMENT AND NOT A SETTER, AND THAT IS THE ONE THING ABOUT IT A CALLER MUST NOT UNDO. §7.5.1
+   "Shared document creation infrastructure" gives it as a row of the SAME creation table as the address
+   beside it, and this entry runs every parsed walk over the finished tree before it returns — §4.2.3's
+   freeze and §4.8.5's iframe walk both ask §2.4.3 for a base URL — so a Document that received it
+   afterwards had already been asked, and for an `about:srcdoc` address that is §2.4.3 step 1's assert.
+   A HOST CARRIES IT AND ANSWERS NOTHING, exactly as it does for `url`, `policy` and `sandbox_flags`:
+   whose base URL a created Document inherits is a fact about the OPERATION core/frame/navigable.c is
+   performing, and a host that derived one would be answering a question the creator already answered. */
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
                       DocumentKind kind, SerializedPolicyContainer policy,
                       SerializedResponsePermissionsPolicy permissions_policy, SandboxFlags sandbox_flags,
-                      uint32_t doc_id, JSValueConst nav_proxy);
+                      uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url);
 
 /* WHICH DOCUMENT THIS REALM IS, in the world registry's naming. §7.4 mints a child's name from it, so a
    same-origin child of a child is named from the child and not from the instance root. */
@@ -261,11 +273,6 @@ const char *document_fallback_base_url_of(const lxb_dom_document_t *dom);
    is COMPARED and never dereferenced — see the definition. */
 void document_set_frozen_base_url(lxb_dom_document_t *dom, lxb_dom_element_t *el, const char *url);
 lxb_dom_element_t *document_frozen_base_element(const lxb_dom_document_t *dom);
-/* HTML §7.4's ABOUT BASE URL of THIS realm's Document — `creatorBaseURL` for the initial `about:blank` a
-   navigable is created with, and §7.4.5's initiator base URL for an `about:` navigation. WRITE-ONCE, by the
-   operation that CREATED the Document and before its tree is walked; a Document created from a response never
-   receives one, which is §2.4.3's null. */
-void document_set_about_base_url(JSContext *ctx, const char *url);
 /* HTML §3.1.1's "the encoding" of this realm's active document, as an id in the Encoding registry
    (core/encoding/encoding.h). It is what HTML §4.12.1.1 falls back to when a `<script>` carries no `charset`
    attribute — "let encoding be el's node document's the encoding" — and therefore what HTML §8.1.4.2's fetch a
