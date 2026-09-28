@@ -5465,16 +5465,39 @@ function defaultTargets(notify = () => {}) {
      COMPLETE. A citation has no such asymmetry — a number is right or wrong wherever it is written, and the
      corpus driver that reports a real page carries as many as the harness above it.
 
-     WHAT THE CAPTURED BUNDLES COST, MEASURED RATHER THAN ASSUMED. `testing/fixtures` holds captured minified
-     third-party chunks, which are exactly the bytes the skip list in `walk` exists for: a citation nobody here
-     wrote is not one this tree can be held to, which is the line `lexbor` and `qjs` are already drawn on. They
-     are NOT skipped by name, because the extractor already excludes them by construction and a name list is
-     the thing that drifts — it reads comment bodies and string literals, a minifier strips the first, and the
-     two captures in this tree answered ZERO citations read between them when this tool was pointed at them
-     directly. HOW THAT WOULD CHANGE, stated so the next reader runs it instead of re-deriving it: point this
-     tool at a capture alone and read the citations-read figure beside its findings. A capture whose string
-     literals carry a dotted number answers nonzero, and the honest repair then is a RULE for captured bytes
-     and still never a list of their names. */
+     WHAT CAPTURED BUNDLES WOULD COST, AND THE PATH THIS PARAGRAPH NAMED FOR THEM HOLDS NONE. The RULE below
+     is unchanged and is why the paragraph is rewritten rather than dropped: a citation nobody here wrote is
+     not one this tree can be held to, which is the line `lexbor` and `qjs` are already drawn on, and captured
+     bytes are NOT skipped by name, because the extractor already excludes them by construction — it reads
+     comment bodies and string literals, and a minifier strips the first — while a name list is the thing that
+     drifts. What was wrong is the SUBJECT.
+     IT READ THAT `testing/fixtures` HOLDS CAPTURED MINIFIED THIRD-PARTY CHUNKS, AND IT HOLDS NONE. That
+     directory is ignored whole and re-included file by file, each with its retention argument written beside
+     the negation, and the entry covering the bodies that look like a capture says of them in its own words
+     that they are webpack-shaped bodies the fixture is built out of, NOT a site mirror, carrying no
+     provenance row and owed none. `git ls-files testing/fixtures/` is the whole set and the directory holds
+     nothing untracked beside it, so there is no capture there at any revision this checkout can reach.
+     THE MEASUREMENT IT CARRIED IS KEPT AND ITS SUBJECT IS MARKED GONE, because a reader who re-derives it
+     from the premise that a minifier strips comments will re-assert it: two captures in this tree once
+     answered ZERO citations read between them when this tool was pointed at them directly. Those bytes were
+     a committed copy of somebody else's site, which this repository no longer carries — established by
+     content, `git cat-file -e origin/main:testing/corpus/serve-faithful.mjs` answering that the path does not
+     exist, since the commit that retired them is unreachable from a shallow clone.
+     SO THE OBSERVATION HAD NOWHERE TO GO, AND IT IS RE-KEYED TO THE ONE PRODUCER THAT REMAINS RATHER THAN TO
+     A SECOND PATH THAT ALSO HOLDS NOTHING. `testing/capture_github_bundle.cjs` is the only thing in this tree
+     that writes a capture; it is a hand drive over a real browser, and it writes `engine/qjs/_github_page.html`,
+     `engine/qjs/_github_combined.js` and a part per script under `engine/qjs/_github_parts/`. Those paths do
+     not exist until somebody runs it, which is the honest state of this observation: it is RUNNABLE and it is
+     not runnable TODAY, and that is a different thing from the directory it used to name, where it could never
+     have run at all. HOW TO RUN IT, stated so the next reader runs it instead of re-deriving it: produce a
+     capture with that tool and point this one at the written file ALONE, by argv, then read the citations-read
+     figure beside its findings. Argv is what makes it askable, because `walk` skips the whole of `qjs` and the
+     collector will therefore never reach those bytes on its own — which is the same line, working. A capture
+     whose string literals carry a dotted number answers nonzero, and the honest repair then is a RULE for
+     captured bytes and still never a list of their names.
+     ONE THING THAT PRODUCER OWES AND IS NOT THIS FILE'S TO FIX: those three paths are not ignored, so a
+     capture written into a shared checkout is untracked content sitting under a directory that is now
+     ordinary tracked source. */
   const testingDir = join(ROOT, "testing");
   if (existsSync(testingDir)) out.push(...walk(testingDir));
   /* AND THE GATES, which were named as a stated limit one commit ago and are collected one commit later,
