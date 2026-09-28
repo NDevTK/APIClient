@@ -3619,10 +3619,36 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            core/dom/document.c HOLDS that assert. WHAT STOOD HERE SAID a peer handed the resource ALONE
            ABORTS THERE, under a message naming whoever created the Document as at fault — this defect
            relocated into a file that did not cause it rather than closed — and that is rewritten rather than
-           dropped, because it is the reasoning a reader re-derives from §2.4.3 alone. The refusal is
-           navigable_load_enqueue's now: a peer's host routes the load it provisions back through the one call
-           every load converges on, and that call asserts that §7.4.2.2's resource arrives with §7.4.5's
-           about base URL, so the relocation is closed BY CONSTRUCTION and what is still owed is the FIELD. NEITHER IS DERIVABLE FROM
+           dropped, because it is the reasoning a reader re-derives from §2.4.3 alone.
+           AND THE CLAUSE THAT REPLACED IT IS REFUTED IN ITS TURN, BY THE ONE STRUCTURAL FACT IT RESTS ON — KEPT
+           IN ITS OWN WORDS BECAUSE IT IS THE CONVENIENT READING AND THE NEXT READER WILL RE-DERIVE IT. It said:
+           "The refusal is navigable_load_enqueue's now: a peer's host routes the load it provisions back
+           through the one call every load converges on, and that call asserts that §7.4.2.2's resource arrives
+           with §7.4.5's about base URL, so the relocation is closed BY CONSTRUCTION and what is still owed is
+           the FIELD." navigable_load_enqueue IS STATIC IN THIS FILE and is declared in no header, so no host
+           entry can reach it at all: `git grep -n navigable_load_enqueue -- '*.h'` answers nothing, and
+           `git grep -nw navigable_load_enqueue -- engine` answers THREE call sites, all of them here (the
+           navigate, the reload and the same-agent arm below). A peer's host does NOT route its root document
+           through it — main.c's qjs_init parses with engine_parse_document and installs with
+           engine_realm_install, whose nine parameters hold no about base URL and whose path calls nothing that
+           writes one: `git grep -nw document_set_about_base_url -- engine` answers ONE caller, this file's own
+           realm builder, which is the CHILD-realm path in THIS agent and not a root's. So a peer handed the
+           resource alone still reaches core/dom/document.c's §2.4.3 step 1 assert — the relocation that clause
+           says is closed — and the FIELD is not the only thing owed.
+           WHAT IS ALSO OWED IS AN ABI PARAMETER, WHICH IS WHY THE TWO HALVES OF THE `BUILD` ABOVE ARE NOT
+           SYMMETRIC AND MUST NOT BE PRICED AS ONE. The RESOURCE has a whole path already: it is the bytes field
+           the provisioning record carries, which reaches qjs_init as `(html, html_len)` and is parsed, so the
+           notice field is genuinely all of it. The ABOUT BASE URL has NO path — qjs_init's sixteen parameters
+           do not include it — so it needs a hop at every party between this notice and that entry, and one of
+           those hops is the ABI's own signature. The clause "with the readers this host already has for the
+           container" is true of the container and of the resource and false of the base URL.
+           AND THE TWO READERS OF THIS RECORD ARE LIVE ON WRITE WHILE THIS PRODUCER IS LIVE ONLY AFTER A BUILD,
+           WHICH DECIDES THE UNIT AND NOT MERELY THE ORDER. Both take the policy as the remainder from field 16
+           (`f.slice(16)` in engine/trusted.mjs and in extension/bridge.js), so two fields inserted before it
+           move that index in BOTH — and CLAUDE.md §A-CROSS-BOUNDARY-DIFF's in-between state here is not a
+           srcdoc frame misbehaving but EVERY cross-origin child navigable notice failing its own field count,
+           in the half that is live, until somebody builds the half that is not.
+           NEITHER FIELD IS DERIVABLE FROM
            WHAT THIS RECORD CARRIES: the top-level creation URL beside them is §8.1.3.1's, which for a nested
            frame is the TOP document's and never this one's, and the creator's ADDRESS is not its BASE URL the
            moment it carries `<base href>`, which is what the same-origin arm above passes document_base_url
@@ -3642,13 +3668,20 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                   "policy, ancestor origins, sandboxing flags and its creator's whole policy container, and it "
                   "does NOT carry the document's own BYTES, nor §7.4's ABOUT BASE URL — TWO facts a srcdoc "
                   "peer cannot derive and not one. Add §7.4.5's resource AND that base URL, before the policy, "
-                  "which is the record's remainder, with the readers this host already has for the container. "
-                  "The resource alone does not close this, and where it REFUSES is navigable_load_enqueue — "
-                  "the one call every load converges on, the load a peer's host provisions included — which "
-                  "asserts that §7.4.2.2's resource arrives with §7.4.5's about base URL. It used to reach the "
-                  "peer's own §2.4.3 assert instead, naming that document as at fault for a field this record "
-                  "would not carry; the file that composed both slots refuses it now, and the FIELD is still "
-                  "the thing to add");
+                  "which is the record's remainder. THE TWO HALVES COST DIFFERENT AMOUNTS AND THE COMMENT "
+                  "ABOVE HOLDS THE LEDGER: the RESOURCE reaches a peer's qjs_init as the provisioning record's "
+                  "own bytes and needs nothing but this field, while the ABOUT BASE URL reaches nothing — "
+                  "qjs_init takes sixteen parameters and no about base URL, engine_realm_install takes nine and "
+                  "no about base URL, and document_set_about_base_url has exactly ONE caller, this file's own "
+                  "realm builder, which is a CHILD realm of THIS agent and not a peer's root. So it is an ABI "
+                  "SIGNATURE and every hop to it, not a field. A PREVIOUS CLAUSE HERE SAID THE REFUSAL WAS "
+                  "navigable_load_enqueue's, `the load a peer's host provisions included`, and THAT IS FALSE: "
+                  "that function is static in this file, is in no header, and has three call sites all here, "
+                  "so a peer handed the resource alone still reaches core/dom/document.c's §2.4.3 step 1 "
+                  "assert. AND BOTH READERS OF THIS RECORD TAKE THE POLICY AS THE REMAINDER FROM FIELD 16 "
+                  "(engine/trusted.mjs, extension/bridge.js), which are live on WRITE while this producer is "
+                  "live only after a BUILD — so inserting two fields before the policy is one commit or it is "
+                  "every cross-origin child navigable's notice short of its count in the half that is live");
         /* THE NOTICE, and every field of it is load-bearing. The CHILD is the name the host provisions an
            instance under; the CREATOR names who made it, which is what the host routes replies through and what
            a browser would decide policy from; the URL is the child's initial address; the ORIGIN is the
