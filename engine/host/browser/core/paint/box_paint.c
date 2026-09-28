@@ -754,16 +754,48 @@ static bool bp_inline_box_marks(BpState *st, lxb_dom_element_t *el)
     return ok;
 }
 
+/* WHAT ONE RUN'S ENUMERATION CARRIES ACROSS ITS DEPTHS — core/layout/line_box.c's `LbRun` for the PAINT side
+ * of the same walk. The FILL and this walk are two readings of ONE formatting context, which is what
+ * `bp_context_step_7_2_1`'s cursor assert is about, so the members are that walk's: the characters, how many of
+ * them have been laid, the run's exclusive end and whether it has been met.
+ * IT IS A STRUCT AND NOT FOUR MORE PARAMETERS because every one of them is threaded through a recursion whose
+ * depth is the inline box nesting, and a member one recursive call forwarded differently from another is two
+ * enumerations of one run with nothing saying so — which is the defect the paragraph on `r->end` below records
+ * this walk actually having had. */
+typedef struct {
+    const LineBoxGlyph *g;     /* the characters core/layout/line_box.h placed on this context's lines */
+    size_t n;                  /* how many of them there are */
+    size_t cursor;             /* how many this walk has laid — ONE monotone pass, interleaved with the boxes */
+    lxb_dom_node_t *end;       /* §9.2.1.1's next in-flow block-level box: the run's EXCLUSIVE end */
+    bool past_end;             /* whether the walk has met it, AT ANY DEPTH */
+    CssPx origin_x, origin_y;  /* the CONTENT BOX ORIGIN of the box holding this context, in CLIENT coords */
+} BpRun;
+
 /* CSS 2.1 §E.2's STEP 7.2.1, OVER THE BOXES THAT ARE CHILDREN OF `parent` IN THIS FORMATTING CONTEXT — "For
  * each box that is a child of that element, in that line box, in tree order:" and, for an inline box, its own
  * item 4 recursion, which §E.2 spells "Otherwise, jump to 7.2.1 for that element."
  *
- * `from` AND `to` ARE THE HALF-OPEN SIBLING RANGE THIS CONTEXT COVERS, which is `BlockFlowRun` read as
- * core/layout/block_flow.h defines it and is why the top-level call cannot simply walk every child. §9.2.1.1
- * puts a MIXED container's inline content in one anonymous block box PER MAXIMAL RUN, so a container's child
- * list holds the boxes of SEVERAL contexts; a walk that took the whole list would lay every inline box's
- * background once per run. The recursion passes the nested box's own FIRST BOX-TREE CHILD and NULL because an
- * inline box's children are all in the one run its own box is in.
+ * `from` IS A POSITION IN `parent`'s OWN BOX-TREE SEQUENCE AND THE RUN'S EXCLUSIVE END IS `r->end`, which is
+ * `BlockFlowRun` read as core/layout/block_flow.h defines it and is why the top-level call cannot simply walk
+ * every child. §9.2.1.1 puts a MIXED container's inline content in one anonymous block box PER MAXIMAL RUN, so
+ * a container's child list holds the boxes of SEVERAL contexts; a walk that took the whole list would lay every
+ * inline box's background once per run. The recursion passes the nested box's own FIRST BOX-TREE CHILD, and the
+ * end travels in `r` rather than as a second bound because of the paragraph below.
+ *
+ * THE END IS A FLAG TESTED AT EVERY DEPTH AND NOT A SIBLING BOUND TESTED AT ONE, AND THE BREAK CSS 2.2
+ * §9.2.1.1 "Anonymous block boxes" DESCRIBES IS WHY.
+ * "When an inline box contains an in-flow block-level box, the inline box (and its inline ancestors within the
+ * same line box) is broken around the block-level box …, splitting the inline box into two boxes (even if
+ * either side is empty), one on each side of the block-level box(es). The line boxes before the break and after
+ * the break are enclosed in anonymous block boxes, and the block-level box becomes a sibling of those anonymous
+ * boxes." So the box that ENDS a run is a sibling of the run's box and is STILL a child of the inline box it
+ * broke — the end is met at a DEPTH the container's own sequence never visits, and a loop comparing `child`
+ * against it at depth 0 alone walks out of the run and into the next one. What that cost, before this was a
+ * flag: `<div><a>t<div>x</div><b>B</b></a></div>` had the FIRST run descend into `<a>`, step over the `<div>`
+ * that ends it and lay `<b>`'s background — and then the SECOND run, which is where `<b>` actually is, lay it
+ * again. `r->past_end` is core/layout/line_box.c's `LbRun` member of the same name, set where `lb_child` sets
+ * it and propagated back up the recursion, which is what keeps the FILL and this walk two readings of ONE
+ * formatting context rather than two ranges that happen to agree.
  *
  * THE RANGE IS STEPPED OVER core/layout/box_tree.h's SPLICED SEQUENCE AND NOT WITH `->next`, which is
  * css-display-3 §2.5 "Box Generation: the none and contents keywords" and is load-bearing for the cursor
@@ -797,16 +829,22 @@ static bool bp_inline_box_marks(BpState *st, lxb_dom_element_t *el)
  * no marks therefore keeps the CHARACTERS where they were while adding ink for the boxes §E.2 gives ink to,
  * and a box that contributes no character (an atomic inline reaches the line as one U+FFFC item, which
  * `line_box_glyphs` does not emit) consumes nothing and costs nothing. */
-static bool bp_step_7_2_1(BpState *st, lxb_dom_element_t *parent, lxb_dom_node_t *from, lxb_dom_node_t *to,
-                          const LineBoxGlyph *g, size_t n, size_t *cursor, CssPx origin_x, CssPx origin_y)
+static bool bp_step_7_2_1(BpState *st, BpRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *from)
 {
     lxb_dom_node_t *child;
 
-    for (child = from; child != to && child != NULL; child = block_flow_run_next(parent, child)) {
+    for (child = from; child != NULL; child = block_flow_run_next(parent, child)) {
+        /* THE RUN'S END, TESTED AT THIS DEPTH AND BEFORE ANYTHING ELSE — core/layout/line_box.c's `lb_child`
+           tests it in exactly this position, and the two walks agreeing about where a run stops is the whole
+           of what the cursor assert below is able to check. */
+        if (child == r->end) {
+            r->past_end = true;
+            return true;
+        }
         if (child->type == LXB_DOM_NODE_TYPE_TEXT) {
-            while (*cursor < n && g[*cursor].style == parent) {
-                if (!bp_glyph(st, &g[*cursor], origin_x, origin_y)) return false;
-                (*cursor)++;
+            while (r->cursor < r->n && r->g[r->cursor].style == parent) {
+                if (!bp_glyph(st, &r->g[r->cursor], r->origin_x, r->origin_y)) return false;
+                r->cursor++;
             }
             continue;
         }
@@ -877,8 +915,12 @@ static bool bp_step_7_2_1(BpState *st, lxb_dom_element_t *parent, lxb_dom_node_t
                 st->why = outer_why;
                 if (!sub_ok) return false;
             }
-            if (!bp_step_7_2_1(st, box, box_tree_first_child(box), NULL, g, n, cursor, origin_x, origin_y))
-                return false;
+            if (!bp_step_7_2_1(st, r, box, box_tree_first_child(box))) return false;
+            /* THE END MET INSIDE THIS BOX ENDS THE WALK AT EVERY DEPTH ABOVE IT TOO. §9.2.1.1 makes the
+               block-level box that ends a run "a sibling of those anonymous boxes" while leaving it a child of
+               the inline box it broke, so the node that stops this run is reached BELOW the depth the run was
+               entered at and the ancestor loops have no bound of their own to stop on. */
+            if (r->past_end) return true;
         }
     }
     return true;
@@ -895,7 +937,7 @@ static bool bp_context_step_7_2_1(BpState *st, lxb_dom_element_t *style, BlockFl
                                   CssPx origin_x, CssPx origin_y)
 {
     LineBoxGlyph *g = NULL;
-    size_t n = line_box_glyphs(style, run, &g), cursor = 0;
+    size_t n = line_box_glyphs(style, run, &g);
     /* A CONTEXT THAT PLACED NO CHARACTER, STATED BEFORE THE WALK RATHER THAN INFERRED AFTER IT. The
        enumeration below still runs — CSS 2.1 §E.2's step 7.2.1 items 1 and 3 are an inline box's own
        background and border and are laid whether or not that box holds text — so this is a reason the offer
@@ -909,34 +951,87 @@ static bool bp_context_step_7_2_1(BpState *st, lxb_dom_element_t *style, BlockFl
        copy of `after`'s NEXT SIBLING, and core/layout/block_flow.h states why the copies had to become one:
        css-display-3 §2.5 "Box Generation: the none and contents keywords"' splice makes a DOM next sibling the
        wrong position, and the walk that FILLS this context, the two that MEASURE it and this one that PAINTS it
-       would each have had to be taught that separately. The `open` half of the answer is not read here because
-       this walk takes the container as its own style operand and enumerates from `at` downward; that is the one
-       thing about this site the DCHECK below is two-sided about.
-       AND THAT SENTENCE IS A PRE-EXISTING DEFECT THAT THE STEP NOW NAMES RATHER THAN A PROPERTY OF THIS WALK.
-       CSS 2.2 §9.2.1.1 splits an inline box around an in-flow block-level box, so a run that FOLLOWS such a
-       break begins INSIDE that box — `open` is then the inline box and not `style` — and this walk both laid
-       the run's characters under the container's style and stepped the container's sequence from a position
-       that is not in it. The DOM step answered that plausibly (`at->next` inside the fragment, then NULL) and
-       the mismatch surfaced, when it surfaced at all, as the cursor assert below reporting a count. The
-       box-tree step refuses it AT THE STEP, by name, which is the same defect made loud one call earlier.
-       WHAT THE NEXT DIFF BUILDS: this walk taking the `open` half of the pair as the box it enumerates and as
-       the style its own marks carry, so a run that continues a fragment is painted in the box it is a fragment
-       OF. HOW ITS ABSENCE WOULD SHOW: a container whose inline box holds a block-level box and more content
-       after it — `<div><a>t<div>x</div>more</a></div>` — reaches core/layout/box_tree.h's membership refusal
-       naming `more` as stepped out of the wrong box's sequence. */
-    lxb_dom_node_t *from = block_flow_run_start(style, run).at;
-    bool ok;
+       would each have had to be taught that separately.
+       AND THE `open` HALF IS READ HERE NOW, WHICH IS WHAT THE RESIDUAL THIS REPLACES WAS ABOUT. That record
+       said this walk `takes the container as its own style operand` and enumerates from the run's first
+       position downward, and CSS 2.2 §9.2.1.1 "Anonymous block boxes" is why that is wrong for a run that
+       follows a break: the section splits an inline box "into two boxes (even if either side is empty), one on
+       each side of the block-level box(es)", so such a run BEGINS INSIDE the inline box, `open` is that box
+       rather than `style`, and this walk both laid the run's characters under the container's style —
+       `line_box_glyphs` reports them under the fragment's own element, so the `style == parent` test matched
+       nothing — and stepped the CONTAINER's sequence from a position that is not in it.
+       THE RESIDUAL'S REMEDY CLAUSE WAS SHORT BY THE UNWIND, AND IT IS WRITTEN OUT HERE RATHER THAN DELETED
+       BECAUSE IT IS THE REMEDY A READER RE-DERIVES FROM THE PAIR. It said to take the `open` half of the pair
+       `as the box it enumerates and as the style its own marks carry`, and `open` alone paints a run that
+       CONTINUES a fragment and loses every position AFTER that fragment closes: `<div><a>t<div>x</div>more</a>
+       tail</div>` has `tail` in the same run as `more` and in the CONTAINER's sequence, so a walk that only
+       re-based itself on `open` would have traded core/layout/box_tree.h's membership refusal for this
+       function's own cursor assert. The second half of that clause has no referent at all — this walk carries
+       no marks of its own, `bp_inline_box_marks` lays them per CHILD, and `parent` is the operand of the glyph
+       test and of the box-tree step and of nothing else.
+       SO THE LOOP BELOW IS core/layout/line_box.c's `lb_fill` ONE FOR ONE, and that is the point rather than a
+       resemblance: the FILL is the reading this walk is asserted against. It enumerates `open`'s own sequence,
+       and where that sequence ends it STEPS OUT to `open`'s box parent and continues AFTER `open` there — never
+       AT it, which would re-offer a fragment whose marks the earlier run already laid, since
+       `line_box_inline_fragments` reports EVERY fragment of an element in one call.
+       THE OPENING FRAGMENT'S OWN MARKS ARE THEREFORE LAID EXACTLY ONCE, by the run in which the broken inline
+       box is first reached as a CHILD — which §9.2.1.1 guarantees exists, "one on each side of the block-level
+       box(es)" — and a continuing run lays none of them. */
+    BlockFlowRunStart start = block_flow_run_start(style, run);
+    lxb_dom_element_t *open = start.open;
+    lxb_dom_node_t *at = start.at;
+    BpRun r;
+    bool ok = true;
 
+    r.g = g;
+    r.n = n;
+    r.cursor = 0;
+    r.end = run.end;
+    r.past_end = false;
+    r.origin_x = origin_x;
+    r.origin_y = origin_y;
     if (n == 0) bp_decline(st, BOX_PAINT_DECLINE_NO_CHARACTERS);
-    ok = bp_step_7_2_1(st, style, from, run.end, g, n, &cursor, origin_x, origin_y);
 
-    DCHECKF(!ok || cursor == n,
+    for (;;) {
+        lxb_dom_node_t *open_node;
+        lxb_dom_element_t *up;
+
+        ok = bp_step_7_2_1(st, &r, open, at);
+        if (!ok || r.past_end) break;
+        /* THE CONTAINER IS WHERE THE UNWIND STOPS, because the box ancestors of every position in a
+           container's content are inline boxes up to the container itself and the container brackets the run
+           rather than being a member of it. */
+        if (open == style) break;
+        open_node = lxb_dom_interface_node(open);
+        up = box_tree_parent(open_node);
+        DCHECK(up != NULL,
+               "CSS 2.2 §9.2.1.1's run was inside a box with no BOX parent, so CSS 2.1 §E.2's step 7.2.1 "
+               "cannot leave it — the box ancestors of every position in a container's content are inline "
+               "boxes up to the container itself, and this chain does not reach it");
+        at = box_tree_next_sibling(up, open_node);
+        open = up;
+    }
+
+    DCHECKF(!ok || r.cursor == n,
             "CSS 2.1 §E.2 \"Painting order\"'s step 7.2.1 walked one inline formatting context's boxes in tree "
             "order and laid %zu of the %zu characters core/layout/line_box.h placed on its lines. Both numbers "
             "are this engine's own readings of ONE context — the fill's items and this walk's child lists — so "
-            "a character the walk never reached is a node `line_box_glyphs` collected and "
-            "`BlockFlowRun`'s sibling range does not cover",
-            cursor, n);
+            "a character the walk never reached is a node `line_box_glyphs` collected and this walk's own "
+            "enumeration of `BlockFlowRun` does not cover",
+            r.cursor, n);
+    /* AND THE OTHER HALF OF THE SAME PAIR: the walk MET the run's end. The assert above is about the
+       CHARACTERS and is silent about the MARKS, so a walk that ran off the end of its run — into the next
+       anonymous block box, or into a block-level box's own formatting context — would lay an inline box's
+       background in a context that box is not on and still count every character. `lb_fill` asserts the
+       identical thing about the FILL; this is the same invariant owed by the second reading, not a copy of the
+       first one's answer. */
+    DCHECK(!ok || run.end == NULL || r.past_end,
+           "CSS 2.1 §E.2 \"Painting order\"'s step 7.2.1 walked one of CSS 2.2 §9.2.1.1's anonymous block "
+           "boxes to the end of its container's content without ever meeting the in-flow block-level box that "
+           "ENDS that run — so the boxes it offered marks for are some SUPERSET of the ones on this context's "
+           "line boxes, and the extra ones get their own offers as well. The run's end is a node "
+           "core/layout/block_flow.h's own content order produced, so either that order and this walk descend "
+           "differently or the tree changed under the walk");
     free(g);
     return ok;
 }
