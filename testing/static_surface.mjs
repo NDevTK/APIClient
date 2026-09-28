@@ -239,7 +239,11 @@
  *     all but three carried no literal byte at all. The boundary is not where the addresses are being lost —
  *     the caller had not spelled them either. Widening the reach does not change that ratio, so (a'') buys
  *     recall and not razor, and anyone building it should say so before they start.
- * (a') A REFERENCE THAT IS A CALLEE ONLY THROUGH `.call` OR `.apply`. NOT COVERED: the closure admits a
+ * (a') A REFERENCE THAT IS A CALLEE ONLY THROUGH `.call` OR `.apply`, WHICH IS NOW OWED TO BOTH CLOSURES AND
+ *     NOT ONLY THE SINGLE-SITE ONE. `sharedCallSitesOf` admits a function only where EVERY reference of its
+ *     binding is a callee, so one `.call` spelling anywhere among N references refuses the whole SET rather
+ *     than one member of it — the same hole with a larger blast radius, and the same two admitting shapes
+ *     close both. NOT COVERED: the closure admits a
  *     reference standing in callee position and nothing else, so `f.call(recv, x)` and `f.apply(recv, [x])`
  *     put that one reference in an OBJECT position and the function is refused as un-entered — correctly by
  *     the closure's own rule and needlessly, because those two spellings name the argument list as plainly as
@@ -308,6 +312,30 @@
  *     statements before the return, which is exactly the reason the one-statement rule exists — so this is a
  *     widening that must be paid for in FALSE COMPLETES and measured as one, built as a classifier and run
  *     over the whole population before it lands, with the rows it newly settles read at their coordinates.
+ *
+ * (e) A URL COMPONENT READ OFF AN INLINE CONSTRUCTION, WHICH IS BUILT AS A CLASSIFIER, MEASURED AND DECLINED.
+ *     NOT COVERED: `new URL(ref, base).pathname` and `new URL(ref).href` are a MemberExpression whose OBJECT
+ *     is a construction, and the `MemberExpression` arm requires that object to be an Identifier — so the
+ *     read refuses and the construction's EXACT resolution, which the arm two paragraphs up already performs,
+ *     is unreachable THROUGH it. That is the occluding-leaf shape the `new URL` widening repaired, arriving one
+ *     level out: the outer node is one row and it removes the only route to what is under it.
+ *     WHAT THE NEXT DIFF BUILDS: an arm in `fold`'s MemberExpression case for an object that is a
+ *     `NewExpression` or `CallExpression`, admitted only where that object's fold carries `mut` (which in this
+ *     file means the value IS a URL object) with no hole, answering a WHITELISTED component — `href`,
+ *     `pathname`, `search`, `origin`, `host`, `hostname`, `protocol`, `hash`, `port` — out of `new URL(text)`
+ *     and refusing `searchParams` and every member whose value is not a string. It does NOT demote: a
+ *     construction read immediately has never been bound to anything, so no statement can have mutated it,
+ *     which is the same argument `deref` already makes for a construction that is its consumer's direct
+ *     operand.
+ *     HOW ITS ABSENCE WOULD SHOW: a row whose WHY class is `a property read` whose argument text at its own
+ *     printed coordinate is a `new URL(...)` followed by one of those component names.
+ *     WHY IT IS DECLINED RATHER THAN OPEN, AND THE NUMBER IS THE WHOLE OF THE REASON: it was built as a
+ *     classifier and run over the whole corpus BEFORE being judged, which is what CLAUDE.md
+ *     §AND-A-PROPOSED-NARROWING asks of a change in the other direction and is owed a widening just as much.
+ *     It fired ZERO times across every channel — data, program, blind spot and manifest alike. A reader who
+ *     builds it should expect that figure to be about the BUNDLERS in the corpus rather than about the shape:
+ *     the spelling a bundler emits is `new Worker(new URL(...))`, where the construction is the direct operand
+ *     and is already folded, and the component read is how a hand-written module spells it.
  *
  * WHAT COMPLETES THE COMPARISON, NAMED SO IT CAN BE RUN RATHER THAN RE-DERIVED. This file is one half. The
  * other half is not "the engine's endpoint count", which answers a different question: `solver/result.c`
@@ -1004,11 +1032,143 @@ function fold(node, binds, depth, env) {
    file makes and whose name nothing assigns free — so a bundle that ships its own `URL` polyfill and binds
    the name is REFUSED rather than folded through a constructor whose behaviour is not the standard's.
    WHAT IS REFUSED AND WHY, because a coercion set that does not say what it turns away is read as complete:
-   `encodeURIComponent`, `encodeURI` and `.replace()` CHANGE the bytes, so folding them to their operand
-   would report an address the program never sends; `.concat()` cannot be told from `Array.prototype.concat`
-   by any parse, so admitting it would fold an array join into a URL; `.toString(radix)` is not identity and
-   is refused by its argument count. Each of those is a fold a stronger tool could make with a type it does
-   not have, and each is left as a hole. */
+   `.toString(radix)` is not identity and is refused by its argument count, and a receiver or an operand this
+   fold did not recover is a hole in every arm here.
+   THIS PARAGRAPH USED TO REFUSE `encodeURIComponent`, `encodeURI`, `.replace()` AND `.concat()` AND BOTH OF
+   ITS REASONS WERE WRONG, which is written out rather than deleted because each is the reason a reader
+   re-derives from the arms above. It said the first three "CHANGE the bytes, so folding them to their operand
+   would report an address the program never sends" — true of folding a call to its OPERAND, and this arm does
+   not do that: it APPLIES the function, so `encodeURIComponent("/a/b")` folds to `%2Fa%2Fb` and the answer is
+   the bytes the program really sends. Evaluating a pure function of text the fold already recovered is the
+   same operation `new URL` has always performed here, and the paragraph above says why that one is exact.
+   It said `.concat()` "cannot be told from `Array.prototype.concat` by any parse", and it can be told apart
+   by THIS one: the fold has no arm for an ArrayExpression at all, so a receiver that folds to text cannot be
+   an array, and the ambiguity the sentence names is unreachable from the only position this arm is asked in.
+   MEASURED at the corpus this landed against and stated as a shape rather than a number, since a count over a
+   corpus this repository does not carry cannot be re-derived: the arm settles a real third-party monitoring
+   endpoint spelled `"https://…/fingerprintjs/v".concat(n,"/npm-monitoring")`, whose version `n` the fold
+   already had — an address a competent extractor states and this file was crediting to execution. */
+/* ── A PURE FUNCTION OF TEXT THIS FOLD ALREADY RECOVERED ─────────────────────────────────────────────────
+   WHY THIS IS A FOLD AND NOT A GUESS, WHICH IS THE SAME ARGUMENT `new URL` ABOVE MAKES AND NOT A SECOND ONE.
+   Every entry below is a function whose result is determined by its operands and by nothing else, so where
+   the operands are recovered LITERALLY the answer is the one the program computes — the same function, applied
+   by the same runtime, to the same bytes. Nothing here asks what a value will be at run time; it asks what a
+   pure function OF A KNOWN VALUE is, and that is a property of the text.
+   THE RECEIVER'S TYPE IS THE ONE HAZARD AND IT IS GUARDED RATHER THAN ASSUMED. `fold` produces text for a
+   NumericLiteral as readily as for a StringLiteral, and `String.prototype.toLowerCase` on a number THROWS —
+   so a numeric-looking recovered text would let this arm report an address for a call that raises instead of
+   sending anything, which is the FALSE COMPLETE this file may not have. A recovered text that is a numeric
+   literal spelling is therefore refused, and that is a floor: the refusal costs the baseline a fold and the
+   admission would cost it its one unrepeatable failure.
+   WHAT IS REFUSED, EACH BECAUSE IT IS NOT A PURE FUNCTION OF TEXT: a replacement that is a FUNCTION, whose
+   result depends on running it; `.replace` with a pattern this fold cannot read as either a string or a
+   regular expression, since the two behave differently and the recovered TEXT of a regexp does not say which
+   it was; an index or width argument that is not a literal; and `.toString(radix)`, which the arm above
+   already refuses by its argument count.
+   ITS PRICE IS PRINTED ON EVERY RUN, per arm and per refusal reason, for the reason the global door's three
+   numbers are: a widening whose refusals are unmeasured is a trade nobody made, and an arm nobody has watched
+   fire cannot be told from one that is dead. */
+const PURE_STRING_GLOBAL = new Map([
+  ["encodeURIComponent", encodeURIComponent], ["encodeURI", encodeURI],
+  ["decodeURIComponent", decodeURIComponent], ["decodeURI", decodeURI],
+  ["escape", escape], ["unescape", unescape],
+]);
+const IDENTITY_ON_A_STRING = new Set(["toLowerCase", "toUpperCase", "trim", "trimStart", "trimEnd",
+                                      "valueOf", "normalize"]);
+const INDEXING_ON_A_STRING = new Set(["slice", "substring", "substr", "padStart", "padEnd", "repeat",
+                                      "charAt", "at"]);
+/* A RECOVERED TEXT THAT IS A NUMBER'S OWN SPELLING, which is the one shape a receiver arm must turn away. */
+const NUMERIC_TEXT = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
+const tickPure = (env, bag, k) => { if (env && env.pure) env.pure[bag].set(k, (env.pure[bag].get(k) || 0) + 1); };
+/* `.replace`'s FIRST ARGUMENT IS NOT A STRING QUESTION. A StringLiteral replaces one occurrence and a
+   RegExpLiteral replaces by its own flags, and the recovered TEXT of the two is indistinguishable — so the
+   pattern is read off the NODE and anything else is refused rather than coerced. */
+function replacePatternOf(n) {
+  if (!n) return null;
+  if (n.type === "StringLiteral") return n.value;
+  if (n.type === "RegExpLiteral") { try { return new RegExp(n.pattern, n.flags); } catch { return null; } }
+  return null;
+}
+function foldPureStringCall(node, binds, depth, env) {
+  if (node.type === "NewExpression") return null;
+  const c = node.callee, args = node.arguments || [];
+  if (args.some((x) => !x || x.type === "SpreadElement" || x.type === "ArgumentPlaceholder")) return null;
+  const globalName = c && c.type === "Identifier" && env.freeRef.has(c) ? c.name : null;
+  if (globalName && PURE_STRING_GLOBAL.has(globalName)) {
+    if (args.length !== 1) return null;
+    const a0 = fold(args[0], binds, depth + 1, env);
+    if (a0.holes !== 0) { tickPure(env, "refused", "an operand this fold did not recover"); return null; }
+    /* `decodeURIComponent` THROWS ON A MALFORMED SEQUENCE, which is the program's own behaviour and not a
+       failure of this arm — a call that raises sends nothing, so the honest answer is no address. */
+    try { const t = PURE_STRING_GLOBAL.get(globalName)(a0.text); tickPure(env, "settled", globalName); return { text: t, holes: 0 }; }
+    catch { tickPure(env, "refused", "the platform function raises on this operand"); return null; }
+  }
+  if (!c || (c.type !== "MemberExpression" && c.type !== "OptionalMemberExpression")) return null;
+  if (c.computed || c.property.type !== "Identifier") return null;
+  const m = c.property.name;
+  /* `[a,b].join(sep)` ON AN INLINE ARRAY, which is the one position where `join` cannot be anything but
+     `Array.prototype.join`: the receiver is written as an array in the text being read. */
+  if (m === "join" && c.object.type === "ArrayExpression" && args.length <= 1) {
+    const el = [];
+    for (const e of c.object.elements) {
+      if (!e || e.type === "SpreadElement") { tickPure(env, "refused", "an array element this fold cannot read"); return null; }
+      const r = fold(e, binds, depth + 1, env);
+      if (r.holes !== 0) { tickPure(env, "refused", "an array element this fold did not recover"); return null; }
+      el.push(r.text);
+    }
+    let sep = ",";
+    if (args.length === 1) {
+      const sr = fold(args[0], binds, depth + 1, env);
+      if (sr.holes !== 0) { tickPure(env, "refused", "a separator this fold did not recover"); return null; }
+      sep = sr.text;
+    }
+    tickPure(env, "settled", "join"); return { text: el.join(sep), holes: 0 };
+  }
+  const arm = (m === "replace" || m === "replaceAll") ? "replace"
+            : IDENTITY_ON_A_STRING.has(m) ? "identity"
+            : m === "concat" ? "concat"
+            : INDEXING_ON_A_STRING.has(m) ? "indexing" : null;
+  if (!arm) return null;
+  const recv = fold(c.object, binds, depth + 1, env);
+  if (recv.holes !== 0) { tickPure(env, "refused", "a receiver this fold did not recover"); return null; }
+  const t = recv.text;
+  if (NUMERIC_TEXT.test(t)) { tickPure(env, "refused", "a receiver whose recovered text is a number's own spelling"); return null; }
+  try {
+    if (arm === "identity") {
+      if (args.length) return null;
+      tickPure(env, "settled", m); return { text: String.prototype[m].call(t), holes: 0 };
+    }
+    if (arm === "concat") {
+      const vs = [];
+      for (const a of args) {
+        const r = fold(a, binds, depth + 1, env);
+        if (r.holes !== 0) { tickPure(env, "refused", "a concatenated operand this fold did not recover"); return null; }
+        vs.push(r.text);
+      }
+      tickPure(env, "settled", "concat"); return { text: t.concat(...vs), holes: 0 };
+    }
+    if (arm === "replace") {
+      if (args.length !== 2) return null;
+      if (args[1].type === "FunctionExpression" || args[1].type === "ArrowFunctionExpression") {
+        tickPure(env, "refused", "a replacement that is a function"); return null;
+      }
+      const pat = replacePatternOf(args[0]);
+      if (pat === null) { tickPure(env, "refused", "a pattern this fold cannot read as a string or a regular expression"); return null; }
+      const rep = fold(args[1], binds, depth + 1, env);
+      if (rep.holes !== 0) { tickPure(env, "refused", "a replacement this fold did not recover"); return null; }
+      tickPure(env, "settled", m);
+      return { text: m === "replaceAll" ? t.replaceAll(pat, rep.text) : t.replace(pat, rep.text), holes: 0 };
+    }
+    const ns = [];
+    for (const a of args) {
+      if (a.type === "NumericLiteral") { ns.push(a.value); continue; }
+      if (a.type === "UnaryExpression" && a.operator === "-" && a.argument.type === "NumericLiteral") { ns.push(-a.argument.value); continue; }
+      if (a.type === "StringLiteral") { ns.push(a.value); continue; }
+      tickPure(env, "refused", "an index or width argument that is not a literal"); return null;
+    }
+    tickPure(env, "settled", m); return { text: String.prototype[m].apply(t, ns), holes: 0 };
+  } catch { tickPure(env, "refused", "the platform method raises on this receiver"); return null; }
+}
 const ABSOLUTE_URL = /^[A-Za-z][A-Za-z0-9+.\-]*:/;
 const URL_UNKNOWN_BASE = "https://static-surface.invalid/";
 function foldPlatformString(node, binds, depth, env) {
@@ -1068,7 +1228,7 @@ function foldPlatformString(node, binds, depth, env) {
   if (args.length === 0 && c && (c.type === "MemberExpression" || c.type === "OptionalMemberExpression") &&
       !c.computed && c.property.type === "Identifier" && c.property.name === "toString")
     return fold(c.object, binds, depth + 1, env);
-  return null;
+  return foldPureStringCall(node, binds, depth, env);
 }
 
 /* `obj.prop` AS ONE KEY, so a write and a read of the same slot are the same string and cannot drift. */
@@ -1234,6 +1394,40 @@ function foldEnvOnly(node, binds, depth, env) {
         if (!ps) return null;
         const no = (k) => { env.sole.refused.set(k, (env.sole.refused.get(k) || 0) + 1); return null; };
         const call = env.callSiteOf.get(ps.fn);
+        /* THE SHARED HELPER, WHOSE PARAMETER IS THE SET OF WHAT ITS CALLERS PASS. `sharedCallSitesOf` carries
+           the soundness argument; this is the arithmetic. It runs only where the SINGLE-site closure found no
+           call, so the two can never both answer and the existing count cannot move by this being here.
+           EVERY CALL MUST SETTLE OR THE WHOLE SET IS REFUSED, because a set missing one member is not the
+           address set — it is a subset presented as one, which is the false-complete direction. */
+        if (!call && env.shared && env.sharedCallSitesOf) {
+          const calls = env.sharedCallSitesOf.get(ps.fn);
+          if (calls && calls.length > 1 && !env.sole.seen.has(ps.fn)) {
+            env.shared.arity.set(calls.length, (env.shared.arity.get(calls.length) || 0) + 1);
+            const seen = new Set(env.sole.seen); seen.add(ps.fn);
+            const texts = []; let settled = true;
+            for (const cc of calls) {
+              const as2 = cc.arguments;
+              /* A SPREAD MAKES POSITION MEANINGLESS AND A SHORT CALL SUPPLIES NOTHING — the same two
+                 refusals the single-site arm makes, asked of each member of the set. */
+              if (as2.some((x) => x && (x.type === "SpreadElement" || x.type === "ArgumentPlaceholder"))) { settled = false; break; }
+              if (ps.index >= as2.length) { settled = false; break; }
+              const got = fold(as2[ps.index], binds, depth + 1, { ...env, sole: { ...env.sole, seen } });
+              if (got.holes !== 0) { settled = false; break; }
+              texts.push(got.text);
+            }
+            if (settled) {
+              const set = [...new Set(texts)];
+              env.shared.settled++;
+              env.shared.distinct.set(set.length, (env.shared.distinct.get(set.length) || 0) + 1);
+              /* THE SET IS CARRIED IN ITS OWN FIELD AND NEVER IN `alt`. `alt` is the CONDITIONAL mechanism's
+                 second arm and `branchAlt` is read as a count of that one thing; putting a helper's second
+                 caller in it would make one column answer two questions, and a reader could not tell which
+                 mechanism a nonzero reading came from. */
+              return { text: set[0], holes: 0, set };
+            }
+            env.shared.unsettled++;
+          }
+        }
         if (!call) return no("no call site: " + (env.whyNoCall.get(ps.fn) ||
           "it is not a named value at all — it is " + (env.roleOfFn.get(ps.fn) || "in a role this pass does not name")));
         /* A CYCLE IS POSSIBLE EVEN THOUGH EACH FUNCTION HAS ONE CALL SITE — two helpers calling only each
@@ -1794,6 +1988,17 @@ function collectBinds(ast) {
     refCount.set(r.d, (refCount.get(r.d) || 0) + 1);
     if (!refFirst.has(r.d)) refFirst.set(r.d, n);
   }
+  /* EVERY REFERENCE OF A BINDING AND NOT ONLY THE FIRST, which is what lets a SHARED helper's parameter be
+     folded to the SET of what its callers pass. `refFirst` answers the single-reference question and says
+     nothing about a binding referenced twice; this map is the same walk keeping all of them. */
+  const refsOfDecl = new Map();
+  for (const { n, s: sc } of refs) {
+    if (notRef.has(n)) continue;
+    const r = resolve(sc, n.name);
+    if (!r) continue;
+    if (!refsOfDecl.has(r.d)) refsOfDecl.set(r.d, []);
+    refsOfDecl.get(r.d).push(n);
+  }
   const callSiteOf = new Map();  // fn node -> the one CallExpression that can enter it
   /* AN IMMEDIATELY-INVOKED FUNCTION NEEDS NO REFERENCE COUNT AT ALL: the function expression IS the callee,
      so no name exists anywhere for anything else to reach it through. */
@@ -1808,9 +2013,43 @@ function collectBinds(ast) {
   }
   /* WHY A FUNCTION HAS NO UNIQUE CALL SITE, NAMED AS A STRUCTURE RATHER THAN COUNTED AS ONE NUMBER. The
      refusal reasons partition differently and take different work: a function REFERENCED many times is a
-     shared helper and no call-site analysis will ever settle its parameters, while a function that is not a
-     named value at all — an object-literal property, a callback argument, a returned closure — is the
-     bundler's module shape and cannot be reached by any reference count, because there is no reference. */
+     SHARED helper, which `sharedCallSitesOf` above settles as a SET where every one of those references is a
+     callee, while a function that is not a named value at all — an object-literal property, a callback
+     argument, a returned closure — is the bundler's module shape and cannot be reached by any reference
+     count, because there is no reference.
+     THE FIRST HALF USED TO READ `and no call-site analysis will ever settle its parameters`, AND IT IS
+     REWRITTEN RATHER THAN DELETED BECAUSE IT IS WHAT A READER RE-DERIVES FROM THE COUNT: two call sites look
+     like two answers and therefore like none. What the single-site closure actually rests on is not the count
+     but that NOTHING ELSE CAN ENTER THE FUNCTION, and that survives any number of callee references — so the
+     parameter is the SET of what the callers pass, which is a fact about the text. The refusal rows below stay
+     exactly as they were and go on counting the helpers the SET arm did not settle, so the two numbers
+     partition rather than replace one another. */
+  /* ── THE SHARED HELPER'S CALL SITES, ALL OF THEM ────────────────────────────────────────────────────────
+     WHY THIS IS SOUND AT THE SAME BAR AS THE SINGLE-SITE CLOSURE AND NOT A WEAKER ONE. That closure's
+     argument is that where a function's binding is referenced exactly once and that reference is a callee,
+     every invocation binds parameter i to the fold of THAT ONE argument node. The quantifier is what does the
+     work, and it generalises: where EVERY reference of the binding is a callee, the set of argument nodes at
+     position i is finite, enumerated by the text, and complete — nothing else can enter the function, because
+     no reference exists through which anything else could reach it. The fold of that SET is then a set of
+     values the program really passes, which is exactly what the chunk-manifest channel already emits per
+     candidate. A binding the file REASSIGNS is refused for the same reason it is there, and a reference that
+     is NOT a callee is refused because it hands the function out to a caller this file cannot see.
+     WHAT IT IS NOT: an argument that the parameter takes one of those values on any GIVEN run. It is the
+     claim that the address set is in the text, which is the only claim the razor turns on. */
+  const sharedCallSitesOf = new Map();  // fn node -> EVERY CallExpression that can enter it
+  for (const [d, rs] of refsOfDecl) {
+    if (d.reassigned) continue;
+    const fn = d.fn || (d.init && FN_LIKE.has(d.init.type) ? d.init : null);
+    if (!fn) continue;
+    const calls = [];
+    let everyRefIsACallee = true;
+    for (const r of rs) {
+      const call = calleeOf.get(r);
+      if (!call) { everyRefIsACallee = false; break; }
+      calls.push(call);
+    }
+    if (everyRefIsACallee && calls.length) sharedCallSitesOf.set(fn, calls);
+  }
   const whyNoCall = new Map();
   for (const [fn, d] of declOfFn) {
     if (callSiteOf.has(fn)) continue;
@@ -1828,7 +2067,8 @@ function collectBinds(ast) {
     const ps = paramSlot.get(r.d);
     if (ps && !usesArguments.has(ps.fn)) paramOf.set(n, ps);
   }
-  return { binds, fnDeclOf, slotOf, count, freeRef, paramOf, callSiteOf, whyNoCall, roleOfFn, cbVia };
+  return { binds, fnDeclOf, slotOf, count, freeRef, paramOf, callSiteOf, sharedCallSitesOf, whyNoCall,
+           roleOfFn, cbVia };
 }
 
 /* ── THE CHUNK MANIFEST ───────────────────────────────────────────────────────────────────────────────────
@@ -1989,16 +2229,20 @@ function readFile(src, filename) {
                      spell: new Map(), spellOther: { globalComputedDynamic: 0 },
                      inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 },
                      sole: { settled: 0, unsettled: 0, refused: new Map() }, mutFloor: { demoted: 0, rows: [] },
+                     pure: { settled: new Map(), refused: new Map() },
+                     shared: { settled: 0, unsettled: 0, arity: new Map(), distinct: new Map() },
                      callResult: { verdict: new Map(), rows: [] } };
 
-  const { binds, fnDeclOf, slotOf, count: bindCount, freeRef, paramOf, callSiteOf, whyNoCall, roleOfFn, cbVia } = collectBinds(ast);
+  const { binds, fnDeclOf, slotOf, count: bindCount, freeRef, paramOf, callSiteOf, sharedCallSitesOf,
+          whyNoCall, roleOfFn, cbVia } = collectBinds(ast);
   /* THE ENUMERATING FOLD'S FIXED HALF, built once per file: which binding a reference resolves to and which
      slot a member read names. The per-row half — which application, which candidate — is added at the row. */
   /* `freeRef` IS PART OF THE FOLD'S ENV AND NOT ONLY THE DOOR MATCHER'S, because the coercion arms below
      ask the same question the global door asks — is this `URL`, this `Request`, this `String` the platform's
      one — and one answer read two ways is what keeps them from disagreeing. A fold with no env cannot answer
      it and REFUSES, which is the floor direction. */
-  const envBase = { fnDeclOf, slotOf, freeRef, paramOf, callSiteOf, whyNoCall, roleOfFn, cbVia };
+  const envBase = { fnDeclOf, slotOf, freeRef, paramOf, callSiteOf, sharedCallSitesOf, whyNoCall,
+                    roleOfFn, cbVia };
   const manifest = scanManifest(ast, binds, envBase, filename);
   /* THE DOOR CHANNEL'S OWN ENV, AND WHY THE DOOR CHANNEL HAS ONE AT ALL. `foldEnvOnly` was reached only
      with a manifest CANDIDATE, so every arm in it that needs no candidate was being withheld from the rows
@@ -2021,8 +2265,13 @@ function readFile(src, filename) {
      rows can be named at the site that owns them: a demotion read off a global would say how many there
      are and never WHERE, and where is the whole of what makes the residual above answerable. */
   const mutFloor = { demoted: 0, rows: [] };
+  /* THE TWO NEW ARMS' OWN PRICES, kept on the DOOR env for the reason `mutFloor` is: a count read off a
+     module-level bag says how many and never in which channel, and the channels are what a reader compares. */
+  const pureBudget = { settled: new Map(), refused: new Map() };
+  const sharedBudget = { settled: 0, unsettled: 0, arity: new Map(), distinct: new Map() };
   const envDoor = { ...envBase, vars: new Map(), app: null, fn: null, candidate: null,
-                    inline: inlineBudget, sole: soleBudget, mutFloor, callHoles: new Set() };
+                    inline: inlineBudget, sole: soleBudget, mutFloor, pure: pureBudget,
+                    shared: sharedBudget, callHoles: new Set() };
   const sites = [];
   const pathish = new Set();
   const blind = [];
@@ -2178,7 +2427,7 @@ function readFile(src, filename) {
       sites.push({
         argShape, argBinds, argNameLen: (a && a.type === "Identifier") ? a.name.length : null,
         door: door.id, cls: door.cls, engineDoor: door.engine !== null, kind, holes: r.holes,
-        url: r.text, alt: r.alt || null, guard,
+        url: r.text, alt: r.alt || null, set: r.set || null, guard,
         /* THE REACH PAIR. `fnDepth` 0 is a call the module body itself performs, so evaluating the program
            reaches it; anything above 0 needs its enclosing function CALLED. `innerAsync` is whether the
            INNERMOST enclosing function is an async one, which is the axis the two door classes come apart
@@ -2431,6 +2680,7 @@ function readFile(src, filename) {
            manifest, spell, spellOther,
            inline: { settled: inlineBudget.settled, refused: inlineBudget.refused }, recvDoor,
            sole: { settled: soleBudget.settled, unsettled: soleBudget.unsettled, refused: soleBudget.refused },
+           pure: pureBudget, shared: sharedBudget,
            mutFloor, callResult };
 }
 
@@ -2467,8 +2717,56 @@ const SELFTEST = [
   [`const u=new URL("https://h.example/a");fetch(u)`,       ["fetch|data|shape|https://h.example/a{?}"]],
   [`fetch(String("/a/b"))`,                                 ["fetch|data|folded|/a/b"]],
   [`fetch(new Request("/a/b"))`,                            ["fetch|data|folded|/a/b"]],
-  [`fetch("/a/".concat("b"))`,                              ["fetch|data|opaque|{?}"]],  /* .concat is refused: Array.prototype.concat is the same shape */
-  [`fetch(encodeURIComponent("/a/b"))`,                     ["fetch|data|opaque|{?}"]],
+  /* THESE TWO ROWS READ `opaque` AND THE REASONS FOR BOTH REFUSALS WERE WRONG, which is recorded here rather
+     than quietly swapped because each is the reason a reader re-derives at the arm. `.concat` was refused as
+     indistinguishable from `Array.prototype.concat`, and a receiver that FOLDS cannot be an array — this fold
+     has no arm for an ArrayExpression, so the ambiguity is unreachable from the only position the arm is
+     asked in. `encodeURIComponent` was refused because it CHANGES the bytes, which argues against folding a
+     call to its OPERAND and says nothing against APPLYING it: the result is the bytes the request carries. */
+  [`fetch("/a/".concat("b"))`,                              ["fetch|data|folded|/a/b"]],
+  [`fetch(encodeURIComponent("/a/b"))`,                     ["fetch|data|folded|%2Fa%2Fb"]],
+  /* EVERY OTHER ARM OF THE PURE-STRING EVALUATION, one control each, so a zero in its printed price is a fact
+     about the corpus and not a dead arm. The last two are its REFUSALS and must stay opaque: a numeric
+     receiver would THROW at run time rather than send anything, and a pattern this fold cannot read as either
+     a string or a regular expression is two different replacements wearing one recovered text. */
+  [`fetch(decodeURIComponent("%2Fa"))`,                     ["fetch|data|folded|/a"]],
+  [`fetch(encodeURI("/a b"))`,                              ["fetch|data|folded|/a%20b"]],
+  [`fetch(escape("/a b"))`,                                 ["fetch|data|folded|/a%20b"]],
+  [`fetch(unescape("/a%20b"))`,                             ["fetch|data|folded|/a b"]],
+  [`fetch(["/a","b"].join("/"))`,                           ["fetch|data|folded|/a/b"]],
+  [`fetch("/A/B".toLowerCase())`,                           ["fetch|data|folded|/a/b"]],
+  [`fetch("/a/b".toUpperCase())`,                           ["fetch|data|folded|/A/B"]],
+  [`fetch(" /a/b ".trim())`,                                ["fetch|data|folded|/a/b"]],
+  [`fetch("/a/bX".slice(0,-1))`,                            ["fetch|data|folded|/a/b"]],
+  [`fetch("/a/_".replace("_","b"))`,                        ["fetch|data|folded|/a/b"]],
+  [`fetch("/a/_".replace(/_/g,"b"))`,                       ["fetch|data|folded|/a/b"]],
+  [`fetch("/a/_".replaceAll("_","b"))`,                     ["fetch|data|folded|/a/b"]],
+  [`fetch((7).toLowerCase())`,                              ["fetch|data|opaque|{?}"]],
+  [`fetch("/a/_".replace(k,"b"))`,                          ["fetch|data|opaque|{?}"]],
+  [`fetch("/a/_".replace("_",()=>"b"))`,                    ["fetch|data|opaque|{?}"]],
+  [`fetch("/a/b".slice(k))`,                                ["fetch|data|opaque|{?}"]],
+  [`fetch(["/a",u].join("/"))`,                             ["fetch|data|opaque|{?}"]],
+  [`fetch(u.toLowerCase())`,                                ["fetch|data|opaque|{?}"]],
+  [`fetch(decodeURI("/a%20b"))`,                            ["fetch|data|folded|/a b"]],
+  [`fetch(" /a".trimStart())`,                              ["fetch|data|folded|/a"]],
+  [`fetch("/a ".trimEnd())`,                                ["fetch|data|folded|/a"]],
+  [`fetch("/a".valueOf())`,                                 ["fetch|data|folded|/a"]],
+  [`fetch("/a".normalize())`,                               ["fetch|data|folded|/a"]],
+  [`fetch("X/a/b".substring(1))`,                            ["fetch|data|folded|/a/b"]],
+  [`fetch("X/a/b".substr(1))`,                               ["fetch|data|folded|/a/b"]],
+  [`fetch("/a/b".padStart(5,"z"))`,                          ["fetch|data|folded|z/a/b"]],
+  [`fetch("/a".padEnd(4,"b"))`,                              ["fetch|data|folded|/abb"]],
+  [`fetch("/a".repeat(2))`,                                  ["fetch|data|folded|/a/a"]],
+  [`fetch("/".charAt(0))`,                                   ["fetch|data|folded|/"]],
+  [`fetch("/".at(0))`,                                       ["fetch|data|folded|/"]],
+  [`fetch(decodeURIComponent("%E0%A4%A"))`,                 ["fetch|data|opaque|{?}"]],
+  [`fetch(encodeURIComponent(u))`,                          ["fetch|data|opaque|{?}"]],
+  [`fetch(["/a",...b].join("/"))`,                          ["fetch|data|opaque|{?}"]],
+  [`fetch(["/a","b"].join(k))`,                             ["fetch|data|opaque|{?}"]],
+  [`fetch("/a".concat(u))`,                                 ["fetch|data|opaque|{?}"]],
+  [`fetch("/a/_".replace("_",u))`,                          ["fetch|data|opaque|{?}"]],
+  [`fetch("/a".repeat(-1))`,                                ["fetch|data|opaque|{?}"]],
+  [`fetch(hof("/a/b"))`,                                    ["fetch|data|opaque|{?}"]],
   [`const f=e=>"/api/"+e+"/x";fetch(f("v2"))`,              ["fetch|data|folded|/api/v2/x"]],
   [`const g=()=>"/api/g";fetch(g())`,                       ["fetch|data|folded|/api/g"]],
   [`const h=e=>"/api/"+e;fetch(h(q))`,                      ["fetch|data|opaque|{?}"]],
@@ -2552,7 +2850,20 @@ const SELFTEST = [
   //  browser reads; `/out` is what a pass keying on the NAME would report.
   [`function f(u){function g(u){fetch(u)}g("/in")}f("/out")`, ["fetch|data|folded|/in"]],
   //  A SECOND CALL SITE MEANS THE PARAMETER IS NOT DETERMINED — the first refusal, and the commonest.
-  [`function f(u){fetch(u)}f("/a");f("/b")`,                ["fetch|data|opaque|{?}"]],
+  /* THIS ROW READ `opaque` AND WAS THE ONLY CONTROL ASSERTING THAT A SHARED HELPER CANNOT BE SETTLED, which
+     is written out rather than deleted because it is the reading the reference COUNT invites: a function
+     called from two places has two arguments and neither is "the" argument. The quantifier the single-site
+     closure rests on is not the count, it is that NOTHING ELSE CAN ENTER THE FUNCTION — and where every
+     reference is a callee that holds for any number of them, so the parameter is the SET of what the callers
+     pass and the set is in the text. The row prints its first address and its second as `alt`; the url
+     accounting reads the whole set. */
+  [`function f(u){fetch(u)}f("/a");f("/b")`,                ["fetch|data|folded|/a"]],
+  /* AND THE SHARED CLOSURE'S OWN REFUSALS, so `unsettled` and the reference-count refusal below it are both
+     armed by an input whose shape is the one that refuses rather than by luck. */
+  [`function f(u){fetch(u)}f(x);f("/b")`,                   ["fetch|data|opaque|{?}"]],
+  [`function f(u){fetch(u)}f("/a");f(...a)`,                ["fetch|data|opaque|{?}"]],
+  [`function f(u){fetch(u)}f("/a");f()`,                    ["fetch|data|opaque|{?}"]],
+  [`function f(u){fetch(u)}f("/a");g(f)`,                   ["fetch|data|opaque|{?}"]],
   //  A RECURSIVE FUNCTION REFERENCES ITS OWN NAME, so it can never qualify and needs no separate guard.
   [`function f(u){fetch(u);f(u)}f("/a")`,                   ["fetch|data|opaque|{?}"]],
   //  THE REFERENCE IS NOT A CALLEE — passed as a value, reached through `.call`, or constructed. Each of
@@ -2621,13 +2932,17 @@ const SELFTEST_WHY = new Map([
   [`requestAnimationFrame(u=>fetch(u))`,    `a platform timestamp`],
   [`hof(u=>fetch(u))`,                      `a callback parameter supplied by app code`],
   [`t[k](u=>fetch(u))`,                     `a callback parameter whose supplier this pass cannot name`],
-  [`function f(u){fetch(u)}f("/a");f("/b")`, `a function parameter, no platform supplier`],
+  /* THIS ROW READ `function f(u){fetch(u)}f("/a");f("/b")` AND THE SHARED CLOSURE NOW SETTLES IT. A helper
+     NOTHING references has no call site at any quantifier, so its parameter is the class this control arms. */
+  [`function f(u){fetch(u)}`,               `a function parameter, no platform supplier`],
   [`fetch(u)`,                              `a global this file never assigns`],
   [`var B="/a";var B="/b";fetch(B)`,        `a name this pass refuses to settle`],
   [`fetch(u.v)`,                            `a property read`],
   [`fetch(u[k])`,                           `a computed property read`],
   [`var k="b";var m={a:"/x"};fetch(m[k])`,  `a map key the object does not carry`],
-  [`fetch(encodeURIComponent("/a/b"))`,     `a call result`],
+  /* THIS ROW READ `fetch(encodeURIComponent("/a/b"))` AND THE PURE-STRING ARM NOW SETTLES IT, so it produces
+     no hole to classify. A free name this file never binds in callee position is the shape that still does. */
+  [`fetch(hof("/a/b"))`,                    `a call result`],
   [`fetch(a-b)`,                            `an operator this fold does not evaluate`],
   [`fetch([1])`,                            `a node kind this fold has no arm for`],
   [`const u=new URL("https://h.example/a");fetch(u)`, `a mutation nothing in the text records`],
@@ -2773,6 +3088,8 @@ function selftest() {
   const soleRefused = new Set();
   let soleSettled = 0, soleUnsettled = 0, mutDemoted = 0;
   const whyClasses = new Set(), whySeenPer = new Map();
+  const pureArms = new Set(), pureRefusals = new Set();
+  let sharedSettled = 0, sharedUnsettled = 0;
   for (const [src, want] of SELFTEST) {
     const r = readFile(src, "<selftest>");
     if (!r.parsed) die(`SELF-TEST: the parser refused \`${src}\` — ${r.error}`);
@@ -2786,6 +3103,9 @@ function selftest() {
     for (const x of r.sites) if (x.sig) { for (const c of x.sig.split(" + ")) whyClasses.add(c); if (!whySeenPer.has(src)) whySeenPer.set(src, x.sig); }
     for (const x of r.blind) if (x.sig) for (const c of x.sig.split(" + ")) whyClasses.add(c);
     soleSettled += r.sole.settled; soleUnsettled += r.sole.unsettled; mutDemoted += r.mutFloor.demoted;
+    for (const k of r.pure.settled.keys()) pureArms.add(k);
+    for (const k of r.pure.refused.keys()) pureRefusals.add(k);
+    sharedSettled += r.shared.settled; sharedUnsettled += r.shared.unsettled;
     /* THE BRANCH COLUMN IS ARMED HERE AND NOWHERE ELSE. It reads 0 over the corpus, and a column that has
        never spoken cannot tell "the corpus has none" from "the mechanism is dead" — which is exactly the
        pair CLAUDE.md §A-CONTROL-ARMS-ONLY-ON-A-SITE exists to separate. */
@@ -2904,6 +3224,54 @@ function selftest() {
   if (!(mutDemoted > 0))
     die(`SELF-TEST FAILED: no control demotes a constructed URL read through a name, so the mutable-fold ` +
         `floor's count is unarmed and the residual it prices is a claim rather than a measurement.`);
+  /* ── THE PURE-STRING EVALUATION, EVERY ARM AND EVERY REFUSAL, TWO-SIDED ──────────────────────────────────
+     The forward direction says every arm this file DECLARES has been seen firing, which is what makes a zero
+     in its printed price a fact about the corpus rather than a dead mechanism. The reverse says every arm the
+     code can EMIT has been declared — the only check that sees a method added to `foldPureStringCall` and not
+     to a table, which would print a name no reader can look up. The refusals are asserted the same way,
+     because a widening whose refusal counts nobody has watched rise is priced by nothing. */
+  const PURE_ARMS = [...PURE_STRING_GLOBAL.keys(), ...IDENTITY_ON_A_STRING, ...INDEXING_ON_A_STRING,
+                     "join", "concat", "replace", "replaceAll"];
+  for (const k of PURE_ARMS)
+    if (!pureArms.has(k))
+      die(`SELF-TEST FAILED: no control shows the pure-string arm "${k}" firing, so a zero in its printed ` +
+          `price cannot be told from an arm that is dead.`);
+  for (const k of pureArms)
+    if (!PURE_ARMS.includes(k))
+      die(`SELF-TEST FAILED: a control produced the pure-string arm "${k}", which no table here declares. ` +
+          `The declared arms have drifted from what \`foldPureStringCall\` can emit.`);
+  const PURE_REFUSALS = [
+    "an operand this fold did not recover",
+    "the platform function raises on this operand",
+    "an array element this fold cannot read",
+    "an array element this fold did not recover",
+    "a separator this fold did not recover",
+    "a receiver this fold did not recover",
+    "a receiver whose recovered text is a number's own spelling",
+    "a concatenated operand this fold did not recover",
+    "a replacement that is a function",
+    "a pattern this fold cannot read as a string or a regular expression",
+    "a replacement this fold did not recover",
+    "an index or width argument that is not a literal",
+    "the platform method raises on this receiver",
+  ];
+  for (const k of PURE_REFUSALS)
+    if (!pureRefusals.has(k))
+      die(`SELF-TEST FAILED: no control makes the pure-string evaluation refuse for the reason "${k}", so ` +
+          `that row's count is unarmed and a zero in it says nothing about the corpus.`);
+  for (const k of pureRefusals)
+    if (!PURE_REFUSALS.includes(k))
+      die(`SELF-TEST FAILED: the pure-string evaluation refused for the reason "${k}", which this file does ` +
+          `not declare, so its printed price would carry a name no reader can look up.`);
+  /* ── THE SHARED-HELPER CLOSURE, BOTH SIDES ───────────────────────────────────────────────────────────────
+     `settled` is the figure that moves the razor and `unsettled` is the arm working and buying nothing, and a
+     block printing one of them unarmed reads as a mechanism nobody has exercised. */
+  if (!(sharedSettled > 0))
+    die(`SELF-TEST FAILED: no control shows the shared-helper closure SETTLING a parameter, so its ` +
+        `\`settled\` over the corpus cannot be told from a dead mechanism.`);
+  if (!(sharedUnsettled > 0))
+    die(`SELF-TEST FAILED: no control shows the shared-helper closure crossing to a caller's argument that ` +
+        `is itself opaque, so \`unsettled\` — the arm working and buying nothing — is measuring nothing.`);
   const seenBlindKind = new Set(), seenBlindProp = new Set();
   let blindSpoke = 0;
   for (const [src, want] of SELFTEST_BLIND) {
@@ -3229,6 +3597,8 @@ function main(argv) {
       globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
       inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 },
       sole: { settled: 0, unsettled: 0, refused: new Map() }, mutFloor: { demoted: 0, rows: [] },
+      pure: { settled: new Map(), refused: new Map() },
+      shared: { settled: 0, unsettled: 0, arity: new Map(), distinct: new Map() },
       callResult: { verdict: new Map(), rows: [] },
       sig: { data: new Map(), program: new Map(), blind: new Map() },
       manifest: { sites: 0, addressSites: 0, candidates: 0, dropped: 0, fragments: 0, refusedTwoApplications: 0, multi: 0 },
@@ -3268,6 +3638,11 @@ function main(argv) {
     for (const [k, v] of r.inline.refused) b.inline.refused.set(k, (b.inline.refused.get(k) || 0) + v);
     b.sole.settled += r.sole.settled; b.sole.unsettled += r.sole.unsettled;
     for (const [k, v] of r.sole.refused) b.sole.refused.set(k, (b.sole.refused.get(k) || 0) + v);
+    for (const [k, v] of r.pure.settled) b.pure.settled.set(k, (b.pure.settled.get(k) || 0) + v);
+    for (const [k, v] of r.pure.refused) b.pure.refused.set(k, (b.pure.refused.get(k) || 0) + v);
+    b.shared.settled += r.shared.settled; b.shared.unsettled += r.shared.unsettled;
+    for (const [k, v] of r.shared.arity) b.shared.arity.set(k, (b.shared.arity.get(k) || 0) + v);
+    for (const [k, v] of r.shared.distinct) b.shared.distinct.set(k, (b.shared.distinct.get(k) || 0) + v);
     b.mutFloor.demoted += r.mutFloor.demoted;
     for (const row of r.mutFloor.rows) b.mutFloor.rows.push(row);
     for (const [k, v] of r.callResult.verdict) b.callResult.verdict.set(k, (b.callResult.verdict.get(k) || 0) + v);
@@ -3338,7 +3713,13 @@ function main(argv) {
           if (s.argNameLen === 1) b.oneCharNames++;
         }
       }
-      if (s.kind !== "opaque") { b.urls.add(s.method + " " + s.url); c.urls.add(s.method + " " + s.url); }
+      /* EVERY ADDRESS THE ROW RECOVERED AND NOT ONLY THE ONE IT PRINTS. A shared helper resolved to the SET
+         of what its callers pass has recovered N addresses at ONE site, and a url accounting reading `url`
+         alone would count one of them — which understates the parse by exactly the thing the arm bought.
+         `url` stays the row's own display value so no existing column moves. */
+      if (s.kind !== "opaque") {
+        for (const u of (s.set && s.set.length ? s.set : [s.url])) { b.urls.add(s.method + " " + u); c.urls.add(s.method + " " + u); }
+      }
       if (nExamples) b.rows.push(s);
     }
   }
@@ -3371,6 +3752,8 @@ function main(argv) {
     globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
     inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 },
     sole: { settled: 0, unsettled: 0, refused: new Map() }, mutFloor: { demoted: 0, rows: [] },
+    pure: { settled: new Map(), refused: new Map() },
+    shared: { settled: 0, unsettled: 0, arity: new Map(), distinct: new Map() },
     callResult: { verdict: new Map(), rows: [] },
     sig: { data: new Map(), program: new Map(), blind: new Map() },
     manifest: { sites: 0, addressSites: 0, candidates: 0, dropped: 0, fragments: 0, refusedTwoApplications: 0, multi: 0 }, manifestDistinctUrls: 0,
@@ -3404,6 +3787,11 @@ function main(argv) {
     for (const [k, v] of b.inline.refused) tot.inline.refused.set(k, (tot.inline.refused.get(k) || 0) + v);
     tot.sole.settled += b.sole.settled; tot.sole.unsettled += b.sole.unsettled;
     for (const [k, v] of b.sole.refused) tot.sole.refused.set(k, (tot.sole.refused.get(k) || 0) + v);
+    for (const [k, v] of b.pure.settled) tot.pure.settled.set(k, (tot.pure.settled.get(k) || 0) + v);
+    for (const [k, v] of b.pure.refused) tot.pure.refused.set(k, (tot.pure.refused.get(k) || 0) + v);
+    tot.shared.settled += b.shared.settled; tot.shared.unsettled += b.shared.unsettled;
+    for (const [k, v] of b.shared.arity) tot.shared.arity.set(k, (tot.shared.arity.get(k) || 0) + v);
+    for (const [k, v] of b.shared.distinct) tot.shared.distinct.set(k, (tot.shared.distinct.get(k) || 0) + v);
     tot.mutFloor.demoted += b.mutFloor.demoted;
     for (const row of b.mutFloor.rows) tot.mutFloor.rows.push(row);
     for (const [k, v] of b.callResult.verdict) tot.callResult.verdict.set(k, (tot.callResult.verdict.get(k) || 0) + v);
@@ -3629,8 +4017,11 @@ function main(argv) {
   /* ── THE UNIQUE-CALL-SITE CLOSURE AND ITS PRICE ─────────────────────────────────────────────────────────
      THE OTHER DIRECTION OF THE BOUNDARY THE INLINE CROSSES, and reported the same way for the same reason.
      What this one adds that the inline's block does not is that its refusals name a STRUCTURE rather than a
-     spelling: a helper referenced five times is a shared helper and no call-site analysis will ever settle
-     its parameters, while a function that is not a named value AT ALL — an object-literal property, a
+     spelling: a helper referenced five times is a shared helper, which the SHARED-HELPER block below settles
+     as a SET where every one of those references is a callee and counts as unsettled where one of them does
+     not — the clause here used to read `and no call-site analysis will ever settle its parameters`, which is
+     the reading the count invites and which the quantifier refutes. A function that is not a named value AT
+     ALL — an object-literal property, a
      callback argument, a returned closure — is the bundler's module shape, where there is no reference for
      any count to be about. Those two take opposite work, and summing them into one number would say only
      that the closure declined.
@@ -3649,6 +4040,47 @@ function main(argv) {
   console.log(`  unsettled ${String(tot.sole.unsettled).padStart(5)}   resolved to the caller's argument and it carries a hole too — the arm working, buying nothing`);
   for (const [k, v] of [...tot.sole.refused].sort((a, b) => b[1] - a[1]))
     console.log(`  refused   ${String(v).padStart(5)}   ${k}`);
+  /* ── THE SHARED-HELPER CLOSURE AND ITS PRICE ─────────────────────────────────────────────────────────────
+     THE SAME QUANTIFIER ONE STEP WIDER, AND PRINTED APART SO NEITHER FIGURE MOVES THE OTHER. The block above
+     asks whether a function's binding is referenced EXACTLY ONCE; this asks whether EVERY reference of it is
+     a callee, which admits a helper called from several places and hands its parameter the SET of what the
+     callers pass. It runs only where the block above found no call, so the two partition the population and
+     a reader can price each alone.
+     `settled` HERE IS A SITE AND `distinct` IS HOW MANY ADDRESSES IT RECOVERED, which are two facts and not
+     one: a helper called three times with one address is a fold, and one called twice with two is a fold that
+     recovered TWO addresses at a single site — the reason the url accounting reads the whole set. A row is
+     REFUSED WHOLE where any one call fails to settle, because a set missing a member is a subset presented as
+     the whole, and that is the false-complete direction this file may not be wrong in. */
+  console.log(``);
+  console.log(`THE SHARED-HELPER CLOSURE AND WHAT IT DECLINED — the same closure with the quantifier widened`);
+  console.log(`  from "referenced exactly once" to "every reference is a callee". A helper called from N`);
+  console.log(`  places has a FINITE, TEXT-ENUMERATED argument set at each position, and nothing else can`);
+  console.log(`  enter it, so the fold of that set is a set of values the program really passes — the same`);
+  console.log(`  claim the chunk-manifest band makes per candidate. It is asked only where the block above`);
+  console.log(`  found no unique call, so the two counts partition and neither moves the other.`);
+  console.log(`  settled   ${String(tot.shared.settled).padStart(5)}   shared helper(s) whose parameter resolved to a COMPLETE address set`);
+  for (const [k, v] of [...tot.shared.distinct].sort((a, b) => a[0] - b[0]))
+    console.log(`     of those, ${String(v).padStart(3)} recovered ${k} distinct address(es) at ONE call site`);
+  console.log(`  unsettled ${String(tot.shared.unsettled).padStart(5)}   at least one caller's argument carries a hole too — the arm working, buying nothing`);
+  for (const [k, v] of [...tot.shared.arity].sort((a, b) => a[0] - b[0]))
+    console.log(`  examined  ${String(v).padStart(5)}   helper(s) with ${k} call site(s) — the population the widening reaches at all`);
+  console.log(``);
+
+  /* ── THE PURE-STRING EVALUATION AND ITS PRICE ────────────────────────────────────────────────────────────
+     EVERY ARM NAMED AND EVERY REFUSAL SIZED, for the reason the two blocks above are: the header's own
+     retired paragraph refused three of these on a reason that was wrong, and a reader who reaches for that
+     reason again needs the count that says what applying the function instead actually bought. An arm that
+     reads ZERO over this corpus is NOT dead — every one of them is shown firing by a control — so a zero here
+     is a fact about the bundles and not about the mechanism. */
+  console.log(`THE PURE-STRING EVALUATION AND WHAT IT DECLINED — a function whose result is determined by its`);
+  console.log(`  operands is APPLIED to text this fold already recovered, rather than folded to its operand.`);
+  console.log(`  \`encodeURIComponent("/a b")\` is \`%2Fa%20b\`, which is the bytes the program sends; this file`);
+  console.log(`  used to call that a hole. Every arm is armed by a control, so a zero is about the corpus.`);
+  for (const [k, v] of [...tot.pure.settled].sort((a, b) => b[1] - a[1]))
+    console.log(`  settled ${String(v).padStart(5)}   ${k}`);
+  if (!tot.pure.settled.size) console.log(`  settled     0   no arm fired on this corpus`);
+  for (const [k, v] of [...tot.pure.refused].sort((a, b) => b[1] - a[1]))
+    console.log(`  refused ${String(v).padStart(5)}   ${k}`);
   console.log(``);
 
   /* ── THE MUTABLE-FOLD FLOOR AND ITS PRICE ────────────────────────────────────────────────────────────────
@@ -3923,7 +4355,7 @@ function main(argv) {
   if (parseFail.length) { console.log(``); console.log(`PARSE REFUSED (${parseFail.length}):`); for (const p of parseFail.slice(0, 10)) console.log(`  ${p}`); }
   if (nExamples) {
     console.log(``); console.log(`EXAMPLES:`);
-    for (const r of out.examples) console.log(`  [${r.kind}/${r.door}/g${r.guard}] ${r.method} ${r.url.slice(0, 120)}${r.alt ? `   (alt ${r.alt.slice(0, 60)})` : ""}   ${r.file}:${r.line}`);
+    for (const r of out.examples) console.log(`  [${r.kind}/${r.door}/g${r.guard}] ${r.method} ${r.url.slice(0, 120)}${r.alt ? `   (alt ${r.alt.slice(0, 60)})` : ""}${r.set && r.set.length > 1 ? `   (+ ${r.set.slice(1).join(" ").slice(0, 120)})` : ""}   ${r.file}:${r.line}`);
     console.log(``); console.log(`MANIFEST EXAMPLES (one composition, its first addresses):`);
     for (const m of out.manifestExamples) {
       console.log(`  ${m.file}:${m.line}  ${m.candidates} candidate(s), ${m.dropped} dropped, ${m.fragments} fragment(s)`);
