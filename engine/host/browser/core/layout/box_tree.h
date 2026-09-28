@@ -49,12 +49,50 @@
  * predicate no longer TAKES the container, it derives the text node's own parent, so the wrong element is
  * unspellable at this sequence's remaining consumers instead of being a sentence each of them must recall.
  *
- * NOT COVERED: §2.5's splice carries an element's PSEUDO-ELEMENTS as well as its source-document children, and
- * this sequence holds only the second — no `::before`/`::after` box generation exists in this engine for it to
- * splice, so the splice's pseudo-element half has nothing to splice yet. WHAT THE NEXT DIFF BUILDS:
- * pseudo-element box generation, whose boxes then enter THIS sequence before and after an element's children
- * rather than at each caller. HOW ITS ABSENCE WOULD SHOW: a document whose `contents` element carries
- * generated content renders that content in a different box parent from the one §2.5 names. */
+ * NOT COVERED: THIS SEQUENCE'S MEMBER TYPE IS A DOM NODE, and css-display-3 §1 "Introduction" names a box-tree
+ * child that is not one — "a principal block box and a child marker box". So a child box with no
+ * source-document node cannot be yielded here at all, and §2.5's splice carries exactly such children: "its
+ * pseudo-elements, such as ::before and ::after pseudo-elements".
+ * THIS CLAUSE USED TO READ `no ::before/::after box generation exists in this engine for it to splice`, AND IT
+ * IS REWRITTEN RATHER THAN DELETED BECAUSE A READER WHO GREPS THIS ENGINE FOR A PSEUDO-ELEMENT BOX RE-DERIVES
+ * IT. It ENUMERATED where the gap is a PROPERTY, and §2.5's own sentence says "such as ::before and ::after
+ * pseudo-elements" rather than naming a closed pair — so the two it listed made the population look empty when
+ * the commonest member of that population is neither of them.
+ *   - ::before AND ::after ARE EMPTY, BY CONSTRUCTION RATHER THAN BY OMISSION, and no diff at this component
+ *     can change that. css-pseudo-4 §4.1 "Generated Content Pseudo-elements: ::before and ::after" gates them
+ *     on a COMPUTED VALUE — "When their computed content value is not none, these pseudo-elements generate
+ *     boxes as if they were immediate children of their originating element" — and css-content-3 §1
+ *     "Inserting and Replacing Content: the content property" makes the initial `normal` compute to `none` for
+ *     exactly those two. Nothing can move it off `none`, because the property does not PARSE: the derivation
+ *     is a grep of lexbor's `source/lexbor/css/property/const.h` for `LXB_CSS_PROPERTY_CONTENT`, with
+ *     `LXB_CSS_PROPERTY_COLOR` as the armed control that shows the question reaches an answer at all.
+ *   - ::marker IS NOT EMPTY, AND IT IS THE MEMBER THE RETIRED ENUMERATION HID. css-display-3 §2.3
+ *     "Generating Marker Boxes: the list-item keyword" generates it from the display value ALONE — the keyword
+ *     "causes the element to generate a ::marker pseudo-element" — css-content-3 §1 leaves ITS content at
+ *     `normal` rather than `none`, and the UA sheet already computes `list-item` for every `li` (grep
+ *     core/css/css_style_declaration.c's UA rule table for that pair). So the member css-display-3 §1 names is
+ *     missing from this sequence for every list item in every document, with no author declaration anywhere
+ *     and no `content` support needed to reach it.
+ * HOW ITS ABSENCE WOULD SHOW: `box_tree_first_child` of a `list-item` box answers that box's first
+ * SOURCE-DOCUMENT child where §1 says the first child box is the marker, so every walk over the sequence is
+ * one member short AT ITS HEAD and a list renders with no markers. §2.5 is what makes it THIS component's
+ * question rather than a marker component's: a `contents` list item has no principal box for the marker to be
+ * a child OF, Appendix B leaves an `li` behaving normally under `contents`, and §2.5 then splices the marker
+ * into the ancestor's sequence exactly as it splices the source-document children.
+ * WHAT THE NEXT DIFF BUILDS: the ::marker box of a `list-item` element AS A MEMBER OF THIS SEQUENCE — not
+ * `::before`/`::after`, whose population no diff here can make non-empty, and not a widened member type on its
+ * own, which is a shape with no producer. It is ONE landing and it touches SIX positions in this component
+ * rather than the one the retired clause implied: `box_tree_first_child` (a marker precedes the first
+ * source-document child), `bt_resolve` and `bt_continue_before` (the splice descends INTO a `contents` element
+ * and steps back OUT of it at the FRONT, which is where the marker stands), `bt_resolve_back` and
+ * `bt_continue_after` (those same two positions read the other way), and `bt_require_in_sequence`, whose
+ * membership test IS `box_tree_parent(child) == box` and which a member with no DOM parent cannot satisfy —
+ * that refusal is where the member-type decision lands, and it REFUSES a half-landing rather than answering
+ * one plausibly. `box_tree_prev_sibling`'s round trip is the second such guard and was landed before this was
+ * written, so a splice taught to only ONE of the two descents is already a crash rather than a sequence that
+ * reads one way forward and another way back.
+ * RETIREMENT: this residual goes when this sequence can yield a box-tree child that is NOT a DOM node, because
+ * the enumeration that made its gap look empty is unspellable once the member type can name one. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_BOX_TREE_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_BOX_TREE_H
 
