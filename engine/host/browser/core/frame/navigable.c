@@ -739,6 +739,12 @@ static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, ui
 typedef struct {
     uint32_t doc;
     char *url, *top_level_url, *about_base_url;
+    /* HTML §4.8.5 "The `iframe` element"'s CLASS for the Document this creation builds — "the resulting
+       Document must be considered an iframe srcdoc document". A SCALAR beside the address rather than a
+       re-read of it at the finish, because by the time the finish runs the only thing left to ask would be
+       that address, and the address is a strictly larger question (navigable.h states both directions at the
+       RealmBuilder row). It is settled at the OPEN, where §7.4.5's document resource is still in hand. */
+    bool is_iframe_srcdoc;
     /* §7.1.7's CONTAINER, ITEM BY ITEM AND COPIED. Its serialization borrows every string from whoever built
        it (policy_container.h), and this record outlives that frame — so the items are held rather than the
        struct, and the struct is rebuilt from them at the finish. */
@@ -817,7 +823,8 @@ static NavCreateWork *nav_create_begin(JSContext *ctx, uint32_t doc, const char 
                                        const HeaderList *response_headers, const MimeType *computed_type,
                                        SerializedPolicyContainer policy,
                                        SerializedResponsePermissionsPolicy permissions_policy,
-                                       const char *about_base_url, SandboxFlags sandbox_flags)
+                                       const char *about_base_url, SandboxFlags sandbox_flags,
+                                       bool is_iframe_srcdoc)
 {
     NavCreateWork *w;
     int encoding = -1;
@@ -901,6 +908,7 @@ static NavCreateWork *nav_create_begin(JSContext *ctx, uint32_t doc, const char 
     w->url                      = nav_strdup(url);
     w->top_level_url            = nav_strdup(top_level_url);
     w->about_base_url           = nav_strdup(about_base_url);
+    w->is_iframe_srcdoc         = is_iframe_srcdoc;
     w->csp                      = nav_strdup(policy.csp);
     w->self_origin              = nav_strdup(policy.self_origin);
     w->coep_endpoint            = nav_strdup(policy.embedder.endpoint);
@@ -1009,7 +1017,8 @@ static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueCon
                            serialized_response_permissions_policy(w->permissions_policy,
                                                                   w->permissions_policy_report_only),
                            w->sandbox_flags, w->doc, nav_proxy,
-                           w->about_base_url && *w->about_base_url ? w->about_base_url : NULL);
+                           w->about_base_url && *w->about_base_url ? w->about_base_url : NULL,
+                           w->is_iframe_srcdoc);
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
     /* AND §13.2.3.2's ANSWER ONTO THE DOCUMENT IT IS ABOUT, for the same reason and in the same place as the
        about base URL below: it is a fact the OPERATION determined and the host's realm builder cannot answer.
@@ -1088,9 +1097,13 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
        about:blank's permissions policy is exactly §9.5's, which is what §7.3.2.1 creates it with. It is stated
        here rather than defaulted because serialized_response_permissions_policy is the only constructor and a
        caller that stops stating it stops compiling. */
+    /* NOT AN IFRAME SRCDOC DOCUMENT, AND THE ASSERT ABOVE IS WHY IT CANNOT BE. HTML §4.8.5's srcdoc arm
+       navigates with a DOCUMENT RESOURCE, which is a response this entry refuses outright, so the class is
+       the constant false here rather than a fact this caller happens not to have. */
     w = nav_create_begin(ctx, doc, url, top_level_url, origin, NULL, OPENER_POLICY_UNSAFE_NONE, /*navigates*/false,
                          NULL, 0, NULL, NULL, policy,
-                         serialized_response_permissions_policy(NULL, NULL), about_base_url, sandbox_flags);
+                         serialized_response_permissions_policy(NULL, NULL), about_base_url, sandbox_flags,
+                         /*is_iframe_srcdoc*/ false);
     DCHECK(nav_create_ended(w),
            "§7.4's initial about:blank was opened as a creation with items left to fill — its markup is a "
            "constant of this build and reaches child_document as the no-response arm, which takes no load "
@@ -1996,7 +2009,18 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                                      computed_defined ? &computed : NULL,
                                      policy,
                                      serialized_response_permissions_policy(resp_pp, resp_pp_report_only),
-                                     about_base, final_flags);
+                                     about_base, final_flags,
+                                     /* HTML §4.8.5 "The `iframe` element"'s CLASS, CONFERRED HERE BECAUSE
+                                        THIS IS WHERE THE ARM THAT CONFERS IT WAS TAKEN. "Navigate an iframe
+                                        or frame given element, about:srcdoc, the empty string, and the value
+                                        of element's srcdoc attribute. The resulting Document must be
+                                        considered an iframe srcdoc document" — and `resource` is non-NULL
+                                        exactly when this load took §7.4.5's create-navigation-params-from-a-
+                                        srcdoc-resource constructor above, which is that navigation and no
+                                        other. It is the SAME operand navigable_load_enqueue already pairs
+                                        with the address and with the about base URL, read here off the slot
+                                        the job carried rather than off the address it produced. */
+                                     /*is_iframe_srcdoc*/ resource != NULL);
     }
     opener_policy_free(&response_coop);
     embedder_policy_free(&response_ep);
@@ -3646,9 +3670,20 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            spelling gets zero and reads that as a fabricated citation rather than as a retired one. There is no
            setter any more: HTML §7.4's about base URL is an ARGUMENT of document_install, carried from this
            file's own builder call, and main.c's root install passes it explicitly as NULL because a root
-           document is created FROM A RESPONSE. So the conclusion is now stated by the code rather than derived
-           from a caller count — a peer handed the resource alone still reaches core/dom/document.c's §2.4.3
-           step 1 assert — and the FIELD is not the only thing owed.
+           document is created FROM A RESPONSE.
+           AND THE `STILL REACHES core/dom/document.c's §2.4.3 STEP 1 ASSERT` CLAUSE THAT STOOD HERE IS RETIRED
+           BY THE DIFF THAT MADE THAT ASSERT EXACT, IN THE DIRECTION THAT MATTERS TO THIS REFUSAL. Step 1's
+           condition is HTML §4.8.5's CLASS and is now carried as a creation fact rather than sniffed off the
+           address, and a peer's root install states that fact FALSE — so a peer handed the resource alone
+           would no longer abort at all: §2.4.3 would answer its step 3, the address `about:srcdoc`, and every
+           relative URL in that frame would fail to parse SILENTLY. The refusal below is therefore not
+           belt-and-braces over a downstream abort, it is the ONLY thing standing there, which is an argument
+           for the DFAIL rather than against the exactness — a page-reachable abort keyed on an address was
+           firing on ordinary DOMParser and clone documents that are not of the class at all.
+           THE LEDGER IS UNCHANGED AT TWO FIELDS AND THE CLASS IS NOT A THIRD, which is the one thing a reader
+           re-deriving this is likely to get wrong: `is_iframe_srcdoc` is settled at the load's own open as
+           `resource != NULL`, so a peer handed the resource derives it from that resource EXACTLY as this
+           file does, on its own side of the boundary. What has to cross is still the BYTES and the BASE URL.
            WHAT IS ALSO OWED IS AN ABI PARAMETER, WHICH IS WHY THE TWO HALVES OF THE `BUILD` ABOVE ARE NOT
            SYMMETRIC AND MUST NOT BE PRICED AS ONE. The RESOURCE has a whole path already: it is the bytes field
            the provisioning record carries, which reaches qjs_init as `(html, html_len)` and is parsed, so the
@@ -3692,9 +3727,14 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                   "ABI SIGNATURE and every hop to it, not a field — and the last hop, document_install's own "
                   "parameter, is the one that already exists. A PREVIOUS CLAUSE HERE SAID THE REFUSAL WAS "
                   "navigable_load_enqueue's, `the load a peer's host provisions included`, and THAT IS FALSE: "
-                  "that function is static in this file, is in no header, and has three call sites all here, "
-                  "so a peer handed the resource alone still reaches core/dom/document.c's §2.4.3 step 1 "
-                  "assert. AND BOTH READERS OF THIS RECORD TAKE THE POLICY AS THE REMAINDER FROM FIELD 16 "
+                  "that function is static in this file, is in no header, and has three call sites all here. "
+                  "A LATER CLAUSE SAID SUCH A PEER STILL REACHES core/dom/document.c's §2.4.3 step 1 assert, "
+                  "and that is retired too: step 1's condition is §4.8.5's CLASS, carried as a creation fact "
+                  "and stated FALSE by every root install, so a peer handed the resource alone answers step 3 "
+                  "— the address — and fails every relative URL SILENTLY. This refusal is the only thing "
+                  "standing there. THE CLASS IS NOT A THIRD FIELD: it is derived from the resource at the "
+                  "open, so a peer derives it from the resource too, and what must cross is still TWO. "
+                  "AND BOTH READERS OF THIS RECORD TAKE THE POLICY AS THE REMAINDER FROM FIELD 16 "
                   "(engine/trusted.mjs, extension/bridge.js), which are live on WRITE while this producer is "
                   "live only after a BUILD — so inserting two fields before the policy is one commit or it is "
                   "every cross-origin child navigable's notice short of its count in the half that is live");

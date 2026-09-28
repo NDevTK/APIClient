@@ -133,14 +133,30 @@ void document_install_proto(JSContext *ctx);
    "Shared document creation infrastructure" gives it as a row of the SAME creation table as the address
    beside it, and this entry runs every parsed walk over the finished tree before it returns — §4.2.3's
    freeze and §4.8.5's iframe walk both ask §2.4.3 for a base URL — so a Document that received it
-   afterwards had already been asked, and for an `about:srcdoc` address that is §2.4.3 step 1's assert.
+   afterwards had already been asked, and for an iframe srcdoc document that is §2.4.3 step 1's assert.
    A HOST CARRIES IT AND ANSWERS NOTHING, exactly as it does for `url`, `policy` and `sandbox_flags`:
    whose base URL a created Document inherits is a fact about the OPERATION core/frame/navigable.c is
    performing, and a host that derived one would be answering a question the creator already answered. */
+/* `is_iframe_srcdoc` is HTML §4.8.5 "The `iframe` element"'s CLASS — "the resulting Document must be
+   considered an iframe srcdoc document", said of the Document produced by that section's step 1, "navigate
+   an iframe or frame given element, about:srcdoc, the empty string, and the value of element's srcdoc
+   attribute". FALSE for every other creation, the root's included.
+   IT IS CARRIED FOR THE SAME REASON AS THE ROW ABOVE AND MUST NOT BE RE-DERIVED FROM THE ADDRESS, which is
+   the shape this parameter replaced. The class is CONTAINED IN the set of Documents whose URL matches
+   `about:srcdoc` and is not equal to it, in both directions: a DOMParser parse and a DOM §4.4 clone COPY
+   their source's URL (HTML §8.5.1 step 3, DOM §4.4's field list) without being navigations, so inside a
+   srcdoc frame ordinary script builds Documents at that address that are not of this class; and
+   `<iframe src="about:srcdoc">` is given an about base URL by §7.4.2.2 "Beginning navigation" ("if url
+   matches about:blank or IS about:srcdoc") while NOT being of this class at all. §2.4.3's own step 1 names the
+   CLASS where its step 2 spells a URL match, which is the standard distinguishing them in one algorithm.
+   BOTH OF THIS ROW AND THE ONE ABOVE OR NEITHER: core/dom/document.c asserts the pairing at the record's
+   birth, because §2.4.3 step 1's assert is otherwise performed arbitrarily far from the creation that
+   broke it. */
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
                       DocumentKind kind, SerializedPolicyContainer policy,
                       SerializedResponsePermissionsPolicy permissions_policy, SandboxFlags sandbox_flags,
-                      uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url);
+                      uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url,
+                      bool is_iframe_srcdoc);
 
 /* WHICH DOCUMENT THIS REALM IS, in the world registry's naming. §7.4 mints a child's name from it, so a
    same-origin child of a child is named from the child and not from the instance root. */

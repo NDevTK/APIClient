@@ -150,6 +150,7 @@ typedef struct {
     uint32_t                  doc_id;          /* the world registry's name for this document */
     JSValueConst              nav_proxy;       /* §7.2.3's ONE WindowProxy for its navigable */
     const char               *about_base_url;  /* HTML §7.4's ABOUT BASE URL, or NULL — see platform.h */
+    bool                      is_iframe_srcdoc; /* HTML §4.8.5's CLASS for this Document — see platform.h */
 } PlatformDocument;
 
 /* ONE COMPONENT, BOTH HALVES. The thunks below exist because a component's declaration takes exactly the facts
@@ -884,7 +885,7 @@ static void i_resize_observer(JSContext *c, JSValueConst g, const PlatformDocume
 static void i_document(JSContext *c, JSValueConst g, const PlatformDocument *d)
 {
     document_install(c, g, d->dom, d->url, d->kind, d->policy, d->permissions_policy, d->sandbox_flags,
-                     d->doc_id, d->nav_proxy, d->about_base_url);
+                     d->doc_id, d->nav_proxy, d->about_base_url, d->is_iframe_srcdoc);
 }
 static void i_xml_serializer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; xml_serializer_install(c, g); }
 
@@ -2452,7 +2453,8 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
                                const char *origin, DocumentKind kind, SerializedPolicyContainer policy,
                                SerializedResponsePermissionsPolicy permissions_policy,
                                SandboxFlags sandbox_flags,
-                               uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url)
+                               uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url,
+                               bool is_iframe_srcdoc)
 {
     /* THE ONE CONSTRUCTION OF THIS VALUE IN THE PROGRAM — see platform_agent_init above for why it is here and
        not in the three hosts that used to write these assignments out by hand. */
@@ -2467,6 +2469,7 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
         .doc_id             = doc_id,
         .nav_proxy          = nav_proxy,
         .about_base_url     = about_base_url,
+        .is_iframe_srcdoc   = is_iframe_srcdoc,
     };
     const PlatformDocument *doc = &d;
     int i;

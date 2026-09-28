@@ -208,12 +208,19 @@ void platform_worker_agent_init(JSContext *ctx, const char *origin, const char *
  * every Document created from a response. IT IS CARRIED LIKE `url` AND `policy` AND FOR THE SAME REASON: it is
  * a fact about the OPERATION that created the Document (core/frame/navigable.c's), which a host does not have
  * and must not derive, and it reaches document_install as an ARGUMENT because §7.5.1 "Shared document creation
- * infrastructure" gives it as a row of the creation table and that entry's own parsed walks read it. */
+ * infrastructure" gives it as a row of the creation table and that entry's own parsed walks read it.
+ * `is_iframe_srcdoc` is HTML §4.8.5 "The `iframe` element"'s CLASS — "the resulting Document must be
+ * considered an iframe srcdoc document" — which §2.4.3's fallback base URL step 1 reads and which is a fact
+ * about the OPERATION rather than about the address, for the reasons core/dom/document.h states at the same
+ * row. CARRIED AND NOT DERIVED, like the row above it: a host has no way to know which arm of §4.8.5 the
+ * creator took, and the address does not say (a DOMParser document inside a srcdoc frame carries the same
+ * one). FALSE for every creation but that arm's. */
 void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
                                const char *origin, DocumentKind kind, SerializedPolicyContainer policy,
                                SerializedResponsePermissionsPolicy permissions_policy,
                                SandboxFlags sandbox_flags,
-                               uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url);
+                               uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url,
+                               bool is_iframe_srcdoc);
 
 /* THE AGENT HALF, UNDONE — every component's agent-lifetime release, in the reverse of the declaration order,
  * before the runtime is freed.

@@ -262,12 +262,13 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
                                  SerializedPolicyContainer policy,
                                  SerializedResponsePermissionsPolicy permissions_policy,
                                  SandboxFlags sandbox_flags,
-                                 uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url)
+                                 uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url,
+                                 bool is_iframe_srcdoc)
 {
     JSValue g = JS_GetGlobalObject(ctx);
 
     platform_document_install(ctx, g, dom, url, origin, kind, policy, permissions_policy, sandbox_flags,
-                              doc_id, nav_proxy, about_base_url);
+                              doc_id, nav_proxy, about_base_url, is_iframe_srcdoc);
     JS_FreeValue(ctx, g);
 }
 
@@ -330,12 +331,13 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
                                      SerializedPolicyContainer policy,
                                      SerializedResponsePermissionsPolicy permissions_policy,
                                      SandboxFlags sandbox_flags,
-                                     uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url)
+                                     uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url,
+                                     bool is_iframe_srcdoc)
 {
     JSContext *ctx = engine_realm_new(rt, top_level_url);
 
     engine_realm_install(ctx, dom, url, origin, kind, policy, permissions_policy, sandbox_flags, doc_id,
-                         nav_proxy, about_base_url);
+                         nav_proxy, about_base_url, is_iframe_srcdoc);
     return ctx;
 }
 
@@ -917,7 +919,8 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
                              /* §7.4's ABOUT BASE URL: NULL. This host's root document is created FROM A
                                 RESPONSE the trusted zone fetched, which is the one arm §2.4.3 "Document base
                                 URLs" answers with the document's own address rather than an inherited base. */
-                             world_local_doc(), root_proxy, /*about_base_url*/ NULL);
+                             world_local_doc(), root_proxy, /*about_base_url*/ NULL,
+                             /*is_iframe_srcdoc*/ false);
         /* AND HTML §13.2.3.2 "Determining the character encoding"'s ANSWER ONTO THE DOCUMENT IT IS ABOUT —
            here, for core/frame/navigable.c's reason and in the same place as it: the Document record is the
            realm builder's product, so this is the first moment there is anything to write it on, and the
@@ -1175,7 +1178,7 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
                              np.sandbox_flags, doc, proxy,
                              /* A JOINED document is a second RESPONSE of this cluster — see the root's own
                                 install for why §7.4's about base URL is null for one. */
-                             /*about_base_url*/ NULL);
+                             /*about_base_url*/ NULL, /*is_iframe_srcdoc*/ false);
         /* §13.2.3.2's ANSWER ONTO THIS DOCUMENT, for the reason `qjs_init` states at its own install: a
            second document of this cluster is a second response, decoded with its own encoding, and reading
            the root's would be one document reporting another's. */

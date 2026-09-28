@@ -298,6 +298,34 @@ typedef struct Document {
        `type` and disagree about the interface, so the derivation would report every DOMParser XML document as
        an XMLDocument. It decides this document's wrapper's prototype, so it is read at node_wrap. */
     DocumentInterface    iface;
+    /* HTML §4.8.5 "The `iframe` element"'s CLASS, CARRIED BECAUSE IT IS A FACT ABOUT THE OPERATION THAT MADE
+     * THIS DOCUMENT AND IS RECOVERABLE FROM NOTHING THE DOCUMENT HOLDS. "Navigate an iframe or frame given
+     * element, about:srcdoc, the empty string, and the value of element's srcdoc attribute. The resulting
+     * Document must be considered an iframe srcdoc document." §2.4.3 "Document base URLs"' fallback base URL
+     * step 1 is the reader, and it is the ONLY one.
+     *
+     * IT SITS HERE, BESIDE §4.5's THREE, BECAUSE IT IS THE SAME KIND OF FACT: settled by the creating
+     * algorithm and never written again. That is also why it takes NO COW CAPTURE — a capture exists so a
+     * flow that OVERWRITES a field can put the old one back, and no flow can write this one.
+     *
+     * WHAT STOOD HERE INSTEAD WAS `strncmp(addr, "about:srcdoc", 12)` AT THE READER, and it is recorded
+     * rather than merely replaced because the address is the intuitive answer and a reader will re-derive it.
+     * The address is a PROXY for this fact and the two sets differ in BOTH directions:
+     *   - LARGER, on ordinary script. A Document created by document_new takes the SOURCE document's URL —
+     *     HTML §8.5.1's "URL is relevantDocument's URL" for DOMParser, DOM §4.4's "set copy's … URL … to
+     *     those of node" for a document clone — and is given no about base URL, because neither algorithm is
+     *     a navigation. So inside a srcdoc frame `new DOMParser().parseFromString(…)` and
+     *     `document.cloneNode(true)` both build a Document addressed `about:srcdoc` with a legitimately null
+     *     about base URL, which the old assert fired on: a page-reachable dev abort on markup a page is
+     *     entitled to write, which is the one thing §Offensive-programming says a DCHECK may never stand on.
+     *   - SMALLER IS NOT THE WORD FOR THE OTHER DIRECTION, AND IT IS A WRONG ANSWER RATHER THAN A WRONG
+     *     ASSERT. `<iframe src="about:srcdoc">` is NOT an iframe srcdoc document — no srcdoc attribute, so
+     *     §4.8.5 takes its `Otherwise` arm and nothing "must be considered" anything — yet §7.4.2.2
+     *     "Beginning navigation" gives it an about base URL anyway ("if url matches about:blank OR IS
+     *     about:srcdoc: … set documentState's about base URL to initiatorBaseURLSnapshot"). The standard's
+     *     answer for it is step 3, its own address; the address-shaped test returned the creator's base URL.
+     * Both are closed by asking the creation instead of the string. */
+    bool                 is_iframe_srcdoc;
     /* DOM §4.5 Interface Document's "Each document has an associated encoding (an encoding)"
        — an id in the Encoding registry (core/encoding), and the fact HTML §4.12.1.1 falls back to when a
        `<script>` has no `charset` attribute: "let encoding be el's node document's the encoding". It is a
@@ -2292,10 +2320,32 @@ const char *document_fallback_base_url_of(const lxb_dom_document_t *dom)
     DCHECK(d != NULL, "§2.4.3's fallback base URL was asked of a document with no record — a tree that came "
                       "from neither document_install nor document_new has no address, no about base URL and "
                       "no way to answer");
-    /* STEPS 1 AND 2 read the document's ABOUT BASE URL, and both require it to be non-null: step 1 ASSERTS it
-       for an iframe srcdoc document, step 2 tests it for a document whose URL matches about:blank. A null one
-       (a NULL pointer here) therefore cannot reach either, so the parse those steps need is performed only
-       when there is an about base URL to return — which for a document created from a response is never. */
+    /* STEP 1: "if document is an IFRAME SRCDOC DOCUMENT: assert document's about base URL is non-null; return
+       document's about base URL." THE CONDITION IS A CLASS AND NOT A URL TEST, which is why it reads a
+       creation fact rather than the address. HTML §4.8.5 "The `iframe` element" states the class twice and
+       the two are not the same set: the srcdoc attribute's own prose glosses it as "a Document whose URL
+       matches about:srcdoc", and process-the-iframe-attributes step 1 says of the navigation it performs
+       "the resulting Document MUST BE CONSIDERED an iframe srcdoc document". Only the second is a membership
+       rule — the first is a consequence of it, which §2.4.1's own note makes explicit ("it is not possible to
+       create an iframe srcdoc document whose URL has a non-null query … the set of all URLs that match
+       about:srcdoc only vary in their fragment"). So the class is CONTAINED IN the match set and is not equal
+       to it, and §2.4.3 itself distinguishes them: this step names the class where step 2 below spells a URL
+       match outright. Reading the ADDRESS here answered a strictly larger question and was wrong in both
+       directions at once — see the record's own field for the two documents it decided wrongly. */
+    if (d->is_iframe_srcdoc) {
+        DCHECK(d->base.about != NULL,
+               "§2.4.3 step 1's assert failed: an iframe srcdoc Document has a NULL about base URL. A srcdoc "
+               "document has no address of its own to fall back to — every relative URL in it, and every "
+               "`<base href>` it carries, would resolve against `about:srcdoc`, whose opaque path cannot be a "
+               "base — so whoever created this Document must give it §7.4's about base URL (the srcdoc "
+               "iframe's node document's base URL). core/frame/navigable.c asserts the same pairing at the "
+               "one call every load converges on, where §4.8.5's resource and that base URL are both in hand");
+        return d->base.about;
+    }
+    /* STEP 2: "if document's URL MATCHES about:blank and document's about base URL is non-null, then return
+       document's about base URL." A URL test, spelled as one, and asked only when there is an about base URL
+       to return — which for a document created from a response is never, so the parse is not paid for by the
+       branch every document in the engine takes. */
     if (d->base.about) {
         UrlRecord u;
         bool about;
@@ -2304,23 +2354,14 @@ const char *document_fallback_base_url_of(const lxb_dom_document_t *dom)
         CHECK(url_parse(&u, d->addr.bytes, strlen(d->addr.bytes), NULL),
               "a document's own address is not a URL — §2.4.3 asks whether it MATCHES about:blank, which is a "
               "question about a URL record, and this record's address never parsed");
-        /* HTML §2.4.1's two match relations, asked in §2.4.3's order. A document created AT about:blank whose
-           address later moved (§7.4.4's URL and history update steps — `history.pushState` from an inherited
-           origin) stops matching, and step 3's address is then the answer even though the about base URL is
-           still there: the two are separate facts and the standard tests both. */
-        about = url_matches_about(&u, "srcdoc", /*query_must_be_null*/ true) ||
-                url_matches_about(&u, "blank", /*query_must_be_null*/ false);
+        /* HTML §2.4.1's match relation, and ONLY the about:blank one: the srcdoc relation belonged to step 1
+           and step 1 no longer asks a URL anything. A document created AT about:blank whose address later
+           moved (§7.4.4's URL and history update steps — `history.pushState` from an inherited origin) stops
+           matching, and step 3's address is then the answer even though the about base URL is still there:
+           the two are separate facts and the standard tests both. */
+        about = url_matches_about(&u, "blank", /*query_must_be_null*/ false);
         url_record_free(&u);
         if (about) return d->base.about;
-    } else {
-        /* STEP 1's ASSERT, stated where the standard states it: "assert: document's about base URL is
-           non-null" for an iframe srcdoc document. The cheap prefix test rather than a parse, because this is
-           the branch taken by every document in the engine and the assert must not cost one. */
-        DCHECK(strncmp(d->addr.bytes, "about:srcdoc", 12) != 0,
-               "§2.4.3 step 1's assert failed: an iframe srcdoc Document has a NULL about base URL. A srcdoc "
-               "document has no address of its own to fall back to — every relative URL in it, and every "
-               "`<base href>` it carries, would resolve against `about:srcdoc` — so whoever created this "
-               "Document must give it §7.4's about base URL (the srcdoc iframe's node document's base URL)");
     }
     return d->addr.bytes;   /* STEP 3: "return document's URL" */
 }
@@ -2413,8 +2454,8 @@ void document_set_frozen_base_url(lxb_dom_document_t *dom, lxb_dom_element_t *el
  * called by core/frame/navigable.c AFTER the host's realm builder returned — which is after this file's own
  * document_install has run every parsed walk over the finished tree. Two of those walks ask §2.4.3 "Document
  * base URLs" for a base URL: §4.2.3's freeze, which runs FIRST among them and reads the FALLBACK base URL, and
- * §4.8.5's iframe walk, which resolves a nested frame's `src` against the DOCUMENT base URL. For a Document
- * addressed `about:srcdoc` both reach document_fallback_base_url_of with a null about base URL and fire
+ * §4.8.5's iframe walk, which resolves a nested frame's `src` against the DOCUMENT base URL. For an IFRAME
+ * SRCDOC DOCUMENT both reach document_fallback_base_url_of with a null about base URL and fire
  * §2.4.3 step 1's assert — so `<iframe srcdoc="<base href=/x/>">` and `<iframe srcdoc="<iframe src=/y>">`
  * aborted a dev build on ordinary markup, and in release resolved every relative URL in the frame against
  * `about:srcdoc`, whose opaque path makes the parse FAIL.
@@ -5021,7 +5062,7 @@ DocumentKind document_kind_initial_about_blank(void)
  * the record instead answers that question and every other per-document one through one indirection, with no
  * registry to keep in step — a registry is a second list of documents whose failure mode is a stale row. */
 static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, DocumentInterface iface,
-                             DocumentKind kind, const char *about_base_url)
+                             DocumentKind kind, const char *about_base_url, bool is_iframe_srcdoc)
 {
     lxb_dom_document_t *dd = lxb_dom_interface_document(dom);
     Document *d;
@@ -5097,7 +5138,7 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
        record is built HERE, inside the builder, and document_install's parsed walks run before the builder
        returns — so a write afterwards is a write after §4.2.3's freeze and after §4.8.5's iframe walk have
        already asked §2.4.3 "Document base URLs" for a fallback base URL this Document did not have. For an
-       `about:srcdoc` Document that is §2.4.3 step 1's own assert, firing on ordinary markup.
+       IFRAME SRCDOC DOCUMENT that is §2.4.3 step 1's own assert, firing on ordinary markup.
        NO COW CAPTURE, and that is the ordering being load-bearing rather than an omission: a capture exists so
        that a flow that overwrites a field can put the old one back, and at this line the record has no
        `document` object for a delta to hang off and no flow has ever been able to read the field. */
@@ -5108,6 +5149,27 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
            "would be returned as this Document's fallback base URL and every relative URL in it would resolve "
            "against nothing");
     if (about_base_url) d->base.about = doc_addr_intern(d, about_base_url);
+    /* HTML §4.8.5's CLASS, AND ITS PAIRING WITH THE FIELD ABOVE ASSERTED AT THE BIRTH OF THE RECORD THAT
+       HOLDS BOTH. §2.4.3 step 1's own assert is "document's about base URL is non-null" FOR THIS CLASS, and
+       the read that performs it is arbitrarily far from here — the first relative URL anything in the
+       document resolves, which for a `<base href>` is inside document_install's own parsed walk and for a
+       page's own `fetch("/x")` is whenever that line runs. Asked HERE it is a fact about ONE creation with
+       both operands in hand, which is what makes the message able to name the caller rather than the read.
+       IT IS THE SAME INVARIANT core/frame/navigable.c ASSERTS AT ITS ENQUEUE AND NOT A SECOND COPY OF IT:
+       that one is over §7.4.2.2's DOCUMENT RESOURCE, which is the operand §4.8.5's arm carries, and this one
+       is over the CLASS that arm confers — one hop apart, with every host's realm builder in between, which
+       is precisely the span a caller can drop a field across. */
+    DCHECK(!is_iframe_srcdoc || about_base_url != NULL,
+           "an IFRAME SRCDOC DOCUMENT was created with no about base URL. HTML §4.8.5 \"The `iframe` "
+           "element\"'s process-the-iframe-attributes step 1 confers this class on the Document its srcdoc "
+           "navigation produces, and §2.4.3 \"Document base URLs\"' fallback base URL step 1 asserts a "
+           "non-null about base URL for exactly it — a srcdoc document has no address of its own to fall back "
+           "to, so without one every relative URL in it resolves against `about:srcdoc`, whose opaque path "
+           "cannot be a base. Pass §7.4.2.2 \"Beginning navigation\"'s initiatorBaseURLSnapshot beside the "
+           "resource: the two are rows of ONE constructor (§7.4.5's create navigation params from a srcdoc "
+           "resource reads the body AND the about base URL off the same entry), and a creation carrying one "
+           "of them is half of it");
+    d->is_iframe_srcdoc = is_iframe_srcdoc;
     /* BOTH OF §4.5's CREATION FACTS, FROM THE ONE VALUE THAT CARRIES THEM. `document_kind` has already
        asserted the content type is non-empty and fits, so this copy cannot be the one that truncates. */
     snprintf(d->content_type, sizeof d->content_type, "%s", type);
@@ -5215,7 +5277,11 @@ JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, 
        or `about:srcdoc`, and a second Document in this realm (§4.5.1's factories, DOMParser, XHR's
        responseXML) is created by none of those operations — §2.4.3 "Document base URLs" answers for it
        with its own address, which is step 3. */
-    Document *d = doc_rec_new(ctx, dom, url, iface, kind, /*about_base_url*/ NULL);
+    /* …AND FOR THE SAME REASON NOT HTML §4.8.5's CLASS: "the resulting Document must be considered an
+       iframe srcdoc document" is said of the Document a srcdoc NAVIGATION produces, and this is not one —
+       even when the address it copies off its source IS `about:srcdoc`, which is exactly what a DOMParser or
+       a clone inside a srcdoc frame hands it. §2.4.3 then answers for it with step 3, its own address. */
+    Document *d = doc_rec_new(ctx, dom, url, iface, kind, /*about_base_url*/ NULL, /*is_iframe_srcdoc*/ false);
 
     /* WHO DESTROYS IT. A document a FLOW created is that flow's, exactly like a node it created: the COW delta
        owns it and destroys it when the delta is discarded, so the frontier does not accumulate one document per
@@ -5288,7 +5354,7 @@ lxb_html_document_t *document_template_contents_owner(JSContext *ctx, lxb_dom_do
            `d`. */
         inert = doc_rec_new(d->realm, dom, "about:blank", DOCUMENT_IFACE_DOCUMENT,
                             document_kind(d->is_xml, d->is_xml ? "application/xml" : "text/html"),
-                            /*about_base_url*/ NULL);
+                            /*about_base_url*/ NULL, /*is_iframe_srcdoc*/ false);
         inert->is_inert_template = 1;
         doc_realm_owns(d->realm, inert);
         /* The wrapper the record itself holds is the one that outlives this: nothing here has a use for a
@@ -5383,7 +5449,8 @@ lxb_dom_element_t *document_create_element_html(lxb_dom_document_t *dom, const c
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
                       DocumentKind kind, SerializedPolicyContainer policy,
                       SerializedResponsePermissionsPolicy permissions_policy, SandboxFlags sandbox_flags,
-                      uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url)
+                      uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url,
+                      bool is_iframe_srcdoc)
 {
     Document *d;
     JSValue doc;
@@ -5411,7 +5478,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        exactly where a reader expects XMLDocument: its text is "create and initialize a Document object
        document, given \"xml\", type, and navigationParams", so the `xml` there is DOM §4.5's TYPE and nothing
        else. */
-    d = doc_rec_new(ctx, dom, url, DOCUMENT_IFACE_DOCUMENT, kind, about_base_url);
+    d = doc_rec_new(ctx, dom, url, DOCUMENT_IFACE_DOCUMENT, kind, about_base_url, is_iframe_srcdoc);
     d->doc = doc_id;
     /* CSP §2.2's SELF-ORIGIN BECOMES A RECORD HERE, at the one point a document's facts stop being the bytes a
        host stated and start being the types the algorithms are written over. origin_parse is the transport

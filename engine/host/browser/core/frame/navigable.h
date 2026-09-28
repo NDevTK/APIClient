@@ -140,13 +140,26 @@
    builder has returned: core/dom/document.c builds it inside document_install and then runs §4.2.3's freeze
    and §4.8.5's iframe walk over the finished tree, both of which ask §2.4.3 "Document base URLs" for a base
    URL. A value written after the builder is a value written after those two have already been answered, which
-   for an `about:srcdoc` Document is §2.4.3 step 1's assert on ordinary markup. */
+   for an iframe srcdoc document is §2.4.3 step 1's assert on ordinary markup. */
+/* `is_iframe_srcdoc` is HTML §4.8.5 "The `iframe` element"'s CLASS for the Document this builds — "the
+   resulting Document must be considered an iframe srcdoc document", said of the Document produced by that
+   section's step 1 and of no other creation. A builder NEVER derives it, and unlike the rows above it there
+   is a WRONG derivation close to hand that looks right: the address. It is not the same question. §2.4.1's
+   note says the class's URLs "only vary in their fragment", so the class is CONTAINED IN the match set, and
+   the containment is strict at both ends — a DOMParser parse or a DOM §4.4 clone inside a srcdoc frame COPIES
+   that address onto a Document no navigation made, and `<iframe src="about:srcdoc">` takes §4.8.5's
+   `Otherwise` arm and is not of the class while §7.4.2.2 gives it an about base URL anyway. §2.4.3 reads the
+   CLASS at its step 1 and a URL MATCH at its step 2, which is the standard telling them apart in one
+   algorithm. It travels WITH the creation for the identical reason the row above does: the Document RECORD
+   does not exist until the builder has returned, and this is the fact that decides what §4.2.3's freeze and
+   §4.8.5's iframe walk are told when they ask §2.4.3 inside it. */
 typedef JSContext *(*RealmBuilder)(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                    const char *top_level_url, const char *origin, DocumentKind kind,
                                    SerializedPolicyContainer policy,
                                    SerializedResponsePermissionsPolicy permissions_policy,
                                    SandboxFlags sandbox_flags,
-                                   uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url);
+                                   uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url,
+                                   bool is_iframe_srcdoc);
 void navigable_set_realm_builder(RealmBuilder b);
 
 /* BUILD THE REALM OF A SAME-ORIGIN NAVIGABLE THIS AGENT HOLDS. The answer is BORROWED, and that is a statement
@@ -199,7 +212,13 @@ void navigable_set_realm_builder(RealmBuilder b);
    URL. NULL for every Document that comes from a response, which is §2.4.3's null and the ordinary case. It is
    a parameter and not a read off anything, for the reason `policy` beside it is: whose base URL it is belongs
    to the OPERATION (the creator's for a create, the initiator's for a navigation) and never to the navigable
-   being filled. */
+   being filled.
+   THERE IS NO `is_iframe_srcdoc` BESIDE IT HERE, AND THAT IS A STATEMENT RATHER THAN AN OMISSION: this entry
+   serves §7.2's initial `about:blank` alone — its own first assert REFUSES a response — and HTML §4.8.5's
+   srcdoc arm is a NAVIGATION carrying a document resource, which reaches the stepped entry and never this
+   one. A Document built through here is of that class in no reading, so the value it would be handed is the
+   constant false, and a parameter that can only take one value is a knob a caller could get wrong for no
+   capability at all. */
 /* `content_type` is the RESPONSE's `Content-Type` value as Fetch §2.2.2's `get` joined it, and the ONE thing
    read off it here is HTML §13.2.3.2 "Determining the character encoding"'s transport-layer charset (through
    Fetch §3.5's legacy extract an encoding). It is NOT what decides which parse this Document gets — that is

@@ -9689,12 +9689,13 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
                              SerializedPolicyContainer policy,
                              SerializedResponsePermissionsPolicy permissions_policy,
                              SandboxFlags sandbox_flags,
-                             uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url)
+                             uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url,
+                             bool is_iframe_srcdoc)
 {
     JSValue g = JS_GetGlobalObject(ctx);
 
     platform_document_install(ctx, g, dom, url, origin, kind, policy, permissions_policy, sandbox_flags,
-                              doc_id, nav_proxy, about_base_url);
+                              doc_id, nav_proxy, about_base_url, is_iframe_srcdoc);
 
     /* THE FIXTURE'S OWN SURFACE — the @S sinks and the host-edge stand-ins the probes drive. Every one of
        these is this fixture's, which is why it is here and not in the list. */
@@ -9757,7 +9758,8 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
                                  SerializedPolicyContainer policy,
                                  SerializedResponsePermissionsPolicy permissions_policy,
                                  SandboxFlags sandbox_flags,
-                                 uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url)
+                                 uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url,
+                                 bool is_iframe_srcdoc)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -9771,7 +9773,7 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
     /* §3.3.7 step 1: a child navigable is a Window; §8.1.3.5 step 1.2.1: a Window has no owner set. */
     realm_install_intrinsics(ctx, top_level_url, "Window", false);
     tf_realm_install(ctx, dom, url, origin, kind, policy, permissions_policy, sandbox_flags, doc_id,
-                     nav_proxy, about_base_url);
+                     nav_proxy, about_base_url, is_iframe_srcdoc);
     return ctx;
 }
 
@@ -30679,7 +30681,12 @@ int main(int argc, char **argv) {
                             own, which is the arm §2.4.3 "Document base URLs" answers with that address; only
                             an `about:blank` or `about:srcdoc` Document inherits one, and those arrive through
                             tf_child_realm above. */
-                         /*about_base_url*/ NULL);
+                         /*about_base_url*/ NULL,
+                         /* …AND HTML §4.8.5's CLASS: FALSE. A root document is not the product of an
+                            `<iframe srcdoc>` navigation under any reading, so it is of that class in none —
+                            stated outright rather than left to a default, for the same reason the row above
+                            it is. */
+                         /*is_iframe_srcdoc*/ false);
         JS_FreeValue(ctx, root_proxy);
     }
 
