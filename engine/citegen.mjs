@@ -1353,10 +1353,16 @@ const SPECS = [
      quotations compared down by six and step references compared down by six. THE FINDINGS DID NOT MOVE AT ALL
      — every channel and every one of the four category headers was byte-identical across all five runs, so no
      defect was introduced and none was retired, which is the direction the whole-corpus rule most cares about.
-     WHERE THE LOSS COMES FROM IS ONE LINE AND IT IS NOT THE ANCHORS. Almost all of it is the TITLE channel:
-     resolution by a stated title fell by sixty-five while resolution by an anchor ROSE. The gate is
-     `c.titleEv.length === 1` standing BEFORE `titlePlaces`, so a title used by two indexed standards is refused
-     outright even where the neighbourhood half would have kept exactly one of them. Both new indexes carry real
+     WHERE THE LOSS COMES FROM IS ONE GATE AT TWO SITES AND IT IS NOT THE ANCHORS. Almost all of it is the
+     TITLE channel: resolution by a stated title fell by sixty-five while resolution by an anchor ROSE. The gate
+     is `c.titleEv.length === 1` standing BEFORE `titlePlaces`, so a title used by two indexed standards is
+     refused outright even where the neighbourhood half would have kept exactly one of them.
+     IT IS SPELLED TWICE AND THE SECOND COPY IS THE ONE A REPAIR WILL MISS — once where the per-site resolution
+     below picks a standard, and once where the group rule feeds `titleKeys` so a title stated at one site places
+     the number for its whole file. Both read the same two tests in the same order, so repairing the per-site
+     copy alone leaves the GROUP copy refusing the same titles and leaves the cluster reading as handled, which
+     is the certified-survivor shape a partial sweep always has. This sentence says two because the count was
+     greped rather than recalled; grep the construct before repairing either. Both new indexes carry real
      headings that exactly one older index already used — `Animation Frames` is a heading of HTML and of Web
      Animations, `URL` of Fetch and of Service Workers, `Specification conventions` of Web Cryptography and of
      Web Animations — and the moment a second standard uses one, every site resolving on it drops to its file's
