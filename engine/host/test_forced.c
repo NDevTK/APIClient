@@ -1015,6 +1015,95 @@ static const char *HTML =
     " ? 'isREANY' : 'wrong:' + reLog2.length));"
     "removeEventListener('error', reH3);"
     "</script>"
+    /* ---- HTML §4.8.5 "The `iframe` element"'s SRCDOC DOCUMENTS ----------------------------------------
+       THE ONE DOCUMENT CLASS THIS FIXTURE COULD NOT BUILD, and therefore the one whose §2.4.3 arm nothing
+       here had ever asked. Two asserts over that class stand in core/dom/document.c — step 1's own
+       "Assert: document's about base URL is non-null." and the pairing checked at the record's birth — and a
+       clean run of this fixture was UNSCORABLE for both rather than confirming, which is
+       CLAUDE.md §AN-ABSENT-CRASH-IS-NOT-A-CORRECT-VALUE exactly: a check that never executes is
+       indistinguishable from one that passed.
+
+       IT IS MARKUP AND NOT SCRIPT, AND THAT IS THE REALM BUDGET RATHER THAN A STYLE. A frame these
+       `<script>`s created would be created by EVERY FLOW that reached the statement, which is
+       §A-CAPABILITY-MATERIALIZED-PER-FLOW's ceiling paid twice over on the largest document here. Inserted as
+       markup it is created ONCE, by the parse, before any `state` read has forked anything — so both child
+       navigables are BASELINE creations and the cost is O(1) in the flow count rather than O(flows). That is
+       also why this block sits ABOVE the first `<script>` to name `state`: a reader who moves it below the
+       fork is changing what it costs, not only where it reads.
+
+       EVERY WITNESS IS CONSTANTS. This engine's whole purpose is to make values unknown, so a path composed
+       from a computed value is not a concrete string and the request never goes out — after which the
+       silence reads as the path not being taken, in exact proportion to how well the engine is working
+       (§A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE-UNKNOWN). Every address below is a
+       literal and every `?v=` token is a literal per arm; the ONE thing composed at run time is the
+       RESOLUTION of `/api/` against `sdbase?v=rel`, which is the engine's own §2.4.3 answer built out of two
+       constants and is the whole of what the first row asks.
+
+       THE ROWS, AND WHAT EACH SEPARATES. They are ordered so that an earlier one surviving localises a later
+       one's absence, which is what makes a missing row readable instead of merely missing.
+         /api/sdrun      ABSOLUTE, so it depends on no base resolution at all: it is the ARMED CONTROL
+                         (§A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE) and says the srcdoc
+                         Document was built and its script ran. A run without it has established nothing
+                         about the three below.
+         /api/sdbase     RELATIVE, and the only relative reference here. §4.2.3 "The base element" freezes
+                         `/api/` against §2.4.3's FALLBACK base URL, whose step 1 for this class is
+                         "Return document's about base URL." — the parent's base URL — so the request can
+                         only carry this address if the about base URL was in hand WHEN THE TREE WAS WALKED.
+                         `about:srcdoc` has an opaque path and can be no base, so a null one resolves
+                         nothing and this row is absent.
+         /api/sdparse    DOMParser INSIDE the frame. The built Document takes its source's URL, and no
+                         parse is a navigation, so it is addressed `about:srcdoc` with a legitimately NULL
+                         about base URL and is NOT of §4.8.5's class — "The resulting Document must be
+                         considered an iframe srcdoc document." is said of the Document a srcdoc NAVIGATION
+                         produces, and this is not one. A step 1 keyed on the ADDRESS answered a strictly
+                         larger question and asserted on a state a page is entitled to reach.
+         /api/sdclone    `document.cloneNode(true)` inside the frame, which reaches the same creation by the
+                         other of its two callers. It is written FIRST of the pair so that a realm with no
+                         DOMParser cannot take the clone row down with it.
+
+       AND THE SECOND FRAME IS THE OTHER DIRECTION, WHICH IS A WRONG ANSWER RATHER THAN A WRONG ASSERT.
+       `<iframe src="about:srcdoc">` has no `srcdoc` attribute, so §4.8.5 takes its `Otherwise` arm and
+       confers nothing — while §7.4.2.2 "Beginning navigation" gives it an about base URL anyway, its step
+       for a url that matches about:blank or is about:srcdoc being
+       "Set documentState's about base URL to initiatorBaseURLSnapshot." over
+       "Set initiatorBaseURLSnapshot to sourceDocument's document base URL.". So §2.4.3 must reach step 3 and
+       answer this Document's OWN address; an address-shaped step 1 returned the creator's base URL instead,
+       and the two are told apart by nothing else a page can read.
+       ITS ROWS READ THE ADDRESS BEFORE THE BASE URL, AND THAT IS THE WHOLE OF WHY THEY CAN SEPARATE
+       ANYTHING. A frame whose navigation has not landed is still holding the Document it was CREATED with,
+       and that Document is the initial `about:blank` one — whose about base URL is non-null and which §2.4.3
+       step 2 therefore answers with the creator's base URL, CORRECTLY. So a probe reading the base URL alone
+       cannot tell `about:blank` answering its own step 2 right from `about:srcdoc` answering step 1 wrong:
+       both render as the parent's address, and the row would have charged the engine for a schedule. Reading
+       §4.5's `URL` first splits them, and every arm is a literal — `initial` (the navigation has not landed,
+       which is a statement about the SCHEDULE and not about §2.4.3), `ownaddr` (the standard's answer),
+       `inherited` (the retired address sniff's), `otheraddr` (neither, which no reading predicts).
+       WHAT THE ROWS ASSERT IS THEREFORE `NOT inherited` AND NOT `ownaddr`, because `initial` is a legitimate
+       outcome of a slower schedule and a row that refused it would be red for a reason that is not a defect.
+       The SYNC read is emitted unconditionally and is that frame's own reachability witness; the TIMER read
+       is the subject, and it is a TIMER rather than a `load` handler because this document already
+       establishes that its timers fire (`/api/timerfire`) and an absent `load` would be a silence where an
+       arm can be a value. */
+    "<iframe id=sdf srcdoc=\"<base href='/api/'>"
+    "<script>"
+    "fetch('https://x.test/api/sdrun?v=ran');"
+    "fetch('sdbase?v=rel');"
+    "var sdc = document.cloneNode(true);"
+    "fetch('https://x.test/api/sdclone?v=' + (sdc !== document ? 'cloned' : 'wrong'));"
+    "var sdp = new DOMParser().parseFromString('<p id=sdpp>x</p>', 'text/html');"
+    "fetch('https://x.test/api/sdparse?v=' + (sdp.getElementById('sdpp') ? 'built' : 'wrong'));"
+    "</script>\"></iframe>"
+    "<iframe id=sdo src=\"about:srcdoc\"></iframe>"
+    "<script>"
+    "var sdo = document.getElementById('sdo');"
+    "function sdoRead(d) {"
+    " return (d.URL === 'about:blank') ? 'initial'"
+    "  : (d.URL !== 'about:srcdoc') ? 'otheraddr'"
+    "  : (d.baseURI === 'about:srcdoc') ? 'ownaddr' : 'inherited'; }"
+    "fetch('/api/sdsync?v=' + sdoRead(sdo.contentWindow.document));"
+    "setTimeout(function(){"
+    " fetch('/api/sdotherwise?v=' + sdoRead(sdo.contentWindow.document)); }, 0);"
+    "</script>"
     "<script>var cfg = { admin: state.admin };"
     "var delObj = { k: 'keepVAL' };"   /* a shared BASELINE object; a forked flow will DELETE its k -> must revert per-flow */
     "var rx = { _f: 'base' };"   /* a reactive-framework style object: `flag` is an ACCESSOR backed by _f (Vue does exactly this) */
@@ -15180,6 +15269,76 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the statement RAN and /api/iframenav's `v` is not `ifnav` — §4.8.5's inserted iframe got no "
              "child navigable, its proxy was not stable across two reads, or the read through it did not "
              "resolve to the peer's answer");
+    /* §4.8.5's SRCDOC DOCUMENTS — the class §2.4.3 step 1 is about, and the class this fixture could not build
+       until the markup above existed. The rows are ordered so that an earlier one surviving localises a later
+       one's absence; see that markup for what each separates. */
+    const char *sdrun_why = NULL; int sdrun_tt = 1;
+    fold_row(&sdrun_tt, &sdrun_why, !!strstr(js, "\"/api/sdrun\""),
+             "NOT REACHED: there is no /api/sdrun record at all, and that address is ABSOLUTE — it depends on "
+             "no base resolution, so its absence is not §2.4.3 answering wrongly. Either the `<iframe srcdoc>` "
+             "built no Document or that Document's own script never ran, and every srcdoc row below this one "
+             "is unscored rather than failing");
+    fold_row(&sdrun_tt, &sdrun_why, param_value_is(js, "/api/sdrun", "v", "ran"),
+             "the srcdoc Document's script ran and /api/sdrun's `v` is not `ran`, which is a literal in the "
+             "document — so the request was composed from something other than the constant beside it");
+    /* §2.4.3's FALLBACK BASE URL, asked of the one class whose step 1 is an assert. THE ADDRESS IS COMPOSED BY
+       THE ENGINE out of two literals — `/api/` from the frame's own `<base href>` and `sdbase?v=rel` from its
+       only relative reference — so this row is the resolution itself and not a string the page carried. */
+    const char *sdbase_why = NULL; int sdbase_tt = 1;
+    fold_row(&sdbase_tt, &sdbase_why, !!strstr(js, "\"/api/sdbase\""),
+             "there is no /api/sdbase record: the ONLY relative reference in the srcdoc Document resolved to "
+             "nothing, so §4.2.3's freeze of `/api/` against §2.4.3's fallback base URL did not produce a "
+             "usable base. `about:srcdoc` has an opaque path and can be no base, so this is what a NULL about "
+             "base URL looks like from the page — read /api/sdrun first: if that row stands, the Document was "
+             "built and ran, and the about base URL is the thing that was missing when its tree was walked");
+    fold_row(&sdbase_tt, &sdbase_why, param_value_is(js, "/api/sdbase", "v", "rel"),
+             "/api/sdbase was requested and its `v` is not `rel` — the base resolved, so the relative "
+             "reference reached an address, and the token beside it is a literal of the frame's own markup");
+    /* §4.8.5's CLASS IS NOT ITS ADDRESS — a Document built INSIDE the frame by an algorithm that is not a
+       navigation takes its source's URL and gets no about base URL, so it is addressed `about:srcdoc` with a
+       legitimately null one. A step 1 keyed on the address asserted on it, which is a page-reachable abort. */
+    const char *sdclone_why = NULL; int sdclone_tt = 1;
+    fold_row(&sdclone_tt, &sdclone_why, !!strstr(js, "\"/api/sdclone\""),
+             "there is no /api/sdclone record: `document.cloneNode(true)` inside the srcdoc frame did not "
+             "reach its fetch. If /api/sdrun stands, the frame ran and this statement is where it stopped — "
+             "which is the shape a §2.4.3 step 1 keyed on the ADDRESS rather than on §4.8.5's class produces, "
+             "since the copy is addressed `about:srcdoc` and no clone is a navigation");
+    fold_row(&sdclone_tt, &sdclone_why, param_value_is(js, "/api/sdclone", "v", "cloned"),
+             "the clone ran and /api/sdclone's `v` is not `cloned` — the copy is the same object as the "
+             "Document it was made from, which no reading of DOM §4.4's clone produces");
+    const char *sdparse_why = NULL; int sdparse_tt = 1;
+    fold_row(&sdparse_tt, &sdparse_why, !!strstr(js, "\"/api/sdparse\""),
+             "there is no /api/sdparse record: `new DOMParser().parseFromString(...)` inside the srcdoc frame "
+             "did not reach its fetch. Read /api/sdclone first — it is the SAME creation reached by the other "
+             "of its two callers, so the pair says whether this is the creation or the member");
+    fold_row(&sdparse_tt, &sdparse_why, param_value_is(js, "/api/sdparse", "v", "built"),
+             "the parse ran and /api/sdparse's `v` is not `built` — the parsed Document does not contain the "
+             "element its own markup names");
+    /* AND THE OTHER DIRECTION: `<iframe src=\"about:srcdoc\">` takes §4.8.5's `Otherwise` arm, so it is NOT of
+       the class, while §7.4.2.2 gives it an about base URL regardless. §2.4.3 must therefore reach step 3 and
+       answer its OWN address. `initial` is ACCEPTED by both rows: the navigation not having landed is a fact
+       about the schedule, and the claim here is only that the creator's base URL is never the answer. */
+    const char *sdsync_why = NULL; int sdsync_tt = 1;
+    fold_row(&sdsync_tt, &sdsync_why, !!strstr(js, "\"/api/sdsync\""),
+             "there is no /api/sdsync record: the parent never read through the `about:srcdoc` frame at all, "
+             "so both rows of this pair are unscored rather than failing");
+    fold_row(&sdsync_tt, &sdsync_why,
+             param_value_is(js, "/api/sdsync", "v", "ownaddr") ||
+             param_value_is(js, "/api/sdsync", "v", "initial"),
+             "the parent read through the `about:srcdoc` frame and got neither `ownaddr` nor `initial`. "
+             "`inherited` is the retired answer — §2.4.3 returning the CREATOR's base URL for a Document that "
+             "is not an iframe srcdoc document, which is what an address-shaped step 1 answers and what "
+             "§4.8.5's `Otherwise` arm forbids; `otheraddr` is a third address no reading predicts");
+    const char *sdother_why = NULL; int sdother_tt = 1;
+    fold_row(&sdother_tt, &sdother_why, !!strstr(js, "\"/api/sdotherwise\""),
+             "there is no /api/sdotherwise record: the timer that re-reads the `about:srcdoc` frame never "
+             "fired. That is the SCHEDULE and not §2.4.3 — /api/timerfire is this document's own witness that "
+             "its timers run at all");
+    fold_row(&sdother_tt, &sdother_why,
+             param_value_is(js, "/api/sdotherwise", "v", "ownaddr") ||
+             param_value_is(js, "/api/sdotherwise", "v", "initial"),
+             "the timer re-read the `about:srcdoc` frame and got neither `ownaddr` nor `initial` — see "
+             "/api/sdsync's row for what the two remaining tokens mean");
     /* AND THE REALM THE ROW ABOVE BUILT CAME BACK — §A-CAPABILITY-MATERIALIZED-PER-FLOW's ceiling, asked as a
        measurement instead of read off a line by hand.
        WHAT WAS HERE BEFORE WAS A SENTENCE ADDRESSED TO A PERSON. The iframe statement's own note said "READ
@@ -18086,6 +18245,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "chardata-offset-two-members", cdsplit_tt, "/api/cdsplit", SESS_EXPLORE, cdsplit_why },
         { "chardata-count-chain", cdsub_tt, "/api/cdsub", SESS_EXPLORE, cdsub_why },
         { "iframe-nav", ifnav_tt, "/api/iframenav", SESS_EXPLORE, ifnav_why },
+        /* §4.8.5's srcdoc documents. `srcdoc-fallback-base` is KEYED ON THE FETCH'S OWN ARGUMENT and not on
+           the address it produces, because the address is what the ENGINE composes out of the frame's
+           `<base href>` and this literal — the key names a statement the document makes, exactly as
+           `realm-reclaim` above does. */
+        { "srcdoc-script-ran", sdrun_tt, "/api/sdrun", SESS_EXPLORE, sdrun_why },
+        { "srcdoc-fallback-base", sdbase_tt, "sdbase?v=rel", SESS_EXPLORE, sdbase_why },
+        { "srcdoc-clone-not-class", sdclone_tt, "/api/sdclone", SESS_EXPLORE, sdclone_why },
+        { "srcdoc-domparser-not-class", sdparse_tt, "/api/sdparse", SESS_EXPLORE, sdparse_why },
+        { "srcdoc-otherwise-sync", sdsync_tt, "/api/sdsync", SESS_EXPLORE, sdsync_why },
+        { "srcdoc-otherwise-timer", sdother_tt, "/api/sdotherwise", SESS_EXPLORE, sdother_why },
         /* KEYED ON THE REMOVAL rather than on an endpoint, because this row is about a statement that emits
            nothing: §7.5.10's release is observable as a COUNT and not as a fetch. */
         { "realm-reclaim", realmback_tt, "document.body.removeChild(_if)", SESS_EXPLORE, realmback_why },
