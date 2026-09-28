@@ -679,13 +679,17 @@ static IntrinsicInlineSizes is_run_sizes(lxb_dom_element_t *el, lxb_dom_element_
 
 IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, BlockFlowRun run)
 {
+    BlockFlowRunStart start;
+
     DCHECK(el != NULL, "CSS 2.2 §9.4.2's context was measured with no block container to style it");
-    if (run.after == NULL) return is_run_sizes(el, el, lxb_dom_interface_node(el)->first_child, run.end);
-    DCHECK(run.after->parent != NULL && run.after->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
-           "CSS 2.2 §9.2.1.1's run was started after a node with no element parent, so there is no box for it "
-           "to be a fragment of — the node a run follows is a child of the container or of an inline box the "
-           "break itself split, and either way its parent is an element whose style the fragment carries");
-    return is_run_sizes(el, lxb_dom_interface_element(run.after->parent), run.after->next, run.end);
+    /* WHERE THE RUN BEGINS IS THE RUN TYPE'S OWN ANSWER AND IS NO LONGER COMPOSED HERE. This site used to read
+       `after`'s NEXT SIBLING inside `after`'s PARENT — one of three copies of that pair — and
+       core/layout/block_flow.h states why the copies had to go: css-display-3 §2.5 "Box Generation: the none
+       and contents keywords"' splice makes a DOM next sibling the wrong position, so the walk that FILLS this
+       run and the walk that MEASURES it would each have had to be taught the same rule. `open` is the element
+       whose fragment the run continues and whose style its content carries. */
+    start = block_flow_run_start(el, run);
+    return is_run_sizes(el, start.open, start.at, run.end);
 }
 
 /* css-sizing-3 §5.2's CONTRIBUTION OF ONE BOX ON THE STACK, out of the box's own two INNER sizes and its two

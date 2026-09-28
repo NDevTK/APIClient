@@ -307,6 +307,39 @@ typedef struct {
     lxb_dom_node_t *end;     /* the one it ENDS BEFORE; NULL is the end of the content */
 } BlockFlowRun;
 
+/* WHERE ONE OF THOSE RUNS BEGINS, AS THE PAIR `after` NAMES THAT A FIRST NODE CANNOT: the first position of the
+   run's content, and the ELEMENT whose fragment the run continues. §9.2.1.1 breaks an inline box around an
+   in-flow block-level box, "splitting the inline box into two boxes (even if either side is empty), one on each
+   side of the block-level box(es)", so a run that follows such a break BEGINS inside that box with no opening
+   edge of its own — the edge belongs to the fragment on an earlier anonymous block box — and may hold NO NODE
+   at all while still carrying the box's closing edge. `open` is what says which box that is; it is the
+   CONTAINER itself for a run that follows no break, which is the same answer read off `after == NULL`.
+   IT IS ONE ENTRY BECAUSE THE QUESTION WAS SPELLED FOUR TIMES AND THE SPELLING IS THE DOOMED ONE. Every
+   caller composed it as `run.after == NULL ? el->first_child : run.after->next` beside
+   `run.after == NULL ? el : run.after->parent`, which reads `after` AS A SIBLING BOUND — and that is exactly
+   what css-display-3 §2.5 "Box Generation: the none and contents keywords"' splice makes wrong, since "the
+   element must be treated as if it had been replaced in the element tree by its contents" puts a run's first
+   position inside an element that generates no box, whose DOM next sibling is a position in NO box's content.
+   Four copies of that spelling are four places the splice has to be taught and four chances for two of them to
+   disagree about where one box's content starts; one entry is one place. The CALLERS ARE THE FILL, THE TWO
+   MEASUREMENTS AND THE PAINT of one formatting context — core/layout/line_box.c, core/layout/intrinsic_size.c,
+   core/layout/block_flow.c's own box-generation test and core/paint/box_paint.c — which is exactly the set CSS
+   2.1 §E.2's step 7.2.1 already asserts agreement between, so a fifth reading of where a run starts was a way
+   for that assert to fire about a document rather than about a defect. The DCHECK two of them carried about
+   `after`'s parent is here for the same reason — it was one precondition stated twice.
+   NOT COVERED: this answers where a run BEGINS and each walk still STEPS through it with `->next`, so §2.5's
+   splice is unbuilt at those walks. WHAT THE NEXT DIFF BUILDS: the run's own step, over
+   core/layout/box_tree.h's spliced child sequence, so the position after `at` is a position in the box tree
+   rather than a DOM sibling. HOW ITS ABSENCE WOULD SHOW: a `contents` element among a block container's
+   content reaches one of those walks' own `display: contents` aborts, each of which names box_tree.h as the
+   sequence it is owed, instead of being enumerated. */
+typedef struct {
+    lxb_dom_node_t *at;       /* the run's first content position; NULL where the run holds no node at all */
+    lxb_dom_element_t *open;  /* the box whose fragment it continues — the container where it follows no break */
+} BlockFlowRunStart;
+
+BlockFlowRunStart block_flow_run_start(lxb_dom_element_t *el, BlockFlowRun run);
+
 /* §9.2.1.1's PRECONDITION about ONE CHILD: is it an INLINE BOX that the section BREAKS — "when an inline box
    contains an in-flow block-level box, the inline box (and its inline ancestors within the same line box) is
    broken around the block-level box"? A child that is not an element, or is not §9.2.2's inline box (a

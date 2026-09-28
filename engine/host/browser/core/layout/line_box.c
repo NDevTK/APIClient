@@ -961,6 +961,7 @@ static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun 
     CssPx available = css_px(0.0);
     lxb_dom_node_t *root, *at;
     lxb_dom_element_t *open;
+    BlockFlowRunStart start;
     LbRun r;
     size_t n;
 
@@ -969,17 +970,15 @@ static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun 
     /* THE RUN'S OPEN FRAGMENT, WHICH IS WHAT `after` NAMES THAT A FIRST NODE CANNOT. §9.2.1.1 splits an inline
        box "into two boxes (even if either side is empty)", so a run that follows a break inside one BEGINS
        inside that box with no opening edge of its own — the edge belongs to the fragment on an earlier
-       anonymous block box — and may contain no node at all while still carrying the box's closing edge. */
-    if (run.after == NULL) {
-        open = style;
-        at = root->first_child;
-    } else {
-        DCHECK(run.after->parent != NULL && run.after->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
-               "CSS 2.2 §9.2.1.1's run was started after a node with no element parent, so there is no box for "
-               "the fragment to belong to and no style for §9.4.2's line to measure its content with");
-        open = lxb_dom_interface_element(run.after->parent);
-        at = run.after->next;
-    }
+       anonymous block box — and may contain no node at all while still carrying the box's closing edge.
+       IT IS ASKED OF THE RUN TYPE'S OWN OWNER AND NO LONGER COMPOSED HERE, which is core/layout/block_flow.h's
+       reason and not a tidy-up: this pair used to be spelled at three call sites as `after`'s NEXT SIBLING
+       inside `after`'s PARENT, and css-display-3 §2.5 "Box Generation: the none and contents keywords"' splice
+       is what makes that reading wrong — so three walks over one box list would have had to be taught it
+       separately, and two of them could have disagreed about where one box's content starts. */
+    start = block_flow_run_start(style, run);
+    open = start.open;
+    at = start.at;
     /* §9.4.2's CONTENT, COLLECTED BEFORE ANY OF IT IS MEASURED, which [UAX14] forces rather than anyone
        choosing: its rules read forward past the boundary they decide, so no per-character state can settle a
        break as the character arrives. core/layout/text_run.h states it in full. */

@@ -1011,6 +1011,30 @@ static lxb_dom_node_t *bf_block_box_at(lxb_dom_element_t *el, lxb_dom_node_t *at
     return NULL;
 }
 
+/* WHERE ONE OF §9.2.1.1's RUNS BEGINS — see block_flow.h for why this pair is one entry rather than the four
+   copies of `run.after->next` beside `run.after->parent` that its callers used to compose for themselves. */
+BlockFlowRunStart block_flow_run_start(lxb_dom_element_t *el, BlockFlowRun run)
+{
+    BlockFlowRunStart out;
+
+    DCHECK(el != NULL, "CSS 2.2 §9.2.1.1's run was asked where it begins with no container to begin inside");
+    if (run.after == NULL) {
+        /* A RUN THAT FOLLOWS NO BREAK BEGINS AT THE CONTAINER'S OWN CONTENT and continues no fragment, so the
+           box whose style its content carries is the container itself. */
+        out.open = el;
+        out.at = lxb_dom_interface_node(el)->first_child;
+        return out;
+    }
+    DCHECK(run.after->parent != NULL && run.after->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "CSS 2.2 §9.2.1.1's run was started after a node with no element parent, so there is no box for the "
+           "run to be a fragment OF and no style for its content to be measured with — the node a run follows is "
+           "a child of the container or of an inline box the break itself split, and either way its parent is an "
+           "element whose opening edge belongs to an earlier one of these boxes");
+    out.open = lxb_dom_interface_element(run.after->parent);
+    out.at = run.after->next;
+    return out;
+}
+
 /* DOES §9.2.1.1 GENERATE AN ANONYMOUS BLOCK BOX FOR THIS RUN? The section generates one only to wrap
    inline-level content — "we assume that there is an anonymous block box around 'Some text'" — so a run
    holding none is not a box at all, and `<div><p></p></div>` has ONE box on its stack and not three.
@@ -1031,7 +1055,11 @@ bool block_flow_run_generates_box(lxb_dom_element_t *el, BlockFlowRun run)
     root = lxb_dom_interface_node(el);
     if (run.after != NULL && run.after->parent != root) return true;
     if (run.end != NULL && run.end->parent != root) return true;
-    c = run.after == NULL ? root->first_child : run.after->next;
+    /* NEITHER BOUND IS DEEP BY THE TWO TESTS ABOVE, so the run begins at a CHILD of the container and the
+       `open` half of this answer is the container itself — which is why the scan below reads only `at`. Asking
+       for the pair rather than composing the first position here is what keeps this walk and the two that
+       MEASURE the same run agreeing about where it starts. */
+    c = block_flow_run_start(el, run).at;
     for (; c != NULL && c != run.end; c = c->next)
         if (block_flow_child_kind(el, c) == BLOCK_FLOW_CHILD_INLINE) return true;
     return false;

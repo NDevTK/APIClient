@@ -898,8 +898,14 @@ static bool bp_context_step_7_2_1(BpState *st, lxb_dom_element_t *style, BlockFl
        the characters core/layout/line_box.h placed on this context's lines, so a zero here is a container
        with nothing in it — which is what a document whose body holds one empty `div` looks like from this
        component, and is exactly what a walk over a page that has mounted does not look like. */
-    lxb_dom_node_t *from = run.after != NULL ? run.after->next
-                                             : lxb_dom_interface_node(style)->first_child;
+    /* WHERE THE RUN BEGINS, ASKED OF THE RUN TYPE'S OWN OWNER RATHER THAN COMPOSED HERE — this was the fourth
+       copy of `after`'s NEXT SIBLING, and core/layout/block_flow.h states why the copies had to become one:
+       css-display-3 §2.5 "Box Generation: the none and contents keywords"' splice makes a DOM next sibling the
+       wrong position, and the walk that FILLS this context, the two that MEASURE it and this one that PAINTS it
+       would each have had to be taught that separately. The `open` half of the answer is not read here because
+       this walk takes the container as its own style operand and enumerates from `at` downward; that is the one
+       thing about this site the DCHECK below is two-sided about. */
+    lxb_dom_node_t *from = block_flow_run_start(style, run).at;
     bool ok;
 
     if (n == 0) bp_decline(st, BOX_PAINT_DECLINE_NO_CHARACTERS);
