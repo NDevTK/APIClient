@@ -597,6 +597,41 @@ const CHANNELS = {
   '"X" in global': /["'\x60]([A-Za-z_$][\w$]*)["'\x60]\s*in\s+(?:window|self|globalThis)\b/g,
   "X.member":      /(?:^|[^\w$.])([A-Z][\w$]*)\s*\.\s*[A-Za-z_$][\w$]*/g,
   "f(a,X)":        /[\w$)\]]\s*\(\s*[A-Za-z_$][\w$]*\s*,\s*([A-Za-z_$][\w$]*)\s*\)/g,
+  /* THE FOURTH OPERATOR SHAPE THAT EVALUATES A BINDING, AND AN ENUMERATION THAT SAID THERE WERE THREE IS
+     WHERE IT WENT MISSING. This file's own `AN IDENTIFIER PASSED AS AN ARGUMENT IS EVALUATED` paragraph states
+     the rule this channel is an instance of -- "`new X(`, `instanceof X` and `X.member` are the three shapes
+     that evaluate a binding, and they are all OPERATOR shapes" -- and a class heritage is one more of them.
+     ECMAScript §15.7.14 "Runtime Semantics: ClassDefinitionEvaluation" reaches the superclass through "Let
+     superclass be ? GetValue(? superclassRef)",
+     and ECMAScript §6.2.5.5 "GetValue ( refRecord )" says "If IsUnresolvableReference(refRecord) is true,
+     throw a ReferenceError exception" -- so `class C extends WebSocket{}` ends the flow on that line exactly
+     as `new WebSocket(` does. AN ENUMERATION ASSERTED COMPLETE IS THE ONE CLAIM NOTHING HERE COULD CHECK, and
+     its cost was not a smaller table: it was the flow-ending COLUMN a reader dispatches from reading one short
+     per row, with the missing site recorded in a commit message where no reader of this file can reach it.
+     ITS MEASURED PRICE, by the standard this file holds its other channel widenings to, and the DERIVATION
+     rather than the figures because the corpus moves:
+       grep -rhoE '\bextends[[:space:]]+[A-Za-z_$][A-Za-z0-9_$]*' <corpus> | sed -E 's/^extends +//' \
+         | sort | uniq -c | sort -rn        # then intersect the names with browser/platform_names.h
+     When it was taken: 5741 occurrences over 448 distinct names, NINE of them platform names (29
+     occurrences), of which exactly THREE are absent globals -- `WebSocket`, `DOMException` and `EventSource`,
+     one occurrence each -- and all three were ALREADY ranked at 51, 70 and 10, so it adds NO row to list A
+     and moves NO rank (their nearest neighbours sit at 21, 66 and 8). WHAT IT CHANGES is the one number this
+     file could not state: those rows' `use`/`thr` each rise by one, which is the reconciliation
+     `WebSocket use=19 thr=19` needed a commit message to perform by hand -- 13 `new X(` + 6 `X.member` + this.
+     BOTH READERS TAKE IT WITH NO CHANGE, WHICH IS MEASURED RATHER THAN ASSUMED, because a channel whose
+     occurrences reach no verdict would buy a column of `?`. engine/js_guard_shape.mjs answers a heritage
+     offset in all four verdicts and in both polarities -- `class C extends X{}` throws, a `typeof` guard over
+     it reads guarded-silent, the same with an `else` reads guarded-fallback, inside a `try` with a handler
+     reads caught, and the INVERTED test still throws -- and `class X extends Q{}`, where the offset lands on
+     the class's own BINDING name, correctly reaches NO verdict, which its `class X{}` control already covers.
+     engine/js_code_refs.mjs MARKS the heritage read, leaves it UNMARKED inside a string, drops it entirely
+     inside a comment, and leaves it unmarked where the page BINDS the name -- so the code/not-code
+     subtraction and the shadow bucket apply here exactly as they do to every other channel in this table.
+     ITS FLOORS, stated because the count is one per row: a comment between `extends` and the name is not
+     matched, and where the heritage is a MEMBER expression the HEAD identifier is captured -- which is the
+     read that throws, and is also matched by `X.member`, so such an occurrence counts in both. This corpus
+     holds no platform-named instance of either, so both are empty TODAY and not by construction. */
+  "extends X":     /\bextends\s+([A-Za-z_$][\w$]*)/g,
 };
 const CONTROL = {
   "X instanceof (control)":   /\b([A-Za-z_$][\w$]*)\s+instanceof\b/g,
@@ -646,6 +681,15 @@ const ARM = {
   "f(a,X)":        ['Ue(a,AbsentRankPos)',             ['"Screen,SharedWorker,AbsentRankNeg,WebSocket"',
                                                         'q="Screen,AbsentRankNeg,WebSocket".split(",")',
                                                         'Ue(a,"AbsentRankNeg")']],
+  /* THE NEGATIVES ARE THE TWO SHAPES THIS CORPUS ACTUALLY HOLDS, never invented near misses: a component
+     options object whose KEY is `extends` (12 occurrences, a `{mixins:s,extends:r}` destructure) and a
+     library helper CALLED `extends` (43, `this.parent.extends(e)`). A form without the whitespace
+     requirement takes the first and one anchored on the bare word takes the second. The word inside a
+     STRING is deliberately NOT a negative: the channels read raw text, so it IS matched here and the
+     code/not-code reader is what retires it -- the division every other channel here already lives under. */
+  "extends X":     [['class C extends AbsentRankPos{}', 'var C=class extends AbsentRankPos{};',
+                     'class C extends AbsentRankPos.Foo{}'],
+                    ['{mixins:s,extends:AbsentRankNeg}', 'this.parent.extends(AbsentRankNeg)']],
 };
 for (const [k, re] of Object.entries(CHANNELS)) {
   const [pos, neg] = ARM[k] || die(`channel ${k} has no positive/negative control — add one before reading it.`);
@@ -1432,7 +1476,7 @@ const emptyWhy = (n) => {
    RETIREMENT: when a scope-aware reader exists, at which point the alias set is per-binding rather than
    per-file and this measurement is RE-RUN rather than remembered. */
 const GUARD_CH = new Set(["typeof X", "window.X", "self.X", "globalThis.X", 'global["X"]', '"X" in global']);
-const USE_CH = new Set(["new X(", "X.member", "instanceof X", "f(a,X)"]);
+const USE_CH = new Set(["new X(", "X.member", "instanceof X", "f(a,X)", "extends X"]);
 /* THE SENTENCE BELOW — "every channel is in exactly one of the two sets, so `u + g` IS the free total" — was
    stated in prose and checked by nothing, which is the one shape that cannot fail loudly: a channel in
    NEITHER set contributes to neither `u` nor `g`, so a name reached only by it reads `!u && !g` and is
@@ -1640,9 +1684,22 @@ const READ_A = new Map([
     + "OWN RESOLVER AND FAIL LATER AND ELSEWHERE, which no per-occurrence verdict can show: ActionCable's "
     + "`WebSocket:\"undefined\"!=typeof WebSocket?WebSocket:void 0` turns `open()`'s `new r.WebSocket(url)` into "
     + "a TypeError, and ethers' four-arm `Rte()` throws `Error(\"`WebSocket` is not supported in this "
-    + "environment\")` out of a TOP-LEVEL `const`, which costs that module's whole evaluation. WHAT THIS READING "
-    + "DID NOT SETTLE, stated because that half is about a corpus rather than about a standard: whether anything "
-    + "past that module-level throw composes an address this engine does not otherwise reach. AND ONE SITE IS "
+    + "environment\")` out of a TOP-LEVEL `const`, which costs that module's whole evaluation. THAT LAST HALF IS "
+    + "NOW SETTLED AND IT CONFIRMS `none` RATHER THAN MOVING IT — measured on a later fetch, where the minifier "
+    + "spells the resolver `Cte` rather than `Rte`, which is a fact about the fetch and not a correction. The "
+    + "top-level `const` sits 61% through a 1.5 MB chunk and EVERY address-composing site after it was opened: four "
+    + "`4byte.sourcify.dev/?q=`, one `links.ethers.org/v5-errors-` and one `viem.sh` are documentation links inside "
+    + "THROWN ERROR MESSAGES rather than requests; `https://ipfs.io` and `https://arweave.net` are default GATEWAY "
+    + "BASES reached only through ENS avatar resolution; and all three `fetch(` calls take an address supplied at "
+    + "RUN TIME by an on-chain reply or by caller options (a CCIP-read `{sender}`/`{data}` gateway, an avatar `HEAD` "
+    + "probe, an avatar metadata read) rather than one the bundle composes. Every bundle-composed one of them occurs "
+    + "BEFORE the throw as well — ipfs.io 1/1, arweave.net 1/1, 4byte 4/4, viem.sh 1/1 — so the engine already "
+    + "holds it on the arm it takes today, and `ipfs.io` is additionally named by a second chunk of the same page. "
+    + "The one literal occurring ONLY after the throw is `links.ethers.org`, which is prose in an error string. "
+    + "AND THE TWENTIETH FLOW-ENDING SITE IS A `class … extends WebSocket`, WHICH NO USE CHANNEL COULD MATCH UNTIL "
+    + "THE `extends X` CHANNEL ABOVE LANDED: a session-replay recorder's `start()` subclasses the page's own socket "
+    + "to tee its frames, its only preceding gate is `if(this.isRecording)return`, and it composes no address of its "
+    + "own — a ninth KIND of branch and the same verdict. AND ONE SITE IS "
     + "NOT A WEBSOCKET WORK ITEM AT ALL: its `new WebSocket` sits in a module a dynamic `import()` reaches only "
     + "under a `noWorker=1` query, and that module's importer calls a top-level function whose first statement "
     + "evaluates a BARE `Worker` in an array literal beside a `typeof`-guarded `SharedWorker` — so `Worker`, "
