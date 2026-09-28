@@ -9,6 +9,7 @@
 #include "quickjs.h"
 #include "core/dom/element.h"
 #include "core/events/pointer_capture.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 
 /* Pointer Events 4 §4's `boolean hasPointerCapture ( long pointerId )` — ONE declaration, once per agent. */
@@ -109,6 +110,18 @@ void pointer_capture_init(JSContext *ctx)
            "pointer_capture_init ran twice — Pointer Events 4 §4's member is declared once per AGENT, and a "
            "second declaration would leave two ids for one member with the first's pool entry unreachable");
     g_id_has_capture = idl_method_id(ctx, PC_1LONG, 1, js_pc_has_capture, 0);
+    /* AND THE ID IS AGENT STATE, WHICH THE ASSERT ABOVE ASSUMES AND NOTHING WAS MAKING TRUE. A file-scope
+       static survives an agent; `idl_method_id` returns an INDEX INTO core/idl_args.c's member pool, and
+       `idl_args_free` puts that pool's count back at 0 — so a carried index names a member of a pool that no
+       longer exists, and once the next agent has declared far enough it names a DIFFERENT member, which
+       pointer_capture_install would then install under `hasPointerCapture`. Registering the slot is what puts
+       it back at -1 when the agent is released, so the `< 0` precondition is true for the SECOND agent by
+       construction rather than by there only ever having been one.
+       MEASURED: without this line a build's own two-agent and cold-park/cold-resume stages aborted at that
+       assert — four stage processes, one identity — and the assert was RIGHT: `pointer_capture_init` really
+       had run twice with the first agent's index still in the static. The defect was never the crash. */
+    agent_state_id("pointer_capture", &g_id_has_capture,
+                   "Pointer Events 4 §4's `hasPointerCapture` pool entry");
     /* Web IDL §3.7.7 "Operations"' receiver test. Pointer Events 4 §4 is a `partial interface Element`, so the
        interface the receiver must implement is Element and the predicate is core/dom/element.h's own
        `element_is` — declared here rather than performed in the body, the way CSSOM VIEW §6's members are. */
