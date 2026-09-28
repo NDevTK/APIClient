@@ -3409,6 +3409,10 @@ void element_free(JSRuntime *rt)
     free(g_ts);
     g_ts = NULL;
     g_ts_n = g_ts_cap = 0;
+    /* Pointer Events 4 §4's `partial interface Element`, BEFORE element_view_free because element_init runs
+       the two the other way round. Its slot is declared under this row, so the undo below is what resets it
+       and this call is the claim that entitles the undo to — see core/events/pointer_capture.c. */
+    pointer_capture_free();
     element_view_free();
     html_element_free(rt);
     html_style_element_free(rt);   /* before the sheet interface whose objects it holds */

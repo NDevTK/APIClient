@@ -164,3 +164,28 @@ void pointer_capture_install(JSContext *ctx, JSValueConst proto)
        installing either flips a guard TRUE onto a branch that then raises, which is worse than the absence.
        They stay honestly absent, which is what engine/idlgen.mjs reports them as. */
 }
+
+/* THE RELEASE IS THE CLAIM AND NOT THE RESET, WHICH IS WHY IT EXISTS WITH NOTHING TO FREE. The one slot this
+   file holds is declared under `element`, so element_free's last line is what puts it back; a reset written
+   here as well would be the SECOND resetter core/agent_state.h's undo exists to stop being kept by hand. What
+   only THIS file can say is that the cascade reached it — agent_state_undo refuses to put back a slot declared
+   in a file that has not spoken, because once the slot is at its pre-init value a release that never ran and
+   one that did are the same bytes.
+   IT IS THE OTHER HALF OF THE ROW MOVE RATHER THAN A SEPARATE REPAIR, and that is the whole reason it was
+   owed. Declaring under `element` is what makes element_free the release that reaches this file, which is
+   exactly what core/platform.c's row walk asks for — and the SAME act puts this file inside
+   agent_state_undo("element")'s per-file question, which the old spelling was outside. A row move therefore
+   carries a cascade edit with it; the declaration alone trades one abort for another.
+   DERIVED RATHER THAN CHOSEN, AND THE DENOMINATOR IS NOT THE DECLARING SET: THIRTY-FOUR files declare under
+   `element`, and ONE of them is core/dom/element.c, which CALLS the undo and is exempt by the undo's own
+   `strcmp(file)` arm. Of the THIRTY-THREE that remain, THIRTY-TWO already ended their release in
+   agent_state_reached("element") and this file was the one that did not — so the population was exactly one
+   and this diff closes it at thirty-three of thirty-three.
+   ORDER IS FREE HERE, uniquely among element_free's members: this file holds no reference, no atom and no
+   allocation — one `int` pool entry — so nothing later in that cascade can read a handle this gives back. */
+void pointer_capture_free(void)
+{
+    /* AND THE CASCADE REACHED THIS FILE — the claim that entitles element_free's last line to put this file's
+       slot back. See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("element");
+}

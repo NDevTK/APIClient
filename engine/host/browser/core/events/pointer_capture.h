@@ -127,4 +127,11 @@ void pointer_capture_init(JSContext *ctx);
  * member runs in the realm that DEFINED it (core/dom/element.c states that for the same list). */
 void pointer_capture_install(JSContext *ctx, JSValueConst proto);
 
+/* Pointer Events 4 §4's AGENT half given back — called from core/dom/element.c's element_free, the release on
+ * whose column `element` sits. It frees nothing: the one slot is declared under `element` and that cascade's
+ * last line resets it from the registry. What this entry exists for is the CLAIM that the cascade reached this
+ * file, which core/agent_state.h's agent_state_undo requires of every file declaring under a row it does not
+ * itself undo — without it the undo refuses, naming this file's declaration. */
+void pointer_capture_free(void);
+
 #endif
