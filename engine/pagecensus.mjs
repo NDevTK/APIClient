@@ -43,7 +43,41 @@
  * REWRITTEN: a lane sent to reproduce a census by typing it gets a file-not-found for a component it did not
  * touch, reads that as its own mistake, and the cheapest thing that stops the next one is the line saying so
  * where the command is. What to type instead is any static server over the directory holding the document —
- * `python3 -m http.server <port>` in testing/fixtures drives every tracked fixture there.
+ * and where that directory is testing/fixtures, that server is `node testing/fixtures_server.cjs` and NOT
+ * `python3 -m http.server`.
+ * THIS LINE READ, in these words, that `python3 -m http.server <port>` in testing/fixtures drives every
+ * tracked fixture there,
+ * with no caveat, AND IT IS REWRITTEN RATHER THAN DELETED because its reasoning is what a reader re-derives:
+ * this driver is handed a URL and knows nothing about any on-disk layout, so any static server over the
+ * directory looks interchangeable, and for most of that directory it is. It is not for a document whose
+ * SUBJECT is something the server chooses. A `.headers` sidecar beside a file and a `?pipe=status(...)` query
+ * are wptserve's own spellings; testing/fixtures_server.cjs implements both and `http.server` implements
+ * neither, and the cost is not a missing feature but a fixture answering its own OPPOSITE with nothing saying
+ * so. `cspconn_blocked.html` differs from `cspconn_open.html` in its witness-path prefix and its title and in
+ * nothing else — the whole of the blocked arm is `cspconn_blocked.html.headers` — so served without the
+ * sidecar the pair is one document twice. `scrstat_status_error.html` asks for its status with
+ * `?pipe=status(404)`, so a server that drops the query delivers that element at 200, and it then loads and
+ * RUNS, which that document names in its own words as THE INVERSION TO WATCH FOR.
+ * MEASURED, both servers over this same directory in one sitting, with an invented path answering 404 in each
+ * as the armed control: `http.server` returns the blocked arm carrying NO `content-security-policy` header at
+ * all and answers `?pipe=status(404)` with 200, the same status it gives the bare file; fixtures_server.cjs
+ * returns `content-security-policy: connect-src 'none'; img-src 'self'` on that document and 404 for that
+ * pipe, and sends a PERMISSIVE policy on the open arm, so the arms differ by what the policy SAYS rather than
+ * by whether one arrived.
+ * THE DIRECTION IS WHY THIS IS A REPAIR AND NOT A FOOTNOTE: the blocked arm served without its sidecar
+ * requests `cspconn-blocked-connect.txt` and resolves it, and that document declares exactly that log shape to
+ * be the one reading that makes every cspBlocks verdict this product emits unfalsifiable. So the
+ * documented command does not blunt the fixture, it manufactures this engine's most alarming false finding.
+ * AND THE THIRD DIFFERENCE IS STATED AS MEASURED BECAUSE IT IS THE ONE THAT IS EASY TO OVER-CLAIM:
+ * `http.server` DOES write a request line, to STDERR, in common-log format. What it does not write is
+ * `testing/fixtures_access.<port>.log`, which testing/README.md names as the oracle for a served fixture, and
+ * its line carries neither the `referer=` nor the `dest=` field both cspconn arms use to separate the Chrome
+ * load from the safeFetch load inside one log. The honest claim is that the log is in the wrong place and the
+ * wrong shape, never that there is none — a reader told there is none greps, finds one, and disbelieves the
+ * two differences above, which are the ones that decide the answer.
+ * RETIREMENT: this record goes when a served fixture whose subject is a server capability carries a WITNESS
+ * for that capability itself — a request the document makes only when the header or the status arrived — so a
+ * wrong server shows up as its own row in the log instead of as the engine getting the standard wrong.
  *
  * WHY THE CENSUS IS A SERIES AND WHICH HALF OF IT IS QUOTED WHERE. solver/result.c states the kinds and they
  * are not alike. `_wfq` is a reading of an INSTANT: on a frontier that has drained it is `{members: 0}`, which
@@ -110,7 +144,10 @@
  *
  * Usage:  node engine/pagecensus.mjs <document-url> [transcript.jsonl]
  *   e.g.  node testing/corpus/serve-faithful.mjs gitlab 8977 &       <-- DELETED at e36d41d2; see above
- *         (cd testing/fixtures && python3 -m http.server 8973) &        <-- a tracked subject that exists
+ *         FIX_PORT=8973 node testing/fixtures_server.cjs &   <-- a tracked subject that exists, served by the
+ *                                                            ONE server its documents need; it resolves the
+ *                                                            directory from its own path, so there is no `cd`
+ *                                                            in it. See the http.server paragraph above.
  *         `timeout 400 sh -c "ulimit -S -t 300; node engine/pagecensus.mjs http://127.0.0.1:8977/ /tmp/gl.jsonl"`
  */
 import { appendFileSync, existsSync } from "node:fs";
