@@ -130,7 +130,21 @@ void pointer_capture_init(JSContext *ctx)
        MEASURED: without this line a build's own two-agent and cold-park/cold-resume stages aborted at that
        assert — four stage processes, one identity — and the assert was RIGHT: `pointer_capture_init` really
        had run twice with the first agent's index still in the static. The defect was never the crash. */
-    agent_state_id("pointer_capture", &g_id_has_capture,
+    /* AND THE ROW IS `element`, NOT THIS FILE'S OWN NAME, WHICH IS THE SPELLING A READER RE-DERIVES AND THE
+       ONE THAT ABORTED A BUILD. Pointer Events 4 §4 is a `partial interface Element`, and this component is
+       reached from ONE place in each direction: `pointer_capture_init` and `pointer_capture_install` have
+       exactly one caller each and both are core/dom/element.c. So element's release column is whose release
+       this slot's reset is reached from, which is precisely what core/platform.c's row walk asks about --
+       `element` is a row carrying a release and `pointer_capture` is not a row at all. It is the same idiom
+       core/dom/selection.c uses declaring under `document` and core/crypto/subtle_crypto.c under `crypto`:
+       A SUB-COMPONENT NAMES THE ROW THAT RELEASES IT, NEVER ITS OWN FILE.
+       THIS LINE READ `"pointer_capture"` AND THE WRONG SPELLING IS THE INTUITIVE ONE -- a file names its slot
+       after itself, the name reads as correct at this site, and nothing local disagrees. What it cost is not
+       a weaker check but a check that was NEVER RUN: the row pairing can only ask "does anybody RELEASE
+       this?" about a name a row carries, so this slot was never asked, while `element`'s row reported
+       "declared no agent state" in the exact words a component that declared nothing produces. One answer,
+       three states -- the defect core/agent_state.h exists to refuse, arriving through the NAME. */
+    agent_state_id("element", &g_id_has_capture,
                    "Pointer Events 4 §4's `hasPointerCapture` pool entry");
     /* Web IDL §3.7.7 "Operations"' receiver test. Pointer Events 4 §4 is a `partial interface Element`, so the
        interface the receiver must implement is Element and the predicate is core/dom/element.h's own
