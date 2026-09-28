@@ -49,50 +49,67 @@
  * predicate no longer TAKES the container, it derives the text node's own parent, so the wrong element is
  * unspellable at this sequence's remaining consumers instead of being a sentence each of them must recall.
  *
- * NOT COVERED: THIS SEQUENCE'S MEMBER TYPE IS A DOM NODE, and css-display-3 §1 "Introduction" names a box-tree
- * child that is not one — "a principal block box and a child marker box". So a child box with no
- * source-document node cannot be yielded here at all, and §2.5's splice carries exactly such children: "its
- * pseudo-elements, such as ::before and ::after pseudo-elements".
+ * NOT COVERED, AND THE REFUSAL IS AT box_tree.c RATHER THAN IN THIS PARAGRAPH — WHICH IS WHAT CHANGED SINCE IT
+ * WAS A RESIDUAL. THIS SEQUENCE'S MEMBER TYPE IS A DOM NODE, and css-display-3 §1 "Introduction" names a
+ * box-tree child that is not one — "a principal block box and a child marker box". So a `list-item` box's
+ * sequence cannot be stated here at all, and the two entries that would state it CRASH instead of answering:
+ * `box_tree_first_child` for such a box, and `box_tree_prev_sibling` where its answer would be the START of
+ * the sequence. Read `bt_require_marker_box_is_spellable` for the spec sentences and for what narrows it.
  * THIS CLAUSE USED TO READ `no ::before/::after box generation exists in this engine for it to splice`, AND IT
- * IS REWRITTEN RATHER THAN DELETED BECAUSE A READER WHO GREPS THIS ENGINE FOR A PSEUDO-ELEMENT BOX RE-DERIVES
- * IT. It ENUMERATED where the gap is a PROPERTY, and §2.5's own sentence says "such as ::before and ::after
- * pseudo-elements" rather than naming a closed pair — so the two it listed made the population look empty when
- * the commonest member of that population is neither of them.
- *   - ::before AND ::after ARE EMPTY, BY CONSTRUCTION RATHER THAN BY OMISSION, and no diff at this component
- *     can change that. css-pseudo-4 §4.1 "Generated Content Pseudo-elements: ::before and ::after" gates them
- *     on a COMPUTED VALUE — "When their computed content value is not none, these pseudo-elements generate
- *     boxes as if they were immediate children of their originating element" — and css-content-3 §1
- *     "Inserting and Replacing Content: the content property" makes the initial `normal` compute to `none` for
- *     exactly those two. Nothing can move it off `none`, because the property does not PARSE: the derivation
- *     is a grep of lexbor's `source/lexbor/css/property/const.h` for `LXB_CSS_PROPERTY_CONTENT`, with
- *     `LXB_CSS_PROPERTY_COLOR` as the armed control that shows the question reaches an answer at all.
- *   - ::marker IS NOT EMPTY, AND IT IS THE MEMBER THE RETIRED ENUMERATION HID. css-display-3 §2.3
- *     "Generating Marker Boxes: the list-item keyword" generates it from the display value ALONE — the keyword
- *     "causes the element to generate a ::marker pseudo-element" — css-content-3 §1 leaves ITS content at
- *     `normal` rather than `none`, and the UA sheet already computes `list-item` for every `li` (grep
- *     core/css/css_style_declaration.c's UA rule table for that pair). So the member css-display-3 §1 names is
- *     missing from this sequence for every list item in every document, with no author declaration anywhere
- *     and no `content` support needed to reach it.
- * HOW ITS ABSENCE WOULD SHOW: `box_tree_first_child` of a `list-item` box answers that box's first
- * SOURCE-DOCUMENT child where §1 says the first child box is the marker, so every walk over the sequence is
- * one member short AT ITS HEAD and a list renders with no markers. §2.5 is what makes it THIS component's
- * question rather than a marker component's: a `contents` list item has no principal box for the marker to be
- * a child OF, Appendix B leaves an `li` behaving normally under `contents`, and §2.5 then splices the marker
- * into the ancestor's sequence exactly as it splices the source-document children.
- * WHAT THE NEXT DIFF BUILDS: the ::marker box of a `list-item` element AS A MEMBER OF THIS SEQUENCE — not
- * `::before`/`::after`, whose population no diff here can make non-empty, and not a widened member type on its
- * own, which is a shape with no producer. It is ONE landing and it touches SIX positions in this component
- * rather than the one the retired clause implied: `box_tree_first_child` (a marker precedes the first
- * source-document child), `bt_resolve` and `bt_continue_before` (the splice descends INTO a `contents` element
- * and steps back OUT of it at the FRONT, which is where the marker stands), `bt_resolve_back` and
- * `bt_continue_after` (those same two positions read the other way), and `bt_require_in_sequence`, whose
- * membership test IS `box_tree_parent(child) == box` and which a member with no DOM parent cannot satisfy —
- * that refusal is where the member-type decision lands, and it REFUSES a half-landing rather than answering
- * one plausibly. `box_tree_prev_sibling`'s round trip is the second such guard and was landed before this was
- * written, so a splice taught to only ONE of the two descents is already a crash rather than a sequence that
- * reads one way forward and another way back.
- * RETIREMENT: this residual goes when this sequence can yield a box-tree child that is NOT a DOM node, because
- * the enumeration that made its gap look empty is unspellable once the member type can name one. */
+ * IS KEPT BECAUSE A READER WHO GREPS THIS ENGINE FOR A PSEUDO-ELEMENT BOX RE-DERIVES IT. It ENUMERATED where
+ * the gap is a PROPERTY, and §2.5's own sentence says "such as ::before and ::after pseudo-elements" rather
+ * than naming a closed pair — so the two it listed made the population look empty when the commonest member of
+ * that population is neither of them. ::before AND ::after ARE STILL EMPTY, BY CONSTRUCTION RATHER THAN BY
+ * OMISSION, and no diff at this component can change it: css-pseudo-4 §4.1 "Generated Content Pseudo-elements:
+ * ::before and ::after" gates them on a COMPUTED VALUE — "When their computed content value is not none, these
+ * pseudo-elements generate boxes as if they were immediate children of their originating element" — and
+ * css-content-3 §1 "Inserting and Replacing Content: the content property" makes the initial `normal` compute
+ * to `none` for exactly those two: "For ::before and ::after, this computes to none. For ::marker,
+ * ::placeholder, and ::file-selector-button, this computes to itself (normal)." Nothing can move it off
+ * `none`, because the property does not PARSE: the derivation is a grep of lexbor's
+ * `source/lexbor/css/property/const.h` for `LXB_CSS_PROPERTY_CONTENT`, with `LXB_CSS_PROPERTY_COLOR` as the
+ * armed control that shows the question reaches an answer at all.
+ * AND THE SIX-POSITION NEXT-DIFF CLAUSE THAT REPLACED IT WAS ITSELF REFUTED BY THE DIFF THAT ACTED ON IT,
+ * RECORDED HERE RATHER THAN DELETED BECAUSE A READER WHO RE-DERIVES IT FROM §2.5's SPLICE WILL WRITE IT AGAIN.
+ * It named `bt_resolve`, `bt_continue_before`, `bt_resolve_back` and `bt_continue_after` — the four SPLICE
+ * positions — on the ground that "a `contents` list item has no principal box for the marker to be a child OF
+ * … and §2.5 then splices the marker into the ancestor's sequence exactly as it splices the source-document
+ * children". THERE IS NO SUCH ELEMENT AND THE MARKER NEVER MEETS THE SPLICE. An element computes ONE
+ * `display`, and `bt_is_spliced` is one comparison against `contents`, so an element this walk pierces is not
+ * `list-item` and generates no marker at all — css-display-3 §2.3 "Generating Marker Boxes: the list-item
+ * keyword" generates it from that keyword and from nothing else ("causes the element to generate a ::marker
+ * pseudo-element"). A `list-item` element GENERATES a box, so it terminates the splice rather than being
+ * pierced by it, and its marker is a child of that box. What §2.5's sentence really carries through the splice
+ * is the pseudo-elements it names — "its children and pseudo-elements still generate boxes and text sequences
+ * as normal" — which is the empty pair above. TWO positions are touched and not six, and both now refuse.
+ * HOW ITS ABSENCE WOULD SHOW, NOW THAT IT IS A CRASH: a document containing a list item reaches
+ * `box_tree_first_child` of that item through any walk over its contents and ABORTS naming css-lists-3 §3.1,
+ * where before the same walk got the item's first SOURCE-DOCUMENT child and a list rendered with no marker.
+ * In release, where the refusal compiles out, that earlier answer is what is still returned.
+ * WHAT THE NEXT DIFF BUILDS IS css-lists-3 §3.2 "Generating Marker Contents", NOT THE MEMBER TYPE, and the
+ * order is forced rather than chosen: §3.2 is what makes the refusal PRECISE instead of blanket, because its
+ * last arm is "otherwise: The marker box has no contents and ::marker does not generate a box" — a list item
+ * with no marker string has a COMPLETE sequence here and must not be refused. It needs `list-style-type`
+ * (css-lists-3 §3.4 "Text-based Markers: the list-style-type property", whose `Initial:` line is `disc` and
+ * whose `Inherited:` line is `yes`) to be a computed value at all, which it is not: the property is in neither
+ * lexbor's registry nor core/css/css_style_declaration.c's unregistered-initial table, so css-cascade-5 §7.1
+ * "Initial Values" has no initial value to fall to and it answers NULL for every element. §3.2's arms then
+ * reach css-counter-styles-3 §6.3 "Symbolic: disc, circle, square, disclosure-open, disclosure-closed" for the
+ * symbol a `disc` marker is filled with, and any NUMERIC style additionally needs css-lists-3 §4.6 "The
+ * Implicit list-item Counter" — which is why that arm is a crash of its own and not part of the same landing.
+ * THE MEMBER TYPE IS THE LANDING AFTER THAT, and `bt_require_in_sequence` is where its decision lands: that
+ * test IS `box_tree_parent(child) == box`, which a member with no DOM parent cannot satisfy, so it REFUSES a
+ * half-landing rather than answering one plausibly. `box_tree_prev_sibling`'s round trip is the second such
+ * guard, so a sequence taught to only ONE of its two directions is already a crash rather than one that reads
+ * one way forward and another way back. THE STYLE AND THE LAYOUT ARE TWO MORE AND ARE NOT THIS COMPONENT'S:
+ * css-pseudo-4 §4 "Tree-Abiding Pseudo-elements" gives the box its properties ("They inherit any inheritable
+ * properties from their originating element; non-inheritable properties take their initial values as usual"),
+ * over a box core/css/css_computed_value.h can only key on an ELEMENT; and css-lists-3 §3.5 "Positioning
+ * Markers: The list-style-position property" has an `Initial:` of `outside`, whose block-container arm is "the
+ * marker box is a block container and is placed outside the principal block box" — a positioning scheme this
+ * engine has no component for, and one §3.5's own text calls "handwavey nonsense from CSS2".
+ * RETIREMENT: this paragraph goes when this sequence can yield a box-tree child that is NOT a DOM node,
+ * because the enumeration that made its gap look empty is unspellable once the member type can name one. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_BOX_TREE_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_BOX_TREE_H
 
