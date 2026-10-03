@@ -172,12 +172,49 @@ const char *css_shorthand_name_at(unsigned i);
 
 const char *css_shorthand_property_named(const char *name);
 
-/* THE SHORTHANDS THAT SET `longhand`, written into `out` in CSSOM §6.6's own PREFERRED ORDER — "order
-   shorthands lexicographically; move all items that begin with `-` last; move all items that begin with `-`
-   but not `-webkit-` last; order by the number of longhand properties that map to it, with the greatest number
-   first". Returns how many, which is 0 both for a longhand no recorded shorthand sets and for a name that IS
-   one. `max` must be at least CSS_SHORTHAND_MAX_OF. The names are BORROWED. */
-unsigned css_shorthand_shorthands_of(const char *longhand, const char **out, unsigned max);
+/* THE SHORTHANDS `property` IS A LONGHAND OF, written into `out` in CSSOM §6.6 "CSS Declaration Blocks"' own
+   PREFERRED ORDER — "order shorthands lexicographically; move all items that begin with `-` last; move all
+   items that begin with `-` but not `-webkit-` last; order by the number of longhand properties that map to it,
+   with the greatest number first". Returns how many. `max` must be at least CSS_SHORTHAND_MAX_OF. The names are
+   BORROWED.
+   ZERO IS ONE FACT AND NOT A LIST OF SITUATIONS: NO ROW OF THE TABLE ABOVE NAMES `property` AMONG ITS
+   LONGHANDS. THE OPERAND IS NAMED FOR WHAT CALLERS HAND IT RATHER THAN `longhand`, because a parameter that
+   presupposes its operand's KIND is the whole of what makes a zero read as a claim about a longhand — and what
+   a page writes is routinely a shorthand, a custom property, or a property this table has no row for.
+   THIS ENTRY USED TO DESCRIBE THE RETURN AS
+   `0 both for a longhand no recorded shorthand sets and for a name that IS one`
+   (backticked: it is a spelling being shown, and in double quotes beside a § it would read as a quotation of
+   CSSOM and be reported as one that is not there). It is REWRITTEN RATHER THAN DELETED because a reader who
+   re-derives it from the fact that a shorthand answers 0 will write it again, and it is wrong twice over. It
+   ENUMERATES INPUTS where the answer is a PROPERTY, so it is incomplete for every name it does not list and
+   the two it does list partition nothing — a custom property answers 0 for the identical one reason. And read
+   as a CONFESSION OF AMBIGUITY it invites a second out-parameter telling those two inputs apart, which no
+   caller here would read.
+   THE MERGE IS THE STANDARD'S OWN CONDITION AND NOT THIS COMPONENT'S CHOICE. CSSOM §6.6's step is "If property
+   maps to one or more shorthand properties, let shorthands be an array of those shorthand properties, in
+   preferred order", and a SHORTHAND maps to no shorthand exactly as an uncovered longhand does — so the
+   condition is false, the loop does not run, and the declaration serializes under its own name, which is the
+   correct answer for both. Every caller reads the count the way the algorithm does, as a LIST TO ITERATE and
+   never as a flag:
+   `cssd_serialize_decls` loops to it and emits the declaration itself when the loop does not run,
+   `css_page_property_applies` loops to it and answers false, and `css_shorthand_init`'s round trip is the ONE
+   site that asserts a nonzero — on an operand the `css_shorthand_is_shorthand` DCHECK two lines above it has
+   already excluded, so the two readings are disjoint there rather than merged.
+   THE SHORTHAND OPERAND IS REACHED RATHER THAN HYPOTHETICAL, which is why the merge has to be stated and not
+   just tolerated: `css_page_property_applies` asks the page lists about the DECLARATION AS WRITTEN and before
+   any expansion — `cssd_decls_collect_declaration` states why, and names a shorthand doing it — so every
+   shorthand this table records that core/css/css_page.c's lists do not carry for the context asked arrives
+   here, a `@page { list-style: none }` and a `@page { inset: 0 }` among them, and 0 is right for each because
+   a name those lists do not carry does not apply however it expands.
+   A CALLER THAT MUST TELL THE READINGS APART ASKS `css_shorthand_is_shorthand`, which is the SAME TABLE asked
+   the other question — one fact, two predicates, with the mutual exclusion asserted in `css_shorthand_init`'s
+   per-longhand loop and again inside `css_shorthand_complete_for`. WHAT IT MUST NOT DO IS READ 0 AS
+   COMPLETENESS: `css_shorthand_complete_for` is not derivable from this entry and its own paragraph states why
+   in both directions — `display` answers 0 here and IS complete, `font-variant-caps` answers 1 here and is NOT.
+   RETIREMENT: this record goes when this entry delivers its names NULL-TERMINATED and returns nothing, as
+   `css_shorthand_name_at` above already does and for the reason stated there, because a caller then holds no
+   integer to read as a flag and the zero this paragraph is about does not exist to be interpreted. */
+unsigned css_shorthand_shorthands_of(const char *property, const char **out, unsigned max);
 
 /* @LOGICAL — THE LOGICAL PROPERTY GROUP ENTRY THAT STOOD HERE IS `css_logical_group_of` IN
    core/css/css_logical.h, and it moved rather than being wrapped: a forwarder here would be a second door on

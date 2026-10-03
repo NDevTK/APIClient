@@ -1877,18 +1877,23 @@ static void css_sh_move_last(const char **v, unsigned n, bool (*pred)(const char
     for (i = 0; i < nm; i++) v[at++] = moved[i];
 }
 
-unsigned css_shorthand_shorthands_of(const char *longhand, const char **out, unsigned max)
+/* THE OPERAND IS ANY PROPERTY NAME AND NOT NECESSARILY A LONGHAND, which is why no assert here refuses a
+   SHORTHAND: `css_page_property_applies` asks about the declaration as written and before any expansion, so
+   `@page { list-style: none }` reaches this scan with a name the table records as a ROW, and 0 is the answer
+   CSSOM §6.6 "CSS Declaration Blocks"' own condition gives it. core/css/css_shorthand.h's entry states what the
+   zero means and which predicate answers the other question. */
+unsigned css_shorthand_shorthands_of(const char *property, const char **out, unsigned max)
 {
     unsigned n = 0, i, j;
 
-    DCHECK(longhand != NULL && out != NULL,
-           "the longhand's shorthand set was asked for with no name or nowhere to write it");
+    DCHECK(property != NULL && out != NULL,
+           "a property's shorthand set was asked for with no name or nowhere to write it");
     DCHECK(max >= CSS_SHORTHAND_MAX_OF,
            "a caller offered less room than a longhand's shorthand set can need — CSS_SHORTHAND_MAX_OF is the "
            "table's own maximum and css_shorthand_init asserts the table against it");
     for (i = 0; i < CSS_SH_N(SHORTHANDS); i++) {
         for (j = 0; j < SHORTHANDS[i].n; j++) {
-            if (strcmp(SHORTHANDS[i].longhands[j], longhand) != 0) continue;
+            if (strcmp(SHORTHANDS[i].longhands[j], property) != 0) continue;
             CHECK(n < max, "cssom: a longhand maps to more shorthands than the caller made room for — the "
                            "next write would be past the end of its array");
             out[n++] = SHORTHANDS[i].name;
