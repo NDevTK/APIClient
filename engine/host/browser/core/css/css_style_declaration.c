@@ -3093,10 +3093,19 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
          sentence — "A computed <image> value is the specified value with any <url>s, <color>s, and <length>s
          computed" — which core/css/css_image.h already quotes: a `list-style-image: linear-gradient(red, blue)`
          computes `red` to `rgb(255, 0, 0)` and reporting the author's bytes would be a specified value under the
-         word computed. SO THAT ROW NEEDS A `<url>`/`<gradient>` SPLIT THIS TREE DOES NOT EXPORT: core/css/
+         word computed. SO THAT ROW NEEDS A `<url>`/`<gradient>` SPLIT, AND THE SPLIT IS EXPORTED NOW:
+         core/css/css_image.h publishes `css_image_kind` over a `CssImageKind` whose two arms are
+         css-images-3 §2's own, with `css_image_is_image` kept as a PREDICATE over it rather than as a second
+         walk. THE CLAUSE HERE SAID THE TREE DOES NOT EXPORT ONE, and it is kept in its own words — unquoted,
+         because a run of this tree's prose is not a spec quotation — since a reader who greps that header for
+         an arm test will re-derive it, and since the ORDER it states is still the right one: core/css/
          css_image.h offers `css_image_is_image` and nothing finer, with `img_url` and `img_gradient` both
-         static, so the landing is an entry there before it is a row here. Verify each line against the fetched
-         draft rather than taking it from here.
+         static, so the landing is an entry there before it is a row here. The entry WAS that landing, and the
+         row is what is left. WHAT THE ENTRY DOES NOT ANSWER IS THE VALUE, deliberately and for the reason
+         that header's own banner gives — the specified value is the author's bytes this table already holds,
+         and the `<color>`s and `<length>`s a computed `<gradient>` needs are core/css/css_color.h's and
+         core/css/css_length.h's to compute, so the row is that composition and not a second call. Verify each
+         line against the fetched draft rather than taking it from here.
          css-lists-3 §3.5's IS STILL NOT TO BE BUILT and the reason is unchanged: its line is "keyword, but see
          prose", its prose is the positioning scheme above, and §3.2 reads the property in NO arm — so a row
          would answer a keyword whose two arms nothing distinguishes, for no caller.

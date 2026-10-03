@@ -537,15 +537,24 @@ static bool img_url(const char *name, size_t name_len, const char *args, size_t 
     return args[args_len - 1] == ')' && memchr(args, '(', args_len) != NULL;
 }
 
-bool css_image_is_image(const char *text, size_t len)
+/* A gradient NOTATION whose arguments do not match its own production is NOT an `<image>`, which is the whole
+   of what this says: css-images-3 §2's production has two arms and no third answer, so `img_gradient`'s FALSE
+   is the refusal and not a weaker kind of gradient. It exists so the three family branches below each read as
+   one `return` rather than carrying a ternary apiece. */
+static CssImageKind img_gradient_kind(const char *a, size_t alen, ImgPrefixFn prefix, ImgPositionFn pos)
+{
+    return img_gradient(a, alen, prefix, pos) ? CSS_IMAGE_GRADIENT : CSS_IMAGE_NOT_AN_IMAGE;
+}
+
+CssImageKind css_image_kind(const char *text, size_t len)
 {
     const char *name, *args;
     size_t name_len, args_len;
 
     DCHECK(text != NULL, "css-images-3 §2's <image> was asked about a NULL component value");
     img_trim(&text, &len);
-    if (!img_function(text, len, &name, &name_len, &args, &args_len)) return false;
-    if (img_url(name, name_len, args, args_len)) return true;
+    if (!img_function(text, len, &name, &name_len, &args, &args_len)) return CSS_IMAGE_NOT_AN_IMAGE;
+    if (img_url(name, name_len, args, args_len)) return CSS_IMAGE_URL;
     /* css-images-4 §3 "Gradients" has SIX notations, and §3.4 "Repeating Gradients: the
        repeating-linear-gradient(), repeating-radial-gradient(), and repeating-conic-gradient() notations"
        gives each repeating form the syntax of the one it repeats — "These notations take the same values and
@@ -562,13 +571,13 @@ bool css_image_is_image(const char *text, size_t len)
        the quotation. */
     if (img_word_is(name, name_len, "linear-gradient") ||
         img_word_is(name, name_len, "repeating-linear-gradient"))
-        return img_gradient(args, args_len, img_linear_direction, img_pos_length);
+        return img_gradient_kind(args, args_len, img_linear_direction, img_pos_length);
     if (img_word_is(name, name_len, "radial-gradient") ||
         img_word_is(name, name_len, "repeating-radial-gradient"))
-        return img_gradient(args, args_len, img_radial_shape_size_at, img_pos_length);
+        return img_gradient_kind(args, args_len, img_radial_shape_size_at, img_pos_length);
     if (img_word_is(name, name_len, "conic-gradient") ||
         img_word_is(name, name_len, "repeating-conic-gradient"))
-        return img_gradient(args, args_len, img_conic_from_at, img_pos_angle);
+        return img_gradient_kind(args, args_len, img_conic_from_at, img_pos_angle);
     if (img_word_is(name, name_len, "image") || img_word_is(name, name_len, "image-set") ||
         img_word_is(name, name_len, "cross-fade") || img_word_is(name, name_len, "element"))
         DFAIL("a component value names one of css-images-4 §2 \"2D Image Values: the <image> type\"'s FOUR "
@@ -578,5 +587,14 @@ bool css_image_is_image(const char *text, size_t len)
               "refusing it here DROPS a valid declaration rather than reporting a gap. BUILD the arm the "
               "crash names; `image-set()` is the one a real page reaches first, since it is how a bundle "
               "ships a 2x asset");
-    return false;
+    return CSS_IMAGE_NOT_AN_IMAGE;
+}
+
+/* css_image.h's one-walk paragraph, as code: this is an INEQUALITY over the kind and not a second scan of the
+   same component value, so no state of the program can make the two answers disagree and there is nothing here
+   for an assert to stand on. The walk that used to live in this body is the one above, unchanged except for
+   what it returns. */
+bool css_image_is_image(const char *text, size_t len)
+{
+    return css_image_kind(text, len) != CSS_IMAGE_NOT_AN_IMAGE;
 }
