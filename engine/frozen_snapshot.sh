@@ -59,6 +59,48 @@
 # which is the cost this project is least able to afford. And it would not have closed (3) at all, since that
 # one needs no peer. The sharing is deliberate; what was wrong is what the sharing LICENSED.
 set -e
+# AND THE SCRIPT SEALS ITSELF BEFORE IT DOES ANYTHING, BECAUSE A `.sh` IN THIS CHECKOUT IS DEPLOYED ON WRITE.
+# Every argument above is about the TREE a gate measures. This is about the GATE'S OWN BYTES: bash reads a
+# script INCREMENTALLY, by byte offset, so a lane editing this file while a freeze runs does not change the next
+# freeze -- it changes THIS one, mid-flight, and bash resumes at an offset that now lands in different text.
+# MEASURED, on this file, in one session: a freeze launched at 18:28 ran a complete build; a lane wrote this
+# file at 18:39:53, growing it from 778 lines to 793; and bash's next read produced
+# `frozen_snapshot.sh: line 760: a: command not found` -- a fragment of a word -- and then executed the
+# NO-COMMAND arm's closing echoes, so a log carrying a FULL build report ended in
+# `act        PROVISIONED, RAN NOTHING`. At 778 lines line 760 is `"$@"`; at 793 it is a comment.
+# THAT IS THE ONE LINE THIS SCRIPT'S TAIL EXISTS TO BE, AND IT LIED. CLAUDE.md records the usage-line case --
+# a log whose last line describes how to USE the program, read as a finished run -- and rates it as accusing an
+# INSTRUMENT rather than a reading. This is strictly worse: that log is EMPTY, so something invites the
+# question, and this one is FULL, so nothing does; the discriminator a reader is told to trust is the thing that
+# was wrong. A `tail -1` of that log says the gate did nothing, on a run that measured everything.
+# SO THE FIX IS A CONSTRUCTION AND NOT A WARNING. The first act is to copy this file to a private per-pid path,
+# confirm the copy is BYTE-IDENTICAL to what was read (which is what catches a write landing DURING the copy,
+# and is the same `cmp` CLAUDE.md requires of any restore), and `exec` the copy. After that the interpreter's
+# bytes are unreachable from the shared tree and no edit can reach this run -- the impossible state made
+# impossible rather than documented. The guard variable is what stops it looping, and it carries the ORIGINAL
+# path so every message below still names the file a reader would edit.
+if [ -z "${FROZEN_SNAPSHOT_SEALED:-}" ]; then
+  _self="${BASH_SOURCE[0]}"
+  _seal="${TMPDIR:-/tmp}/frozen_snapshot.sealed.$$.sh"
+  if ! cp -- "$_self" "$_seal"; then
+    echo "REFUSING: could not seal $_self at $_seal -- a gate whose own bytes a peer can rewrite mid-run is" \
+         "how a full build log came to end in 'RAN NOTHING'" >&2
+    exit 1
+  fi
+  if ! cmp -s -- "$_self" "$_seal"; then
+    rm -f -- "$_seal"
+    echo "REFUSING: $_self changed while it was being sealed, so the copy is not the script that was read." \
+         "Something is writing it right now; re-run once that lane has committed." >&2
+    exit 1
+  fi
+  FROZEN_SNAPSHOT_SEALED="$_self" FROZEN_SNAPSHOT_SEAL="$_seal" exec bash "$_seal" "$@"
+fi
+# THE SEAL IS THIS INVOCATION'S OWN TEMPORARY AND NOTHING ELSE MAY BE REMOVED HERE, which is why the trap names
+# the VARIABLE the parent set rather than `$0`: `$0` is the seal today and is whatever a future edit makes it,
+# and an `rm` in a trap is not the place to find that out. The removal is gated on the variable being non-empty.
+if [ -n "${FROZEN_SNAPSHOT_SEAL:-}" ]; then
+  trap 'rm -f -- "$FROZEN_SNAPSHOT_SEAL"' EXIT
+fi
 REV="$1"; LANE="$2"; shift 2 || true
 SRC=$(git rev-parse --show-toplevel)
 ROOT="${FROZEN_SNAPSHOT_ROOT:-${TMPDIR:-/tmp}/apiclient-frozen}"
