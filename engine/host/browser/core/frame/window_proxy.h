@@ -175,7 +175,14 @@ JSValue window_proxy_for_document(JSContext *ctx, uint32_t doc, const Origin *or
 
 /* THE WindowProxy THIS AGENT ALREADY HOLDS FOR `doc`, or JS_UNDEFINED when it holds none — the half of the
    door above that may not mint, for a caller that has a document NAME and nothing else to build one from (an
-   arriving identity's parent and opener slots). Owned on a hit. */
+   arriving identity's parent and opener slots). Owned on a hit.
+   "HOLDS" IS ABOUT THE NAVIGABLE AND NOT ABOUT ITS ACTIVE DOCUMENT, which is the one thing a caller must not
+   read past. §7.2.3 "The WindowProxy exotic object" makes the proxy the long-lived half of the pair, so a
+   navigable whose Document THIS TIMELINE has never materialized and one whose active document §7.5.10
+   "Destroying documents" has destroyed BOTH answer with the navigable: a realm is how an active document is
+   reached and never how a navigable is named. A caller that needs the active document asks
+   window_proxy_document_state or window_proxy_realm and may not infer it from a hit here — a hit says this
+   agent has the navigable and says nothing whatever about what that navigable is showing. */
 JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc);
 
 /* WHICH REALM OF THIS AGENT THE DOCUMENT NAMED `doc` IS, IN THE TIMELINE THAT IS ASKING — NULL when this
@@ -207,8 +214,12 @@ JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc);
  * runs and window_proxy_set_destroyed nulls the realm with it — and the fourth is a REMOTE navigable, whose Document is
  * a peer's and which this same table records, so the scan FINDS it and answers NULL. The retired sentence also
  * said a caller that merely needs to know "asks window_proxy_of_document, whose asserts separate the two", and
- * that entry ABORTS on the destroyed third rather than answering it, so it separates the two it was written
- * for and is silent about the one that costs a reader an investigation.
+ * the indictment that stood here — that the entry "ABORTS on the destroyed third rather than answering it" —
+ * IS DISCHARGED AND IS KEPT BECAUSE THE REASONING IS WHAT A READER RE-DERIVES: that entry ANSWERS now, for
+ * every state in which this agent holds a navigable at all, and the `realm != NULL` assert is gone with the
+ * one reading it offered. What moved is not the message but WHICH QUESTION the realm read was answering — a
+ * navigable is identified by §7.2.3's proxy and never by a realm — so the four states above are four answers
+ * to THIS lookup and are errors only at a caller that asked for an ACTIVE DOCUMENT.
  * ASK window_proxy_document_state FOR THE PARTITION. Only the NAVIGABLE can materialize the INITIAL case, so a
  * caller that needs it materialized holds the proxy and calls window_proxy_realm; the DESTROYED case has no
  * materialization at any time and its readable surface is §7.2.1's cross-origin list, answered from the record

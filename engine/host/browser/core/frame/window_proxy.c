@@ -1257,15 +1257,61 @@ JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc)
                "(world_doc_adopt), so the two statements were made in the wrong order, or a proxy that answered "
                "for this document has been collected while a peer still held a reference into it");
         if (JS_IsUndefined(held)) return JS_UNDEFINED;
+        /* THE NAVIGABLE OUTLIVES ITS DOCUMENT, SO A REALM IS NOT HOW A NAVIGABLE IS IDENTIFIED. HTML §7.2.3
+           "The WindowProxy exotic object" states that lifetime in its own opening sentences — "Each browsing
+           context has an associated WindowProxy object", and on a navigation "the Window object wrapped by the
+           browsing context's associated WindowProxy object is changed". So the proxy is the long-lived half of
+           the pair, the realm read reaches the ACTIVE DOCUMENT, and this entry hands out the NAVIGABLE: a
+           document with no active document in THIS timeline still has an answer here, and it is `held`.
+           A `DCHECK(realm != NULL, …)` STOOD HERE NAMING ONE CAUSE FOR A POPULATION OF TWO. It is recorded
+           rather than deleted because its reasoning is what a reader re-derives: it read
+           `before THIS TIMELINE materialized that document's realm`, and the OTHER state is a navigable whose
+           active document HTML §7.5.10 "Destroying documents" has destroyed — its step 8, "Set document's
+           browsing context to null", reaches window_proxy_set_destroyed, which nulls this record's realm while
+           the row stays in the table, since only the collector takes one out. So a timeline that ran
+           `window.close()` fired an abort about materialization ORDER, and the two readings take OPPOSITE work:
+           a reader obeying that message goes to materialize a Document for a browsing context that is null,
+           which proxy_realm refuses by name one screen up. The header has said so since
+           window_proxy_document_state landed, in the words
+           `ABORTS on the destroyed third rather than answering it`.
+           ITS FINAL CLAUSE WAS THE WHOLE JUSTIFICATION AND IT IS FALSE OF BOTH STATES, which is why the assert
+           GOES rather than gaining a partition. That clause read
+           `a reference into a Document this timeline never built cannot have been lent to it`, an argument
+           about the PEER path alone — and a realm is PER FLOW, so a sibling arm that DID materialize one is
+           exactly who lent the reference, after which this timeline holds the navigable and no realm with
+           nothing out of order anywhere. What stays readable of either state is HTML §7.2.1 "Security
+           infrastructure for Window, WindowProxy, and Location objects"' cross-origin list, answered FROM THE
+           RECORD — and the record is what `held` names. */
         realm = window_proxy_realm_of_document(doc);
-        DCHECK(realm != NULL,
-               "the WindowProxy of a document THIS AGENT HOSTS was asked for before THIS TIMELINE materialized "
-               "that document's realm. The navigable exists — the row above is it — and its initial about:blank "
-               "Document is materialized by the first read that reaches through it IN A GIVEN FLOW "
-               "(navigable.h), so a sibling arm having built one says nothing about this one. A peer can only "
-               "name a document it has a reference into, and a reference into a Document this timeline never "
-               "built cannot have been lent to it");
-        if (!realm) return JS_UNDEFINED;
+        if (realm == NULL) {
+#if APICLIENT_DEV
+            /* WHICH OF THE FIVE, ASKED OF THE ONE COMPONENT THAT PARTITIONS IT — two of them are the states
+               answered above, and the other three are refused by the two tests above, so every arm here is a
+               GUARD over a closed enumeration this codebase owns and names what MOVED rather than what to
+               build. The state is read fresh beside the realm because the pair is what a disagreement is in. */
+            switch (window_proxy_document_state(doc)) {
+            case WP_DOC_INITIAL:
+            case WP_DOC_DESTROYED:
+                break;                 /* the two states a hosted navigable legitimately has no realm in */
+            case WP_DOC_REMOTE:
+                DFAIL("the state scan called this navigable's active document a PEER's for a document "
+                      "`world_doc_hosted` answered TRUE for — both statements are about one `doc` under one "
+                      "applied delta, so the row's own `doc` and the world registry disagree");
+                break;
+            case WP_DOC_NO_NAVIGABLE:
+                DFAIL("the state scan found no navigable for a document the scan one screen up DID find one "
+                      "for — two walks of one table under one applied delta cannot disagree unless something "
+                      "between them moved the delta");
+                break;
+            case WP_DOC_ACTIVE:
+                DFAIL("the realm read answered NULL for a navigable whose own record says its active document "
+                      "IS materialized — both are bare field loads off one row under one applied delta, so "
+                      "they cannot disagree unless something between them moved the delta");
+                break;
+            }
+#endif
+            return JS_DupValue(ctx, held);
+        }
         DCHECK(JS_VALUE_GET_PTR(document_window_proxy(realm)) == JS_VALUE_GET_PTR(held),
                "the realm answering for this document and the navigable the scan found are not one navigable — "
                "§7.2.3 gives a navigable ONE WindowProxy and a realm IS a document (core/dom/document.h), so "
@@ -1286,8 +1332,34 @@ JSValue window_proxy_for_document(JSContext *ctx, uint32_t doc, const Origin *or
     if (!JS_IsUndefined(held)) return held;
     DCHECK(!world_doc_hosted(doc),
            "a REMOTE WindowProxy was about to be minted for a document whose realm this agent holds — the "
-           "lookup above answers for every hosted document, so reaching here means it could not, and minting "
-           "would give one navigable a second proxy that resolves nothing");
+           "lookup above answers for every hosted document THIS AGENT HOLDS A NAVIGABLE FOR, whatever state "
+           "that navigable's active document is in, so reaching here means it holds NONE: hosting is decided "
+           "by §7.4 before any navigable is minted (world_doc_adopt), and minting would give one navigable a "
+           "second proxy that resolves nothing");
+    /* AND THE REFUSAL IS A GUARD AND NOT ONLY AN ASSERT, because `!world_doc_hosted(doc)` is the MINT'S OWN
+       PRECONDITION rather than a choice made here — window_proxy_new_remote asserts it and remote_nav_record
+       asserts it again — and all three are compiled out of the build that ships, so the dev abort fires first
+       and NO GATE IN THIS TREE CAN EXERCISE what release does next. What it does is `live_nav_record` a SECOND
+       row for `doc`, which makes live_nav_of_document's at-most-one-row invariant false, and hand the next scan
+       a record whose `window` is undefined and whose origin is a peer's — so a same-origin read of this
+       agent's own navigable answers CROSS-ORIGIN and §7.2.1's filter is applied against the wrong principal.
+       Propagating the absence is the one arm that leaves no such state behind, and it is already in the
+       contract the arriving-identity caller reads against (core/frame/remote_object.h: a navigable, remote or
+       local, "or JS_UNDEFINED").
+       NAMED RESIDUAL — WHAT IS NOT COVERED: the absence this propagates is a REFUSAL and not the answer §7.2.3
+       gives. A document this agent hosts and holds no navigable for has a WindowProxy in the standard and none
+       here, so a routed delivery gets no `source` and an arriving identity's parent or opener slot falls to its
+       `none` — which §7.2.2.4 "Accessing related windows" reads as a TOP-LEVEL navigable, so a cross-origin
+       child presents as top-level rather than as unknown. WHAT THE NEXT DIFF BUILDS: a LOCAL navigable
+       rebuildable from an arriving identity. window_proxy_new_self takes an opener policy and a §7.1.5
+       sandboxing flag set that no document NAME carries and that remote_object.c's record does not cross for a
+       HOSTED document, so the diff is those two fields on that record — or the remote reference holding the
+       borrowed live-navigable row alive, which is the other end of the same lifetime and is why this state
+       exists at all (the row is dropped by proxy_finalizer while a peer still names it). HOW ITS ABSENCE WOULD
+       SHOW: in dev, an abort at the hosted-no-navigable assert above on an instance whose peer held a reference
+       across a collection; in release, a delivered message whose `source` is undefined, or a navigable whose
+       `parent` answers itself while an element in another document presents it. */
+    if (world_doc_hosted(doc)) return JS_UNDEFINED;
     obj = window_proxy_new_remote(ctx, doc, origin, name, parent, opener);
     if (JS_IsException(obj)) return obj;
     remote_nav_record(obj, doc);
