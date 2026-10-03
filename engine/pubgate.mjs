@@ -62,6 +62,28 @@ const remote = arg('--remote', 'origin');
 const branch = arg('--branch', 'main');
 const right = arg('--head', 'HEAD');
 const cut = arg('--cut', null);
+/* AND THE COUNT THE CALLER BELIEVES IT IS PUBLISHING, WHICH IS AN INPUT AND NOT A LINE IN A TRANSCRIPT.
+ * MEASURED, by the author of this gate, one hour after landing it: a push was gated with
+ * `node engine/pubgate.mjs --cut <sha> > /dev/null 2>&1; echo $?`. The exit status was 0 and correct -- the
+ * cut split no pair -- and it published FOUR commits of which ONE had been read. Three were peers': two from
+ * one lane that are a CORRECTING PAIR, and one from a lane that had not reported. The pair went out WHOLE
+ * because the cut happened to sit above both, which is luck, and luck is what a gate exists to stop being
+ * load-bearing: a cut one commit lower would have published a citation that lane had already withdrawn, which
+ * is the exact hazard its own report named.
+ * THE EXIT STATUS WAS NEVER THE THING THAT FAILED. It answers the PAIR RULE. The quantity that was ignored is
+ * the DENOMINATOR -- `publishes N of M` -- and it was ignored by a redirection, which is the one way a reader
+ * can obey every instruction about gating a push on a status and still not know what the push publishes.
+ * CLAUDE.md's backstop is arithmetic (compare the inspection's count against what the push reports moving) and
+ * it is unrunnable when the inspection's count went to /dev/null. So the count becomes an ARGUMENT: a caller
+ * states how many commits it believes the cut publishes, and this refuses when it disagrees. Discarding the
+ * output can no longer hide the number, because the number had to be written down to get a verdict at all.
+ * IT IS REQUIRED WITH `--cut` AND REFUSED WITHOUT IT, which is the difference between a rule and a habit --
+ * CLAUDE.md measured that an author who has just written a publication rule breaks it under ordinary time
+ * pressure, so the mechanical form is the only one that survives being in a hurry. The EXPLORATORY read is
+ * this gate with NO `--cut`: it prints the whole chain, every proven edge and every allowed cut, and judges
+ * nothing. RETIREMENT: this goes when a push in this tree cannot be issued except by something that reads this
+ * gate's range itself, because the count is then never a human's to transcribe. */
+const expect = arg('--expect', null);
 
 /* The fetch and the range read are ONE process. Nothing between them is a command a reader has to remember. */
 git(['fetch', remote, branch]);
@@ -192,6 +214,16 @@ if (cut === null) {
   process.exit(0);
 }
 
+if (expect === null) {
+  console.log('REFUSED: --cut was given without --expect <n>.');
+  console.log('  A cut is a decision about HOW MANY commits go out, and this gate will not hand a push an exit');
+  console.log('  status for one unless the caller states that number. The chain and every allowed cut are');
+  console.log('  printed above: read the `publishes N of M` you intend and pass it back as --expect N.');
+  console.log('  WHY IT IS REQUIRED: a push gated with `pubgate --cut <sha> > /dev/null; echo $?` published FOUR');
+  console.log('  commits of which one had been read, and the status was 0 and correct the whole time. The number');
+  console.log('  is the part a redirection hides, so the number is an input.');
+  process.exit(2);
+}
 const cutSha = git(['rev-parse', cut]).trim();
 if (!index.has(cutSha)) {
   console.log(`REFUSED: --cut ${cut} (${cutSha.slice(0, 7)}) is not in this range.`);
@@ -208,6 +240,20 @@ if (spanning.length > 0) {
   }
   process.exit(1);
 }
-console.log(`VERDICT: ALLOWED BY THE PAIR RULE — a cut at [${ci}] ${cutSha.slice(0, 7)} publishes ${ci + 1} of ${commits.length} commit(s)`);
-console.log('  and splits no proven correcting pair. It says NOTHING about report state — see above.');
+/* THE COUNT IS CHECKED BEFORE THE PAIR VERDICT IS PRINTED, because a caller that disagrees with this gate
+ * about what it is publishing has not made a smaller decision -- it has made a decision about a different
+ * range, and an ALLOWED line above a wrong number is the reassuring transcript CLAUDE.md names. */
+const n = ci + 1;
+if (String(expect).trim() !== String(n)) {
+  console.log(`VERDICT: REFUSED — you passed --expect ${JSON.stringify(expect)} and a cut at [${ci}] ` +
+              `${cutSha.slice(0, 7)} publishes ${n} of ${commits.length} commit(s).`);
+  console.log('  This is not a smaller publication than you asked for, it is a DIFFERENT one: the commits');
+  console.log('  between them are peers\' and you have not read them. The chain is printed above, oldest first.');
+  console.log('  If the extra commits are ones you mean to publish, pass --expect ' + n + ' and say so in your');
+  console.log('  report; if they are not, cut lower and check the pair rule again at that cut.');
+  process.exit(1);
+}
+console.log(`VERDICT: ALLOWED BY THE PAIR RULE — a cut at [${ci}] ${cutSha.slice(0, 7)} publishes ${n} of ${commits.length} commit(s)`);
+console.log(`  which is the --expect ${n} you stated, and splits no proven correcting pair. It says NOTHING`);
+console.log('  about report state — see above.');
 process.exit(0);
