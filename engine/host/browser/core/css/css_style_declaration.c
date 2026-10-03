@@ -3026,75 +3026,76 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
        absence read as a modelled property rather than as an unmodelled one. */
     { "pointer-events", "auto" },
     /* css-lists-3 §3.4 "Text-based Markers: the list-style-type property", whose `Initial:` line is `disc`,
-       and css-lists-3 §3.3 "Image Markers: the list-style-image property", whose `Initial:` line is `none`.
-       BOTH LINES WERE READ OFF THE FETCHED EDITOR'S DRAFT AND NOT OFF A CORPUS, and that is a fact about the
-       citation rather than about the property: engine/specindex carries no css-lists-3 row, so every citation
-       to that standard in this tree is counted and judged by nothing. The two numbers and the two titles above
-       are from `curl drafts.csswg.org/css-lists-3/`, whose own heading list carries both, and either is one
-       command from being re-checked.
-       THE ROWS ARE WHAT MAKE EITHER PROPERTY ANSWERABLE AT ALL, which is `pointer-events`' argument one line
+       css-lists-3 §3.3 "Image Markers: the list-style-image property", whose `Initial:` line is `none`, and
+       css-lists-3 §3.5 "Positioning Markers: The list-style-position property", whose `Initial:` line is
+       `outside`.
+       ALL THREE LINES WERE READ OFF THE FETCHED EDITOR'S DRAFT AND NOT OFF A CORPUS, and that is a fact about
+       the citation rather than about the properties: engine/specindex carries no css-lists-3 row, so every
+       citation to that standard in this tree is counted and judged by nothing. The three numbers and the three
+       titles above are from `curl drafts.csswg.org/css-lists-3/`, whose own heading list carries all of them,
+       and any is one command from being re-checked.
+       THE ROWS ARE WHAT MAKE EACH PROPERTY ANSWERABLE AT ALL, which is `pointer-events`' argument one line
        up word for word. Lexbor's registry carries NO `list-style` anything — the derivation rather than a
        count, because the vendored parser moves: `grep -rniE 'list.style' engine/lexbor/source/lexbor/css/`
        exits 1 with no output, against a `z.index` control over the same path that exits 0 and prints — so
        with no row here css-cascade-5 §7.1 "Initial Values" has no initial value to fall to and the cascade
        answers NULL for every element that does not declare one, which is every element on almost every page.
-       BOTH `Inherited:` LINES ARE `yes` AND core/css/css_defaulting.c ALREADY CARRIES BOTH NAMES, so neither
-       needs a companion row there the way `justify-items` did: css-cascade-5 §7.2 "Inheritance" answers the
+       ALL THREE `Inherited:` LINES ARE `yes` AND core/css/css_defaulting.c ALREADY CARRIES ALL THREE NAMES, so
+       none needs a companion row there the way `justify-items` did: css-cascade-5 §7.2 "Inheritance" answers the
        ROOT with the initial value, so without these rows the inherited chain had no base case either and
        answered NULL from the root down.
-       THEY ARRIVE AS A PAIR BECAUSE css-lists-3 §3.2 "Generating Marker Contents" IS AN ORDERED LIST AND THE
-       IMAGE ARM RUNS FIRST. §3.2 states its own structure — "The contents of a marker box are determined by
-       the first of these conditions that is true" — and the two conditions that read the ORIGINATING ELEMENT
+       THE FIRST TWO ARRIVED AS A PAIR BECAUSE css-lists-3 §3.2 "Generating Marker Contents" IS AN ORDERED LIST
+       AND THE IMAGE ARM RUNS FIRST. §3.2 states its own structure — "The contents of a marker box are determined
+       by the first of these conditions that is true" — and the two conditions that read the ORIGINATING ELEMENT
        are "list-style-image on the originating element defines a marker image" AHEAD OF "list-style-type on
        the originating element defines a marker string". So the type alone cannot answer §3.2: it would make
        true an arm that is only reached once the one above it is false, which is the enumeration error of
        building to a list of inputs without asking which step first sees them.
-       `list-style-position` IS DELIBERATELY ABSENT AND IS NOT A THIRD MEMBER OF THIS PAIR. §3.2 reads it in
-       no arm, so a row for it would be an initial value nothing asks for; css-lists-3 §3.5 "Positioning
-       Markers: The list-style-position property" is a positioning scheme core/layout/box_tree.h records this
-       engine as having no component for, and §3.5's own text calls it "handwavey nonsense from CSS2". It
-       arrives with css-lists-3 §3.6 "Styling Markers: the list-style shorthand property", which is the next
-       landing and which cannot expand without it.
-       NAMED RESIDUAL — THESE TWO ARE A VALUE A PAGE READS AND NOT YET A COMPUTED VALUE A C ALGORITHM MAY ASK
+       `list-style-position` ARRIVED WITH §3.6 AND THE CLAUSE THAT PREDICTED THAT IS WHY IT IS RECORDED HERE
+       RATHER THAN DELETED — in its own words, unquoted because a run of this tree's prose is not a spec
+       quotation: the property IS DELIBERATELY ABSENT AND IS NOT A THIRD MEMBER OF THIS PAIR, because §3.2 reads
+       it in no arm, so a row for it would be an initial value nothing asks for; and it arrives with
+       css-lists-3 §3.6 "Styling Markers: the list-style shorthand property", which is the next landing and
+       which cannot expand without it. BOTH HALVES HELD. §3.6's `Value:` line is
+       `<'list-style-position'> || <'list-style-image'> || <'list-style-type'>`, so the shorthand sets this
+       longhand and CSS Cascade's shorthand rule resets it to this very line whenever §3.6's grammar leaves the
+       term out — which is the reader the clause said did not exist yet. What is still true is the other half:
+       §3.2 reads this property in no arm, and css-lists-3 §3.5's `outside` is a positioning scheme
+       core/layout/box_tree.h records this engine as having no component for, with css-lists-3 §3.5
+       "Positioning Markers: The list-style-position property" calling it in its own text
+       "This is handwavey nonsense from CSS2, and needs a real definition."
+       NAMED RESIDUAL — THESE THREE ARE A VALUE A PAGE READS AND NOT YET A COMPUTED VALUE A C ALGORITHM MAY ASK
        FOR. The code is correct for what it does: §7.1 now has an initial value, §7.2 now has a base case,
-       CSSOM §2's supported set now carries both names (cssd_own_init walks this table), and §6.6.1 installs
-       `listStyleType` and `listStyleImage` as IDL attributes whose read goes through
-       core/css/css_computed_value.c's `css_cv_specified`.
+       CSSOM §2's supported set now carries all three names (cssd_own_init walks this table), §6.6.1 installs
+       `listStyleType`, `listStyleImage` and `listStylePosition` as IDL attributes whose read goes through
+       core/css/css_computed_value.c's `css_cv_specified`, and core/css/css_shorthand.c now owns §3.6's
+       expansion and all three `Value:` lines — so a declared value has been through its own grammar and is
+       canonicalized, and both spellings of one declaration agree.
          WHAT IS NOT COVERED: `css_computed_value` — the entry a C spec algorithm asks, and the only one — goes
-         on crashing for both names at `css_cv_modelled`. Not for want of a `Computed value:` line: §3.4's is
-         `specified value` and would be one row of that file's as-specified arm. It is the SECOND assert there,
-         `css_shorthand_complete_for`, which must answer FALSE while css-lists-3 §3.6's `list-style` has no row
-         in core/css/css_shorthand.c — that shorthand sets both of these longhands, nothing expands it, and
-         recording completeness over it would assert exactly the falsehood that predicate exists to catch.
-         WHAT THE NEXT DIFF BUILDS: §3.6's row. It is a KIND OF ITS OWN and not a CSS_SH_ALL_OF, because §3.6
-         states a disambiguation no `||` rule has — "a value of none in the shorthand must be applied to
-         whichever of the two properties aren't otherwise set by the shorthand", with `list-style: none`
-         setting BOTH — and `none` is a member of both longhands' value sets, which is the one arrangement
-         CSS_SH_ALL_OF's word-to-term assignment cannot decide. It carries `list-style-position`'s `outside`
-         with it, plus a grammar apiece in `css_shorthand_validates_longhand`. Only then are the
-         `css_computed_models` row and the `css_shorthand_complete_for` row true, and only then can
-         core/layout/box_tree.c ask §3.2.
-         HOW ITS ABSENCE WOULD SHOW: a page reads back TWO SPELLINGS OF ONE DECLARATION and gets two answers —
-         `list-style-type: none` is honoured, and the `list-style: none` that every reset stylesheet writes
-         instead reports `disc`, because the shorthand reaches the cascade as a declaration nothing takes
-         apart. It is observed at the PAIR and never at one member, since either answer alone is a value a
-         browser also gives.
-       A SECOND NARROWNESS, AND IT IS A DIFFERENT CLAUSE BECAUSE ITS NEXT DIFF IS THE SAME ONE: A DECLARED
-       VALUE IS STORED AS THE AUTHOR'S OWN BYTES. `css_shorthand_validates_longhand` answers FALSE for both
-       names, so `cssd_decls_add` collects the raw tokens {D} nothing validated them against {S}3.4's
-       `<counter-style> | <string> | none` or {S}3.3's `<image> | none`, and nothing lower-cased them. This
-       is `pointer-events`' state above and not a shape invented here, and it is the UNDECLARED half of
-       both properties that these rows close.
-         WHAT IS NOT COVERED: an out-of-grammar declaration is KEPT where CSS Syntax drops it, and a
-         declaration spelled in any other case is reported back in that case.
-         WHAT THE NEXT DIFF BUILDS: the same {S}3.6 row above, because its expansion routes each component
-         through `css_shorthand_longhand_value` and therefore needs all three longhand grammars anyway {D}
-         which is why this is one landing with the clause above it rather than a second.
-         HOW ITS ABSENCE WOULD SHOW: a page sets a marker type in upper case and reads it back in upper
-         case, where a browser answers the canonical keyword; and a value no grammar admits survives the
-         round trip instead of leaving the block empty. Both are read at `getComputedStyle`, and both are
-         about the WRITE path rather than about the default these rows supply. */
-    { "list-style-type", "disc" }, { "list-style-image", "none" },
+         on crashing for all three names at `css_cv_modelled`'s FIRST assert. Its SECOND,
+         `css_shorthand_complete_for`, now answers TRUE for them, which is what §3.6's row bought.
+         WHAT THE NEXT DIFF BUILDS: a `css_computed_models` row apiece in core/css/css_computed_value.c, and
+         the three are NOT one row's worth of work. css-lists-3 §3.4's `Computed value:` line is
+         `specified value` and is one row of that file's as-specified arm; css-lists-3 §3.5's is
+         "keyword, but see prose" and its prose is the positioning scheme above, so a row for it would answer a
+         keyword whose two arms nothing distinguishes; and css-lists-3 §3.3's is
+         "the keyword none or the computed <image>", which is NOT as-specified — a computed
+         `<image>` has its `<url>` resolved against css-values-4 §4.5.1 "Relative URLs", which that file's text
+         arm does not do. Verify each line against the fetched draft rather than taking it from here.
+         HOW ITS ABSENCE WOULD SHOW: core/layout/box_tree.c's `bt_require_marker_box_is_spellable` goes on
+         refusing EVERY list item rather than only the ones css-lists-3 §3.2 gives a marker box, because the
+         narrowing it names reads these properties through `css_computed_value` and that entry crashes.
+       A SECOND NARROWNESS THAT WAS RECORDED HERE IS RETIRED, AND THE RETIRED WORDING IS KEPT BECAUSE A READER
+       WHO FINDS A RAW DECLARED VALUE IN THE CASCADE WILL RE-DERIVE IT — in its own words, unquoted because a
+       run of this tree's prose is not a spec quotation: A DECLARED VALUE IS STORED AS THE AUTHOR'S OWN BYTES,
+       because `css_shorthand_validates_longhand` answered FALSE for both names, so an out-of-grammar
+       declaration is KEPT where CSS Syntax drops it and a declaration spelled in any other case is reported
+       back in that case. That predicate now answers TRUE for all three and
+       core/css/css_shorthand.c owns the three grammars, so a `list-style-type: BOGUS!` is dropped and a
+       `list-style-type: UPPER-ROMAN` reads back `upper-roman` — css-counter-styles-3 §3 "Defining Custom
+       Counter Styles: the @counter-style rule"' own rule, which lower-cases the names that specification
+       defines and leaves an author's own name case-sensitive. */
+    { "list-style-type", "disc" }, { "list-style-image", "none" }, { "list-style-position", "outside" },
 };
 
 /* THE UNREGISTERED-INITIAL TABLE'S OWN INVARIANT, asserted once per instance beside the UA stylesheet's and

@@ -89,15 +89,30 @@
  *     in core/css/css_style_declaration.c already computes for every `li` — so a marker is reachable with no
  *     author declaration anywhere, and WHOSE gap that is belongs to core/layout/box_tree.h's residual and is
  *     read there rather than restated here. THIS component's answer is a different one, and it rests on a
- *     SECOND unparsed property rather than on a judgement made here: css-lists-3 §3.5 "Positioning
- *     Markers: The list-style-position property" puts the marker on the line only at `inside` ("The ::marker
- *     is an inline element at the start of the list item's contents"), its initial value is `outside`, and
- *     `LXB_CSS_PROPERTY_LIST_STYLE_POSITION` is absent from that same lexbor header against the same armed
- *     control — so `inside` is unreachable. At `outside` §3.5 states no answer to hold this component to: the
- *     marker box "may affect the height of the principal block box and/or the height of its first line box,
- *     and in some cases may cause the creation of a new line box; this interaction is also not defined."
- *   So this component owes the marker NOTHING TODAY, and that is derived rather than assumed: the first thing
- *   that would change it is `list-style-position` parsing, never `content`.
+ *     SECOND property, and the REASON HAS CHANGED under it — which is recorded rather than rewritten away
+ *     because the retired reasoning is sound about lexbor and a reader will re-derive it. It read that
+ *     `LXB_CSS_PROPERTY_LIST_STYLE_POSITION` "is absent from that same lexbor header against the same armed
+ *     control — so `inside` is unreachable", and the lexbor half is still true and no longer decides anything:
+ *     a property that registry does not carry reaches the cascade as a `__CUSTOM` holding its RAW TOKENS, so
+ *     whether it parses depends on whether THIS engine owns its grammar, and core/css/css_shorthand.c now owns
+ *     css-lists-3 §3.5 "Positioning Markers: The list-style-position property"' `inside | outside` along with
+ *     §3.6 "Styling Markers: the list-style shorthand property"' shorthand. The `content` half of the same
+ *     sentence is NOT retired with it, because css-content-3 §1's property has no grammar in this engine
+ *     either — the argument above is the DERIVATION and the conclusion it reached for this one property is what
+ *     went stale.
+ *   SO THIS COMPONENT OWES THE MARKER NOTHING TODAY FOR A DIFFERENT AND NARROWER REASON: §3.5 puts the marker
+ *   on the line only at `inside` ("The ::marker is an inline element at the start of the list item’s
+ *   contents"), and THERE IS NO MARKER BOX TO PUT THERE AT ANY VALUE — core/layout/box_tree.c's
+ *   `bt_require_marker_box_is_spellable` refuses to state the child sequence of a list item at all, because
+ *   css-lists-3 §3.1 "The ::marker Pseudo-Element" makes that box the sequence's first member and the sequence
+ *   cannot name it. In release, where the refusal compiles out, the sequence answers the item's first
+ *   SOURCE-DOCUMENT child, so a marker reaches no walk and no line either way. At `outside` §3.5 additionally
+ *   states no answer to hold this component to: the marker box "may affect the height of the principal block
+ *   box and/or the height of its first line box, and in some cases may cause the creation of a new line box;
+ *   this interaction is also not defined."
+ *   THE FIRST THING THAT WOULD CHANGE IT IS THEREFORE THAT SEQUENCE GAINING THE MARKER as a member it can
+ *   yield, which core/layout/box_tree.h states the ordering of — never `content`, and no longer
+ *   `list-style-position` parsing, which has happened.
  *
  * NOTHING IS STORED, for core/layout/used_value.h's reason: a layout is per-flow state, so a cached line box
  * is shared state solver/dom_cow.h does not swap and a stale one is another flow's geometry. Every answer is

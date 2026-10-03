@@ -63,6 +63,34 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value);
    may be immediately preceded by - or + to indicate the number's sign"), which the filter admits too. */
 bool css_shorthand_number(const char *w, size_t n, double *out);
 
+/* THE COMPONENT VALUES of `v`, written into `w`/`len` as spans inside it. `max` is the grammar's own
+   multiplier, so a value carrying more components than the grammar admits is INVALID rather than truncated —
+   reported as -1, which every caller turns into the dropped declaration.
+   IT IS CSS Syntax §4 "Tokenization"'s SPLIT AND NOT A SPLIT ON WHITESPACE, which is three sentences and not a
+   nicety. A FUNCTION is one component value however many spaces its arguments carry, so `border: 1px solid
+   rgb(1, 2, 3)` is THREE and a whitespace split reports five and drops it as over-long. A `<string>` is one
+   however many spaces are INSIDE it (css-values-4 §4.4 "Quoted Strings: the <string> type": "they are
+   delimited by double quotes or single quotes, and correspond to the <string-token> production"), so
+   `list-style-type: "Note: "` is ONE and a whitespace split reports two. And a quote is only a delimiter when
+   it is not ESCAPED — §4.4: "Double quotes cannot occur inside double quotes, unless escaped".
+   EXPORTED for the reason §5.3's `<number>` above is: css-counter-styles-3 §4 "Defining Anonymous Counter
+   Styles: the symbols() function"' `[ <string> | <image> ]+` is a component-value list inside ONE component
+   value, so the consumer that owns that production asks here rather than writing a second split that would
+   disagree about `symbols("a b" url(x.png))`. */
+int css_shorthand_components(const char *v, const char **w, size_t *len, int max);
+
+/* css-values-4 §4.4 "Quoted Strings: the <string> type"'s PRODUCTION over one component value's span — the
+   `<string-token>` §4.4 defers to CSS Syntax for, asked as a validity test because the specified value is the
+   author's own bytes (core/css/css_image.h states that argument for an `<image>` and §4.4's is the same one:
+   a string's quotes are part of how CSSOM serializes it back, so choosing between them here would be this
+   engine inventing a spelling).
+   FALSE FOR A `<bad-string-token>`, which is the one arm a reader is likeliest to leave out. CSS Syntax §4.3.5
+   "Consume a string token" ends a string at a NEWLINE with that token rather than with a string, and §4.4
+   states the author-facing half — "It is possible to break strings over several lines ... but in such a case
+   the newline itself has to be escaped with a backslash" — so a span carrying an unescaped newline, or whose
+   closing quote is consumed by the escape in front of it, is a declaration CSS Syntax drops. */
+bool css_shorthand_string(const char *w, size_t n);
+
 /* Is the set of shorthands that can set `longhand` recorded here IN FULL, AND does the expansion above answer
    for every one of them? A consumer that derives a longhand's COMPUTED value asserts this before it trusts the
    cascade, because the failure mode of an unrecorded shorthand is silence: `margin: 0` would leave

@@ -101,11 +101,19 @@
  * nor core/css/css_style_declaration.c's unregistered-initial table, so css-cascade-5 §7.1 'Initial
  * Values' has no initial value to fall to and it answers NULL for every element" — and the table half is
  * retired: it carries §3.4's `disc` and css-lists-3 §3.3 "Image Markers: the list-style-image property"'s
- * `none`, which is §3.2's image arm as well as its type arm, so both now default and inherit. WHAT A
- * COMPUTED VALUE STILL WAITS ON IS css-lists-3 §3.6 "Styling Markers: the list-style shorthand property":
- * `css_computed_value` asserts `css_shorthand_complete_for` first, and `list-style` sets both longhands and
- * has no row in core/css/css_shorthand.c, so recording completeness would make a `list-style: none` page
- * read as `disc`. Read `bt_require_marker_box_is_spellable` for the ordering. §3.2's arms then
+ * `none`, which is §3.2's image arm as well as its type arm, so both now default and inherit. THE CLAUSE THAT
+ * STOOD HERE NAMED css-lists-3 §3.6 "Styling Markers: the list-style shorthand property" AS WHAT A COMPUTED
+ * VALUE WAITS ON, AND IT IS RETIRED BY THAT ROW LANDING — kept in its own words because a reader who re-derives
+ * the ordering will write it again: "`css_computed_value` asserts `css_shorthand_complete_for` first, and
+ * `list-style` sets both longhands and has no row in core/css/css_shorthand.c, so recording completeness would
+ * make a `list-style: none` page read as `disc`." §3.6's row EXISTS, with its own kind, its own grammar for each
+ * of the three longhands and §3.6's four worked examples of the `none` distribution asserted at
+ * `css_shorthand_init`, so that predicate now answers TRUE for all three names.
+ * THE CLAUSE WAS ALSO WRONG ABOUT WHICH ASSERT, WHICH IS THE PART WORTH KEEPING RATHER THAN THE COORDINATE: the
+ * predicate it named is `css_cv_modelled`'s SECOND and `css_computed_models` is its FIRST, so a reader who built
+ * only the thing it named would have met a crash one line earlier than the clause predicted. WHAT A COMPUTED
+ * VALUE NOW WAITS ON IS THAT FIRST ONE — a `Computed value:` row apiece in core/css/css_computed_value.c, which
+ * is THREE different amounts of work rather than one, stated at that table's own residual. §3.2's arms then
  * reach css-counter-styles-3 §6.3 "Symbolic: disc, circle, square, disclosure-open, disclosure-closed" for the
  * symbol a `disc` marker is filled with, and any NUMERIC style additionally needs css-lists-3 §4.6 "The
  * Implicit list-item Counter" — which is why that arm is a crash of its own and not part of the same landing.

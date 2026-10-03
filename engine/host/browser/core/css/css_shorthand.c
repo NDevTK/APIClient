@@ -9,7 +9,9 @@
 #include "core/css/css_background_shorthand.h"
 #include "core/css/css_color.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_counter_style.h"
 #include "core/css/css_font_shorthand.h"
+#include "core/css/css_image.h"
 #include "core/css/css_length.h"
 #include "core/css/css_pending_substitution.h"
 #include "core/css/css_shorthand.h"
@@ -45,16 +47,23 @@ static bool css_word_is(const char *w, size_t n, const char *kw)
     return kw[n] == '\0';
 }
 
-/* THE COMPONENT VALUES of a shorthand's value. `max` is the grammar's own multiplier, so a value carrying more
-   components than the grammar admits is INVALID rather than truncated — reported as -1, which every caller
-   turns into the dropped declaration.
-   A FUNCTION IS ONE COMPONENT VALUE however many spaces its arguments carry, which is CSS Syntax §4's function
-   token and not a nicety: `border: 1px solid rgb(1, 2, 3)` is THREE components, and a split on whitespace
-   alone reports five and drops the declaration as over-long. So the depth is counted. */
-static int css_words(const char *v, const char **w, size_t *len, int max)
+/* CSS Syntax §4 "Tokenization"'s COMPONENT VALUES of a shorthand's value — see css_shorthand.h for the
+   contract, for the three sentences the split is made of and for why it is exported.
+   THE STRING ARM USED TO BE ABSENT AND THE OMISSION WAS LATENT RATHER THAN HARMLESS, which is recorded here
+   because a reader who sees only the depth counter will re-derive the old comment's claim that a function token
+   is the whole of §4's difference from a whitespace split. No property this file validated admitted a
+   `<string>` until css-lists-3 §3.4 "Text-based Markers: the list-style-type property" did, so a split string
+   could not be observed: `margin: "a b"` reported two components and was dropped, and one component carrying
+   `"a b"` is refused by `sh_length_component` and is dropped too. §3.4's `<string>` arm is the first value for
+   which the two answers differ — `list-style-type: "Note: "` is ONE component value and reported as two is a
+   declaration this engine drops and a browser honours. */
+int css_shorthand_components(const char *v, const char **w, size_t *len, int max)
 {
     int n = 0;
 
+    DCHECK(v != NULL && w != NULL && len != NULL && max > 0,
+           "CSS Syntax §4's component-value split was asked for with no value, nowhere to write the spans, or "
+           "no room at all — `max` is the grammar's own multiplier and a grammar admits at least one component");
     while (*v) {
         const char *s;
         int depth = 0;
@@ -63,6 +72,17 @@ static int css_words(const char *v, const char **w, size_t *len, int max)
         if (!*v) break;
         s = v;
         while (*v && (depth > 0 || !isspace((unsigned char)*v))) {
+            /* §4.3.5 "Consume a string token": the delimiter is whatever quote opened it, an escape consumes
+               the code point after it, and an UNTERMINATED string runs to the end of the value — which makes
+               it one component value that `css_shorthand_string` then refuses, so the declaration is dropped
+               exactly as §4.3.5's `<bad-string-token>` requires rather than being split into two. */
+            if (*v == '"' || *v == '\'') {
+                char q = *v++;
+
+                while (*v && *v != q) v += (*v == '\\' && v[1] != '\0') ? 2 : 1;
+                if (*v == q) v++;
+                continue;
+            }
             if (*v == '(') depth++;
             else if (*v == ')' && depth > 0) depth--;
             v++;
@@ -73,6 +93,35 @@ static int css_words(const char *v, const char **w, size_t *len, int max)
         n++;
     }
     return n;
+}
+
+bool css_shorthand_string(const char *w, size_t n)
+{
+    char q;
+    size_t i;
+
+    DCHECK(w != NULL,
+           "css-values-4 §4.4's `<string>` production was asked about a NULL span — a component value is a span "
+           "inside the declaration it was split out of, and an absent pointer is a caller that lost it");
+    if (n < 2) return false;
+    q = w[0];
+    if (q != '"' && q != '\'') return false;
+    if (w[n - 1] != q) return false;
+    for (i = 1; i + 1 < n; i++) {
+        if (w[i] == '\\') {
+            /* THE CLOSING QUOTE IS NOT THE END WHERE AN ESCAPE REACHES IT: a span of `"a\"` is §4.3.5's
+               `<bad-string-token>`, because the escape consumes the quote and the string never closes. */
+            if (i + 2 >= n) return false;
+            i++;
+            continue;
+        }
+        /* §4.4: "Double quotes cannot occur inside double quotes, unless escaped ... Analogously for single
+           quotes", and §4.3.5 ends a string at a newline with a `<bad-string-token>`. §3.3 "Preprocessing the
+           input stream" is why all three spellings of a newline are refused and not only U+000A: it folds CR,
+           FF and CRLF to one LF, so each of them IS a newline wherever a declaration's raw bytes are read. */
+        if (w[i] == q || w[i] == '\n' || w[i] == '\r' || w[i] == '\f') return false;
+    }
+    return true;
 }
 
 #define CSS_SH_N(a) (sizeof(a) / sizeof((a)[0]))
@@ -556,7 +605,7 @@ static char *text_align_component(const char *value, int term)
     const char *w[1], *kw;
     size_t wl[1];
 
-    if (css_words(value, w, wl, 1) != 1) return NULL;
+    if (css_shorthand_components(value, w, wl, 1) != 1) return NULL;
     if (css_word_is(w[0], wl[0], "justify-all")) return css_sh_strdup("justify");
     kw = css_sh_keyword(TEXT_ALIGN_KEYWORDS, CSS_SH_N(TEXT_ALIGN_KEYWORDS), w[0], wl[0]);
     if (kw == NULL) return NULL;
@@ -598,7 +647,7 @@ static char *vertical_align_component(const char *value, int part)
     size_t wl[3], flen[3] = { 0, 0, 0 };
     int n, i;
 
-    n = css_words(value, w, wl, 3);
+    n = css_shorthand_components(value, w, wl, 3);
     if (n < 1) return NULL;
     for (i = 0; i < n; i++) {
         const char *c;
@@ -661,7 +710,7 @@ static char *border_triple_component(const char *value, int part)
     size_t wl[3], flen[3] = { 0, 0, 0 };
     int n, i;
 
-    n = css_words(value, w, wl, 3);
+    n = css_shorthand_components(value, w, wl, 3);
     if (n < 1) return NULL;
     for (i = 0; i < n; i++) {
         int term = border_term_of(w[i], wl[i]);
@@ -717,7 +766,7 @@ static char *border_four_side_component(const char *value, int side, CssBorderPa
 {
     const char *w[4], *kw;
     size_t wl[4];
-    int n = css_words(value, w, wl, 4), i, comp;
+    int n = css_shorthand_components(value, w, wl, 4), i, comp;
 
     if (n < 1) return NULL;
     for (i = 0; i < n; i++)
@@ -751,7 +800,7 @@ static char *flex_flow_component(const char *value, const char *longhand)
 {
     const char *w[3], *dir = NULL, *wrap = NULL;
     size_t wl[3];
-    int n = css_words(value, w, wl, 3), i;
+    int n = css_shorthand_components(value, w, wl, 3), i;
 
     if (n < 1 || n > 2) return NULL;
     for (i = 0; i < n; i++) {
@@ -882,7 +931,7 @@ static bool flex_triple(const char *value, CssShSpan out[3])
 {
     const char *w[3];
     size_t wl[3];
-    int n = css_words(value, w, wl, 3);
+    int n = css_shorthand_components(value, w, wl, 3);
     unsigned i;
 
     for (i = 0; i < CSS_SH_N(FLEX_OMITTED); i++)
@@ -919,7 +968,7 @@ static bool flex_triple(const char *value, CssShSpan out[3])
         }
         return false;
     default:
-        DCHECK(n == 3, "css_words answered a component count outside the 1..3 its own `max` argument permits");
+        DCHECK(n == 3, "css_shorthand_components answered a count outside the 1..3 its own `max` argument permits");
         if (flex_is_factor(w[0], wl[0]) && flex_is_factor(w[1], wl[1])) {
             flex_span(&out[0], w[0], wl[0]);
             flex_span(&out[1], w[1], wl[1]);
@@ -934,6 +983,169 @@ static bool flex_triple(const char *value, CssShSpan out[3])
         }
         return false;
     }
+}
+
+/* ---- css-lists-3 §3.6 "Styling Markers: the list-style shorthand property" ---------------------------------
+ *
+ * ITS `Value:` LINE IS `<'list-style-position'> || <'list-style-image'> || <'list-style-type'>`, WHICH IS
+ * CSS_SH_ALL_OF's RULE IN ONE DIRECTION AND NOT IN THE OTHER — which is why the kind exists and why the ROW
+ * still carries the per-longhand `initial` list that kind reads. The SERIALIZATION is exactly the `||` rule:
+ * canonical order, each term omitted when it holds that longhand's own `Initial:` line, and §6.7.2's "cannot
+ * exactly represent the values" arm when every one of them is, because §3.6's own `Initial:` line is "see
+ * individual properties" and states none. The EXPANSION is not, and the sentence that breaks it is §3.6's own:
+ * "Using a value of none in the shorthand is potentially ambiguous, as none is a valid value for both
+ * list-style-image and list-style-type. To resolve this ambiguity, a value of none in the shorthand must be
+ * applied to whichever of the two properties aren’t otherwise set by the shorthand." A `||` assigns each word
+ * to the ONE term whose grammar admits it; `none` is admitted by TWO, and §3.6's resolution is not a tie-break
+ * but a distribution — its third worked example is `list-style: none`, which "Sets both image and type to
+ * "none"", so ONE word fills TWO terms and neither of them takes its longhand's initial.
+ *
+ * ITS FOURTH WORKED EXAMPLE IS WHAT MAKES THE DISTRIBUTION A REFUSAL AND NOT A PREFERENCE:
+ * `list-style: none disc url(bullet.png)` carries the annotation `Syntax error` where its three siblings each
+ * name the two values they set — all three terms are spoken for, so the `none` has nothing left to be applied
+ * to and the declaration sets NOTHING. A reader who implements
+ * the distribution as "put it wherever it fits, else ignore it" admits that value and sets two longhands a
+ * browser leaves untouched.
+ *
+ * `inside` AND `outside` ARE NEVER THE TYPE TERM HERE AND ARE VALID `list-style-type` VALUES, and the
+ * asymmetry is a sentence rather than an oversight. A `<counter-style-name>` is a `<custom-ident>`, so it would
+ * otherwise claim either word, and css-counter-styles-3 §3 "Defining Custom Counter Styles: the @counter-style
+ * rule" settles it outright: "In addition, some names, like inside, are valid as counter style names, but
+ * conflict with the existing values of properties like list-style, and so won’t be usable there." §3.6's own
+ * Note points at the same rule from the other end ("The <counter-style> values of list-style-type can also
+ * create grammatical ambiguities. As such values are ultimately <custom-ident> values, the parsing rules in
+ * [CSS-VALUES-3] apply"). The LONGHAND has no position term for them to conflict with, so `list-style-type:
+ * inside` is a counter style named `inside` — which is why the two directions ask the PRODUCTIONS and not one
+ * shared classifier: one predicate answering both would be deciding §3.6's `||` assignment and §3.4's own
+ * `Value:` line with one bit, and the stricter question would silently decide the looser one. */
+static const char *const LIST_STYLE_POSITION_KEYWORDS[] = { "inside", "outside" };
+/* §3.6's `Value:` line order — POSITION, IMAGE, TYPE — which is the order the serialization reads positionally
+   and the expansion writes, with each longhand's own `Initial:` line beside it: §3.5 "Positioning Markers: The
+   list-style-position property"' `outside`, §3.3 "Image Markers: the list-style-image property"' `none` and
+   §3.4 "Text-based Markers: the list-style-type property"' `disc`. */
+static const char *const LH_LIST_STYLE[] = { "list-style-position", "list-style-image", "list-style-type" };
+static const char *const LIST_STYLE_INITIAL[] = { "outside", "none", "disc" };
+
+/* IS `longhand` ONE OF §3.6's THREE? One predicate rather than three comparisons at each of the four sites
+   that ask, because the list and the grammar behind it are one statement: a name added to `LH_LIST_STYLE` with
+   no arm in `list_style_longhand_value` is the silent shape css_shorthand.h's completeness entry describes. */
+static bool list_style_owns(const char *longhand)
+{
+    unsigned i;
+
+    for (i = 0; i < CSS_SH_N(LH_LIST_STYLE); i++)
+        if (strcmp(LH_LIST_STYLE[i], longhand) == 0) return true;
+    return false;
+}
+
+/* §3.6's `||` ASSIGNMENT for ONE component value: which of the three terms admits it, 3 for the `none` that
+   two of them admit and whose term §3.6's disambiguation decides, and -1 for a value no term admits — which is
+   a declaration CSS Syntax drops. `*canon` receives the CANONICAL spelling where the grammar has one and NULL
+   where the specified value is the author's own bytes (an `<image>`, a `<string>`, a `symbols()` and an
+   author's own counter-style name are each the second case, for the reason core/css/css_image.h states).
+   THE ORDER OF THE ARMS IS THE GRAMMAR AND NOT AN OPTIMISATION: position's two keywords are tried before
+   `<counter-style>` because §3's sentence above takes them off the type term entirely, and `none` is answered
+   before `<image>` and `<counter-style>` because neither production admits it (core/css/css_image.h refuses it
+   by name and css-counter-styles-3 §3 excludes it from a `<counter-style-name>`), so an arm order that reached
+   them first would answer -1 for §3.6's own examples. */
+static int list_style_term_of(const char *w, size_t n, const char **canon)
+{
+    *canon = css_sh_keyword(LIST_STYLE_POSITION_KEYWORDS, CSS_SH_N(LIST_STYLE_POSITION_KEYWORDS), w, n);
+    if (*canon != NULL) return 0;
+    if (css_word_is(w, n, "none")) { *canon = "none"; return 3; }
+    if (css_image_is_image(w, n)) return 1;
+    if (css_counter_style_is_counter_style(w, n)) {
+        *canon = css_counter_style_canonical_name(w, n);
+        return 2;
+    }
+    if (css_shorthand_string(w, n)) return 2;
+    return -1;
+}
+
+/* §3.6's WHOLE VALUE, expanded into the longhand at `term`. NULL is the dropped declaration.
+   THE SPANS ARE RESOLVED FOR ALL THREE TERMS AND ONE IS RETURNED, because §3.6's disambiguation is stated over
+   the whole value — which of the two properties a `none` goes to depends on what the OTHER components set — so
+   a per-term expansion that looked only for its own term could not answer it. That is the same shape
+   `flex_triple` has and for the same reason. */
+static char *list_style_component(const char *value, int term)
+{
+    const char *w[3], *span[3] = { NULL, NULL, NULL };
+    size_t wl[3], spanlen[3] = { 0, 0, 0 };
+    int n, i, nones = 0, free_terms;
+
+    n = css_shorthand_components(value, w, wl, (int)CSS_SH_N(w));
+    if (n < 1) return NULL;
+    for (i = 0; i < n; i++) {
+        const char *canon = NULL;
+        int t = list_style_term_of(w[i], wl[i], &canon);
+
+        if (t < 0) return NULL;
+        if (t == 3) { nones++; continue; }
+        /* A `||` ADMITS EACH TERM AT MOST ONCE, so a second `inside`, a second `<image>` or a second
+           `<counter-style>` is a declaration outside §3.6's grammar and sets nothing. */
+        if (span[t] != NULL) return NULL;
+        span[t] = canon ? canon : w[i];
+        spanlen[t] = canon ? strlen(canon) : wl[i];
+    }
+    /* §3.6's disambiguation, over the two terms `none` is a value of. "whichever of the two properties aren’t
+       otherwise set by the shorthand" is PLURAL where both are free, which is the `list-style: none` example
+       setting both; and a `none` with no free term left is §3.6's fourth example, the syntax error. */
+    free_terms = (span[1] == NULL) + (span[2] == NULL);
+    if (nones > free_terms) return NULL;
+    if (nones > 0) {
+        if (span[1] == NULL) { span[1] = "none"; spanlen[1] = 4; }
+        if (span[2] == NULL) { span[2] = "none"; spanlen[2] = 4; }
+    }
+    /* css-cascade-5 §3 "Shorthand Properties": "when values are omitted from a shorthand form, unless
+       otherwise defined, each missing sub-property is assigned its initial value", so a term §3.6's grammar
+       left out takes its own longhand's `Initial:` line — which is the SAME list the serialization omits a term
+       for holding, and is the row's so that the two directions read one statement.
+       §3.6's `none` DISTRIBUTION RUNS BEFORE THIS AND IS NOT AN INSTANCE OF IT, which is the whole difference
+       between the two: `list-style: none` leaves the type term unwritten and §3.4's initial is `disc`, so the
+       ordering above is what makes that value `none` rather than "unless otherwise defined" reaching for the
+       initial. §3.6 IS that otherwise. */
+    if (span[term] == NULL) return css_sh_strdup(LIST_STYLE_INITIAL[term]);
+    return css_sh_dupn(span[term], spanlen[term]);
+}
+
+/* §3.6's three longhands' OWN value grammars — the `Value:` lines of §3.5, §3.3 and §3.4, asked of the
+   productions that own them rather than restated here. The answer is the SPECIFIED value: canonicalized where
+   the grammar is a keyword or a name css-counter-styles-3 defines, verbatim where it is an `<image>`, a
+   `<string>`, a `symbols()` or an author's own counter-style name. NULL for a value the grammar does not admit,
+   which is a declaration CSS Syntax drops. Only ever reached for a name `css_shorthand_validates_longhand`
+   answers TRUE for, and CSS Cascade §7.3's keywords have already been taken by the caller. */
+static char *list_style_longhand_value(const char *longhand, const char *value)
+{
+    const char *w[1], *kw;
+    size_t wl[1];
+
+    /* Each of the three `Value:` lines is a single component value with NO multiplier over it, so a second one
+       is an invalid declaration, which the split reports by refusing to write past `max`. */
+    if (css_shorthand_components(value, w, wl, 1) != 1) return NULL;
+    if (strcmp(longhand, "list-style-position") == 0) {
+        kw = css_sh_keyword(LIST_STYLE_POSITION_KEYWORDS, CSS_SH_N(LIST_STYLE_POSITION_KEYWORDS), w[0], wl[0]);
+        return kw ? css_sh_strdup(kw) : NULL;
+    }
+    /* §3.3's and §3.4's `none` is each property's own term and is answered before either production, because
+       neither admits it: core/css/css_image.h refuses `none` by name and css-counter-styles-3 §3 excludes it
+       from a `<counter-style-name>`. */
+    if (css_word_is(w[0], wl[0], "none")) return css_sh_strdup("none");
+    if (strcmp(longhand, "list-style-image") == 0)
+        return css_image_is_image(w[0], wl[0]) ? css_sh_dupn(w[0], wl[0]) : NULL;
+    DCHECK(strcmp(longhand, "list-style-type") == 0,
+           "a longhand outside css-lists-3 §3.6's three reached the list-style grammar. This function and "
+           "`css_shorthand_validates_longhand`'s §3.6 arm are one list and have come apart, and the failure is "
+           "silent in the direction that matters: a property with a grammar of its own would have that grammar "
+           "replaced by `<counter-style> | <string> | none`");
+    /* §3.4's `<counter-style>` ARM IS ASKED BEFORE ITS `<string>` ONE and the two are disjoint by construction
+       — a `<counter-style-name>` is an ident sequence and a `<string>` begins with a quote — so the order is
+       readability and not grammar. `inside` IS admitted here, which §3's own sentence permits and §3.6's `||`
+       does not: see the paragraph above `LIST_STYLE_POSITION_KEYWORDS`. */
+    if (css_counter_style_is_counter_style(w[0], wl[0])) {
+        kw = css_counter_style_canonical_name(w[0], wl[0]);
+        return kw ? css_sh_strdup(kw) : css_sh_dupn(w[0], wl[0]);
+    }
+    return css_shorthand_string(w[0], wl[0]) ? css_sh_dupn(w[0], wl[0]) : NULL;
 }
 
 char *css_shorthand_component(const char *shorthand, const char *value, const char *longhand)
@@ -959,6 +1171,24 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
        longhand with a list of its own; core/css/css_background_shorthand.h owns §2.10 and this table owns the
        row, exactly as CSS_SH_FONT is the seam for §2.7. */
     if (strcmp(shorthand, "background") == 0) return css_background_shorthand_component(value, longhand);
+
+    /* ---- css-lists-3 §3.6's `list-style` ------------------------------------------------------------------ */
+    if (strcmp(shorthand, "list-style") == 0) {
+        int term = -1;
+        unsigned t;
+
+        for (t = 0; t < CSS_SH_N(LH_LIST_STYLE); t++)
+            if (strcmp(longhand, LH_LIST_STYLE[t]) == 0) { term = (int)t; break; }
+        if (term < 0) return NULL;   /* this shorthand does not name that longhand */
+        /* css-cascade-5 §3 "Shorthand Properties" on a CSS-wide keyword: "it sets all of its sub-properties
+           to that keyword, including any that are reset-only sub-properties". It is the ENTIRE value, so it
+           precedes §3.6's own grammar, in which `inherit` is no term at all. css-cascade-5 §7.3 "Explicit
+           Defaulting" is what resolves it, and for these three that matters: all of css-lists-3 §3.3, §3.4 and
+           §3.5 state `Inherited: yes`, so an explicit `inherit` and css-cascade-5 §7.2 "Inheritance"' own
+           inheritance reach the same answer through different steps and must not be conflated here. */
+        if (css_wide_keyword(value)) return css_sh_strdup(value);
+        return list_style_component(value, term);
+    }
 
     /* ---- css-inline-3 §4.2's `vertical-align` -------------------------------------------------------------- */
     if (strcmp(shorthand, "vertical-align") == 0) {
@@ -1052,7 +1282,7 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
            what is not a `<margin-width>`: `margin: inherit` is not one, and §7's DEFAULTING step is what
            resolves it one property along. */
         if (css_wide_keyword(value)) return css_sh_strdup(value);
-        n = css_words(value, w, wl, 4);
+        n = css_shorthand_components(value, w, wl, 4);
         /* THE COUNT IS NO LONGER LEXBOR'S TO GUARANTEE, so it is a refusal and not an assertion. This used to
            DCHECK that the count was within CSS 2.1 §8.3 and §8.4's `{1,4}` on the grounds that lexbor parses
            the shorthand into a four-slot typed value and can serialize nothing else — which was true while
@@ -1109,9 +1339,10 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
                is what resolves it. */
             if (css_wide_keyword(value)) return css_sh_strdup(value);
             /* A COMPONENT COUNT PAST THE MULTIPLIER IS AN INVALID DECLARATION AND NOT A TRUNCATION, which is
-               `css_words`' own -1 and the same refusal `margin` makes: nothing typed this value, so the count
-               is the page's and CSS Syntax 3 §5.5.6 "Consume a declaration" drops what the grammar refuses. */
-            n = css_words(value, w, wl, m);
+               `css_shorthand_components`' own -1 and the same refusal `margin` makes: nothing typed this
+               value, so the count is the page's and CSS Syntax 3 §5.5.6 "Consume a declaration" drops what
+               the grammar refuses. */
+            n = css_shorthand_components(value, w, wl, m);
             if (n < 1) return NULL;
             /* EVERY COMPONENT IS VALIDATED BEFORE ANY OF THEM SETS ANYTHING, because an invalid shorthand is
                a declaration the cascade drops WHOLE rather than one that sets the sides before the bad
@@ -1177,7 +1408,7 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
            to themselves, so they precede CSS Cascade §7.3's own grammar, in which neither is a term. */
         if (css_wide_keyword(value)) return css_sh_strdup(value);
         /* Two components and no multiplier over either, so a third is an invalid declaration. */
-        n = css_words(value, w, wl, 2);
+        n = css_shorthand_components(value, w, wl, 2);
         if (n < 1 || n > 2) return NULL;
         kw[0] = css_sh_keyword(first, nf, w[0], wl[0]);
         if (kw[0] == NULL) return NULL;
@@ -1192,7 +1423,7 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
     else return NULL;
     /* css-overflow §3.1: `overflow: <'overflow-block'>{1,2}` "sets the specified values of overflow-x and
        overflow-y in that order. If the second value is omitted, it is copied from the first." */
-    n = css_words(value, w, wl, 2);
+    n = css_shorthand_components(value, w, wl, 2);
     if (n < 1) return NULL;
     kw[0] = css_sh_keyword(OVERFLOW_KEYWORDS, CSS_SH_N(OVERFLOW_KEYWORDS), w[0], wl[0]);
     kw[1] = (n > 1) ? css_sh_keyword(OVERFLOW_KEYWORDS, CSS_SH_N(OVERFLOW_KEYWORDS), w[1], wl[1]) : kw[0];
@@ -1215,8 +1446,8 @@ static char *table_longhand_value(const char *longhand, const char *value)
 
     if (idx >= 0) {
         /* Each of the three `Value:` lines is a two-keyword choice carrying NO multiplier, so a second
-           component value is an invalid declaration and css_words reports it by refusing to write past `max`. */
-        if (css_words(value, w, wl, 1) != 1) return NULL;
+           component value is an invalid declaration, which the split reports by refusing to write past `max`. */
+        if (css_shorthand_components(value, w, wl, 1) != 1) return NULL;
         kw = css_sh_keyword(TABLE_KEYWORD_LONGHANDS[idx].kw, TABLE_KEYWORD_LONGHANDS[idx].n, w[0], wl[0]);
         return kw ? css_sh_strdup(kw) : NULL;
     }
@@ -1230,8 +1461,8 @@ static char *table_longhand_value(const char *longhand, const char *value)
        two are specified, the first gives the horizontal spacing and the second the vertical spacing." Which of
        the two a reader gets is the COMPUTED value's question and not this one — this is the specified value,
        so a one-length declaration stays one length and core/css/css_computed_value.h's entry is what doubles
-       it. A THIRD component is an invalid declaration, which css_words reports by refusing to write past 2. */
-    n = css_words(value, w, wl, 2);
+       it. A THIRD component is an invalid declaration, which the split reports by refusing to write past 2. */
+    n = css_shorthand_components(value, w, wl, 2);
     if (n < 1) return NULL;
     for (i = 0; i < n; i++) {
         /* §17.6.1: "Lengths may not be negative." `sh_length_component` answers the PRODUCTION and not the
@@ -1275,6 +1506,14 @@ bool css_shorthand_validates_longhand(const char *longhand)
        those, and a second grammar standing beside its parser is the `border-*-color` mistake one property
        along, where the registry speaks and this component must not answer over it. */
     if (strcmp(longhand, "justify-items") == 0 || strcmp(longhand, "justify-self") == 0) return true;
+    /* css-lists-3 §3.6's THREE, whose registry gap is the §17 table's and is the one these rows' own initial
+       values in core/css/css_style_declaration.c are recorded under: lexbor's property registry carries NO
+       `list-style` anything, so each of the three reaches the cascade as a `__CUSTOM` holding the name and the
+       RAW TOKENS, with nothing having validated them against §3.5's, §3.3's or §3.4's `Value:` line and nothing
+       having lower-cased them. The derivation rather than a count, because the vendored parser moves:
+       `grep -rniE 'list.style' engine/lexbor/source/lexbor/css/` exits 1 with no output, against a `z.index`
+       control over the same path that exits 0 and prints. */
+    if (list_style_owns(longhand)) return true;
     part = border_part_index(longhand, &side);
     (void)side;
     /* The four widths and the four styles. The four `border-*-color` longhands ARE in lexbor's registry — it
@@ -1305,19 +1544,22 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
        grammar needs two component slots and the border longhands' needs one. */
     if (table_keyword_longhand_index(longhand) >= 0 || strcmp(longhand, "border-spacing") == 0)
         return table_longhand_value(longhand, value);
+    /* css-lists-3 §3.6's three, AFTER §7.3's keywords, because `list-style-type: inherit` is not a
+       `<counter-style>` and a `<counter-style-name>` is an ident sequence that would admit it. */
+    if (list_style_owns(longhand)) return list_style_longhand_value(longhand, value);
     /* css-align-3 §7.1's and css-align-3 §6.1's single-keyword forms, over the two lists this component owns because
        lexbor types neither property. One component value and no multiplier, so a second is invalid. */
     if (strcmp(longhand, "justify-items") == 0 || strcmp(longhand, "justify-self") == 0) {
         bool it = strcmp(longhand, "justify-items") == 0;
 
-        if (css_words(value, w, wl, 1) != 1) return NULL;
+        if (css_shorthand_components(value, w, wl, 1) != 1) return NULL;
         kw = it ? css_sh_keyword(JUSTIFY_ITEMS_KEYWORDS, CSS_SH_N(JUSTIFY_ITEMS_KEYWORDS), w[0], wl[0])
                 : css_sh_keyword(JUSTIFY_SELF_KEYWORDS, CSS_SH_N(JUSTIFY_SELF_KEYWORDS), w[0], wl[0]);
         return kw ? css_sh_strdup(kw) : NULL;
     }
     /* `<line-width>` and `<line-style>` are each ONE component value — no multiplier — so a second one is an
-       invalid declaration and css_words reports it by refusing to write past `max`. */
-    n = css_words(value, w, wl, 1);
+       invalid declaration, which the split reports by refusing to write past `max`. */
+    n = css_shorthand_components(value, w, wl, 1);
     if (n != 1) return NULL;
     if (part == 1) {
         kw = css_sh_keyword(LINE_STYLE_KEYWORDS, CSS_SH_N(LINE_STYLE_KEYWORDS), w[0], wl[0]);
@@ -1402,6 +1644,10 @@ typedef enum {
     CSS_SH_BORDER,      /* §3.4's `border`: one triple common to all four sides, over an untouched border-image */
     CSS_SH_FONT,        /* css-fonts-4 §2.7's `font`, whose grammar is core/css/css_font_shorthand.h's */
     CSS_SH_TEXT_ALIGN,  /* css-text-4 §7.1's one keyword redistributed over two longhands, plus its two pairs */
+    CSS_SH_LIST_STYLE,  /* css-lists-3 §3.6's `list-style`: CSS_SH_ALL_OF's `||` in the SERIALIZATION direction
+                           — which is why its row still carries the per-longhand `initial` list that rule reads
+                           — over an EXPANSION whose `none` is distributed across two terms rather than
+                           assigned to one. See that section's block above `LIST_STYLE_POSITION_KEYWORDS` */
     CSS_SH_BACKGROUND   /* css-backgrounds-3 §2.10's `background`, whose grammar is a LIST OF LAYERS and lives
                            in core/css/css_background_shorthand.h */
 } CssShKind;
@@ -1416,21 +1662,26 @@ typedef struct {
        css_shorthand_component answers for every row's every longhand: a row that did not was a shorthand whose
        declarations set NOTHING, and the flag that used to record that is deleted with the row that had it. */
     const char *probe;
-    /* CSS_SH_ALL_OF ONLY — each longhand's own `Initial:` line, in the row's canonical order. §6.7.2's rule is
-       "If component values can be omitted or replaced with a shorter representation without changing the
-       meaning of the value, omit/replace them.", and a
-       term holding its initial is exactly one that can be, so this list is the omission's DATA and belongs to
-       the row rather than to the algorithm. It is the SAME list the forward expansion fills an omitted term
-       from, which is what keeps the two directions one statement. NULL for every other kind, asserted. */
+    /* THE TWO `||` KINDS ONLY — CSS_SH_ALL_OF and CSS_SH_LIST_STYLE — each longhand's own `Initial:` line, in
+       the row's canonical order. §6.7.2's rule is "If component values can be omitted or replaced with a
+       shorter representation without changing the meaning of the value, omit/replace them.", and a term
+       holding its initial is exactly one that can be, so this list is the omission's DATA and belongs to the
+       row rather than to the algorithm. It is the SAME list the forward expansion fills an omitted term from,
+       which is what keeps the two directions one statement. NULL for every other kind, asserted.
+       IT IS TWO KINDS AND NOT ONE BECAUSE A KIND NAMES THE EXPANSION'S RULE, AND THIS FIELD IS THE
+       SERIALIZATION'S: css-lists-3 §3.6 "Styling Markers: the list-style shorthand property" serializes by
+       exactly the `||` rule and expands by a different one, so widening the kind would have made the field
+       mean two things at once — which is the argument CSS_SH_FLEX is a kind for, read from the other side. */
     const char *const *initial;
-    /* CSS_SH_ALL_OF ONLY — the SHORTHAND'S OWN `Initial:` line, for the case where every term is omitted and
-       the omission would leave the empty string, which matches no production of any of these grammars.
-       IT IS NULL WHERE THE PROPERTY DEFINITION STATES NONE, and that is the whole of the difference between
-       the two rows that reach the case: css-inline-3 §4.2 gives `vertical-align` an `Initial:` line of
-       `baseline`, so an all-initial list has a value it can be written as; css-backgrounds-3 §3.4 gives
-       `border-<side>` "see individual properties", so it has none and §6.7.2's "cannot exactly represent" arm
-       is the answer instead. css_shorthand_init asserts that a stated one EXPANDS BACK to this row's own
-       initials, so the two cannot state different faces of one value. */
+    /* THE SAME TWO KINDS ONLY — the SHORTHAND'S OWN `Initial:` line, for the case where every term is omitted
+       and the omission would leave the empty string, which matches no production of any of these grammars.
+       IT IS NULL WHERE THE PROPERTY DEFINITION STATES NONE, which is what separates the one row that states
+       one from the three that do not: css-inline-3 §4.2 gives `vertical-align` an `Initial:` line of
+       `baseline`, so an all-initial list has a value it can be written as; css-backgrounds-3 §3.4's
+       `border-<side>`, css-flexbox-1 §5.3's `flex-flow` and css-lists-3 §3.6's `list-style` each give "see
+       individual properties", so they have none and §6.7.2's "cannot exactly represent" arm is the answer
+       instead. css_shorthand_init asserts that a stated one EXPANDS BACK to this row's own initials, so the
+       two cannot state different faces of one value. */
     const char *whole_initial;
 } CssShorthandRow;
 
@@ -1526,6 +1777,16 @@ static const CssShorthandRow SHORTHANDS[] = {
     { "inset",        SIDES,           4, CSS_SH_FOUR_SIDE, "auto 0 10% 2px", NULL, NULL },
     { "inset-block",  LH_INSET_BLOCK,  2, CSS_SH_TWO_AXIS,  "auto 4px",       NULL, NULL },
     { "inset-inline", LH_INSET_INLINE, 2, CSS_SH_TWO_AXIS,  "3% auto",        NULL, NULL },
+    /* css-lists-3 §3.6. The fixture names ALL THREE terms, in the grammar's canonical order and none of them
+       at its own initial, so the round trip exercises the whole `||` in the one arrangement that writes every
+       term. The arrangements one fixture cannot reach are each a DIFFERENT sentence of §3.6 — its own four
+       worked examples of the `none` distribution, the `||` in another order, a `<string>` carrying a space and
+       css-counter-styles-3 §4's `symbols()` — and are asserted separately by css_shorthand_init. THE FIXTURE IS
+       NOT `outside none disc`: that is each longhand's own `Initial:` line, and a round trip over it would
+       exercise the omission rule at none of its three terms and answer §6.7.2's "cannot exactly represent" arm
+       for all of them at once. */
+    { "list-style",    LH_LIST_STYLE,     3, CSS_SH_LIST_STYLE, "inside url(bullet.png) upper-roman",
+      LIST_STYLE_INITIAL, NULL },
     { "margin",        LH_MARGIN,         4, CSS_SH_FOUR_SIDE, "1px 2px 3px 4px", NULL, NULL },
     { "overflow",      LH_OVERFLOW,       2, CSS_SH_TWO_AXIS,  "hidden auto", NULL, NULL },
     { "padding",       LH_PADDING,        4, CSS_SH_FOUR_SIDE, "1px 2px", NULL, NULL },
@@ -1744,7 +2005,7 @@ static char *css_sh_two_axis_value(const char *const *v)
     return css_sh_join(v, 2);
 }
 
-/* A THREE-TERM `||`, written in the canonical order of the grammar with each term omitted when it holds that
+/* AN n-TERM `||`, written in the canonical order of the grammar with each term omitted when it holds that
    longhand's initial value — §6.7.2's "If component values can be omitted or replaced with a shorter
    representation without changing the meaning of the value, omit/replace them." `initial` is the same list the forward expansion fills an omitted term from, which is
    what keeps the two directions one statement; it is the ROW's, because the rule is one algorithm over two
@@ -1916,7 +2177,11 @@ char *css_shorthand_serialize_value(const char *shorthand, const char *const *va
     switch (row->kind) {
     case CSS_SH_FOUR_SIDE: return css_sh_four_side_value(values);
     case CSS_SH_TWO_AXIS:  return css_sh_two_axis_value(values);
-    case CSS_SH_ALL_OF:    return css_sh_all_of_value(values, row->initial, row->n, row->whole_initial);
+    case CSS_SH_ALL_OF:
+    case CSS_SH_LIST_STYLE:
+        /* §6.7.2's `||` rule is css-lists-3 §3.6's serialization unchanged — see the kind's own entry for why
+           only the EXPANSION differs, and why the row therefore carries an `initial` list of its own. */
+        return css_sh_all_of_value(values, row->initial, row->n, row->whole_initial);
     case CSS_SH_FLEX:      return css_sh_flex_value(values);
     case CSS_SH_FONT:      return css_font_shorthand_value(values);
     case CSS_SH_TEXT_ALIGN: return css_sh_text_align_value(values);
@@ -1951,9 +2216,9 @@ void css_shorthand_init(void)
                "a shorthand row carries no fixture value, so nothing exercises its expansion. Every row in this "
                "table is one css_shorthand_component takes apart — a row that is not is a shorthand whose "
                "declarations set no longhand at all, which reads as the property's INITIAL value everywhere");
-        DCHECK((row->kind == CSS_SH_ALL_OF) == (row->initial != NULL),
-               "a shorthand row carries a per-longhand INITIAL list without being the `||` kind that reads it, "
-               "or is that kind and carries none. §6.7.2's omission rule needs exactly that list to "
+        DCHECK((row->kind == CSS_SH_ALL_OF || row->kind == CSS_SH_LIST_STYLE) == (row->initial != NULL),
+               "a shorthand row carries a per-longhand INITIAL list without being one of the kinds that read "
+               "it, or is one of them and carries none. §6.7.2's omission rule needs exactly that list to "
                "know which terms can be dropped, and a NULL one would be read past the null pointer rather "
                "than reported");
         DCHECK(row->whole_initial == NULL || row->initial != NULL,
@@ -2129,6 +2394,138 @@ void css_shorthand_init(void)
                         "section does not admit must set none of the three longhands — accepting one is a "
                         "number on the page that no declaration of it could have produced",
                         FLEX_INVALID[i], LH_FLEX[j], got);
+                free(got);
+            }
+    }
+    /* css-lists-3 §3.6's `none` DISTRIBUTION AND THE ARRANGEMENTS ONE FIXTURE CANNOT REACH. The row's round
+       trip exercises the grammar where every term is written; each case below is a DIFFERENT sentence of §3.6
+       or of a production it names, and each of them fails SILENTLY — the declaration is not dropped, it sets a
+       marker a page never asked for. THE EXPECTED TRIPLES ARE §3.6's OWN WORKED EXAMPLES and are read off that
+       section's text rather than off this implementation: `list-style: none disc` "Sets the image to "none" and
+       the type to "disc"", `list-style: none url(bullet.png)` "Sets the image to "url(bullet.png)" and the type
+       to "none"", and `list-style: none` "Sets both image and type to "none"". */
+    {
+        /* `writable` IS §6.7.2's "cannot exactly represent the values of all the properties in list" ARM, and
+           it is a field rather than a derived test because §3.6's FIRST worked example lands on it: `list-style:
+           none disc` sets the image to `none` and the type to `disc`, which are §3.3's and §3.4's OWN
+           `Initial:` lines, so with the position also omitted every term of the `||` is dropped and the
+           omission leaves the empty string — which matches no production of §3.6's `Value:` line. §3.6 states
+           no `Initial:` line of its own ("see individual properties"), so the row carries no `whole_initial`
+           to write instead and NULL is the answer, exactly as it is for an all-initial `border-<side>` and an
+           all-initial `flex-flow`. IT IS THE EXPANSION THAT IS PINNED FOR SUCH A CASE AND THE SERIALIZATION
+           THAT IS ASSERTED TO REFUSE, because those are two different claims and a shared `back != NULL`
+           would have made §3.6's own example the one value in this table that crashes. */
+        static const struct { const char *value; const char *want[3]; bool writable; } LIST_STYLE_CASES[] = {
+            /* §3.6's three `none` examples, in its own order. The POSITION is each triple's first entry and is
+               `outside` throughout, because none of the three names one and CSS Cascade's shorthand rule
+               resets an omitted longhand to its own `Initial:` line — §3.5's. */
+            { "none disc",             { "outside", "none", "disc" }, false },
+            { "none url(bullet.png)",  { "outside", "url(bullet.png)", "none" }, true },
+            /* The one word that fills TWO terms, which is the whole reason this is a kind of its own: the type
+               does NOT fall to §3.4's `disc` here, so a reader who implemented the distribution as a tie-break
+               over one free term would answer `disc` for the value every reset stylesheet writes. */
+            { "none",                  { "outside", "none", "none" }, true },
+            /* §3.6's own two examples of the `||` in prose, each in the OTHER order from the row's fixture, so
+               the assignment is exercised without depending on a term's position. */
+            { "upper-roman inside",    { "inside", "none", "upper-roman" }, true },
+            { "circle outside",        { "outside", "none", "circle" }, true },
+            /* css-counter-styles-3 §3's case rule — "the names defined in this specification are ASCII
+               lowercased on parse wherever they are used as counter styles, e.g. in the list-style set of
+               properties" — against the sentence directly before it, "Counter style names are case-sensitive",
+               which leaves an author's own name exactly as written. The two are one rule and two answers. */
+            { "UPPER-ROMAN",           { "outside", "none", "upper-roman" }, true },
+            { "MyStyle",               { "outside", "none", "MyStyle" }, true },
+            /* §3.4's `<string>` arm, carrying a SPACE — the component value CSS Syntax §4's split answers as
+               one and a split on whitespace answers as two, which is the arm `css_shorthand_components` gained
+               for this property and the only value in this table that exercises it. §3.4's own example. */
+            { "\"Note: \" inside",     { "inside", "none", "\"Note: \"" }, true },
+            /* css-counter-styles-3 §4 "Defining Anonymous Counter Styles: the symbols() function", whose two
+               worked examples are these two: a `symbols()` with its `<symbols-type>` omitted and one with
+               `cyclic`. Both are ONE component value with THREE spaces inside, so each exercises the function
+               arm of the split as well as §4's grammar. */
+            { "symbols(\"*\" \"\\2020\" \"\\2021\" \"\\A7\")",
+              { "outside", "none", "symbols(\"*\" \"\\2020\" \"\\2021\" \"\\A7\")" }, true },
+            { "symbols(cyclic \"*\" \"\\2020\")",
+              { "outside", "none", "symbols(cyclic \"*\" \"\\2020\")" }, true },
+        };
+        /* Values §3.6's grammar does not admit. Each is a DROPPED declaration setting none of the three, and
+           each is one this file would have got wrong in a different way. */
+        static const char *const LIST_STYLE_INVALID[] = {
+            /* §3.6's FOURTH worked example, annotated `Syntax error`: every term is spoken for, so the `none`
+               has nothing left to be applied to. It is the one value the distribution must REFUSE. */
+            "none disc url(bullet.png)",
+            /* A `||` admits each term at most once — a second position, a second type, a second image, and a
+               `none` pair with only one free term left. */
+            "inside outside", "disc circle", "url(a.png) url(b.png)", "none none disc",
+            /* `none` three times: §3.6 has two terms it can be applied to and no third. */
+            "none none none",
+            /* A fourth component value, which no multiplier over the three terms admits. */
+            "inside url(a.png) disc extra",
+            /* A value no term's production admits. The first is an ident sequence `<counter-style-name>` would
+               claim and `!` is not an ident code point; the second is a `<length>`, which is no term of §3.6
+               at all; the third is css-counter-styles-3 §4's own invalid arm ("If the system is alphabetic or
+               numeric, there must be at least two <string>s or <image>s"); the fourth is a `symbols()` whose
+               one argument is neither a `<string>` nor an `<image>`; and the last is CSS Syntax §4.3.5's
+               `<bad-string-token>`, whose closing quote the escape in front of it consumes. */
+            "bogus!", "1px", "symbols(numeric \"a\")", "symbols(bogus)", "\"unterminated\\\"",
+        };
+
+        for (i = 0; i < CSS_SH_N(LIST_STYLE_CASES); i++) {
+            char *back;
+            char *got[3];
+
+            for (j = 0; j < CSS_SH_N(got); j++) {
+                got[j] = css_shorthand_component("list-style", LIST_STYLE_CASES[i].value, LH_LIST_STYLE[j]);
+                DCHECKF(got[j] != NULL && strcmp(got[j], LIST_STYLE_CASES[i].want[j]) == 0,
+                        "css-lists-3 §3.6's expansion of `list-style: %s` gave `%s` the value `%s` where the "
+                        "section states `%s`. This is the failure that does not crash: the declaration is "
+                        "ACCEPTED and one of its three longhands carries a value the page never wrote, so "
+                        "§3.2 \"Generating Marker Contents\" reads a marker off a property nobody set",
+                        LIST_STYLE_CASES[i].value, LH_LIST_STYLE[j], got[j] ? got[j] : "(dropped)",
+                        LIST_STYLE_CASES[i].want[j]);
+            }
+            /* AND THE SERIALIZATION AGREES WITH THE EXPANSION ON EVERY ONE OF THEM, which is a stronger
+               statement than the row's own round trip: that one starts from a value already in the omitted
+               form, and these start from values §6.7.2 must SHORTEN. Re-expanding the shortened form is what
+               says the shortening preserved the meaning, which is the whole of §6.7.2's condition — and for
+               this shorthand it is the one check that can catch the omission rule and the `none` distribution
+               disagreeing, since an image omitted for holding its initial `none` is re-read through the
+               distribution rather than through the omission. */
+            back = css_shorthand_serialize_value("list-style", (const char *const *)got);
+            DCHECKF((back != NULL) == LIST_STYLE_CASES[i].writable,
+                    "css-lists-3 §3.6's serialization answered `%s` for `list-style: %s`'s own three longhand "
+                    "values where this case expects the opposite. A value that came OUT of a declaration must "
+                    "serialize back unless EVERY term of the `||` holds its longhand's initial, which is the "
+                    "one state §6.7.2's \"cannot exactly represent\" arm answers for a shorthand whose own "
+                    "`Initial:` line is \"see individual properties\" — so the two directions disagree about "
+                    "which state that is",
+                    back ? back : "(nothing)", LIST_STYLE_CASES[i].value);
+            for (j = 0; back != NULL && j < CSS_SH_N(got); j++) {
+                char *again = css_shorthand_component("list-style", back, LH_LIST_STYLE[j]);
+
+                DCHECKF(again != NULL && strcmp(again, LIST_STYLE_CASES[i].want[j]) == 0,
+                        "css-lists-3 §3.6's serialization shortened `list-style: %s` to `%s`, and re-expanding "
+                        "that gives `%s` the value `%s` rather than `%s`. CSSOM §6.7.2 permits an omission "
+                        "only \"without changing the meaning of the value\", so a component was dropped that "
+                        "the grammar reads back as something else — §3.6's `none` distribution is where that "
+                        "happens, because an omitted image is not an absent one",
+                        LIST_STYLE_CASES[i].value, back ? back : "(nothing)", LH_LIST_STYLE[j],
+                        again ? again : "(dropped)", LIST_STYLE_CASES[i].want[j]);
+                free(again);
+            }
+            free(back);
+            for (j = 0; j < CSS_SH_N(got); j++) free(got[j]);
+        }
+        for (i = 0; i < CSS_SH_N(LIST_STYLE_INVALID); i++)
+            for (j = 0; j < CSS_SH_N(LH_LIST_STYLE); j++) {
+                char *got = css_shorthand_component("list-style", LIST_STYLE_INVALID[i], LH_LIST_STYLE[j]);
+
+                DCHECKF(got == NULL,
+                        "css-lists-3 §3.6's expansion accepted `list-style: %s` and gave `%s` the value `%s`. "
+                        "CSS Syntax drops a declaration outside a property's grammar WHOLE, so a value this "
+                        "section does not admit must set none of the three longhands — accepting one is a "
+                        "marker on the page that no declaration of it could have produced",
+                        LIST_STYLE_INVALID[i], LH_LIST_STYLE[j], got);
                 free(got);
             }
     }
@@ -2425,6 +2822,30 @@ bool css_shorthand_complete_for(const char *longhand)
        `css_cv_modelled`'s FIRST assert naming the property — the same genuinely-open question the two
        `justify-*` rows above are in, and a different question from this one.
 
+       `list-style-position`, `list-style-image` and `list-style-type` — css-lists-3 §3.6 "Styling Markers: the
+       list-style shorthand property"' `list-style` is the ONLY shorthand in CSS that sets any of the three, and
+       IT IS NOW IN THE TABLE ABOVE. That row is the whole of what these entries were waiting on. §3.6 states
+       the relation in its own words ("The list-style property is a shorthand notation for setting the three
+       properties list-style-type, list-style-image, and list-style-position at the same place in the style
+       sheet"), while §3.5 "Positioning Markers: The list-style-position property", §3.3 "Image Markers: the
+       list-style-image property" and §3.4 "Text-based Markers: the list-style-type property" each declare one
+       of them as a standalone longhand with its own `Value:`, `Initial:` and `Computed value:` lines. No module
+       states a second container over them: css-lists-3 §3.7 "The marker-side property"' `marker-side` and §4's
+       `counter-reset`, `counter-increment` and `counter-set` are sibling properties of the same module that set
+       nothing, and the `::marker` pseudo-element §3.1 "The ::marker Pseudo-Element" names takes properties of
+       its own rather than setting these.
+       UNTIL THAT ROW EXISTED A `list-style: none` SET NOTHING AT ALL, which is the quietest shape this defect
+       has and the one `text-align`, `vertical-align` and the `place-*` pair were each in — with one difference
+       that made it louder on real pages and is why it is recorded: lexbor's registry carries NO `list-style`
+       anything, so BOTH spellings were unmodelled, and a page writing the shorthand every reset stylesheet
+       carries read back §3.4's `Initial:` of `disc` while the byte-identical `list-style-type: none` beside it
+       was honoured. core/css/css_style_declaration.c's unregistered-initial table states the registry
+       derivation and its armed control.
+       WHAT THESE THREE HAVE NOT GOT IS A `Computed value:` LINE in core/css/css_computed_value.c, so a reader
+       asking for one crashes at `css_cv_modelled`'s FIRST assert naming the property — the same genuinely-open
+       question the two `justify-*` rows and the four flow-relative inset rows above are in, and a different
+       question from this one.
+
        NAMED RESIDUAL — THE FLOW-RELATIVE SHORTHANDS OF THE OTHER LOGICAL PROPERTY GROUPS THAT HAVE ANY,
        WHICH THIS LIST STILL RECORDS WITHOUT. They are named rather than counted: `margin`, `padding`,
        `border-width`, `border-style` and `border-color`. The groups core/css/css_logical.c carries that are
@@ -2490,6 +2911,7 @@ bool css_shorthand_complete_for(const char *longhand)
         "align-items", "align-self", "justify-items", "justify-self",
         "top", "right", "bottom", "left",
         "inset-block-start", "inset-block-end", "inset-inline-start", "inset-inline-end",
+        "list-style-position", "list-style-image", "list-style-type",
         "z-index",
     };
     unsigned i;
