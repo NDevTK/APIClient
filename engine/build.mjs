@@ -8179,7 +8179,10 @@ STAGES.push(onHost(NATIVE_SMOKE, STAGE_HOST.NATIVE));
    too, and that is not where it mattered: `node engine/build.mjs` is the command the file names, so a stage
    only the other target runs is a stage the graph of what actually gets run does not contain. Same binary as
    the verdict run above, two more spawns of it, seven seconds at today's early aborts. */
-STAGES.push(...coldRoundTripStages(NATIVE_BUILT.bin, "none"));
+/* CAPTURED RATHER THAN SPREAD STRAIGHT IN, because the reachability stages below need these two runs' LOG
+   PATHS and a caller that spreads holds nothing. The records are the same records; only the binding is new. */
+const COLD_STAGES = coldRoundTripStages(NATIVE_BUILT.bin, "none");
+STAGES.push(...COLD_STAGES);
 
 /* ── AND THE VEHICLE'S RUN, WHICH STILL RUNS AND DECIDES NOTHING ──────────────────────────────────────────
    ITS HOST DEPENDS ON WHETHER THE NATIVE RUN HAPPENED, and that is not a hedge - it is the rule STAGE_HOST
@@ -8217,14 +8220,33 @@ FINDINGS.push(vehicleAgreement(NATIVE_SMOKE, WASM_SMOKE));
    cannot produce — a HOLE (a rung silent while a LATER rung answered, against main()'s one fixed order) and a
    PARTIAL rung (a function that printed some of its own markers and not the rest). The reach itself is
    REPORTED, which is the §AN-INVARIANT-OVER-A-GATED-OPERATION rule the reader states for itself. */
-for (const [smoke, artifact, host, why] of [
-      [NATIVE_SMOKE, NATIVE_BUILT.bin, STAGE_HOST.NATIVE, "the native program did not link, so there is no run to read"],
-      [WASM_SMOKE, join(OUT, "qjs.wasm"), NATIVE_BUILT.bin === null ? STAGE_HOST.WASM : STAGE_HOST.VEHICLE,
+/* AND THE NATIVE STAGE READS EVERY RUN OF THAT BINARY, NOT ONLY THE SMOKE — WHICH IS WHAT THIS STAGE GOT WRONG
+   ON ITS FIRST LANDING AND WHAT THAT MISTAKE COST. The smoke is the SHORTEST run this producer has: measured on
+   one frozen snapshot, `@RESULT` -- which main() prints unconditionally after the drive returns -- is ABSENT
+   from both smoke logs and PRESENT in both cold-round-trip logs, and the cross-instance rung's three markers
+   (`@A2ENTER @A2REALM @A2OK`) read 0/0/0 in every smoke log and 1/1/1 in both cold ones, with a `^@ZZ` negative
+   control at 0 throughout. So the whole ladder IS reached, by the cold pair, and has been for a week; the smoke
+   runs do not return from `engine_run` at all.
+   READING ONLY THE SMOKE MADE THE STAGE PRINT A FLOOR AND CALL IT A REACH, and a coordinator read that floor as
+   a total and dispatched a lane at a rung that was working -- so the sentence this stage prints every build sent
+   its reader to the teardown and the cross-instance surface when the run had never left the drive, some 295
+   lines of main() earlier. That is CLAUDE.md's floor-read-as-a-total arriving through an instrument I landed.
+   IT IS ONE INVOCATION AND NOT THREE, because `--artifact` takes the UNION of the artifacts it is given and all
+   three of these runs are the SAME binary -- so one artifact, several logs, and the reader reports each log by
+   PATH on its own line, which is the rule its own header states for exactly this reason. A log the cold pair did
+   not produce (it was skipped, or session ONE aborted so session TWO had no residue) is simply absent from the
+   list; the reader is handed only paths that exist. */
+for (const [logs, artifact, host, why] of [
+      [[NATIVE_SMOKE, ...COLD_STAGES].map((v) => v && v.log).filter(Boolean),
+       NATIVE_BUILT.bin, STAGE_HOST.NATIVE, "the native program did not link, so there is no run to read"],
+      [[WASM_SMOKE].map((v) => v && v.log).filter(Boolean),
+       join(OUT, "qjs.wasm"), NATIVE_BUILT.bin === null ? STAGE_HOST.WASM : STAGE_HOST.VEHICLE,
        "the smoke program did not link, so there is no run to read"]]) {
   const label = `fixture reachability (${host.tag})`;
-  STAGES.push(onHost(!smoke.log || !artifact || !existsSync(artifact) || !existsSync(smoke.log)
+  const present = logs.filter((l) => existsSync(l));
+  STAGES.push(onHost(!present.length || !artifact || !existsSync(artifact)
     ? skipped(label, why)
-    : runProgram(label, [join(ENGINE, "fixturereach.mjs"), "--artifact", artifact, smoke.log],
+    : runProgram(label, [join(ENGINE, "fixturereach.mjs"), "--artifact", artifact, ...present],
         "a HOLE is a selftest row that did not answer while a later one did, and a PARTIAL rung is a function " +
         "ENTERED and not finished — neither is a short run, which is why these two and nothing else set this " +
         "stage's exit code. Fix at the ROOT in engine/host/test_forced.c or in whatever it calls; there is no " +
