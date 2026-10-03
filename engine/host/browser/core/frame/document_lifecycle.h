@@ -5,7 +5,7 @@
  * the child's Document, its Window and its realm stayed exactly as they were, its queued tasks stayed on the
  * queue and would still run, its descendants were never told, and nothing anywhere recorded that a destruction
  * had happened. A page could not tell that from a navigable that had merely been closed, and neither could the
- * engine — which is the tell that it was not an implementation of anything. §7.5.10 is eleven steps and
+ * engine — which is the tell that it was not an implementation of anything. §7.5.10 is nine steps and
  * §7.5.10's descendant form is six more, and every one of them is observable.
  *
  * AND `close()` WAS THE SAME BYTE ONE LAYER UP. Both spellings of §7.2.2.1 — window.c's member and the
@@ -39,7 +39,7 @@
  * the destroyed document holds that realm through COUNTED references — its frames, its jobs, its parked
  * continuation, the dups its COW delta took at each capture — so a realm a flow can resume into cannot reach
  * that teardown at all. Which is exactly why NO flow is abandoned, terminated or paged to make one: §7.5.10
- * step 7 removes QUEUED TASKS, work that has not started, and the standard has no object at all for a
+ * step 5 removes QUEUED TASKS, work that has not started, and the standard has no object at all for a
  * continuation suspended mid-program. THIS PARAGRAPH USED TO SAY THE OPPOSITE — that a parked flow "must be
  * abandoned before its heap can go, and a flow does not currently record which realm it is in" — which is a
  * guess that reads as a decision, and it contradicted navigable.c's own teardown, where the argument above is
@@ -59,7 +59,7 @@
    two numbers written twice, agreeing with each other and with nothing else. Step 4 is a whole algorithm that
    runs the page's code, and the effect of describing it as done was that a child navigable removed mid-navigate
    kept an ongoing navigate event for ever: no `abort` at the AbortSignal a `navigate` listener handed to a
-   `fetch()`, no `navigateerror`, and then step 7 below dropped its queued tasks underneath it. A step number is
+   `fetch()`, no `navigateerror`, and then §7.5.10's step 5 below dropped its queued tasks underneath it. A step number is
    a claim the next reader can check; a range that names a step the body does not contain is the one kind of
    citation that cannot be checked at all, because it reads as coverage.
    `proxy` is the child navigable's WindowProxy. Calling it for a navigable whose active document has already
@@ -127,7 +127,7 @@ void document_lifecycle_window_close(JSContext *ctx, JSValueConst proxy);
  * instance is an origin-keyed agent cluster, so a cross-origin incoming Document is a peer's — while the
  * outgoing Document is local by construction, because it is the one this agent has been running.
  *
- * §7.5.10 STEP 7 DOES NOT EAT THIS OPERATION, AND THE REASON IS THE STANDARD'S ORDER RATHER THAN A CHOICE OF
+ * §7.5.10 STEP 5 DOES NOT EAT THIS OPERATION, AND THE REASON IS THE STANDARD'S ORDER RATHER THAN A CHOICE OF
  * REALM. The step removes queued tasks "without running those tasks", and the unload task reaches it from
  * INSIDE its own body (§7.5.9 step 20 destroys the document), by which time it has left the queue. What has to
  * hold beside that is the SCOPE of the removal: it is over the timeline performing the destruction and not

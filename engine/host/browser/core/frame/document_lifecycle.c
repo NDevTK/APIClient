@@ -19,7 +19,7 @@
 #include "core/html/html_iframe.h"
 #include "core/html/user_activation.h"
 #include "core/timing/timer.h"
-#include "solver/flow.h"   /* §7.5.10 step 7's OTHER task queue: the running flow's own program sequence */
+#include "solver/flow.h"   /* §7.5.10 step 5's OTHER task queue: the running flow's own program sequence */
 
 /* THE THREE PER-DOCUMENT OPERATIONS, and why they are ONE fan-out with three bodies.
  *
@@ -58,7 +58,7 @@ static void descend_enqueue(JSContext *ctx, JSValueConst proxy, int op, int afte
 static void self_enqueue(JSContext *ctx, JSValueConst proxy, int op, int after);
 static void destroy_a_top_level_traversable(JSContext *ctx, JSValueConst proxy);
 /* §7.5.9's UNLOADING DOCUMENT CLEANUP STEPS — declared here because it has TWO ENTRIES, in two different
-   algorithms: §7.5.9's unload a Document step 18, and §7.5.10's destroy a Document step 6. It is defined beside
+   algorithms: §7.5.9's unload a Document step 18, and §7.5.10's destroy a Document step 4. It is defined beside
    the salvageable state its own branch reads. */
 static void unloading_document_cleanup_steps(JSContext *cctx);
 
@@ -88,9 +88,17 @@ static JSContext *active_realm(JSContext *ctx, JSValueConst proxy)
     return window_proxy_materialized(proxy) ? window_proxy_realm(ctx, proxy) : NULL;
 }
 
-/* §7.5.10's DESTROY A DOCUMENT — the eleven steps, over the state this engine has for them.
+/* §7.5.10's DESTROY A DOCUMENT — the nine steps, over the state this engine has for them.
  *
- * STEP 2's ABORT A DOCUMENT (§7.5.11) CANCELS THE DOCUMENT'S FETCHES, AND THAT IS STEP 7's DROP. A fetch in
+ * IT SAID ELEVEN AND EVERY STEP NUMBER BELOW WAS THE ELEVEN-STEP EDITION'S. The committed corpus was stamped
+ * 3 September 2026 and the standard moved on 3 October 2026, DELETING the two MessagePort steps that stood at
+ * 4 and 5 (the block below) and shifting everything after them down by two. The retired mapping is kept
+ * because a reader holding an older draft re-derives it: old 1-3 unchanged, old 4-5 GONE, old 6/7/8/9/10/11
+ * now 4/5/6/7/8/9. §7.5.10's SECOND algorithm — destroy a document and its descendants — did NOT move, so
+ * its step numbers elsewhere in this file are right as written, and a uniform shift over everything spelled
+ * "§7.5.10 step N" would have broken every one of them.
+ *
+ * STEP 2's ABORT A DOCUMENT (§7.5.11) CANCELS THE DOCUMENT'S FETCHES, AND THAT IS STEP 5's DROP. A fetch in
  * this engine is a JOB parked on a host-owed answer (navigable.c's §7.4 step 14 load), so "the fetches of this
  * document" and "the tasks of this document" are the same set and dropping the job IS what abandons the
  * request — one mechanism, asserted below to have emptied the queues rather than assumed to have. §7.5.11's
@@ -98,12 +106,12 @@ static JSContext *active_realm(JSContext *ctx, JSValueConst proxy)
  * its realm is built (navigable.c's child_document), so there is no parser in flight to reach; a streaming
  * parser arrives with its own abort entry, as its own component.
  *
- * STEPS 10 AND 11 ITERATE SETS THAT ARE EMPTY BY CONSTRUCTION: this engine has no WorkerGlobalScope and no
+ * STEPS 8 AND 9 ITERATE SETS THAT ARE EMPTY BY CONSTRUCTION: this engine has no WorkerGlobalScope and no
  * worklet global scopes, so "for each" runs zero times. That is the correct implementation of those steps and
  * not an omission — a Worker subsystem arrives with its own owner set and its own entry here.
  *
- * STEPS 8 AND 9 ARE ONE WRITE, AND STEP 9 IS THE RECLAMATION. Step 8 records the fact a page reads through
- * §7.2.2.1's `closed`; step 9 — "Set document's node navigable's active session history entry's document
+ * STEPS 6 AND 7 ARE ONE WRITE, AND STEP 7 IS THE RECLAMATION. Step 6 records the fact a page reads through
+ * §7.2.2.1's `closed`; step 7 — "Set document's node navigable's active session history entry's document
  * state's document to null" — is the NAVIGABLE letting go of the Document, because §7.3.1 "Navigables" defines
  * a navigable's active document as "its active session history entry's document" and §7.4.1.1 "Session history
  * entries" defines that as "its document state's document". This engine holds that binding on the navigable's
@@ -112,7 +120,7 @@ static JSContext *active_realm(JSContext *ctx, JSValueConst proxy)
  * Window). So the two go together in window_proxy_set_destroyed and neither has a site of its own.
  * IT USED TO SAY THIS STEP HAD NOWHERE TO LAND, on the reasoning that §7.4.1 puts entries on the TRAVERSABLE
  * while this engine holds them on the navigable's realm — which is true of the ENTRY LIST and says nothing
- * about the field step 9 nulls. The field is the active document, the navigable is what holds it, and while
+ * about the field step 7 nulls. The field is the active document, the navigable is what holds it, and while
  * that paragraph stood it was the only thing between this engine and reclaiming a realm: every child document
  * ever created stayed fully allocated behind a navigable that had announced its destruction. A gap recorded
  * instead of closed is worse than one nobody noticed, because it reads as a decision. */
@@ -121,18 +129,44 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
     JSContext *cctx = active_realm(ctx, proxy);
 
     if (cctx) {
-        /* STEPS 4 AND 5 — the ports whose relevant global object's associated Document is this one, each
-           disentangled. The SET is enumerable (message_port.c keeps the live ports and each one records its
-           realm); the DISENTANGLE is not yet, and the difference is whose write it is. A disentangle is a
-           write to the port record, so it belongs to the flow performing the destruction — and a list of
-           borrowed pointers is agent-global, so it cannot tell this flow's port from a sibling arm's. Reaching
-           into the wrong timeline would be a silent wrong answer; stopping here is a loud one. */
+        /* THE TWO STEPS THIS GUARDED ARE GONE FROM THE STANDARD, AND WHETHER THE GUARD GOES WITH THEM IS NOT
+           THIS DIFF'S TO DECIDE. It read "STEPS 4 AND 5 — the ports whose relevant global object's associated
+           Document is this one, each disentangled", and that was the 3 September 2026 edition. The 3 October
+           2026 edition deletes both, and `disentangle` now occurs nowhere in §7.5.10. §9.4 was restructured in
+           the same change — a non-normative "Broadcasting to many ports" arrived at §9.4.5 and pushed "Ports
+           and garbage collection" to §9.4.6 — and the old §9.4.5's normative "when a MessagePort object o is
+           garbage collected, if o is entangled then the user agent must disentangle o" went with it. §9.4.6
+           states liveness as a strong reference from the entangled port OR from the port's relevant global
+           object, and mentions disentangling only as author advice. So the obligation was RETIRED upstream
+           rather than relocated, which is why no number here is a renumber.
+           THE RETIRED ARGUMENT IS KEPT BECAUSE A READER RE-DERIVES IT: the SET was enumerable (message_port.c
+           keeps the live ports and each records its realm) and the DISENTANGLE was not, the difference being
+           whose write it is — a disentangle writes the port record, so it belonged to the flow performing the
+           destruction, and a list of borrowed pointers is agent-global and cannot tell this flow's port from a
+           sibling arm's. Stopping loudly beat reaching into the wrong timeline.
+           NAMED RESIDUAL — THIS ASSERT NOW STANDS ON NO STEP OF ANY SECTION.
+           NOT COVERED: which of two readings holds. Either the guard is a retired spec step and goes with the
+             steps, or it is incidentally protecting THIS ENGINE's own ownership — the write below releases the
+             child realm at step 7, and a tracked port names its realm by BORROWED pointer (message_port.c's
+             table is keyed on a record the collector owns, and port_untrack runs in a finalizer that may be
+             LATER than the agent's release), so a port outliving the realm it names would be this engine's
+             defect and not the standard's. The two take opposite actions and nothing here decides between them.
+           WHAT THE NEXT DIFF BUILDS: that decision, over the whole live-port mechanism rather than over this
+             line — core/events/message_port.{c,h}'s realm-keyed count exists for this guard and says so in its
+             own header, so retiring the guard leaves a producer with no consumer, while keeping it needs a
+             reason that is this engine's ownership rather than a citation. What settles it is reading what
+             holds the child realm across window_proxy_set_destroyed.
+           HOW ITS ABSENCE WOULD SHOW: a dev build aborting here on a page doing nothing the standard forbids —
+             an `<iframe>` that constructs a MessagePort and is then removed — where a release build and a real
+             browser both destroy the Document and leave the port to collection. */
         DCHECK(message_port_count_in_realm(cctx) == 0,
-               "a Document with live MessagePorts was destroyed — §7.5.10 steps 4-5 disentangle each of them. "
-               "BUILD IT: the port list has to become PER FLOW before the disentangle can run, which is the "
-               "same sentence as the port's own message queue being a JS Array — a list held as a JS value "
-               "forks and parks with the flow that created the port, and then the walk is that flow's");
-        /* STEP 6 — the UNLOADING DOCUMENT CLEANUP STEPS, the same body §7.5.9's unload runs at ITS step 18.
+               "a Document with live MessagePorts was destroyed. THIS NO LONGER STANDS ON A STEP OF §7.5.10 "
+               "— the two steps that asked for the disentangle were deleted upstream, so read the residual "
+               "above before building anything: it names the two readings and the observation that decides "
+               "them. If it is this engine's own ownership that wants this, the port list has to become PER "
+               "FLOW before a disentangle can run, which is the same sentence as the port's own message queue "
+               "being a JS Array — a list held as a JS value forks and parks with the flow that made the port");
+        /* STEP 4 — the UNLOADING DOCUMENT CLEANUP STEPS, the same body §7.5.9's unload runs at ITS step 18.
            IT WAS RUN ON ONE OF ITS TWO PATHS, and the one it was missing is the one a page reaches by removing
            an `<iframe>`: destroy-a-child-navigable goes straight to destroy-a-document-and-its-descendants and
            never unloads at all, so a removed frame's map of active timers was never cleared by any step. That it
@@ -142,21 +176,21 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
            somebody else's filter is a step that stops being performed when that filter changes its mind, and
            nothing here would have said so. */
         unloading_document_cleanup_steps(cctx);
-        /* STEP 7 — the tasks of this document, removed WITHOUT running. A task queued by a document that no
+        /* STEP 5 — the tasks of this document, removed WITHOUT running. A task queued by a document that no
            longer exists must not run: it would script a destroyed Document, and every one of those is a
            use-after-destroy a page can trigger by removing a frame that queued work.
            THE SECOND CALL IS THE ASSERT, not a retry: a drop that left anything behind would leave exactly the
            task that runs against a destroyed document, which is silent until it is a crash somewhere else. */
         JS_DropJobsForContext(cctx);
         DCHECK(JS_DropJobsForContext(cctx) == 0,
-               "§7.5.10 step 7 dropped a destroyed Document's queued tasks and there were still more — the "
+               "§7.5.10 step 5 dropped a destroyed Document's queued tasks and there were still more — the "
                "queues this walks are not all of them, and whichever one it missed will run page code in a "
                "document whose browsing context is null");
         /* AND THE OTHER TASK QUEUE, WHICH IS THE FRONTIER'S OWN. The line above says "the queues this walks are
            not all of them" as a hypothetical, and it is a FACT: JS_DropJobsForContext walks the runtime's job
            queues, and a document's SCRIPTS are not there. They are rows of the running flow's one program
            sequence (solver/flow.h's `dyn`/`dyn_doc`), queued by whichever flow created the navigable, and
-           §7.5.10 step 7's "any task queue" is every queue a task of this document can be sitting in. A row is
+           §7.5.10 step 5's "any task queue" is every queue a task of this document can be sitting in. A row is
            a task by the standard's own reckoning — §8.1.4.4 "Calling scripts" runs it, and §4.12.1.1
            "Processing model" queues it ("queue an element task on the DOM manipulation task source")
            — so a row of a destroyed Document that is still allowed to reach the compile is precisely the
@@ -167,8 +201,8 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
            has not yet destroyed this document is running a document that is still there, and taking its rows
            would destroy something in a timeline that never asked.
            THE REMOVAL TAKES EXACTLY THE ROWS THE COUNT THAT USED TO STAND HERE COUNTED — this flow's, for this
-           document, that it has not started. A ROW IT HAS ALREADY STARTED IS NOT STEP 7'S, which is why the
-           removal is narrower than the column: step 7 is about work that has not run, while a compiled row is a
+           document, that it has not started. A ROW IT HAS ALREADY STARTED IS NOT STEP 5'S, which is why the
+           removal is narrower than the column: step 5 is about work that has not run, while a compiled row is a
            program this flow may be SUSPENDED INSIDE, and the standard has no object at all for a continuation
            suspended mid-program — that one is the flow's own state and §NO BOUNDS forbids touching it.
            AND STEP 2's "Abort document." ARRIVES AS THE SAME REMOVAL: an outstanding external script whose row
@@ -176,9 +210,9 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
            the one instance of the fetch algorithm this document still had in flight. */
         flow_programs_remove_for_document(flow_running(), document_doc(cctx));
     }
-    /* STEPS 8 AND 9 — the browsing context is null, and the navigable stops naming this Document. LAST, which
+    /* STEPS 6 AND 7 — the browsing context is null, and the navigable stops naming this Document. LAST, which
        is the standard's own order and is load-bearing here: every step above reads the active document through
-       active_realm, and step 9 is what makes that answer NULL from now on. */
+       active_realm, and step 7 is what makes that answer NULL from now on. */
     window_proxy_set_destroyed(ctx, proxy);
 }
 
@@ -206,7 +240,7 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
 #define UNLOAD_SALVAGEABLE false
 
 /* §7.5.9's UNLOADING DOCUMENT CLEANUP STEPS — ONE BODY, TWO ENTRIES, which is why it is a function and not two
- * lines. §7.5.9's unload a Document reaches it at step 18 and §7.5.10's destroy a Document at step 6, and a
+ * lines. §7.5.9's unload a Document reaches it at step 18 and §7.5.10's destroy a Document at step 4, and a
  * Document can arrive by either route ALONE: a navigation unloads and then destroys, while a removed `<iframe>`
  * is destroyed with no unload anywhere in its history. Written inline at one of them it is not a shared
  * algorithm at all, it is that algorithm's private line — which is exactly what it had become, and the entry it
@@ -632,7 +666,7 @@ static int js_unload_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
     DCHECK(s->hdr.stage == UNLOAD_DESTROY, "§7.5.9's unload task resumed at a stage it does not have");
     JS_FreeValue(ctx, cb_result);
     /* STEP 18's UNLOADING DOCUMENT CLEANUP STEPS — the shared body, which §7.5.10's destroy reaches at its own
-       step 6. What it does and why three of its four sets are empty is stated there, once. */
+       step 4. What it does and why three of its four sets are empty is stated there, once. */
     if (cctx)
         unloading_document_cleanup_steps(cctx);
     /* STEP 20: salvageable is false, so the document is destroyed. The DESCENDANTS are already gone — each one
@@ -654,7 +688,7 @@ static void js_unload_visit(JSContext *ctx, void *st, JSStepVisit *v)
 
 #define SELF_DESTROY_STAGES(X) \
     X(SELF_DESTROY, "HTML §7.5.10 destroy a document and its descendants step 6 → destroy a Document, steps " \
-                    "1-11, then report this destruction to the navigable that is waiting on it (step 5)")
+                    "1-9, then report this destruction to the navigable that is waiting on it (step 5)")
 enum { SELF_DESTROY_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const SELF_DESTROY_STEPS[] = { SELF_DESTROY_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -873,7 +907,7 @@ static void self_enqueue(JSContext *ctx, JSValueConst proxy, int op, int after)
  * STEPS 1 AND 3 are §7.3.2.3's remove-a-browsing-context: take the browsing context out of its group's set,
  * and drop the group when its set empties. This engine has no browsing context group OBJECT — an instance is
  * an origin-keyed agent cluster, which is the heap boundary rather than the group — and the one consequence a
- * page can read is that the navigable's browsing context becomes null, which is §7.5.10 step 8 and is written
+ * page can read is that the navigable's browsing context becomes null, which is §7.5.10 step 6 and is written
  * by the destruction step 2 just queued.
  *
  * STEPS 4 AND 5 remove the traversable from the user interface and from the user agent's top-level traversable
