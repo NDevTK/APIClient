@@ -335,6 +335,28 @@ function readRun(path, derived) {
     const j = /"at"\s*:\s*"([^"]*)"/.exec(ab[1]);
     at = j ? j[1] : ab[1].slice(0, 160);
   }
+  /* ZERO MARKERS AND NO ABORT IS NOT A REACH OF ZERO — IT IS A FILE THIS PROBE CANNOT READ, and the two take
+     opposite work. `compiledMarkers` already refuses an ARTIFACT that holds no marker of the roster, in those
+     words and for this reason, and that refusal lives inside the artifact path, so it has never applied to a RUN
+     LOG at any input: a log of another subject, an empty file, or one truncated before the fixture printed a
+     byte was scored `REACH 0/N` with every rung listed as beyond the reach. That is the accusing direction, and
+     it is the worst available for this file in particular, whose whole job is to say which rows a run could not
+     answer for — so an unreadable input rendered identically to a total failure of the engine.
+     THE DISCRIMINATOR IS THE RUN'S OWN ABORT LINE, AND IT IS TWO-SIDED: a run that really died before its first
+     marker printed `@WHY` or `@E`, so zero markers WITH an abort is a genuine zero and is still scored; zero
+     markers WITHOUT one is a file carrying no evidence either way.
+     MEASURED BY ARMING THE CONTROL RATHER THAN BY READING THE CODE: a one-line file holding no marker scored
+     `REACH 0/15 resolving rung(s)` with `no @WHY/@E line in this run` and exited 0, listing all fifteen rungs as
+     beyond the reach — so the refusal this file documents for an artifact was unreachable for a log.
+     RESIDUAL: a log holding SOME markers, no abort, and an unreached tail is either TRUNCATED or COMPLETE, and
+     this cannot tell those apart. The next diff derives the producer's own terminal marker — the last
+     unconditional rung's — and reports a run lacking it as truncated rather than as a reach. Its absence shows
+     as a REACH printed for a run whose writer was killed, indistinguishable in this output from a run that
+     reached the end and answered nothing further. */
+  if (!present.size && at === null)
+    refuse(`no marker of the roster occurs in ${path} and it carries no @WHY/@E line — so this is not a run of ` +
+           `${relative(ROOT, PRODUCER)} that reached nothing, it is a file this probe cannot read, and scoring ` +
+           `it would print REACH 0/N with every rung beyond the reach`);
   return { present, at };
 }
 
