@@ -51,6 +51,19 @@
  *   - A SPECIFIER INSIDE A STRING. Import extraction is a regex over text, so a bundle that embeds source AS
  *     DATA offers specifiers no page evaluates. The cost is bounded and visible: a wrong URL is a 404 that
  *     lands in `declined` with its status, never a file in the corpus.
+ *   - THE DOCUMENT BASE URL OF A DOCUMENT THAT SHIPS A `<base href>`. Finding the first one in tree order is a
+ *     question about a PARSED tree and this walk is a matcher over text, so a relative reference whose two
+ *     candidate bases disagree is REFUSED rather than resolved under a guess. The refusal is per reference and
+ *     is argued at `baseCandidates`.
+ *   - A CHARACTER REFERENCE OUTSIDE THE FIVE THIS FILE CARRIES. An attribute value is decoded before it is a
+ *     URL, and the full named-character-references table is what decides a run this subset does not hold, so
+ *     such a reference is REFUSED. Argued at `decodeAttrRefs`, with what the next diff builds.
+ *
+ * AND A REFERENCE THAT NEVER BECAME A REQUEST IS RECORDED TOO, WHICH IS THE ONE SHORTFALL THIS FILE USED TO
+ * BE UNABLE TO NAME. The frontier was built by a `catch` that returned null into a `.filter(Boolean)`, so a
+ * reference this walk could not resolve read as a reference the document did not have — the defaulted-field
+ * shape, where the absence becomes a plausible datum and nothing counts it. Such a reference is now a row in
+ * `declined` carrying `requested: false`, and the per-site line prints how many there were.
  *
  * NON-OK AND DECLINED RESPONSES ARE RECORDED AND ARE NOT IN `resources`. corpus_programs.mjs builds its
  * essence map from every row it can see, so a row whose bytes did not reach disk can still make a digest
@@ -104,7 +117,7 @@ const saneName = (u) => {
 const TAG_SCRIPT = /<script\b[^>]*\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>/gi;
 const TAG_LINK = /<link\b[^>]*>/gi;
 const LINK_REL = /\brel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
-const LINK_HREF = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
+const ATTR_HREF = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
 const pick = (m) => (m ? (m[1] ?? m[2] ?? m[3] ?? "") : "");
 
 function documentRefs(html) {
@@ -113,9 +126,152 @@ function documentRefs(html) {
   for (const m of html.matchAll(TAG_LINK)) {
     const rel = pick(LINK_REL.exec(m[0])).trim().toLowerCase();
     if (rel !== "preload" && rel !== "modulepreload") continue;
-    const href = pick(LINK_HREF.exec(m[0])); if (href) out.push(href);
+    const href = pick(ATTR_HREF.exec(m[0])); if (href) out.push(href);
   }
   return out;
+}
+
+/* A REFERENCE IS AN ATTRIBUTE VALUE, SO THE BYTES IN IT ARE NOT THE BYTES A URL PARSER SEES. The tokenizer
+   resolves character references inside an attribute value before any URL exists, so `src="/a&amp;b"` names
+   `/a&b`, and a fetcher that asks for the literal `&amp;` asks a question the page never asked. THE HAZARD IS
+   NOT THAT THE REQUEST FAILS — IT IS THAT IT ANSWERS: a query whose parameter name is `amp;authorization`
+   rather than `authorization` is a well-formed request, so the reply is a real status over real bytes, and a
+   row stored under that URL's name is a measurement of an error page wearing a real address.
+   WHAT DECIDES IT IS A SPEC ALGORITHM AND NOT A REPLACE CHAIN. HTML §13.2.5.77 "Character reference state"
+   sends an alphanumeric run to §13.2.5.78 "Named character reference state", which consumes the longest
+   identifier in the named character references table of §13.5 "Named character references"; a run matching
+   nothing reaches §13.2.5.79 "Ambiguous ampersand state", whose own arms EMIT those characters and whose only
+   complaint is that "This is an unknown-named-character-reference parse error." — so an `&` beginning no
+   reference is ORDINARY TEXT, and a refusal on `&` would fire on every healthy query string. §13.2.5.78 also
+   states the attribute-only arm honoured below: where a match's last character is not a semicolon "and the
+   next input character is either a U+003D EQUALS SIGN character (=) or an ASCII alphanumeric, then, for
+   historical reasons" it is NOT decoded, which is why `?a=1&ampere=2` keeps its text while `&amp;` and a
+   trailing `&amp` do not. Its munch is "Consume the maximum number of characters possible, where the consumed
+   characters are one of the identifiers in the first column of the named character references table.", which
+   is why a run no table entry is a prefix of is not a reference however much it looks like one.
+   NAMED RESIDUAL — WHAT IS NOT COVERED: this carries the five references HTML attribute escaping exists to
+   produce and none of the table's other rows, so a SEMICOLON-TERMINATED run outside it is UNDECIDABLE here.
+   The full table is what says whether such a run is a reference at all, and either guess stores a URL the page
+   never named, so it is REFUSED rather than left silently wrong — a subset that merely under-decodes CERTIFIES
+   its survivors, the common case ceasing to show an ampersand run while the rare one stays wrong with nothing
+   left to say so. ALSO NOT COVERED: a semicolon-LESS run outside the subset, which §13.2.5.78 decodes when the
+   next character is neither `=` nor alphanumeric. It is left alone and NOT refused, because `&b` at the end of
+   a query has that exact shape and refusing it would fire on healthy sites.
+   WHAT THE NEXT DIFF BUILDS: the named character references table itself, derived from
+   engine/lexbor/source/lexbor/html/tokenizer/res.h, which already holds it, rather than typed out a second
+   time — and the refusal retires with it. HOW ITS ABSENCE SHOWS: a `declined` row reading
+   `undecidable-character-reference`, and a reference the table would have resolved reaching no request. */
+const NAMED_REF = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+const ATTR_REF = /&(#[xX][0-9a-fA-F]+|#[0-9]+|[A-Za-z][A-Za-z0-9]*)(;?)/g;
+
+function decodeAttrRefs(raw) {
+  let undecidable = null;
+  const value = String(raw).replace(ATTR_REF, (m, body, semi, at, whole) => {
+    if (body[0] === "#") {
+      /* §13.2.5.84 "Numeric character reference end state" answers every out-of-range form with U+FFFD rather
+         than with a throw: a surrogate is a surrogate-character-reference parse error, a value above 0x10FFFF
+         is character-reference-outside-unicode-range, and both become the replacement character. */
+      const hex = body[1] === "x" || body[1] === "X";
+      const cp = parseInt(hex ? body.slice(2) : body.slice(1), hex ? 16 : 10);
+      return Number.isFinite(cp) && cp > 0 && cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff)
+        ? String.fromCodePoint(cp) : "\ufffd";
+    }
+    const v = NAMED_REF[body];
+    if (v === undefined) {
+      /* A run this subset cannot decide is a refusal only where a SEMICOLON makes it a reference outright;
+         without one it is the §13.2.5.79 shape an ordinary query string produces. */
+      if (semi) undecidable ??= `&${body};`;
+      return m;
+    }
+    /* `body` is the maximal alphanumeric run, so the character after it is never alphanumeric and the
+       historical arm reduces to the one test §13.2.5.78 still leaves open. */
+    if (!semi && whole[at + m.length] === "=") return m;
+    return v;
+  });
+  return { value, undecidable };
+}
+
+/* THE DOCUMENT BASE URL IS NOT THE DOCUMENT'S ADDRESS, AND A MATCHER OVER TEXT CANNOT TELL YOU WHICH IT IS.
+   HTML §2.4.3 "Document base URLs": "If document has no descendant base element that has an href attribute,
+   then return document's fallback base URL." — "Otherwise, return the frozen base URL of the first base
+   element in document that has an href attribute, in tree order." The fallback IS the address, so resolving
+   against `finalUrl` is exactly right for a document with no `<base href>` and wrong for one that has one.
+   WHY THIS DOES NOT READ THE BASE AND RESOLVE AGAINST IT. The FIRST such element in TREE ORDER is a fact about
+   a parsed tree: a `<base>` inside a comment, inside `<script>` or `<textarea>` text, or inside a `<template>`
+   — whose contents are a separate fragment and so no descendant of the document — is not the document's base,
+   and a matcher over text takes all three. Resolving against one of those would move a CORRECT answer to a
+   wrong one on every document that merely mentions a base, a larger population than the documents that ship
+   one. §4.2.3 "The base element" does say "A base element, if it has an href attribute, must come before any
+   other elements in the tree that have attributes defined as taking URLs." — and an authoring requirement is
+   not a thing a fetcher of other people's documents may assume.
+   SO THE ANSWER IS A REFUSAL, AND IT IS PER REFERENCE RATHER THAN PER DOCUMENT. A candidate is computed the way
+   §4.2.3 computes a frozen base URL — the href parsed against the document's fallback base URL, "Thus, the base
+   element isn't affected by itself.", with a parse failure and with a `data:` or `javascript:` scheme alike
+   taking the arm that says "then set element's frozen base URL to document's fallback base URL and return."
+   — and a reference is fetched only where it resolves to the SAME URL under the
+   address and under every candidate. That asks no question of the bases themselves, which is what makes it
+   exact: an absolute reference is base-independent by construction, and a `<base href="/">` on a document
+   already at `/` changes no resolution, so neither costs anything.
+   RETIREMENT: this goes when the document is PARSED rather than matched, because the first `<base href>` in
+   tree order is then a fact and no refusal is owed. HOW ITS ABSENCE SHOWS: a `declined` row reading
+   `base-element-ambiguous` carrying both resolutions. */
+const TAG_BASE = /<base\b[^>]*>/gi;
+
+function baseCandidates(html, fallbackBaseUrl) {
+  const bases = new Set();
+  let unreadable = 0;
+  for (const m of html.matchAll(TAG_BASE)) {
+    const hm = ATTR_HREF.exec(m[0]);
+    if (!hm) continue;                     /* §2.4.3 counts only a base element that HAS an href attribute */
+    const { value, undecidable } = decodeAttrRefs(pick(hm));
+    if (undecidable) { unreadable++; continue; }
+    let u;
+    try { u = new URL(value, fallbackBaseUrl); } catch { bases.add(fallbackBaseUrl); continue; }
+    bases.add(u.protocol === "data:" || u.protocol === "javascript:" ? fallbackBaseUrl : u.href);
+  }
+  return { bases: [...bases], unreadable };
+}
+
+/* THE RESOLUTION, AND THE REASON IT RETURNS A REFUSAL RATHER THAN A NULL. What stood here was
+   `try { return new URL(h, doc.finalUrl).href } catch { return null }` behind a `.filter(Boolean)`, which
+   turned "this reference could not be resolved" into "there was no reference" — the one shortfall of this walk
+   that no line of the per-site report could name, beside the depth frontier it counts and the statuses it
+   declines. A reference this cannot resolve soundly is now a DECLARED ABSENCE, which is what `declined` is. */
+function resolveDocumentRef(h, fallbackBaseUrl, base) {
+  const { value, undecidable } = decodeAttrRefs(h);
+  if (undecidable)
+    return { reason: "undecidable-character-reference",
+             note: `${JSON.stringify(h)} carries ${undecidable}, which is not one of the named character `
+                 + `references this file can decide; HTML §13.5's table is what says whether it is one at all` };
+  /* An absolute reference resolves to itself under every base, so no base question reaches it. */
+  try { return { url: new URL(value).href }; } catch { /* relative: the base decides it */ }
+  let own;
+  try { own = new URL(value, fallbackBaseUrl).href; }
+  catch { return { reason: "unresolvable-reference",
+                   note: `${JSON.stringify(value)} does not resolve against ${fallbackBaseUrl}` }; }
+  if (base.unreadable)
+    return { reason: "base-element-ambiguous",
+             note: `${base.unreadable} apparent <base href> carries a character reference this file cannot `
+                 + `decide, so the base this relative reference resolves against is unknown` };
+  for (const b of base.bases) {
+    let under = null;
+    try { under = new URL(value, b).href; } catch { /* a base this reference cannot resolve against at all */ }
+    if (under !== own)
+      return { reason: "base-element-ambiguous",
+               note: `${own} under the document's own address, ${under === null ? "unresolvable" : under} `
+                   + `under an apparent <base href> whose frozen base URL is ${b}` };
+  }
+  return { url: own };
+}
+
+/* A MODULE SPECIFIER IS NEITHER OF THE TWO QUESTIONS ABOVE, AND IS KEPT APART SO NEITHER ANSWER CAN BE READ
+   FOR THE OTHER. It is JS source rather than an attribute value, so no character reference was ever resolved
+   in it; and it resolves against the MODULE'S OWN URL rather than against any document base. What changes here
+   is only that a specifier this cannot resolve is now declared instead of dropped. */
+function resolveImportSpec(s, moduleUrl) {
+  try { return { url: new URL(s, moduleUrl).href }; }
+  catch { return { reason: "unresolvable-specifier",
+                   note: `${JSON.stringify(s)} does not resolve against ${moduleUrl}` }; }
 }
 
 /* STATIC IMPORT SPECIFIERS. A regex over text, which is what this file's header declares it to be: the cost
@@ -225,6 +381,7 @@ export async function run() {
                   resources: [], declined: [], frontierUnfetched: [] };
     const seenUrl = new Set();
     const written = new Map();          /* savedPath -> sha256, so one name is never two bodies */
+    let nRefused = 0;
 
     const save = (r, url) => {
       const e = essenceOf(r.contentType);
@@ -248,6 +405,15 @@ export async function run() {
                           ...(r.error ? { error: r.error } : {}) });
       if (reason === "unclassified-essence" && !unclassified.has(essenceOf(r.contentType)))
         unclassified.set(essenceOf(r.contentType), url);
+    };
+    /* A REFUSAL IS NOT A ZERO-STATUS RESPONSE, AND IT MAY NOT BORROW ONE'S SHAPE. `get`'s catch arm already
+       records `status: 0` for a request that WAS made and threw, so reusing that row would merge "the network
+       failed" with "no request was ever composed" — two facts behind one answer, which is the shape this
+       file's header refuses a few paragraphs up for an unclassified essence. A refusal carries the REFERENCE
+       as the document spelled it, says it was not requested, and carries nothing a response would have. */
+    const refuse = (reference, reason, note) => {
+      rec.declined.push({ reference, requested: false, reason, note });
+      nRefused++;
     };
 
     /* THE DOCUMENT. It is the site record's own sha256/contentType — corpus_programs.mjs reads the document's
@@ -278,9 +444,13 @@ export async function run() {
 
     /* THE FRONTIER: the document's own script and preload references, then the static imports of whatever
        those turn out to be, to the stated depth. */
-    let frontier = documentRefs(doc.body.toString("utf8"))
-      .map((h) => { try { return new URL(h, doc.finalUrl).href; } catch { return null; } })
-      .filter(Boolean);
+    const html = doc.body.toString("utf8");
+    const base = baseCandidates(html, doc.finalUrl);
+    let frontier = [];
+    for (const h of documentRefs(html)) {
+      const got = resolveDocumentRef(h, doc.finalUrl, base);
+      if (got.url) frontier.push(got.url); else refuse(h, got.reason, got.note);
+    }
     let nProgSaved = 0, nDocSaved = 0;
 
     for (let depth = 0; depth <= DEPTH; depth++) {
@@ -298,9 +468,11 @@ export async function run() {
           rec.resources.push(row2);
           if (PROGRAM.has(e)) nProgSaved++; else nDocSaved++;
           if (PROGRAM.has(e)) {
-            const refs = importRefs(r.body.toString("utf8"))
-              .map((s) => { try { return new URL(s, r.finalUrl).href; } catch { return null; } })
-              .filter(Boolean);
+            const refs = [];
+            for (const s of importRefs(r.body.toString("utf8"))) {
+              const got = resolveImportSpec(s, r.finalUrl);
+              if (got.url) refs.push(got.url); else refuse(s, got.reason, got.note);
+            }
             if (depth < DEPTH) next.push(...refs);
             else for (const f of refs) if (!seenUrl.has(f)) rec.frontierUnfetched.push(f);
           }
@@ -314,7 +486,8 @@ export async function run() {
     manifest.push(rec);
     const bytes = rec.resources.reduce((a, b) => a + b.bytes, rec.bytes || 0);
     say(`  ${row.id.padEnd(12)} doc ${doc.status} ${JSON.stringify(docEssence)} — saved ${nProgSaved} program(s) `
-        + `+ ${nDocSaved} document(s), declined ${rec.declined.length}, `
+        + `+ ${nDocSaved} document(s), declined ${rec.declined.length} (${nRefused} reference(s) `
+        + `refused unresolved, never requested), `
         + `${[...new Set(rec.frontierUnfetched)].length} specifier(s) left at the depth-${DEPTH} frontier, `
         + `${bytes} byte(s)`);
   }
