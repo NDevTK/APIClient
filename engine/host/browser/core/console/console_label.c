@@ -69,10 +69,23 @@ void console_label_chain_visit(JSContext *ctx, ConsoleLabelChain *c, JSStepVisit
  * §7.1.1 ToPrimitive over an OBJECT — which is the one shape excluded below, from a C activation with no flow
  * base under it, exactly as every other converter in this engine refuses it.
  *
- * AN ABSENT EXAMPLE AND AN EXAMPLE THAT IS `undefined` ARE ONE ANSWER HERE and that is the accessor's own
- * conflation rather than this file's choice: concolic_example returns JS_UNDEFINED for both and offers no
- * third answer. Reading it as "no example" is the sound direction — it states less than the run knows and
- * keeps both arms — where reading it as the label "undefined" would decide a link on a fact nobody has. */
+ * AN ABSENT EXAMPLE AND AN EXAMPLE THAT IS `undefined` ARE ONE ANSWER HERE, and reading it as "no example" is
+ * the sound direction — it states less than the run knows and keeps both arms — where reading it as the label
+ * "undefined" would decide a link on a fact nobody has.
+ * THIS PARAGRAPH USED TO CALL THAT "the accessor's own conflation rather than this file's choice", on the
+ * ground that "concolic_example returns JS_UNDEFINED for both and offers no third answer". That is retired and
+ * kept in its own words because a reader who re-derives it from the JS_UNDEFINED in front of them will write it
+ * again: `concolic_example_state` is the third answer, so the collapse IS this file's choice now, and it is
+ * still the right one for the states that genuinely carry nothing.
+ * NAMED RESIDUAL — A DETERMINED LABEL IS READ AS UNSTATED. What is not covered: a label whose example this
+ * flow's own equality PINNED (`if (lbl === undefined) console.time(lbl)`, and every pin whose value coerces
+ * through §7.1.21 ToPropertyKey ( arg ) to a key) answers CONCOLIC_EX_DETERMINED, which is a PROOF, and this
+ * function reads it as JS_ATOM_NULL — correct, because unstated keeps every key arm, and narrower than the
+ * run's own knowledge.
+ * What the next diff builds: ask `concolic_example_state` here and take DETERMINED as the label, so the chain
+ * matches the key the flow proved instead of eliminating all of them. How its absence would show: a §1.2/§1.4
+ * chain that walks every key of a map it has a proved label for, eliminates all of them, and mints a fresh
+ * per-source slot — a `console.timeEnd` that reports no `startTime` for a timer the same run started. */
 static JSAtom console_label_example_atom(JSContext *ctx, JSValueConst label, const char *algorithm)
 {
     JSValue ex = concolic_example(ctx, label);

@@ -113,6 +113,45 @@ int         concolic_branch_neg(JSValueConst v);
    decide.c builds its constraint keys with this, which is why the solver has ONE speller and not three. */
 char       *concolic_ident_compose(const char *tag, const char *const *fields, int n);
 JSValue     concolic_example(JSContext *ctx, JSValueConst v);   /* the concrete example (dup'd) or JS_UNDEFINED */
+
+/* WHY THAT ANSWER IS NOT ENOUGH, AND WHAT THE READ BELOW IS FOR. `concolic_example` spends JS_UNDEFINED on
+ * FOUR distinct facts, and its callers each wrote down their own account of which one they were acting on
+ * because there was no way to ask — so the accounts disagree, and the ones that are wrong are wrong in
+ * different directions. The four:
+ *   - the value carries no example at all, which is what genuinely external input and server-injected absent
+ *     state look like by design and is the state that keeps BOTH arms of every branch;
+ *   - the value carries one and THIS FLOW'S OWN ARM proved it wrong, so the run holds POSITIVE evidence the
+ *     bytes are not what a real session sees, plus whatever exclusion, interval or predicate the gate that
+ *     contradicted it recorded;
+ *   - this flow's own equality DETERMINED the value and determined it to be `undefined` or a value that
+ *     coerces to one — `x === undefined` is among the commonest gates a bundle writes, `concolic_pin` records
+ *     it as CONCOLIC_LIT_UNDEFINED and `pin_of`'s own banner is explicit that "a source pinned to undefined
+ *     must answer undefined, not 'unpinned'". That sentinel is kept one layer down and spent one layer up:
+ *     the pin arrives here as JS_UNDEFINED, and every reader of this accessor takes JS_UNDEFINED for an
+ *     absence. The STRONGEST determination this engine can make and the weakest thing it can say about a
+ *     value report as one answer;
+ *   - the operand is not a concolic at all.
+ * §@H divides those by whether a VALUE WAS DETERMINED, and §A-SHAPE-STATES-TWO-FACTS by whether a DOMAIN was,
+ * so collapsing them is a wrong report rather than a partial one: a determined value renders as a bare shape,
+ * and a shape whose gate narrowed nothing renders the same way.
+ *
+ * IT IS DERIVED FROM THE ONE DECISION `concolic_example` ITSELF SWITCHES ON and is never a second reading of
+ * the chain, so the two cannot answer differently about one value and no assert is needed to say so — which
+ * is also why this takes no JSContext: it mints nothing, allocates nothing and is side-effect-free, so it may
+ * stand in a DCHECK condition.
+ *
+ * WHAT A CALLER OWES EACH ANSWER. DETERMINED is a PROOF and may be acted on; HELD is an OBSERVATION; NONE and
+ * CONTRADICTED are the two states in which this flow has no bytes to show, and they are NOT interchangeable —
+ * NONE says nothing was ever computed, while CONTRADICTED says a gate on this very path disproved what was.
+ * Reading either as a value is §@H's invention; reading DETERMINED as an absence is its mirror, and the
+ * under-claim is the direction nobody discovers by acting on it. */
+typedef enum {
+    CONCOLIC_EX_NONE = 0,       /* no example, or the operand is not a concolic — both arms stay open */
+    CONCOLIC_EX_HELD,           /* an example this flow has not contradicted */
+    CONCOLIC_EX_DETERMINED,     /* concretize-on-pin: this flow's own equality proved the value */
+    CONCOLIC_EX_CONTRADICTED    /* an example THIS path's own arm proved wrong */
+} ConcolicExState;
+ConcolicExState concolic_example_state(JSValueConst v);
 void        concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example);   /* attach/replace (consumes example) */
 
 /* WHAT THIS FLOW HAS *PROVED* THIS VALUE IS — CONCRETIZE-ON-PIN, asked of a VALUE and answered in BYTES.

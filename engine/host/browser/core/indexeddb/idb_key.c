@@ -300,21 +300,38 @@ IdbKeyResult idb_key_convert_here(JSContext *ctx, JSValueConst input, JSValue *p
     /* THE CONCOLIC ARM COMES FIRST because a concolic is an OBJECT: every test in the arm above would answer
        "no" for one and it would fall out of the bottom as "invalid type". */
     while (concolic_is(v)) {
+        /* WHICH FACT THE ABSENCE BELOW IS, ASKED BEFORE IT IS READ. `concolic_example` spends JS_UNDEFINED on
+           four states (solver/concolic.h) and this loop owes two of them opposite work, so the shape is not
+           what decides — the state is.
+           A DETERMINED `undefined` IS A DECIDED §7.4 ANSWER AND NOT AN ABSENCE, which is what this arm used to
+           get wrong. `concolic_pin` records `k === undefined` as CONCOLIC_LIT_UNDEFINED and `pin_of` is
+           explicit that "a source pinned to undefined must answer undefined, not 'unpinned'" — so a flow that
+           has PROVED the key is `undefined` knows exactly what §7.4 says about it ("invalid type", by falling
+           through every type test below), and the abort this loop raised instead stood on a page's own
+           `if (k === undefined)` gate. That is the one direction CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE
+           forbids: an ordinary bundle shape, not an invariant of this engine's, handing a page a dev abort.
+           Taking the value lets the loop exit — `concolic_is(undefined)` is false — and idb_key_concrete_arm
+           answers the decided "invalid type". */
+        ConcolicExState st = concolic_example_state(v);
         JSValue ex = concolic_example(ctx, v);
 
-        if (JS_IsUndefined(ex)) {
+        if (JS_IsUndefined(ex) && st != CONCOLIC_EX_DETERMINED) {
             JS_FreeValue(ctx, ex);
             JS_FreeValue(ctx, held);
-            /* TWO STATES WEAR THIS SHAPE and neither is built. A concolic with NO example yet is a value whose
-               §7.4 answer is not decidable at all — it is a key on one arm and a "DataError" on the other, so
-               the step must FORK and explore both, which is the flow the solver owes here. A concolic whose
-               example genuinely IS `undefined` has a decided answer ("invalid type"), and concolic_example
-               reports the two identically, so the fork cannot be written without an accessor that tells them
-               apart. */
-            DFAIL("Indexed Database §7.4 reached a concolic with no EXAMPLE: whether it is a valid key is "
-                  "undecided, so the step must FORK a key arm and an invalid arm rather than answer one of "
-                  "them — and concolic_example cannot yet distinguish an absent example from an `undefined` "
-                  "one, which is the accessor that fork needs first");
+            /* AND THE TWO REMAINING STATES ARE STILL ONE ABORT, BECAUSE THE FORK IS STILL OWED FOR BOTH — but
+               the message NAMES which one was met, so the next diff is sent at the state it actually has to
+               build for rather than at a guess. A concolic with NO example is a value whose §7.4 answer is not
+               decidable at all — a key on one arm and a "DataError" on the other — so the step must FORK and
+               explore both. A CONTRADICTED one is the same undecided answer with a constraint already in hand:
+               the gate that disproved the example recorded an exclusion, an interval or a predicate under the
+               value's hole, so the fork's arms are narrowed by facts this flow observed rather than open. */
+            DFAILF("Indexed Database §7.4 Convert a value to a key reached a concolic this flow has no key "
+                   "bytes for (%s): whether it is a valid key is undecided, so the step must FORK a key arm "
+                   "and an invalid arm rather than answer one of them",
+                   st == CONCOLIC_EX_CONTRADICTED
+                       ? "this path's own arm CONTRADICTED the example, so the fork's arms are narrowed by the "
+                         "exclusion, interval or predicate that gate recorded"
+                       : "no example was ever computed, so neither arm is narrowed by anything");
             return IDB_KEY_INVALID_TYPE;
         }
         JS_FreeValue(ctx, held);

@@ -2236,8 +2236,23 @@ static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
     /* JS_UNDEFINED IS THE ABSENCE, WHICH IS concolic.h'S OWN SPELLING OF IT ("the concrete example (dup'd) or
        JS_UNDEFINED"), and it is read here as the absence and never as a falsy example. The two are the same
        tag, so a value whose example genuinely IS `undefined` is treated as carrying none — that is the
-       producer's encoding, not this reader's default, and the alternative would be this file inventing a
-       distinction the value class does not make. */
+       producer's encoding and not this reader's default.
+       THIS PARAGRAPH USED TO END "the alternative would be this file inventing a distinction the value class
+       does not make", and that clause is retired rather than deleted because it is what a reader re-derives
+       from one tag standing for two facts: the class DOES make the distinction now
+       (`concolic_example_state`), so the collapse here is a choice and no longer a limit.
+       NAMED RESIDUAL — A DETERMINED ARM READS AS UNOBSERVED. What is not covered: a condition whose value this
+       flow's own equality PINNED, where the pinned value's own SPELLING is the one `pin_mint` hands back as
+       JS_UNDEFINED. Every OTHER falsy pin is already decided correctly by the line below, because the test is
+       the TAG and not truthiness — a pin of `null`, `0` or `""` arrives non-undefined and reaches `JS_ToBool`
+       — so the gap is the tag the absence shares and nothing wider: the run has PROVED which arm a real session
+       takes and this function answers REAL_ARM_UNOBSERVED, which is sound (neither arm is marked, both are
+       kept) and narrower than what the flow knows. What the next diff builds: read the state here and
+       answer `JS_ToBool` for DETERMINED even where the value is undefined, so dec_fork_here keeps the arm the
+       proof names as primary and decide_note_forced_arm marks the other FORCED. How its absence would show: a
+       request built past `if (x === undefined) { … }`'s inner gate graded as though nothing had been observed
+       — §A-REQUEST-CARRIES-THE-PROVENANCE's FORCED under-claimed, which is the grade safeFetch's firing
+       decision reads, so the under-claim is in the direction that permits an act rather than refusing one. */
     if (JS_IsUndefined(ex)) return REAL_ARM_UNOBSERVED;
     real = JS_ToBool(ctx, ex);
     JS_FreeValue(ctx, ex);

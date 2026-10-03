@@ -5886,25 +5886,88 @@ int concolic_branch_neg(JSValueConst v) {
  * at a second — which is most example reads in this engine, since each `+` over an unknown asks for two. What
  * pays the walk is a source or member read on a page that has pinned something, and that is the population
  * `pin_of` already pays for at the mint. */
-JSValue concolic_example(JSContext *ctx, JSValueConst v) {
-    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
-    if (!c) return JS_UNDEFINED;
-    /* WHAT THIS FLOW HAS *PROVED*, ASKED BEFORE WHAT IT WAS HANDED — see the paragraph above for why a proof
-       outranks an observation, and concolic.h's concolic_pin for the pin itself.
-       IT NEEDS NO CANDIDATE GUARD, WHICH THE MINT'S ARM DOES, AND THE REASON IS STRUCTURAL RATHER THAN A CASE
-       NOBODY THOUGHT ABOUT: a substituted source never becomes a concolic at all — concolic_deliver hands back
-       the attacker's own bytes as a plain string — so there is no record here to carry `src_self`, and a pin
-       the exploring run took cannot stand in front of a payload this accessor is never asked about. */
+/* WHICH OF THE FOUR THE ACCESSOR IS ABOUT TO ANSWER — ONE decision, read by `concolic_example` to MINT and by
+   `concolic_example_state` to REPORT, so the value and the fact about it cannot disagree and nothing has to
+   assert that they do not. See concolic.h for what each answer obliges a caller to.
+   IT HANDS BACK THE PIN ENTRY RATHER THAN RE-LOOKING IT UP, which is the whole of why this is a derivation and
+   not a second copy: a `DETERMINED` answer and the bytes that make it true come out of ONE `cons_lookup`, so
+   there is no second chain read for a later write to have moved under. `pin_of` stays the mint path for the
+   OTHER pin reader (concolic_new's arm, which has no state to report), and `pin_mint` is still the one place a
+   stored (kind, spelling) pair becomes a value again — which is what its own banner's "the two read sites"
+   already names.
+   WHAT THIS FLOW HAS *PROVED* IS ASKED BEFORE WHAT IT WAS HANDED — see the accessor's paragraph for why a
+   proof outranks an observation, and concolic.h's concolic_pin for the pin itself.
+   IT NEEDS NO CANDIDATE GUARD, WHICH THE MINT'S ARM DOES, AND THE REASON IS STRUCTURAL RATHER THAN A CASE
+   NOBODY THOUGHT ABOUT: a substituted source never becomes a concolic at all — concolic_deliver hands back
+   the attacker's own bytes as a plain string — so there is no record here to carry `src_self`, and a pin
+   the exploring run took cannot stand in front of a payload this accessor is never asked about.
+   `*ppin` IS BORROWED OUT OF THE CONSTRAINT CHAIN AND IS DEAD AT THE NEXT `cons_entry` — the head is a growable
+   array and growing it is a realloc, which is the contract concolic_pin spells at its own two writes ("`c` IS
+   DEAD FROM HERE"). The one caller that takes it mints from it on the NEXT LINE, and `pin_mint` writes no
+   constraint and runs none of the page's code, so the window is exactly the one `pin_of` has always had inside
+   itself; what is new is that the pointer crosses a function boundary, which is why the lifetime is stated here
+   rather than left for a second caller to discover. A caller that needs it across anything else copies it. */
+static ConcolicExState example_state_of(const Concolic *c, const Cons **ppin)
+{
+    *ppin = NULL;
+    if (!c) return CONCOLIC_EX_NONE;
     if (g_pin_any && c->src_self && c->src) {
-        JSValue pv = pin_of(ctx, c->src);
-        if (!JS_IsUninitialized(pv)) return pv;
+        const Cons *p = cons_lookup(c->src);
+        /* `val` IS THE DETERMINATION AND `pinned_root` IS NOT — concolic_pin writes the mark on a LOOSE
+           equality's holding arm without writing a value, so an entry is routinely present with nothing
+           pinned. That is the same test `pin_of` makes (`!c || !c->val`), stated here because the state and
+           the mint are now one answer. */
+        if (p && p->val) { *ppin = p; return CONCOLIC_EX_DETERMINED; }
     }
-    if (JS_IsUndefined(c->example)) return JS_UNDEFINED;
+    if (JS_IsUndefined(c->example)) return CONCOLIC_EX_NONE;
     if (g_ex_contra_any && c->ident) {
         const Cons *e = cons_lookup(c->ident);
-        if (e && e->ex_contra) return JS_UNDEFINED;
+        if (e && e->ex_contra) return CONCOLIC_EX_CONTRADICTED;
     }
-    return JS_DupValue(ctx, c->example);
+    return CONCOLIC_EX_HELD;
+}
+
+JSValue concolic_example(JSContext *ctx, JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    const Cons *pin;
+
+    switch (example_state_of(c, &pin)) {
+    /* THE TWO ARMS THAT DEREFERENCE ARE ASSERTED ACROSS THE SEAM AND NOT WITHIN IT, which is why these are
+       checks rather than the non-check §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE forbids: the operands come
+       from a DIFFERENT function, so an edit there that answered DETERMINED with no entry or HELD for a value
+       that is not a concolic at all would be a NULL dereference here, and these turn it into the abort that
+       names which arm handed it over. Nothing in THIS function can make them fail. */
+    case CONCOLIC_EX_DETERMINED:
+        DCHECK(pin != NULL,
+               "the example state answered DETERMINED and handed back no constraint entry — the pin's bytes "
+               "and the claim that there is one come out of ONE lookup precisely so the mint below cannot be "
+               "asked to spell a determination nobody found");
+        return pin_mint(ctx, (ConcolicLit)pin->valkind, pin->val);
+    case CONCOLIC_EX_HELD:
+        DCHECK(c != NULL,
+               "the example state answered HELD for a value that carries no concolic record — HELD is a claim "
+               "about a record's own `example` field, so an operand with no record can only be NONE and this "
+               "arm would be reading one that does not exist");
+        return JS_DupValue(ctx, c->example);
+    /* THE TWO STATES IN WHICH THIS FLOW HAS NO BYTES TO SHOW, AND THE ONE ANSWER BETWEEN THEM IS WHY
+       `concolic_example_state` EXISTS. They are not interchangeable — NONE says nothing was ever computed,
+       CONTRADICTED says a gate on this very path disproved what was — and a caller that owes them different
+       work asks for the state rather than reading this absence twice. The ABSENCE is the sound answer for both
+       (§@H: handing back contradicted bytes is an invention, and inventing one for a value that never had one
+       is the same invention), which is why the collapse is safe HERE and only here. */
+    case CONCOLIC_EX_NONE:
+    case CONCOLIC_EX_CONTRADICTED:
+        break;
+    }
+    return JS_UNDEFINED;
+}
+
+/* …AND THE SAME DECISION, REPORTED — see concolic.h for the four answers and what each obliges a caller to. */
+ConcolicExState concolic_example_state(JSValueConst v) {
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    const Cons *pin;
+
+    return example_state_of(c, &pin);
 }
 
 /* THIS FLOW TOOK AN ARM THE VALUE'S OWN EXAMPLE SAYS A REAL SESSION DOES NOT TAKE — see the accessor above for
