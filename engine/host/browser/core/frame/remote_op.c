@@ -263,6 +263,19 @@ const char *remote_op_addressee(const RemoteOp *op)
     return op->f[3];
 }
 
+/* THE MEMBER — the fifth field, and ONLY for a `windowproxy.get`: the five `object.*` verbs put
+   `<generation>:<id>` in that slot (see the record grammar in remote_op.h), so the field's MEANING is a
+   function of the verb and not of its position. NULL rather than a DCHECK for the reason the header gives: the
+   caller is asking which operation arrived, and the absence is the answer to that. */
+const char *remote_op_member(const RemoteOp *op)
+{
+    DCHECK(op != NULL, "the member of a cross-agent operation that was never parsed");
+    if (op->op != OP_WPGET) return NULL;
+    /* THE FIELD IS THERE BY THE PARSE'S OWN `CHECK`: OPS[OP_WPGET].need is 5, so indices 0..4 arrived or no
+       record got this far — which is why this reads the slot rather than re-counting the fields. */
+    return op->f[4];
+}
+
 const char *remote_op_program(JSContext *ctx, const RemoteOp *op)
 {
     JSValue g;

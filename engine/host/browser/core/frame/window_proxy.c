@@ -301,8 +301,15 @@ typedef struct {
     uint32_t doc;
 } ProxyData;
 
-/* §7.2.2.1's `closed` GETTER, AS ONE EXPRESSION — "true if this's browsing context is null or its is closing
-   is true". Written once here so that no member can ask half of it: a `closed` that read only the destroy
+/* §7.2.2.1's `closed` GETTER, AS ONE EXPRESSION — "true if this's navigable is null or its is closing
+   is true". THE WORD IS `navigable` AND IT WAS `browsing context`, which is the calendar kind of corpus
+   staleness rather than anybody's mistake: the quotation was exact against the corpus that stood when it was
+   written, the standard renamed the operand in that one sentence, and the regen of the committed corpus is what
+   made the old spelling a divergence. It is repaired beside the two new sites that quote the same sentence
+   because N copies of one sentence are N chances to be stale and a site that differs from its siblings is a
+   finding whichever way it differs — and this one was individually resolved against the document rather than
+   swept to agree with them.
+   WRITTEN ONCE HERE so that no member can ask half of it: a `closed` that read only the destroy
    flag would report a closing popup as open, and one that read only is-closing would report a removed frame
    as open. Both of those were the single byte this replaced, in the two directions it could be wrong.
    "BROWSING CONTEXT IS NULL" HAS TWO WRITERS AND THIS IS WHERE THEY MEET — §7.5.10 step 8's destruction and
@@ -3792,6 +3799,108 @@ static int proxy_answer_matches_idl(JSValueConst v, int magic)
    agent ran close() wrote — so the read is one step of the standard performed in another instance, and the
    wait for that peer is a sub-sequence inside it (`req` is its cursor), not a step of its own. One stage: a
    flow parked here is parked at the read it made, whichever member it asked for. */
+/* §7.2.1'S TWO RECORD-ANSWERABLE MEMBERS, COMPUTED ONCE FOR BOTH SIDES OF THE SEAM. The two expressions
+   below used to live only in proxy_get_step's hosted arm, where they answer a read made IN this instance; the
+   receiving half of a `windowproxy.get` needs the same two answers for a read made in ANOTHER one, and two
+   spellings of one answer is the shape that drifts — the identical argument remote_op.h makes about the
+   record's own grammar. So the arm became this function and gained a second caller
+   (window_proxy_record_member_of_document) rather than a twin.
+   1 AND `*out` WHEN THIS MEMBER IS ONE OF THE TWO, 0 AND `*out` UNTOUCHED OTHERWISE — and the REFUSAL is the
+   caller's to spell, which is why this returns a verdict instead of crashing. A DFAIL here would stamp THIS
+   line for both callers and could name neither the step machine nor the arriving record, which is the
+   assert-that-names-a-remedy-but-not-a-site defect a shared helper creates. Each caller knows what reaching it
+   with a third member means, and each says so in its own words.
+   WHY THESE TWO AND NOT A THIRD. HTML §7.2.2.2 "Indexed access on the Window object" makes `length` a COUNT —
+   "The length getter steps are to return this's associated Document's document-tree child navigables's size" —
+   and §7.2.2.1 "Opening and closing windows" makes `closed` a pair of FLAGS this agent writes: "The closed
+   getter steps are to return true if this's navigable is null or its is closing is true; otherwise false."
+   Both are facts the §7.2.3 record already holds, so neither needs the active document's realm to be
+   reached, let alone materialized. Every other member of §7.2.1.3.1's thirteen either names an OBJECT of that
+   realm — `location`, and the `document` §7.2.2 "The Window object" declares — or is a navigable of this agent
+   that proxy_member_get answers in-turn, so a third arm here would be a member whose answer this record does
+   not contain.
+   A NAVIGABLE WHOSE REALM HAS NOT BEEN MATERIALIZED COUNTS ZERO, and that is the computed answer rather than a
+   stand-in for one: its active document is the empty about:blank Document §7.4 created, an element can only get
+   into it by script, and script cannot run in a realm that does not exist. Building a whole platform to count
+   the iframes in a document that provably has none is what made this read cost a realm per flow — 4000 flows in
+   and the frontier hit the RAM floor at ~57% of the depth it reaches without it.
+   AND A DESTROYED NAVIGABLE COUNTS ZERO FOR A DIFFERENT REASON AND THE SAME WAY: §7.5.10 "Destroying
+   documents"' set-the-Document's-browsing-context-to-null step reaches window_proxy_set_destroyed, which nulls
+   this record's realm, so there is no active document to count and there will not be one. The `realm ? … : 0`
+   below answers both states and asserting the difference is not this line's to make — window_proxy_document_state
+   is the one entry that partitions them.
+   JS_GetOpaque AND NOT proxy_of, which is proxy_get_step's own existing choice and is kept: neither arm WRITES
+   the record, and a capture here would put an entry in the running flow's delta for storage the read never
+   touches. (window_proxy_closed captures through its own accessor, which is that member's own contract.) */
+static int proxy_record_member(JSContext *ctx, JSValueConst nav, int magic, JSValue *out)
+{
+    ProxyData *p = JS_GetOpaque(nav, g_proxy_class);
+
+    DCHECK(p != NULL, "§7.2.1's record-answerable members were asked of something that is not a WindowProxy");
+    DCHECK(out != NULL, "§7.2.1's record-answerable members were asked with nowhere to put the answer");
+    switch (magic) {
+    case WP_LENGTH:
+        *out = JS_NewInt32(ctx, p->realm ? iframe_child_navigable_count(p->realm) : 0);
+        return 1;
+    case WP_CLOSED:
+        /* §7.2.2.1's whole OR, which is window_proxy_closed's — never the recorded flags, for the reason
+           written at wp_bc_null: a frame removed from the tree is closed on that line. */
+        *out = JS_NewBool(ctx, window_proxy_closed(ctx, nav));
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* WHICH MEMBER A NAME IS, over the ONE table that spells them. PROXY_MEMBER is also what the asking side writes
+   into a `windowproxy.get` record (proxy_get_step), so the two halves of the seam read one spelling and a
+   member renamed here cannot be answered under its old name there. -1 for a name this surface does not install
+   — which is not the same set as §7.2.1.3.1's thirteen (`close`, `focus`, `blur` and `postMessage` are on that
+   list and are not accessors of this object), and the caller decides what that absence means. */
+static int proxy_member_of_name(const char *name)
+{
+    int i;
+
+    DCHECK(name != NULL, "a WindowProxy member was looked up by no name at all");
+    for (i = 0; i < WP_MEMBER_N; i++)
+        if (!strcmp(PROXY_MEMBER[i], name)) return i;
+    return -1;
+}
+
+/* AND THE SAME TWO ANSWERS FOR A CALLER THAT HAS A DOCUMENT NAME AND A MEMBER NAME — see window_proxy.h. */
+int window_proxy_record_member_of_document(JSContext *ctx, uint32_t doc, const char *member, JSValue *out)
+{
+    JSValue held;
+    int magic, answered;
+
+    DCHECK(member != NULL,
+           "§7.2.1's record-answerable members were asked of a document with no member named — the caller holds "
+           "a record whose verb it has not read, and `windowproxy.get` is the only one of the six that carries a "
+           "member at all");
+    DCHECK(out != NULL, "§7.2.1's record-answerable members were asked with nowhere to put the answer");
+    magic = proxy_member_of_name(member);
+    if (magic < 0) return 0;
+    /* THE PARTITION IS ASKED OF THE ONE ENTRY THAT OWNS IT, and the two states that answer 0 here are the two
+       whose own ABORTS name the work: a document whose active Document is a PEER's (no realm of this heap is it,
+       now or ever) and a name this timeline holds no navigable of at all. Answering `length` 0 for either would
+       be a count of a document this agent knows nothing about, reported as a real one — and the caller's own
+       realm lookup aborts on both by name, which is strictly more than this entry could say. The other three
+       states all mean THIS AGENT HOLDS THE NAVIGABLE, which is the whole of what the two members read. */
+    switch (window_proxy_document_state(doc)) {
+    case WP_DOC_ACTIVE: case WP_DOC_DESTROYED: case WP_DOC_INITIAL: break;
+    case WP_DOC_REMOTE: case WP_DOC_NO_NAVIGABLE: return 0;
+    }
+    held = window_proxy_of_document(ctx, doc);
+    /* ONLY REACHABLE IN RELEASE, and it is a guard rather than an assert for that reason: the entry above
+       DCHECKs a hosted document it holds no navigable for, and the partition has just excluded every state in
+       which it holds none — so a JS_UNDEFINED here is that assert compiled out, and the caller's lookup is what
+       names it. */
+    if (JS_IsUndefined(held)) return 0;
+    answered = proxy_record_member(ctx, held, magic, out);
+    JS_FreeValue(ctx, held);
+    return answered;
+}
+
 #define PROXY_GET_STAGES(X) \
     X(PROXY_GET_ASK = IDL_STEP_FIRST, \
       "HTML §7.2.3 the WindowProxy exotic object (the cross-instance member's value, resolved by the instance " \
@@ -3833,26 +3942,17 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
        child-navigable count of the ACTIVE DOCUMENT, so it is a walk of THAT document's tree — the reading
        realm would count this document's frames and call them the other's. §7.2.2.1's `closed` is the top-level
        traversable's, and the agent that holds the active document is the agent whose `close()` writes it.
-       A NAVIGABLE WHOSE REALM HAS NOT BEEN MATERIALIZED COUNTS ZERO, and that is the computed answer rather
-       than a stand-in for one: its active document is the empty about:blank Document §7.4 created, an element
-       can only get into it by script, and script cannot run in a realm that does not exist. Building a whole
-       platform to count the iframes in a document that provably has none is what made this read cost a realm
-       per flow — 4000 flows in and the frontier hit the RAM floor at ~57% of the depth it reaches without it. */
+       THE TWO EXPRESSIONS ARE proxy_record_member'S NOW, and the paragraph that stood here arguing why an
+       unmaterialized realm counts ZERO moved with them rather than being copied: the receiving half of a
+       `windowproxy.get` needs the same two answers, and the reasoning belongs beside the one computation.
+       WHAT IS STILL THIS SITE'S IS THE REFUSAL. A third member reaching this step machine is a member
+       proxy_member_get answers in-turn, which is a fact about THIS surface and nothing the shared computation
+       could say — so the verdict comes back and the crash is spelled here. */
     if (world_doc_hosted(p->doc)) {
-        switch (magic) {
-        case WP_LENGTH:
-            *presult = JS_NewInt32(ctx, p->realm ? iframe_child_navigable_count(p->realm) : 0);
-            break;
-        case WP_CLOSED:
-            /* §7.2.2.1's whole OR, which is window_proxy_closed's — never the recorded flags, for the reason
-               written at wp_bc_null: a frame removed from the tree is closed on that line. */
-            *presult = JS_NewBool(ctx, window_proxy_closed(ctx, nav));
-            break;
-        default:
+        if (!proxy_record_member(ctx, nav, magic, presult)) {
             DFAIL("a navigable-own member reached the step machine — it is answered by proxy_member_get, in "
                   "this turn, with no host round trip");
             *presult = JS_UNDEFINED;
-            break;
         }
         return JS_STEP_DONE;
     }

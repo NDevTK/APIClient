@@ -602,6 +602,32 @@ bool window_proxy_receiver_is_own_realm(JSContext *ctx, JSValueConst js_value);
    Per-flow: captured into the running flow's delta, so a sibling arm that never closed it still sees it open. */
 bool window_proxy_closed(JSContext *ctx, JSValueConst proxy);
 
+/* §7.2.1's TWO RECORD-ANSWERABLE MEMBERS, FOR A CALLER THAT HAS A DOCUMENT NAME AND A MEMBER NAME AND NO REALM
+ * OF THE TARGET — the receiving half of a cross-instance `windowproxy.get`. Returns 1 with `*out` set to the
+ * member's value, or 0 with `*out` untouched; `member` is HTML §7.2.1.3.1 "CrossOriginProperties ( O )"' own
+ * property name, which is the spelling the asking half writes into the record.
+ *
+ * THE TWO ARE `length` AND `closed`, AND THAT IS A PROPERTY OF THE STANDARD RATHER THAN OF THIS ENGINE.
+ * HTML §7.2.2.2 "Indexed access on the Window object" makes one a COUNT — "The length getter steps are to return
+ * this's associated Document's document-tree child navigables's size" — and HTML §7.2.2.1 "Opening and closing
+ * windows" makes the other a pair of FLAGS this agent writes: "The closed getter steps are to return true if
+ * this's navigable is null or its is closing is true; otherwise false." Both are facts §7.2.3's record
+ * already holds, so neither needs the active document's realm REACHED, let alone materialized — which is why
+ * this is the one entry a peer's read can be answered through when there is no such realm at all.
+ *
+ * `ctx` MAY BE ANY REALM OF THIS AGENT AND NEED NOT BE THE NAMED DOCUMENT'S, which is the whole point and is
+ * sound for exactly these two: it is used to MINT the primitive (JS_NewInt32 / JS_NewBool) and to walk this
+ * agent's own navigable records, never to reach into the document being asked about. A caller handing the value
+ * onward must not read that permission any wider — see solver/engine.c's flow_perform, where the assert that
+ * stops a member whose answer is an OBJECT being converted in the wrong realm is written.
+ *
+ * 0 IS `THIS ENTRY CANNOT ANSWER` AND NEVER A VALUE. It is 0 for a member that is not one of the two, and for a
+ * document whose active Document is a PEER's or whose name this timeline holds no navigable of — and in those
+ * last two the CALLER's own realm lookup aborts naming the work, which is strictly more than this entry could
+ * say. Answering `length` 0 for either would be a count of a document this agent knows nothing about, reported
+ * as a real one. */
+int window_proxy_record_member_of_document(JSContext *ctx, uint32_t doc, const char *member, JSValue *out);
+
 /* IS THIS ONE OF THE PROXY OBJECTS THIS COMPONENT MINTS? An implementation question, asked of values this
    component holds and about to read ProxyData out of. It is NOT the Web IDL type test — see below. */
 bool window_proxy_is(JSValueConst v);

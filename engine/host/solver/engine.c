@@ -3089,7 +3089,7 @@ static Flow *g_enqueue_owner;
  * A DESTRUCTION IS PER-FLOW BECAUSE EVERY PIECE OF IT IS STATE A PAGE OBSERVES. §7.5.9 fires `pagehide` and
  * `unload` at listeners a SCRIPT registered, so they live in the COW delta of the flow that ran that script and
  * in no baseline; its "clear window's map of active timers" clears the timers the timeline that set them holds;
- * §7.5.10 step 8's browsing-context-null is a write to the WindowProxy record, which that record's own COW
+ * §7.5.10 step 6's browsing-context-null is a write to the WindowProxy record, which that record's own COW
  * capture makes per-flow — which is the same reason document_lifecycle.h gives for the subtree wait being a
  * count on the proxy rather than a shared integer. Run in ONE timeline this would destroy the document there
  * and leave every other flow running a document the browser replaced: exactly the two-tops state the trusted
@@ -8865,6 +8865,12 @@ void engine_request_paint_every_world(void) {
     paint_mark_standing_members();
 }
 
+/* THE ANSWER RECORD'S ONE WRITER, declared ahead of the first of its two callers — its body sits beside the
+   OTHER one, where a completion is read off a program's row, because that is the caller whose own locals it was
+   factored out of. */
+static void perform_answer_notify(JSContext *ctx, JSContext *ectx, Flow *f, const char *token,
+                                  int completion, JSValueConst cv);
+
 /* THE OPERATION BECOMES THIS FLOW'S NEXT PROGRAM. Not a call: a peer answers by RUNNING a program, and every one
    of these is the page's own code — an IDL getter, a page's setter, a page's function — which a C activation
    has no flow base under. Queued with the flow switched in, so the operands the program reads are written into
@@ -8885,8 +8891,9 @@ static void flow_perform(JSContext *ctx, Flow *f)
     const WorldId *anc;
     int n_anc;
     CowDelta *seg;
-    JSContext *rctx;
     uint32_t doc;
+    const char *member;
+    JSValue answer;
 
     DCHECK(flow_running() == f, "a cross-agent operation was performed while another flow was switched in — its "
                                 "operands would be written into that flow's delta and its program would run "
@@ -8905,7 +8912,6 @@ static void flow_perform(JSContext *ctx, Flow *f)
           "flow suspended at the read that asked, with nothing left that knows what it asked");
     op = remote_op_parse(record);
     doc = world_doc_intern(remote_op_doc(op));
-    rctx = doc_realm(doc);
     n_anc = world_parse(remote_op_worlds(op), &w, &anc);
     /* ASKED AGAIN AT THE MOMENT IT RUNS, for the reason flow_deliver asks it again: the scheduler has run other
        flows since the record arrived, and which world holds writes here is a property of the run. */
@@ -8915,14 +8921,74 @@ static void flow_perform(JSContext *ctx, Flow *f)
            "a cross-agent operation ran in the answering flow's timeline alone while the asking world holds "
            "writes in this instance — it answers about a document missing everything the asking flow did here. "
            "Build the join of the two deltas that engine_route names");
-    /* THE ENTRY IS SPENT HERE AND WHAT SURVIVES IT IS THE TOKEN. The record has become a program and has
-       nothing left to say; the token is COPIED out of the queue entry onto that program's row, because the
-       answer is the program's COMPLETION and the row is what says which completion. `strdup` and not a move:
-       the entry is a JS value that a forked ARM may still name, so the row owns a C string of its own and the
-       entry's own reference dies with the JS_FreeValue below. Nothing about this operation is left on the
-       flow, which is what lets the next entry start on a flow that is already performing one. */
-    {
+    /* §7.2.1'S TWO RECORD-ANSWERABLE MEMBERS DO NOT NEED A PROGRAM, SO THEY DO NOT GET ONE — and the realm
+       lookup therefore moved DOWN to its one use rather than this test moving up past it. That ordering is the
+       whole of the fix: a navigable whose active Document §7.5.10 "Destroying documents" destroyed in this
+       timeline has no realm now and will not have one (its set-the-Document's-browsing-context-to-null step
+       reaches window_proxy_set_destroyed, which nulls the record's realm), so asking for one FIRST aborted on
+       the one population §7.2.1 "Security infrastructure for Window, WindowProxy, and Location objects" says
+       is still readable. The lookup is unchanged and its partition is unchanged; it is simply asked where its
+       answer is spent, which is remote_op_program's operand install.
+       WHAT CHANGES FOR AN ACTIVE NAVIGABLE IS THE COST AND NOT THE ANSWER, and that is a derivation rather than
+       a hope. §7.2.1.3.4 "CrossOriginGetOwnPropertyHelper ( O , P )" runs "an anonymous built-in function,
+       created in the current realm, that performs the same steps as the getter of the IDL attribute P on object
+       O", and for these two the steps are THIS ENGINE'S C: core/frame/window.c's `length` getter is
+       `iframe_child_navigable_count(ctx)` over the receiver's own navigable and its `closed` getter is
+       `window_proxy_closed(ctx, nav)` — the same two expressions window_proxy_record_member_of_document
+       computes, over the same record, with the realm read off the same navigable
+       (window_proxy_realm_of_document IS that record's `realm`). So the program route and this one are one
+       answer, and running it as a program bought a flow base for a body that holds no page code and cannot
+       park. It also bought a REALM: for a navigable whose initial about:blank no read of this timeline has
+       reached through, the program route materializes one per flow, which is the cost proxy_get_step's own
+       hosted arm measured at 4000 flows and ~57% of the depth the frontier reaches without it.
+       THE PROGRAM ROUTE IS NOT SUPERSEDED AND IS NOT A FALLBACK TO THIS ONE. §7.2.1.3.1
+       "CrossOriginProperties ( O )" lists THIRTEEN names and nine of them carry [[NeedsGetter]], so what arrives
+       is an open population: a record is TEXT from an untrusted instance, remote_op_parse admits every listed
+       name, and the nine that are accessors include `location`, `opener`, `parent` and `top` — whose answers are
+       OBJECTS of the target realm and which this entry refuses by name. Delete the program route and those have
+       nothing; keep a predicate that selects between two answers to ONE question and it drifts. This is the
+       second: one question, two populations, and the refusal below is what keeps them apart.
+       AND THE ONE THING THAT WOULD BE WRONG IS ASSERTED RATHER THAN ARGUED. `ctx` here is this instance's ROOT
+       document's realm — the scheduler asserts that identity where it opens a session — and the document this
+       record names is another realm of this SAME agent (an agent is origin-keyed, so a hosted name is one of
+       ours), never a peer's. So the two realms are siblings rather than strangers, and what follows is still
+       true of siblings: core/frame/remote_object.c's encoder consults the
+       realm it is handed for exactly one shape: an OBJECT. `window_proxy_navigable_of(ctx, v)` resolves a
+       Window global against the realm it was given, and the generic export keys its `<document>:<generation>:<id>`
+       on `world_local_doc()` — so an object encoded here would be lent under the WRONG document's name, and the
+       asker would hold a reference into a document that never lent it. A NUMBER and a BOOLEAN have no such path:
+       measured by reading the interpreter rather than the contract, JS_ToBoolFree returns
+       `JS_VALUE_GET_INT(val)` for JS_TAG_BOOL and JS_ToFloat64FreeAt returns `JS_VALUE_GET_INT(val)` for
+       JS_TAG_INT (0, which is <= JS_TAG_NULL) and the double for JS_TAG_FLOAT64, each without reading `ctx`.
+       AT TODAY'S ONE CALLER THE CONDITION CANNOT FAIL, which is stated rather than hidden because it is the same
+       population doc_realm_at's own DCHECK stands on: window_proxy_record_member_of_document mints its two
+       answers with JS_NewInt32 and JS_NewBool, so what this check is for is a WIDENING of that entry to a third
+       member — `location` and `opener` are real members of that surface and their answers are objects — and a
+       widening is a diff somebody will plausibly write. It is the design decision in one line, and it is a
+       DCHECK rather than a CHECK because the value is one this codebase COMPUTED (§Offensive-programming's own
+       discriminator) and because release encoding an object here is a wrong answer rather than an unsafe one. */
+    member = remote_op_member(op);
+    if (member != NULL && window_proxy_record_member_of_document(ctx, doc, member, &answer)) {
+        DCHECK(JS_IsNumber(answer) || JS_IsBool(answer),
+               "a §7.2.1 member was answered from the §7.2.3 record and the value is neither a NUMBER nor a "
+               "BOOLEAN — this route converts it in THIS INSTANCE'S ROOT realm rather than in the named "
+               "DOCUMENT's, which is sound only while the conversion reads no realm. An OBJECT does: "
+               "remote_object_encode resolves a Window global against the realm it was handed and keys a "
+               "generic export's name on world_local_doc(), so this one would be lent under the wrong "
+               "document's name and the asker would hold a reference into a document that never lent it. "
+               "A member whose answer is an object is answered by the PROGRAM route below, in the target's own "
+               "realm — route it there rather than widening this one");
+        perform_answer_notify(ctx, ctx, f, token, ENGINE_COMPLETION_NORMAL, answer);
+        JS_FreeValue(ctx, answer);
+    } else {
+        /* THE ENTRY IS SPENT HERE AND WHAT SURVIVES IT IS THE TOKEN. The record has become a program and has
+           nothing left to say; the token is COPIED out of the queue entry onto that program's row, because the
+           answer is the program's COMPLETION and the row is what says which completion. `strdup` and not a
+           move: the entry is a JS value that a forked ARM may still name, so the row owns a C string of its own
+           and the entry's own reference dies with the JS_FreeValue below. Nothing about this operation is left
+           on the flow, which is what lets the next entry start on a flow that is already performing one. */
         char *own = strdup(token);
+        JSContext *rctx = doc_realm(doc);
         /* THE PROGRAM IS READ BEFORE THE ROW IS MADE because reading it is what SETS the operation's operands
            on the answering realm's global (remote_op.c) — one call, and the row's body is what it answered. */
         /* AND ITS LENGTH IS ITS `strlen` BECAUSE THIS ENGINE WROTE IT. remote_op_program answers one of this
@@ -9026,6 +9092,52 @@ static void flow_emit_dump(JSContext *ctx, Flow *f, JSValueConst cv)
     free(world);   /* world_name allocates; see solver/world.h */
 }
 
+/* THE ANSWER RECORD, WRITTEN IN ONE PLACE. Two callers reach the wire with a completion for one rendezvous
+   token — the program's, read where the scheduler reads one (flow_answer_perform), and the record-only answer
+   flow_perform gives a §7.2.1 member that needs no program at all — and the record's field layout, its
+   separator and its order are ONE grammar. Two spellings of a grammar are two grammars, which is the argument
+   core/frame/remote_op.h makes about the question and is the same about the answer.
+   `ectx` IS THE REALM THE VALUE IS CONVERTED IN AND `ctx` IS ONLY THE NOTICE'S, and the two are separate
+   parameters because they are separate facts: Web IDL §3.7 "Interfaces" gives every realm its own intrinsics
+   ("for every interface that is exposed in a given realm … a corresponding property exists on the realm's
+   global object"), so a value read through another document's is read by a platform that is not the one that
+   produced it — while engine_host_notify ignores its ctx entirely and only appends to this instance's notice
+   buffer. The two were already different expressions at the one call site this replaces; naming them makes the
+   difference a parameter rather than a coincidence.
+   THE ANSWER SAYS WHICH TIMELINE COMPUTED IT, and it is not a diagnostic. This document's state IS its flows,
+   so the operation was performed by every one of them and the asking instance receives N completions under ONE
+   rendezvous token — which, with the timelines unnamed, is N interchangeable claims about one question.
+   Measured before this field existed: the routing zone held them in a one-slot map keyed by the token, kept
+   whichever arrived last and dropped the rest, and one page's `(typeof w.closed) + ":" + w.closed` came back
+   `true` at one read and `false` at the next out of two CONTRADICTORY timelines of this document. The name is
+   world_serialize's, the ONE spelling of a world on the wire (solver/world.h), so the asker can compare it,
+   record it beside the answer it belongs to, and refuse a second delivery of it. */
+static void perform_answer_notify(JSContext *ctx, JSContext *ectx, Flow *f, const char *token,
+                                  int completion, JSValueConst cv)
+{
+    char world[1024];
+    char *enc, *rec;
+    size_t cap;
+
+    DCHECK(token != NULL && *token,
+           "a cross-agent operation's answer was written under no rendezvous token — the completion names no "
+           "question, so the flow that asked would park on it forever");
+    enc = remote_completion_encode(ectx, completion, cv);
+    /* world_serialize CRASHES on its own truncation rather than sending a prefix, which is what makes the name
+       on this notice the same name every other record of this world carries. */
+    world_serialize(f->world, world, sizeof world);
+    cap = strlen(token) + strlen(world) + strlen(enc) + 24;
+    rec = malloc(cap);
+    CHECK(rec != NULL, "engine: OOM writing a cross-agent operation's answer — a dropped answer parks the "
+                       "asking flow on a question nothing will answer again");
+    /* THE WORLD SITS BEFORE THE COMPLETION because the completion is the record's REMAINDER: a value grammar
+       may contain a tab, and a world vector may not (world_serialize's fields are ':' and ','). */
+    snprintf(rec, cap, "remoteop.answer\t%s\t%s\t%s", token, world, enc);
+    engine_host_notify(ctx, rec);
+    free(rec);
+    free(enc);
+}
+
 static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
 {
     JSValue thrown = JS_UNDEFINED;
@@ -9035,17 +9147,6 @@ static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
        row's KIND to get here and only a row inside the queue has one. */
     int row = f->script_i;
     char *token;
-    char *enc, *rec;
-    size_t cap;
-    /* THE ANSWER SAYS WHICH TIMELINE COMPUTED IT, and it is not a diagnostic. This document's state IS its
-       flows, so the operation was performed by every one of them and the asking instance receives N completions
-       under ONE rendezvous token — which, with the timelines unnamed, is N interchangeable claims about one
-       question. Measured before this field existed: the routing zone held them in a one-slot map keyed by the
-       token, kept whichever arrived last and dropped the rest, and one page's `(typeof w.closed) + ":" +
-       w.closed` came back `true` at one read and `false` at the next out of two CONTRADICTORY timelines of this
-       document. The name is world_serialize's, the ONE spelling of a world on the wire (solver/world.h), so the
-       asker can compare it, record it beside the answer it belongs to, and refuse a second delivery of it. */
-    char world[1024];
 
     DCHECK(row >= 0 && row < f->dyn_n,
            "a cross-agent operation was answered from a cursor that is not on the queue — the kind that "
@@ -9071,20 +9172,7 @@ static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
        citation is ever checked, which is why an un-anchored one is not merely unchecked but SHIELDED. Both
        sites are repaired together because they are one sentence written twice and a repair at one leaves the
        other asking the same question the same wrong way. */
-    enc = remote_completion_encode(doc_realm(flow_dyn_doc(f)), completion, cv);
-    /* world_serialize CRASHES on its own truncation rather than sending a prefix, which is what makes the name
-       on this notice the same name every other record of this world carries. */
-    world_serialize(f->world, world, sizeof world);
-    cap = strlen(token) + strlen(world) + strlen(enc) + 24;
-    rec = malloc(cap);
-    CHECK(rec != NULL, "engine: OOM writing a cross-agent operation's answer — a dropped answer parks the "
-                       "asking flow on a question nothing will answer again");
-    /* THE WORLD SITS BEFORE THE COMPLETION because the completion is the record's REMAINDER: a value grammar
-       may contain a tab, and a world vector may not (world_serialize's fields are ':' and ','). */
-    snprintf(rec, cap, "remoteop.answer\t%s\t%s\t%s", token, world, enc);
-    engine_host_notify(ctx, rec);
-    free(rec);
-    free(enc);
+    perform_answer_notify(ctx, doc_realm(flow_dyn_doc(f)), f, token, completion, cv);
     JS_FreeValue(ctx, thrown);
     /* THE ROW STOPS OWING, and it is the row rather than the flow that stops: this program's question has been
        answered and the flow's other rows are other questions, each still holding its own token. The kind stays

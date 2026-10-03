@@ -82,6 +82,19 @@ const char *remote_op_doc(const RemoteOp *op);
    the record — and this file holds no solver dependency at all. What it owes is the FIELD; what the operand
    means is asked where the flows are. */
 const char *remote_op_addressee(const RemoteOp *op);
+/* THE MEMBER A `windowproxy.get` NAMES — HTML §7.2.1.3.1 "CrossOriginProperties ( O )"' property name, which
+   is the record's one operand — or NULL when the record is not a `windowproxy.get` at all.
+   NULL IS AN ANSWER AND NOT AN ERROR, which is the one way this differs from the three fields above. Those are
+   the TRANSPORT'S and every verb carries them, so asking for one says nothing about which operation arrived;
+   a member is an operand of ONE verb, and the slot it occupies holds `<generation>:<id>` for the five
+   `object.*` verbs — so an accessor that asserted its way past a non-`windowproxy.get` would hand its caller
+   an object name under the name of a member. The caller is deciding WHICH operation this is, so the absence IS
+   the fact it needs, and one call answers both halves of that question rather than a predicate and a reader
+   that can disagree.
+   THAT IT IS ONE OF §7.2.1.3.1's THIRTEEN IS ALREADY TRUE HERE — remote_op_parse CHECKs it where the record is
+   born, which is the only place both callers of the parse reach, and a second check of one invariant is the
+   copy that drifts. What this line owes is the FIELD. */
+const char *remote_op_member(const RemoteOp *op);
 /* THE PROGRAM THAT PERFORMS IT. Installs every operand on `ctx`'s global as a slot and returns the source,
    BORROWED (static text). Running it is the caller's, and it must be run as a flow. */
 const char *remote_op_program(JSContext *ctx, const RemoteOp *op);
