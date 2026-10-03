@@ -1044,6 +1044,39 @@ const SPECS = [
      at the judged, compared and verified figures on the same lines. RETIREMENT: this record goes when the
      registry states each row's husk and heading-range check as data the regen re-asks, so an emptied document
      cannot be indexed as a full one by anybody who forgot to read its abstract. */
+  /* AND THE FIRST THING THIS ROW FOUND WAS REPORTED WITH THE WRONG REASON BY THE COMMIT THAT LANDED IT, WHICH
+     IS WORSE THAN THE WRONG VERDICT WOULD HAVE BEEN AND IS WHY IT IS CORRECTED HERE RATHER THAN QUIETLY.
+     fc0e4892f825a4d067c6291038cc16d6f509ae4d says the rows this index raised against the two css components
+     are real `and are the defect an index exists to find: two css components cite this module's image-marker
+     section while quoting CSS BACKGROUNDS' words`. The VERDICT holds — they are findings, and they are the
+     sites' rather than this row's — and that REASON is false. Nobody quoted the wrong standard. A reader who
+     checks the reason finds it plausible and inherits the method, which is the half that had to be withdrawn.
+     WHAT IS ACTUALLY THERE, read off the draft's own bytes and off both committed text corpora rather than
+     argued. This module's image-marker section states its computed value as the keyword none or the computed
+     image, and the editors draft closes the anchor around the keyword and opens the next word with NO
+     SEPARATOR between them, so the document RENDERS the two words joined and the committed text holds them
+     joined. The components quote the phrase the way a human reads the rendered page, with the separator a
+     reader supplies without noticing. CSS Backgrounds states the identical computed value for its own image
+     source property and its markup DOES carry the separator — so the phrase as the components write it occurs
+     in that standard and not in this one, and the checker naming it is the checker being right.
+     SO THE SITES ARE QUOTING A SILENT TIDY-UP OF A DEFECT IN THE STANDARD'S OWN MARKUP, which is a shape this
+     tree has already paid for once in the other direction, and the repair is the one the audit prescribes for
+     a quotation that does not match: write what the document says, or ELIDE across the join, which is the
+     legitimate cut the quotation check verifies. That is a component edit and is not this row's to make.
+     AND THE READER IS NOT WIDENED TO CLOSE IT, which is the tempting repair and is the wrong one twice over.
+     Making the extraction insert a separator at every element boundary would make this quotation verify, and
+     it would make every corpus here say something the document does not — the corpus exists to be what the
+     document says, or a quotation is being checked against a paraphrase — and it would split the words of
+     every standard that marks up PART of one, which is a defect with no bound instead of one with a count.
+     NAMED RESIDUAL — WHAT IS NOT COVERED: a wrong-standard verdict reads the same whether an author cited the
+     wrong document or cited the right one whose own bytes differ from another standard's identical sentence by
+     a single separator, and the second is the reading nobody reaches, because the message names a standard the
+     site never mentioned and that is what a mis-citation looks like. WHAT THE NEXT DIFF BUILDS: that verdict
+     asked whether the cited section's text matches the quotation once BOTH are read with their separators
+     normalised, and saying so in the message where it does — which distinguishes the two readings without
+     changing what either corpus holds. HOW ITS ABSENCE WOULD SHOW: a component repaired toward the standard
+     the message names, so a citation that was right about its document is edited to name a document it has
+     nothing to do with, and the audit then reports the repair as VERIFIED. */
   { key: "csslists3", label: "CSS Lists and Counters Module Level 3", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-lists-3/", edition: "maintained", anchors: ["css-lists-3"] },
   { key: "cssoverflow3", label: "CSS Overflow Module Level 3", kind: "bikeshed",
