@@ -364,6 +364,100 @@ function costScope() {
                     "measurable only on the fixture that chose its own frontier.");
   return COST;
 }
+/* ── THE HEAP CENSUS'S BYTE ROWS, WHICH HAVE NEVER BEEN READ ON A REAL PAGE ───────────────────────────────
+   WHY THIS SCOPE EXISTS AND WHY IT IS THIS DRIVER'S. bridge.js composes `heap: result._heap` on the SAME
+   `_engineLog` row it composes `wfq: result._wfq` on, and DCHECKs `_heap`'s presence on every result
+   document it accepts — and it says in its own words why that matters: "Until they rode this document they
+   were printed only by the smoke driver's loop, so every one of these numbers had been quoted about one
+   fixture and never once about a real page". The producer is built and the row arrives; `sample()` below
+   returned `wfq` and `quantum` and dropped `heap` on the floor, so the published census had no live-page
+   reader at all. That is the write-with-no-reader half of the record-field contract, one census over from
+   the minter triple and the cost scope, and it is caught the same way those are.
+
+   WHAT THE ABSENT READING COSTS, WHICH IS WHY THESE ELEVEN AND NOT THE OTHER TWENTY-ONE. `engine/build.mjs`
+   links the shipped artifact with `-sMAXIMUM_MEMORY=4294967296` and calls that line "THE ARCHITECTURE'S
+   CEILING, not a budget", because wasm32 addresses 4 GiB and nothing can raise it. Whether a real page's
+   frontier approaches that ceiling is a question about BYTES, and the only bytes figures the engine
+   publishes are on this census. The fixture's are measured and quoted in three places in build.mjs; a real
+   page's have never been taken, so the one question the ceiling poses has been answered for the one
+   document whose workload is its author's design decision and for nothing else.
+
+   IT IS A DIFFERENT OBJECT FROM `wfq` AND IS THEREFORE PRINTED BEFORE THE EMPTY-FRONTIER RETURN. result.c
+   composes `{"members":0}` with no branch row on a drained or parked frontier, and the loop below returns
+   early on that; the heap census is composed by `result_heap_json` regardless and is at its most
+   interesting on exactly that path, since `arenaKiB` is a high-water that a drain does not give back. A
+   block placed after that return would lose the reading where it is worth most. */
+function heapComposerKeys() {
+  const src = fs.readFileSync(RESULT_C, "utf8");
+  const i = src.indexOf("char *result_heap_json(JSContext *ctx)");
+  if (i < 0) throw new Error("[live-wfq] cannot find `result_heap_json` in " + RESULT_C + " — this driver " +
+                             "takes its byte-row set from that composer, and a census it cannot read is " +
+                             "one whose rows it would compare as undefined.");
+  const j = src.indexOf("\n}\n", i);
+  if (j < 0) throw new Error("[live-wfq] `result_heap_json` in " + RESULT_C + " has no closing brace at " +
+                             "column 0 — the span this reader derives its row set from is unbounded.");
+  return new Set([...src.slice(i, j).matchAll(/\\"([A-Za-z_][A-Za-z0-9_]*)\\":/g)].map((m) => m[1]));
+}
+
+/* THE KINDS, FROM result.c's AND engine.c's OWN PROSE, because a byte row's kind decides whether the
+   ceiling question may be asked of it at all and no format string carries that.
+   EVERY ROW HERE IS A GAUGE AT THE CENSUS INSTANT EXCEPT ONE. The quickjs rows are `JS_ComputeMemoryUsage`
+   fields read at that instant; `unattributed` is, in result.c's words, "a SUBTRACTION of two gauges"; and
+   `cLiveKiB` is `mallinfo().uordblks`, what the allocator "has handed out and not been given back", which
+   FALLS when memory is freed. None of them may be differenced across two rows of this stream as a rate,
+   and a maximum over this stream's samples of any of them UNDER-READS the true peak, because a peak
+   between two censuses is invisible to a sampler.
+   `arenaKiB` IS THE EXCEPTION AND IT IS THE ONLY ROW THE CEILING QUESTION CAN BE ASKED OF. engine.c, at
+   `engine_c_alloc_arena`: it is "the total space it has taken from the system, which in wasm is LINEAR
+   MEMORY AND ONLY EVER GROWS". Monotone means its latest value IS its high-water, which is what a ceiling
+   is compared against — and it is monotone on exactly the host whose ceiling is in question, since this
+   driver attaches to the extension in a real browser and therefore always samples the wasm artifact. On a
+   NATIVE run the same row can fall, so this kind statement is about this driver's path and not about the
+   field everywhere. */
+const HEAP_GAUGE = ["miscBytes", "objBytes", "propBytes", "shapeBytes", "strBytes", "atomBytes",
+                    "funcBytes", "arrayElemBytes", "unattributed", "cLiveKiB"];
+const HEAP_WASM_MONOTONE = ["arenaKiB"];
+
+function heapScope() {
+  const keys = heapComposerKeys();
+  const named = [...HEAP_GAUGE, ...HEAP_WASM_MONOTONE];
+  for (const k of named)
+    if (!keys.has(k))
+      throw new Error("[live-wfq] result_heap_json no longer publishes `" + k + "` — this driver names it " +
+                      "from result.c's own composer, so a row that has gone is one the producer renamed " +
+                      "or dropped rather than one this file invented, and every reading below it would " +
+                      "compare an absent field as undefined.");
+  /* THE TWO-WAY CHECK, FILTERED TO THE BYTE FAMILY BY SUBJECT AND NOT BY SPELLING — the distinction
+     `costScope` already makes. A byte row added to that composer and named by nobody here is the exact
+     state this block exists to end, and the ceiling question is the one a new byte row is most likely to
+     be about. The twenty-one rows this filter excludes are counts and histograms (allocations, atoms,
+     realm refs, step machines, tramp frames): real rows, a different question, and not this scope's. */
+  const published = [...keys].filter((k) => /(?:Bytes|KiB)$/.test(k) || k === "unattributed");
+  const unread = published.filter((k) => !named.includes(k));
+  if (unread.length)
+    throw new Error("[live-wfq] result_heap_json publishes byte row(s) no reader here names: " +
+                    unread.join(", ") + ". A published byte row with no reader is how the heap census came " +
+                    "to be composed on every real-page document and read on none — name the row and say " +
+                    "which kind it is, or the ceiling question grows a column nobody asks.");
+  return named;
+}
+
+/* THE CEILING, DERIVED FROM THE LINK FLAG THAT SETS IT RATHER THAN COPIED AS A NUMBER. A restated constant
+   is a second copy, and the copy that drifts is the one nobody runs against reality: a build that raises or
+   lowers `-sMAXIMUM_MEMORY` must move this fraction's denominator with it, and a hardcoded 4 GiB would go
+   on reporting a share of a ceiling the artifact no longer has. Exactly one occurrence is required — two
+   would mean the link line this reader is about is no longer the only one, and a share composed against
+   whichever matched first would be a fraction of a ceiling some other target was linked with. */
+const BUILD_MJS = path.join(__dirname, "..", "engine", "build.mjs");
+function wasmCeilingKiB() {
+  const hits = [...fs.readFileSync(BUILD_MJS, "utf8").matchAll(/"-sMAXIMUM_MEMORY=(\d+)"/g)];
+  if (hits.length !== 1)
+    throw new Error("[live-wfq] engine/build.mjs carries " + hits.length + " `-sMAXIMUM_MEMORY=` flag(s) " +
+                    "and this reader composes a share of the ONE ceiling the sampled artifact was linked " +
+                    "with. Zero means the flag was renamed and the share would have no denominator; more " +
+                    "than one means it is no longer one ceiling and a reader cannot tell which was used.");
+  return Number(hits[0][1]) / 1024;
+}
 
 /* THE ONE COST IDENTITY result.c STATES AS CHECKABLE ON THIS DOCUMENT, in the same three-state shape the
    branch identities use and for the same reason: it is a DCHECK in flow_wfq_census, which is compiled OUT
@@ -482,8 +576,15 @@ function sample(pg) {
     if (!("wfq" in r)) return { run: r.run, NO_WFQ: true, switches: r.switches, sched: sched };
     /* `quantum` rides the same log row (bridge.js composes it beside `wfq`) and its `isCpu` is what makes a
        RAW burn on this line quotable. Absent is returned as absent; bridge.js asserts its shape upstream. */
+    /* AND THE HEAP CENSUS, WHICH RIDES THIS SAME ROW AND WAS DROPPED HERE. bridge.js composes
+       `heap: result._heap` one line from the `wfq` it composes above and DCHECKs its presence on every
+       document it accepts, so an absent one is a producer that stopped composing rather than an engine
+       holding no bytes — returned as absent and never as an object of zeros, the rule every other
+       absence in this driver follows. The NO_WFQ return above does NOT carry it: that path is bridge's
+       `_wfq` assert already having failed, which is a broken relay rather than a reading of a page. */
     return { run: r.run, wfq: r.wfq, switches: r.switches, sched: sched,
-             quantum: ("quantum" in r) ? r.quantum : null };
+             quantum: ("quantum" in r) ? r.quantum : null,
+             heap: ("heap" in r) ? r.heap : null };
   });
 }
 
@@ -496,6 +597,8 @@ async function main() {
   const COSTROWS = costScope();
   const KEYROWS = keyScope();
   const SPREADROWS = spreadScope();
+  const HEAPROWS = heapScope();
+  const CEIL_KIB = wasmCeilingKiB();
   console.log("# artifact " + JSON.stringify(artifactStamp()));
   console.log("# windowMs=" + WINDOW + " everyMs=" + EVERY +
               " — COUNTERS (may be differenced): " + COUNTERS.join(",") +
@@ -525,6 +628,15 @@ async function main() {
               "order's own points and `nonrewardMax` is the bound every term but the reward is under. Read " +
               "beside `neverPickedGap`: a gap of 0.000 says something else decided, and these say whether " +
               "anything could have.");
+  console.log("# heap scope, derived from result_heap_json (" + HEAPROWS.length + " byte rows) — GAUGES at " +
+              "the census instant, never differenced: " + HEAP_GAUGE.join(",") + " | MONOTONE IN WASM, so " +
+              "its latest value IS its high-water: " + HEAP_WASM_MONOTONE.join(",") + " | ceiling " +
+              CEIL_KIB + " KiB, derived from engine/build.mjs's own -sMAXIMUM_MEMORY. `arenaCeilingShare` " +
+              "is a FLOOR and not the artifact's share of its address space: it is the C ALLOCATOR's arena " +
+              "over that ceiling, and the linear memory also holds the stack and static data. The figure " +
+              "that is the whole of it is HEAPU8.length, which bridge.js carries as `workingSetBytes` on " +
+              "the POOL record and not on the row this driver samples — so a reader wanting the true share " +
+              "is waiting on that field reaching this row, and this one is the lower bound until it does.");
 
   const { browser, extId } = await connect();
   try {
@@ -608,6 +720,23 @@ async function main() {
            as a branch scope reading zero — result.c composes that short form on its own path. Absent is
            said once, as a flag; filling twenty-three nulls would render an unasked question exactly like a
            measured one, which is the defect the rest of this stream spells with null to avoid. */
+        /* THE HEAP CENSUS, PRINTED BEFORE THE EMPTY-FRONTIER RETURN BELOW because it is a different
+           object composed by a different function and a drained frontier does not make it absent — see
+           heapScope's banner. Absent is said ONCE as a flag rather than as eleven nulls, which is the
+           rule the branch block below states: filling a row per field would render a census the producer
+           never sent exactly like one it sent reading zero. */
+        if (!s.heap || typeof s.heap !== "object") { out.heapAbsent = true; }
+        else {
+          const h = s.heap;
+          for (const k of HEAPROWS) out[k] = (k in h) ? h[k] : null;
+          /* THE ONLY QUOTIENT THIS SCOPE COMPOSES, AND IT IS ASKED OF THE ONE MONOTONE ROW. A share of a
+             ceiling is a high-water question, so asking it of a GAUGE would publish whatever the allocator
+             happened to be holding at this instant as a distance to a limit the run may already have been
+             nearer to. `cLiveKiB` is printed RAW beside it for exactly that reason — this driver's standing
+             rule that the columns go side by side and the reader divides knowing what is in it. A zero or
+             absent denominator yields null and never 0. */
+          out.arenaCeilingShare = share(h.arenaKiB, CEIL_KIB);
+        }
         if (!("branches" in w)) { out.brAbsent = true; console.log(JSON.stringify(out)); continue; }
         for (const k of BR) out[k] = (k in w) ? w[k] : null;
         /* THE IDENTITIES, CHECKED. A violated one means every branch row on this line describes some other
