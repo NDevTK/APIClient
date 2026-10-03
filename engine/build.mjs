@@ -8223,6 +8223,58 @@ const FINDINGS = [];
    claim about the tree are two different things and only one of them ships. */
 const NATIVE_BUILT = await nativeProgram("none", "dev");
 STAGES.push(onHost(NATIVE_BUILT.stage, STAGE_HOST.NATIVE));
+
+/* ── A BUILD IS ONLY A COMPILE, AND THIS LINE IS WHERE THE COMPILE ENDS ────────────────────────────────────
+ * Every stage above this point is a COMPILE OR A LINK and nothing else: the renderer-ABI declaration list,
+ * from which this file DERIVES the linker's export set so a declaration that disagrees with `main.c` is a
+ * broken link rather than a style note; the two emcc links; and the native link. Every stage BELOW it RUNS a
+ * program or AUDITS the tree. The array is already exactly the first set at this line, which is why the seam
+ * is here and not at a line somebody chose.
+ *
+ * WHAT WAS WRONG WAS NOT THE DURATION, IT WAS WHAT THE EXIT CODE MEANT. This program compiled, linked,
+ * stamped and installed — and then exited on whether FOURTEEN GATE STAGES passed, so a build whose every
+ * artifact was correct reported a failure, and the one question `did this tree compile` had no answer anybody
+ * could read without reading a verdict about the ::marker DCHECK. Those are two claims of different size
+ * sharing one spelling, which is the shape this file already refuses at the install line (a `release`
+ * artifact's green line is a SMALLER claim than a `dev` one, so it does not share a sentence with it).
+ *
+ * SO THE DEFAULT IS THE COMPILE AND THE GATES ARE ASKED FOR BY NAME. That is a behaviour change for every
+ * caller, and it is ANNOUNCED rather than narrowed silently: the line below says no gate ran and names the
+ * command that runs them, and `report()`'s own table says `of 4 stage(s)` where it used to say sixteen, which
+ * is a tell a reader cannot miss. A default that quietly stopped doing fourteen things would be the silent
+ * narrowing this project forbids; a default that says so is a seam.
+ *
+ * WHAT THIS IS NOT IS A PREDICATE SELECTING BETWEEN TWO IMPLEMENTATIONS. There is one compile and one gate
+ * suite, and this names which ACT the caller wants — the same routing `native`, `release`, `min` and `lexbor`
+ * already are. Delete the gate suite and the compile still has to answer `did it link`, which is the test
+ * §C-stack states for telling routing from a fallback.
+ *
+ * RESIDUAL — THE GATE SUITE IS STILL IN THIS FILE. WHAT IS NOT COVERED: everything below this seam is three
+ * thousand lines of running and auditing inside the file whose name says `build`, reachable only through this
+ * verb, so a reader looking for the gates reads the build to find them and a reader changing the build reads
+ * the gates to be sure. WHAT THE NEXT DIFF BUILDS: those stages, their helpers (`runChild`, `runProgram`,
+ * `skipped`, `onHost`, `coldRoundTripStages`, `vehicleAgreement`, `probeStanding`, `abortRecord`,
+ * `CENSUS_WITNESS`) and `report` move to their own entry, which takes the artifact paths and the revision
+ * reading as ARGUMENTS rather than closing over this file's constants — because a module that derived `OUT`
+ * for itself would be a second place the layout is written down, which is the rule `engine/lexbor_source.mjs`
+ * states for `srcDir` and `engine/obj_store.mjs` now obeys for `engineDir`. HOW ITS ABSENCE WOULD SHOW: a
+ * `--list-sources` or `lexbor` invocation still parses and loads the whole gate suite before answering, and a
+ * reader asking what gates this project has has to grep a file named for something else. */
+const GATES = process.argv.includes("gates");
+if (!GATES) {
+  console.log("[build] NO GATE RAN — THIS VERDICT IS THE COMPILE'S AND NOTHING ELSE. The stages above are the "
+            + "ABI declaration list, the two emcc links and the native link; they say the tree COMPILED and "
+            + "LINKED and they say nothing whatever about what the program does.");
+  console.log("[build]   the gate suite — the smoke runs on both hosts, the cold round trip, the two-instance "
+            + "ABI drive, the browser-process layer, the cross-process peer transport and the source audits — "
+            + "is a SEPARATE ACT and is asked for by name:");
+  console.log("[build]       node engine/build.mjs gates");
+  console.log("[build]   it re-reads the artifacts this run just produced, so it is not a second build; and it "
+            + "is where every reach, census and abort reading in this project comes from. A green line here is "
+            + "not one of those readings.");
+  report(STAGES, FINDINGS);
+}
+
 const NATIVE_SMOKE = NATIVE_BUILT.bin === null
   ? skipped("native smoke test", "the native program did not link")
   : runChild("native smoke test" + (MIN ? " (minimal document)" : ""),
