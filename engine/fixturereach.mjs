@@ -42,6 +42,36 @@
  *     of that row in its own words; demanding it would be the same gated-operation defect one level down.
  * Both are read off brace structure rather than asserted here, so neither is a judgement anybody has to keep.
  *
+ * AND MAIN()'S OWN TOP-LEVEL EMISSIONS ARE RUNGS, WHICH THIS FILE USED TO DISCARD BY NAME. The reason given
+ * was that "the ladder's container is not one of its rungs", and that is right about main as a FUNCTION and
+ * wrong about its EMISSIONS — it threw away the only markers whose producing call CANNOT be ambiguous, since
+ * main prints them itself at a known offset in its own body and no attribution argument is needed. They are
+ * also the only thing that lets this reader say WHERE IN MAIN a run stopped rather than merely which rows
+ * answered. One rung per tag, at the offset of that tag's first unconditional top-level emission; an emission
+ * below top level, or one a decision reaches, is CONDITIONAL exactly as it is in any other function — and
+ * before this, main's conditional markers were reported by nothing at all, because no rung carried them.
+ *
+ * AND THE SECOND RESOLUTION LIMIT IS WHOSE CALL PRINTED THE MARKER, WHICH THE FIRST ONE BELOW DOES NOT REACH.
+ * That limit is about two RUNGS sharing a marker. This is about ONE rung's function being reachable from a
+ * function that is NOT on the ladder, and it fails in the FLATTERING direction: the marker appears, the rung
+ * scores as answered, and main()'s own call to it never ran. Measured on this producer — `probes_report` is a
+ * rung AND is called by `fixture_have_answers`, which main() does not call at all but INSTALLS as the engine's
+ * park hook — so that call runs INSIDE engine_run, which main() has not returned from when the marker prints,
+ * while the rung's own call is a statement after it. At e4f949388d7beda7276dce966a6073277223fbb7 both smoke
+ * logs read REACH 14/15 naming `second_agent_selftest` as the first unreached rung, while @RESULT — which
+ * main() prints unconditionally on the line BEFORE that rung's call — occurs ZERO times in either file, and so
+ * does the verdict sentence that follows it, which the same build's cold-park and cold-resume logs both carry.
+ * Two witnesses, one control: neither smoke run had left engine_run, and the reading pointed a reader at the
+ * teardown and at the cross-instance second agent instead. What the two logs do NOT share is a reason — the
+ * native one's terminal line is an abort and the vehicle's is an ordinary emission, so the vehicle's stop is
+ * recorded by nothing and the agreement of their reaches is not evidence that one cause produced both. So a
+ * rung whose
+ * function is CALLED from any function but main() is ATTRIBUTION-AMBIGUOUS, takes no part in the reach or the
+ * hole test, and is printed as such. The test errs TOWARD ambiguity by construction — a prototype or an
+ * address-of inside some body counts as a caller — because excluding a rung UNDERSTATES the reach and can
+ * never manufacture a finding, while admitting one overstates it, which is the direction that cost the
+ * reading above.
+ *
  * THE RESOLUTION LIMIT, STATED BECAUSE A LADDER READS AS FINER THAN IT IS. Several rungs share one marker, so
  * that marker's presence cannot say which of them answered. A rung whose required markers are all required by
  * an EARLIER rung is INDISTINGUISHABLE and takes no part in the reach or the hole test; it is printed as such.
@@ -86,17 +116,21 @@ const PRODUCER = join(ROOT, "engine", "host", "test_forced.c");
 
 /* THE MARKER NAMESPACE THIS PRODUCER PRINTS. Asserted equal to the derivation below; see the header for why it
    is spelled at all and for the condition that retires it.
-   NAMED RESIDUAL — NOTHING IN THIS TREE INVOKES THIS READER, so the equality below is checked only when
-   somebody runs it by hand, and a roster this file does not run is a SPELLING rather than a reader.
-   NOT COVERED: a marker landed in the producer leaves the roster short, and the only thing that fires is a
-   refusal inside a tool no stage calls.
-   WHAT THE NEXT DIFF BUILDS: this reader on engine/build.mjs's own stage list, with exit 2 read as a failure
-   rather than as silence. `grep -c fixturereach engine/build.mjs` answers 0 at origin/main, which is why this
-   is outstanding rather than already met.
-   HOW ITS ABSENCE SHOWS: every invocation of this file exits 2 naming the markers to ADD, for as long as
-   nobody invokes it — while engine/fieldgate.mjs goes on crediting each roster name as a READ, because for the
-   marker namespace a name in a scanned file IS the construct. So that gate's WRITTEN-with-no-reader band reads
-   clean over a reader that refuses to run at all, which is a state this roster has already been in. */
+   RESIDUAL RETIRED — MET BY A CONSTRUCTION, AND REWRITTEN RATHER THAN DELETED BECAUSE WHAT A READER
+   RE-DERIVES IS WHY A ROSTER IS SPELLED AT ALL. It read: NOTHING IN THIS TREE INVOKES THIS READER, so the
+   equality below is checked only when somebody runs it by hand, and a roster this file does not run is a
+   SPELLING rather than a reader; NOT COVERED: a marker landed in the producer leaves the roster short and the
+   only thing that fires is a refusal inside a tool no stage calls; WHAT THE NEXT DIFF BUILDS: this reader on
+   engine/build.mjs's own stage list, with exit 2 read as a failure rather than as silence, `grep -c
+   fixturereach engine/build.mjs` answering 0 at origin/main. It answers 3 — MEASURED at
+   e4f949388d7beda7276dce966a6073277223fbb7 — and that file pushes ONE stage per host with `--artifact`
+   REQUIRED, stating in its own words why the artifact may not be the union of both programs. So the equality
+   is checked on every build and a refusal is a stage's exit code rather than silence.
+   WHAT THE RETIREMENT DOES NOT BUY, STATED HERE BECAUSE A MET CONDITION READS AS A CLOSED QUESTION: that
+   stage is fed the two SMOKE logs and nothing else, and those are the SHORTEST runs this producer has. At the
+   revision above both of them stop in engine_run, while the same build's cold-park and cold-resume logs reach
+   EVERY rung of the ladder — and no stage reads those two files. So the gate's reach is a floor over the runs
+   it happens to be handed, which is a fact about the stage list and not about the producer. */
 const ROSTER = [
   "@A2ENTER", "@A2OK", "@A2REALM", "@CANVAS2D", "@COLDPARK", "@COLDRESUME", "@FACE", "@FLEX", "@GCOMP",
   "@GLYF", "@GLYPHMARK", "@H", "@HGATED", "@HUNASKED", "@HWORK", "@IMGMARK", "@INLINEBOX", "@INLINEBREAK",
@@ -251,7 +285,7 @@ function derive() {
       if (mask[k] === "{") depth++;
       else if (mask[k] === "}") depth--;
     }
-    sites.push({ tag: "@" + m[2], fn: body.name, depth, line: lineOf(src, m.index) });
+    sites.push({ tag: "@" + m[2], fn: body.name, depth, off: m.index, line: lineOf(src, m.index) });
   }
 
   /* A LITERAL THIS PRODUCER COMPILES AND NEVER PRINTS — the longest assert message naming a roster marker,
@@ -280,10 +314,25 @@ function derive() {
            `engine/fieldgate.mjs can see a reader for each name; a roster that drifts is a marker whose reader ` +
            `that gate cannot credit, which is the band this file was written to empty`);
 
+  /* WHO ELSE CALLS A RUNG'S FUNCTION — see the header. Read off the same mask as everything else, so a name
+     in a comment or inside a literal is not a caller. A match at FILE SCOPE is the declarator or a prototype
+     and is skipped; anything inside a body that is not main()'s is a caller this ladder cannot tell from
+     main()'s own call, INCLUDING the function's own body, since a recursive call is the same ambiguity. */
+  function otherCallersOf(fn) {
+    const re = new RegExp(String.raw`\b${fn}\s*\(`, "g");
+    const out = new Set();
+    let c;
+    while ((c = re.exec(mask))) {
+      const b = bodies.find((x) => x.close > x.open && x.open < c.index && c.index < x.close);
+      if (b && b.name && b.name !== "main") out.add(b.name);
+    }
+    return [...out].sort();
+  }
+
   /* The rungs, in main()'s own call order. */
   const byFn = new Map();
   for (const s of sites) {
-    if (s.fn === "main") continue;              /* the ladder's container is not one of its rungs */
+    if (s.fn === "main") continue;              /* main's own emissions are rungs below, at their own offsets */
     if (!byFn.has(s.fn)) byFn.set(s.fn, []);
     byFn.get(s.fn).push(s);
   }
@@ -303,19 +352,32 @@ function derive() {
     const row = { fn, required, conditional, line: ss[0].line };
     if (at < 0) offLadder.push({ ...row, why: "no call in main()" });
     else if (gated) offLadder.push({ ...row, why: "every call in main() is reached through a decision" });
-    else rungs.push({ ...row, at });
+    else rungs.push({ ...row, at, ambiguous: otherCallersOf(fn) });
+  }
+
+  /* MAIN'S OWN EMISSIONS, each at its own offset rather than folded into one rung — see the header. A tag main
+     emits twice is ONE rung, at the FIRST unconditional occurrence, because the marker cannot say which. */
+  const mainCond = new Set();
+  for (const s of sites) {
+    if (s.fn !== "main") continue;
+    if (s.depth > 0 || !unconditionalIn(mask, main, s.off)) { mainCond.add(s.tag); continue; }
+    if (rungs.some((r) => r.mainTag === s.tag)) continue;
+    rungs.push({ fn: "main@" + s.tag.slice(1), mainTag: s.tag, required: [s.tag], conditional: [],
+                 line: s.line, at: s.off, ambiguous: [] });
   }
   rungs.sort((a, b) => a.at - b.at);
   if (!rungs.length) refuse("no rung — every marker-emitting function is off the ladder, which means the call " +
                             "order was not read rather than that the producer has no rows");
 
-  /* A rung adds nothing the ladder can resolve when an earlier rung already requires all of its markers. */
+  /* A rung adds nothing the ladder can resolve when an earlier rung already requires all of its markers, or
+     when another function calls it and the marker cannot say which call printed it. The markers still enter
+     `seen`, because a LATER rung requiring them is just as unable to tell them apart. */
   const seen = new Set();
   for (const r of rungs) {
-    r.resolves = r.required.some((t) => !seen.has(t));
+    r.resolves = !r.ambiguous.length && r.required.some((t) => !seen.has(t));
     for (const t of r.required) seen.add(t);
   }
-  return { src, rungs, offLadder, derived, witness };
+  return { src, rungs, offLadder, derived, witness, mainCond: [...mainCond].sort() };
 }
 
 /* ---- a run's captured output ----------------------------------------------------------------------------- */
@@ -405,7 +467,7 @@ function compiledMarkers(path, derived, witness) {
 
 /* ---- report ---------------------------------------------------------------------------------------------- */
 
-const { rungs, offLadder, derived, witness } = derive();
+const { rungs, offLadder, derived, witness, mainCond } = derive();
 const argv = process.argv.slice(2);
 const say = (s) => process.stdout.write("[fixturereach] " + s + "\n");
 const args = [], artifacts = [];
@@ -424,11 +486,21 @@ say(`producer ${relative(ROOT, PRODUCER)} — ${rungs.length} rung(s) in main()'
     `${rungs.filter((r) => r.resolves).length} of them resolving a marker no earlier rung requires, ` +
     `${offLadder.length} marker-emitting function(s) off the ladder, ${derived.length} marker(s) in the roster`);
 
+/* PRINTED ON EVERY INVOCATION AND NOT ONLY UNDER --ladder, because it is what explains the reach below: a
+   reader holding one run's output cannot otherwise see why a rung it knows about is absent from the count. */
+const ambiguousRungs = rungs.filter((r) => r.ambiguous.length);
+if (ambiguousRungs.length)
+  say(`ATTRIBUTION-AMBIGUOUS and therefore OUTSIDE the reach — the marker cannot say which call printed it: ` +
+      ambiguousRungs.map((r) => `${r.fn} [${r.required.join(" ")}] is also called by ${r.ambiguous.join(", ")}`)
+        .join("; "));
+
 if (args.includes("--ladder") || !args.length) {
   for (const [i, r] of rungs.entries())
     say(`  ${String(i + 1).padStart(3)}. ${r.fn.padEnd(38)} requires [${r.required.join(" ")}]` +
         `${r.conditional.length ? ` conditional [${r.conditional.join(" ")}]` : ""}` +
-        `${r.resolves ? "" : "  INDISTINGUISHABLE — an earlier rung requires every marker of it"}`);
+        `${r.resolves ? "" : (r.ambiguous.length
+            ? `  ATTRIBUTION-AMBIGUOUS — also called by ${r.ambiguous.join(", ")}`
+            : "  INDISTINGUISHABLE — an earlier rung requires every marker of it")}`);
   for (const o of offLadder)
     say(`  OFF  ${o.fn.padEnd(38)} ${o.why}; requires [${o.required.join(" ")}]` +
         `${o.conditional.length ? ` conditional [${o.conditional.join(" ")}]` : ""}`);
@@ -481,7 +553,7 @@ for (const path of args.filter((a) => a !== "--ladder")) {
   const beyond = state.slice(reach).filter((s) => !partial.includes(s) && !holes.includes(s));
   if (beyond.length)
     say(`  beyond the reach, neither partial nor holed: ${beyond.map((s) => s.r.fn).join(", ")}`);
-  const cond = rungs.flatMap((r) => r.conditional).filter((t) => present.has(t));
+  const cond = [...rungs.flatMap((r) => r.conditional), ...mainCond].filter((t) => present.has(t));
   say(`  conditional markers this run printed: ${cond.length ? [...new Set(cond)].join(" ") : "none"}`);
   if (!compiled && (partial.length || holes.length)) {
     scored -= partial.length + holes.length;
