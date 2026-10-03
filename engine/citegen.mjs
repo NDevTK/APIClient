@@ -1353,31 +1353,32 @@ const SPECS = [
      quotations compared down by six and step references compared down by six. THE FINDINGS DID NOT MOVE AT ALL
      — every channel and every one of the four category headers was byte-identical across all five runs, so no
      defect was introduced and none was retired, which is the direction the whole-corpus rule most cares about.
-     WHERE THE LOSS COMES FROM IS ONE GATE AT TWO SITES AND IT IS NOT THE ANCHORS. Almost all of it is the
+     WHERE THE LOSS CAME FROM WAS ONE GATE AT TWO SITES AND IT WAS NOT THE ANCHORS. Almost all of it was the
      TITLE channel: resolution by a stated title fell by sixty-five while resolution by an anchor ROSE. The gate
-     is `c.titleEv.length === 1` standing BEFORE `titlePlaces`, so a title used by two indexed standards is
-     refused outright even where the neighbourhood half would have kept exactly one of them.
-     IT IS SPELLED TWICE AND THE SECOND COPY IS THE ONE A REPAIR WILL MISS — once where the per-site resolution
-     below picks a standard, and once where the group rule feeds `titleKeys` so a title stated at one site places
-     the number for its whole file. Both read the same two tests in the same order, so repairing the per-site
-     copy alone leaves the GROUP copy refusing the same titles and leaves the cluster reading as handled, which
-     is the certified-survivor shape a partial sweep always has. This sentence says two because the count was
-     greped rather than recalled; grep the construct before repairing either. Both new indexes carry real
+     WAS `c.titleEv.length === 1` standing BEFORE `titlePlaces`, so a title used by two indexed standards was
+     refused outright even where the neighbourhood half would have kept exactly one of them. IT IS REPAIRED —
+     the two tests are filtered in the other order and ONE SURVIVOR is required, which is argued in full where
+     the survivor is computed; the argument is kept here in the past tense because the measurement below is what
+     made the gate visible and a reader re-deriving `uniqueness first, corroboration second` will re-impose it.
+     IT WAS SPELLED TWICE AND THE SECOND COPY IS THE ONE A REPAIR WOULD HAVE MISSED — once where the per-site
+     resolution below picks a standard, and once where the group rule feeds `titleKeys` so a title stated at one
+     site places the number for its whole file. Both read the same two tests in the same order, so repairing the
+     per-site copy alone would have left the GROUP copy refusing the same titles and left the cluster reading as
+     handled, which is the certified-survivor shape a partial sweep always has. That is why the survivor is now
+     computed ONCE, in the group loop, and STORED on the citation: there is no second spelling left to repair.
+     Both new indexes carry real
      headings that exactly one older index already used — `Animation Frames` is a heading of HTML and of Web
      Animations, `URL` of Fetch and of Service Workers, `Specification conventions` of Web Cryptography and of
      Web Animations — and the moment a second standard uses one, every site resolving on it drops to its file's
      vote, taking the whole group in that file with it. Read at the sites: the HTML animation-frame cluster is
      still filed under HTML and is still correct, and it is now placed by a GUESS where it used to be placed by
      evidence.
-     RESIDUAL. NOT COVERED: a title the cited number's own standard places in the cited neighbourhood is refused
-     as evidence whenever any OTHER indexed standard uses the same words anywhere, however far from any number
-     the site could be citing. WHAT THE NEXT DIFF BUILDS: filter `titleEv` through `titlePlaces` FIRST and
-     require exactly one SURVIVOR, which is strictly stronger evidence than either half alone and which this
-     paragraph's own neighbourhood argument already justifies — measured over the whole corpus, both directions
-     reported, because widening a CONFIRMING channel is the direction that certifies what nothing can refute.
-     HOW ITS ABSENCE WOULD SHOW: a reader would observe the resolved-by-title count FALL whenever a standard is
-     added, with the finding total flat and the added standard's own audited count small, and would find the
-     displaced sites still filed under the right standard and newly marked as this audit's guess. */
+     THAT RESIDUAL IS RETIRED BY THE SURVIVOR FILTER AND ITS ABSENCE CLAUSE IS KEPT, BECAUSE THE OBSERVATION IS
+     STILL THE ONE THAT WOULD CATCH A REGRESSION HERE: a reader would see the resolved-by-title count FALL
+     whenever a standard is added, with the finding total flat and the added standard's own audited count small,
+     and would find the displaced sites still filed under the right standard and newly marked as this audit's
+     guess. That is now a REGRESSION TEST rather than a gap, and it is the cheapest one this file has — it needs
+     no corpus knowledge and no spec reading, only the two numbers the summary already prints. */
 ];
 const SPEC_BY_KEY = new Map(SPECS.map((s) => [s.key, s]));
 const indexFileOf = (key) => join(INDEX_DIR, key + ".json");
@@ -6384,7 +6385,38 @@ function audit(argv, opts = {}) {
       if (c.ev) { g.evidence = true; for (const h of c.ev.hits) g.keys.add(h.key); }
       /* AND THE TITLES ITS MEMBERS STATE, KEPT APART FROM `keys` ON PURPOSE — see the group-title rule below
        * for why merging them would be the fetch/headers.c defect with better evidence in it. */
-      if (c.titleEv.length === 1 && titlePlaces(c.titleEv[0], c.no)) g.titleKeys.add(c.titleEv[0].key);
+      /* ONE SURVIVOR OF THE PLACEMENT TEST, COMPUTED ONCE AND STORED, SO BOTH READERS ASK ONE QUESTION.
+       * The gate here used to be `c.titleEv.length === 1 && titlePlaces(c.titleEv[0], c.no)` — refuse unless
+       * exactly one INDEXED standard uses the title at all, and only then ask whether that standard numbers it
+       * beside the cited §. Its argument is kept because a reader will re-derive it: a title is weak evidence
+       * in proportion to how many documents share it, so requiring uniqueness first reads as the strict order.
+       * IT IS THE WRONG ORDER AND THE COST WAS MEASURED RATHER THAN ARGUED. The two tests are not a strength
+       * ladder, they ask DIFFERENT questions — one about a title's rarity across the corpus, one about whether
+       * a particular standard's numbering puts it where this citation says — so a title that a second standard
+       * happens to use ANYWHERE was refused even where the neighbourhood half would have kept exactly one of
+       * them. The loss landed on correct code and arrived whenever a standard was INDEXED: the paragraph at
+       * this file's registry records resolution-by-title falling by sixty-five over one pair of added rows with
+       * every finding channel byte-identical, which is a coverage loss for no answers.
+       * FILTERING FIRST AND REQUIRING ONE SURVIVOR IS STRICTLY STRONGER THAN EITHER HALF ALONE, which is the
+       * whole of why this widens nothing it should not. A survivor is a standard that BOTH uses the title and
+       * numbers it in the cited number's own neighbourhood; the old first half asked only the former of one
+       * standard, and `titlePlaces` alone asks only the latter of whichever standard happened to be unique.
+       * Every case the old order accepted this one accepts with the same answer, every case where no candidate
+       * places is still refused, and TWO survivors are still refused — which is the case that matters, because
+       * it is the SRI/Mixed Content shape this file records one screen up: two standards carrying one
+       * boilerplate heading AT THE SAME NUMBER both place, so the ambiguity this rule must not arbitrate
+       * survives the filter untouched. What is gained is exactly one survivor out of several candidates.
+       * AND IT IS ONE CALL SITE BY CONSTRUCTION RATHER THAN BY DISCIPLINE. The retired gate was spelled TWICE
+       * — here and at the per-site resolution below — reading the same two tests in the same order, so a repair
+       * of either copy alone would have left the other refusing the same titles and left the cluster reading as
+       * handled, which is CLAUDE.md's certified-survivor shape. The survivor is therefore computed in THIS loop,
+       * which runs over every non-foreign citation before the per-site loop does, and stored on the citation;
+       * the site below READS it. There is no second spelling left to drift. */
+      c.titlePlacedEv = (() => {
+        const kept = c.titleEv.filter((ev) => titlePlaces(ev, c.no));
+        return kept.length === 1 ? kept[0] : null;
+      })();
+      if (c.titlePlacedEv) g.titleKeys.add(c.titlePlacedEv.key);
       /* AND THE STANDARDS ITS MEMBERS NAME OUTRIGHT, WHICH IS THE ONE THING THAT CAN OVERRULE THE TITLE. */
       if (c.anchor && idx.has(c.anchor)) g.anchorKeys.add(c.anchor);
       g.members.push(c);
@@ -6452,8 +6484,8 @@ function audit(argv, opts = {}) {
        * demonstrably that standard with the NUMBER wrong. A title sitting nowhere near is the tell that the
        * STANDARD is wrong, which check (3)'s own `else` already refuses to judge past for the same reason.
        * What that refusal costs is disclosed rather than swallowed — see the number-exists counter below. */
-      if (!spec && c.titleEv.length === 1 && titlePlaces(c.titleEv[0], c.no)) {
-        spec = c.titleEv[0].key; how = "title";
+      if (!spec && c.titlePlacedEv) {
+        spec = c.titlePlacedEv.key; how = "title";
       }
       /* AND A TITLE STATED AT ONE SITE PLACES THE NUMBER FOR THE FILE, WHICH IS THE HALF THIS FILE'S OWN
        * ADVICE MADE COSTLY. `g.keys` is fed by TERM evidence alone, so one term claim resolves every citation
@@ -6474,9 +6506,10 @@ function audit(argv, opts = {}) {
        * still null — no anchor, no single-key term group, no title at this site — so it can only turn a
        * citation that was about to be GUESSED by the file vote into one resolved on evidence.
        *
-       * THE EVIDENCE IS THE SAME STRENGTH AS THE PER-SITE RULE AND ITS SCOPE IS NARROWER THAN A TERM'S. It
-       * runs `titlePlaces` unchanged, so a title still has to be used by exactly one indexed standard and to
-       * be numbered by that standard beside the cited §; and where a term hit says only that some standard
+       * THE EVIDENCE IS THE SAME STRENGTH AS THE PER-SITE RULE AND ITS SCOPE IS NARROWER THAN A TERM'S. Both
+       * read the SAME stored survivor — exactly one indexed standard that uses the title AND numbers it beside
+       * the cited §, which is why there is one spelling of it rather than two; and where a term hit says only
+       * that some standard
        * defines the phrase SOMEWHERE, a title placed at §N is evidence about §N itself, which is the number
        * every member of the group cites. Two members stating titles that resolve to two standards decide
        * NOTHING here — no fallback rescue, unlike the term branch — because a disagreement about a number is
