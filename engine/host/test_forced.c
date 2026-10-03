@@ -35,6 +35,8 @@
                                       merely looking like it — see box_paint_inline_break_selftest's arming
                                       check for why a count of TWO there is what makes its mark counts about
                                       the document they claim to be about */
+#include "core/layout/line_box.h"   /* …and CSS 2.2 §9.4.2's own fragment count for a box that section splits */
+#include "core/layout/box_subject.h"   /* the one sentence every layout remedy in this tree is stated against */
 #include "core/dom/attr_list.h"  /* dom_attr_get_ns — the §6.3 rows read back the EXPANDED name */
 #include "core/frame/csp_source_list.h"
 #include "core/frame/navigable.h"
@@ -28362,22 +28364,36 @@ static void box_paint_inline_box_selftest(JSContext *ctx, lxb_html_document_t *d
  * the block-level box that is their sibling. A ONE here is a container this walk reads as ordinary
  * inline content, at which point every count below would be about a document this row is not for.
  *
- * NAMED RESIDUAL — THE BROKEN INLINE BOX'S OWN FRAGMENT COUNT IS NOT ASSERTED ANYWHERE HERE.
- * WHAT IS NOT COVERED: no count in this row is over a mark the BROKEN `span` laid for itself. §9.2.1.1 splits
- * that box "into two boxes (even if either side is empty)" and `bp_inline_box_marks` lays one mark per
- * fragment in ONE call, so an element broken by the section owes TWO. This row declares no background and no
- * border on it — deliberately, because the counts above would then depend on a fragment count this file has
- * not derived — so it lays nothing, and a `line_box_inline_fragments` answering ONE fragment for a broken
- * inline box satisfies every assertion below. The tail `span` of the BOX document lies wholly inside the
- * second run and is therefore one fragment whatever the section does.
+ * NAMED RESIDUAL — THE BROKEN INLINE BOX'S OWN MARKS ARE NOT COUNTED HERE, AND ITS FRAGMENT COUNT NOW IS.
+ * THIS RECORD USED TO READ "THE BROKEN INLINE BOX'S OWN FRAGMENT COUNT IS NOT ASSERTED ANYWHERE HERE", with
+ * the clause "a `line_box_inline_fragments` answering ONE fragment for a broken inline box satisfies every
+ * assertion below". That half is RETIRED and is rewritten rather than deleted, because a reader who re-derives
+ * it from the mark counts will re-add it: this row declares no background on that box, so no count here moves
+ * with its fragments, and the inference that nothing therefore checks them was exactly right until the arming
+ * check asked core/layout/line_box.h directly. A ONE now ABORTS before any count runs.
+ * WHAT IS NOT COVERED: no count in this row is over a MARK the BROKEN `span` laid for itself. CSS 2.2
+ * §9.2.1.1 splits that box "into two boxes (even if either side is empty)" and `bp_inline_box_marks` lays one
+ * mark per fragment in ONE call, so an element broken by the section owes TWO — and this row declares no
+ * background and no border on it, deliberately, so it lays nothing. The tail `span` of the BOX document lies
+ * wholly inside the second run and is therefore one fragment whatever the section does.
  * WHAT THE NEXT DIFF BUILDS: a `background-color` on the broken `span` and a third count held to TWO, with
  * the two rectangles read against each other — the first fragment ending at or before the `em`'s own box and
  * the second beginning at or after it, which is CSSOM VIEW §6 "Extensions to the Element Interface"'
  * `getClientRects()` step 3's "one for each box fragment" and is what a single union rectangle cannot
  * produce.
- * HOW ITS ABSENCE WOULD SHOW: no row this host prints states how many fragments §9.2.1.1's break gives an
- * inline box, so nothing here would report a painter that laid a broken box's background once, over the union
- * of its two halves, covering the block-level box between them.
+ * AND THAT CLAUSE IS SECOND RATHER THAN FIRST, WHICH IS AN ORDERING THE CLAUSE ITSELF DOES NOT STATE AND IS
+ * WHY THE FRAGMENT COUNT LANDED ALONE. Declaring a background on that box moves `text_red`, `box_red`,
+ * `text.n` and `box.n` — four derivations in this row that NO RUN HAS EVER PRODUCED, since `@INLINEBREAK`
+ * occurs in no artifact (measured with `@INLINEBOX` as the armed control and an invented marker as the
+ * negative one). A diff that changes an unobserved derivation destroys the one thing a first build could
+ * settle: whether a disagreement is this row's arithmetic or the diff that edited it. The fragment count
+ * touches no number here, so it makes the background diff CHECKABLE — after one build the two rectangles are
+ * read against a count that was measured rather than against one this file derived.
+ * HOW ITS ABSENCE WOULD SHOW: no row this host prints states WHERE either fragment of a broken inline box
+ * reaches, so nothing here would report a painter that laid a broken box's background once over the UNION of
+ * its two halves — which covers the block-level box between them and is a rectangle neither fragment is. The
+ * count alone cannot see that: two fragments correctly counted and one union mark laid is a state every
+ * assertion in this row still passes.
  * RETIREMENT: this record goes when a count in this row is asserted over the broken box's own marks.
  *
  * NOT RUN. No number below has been observed; the first build is what turns them into measurements, and the
@@ -28428,10 +28444,13 @@ static TfBbShape tf_bb_prefix(lxb_dom_document_t *d, lxb_dom_node_t *body)
 static void tf_bb_arm(TfBbShape s)
 {
     BlockFlowAnonBox *v = NULL;
+    LineBoxFragment *frags = NULL;
+    lxb_dom_element_t *est = NULL;
     char *broken = css_computed_value(s.broken, "display");
     char *block = css_computed_value(s.block, "display");
     char *container = css_computed_value(s.container, "display");
-    size_t n;
+    char ebuf[160];
+    size_t n, nfrag;
     bool ok = broken != NULL && block != NULL && container != NULL && strcmp(broken, "inline") == 0 &&
               strcmp(block, "block") == 0 && strcmp(container, "block") == 0;
 
@@ -28460,6 +28479,45 @@ static void tf_bb_arm(TfBbShape s)
            "which point CSS 2.1 §E.2 \"Painting order\"'s step 7.2.1 is asked about ONE context and every "
            "count below is about a document this row is not for",
            n);
+
+    /* AND HOW MANY FRAGMENTS CSS 2.2 §9.2.1.1's BREAK GAVE THE BOX IT SPLIT, which is the half this row's
+       own residual named as uncovered. It is asked HERE, of the tree as it stands and before any paint, for
+       the reason the
+       display check above is: core/layout/line_box.h's precondition for this entry is a computed `display` of
+       `inline` or `inline-block`, in flow, in a `horizontal-tb` writing mode, and the line above is what
+       establishes the first of those.
+       IT ADDS NO ABORT SURFACE TO THE RUN AND MOVES WHERE ONE WOULD FIRST SHOW, which is this banner's own
+       sentence about the arming check: the paint below measures the same line boxes over the same document, so
+       a layout refusal this call meets is one that stood on that road already — and meeting it in the arming
+       check makes the row ABSENT rather than wrong.
+       NO FIELD CARRIES THE COUNT AND THAT IS THE SAME ARGUMENT THE DISPLAY CHECK MAKES FOR ITSELF: the assert
+       is an ALWAYS-FATAL `CHECKF`, so a box measured as unsplit aborts before the `printf` and `grep -c
+       '@INLINEBREAK'` answers 0 — which is this row's stated control for every other derivation in it, and is
+       strictly louder than a number printed beside the rest. */
+    nfrag = line_box_inline_fragments(s.broken, &est, &frags);
+    free(frags);
+    CHECKF(nfrag == 2u,
+           "core/layout/line_box.h answered %zu fragment(s) for the inline box CSS 2.2 §9.2.1.1 \"Anonymous "
+           "block boxes\" breaks, where that section derives TWO — it splits the box \"into two boxes (even if "
+           "either side is empty), one on each side of the block-level box(es)\" and \"the line boxes before "
+           "the break and after the break are enclosed in anonymous block boxes\", so the box has a fragment "
+           "on each of the two the count above already asserted. ONE is this box measured as UNSPLIT, which no "
+           "other assertion in this row can see: it declares no background and no border, so the painter lays "
+           "nothing per fragment and every count below passes over a broken box reported as one box. The same "
+           "entry's contract makes ONE the right answer for an ATOMIC inline-level box, which this `span` is "
+           "not — CSS 2.2 §9.2.2 \"Inline-level elements and inline boxes\" makes an atomic box participate as "
+           "a single opaque box and CSS 2.2 §9.4.2 \"Inline formatting contexts\" never splits one — so a ONE "
+           "here is also this `display: inline` box having been classified as atomic",
+           nfrag);
+    CHECKF(est == s.container,
+           "core/layout/line_box.h measured those fragments from %s rather than from the `p` CSS 2.2 §9.2.1.1 "
+           "\"Anonymous block boxes\" forces to hold only block-level boxes. That header states the frame is "
+           "the ESTABLISHING block container's content box in BOTH of CSS 2.2 §9.2.1's shapes, and names that as "
+           "makes the anonymous boxes invisible to a caller: the entry adds each box's own origin inside the "
+           "container to the coordinates it measures. A DIFFERENT element here is the walk having stopped at "
+           "an inline ancestor or run past this container to an outer one, at which point the two rectangles a "
+           "later diff reads against each other are in a frame neither CSS 2.2 §9.2.1.1 box is in",
+           box_subject(est, ebuf, sizeof ebuf));
 }
 
 /* THE TEXT TAIL — `<p><span style=…>t<em style=…>x</em>more</span></p>`. The second run holds a run of TEXT
