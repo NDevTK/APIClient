@@ -3078,7 +3078,22 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
          `list-style-type: none` is honoured, and the `list-style: none` that every reset stylesheet writes
          instead reports `disc`, because the shorthand reaches the cascade as a declaration nothing takes
          apart. It is observed at the PAIR and never at one member, since either answer alone is a value a
-         browser also gives. */
+         browser also gives.
+       A SECOND NARROWNESS, AND IT IS A DIFFERENT CLAUSE BECAUSE ITS NEXT DIFF IS THE SAME ONE: A DECLARED
+       VALUE IS STORED AS THE AUTHOR'S OWN BYTES. `css_shorthand_validates_longhand` answers FALSE for both
+       names, so `cssd_decls_add` collects the raw tokens {D} nothing validated them against {S}3.4's
+       `<counter-style> | <string> | none` or {S}3.3's `<image> | none`, and nothing lower-cased them. This
+       is `pointer-events`' state above and not a shape invented here, and it is the UNDECLARED half of
+       both properties that these rows close.
+         WHAT IS NOT COVERED: an out-of-grammar declaration is KEPT where CSS Syntax drops it, and a
+         declaration spelled in any other case is reported back in that case.
+         WHAT THE NEXT DIFF BUILDS: the same {S}3.6 row above, because its expansion routes each component
+         through `css_shorthand_longhand_value` and therefore needs all three longhand grammars anyway {D}
+         which is why this is one landing with the clause above it rather than a second.
+         HOW ITS ABSENCE WOULD SHOW: a page sets a marker type in upper case and reads it back in upper
+         case, where a browser answers the canonical keyword; and a value no grammar admits survives the
+         round trip instead of leaving the block empty. Both are read at `getComputedStyle`, and both are
+         about the WRITE path rather than about the default these rows supply. */
     { "list-style-type", "disc" }, { "list-style-image", "none" },
 };
 
