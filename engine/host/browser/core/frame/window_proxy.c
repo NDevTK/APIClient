@@ -1201,6 +1201,38 @@ JSContext *window_proxy_realm_of_document(uint32_t doc)
     return p == NULL ? NULL : p->realm;
 }
 
+/* WHAT THAT NULL MEANS, AS A PARTITION RATHER THAN AS A LIST OF CANDIDATES — see the header. Same scan, same
+   bare JS_GetOpaque, same absence of a ctx: it materializes nothing and captures nothing, so it stands
+   wherever the realm read above stands, including inside a DCHECK condition.
+   IT EXISTS BECAUSE ONE NULL WAS ANSWERING FOUR QUESTIONS AND EVERY CALLER THAT MET ONE HAD TO GUESS WHICH.
+   solver/engine.c's `doc_realm` abort listed three of them in its own message and the one it did NOT list is
+   the one that fires: §7.5.10 "Destroying documents"' set-the-Document's-browsing-context-to-null step runs
+   and this engine's window_proxy_set_destroyed nulls the navigable's realm with it, so a timeline that ran
+   `window.close()` holds a navigable of that name whose active document it HAS no more. That is neither "no
+   timeline opened it" nor "this timeline navigated away from it" — a navigation REPLACES an active document
+   and leaves a realm, which is why window_proxy_navigate refuses a destroyed navigable by name — and a reader
+   handed the three-candidate list goes to materialize a Document for a browsing context that is null, which
+   proxy_realm refuses by name one screen up.
+   THE REMOTE ARM IS NOT A FOURTH SPELLING OF ABSENT. A remote navigable is recorded in this same table
+   (window_proxy_new_remote says why), so the scan FINDS one and its realm is NULL for a reason no caller may
+   act on the way it acts on the others: its Document is a peer's and no realm of this heap ever will be. */
+WindowProxyDocumentState window_proxy_document_state(uint32_t doc)
+{
+    JSValueConst proxy = live_nav_of_document(doc);
+    ProxyData *p;
+
+    if (JS_IsUndefined(proxy)) return WP_DOC_NO_NAVIGABLE;
+    p = JS_GetOpaque(proxy, g_proxy_class);
+    DCHECK(p != NULL, "the document state of a navigable was asked for and the navigable answering it carries "
+                      "no §7.2.3 record — live_nav_of_document asserts the same thing of every row it walks");
+    if (p == NULL) return WP_DOC_NO_NAVIGABLE;
+    if (!world_doc_hosted(p->doc)) return WP_DOC_REMOTE;
+    /* THE DESTROYED TEST COMES FIRST, because `destroyed` and `realm == NULL` are both true of it and only
+       this order tells "there is no document" from "there is not one YET" — proxy_realm's own assert pair. */
+    if (p->destroyed) return WP_DOC_DESTROYED;
+    return p->realm != NULL ? WP_DOC_ACTIVE : WP_DOC_INITIAL;
+}
+
 JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc)
 {
     int i;

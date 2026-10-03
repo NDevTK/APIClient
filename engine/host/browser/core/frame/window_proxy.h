@@ -199,13 +199,49 @@ JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc);
  * release). What makes the answer this flow's with no ctx passed is that the COW machinery has already applied
  * the running flow's delta.
  *
- * NULL IS A REAL ANSWER AND NEVER "NOT FOUND", and it is ONE answer for two states the caller may care about
- * telling apart: this agent holds no navigable of that name, and it holds one whose Document THIS TIMELINE has
- * never read through (navigable.h). Only the NAVIGABLE can materialize the second, so a caller that needs it
- * materialized holds the proxy and calls window_proxy_realm; a caller that merely needs to know asks
- * window_proxy_of_document, whose asserts separate the two. A REMOTE navigable answers NULL too — its Document
- * is a peer's, so no realm of this heap is it — which is the answer `world_doc_hosted` already gates on. */
+ * NULL IS A REAL ANSWER AND NEVER "NOT FOUND", and it is ONE answer for FOUR states the caller may care about
+ * telling apart. THIS SENTENCE SAID TWO, AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE THE TWO IT NAMED ARE
+ * THE TWO A READER RE-DERIVES: this agent holds no navigable of that name, and it holds one whose Document
+ * THIS TIMELINE has never read through (navigable.h). The third is a navigable whose active document §7.5.10
+ * "Destroying documents" DESTROYED in this timeline — its set-the-Document's-browsing-context-to-null step
+ * runs and window_proxy_set_destroyed nulls the realm with it — and the fourth is a REMOTE navigable, whose Document is
+ * a peer's and which this same table records, so the scan FINDS it and answers NULL. The retired sentence also
+ * said a caller that merely needs to know "asks window_proxy_of_document, whose asserts separate the two", and
+ * that entry ABORTS on the destroyed third rather than answering it, so it separates the two it was written
+ * for and is silent about the one that costs a reader an investigation.
+ * ASK window_proxy_document_state FOR THE PARTITION. Only the NAVIGABLE can materialize the INITIAL case, so a
+ * caller that needs it materialized holds the proxy and calls window_proxy_realm; the DESTROYED case has no
+ * materialization at any time and its readable surface is §7.2.1's cross-origin list, answered from the record
+ * with no realm at all. */
 JSContext *window_proxy_realm_of_document(uint32_t doc);
+
+/* THAT NULL, PARTITIONED — one question with one answer, where the realm read above is one answer to four
+ * questions. It is the same scan with the same guarantees: no ctx, no materialization, no capture, so it may
+ * stand wherever that one stands.
+ *
+ * WHY A PARTITION AND NOT A LIST IN A CRASH MESSAGE. solver/engine.c's realm lookup aborted under a message
+ * naming three candidate causes, and the state that actually fires on the cross-instance seam — a timeline
+ * that ran `window.close()` and therefore holds a navigable with NO active document — was not among them, so
+ * the crash sent its reader to materialize a Document for a browsing context that is null (which proxy_realm
+ * refuses by name) or to a residual about HOST TIME (which that residual's own HOW-ITS-ABSENCE-SHOWS clause
+ * correctly excludes, since it requires no flow-time caller on the frame list). A caller that can NAME the
+ * state can take the one action that state admits; a caller handed three candidates guesses. */
+typedef enum {
+    /* this timeline holds a navigable of that name and its active document's realm is materialized */
+    WP_DOC_ACTIVE = 0,
+    /* §7.5.10 "Destroying documents" ran over this navigable's active document IN THIS TIMELINE: there is no
+       active document, there will not be one, and §7.2.1's cross-origin list is what remains readable */
+    WP_DOC_DESTROYED,
+    /* the navigable exists and still shows the initial about:blank Document §7.4 created it with, which no
+       read of THIS timeline has reached through — the one state window_proxy_realm materializes */
+    WP_DOC_INITIAL,
+    /* the navigable's active document is a PEER's: no realm of this heap is it, now or ever */
+    WP_DOC_REMOTE,
+    /* this timeline holds no navigable of that name at all — never opened here, or navigated away from */
+    WP_DOC_NO_NAVIGABLE
+} WindowProxyDocumentState;
+
+WindowProxyDocumentState window_proxy_document_state(uint32_t doc);
 
 /* THE NAVIGABLE A VALUE NAMES, whichever of its two spellings it is: the value itself when it IS a
    WindowProxy, and the asking realm's WindowProxy when it is that realm's Window GLOBAL — win_or_proxy's

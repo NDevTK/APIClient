@@ -2922,15 +2922,90 @@ static JSContext *doc_realm(uint32_t doc)
        core/frame/navigable.c's own teardown assert already names, which §7.5.10 step 7's removal of a destroyed
        document's queued tasks is what discharges. A sibling arm that did not navigate still answers, which is
        the whole point. */
-    DCHECK(realm != NULL,
-           "a navigable this agent holds was asked for the realm of its active document and THIS TIMELINE has "
-           "never materialized one — §7.4 created it with the initial about:blank Document, and only a read "
-           "THROUGH that navigable's own WindowProxy builds the realm, per flow (core/frame/navigable.h). A "
-           "sibling arm having built one says nothing about this one. A caller that must materialize holds the "
-           "NAVIGABLE and calls window_proxy_realm; a caller that only has the NAME is reaching for a document "
-           "no timeline of this instance has opened, or one THIS timeline has navigated away from, or is "
-           "standing at HOST TIME with no owner named (engine_unload_document's residual says what that costs "
-           "and what closes it)");
+    /* AND THE NULL IS PARTITIONED RATHER THAN DESCRIBED, WHICH IS THE WHOLE OF WHAT CHANGED HERE AND IS A
+       FINDING ABOUT THE ASSERT THAT STOOD BEFORE IT. It read, in one message, that a caller holding only the
+       NAME "is reaching for a document no timeline of this instance has opened, or one THIS timeline has
+       navigated away from, or is standing at HOST TIME with no owner named" — three candidates, one of which
+       the reader had to pick. MEASURED on the two-instance ABI drive, where this aborts: the state that fires
+       is NONE OF THE THREE. §7.5.10 "Destroying documents"' SET-THE-DOCUMENT'S-BROWSING-CONTEXT-TO-NULL
+       step runs, and core/frame/window_proxy.c's window_proxy_set_destroyed nulls the navigable's realm with
+       it, so the
+       timeline that ran the page's own `window.close()` holds a navigable of that name with NO ACTIVE
+       DOCUMENT. That is not "never opened" and it is not "navigated away from" — a navigation REPLACES an
+       active document and leaves a realm, which is why window_proxy_navigate refuses a destroyed navigable BY
+       NAME — and it is not host time either, which engine_unload_document's residual already excludes in its
+       own HOW-ITS-ABSENCE-SHOWS clause ("with THIS function on the frame list and no flow-time caller anywhere
+       on it"). That clause was exactly right and the frame list of the measured abort is
+       doc_realm <- flow_step <- engine_sched_slice, every frame of it flow time.
+       SO THE ENUMERATION WAS AN ENUMERATION OF INPUTS AND IT WAS SHORT BY THE ONE THAT MATTERED, which is the
+       one failure mode a crash that names a remedy has: a reader obeying it goes to materialize a Document for
+       a browsing context that is NULL, and proxy_realm refuses that by name one file over. The partition is
+       asked of the one component that can answer it (window_proxy_document_state), and each arm names the one
+       action its own state admits. */
+#if APICLIENT_DEV
+    if (realm == NULL) {
+        switch (window_proxy_document_state(doc)) {
+        case WP_DOC_DESTROYED:
+            /* THE CAPABILITY, NAMED: a cross-agent §7.2.1 read of a navigable with no active document.
+               WHAT IS NOT COVERED: this engine answers such a read by QUEUEING A PROGRAM in the target
+               document's realm (flow_perform, and the compile that follows it), and §7.5.10 has taken that
+               realm off the navigable — so the one timeline whose answer is `length` 0 and `closed` true
+               cannot produce it, while the sibling timelines that did not close answer normally.
+               WHAT THE NEXT DIFF BUILDS: the record-only answer. core/frame/window_proxy.c ALREADY computes
+               it for every other caller — proxy_get_step's hosted arm is
+               `p->realm ? iframe_child_navigable_count(p->realm) : 0` and window_proxy_closed is §7.2.2.1's
+               whole OR — and `length` and `closed` are the only two of §7.2.1.3.1's thirteen that reach this
+               seam at all, the rest being answered in-turn by proxy_member_get (proxy_get_step DFAILs on
+               them). So the diff is a window_proxy.c entry answering those two from the record, with
+               flow_perform routing to it instead of composing a program, and NOT a second copy of the
+               expressions in this file. The two subproblems under it, in order: remote_op.c must be able to
+               hand its caller the MEMBER NAME (it exports the doc, the worlds and the addressee and not
+               `f[4]`), and the completion must be ENCODED somewhere — remote_completion_encode takes the
+               realm the program ran in, and an answer that belongs to no document has none, so which realm
+               converts it is a design question this crash deliberately does not settle.
+               HOW ITS ABSENCE WOULD SHOW: this abort, with flow_step on the frame list, on any instance one of
+               whose timelines has closed or destroyed a document a peer still holds a reference into. */
+            DFAIL("a cross-agent operation or a queued program named a document whose active Document THIS "
+                  "TIMELINE DESTROYED — §7.5.10 \"Destroying documents\"' set-the-Document's-browsing-context-to-null "
+                  "step nulled it "
+                  "and window_proxy_set_destroyed nulled the navigable's realm with it, so there is no realm "
+                  "now and there will not be one: proxy_realm refuses to materialize a destroyed navigable by "
+                  "name. A sibling arm that did not close still answers, which is why this is one timeline's "
+                  "state and not the document's. §7.2.1's cross-origin list is what a peer may still read "
+                  "here, and window_proxy.c answers every one of those FROM THE RECORD with no realm — BUILD "
+                  "that route for the cross-instance seam (see the residual above this line); do not ask for "
+                  "an ACTIVE DOCUMENT, because this navigable has none");
+            break;
+        case WP_DOC_INITIAL:
+            DFAIL("a navigable this agent holds was asked for the realm of its active document and THIS "
+                  "TIMELINE has never materialized one — §7.4 created it with the initial about:blank "
+                  "Document, and only a read THROUGH that navigable's own WindowProxy builds the realm, per "
+                  "flow (core/frame/navigable.h). A sibling arm having built one says nothing about this one. "
+                  "A caller that must materialize holds the NAVIGABLE and calls window_proxy_realm, and this "
+                  "lookup takes a NAME: resolve it with window_proxy_of_document first");
+            break;
+        case WP_DOC_REMOTE:
+            DFAIL("the realm of a document a PEER INSTANCE holds was asked for — no realm of this heap is it, "
+                  "now or ever, and `world_doc_hosted` is the gate every caller of this lookup is supposed to "
+                  "have passed before reaching it");
+            break;
+        case WP_DOC_NO_NAVIGABLE:
+            DFAIL("a document name resolved to no navigable of THIS TIMELINE at all — it names a document no "
+                  "timeline of this instance has opened, or one THIS timeline has navigated away from (a "
+                  "navigation moves the navigable's `doc` from the instant window_proxy_navigate runs, so the "
+                  "outgoing name answers nothing in the timeline that navigated, and the programs still queued "
+                  "for it are the residue core/frame/navigable.c's teardown assert names), or the caller is "
+                  "standing at HOST TIME with no owner named (engine_unload_document's residual says what that "
+                  "costs and what closes it)");
+            break;
+        case WP_DOC_ACTIVE:
+            DFAIL("the realm lookup answered NULL for a navigable whose own record says its active document IS "
+                  "materialized — the two reads walk one table in one applied delta, so they cannot disagree "
+                  "unless something between them moved the delta");
+            break;
+        }
+    }
+#endif
     return realm;
 }
 
