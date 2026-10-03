@@ -506,12 +506,32 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
  * (offsets from `*establishing`'s content box origin on that axis), with `*establishing` receiving the block
  * container that frame belongs to.
  *
- * BOTH HALVES OF THE NAME ARE THE PRECONDITION AND THIS ENTRY ASSERTS THEM, which the entry above no longer
- * does for it: that one answers a REPLACED inline element now, and this one must not, because CSS 2.2 §8.3
- * "Margin properties"' exception is what its block arm rests on — "these properties apply to all elements, but
- * VERTICAL MARGINS WILL NOT HAVE ANY EFFECT ON NON-REPLACED INLINE ELEMENTS" — and a replaced element's
- * vertical margins DO have an effect. A replaced element also needs none of this: §10.3.2 and §10.6.2 give it
- * both extents and core/layout/flow_position.h gives it one origin, which is the ordinary composition.
+ * BOTH HALVES OF THE NAME ARE THE PRECONDITION AND THIS ENTRY ASSERTS EACH OF THEM ITSELF, which
+ * `line_box_inline_fragments` does not do for it: that entry's own precondition is a computed `display` of
+ * `inline` OR `inline-block` and it refuses nothing about replacedness, so NEITHER half is inherited from the
+ * call below. CSS 2.2 §8.3 "Margin properties"' exception is what this entry's block arm rests on — "these
+ * properties apply to all elements, but VERTICAL MARGINS WILL NOT HAVE ANY EFFECT ON NON-REPLACED INLINE
+ * ELEMENTS" — and it is written over exactly ONE box. A REPLACED element's vertical margins DO have an effect,
+ * and so do an `inline-block`'s: CSS 2.2 §10.6.6 "Complicated cases" applies to "'Inline-block', non-replaced
+ * elements" and says in so many words that "for 'inline-block' elements, the margin box is used when
+ * calculating the height of the line box". Neither box needs this entry at all — §10.3.2 and §10.6.2 for the
+ * replaced one, §10.3.9 "'Inline-block', non-replaced elements in normal flow" and §10.6.6 for the other, give
+ * each both extents, and core/layout/flow_position.h gives each one origin, which is the ordinary composition.
+ *
+ * THE `display` HALF WAS NOT ASSERTED HERE UNTIL IT WAS WRITTEN DOWN, AND THIS SENTENCE CLAIMED IT WAS — kept
+ * rather than quietly repaired, because the retired reason is the one a reader re-derives on meeting the new
+ * assert and calling it redundant. It read that the entry asserts both halves and that
+ * `line_box_inline_fragments` "no longer does for it", which is true of REPLACEDNESS and silent about
+ * `display`: the `display` half was left to core/layout/scrolling_area.c's `sa_is_non_replaced_inline`, which
+ * does test both, so the one caller was safe while the ENTRY was not — and `line_box_inline_fragments`' own
+ * `display` assert READS as covering the second half while ADMITTING the one box §8.3's exception excludes. A
+ * non-replaced `inline-block` therefore passed every assert on this path and took the block arm, which reports
+ * §10.6.1's border area AS the margin edge, so its used `margin-top` and `margin-bottom` were dropped with
+ * nothing to say so. HOW ITS ABSENCE WOULD HAVE SHOWN: a scrolling area reported INSIDE the real block-axis
+ * margin edge of a box whose cascade gives it `display: inline-block` and a vertical margin, with no abort
+ * anywhere — which is why no caller could have found it by running. RETIREMENT: this record goes when
+ * `line_box_inline_fragments`' two delimitations are two entries each asserting its own shape, because no
+ * reader can then re-derive that its one precondition covers this one.
  *
  * IT EXISTS BECAUSE AN INLINE BOX HAS NO `width` AND NO `height`, so the ONE-ORIGIN-PLUS-ONE-EXTENT shape every
  * other box's margin edge is composed from cannot describe it. CSS 2.2 §10.3.1 "Inline, non-replaced elements"

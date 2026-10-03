@@ -2448,15 +2448,16 @@ void line_box_inline_margin_span(lxb_dom_element_t *el, lxb_dom_element_t **esta
     DCHECK(el != NULL && establishing != NULL && lo != NULL && hi != NULL,
            "CSS 2.2 §9.4.2's margin span of an inline box was asked for with no element, nowhere to report the "
            "formatting context it is in, or nowhere to report one of the two edges");
-    /* BOTH HALVES OF "NON-REPLACED INLINE BOX", ASKED HERE BECAUSE THIS ENTRY'S OWN BLOCK AXIS IS THE HALF
-       THAT DIVIDES THEM AND `line_box_inline_fragments` NO LONGER ASKS IT. That entry answers a REPLACED
-       element now — its fragment is CSS 2.2 §9.2.2's single opaque box, delimited by one run item — and this
-       entry's vertical arm below reports the border area AS the margin edge on the strength of CSS 2.2 §8.3
-       "Margin properties"' own exception, which is written over NON-REPLACED inline elements alone ("vertical
-       margins will not have any effect on non-replaced inline elements"). A replaced element's vertical
-       margins DO have an effect, so answering one here would drop them silently — the caller composes an
-       ORIGIN PLUS AN EXTENT for it instead (core/layout/scrolling_area.c's own predicate is this same pair,
-       and §10.3.2 and §10.6.2 give it both numbers), which is why this is an assert and not an arm. */
+    /* THE REPLACEDNESS HALF OF "NON-REPLACED INLINE BOX", ASKED HERE BECAUSE THIS ENTRY'S OWN BLOCK AXIS IS
+       THE HALF THAT DIVIDES THEM AND `line_box_inline_fragments` NO LONGER ASKS IT. That entry answers a
+       REPLACED element now — its fragment is CSS 2.2 §9.2.2's single opaque box, delimited by one run item —
+       and this entry's vertical arm below reports the border area AS the margin edge on the strength of
+       CSS 2.2 §8.3 "Margin properties"' own exception, which is written over NON-REPLACED inline elements
+       alone ("vertical margins will not have any effect on non-replaced inline elements"). A replaced
+       element's vertical margins DO have an effect, so answering one here would drop them silently — the
+       caller composes an ORIGIN PLUS AN EXTENT for it instead (core/layout/scrolling_area.c's own predicate
+       is this same pair, and §10.3.2 and §10.6.2 give it both numbers), which is why this is an assert and
+       not an arm. */
     DCHECK(!replaced_element_of(el).replaced,
            "CSS 2.2 §9.4.2's margin span was asked for a REPLACED inline element. §8.3 \"Margin properties\"' "
            "exception — \"these properties apply to all elements, but VERTICAL MARGINS WILL NOT HAVE ANY "
@@ -2466,6 +2467,30 @@ void line_box_inline_margin_span(lxb_dom_element_t *el, lxb_dom_element_t **esta
            "also does not need this entry at all — CSS 2.1 §10.3.2 and §10.6.2 give it both extents and "
            "core/layout/flow_position.h gives it one origin, which is the composition "
            "core/layout/scrolling_area.c's own non-replaced-inline predicate routes it to");
+    /* AND THE `display` HALF, WHICH IS NOT INHERITED FROM THE CALL BELOW AND USED TO BE LEFT TO THE CALLER.
+       `line_box_inline_fragments`' own precondition is a computed `display` of `inline` OR `inline-block`, so
+       it ADMITS the one box CSS 2.2 §8.3's exception does not cover and READS as having asked this question.
+       An `inline-block` is §9.2.2's ATOMIC inline-level box with a used `width` (§10.3.9 "'Inline-block',
+       non-replaced elements in normal flow") and a used `height` (§10.6.6 "Complicated cases"), and §10.6.6
+       states the consequence outright — "for 'inline-block' elements, the margin box is used when calculating
+       the height of the line box" — so the block arm below would report §10.6.1's border area as its margin
+       edge and drop both vertical margins with nothing to say so. THIS IS A ROUTING INVARIANT AND NOT A READ OF
+       THE PAGE'S CASCADE: core/layout/scrolling_area.c asks `sa_is_non_replaced_inline` before this call and
+       sends every box that predicate refuses to the origin-plus-extent composition, so a `display` the page
+       wrote reaches that composition and never this entry — reaching here is those two classifications having
+       come apart, which is what makes this the entry's own assert rather than the caller's. */
+    DCHECK(lb_computed_is(el, "display", "inline"),
+           "CSS 2.2 §9.4.2's margin span was asked for a box whose computed `display` is not `inline`. §8.3 "
+           "\"Margin properties\"' exception — \"these properties apply to all elements, but VERTICAL MARGINS "
+           "WILL NOT HAVE ANY EFFECT ON NON-REPLACED INLINE ELEMENTS\" — is what lets the block arm below "
+           "report §10.6.1 \"Inline, non-replaced elements\"' border area AS a margin edge, and an "
+           "`inline-block` is not that box: §9.2.2 \"Inline-level elements and inline boxes\" makes it an "
+           "ATOMIC inline-level box, §10.3.9 \"'Inline-block', non-replaced elements in normal flow\" gives it "
+           "a used `width` and §10.6.6 \"Complicated cases\" a used `height` — which states the effect this "
+           "arm would drop in its own words, \"for 'inline-block' elements, the margin box is used when "
+           "calculating the height of the line box\". It needs ONE ORIGIN PLUS ONE EXTENT instead, which is "
+           "what core/layout/scrolling_area.c routes every box its `sa_is_non_replaced_inline` refuses to — so "
+           "reaching here is that classification and this entry's precondition having come apart");
     n = line_box_inline_fragments(el, establishing, &frags);
     DCHECK(n >= 1 && frags != NULL,
            "CSS 2.2 §9.4.2's fragments were reported as NONE for an inline box that generates one. That entry's "
