@@ -20,6 +20,17 @@
  * rather than on a transcript, which is §A-DESTRUCTIVE-STEP-IS-GATED-BY-THE-CHECK'S-EXIT-STATUS owed to the
  * one irreversible outward act this project has.
  *
+ * AND `NAMING AN EARLIER SHA` WAS THE WRONG PREDICATE FOR `CORRECTING AN EARLIER COMMIT`, WHICH THIS FILE
+ * MEASURED ON ITSELF. The condition quoted above is met by a MENTION, and a message mentions a sha for every
+ * reason a message has. MEASURED: the commit that landed `engine/githooks/pre-push` quoted `ed102dc..e4b1557`
+ * as the OUTPUT of a `git push --dry-run` it had run, and this file reported that as a PROVEN correcting edge.
+ * The edge channel is now two bands — a `Corrects: <sha>` TRAILER, which is a statement, and a bare MENTION,
+ * which is a guess about prose — and BOTH still forbid a cut, because a false edge refuses a publication while
+ * a missed one splits a real pair. Only the CLAIM differs, which is the banding
+ * §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN asks for. RETIREMENT: this goes when every correcting pair in a range
+ * this gate reads arrives DECLARED, because the inferred band is then empty by authorship rather than by luck
+ * and the false positive has no population left to land in.
+ *
  * WHAT IT CANNOT SEE, STATED HERE BECAUSE §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN RATES A CONFESSION SUMMED INTO
  * A VERDICT AS THE DEFECT: it does not know which lane has REPORTED. That is a coordinator's knowledge, it
  * lives in no artifact, and a tool that guessed it would be asserting the one fact that decides the prefix. So
@@ -138,11 +149,41 @@ const index = new Map(commits.map((c, i) => [c.sha, i]));
 const edges = [];
 for (let i = 0; i < commits.length; i += 1) {
   const c = commits[i];
+  /* TWO BANDS, BECAUSE `NAMES AN EARLIER SHA` AND `CORRECTS AN EARLIER COMMIT` ARE TWO QUESTIONS AND THIS USED
+     TO ANSWER THE SECOND WITH THE FIRST. A message mentions a sha for every reason a message has: an incident
+     it is recording, a range it is quoting, a command's OUTPUT it is pasting. MEASURED, by this gate on the
+     commit that landed `engine/githooks/pre-push`: that message quoted `ed102dc..e4b1557` as the output of a
+     `git push --dry-run` it had run, and this file reported `[1] e4b1557 is corrected by [2] 27fad84` as
+     PROVEN. Nothing was corrected and nothing in the prose said it was.
+     THE DIRECTION IS CONSERVATIVE AND THAT IS WHY BOTH BANDS STILL FORBID A CUT. A FALSE edge refuses a
+     publication; a MISSED one splits a real pair, and §AND-THE-PREFIX-THAT-RULE-NAMES-IS-NOT-THEREBY-SAFE
+     prices that at a known-wrong figure published while its correction sits unpublished on a branch nobody
+     merges from, read by exactly one person at the moment they have already decided to do the work. So the
+     bands differ in what this file CLAIMS and not in what it allows — which is the banding
+     §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN asks for, a finding and a confession never summed.
+     WHAT A FALSE EDGE COSTS IS NOT NOTHING AND IS STATED SO NOBODY DISCOVERS IT AT A PUSH: it can forbid the
+     one cut the report state permits. On that same chain, had [1]'s lane reported and [2]'s not, the allowed
+     cuts would have been [0] alone — one of two reported commits — because the cut at [1] was forbidden by an
+     edge that was a quotation. The remedy is the DECLARED band: a trailer is read rather than inferred.
+     A `Corrects:` TRAILER IS AN ARTIFACT AND THE PROSE IS A GUESS ABOUT ONE, which is §AN-AUDITOR-DERIVES-THE-
+     RULE's own standard — derive the rule from the thing that states it, never restate it. */
+  for (const m of c.body.matchAll(/^\s*Corrects:\s*([0-9a-f]{7,40})\b/gim)) {
+    const target = commits.find((o) => o.sha.startsWith(m[1]) && o.sha !== c.sha);
+    if (!target) continue;
+    const j = index.get(target.sha);
+    if (j < i && !edges.some((e) => e.from === i && e.to === j))
+      edges.push({ from: i, to: j, spelling: m[1], band: "DECLARED", inRange: false });
+  }
   for (const m of c.body.matchAll(/\b([0-9a-f]{7,40})\b/g)) {
     const target = commits.find((o) => o.sha.startsWith(m[1]) && o.sha !== c.sha);
     if (!target) continue;
     const j = index.get(target.sha);
-    if (j < i && !edges.some((e) => e.from === i && e.to === j)) edges.push({ from: i, to: j, spelling: m[1] });
+    if (j >= i || edges.some((e) => e.from === i && e.to === j)) continue;
+    /* THE RANGE NOTE IS INFORMATION AND NEVER AN EXCLUSION. `A..B` is the shape the measured false positive
+       had, and reporting it tells a reader WHERE to look; excluding on it would miss a correction whose only
+       mention of its target is inside a range, which is the expensive direction. */
+    const around = c.body.slice(Math.max(0, m.index - 2), m.index + m[1].length + 2);
+    edges.push({ from: i, to: j, spelling: m[1], band: "MENTIONED", inRange: around.includes("..") });
   }
 }
 
@@ -161,14 +202,24 @@ for (let i = 0; i < commits.length; i += 1) {
 }
 console.log('');
 
-console.log('## correcting edges — PROVEN, from each commit\'s own message naming an earlier sha in this range');
+console.log('## correcting edges — DECLARED by a `Corrects:` trailer, or INFERRED from a bare mention. Both forbid a cut.');
 if (edges.length === 0) {
-  console.log('  none proven. THAT IS NOT `no pair exists`: a correction whose message names no sha is invisible');
-  console.log('  to this check, which is the blind spot, not a clean bill.');
+  console.log('  none. THAT IS NOT `no pair exists`: a correction whose message names its target nowhere at all');
+  console.log('  is invisible to this check, which is the blind spot, not a clean bill.');
 } else {
   for (const e of edges) {
-    console.log(`  [${e.to}] ${commits[e.to].short} is corrected by [${e.from}] ${commits[e.from].short}  (named as "${e.spelling}")`);
+    const how = e.band === "DECLARED"
+      ? 'DECLARED — the message carries `Corrects: ' + e.spelling + '`, which is a statement and not a reading of prose'
+      : 'INFERRED from a bare mention of "' + e.spelling + '"' +
+        (e.inRange ? ' INSIDE A RANGE (`A..B`), which is the shape of this check\'s one MEASURED false positive —'
+                   + ' OPEN THE MESSAGE before cutting lower on account of it'
+                   : ' — a message names a sha for every reason a message has, so READ IT');
+    console.log(`  [${e.to}] ${commits[e.to].short} <- [${e.from}] ${commits[e.from].short}  ${how}`);
   }
+  const inferred = edges.filter((e) => e.band === "MENTIONED").length;
+  if (inferred)
+    console.log(`  ${inferred} of ${edges.length} edge(s) are INFERRED. A lane that writes \`Corrects: <sha>\` moves its own` +
+                ' pair into the declared band and out of this sentence.');
 }
 console.log('');
 
@@ -176,7 +227,7 @@ console.log('');
 const forbidden = new Set();
 for (const e of edges) for (let i = e.to; i < e.from; i += 1) forbidden.add(i);
 
-console.log('## cuts — a cut AT [i] publishes 0..i. FORBIDDEN means it splits a proven correcting pair.');
+console.log('## cuts — a cut AT [i] publishes 0..i. FORBIDDEN means it splits a correcting pair, declared or inferred.');
 for (let i = 0; i < commits.length; i += 1) {
   const bad = forbidden.has(i);
   console.log(`  cut at [${i}] ${commits[i].short}  ->  publishes ${i + 1} commit(s)  ${bad ? 'FORBIDDEN — splits a pair' : 'allowed by the pair rule'}`);
@@ -233,7 +284,7 @@ if (!index.has(cutSha)) {
 const ci = index.get(cutSha);
 const spanning = edges.filter((e) => e.to <= ci && ci < e.from);
 if (spanning.length > 0) {
-  console.log(`VERDICT: REFUSED — a cut at [${ci}] ${cutSha.slice(0, 7)} splits ${spanning.length} proven correcting pair(s):`);
+  console.log(`VERDICT: REFUSED — a cut at [${ci}] ${cutSha.slice(0, 7)} splits ${spanning.length} correcting pair(s), declared or inferred:`);
   for (const e of spanning) {
     console.log(`  ${commits[e.to].short} would be published WITHOUT ${commits[e.from].short}, which corrects it.`);
     console.log(`    ${commits[e.from].subject}`);
@@ -254,6 +305,6 @@ if (String(expect).trim() !== String(n)) {
   process.exit(1);
 }
 console.log(`VERDICT: ALLOWED BY THE PAIR RULE — a cut at [${ci}] ${cutSha.slice(0, 7)} publishes ${n} of ${commits.length} commit(s)`);
-console.log(`  which is the --expect ${n} you stated, and splits no proven correcting pair. It says NOTHING`);
+console.log(`  which is the --expect ${n} you stated, and splits no correcting pair this gate can see. It says NOTHING`);
 console.log('  about report state — see above.');
 process.exit(0);
