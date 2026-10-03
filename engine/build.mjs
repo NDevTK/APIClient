@@ -5729,10 +5729,38 @@ function vehicleAgreement(nat, veh) {
                   `not of any interleaving, so these two programs are not the same fixture`);
   const an = a.abort === null ? null : causeName(a.abort);
   const bn = b.abort === null ? null : causeName(b.abort);
-  if (an !== bn)
-    findings.push(`THE ABORTS DIFFER - native: ${an === null ? "none" : JSON.stringify(an)}; vehicle: ` +
-                  `${bn === null ? "none" : JSON.stringify(bn)}. An abort's IDENTITY survives a repeat, so ` +
-                  `this is a difference between the two HOSTS and not between two runs`);
+  /* AN ABORT ON ONE HOST AND NONE ON THE OTHER IS A REACH DIFFERENCE, AND REACH IS THE ONE QUANTITY THIS
+     FUNCTION REFUSES TO COMPARE. The guard above already says it for the DENOMINATOR -- a host that printed no
+     table "did not REACH one, which is a reading of one interleaving and says nothing about the vehicle" -- and
+     this axis had no such guard, so the same fact arrived as a FINDING at one axis and as an INABILITY at the
+     other, in one function. An abort is FIRST-PAST-THE-POST and a run reaches it or does not; the vehicle's
+     slice is WALL-denominated, so how far it got is a fact about the box and the hour, which this line says of
+     itself two sentences later. There is no cross-host reach measure available to rule that out either: the
+     tail below refuses every work, fork, job and census total for exactly the reason that would be needed here.
+     MEASURED, on the frozen build at 3a2808f: this line reported `THE ABORTS DIFFER - native: box_tree.c...;
+     vehicle: none` as a VEHICLE finding. The native host aborted at the ::marker DCHECK after 606.1 s of CPU
+     and the vehicle spent its whole 900.0 s budget without reaching it. Nothing about the vehicle was
+     established; the difference was the native host dying earlier in its own budget.
+     SO THE PARTITION IS THREE-WAY AND NOT TWO. Two DIFFERENT aborts is a real host disagreement, because both
+     runs reached one and they name different things. One abort and one absence is an INABILITY, named per host
+     so the silence is readable as an answer rather than as agreement -- which is §A-GATE-STATES-ITS-FINDINGS-
+     AND-ITS-BLIND-SPOTS-AS-SEPARATE-VERDICTS owed to the one axis of this function that lacked it.
+     WHAT THIS COSTS IS A FINDING, WHICH IS THE DIRECTION THAT NEEDS SAYING: a falling count must not be
+     readable as accuracy by anyone, including whoever made it fall. Nothing is weakened in the verdict, since
+     a vehicle finding never moved the exit code and this line says so; and nothing is lost, because the pair
+     moves to COULD NOT BE COMPARED with both hosts' states named. What IS gone is the ability to report
+     `native aborted, vehicle did not` as a defect in the vehicle, and that report was never about the vehicle. */
+  if (an !== null && bn !== null && an !== bn)
+    findings.push(`THE ABORTS DIFFER - native: ${JSON.stringify(an)}; vehicle: ${JSON.stringify(bn)}. BOTH ` +
+                  `hosts reached an abort and they name different things, and an abort's IDENTITY survives a ` +
+                  `repeat - so this is a difference between the two HOSTS and not between two runs`);
+  else if (an !== bn)
+    cannot.push(`the ABORT (native: ${an === null ? "none" : JSON.stringify(an)}; vehicle: ` +
+                `${bn === null ? "none" : JSON.stringify(bn)}) - an abort is FIRST-PAST-THE-POST, so one host ` +
+                `reaching one and the other not is a REACH difference, and reach on the vehicle is ` +
+                `wall-denominated and therefore a fact about the box and the hour. The host that aborted may ` +
+                `simply have died earlier in its own budget; no total this line is allowed to compare could ` +
+                `tell that from a difference between the two programs`);
   const head = `[build] VEHICLE AGREEMENT (${den(a)}; ${den(b)})`;
   const could = cannot.length ? `\n[build]   COULD NOT BE COMPARED IN THIS RUN: ${cannot.join("; ")}.` : ``;
   const tail = `\n[build]   NOT COMPARED, DELIBERATELY: how many statements each host ANSWERED, and every ` +
