@@ -77,7 +77,7 @@
  *        node engine/fixturereach.mjs --ladder          (the derivation alone, no run)
  * Exit: 0 nothing scored against it; 1 a hole or a partial rung, scored against an artifact; 2 refused. */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -366,6 +366,20 @@ function readRun(path, derived) {
    a row the binary never held. Read as bytes and searched as bytes: a wasm module is not text and decoding it
    would refuse whole artifacts for holding one invalid sequence. */
 function compiledMarkers(path, derived, witness) {
+  /* A PATH THAT IS NOT A REGULAR FILE IS REFUSED HERE AND NOT DISCOVERED BY `readFileSync` THROWING, because
+     the two exits mean opposite things to a caller and this reader's own header is what says so: a REFUSAL is
+     2 and anything else is 3, and `EISDIR: illegal operation on a directory` arrives as 3 with a node stack on
+     it — a build stage reading that cannot tell "you handed me the wrong path" from "this reader is broken".
+     MEASURED: `--artifact engine/qjs` is a DIRECTORY in this tree and produced exactly that, which is the
+     likeliest misuse there is, since the binary's own name is one path component further down. A caller's
+     `existsSync` does NOT close it — a directory exists — so the guard belongs at the primitive, where the
+     impossible state can be made impossible rather than remembered at every call site. */
+  let st = null;
+  try { st = statSync(path); } catch (e) { refuse(`--artifact ${path} cannot be stat'd (${e.code || e.message})`); }
+  if (!st.isFile())
+    refuse(`--artifact ${path} is ${st.isDirectory() ? "a DIRECTORY" : "not a regular file"} — this wants the ` +
+           `BUILT PROGRAM itself (engine/host/out/qjs-native-none, engine/host/out/qjs.wasm), whose bytes are ` +
+           `searched for the markers the producer compiled in`);
   const hay = readFileSync(path).toString("latin1");
   /* THE ONE MISUSE THAT DISARMS THIS CHECK IN THE FLATTERING DIRECTION IS HANDING IT A RUN LOG. A log holds
      every marker the run printed, so the compiled set would equal the observed set, every absent rung would be

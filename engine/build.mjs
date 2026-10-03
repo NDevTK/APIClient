@@ -5150,7 +5150,14 @@ function runChild(label, prog, args, hint) {
      inside either one. The cold round trip is exactly that shape — session ONE writes a residue and session
      TWO rebuilds it, and "a kind session one wrote and this one did not rebuild" is a comparison of two
      children's output that nothing but the caller holds both halves of. */
-  return Object.assign(runOutcome(label, t, hint), { captured: t.captured });
+  /* AND THE PATH TRAVELS BESIDE THEM, BECAUSE A READER OF A RUN WANTS THE RUN AND NOT A COPY OF ITS BYTES.
+     `captured` is this process's string; a stage that reads a run reports it BY PATH — engine/fixturereach.mjs
+     says so in its own header, on CLAUDE.md §AND-A-SCRATCH-DIRECTORY-HOLDS-RUNS-OF-SEVERAL-SUBJECTS' ground
+     that a value quoted out of a directory belongs to a document nobody is discussing. The alternative is a
+     caller recomputing `slug` and the pid to name the file, which is the second copy of the identity rule the
+     paragraph above states — and the copy that drifts is the one nobody re-derives. It is the PER-PID path and
+     never the stable symlink: two names for one inode is what CLAUDE.md measured an abort count double on. */
+  return Object.assign(runOutcome(label, t, hint), { captured: t.captured, log });
 }
 
 /* BOTH NUMBERS, AT EVERY OUTCOME, WITH THE VERDICT NAMING WHICH ONE DECIDED — CLAUDE.md §Testing, and the
@@ -8192,6 +8199,38 @@ STAGES.push(onHost(WASM_SMOKE,
 /* ONE LINE, ITS OWN VERDICT, SUMMED INTO NOTHING — see `vehicleAgreement`. It is composed here, where both
    records are in one hand, and PRINTED by `report()` beside the verdict, where a reader is looking. */
 FINDINGS.push(vehicleAgreement(NATIVE_SMOKE, WASM_SMOKE));
+/* AND THE REACHABILITY LADDER OVER THE TWO RUNS ABOVE, WHICH IS THE READER THOSE @ MARKERS WERE WRITTEN FOR.
+   engine/host/test_forced.c prints a marker at the head of every selftest row it answers, and engine/
+   fixturereach.mjs derives main()'s call order from the producer's own bytes and reads which of them a captured
+   run carries. Until this push its ONLY caller was a person remembering to run it: a marker with no reader
+   reads zero for ever, which is §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES, and a reader nobody invokes is the same
+   hole one level out — the smoke's own `@H row printed 0` hint above names a statement the fixture declares and
+   the run did not answer, and nothing on this list was asking WHETHER THE FUNCTION RAN AT ALL.
+   IT IS TWO STAGES AND NOT ONE, because `--artifact` takes the UNION of the artifacts it is given: handing it
+   both programs would answer "compiled" for a marker only the OTHER one holds, and a rung excused on that
+   ground is §A-CONTROL-ARMS-ONLY-ON-A-SITE's unarmed probe deciding a verdict. One (log, artifact) pair each,
+   on the host whose run it is about — the native reading DECIDES and the vehicle's is a VEHICLE fact, exactly
+   as the two smoke stages themselves are pushed, so a wall-denominated run's reach is never summed into the
+   verdict. THE ARTIFACT IS REQUIRED RATHER THAN OPTIONAL HERE: without it the reader prints its observations
+   and UNSCORES every one of them, which would put a stage on this list that cannot fail.
+   WHAT IT WILL NOT DO IS GRADE A SHORT RUN. It asserts only the two things a budget and a shorter document
+   cannot produce — a HOLE (a rung silent while a LATER rung answered, against main()'s one fixed order) and a
+   PARTIAL rung (a function that printed some of its own markers and not the rest). The reach itself is
+   REPORTED, which is the §AN-INVARIANT-OVER-A-GATED-OPERATION rule the reader states for itself. */
+for (const [smoke, artifact, host, why] of [
+      [NATIVE_SMOKE, NATIVE_BUILT.bin, STAGE_HOST.NATIVE, "the native program did not link, so there is no run to read"],
+      [WASM_SMOKE, join(OUT, "qjs.wasm"), NATIVE_BUILT.bin === null ? STAGE_HOST.WASM : STAGE_HOST.VEHICLE,
+       "the smoke program did not link, so there is no run to read"]]) {
+  const label = `fixture reachability (${host.tag})`;
+  STAGES.push(onHost(!smoke.log || !artifact || !existsSync(artifact) || !existsSync(smoke.log)
+    ? skipped(label, why)
+    : runProgram(label, [join(ENGINE, "fixturereach.mjs"), "--artifact", artifact, smoke.log],
+        "a HOLE is a selftest row that did not answer while a later one did, and a PARTIAL rung is a function " +
+        "ENTERED and not finished — neither is a short run, which is why these two and nothing else set this " +
+        "stage's exit code. Fix at the ROOT in engine/host/test_forced.c or in whatever it calls; there is no " +
+        "baseline to update and the REACH is reported rather than graded, so a run that stopped early is a " +
+        "fact about the run and exits zero."), host));
+}
 /* A STALE ARTIFACT IS NOT A SUBJECT. route.mjs imports extension/lib/qjs/qjs.mjs off disk, so running it after
    a failed ABI link would measure whatever a PREVIOUS build left there and report the number under this
    revision — which is worse than not running it, and is why this is a SKIP rather than an attempt. */
