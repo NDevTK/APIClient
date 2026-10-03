@@ -1451,9 +1451,15 @@ static CssPx lb_align_offset(lxb_dom_element_t *style, const TextRunMeasure *m, 
               "becomes a distribution of `slack` over the opportunities rather than a single offset");
         return css_px(0.0);
     }
-    /* §7.1's five distributing values. `left` and `right` are the LINE-RELATIVE edges — "in vertical writing "
-       modes, this can be either the physical top or bottom" — and the entry below has already
-       established that this formatting context's line-left IS its physical left. */
+    /* css-text-4 §7.1 "Text Alignment: the text-align shorthand"'s five distributing values. `left` and
+       `right` are the LINE-RELATIVE edges — css-text-4 §7.1: "in vertical writing modes, this can be either
+       the physical top or bottom, depending on writing-mode" — and `lb_require_horizontal_tb` has already
+       established that this formatting context's line-left IS its physical left. THE HELPER IS NAMED AND THE
+       CLAIM CARRIES ITS WITNESS, which is a grep: BOTH of this function's callers run it before their fill —
+       `line_box_glyphs` on the establishing container, `line_box_inline_fragments` on that container AND on
+       the box it was asked about, which is css-writing-modes-4 §7.3 "Orthogonal Flows"' pair and only that
+       entry can see it. The retired wording said `the entry below`, which resolved to the glyph walk for a
+       reader scanning declarations and was true of only ONE caller, so it is not re-pointed at anything. */
     centered = strcmp(kw, "center") == 0;
     if (strcmp(kw, "left") == 0) to_left = true;
     else if (strcmp(kw, "right") == 0) to_left = false;
@@ -1521,6 +1527,19 @@ size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph 
     DCHECK(style != NULL && out != NULL,
            "CSS 2.1 §E.2 \"Painting order\"'s step 7.2.1 text was asked for with no element whose properties "
            "the establishing box has, or with nowhere to report the characters");
+    /* §9.4.2's PHYSICAL AXES, ASKED AT THIS ENTRY AND NOT INSIDE `lb_align_offset`, BECAUSE BOTH COORDINATES
+       THIS ENTRY REPORTS ARE PHYSICAL AND ONLY ONE OF THEM GOES THROUGH THAT HELPER. `origin_x` is an offset
+       from the content box's LEFT edge and the alignment is its only writing-mode-sensitive term, but
+       `baseline_y` is an offset from the content box's TOP edge and comes out of the `top`/`e.above` stack
+       below with no alignment in it at all — so a refusal placed in the alignment would leave the BLOCK-axis
+       coordinate of a vertical-mode box unasserted, and css-writing-modes-4 §3.2 "Block Flow Direction: the
+       writing-mode property" is what makes the block axis the one that moves first.
+       ONE CALL AND NOT THE TWO `line_box_inline_fragments` MAKES: that entry is handed a BOX and goes looking
+       for the container, so css-writing-modes-4 §7.3 "Orthogonal Flows" is a disagreement it can see and must
+       ask about twice. This entry is handed the establishing container ITSELF — core/layout/line_box.h's own
+       contract for `style` — so there is no second element here to ask, and inventing one would be a second
+       answer to a question this signature does not pose. */
+    lb_require_horizontal_tb(style);
     n = lb_fill(&m, style, run, line_box_available_width_derived(), &lines);
     for (i = 0; i < n; i++) {
         bool exists = false;

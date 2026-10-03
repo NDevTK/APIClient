@@ -322,6 +322,11 @@ void line_box_content_span(lxb_dom_element_t *style, BlockFlowRun run,
  * css-text-3 §4.1.1 collapsed away entirely, has no character to place and is not an absence of a
  * measurement.
  *
+ * `style` MUST BE IN A `horizontal-tb` WRITING MODE, ASSERTED — the same precondition
+ * `line_box_inline_fragments` states for its own box, owed here for the same reason and for BOTH
+ * coordinates: `origin_x` and `baseline_y` are this box's PHYSICAL left and top, which are §9.4.2's own
+ * axes only in that mode.
+ *
  * THE ARGUMENTS ARE `line_box_content_height`'s TWO AND MEAN EXACTLY WHAT THEY MEAN THERE: §9.2.1.1's
  * anonymous block box has no element, so `style` is whose computed properties the box has and `run` is which
  * of that container's runs this context is. A caller reaching every context under an element asks
@@ -329,8 +334,8 @@ void line_box_content_span(lxb_dom_element_t *style, BlockFlowRun run,
 typedef struct {
     uint32_t cp;                /* the code point that draws — always a css-text-3 §4.1.1 Phase I character */
     lxb_dom_element_t *style;   /* the inline box it is in, whose `font-size` and `color` it has */
-    CssPx origin_x;             /* the pen position, from the content box's LEFT edge */
-    CssPx baseline_y;           /* its BASELINE, from the content box's TOP edge */
+    CssPx origin_x;             /* the pen position, from the content box's LEFT edge (horizontal-tb, asserted) */
+    CssPx baseline_y;           /* its BASELINE, from the content box's TOP edge (horizontal-tb, asserted) */
 } LineBoxGlyph;
 
 size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph **out);
