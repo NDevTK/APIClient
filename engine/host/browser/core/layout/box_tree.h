@@ -88,12 +88,24 @@
  * In release, where the refusal compiles out, that earlier answer is what is still returned.
  * WHAT THE NEXT DIFF BUILDS IS css-lists-3 §3.2 "Generating Marker Contents", NOT THE MEMBER TYPE, and the
  * order is forced rather than chosen: §3.2 is what makes the refusal PRECISE instead of blanket, because its
- * last arm is "otherwise: The marker box has no contents and ::marker does not generate a box" — a list item
- * with no marker string has a COMPLETE sequence here and must not be refused. It needs `list-style-type`
- * (css-lists-3 §3.4 "Text-based Markers: the list-style-type property", whose `Initial:` line is `disc` and
- * whose `Inherited:` line is `yes`) to be a computed value at all, which it is not: the property is in neither
- * lexbor's registry nor core/css/css_style_declaration.c's unregistered-initial table, so css-cascade-5 §7.1
- * "Initial Values" has no initial value to fall to and it answers NULL for every element. §3.2's arms then
+ * `otherwise` arm reads "The marker box has no contents and ::marker does not generate a box" — a list item
+ * §3.2 answers that arm for has a COMPLETE sequence here and must not be refused. It needs
+ * `list-style-type` (css-lists-3 §3.4 "Text-based Markers: the list-style-type property", whose `Initial:`
+ * line is `disc` and whose `Inherited:` line is `yes`) to be a computed value at all.
+ * THIS CLAUSE USED TO READ "a list item with no marker string", AND BOTH HALVES OF WHAT FOLLOWED IT ARE
+ * REWRITTEN RATHER THAN DELETED, because a reader who reaches for `list-style-type` alone re-derives both.
+ * The FIRST half enumerated ONE of §3.2's three conditions: that section is ORDERED ("The contents of a
+ * marker box are determined by the first of these conditions that is true"), so its `otherwise` arm needs
+ * `content` on the ::marker to be `normal`, no `list-style-image` defining a marker image AND no
+ * `list-style-type` defining a marker string. The SECOND said the property "is in neither lexbor's registry
+ * nor core/css/css_style_declaration.c's unregistered-initial table, so css-cascade-5 §7.1 'Initial
+ * Values' has no initial value to fall to and it answers NULL for every element" — and the table half is
+ * retired: it carries §3.4's `disc` and css-lists-3 §3.3 "Image Markers: the list-style-image property"'s
+ * `none`, which is §3.2's image arm as well as its type arm, so both now default and inherit. WHAT A
+ * COMPUTED VALUE STILL WAITS ON IS css-lists-3 §3.6 "Styling Markers: the list-style shorthand property":
+ * `css_computed_value` asserts `css_shorthand_complete_for` first, and `list-style` sets both longhands and
+ * has no row in core/css/css_shorthand.c, so recording completeness would make a `list-style: none` page
+ * read as `disc`. Read `bt_require_marker_box_is_spellable` for the ordering. §3.2's arms then
  * reach css-counter-styles-3 §6.3 "Symbolic: disc, circle, square, disclosure-open, disclosure-closed" for the
  * symbol a `disc` marker is filled with, and any NUMERIC style additionally needs css-lists-3 §4.6 "The
  * Implicit list-item Counter" — which is why that arm is a crash of its own and not part of the same landing.

@@ -3025,7 +3025,109 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
        inheritance half has listed this property since before anything could ask for it, which is why the
        absence read as a modelled property rather than as an unmodelled one. */
     { "pointer-events", "auto" },
+    /* css-lists-3 §3.4 "Text-based Markers: the list-style-type property", whose `Initial:` line is `disc`,
+       and css-lists-3 §3.3 "Image Markers: the list-style-image property", whose `Initial:` line is `none`.
+       BOTH LINES WERE READ OFF THE FETCHED EDITOR'S DRAFT AND NOT OFF A CORPUS, and that is a fact about the
+       citation rather than about the property: engine/specindex carries no css-lists-3 row, so every citation
+       to that standard in this tree is counted and judged by nothing. The two numbers and the two titles above
+       are from `curl drafts.csswg.org/css-lists-3/`, whose own heading list carries both, and either is one
+       command from being re-checked.
+       THE ROWS ARE WHAT MAKE EITHER PROPERTY ANSWERABLE AT ALL, which is `pointer-events`' argument one line
+       up word for word. Lexbor's registry carries NO `list-style` anything — the derivation rather than a
+       count, because the vendored parser moves: `grep -rniE 'list.style' engine/lexbor/source/lexbor/css/`
+       exits 1 with no output, against a `z.index` control over the same path that exits 0 and prints — so
+       with no row here css-cascade-5 §7.1 "Initial Values" has no initial value to fall to and the cascade
+       answers NULL for every element that does not declare one, which is every element on almost every page.
+       BOTH `Inherited:` LINES ARE `yes` AND core/css/css_defaulting.c ALREADY CARRIES BOTH NAMES, so neither
+       needs a companion row there the way `justify-items` did: css-cascade-5 §7.2 "Inheritance" answers the
+       ROOT with the initial value, so without these rows the inherited chain had no base case either and
+       answered NULL from the root down.
+       THEY ARRIVE AS A PAIR BECAUSE css-lists-3 §3.2 "Generating Marker Contents" IS AN ORDERED LIST AND THE
+       IMAGE ARM RUNS FIRST. §3.2 states its own structure — "The contents of a marker box are determined by
+       the first of these conditions that is true" — and the two conditions that read the ORIGINATING ELEMENT
+       are "list-style-image on the originating element defines a marker image" AHEAD OF "list-style-type on
+       the originating element defines a marker string". So the type alone cannot answer §3.2: it would make
+       true an arm that is only reached once the one above it is false, which is the enumeration error of
+       building to a list of inputs without asking which step first sees them.
+       `list-style-position` IS DELIBERATELY ABSENT AND IS NOT A THIRD MEMBER OF THIS PAIR. §3.2 reads it in
+       no arm, so a row for it would be an initial value nothing asks for; css-lists-3 §3.5 "Positioning
+       Markers: The list-style-position property" is a positioning scheme core/layout/box_tree.h records this
+       engine as having no component for, and §3.5's own text calls it "handwavey nonsense from CSS2". It
+       arrives with css-lists-3 §3.6 "Styling Markers: the list-style shorthand property", which is the next
+       landing and which cannot expand without it.
+       NAMED RESIDUAL — THESE TWO ARE A VALUE A PAGE READS AND NOT YET A COMPUTED VALUE A C ALGORITHM MAY ASK
+       FOR. The code is correct for what it does: §7.1 now has an initial value, §7.2 now has a base case,
+       CSSOM §2's supported set now carries both names (cssd_own_init walks this table), and §6.6.1 installs
+       `listStyleType` and `listStyleImage` as IDL attributes whose read goes through
+       core/css/css_computed_value.c's `css_cv_specified`.
+         WHAT IS NOT COVERED: `css_computed_value` — the entry a C spec algorithm asks, and the only one — goes
+         on crashing for both names at `css_cv_modelled`. Not for want of a `Computed value:` line: §3.4's is
+         `specified value` and would be one row of that file's as-specified arm. It is the SECOND assert there,
+         `css_shorthand_complete_for`, which must answer FALSE while css-lists-3 §3.6's `list-style` has no row
+         in core/css/css_shorthand.c — that shorthand sets both of these longhands, nothing expands it, and
+         recording completeness over it would assert exactly the falsehood that predicate exists to catch.
+         WHAT THE NEXT DIFF BUILDS: §3.6's row. It is a KIND OF ITS OWN and not a CSS_SH_ALL_OF, because §3.6
+         states a disambiguation no `||` rule has — "a value of none in the shorthand must be applied to
+         whichever of the two properties aren't otherwise set by the shorthand", with `list-style: none`
+         setting BOTH — and `none` is a member of both longhands' value sets, which is the one arrangement
+         CSS_SH_ALL_OF's word-to-term assignment cannot decide. It carries `list-style-position`'s `outside`
+         with it, plus a grammar apiece in `css_shorthand_validates_longhand`. Only then are the
+         `css_computed_models` row and the `css_shorthand_complete_for` row true, and only then can
+         core/layout/box_tree.c ask §3.2.
+         HOW ITS ABSENCE WOULD SHOW: a page reads back TWO SPELLINGS OF ONE DECLARATION and gets two answers —
+         `list-style-type: none` is honoured, and the `list-style: none` that every reset stylesheet writes
+         instead reports `disc`, because the shorthand reaches the cascade as a declaration nothing takes
+         apart. It is observed at the PAIR and never at one member, since either answer alone is a value a
+         browser also gives. */
+    { "list-style-type", "disc" }, { "list-style-image", "none" },
 };
+
+/* THE UNREGISTERED-INITIAL TABLE'S OWN INVARIANT, asserted once per instance beside the UA stylesheet's and
+   for two reasons where that table has one.
+   ONE PROPERTY HAS ONE ROW, which is `cssd_ua_table_check`'s reason unchanged: `cssom_initial_value` scans this
+   table first-match-wins, so a second row for a name is an initial value that can never be read and a
+   disagreement nothing would report — and `cssd_own_add` DEDUPES, so the duplicate does not surface as a
+   second member of the engine's own supported set either. Every value is non-empty for the same reason: an
+   empty string is a value the cascade would carry, where `css_resolved_computed`'s guard reads a NULL as the
+   absence this table exists to end.
+   AND NO ROW'S NAME IS IN LEXBOR'S REGISTRY, which is the condition `cssom_initial_value` used to assert at the
+   row it was looking up and could not fire for — the record at that loop says why. It is asked HERE, of every
+   row, with no reference to `e->initial`, so a vendored-parser bump that gives one of these properties a
+   registry entry is a crash at the table rather than a row that quietly stops being read. CSSD_INITIAL_WRONG's
+   rows are NOT in scope: those exist to disagree with an answer the registry GIVES, so their condition is the
+   opposite one and is asserted where it is reachable. */
+static void cssd_initial_unregistered_check(void)
+{
+#if APICLIENT_DEV
+    unsigned i, j;
+
+    for (i = 0; i < sizeof(CSSD_INITIAL_UNREGISTERED) / sizeof(CSSD_INITIAL_UNREGISTERED[0]); i++) {
+        DCHECKF(CSSD_INITIAL_UNREGISTERED[i].name != NULL && CSSD_INITIAL_UNREGISTERED[i].name[0] != '\0' &&
+                    CSSD_INITIAL_UNREGISTERED[i].initial != NULL &&
+                    CSSD_INITIAL_UNREGISTERED[i].initial[0] != '\0',
+                "row %u of the unregistered-initial table has an empty property name or an empty initial value "
+                "— a row is a property's whole `Initial:` line, and an empty half of one is a value the "
+                "cascade would carry where css-cascade-5 §7.1 \"Initial Values\" has none to fall to",
+                i);
+        DCHECKF(lxb_css_property_by_name((const lxb_char_t *) CSSD_INITIAL_UNREGISTERED[i].name,
+                                         strlen(CSSD_INITIAL_UNREGISTERED[i].name)) == NULL,
+                "`%s`: this file states an initial value for a property that IS in lexbor's property registry "
+                "— one fact with two answers, and the registry's is the one every other property in CSS "
+                "reads, because `cssom_initial_value` asks it FIRST and returns. So this row is already dead: "
+                "DELETE it and let the registry answer, after checking that what it now says is the property's "
+                "own `Initial:` line. If it is to be OVERRIDDEN rather than adopted the row belongs in "
+                "CSSD_INITIAL_WRONG, which records the answer it disagrees with so the disagreement expires too",
+                CSSD_INITIAL_UNREGISTERED[i].name);
+        for (j = 0; j < i; j++)
+            DCHECKF(strcmp(CSSD_INITIAL_UNREGISTERED[i].name, CSSD_INITIAL_UNREGISTERED[j].name) != 0,
+                    "`%s`: the unregistered-initial table states one property's `Initial:` line TWICE. The scan "
+                    "stops at the first row, so the second can never be read and a transcription error between "
+                    "the two is invisible — and `cssd_own_add` dedupes, so it does not surface as a duplicated "
+                    "supported property either",
+                    CSSD_INITIAL_UNREGISTERED[i].name);
+    }
+#endif
+}
 
 /* THE INITIAL VALUES LEXBOR'S REGISTRY GETS WRONG, each with the answer it gives today so the row EXPIRES.
    This is a different table from the one above and deliberately so: there the registry is silent and the fact
@@ -3163,10 +3265,18 @@ char *cssom_initial_value(const char *name)
         char *out;
 
         if (strcmp(CSSD_INITIAL_UNREGISTERED[i].name, name) != 0) continue;
-        DCHECK(e == NULL,
-               "a property this file states an initial value for is ALSO in lexbor's property registry — one "
-               "fact with two answers, and the registry's is the one every other property in CSS reads. DELETE "
-               "the row: the registry entry is what a pinned parser upgrade would keep in step");
+        /* THE REGISTRY-COLLISION CHECK IS NOT HERE AND USED TO BE, and it is recorded rather than deleted
+           because its argument is exactly right and a reader will re-derive it: a property this file states an
+           initial value for that is ALSO in lexbor's registry is one fact with two answers, and the registry's
+           is the one every other property in CSS reads. WHAT WAS WRONG WAS THE POSITION, which made it a check
+           that could not fire for the state its own message described. `if (e && e->initial)` returns ABOVE
+           this loop, so a row whose name lexbor carries WITH an initial value never reaches this line: the row
+           silently goes dead, the registry answers, and the assert that exists to report the collision is
+           unreachable in the one shape a registry entry normally has. It fired for `e != NULL && e->initial ==
+           NULL` alone, which is the `font-family` state and is one property.
+           `cssd_initial_unregistered_check` asks it at cssom_init over EVERY row rather than over the row a
+           caller happened to name, and with no `e->initial` in the condition, so both halves of the state are
+           covered and a dead row is a crash instead of a quietly superseded one. */
         out = strdup(CSSD_INITIAL_UNREGISTERED[i].initial);
         CHECK(out != NULL, "cssom: OOM copying an initial value — a dropped one reads as no value at all, "
                            "which is a cascade that stopped before its last layer");
@@ -6036,6 +6146,11 @@ void cssom_init(JSContext *ctx)
     /* The UA stylesheet's own invariants, for the same reason: it is scanned first-match-wins, so a duplicated
        row is a declaration that can never be reported and a transcription error nothing else would surface. */
     cssd_ua_table_check();
+    /* And the table of initial values lexbor's registry does not carry, whose rows are scanned the same
+       way and whose every name must still be ABSENT from that registry — a condition
+       `cssom_initial_value` cannot ask at the row it is looking up, because the registry is asked and
+       returned from above the scan. */
+    cssd_initial_unregistered_check();
     g_parser = lxb_css_parser_create();
     CHECK(g_parser != NULL && lxb_css_parser_init(g_parser, NULL) == LXB_STATUS_OK,
           "the CSS parser could not be created");

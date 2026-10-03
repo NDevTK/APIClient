@@ -38,7 +38,7 @@
    sequence therefore owes THREE pseudo members in a defined order; a marker-only flag is a field that has to
    be widened twice.
    IT NAMES WHICH BOX A MEMBER IS AND NEVER THAT ONE EXISTS, which is what keeps a CONTENTLESS marker out: a
-   list item whose §3.2 answer is that section's last arm ("otherwise: The marker box has no contents and
+   list item whose §3.2 answer is that section's `otherwise` arm ("The marker box has no contents and
    ::marker does not generate a box") has a complete sequence with NO pseudo member in it, and the pair simply
    does not yield one. A member type that forced a marker member per list item would be exactly the no-content
    box §3.2 says is not generated — which is why §3.2 is the landing BEFORE this one and not after it.
@@ -243,13 +243,31 @@ static void bt_require_answer_is_in_sequence(lxb_dom_element_t *box, lxb_dom_nod
    THE RELEASE ARM IS TODAY'S ANSWER AND IS COHERENT, which is what a `DFAIL`'s shipped arm owes the components
    downstream of it: the entry goes on returning the first source-document child, which is the marker-less list
    every consumer of this sequence already handles. No component is left holding a state it has no step for.
-   IT REFUSES EVERY LIST ITEM, AND css-lists-3 §3.2 "Generating Marker Contents" IS WHAT WOULD NARROW IT: that
-   section's last arm is "otherwise: The marker box has no contents and ::marker does not generate a box", so a
-   list item with no marker string has a COMPLETE sequence here and must not be refused. This engine cannot ask
-   — `list-style-type` (css-lists-3 §3.4 "Text-based Markers: the list-style-type property", `Initial: disc`)
-   is in neither lexbor's property registry nor core/css/css_style_declaration.c's unregistered-initial table,
-   so css-cascade-5 §7.1 "Initial Values" has no initial value to fall to and it answers NULL for every
-   element. Making §3.2 answerable is the diff after this one.
+   IT REFUSES EVERY LIST ITEM, AND css-lists-3 §3.2 "Generating Marker Contents" IS WHAT WOULD NARROW IT:
+   that section's `otherwise` arm reads "The marker box has no contents and ::marker does not generate a
+   box", so a list item §3.2 answers that arm for has a COMPLETE sequence here and must not be refused.
+   §3.2's CONDITION IS THREE ARMS AND NOT ONE, AND THIS CLAUSE USED TO STATE ONE OF THEM — "a list item
+   with no marker string" — WHICH IS KEPT BECAUSE A READER WHO REACHES FOR `list-style-type` ALONE WILL
+   RE-DERIVE IT. §3.2 is ORDERED: "The contents of a marker box are determined by the first of these
+   conditions that is true", fetched from drafts.csswg.org/css-lists-3/ because engine/specindex has no
+   css-lists-3 row and nothing in this tree checks a citation to it. So the `otherwise` arm is reached only
+   once all three are false: `content` on the ::marker is `normal`, which this engine cannot move it off at
+   all (box_tree.h states that derivation and its armed control); no `list-style-image` on the originating
+   element defines a marker image; and no `list-style-type` defines a marker string. A narrowing built from
+   the third arm alone would answer §3.2 for an arm whose predecessors it never read.
+   THE TWO PROPERTIES §3.2 READS OFF THE ORIGINATING ELEMENT NOW HAVE AN INITIAL VALUE AND ARE STILL NOT A
+   COMPUTED VALUE, which is the other half of what this clause used to say: it read that `list-style-type`
+   "is in neither lexbor's property registry nor core/css/css_style_declaration.c's unregistered-initial
+   table", and the second half is RETIRED — that table carries css-lists-3 §3.4 "Text-based Markers: the
+   list-style-type property"'s `disc` and css-lists-3 §3.3 "Image Markers: the list-style-image property"'s
+   `none`, so css-cascade-5 §7.1 "Initial Values" has an initial value to fall to and §7.2 "Inheritance"
+   has a base case. WHAT STILL BLOCKS §3.2 IS ONE ROW IN A THIRD FILE: `css_computed_value` is the entry a C
+   algorithm asks and it asserts `css_shorthand_complete_for` FIRST, which must answer FALSE while
+   css-lists-3 §3.6 "Styling Markers: the list-style shorthand property" has no row in
+   core/css/css_shorthand.c — that shorthand sets both longhands, nothing takes it apart, so a
+   `ul { list-style: none }` would read as `disc` and this refusal would fire on exactly the list items
+   §3.2 says have no marker box. §3.6's row is the landing before this one, and the named residual at that
+   table states its shape.
    §3.1's LAST SENTENCE IS WHY THE `list-item` TEST IS THE WHOLE POPULATION AND NOT A FIRST APPROXIMATION OF IT:
    "Marker boxes only exist for list items: on any other element, the ::marker pseudo-element's content property
    must compute to none, which suppresses its creation."
