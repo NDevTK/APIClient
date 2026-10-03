@@ -56,7 +56,7 @@ static const char *const FONT_FORMAT[] = {
     "collection", "embedded-opentype", "opentype", "svg", "truetype", "woff", "woff2",
 };
 
-/* §4.3.1's `<font-tech>`, FLATTENED FROM ITS THREE PRODUCTIONS because they are alternatives of one another and
+/* css-fonts-4 §4.3.1's `<font-tech>`, FLATTENED FROM ITS THREE PRODUCTIONS because they are alternatives of one another and
    nothing here asks which of the three a keyword came from:
      `<font-tech> = [ <font-features-tech> | <color-font-tech> | variations | palettes | incremental ]`
      `<font-features-tech> = [ features-opentype | features-aat | features-graphite ]`
@@ -405,7 +405,7 @@ static char *src_strip_comments(const char *value)
    IT IS A LEXICAL SPLIT AND NOT A TOKENIZATION, and the bound on that is what makes it safe: it skips strings
    and escapes and counts parentheses, so the only way it can DISAGREE with CSS Syntax is by treating a comma
    as nested when a real tokenizer would not — which MERGES two components into one that then fails the item
-   grammar. It can never split one component into two, so no value it mis-reads is ACCEPTED; §4.3.1's "If
+   grammar. It can never split one component into two, so no value it mis-reads is ACCEPTED; css-fonts-4 §4.3.1's "If
    there are no supported entries at the end of this process" is the outcome either way. */
 static void src_next_component(const char **p, const char *end, const char **start, const char **stop)
 {
@@ -589,7 +589,7 @@ static bool src_take_format(SrcItem *it, const char *a, const char *e)
     src_skip_ws(&p, e);
     cp = css_cp_at(p, e, NULL);
     if (cp == '"' || cp == '\'') {
-        /* The `<string>` arm is an OPEN SET: §4.3.1's legacy table names nine strings that "have the same
+        /* The `<string>` arm is an OPEN SET: css-fonts-4 §4.3.1's legacy table names nine strings that "have the same
            effect as if the equivalent modern syntax had been used", and the production admits any `<string>`
            at all. A string outside the table names a format nothing activates, which is §4.3.3 "Selecting
            items in the src"'s skip-downloading question and not this one. */
@@ -606,7 +606,7 @@ static bool src_take_format(SrcItem *it, const char *a, const char *e)
                 break;
             }
         free(ident);
-        if (!it->format_kw) return false;       /* an identifier outside §4.3.1's closed keyword set */
+        if (!it->format_kw) return false;       /* an identifier outside css-fonts-4 §4.3.1's closed keyword set */
     }
     src_skip_ws(&p, e);
     return css_cp_at(p, e, NULL) == CSS_CP_EOF;
@@ -630,7 +630,7 @@ static bool src_take_tech(SrcItem *it, const char *a, const char *e)
         for (i = 0; i < COUNTOF(FONT_TECH); i++)
             if (enumerated_attribute_keyword_match(FONT_TECH[i], ident, strlen(ident))) { kw = FONT_TECH[i]; break; }
         free(ident);
-        if (!kw) return false;                  /* an identifier outside §4.3.1's closed keyword set */
+        if (!kw) return false;                  /* an identifier outside css-fonts-4 §4.3.1's closed keyword set */
         src_tech_add(it, kw);
         src_skip_ws(&p, e);
         if (css_cp_at(p, e, NULL) == CSS_CP_EOF) break;
@@ -645,7 +645,7 @@ static bool src_take_tech(SrcItem *it, const char *a, const char *e)
     return true;
 }
 
-/* ONE `<font-src>`, over the component span. FALSE is §4.3.1's "If parsing a component value results in a
+/* ONE `<font-src>`, over the component span. FALSE is css-fonts-4 §4.3.1's "If parsing a component value results in a
    parsing error or its format or tech are unsupported, do not add it to the list of supported sources" —
    whose FIRST half is what this file decides and whose second is the residual css_font_src.h names, and which
    drops THIS COMPONENT and not the declaration, and is the whole difference between this list and an ordinary `#`: "These parsing rules allow
@@ -673,7 +673,7 @@ static bool src_parse_item(const char *a, const char *e, SrcItem *out)
         out->local = css_font_family_descriptor_value(arg);
         free(arg);
         if (!out->local) return false;
-        /* §4.3.1's `local()` alternative carries NO `format()` and NO `tech()` — those belong to the `<url>`
+        /* css-fonts-4 §4.3.1's `local()` alternative carries NO `format()` and NO `tech()` — those belong to the `<url>`
            alternative alone — so anything at all after the notation is outside the grammar. */
         src_skip_ws(&p, e);
         return css_cp_at(p, e, NULL) == CSS_CP_EOF;
@@ -741,7 +741,7 @@ static void src_serialize_item(SrcBuf *out, const SrcItem *it)
         src_buf_add(out, ")", 1);
     } else if (it->format_str) {
         /* THE STRING ARM IS EMITTED AS A STRING AND IS NOT FOLDED TO ITS KEYWORD, which is a decision and not
-           an omission. §4.3.1's legacy table says the nine strings "have the same effect as if the equivalent
+           an omission. css-fonts-4 §4.3.1's legacy table says the nine strings "have the same effect as if the equivalent
            modern syntax had been used" — a statement about EFFECT, which is what a font load does with the
            value, and not about serialization; and three of the nine have no single-keyword equivalent at all
            (`format("woff2-variations")` is `format(woff2) tech(variations)`), so a fold would have to invent
@@ -804,7 +804,7 @@ char *css_font_src_descriptor_value(const char *value)
     p = text;
     end = text + strlen(text);
 
-    /* §4.3.1: "To parse a <font-src-list> production, parse a list of <font-src>s." Each component is parsed
+    /* css-fonts-4 §4.3.1: "To parse a <font-src-list> production, parse a list of <font-src>s." Each component is parsed
        INDEPENDENTLY and a failing one is dropped rather than invalidating the list, which is the sentence
        after it: "If parsing a component value results in a parsing error or its format or tech are
        unsupported, do not add it to the list of supported sources." */
@@ -819,7 +819,7 @@ char *css_font_src_descriptor_value(const char *value)
     }
     free(text);
 
-    /* §4.3.1: "If there are no supported entries at the end of this process, the value for the src descriptor
+    /* css-fonts-4 §4.3.1: "If there are no supported entries at the end of this process, the value for the src descriptor
        is a parse error." CSS Syntax drops the declaration whole, and §4.1 "The @font-face rule" says what a
        rule without one is worth: "@font-face rules require a font-family and src descriptor; if either of
        these are missing, the @font-face rule must not be considered when performing the font matching
