@@ -3031,12 +3031,53 @@ const OTHER_SPECS = [
      component cites most — so the report is clean about a standard it never looked at. */
   "fips 197", "fips 180-4", "fips 198-1", "sp 800-38d",
   "positioned layout", "css viewport", "har",
+  /* NINE OF THESE ONE-WORD ROWS ARE RETIRED ON THE LINE BELOW, AND THEY ARE THE `database` HAZARD THE INDEXED
+     TABLE NAMES RATHER THAN THE HEAD HAZARD THE FOUR ROWS NEAR THE TOP OF THIS LIST RECORD — which is why
+     neither of the two readings already written down here finds them. They are not too SHORT for the
+     tokenizer's reach and they do not sit at the wrong END of a name: `lists` is the last word of `CSS Lists`,
+     so anchorTokens offers it as a tail and every one of the nine is perfectly reachable. What they are
+     reachable FROM is the question nobody had asked, and the answer is ORDINARY ENGLISH. Each is a word this
+     tree writes in prose constantly, and a tail is read from the words in front of a section sign whether or
+     not those words name anything.
+     MEASURED THROUGH THE CONSUMER'S OWN MATCHER AND NEVER OFF THE ENTRY, over every section sign in the
+     audited tree, by hooking the TWO membership tests that EVERY role of both lists runs through — a tail
+     suffix, a join gate on the base, a join gate on the base's last word, and nameStart on its first — so the
+     census is total by construction instead of by an enumeration somebody wrote down. Of the fifty-five rows
+     on this list that decided anything at all, these NINE decided THIRTY-TWO citations between them and not
+     one of those decisions stood on a capitalised name: `from a position`, `the two shapes`, `would break`,
+     `three name lists`, `crash on a page`, `so writing`, `the detached view`, `-> scroll`, `the bytes do not
+     contain`. Every one was filed as a FOREIGN standard of that name, so an indexed standard's citation left
+     the judged population and the by-standard census reported a document nobody cited as SEEN. A shielded
+     citation is not an unexamined one; it is one being examined as somebody else's — and a foreign anchor is
+     never audited at all, so these were not even that.
+     THE TEST THAT SEPARATES THEM FROM THE ROWS THAT STAY IS NOT A PREFERENCE AND NOT A WORD COUNT: it is
+     whether anything CORRECT stands under the row. `values` decides on `CSS Values` forty-nine times and on
+     prose nineteen; `png` one hundred and eighty-nine against four; `storage` seventy-four against seven.
+     Those are MIXED and the repair at a mixed row is at the SITE — write the standard in front of the number
+     — because deleting the row would take the correct answers with it. These nine have NO correct answer to
+     take: capitalised zero, every time.
+     WHAT REPLACES THEM IS WHAT ALREADY ANSWERED THE SPELLING THIS TREE WRITES. A CSS module is cited here by
+     its hyphenated levelled shortname, which is ONE token LEVELLED reads without consulting either list, so
+     the spelling that names a document was never decided by these rows. A row here would buy a second answer
+     to a question that has one, and the one it was buying was wrong.
+     AND ONE OF THEM SHADOWED THE SPELLING IT WAS SUPPOSED TO HELP, which is the `CSS Nesting` defect
+     anchorTokens' own Module trim records: classifyAnchor asks the two LISTS before it asks LEVELLED, so the
+     standard's own published title produced the joined levelled token FIRST and was then decided by the bare
+     one-word row standing after it — one document, two foreign names, and the full published title was the
+     losing spelling. Measured on the tokenizer directly rather than argued.
+     THE HEADS STAY RECORDED HERE rather than being deleted, because a reader who re-derives them will re-add
+     them: a one-word CSS module name is what anyone writes first and nothing about it looks wrong from the
+     list alone. The nine are `view`, `writing`, `contain`, `scroll`, `shapes`, `page`, `lists`, `break` and
+     `position`. RETIREMENT: this record goes when a row on either list cannot be landed without a run that
+     shows it deciding on a CAPITALISED occurrence of its own name — the census this measurement took, in the
+     build, refusing a row whose every decision is prose — because the rule is then closed by construction and
+     the standing list is nobody's sweep. */
   /* CSS modules, as this tree spells them when it does not use the levelled shortname */
-  "css", "selectors", "cascade", "view", "values", "sizing", "fonts", "backgrounds", "text",
-  "display", "position", "overflow", "images", "color", "transforms", "writing", "box", "inline",
-  "contain", "align", "ui", "scroll", "logical", "variables", "syntax", "media", "mediaqueries",
-  "highlight", "masking", "shapes", "multicol", "tables", "page", "flexbox", "grid", "counter", "lists",
-  "break", "ruby", "pseudo", "speech", "transitions", "animations", "compositing", "filter", "srgb",
+  "css", "selectors", "cascade", "values", "sizing", "fonts", "backgrounds", "text",
+  "display", "overflow", "images", "color", "transforms", "box", "inline",
+  "align", "ui", "logical", "variables", "syntax", "media", "mediaqueries",
+  "highlight", "masking", "multicol", "tables", "flexbox", "grid", "counter",
+  "ruby", "pseudo", "speech", "transitions", "animations", "compositing", "filter", "srgb",
 ];
 const ANCHOR_TO_KEY = new Map();
 for (const s of SPECS) for (const a of s.anchors) ANCHOR_TO_KEY.set(a, s.key);
