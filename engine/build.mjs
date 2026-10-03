@@ -6377,8 +6377,14 @@ if (!existsSync(join(LEXBOR_SRC, "lexbor", "html", "html.h"))) {
   console.error("[build]   broken working tree rather than a step somebody forgot to run.");
   process.exit(1);
 }
-const LEXBOR_LIB = join(WORK, "liblexbor.o");   // relocatable partial-link object (emcc -o .a doesn't archive from .c)
 const LEXBOR_INC = LEXBOR_SRC;
+/* THE FLAG SET IS DECLARED ONCE BECAUSE THE ARCHIVE'S NAME IS DERIVED FROM IT, never restated beside it. The
+   response file below is built from this list and so is the identity, so the two cannot disagree about what was
+   compiled — the property §OBJECTS claims for `flagId`, and the one a second hand-written copy would lose.
+   `-o` IS DELIBERATELY ABSENT: the output path is what the identity NAMES, so folding it in is circular. The
+   213 sources are absent for the opposite reason — `lexborSourceId` IS their content. And `-r` is why the
+   output is a relocatable partial-link object rather than an `.a`: emcc will not archive from `.c`. */
+const LEXBOR_CFLAGS = ["-I", LEXBOR_INC, "-O2", "-w", "-D_GNU_SOURCE", "-DENABLE_DUMPS", "-r"];
 function findC(dir, out) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, e.name);
@@ -6387,35 +6393,97 @@ function findC(dir, out) {
   }
   return out;
 }
-/* WHAT THE CACHED ARCHIVE WAS COMPILED FROM, asked of the SOURCE rather than of a version string. While lexbor
-   was fetched by tag, "same tag" implied "same bytes" and presence was a sound cache key. A tracked source is
-   EDITABLE — that is the whole point of vendoring it — so presence now means "some archive exists", which is
-   the defect this build already carries a paragraph about one level up: a value read from one place and written
-   in another with nothing asserting they agree. An edit to html/tree.c would relink the PREVIOUS objects and
-   every gate would attribute the result to the edited revision.
-   THE COMPUTATION IS engine/lexbor_source.mjs's, NOT THIS FILE'S, because it was this file's and the OTHER
-   compiler in this tree never got it: engine/wpt.mjs cached its native archive on presence alone and stopped
-   linking the day the fork grew a function. One archive-identity answer, imported by everything that caches an
-   archive — a second copy of it is the same shape as the defect it removes. */
-const LEXBOR_ID_FILE = join(WORK, "liblexbor.srcid");
+/* WHAT THE CACHED ARCHIVE WAS COMPILED FROM — CARRIED BY ITS NAME, so there is nothing beside it to be wrong.
+   THE RETIRED ARGUMENT, KEPT BECAUSE A READER WHO RE-DERIVES IT WILL RE-ADD THE SIDECAR. This paragraph used to
+   say that while lexbor was fetched by tag "same tag" implied "same bytes" and presence was a sound cache key;
+   that a TRACKED source is EDITABLE, so presence means only "some archive exists", which is "a value read from
+   one place and written in another with nothing asserting they agree"; and that an edit to html/tree.c "would
+   relink the PREVIOUS objects and every gate would attribute the result to the edited revision" — therefore the
+   id belonged in a `liblexbor.srcid` written beside the archive. Every clause of that is true of a FIXED
+   FILENAME and none of it reaches a CONTENT NAME: `liblexbor-<id>.o` existing means some compile, with this
+   emcc's own version text and this flag set, over lexbor sources whose bytes hash into that id, produced it. So
+   presence IS the statement the sidecar was making, the two-places-one-value shape is gone, and an edited tree
+   asks for a name no compile ever published. The sidecar is DELETED rather than kept beside the name, because a
+   second answer to one question is how two answers drift.
+   THE COMPUTATION IS engine/lexbor_source.mjs's, NOT THIS FILE'S, and that is unchanged: it was this file's and
+   the OTHER compiler in this tree never got it — engine/wpt.mjs cached its native archive on presence alone and
+   stopped linking the day the fork grew a function. One archive-identity answer, imported by everything that
+   caches an archive; a second copy of it is the same shape as the defect it removes.
+   AND THE SOURCE ID IS NOT THE WHOLE KEY, WHICH IS THE ONE THING A SIDECAR SPELLED `srcid` INVITED GETTING
+   WRONG. An archive's bytes are decided by the COMPILER and the FLAGS as much as by the source, and the failure
+   of leaving either out is NOT A MISS — it is a FALSE HIT, which is the only failure mode this scheme may not
+   have. emsdk upgrades IN PLACE, so one path names two compilers that emit different objects; under a
+   source-only name the archive the old one emitted keeps exactly the name the new one asks for, and gets
+   LINKED. The same holds for a flag: `-DENABLE_DUMPS` or `-O2` edited to anything else leaves `lexborSourceId`
+   byte-identical. So the id folds in `toolchain()`'s `flagId` — the hash of (this compiler's own version text,
+   this flag set), which is the parameter every object in OBJDIR is already named under — and a stale archive
+   therefore has a DIFFERENT NAME that this build cannot reach.
+   WHAT IS STILL NOT IN THE KEY is anything under engine/lexbor that is not a `.c` or `.h` under
+   `source/lexbor`; that is `lexborSourceId`'s own scope and the stamp paragraph at the production link already
+   names it as a false-DIRTY it buys deliberately.
+   IT LIVES IN OBJDIR, WHICH IS WHAT MAKES IT SHARED, and the fixed name plus the in-place write were the whole
+   of why it was refused a place there. MEASURED before this change rather than argued: eleven frozen snapshots
+   at eleven revisions each held their own `engine/.work/liblexbor.o`, all eleven BYTE-IDENTICAL (md5
+   6e20c6c6213074115009a1a16e013b9d), so eleven 213-source compiles had produced one artifact eleven times.
+   A STORE A BUILD MAY EVICT FROM IS SAFE FOR THE SAME REASON THE OBJECTS ARE: a name is a FACT about an input
+   set, so a missing archive is a MISS and a miss is a compile. `rm -rf engine/.work/obj` therefore costs a
+   lexbor compile where it used to cost none, which is the honest price of this archive being in the one
+   directory that is shared and reclaimed rather than in the one that is neither. */
 function buildLexbor(force) {
-  const id = lexborSourceId(LEXBOR_SRC);
-  const cachedId = existsSync(LEXBOR_ID_FILE) ? readFileSync(LEXBOR_ID_FILE, "utf8").trim() : null;
-  if (!force && existsSync(LEXBOR_LIB) && cachedId === id) return;
-  if (existsSync(LEXBOR_LIB) && cachedId !== id)
-    console.log("[build] lexbor source changed (" + (cachedId || "no id") + " -> " + id + ") — recompiling");
+  /* THE TOOLCHAIN IS ASKED HERE AND NOT AT THE TOP OF THE FILE, for the reason the §OBJECTS section header
+     gives: nothing may compile — or spawn a compiler — above the branch that decides what to compile, and this
+     function is CALLED below `native`, which exits on its own. It adds no emsdk dependency to any path that did
+     not already carry one: every route reaching this call reaches the emcc link below, which requires the same
+     compiler unconditionally. What it does change is WHERE an absent emcc is reported — here, in front of a
+     213-source compile instead of after one. */
+  const tc = toolchain("emcc(lexbor)", requireEmcc(), ["-v"], /^emcc \(/m, LEXBOR_CFLAGS, ENGINE, true);
+  const srcId = lexborSourceId(LEXBOR_SRC);
+  const id = createHash("sha256").update("apiclient-lexbor-v1\0" + tc.flagId + "\0" + srcId)
+                                 .digest("hex").slice(0, 32);
+  const lib = join(OBJDIR, "liblexbor-" + id + ".o");
+  /* FORCE RECOMPILES AND REPUBLISHES UNDER THE SAME NAME, which is what `node engine/build.mjs lexbor` now
+     means and is the whole of what it can mean: the inputs decide the name, so a forced build cannot produce a
+     different one, and the bytes it renames into place are the bytes that were already there. */
+  if (!force && existsSync(lib)) {
+    console.log("[build] lexbor  " + lib + "  (source " + srcId + ", toolchain+flags " + tc.flagId + ")");
+    return lib;
+  }
   const srcs = findC(join(LEXBOR_SRC, "lexbor"), []);
-  console.log("[build] lexbor: compiling " + srcs.length + " sources -> liblexbor.a (once, ~minutes)");
-  const rsp = join(WORK, "lexbor.rsp");
+  console.log("[build] lexbor: compiling " + srcs.length + " sources -> " + lib + " (once, ~minutes)");
+  /* A PRIVATE TEMPORARY INSIDE OBJDIR AND A PUBLISH BY `rename`, exactly as the object `adopt` below does and
+     for both of its reasons. The pid keeps two concurrent builds out of each other's way, and the rename makes
+     the publish atomic — so a snapshot recompiling this archive cannot overwrite bytes another snapshot is
+     linking, which under a FIXED name it could. Under a content name both arrive at the same name with the same
+     bytes, so arriving twice is harmless, and a reader holding an open fd keeps the inode it opened. INSIDE
+     OBJDIR because a rename is atomic only within one filesystem and a lane may point `APICLIENT_OBJ_STORE` at
+     another one. */
+  const tmp = join(OBJDIR, ".tmp-" + process.pid + "-lexbor");
+  /* THE RESPONSE FILE CARRIES THE PID TOO AND IS REMOVED AFTER THE SPAWN. It is an INPUT rather than a
+     published artifact, so a fixed name there is not a stale-link hazard — it is two concurrent builds in one
+     tree handing emcc each other's argument list, which is the same concurrency this function's output name
+     just stopped having. */
+  const rsp = join(WORK, "lexbor-" + process.pid + ".rsp");
   const fwd = (s) => s.replace(/\\/g, "/");   // response-file backslashes are clang escapes -> forward-slash paths
-  writeFileSync(rsp, [...srcs.map(fwd), "-I", fwd(LEXBOR_INC), "-O2", "-w", "-D_GNU_SOURCE", "-DENABLE_DUMPS", "-r", "-o", fwd(LEXBOR_LIB)].join("\n"));
-  const r = spawnSync(requireEmcc(), ["@" + rsp], { stdio: "inherit", shell: true, cwd: ENGINE });
-  if (r.status !== 0) { console.error("[build] lexbor FAILED rc=" + r.status); process.exit(r.status || 1); }
-  /* STAMPED ONLY ON SUCCESS, and only after the archive exists: a failed compile that recorded the id would
-     make the next build skip it and link whatever object was there before, which is the stale-link this
-     mechanism exists to prevent, reached through its own cache. */
-  writeFileSync(LEXBOR_ID_FILE, id + "\n");
-  console.log("[build] lexbor OK -> " + LEXBOR_LIB + " (source " + id + ")");
+  writeFileSync(rsp, [...srcs.map(fwd), ...LEXBOR_CFLAGS.map(fwd), "-o", fwd(tmp + ".o")].join("\n"));
+  const r = spawnSync(tc.cc, ["@" + rsp], { stdio: "inherit", shell: tc.shell, cwd: tc.cwd });
+  rmSync(rsp, { force: true });
+  /* emcc WRITES A `<base>.wasm` BESIDE A `-o <base>.o` — measured at 240 bytes and referenced by nothing, since
+     `LDFLAGS_COMMON` links the `.o`. It was harmless litter in `.work`; in a SHARED store it is litter every
+     snapshot inherits and a reclaim loop has to wonder about, so it goes on every exit path of this function. */
+  rmSync(tmp + ".wasm", { force: true });
+  if (r.status !== 0) {
+    /* NOTHING HALF-NAMED SURVIVES A FAILURE, which is the sidecar's "STAMPED ONLY ON SUCCESS" argument with
+       nothing left to stamp: a failed compile publishes no name at all, so the next build asks for a name
+       nothing ever wrote and compiles. The stale link that argument guarded against is now unreachable rather
+       than guarded against — and a temporary left behind is an object with no identity, which is what makes a
+       store's contents stop meaning anything. */
+    rmSync(tmp + ".o", { force: true });
+    console.error("[build] lexbor FAILED rc=" + r.status);
+    process.exit(r.status || 1);
+  }
+  renameSync(tmp + ".o", lib);                 /* the FACT, published atomically */
+  console.log("[build] lexbor OK -> " + lib + " (source " + srcId + ")");
+  return lib;
 }
 
 // THE IDL GAP AUDIT IS A STAGE OF THIS BUILD — see the stage list at the bottom. It was in nobody's build,
@@ -6590,10 +6658,12 @@ console.log("[rev] the source-derived field contracts were taken at that revisio
    NOTHING COMPILES ABOVE THE BRANCH THAT DECIDES WHAT TO COMPILE, STILL, AND THAT IS READ OFF THIS SECTION
    RATHER THAN ASSERTED ABOUT IT. Every statement between here and the `native` branch DECLARES: four hash
    helpers, two memo containers, a `mkdirSync` of `.work/obj`, and three function bodies. The only process this
-   section can spawn is inside `toolchain()`, which asks a compiler for its VERSION and runs only when CALLED —
-   and the one call that needs emsdk, `WASM_TC`, is left at the emcc link below for exactly that reason. It
-   also has to be: `CFLAGS` is declared below here, so `WASM_TC` could not be evaluated at this point even if
-   emsdk were free. `requireEmcc` is reachable from nothing above the emcc link.
+   section can spawn is inside `toolchain()`, which asks a compiler for its VERSION and runs only when CALLED.
+   TWO CALLS NEED EMSDK AND BOTH ARE BELOW THE BRANCH — `WASM_TC` at the emcc link, and `buildLexbor`'s own,
+   which names that archive for its compiler and flags as well as its source. This clause read "the one call",
+   and it is a COUNT rather than a rule, so it went wrong the moment a second call was correct to add; the rule
+   it was stating is unchanged and is the headline above. `WASM_TC` also has to be where it is: `CFLAGS` is
+   declared below here, so it could not be evaluated at this point even if emsdk were free.
    AND IT CHANGES NO OBJECT NAME, WHICH IS THE ACCEPTANCE TEST THE BANNER BELOW ALREADY STATES FOR ITSELF.
    Nothing moved here reads anything declared between its old position and this one; an identity is
    (toolchain version string, flag set, source bytes, recorded header bytes) and all four are parameters or
@@ -7611,7 +7681,11 @@ if (NATIVE) {
    toolchain CHECK lazy, and this line ran the toolchain regardless of whether the check was ever consulted.
    The invariant that now holds is one sentence — NOTHING COMPILES ABOVE THE BRANCH THAT DECIDES WHAT TO
    COMPILE — and every target that exits on its own is above it. */
-buildLexbor(process.argv[2] === "lexbor");
+/* THE PATH IS RETURNED RATHER THAN RE-DERIVED AT THE LINK, which is `lexborNativeArchive`'s own rule applied
+   to the emcc half: "a consumer cannot hold a stale one because it is never handed one". It used to be a
+   module-scope `const LEXBOR_LIB` beside the `.srcid` that described it — a path a reader could hold without
+   the id that said what was in it. Now the only way to name this archive is to have asked for it. */
+const LEXBOR_LIB = buildLexbor(process.argv[2] === "lexbor");
 if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt; re-run without arg to build the engine."); process.exit(0); }
 
 /* THE EXPORTS THE BRIDGE ccalls — and the previous sentence here ("emscripten drops anything not named") is

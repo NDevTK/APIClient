@@ -33,6 +33,18 @@
  * path to an archive that IS this source's or it does not return at all; a consumer cannot hold a stale one
  * because it is never handed one. That is the difference between a check every caller must remember and an
  * impossible state — and the check-shaped version had already been forgotten once per consumer added.
+ *
+ * AND AN ID COMPUTED HERE IS NOT A NAME, WHICH IS THE PROPERTY THE EMCC HALF HAS AND THIS ONE DOES NOT.
+ * `engine/build.mjs`'s `buildLexbor` no longer writes a sidecar at all: its archive is NAMED for its own
+ * identity and published into the shared object store by `rename`, so presence IS the statement a stamp was
+ * making and two revisions cannot want one path. The archive below is the remaining FIXED NAME plus SIDECAR,
+ * written IN PLACE in a per-snapshot directory, so every frozen build still pays its cmake+make; the residual
+ * that states what closes it, why the blocker is where the identity helpers LIVE rather than anything about
+ * cmake, and how its absence shows, is written at `engine/frozen_snapshot.sh` beside the store it is about and
+ * is findable from either site by the name it proposes, `liblexbor_static-<id>.a`.
+ * WHAT THAT RESIDUAL IS NOT IS AN ARGUMENT THAT THIS FILE'S STAMP IS WRONG TODAY. A sidecar beside a fixed name
+ * in a directory ONE snapshot owns is a sound answer to "what was this compiled from"; what it cannot do is let
+ * two snapshots share one archive, which is a different question and the only one the name answers.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";

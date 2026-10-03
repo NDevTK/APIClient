@@ -484,26 +484,41 @@ rm -rf "$DIR/engine/.work/emsdk" "$DIR/engine/.work/wpt"
 # objects through one would touch NOTHING this script's LRU key can see — degrading the mechanism this file
 # argues for at length, for a directory that is not the snapshot's cost anyway.
 #
-# WHAT IS NOT SHARED AND THE REFUSAL IS THE SAME DISCRIMINATOR READ THE OTHER WAY: the two LEXBOR archives.
-# `engine/.work/liblexbor.o` (emcc, with `liblexbor.srcid` beside it) and `engine/.work/lexbor-native/`
-# (cmake+make, with its own stamp) are each a FIXED FILENAME plus a SIDECAR ID, written IN PLACE. Neither
-# property the store rests on is present: the name carries no identity, so two revisions want the same path, and
-# the publish is not atomic, so a second snapshot recompiling the archive overwrites bytes a first may be
-# linking. Sharing those would re-create exactly the defect the quoted paragraph above describes, which is why
-# it is refused rather than deferred. AND THE COST OF REFUSING IS STATED RATHER THAN HIDDEN, in the two figures a
-# cold frozen build prints for itself: `lexbor: compiling 213 sources` for the emcc archive, and a second
-# cmake+make over that same source tree for the native one whose count it does not print — against the 458 in
-# `TO_COMPILE` that ARE in the store, which that same build reports as `458 to compile` on each toolchain. So a
-# freeze at a new revision still pays two lexbor compiles, and a wall time that barely moves on the second half
-# of a controlled pair is THAT cost and not this change failing. Those two become the larger half of what a
-# frozen build compiles from cold once this lands, which is a reason to build the next diff and not a reason to
-# widen this one — a second subproblem added here is how a diff lands half-scoped.
-# RESIDUAL — WHAT THE NEXT DIFF BUILDS is the same two properties for those archives: a content-addressed name
-# (`liblexbor-<srcid>.o`) and a publish by `rename`, after which they share under the identical argument and
-# `liblexbor.srcid` stops existing because the name carries what the stamp was for. HOW ITS ABSENCE WOULD SHOW:
-# a freeze at a revision whose `engine/lexbor/source` did not move reports `0 to compile (rest cached)` from the
-# store and still prints a lexbor line naming a source count — the two halves of one build disagreeing about
-# whether anything changed.
+# ONE OF THE TWO LEXBOR ARCHIVES IS SHARED NOW AND ONE IS NOT, AND THE REFUSAL IS KEPT BECAUSE ITS ARGUMENT IS
+# WHAT A READER RE-DERIVES. It read: the two archives are each a FIXED FILENAME plus a SIDECAR ID, written IN
+# PLACE, so "neither property the store rests on is present: the name carries no identity, so two revisions want
+# the same path, and the publish is not atomic, so a second snapshot recompiling the archive overwrites bytes a
+# first may be linking". Every clause of that was CONDITIONAL ON SHARING and is still exactly right about what
+# sharing a fixed name would do — it was never a description of the state as it stood, because `engine/.work` is
+# INSIDE the snapshot, so the archives were per-snapshot and nothing could collide. MEASURED: eleven snapshots at
+# eleven revisions each held their own copy of BOTH, and the eleven copies of each were BYTE-IDENTICAL (emcc md5
+# 6e20c6c6213074115009a1a16e013b9d, native md5 087d988c845cedde8986261ebf8946d2) — eleven 213-source compiles and
+# eleven cmake+makes for two artifacts. That is the cost, and it is what the content name removes.
+# THE EMCC HALF IS IN THE STORE: `engine/build.mjs`'s `buildLexbor` names it `liblexbor-<id>.o` under
+# `H(this emcc's own version text, its flag set, the lexbor source bytes)` and publishes it by `rename` from a
+# pid-named temporary, so it shares under the identical argument as every object beside it and `liblexbor.srcid`
+# is gone — the name carries what the stamp was for. The SOURCE ID ALONE WOULD NOT HAVE DONE, which is the half
+# the old residual's `liblexbor-<srcid>.o` spelling got wrong: emsdk upgrades IN PLACE, so a source-only name
+# lets an archive one compiler emitted answer for another, which is a FALSE HIT rather than a miss.
+# AND THE COST OF STILL REFUSING THE NATIVE HALF IS STATED RATHER THAN HIDDEN, in the figures a cold frozen build
+# prints for itself: `building lexbor natively (once, cmake + make)` for the archive that is not shared, against
+# the 458 in `TO_COMPILE` that ARE in the store and the emcc archive that now is.
+# RESIDUAL — THE NATIVE LEXBOR ARCHIVE IS STILL A FIXED NAME AND A SIDECAR IN A PER-SNAPSHOT DIRECTORY.
+# WHAT IS NOT COVERED: `engine/lexbor_source.mjs`'s `liblexbor_static.a`, with `liblexbor_static.srcid` beside it,
+# under `engine/.work/lexbor-native`. It is reached by TWO consumers (`engine/build.mjs`'s native target and
+# `engine/wpt.mjs`), so it is that file's diff and not this one's, and every freeze pays its cmake+make.
+# WHAT THE NEXT DIFF BUILDS, and the blocker is WHERE THE IDENTITY HELPERS LIVE rather than anything about cmake:
+# `toolchain()`, `unroot` and the `APICLIENT_OBJ_STORE` resolution are all `engine/build.mjs`'s, while that
+# archive is built in `engine/lexbor_source.mjs` — and a second copy of them there is precisely what that file's
+# own header forbids ("a second copy of it is the same shape as the defect it removes"). So the diff is to lift
+# those three out into a module both importers read, then name the archive `liblexbor_static-<id>.a` in the store
+# under `H(the compiler CMAKE ITSELF PICKS, asked for its version, the cmake flags, lexborSourceId)` and publish
+# it by `rename` from a pid-named temporary inside the store. The compiler is the extra parameter the emcc half
+# did not need: cmake chooses `cc`, which is not necessarily the `clang` that `NATIVE_TC` names.
+# HOW ITS ABSENCE WOULD SHOW: a freeze at a revision whose `engine/lexbor/source` did not move reports its emcc
+# lexbor line as a store hit and `0 to compile (rest cached)` on both toolchains, and STILL prints
+# `building lexbor natively (once, cmake + make)` — one build's two halves disagreeing about whether the same
+# source tree changed. The observation is that pair of lines in one log; it names no revision and no file.
 #
 # A PRIVATE EMPTY DIRECTORY IS STILL MADE AND THIS LINE STILL DELETES ONE, because a build run in a snapshot
 # WITHOUT `APICLIENT_OBJ_STORE` set falls back to it — and those objects are that snapshot's own at that SHA,
