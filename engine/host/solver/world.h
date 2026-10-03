@@ -122,6 +122,18 @@ void world_doc_adopt(uint32_t doc);
  * document, and `document_free` — reached from the realm's own teardown hook — is the moment it stops being
  * one.
  *
+ * AND THAT ARGUMENT IS ABOUT STALENESS AND IS SILENT ABOUT A FORK, WHICH IS WHAT MAKES THE ROW WRONG RATHER
+ * THAN MERELY NARROW. The two edges do keep it honest against a realm that is GONE, and no pair of edges can
+ * make ONE value right while TWO realms are live. A realm is per-flow state: this row is the one part of a
+ * navigable's binding that does not ride the COW delta — a SECOND COPY of `ProxyData`'s own `realm`
+ * (core/frame/window_proxy.c), kept where no world can be named. Two arms that each read through one srcless
+ * navigable each materialize their own Document, which is the per-flow isolation working rather than a caller
+ * misbehaving, and `world_doc_realm_set` then aborts because the binding is (document, WORLD) and this key is
+ * half of it. What must be built is that resolution, answered from the navigable whose PER-FLOW `doc` is the one
+ * asked about; the refutation at `world_doc_realm_set` records the two remedies its crash used to name and why
+ * neither of them is available.
+ * RETIREMENT: this record goes when these two entries no longer exist.
+ *
  * WHY THE QUESTION EXISTS AT ALL. An instance is an ORIGIN-KEYED AGENT CLUSTER (SECURITY.md), so SEVERAL
  * documents are this one's and a peer may hold a reference into any of them — `event.source` names the
  * document whose script posted, which is a child navigable as often as it is the root. A cross-instance

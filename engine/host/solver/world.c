@@ -134,13 +134,36 @@ void world_doc_realm_set(uint32_t doc, JSContext *realm)
            "a realm was recorded for a document this agent does not HOLD — hosting is decided by §7.4 before "
            "the realm is built (world_doc_adopt), so the two statements were made in the wrong order and every "
            "cross-instance route keyed on `hosted` would still call this document a peer's");
+    /* THE TWO REMEDIES THIS CRASH NAMED ARE BOTH WRONG, AND THEY ARE RECORDED RATHER THAN DELETED BECAUSE A
+       READER WHO RE-DERIVES THEM FROM THE MESSAGE BELOW WILL BUILD ONE OF THEM. They were `either the built
+       realm is state the flow's delta carries, or the navigable is materialized once for all of its timelines`.
+         - THE FIRST WAS ALREADY TRUE WHEN IT WAS WRITTEN, so it sends its one reader to build what is standing.
+           `ProxyData` is a CowRecord captured in its own accessor (core/frame/window_proxy.c), and `realm` is a
+           POD field INSIDE the captured bytes exactly as `doc` and `origin` are — which that file states in as
+           many words. So each arm's materialization already rides its own delta and neither arm can observe the
+           other's, which is WHY two arms each reach this line rather than a thing still to build.
+         - THE SECOND IS UNBUILDABLE AT A LAZY MATERIALIZATION, and solver/cow.c states the rule it breaks: an
+           object a flow creates after its last fork is flow-PRIVATE and is never captured. A realm built by a
+           non-boot arm is therefore that arm's own and cannot be a sibling's baseline, so there is no `once for
+           all of its timelines` to be had at a materialization reached from a property read. Materializing
+           EAGERLY at creation would make it baseline only where the creation is boot's, and the
+           realm-per-navigable cost of that is what core/frame/navigable.h's deferral exists to avoid.
+       SO THE DEFECT IS THIS ROW AND NEITHER CALLER, AND NO VALUE IN IT IS RIGHT ONCE A FORK EXISTS: it is keyed
+       by DOCUMENT where the binding is (document, WORLD), which window_proxy_window's own crash already names.
+       Holding the LATEST or the FIRST would hand a cross-instance read the wrong arm's realm — the one failure
+       the per-flow delta exists to prevent — so this crash is doing protective work and must not be softened.
+       The row is a SECOND COPY of a field that already rides the delta, kept where no world can be named.
+       RETIREMENT: this record goes when `world_doc_realm` is answered from the navigable whose PER-FLOW `doc` is
+       this one and this row no longer exists. */
     DCHECK(realm == NULL || g_docs[doc - 1].realm == NULL,
            "a SECOND realm was built for one document — a Document has one Window, so these are two of them "
            "wearing one name, and a peer routing on that name cannot tell which one it asked. It is the LAZY "
            "MATERIALIZATION meeting a FORK: proxy_realm builds the initial about:blank Document's realm through "
            "the PER-FLOW WindowProxy record (navigable.h), so two arms that each read through one srcless "
-           "navigable each build one. The fix is where the second is made and not here — either the built realm "
-           "is state the flow's delta carries, or the navigable is materialized once for all of its timelines");
+           "navigable each build one. THE FIX IS THIS ROW: it is keyed by DOCUMENT where the binding is "
+           "(document, WORLD), so no single value in it is right once a fork exists — answer `world_doc_realm` "
+           "from the navigable whose PER-FLOW `doc` is this one, and delete the row. The comment above records "
+           "the two remedies this message used to name and why neither is available");
     g_docs[doc - 1].realm = realm;
 }
 
