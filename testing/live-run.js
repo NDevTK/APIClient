@@ -1154,7 +1154,30 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      artifact older than the row prints `null`, which is a different fact from a surface every address of
      which the run had determined — the first is the run not stating the bar, the second is the bar answering
      and refusing to claim it. */
-  "epAddressClass"];
+  "epAddressClass",
+  /* …AND THE UNION OF THOSE TWO, COMPOSED BY THE PRODUCER, WHICH IS THE ONE ROW ON THIS LIST A PERSON MAY
+     READ AS THE HARD BAR ITSELF. The row above ends "the bar's floor over a surface is the UNION of this
+     row's `unknown` and `epReach`'s `beyond`; a union is not a sum, because a row can be in both, and
+     NOTHING IN THIS DRIVER COMPOSES ONE" — and that last clause was a statement about THIS FILE which is
+     why it is kept there: a reader holding the two marginals re-derives the union-is-not-a-sum argument and
+     then has to assemble the union by hand, which is the one assembly CLAUDE.md
+     §What-the-tool-produces names as the defect. solver/endpoint.c's `endpoint_razor_class_of` composes it
+     PER ROW at the emitter, out of the address class and the door list's FOURTH column — whether the door
+     handed this surface bytes that were in the served document at all — and `endpoint_razor_hist_json`
+     partitions the emitted surface by it, so the composed class is a @COLD row and no consumer assembles
+     anything.
+     IT IS A THIRD GRAIN OF TWO OBSERVATIONS AND NOT A THIRD OBSERVATION. It is DERIVED from `epReach`'s
+     operand and `epAddressClass`, so a reader holding all three of these rows still holds TWO facts
+     (CLAUDE.md §EVIDENCE-INFLATION) — and the derivation is named here rather than left to be noticed,
+     which is that record's own prescribed cure.
+     IT IS A FLOOR AND NEVER A TARGET, in `epReach`'s words: `runtime-only` 0 against a nonzero `epEmitted`
+     is this document REFUSING TO CLAIM the bar and not a smaller version of it, and `unproven` is not the
+     claim that a parse COULD have stated the address — solver/endpoint.h enumerates the three populations
+     it holds, one of which (a source this flow PINNED and re-read) really is past every parse.
+     ITS KIND AND ITS ABSENCE FOLLOW THE TWO ROWS ABOVE IT EXACTLY: an object copied whole and never spread,
+     and an artifact older than the row prints `null`, which is the run not stating the bar and is a
+     different fact from the bar answering and refusing to claim it. */
+  "epRazorClass"];
 
 const COLD_ROWS = COLD_STEP_UNITS.concat(COLD_FRONTIER, COLD_SEED, COLD_COUNTERS);
 const WFQ_ROWS = ["members"].concat(WFQ_JOB_SPLIT, WFQ_PICKS, WFQ_LADDER);
@@ -1447,15 +1470,36 @@ async function oneRun(browser, pg, url, budgetMs, engineErrs) {
        so the formatter below spells them `-` and `{}` and never folds either into the other. */
     doors: mine.map((r) => ({ doors: ("endpointDoors" in r) ? r.endpointDoors : undefined,
                               mintedAt: ("endpointMintedAt" in r) ? r.endpointMintedAt : undefined,
-                              /* …AND THE THIRD, WHICH IS THE ONLY ONE OF THE THREE THAT ANSWERS THE OWNER'S
-                                 HARD BAR: whether the run had DETERMINED each address, per address, off the
-                                 emitted array. The two beside it are WHICH MECHANISM and WHEN, and neither
-                                 reaches the bar — a literal chunk URL through `module-import` and one built
-                                 out of the fragment come through the same door as each other. `undefined` is
-                                 a relay predating the field and is a different fact from a surface whose
-                                 every address the run had determined, for the two rows above's reason. */
+                              /* …AND THE THIRD: whether the run had DETERMINED each address, per address,
+                                 off the emitted array. The two beside it are WHICH MECHANISM and WHEN, and
+                                 neither reaches the bar — a literal chunk URL through `module-import` and
+                                 one built out of the fragment come through the same door as each other.
+                                 THIS CLAUSE USED TO CALL IT "THE ONLY ONE OF THE THREE THAT ANSWERS THE
+                                 OWNER'S HARD BAR" AND IS REWRITTEN RATHER THAN DELETED, because a reader
+                                 who re-derives it from the two rows above will write it again: it is an
+                                 OPERAND of that bar and not the bar. It cannot see a row whose address was
+                                 an ordinary determined string by the time it arrived AND whose bytes were
+                                 never in the served document at all — a chunk list a reply carried — which
+                                 clears the bar outright and lands in `concrete` here. `undefined` is a relay
+                                 predating the field and is a different fact from a surface whose every
+                                 address the run had determined, for the two rows above's reason. */
                               addressClass: ("endpointAddressClass" in r)
-                                ? r.endpointAddressClass : undefined })),
+                                ? r.endpointAddressClass : undefined,
+                              /* …AND THE BAR ITSELF, COMPOSED BY THE PRODUCER OUT OF THAT OPERAND AND THE
+                                 DOOR'S OWN BYTES COLUMN. extension/bridge.js writes it on every engine-run
+                                 record from solver/endpoint.c's per-row `razorClass`, and it is read here
+                                 because a field the shipped path writes and the one instrument that
+                                 measures a REAL SITE does not read is a producer with no reader on exactly
+                                 the column this product is judged by.
+                                 IT IS NOT UNIONED WITH ANYTHING HERE AND MAY NOT BE. The zone that relays
+                                 it holds no door map, by its own argument, and neither does this file: a
+                                 union assembled by a consumer out of `doors` and `addressClass` is the
+                                 figure CLAUDE.md §What-the-tool-produces DEMOTED, because `beyond` is what
+                                 a MARKUP parse cannot reach and `fetch`, `xhr` and `module-import` are all
+                                 in it. `undefined` is a relay predating the field, for the rows above's
+                                 reason. */
+                              razorClass: ("endpointRazorClass" in r)
+                                ? r.endpointRazorClass : undefined })),
     frontier: mine.map(census),
     storeEndpointsDelta: (last.endpoints === null || before.endpoints === null)
       ? null : last.endpoints - before.endpoints,
@@ -1633,6 +1677,15 @@ async function main() {
            there is a disagreement worth opening rather than a pair to reconcile. It is the same relationship
            `endpointDoors` has with `epReach` one row up. */
         endpointAddressClass: rs.map((r) => r.doors.map((d) => hist(d.addressClass)).join("|") || "no-row"),
+        /* …AND THE BAR, PER RUN, BESIDE THE OPERAND THAT CANNOT STATE IT. Read WITH `epRazorClass` in
+           `frontier` and not instead of it, for `endpointAddressClass`'s reason exactly: that row is
+           composed from the ENGINE's own census and this from the emitted array, so they are two documents
+           at two instants and this driver asserts no identity between them — a `runtime-only: 0` here
+           beside a nonzero one there is a disagreement worth opening rather than a pair to reconcile.
+           IT IS THE COLUMN THIS PRODUCT IS JUDGED BY AND IT IS STILL A DIAGNOSTIC: a run whose whole
+           surface reads `unproven` has REFUSED TO CLAIM the bar on that document, which is a finding about
+           the run and never a target to optimise toward. */
+        endpointRazorClass: rs.map((r) => r.doors.map((d) => hist(d.razorClass)).join("|") || "no-row"),
         sinks: spread(rs, first("sinks")),
         candidates: spread(rs, first("candidates")),
         flows: spread(rs, first("flows")),
