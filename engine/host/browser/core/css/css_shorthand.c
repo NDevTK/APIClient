@@ -2193,6 +2193,52 @@ char *css_shorthand_serialize_value(const char *shorthand, const char *const *va
     }
 }
 
+#if APICLIENT_DEV
+/* THE LONGHANDS THIS TABLE NAMES WHOSE SHORTHAND SET IS KNOWINGLY NOT RECORDED IN FULL — the other half of
+   css_shorthand_complete_for's partition, and the reason that predicate is not and CANNOT be derived from the
+   table. Every name here is named by some row above AND is set by a shorthand that has NO row, so a derivation
+   over the rows would answer TRUE for it where the correct answer is FALSE. It is a hand list because the fact
+   it states is about CSS rather than about this table: nothing in here knows what is outside it.
+     THE SEVEN `font-variant-*` — css-fonts-4 §6.11's `font-variant`, for the reason
+       css_shorthand_complete_for's own paragraph states; the `font` row names all seven (one Set Explicitly and
+       six Reset Implicitly) and css-fonts-4 §6.11 sets every one of them.
+     THE FIVE `border-image-*` — css-backgrounds-3 §5.7 "Border Image Shorthand: the border-image property",
+       whose `Value:` line is `<'border-image-source'> || <'border-image-slice'> [ / <'border-image-width'> |
+       / <'border-image-width'>? / <'border-image-outset'> ]? || <'border-image-repeat'>`, so it is a shorthand
+       over exactly these five and it has no row in the table. The `border` row names them because
+       css-backgrounds-3 §3.4 RESETS them, which makes `border` ONE of the two shorthands that can set
+       them and not both.
+       THIS EXCLUSION WAS CORRECT AND UNARGUED: the font seven carry a paragraph and these five carried none,
+       so their absence read as an omission rather than as a decision. Whether these five are in lexbor's
+       property registry is a SEPARATE axis and is deliberately not stated here — css-backgrounds-3 §5.7's
+       missing row alone decides this one.
+   A NAME IS IN EXACTLY ONE OF THE TWO LISTS, asserted by css_shorthand_init over every longhand the table
+   names, so a row
+   added with no decision about its longhands crashes instead of silently answering FALSE for them.
+   DEV-ONLY, AND THAT IS A STATEMENT RATHER THAN A BUILD DETAIL: css_shorthand_complete_for answers FALSE for
+   every name here in BOTH builds, which is the correct answer either way. This list exists only to tell that
+   FALSE — the one somebody decided — from the FALSE nobody looked at, and the only thing that needs the
+   difference is the assert, so the list is compiled exactly where the assert is.
+   RETIREMENT: this list goes when `font-variant` and `border-image` have rows of their own, because every
+   longhand the table names is then set only by shorthands the table carries and the partition's second arm is
+   unreachable rather than empty. */
+static const char *const SH_INCOMPLETE_BY_DESIGN[] = {
+    "font-variant-caps", "font-variant-alternates", "font-variant-east-asian", "font-variant-emoji",
+    "font-variant-ligatures", "font-variant-numeric", "font-variant-position",
+    "border-image-source", "border-image-slice", "border-image-width",
+    "border-image-outset", "border-image-repeat",
+};
+
+static bool css_sh_incomplete_by_design(const char *longhand)
+{
+    unsigned i;
+
+    for (i = 0; i < CSS_SH_N(SH_INCOMPLETE_BY_DESIGN); i++)
+        if (strcmp(SH_INCOMPLETE_BY_DESIGN[i], longhand) == 0) return true;
+    return false;
+}
+#endif
+
 void css_shorthand_init(void)
 {
 #if APICLIENT_DEV
@@ -2251,6 +2297,29 @@ void css_shorthand_init(void)
             back_n = css_shorthand_shorthands_of(row->longhands[j], sh, CSS_SHORTHAND_MAX_OF);
             DCHECK(back_n >= 1,
                    "a longhand named by a shorthand row does not find that row from the other direction");
+            /* THE THIRD READING OF THE SAME ROW, and the one nothing used to ask. The reverse reading above is
+               DERIVED from the table; css_shorthand_complete_for's first half is not and cannot be, so the two
+               are tied together HERE instead — every longhand the table names is in exactly one of the
+               predicate's recorded list and SH_INCOMPLETE_BY_DESIGN. A row whose longhands are in NEITHER is
+               the silence this partition exists to end: the row expands, this loop's own round trip passes, and
+               every consumer that asserts completeness before reading one of those longhands' computed values
+               crashes at ITS OWN site instead of here, holding a declaration nothing took apart. */
+            DCHECKF(css_shorthand_complete_for(row->longhands[j])
+                    || css_sh_incomplete_by_design(row->longhands[j]),
+                    "the `%s` row names `%s`, and that longhand is in NEITHER css_shorthand_complete_for's "
+                    "recorded list NOR SH_INCOMPLETE_BY_DESIGN — so nobody has answered whether the set of "
+                    "shorthands that can set it is recorded IN FULL, and the predicate answers FALSE by "
+                    "default. Record it in the first list if this table carries every shorthand that sets it, "
+                    "and in the second — with the section of the one that is missing — if it does not",
+                    row->name, row->longhands[j]);
+            DCHECKF(!(css_shorthand_complete_for(row->longhands[j])
+                      && css_sh_incomplete_by_design(row->longhands[j])),
+                    "`%s` is recorded BOTH as a longhand whose shorthand set is complete and as one knowingly "
+                    "incomplete, so the two lists state opposite answers to one question and whichever is read "
+                    "first decides. Delete whichever entry the live decision retired — a shorthand GAINING a "
+                    "row in this table makes the by-design entry stale, and losing one makes the recorded "
+                    "entry stale",
+                    row->longhands[j]);
         }
         for (j = 0; j < row->n; j++) {
             values[j] = css_shorthand_component(row->name, row->probe, row->longhands[j]);
@@ -2671,6 +2740,14 @@ bool css_shorthand_complete_for(const char *longhand)
        FALSE was `border-color`, and the flag is gone with the gap.
        A name absent from this list is not "probably fine": it is a question nobody has answered, and the
        answer decides whether a `margin: 0` two lines up was read or ignored.
+       THIS LIST IS NOT DERIVED FROM THE TABLE ABOVE AND CANNOT BE, which the header states the whole of: the
+       question quantifies over CSS and the table knows only what is in it, so a derivation over the rows would
+       be wrong in BOTH directions — it could not produce `display`, which no row mentions and which is complete
+       because NO shorthand in CSS sets it, and it would answer TRUE for `font-variant-caps`, which the `font`
+       row names and which css-fonts-4 §6.11 makes incomplete. WHAT IS TIED TO THE TABLE IS THE PARTITION:
+       css_shorthand_init asserts that every longhand the table names is in this list or in
+       SH_INCOMPLETE_BY_DESIGN and never in both, so a row added with no decision about its longhands crashes
+       at init rather than reaching here and answering FALSE.
        `white-space` is a LONGHAND here on CSS 2.1 §16.6's statement of it, and no shorthand in this table sets
        it; css-text-4's decomposition into `white-space-collapse`/`text-wrap-mode` names two properties lexbor's
        registry does not carry, so there is no expansion for this file to take apart.

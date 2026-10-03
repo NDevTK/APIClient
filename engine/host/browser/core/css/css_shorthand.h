@@ -95,9 +95,33 @@ bool css_shorthand_string(const char *w, size_t n);
    for every one of them? A consumer that derives a longhand's COMPUTED value asserts this before it trusts the
    cascade, because the failure mode of an unrecorded shorthand is silence: `margin: 0` would leave
    `margin-top` reading its initial value, with a real number to show for it and nothing to say the declaration
-   was never looked at. BOTH halves are DERIVED now — the first from the table below, the second from each
-   shorthand's own "does css_shorthand_component answer for my longhands" flag — so the two lists that used to
-   be maintained side by side cannot come apart. */
+   was never looked at.
+   THE TWO HALVES ARE ANSWERED BY TWO DIFFERENT MECHANISMS AND ONLY THE SECOND IS DERIVED. This sentence read
+   "BOTH halves are DERIVED now — the first from the table below, the second from each shorthand's own `does
+   css_shorthand_component answer for my longhands` flag — so the two lists that used to be maintained side by
+   side cannot come apart", and it is rewritten rather than deleted because the reverse direction of the table
+   IS derived by scanning the rows, so a reader who generalises from that will write it again.
+   THE SECOND HALF IS DERIVED, AND NOT FROM A FLAG: the flag is DELETED — the row struct's `probe` comment in
+   the implementation records that it went with the one row that answered FALSE for it — and what discharges
+   that half now is css_shorthand_init's round trip, which runs EVERY row's fixture through the expansion and
+   back and crashes on a row that does not answer for one of its own longhands. It is a property of the TABLE
+   rather than of a longhand, which is stronger than the per-longhand read it replaced.
+   THE FIRST HALF IS RECORDED BY HAND, AND IT IS NOT DERIVABLE FROM THIS TABLE AT ALL — not "not derived yet".
+   IT QUANTIFIES OVER CSS AND THE TABLE KNOWS ONLY WHAT IS IN IT: `display` is complete because NO shorthand in
+   CSS sets it, and no row mentions it, so a table-derivation cannot produce it; `font-variant-caps` is NOT
+   complete because css-fonts-4 §6.11 "Overall shorthand for font rendering: the font-variant property" sets it
+   and has no row here, and the `font` row DOES name it, so a table-derivation would answer TRUE where the
+   correct answer is FALSE. The derivation and the recorded list would therefore disagree in BOTH directions,
+   and the recorded list is the right one — which is why there is no agreement assert to be had between them.
+   WHAT IS CLOSED BY CONSTRUCTION IS THE HAZARD THE RETIRED SENTENCE CREATED: a lane that adds a row, reads
+   "both halves are DERIVED" and leaves the predicate alone used to get a silent FALSE for every longhand the
+   new row names. css_shorthand_init now asserts the two lists PARTITION the table's own longhands — each is
+   either recorded complete or recorded incomplete-by-design, never neither and never both — so a row whose
+   longhands are in neither list CRASHES at init, naming the row and the longhand.
+   RETIREMENT: this record goes when the first half is answered from the committed spec corpus's own property
+   definitions — the properties whose `Value:` line names `<'longhand'>`, which engine/specindex/text carries —
+   because the question is then derived from the STANDARDS rather than recorded from one reading of them, and
+   the incomplete-by-design list is derived with it. */
 bool css_shorthand_complete_for(const char *longhand);
 
 /* THE TABLE'S OWN INVARIANTS, asserted once per agent. The reverse direction below and the forward direction
