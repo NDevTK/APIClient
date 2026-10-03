@@ -2994,35 +2994,62 @@ static JSContext *doc_realm_at(uint32_t doc, const char *file, int line)
     if (realm == NULL) {
         switch (window_proxy_document_state(doc)) {
         case WP_DOC_DESTROYED:
-            /* THE CAPABILITY, NAMED: a cross-agent §7.2.1 read of a navigable with no active document.
-               WHAT IS NOT COVERED: this engine answers such a read by QUEUEING A PROGRAM in the target
-               document's realm (flow_perform, and the compile that follows it), and §7.5.10 has taken that
-               realm off the navigable — so the one timeline whose answer is `length` 0 and `closed` true
-               cannot produce it, while the sibling timelines that did not close answer normally.
-               WHAT THE NEXT DIFF BUILDS: the record-only answer. core/frame/window_proxy.c ALREADY computes
-               it for every other caller — proxy_get_step's hosted arm is
-               `p->realm ? iframe_child_navigable_count(p->realm) : 0` and window_proxy_closed is §7.2.2.1's
-               whole OR — and `length` and `closed` are the only two of §7.2.1.3.1's thirteen that reach this
-               seam at all, the rest being answered in-turn by proxy_member_get (proxy_get_step DFAILs on
-               them). So the diff is a window_proxy.c entry answering those two from the record, with
-               flow_perform routing to it instead of composing a program, and NOT a second copy of the
-               expressions in this file. The two subproblems under it, in order: remote_op.c must be able to
-               hand its caller the MEMBER NAME (it exports the doc, the worlds and the addressee and not
-               `f[4]`), and the completion must be ENCODED somewhere — remote_completion_encode takes the
-               realm the program ran in, and an answer that belongs to no document has none, so which realm
-               converts it is a design question this crash deliberately does not settle.
+            /* THE CAPABILITY, NAMED: a cross-agent operation on a navigable with no active document, for an
+               operation whose answer this agent's §7.2.3 RECORD does not contain.
+               THE §7.2.1 WINDOW-MEMBER HALF IS BUILT and this residual is RE-KEYED rather than retired:
+               flow_perform routes a `windowproxy.get` through window_proxy_record_member_of_document before it
+               asks for a realm at all, so `length` and `closed` are answered here with no realm and never reach
+               this arm. What still does is TWO populations, and they are not one capability:
+               WHAT IS NOT COVERED (1), A §7.2.1 MEMBER WHOSE ANSWER IS AN OBJECT. §7.2.1.3.1
+               "CrossOriginProperties ( O )" lists thirteen names, NINE of them carrying [[NeedsGetter]], and
+               the record-only route answers two — so `location`, `opener`, `parent`, `top`, `window`, `self`
+               and `frames` arriving from a peer reach this abort. Their answers are OBJECTS of a realm that no
+               longer exists, which is why they are not a widening of that route: §7.2.3's own surface would
+               have to answer a navigable or a Location for a document that has none.
+               WHAT IS NOT COVERED (2), AN `object.*` VERB ON A LENT OBJECT OF THE DESTROYED REALM. A peer
+               holding `o<document>:<generation>:<id>` into a document this timeline has destroyed asks
+               [[Get]] / [[Set]] / [[Delete]] / [[Call]] / [[HasProperty]] and the object is gone with its
+               realm. That is a different answer in kind — a THROW rather than a value, since the operation
+               cannot be performed at all — so it takes a decision about WHICH exception and not a record read.
+               WHAT THE NEXT DIFF BUILDS: (2) first, because it needs no new §7.2.3 surface — the completion
+               grammar already carries a throw (`!` in core/frame/remote_object.c) and
+               perform_answer_notify already writes one, so the diff is the arm that recognises a destroyed
+               document at the object verbs and the choice of exception. (1) after it, and only with a
+               cross-instance answer for a navigable that has none.
                HOW ITS ABSENCE WOULD SHOW: this abort, with flow_step on the frame list, on any instance one of
-               whose timelines has closed or destroyed a document a peer still holds a reference into. */
+               whose timelines has closed or destroyed a document a peer still holds a reference into — and now
+               only for a record whose verb is not a `windowproxy.get` of those two members.
+               AND THE RETIRED CLAUSE IS KEPT HERE BECAUSE IT WAS WRONG IN A WAY THE NEXT ONE CAN REPEAT. It
+               read that `length` and `closed` are "the only two of §7.2.1.3.1's thirteen that reach this seam
+               at all", and that is a claim about this engine's EMITTERS — proxy_get_step DFAILs on the rest and
+               core/html/html_iframe.c DFAILs at its own — and NOT about what ARRIVES. A record is TEXT from an
+               untrusted instance (SECURITY.md), remote_op_parse admits every listed name with a CHECK and
+               every [[NeedsGetter]] one with a DCHECK, so the population at this line is NINE in dev and
+               THIRTEEN in release. It named a POPULATION where the fact it needed was a PROPERTY, which is the
+               shape CLAUDE.md §THE-`WHAT-IS-NOT-COVERED`-CLAUSE-ROTS-TOO describes, and a reader who had
+               believed it would have widened the record-only route to a member whose answer is an object.
+               AND THE DESIGN QUESTION IT LEFT OPEN IS SETTLED, recorded here because an open question goes on
+               commissioning the same reading for ever. It asked which realm converts a completion that belongs
+               to no document. The question presupposed an encoding that NEEDS a realm, and for these two it
+               does not: both answers are ECMAScript §6.1 primitives, and remote_object_encode's bool and
+               number arms are `JS_ToBool` / `JS_ToFloat64` over an already-primitive value, which
+               engine/qjs/quickjs.c answers from the TAG without reading `ctx`. So any realm of this agent
+               converts them identically, flow_perform hands its own, and the one thing that would be wrong —
+               an OBJECT, whose name the encoder keys on the realm it was handed — is a DCHECK at that call
+               rather than an argument here. */
             DFAILF("a cross-agent operation or a queued program named a document whose active Document THIS "
                    "TIMELINE DESTROYED, asked at %s:%d — §7.5.10 \"Destroying documents\"' "
                    "set-the-Document's-browsing-context-to-null step nulled it "
                    "and window_proxy_set_destroyed nulled the navigable's realm with it, so there is no realm "
                    "now and there will not be one: proxy_realm refuses to materialize a destroyed navigable by "
                    "name. A sibling arm that did not close still answers, which is why this is one timeline's "
-                   "state and not the document's. §7.2.1's cross-origin list is what a peer may still read "
-                   "here, and window_proxy.c answers every one of those FROM THE RECORD with no realm — BUILD "
-                   "that route for the cross-instance seam (see the residual above this line); do not ask for "
-                   "an ACTIVE DOCUMENT, because this navigable has none", file, line);
+                   "state and not the document's. THE RECORD-ONLY ROUTE EXISTS AND THIS OPERATION IS NOT ONE "
+                   "IT ANSWERS: flow_perform routes a `windowproxy.get` for `length` or `closed` through "
+                   "window_proxy_record_member_of_document ahead of this lookup, so reaching here means either "
+                   "a §7.2.1 member whose answer is an OBJECT of the realm that is gone, or an `object.*` verb "
+                   "on an object lent out of it — two different answers, and the residual above this line says "
+                   "which to build first and why the object verbs are a THROW rather than a value. Do not ask "
+                   "for an ACTIVE DOCUMENT, because this navigable has none", file, line);
             break;
         case WP_DOC_INITIAL:
             DFAILF("a navigable this agent holds was asked for the realm of its active document and THIS "
