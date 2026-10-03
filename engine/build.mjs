@@ -6885,6 +6885,10 @@ async function compileAll(tc, sources) {
  *                                              nobody reaches for)
  *   node engine/build.mjs native leak       -> LeakSanitizer (which allocation is still live at exit)
  *   node engine/build.mjs native address    -> AddressSanitizer (UAF / double-free / overflow, leaks included)
+ *   node engine/build.mjs native undefined  -> UndefinedBehaviorSanitizer (signed overflow, shifts out of
+ *                                              range, misaligned loads, a null dereference, an out-of-range
+ *                                              enum or `_Bool`, a float-to-int overflow, a call through a
+ *                                              mismatched function pointer, `__builtin_unreachable` reached)
  *   … plus `release` for check.h's release exemption (-DAPICLIENT_DEV=0) — see the paragraph below, which is
  *     where the reason the DEFAULT is `dev` and the reason that default cannot answer every question both live.
  *   … plus `min` to drive the minimal fixture, as the wasm smoke takes it.
@@ -6896,6 +6900,29 @@ async function compileAll(tc, sources) {
  * (MAXIMUM_MEMORY clamps it; lifting both reached 3.1 GiB still inside switch 1). A sanitizer target that cannot
  * reach switch two measures nothing, so the flag is DELETED rather than kept as a mode nobody can use.
  *
+ * THE `undefined` KIND IS A CAPABILITY AND IS DELIBERATELY NOT ON THE DEFAULT BUILD'S STAGE LIST, and the two
+ * halves of that are a different decision each. A kind the build ACCEPTS costs a reader one word on a command
+ * line; a kind on the STAGE LIST is a policy with a price, and §AND-AN-ABORT-AT-PROGRAM-INIT says an always-on
+ * refusal promotes its own conversion queue onto the critical path of every dev measurement in the tree. This
+ * one would also pay that price TWICE over: a different `-fsanitize=` is a different flag set, so it is a
+ * different `flagId` and therefore a SECOND full native compile of every translation unit beside the verdict
+ * host's, and — because `-fno-sanitize-recover` makes a finding fatal and an abort is first-past-the-post — a
+ * single finding anywhere would end that stage before it reached the fixture's probe table. Whether it belongs
+ * there is a question about a NUMBER NOBODY HAS, and this lane may not build, so it is not guessed at: run
+ * `node engine/build.mjs native undefined` and read what the run says. Putting it on the list is the next diff
+ * if that number is small, and is the wrong diff if it is not.
+ * WHY THIS AXIS RATHER THAN ANOTHER, AND WITH THE BRIEF THAT ASKED FOR IT CORRECTED. The two most expensive
+ * defects CLAUDE.md records are both UB-driven miscompilation — a data pointer in `JSCFunctionType` passing at
+ * -O0 and segfaulting a whole directory at -O1, and a variadic sentinel scan clang turned into a two-byte
+ * `jmp .` — and NEITHER of them is `-fsanitize=undefined` territory, which is worth saying because believing
+ * otherwise is how this target would be trusted past its evidence. There is no sanitizer for a STRICT-ALIASING
+ * (TBAA) violation at all; the discriminator CLAUDE.md names for that one is `-fno-strict-aliasing`, which is a
+ * CODEGEN CHANGE that makes the miscompile stop happening rather than a check that reports it, so it is not a
+ * sanitizer kind and folding it into `SAN_KIND` would be one word answering two questions. And the sentinel
+ * scan reads past the end of an array it received as a POINTER, so `-fsanitize=array-bounds` cannot see its
+ * extent either — that one is ASan's stack redzones, which this target already has. What `undefined` DOES buy
+ * is every check listed above, none of which anything in this tree has ever measured: an engine that computes
+ * hashes, shifts, indices and refcounts in C has had no instrument pointed at its arithmetic.
  * Native is not a workaround for that: it is where every other gate in this project already runs its C —
  * engine/wpt.mjs builds this same source list natively for the same reason (an eight-minute wasm link per
  * iteration is a gate nobody runs), and a native ASan run over that runner is what named the attribute-lifetime
@@ -6996,14 +7023,72 @@ async function compileAll(tc, sources) {
    links and reports for `address` and is BROKEN for `leak` — it dies inside LeakSanitizer's own startup with
    `CHECK failed: lsan_interceptors.cpp:82 "((!lsan_init_is_running)) != (0)"` and exits 23, which is the SAME
    code a real leak report exits with, so a reader taking the status instead of the output scores it a pass.
-   NAMED RESIDUAL — THE SYMBOL SUBSET IS VERIFIED OVER ONE TRANSLATION UNIT AND NOT OVER THE PROGRAM.
-   WHAT IS NOT COVERED: the 47-symbol check was taken over quickjs.c, the largest TU, and the other sources may
-   reference an interface symbol it does not. WHAT THE NEXT DIFF BUILDS: nothing — the link is that check, and
-   it runs on every invocation of this target. HOW ITS ABSENCE WOULD SHOW: this target fails with an undefined
-   reference to a `__asan_*`/`__lsan_*` name that is absent from
-   `nm -D --defined-only $(clang -print-file-name=libasan.so)`. */
+   AND THE SAME PAIRING WAS MEASURED FOR `undefined` BEFORE THAT KIND WAS DECLARED, ON THIS BOX, WITH THE SCOPE
+   STATED BECAUSE IT IS NARROWER THAN THE asan ONE. The shape is identical: clang's own compiler-rt directory
+   does not exist here (`-print-runtime-dir` names a path that is absent), and
+   `clang -print-file-name=libubsan.so` answers out of the GCC installation clang itself detected, so the second
+   arm resolves and `-fno-sanitize-link-runtime` + that `.so` links. What was checked: this box's libubsan
+   exports 28 distinct `__ubsan_handle_*` base names, which covers the whole C surface of the `undefined` group
+   — alignment, `builtin`, out-of-bounds, divrem, float-cast, function-type, the four integer overflows,
+   `load_invalid_value` (which is how an out-of-range enum and `_Bool` arrive), missing-return, nonnull,
+   pointer-overflow, shift, `builtin_unreachable`, vla-bound, and `type_mismatch_v1` (which is how a null
+   dereference arrives). A program exercising ten of them referenced ten `*_abort` variants and every one was
+   SERVED, with an invented name as the negative control reporting MISSING; the link then succeeded and produced
+   correct `runtime error:` reports with no `LD_LIBRARY_PATH`.
+   THERE IS NO VERSION TOKEN ON THIS SIDE, which is a difference and not a gap: asan carries
+   `__asan_version_mismatch_check_v8` and the ubsan ABI is the handler set itself, so a skew is an undefined
+   reference at the link rather than a runtime abort. Both are LOUD, which is the property that matters.
+   NAMED RESIDUAL — THE SYMBOL SUBSET IS VERIFIED OVER ONE TRANSLATION UNIT AND NOT OVER THE PROGRAM, AND FOR
+   `undefined` NOT EVEN OVER ONE OF THIS PROGRAM'S.
+   WHAT IS NOT COVERED: the 47-symbol asan check was taken over quickjs.c, the largest TU, and the other sources
+   may reference an interface symbol it does not; the ubsan check above was taken over a PURPOSE-BUILT program
+   and not over any source this build compiles, so it establishes that the two halves pair and not that this
+   engine's own arithmetic references nothing further. WHAT THE NEXT DIFF BUILDS: nothing — the link is that
+   check, and it runs on every invocation of this target. HOW ITS ABSENCE WOULD SHOW: this target fails with an
+   undefined reference to a `__asan_*`/`__lsan_*`/`__ubsan_*` name that is absent from
+   `nm -D --defined-only $(clang -print-file-name=lib<asan|ubsan>.so)`. */
+/* ── WHAT EACH SANITIZER KIND IS, IN ONE TABLE ───────────────────────────────────────────────
+   THREE FACTS ABOUT ONE KIND, AND THEY USED TO BE A TERNARY, A SECOND TERNARY AND A THIRD SPELLING IN argv.
+   `kind === "leak" ? "lsan" : "asan"` answers "which runtime" for a CLOSED set of two by making every other
+   value `asan`, so a third kind would have resolved SILENTLY to the wrong library and reported its absence
+   under the wrong package name — the hand-copied-list defect this file warns about, in a conditional. The
+   argv read below was the same list a third time. Here they are one row per kind, and the argv read is derived
+   FROM this table, so a kind that is declared is selectable and a kind that is not declared cannot be asked
+   for by accident.
+   `lib` IS THE RUNTIME'S BASE NAME, which both arms of the resolver compose: clang's own compiler-rt as
+   `libclang_rt.<lib>*` and the GCC installation's as `lib<lib>.so`. UBSan's compiler-rt file is
+   `libclang_rt.ubsan_standalone-x86_64.a`, which that prefix matches.
+   `deb` IS THE PACKAGE A READER HAS TO INSTALL, and it is per kind because gcc's sonames are: libasan8,
+   liblsan0, libubsan1 for gcc-13. The ternary it replaces said `libasan8` or `lib<lib>0`, so ubsan would have
+   been reported as `libubsan0`, which does not exist.
+   `recovers` IS WHETHER A FINDING LETS THE PROGRAM CARRY ON, and it is the one field that decides whether this
+   target is a GATE or a LOG. ASan and LSan abort; UBSan by DEFAULT prints `runtime error:` and CONTINUES, so a
+   stage reading the child's exit code would score a run with real findings in it as a PASS — §Testing's
+   red-verdict-as-furniture defect inverted, a GREEN verdict over a finding, which is strictly worse because
+   nothing invites a reader to look. MEASURED on this box, one toy program, no pipe on the status read: with
+   `-fno-sanitize-recover=undefined` a signed-overflow finding exits 1 and stops; without it the identical
+   finding prints and the program exits 0 and keeps running; a clean run exits 0 either way, so the flag does
+   not make everything red. The flag is CODEGEN — it selects the `__ubsan_handle_*_abort` handler variants over
+   the plain ones — so it belongs in the compile flags and therefore in the object's name, which is where
+   `nativeProgram` puts it. It is emitted only for the kinds that recover, so the `address` and `leak` flag sets
+   are byte-identical to what they were and their objects keep their names. */
+const SAN_KIND = {
+  /* `address` FIRST, because the argv read takes the first declared kind the command line names and the
+     ternary it replaces preferred `address` over `leak`. `node engine/build.mjs native address leak` must keep
+     answering `address`. */
+  address:   { lib: "asan",  deb: "libasan8",  recovers: false },
+  leak:      { lib: "lsan",  deb: "liblsan0",  recovers: false },
+  undefined: { lib: "ubsan", deb: "libubsan1", recovers: true  },
+};
 function sanitizerRuntime(kind) {
-  const lib = kind === "leak" ? "lsan" : "asan";
+  /* A KIND WITH NO ROW IS A CALLER THAT INVENTED ONE, AND IT MAY NOT BE ANSWERED WITH A DEFAULT: the ternary
+     this replaced answered `asan` for every unknown value, which is a plausible datum where an abort belongs.
+     The argv read derives its vocabulary from this table, so the only way to get here is a direct call. */
+  if (!SAN_KIND[kind])
+    throw new Error(`[build] sanitizerRuntime was asked for the sanitizer kind ${JSON.stringify(kind)}, which ` +
+                    `SAN_KIND does not declare. The declared kinds are ` + Object.keys(SAN_KIND).join(", ") +
+                    `, and "none" asks nothing and must not reach here.`);
+  const lib = SAN_KIND[kind].lib;
   const ask = (a) => (spawnSync("clang", a, { encoding: "utf8" }).stdout || "").trim();
   const ownDir = ask(["-print-runtime-dir"]);
   if (ownDir && existsSync(ownDir) && readdirSync(ownDir).some((f) => f.startsWith("libclang_rt." + lib)))
@@ -7022,7 +7107,7 @@ function sanitizerRuntime(kind) {
                           : "unreported")
                 + ", and `clang -print-file-name=" + soname + "` answered `" + so + "` (a bare name means not "
                 + "found). Install llvm's compiler-rt or gcc's libsanitizer (Debian/Ubuntu: libclang-rt-dev, "
-                + "or lib" + lib + (lib === "asan" ? "8" : "0") + " with gcc installed)." };
+                + "or " + SAN_KIND[kind].deb + " with gcc installed)." };
 }
 /* THE CROSS-SESSION ROUND TRIP, AS A FUNCTION BOTH TARGETS CALL — AND IT IS NO LONGER BEHIND AN ARGUMENT.
    It was `if (process.argv.includes("cold"))`, and §Testing's excluded-test rule reaches one layer further
@@ -7232,7 +7317,13 @@ async function nativeProgram(kind, dev) {
      translation unit. Splitting them is also what keeps the identity honest in the only direction that
      matters: the kind is IN the object name, so an instrumented object can never be linked into an
      unsanitized program, and a change of RUNTIME cannot invalidate an object it did not change. */
-  const SAN_INSTRUMENT = kind === "none" ? [] : ["-fsanitize=" + kind];
+  const SAN_INSTRUMENT = kind === "none" ? []
+    : ["-fsanitize=" + kind,
+       /* AND THE KINDS THAT RECOVER ARE TOLD NOT TO, WHICH IS WHAT MAKES A FINDING A VERDICT RATHER THAN A LINE
+          IN A LOG. `SAN_KIND`'s own paragraph carries the measurement and the reason it is a CODEGEN flag and
+          therefore part of the object's name; it is emitted per kind rather than unconditionally so that
+          `address` and `leak` keep the exact flag sets — and therefore the exact object names — they had. */
+       ...(SAN_KIND[kind].recovers ? ["-fno-sanitize-recover=" + kind] : [])];
   /* THE FLAG LIST THAT COMPILES THIS PROGRAM, WHICH IS ALSO ITS HALF OF THE OBJECT'S NAME. Every token that
      decides the emitted bytes is here and nowhere else: the optimisation and frame-pointer flags, the
      instrumentation, and the dialect (which carries `-DAPICLIENT_DEV=`, so dev and release are two object sets
@@ -7358,8 +7449,13 @@ const NATIVE = process.argv.includes("native");
 if (NATIVE) {
   /* WHICH SANITIZER, IF ANY — named, because the plain native build is the one the memory series comes from and
      a sanitizer changes both the numbers and the wall-clock by an order of magnitude. */
-  const kind = process.argv.includes("address") ? "address"
-             : process.argv.includes("leak")    ? "leak" : "none";
+  /* DERIVED FROM `SAN_KIND` AND NOT SPELLED AGAIN. This was a ternary naming two of the three facts that
+     table now holds, so a kind added there and not here was a kind the build could resolve a runtime for and
+     nobody could ask for — the write-with-no-reader half of the defaulted-field defect, in a command line.
+     FIRST DECLARED WINS, which is the behaviour the ternary had: it preferred `address` over `leak`, and
+     `address` is the table's first row for that reason. `none` is the absence of any of them, which is why it
+     is not a row. */
+  const kind = Object.keys(SAN_KIND).find((k) => process.argv.includes(k)) || "none";
   /* WHICH ASSERTION REGIME — the SAME WORD the emcc CFLAGS below read for the same fact, and inert for them
      here because this branch ends in `report()`, which always exits, so a `release` on a `native` command line
      never reaches the wasm link. `dev` is the default and the paragraph above `sanitizerRuntime` says why;
