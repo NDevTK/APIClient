@@ -159,7 +159,12 @@ function documentRefs(html) {
    a query has that exact shape and refusing it would fire on healthy sites.
    WHAT THE NEXT DIFF BUILDS: the named character references table itself, derived from
    engine/lexbor/source/lexbor/html/tokenizer/res.h, which already holds it, rather than typed out a second
-   time — and the refusal retires with it. HOW ITS ABSENCE SHOWS: a `declined` row reading
+   time — and the refusal retires with it. IT IS NOT A FLAT LIST THERE AND A READER SENT TO IT SHOULD KNOW:
+   `lxb_html_tokenizer_res_entities_sbst` is a static search tree of single characters with child and next
+   offsets, so reconstructing the names means WALKING it, and lexbor's own generator for it
+   (`utils/lexbor/html/tokenizer_entities_bst.py`, which that file names in its header) is not vendored here.
+   The other route is §13.5's own table, fetched, which is what `--regen` already does for every other
+   committed index. HOW ITS ABSENCE SHOWS: a `declined` row reading
    `undecidable-character-reference`, and a reference the table would have resolved reaching no request. */
 const NAMED_REF = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
 const ATTR_REF = /&(#[xX][0-9a-fA-F]+|#[0-9]+|[A-Za-z][A-Za-z0-9]*)(;?)/g;
