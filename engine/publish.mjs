@@ -38,6 +38,8 @@
  * its message that its author considers it final -- because the one judgement left here is then checkable too.
  */
 import { spawnSync } from "node:child_process";
+import { accessSync, constants } from "node:fs";
+import { join, resolve } from "node:path";
 
 const NET = /could not read from remote|connection (reset|timed out)|early eof|rpc failed|unexpected disconnect|failed to connect|temporary failure in name resolution|operation timed out/i;
 
@@ -80,6 +82,35 @@ const dests = here === "main" ? ["main"] : ["main", here];
 if (dests.length === 1)
   say("WARNING: the current branch IS main, so this publishes to ONE ref. That is the state CLAUDE.md's " +
       "two-ref rule exists to prevent; it is allowed here only because there is no second ref to name.");
+
+/* THE OTHER HALF OF THE CONSTRUCTION IS ASSERTED HERE, AND THE TWO LOCK EACH OTHER. This file puts the gate in
+   the PATH of the push; `engine/githooks/pre-push` makes a push that carries no verdict REFUSE. Either alone is
+   a convention somebody has to remember -- a bare `git push` walks past this file, and a hook nobody armed is
+   the check-shaped version `engine/lexbor_source.mjs`'s header condemns, "a check every caller must remember"
+   rather than an impossible state. So this tool will not publish from a checkout where the hook is not armed:
+   you cannot use the wrapper without the hook, and with the hook you cannot bypass the wrapper by forgetting.
+   THE PATH IS COMPARED ABSOLUTE, DELIBERATELY. git's own interpretation of a RELATIVE `core.hooksPath` has
+   differed by version about what it is relative to, and a check that cannot say which directory it means is a
+   check whose zero means nothing. An absolute path is a fact about WHERE this tree is checked out, which
+   `engine/lexbor_source.mjs` rightly refuses for an IDENTITY -- and this is not one: it is a local config in one
+   working copy, and a frozen snapshot legitimately has none, so a publish attempted from a snapshot refuses
+   here and names the command, which is the correct answer rather than a false alarm. */
+const TOP = git(["rev-parse", "--show-toplevel"]).stdout.trim();
+const HOOKS = join(TOP, "engine", "githooks");
+const havePath = git(["config", "--get", "core.hooksPath"], { allowFail: true }).stdout.trim();
+if (!havePath || resolve(havePath) !== HOOKS)
+  die(2, "REFUSED: core.hooksPath does not name this repository's tracked hook directory, so a bare `git push`",
+         "from this checkout would publish an ancestry with no verdict in front of it -- which is the incident",
+         "this tool's own header records. Arm it once, in this checkout:",
+         `      git config core.hooksPath ${HOOKS}`,
+         `  it currently reads ${havePath ? "'" + havePath + "'" : "(unset)"}.`);
+try { accessSync(join(HOOKS, "pre-push"), constants.X_OK); }
+catch (e) {
+  die(2, `REFUSED: ${join(HOOKS, "pre-push")} is not an executable file (${e.code || e.message}).`,
+         "git runs a hook only if it is executable AND SAYS NOTHING WHEN IT IS NOT, so an un-executable hook is",
+         "the absence of a question rather than a failing check -- every push would succeed unverified and the",
+         "transcript would look identical to one that was verified. Restore the mode: chmod +x on that path.");
+}
 
 say(`cut ${sha.slice(0, 7)}  --expect ${expect}  destinations: ${dests.join(", ")} on ${remote}`);
 say("running the gate; its whole chain is below and is not piped anywhere ──────────────────────────────────");
@@ -139,7 +170,13 @@ for (const d of dests) {
   let ok = false;
   for (let attempt = 0, wait = 2000; attempt < 5 && !ok; attempt++, wait *= 2) {
     if (attempt) { say(`retrying ${d} after ${wait / 2000}s (network)`); spawnSync("sleep", [String(wait / 2000)]); }
-    const r = spawnSync("git", ["push", remote, `${sha}:refs/heads/${d}`], { encoding: "utf8" });
+    /* THE VERDICT TRAVELS WITH THE PUSH AND IS A CLAIM THE HOOK FALSIFIES, never a password. It carries the
+       SHA and the COUNT, and `engine/githooks/pre-push` checks both against what git hands it on stdin -- the
+       local sha it is about to send and the REMOTE'S CURRENT sha for that ref, which is the freshest left end
+       there is. So the arithmetic backstop is performed a SECOND time, by something that cannot be skipped,
+       against a left end that cannot be stale. */
+    const r = spawnSync("git", ["push", remote, `${sha}:refs/heads/${d}`],
+                        { encoding: "utf8", env: { ...process.env, APICLIENT_PUBGATE: `${sha}:${n}` } });
     process.stderr.write(r.stderr || "");
     if (r.status === 0) { ok = true; break; }
     if (!NET.test(r.stderr || "")) break;

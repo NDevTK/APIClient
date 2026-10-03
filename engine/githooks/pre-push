@@ -1,0 +1,69 @@
+#!/bin/sh
+# A PUSH THAT DID NOT COME THROUGH THE GATE IS REFUSED HERE, BECAUSE EVERY OTHER PLACE TO SAY SO IS A PLACE
+# SOMEBODY HAS TO REMEMBER.
+#
+# `engine/publish.mjs` already puts the gate in the PATH of the act -- it spawns `engine/pubgate.mjs`, reads its
+# exit status, and pushes only on a zero. What it CANNOT do is be the only way to push. A bare `git push` skips
+# it entirely, and that is not a hypothetical: the incident `engine/publish.mjs`'s own header records is a push
+# that published FOUR commits of which ONE had been read, made by a coordinator who had run the gate and sent
+# its output to /dev/null. The wrapper closed the redirection. This closes the OMISSION, and the two together
+# are the construction CLAUDE.md asks for -- the wrapper refuses to push without a verdict, and this refuses a
+# push that carries none.
+#
+# IT IS NOT A PASSWORD AND THAT IS THE WHOLE DESIGN. A hook that only checked for a marker would be bypassed by
+# exporting one, so the marker is a CLAIM THIS HOOK FALSIFIES: `APICLIENT_PUBGATE` carries `<sha>:<count>`, and
+# both halves are checked against what GIT ITSELF hands this hook on stdin -- the local sha it is about to send
+# and the REMOTE'S CURRENT sha for that ref. That remote sha is the freshest left end there is: it is the value
+# the server answered for this push, not a tracking ref whose age is the last fetch's, which CLAUDE.md names as
+# the half the captured-sha discipline does not reach. So the arithmetic backstop -- "the only check that
+# survives both ends moving" -- is performed HERE, at the one point no procedure can forget, and a hand-exported
+# variable has to carry a count that is already correct to get past it.
+#
+# WHAT IT DELIBERATELY DOES NOT DO. It does not run the gate: a hook that re-derived the pair rule would be a
+# second copy of `engine/pubgate.mjs`, and the copy nobody reads is the one that drifts. It checks the ONE
+# quantity a redirection hides and refuses everything it cannot check.
+#
+# THE ESCAPE IS `git -c core.hooksPath= push` AND LEAVING IT AVAILABLE IS NOT A WEAKNESS. Nothing in a git
+# checkout can make a bypass impossible; what a forcing function buys is that the DEFAULT refuses, so a bypass
+# becomes a deliberate act visible in a transcript -- the same standing `--force` has here, available and
+# banned by rule rather than by the tool.
+set -e
+
+REMOTE_NAME="$1"
+Z=0000000000000000000000000000000000000000
+
+refuse() {
+  echo "pre-push: REFUSED -- $1" >&2
+  echo "" >&2
+  echo "  Publish with the gate in the path of the push:" >&2
+  echo "      node engine/publish.mjs <sha> --expect <n>" >&2
+  echo "" >&2
+  echo "  Read the chain FIRST with no cut, which prints every allowed cut and the denominator:" >&2
+  echo "      node engine/pubgate.mjs" >&2
+  echo "" >&2
+  echo "  CLAUDE.md: a push publishes an ANCESTRY and not a commit, and the publishable prefix ends at the" >&2
+  echo "  OLDEST UNREPORTED commit -- which lives in no artifact, so the gate cannot know it and you must." >&2
+  exit 1
+}
+
+[ -n "$APICLIENT_PUBGATE" ] || refuse "this push carries no gate verdict (APICLIENT_PUBGATE is unset)"
+
+CLAIM_SHA=${APICLIENT_PUBGATE%%:*}
+CLAIM_N=${APICLIENT_PUBGATE##*:}
+case "$CLAIM_N" in
+  ''|*[!0-9]*) refuse "APICLIENT_PUBGATE is '$APICLIENT_PUBGATE' and is not <sha>:<count>" ;;
+esac
+
+SAW=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -n "$local_ref" ] || continue
+  SAW=$((SAW + 1))
+  [ "$local_sha" != "$Z" ] || refuse "this is a DELETE of $remote_ref, which nothing here publishes"
+  [ "$remote_sha" != "$Z" ] || refuse "$remote_ref does not exist on $REMOTE_NAME -- this publishes to refs that are already there"
+  [ "$local_sha" = "$CLAIM_SHA" ] || refuse "the verdict names $CLAIM_SHA and this push sends $local_sha to $remote_ref"
+  N=$(git rev-list --count "$remote_sha..$local_sha")
+  [ "$N" = "$CLAIM_N" ] || refuse "$REMOTE_NAME/$remote_ref stands at $remote_sha, so this push moves $N commit(s), not the $CLAIM_N the verdict states"
+done
+
+[ "$SAW" -gt 0 ] || refuse "git named no ref on stdin, so there is nothing this hook could check"
+exit 0
