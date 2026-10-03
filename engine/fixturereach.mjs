@@ -85,12 +85,23 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PRODUCER = join(ROOT, "engine", "host", "test_forced.c");
 
 /* THE MARKER NAMESPACE THIS PRODUCER PRINTS. Asserted equal to the derivation below; see the header for why it
-   is spelled at all and for the condition that retires it. */
+   is spelled at all and for the condition that retires it.
+   NAMED RESIDUAL — NOTHING IN THIS TREE INVOKES THIS READER, so the equality below is checked only when
+   somebody runs it by hand, and a roster this file does not run is a SPELLING rather than a reader.
+   NOT COVERED: a marker landed in the producer leaves the roster short, and the only thing that fires is a
+   refusal inside a tool no stage calls.
+   WHAT THE NEXT DIFF BUILDS: this reader on engine/build.mjs's own stage list, with exit 2 read as a failure
+   rather than as silence. `grep -c fixturereach engine/build.mjs` answers 0 at origin/main, which is why this
+   is outstanding rather than already met.
+   HOW ITS ABSENCE SHOWS: every invocation of this file exits 2 naming the markers to ADD, for as long as
+   nobody invokes it — while engine/fieldgate.mjs goes on crediting each roster name as a READ, because for the
+   marker namespace a name in a scanned file IS the construct. So that gate's WRITTEN-with-no-reader band reads
+   clean over a reader that refuses to run at all, which is a state this roster has already been in. */
 const ROSTER = [
-  "@A2ENTER", "@A2OK", "@A2REALM", "@CANVAS2D", "@COLDPARK", "@COLDRESUME", "@FACE", "@GCOMP", "@GLYF",
-  "@GLYPHMARK", "@H", "@HGATED", "@HUNASKED", "@HWORK", "@IMGMARK", "@INLINEBOX", "@OCENSUS", "@PAGEERR",
-  "@PAGEERR-EXPLORED", "@PAGEERR-RETRACTED", "@PAGEERR-STAGED", "@PAGEERR-STAGED-TOKEN", "@PAINT",
-  "@PAINTTEXT", "@RASTER", "@RESULT", "@S", "@SCENSUS",
+  "@A2ENTER", "@A2OK", "@A2REALM", "@CANVAS2D", "@COLDPARK", "@COLDRESUME", "@FACE", "@FLEX", "@GCOMP",
+  "@GLYF", "@GLYPHMARK", "@H", "@HGATED", "@HUNASKED", "@HWORK", "@IMGMARK", "@INLINEBOX", "@INLINEBREAK",
+  "@OCENSUS", "@PAGEERR", "@PAGEERR-EXPLORED", "@PAGEERR-RETRACTED", "@PAGEERR-STAGED",
+  "@PAGEERR-STAGED-TOKEN", "@PAINT", "@PAINTTEXT", "@RASTER", "@RESULT", "@S", "@SCENSUS",
 ];
 
 /* A REFUSAL EXITS 2 AND A FINDING EXITS 1, because a status that merged them would be the one shape this
