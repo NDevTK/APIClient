@@ -981,6 +981,29 @@ static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueCon
            "§7.5.1's creation was finished with response bytes still unfilled — the realm is built around the "
            "PARSED tree (document_policy_new walks it for CSP §3.3's `<meta>` policies), so a Document handed "
            "over here would be judged under the policies of a prefix of itself");
+    /* AND THE DOCUMENT NAME THIS CREATION CARRIES IS RE-READ HERE, BECAUSE THE BRANCH THAT CHOSE IT READ A
+       PER-FLOW FACT TWO STAGES AGO. §7.4 step 14's load takes `doc` from `window_proxy_materialized(proxy)`:
+       materialized means the navigable already has an active Document in the READING FLOW's timeline, so the
+       navigation supersedes it and §7.5.1's new Document is minted a NEW name; not materialized means §7.4's own
+       name was never installed and this creation may take it. That read is in the FETCH stage and this install is
+       in the CREATE stage, at least one JS_STEP_YIELD later (the first CREATE arm always steps the parse once and
+       returns one) — and `ProxyData`'s `realm` is a POD field inside the COW-captured bytes (window_proxy.c's
+       PROXY_REC), so it answers about whichever TIMELINE is applied rather than about the navigable. A sibling
+       flow materializing the initial about:blank through this same navigable flips it, and so does this job's
+       flow simply being a different flow from the one that materialized it. NEITHER NEEDS A FORK.
+       WITHOUT IT THE STATE SURFACES TWO STAGES ON AND IN ANOTHER COMPONENT: `document_install` writes
+       solver/world.c's realm row, which aborts naming the (document, WORLD) binding — true about the row, and a
+       long way from the branch that chose the name. An instance-GLOBAL mint decided from a PER-FLOW read is
+       CLAUDE.md §AN-OPERATION-THAT-BECOMES-A-WORK-ITEM-TAKES-ITS-INPUTS-WITH-IT over `doc` rather than over the
+       address, which is the same rule this file already obeys for the address and the about base URL.
+       RETIREMENT: this record goes when the name travels as an argument of this job's own vector (a
+       NAV_LOAD_ARG_ beside the address), because nothing then re-derives it off the navigable at all. */
+    DCHECK(!w->navigates || w->doc != window_proxy_doc(nav_proxy) || !window_proxy_materialized(nav_proxy),
+           "a NAVIGATION reached §7.5.1's create holding the NAVIGABLE'S OWN document name while that navigable "
+           "has since been MATERIALIZED — the name was taken at the fetch stage because nothing had read through "
+           "this navigable yet, something has, and the Document about to be installed is therefore the SECOND one "
+           "wearing that name. The name is not the navigable's to answer across a suspension: carry it with the "
+           "job as its address already is, decided once where the navigation is");
     if (w->load) {
         CHECK(document_load_finish(w->load) == LXB_STATUS_OK, "a child navigable's Document did not parse");
         w->load = NULL;

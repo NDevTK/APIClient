@@ -153,14 +153,30 @@ void world_doc_realm_set(uint32_t doc, JSContext *realm)
        Holding the LATEST or the FIRST would hand a cross-instance read the wrong arm's realm — the one failure
        the per-flow delta exists to prevent — so this crash is doing protective work and must not be softened.
        The row is a SECOND COPY of a field that already rides the delta, kept where no world can be named.
+       AND THE WORD `FORK` IN THE MESSAGE BELOW IS A NARROWING A MEASUREMENT REFUTED, KEPT IN ITS OWN WORDS
+       BECAUSE A READER WHO RE-DERIVES IT FROM `PER-FLOW` WILL WRITE IT AGAIN. It read `two arms that each read
+       through one srcless navigable each build one`, and the smoke run that fires this abort has NO FORK IN IT:
+       its own census reads 0 fork(s), 1 flow created and an EMPTY fork table beside 313 CPU-seconds and 15.4M
+       source reads, so a reader who greps for a fork finds none and may conclude the crash is spurious — which
+       is what world_mint_doc's own retired message two functions down already cost once. ANY TWO FLOWS SUFFICE:
+       `realm` is a POD field inside the COW-captured bytes rather than a fact about the navigable, so a flow and
+       the LOAD JOB it enqueued read it as NULL independently and no fork relationship is needed.
+       AND THERE IS A SECOND ROUTE WITH NO SECOND MATERIALIZATION IN IT, which this message never named:
+       core/frame/navigable.c's §7.4 step 14 load chooses between MINTING a name and REUSING the navigable's own
+       from exactly that per-flow read, at its FETCH stage, and installs at its CREATE stage a JS_STEP_YIELD or
+       more later — so a navigable materialized in the interval gets a second Document under ONE name and this
+       row is merely where it surfaces. That branch asserts it at its own origin now.
+       RETIREMENT (this correction): it goes with the branch, when the name travels as an argument of that job's
+       own vector instead of being re-derived off the navigable.
        RETIREMENT: this record goes when `world_doc_realm` is answered from the navigable whose PER-FLOW `doc` is
        this one and this row no longer exists. */
     DCHECK(realm == NULL || g_docs[doc - 1].realm == NULL,
            "a SECOND realm was built for one document — a Document has one Window, so these are two of them "
            "wearing one name, and a peer routing on that name cannot tell which one it asked. It is the LAZY "
-           "MATERIALIZATION meeting a FORK: proxy_realm builds the initial about:blank Document's realm through "
-           "the PER-FLOW WindowProxy record (navigable.h), so two arms that each read through one srcless "
-           "navigable each build one. THE FIX IS THIS ROW: it is keyed by DOCUMENT where the binding is "
+           "MATERIALIZATION meeting TWO FLOWS, which need NOT be two arms of a fork: proxy_realm builds the "
+           "initial about:blank Document's realm through the PER-FLOW WindowProxy record (navigable.h), so any "
+           "two flows that each read through one srcless navigable each build one — a flow and the LOAD JOB it "
+           "enqueued are two. THE FIX IS THIS ROW: it is keyed by DOCUMENT where the binding is "
            "(document, WORLD), so no single value in it is right once a fork exists — answer `world_doc_realm` "
            "from the navigable whose PER-FLOW `doc` is this one, and delete the row. The comment above records "
            "the two remedies this message used to name and why neither is available");

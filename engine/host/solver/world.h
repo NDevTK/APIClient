@@ -126,10 +126,13 @@ void world_doc_adopt(uint32_t doc);
  * THAN MERELY NARROW. The two edges do keep it honest against a realm that is GONE, and no pair of edges can
  * make ONE value right while TWO realms are live. A realm is per-flow state: this row is the one part of a
  * navigable's binding that does not ride the COW delta — a SECOND COPY of `ProxyData`'s own `realm`
- * (core/frame/window_proxy.c), kept where no world can be named. Two arms that each read through one srcless
- * navigable each materialize their own Document, which is the per-flow isolation working rather than a caller
- * misbehaving, and `world_doc_realm_set` then aborts because the binding is (document, WORLD) and this key is
- * half of it. What must be built is that resolution, answered from the navigable whose PER-FLOW `doc` is the one
+ * (core/frame/window_proxy.c), kept where no world can be named. ANY TWO FLOWS that each read through one
+ * srcless navigable each materialize their own Document, which is the per-flow isolation working rather than a
+ * caller misbehaving, and `world_doc_realm_set` then aborts because the binding is (document, WORLD) and this
+ * key is half of it. TWO ARMS OF A FORK ARE ONE WAY AND NOT THE ONLY ONE — that crash used to say `two arms`
+ * and the run that fires it reads 0 fork(s), because a flow and the LOAD JOB it enqueued read that per-flow
+ * field as NULL independently; that refutation and the second route are recorded at the crash itself.
+ * What must be built is that resolution, answered from the navigable whose PER-FLOW `doc` is the one
  * asked about; the refutation at `world_doc_realm_set` records the two remedies its crash used to name and why
  * neither of them is available.
  * RETIREMENT: this record goes when these two entries no longer exist.
