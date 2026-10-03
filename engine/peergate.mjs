@@ -892,12 +892,91 @@ async function main() {
     else
       record('nohold', 'pass', 'the peer authority was asked for its two documents and nothing else');
 
+    /* ── WHAT ACTUALLY SPOKE, READ OFF THE INSTANCE TAGS THIS GATE IS ALREADY HOLDING ────────────────
+       TWO ROWS BELOW STATED A CAUSE THIS GATE HAD NOT MEASURED, AND BOTH WERE FALSE ON THE RUN THAT PRODUCED
+       THIS BLOCK. `peers` read "none was provisioned" and each beacon read "the page never reached this
+       line", and the only evidence for either was an ABSENCE — of a report `trusted.mjs` prints in its
+       END-OF-SESSION block, and of a request. An absent measurement and a zero measurement are different
+       facts, which the `result` row three blocks up already refuses to confuse; these two confused them in
+       the direction that costs the most, because "none was provisioned" sends its reader to BUILD
+       provisioning that works.
+       WHAT IS HELD IS ENOUGH TO SAY WHICH, AND NEITHER HALF NEEDS A NEW PRODUCER. `trusted.mjs` echoes every
+       census the moment it arrives — for the reason its own arm argues, that a killed run otherwise leaves
+       nothing — prefixed with that instance's tag `[<document>/s<serial>]`, and the serial is minted in
+       exactly one place, its `provision`, so a tag reading `s3` is three instances provisioned whatever a
+       later report does or does not say. The DOCUMENT half carries the same arithmetic one level down:
+       solver/world.c's `world_mint_doc` names a child `"<parent>.<n>"` off a per-parent counter it
+       increments on every mint and CHECKs never wraps, so a tag naming the seed's FIFTH child is the seed
+       having created five navigables, which is this page having run five of its `window.open` calls —
+       whatever the reads answered and whether or not any of them came back.
+       MEASURED on `run-native-cross-process-peer-transport` at 37a48ea8, by feeding that log back through
+       this extraction with an empty buffer as the control: tags `d1/s1`, `d1.1/s2` and `d1.5/s3`, so THREE
+       instances were provisioned and the seed reached its FIFTH open — while `peers` reported none
+       provisioned and three beacon rows reported a line the page never reached. The two PEER documents are
+       the first and the fifth open and they are the only two whose addresses are LITERAL; the three in
+       between compose theirs out of a cross-instance read's value, and core/frame/navigable.c's window-open
+       steps carry a landed residual saying this engine does not navigate an UNKNOWN destination — so those
+       navigables stay at the initial `about:blank` and no request is ever made. CLAUDE.md states the rule as
+       A WITNESS CARRIES CONSTANTS ONLY, and these four witnesses do not.
+       THAT FIXTURE DEFECT IS NOT REPAIRED HERE, DELIBERATELY. The repair is a branch per arm over LITERAL
+       beacon paths, and a branch over a value that never became concrete FORKS, so BOTH arms run and both
+       beacons arrive — which would make the row fire and mean nothing, the vacuous pass this file refuses
+       everywhere else. It needs a third verdict (both arms arriving IS the transport not having answered)
+       and it is its own landing. What this block does is make the gate say what it MEASURED rather than
+       assert a cause, which has to be true before that question can be asked at all.
+       RETIREMENT: this record goes when the beacons carry CONSTANT addresses and a both-arms arrival is its
+       own verdict, because the absence then has ONE reading and no row has a cause left to state. */
+    const tagged = [...err.matchAll(/^\[trusted\] \[([^\]/]+)\/s([0-9]+)\] /gm)];
+    const spokeFirst = new Map();
+    for (const m of tagged) if (!spokeFirst.has(m[1])) spokeFirst.set(m[1], Number(m[2]));
+    const serialsSeen = tagged.map((m) => Number(m[2]));
+    const highestSerial = serialsSeen.length ? Math.max(...serialsSeen) : 0;
+    /* THE SEED IS THE TAG WHOSE SERIAL IS 1 AND IS NEVER A NAME TYPED HERE: `trusted.mjs` mints the root
+       document's name and this gate does not get to assume which word it chose. */
+    const seedTag = [...spokeFirst].find(([, s]) => s === 1);
+    const seedOf = seedTag ? seedTag[0] : null;
+    /* THE FIRST GENERATION ONLY — a loaded child's own children are `<seed>.<n>.<m>`, and it is the `<n>`
+       that counts the SEED's mints. `Math.max(0, …)` over an empty list is 0, which is "nothing is
+       established" rather than a plausible index. */
+    const seedChildIndex = seedOf === null ? 0 : Math.max(0, ...[...spokeFirst.keys()]
+      .filter((d) => d.startsWith(`${seedOf}.`))
+      .map((d) => Number(d.slice(seedOf.length + 1).split('.')[0]))
+      .filter((n) => Number.isInteger(n) && n > 0));
+    /* WHICH `window.open` OF THE SEED A BEACON IS, DERIVED FROM THE FIXTURE THIS GATE SERVES and never
+       counted by hand: a hand-written ordinal is a second copy of the fixture's own statement order, and
+       that order is the thing the fixture's banner above calls load-bearing. */
+    const seedOpenOrdinal = (prefix) => {
+      const src = seedDoc(port);
+      const marker = src.indexOf(`"/beacon/${prefix}-"`);
+      if (marker < 0) return null;
+      const n = [...src.matchAll(/window\.open\(/g)].filter((m) => m.index < marker).length;
+      return n > 0 ? n : null;
+    };
+
     /* ── THE BEACONS, WHICH ARE THE PAGE'S OWN REPORT OF WHAT THE READS ANSWERED ────────────────────────────── */
     const beacons = seedAsked.map((r) => r.path).filter((p) => p.startsWith('/beacon/'));
     const beacon = (id, prefix, want) => {
       const hits = beacons.filter((p) => p.startsWith(`/beacon/${prefix}-`));
-      if (!hits.length) return record(id, 'missing', `no /beacon/${prefix}-… request was ever made — the read ` +
-                                      'before it never came back, so the page never reached this line');
+      if (!hits.length) {
+        /* AND WHICH OF THE TWO READINGS THE EVIDENCE SUPPORTS, rather than the one this row used to assert.
+           See the tag block above for the arithmetic and for the measurement. */
+        const nth = seedOpenOrdinal(prefix);
+        if (nth !== null && seedChildIndex >= nth)
+          return record(id, 'missing',
+                 `no /beacon/${prefix}-… request was ever made AND THE PAGE DID REACH THE LINE THAT MAKES ` +
+                 `IT: this is the seed's \`window.open\` number ${nth}, and its child document number ` +
+                 `${seedChildIndex} was provisioned — a child name is minted off a counter raised on every ` +
+                 `mint, so at least ${seedChildIndex} of this page's opens ran. The call therefore ran and ` +
+                 'produced no request, which is a finding about the ADDRESS (composed out of a ' +
+                 'cross-instance read\'s value, which this engine will not navigate if it is not concrete) ' +
+                 'and NOT about the read coming back');
+        return record(id, 'missing',
+               `no /beacon/${prefix}-… request was ever made, and nothing held here says which of two: the ` +
+               'page never reached the line, or it reached it and the address never became a concrete ' +
+               `string. This is the seed's \`window.open\` number ${
+                 nth === null ? '(unlocatable in the fixture)' : nth}, and the highest child document of ` +
+               `the seed that spoke is ${seedChildIndex}`);
+      }
       if (hits.includes(`/beacon/${prefix}-${want}`))
         return record(id, 'pass', `/beacon/${prefix}-${want}`);
       return record(id, 'wrong', `saw ${JSON.stringify(hits)}, required /beacon/${prefix}-${want}`);
@@ -922,7 +1001,14 @@ async function main() {
 
     const peerLines = [...err.matchAll(/peer instance \[([^\]]+)\] at (\S+) ended (with code \d+|on \w+)/g)];
     if (!peerLines.length)
-      record('peers', 'missing', 'trusted.mjs reported no peer instance at all — none was provisioned');
+      /* AND THE ABSENCE OF THE REPORT IS NOT THE ABSENCE OF THE INSTANCES. See the tag block above. */
+      record('peers', 'missing', highestSerial
+        ? `trusted.mjs printed no per-instance ending at all, and it provisioned ${highestSerial}: the tags ` +
+          `${JSON.stringify([...spokeFirst.keys()])} spoke on this gate's stderr and the serial they carry ` +
+          'is minted only at `provision`. That report is written in its end-of-session block, so this row ' +
+          'is that block not having been reached and is NOT a statement that nothing was provisioned'
+        : 'no instance tag appeared on this gate\'s stderr at all, so trusted.mjs neither provisioned an ' +
+          'instance nor echoed a census from one — which is a statement about the zone and not about a peer');
     else {
       const bad = peerLines.filter((m) => m[3] !== 'with code 0');
       record('peers', bad.length ? 'wrong' : 'pass',
