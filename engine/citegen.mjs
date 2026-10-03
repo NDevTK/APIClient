@@ -6411,7 +6411,30 @@ function audit(argv, opts = {}) {
        * of either copy alone would have left the other refusing the same titles and left the cluster reading as
        * handled, which is CLAUDE.md's certified-survivor shape. The survivor is therefore computed in THIS loop,
        * which runs over every non-foreign citation before the per-site loop does, and stored on the citation;
-       * the site below READS it. There is no second spelling left to drift. */
+       * the site below READS it. There is no second spelling left to drift.
+       * THE WIDENING IS PRICED IN BOTH DIRECTIONS, because a coverage gain measured only by its finding total
+       * is the number that falls when an instrument stops looking. Two frozen snapshots at ONE revision, this
+       * file installed in place in each, corpus proven byte-identical: `read` HELD at 74029, `resolved` went
+       * 51907 -> 52779 (+872), and the outside-every-check total fell 22122 -> 21250 by exactly that, so the
+       * identity closes to the digit. Quotations COMPARED went 10370 -> 10612 and steps 15574 -> 15795. The
+       * +242 quotations split +179 VERIFIED, +11 CONFIRMED-BY-A-NUMBER, +1 WRONG-SECTION, +0 WRONG-STANDARD,
+       * +51 NOT-FOUND — 190 confirmations against 32 accusations — and the channel this diff CHANGED held at
+       * EXACTLY 185 and added not one.
+       * AND TWO CLAUSES OF THE PREDICTION THAT LICENSED IT WERE WRONG, KEPT HERE BECAUSE A READER RE-DERIVES
+       * THEM. It said `read` would hold BECAUSE this file is outside the audited cone, and this file IS
+       * audited — eighteen of its own citations are read on both sides and two are findings, line-shifted
+       * 4090 -> 4091 and 6686 -> 6719, which are the partial sums of this diff's hunks and whose last is its
+       * net +33. `read` held because the edit's net citation contribution was ZERO, a measurement and not a
+       * property of the cone; a reader trusting the cone claim would relax a check this file needs. It also
+       * said the FILE-VOTE band would shed the whole +872, and the fall is split — vote 7679 -> 7294 and
+       * names-no-standard-and-no-term 12092 -> 11605, the SECOND larger, because a citation whose only
+       * evidence was a shared title had no term claim for a vote to reach.
+       * WHAT WAS NOT DONE IS THE SITE-BY-SITE READ OF ALL 33 NEW FINDINGS, and the reason is in this tool's
+       * own output: the detail rows are a HEAD IN FILE ORDER with 1200 and 1764 more NOT PRINTED, so a content
+       * diff of the printed rows answers 18 new and 14 GONE while nothing was retired — the 14 were pushed out
+       * of the head by the rows above them, which is a floor read as a total. RETIREMENT: these three records
+       * go when this report prints its finding rows keyed by site rather than as a file-order head, because a
+       * before/after is then diffable by content and the channel split stops being the only readable price. */
       c.titlePlacedEv = (() => {
         const kept = c.titleEv.filter((ev) => titlePlaces(ev, c.no));
         return kept.length === 1 ? kept[0] : null;
