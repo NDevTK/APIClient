@@ -503,7 +503,49 @@ const COLD_STEP_UNITS = ["stepNamedRenderingLife", "stepNamedRenderingTypeofLife
    the names above stay SPELLED for a measured reason, recorded at `requireWhole`: a list replaced by a call
    that returns the composer's rows is a list no static reader can see, and the record-field audit's
    WRITE-with-no-reader accusation over this composer then rises from four rows to nine. */
-const COLD_WHOLE = ["rungEntry"];
+/* AND THE TWO EDGE COMPOSERS ARE TAKEN WHOLE TOO AND WERE NOT DECLARED, WHICH IS THE STATE `rungEntry` WAS IN
+   AT 56206ade AND WHICH NOTHING COULD HAVE TOLD FROM A CURATION. A subset is not a defect and `requireWhole`
+   says so in as many words — this driver carries 58 of `cold`'s 142 rows BY DESIGN. What is a defect is a
+   subset nobody declared, and a COMPLETE list nobody declared is that defect waiting for the emitter to grow:
+   the day either edge publishes a row this list does not carry, a driver that never declared the composer
+   whole prints a smaller population and nothing anywhere says so, which is the silent direction of
+   CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS and reads as progress.
+   THE WARRANT IS THE PRODUCER'S AND IS NOT THIS DRIVER'S OPINION OF ITS OWN COMPLETENESS, which is the only
+   ground on which a whole declaration may be made: solver/endpoint.h states, for each edge, identities over
+   its own rows that solver/endpoint.c asserts at the accessor where every term is in one hand. For the fetch
+   edge, "THE THREE IDENTITIES" — a PARTITION (the stage arms plus the freed-and-offered row equal the freed
+   row), freed-and-offered <= offered, and offered <= the ask total. For the XHR edge, the same partition over
+   its placed row plus the one containment, with endpoint.h stating why the second containment is NOT
+   assertable there — a step state is byte-copied at a deep fork and `XHR_SEND_DECL` declares no guard, so two
+   copies would file against one placement. A row inside an identity is a row whose omission makes its
+   siblings unreadable rather than merely absent, and the stage histograms are the arms of one outcome that
+   SUM to the freed row: carrying a partition in part publishes arms that no longer add up.
+   AND THE `…NamedTypeofLife` HALF CARRIES NO IDENTITY AND IS STILL NOT A ROW THIS LIST MAY DROP, which is
+   stated because it is the one pair a reader would check and find unasserted. endpoint.h says those are the
+   only ask rows in that file with no relation over them in either direction — a program is recompiled by every
+   flow that replays it, so the row counts COMPILER RESOLUTIONS — and the split exists so that a bundle which
+   merely PROBES for a name is not merged into the population read as uses. The pair IS the discriminator, so
+   either half alone re-merges exactly what the split was built to separate.
+   MEASURED, AND THE DECLARATION IS GREEN THE DAY IT LANDS, which is what makes it a forcing function rather
+   than a red gate: the derivation is `testing/census_rows.js`'s own `composerRowsFromText` over each
+   composer's emission, and reconciled against this driver's `COLD_ROWS` it answers 8 of 8 for `fetchEdge` and
+   9 of 9 for `xhrEdge`, carried, with nothing published-and-missing in either direction. The controls were
+   run and SPOKE, because a check that has never refused anything is not a check: `cold` and `wfq` declared
+   whole each throw with the rows they publish and this driver curates away, a composer name that does not
+   exist throws, and dropping ONE published row of either edge throws NAMING THAT ROW.
+   WHAT THIS IS NOT, AND THE ALTERNATIVE IS REFUTED BY MEASUREMENT RATHER THAN BY PREFERENCE: it is not a
+   DERIVATION of the row lists above. Replacing a spelled list with a call returning the composer's rows reads
+   as the stronger fix and `requireWhole`'s own record measures it in both arms at 56206ade — the names then
+   appear in no construct anywhere, `engine/fieldgate.mjs`'s holder band has nothing left to see, and that
+   file's WRITE-with-no-reader accusation over one composer rises from four rows to nine. The names stay
+   SPELLED and the completeness becomes an ASSERT, which is CLAUDE.md
+   §AND-THE-COROLLARY-IS-THE-MORE-USEFUL-HALF: one added total covers every future spelling of the question
+   where a rewritten reader covers only the one somebody happened to find.
+   RETIREMENT: this note goes when a composer declares its own rows ONE READING at the emitter — a machine-read
+   line beside `@kinds-of` saying which of its rows no consumer may take in part — because the three keys below
+   are then derived from the producers that know, and which composer is whole stops being a fact a consumer
+   states about itself. */
+const COLD_WHOLE = ["rungEntry", "fetchEdge", "xhrEdge"];
 /* …AND THE REPLY DOOR'S ONE LEVEL, FILED WITH THE GAUGES AND NOT WITH ITS OWN THREE SIBLINGS, which is the
    whole reason this driver splits the two lists: `replyOutstanding` is the count of records the host may still
    be shown AT THE INSTANT the census was composed, so it may FALL and differencing it reads a level as a rate.
