@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { stampArtifact, gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
 import { probeTables } from "./probe_rows.mjs";
 import { lexborSourceId, lexborNativeArchive } from "./lexbor_source.mjs";
+import { objStore, toolIdentity } from "./obj_store.mjs";
 import { childCpuSeconds, childCpuDelta, cpuText } from "./gate_cpu.mjs";
 
 /* THE INSTANT A SOURCE-DERIVED FACT IS TAKEN AT, AND WHY IT IS THE REVISION'S AND NOT THE READER'S.
@@ -6332,7 +6333,10 @@ const EMCC = join(EMSDK, "upstream", "emscripten", process.platform === "win32" 
        -fsyntax-only` — the check CLAUDE.md §Testing requires of every change. A lane on a box with clang and no
        emsdk could not compute its own include roots, so the one verification a non-building lane owes was
        gated behind the toolchain for a host it was not touching.
-     * the NATIVE target, which links `lexbor-native` with clang and never spawns EMCC at all. CLAUDE.md calls
+     * the NATIVE target, which links the native lexbor archive with clang and never spawns EMCC at all. (THAT
+       CLAUSE NAMED `lexbor-native`, the per-snapshot directory that archive was a FIXED NAME in; it is
+       content-named in the shared object store now, and the argument here was never about where it sits.)
+       CLAUDE.md calls
        that host the engine's home — "real threads, a real CPU clock, a real `fork()` and a real sanitizer" —
        and the wasm host "ONE host among several"; requiring the one to build the other inverts that exactly,
        and it is also the host that carries ASan, which §Architecture prescribes BY NAME for memory crashes and
@@ -6731,8 +6735,15 @@ console.log("[rev] the source-derived field contracts were taken at that revisio
    it holds by construction rather than by a check. `unroot` removes ROOT and EMSDK; a snapshot IS a tree and
    ROOT is its top, so every path that differs between two snapshots is ROOT-prefixed and goes. Read for both
    toolchains: emcc's four `-I` roots and its `-ffile-prefix-map` are ROOT-relative, the native dialect's four
-   are the same four, and neither list holds another absolute path; `toolchain()` drops the one line of a version
-   string that carries one. NO NON-VACUOUS ASSERT IS AVAILABLE HERE AND THAT IS WORTH SAYING RATHER THAN WRITING
+   are the same four, and neither list holds another absolute path; the shared identity in `engine/obj_store.mjs`
+   drops the one line of a version string that carries one — THAT CLAUSE READ ``toolchain()` drops'' until the
+   identity moved there, and the drop is the same drop at a different address, which is the kind of detail a
+   reader checks by opening the file the sentence names.
+   AND THE STORE NOW HOLDS A THIRD KIND OF NAME WHOSE ARGUMENT IS NOT THIS PARAGRAPH'S: the native lexbor
+   archive, `liblexbor_static-<id>.a`, which `engine/lexbor_source.mjs` names and whose id collapses NOTHING —
+   it holds no path this tree owns, so there is nothing for an `unroot` to remove and collapsing a prefix two
+   checkouts do not share would be the false hit this whole scheme may not have. The argument is at that file,
+   beside the name it is about. NO NON-VACUOUS ASSERT IS AVAILABLE HERE AND THAT IS WORTH SAYING RATHER THAN WRITING
    A VACUOUS ONE: "the unrooted text holds no ROOT" is true of `unroot`'s own output by definition, and the wider
    predicate — "holds no absolute path" — would FIRE ON A CORRECT FLAG, because an out-of-tree toolchain header
    is one file for every checkout on this machine and the paragraph above keeps its absolute path deliberately.
@@ -6785,13 +6796,21 @@ console.log("[rev] the source-derived field contracts were taken at that revisio
    HOW ITS ABSENCE WOULD SHOW: a `@WHY` from a native binary names a `file` whose directory prefix is a snapshot
    path OTHER than the one the run's own `act` line names. The observation is the comparison of those two
    strings; it needs no knowledge of which assertion fired, and it is available in any log that holds both. */
-const OBJ_STORE_ENV = process.env.APICLIENT_OBJ_STORE || "";
-const OBJDIR = OBJ_STORE_ENV ? resolve(OBJ_STORE_ENV) : join(WORK, "obj");
-mkdirSync(OBJDIR, { recursive: true });
+/* THE RESOLUTION IS `engine/obj_store.mjs`'s AND NOT THIS FILE'S, and the move is what closed the native
+   lexbor archive's refusal rather than anything about cmake. `engine/wpt.mjs` is the second consumer of a
+   cached archive and could reach NEITHER this variable nor `toolchain()`'s identity, so that archive stayed a
+   fixed name plus a sidecar in a per-snapshot directory and every frozen build paid its cmake+make — for want
+   of a place to put two helpers. A copy of them beside it would have been the shape `lexbor_source.mjs`'s own
+   header forbids: two programs deciding independently what a cached artifact was built from.
+   THE CALLER IS TOLD WHICH STORE IT GOT rather than re-reading the environment, because a second read of one
+   variable is a second answer to one question — and here the two answers would be the banner and the
+   behaviour. */
+const OBJ_STORE = objStore(ENGINE);
+const OBJDIR = OBJ_STORE.dir;
 console.log("[build] objects  " + OBJDIR +
-            (OBJ_STORE_ENV ? "  (APICLIENT_OBJ_STORE — shared; a name is a fact about an input set, so a hit " +
-                             "is this revision's object and a miss is a compile)"
-                           : "  (this tree's own)"));
+            (OBJ_STORE.shared ? "  (APICLIENT_OBJ_STORE — shared; a name is a fact about an input set, so a " +
+                                "hit is this revision's object and a miss is a compile)"
+                              : "  (this tree's own)"));
 /* THE FLAGS ARE PART OF THE OBJECT'S NAME, NOT A THING THE CACHE COMPARES. The comment above says a cache
    that misses a header edit reports a stale binary as a fresh one; this cache once missed a FLAG edit, which is
    the same defect with a wider blast radius. `CFLAGS` carries `-DAPICLIENT_DEV=0` under `release` and `=1`
@@ -6843,20 +6862,23 @@ const unroot = (s) => s.split(EMSDK).join("<emsdk>").split(ROOT).join("<root>");
    ABOUT THE EMITTED BYTES, so it is deliberately OUT of `flagId`: it is chosen from the tool, the tool's own
    version string is already hashed, and putting it in would move every existing emcc object name and take a
    warm cache cold for a parameter that cannot distinguish two objects. */
+/* AND THE IDENTITY HALF OF THIS IS `engine/obj_store.mjs`'s NOW, WHICH LEAVES THE INVOCATION HALF HERE. The
+   split is not a tidy-up: the version spawn, the `InstalledDir` drop, the refusal and the hash are the answer
+   to "what is this tool", and the SECOND consumer of a cached archive in this tree needed exactly that answer
+   and could not reach it. `cc`, `cwd` and `shell` are how THIS file spawns a compile and nobody else's
+   business, so they stay.
+   IT CHANGES NO OBJECT NAME, WHICH IS THE ACCEPTANCE TEST THE BANNER ABOVE STATES FOR ITSELF: the moved body
+   hashes the same two strings, through the same `unroot`, in the same order, to the same 12 hex characters, so
+   `emcc: N sources, 0 to compile (rest cached)` on the first build after this is the test and a full recompile
+   is a defect in it rather than a cost of it.
+   `unroot` IS PASSED RATHER THAN MOVED, because WHICH absolute prefixes may be collapsed is a claim about what
+   two checkouts SHARE at that prefix and only a caller knows: emsdk is one symlinked directory in every frozen
+   snapshot, so collapsing it is what makes two snapshots share, and collapsing a prefix they do NOT share
+   would be a false hit. Moving it would also have moved `ROOT` and `EMSDK` out of this file, which is one
+   layout fact each and is not improved by living somewhere a second file has to import it from. */
 function toolchain(name, cc, versionArgv, versionOk, cflags, cwd, shell) {
-  const v = spawnSync(cc, versionArgv, { encoding: "utf8" });
-  const text = unroot(((v.stdout || "") + (v.stderr || "")).split("\n")
-                        .filter((l) => !l.startsWith("InstalledDir")).join("\n"));
-  if (!versionOk.test(text)) {
-    console.error("[build] `" + name + " " + versionArgv.join(" ") + "` did not report a version (rc=" +
-                  v.status + ")\n" +
-                  "[build]   an object may not be named for a toolchain this cannot identify — a name that\n" +
-                  "[build]   does not change when the compiler does is how a stale object is reported fresh.");
-    process.exit(1);
-  }
   return { name, cc, cflags, cwd, shell,
-           flagId: createHash("sha256").update(text + "\0" + unroot(cflags.join("\0")))
-                                       .digest("hex").slice(0, 12) };
+           flagId: toolIdentity(name, cc, versionArgv, versionOk, cflags, unroot) };
 }
 
 /* ONE READ PER FILE PER BUILD, NOT PER TRANSLATION UNIT — check.h is in nearly every dependency list and is
@@ -7159,12 +7181,18 @@ async function compileAll(tc, sources) {
    all, and the one line in it that needs emsdk stays at the emcc link. The method, not the clause, is the
    finding: a next-diff clause that names a MOVE should say which of the two things moves and why that one.
    NAMED RESIDUAL - ONE CALL IN HERE CAN STILL END THE PROCESS, AND IT IS NOW IN THE DEFAULT BUILD'S PATH.
-   WHAT IS NOT COVERED: `lexborNativeArchive` exits(1) when cmake or make cannot be run and the cached archive
-   does not match this tree's lexbor source. The clang spawn does NOT - a missing compiler answers `status:
-   null` and becomes the DEFECT stage above - so the exposure is exactly the cold-archive case, and it is a
-   door in front of every stage this function is called before. It is left standing rather than guarded by a
-   presence check here, because a check here would be a SECOND copy of what that archive's recipe requires and
-   this project has already paid for one of those in the same file.
+   WHAT IS NOT COVERED: `lexborNativeArchive` exits(1) when cmake or make cannot be run. The clang spawn does
+   NOT - a missing compiler answers `status: null` and becomes the DEFECT stage above - so this is a door in
+   front of every stage this function is called before. It is left standing rather than guarded by a presence
+   check here, because a check here would be a SECOND copy of what that archive's recipe requires and this
+   project has already paid for one of those in the same file.
+   THE COST CLAUSE READ `and the cached archive does not match this tree's lexbor source ... so the exposure is
+   exactly the cold-archive case`, AND IT IS KEPT BECAUSE A READER WILL RE-DERIVE IT FROM THE WORD `cached`.
+   It was exact while that archive was a fixed name beside a sidecar, where a matching stamp returned before
+   any spawn. It is content-named in the shared object store now and the CONFIGURE runs on EVERY call, because
+   nothing else can say which compiler cmake picked and therefore what the archive is named - so a box without
+   cmake meets this door on every build and not only on a cold one. The obligation did not change; its
+   population went from a corner to all of them, which makes building it worth more rather than less.
    WHAT THE NEXT DIFF BUILDS: `lexborNativeArchive` returns a failure its callers report instead of exiting -
    which is a change to engine/lexbor_source.mjs and reaches engine/wpt.mjs too, so it is that file's diff and
    not this one's.
@@ -7678,7 +7706,9 @@ if (NATIVE) {
 /* THE WASM LEXBOR, AND IT SITS BELOW `native` FOR THE REASON THE HEADER TWO SCREENS UP ALREADY GIVES.
    That header records this same call being moved below `--list-sources` and `--list-include-roots` because "a
    mode whose whole contract is 'answer and exit' had a compiler under it". `native` is the third such mode and
-   was missed: it links LEXBOR_NATIVE out of WORK/lexbor-native, names no emscripten anything, and ends in a
+   was missed: it links LEXBOR_NATIVE out of the shared object store — `WORK/lexbor-native` until that archive
+   was content-named, which is a change of address and not of this argument — names no emscripten anything,
+   and ends in a
    `report()` that always exits — so it never reached the emcc link below and never wanted this archive. It
    still could not START without emsdk, because this line built lexbor TO WASM before the branch was tested.
    The symptom was the one that rule predicts: `node engine/build.mjs native cold`, on a machine with a native

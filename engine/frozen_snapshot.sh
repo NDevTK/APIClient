@@ -526,41 +526,60 @@ rm -rf "$DIR/engine/.work/emsdk" "$DIR/engine/.work/wpt"
 # objects through one would touch NOTHING this script's LRU key can see — degrading the mechanism this file
 # argues for at length, for a directory that is not the snapshot's cost anyway.
 #
-# ONE OF THE TWO LEXBOR ARCHIVES IS SHARED NOW AND ONE IS NOT, AND THE REFUSAL IS KEPT BECAUSE ITS ARGUMENT IS
-# WHAT A READER RE-DERIVES. It read: the two archives are each a FIXED FILENAME plus a SIDECAR ID, written IN
-# PLACE, so "neither property the store rests on is present: the name carries no identity, so two revisions want
-# the same path, and the publish is not atomic, so a second snapshot recompiling the archive overwrites bytes a
-# first may be linking". Every clause of that was CONDITIONAL ON SHARING and is still exactly right about what
-# sharing a fixed name would do — it was never a description of the state as it stood, because `engine/.work` is
-# INSIDE the snapshot, so the archives were per-snapshot and nothing could collide. MEASURED: eleven snapshots at
+# BOTH LEXBOR ARCHIVES ARE IN THE STORE NOW, AND THE REFUSAL IS KEPT BECAUSE ITS ARGUMENT IS WHAT A READER
+# RE-DERIVES. It read: the two archives are each a FIXED FILENAME plus a SIDECAR ID, written IN PLACE, so
+# "neither property the store rests on is present: the name carries no identity, so two revisions want the same
+# path, and the publish is not atomic, so a second snapshot recompiling the archive overwrites bytes a first may
+# be linking". Every clause of that was CONDITIONAL ON SHARING and is still exactly right about what sharing a
+# fixed name would do — it was never a description of the state as it stood, because `engine/.work` is INSIDE
+# the snapshot, so the archives were per-snapshot and nothing could collide. MEASURED: eleven snapshots at
 # eleven revisions each held their own copy of BOTH, and the eleven copies of each were BYTE-IDENTICAL (emcc md5
 # 6e20c6c6213074115009a1a16e013b9d, native md5 087d988c845cedde8986261ebf8946d2) — eleven 213-source compiles and
 # eleven cmake+makes for two artifacts. That is the cost, and it is what the content name removes.
-# THE EMCC HALF IS IN THE STORE: `engine/build.mjs`'s `buildLexbor` names it `liblexbor-<id>.o` under
-# `H(this emcc's own version text, its flag set, the lexbor source bytes)` and publishes it by `rename` from a
-# pid-named temporary, so it shares under the identical argument as every object beside it and `liblexbor.srcid`
-# is gone — the name carries what the stamp was for. The SOURCE ID ALONE WOULD NOT HAVE DONE, which is the half
-# the old residual's `liblexbor-<srcid>.o` spelling got wrong: emsdk upgrades IN PLACE, so a source-only name
-# lets an archive one compiler emitted answer for another, which is a FALSE HIT rather than a miss.
-# AND THE COST OF STILL REFUSING THE NATIVE HALF IS STATED RATHER THAN HIDDEN, in the figures a cold frozen build
-# prints for itself: `building lexbor natively (once, cmake + make)` for the archive that is not shared, against
-# the 458 in `TO_COMPILE` that ARE in the store and the emcc archive that now is.
-# RESIDUAL — THE NATIVE LEXBOR ARCHIVE IS STILL A FIXED NAME AND A SIDECAR IN A PER-SNAPSHOT DIRECTORY.
-# WHAT IS NOT COVERED: `engine/lexbor_source.mjs`'s `liblexbor_static.a`, with `liblexbor_static.srcid` beside it,
-# under `engine/.work/lexbor-native`. It is reached by TWO consumers (`engine/build.mjs`'s native target and
-# `engine/wpt.mjs`), so it is that file's diff and not this one's, and every freeze pays its cmake+make.
-# WHAT THE NEXT DIFF BUILDS, and the blocker is WHERE THE IDENTITY HELPERS LIVE rather than anything about cmake:
-# `toolchain()`, `unroot` and the `APICLIENT_OBJ_STORE` resolution are all `engine/build.mjs`'s, while that
-# archive is built in `engine/lexbor_source.mjs` — and a second copy of them there is precisely what that file's
-# own header forbids ("a second copy of it is the same shape as the defect it removes"). So the diff is to lift
-# those three out into a module both importers read, then name the archive `liblexbor_static-<id>.a` in the store
-# under `H(the compiler CMAKE ITSELF PICKS, asked for its version, the cmake flags, lexborSourceId)` and publish
-# it by `rename` from a pid-named temporary inside the store. The compiler is the extra parameter the emcc half
-# did not need: cmake chooses `cc`, which is not necessarily the `clang` that `NATIVE_TC` names.
-# HOW ITS ABSENCE WOULD SHOW: a freeze at a revision whose `engine/lexbor/source` did not move reports its emcc
-# lexbor line as a store hit and `0 to compile (rest cached)` on both toolchains, and STILL prints
-# `building lexbor natively (once, cmake + make)` — one build's two halves disagreeing about whether the same
-# source tree changed. The observation is that pair of lines in one log; it names no revision and no file.
+# EACH IS NAMED `H(what compiled it, with which flags, over which bytes)` AND PUBLISHED BY `rename` FROM A
+# TEMPORARY INSIDE THE STORE, so presence IS the statement a sidecar was making, two revisions cannot want one
+# path, and neither sidecar survives. THE SOURCE ID ALONE WOULD NOT HAVE DONE for either, which is the half the
+# old residual's `liblexbor-<srcid>.o` spelling got wrong: emsdk upgrades IN PLACE, so a source-only name lets
+# an archive one compiler emitted answer for another, which is a FALSE HIT rather than a miss.
+#
+# RESIDUAL — RETIRED, AND ITS DESIGN HALF IS KEPT IN ITS OWN WORDS BECAUSE IT WAS WRONG IN A WAY A READER WILL
+# RE-DERIVE. It said the blocker was WHERE THE IDENTITY HELPERS LIVE rather than anything about cmake —
+# "`toolchain()`, `unroot` and the `APICLIENT_OBJ_STORE` resolution are all `engine/build.mjs`'s, while that
+# archive is built in `engine/lexbor_source.mjs`" — so the diff was "to lift those three out into a module both
+# importers read, then name the archive `liblexbor_static-<id>.a` in the store under `H(the compiler CMAKE
+# ITSELF PICKS, asked for its version, the cmake flags, lexborSourceId)` and publish it by `rename` from a
+# pid-named temporary inside the store. The compiler is the extra parameter the emcc half did not need: cmake
+# chooses `cc`, which is not necessarily the `clang` that `NATIVE_TC` names."
+# THE KEY WAS RIGHT, THE NAME WAS RIGHT, THE PUBLISH WAS RIGHT, AND `CMAKE CHOOSES cc` IS THE DEFECT IT WARNS
+# ABOUT ONE LEVEL UP: it names the compiler by a RULE, and cmake resolves its own from `CMAKE_C_COMPILER`, then
+# `$CC`, then a platform candidate list — so a re-derivation of that order is a SECOND COPY of a rule this tree
+# cannot be right about, and being wrong about it is exactly the FALSE HIT the sentence above forbids. MEASURED
+# on this box: `cc` is `/usr/bin/cc` -> `x86_64-linux-gnu-gcc-13`, whose `--version` first line carries no
+# `version` token at all, so even `clang`'s own acceptance regex would have REFUSED the compiler cmake picks.
+# `engine/lexbor_source.mjs` CONFIGURES AND THEN READS `CMAKE_C_COMPILER` OUT OF `CMakeCache.txt`, which is
+# cmake's own answer about what it picked rather than anybody's model of how it picks.
+# AND TWO OF THE THREE WERE NOT LIFTED, WHICH IS WHAT READING THE CALLERS SETTLED. The store resolution moved
+# whole, because `engine/wpt.mjs` is the second consumer and could reach no copy of it. `toolchain()` SPLIT
+# instead: its version spawn, its `InstalledDir` drop, its refusal and its hash are what a second consumer
+# needed, while `cc`, `cwd` and `shell` are how `build.mjs` spawns a compile and are nobody else's business —
+# and `unroot` is PASSED rather than moved, because WHICH absolute prefixes may be collapsed is a claim about
+# what two checkouts SHARE at that prefix and only a caller knows. Lifting it would have moved `ROOT` and
+# `EMSDK` out of `build.mjs` for the benefit of a caller that collapses NOTHING.
+#
+# THE ONE COLD COST A FROZEN SNAPSHOT STILL PAYS FOR LEXBOR IS A CMAKE CONFIGURE, AND IT IS BOUGHT RATHER THAN
+# LEFT OVER — a DECISION and not a residual, because no next diff closes it soundly and a residual that cannot
+# name one is prose. A configure's output records WHERE the source was and cmake refuses to reconfigure across a
+# move, so it cannot be shared by name; and it is the only thing that can say which compiler this make would
+# use. The two alternatives were weighed against the one failure this scheme may not have: PREDICTING cmake's
+# choice is the second copy above, and REUSING a previous configure is sound for its directory and not for its
+# content, since cmake re-runs itself when `CMakeLists.txt` changes and not when a glob's membership does — so a
+# reused build directory can emit an archive missing a translation unit and publish it under a name that claims
+# this source. ITS COST IS PRINTED RATHER THAN ARGUED ABOUT HERE: `lexborNativeArchive` reports the configure's
+# elapsed milliseconds beside the hit, so the price is read off every log that holds one, at today's cmake on
+# today's box, by anyone — which is what a number in a comment can never be.
+# RETIREMENT: this record goes when the store itself can be asked what named each artifact in it — a row per
+# published name carrying the terms of its key — because a reader then reads a key off the store rather than
+# off this paragraph, and the emcc and native halves stop being two accounts a person has to hold at once.
 #
 # A PRIVATE EMPTY DIRECTORY IS STILL MADE AND THIS LINE STILL DELETES ONE, because a build run in a snapshot
 # WITHOUT `APICLIENT_OBJ_STORE` set falls back to it — and those objects are that snapshot's own at that SHA,
