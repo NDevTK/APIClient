@@ -587,19 +587,35 @@ const COLD_WHOLE = ["rungEntry", "fetchEdge", "xhrEdge"];
    instant the census was composed, so a fork copies its parent's state into the count and a sold member takes
    it out. READ THEM WITH `stepUnitRuns.finished`, NEVER ALONE — a census taken when `live` is 0 reports 0
    whatever every member did before it left, which is the same 0 a frontier that never forked reports.
-   NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: the three-arm PARTITION under the total and the
-   ladder-arm histogram beside it, which say WHICH of three things holds an out-of-programs member — never
-   dispatched, framed, or standing at the ladder — and are what separate "the pick has not returned to it"
-   from "a rung above the orphan seed takes it every round". WHAT THE NEXT DIFF BUILDS: the
-   prefix-and-numeric derivation `testing/corpus/site.mjs` already performs, with cold.c's own
-   `unrun + framed + atTheLadder == outOfPrograms` checked from this driver's own output — that identity is a
-   DCHECK, so it is compiled out of a release artifact and a driver is the only place it can be checked on
-   one. It is NOT a hand-typed list here, for that file's stated reason: a fourth arm added to cold.c's
-   if/else chain must be carried the day it lands. HOW ITS ABSENCE WOULD SHOW: a run whose total is nonzero
-   and whose orphan asks are 0, with nothing on the line saying which of the three states those members are
-   standing in. */
+   THE THREE-ARM PARTITION UNDER THE TOTAL IS DERIVED IN `census` AND IS NOT ON THIS LIST, which is where a
+   reader will look for it. It says WHICH of three things holds an out-of-programs member — never dispatched,
+   framed, or standing at the ladder — and separates "the pick has not returned to it" from "a rung above the
+   orphan seed takes it every round"; it is taken by PREFIX off the composer's own object so that a fourth arm
+   added to cold.c's if/else chain is carried the day it lands, which a hand-typed list here would not be.
+   `outOfProgramsAtTheLadderUnits` IS A NAMED ROW AND SITS ON THE LIST, because it is an OBJECT: the numeric
+   prefix derivation excludes it by construction, exactly as `testing/corpus/site.mjs` excludes it, and a row
+   excluded from a derivation is a row that has to be named somewhere or it is carried by nobody.
+   AND THE DISTANCE `finished` IS A DISTANCE TO, WHICH NOTHING PUBLISHED IS DERIVABLE INTO AND WHICH NEITHER
+   REAL-SITE DRIVER HAS EVER CARRIED. solver/cold.h states it in those words: a member retires through the
+   terminal arm of flow_step's ladder, the whole ladder sits below the block that starts the next row, so the
+   precondition for ANY of it is `script_i == dyn_n` — which is this histogram's BUCKET 0 and is
+   `outOfPrograms` above. Every other row on this line answers about `script_i` ALONE: `programCursors` is its
+   distribution and `deepest`/`deepestLeft`/`completed` are global maxima over it, while `dyn_n` is PER-FLOW
+   and appears in none of them, so two frontiers standing at ONE cursor with one row left and with forty rows
+   left render as the same bytes everywhere else here. That is the pair CLAUDE.md
+   §A-FIXTURE-BUILT-TO-EXERCISE-EVERY-MECHANISM is about: `engine/build.mjs` reads this row and asserts its
+   bucket 0 against the total, so the discriminator existed and was read only on a document whose program
+   depth its own author chose.
+   MEASURED, WHICH IS WHY IT IS HERE AND NOT ARGUED. One 540-second fresh-browser drive of gitlab.com/explore
+   read `finished` 0 LIFETIME with `outOfPrograms` 0 and `programCursors` massing 18348 of 18495 members at
+   cursor 7 of `rootPrograms` 38 — so no member was at the ladder, every member had rows left, and whether the
+   frontier was ONE row from its first retirement or THIRTY-ONE was unstatable from the whole census line.
+   A PARTITION AND A GAUGE, like the two rows it is filed with: every live member stands at exactly one
+   distance, so the buckets sum to `live`, and the set is DENSE over [0, the greatest distance any standing
+   member is at] because the ZEROES are the signal. It is never `{}` — cold.c gives an empty frontier distance
+   0 — and an artifact older than the row prints `null`, which is this driver's absent-versus-zero rule. */
 const COLD_FRONTIER = ["stepUnits", "programCursors", "replyOutstanding", "rowsAwaitingBytes",
-                       "live", "outOfPrograms"];
+                       "live", "outOfPrograms", "outOfProgramsAtTheLadderUnits", "programsAhead"];
 /* …AND THE CONSTANT IT IS READ AGAINST, WHICH IS NEITHER OF THE TWO KINDS EVERY OTHER LIST HERE STATES.
    solver/engine.c writes both arms at the ONE line `rootPrograms` is written and never again, because the pair
    is a DENOMINATOR — a fact about what the DOCUMENT owed the reply door when its rows were laid down — so it
@@ -834,6 +850,29 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      engine. An artifact older than this row prints `-`, which is this driver's absent-versus-zero rule and is
      the honest answer: the run did not state it. */
   "unframedStepsLifetime",
+  /* …AND HOW FAR DOWN THAT LADDER THE DESCENTS GOT, WHICH IS THE ROW THAT MAKES `finished` 0 READABLE AND
+     WHICH THIS DRIVER CARRIED NEITHER OF THE THREE OF. solver/result.c states the reading in its own words:
+     `finished` at 0 with `stepReachedRenderingLife` at 0 says the retirement arm was never ASKED and the cause
+     is UPSTREAM of this boundary, and the same 0 with it LARGE says the boundary WAS reached and one of the ten
+     arms ABOVE `finished` took every descent — it is the LAST of the eleven — which `stepUnitRuns` then names.
+     Those are different files to open, and they were ONE string in the hung-cause verdict engine/build.mjs
+     composes until these rows existed.
+     THEY ARE SUFFIX SUMS AND `stepUnitRuns` IS A PARTITION, WHICH IS THE WHOLE REASON A READER NEEDS THEM.
+     The three clock rungs are consecutive arms of one `else if` chain, so the first counts every descent that
+     reached the chain, the next those the rendering rung did not take, the next those the timer rung did not
+     take either — so "the lowest 0 is the localisation" is FALSE of that histogram read row by row and TRUE of
+     these. An arm of `stepUnitRuns` reading 0 says THAT ARM NEVER TOOK A DISPATCH and never says it was not
+     reached, which is the §AN-INVARIANT-OVER-A-GATED-OPERATION shape: those three arms are raised only where
+     the hook TAKES the step, and these are the ASK.
+     NO SUM IS CARRIED BESIDE THEM AND THAT IS THE PRODUCER'S DECISION, NOT AN OMISSION HERE — result.c states
+     that every operand of all four identities is already on its line and that a second spelling of one number
+     in one document is the drift the record-field gate exists to catch. They are contained in
+     `unframedStepsLifetime` above, which is why they are filed with it.
+     LIFETIME COUNTS, PER INSTANCE, RELEASED BY NOTHING — the `Life` in each key is the kind, so they may be
+     differenced and accumulated and a sample below its predecessor is the engine and not the run. An artifact
+     older than them prints `-`, which is this driver's absent-versus-zero rule and is the honest answer: the
+     run did not state them. */
+  "stepReachedRenderingLife", "stepReachedTimerLife", "stepReachedIdleLife",
   /* AND WHETHER THE COMPILE IS REPEATED, WHICH `classicCompiles` ALONE CANNOT SAY AND WAS BEING READ AS
      SAYING. solver/engine.h used to have a reader difference it against the programs a document reached and
      call a figure far above that count a compile repeated per flow; the numerator counts every FLOW, every
@@ -1192,6 +1231,54 @@ function census(r) {
   o.forkAt = ("forkAt" in r) ? r.forkAt : null;
   const c = ("cold" in r) ? r.cold : null;
   for (const k of COLD_ROWS) o[k] = c && (k in c) ? c[k] : null;
+  /* AND THE OUT-OF-PROGRAMS PARTITION, TAKEN BY PREFIX OFF THE COMPOSER'S OWN OBJECT RATHER THAN FROM A LIST
+     HERE — the rows beneath `outOfPrograms` are whatever NUMERIC keys result.c spells with that prefix, so a
+     fourth arm added to cold.c's if/else chain is carried by this driver the day it lands. The OBJECT row
+     beside them (`outOfProgramsAtTheLadderUnits`) is on COLD_FRONTIER and the numeric test excludes it, which
+     is the same split `testing/corpus/site.mjs` makes and the same one engine/build.mjs makes by reading the
+     CONVERSION in the format string rather than an exclusion list.
+     AND THE SUM IS THE CONTRACT, WHICH IS WHY IT SUPPRESSES THE ROWS RATHER THAN BEING PRINTED BESIDE THEM.
+     cold.c DCHECKs `unrun + framed + atTheLadder == outOfPrograms` where the whole population is in one hand,
+     and a DCHECK is compiled out of the RELEASE artifact this driver drives — so this is the only place that
+     identity is checked on the program a live drive actually measures. A disagreement means an arm was added
+     without a row and the breakdown is "a SELECTION being read as a partition" in cold.c's own words, which
+     makes every part under the total a guess; a guess printed as a partition is worse than a refusal, so the
+     parts are dropped and the refusal is named.
+     AND THE SECOND IDENTITY CROSSES THE BOUNDARY THE FIRST ONE DOES NOT. `programsAhead` bucket 0 and
+     `outOfPrograms` are the same predicate written two ways over the same two fields (`dyn_n - script_i == 0`
+     and `script_i == dyn_n`), asserted in result.c where both halves are in one hand and re-asked here at the
+     point the numbers CROSS into this document — so a difference visible here and not there is a row lost
+     between the census and the record rather than a walk that disagreed with itself.
+     THE REFUSAL IS ITS OWN STRING FIELD AND IS NOT A ZERO, which is this driver's rule for `absentRefused`
+     exactly: `null` means the run did not state the rows, and a message means it DID and they do not hold
+     together. `spread` takes numbers only, so a refusal folded into the pair would print as `-` — the silence
+     the field exists to end. */
+  o.outOfProgramsRefused = null;
+  if (c && typeof o.outOfPrograms === "number") {
+    const parts = Object.keys(c).filter((k) => k !== "outOfPrograms" && k.startsWith("outOfPrograms")
+                                               && typeof c[k] === "number");
+    /* THE PARTS ARE ONLY CHECKED WHERE THERE ARE PARTS. A build publishing the total and no breakdown is an
+       OLDER ARTIFACT and not a broken partition, and summing nothing against a nonzero total would refuse a
+       run that measured an engine which never claimed a partition at all. */
+    if (parts.length) {
+      const sum = parts.reduce((a, k) => a + c[k], 0);
+      if (sum !== o.outOfPrograms)
+        o.outOfProgramsRefused = "the frontier census breaks `outOfPrograms` " + o.outOfPrograms +
+          " into rows summing to " + sum + " (" + parts.join(", ") + ") — solver/cold.c raises them on one " +
+          "if/else chain over one walk and DCHECKs the identity, so a disagreement on this RELEASE artifact " +
+          "is an arm added without a row and the breakdown is a SELECTION published as a partition";
+      else for (const k of parts) o[k] = c[k];
+    }
+    const pa = o.programsAhead;
+    if (o.outOfProgramsRefused === null && pa && typeof pa === "object" && !Array.isArray(pa)) {
+      const zero = (typeof pa["0"] === "number") ? pa["0"] : null;
+      if (zero !== o.outOfPrograms)
+        o.outOfProgramsRefused = "`programsAhead` bucket 0 is " + (zero === null ? "absent" : zero) +
+          " against `outOfPrograms` " + o.outOfPrograms + " — they are the same predicate written two ways " +
+          "over the same two fields, so a difference at this boundary is a row lost between the census and " +
+          "this record and no reading composed from either is about the run that happened";
+    }
+  }
   /* AND THE SUBTRACTION IS COMPUTED HERE RATHER THAN LEFT TO THE READER, BECAUSE ONE A READER MUST PERFORM IS
      ONE NOBODY PERFORMS. Both halves are already rows above; this is the difference §What-the-tool-produces
      names as the form the razor USED to take — the addresses this run emitted MINUS the ones minted before it
