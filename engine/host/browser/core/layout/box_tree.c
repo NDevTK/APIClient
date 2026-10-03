@@ -266,8 +266,8 @@ static void bt_require_answer_is_in_sequence(lxb_dom_element_t *box, lxb_dom_nod
    css-lists-3 §3.6 "Styling Markers: the list-style shorthand property" has no row in
    core/css/css_shorthand.c — that shorthand sets both longhands, nothing takes it apart, so a
    `ul { list-style: none }` would read as `disc` and this refusal would fire on exactly the list items
-   §3.2 says have no marker box. §3.6's row is the landing before this one, and the named residual at that
-   table states its shape.
+   §3.2 says have no marker box. §3.6's row is therefore the landing before THE NARROWING and not
+   before this refusal, which already stands; the named residual at that table states its shape.
    §3.1's LAST SENTENCE IS WHY THE `list-item` TEST IS THE WHOLE POPULATION AND NOT A FIRST APPROXIMATION OF IT:
    "Marker boxes only exist for list items: on any other element, the ::marker pseudo-element's content property
    must compute to none, which suppresses its creation."
