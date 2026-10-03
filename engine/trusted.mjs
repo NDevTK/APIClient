@@ -1390,6 +1390,31 @@ async function main() {
                         'instance, so two answers mean one of them belongs to a program this zone is not ' +
                         'driving');
       e.quantum = q;
+      /* AND IT IS ECHOED THE MOMENT IT ARRIVES, FOR THE REASON THE CENSUS ARM BELOW ALREADY ARGUES AND WHICH
+         IS STRONGER HERE. That arm echoes rather than accumulates because a real page's frontier neither
+         drains nor stalls inside anybody's budget, so a reader who waits for the report at the bottom of
+         this file gets nothing from exactly the runs that matter. This line is the DENOMINATION those
+         censuses are measured in — this arm's own banner above calls it "WHAT DECIDES WHETHER ANY NUMBER
+         BELOW IS QUOTABLE AT ALL" — and it was CONSUMED and not echoed, so its only reader was that same
+         end-of-session report. A killed run therefore carried fifteen echoed census lines and no statement
+         of what any of them was a reading of.
+         MEASURED on `run-native-cross-process-peer-transport` at 37a48ea8, whose stage was ended by its
+         gate's own 182-second backstop: three instances echoed five census markers each, every one of them
+         with `slices` at 1 and a `sliceUs` beside it — so a slice WAS opened in each, which is the
+         condition solver/quantum.c announces on, so each instance DID write the line this arm swallowed.
+         The report that would have stated it is below `loops`, which that run never reached.
+         WHAT THIS DOES NOT FIX, SAID HERE BECAUSE THE NEXT READER WILL ASK IT. `engine/build.mjs`'s
+         `quantumDenomination` matches `^@QUANTUM {` — anchored, unprefixed — and its BROKEN-CONTRACT throw
+         fires only when `^@COLD {` also matches, so BOTH of its anchors are blind to every stage hosted
+         here, because this zone prefixes each record with the instance that wrote it. That stage therefore
+         falls to the quiet "this stage printed no @QUANTUM line" sentence rather than to the throw, and it
+         does so for a stage that opened three slices. The repair is that reader's and not this line's: a
+         zone that forged an unprefixed engine record it did not write would be answering for which instance
+         spoke, which is the one thing the tag exists to say.
+         RETIREMENT: this record goes when build.mjs reads the denomination through the same tagged grammar
+         it reads a hosted census through, because the absence of a line is then the absence of a slice at
+         both readers instead of at one. */
+      console.error(`[trusted] [${e.tag}] ${line}`);
       return;
     }
     /* THE PERIODIC SCHEDULER CENSUS — @SWAP, @COLD, @HEAP, @WFQ, @FORKAT, written by solver/engine.c's
