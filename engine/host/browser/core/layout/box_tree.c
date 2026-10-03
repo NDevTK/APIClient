@@ -7,9 +7,14 @@
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
-/* ONE ENUM AND NOT <lexbor/css/css.h>, which is what this directory's other lexbor-CSS consumers take: the
-   decision below needs the pseudo-element NAME SPACE and nothing in the CSS parser, and this header is a pure
-   generated enum with no includes of its own. */
+/* ONE ENUM AND NOT <lexbor/css/css.h>, WHICH IS THE WHOLE-PARSER HEADER: the decision below needs the
+   pseudo-element NAME SPACE and nothing in the CSS parser, and this one is a pure generated enum with no
+   includes of its own, so it pulls in nothing a LAYOUT translation unit has any business compiling.
+   THIS COMMENT USED TO SAY css.h IS "what this directory's other lexbor-CSS consumers take", WHICH WAS A CLAIM
+   ABOUT THE TREE AND WAS FALSE: `git grep -l '#include <lexbor/css' -- engine/host/browser/core/layout/`
+   answers this file and nothing else. It is recorded rather than deleted because the reason to prefer the
+   narrow header is the ARGUMENT above and never a convention somebody counted — a scope claim in a comment is
+   the half that rots, and this one was wrong on the hour it was written. */
 #include <lexbor/css/selectors/pseudo_const.h>
 
 #include "check.h"
