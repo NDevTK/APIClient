@@ -295,7 +295,12 @@ static void bt_require_answer_is_in_sequence(lxb_dom_element_t *box, lxb_dom_nod
    engine does not resolve one there. What is genuinely not as-specified is the `<gradient>` arm, by css-images-3
    §2 "Image Values: the <image> type"'s sentence that core/css/css_image.h already quotes — "A computed <image>
    value is the specified value with any <url>s, <color>s, and <length>s computed" — so a row must tell the two
-   apart, and core/css/css_image.h exports `css_image_is_image` and nothing finer. The named residual at
+   apart, AND THE ENTRY THAT TELLS THEM APART IS EXPORTED NOW: core/css/css_image.h publishes `css_image_kind`
+   over a `CssImageKind` whose two arms are §2's own, with `css_image_is_image` kept as a PREDICATE over it
+   rather than as a second walk. THIS CLAUSE SAID THAT HEADER EXPORTS `css_image_is_image` AND NOTHING FINER,
+   and it is kept in its own words — unquoted, because a run of this tree's prose is not a spec quotation —
+   since a reader who greps that header for an arm test will re-derive it, and since the ORDER it states is
+   still the right one: the entry came before the row, and the ROW is what is left. The named residual at
    core/css/css_style_declaration.c's unregistered-initial table states that shape; verify each
    `Computed value:` line against the fetched draft rather than taking it from here.
    §3.1's LAST SENTENCE IS WHY THE `list-item` TEST IS THE WHOLE POPULATION AND NOT A FIRST APPROXIMATION OF IT:

@@ -118,7 +118,11 @@
  * and §3.3's is the one outstanding row, whose `<url>` arm css-values-4 §4.5.1 "Relative URLs" gives a defined
  * computed value for ("The computed value of a URL that the UA cannot resolve to an absolute URL is the
  * specified value") and whose `<gradient>` arm css-images-3 §2 "Image Values: the <image> type" does not — the
- * split is at that table's own residual and needs an entry core/css/css_image.h does not export yet. §3.2 still
+ * split is at that table's own residual, AND THE ENTRY IT WAITED ON IS LANDED: core/css/css_image.h exports
+ * `css_image_kind` over a `CssImageKind` whose two arms are §2's own, so what is left is the ROW alone. THIS
+ * CLAUSE SAID THAT ENTRY IS ONE THE HEADER DOES NOT EXPORT YET, kept in its own words because the ORDER it
+ * states is still the order — the entry before the row — and a reader who greps that header will re-derive it.
+ * §3.2 still
  * cannot be asked, because its IMAGE arm precedes its TYPE arm and §3.4's row answers only the second.
  * §3.2's arms then reach css-counter-styles-3 §6.3 "Symbolic: disc, circle, square, disclosure-open,
  * disclosure-closed" for the
