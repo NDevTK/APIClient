@@ -1,12 +1,23 @@
 /* ONE REAL DOCUMENT, THROUGH THE PRODUCTION ABI, WITH ITS SCRIPTS INGESTED — and the scheduler's own census
  * published as a SERIES.
  *
- * WHAT IT IS FOR. §Testing: "a before/after belongs on FROZEN BYTES — a mirror, a fixture, a recorded payload
- * replayed — where the only thing that changed is the engine." This tree HAS such a mirror, with a manifest
- * tying every resource to (url, date, sha256), and a server that replays it faithfully. What it did not have
- * was a way to put those bytes through the engine and read `_wfq` and `_cold` off the result WITHOUT a
- * browser. This is that, and it is a measurement driver rather than a gate: it asserts its own host contract
- * and states no expectation whatever about what the engine finds.
+ * WHAT IT IS FOR. The paragraph here read: §Testing, "a before/after belongs on FROZEN BYTES — a mirror, a
+ * fixture, a recorded payload replayed — where the only thing that changed is the engine", and "this tree HAS
+ * such a mirror, with a manifest tying every resource to (url, date, sha256), and a server that replays it
+ * faithfully". BOTH CLAUSES ARE RETIRED AND ARE KEPT RATHER THAN DELETED, because the first is what anybody
+ * re-derives from run-to-run variance and the second is what they then go and build. The RULE is retired: a
+ * page's scripts and styles are COMPUTED AND FETCHED AT RUNTIME, so a frozen copy of an app is a program no
+ * visitor is served. The MIRROR is retired too, and that half is a fact about this tree rather than an
+ * argument — the capture and `serve-faithful.mjs` are DELETED, which the paragraph below records with the
+ * command that establishes it, so a reader who meets the sentence above and goes looking for the mirror it
+ * promises finds nothing. Note the ORDER that made this survive: this file's MIDDLE was repaired and its
+ * BANNER was not, so the stale claim sat in the most load-bearing position in the file while the correct
+ * record sat thirty lines down.
+ * WHAT THIS DRIVER IS FOR, UNCHANGED BY ANY OF THAT, because it never depended on the bytes being frozen:
+ * putting a real document's scripts through the engine and reading `_wfq` and `_cold` off the result WITHOUT a
+ * browser. It takes a URL and answers every park from the origin the document came from, so it drives ANY
+ * origin — live, or a static server over a directory. It is a measurement driver rather than a gate: it
+ * asserts its own host contract and states no expectation whatever about what the engine finds.
  *
  * WHY NOT engine/solvergate.mjs, WHICH ALREADY DRIVES THIS ABI. Two reasons, and each one alone decides it.
  *   - Its ORACLE is set-equality of a document's FINDINGS across several schedules, and it drops `_wfq`,
@@ -119,8 +130,13 @@
  * statement of MIME Sniffing §7 a Node driver can call, so this seam and the extension read one rule. HOW
  * ITS ABSENCE WOULD SHOW: a run in which a resource the origin labels `text/plain` reaches the engine as data
  * where a browser would have compiled it, visible as a `_cold.replyAnswered` that advanced with no program
- * start behind it. It is narrower rather than wrong for a MIRROR replay, because serve-faithful answers the
- * content type the capture RECORDED, which is what the real server said on the day the bytes were frozen.
+ * start behind it. THAT RESIDUAL USED TO CARRY A MITIGATION AND NO LONGER HAS ONE, WHICH WIDENS IT RATHER THAN
+ * changing it: the clause read "it is narrower rather than wrong for a MIRROR replay, because serve-faithful
+ * answers the content type the capture RECORDED, which is what the real server said on the day the bytes were
+ * frozen", and that replay server is deleted (see the paragraph above). So every drive is now a LIVE origin
+ * answering in real time, the one case the mitigation did not cover, and the NOT-COVERED clause stands at its
+ * full width with nothing standing under it. The retired reason is kept because a reader who re-derives it
+ * will read the residual as narrower than it is.
  *
  * NAMED RESIDUAL — the session. Boot, the print sink, the operand placement, the three step codes and the
  * reply seam are spelled here, in engine/solvergate.mjs and in engine/route.mjs. NOT COVERED: a contract that
@@ -221,10 +237,15 @@ const boot = factory.default ?? factory;
 /* THE DOCUMENT, FETCHED THE WAY EVERY OTHER RESOURCE IS. Its FINAL url is what the engine is told, because
    HTML §7.4 "Navigation and session history" makes the document's address the one the response came back
    at, and every park this driver answers is resolved against it. A document that did not arrive is fatal
-   HERE rather than at the parser: an engine handed a 404 body compiles it. testing/corpus/serve-faithful.mjs
-   records what that costs, in its own words and not a standard's — `a fixture that answers 200-with-prose
-   where it means 404 manufactures engine bugs` — having watched the abort it raises rank as a corpus-wide
-   engine defect across five sites. */
+   HERE rather than at the parser: an engine handed a 404 body compiles it. What that costs was measured on
+   the deleted frozen transport rather than argued — testing/corpus/serve-faithful.mjs answered a miss with the
+   two words `not mirrored` as text/plain, the engine compiled them as a classic script, and the parse abort at
+   line 1 column 5 ranked as the corpus's NUMBER ONE engine defect across five sites, naming the PAGE for a
+   defect that was the fixture's. THE SOURCE OF THAT SENTENCE IS GONE AND THE SURVIVING STATEMENT OF IT IS
+   testing/corpus/README.md's "What each instrument refuses to do, and why", which is where a reader can still
+   read it; the file this comment used to quote cannot be opened at any revision a shallow clone reaches
+   (`git cat-file -e origin/main:testing/corpus/serve-faithful.mjs` answers that the path does not exist), so
+   the attribution is re-aimed rather than left pointing at bytes nobody can check. */
 let docRes;
 try { docRes = await fetch(docUrl, { redirect: "follow" }); }
 catch (e) { fail(`the document at ${docUrl} could not be fetched (${String(e && e.message || e)}) — this ` +

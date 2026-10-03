@@ -48,16 +48,29 @@
 ##      corpus cannot omit and still be measuring this tool. It is proven the same way: a route the shipped
 ##      bundle names, requested anonymously, answering 401/403/303 beside a sibling that answers 200.
 ##   3. SURVIVES A HEADLESS LOAD WITHOUT AUTH — a real app document, not an SSO wall and not a 403 shell.
-##   4. MIRRORABLE, so a before/after is on FROZEN BYTES (§Testing). The test is mechanical: does `mirror.mjs`
-##      reach the app's JavaScript, which it does through `<script src>` and `<link rel=preload/modulepreload>`
-##      — EVERY preload, whatever its `as`. This clause used to say `as=script` and the matcher never read
-##      `as` at all: 46 of 445 frozen resources across 10 of 18 rows are fonts, stylesheets and svg, and
-##      keeping them is right, because the fixture replays each under its recorded content type.
+##   4. ITS PROGRAMS ARE REACHABLE BY THE CORPUS FETCHER. THIS TEST USED TO READ "MIRRORABLE, so a before/after
+##      is on FROZEN BYTES (§Testing)" AND BOTH HALVES OF THAT JUSTIFICATION ARE RETIRED — kept here rather than
+##      deleted because a reader who re-derives them will commit a mirror again. The frozen-bytes rule is gone
+##      (a page's scripts and styles are COMPUTED AND FETCHED AT RUNTIME, so a frozen copy is a program no
+##      visitor is served), and `mirror.mjs` is DELETED with the capture it wrote — `git cat-file -e
+##      origin/main:testing/corpus/serve-faithful.mjs` answers that its replay server's path does not exist.
+##      THE TEST ITSELF SURVIVES AND IS WORTH MORE THAN ITS OLD REASON: a row whose programs the fetcher cannot
+##      reach yields a corpus with no programs in it, so every absence measured against it is an absence of the
+##      instrument. Its surviving subject is `fetch.mjs`, whose `documentRefs` extracts exactly the same two
+##      references `mirror.mjs` did, through `<script src>` and `<link rel=preload/modulepreload>`
+##      — EVERY preload, whatever its `as`, which `documentRefs` reads the same way: it gates on `rel` and
+##      never consults `as` at all. This clause used to say `as=script` and the matcher never read `as`
+##      either: 46 of 445 captured resources across 10 of 18 rows were fonts, stylesheets and svg, and keeping
+##      them was right, because the replay server answered each under its recorded content type — a measurement
+##      on the deleted capture, so it is sound about what a real app ships and cannot be re-taken here.
 ##      AND THE TEST IS RUN WITH A REGEX ENGINE, NEVER A LINE-ORIENTED GREP. A `<script>` tag may span
 ##      lines with its `src=` alone on one of them, and grafana's five do — so a `grep -oE` answered ZERO
-##      and this list carried a FAILS-4 verdict for a page that mirrors 5/5 at 200. A page whose bundle is
-##      reached only by RUNNING its inline bootstrap still fails this, and squoosh is the measured example
-##      at 0/0 scripts; a number from such a row may never be quoted as a frozen-bytes comparison.
+##      and this list carried a FAILS-4 verdict for a page that mirrors 5/5 at 200. `fetch.mjs` satisfies that
+##      by construction (`matchAll` over the whole document text, with `[^>]*` crossing newlines), so the
+##      clause is about how a HUMAN checks a candidate row. A page whose bundle is reached only by RUNNING its
+##      inline bootstrap still fails this, and squoosh is the measured example at 0/0 scripts; a number from
+##      such a row is a fact about the fetcher rather than about the engine, and may not be quoted as a
+##      finding about either.
 ##   5. THE BUNDLER STACK IS AN OBSERVATION RECORDED AFTERWARDS, NEVER A SELECTION CRITERION.
 ##
 ## A VERDICT IN THE THIRD COLUMN IS A MEASUREMENT AND ITS ABSENCE IS "NOT ASSESSED", NEVER "PASSES". Most of

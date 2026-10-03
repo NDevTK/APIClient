@@ -27,10 +27,15 @@
  *   - what this tree puts on a global comes from idl_installed.mjs, and the Web IDL §3.8 record count must
  *     reproduce idlgen's published "§3.8 ... N identifier(s) this engine defines on a global".
  * THE CORPUS IS THE FOURTH SUCH POPULATION AND WAS THE LAST TO STOP BEING A GUESS. Which mirrored files are
- * PROGRAMS was read off the FILENAME EXTENSION, and testing/corpus/mirror.mjs folds a URL query into the
- * saved name as a `__q<sha256[0:8]>` suffix -- so three shipped bundles, a 1.5 MB telegram worker among them,
- * have extensions no list reaches and were dropped in silence. engine/corpus_programs.mjs takes the
- * population from testing/corpus/provenance.json's recorded Content-Type instead. Its calibration is not a
+ * PROGRAMS was read off the FILENAME EXTENSION, and the fetcher of the day (testing/corpus/mirror.mjs, since
+ * DELETED with the capture it wrote) folded a URL query into the saved name as a `__q<sha256[0:8]>` suffix --
+ * so three shipped bundles, a 1.5 MB telegram worker among them, had extensions no list reaches and were
+ * dropped in silence. THE SPELLING WENT WITH THAT TOOL AND THE HAZARD DID NOT: the surviving fetcher,
+ * testing/corpus/fetch.mjs, still computes a saved name from a URL, which is why engine/corpus_programs.mjs's
+ * own header keeps that trap OPEN -- read it there rather than re-deriving it here. corpus_programs takes the
+ * population from the `provenance.json` BESIDE THE CORPUS and its recorded Content-Type instead; that
+ * manifest is written under `engine/.work/sitecorpus/` and is NOT tracked -- the driver is, the capture
+ * is not. Its calibration is not a
  * reproduced total, because a manifest publishes none: it is an ACCOUNTING -- every file under the corpus is
  * typed by the manifest, every essence that reaches disk is classified, and the three parts sum to the files
  * walked -- and each of those THROWS. That is the same discipline in the shape the artifact allows, and the
@@ -542,11 +547,14 @@ const ABSENT_GLOBAL = new Set([...PLATFORM].filter((n) => !REACHED.has(n)));
 
 /* ---- the corpus, from the artifact that owns it -------------------------------------------------------- */
 /* WHICH FILES ARE PROGRAMS IS THE SERVER'S ANSWER AND NOT THIS FILE'S GUESS. This selected by FILENAME
-   EXTENSION until it was measured: testing/corpus/mirror.mjs folds a URL's query into the saved name as a
-   `__q<sha256[0:8]>` suffix, so a bundle fetched with a query is saved as `all.js__q54b3907e` and its
-   extension is in no list anybody would write. THREE shipped bundles in the committed mirror are spelled
-   that way -- a 1.5 MB telegram worker and two openlibrary bundles -- and all three were dropped in silence,
-   which reports a smaller absence and reads as progress. engine/corpus_programs.mjs takes the population
+   EXTENSION until it was measured: the fetcher of the day, testing/corpus/mirror.mjs, folded a URL's query
+   into the saved name as a `__q<sha256[0:8]>` suffix, so a bundle fetched with a query was saved as
+   `all.js__q54b3907e` and its extension was in no list anybody would write. THREE shipped bundles in the
+   committed mirror were spelled that way -- a 1.5 MB telegram worker and two openlibrary bundles -- and all
+   three were dropped in silence, which reports a smaller absence and reads as progress. THAT TOOL AND THAT
+   MIRROR ARE DELETED AND THE TRAP IS NOT: testing/corpus/fetch.mjs is the surviving fetcher and still derives
+   a saved name from a URL, so a consumer that re-derived one would drop the query the same way under a
+   different spelling. engine/corpus_programs.mjs takes the population
    from testing/corpus/provenance.json's recorded Content-Type instead, joined by CONTENT so that it copies
    no part of the mirror's naming rule, and it THROWS rather than going quietly short. Its header holds the
    measurement and the two traps on the path route. */

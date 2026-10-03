@@ -70,9 +70,20 @@ each site's observed stack beside the signature it hit — which is both the rea
 the thing that makes a ranking generalise: three sites on one signature is a number, three sites on one
 signature that all ship the same bundler is something to reproduce.
 
-`AT=live` and `AT=frozen` are the same driver. §Testing is why they are not the same measurement: a
-before/after belongs on frozen bytes; a live pass is for DISCOVERING signatures, and its endpoint column is
-noise on any site that aborted.
+`AT=live` AND `AT=frozen` WERE THE SAME DRIVER, AND `AT=frozen` IS NOW A REFUSAL: `run.sh` exits 2 on any
+value but `live`, in as many words, because the transport that value selected served a committed mirror of
+other people's sites and that mirror and its server are deleted — established by CONTENT and not by ancestry,
+`git cat-file -e origin/main:testing/corpus/serve-faithful.mjs` answering that the path does not exist, which
+is the check a SHALLOW clone leaves available.
+
+THE SENTENCE THAT STOOD HERE WENT ON "§Testing is why they are not the same measurement: a before/after
+belongs on frozen bytes; a live pass is for DISCOVERING signatures", AND ITS TWO HALVES DID NOT GO STALE
+TOGETHER. The first half is RETIRED and is kept rather than deleted, because a reader who re-derives it from
+run-to-run variance will commit a mirror again: the reasoning is sound about VARIANCE and answers the wrong
+question, since a page's scripts and styles are COMPUTED AND FETCHED AT RUNTIME and an engine measured
+against a frozen copy is measured against a program no visitor is served. What replaces it is in `## Measuring`
+below. The second half SURVIVES UNCHANGED and is the whole of what `AT` ever selected between: a live pass is
+for DISCOVERING signatures, and its endpoint column is noise on any site that aborted.
 
 `run.sh` needs a LANE: a directory holding a COPY of `testing/harness.js` and of `extension/`, because
 harness.js derives its extension directory from its own location. That copy is what makes the browser
@@ -198,32 +209,47 @@ contention question needs and what splitting the control had removed.
 
 ## What each instrument refuses to do, and why
 
-`mirror.mjs` saves every resource at its ORIGINAL path and keeps its query. An
-earlier builder flattened them to `/sN.js`, which deletes two things a page
-reads: the query (122 of 740 resources carry one, and a real site's first guard
-was `params.affiliate || params.from` read off `document.currentScript`), and the
-module graph (a module chunk's relative `import` resolves against ITS url). Real
-Chrome learns nothing from flattened bytes either, so a zero measured there is a
-fact about the fixture.
+THE FOUR PARAGRAPHS THAT STOOD AT THE HEAD OF THIS SECTION DESCRIBED `mirror.mjs` AND `serve-faithful.mjs` IN
+THE PRESENT TENSE, AND BOTH ARE DELETED. They are rewritten rather than dropped, because every argument in them
+is about a hazard the SURVIVING fetcher still faces — `fetch.mjs` saves bytes a page reads, from URLs it
+extracts out of HTML, exactly as the deleted builder did — so a reader who deletes the record re-derives the
+hazard the hard way. What each one was, and which of them transferred:
 
-`serve-faithful.mjs` rewrites only the ORIGIN, so path and query survive
-byte-for-byte, and recomputes the stored filename from the request's own query
-using the builder's rule rather than a second index that could drift. A missing
-resource 404s loudly and is counted: silently serving an empty body for a missing
-chunk is the flattening defect wearing different clothes.
+A SAVED RESOURCE KEEPS ITS ORIGINAL PATH AND ITS QUERY. `mirror.mjs` did this and an earlier builder had
+flattened them to `/sN.js`, which deletes two things a page reads: the query (122 of 740 resources carried
+one, and a real site's first guard was `params.affiliate || params.from` read off `document.currentScript`),
+and the module graph (a module chunk's relative `import` resolves against ITS url). Real Chrome learns nothing
+from flattened bytes either, so a zero measured there is a fact about the fixture. THIS ONE TRANSFERRED:
+`fetch.mjs` builds its saved name from `${host}${pathname}${search}` and never drops the query, and it records
+the name it WROTE — which is also the condition `engine/corpus_programs.mjs`'s own header names for retiring
+its second trap, so nothing downstream re-derives a name from a URL.
 
-`serve-faithful.mjs` also refuses to answer a miss with PROSE. Its 404 body was the words `not mirrored`,
-served as text/plain, and the engine — correctly — compiled it as a classic script: `not mirrored` is two
-identifiers, so it raised a parse abort at line 1 column 5, which is where `mirrored` starts. That abort
-ranked as the corpus's NUMBER ONE engine defect across five sites, and it was this file. The body is now
-empty. The same census also found the two ways this server and the builder can point at bytes the origin
-never served, and both are now closed: an attribute value is HTML-ESCAPED (figma's `src` held `&#47;` for
+A MISS IS NOT ANSWERED WITH PROSE, AND THIS ONE HAS NO SUCCESSOR TO TRANSFER TO, because there is no replay
+server any more: the bytes come from the network and a 404 is the origin's own. `serve-faithful.mjs`'s 404 body
+was the words `not mirrored`, served as text/plain, and the engine — correctly — compiled it as a classic
+script: `not mirrored` is two identifiers, so it raised a parse abort at line 1 column 5, which is where
+`mirrored` starts. That abort ranked as the corpus's NUMBER ONE engine defect across five sites, and it was the
+fixture. The rule it leaves behind is live for anything that feeds this engine a document: a fixture that
+answers 200-with-prose where it means 404 manufactures engine bugs, which is worse than measuring nothing.
+`engine/pagecensus.mjs` refuses a non-`ok` document for that reason and says so at the refusal.
+
+AND THE LAST TWO DID **NOT** TRANSFER, WHICH IS A FINDING ABOUT `fetch.mjs` AND NOT A NOTE ABOUT A DELETED
+FILE. The same census that found the prose-404 found the two ways a builder can store bytes the origin never
+served, and the deleted builder closed both: an attribute value is HTML-ESCAPED (figma's `src` held `&#47;` for
 `/`, so 7 of 7 resources were saved as a 1.3 MiB 404 page), and a relative URL resolves against the DOCUMENT
 BASE URL — HTML §2.4.3 "Document base URLs", the first descendant `base` element with an `href` (§4.2.3 "The
-base element") — not against the document's own address. Three corpus documents declare one; material
+base element") — not against the document's own address. Three corpus documents declared one; material
 .angular.dev ships `<base href="/">` and every one of its 12 scripts was fetched from the wrong path and
-stored as `<!doctype html><title>Page Not Found</title>`. A fixture that stores an error page under a real
-URL's name manufactures engine bugs, which is worse than measuring nothing.
+stored as `<!doctype html><title>Page Not Found</title>`. MEASURED at the surviving fetcher rather than
+inferred: `fetch.mjs`'s `pick` returns the raw attribute text with no entity decoding, and `documentRefs`'
+callers resolve every reference with `new URL(h, doc.finalUrl)` — the document's own address — while
+`grep -ciE '<base|baseHref|TAG_BASE'` and `grep -ciE 'decodeEntit|unescape|&#|&amp'` over that file each
+answer 0 against a `documentRefs` control answering 2 and an invented token answering 0. So BOTH defects are
+live on the one producer this tree still has, and a corpus it writes for a site that ships a `<base href>` or
+an escaped `src` stores an error page under a real URL's name. That is not prose to repair here: it is a diff
+to `fetch.mjs` that has to be EXERCISED against a real document before it is believed, and the observation
+that settles it is a run over a `<base href="/">` site whose `provenance.json` is then read for a `savedPath`
+holding `<title>Page Not Found</title>`.
 
 `run.sh` refuses to drive a browser it has not proved is its own, and refuses to reuse a fixture server it
 has not proved bound for THIS site — one port is reused per row, so a server that failed to die would answer
@@ -244,16 +270,26 @@ a site that ran cleanly in pass 1 then inherits pass 3's abort.
 
 ## Measuring
 
-A before/after belongs on frozen bytes, where the only thing that changed is the
-engine. Live sites are for DISCOVERING signatures. State the load average with
+THIS SECTION OPENED "A before/after belongs on frozen bytes, where the only thing that changed is the engine.
+Live sites are for DISCOVERING signatures." THE FIRST SENTENCE IS RETIRED AND IS KEPT RATHER THAN DELETED,
+because it is the conclusion anybody re-derives from run-to-run variance and the whole of why a mirror was
+committed here once. It is sound about variance and it prices the wrong thing: a page's scripts and styles are
+COMPUTED AND FETCHED AT RUNTIME, so a frozen copy is a program no visitor is served, and this repository may
+not carry a copy of anybody else's site in any case. WHAT REPLACES IT IS A RUN COUNT AND A SPREAD, and
+comparison only on the quantities that do not move with reach: a crash's IDENTITY, a conservation identity read
+WITHIN one sample, a count that cannot be true, a value that is wrong rather than small. A single live figure
+is quoted with its run count, its spread, the ENGINE's artifact sha256 and the HOUR of the run, because the
+subject's own revision is not ours to state. The second sentence stands: live sites are for DISCOVERING
+signatures. State the load average with
 every number -- `site.mjs` samples it at both ends of the dwell and puts it in the
 row, because the dwell is WALL-CLOCK and a busy machine hands the engine less CPU
 inside the same 60 seconds -- and record the artifact's sha256, not the build head,
 which for a build of a dirty shared tree names a revision whose sources do not
 contain the program that ran.
 
-What the outcome column is worth: measured over three passes on one frozen
-artifact, every site's ABORT-or-not was identical in all three, and so was every
+What the outcome column is worth: measured over three LIVE passes on one frozen
+ENGINE artifact — frozen in `run.sh`'s sense, the lane's own copy of `extension/`,
+never a frozen copy of a site — every site's ABORT-or-not was identical in all three, and so was every
 endpoint count. Only `flows` moved, and it moved a lot (one site 9550-18521), which
 is exactly the wall-clock/CPU variance above. So a single pass settles whether a
 site aborts and on what; it settles nothing about how much work got done.

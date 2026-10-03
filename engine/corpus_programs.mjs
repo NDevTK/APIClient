@@ -34,25 +34,42 @@
  * IT JOINS ON CONTENT (sha256) AND NEVER ON PATH, AND THAT IS THE LOAD-BEARING CHOICE RATHER THAN A DETAIL.
  * Two separate traps sit on the path route and the second one bites:
  *   1. Re-deriving the saved name from a URL would be a SECOND COPY of a rule this tree deliberately keeps in
- *      one place. testing/corpus/serve-faithful.mjs states it and recomputes it per request "rather than
+ *      one place. testing/corpus/serve-faithful.mjs stated it and recomputed it per request "rather than
  *      keeping a second index that could disagree with the tree", and engine/pagecensus.mjs refuses to copy
  *      it in as many words: "A path mapping here would be a second copy of that rule, and the copy anyone
  *      writes first is the one that drops the query." That refusal is a DECISION and this file is consistent
- *      with it: nothing here knows what `__q` means.
+ *      with it: nothing here knows what `__q` means. THE FILE THAT SENTENCE CITED IS DELETED and the trap is
+ *      NOT — testing/corpus/fetch.mjs is the surviving producer, its `saneName` computes the written name
+ *      from a URL, and `__q` occurs nowhere in it (`grep -c '__q' testing/corpus/fetch.mjs` answers 0 against
+ *      a `saneName` control answering 2), so the SPELLING moved and the hazard did not: a consumer that
+ *      re-derived a name from a URL would now be a second copy of a DIFFERENT rule and would drop the query
+ *      the same way. Trap 1 therefore does not retire, and this file still knows nothing about any name.
  *   2. USING THE MANIFEST'S OWN `path` FIELD LOOKS LIKE IT DODGES (1) AND SILENTLY REGRESSES. mirror.mjs
- *      writes the file at `rel.replace(/[^A-Za-z0-9._\/@%+-]/g, '_')` and writes `path: rel` -- the
+ *      wrote the file at `rel.replace(/[^A-Za-z0-9._\/@%+-]/g, '_')` and wrote `path: rel` -- the
  *      UNSANITIZED string -- into the manifest, and recomputes that same substitution wherever it needs the
  *      name back. So the manifest's `path` is NOT the path on disk whenever the URL carries a character
  *      outside that class. MEASURED over the committed mirror: three files differ that way -- two
- *      astexplorer chunks spelled with `~` and one figma chunk spelled with `(` and `)` -- and all three are
- *      read correctly TODAY, because their sanitized names still end in `.js`. A repair that joined on `path`
+ *      astexplorer chunks spelled with `~` and one figma chunk spelled with `(` and `)` -- and all three were
+ *      read correctly, because their sanitized names still ended in `.js`. A repair that joined on `path`
  *      would have dropped three working files while adding three missing ones and reported a net of zero.
  * A digest join needs neither rule. It asks the bytes what they are, so it cannot disagree with a naming
  * convention it never consults, and it is the same move this project makes when it refuses to verify a push
  * by pointer: ask the content, never the name.
- * RETIREMENT: trap 2 goes when mirror.mjs records the name it actually WROTE rather than the one it derived
- * the write from, at which point `path` and the file on disk are the same string and a path join can no
- * longer be silently wrong. Trap 1 does not retire while the saved name is computed from a URL anywhere.
+ * RETIREMENT -- TRAP 2 IS MET BY A CONSTRUCTION, AND THE RECORD IS REWRITTEN RATHER THAN DELETED BECAUSE WHAT
+ * A READER RE-DERIVES IS "just join on the manifest's path field". The condition read "when mirror.mjs records
+ * the name it actually WROTE rather than the one it derived the write from", and it named a file that is now
+ * DELETED -- so read literally it is satisfied by an ABSENCE, which CLAUDE.md rates as the condition shape
+ * that retires a record while nothing has been built. Something WAS built: testing/corpus/fetch.mjs is the
+ * producer that replaced it, it writes `savedPath: relative(MIRROR, p)` -- the name it actually wrote -- and
+ * its own comment at `saneName` says so, citing this header by name: "The manifest records the name that was
+ * WRITTEN rather than the one it was derived from, which is the condition corpus_programs.mjs's own header
+ * names for retiring its second trap." So the trap is closed BY CONSTRUCTION for every corpus this tree can
+ * now produce, the field is `savedPath` rather than `path`, and the three-file measurement ABOVE is about a
+ * corpus and a producer this tree no longer carries, so it is unrepeatable and a later disagreement with it is
+ * not a regression. WHAT KEEPS THE RECORD HERE IS THAT A DIGEST JOIN IS STILL THE RIGHT ANSWER: it needs neither
+ * rule, it cannot disagree with a naming convention it never consults, and a reader who retires this
+ * paragraph on the strength of `savedPath` being trustworthy has re-opened trap 1, which does not retire.
+ * Trap 1 does not retire while the saved name is computed from a URL anywhere -- and `saneName` computes one.
  *
  * ITS COMPLETENESS IS ASSERTED RATHER THAN CLAIMED, BECAUSE THE FAILURE THIS REPLACES WAS A SILENT SHORTFALL.
  * Swapping one selector for another buys nothing if the new one can also go quietly short, so three

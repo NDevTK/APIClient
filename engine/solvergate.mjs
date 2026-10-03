@@ -728,7 +728,21 @@ async function child(docPath, schedName) {
          DRAINS, and a real bundle's does not: measured on a mirrored one under the ingesting driver, the
          frontier grew monotonically for the whole of a bounded run with `finished` at zero, which this loop
          would answer with `the frontier STALLED…` or never reach the end of — a true statement about the
-         precondition and a useless one about the document. What stays here is the refusal and its address. */
+         precondition and a useless one about the document. What stays here is the refusal and its address.
+         AND THE ADDRESS NO LONGER NAMES A FROZEN MIRROR, WHICH IS RECORDED HERE RATHER THAN IN THE STRING
+         BECAUSE A CRASH IS READ BY EVERYONE IT STOPS AND NONE OF THEM OWES THE HISTORY. The emitted text used
+         to offer `node testing/corpus/serve-faithful.mjs <id> <port>` as the way to put bytes behind the
+         ingesting driver, and that file and the committed capture it replayed are DELETED — established by
+         CONTENT and not by ancestry, since this repository is SHALLOW:
+         `git cat-file -e origin/main:testing/corpus/serve-faithful.mjs` answers that the path does not exist,
+         and testing/corpus/run.sh refuses `AT=frozen` outright. So the refusal was telling its reader to type
+         a command that file-not-founds, which is the one thing a remedy clause must never do — the sentence
+         above says a crash's claim about ANOTHER FILE is checked before it is trusted, and this one had gone
+         stale under exactly that rule. What the string says instead is the property that never needed the
+         mirror: pagecensus answers every park from the origin the document came from, so ANY origin serving
+         the document will do. The measurement in (2) above is kept and its subject is marked gone: it was
+         taken on a mirrored bundle this tree no longer carries, so it is sound about the ENGINE and cannot be
+         re-taken, and a later disagreement with it is not a regression and cannot be bisected. */
       if (SCRIPT_LIKE.has(destination))
         gateFail(`this document parks a request whose destination is \`${destination}\` — Fetch \u00a72.2.5 ` +
                  "calls that script-like, so its reply is COMPILED, and this gate MINTS one body " +
@@ -737,9 +751,9 @@ async function child(docPath, schedName) {
                  "defect in the engine. This gate's subject is that one document's finding set is invariant " +
                  "across schedules, and a census is not that. A document whose scripts must be INGESTED is " +
                  "driven by `node engine/pagecensus.mjs <document-url>`, which answers every park by fetching " +
-                 "that park's own URL from the origin the document came from; put a frozen mirror behind it " +
-                 "with `node testing/corpus/serve-faithful.mjs <id> <port>`, or drive the same bytes through " +
-                 "the shipped extension in a real browser with testing/corpus/run.sh");
+                 "that park's own URL from the origin the document came from — point it at ANY origin that " +
+                 "serves the document, or drive the same bytes through the shipped extension in a real " +
+                 "browser with testing/corpus/run.sh");
       /* THIS GATE ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT ITSELF, and that is what it MUST do: its subject
          is that one document's finding set is the same under several schedules, so a reply policy that varied
          with a request's provenance would be a fourth schedule the comparison cannot see. The fields are

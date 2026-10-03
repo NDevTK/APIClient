@@ -364,10 +364,10 @@ uint64_t flow_work_seq_next(void) {
    bundle's later chunks are not reached — is a HYPOTHESIS this census never tested.
    AND THE HYPOTHESIS IS TRUE, ESTABLISHED SINCE BY COUNTING THE FROZEN DOCUMENT ITSELF — WHICH MAKES THIS A
    RIGHT CONCLUSION REACHED BY WRONG EVIDENCE AND NOT A WRONG CLAIM, SO THE METHOD IS THE FINDING AND THE
-   SENTENCE WAS ONLY ITS SYMPTOM. The mirror `serve-faithful.mjs` replays holds TWENTY-FIVE `<script>` open
-   tags, of which one is `type="application/ld+json"` and executes nothing (§4.12.1.1's type check drops it
-   before it can become a row), none sits inside a `<noscript>` or a `<template>`, and the remaining
-   twenty-four split SEVENTEEN with a `src` against SEVEN inline. So the document really does hold 24
+   SENTENCE WAS ONLY ITS SYMPTOM. The mirror `serve-faithful.mjs` replayed held TWENTY-FIVE `<script>` open
+   tags, of which one was `type="application/ld+json"` and executed nothing (§4.12.1.1's type check drops it
+   before it can become a row), none sat inside a `<noscript>` or a `<template>`, and the remaining
+   twenty-four split SEVENTEEN with a `src` against SEVEN inline. So the document really did hold 24
    executable programs and `deepest 7` really does mean sixteen of them were never started.
    THE COINCIDENCE IS THE WHOLE LESSON AND IT IS WHY NOBODY CAUGHT IT: `progStarts` READ 24 AND `rootPrograms`
    IS 24, and they are different quantities that happened to agree on this one document. A count of program
@@ -375,11 +375,22 @@ uint64_t flow_work_seq_next(void) {
    had the run started thirty-one programs the subtraction would have produced a negative number and the error
    would have announced itself. It agreed instead, so a derivation that means nothing produced a figure that
    was exactly right, and the figure was quoted onward as evidence for the method that produced it.
-   AND THAT COUNT IS A PREDICTION THIS MEASUREMENT CAN NOW BE SCORED AGAINST rather than a note: the next run
-   of that mirror must read `rootPrograms` 24, `rootProgramsAwaitedAtSeed` 17 and `rootProgramsHeldAtSeed` 7. A
-   disagreement is informative in either direction — the engine's own script table is built by
-   document_exec_scripts and drops rows this hand count does not model, so a lower number names which rows
-   those are, and a higher one says the count above missed a shape.
+   AND THAT COUNT WAS OFFERED AS A PREDICTION THIS MEASUREMENT COULD BE SCORED AGAINST, WHICH IS NOW
+   UNSCORABLE BY CONSTRUCTION — and that is a real result rather than a failure to measure, so it is stated
+   here instead of left as a note a reader discovers by trying to collect it. The prediction read "the next run
+   of that mirror must read `rootPrograms` 24, `rootProgramsAwaitedAtSeed` 17 and `rootProgramsHeldAtSeed` 7",
+   and THERE IS NO NEXT RUN OF THAT MIRROR: the paragraph at the head of these figures already records that
+   `testing/corpus/serve-faithful.mjs` and the capture it replayed were deleted, so the subject the three
+   numbers are a prediction ABOUT is a document this tree does not carry. A prediction whose subject cannot be
+   re-driven is not weak evidence, it is NO evidence — nothing can confirm or refute it — and a reader who
+   quotes it as a standing falsifier is quoting one that can only ever come back absent.
+   WHAT THE HAND COUNT IS STILL WORTH IS THE SHAPE AND NOT THE THREE NUMBERS. The reasoning survives for any
+   document whose script tags somebody counts: the engine's own script table is built by document_exec_scripts
+   and drops rows a hand count does not model, so a lower number names which rows those are and a higher one
+   says the count missed a shape. `rootPrograms` is the denominator that makes that comparison possible at all,
+   and the run that scores it has to be taken on a subject that still exists — a live site, or one of this
+   tree's own tracked fixtures, whose `<script>` tags are countable the same way and whose bytes a reader can
+   re-fetch.
    THE DISCRIMINATOR THE ORDER HAS NOT GOT, stated as a question because naming a term here without an
    observation that separates the two sides is the wrong-narrowing move one level up: `neverPicked` is 64605 of
    71452 with `neverPickedGap` 0, so the member that is the ONLY one standing at program 8 and the member that

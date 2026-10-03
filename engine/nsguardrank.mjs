@@ -133,8 +133,10 @@ const CANDIDATES = new Set([
 /* ---- the corpus, from the artifact that owns it ---------------------------------------------------------- */
 /* WHICH FILES ARE PROGRAMS IS THE SERVER'S ANSWER AND NOT THIS FILE'S GUESS. This selected by FILENAME
    EXTENSION until it was measured, in the same words engine/absentrank.mjs used and with the same three
-   files missing: testing/corpus/mirror.mjs folds a URL's query into the saved name as a `__q<sha256[0:8]>`
-   suffix, so a bundle fetched with a query is saved as `all.js__q54b3907e` and no extension list reaches it.
+   files missing: the fetcher of the day, testing/corpus/mirror.mjs, folded a URL's query into the saved name as
+   a `__q<sha256[0:8]>` suffix, so a bundle fetched with a query was saved as `all.js__q54b3907e` and no
+   extension list reached it. THAT TOOL IS DELETED AND THE TRAP IS NOT -- testing/corpus/fetch.mjs still derives
+   a saved name from a URL, which is why engine/corpus_programs.mjs's header keeps that trap open by name.
    A namespace ranking that cannot see a 1.5 MB worker bundle under-reports what installing that namespace
    would cost, which is the direction that reads as permission. engine/corpus_programs.mjs takes the
    population from testing/corpus/provenance.json's recorded Content-Type, joined by CONTENT so it copies no

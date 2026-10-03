@@ -262,9 +262,19 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
  *
  * This driver watches a live page through a browser. The companion measurement is the frozen one, and it is
  * recorded here rather than beside the instrument because it is a fact about the PRODUCT and the two readings
- * belong together: `testing/corpus/mirror/gitlab` (a 4.5 MB real bundle, 18 tracked files) replayed by
- * `testing/corpus/serve-faithful.mjs` at its original host and paths, driven by `engine/pagecensus.mjs`
+ * belong together: `testing/corpus/mirror/gitlab` (a 4.5 MB real bundle, 18 files tracked AT THE TIME) replayed
+ * by `testing/corpus/serve-faithful.mjs` at its original host and paths, driven by `engine/pagecensus.mjs`
  * through the production ABI, artifact stamped `f84f671f`, quiet box (load 0.32 rising to 1.03), 51 samples.
+ *
+ * THAT SUBJECT AND THAT TRANSPORT ARE DELETED AND THE READING IS KEPT WITH ITS INSTRUMENT MARKED GONE, which
+ * is the only honest form for it: the capture and `serve-faithful.mjs` were removed because this repository
+ * carries no copy of anybody else's site, established by CONTENT and not by ancestry since the clone is
+ * SHALLOW — `git cat-file -e origin/main:testing/corpus/serve-faithful.mjs` answers that the path does not
+ * exist, and `testing/corpus/run.sh` refuses `AT=frozen` in as many words. So "18 tracked files" was true when
+ * written and names nothing today. The figures below are SOUND where they are about the ENGINE and they CANNOT
+ * BE RE-TAKEN: a later disagreement with them is not a regression, cannot be bisected, and is not evidence
+ * about anything. What makes them worth keeping anyway is that they are a fact about the PRODUCT rather than
+ * about one capture, and the companion live reading beside them is re-takeable at any time.
  *
  *   fetchCallSites: FOUR, every one a `.woff2` font under /assets/, `provenance=derived`, `params` EMPTY.
  *   securitySinks: 0.   pageErrors: 0.   Terminal event: a real `@WHY`, not the budget.
