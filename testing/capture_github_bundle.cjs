@@ -3,15 +3,53 @@
 // combined doesn't ride one response. No magic-number waits — polls
 // the SW for the actual conditions (extension reloaded, script
 // buffer settled).
+//
+// WHERE IT WRITES, AND WHY NOT BESIDE THE ENGINE SOURCE IT FEEDS. These
+// bytes are somebody else's minified bundle, so .gitignore's argument
+// for engine/.work/sitecorpus is this capture's argument too — "other
+// people's bundles are not this project's to commit at all, which is a
+// decision and not a trade-off", answered by a TRACKED DRIVER and an
+// IGNORED OUTPUT, so a fresh clone gets the code that visits the site
+// and never the site. engine/.work is where this project already keeps
+// a fetched third-party corpus; it is default-denied by one line that
+// cannot fail silently, and engine/citegen.mjs's walk skips it for the
+// same reason it skips qjs.
+//
+// THESE THREE PATHS USED TO BE engine/qjs/_github_combined.js,
+// _github_page.html AND _github_parts/, AND THAT IS REWRITTEN RATHER
+// THAN DELETED, because the reason a reader re-derives is sound as far
+// as it goes: native iteration reads the engine's own source from
+// there, so the capture reads as belonging beside it. The cost is not
+// tidiness. engine/qjs is in engine/build.mjs's STAMP_CONE, a stamp's
+// `dirty` is `git status --porcelain` over that cone, and porcelain
+// names an UNTRACKED path — MEASURED on a scratch repository, three
+// `??` lines for exactly these three — so a capture left there made
+// `coneReading` non-null, the wasm install gate REFUSED, and
+// extension/lib/qjs went on holding whatever last passed it while
+// every build reported a dirty cone naming files no program reads.
+// Nothing ever compiled the bytes: engine/qjs contributes four named
+// `.c` files to the build and `walkC` is pointed only at
+// engine/host/{solver,browser}. The whole damage was in what the cone
+// SAID about the tree, which is the loud direction and the one that
+// stops an artifact belonging to a revision from being installed.
+// RETIREMENT: this record goes when STAMP_CONE is derived from the
+// source list the build actually compiles, because a path no program
+// reads can then no longer make a cone dirty and the hazard above has
+// nothing left to arise from.
 "use strict";
 const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
 const puppeteer = require("puppeteer");
 const LOCK = path.resolve(__dirname, "harness.lock");
-const OUT_JS = path.resolve(__dirname, "..", "engine", "qjs", "_github_combined.js");
-const OUT_HTML = path.resolve(__dirname, "..", "engine", "qjs", "_github_page.html");
-const OUT_PARTS = path.resolve(__dirname, "..", "engine", "qjs", "_github_parts");
+// ONE CONSTANT NAMES THE DIRECTORY, so "is the output ignored" is one
+// question rather than three: `git check-ignore -v` answers
+// `.gitignore:290:engine/.work/*` for everything below it, and three
+// resolved paths would be three chances to disagree about that.
+const OUT_DIR = path.resolve(__dirname, "..", "engine", ".work", "github-capture");
+const OUT_JS = path.join(OUT_DIR, "combined.js");
+const OUT_HTML = path.join(OUT_DIR, "page.html");
+const OUT_PARTS = path.join(OUT_DIR, "parts");
 
 async function openPopup(browser, extId) {
   const p = await browser.newPage();
@@ -87,6 +125,13 @@ async function untilBufferSettled(popup, tabId) {
   if (!info || !info.scriptCount) { console.error("no scripts:", info); process.exit(3); }
   console.log(`scripts=${info.scriptCount} islands=${info.islandCount} pageHtmlLen=${info.pageHtmlLen}`);
 
+  // THE OUTPUT DIRECTORY, STATED BEFORE ANY WRITE INTO IT. OUT_PARTS is
+  // nested inside OUT_DIR, so one recursive mkdir of the parts directory
+  // HAPPENED to create the parent that OUT_JS and OUT_HTML are written
+  // into — a precondition held by the nesting rather than by a statement,
+  // which stops holding the day parts/ moves and fails as an ENOENT on a
+  // capture that has already cost a browser drive.
+  fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.mkdirSync(OUT_PARTS, { recursive: true });
   for (const f of fs.readdirSync(OUT_PARTS)) fs.unlinkSync(path.join(OUT_PARTS, f));
   fs.writeFileSync(OUT_JS, "");

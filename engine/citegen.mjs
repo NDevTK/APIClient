@@ -5485,19 +5485,32 @@ function defaultTargets(notify = () => {}) {
      exist, since the commit that retired them is unreachable from a shallow clone.
      SO THE OBSERVATION HAD NOWHERE TO GO, AND IT IS RE-KEYED TO THE ONE PRODUCER THAT REMAINS RATHER THAN TO
      A SECOND PATH THAT ALSO HOLDS NOTHING. `testing/capture_github_bundle.cjs` is the only thing in this tree
-     that writes a capture; it is a hand drive over a real browser, and it writes `engine/qjs/_github_page.html`,
-     `engine/qjs/_github_combined.js` and a part per script under `engine/qjs/_github_parts/`. Those paths do
-     not exist until somebody runs it, which is the honest state of this observation: it is RUNNABLE and it is
-     not runnable TODAY, and that is a different thing from the directory it used to name, where it could never
-     have run at all. HOW TO RUN IT, stated so the next reader runs it instead of re-deriving it: produce a
-     capture with that tool and point this one at the written file ALONE, by argv, then read the citations-read
-     figure beside its findings. Argv is what makes it askable, because `walk` skips the whole of `qjs` and the
-     collector will therefore never reach those bytes on its own — which is the same line, working. A capture
-     whose string literals carry a dotted number answers nonzero, and the honest repair then is a RULE for
-     captured bytes and still never a list of their names.
-     ONE THING THAT PRODUCER OWES AND IS NOT THIS FILE'S TO FIX: those three paths are not ignored, so a
-     capture written into a shared checkout is untracked content sitting under a directory that is now
-     ordinary tracked source. */
+     that writes a capture; it is a hand drive over a real browser, and it writes
+     `engine/.work/github-capture/page.html`, `.../combined.js` and a part per script under `.../parts/`.
+     Those paths do not exist until somebody runs it, which is the honest state of this observation: it is
+     RUNNABLE and it is not runnable TODAY, and that is a different thing from the directory it used to name,
+     where it could never have run at all. HOW TO RUN IT, stated so the next reader runs it instead of
+     re-deriving it: produce a capture with that tool and point this one at the written file ALONE, by argv,
+     then read the citations-read figure beside its findings. Argv is what makes it askable, because `walk`
+     skips the whole of `.work` and the collector will therefore never reach those bytes on its own — which is
+     the same line, working. A capture whose string literals carry a dotted number answers nonzero, and the
+     honest repair then is a RULE for captured bytes and still never a list of their names.
+     THAT CLAUSE READ `walk` SKIPS THE WHOLE OF `qjs` UNTIL THE PRODUCER MOVED, AND IT IS REWRITTEN RATHER THAN
+     DELETED BECAUSE THE MECHANISM SURVIVED THE MOVE AND ONLY THE DIRECTORY CHANGED: `walk`'s skip list holds
+     `qjs`, `lexbor`, `out` and `.work` in one condition, so the capture is unreachable by the collector at
+     EITHER location and argv is what makes it askable at both. A reader who checks the old spelling finds the
+     old directory still skipped and concludes nothing moved.
+     WHAT THAT PRODUCER OWED HAS BEEN PAID, AND THE DEBT IS KEPT HERE BECAUSE IT IS THE REASON THE PATHS ARE
+     WHERE THEY ARE. It read: those three paths are not ignored, so a capture written into a shared checkout is
+     untracked content sitting under a directory that is now ordinary tracked source. The under-statement in it
+     was WHAT THAT COSTS — `engine/qjs` is in engine/build.mjs's STAMP_CONE and a stamp's `dirty` is
+     `git status --porcelain` over that cone, which names UNTRACKED paths, so the capture did not merely sit
+     there unnoticed: it made `coneReading` non-null and the wasm install gate REFUSED, which is a build whose
+     artifact belongs to a revision declining to install itself over three files nothing compiles. The capture
+     writes under `engine/.work/` now, which `git check-ignore -v` answers `.gitignore:290:engine/.work/*` for,
+     so the output is ignored by the line that already covers the build's own work directory rather than by a
+     second rule naming these three files. RETIREMENT: this record goes when STAMP_CONE is derived from the
+     source list the build compiles, because a path no program reads can then no longer make a cone dirty. */
   const testingDir = join(ROOT, "testing");
   if (existsSync(testingDir)) out.push(...walk(testingDir));
   /* AND THE GATES, which were named as a stated limit one commit ago and are collected one commit later,
