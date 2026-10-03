@@ -148,7 +148,7 @@ void world_doc_realm_set(uint32_t doc, JSContext *realm)
            all of its timelines` to be had at a materialization reached from a property read. Materializing
            EAGERLY at creation would make it baseline only where the creation is boot's, and the
            realm-per-navigable cost of that is what core/frame/navigable.h's deferral exists to avoid.
-       SO THE DEFECT IS THIS ROW AND NEITHER CALLER, AND NO VALUE IN IT IS RIGHT ONCE A FORK EXISTS: it is keyed
+       SO THE DEFECT IS THIS ROW AND NEITHER CALLER, AND NO VALUE IN IT IS RIGHT ONCE TWO WORLDS EXIST: it is keyed
        by DOCUMENT where the binding is (document, WORLD), which window_proxy_window's own crash already names.
        Holding the LATEST or the FIRST would hand a cross-instance read the wrong arm's realm — the one failure
        the per-flow delta exists to prevent — so this crash is doing protective work and must not be softened.
@@ -177,7 +177,7 @@ void world_doc_realm_set(uint32_t doc, JSContext *realm)
            "initial about:blank Document's realm through the PER-FLOW WindowProxy record (navigable.h), so any "
            "two flows that each read through one srcless navigable each build one — a flow and the LOAD JOB it "
            "enqueued are two. THE FIX IS THIS ROW: it is keyed by DOCUMENT where the binding is "
-           "(document, WORLD), so no single value in it is right once a fork exists — answer `world_doc_realm` "
+           "(document, WORLD), so no single value in it is right once TWO WORLDS exist — answer `world_doc_realm` "
            "from the navigable whose PER-FLOW `doc` is this one, and delete the row. The comment above records "
            "the two remedies this message used to name and why neither is available");
     g_docs[doc - 1].realm = realm;

@@ -122,7 +122,7 @@ void world_doc_adopt(uint32_t doc);
  * document, and `document_free` — reached from the realm's own teardown hook — is the moment it stops being
  * one.
  *
- * AND THAT ARGUMENT IS ABOUT STALENESS AND IS SILENT ABOUT A FORK, WHICH IS WHAT MAKES THE ROW WRONG RATHER
+ * AND THAT ARGUMENT IS ABOUT STALENESS AND IS SILENT ABOUT A SECOND LIVE REALM, WHICH MAKES THE ROW WRONG RATHER
  * THAN MERELY NARROW. The two edges do keep it honest against a realm that is GONE, and no pair of edges can
  * make ONE value right while TWO realms are live. A realm is per-flow state: this row is the one part of a
  * navigable's binding that does not ride the COW delta — a SECOND COPY of `ProxyData`'s own `realm`
