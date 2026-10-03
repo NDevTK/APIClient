@@ -539,7 +539,7 @@ const COLD_STEP_UNITS = ["stepNamedRenderingLife", "stepNamedRenderingTypeofLife
    appear in no construct anywhere, `engine/fieldgate.mjs`'s holder band has nothing left to see, and that
    file's WRITE-with-no-reader accusation over one composer rises from four rows to nine. The names stay
    SPELLED and the completeness becomes an ASSERT, which is CLAUDE.md
-   §AND-THE-COROLLARY-IS-THE-MORE-USEFUL-HALF: one added total covers every future spelling of the question
+   §THE-COROLLARY-IS-THE-MORE-USEFUL-HALF: one added total covers every future spelling of the question
    where a rewritten reader covers only the one somebody happened to find.
    RETIREMENT: this note goes when a composer declares its own rows ONE READING at the emitter — a machine-read
    line beside `@kinds-of` saying which of its rows no consumer may take in part — because the three keys below

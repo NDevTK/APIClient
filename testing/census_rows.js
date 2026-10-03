@@ -359,7 +359,7 @@ function kindsOf(carried, keys) {
    left to see. MEASURED in a frozen snapshot at 56206ade, both arms: the derived form takes that accusation
    from FOUR rows of this composer to NINE, which is §Architecture's prescribed remedy arguing for undoing the
    fix. What was missing was never the list, it was the invariant CLAUDE.md
-   §AND-THE-COROLLARY-IS-THE-MORE-USEFUL-HALF prescribes — one added total covers every future spelling of the
+   §THE-COROLLARY-IS-THE-MORE-USEFUL-HALF prescribes — one added total covers every future spelling of the
    question, where a rewritten predicate covers only the one somebody happened to find.
    IT TAKES THE COMPOSER KEYS AND NEVER A REGION, so the consumer states WHICH COMPOSER it takes whole and this
    file keeps the only statement of where that composer lives. A path and two literals repeated at the consumer
