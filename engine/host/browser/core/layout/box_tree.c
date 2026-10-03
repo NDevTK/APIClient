@@ -255,8 +255,11 @@ static void bt_require_answer_is_in_sequence(lxb_dom_element_t *box, lxb_dom_nod
    all (box_tree.h states that derivation and its armed control); no `list-style-image` on the originating
    element defines a marker image; and no `list-style-type` defines a marker string. A narrowing built from
    the third arm alone would answer §3.2 for an arm whose predecessors it never read.
-   THE TWO PROPERTIES §3.2 READS OFF THE ORIGINATING ELEMENT NOW HAVE AN INITIAL VALUE AND A GRAMMAR AND ARE
-   STILL NOT A COMPUTED VALUE, which is the other half of what this clause used to say: it read that
+   THE TWO PROPERTIES §3.2 READS OFF THE ORIGINATING ELEMENT NOW HAVE AN INITIAL VALUE, A GRAMMAR AND — FOR
+   ONE OF THE TWO — A COMPUTED VALUE. THIS CLAUSE READ `AND ARE STILL NOT A COMPUTED VALUE` OF BOTH, and it is
+   kept because a reader who counts §3.6's three longhands will re-derive it: §3.4's `css_computed_models` row
+   landed and §3.3's did not, so the pair is HALF answered and §3.2 still cannot be asked, for the ORDERING
+   reason two clauses down rather than for want of both. What it used to say is that it read that
    `list-style-type` "is in neither lexbor's property registry nor
    core/css/css_style_declaration.c's unregistered-initial table", and the second half is RETIRED — that table
    carries css-lists-3 §3.4 "Text-based Markers: the list-style-type property"'s `disc`, css-lists-3 §3.3
@@ -277,10 +280,22 @@ static void bt_require_answer_is_in_sequence(lxb_dom_element_t *box, lxb_dom_nod
    IT NAMED THE WRONG ASSERT, AND THAT IS WHAT THE NEXT READER NEEDS RATHER THAN THE COORDINATE: the predicate
    it called FIRST is `css_cv_modelled`'s SECOND, and `css_computed_models` is the first — so building only the
    thing the clause named leaves this narrowing blocked one line earlier than it said.
-   WHAT STILL BLOCKS §3.2 IS THEREFORE A `css_computed_models` ROW APIECE, and the three are not one row's
-   worth: §3.4's `Computed value:` line is `specified value`, §3.5's is "keyword, but see prose" over the
-   positioning scheme this file records as unbuilt, and §3.3's is "the keyword none or the computed <image>",
-   which resolves a `<url>` against css-values-4 §4.5.1 "Relative URLs". The named residual at
+   WHAT STILL BLOCKS §3.2 IS ONE ROW AND NOT THREE, AND THIS CLAUSE READ `A ROW APIECE` — kept in its own words
+   because the three longhands invite it. §3.4's row LANDED (`Computed value: specified value`, which
+   core/css/css_computed_value.c's as-specified arm answers whole), §3.5's is NOT TO BE BUILT ("keyword, but see
+   prose" over the positioning scheme this file records as unbuilt, and §3.2 reads the property in no arm at
+   all), and §3.3's is the one outstanding row.
+   THE ORDER IS WHAT MAKES §3.4's ROW INSUFFICIENT ON ITS OWN, which is this crash's own ordered-condition
+   sentence read forward rather than a new fact: §3.2's IMAGE arm precedes its TYPE arm, so a narrowing that
+   read `list-style-type` and not `list-style-image` would answer an arm whose predecessor it never asked.
+   §3.3's ROW IS TWO ARMS AND THE CLAUSE HERE NAMED ONLY ONE OF THEM: it said the line resolves a `<url>`
+   against css-values-4 §4.5.1 "Relative URLs", and §4.5.1's own last sentence is what that omits — "The
+   computed value of a URL that the UA cannot resolve to an absolute URL is the specified value." So the `<url>`
+   arm HAS a defined answer in the cascade today, and core/css/css_font_src.h holds the DECISION that this
+   engine does not resolve one there. What is genuinely not as-specified is the `<gradient>` arm, by css-images-3
+   §2 "Image Values: the <image> type"'s sentence that core/css/css_image.h already quotes — "A computed <image>
+   value is the specified value with any <url>s, <color>s, and <length>s computed" — so a row must tell the two
+   apart, and core/css/css_image.h exports `css_image_is_image` and nothing finer. The named residual at
    core/css/css_style_declaration.c's unregistered-initial table states that shape; verify each
    `Computed value:` line against the fetched draft rather than taking it from here.
    §3.1's LAST SENTENCE IS WHY THE `list-item` TEST IS THE WHOLE POPULATION AND NOT A FIRST APPROXIMATION OF IT:

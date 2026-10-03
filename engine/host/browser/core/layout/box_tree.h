@@ -112,9 +112,16 @@
  * THE CLAUSE WAS ALSO WRONG ABOUT WHICH ASSERT, WHICH IS THE PART WORTH KEEPING RATHER THAN THE COORDINATE: the
  * predicate it named is `css_cv_modelled`'s SECOND and `css_computed_models` is its FIRST, so a reader who built
  * only the thing it named would have met a crash one line earlier than the clause predicted. WHAT A COMPUTED
- * VALUE NOW WAITS ON IS THAT FIRST ONE — a `Computed value:` row apiece in core/css/css_computed_value.c, which
- * is THREE different amounts of work rather than one, stated at that table's own residual. §3.2's arms then
- * reach css-counter-styles-3 §6.3 "Symbolic: disc, circle, square, disclosure-open, disclosure-closed" for the
+ * VALUE NOW WAITS ON IS ONE ROW OF THAT FIRST PREDICATE AND NOT THREE, AND THIS CLAUSE READ `A ROW APIECE …
+ * THREE different amounts of work` — kept in its own words because §3.6's three longhands invite the count.
+ * css-lists-3 §3.4's row LANDED; §3.5's is not to be built at all, since §3.2 reads that property in no arm;
+ * and §3.3's is the one outstanding row, whose `<url>` arm css-values-4 §4.5.1 "Relative URLs" gives a defined
+ * computed value for ("The computed value of a URL that the UA cannot resolve to an absolute URL is the
+ * specified value") and whose `<gradient>` arm css-images-3 §2 "Image Values: the <image> type" does not — the
+ * split is at that table's own residual and needs an entry core/css/css_image.h does not export yet. §3.2 still
+ * cannot be asked, because its IMAGE arm precedes its TYPE arm and §3.4's row answers only the second.
+ * §3.2's arms then reach css-counter-styles-3 §6.3 "Symbolic: disc, circle, square, disclosure-open,
+ * disclosure-closed" for the
  * symbol a `disc` marker is filled with, and any NUMERIC style additionally needs css-lists-3 §4.6 "The
  * Implicit list-item Counter" — which is why that arm is a crash of its own and not part of the same landing.
  * THE MEMBER TYPE IS THE LANDING AFTER THAT AND IS NO LONGER AN OPEN QUESTION: it becomes a BY-VALUE PAIR of

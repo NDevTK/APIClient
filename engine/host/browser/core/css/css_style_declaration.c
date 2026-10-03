@@ -3072,19 +3072,38 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
        expansion and all three `Value:` lines — so a declared value has been through its own grammar and is
        canonicalized, and both spellings of one declaration agree.
          WHAT IS NOT COVERED: `css_computed_value` — the entry a C spec algorithm asks, and the only one — goes
-         on crashing for all three names at `css_cv_modelled`'s FIRST assert. Its SECOND,
-         `css_shorthand_complete_for`, now answers TRUE for them, which is what §3.6's row bought.
-         WHAT THE NEXT DIFF BUILDS: a `css_computed_models` row apiece in core/css/css_computed_value.c, and
-         the three are NOT one row's worth of work. css-lists-3 §3.4's `Computed value:` line is
-         `specified value` and is one row of that file's as-specified arm; css-lists-3 §3.5's is
-         "keyword, but see prose" and its prose is the positioning scheme above, so a row for it would answer a
-         keyword whose two arms nothing distinguishes; and css-lists-3 §3.3's is
-         "the keyword none or the computed <image>", which is NOT as-specified — a computed
-         `<image>` has its `<url>` resolved against css-values-4 §4.5.1 "Relative URLs", which that file's text
-         arm does not do. Verify each line against the fetched draft rather than taking it from here.
+         on crashing for `list-style-image` and `list-style-position` at `css_cv_modelled`'s FIRST assert. Its
+         SECOND, `css_shorthand_complete_for`, answers TRUE for all three, which is what §3.6's row bought.
+         THE CLAUSE HERE READ `all three names`, AND css-lists-3 §3.4's ROW LANDED — kept in its own words
+         because a reader who counts the three longhands will re-derive it. §3.4's `Computed value:` line is
+         `specified value`, which is core/css/css_computed_value.c's as-specified arm whole, so that row is in
+         `css_computed_models` and in that arm's own enumeration; the other two are each a different amount of
+         work and neither is one row.
+         WHAT THE NEXT DIFF BUILDS: css-lists-3 §3.3's row, WHICH IS TWO ARMS AND NOT ONE — and the clause that
+         stood here read that its `Computed value:` line is "NOT as-specified" because "a computed `<image>` has
+         its `<url>` resolved against css-values-4 §4.5.1 "Relative URLs", which that file's text arm does not
+         do", which is kept because a reader who reads §3.3's line alone will re-derive it. IT IS TRUE OF THE
+         RESOLUTION AND NOT OF THE ANSWER, and the sentence it omits is §4.5.1's own last one: "The computed
+         value of a URL that the UA cannot resolve to an absolute URL is the specified value." So a `<url>` this
+         engine cannot resolve HAS a defined computed value and it is the specified one — and this engine cannot
+         resolve one in the cascade by a DECISION recorded at core/css/css_font_src.h, which holds a `src` url as
+         the page spelled it and assigns resolution to the fetching component, citing CSS Font Loading §2.1 "The
+         Constructor"'s own ISSUE that the base url is unsettled in the standard for that caller. What is left
+         NOT as-specified is the `<gradient>` arm, by css-images-3 §2 "Image Values: the <image> type"'s own
+         sentence — "A computed <image> value is the specified value with any <url>s, <color>s, and <length>s
+         computed" — which core/css/css_image.h already quotes: a `list-style-image: linear-gradient(red, blue)`
+         computes `red` to `rgb(255, 0, 0)` and reporting the author's bytes would be a specified value under the
+         word computed. SO THAT ROW NEEDS A `<url>`/`<gradient>` SPLIT THIS TREE DOES NOT EXPORT: core/css/
+         css_image.h offers `css_image_is_image` and nothing finer, with `img_url` and `img_gradient` both
+         static, so the landing is an entry there before it is a row here. Verify each line against the fetched
+         draft rather than taking it from here.
+         css-lists-3 §3.5's IS STILL NOT TO BE BUILT and the reason is unchanged: its line is "keyword, but see
+         prose", its prose is the positioning scheme above, and §3.2 reads the property in NO arm — so a row
+         would answer a keyword whose two arms nothing distinguishes, for no caller.
          HOW ITS ABSENCE WOULD SHOW: core/layout/box_tree.c's `bt_require_marker_box_is_spellable` goes on
-         refusing EVERY list item rather than only the ones css-lists-3 §3.2 gives a marker box, because the
-         narrowing it names reads these properties through `css_computed_value` and that entry crashes.
+         refusing EVERY list item rather than only the ones css-lists-3 §3.2 gives a marker box, because §3.2 is
+         an ORDERED condition whose image arm precedes its type arm — so the narrowing it names cannot be built
+         from §3.4's row alone, and reads `list-style-image` through `css_computed_value`, which crashes.
        A SECOND NARROWNESS THAT WAS RECORDED HERE IS RETIRED, AND THE RETIRED WORDING IS KEPT BECAUSE A READER
        WHO FINDS A RAW DECLARED VALUE IN THE CASCADE WILL RE-DERIVE IT — in its own words, unquoted because a
        run of this tree's prose is not a spec quotation: A DECLARED VALUE IS STORED AS THE AUTHOR'S OWN BYTES,

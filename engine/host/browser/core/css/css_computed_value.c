@@ -1460,6 +1460,38 @@ bool css_computed_models(const char *name)
               element, and such an element will participate normally in hit-testing." So a walk asks this of
               EVERY box it considers and never prunes a subtree on one answer. */
            strcmp(name, "pointer-events") == 0 ||
+           /* css-lists-3 §3.4 "Text-based Markers: the list-style-type property", whose `Computed value:` line
+              is `specified value` over a `Value:` line of `<counter-style> | <string> | none` — read off the
+              fetched editor's draft, because engine/specindex carries no css-lists-3 row and nothing in this
+              tree judges a citation to it. Every arm of that line is a value with no unit, no percentage and
+              no environment fact behind it, so the as-specified arm is the whole of the rule: a
+              `<counter-style-name>` is an ident core/css/css_shorthand.c's §3.4 grammar has already
+              canonicalized through core/css/css_counter_style.c's `css_counter_style_canonical_name`, a
+              `<string>` is the author's own bytes, and `none` is the keyword.
+              IT IS HERE BECAUSE ONE ALGORITHM ASKS FOR IT BY NAME AND COULD NOT: css-lists-3 §3.2 "Generating
+              Marker Contents" is an ORDERED condition — "The contents of a marker box are determined by the
+              first of these conditions that is true" — whose third arm is "list-style-type on the originating
+              element defines a marker string", and core/layout/box_tree.c's
+              `bt_require_marker_box_is_spellable` refuses EVERY list item for want of it rather than only the
+              ones §3.2's `otherwise` arm gives no marker box. §3.2 reads the ORIGINATING ELEMENT's own
+              computed value, and `css_computed_value` is the entry a C spec algorithm asks.
+              IT IS NOT THE WHOLE OF §3.2 AND THE ROW DOES NOT CLAIM TO BE, which is what the ORDER of that
+              condition decides rather than a judgement made here: the arm ABOVE this one reads
+              `list-style-image`, so a §3.2 built from this property alone would make true an arm that is only
+              reached once the one above it is false. That property's own row is the next landing and is a
+              different amount of work — css-lists-3 §3.3's `Computed value:` line is "the keyword none or the
+              computed <image>" — and core/css/css_style_declaration.c's unregistered-initial table states its
+              shape at the residual that named this one.
+              `Inherited: yes`, AND THE ROW IS WHAT MAKES THAT INHERITANCE §7.2's OWN: core/css/css_defaulting.c
+              already carries the name, and `css_cv_specified`'s inherited arm routes a property THIS predicate
+              answers for through `css_computed_value` of the parent — so css-cascade-5 §7.2 "Inheritance"'s own
+              sentence, "The inherited value of a property on an element is the computed value of the property
+              on the element's parent element", was answered with the parent's SPECIFIED value for every list
+              item on every page until this row. THAT IS A DISTINCTION WITH NOTHING OBSERVABLE BEHIND IT HERE,
+              which is why the row is safe to land on its own and is not a behaviour change wearing a comment:
+              §3.4's line IS `specified value`, so the two readings are byte-identical at every element, and
+              what the row buys is that the question is now ASKED through the entry that derives one. */
+           strcmp(name, "list-style-type") == 0 ||
            css_computed_models_length(name) ||
            css_border_side_of(name, "style") >= 0;
 }
@@ -1879,9 +1911,10 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
               "computed value has");
     spec = css_cv_specified(el, name);
     DCHECK(spec != NULL,
-           "§7's defaulting produced no SPECIFIED value for a keyword-valued property this component models — "
-           "every one of them is in lexbor's registry with an initial value, or in css_style_declaration.c's "
-           "table of the eight border longhands the registry does not carry");
+           "§7's defaulting produced no SPECIFIED value for a property this component models — every one of "
+           "them has an `Initial:` value to fall to, either from lexbor's own property registry or from "
+           "css_style_declaration.c's unregistered-initial table, whose own invariant asserts that every row "
+           "it carries has a non-empty one and that no row's name is in that registry");
     if (strcmp(name, "overflow-x") == 0 || strcmp(name, "overflow-y") == 0)
         return computed_overflow(el, name, spec);
     if (strcmp(name, "display") == 0)
@@ -2034,6 +2067,7 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
                strcmp(name, "visibility") == 0 || strcmp(name, "z-index") == 0 ||
                strcmp(name, "pointer-events") == 0 ||
                strcmp(name, "align-items") == 0 || strcmp(name, "align-self") == 0 ||
+               strcmp(name, "list-style-type") == 0 ||
                css_border_side_of(name, "style") >= 0,
            "a property this component claims to model reached the as-specified arm without a `Computed value: "
            "as specified` line to justify it — css_computed_models and this switch are one list and have come "
