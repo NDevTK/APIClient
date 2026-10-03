@@ -64,6 +64,27 @@ SRC=$(git rev-parse --show-toplevel)
 ROOT="${FROZEN_SNAPSHOT_ROOT:-${TMPDIR:-/tmp}/apiclient-frozen}"
 mkdir -p "$ROOT"
 
+# THE OBJECT STORE IS SHARED BY EVERY SNAPSHOT AND LIVES OUTSIDE ALL OF THEM, WHICH IS WHAT MAKES A FREEZE AT A
+# NEW REVISION INCREMENTAL. `engine/build.mjs` names objects by the HASH of everything that decides their bytes
+# — the compiler's own version text, the flag set, the source, and every header that compile recorded itself as
+# having read — so `<id>.o` existing is a FACT about an input set rather than a guess about a clock. A snapshot
+# at a second revision therefore computes the SAME name for every file that did not move and a DIFFERENT name
+# for every file that did, which is the whole of the mechanism: there is nothing here to be stale about.
+#
+# BESIDE THE SNAPSHOTS AND ON THEIR DEVICE, SO `root_avail_mb` IS ANSWERING ABOUT THE RIGHT FILESYSTEM. The
+# reclaim loop below sheds snapshots because THIS device is short; a store on another one would make that loop
+# free bytes the store cannot use, which is one question answered about two filesystems. It is NOT under
+# `snap-*`, so the candidate glob does not mistake it for a snapshot.
+#
+# EXPORTED RATHER THAN SYMLINKED INTO THE SNAPSHOT, and the choice is argued at the objdir block below.
+#
+# A LANE THAT WANTS A PRIVATE STORE SETS IT, exactly as `FROZEN_SNAPSHOT_ROOT` works and with the same cost that
+# file's own closing paragraph states for that one: a private store starts cold and shares its warmth with
+# nobody. Per-lane is the right escape hatch and the wrong default.
+STORE="${APICLIENT_OBJ_STORE:-$ROOT/objstore}"
+mkdir -p "$STORE"
+export APICLIENT_OBJ_STORE="$STORE"
+
 # RESOLVE EVERY REVISION IN THE PARENT, BEFORE CLONING, AND PASS THE SHA.
 # A clone's `origin/*` is built from the source repository's LOCAL branches, not from its remote-tracking ones,
 # so inside a snapshot `origin/main` means "the parent's local main" — which in a shared checkout is whatever a
@@ -95,7 +116,10 @@ snapshot_is_live() {
 # This is NOT the mtime question the liveness gate above rightly refuses: that one asks "is someone reading
 # this RIGHT NOW", which mtime cannot answer because a reader writes nothing. This asks "when was this last
 # touched at all", which is the only ordering key available and which a build, a checkout and a gate all move.
-# The directory's own mtime is not it — a build writing into `engine/.work/obj` does not touch the top level.
+# The directory's own mtime is not it — a build writing `extension/lib/qjs` or a stage log does not touch the top
+# level. That example used to be `engine/.work/obj`, and it is replaced rather than dropped because the CLAIM is
+# unchanged and only the instance moved: objects now land in the shared store outside this snapshot, so that one
+# path stopped being written here at all. A deep write still happens on every build and is still the answer.
 # Measured on a live snapshot: top-level mtime 1789649354, deepest mtime 1789649435, eighty-one seconds apart
 # and the deeper one the true answer. Costs ~15 ms on a populated snapshot, so it is affordable per candidate.
 # A tree with no entries answers 0 and sorts first, which is the right answer for a directory holding nothing.
@@ -329,8 +353,39 @@ if [ -z "$NEED" ]; then
   NEED=$(printf '%s\n' "$CAND" | awk -F'\t' 'BEGIN{m=0} $2>m{m=$2} END{print m+0}')
   [ "$NEED" -lt 1024 ] && NEED=1024
 fi
+# THE SHARED OBJECT STORE IS ONE MORE CANDIDATE IN THIS LOOP AND NOT A SECOND POLICY. It is a second consumer
+# of this device, so "do I need this disk?" is the SAME question with one more thing that can answer it; a
+# per-store headroom number beside the one above would be two answers to one question, which is the shape that
+# drifts. It therefore gets this loop's liveness gate, this loop's accounting and `reclaim_snapshot`'s own
+# evidence-then-log-then-delete — and `preserve_evidence` is correct over it without being told anything: a
+# store holds no `*.log` and no `extension/lib/qjs`, because everything in it is RE-DERIVABLE BY DEFINITION.
+#
+# APPENDED AFTER THE SORT, SO IT IS SHED LAST, AND THE ORDER IS ARGUED RATHER THAN MEASURED. Within the
+# snapshots, least-recently-used is right because every candidate costs the SAME to re-derive — a clone and a
+# checkout, seconds. The store does not: shedding it costs a full compile in every snapshot that was warm, which
+# is the most expensive re-derivation on this device. So it goes after everything that is cheaper to rebuild,
+# which is a tiebreak on what leaves first rather than a bound; MEMBERSHIP of nothing is decided here.
+#
+# IT IS NOT IN THE `NEED` COMPUTATION ABOVE, which asks what ONE SNAPSHOT costs. A store is not one, and folding
+# its size into that maximum would raise the headroom every freeze demands and so shed PEERS' snapshots harder
+# for a number that is not about a snapshot at all.
+#
+# AND DELETING FROM IT CANNOT PRODUCE A WRONG ANSWER, which is the whole of why any policy here is admissible.
+# An object's name is a HASH of the inputs that decided its bytes, so an absent object is a MISS, and a miss is
+# a compile. There is no reading under which this loop makes a build link something it should not have — which
+# is exactly what could NOT be said of the mtime cache this store replaces, and is why that one had to be
+# private and empty instead of swept.
+#
+# NOT SHED WHILE ANY SNAPSHOT IS LIVE, BECAUSE ITS OWN LIVENESS QUESTION IS WEAKER THAN A SNAPSHOT'S. A build
+# holds an fd in the store only while a compiler is actually writing one; a build in its identity pass — hashing
+# names, asking whether each object exists — holds none, and would read as reclaimable. A live SNAPSHOT is a
+# live build and a live build may be reading this, so the conjunction closes the gap by construction instead of
+# by a timeout. Being last in the list is what makes that free: if this row is reached at all, every snapshot
+# above it has already been asked.
 AVAIL=$(root_avail_mb)
 echo "reclaim    ${AVAIL}MB free, ${NEED}MB wanted for one snapshot$([ -n "${FROZEN_SNAPSHOT_HEADROOM_MB:-}" ] && echo " (FROZEN_SNAPSHOT_HEADROOM_MB)")"
+CAND=$(printf '%s\n' "$CAND"; printf '%s\t%s\t%s\n' "$(snapshot_last_use "$STORE")" "$(snapshot_size_mb "$STORE")" "$STORE")
+LIVE_SEEN=""
 while IFS=$'\t' read -r lu sz old; do
   [ -n "$old" ] || continue
   [ -d "$old" ] || continue
@@ -339,9 +394,23 @@ while IFS=$'\t' read -r lu sz old; do
     continue
   fi
   if snapshot_is_live "$old"; then
+    LIVE_SEEN=yes
     echo "keeping $(basename "$old") — a live process has it open or is cwd'd into it"; continue
   fi
-  reclaim_snapshot "$old" "${AVAIL}MB free below the ${NEED}MB one snapshot needs; least recently used, last touched $(date -Is -d "@$lu" 2>/dev/null || echo "$lu")"
+  if [ "$old" = "$STORE" ]; then
+    if [ -n "$LIVE_SEEN" ]; then
+      echo "keeping $(basename "$old") — a live snapshot above is a live build, which may be reading this store"
+      echo "         without holding an fd in it; its own liveness answer is not enough to shed it on"
+      continue
+    fi
+    WHY="${AVAIL}MB free below the ${NEED}MB one snapshot needs; the SHARED OBJECT STORE, shed after every"
+    WHY="$WHY snapshot because a recompile is the most expensive re-derivation here — and shedding it cannot"
+    WHY="$WHY give a wrong answer, only a compile, because an object's name is a hash of what produced it"
+  else
+    WHY="${AVAIL}MB free below the ${NEED}MB one snapshot needs; least recently used, last touched"
+    WHY="$WHY $(date -Is -d "@$lu" 2>/dev/null || echo "$lu")"
+  fi
+  reclaim_snapshot "$old" "$WHY"
   AVAIL=$((AVAIL + sz))
 done <<< "$CAND"
 if [ "$AVAIL" -lt "$NEED" ]; then
@@ -383,13 +452,62 @@ fi
 mkdir -p "$DIR/engine/.work"
 rm -rf "$DIR/engine/.work/emsdk" "$DIR/engine/.work/wpt"
 # SYMLINK A PURE TOOLCHAIN; give a PRIVATE, EMPTY directory to anything the build WRITES TO.
-# The object cache reads like part of the toolchain and is part of the MEASUREMENT: sharing it makes every
-# "frozen" snapshot a lie in both directions at once — the build reads objects compiled from other revisions
-# and writes its own back for the next snapshot to read, which is the one input still moving under a gate whose
-# entire product is a number belonging to a revision. A copy is not a fix either, because a copy carries
-# exactly the stale objects that cause it. The price is a full compile per gate run and it is the right price.
-# EMPTY MEANS EMPTY OF ANOTHER REVISION'S OBJECTS, WHICH IS WHY A REUSED SNAPSHOT KEEPS ITS OWN — see the
-# reuse block above; those were compiled from these sources at this SHA and are shared with nobody.
+#
+# AND THE OBJECT CACHE IS THE ONE CASE THAT RULE DOES NOT REACH, SO THE STORE IS SHARED AND IS SET AT THE TOP OF
+# THIS FILE. The paragraph that stood here is kept verbatim below because it is SOUND about the cache it was
+# written against and a reader who re-derives it will re-add it:
+#
+#   "The object cache reads like part of the toolchain and is part of the MEASUREMENT: sharing it makes every
+#    'frozen' snapshot a lie in both directions at once — the build reads objects compiled from other revisions
+#    and writes its own back for the next snapshot to read, which is the one input still moving under a gate
+#    whose entire product is a number belonging to a revision. A copy is not a fix either, because a copy
+#    carries exactly the stale objects that cause it. The price is a full compile per gate run and it is the
+#    right price."
+#
+# EVERY CLAUSE OF THAT WAS TRUE UNDER AN MTIME CACHE, which is what stood in `engine/build.mjs` when it was
+# written. The recorded incident is an mtime incident: 13498 objects in an 836 MB directory symlinked into every
+# frozen build of a session, found only when a lane's commit changed a STRUCT SIZE — an object reported FRESH
+# because its timestamp beat a header's, in another tree. The key is a CONTENT HASH now, over the compiler's own
+# version text, the flag set, the source, and every header that compile recorded itself as having read. So
+# "objects compiled from other revisions" is TRUE AND HARMLESS: an object from another revision either has the
+# SAME inputs, in which case a compiler's output is the same bytes and it IS this revision's object, or it has a
+# DIFFERENT NAME and this build cannot reach it. The struct-size case is the first kind inverted — edit a header
+# and its bytes hash differently, so every object that read it is RENAMED and the stale one is unreachable.
+#
+# EXPORTED, NOT SYMLINKED, AND THE RULE ABOVE IS WHY. That rule is about SHAPE — link a toolchain, copy what the
+# build writes — and the exception is about CONTENT ADDRESSING, which is invisible at a `ln -s`. A link here
+# would put the one line that breaks the rule directly under the line that states it, with its whole
+# justification unreadable from either. It is also the shape that puts the shared store inside the blast radius
+# of every path operation in this script: `rm -rf` of a symlink is safe TODAY, and one later diff adding a
+# trailing slash, a `cp -a`, or a `find -L` reaches through it. An environment variable is reachable by no path
+# operation at all. And it keeps `snapshot_last_use` honest: `find` does not follow links, so a build writing
+# objects through one would touch NOTHING this script's LRU key can see — degrading the mechanism this file
+# argues for at length, for a directory that is not the snapshot's cost anyway.
+#
+# WHAT IS NOT SHARED AND THE REFUSAL IS THE SAME DISCRIMINATOR READ THE OTHER WAY: the two LEXBOR archives.
+# `engine/.work/liblexbor.o` (emcc, with `liblexbor.srcid` beside it) and `engine/.work/lexbor-native/`
+# (cmake+make, with its own stamp) are each a FIXED FILENAME plus a SIDECAR ID, written IN PLACE. Neither
+# property the store rests on is present: the name carries no identity, so two revisions want the same path, and
+# the publish is not atomic, so a second snapshot recompiling the archive overwrites bytes a first may be
+# linking. Sharing those would re-create exactly the defect the quoted paragraph above describes, which is why
+# it is refused rather than deferred. AND THE COST OF REFUSING IS STATED RATHER THAN HIDDEN, in the two figures a
+# cold frozen build prints for itself: `lexbor: compiling 213 sources` for the emcc archive, and a second
+# cmake+make over that same source tree for the native one whose count it does not print — against the 458 in
+# `TO_COMPILE` that ARE in the store, which that same build reports as `458 to compile` on each toolchain. So a
+# freeze at a new revision still pays two lexbor compiles, and a wall time that barely moves on the second half
+# of a controlled pair is THAT cost and not this change failing. Those two become the larger half of what a
+# frozen build compiles from cold once this lands, which is a reason to build the next diff and not a reason to
+# widen this one — a second subproblem added here is how a diff lands half-scoped.
+# RESIDUAL — WHAT THE NEXT DIFF BUILDS is the same two properties for those archives: a content-addressed name
+# (`liblexbor-<srcid>.o`) and a publish by `rename`, after which they share under the identical argument and
+# `liblexbor.srcid` stops existing because the name carries what the stamp was for. HOW ITS ABSENCE WOULD SHOW:
+# a freeze at a revision whose `engine/lexbor/source` did not move reports `0 to compile (rest cached)` from the
+# store and still prints a lexbor line naming a source count — the two halves of one build disagreeing about
+# whether anything changed.
+#
+# A PRIVATE EMPTY DIRECTORY IS STILL MADE AND THIS LINE STILL DELETES ONE, because a build run in a snapshot
+# WITHOUT `APICLIENT_OBJ_STORE` set falls back to it — and those objects are that snapshot's own at that SHA,
+# which is why a REUSED snapshot keeps them and a replaced one does not. Nothing about that reading changed.
 [ -n "$REUSE" ] || rm -rf "$DIR/engine/.work/obj"
 [ -d "$SRC/engine/.work/emsdk" ] && ln -s "$SRC/engine/.work/emsdk" "$DIR/engine/.work/emsdk"
 [ -d "$SRC/engine/.work/wpt" ]   && ln -s "$SRC/engine/.work/wpt"   "$DIR/engine/.work/wpt"
@@ -461,6 +579,19 @@ fi
 echo "evidence   $ROOT/EVIDENCE-*.log  (per-revision logs kept when a snapshot is reclaimed)"
 echo "reclaimed  $ROOT/RECLAIMED.log   (why a snapshot that is gone went, and to whose freeze)"
 echo "snapshot   $DIR"
+# THE STORE IS NAMED HERE FOR THE REASON `node_modules` IS NAMED BELOW: an input nobody states is read from
+# wherever the resolver finds it, and a `0 to compile (rest cached)` is unreadable without knowing which store
+# answered. It is RE-MADE first because the reclaim loop above is entitled to have shed it — which costs a
+# compile and nothing else — and the path this line prints is the one the build will create and use either way.
+# ITS ENTRY COUNT IS THE WARMTH A READER IS ABOUT TO QUOTE: an empty store means the next build is cold, and
+# that is a cost rather than a defect, where a build reporting cached units from an EMPTY store would be one.
+mkdir -p "$STORE"
+echo "objstore   $STORE  ($(ls -A "$STORE" 2>/dev/null | wc -l | tr -d " ") entries, shared by every snapshot;"
+echo "           objects are named by a hash of compiler+flags+source+recorded headers, so a hit is this"
+echo "           revision's own object and a miss is a compile — see engine/build.mjs's OBJECTS banner)"
+echo "           EXPORTED as APICLIENT_OBJ_STORE to the command this script runs. A caller that cd's in and"
+echo "           builds by hand gets NO such variable and so a per-snapshot store that starts cold — which is"
+echo "           the same reason the 'run it' form below needs no cd, and is a cost rather than a wrong answer."
 # THE MODIFICATION GOES ON THE `revision` LINE ITSELF, NOT BESIDE IT. This is the line a reader quotes a
 # number against, and a qualification on a neighbouring line is the one a relay drops — so a reused snapshot
 # a lane has edited cannot be quoted as though it were the revision. The listing below it is the evidence;

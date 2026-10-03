@@ -6599,9 +6599,14 @@ console.log("[rev] the source-derived field contracts were taken at that revisio
    (toolchain version string, flag set, source bytes, recorded header bytes) and all four are parameters or
    content. So a warm cache stays warm across this move, and `emcc: N sources, 0 to compile (rest cached)` on
    the first build after it is the test — a full recompile means a name moved and that is a defect in this
-   change rather than a cost of it. (A FROZEN snapshot still compiles everything, which is not that failure:
-   engine/frozen_snapshot.sh gives each snapshot a PRIVATE EMPTY `engine/.work/obj` on purpose, and nothing
-   here shares an object across one.)
+   change rather than a cost of it. (THAT PARENTHESIS USED TO READ `A FROZEN snapshot still compiles
+   everything ... engine/frozen_snapshot.sh gives each snapshot a PRIVATE EMPTY engine/.work/obj on purpose,
+   and nothing here shares an object across one`, and it is rewritten rather than deleted because a reader who
+   re-derives it from the private-objdir rule will re-add it: frozen snapshots now SHARE one store, set through
+   `APICLIENT_OBJ_STORE` below, so a frozen build at a revision whose files mostly did not move reports the
+   same `0 to compile (rest cached)` every other build does. What a frozen snapshot still compiles from cold is
+   the two LEXBOR archives, which are outside this cache entirely and are named for the reason the store's own
+   paragraph gives.)
    RETIREMENT: this record goes when every declaration this section holds is a hoisted form, because a call
    from above cannot then throw at all and the ordering stops being a thing anybody has to know. */
 /* ── OBJECTS, NAMED BY WHAT PRODUCED THEM ─────────────────────────────────────────────────────────────────────
@@ -6627,8 +6632,89 @@ console.log("[rev] the source-derived field contracts were taken at that revisio
    therefore RE-ROOTED before it is recorded (`repo:<path-from-the-checkout-root>`); an out-of-tree toolchain
    header keeps its absolute path, because that IS one file for every checkout on this machine; and either way
    it is hashed by CONTENT, so which tree it was read from cannot matter. */
-const OBJDIR = join(WORK, "obj");
+/* WHERE THE STORE LIVES IS A POLICY INPUT, AND SHARING ONE ACROSS FROZEN SNAPSHOTS IS WHAT THE CONTENT NAME
+   ABOVE WAS ALWAYS FOR — the paragraph above says so in its own words ("an obj/ directory copied or shared
+   between snapshots HITS exactly when the content genuinely matches, and MISSES exactly when it does not") and
+   there was no second VALUE for the path to make it reachable. `engine/frozen_snapshot.sh` sets this; nothing
+   else does, so an unset or EMPTY value is today's answer at today's path and every working-tree build is
+   byte-identical across this change.
+   THE RETIRED ARGUMENT, KEPT BECAUSE A READER WHO RE-DERIVES IT WILL RE-ADD IT. A shared store was refused, by
+   that script and by the banner at the top of this section, on the ground that "the build reads objects
+   compiled from other revisions and writes its own back for the next snapshot to read, which is the one input
+   still moving under a gate whose entire product is a number belonging to a revision". That is TRUE and was
+   DECISIVE under an MTIME cache, which is what stood there when it was written and which could report FRESH
+   for an object compiled against another tree's headers — the recorded incident being 13498 objects in an
+   836 MB directory symlinked into every frozen build of a session, found only when a commit changed a STRUCT
+   SIZE. It does not reach a CONTENT name: `<id>.o` existing means some compile, with this compiler's version
+   text and this flag set, over a source and headers whose bytes hash to `id`, produced it — so an object "from
+   another revision" is either BYTE-IDENTICAL to the one this revision would emit, inputs being equal, or it
+   has a DIFFERENT NAME and this build cannot reach it. There is no third case, and the struct-size incident is
+   the first one: edit `idl_args.h` and its bytes hash differently, so every object that read it is renamed.
+   WHAT A SHARED STORE RESTS ON THAT NOTHING ELSE ASSERTS IS THAT NO SNAPSHOT-VARYING PATH REACHES `flagId`, and
+   it holds by construction rather than by a check. `unroot` removes ROOT and EMSDK; a snapshot IS a tree and
+   ROOT is its top, so every path that differs between two snapshots is ROOT-prefixed and goes. Read for both
+   toolchains: emcc's four `-I` roots and its `-ffile-prefix-map` are ROOT-relative, the native dialect's four
+   are the same four, and neither list holds another absolute path; `toolchain()` drops the one line of a version
+   string that carries one. NO NON-VACUOUS ASSERT IS AVAILABLE HERE AND THAT IS WORTH SAYING RATHER THAN WRITING
+   A VACUOUS ONE: "the unrooted text holds no ROOT" is true of `unroot`'s own output by definition, and the wider
+   predicate — "holds no absolute path" — would FIRE ON A CORRECT FLAG, because an out-of-tree toolchain header
+   is one file for every checkout on this machine and the paragraph above keeps its absolute path deliberately.
+   WHAT THIS DOES NOT CHANGE IS WHAT IS COMPILED. The flag set, the toolchain, the source set and the recorded
+   header list are the same four things they were, and none of them is this path; a number therefore still
+   belongs to the revision the snapshot's own `revision` line names, and the artifact a shared store builds is
+   the artifact a cold one would have built.
+   IT IS SAFE TO EVICT FROM FOR THE SAME REASON IT IS SAFE TO SHARE: a name is a FACT about an input set, so a
+   missing object is a MISS and a miss is a recompile. No deletion from this directory can produce a wrong
+   answer, which is what makes any eviction policy admissible over it — see that script's reclaim loop, which
+   is the one place that decides when the device is short.
+   PRINTED, because "0 to compile (rest cached)" is unreadable without it: two builds reporting that line from
+   two different stores are indistinguishable in a log, which is the reason the banner below already names the
+   TOOLCHAIN on the same line.
+
+   RESIDUAL — THE KEY DOES NOT COVER SYSTEM HEADERS, AND A SHARED STORE IS WHERE THAT STOPS BEING FREE.
+   WHAT IS NOT COVERED: `-MMD` at the compile below is `-MD` MINUS SYSTEM HEADERS, so what a translation unit
+   read from /usr/include is in no object's name. A libc or kernel-header upgrade IN PLACE therefore invalidates
+   nothing and every object that read those headers stays reachable by name. A TOOLCHAIN upgrade is covered and
+   is a different thing: `toolchain()` hashes the compiler's own `--version` text, so a new clang or a new emsdk
+   renames every object it would emit. This was already true of a per-tree store and cost one tree one stale
+   compile; a store shared by every snapshot on the machine spreads the same stale object to every one of them,
+   which is why it is named HERE rather than left where it was.
+   WHAT THE NEXT DIFF BUILDS, and there are two shapes with different prices. `-MD` in place of `-MMD` closes it
+   exactly, and its cost is read in the identity pass rather than in the compile: `contentId` would hash every
+   system header each unit recorded, which widens the unique-file set `fileHashes` reads — the one cost control
+   this section has — by the whole libc header surface. A STORE GENERATION folded into `flagId` closes it
+   approximately for one hash of a cheap string: the system triple plus the libc build id, which renames every
+   object once per upgrade instead of reading a header per build. The second is the one to prefer if the first
+   measures badly, and which it is is a measurement rather than an argument.
+   HOW ITS ABSENCE WOULD SHOW: a build reports every unit cached across a change to the machine's own C library,
+   and the program it links is not the program a build with an emptied store at the same revision links. The
+   observation is that pair — same revision, one run against the standing store and one against an empty
+   directory — differing in the linked binary, which is a comparison anybody can make and which names no header
+   and no translation unit.
+
+   RESIDUAL — A NATIVE OBJECT IS NOT PATH-INDEPENDENT, SO A SHARED ONE CARRIES THE DONOR SNAPSHOT'S DIRECTORY.
+   WHAT IS NOT COVERED: `CFLAGS` carries `-ffile-prefix-map=<ROOT>/=` and `NATIVE_CFLAGS` carries no such flag.
+   Every source reaches both compilers by ABSOLUTE path, and clang expands `__FILE__` to the path as it was
+   written on the command line (measured directly, and measured rewritten under `-ffile-prefix-map`), while
+   `check.h` emits `__FILE__` verbatim into the `@WHY` every DCHECK and DFAIL prints. A native object shared
+   between two snapshots is therefore a CORRECT compile of the right inputs whose aborts name the directory of
+   the snapshot that compiled it. The emcc half is unaffected, and its own flag's paragraph already claims
+   exactly this property for itself and names sharing as what it is for.
+   WHAT THE NEXT DIFF BUILDS: `-ffile-prefix-map=` + ROOT + `/=` in `NATIVE_CFLAGS`, which makes a native object
+   path-independent on the same terms as an emcc one. Its cost is that the flag is part of `flagId`, so every
+   native object is RENAMED once and one native compile is cold — which is why it is not in this diff: it would
+   land inside the controlled pair that scores the shared store and make a full native recompile there
+   indistinguishable from a key that moved, which is the one reading that pair exists to produce.
+   HOW ITS ABSENCE WOULD SHOW: a `@WHY` from a native binary names a `file` whose directory prefix is a snapshot
+   path OTHER than the one the run's own `act` line names. The observation is the comparison of those two
+   strings; it needs no knowledge of which assertion fired, and it is available in any log that holds both. */
+const OBJ_STORE_ENV = process.env.APICLIENT_OBJ_STORE || "";
+const OBJDIR = OBJ_STORE_ENV ? resolve(OBJ_STORE_ENV) : join(WORK, "obj");
 mkdirSync(OBJDIR, { recursive: true });
+console.log("[build] objects  " + OBJDIR +
+            (OBJ_STORE_ENV ? "  (APICLIENT_OBJ_STORE — shared; a name is a fact about an input set, so a hit " +
+                             "is this revision's object and a miss is a compile)"
+                           : "  (this tree's own)"));
 /* THE FLAGS ARE PART OF THE OBJECT'S NAME, NOT A THING THE CACHE COMPARES. The comment above says a cache
    that misses a header edit reports a stale binary as a fresh one; this cache once missed a FLAG edit, which is
    the same defect with a wider blast radius. `CFLAGS` carries `-DAPICLIENT_DEV=0` under `release` and `=1`
