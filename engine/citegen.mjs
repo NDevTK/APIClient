@@ -1020,6 +1020,32 @@ const SPECS = [
     anchors: ["css-logical-1", "css logical", "css-logical"] },
   { key: "cssinline3", label: "CSS Inline Layout Module Level 3", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-inline-3/", edition: "maintained", anchors: ["css-inline-3"] },
+  /* CSS LISTS AND COUNTERS, INDEXED RATHER THAN LISTED AS FOREIGN, AND THE DIFFERENCE IS WHAT A ROW BUYS: a
+     foreign row buys SILENCE and an index buys ANSWERS. This module was reaching neither. Its citations are
+     written here as the hyphenated levelled shortname, which LEVELLED reads without consulting either list, so
+     every one of them resolved to a name shaped like a standard that no table held — counted in the
+     seen-but-not-indexed census and checked by nothing, in the largest unindexed population any CSS module had
+     in this tree. The one-word row that used to stand on the foreign list did not help and is retired on its
+     own line, with the measurement, for the reason recorded there: it never once decided a citation of this
+     module and decided three of ordinary English instead.
+     THE EDITORS' DRAFT IS THE DOCUMENT, which is this registry's standing rule rather than a choice made here,
+     and it was checked for the two ways a fetchable standard is still the wrong one to index. Its own opening
+     prose names it a public copy of the editors draft and carries none of the words an EMPTIED standard
+     announces itself with, so it is not a husk keeping its name and its boilerplate while its content lives
+     somewhere else. And its numbered headings cover the whole range this tree cites, markers and counters
+     both, so the numbers the components write resolve in the document rather than past its end.
+     ANCHORED ONLY BY THE HYPHENATED LEVELLED SHORTNAME, which is the one spelling that names a document. The
+     unlevelled two-word form names neither level, and the bare one-word form is a word this tree writes in
+     prose — so neither is listed, for the two reasons this table and the foreign list state separately.
+     WHAT THIS COSTS, MEASURED ON THE WHOLE CORPUS rather than on this module, because indexing a standard
+     makes it a NEIGHBOUR of every other one and a row that retires findings in its own component while
+     introducing them elsewhere has moved a defect rather than ended one. The derivation is one command at a
+     revision with and without this row and the three artifacts beside it, read at the four finding counts and
+     at the judged, compared and verified figures on the same lines. RETIREMENT: this record goes when the
+     registry states each row's husk and heading-range check as data the regen re-asks, so an emptied document
+     cannot be indexed as a full one by anybody who forgot to read its abstract. */
+  { key: "csslists3", label: "CSS Lists and Counters Module Level 3", kind: "bikeshed",
+    base: "https://drafts.csswg.org/css-lists-3/", edition: "maintained", anchors: ["css-lists-3"] },
   { key: "cssoverflow3", label: "CSS Overflow Module Level 3", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-overflow-3/", edition: "maintained", anchors: ["css-overflow-3"] },
   { key: "cssdisplay3", label: "CSS Display Module Level 3", kind: "bikeshed",
