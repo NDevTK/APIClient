@@ -4386,6 +4386,69 @@ function censusReading(out) {
                         "not a reading of the run";
 }
 
+/* AN ENGINE RECORD IS READ WHEREVER IT WAS WRITTEN, WHICH IS NOT ALWAYS AT A LINE START — AND THE ANCHOR THAT
+   ASSUMED IT WAS DID NOT MISREAD A STAGE, IT COULD NOT SEE ONE AT ALL.
+   Every record reader in this file was spelled `/^@KIND (\{.*\})$/gm`, and that anchor is exactly right for a
+   stage that runs the engine DIRECTLY. A stage hosted by `engine/trusted.mjs` relays its children's records
+   with the instance that wrote each one in front: `[trusted] [<tag>] @QUANTUM {…}` from its quantum arm, and
+   `[trusted] [<tag>] @COLD#3 @COLD {…}` from its census arm, which also carries a per-marker ordinal. Those
+   lines ARE captured — `runCaptured` spawns with `stdio: ["inherit", fd, fd]`, so the zone's stderr is in the
+   same text this reader is handed — so the records reach every one of these functions and are simply not
+   matched. The failure is therefore SILENT and it is not an absence of data: it is the absence of a QUESTION.
+   AND THE ZONE IS RIGHT NOT TO STRIP ITS OWN PREFIX, which is why the repair belongs here. `trusted.mjs` says
+   so at the site in its own words — "a zone that forged an unprefixed engine record it did not write would be
+   answering for which instance spoke, which is the one thing the tag exists to say" — and it is correct: three
+   instances of one binary write three @QUANTUM lines, and a reader that cannot tell them apart cannot say
+   WHICH one disagreed. So the tag is not furniture to be tolerated, it is a FIELD, and this primitive returns
+   it rather than discarding it.
+   IT IS ONE PRIMITIVE AND NOT A SECOND SPELLING BESIDE THE ANCHOR. §A-superseded-system-is-DELETED: a caller
+   routed here has its anchored regex DELETED in the same diff, so there is no arm left for a record to be read
+   wrongly by. A caller NOT yet routed still carries its own anchor and is still blind — that is a named
+   residual below and not a fallback, because nothing selects between the two.
+   THE RETIREMENT CONDITION THIS ANSWERS NAMED A MECHANISM THAT DID NOT EXIST, AND THAT IS WORTH RECORDING
+   BECAUSE IT IS THE ONE FAILURE MODE A RETIREMENT CLAUSE HAS. `trusted.mjs` ends its record with "this record
+   goes when build.mjs reads the denomination through the same tagged grammar it reads a hosted census
+   through" — which asserts that a tagged grammar for a hosted census is ALREADY HERE. It is not: `lastTwo`
+   reads `/^@COLD (\{.*\})$/gm`, the identical anchor, so BOTH readers were blind and the clause pointed at a
+   sibling as the model to copy. Greped before obeying, as §A-`DFAIL`-OUTLIVES-THE-ABSENCE requires of a clause
+   naming another file, which is the only reason this diff built a primitive instead of copying nothing.
+   WHY IT ASSERTS INSTEAD OF RETURNING WHAT IT HAPPENED TO MATCH. A count over text is a count of a SPELLING,
+   so the anchor's `0` meant "0 of the shape I searched" and read as "this stage printed none" — the reading
+   that cost this subsystem a stage with three open slices. A grammar cannot be made total by widening it once;
+   what it CAN be made is LOUD when a shape it does not know appears. So every line of `out` that ENDS in a
+   record of this kind is counted independently of the prefix grammar, and a line that the audit sees and the
+   taker does not is THROWN rather than dropped: that is a THIRD relay shape, and the next one must stop this
+   reader rather than shrink its answer. The two patterns differ only in the lead-in, which is the one axis
+   this defect has ever been on. */
+function engineRecords(out, kind) {
+  if (!/^@?[A-Z][A-Z0-9-]*$/.test(kind))
+    throw new Error(`[build] engineRecords was asked for ${JSON.stringify(kind)}, which is not a record ` +
+                    `marker. The kind is spelled into a regex here, so a caller passing user text would be ` +
+                    `writing the pattern rather than naming a channel.`);
+  const k = kind.startsWith("@") ? kind.slice(1) : kind;
+  const TAKE = new RegExp(`^(?:\\[trusted\\] \\[([^\\]\\n]*)\\] )?(?:@[A-Z][A-Z0-9-]*#\\d+ )?@${k} (\\{.*\\})$`, "gm");
+  const AUDIT = new RegExp(`^.*?@${k} (\\{.*\\})$`, "gm");
+  const rows = [];
+  for (const m of out.matchAll(TAKE)) {
+    let j;
+    try { j = JSON.parse(m[2]); } catch (e) {
+      throw new Error(`[build] an @${k} line is not JSON (${e.message}): ${m[2]}. The engine composes these ` +
+                      `with one format string per marker and asserts its own buffer, so a malformed one is ` +
+                      `that composer truncated — never a line to skip past.`);
+    }
+    rows.push({ tag: m[1] === undefined ? null : m[1], json: j });
+  }
+  const seen = [...out.matchAll(AUDIT)].length;
+  if (seen !== rows.length)
+    throw new Error(`[build] ${seen} line(s) of this stage's output END in an @${k} record and this reader ` +
+                    `took ${rows.length}. The ${seen - rows.length} it could not take are in a relay shape ` +
+                    `its grammar does not know — this reader speaks the DIRECT form and engine/trusted.mjs's ` +
+                    `\`[trusted] [<tag>] \` prefix with an optional \`@KIND#<n> \` ordinal, and nothing else. ` +
+                    `A new relay must TEACH this grammar rather than shrink its answer, which is what the ` +
+                    `anchor this replaced did silently: it read 0 and that read as "the stage printed none".`);
+  return rows;
+}
+
 /* WHAT THIS RUN'S NUMBERS ARE DENOMINATED IN, READ FROM THE ENGINE'S OWN STATEMENT OF IT — solver/quantum.c's
    `@QUANTUM` line, written once per instance at its first slice by the component that owns the fact
    (`quantum_measure`/`quantum_measure_is_cpu`). It is not a reading of the run and does not vary within one:
@@ -4422,19 +4485,14 @@ function censusReading(out) {
    `undefined` that reads as a run with no denomination — which is the one reading this whole function exists
    to make impossible. */
 function quantumDenomination(out) {
-  const rows = [...out.matchAll(/^@QUANTUM (\{.*\})$/gm)].map((m) => {
-    let j;
-    try { j = JSON.parse(m[1]); } catch (e) {
-      throw new Error(`[build] an @QUANTUM line is not JSON (${e.message}): ${m[1]}. solver/quantum.c's ` +
-                      `quantum_json composes it and asserts its own buffer, so a malformed one is that ` +
-                      `composer truncated or its measure string carrying a character it does not escape.`);
-    }
+  const rows = engineRecords(out, "@QUANTUM").map(({ tag, json: j }) => {
     if (typeof j.isCpu !== "boolean" || typeof j.sliceMs !== "number" || typeof j.measure !== "string")
       throw new Error(`[build] an @QUANTUM line is missing a field of {measure:string, isCpu:boolean, ` +
-                      `sliceMs:number}: ${m[1]}. That object is solver/quantum.c's quantum_json in full and ` +
-                      `is the SAME shape extension/bridge.js asserts on the result document's \`_quantum\`, ` +
-                      `so a rename here is a rename there — fix the composer or both readers, never one.`);
-    return { cpu: j.isCpu, sliceMs: j.sliceMs, measure: j.measure.trim() };
+                      `sliceMs:number}: ${JSON.stringify(j)}. That object is solver/quantum.c's quantum_json ` +
+                      `in full and is the SAME shape extension/bridge.js asserts on the result document's ` +
+                      `\`_quantum\`, so a rename here is a rename there — fix the composer or both readers, ` +
+                      `never one.`);
+    return { cpu: j.isCpu, sliceMs: j.sliceMs, measure: j.measure.trim(), tag };
   });
   if (!rows.length) {
     if (/^@COLD \{/m.test(out))
@@ -4454,7 +4512,10 @@ function quantumDenomination(out) {
       throw new Error(`[build] two @QUANTUM lines in one run disagree — ${JSON.stringify(rows[0])} against ` +
                       `${JSON.stringify(r)}. They are the same binary on the same host, so this is not a ` +
                       `measurement that varies; it is the announce reading something that is not a property ` +
-                      `of the host.`);
+                      `of the host. The \`tag\` on each names WHICH instance wrote it where the stage was ` +
+                      `hosted by engine/trusted.mjs, and \`null\` is a record this reader took from an ` +
+                      `unrelayed stage — a disagreement between a tagged and an untagged row is two stages' ` +
+                      `output in one capture rather than two instances of one.`);
   return { ...rows[0], instances: rows.length };
 }
 /* THE SAME FACT AT EVERY OUTCOME, PASS INCLUDED, because the runs a reader compares are the ones that finished
