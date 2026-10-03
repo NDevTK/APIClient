@@ -36,8 +36,10 @@
  *
  * THE TWO ARMS ARE EXPORTED AS A KIND, AND THE BOOLEAN IS NOW A PREDICATE OVER IT rather than a second scan.
  * Nothing outside this file could ask WHICH arm a component value took, and one caller needs to:
- * css-lists-3 §3.3 "Image Markers: the list-style-image property"' `Computed value:` line is "the keyword none
- * or the computed <image>", and that second phrase is not ONE answer in this engine. css-images-3 §2's own
+ * css-lists-3 §3.3 "Image Markers: the list-style-image property"' `Computed value:` line is "the keyword
+ * noneor the computed <image>" — the absent space is the DRAFT'S OWN, §3.3's table closing an `<a>` element
+ * directly against the next word, so it must not be "corrected" here or the quotation stops matching the only
+ * text that can judge it. That second phrase is not ONE answer in this engine. css-images-3 §2's own
  * sentence above computes `<url>`s, `<color>`s and `<length>`s; a `<url>` this engine cannot resolve HAS a
  * defined computed value and it is the SPECIFIED one, by css-values-4 §4.5.1 "Relative URLs"' last sentence
  * — "The computed value of a URL that the UA cannot resolve to an absolute URL is the specified value" — over

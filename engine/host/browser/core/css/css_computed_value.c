@@ -1500,9 +1500,15 @@ bool css_computed_models(const char *name)
               what the row buys is that the question is now ASKED through the entry that derives one. */
            strcmp(name, "list-style-type") == 0 ||
            /* css-lists-3 §3.3 "Image Markers: the list-style-image property", whose `Computed value:` line
-              is "the keyword none or the computed <image>" over a `Value:` line of `<image> | none` — read
-              off the fetched editor's draft, because engine/specindex carries no css-lists-3 row and nothing
-              in this tree judges a citation to it. IT IS NOT THE AS-SPECIFIED ARM and leaves
+              is "the keyword noneor the computed <image>" over a `Value:` line of `<image> | none` — and
+              THE MISSING SPACE IS THE DRAFT'S OWN BYTES, not a typo to repair here: §3.3's table closes its
+              `<a>` element directly against the next word, so the document renders and stores `noneor`. A
+              reader who "corrects" it makes this quotation unverifiable against the one artifact that can
+              judge it. THIS CLAUSE USED TO READ "engine/specindex carries no css-lists-3 row and nothing in
+              this tree judges a citation to it", and that was true when written and is now false — the module
+              is indexed, so every css-lists-3 quotation in this file is compared against its text on every
+              run. It is rewritten rather than deleted because a reader who re-derives the old reason would go
+              back to citing an unjudged draft. IT IS NOT THE AS-SPECIFIED ARM and leaves
               `css_computed_value` by name, which is why it is absent from that arm's own enumeration: two of
               its three arms ARE the specified value and the third is a crash.
               IT IS HERE BECAUSE §3.2 "Generating Marker Contents" READS IT AHEAD OF §3.4 AND COULD NOT.
@@ -1902,7 +1908,9 @@ bool css_computed_transform_list(lxb_dom_element_t *el, CssTransformList *out)
 }
 
 /* css-lists-3 §3.3 "Image Markers: the list-style-image property"' `Computed value:` line, which is a
-   KEYWORD AND TWO ARMS rather than one rule: "the keyword none or the computed <image>".
+   KEYWORD AND TWO ARMS rather than one rule: "the keyword noneor the computed <image>" — whose absent
+   space is the draft's own, §3.3's table closing an `<a>` against the next word (see the by-name dispatch's
+   own note on this, which is where the reason is written out).
    THE KEYWORD IS ANSWERED FIRST AND NOT THROUGH THE `<image>` PRODUCTION, because it is not in it.
    §3.3's `Value:` line is `<image> | none`, so `none` is the PROPERTY's own term, and
    core/css/css_image.h refuses it by name for exactly that reason — asking that entry about it would be
@@ -1943,7 +1951,8 @@ static char *computed_list_style_image(char *spec)
         break;
     case CSS_IMAGE_GRADIENT:
         DFAILF("`list-style-image: %s`: css-lists-3 §3.3 \"Image Markers: the list-style-image property\"' "
-               "`Computed value:` line is \"the keyword none or the computed <image>\", and the COMPUTED "
+               "`Computed value:` line is \"the keyword noneor the computed <image>\" (the draft's own bytes: "
+               "its table closes an `<a>` against the next word), and the COMPUTED "
                "`<image>` of a gradient is not the author's bytes: css-images-3 §2 \"Image Values: the "
                "<image> type\" says \"A computed <image> value is the specified value with any <url>s, "
                "<color>s, and <length>s computed\", so this notation's `<color>`s and `<length>`s are owed a "
@@ -2047,7 +2056,8 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
         return computed_transform(el, spec);
     /* css-lists-3 §3.3's row leaves here by NAME rather than through the as-specified assert below, which
        would fire with a true message about the wrong thing: §3.3's `Computed value:` line is "the keyword
-       none or the computed <image>", and only two of its three arms are the specified value. See the
+       noneor the computed <image>" (the draft's own bytes), and only two of its three arms are the specified
+       value. See the
        derivation above for which two, and for the sentence of css-values-4 §4.5.1 "Relative URLs" that makes
        the `<url>` one of them. */
     if (strcmp(name, "list-style-image") == 0)
