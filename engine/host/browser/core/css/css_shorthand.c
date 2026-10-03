@@ -1853,7 +1853,11 @@ const char *css_shorthand_property_named(const char *name)
 /* CSSOM §6.6's PREFERRED ORDER is a definition, not a UA preference, and it is FOUR steps applied in its own
    order — each a stable rearrangement of the one before, so the last is the primary key and the first is the
    tie-break. Written out step by step rather than collapsed into one comparator, because the collapsed form is
-   where the tie-break silently inverts. */
+   where the tie-break silently inverts.
+   THE NUMBERS BELOW ARE THE COMMITTED CORPUS'S AND THE LIVE DRAFT HAS FIVE OF THEM, so a reader renumbering
+   them against the draft re-points every label after its inserted second step — core/css/css_shorthand.h's
+   entry for `css_shorthand_shorthands_of` carries what that insertion is, why its population over this table
+   is empty today, and why only the removal and not the re-spelling is outstanding. */
 static bool css_sh_prefixed(const char *s) { return s[0] == '-'; }
 
 static bool css_sh_prefixed_not_webkit(const char *s)

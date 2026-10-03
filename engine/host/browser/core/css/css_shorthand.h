@@ -173,10 +173,44 @@ const char *css_shorthand_name_at(unsigned i);
 const char *css_shorthand_property_named(const char *name);
 
 /* THE SHORTHANDS `property` IS A LONGHAND OF, written into `out` in CSSOM §6.6 "CSS Declaration Blocks"' own
-   PREFERRED ORDER — "order shorthands lexicographically; move all items that begin with `-` last; move all
-   items that begin with `-` but not `-webkit-` last; order by the number of longhand properties that map to it,
-   with the greatest number first". Returns how many. `max` must be at least CSS_SHORTHAND_MAX_OF. The names are
-   BORROWED.
+   PREFERRED ORDER, which is FOUR STEPS and a DEFINITION rather than a UA preference. Returns how many. `max`
+   must be at least CSS_SHORTHAND_MAX_OF. The names are BORROWED.
+   THE STEPS ARE QUOTED ONE AT A TIME RATHER THAN CONDENSED, every run below from CSSOM §6.6: (1) order
+   shorthands lexicographically. (2) move all items in shorthands that begin with U+002D, "last in the list,
+   retaining their relative order". (3) the same for the items that begin with U+002D but do not begin with the
+   `-webkit-` prefix. (4) "order shorthands by the number of longhand properties that map to it, with the
+   greatest number first".
+   THIS ENTRY USED TO CONDENSE ALL FOUR INTO ONE DOUBLE-QUOTED RUN, ONE LINE PER BACKTICKED PIECE BELOW SO THE
+   MASK THAT KEEPS A SPELLING OUT OF THE QUOTATION CHANNEL IS NEVER ASKED TO CROSS A NEWLINE IT CANNOT CROSS:
+   `order shorthands lexicographically; move all items that begin with - last; move all`
+   `items that begin with - but not -webkit- last; order by the number of longhand`
+   `properties that map to it, with the greatest number first`
+   It is REWRITTEN RATHER THAN DELETED because the defect is the SHORTENING and not the words, and a reader who
+   wants one compact sentence will write it again. It diverged from CSSOM at word six — `that` where the
+   standard has `in` — and the clause it dropped TWICE is RETAINING THEIR RELATIVE ORDER, which is the
+   STABILITY every later sentence in this component rests on: `css_sh_move_last` partitions in place and the
+   final insertion sort compares strictly less-than, so each step is stable, and without that clause the
+   quotation licensed none of it. A quotation CUT where the sentence turns is VERIFIED by any corpus that holds
+   the sentence, so no channel here could ever have reported it.
+   WHAT IS NOT COVERED: the live editor's draft has RESTRUCTURED this algorithm into FIVE steps and the
+   committed corpus predates it, so the four above are the CORPUS'S and are what this component implements. The
+   draft inserts a second step removing every item that is a LEGACY SHORTHAND and does not begin with U+002D,
+   and re-spells the old second step over the `-webkit-` prefix rather than over U+002D. THE RE-SPELLING
+   CHANGES NO OUTCOME — traced over a list of an unprefixed name, a `-moz-` one, a `-webkit-` one and a second
+   unprefixed one, both arrangements end with the two unprefixed names, then the `-webkit-` one, then the
+   `-moz-` one — so this component is already right about that half, and only the removal is outstanding.
+   THE REMOVAL IS NOT BUILT AND ITS POPULATION OVER THE TABLE ABOVE IS EMPTY TODAY, which is a reading and not
+   a design: css-cascade-5 §3.1 "Property Aliasing" makes a legacy shorthand an ALIAS declared by whichever
+   specification creates the new property, its own worked example being the `page-break-*` properties, and no
+   row of this table is an alias of anything — derive that rather than trust this sentence, by reading the row
+   names out of SHORTHANDS and asking of each whether any specification declares it an alias. WHAT THE NEXT
+   DIFF BUILDS: the corpus regeneration FIRST, because a verbatim quotation of the draft is reported as a
+   fabrication against a corpus that predates it, and then a per-row FLAG rather than a spelling test, because
+   the aliasing is a fact the DEFINING specification states and not one a name carries. HOW ITS ABSENCE WOULD
+   SHOW: css-cascade-5 §3.1 says of a legacy shorthand that the CSSOM "will not use them when serializing
+   declarations", so a block holding every longhand of an aliased shorthand would serialize under the
+   DEPRECATED name wherever that name sorts ahead of the modern one — observable as a `cssText` naming a
+   property the page never wrote.
    ZERO IS ONE FACT AND NOT A LIST OF SITUATIONS: NO ROW OF THE TABLE ABOVE NAMES `property` AMONG ITS
    LONGHANDS. THE OPERAND IS NAMED FOR WHAT CALLERS HAND IT RATHER THAN `longhand`, because a parameter that
    presupposes its operand's KIND is the whole of what makes a zero read as a claim about a longhand — and what
