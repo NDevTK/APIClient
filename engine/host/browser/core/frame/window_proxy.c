@@ -508,6 +508,80 @@ typedef struct { uint32_t doc; JSValueConst proxy; } RemoteNav;
 static RemoteNav *g_remote_navs;
 static int        g_remote_navs_n, g_remote_navs_cap;
 
+/* EVERY WindowProxy THIS AGENT HAS MINTED, SCANNED ON THE PROXY'S OWN PER-FLOW `doc` — the (document, world)
+   keying solver/world.c's realm row could not express, and the reason that row is gone. A document's realm is
+   a POD field inside the bytes proxy_of captures (PROXY_REC above), so two flows that each read through one
+   srcless navigable hold two realms for one name and NEITHER of them is wrong; a row with ONE slot per
+   document aborted rather than answer, by name, and that crash was doing protective work.
+   IT HAS NO `doc` COLUMN AT ALL, WHICH IS THE WHOLE OF THE FIX. A column would be a second copy of a field
+   that already rides the delta — the very thing solver/world.c's record now warns against — so the key is read
+   off the row's own record AT THE SCAN, under whichever delta is applied, and the answer is the asking
+   TIMELINE's. Two timelines each holding a realm for one name is then a question with two answers rather than
+   a collision.
+   BORROWED, exactly like the remote rows above: proxy_finalizer takes a row out, so this is exactly the set of
+   live proxies and nothing is kept alive by being named. */
+static JSValueConst *g_live_navs;
+static int           g_live_navs_n, g_live_navs_cap;
+
+/* BOTH MINTS RECORD, which is why this is a function and not three statements at each of them: a proxy that is
+   not in the table is a navigable live_nav_of_document cannot see, and its two readers would then report a
+   document this agent holds as UNMATERIALIZED — which is the honest answer for a navigable nothing has read
+   through, and a lie for one that was simply never recorded. One function, so a third mint cannot answer
+   differently by forgetting. */
+static void live_nav_record(JSValueConst proxy)
+{
+    if (g_live_navs_n == g_live_navs_cap) {
+        int cap = g_live_navs_cap ? g_live_navs_cap * 2 : 8;
+        JSValueConst *g = realloc(g_live_navs, (size_t)cap * sizeof *g);
+
+        CHECK(g != NULL, "window proxy: OOM recording a navigable of this agent — an unrecorded navigable "
+                         "answers NO realm for its document, so every cross-instance read through it and every "
+                         "program compiled for it would be told the Document was never materialized");
+        g_live_navs = g;
+        g_live_navs_cap = cap;
+    }
+    g_live_navs[g_live_navs_n++] = proxy;   /* BORROWED — proxy_finalizer takes the row out */
+}
+
+/* WHICH OF THIS AGENT'S NAVIGABLES IS THE DOCUMENT NAMED `doc`, IN THE TIMELINE THAT IS ASKING — JS_UNDEFINED
+   when none of them is.
+   NO CONTEXT AND NO MATERIALIZATION, and both halves of that are load-bearing. Every read here is a bare
+   JS_GetOpaque: it does not go through proxy_of, so it captures nothing, and it does not reach proxy_realm, so
+   it builds nothing. That is what lets this stand inside a DCHECK CONDITION — three of solver/engine.c's
+   sixteen callers of the realm lookup are exactly that — where a materializing call would be the side effect
+   §Offensive-programming bans in a condition, building a realm in dev and not in release. The COW machinery
+   has already applied the running flow's delta, so the per-flow fields the scan reads are this timeline's
+   without a ctx being passed at all.
+   AT MOST ONE ROW MATCHES, AND THAT IS ASSERTED HERE RATHER THAN AT THE RECORD BECAUSE THE KEY IS PER-FLOW. A
+   row is recorded before its `doc` can be read in any other timeline, so there is no moment at which the table
+   holds the pair and the scan is the only place the invariant is expressible. */
+static JSValueConst live_nav_of_document(uint32_t doc)
+{
+    JSValueConst found = JS_UNDEFINED;
+    bool hit = false;
+    int i;
+
+    DCHECK(doc != 0, "the navigable of document zero was asked for — zero is the world registry's NONE, so the "
+                     "caller is holding a handle it never resolved rather than a document");
+    for (i = 0; i < g_live_navs_n; i++) {
+        ProxyData *p = JS_GetOpaque(g_live_navs[i], g_proxy_class);
+
+        DCHECK(p != NULL, "a row of the live-navigable table names an object with no §7.2.3 record — both mints "
+                          "attach one before the object is recorded, so this row names something that is not a "
+                          "WindowProxy at all");
+        if (p == NULL || p->doc != doc) continue;
+        DCHECK(!hit,
+               "TWO of this agent's navigables name ONE document IN ONE TIMELINE — a Document has one Window, "
+               "so these are two of them wearing one name and `w[0] === w[0]` would decide by which row the "
+               "scan reached first. Two TIMELINES each holding a realm for one name is the state this table "
+               "exists to answer and is NOT this: one delta is applied for the whole of this scan");
+        found = g_live_navs[i];
+        hit = true;
+    }
+    (void)hit;
+    return found;
+}
+
 /* THE RECORD AS A COLLECTOR ENTRY SEES IT. JS_GetAnyOpaque AND NOT JS_GetOpaque(val, g_proxy_class):
    core/agent_state.h states the rule and the reason — window_proxy_free gives the class id back, and the
    collection that finalizes this agent's object graph runs AFTER the release column, so a lookup against that
@@ -531,6 +605,14 @@ static void proxy_finalizer(JSRuntime *rt, JSValue val)
     for (i = 0; i < g_remote_navs_n; i++)
         if (JS_VALUE_GET_PTR(g_remote_navs[i].proxy) == JS_VALUE_GET_PTR(val)) {
             g_remote_navs[i] = g_remote_navs[--g_remote_navs_n];
+            break;
+        }
+    /* AND THE LIVE-NAVIGABLE ROW, for the same reason and in the same place: it names this object by POINTER,
+       so a row left behind would have the next scan read a freed record's `doc` and answer a realm for a
+       navigable that no longer exists. */
+    for (i = 0; i < g_live_navs_n; i++)
+        if (JS_VALUE_GET_PTR(g_live_navs[i]) == JS_VALUE_GET_PTR(val)) {
+            g_live_navs[i] = g_live_navs[--g_live_navs_n];
             break;
         }
     /* Both mints attach the record with nothing between JS_NewObjectClass and JS_SetOpaque that allocates on
@@ -898,6 +980,9 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
     p->container = JS_NULL;
     p->doc = doc;
     JS_SetOpaque(obj, p);
+    /* AFTER JS_SetOpaque, because live_nav_of_document reads the RECORD off every row it walks and asserts that
+       every row has one — a row recorded before this line names an object that does not yet carry it. */
+    live_nav_record(obj);
     return obj;
 }
 
@@ -1050,6 +1135,12 @@ static JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origi
     p->container = JS_NULL;   /* §7.3.1.3's link is written by the create, exactly as it is for a local one */
     p->doc = doc;
     JS_SetOpaque(obj, p);
+    /* A REMOTE PROXY IS IN BOTH TABLES, AND THEY ANSWER TWO QUESTIONS. The remote table answers a peer's
+       navigable's IDENTITY (`w[0] === w[0]` over a document another instance holds); this one answers WHICH
+       NAVIGABLE of this agent names a document in the asking timeline, and a remote one's answer to the realm
+       read is a NULL that `world_doc_hosted` already gates every caller on. Recording it keeps the
+       at-most-one-row-per-document invariant in live_nav_of_document TOTAL rather than true of a subset. */
+    live_nav_record(obj);
     return obj;
 }
 
@@ -1092,26 +1183,62 @@ static void remote_nav_record(JSValueConst proxy, uint32_t doc)
     g_remote_navs_n++;
 }
 
+/* WHICH REALM OF THIS AGENT THE DOCUMENT NAMED `doc` IS, IN THE TIMELINE THAT IS ASKING — see the header, and
+   see solver/world.c for the instance-global row this replaced and why one must not come back. */
+JSContext *window_proxy_realm_of_document(uint32_t doc)
+{
+    JSValueConst proxy = live_nav_of_document(doc);
+    ProxyData *p;
+
+    /* NO NAVIGABLE OF THAT NAME IS A REAL ANSWER AND IT IS THE SAME ANSWER AS AN UNMATERIALIZED ONE, which is
+       what lets this be ctx-free: both mean "this timeline has no Document for that name", and only the CALLER
+       knows whether that is a state it can be in. A remote navigable lands here too and answers NULL, which is
+       correct — its Document is a peer's and no realm of this heap is it. */
+    if (JS_IsUndefined(proxy)) return NULL;
+    p = JS_GetOpaque(proxy, g_proxy_class);
+    DCHECK(p != NULL, "the realm of a document was asked for and the navigable answering it carries no §7.2.3 "
+                      "record — live_nav_of_document asserts the same thing of every row it walks");
+    return p == NULL ? NULL : p->realm;
+}
+
 JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc)
 {
     int i;
 
     DCHECK(doc != 0, "the WindowProxy of document zero was asked for — zero is the world registry's NONE, so "
                      "the caller is holding a handle it never resolved rather than a document");
-    /* A DOCUMENT THIS AGENT HOSTS IS ANSWERED BY ITS OWN REALM, never out of the table below: the realm holds
-       the one proxy for its navigable (core/dom/document.h), and a row here for a hosted document would be a
-       second answer to a question that already has one. */
+    /* A DOCUMENT THIS AGENT HOSTS IS ANSWERED BY ITS OWN NAVIGABLE, never out of the remote table below: that
+       table is a map from a PEER's document to the one proxy that resolves it, and a row in it for a hosted
+       document would be a second answer to a question that already has one.
+       IT WENT THROUGH THE REALM UNTIL THIS DIFF — `document_window_proxy(world_doc_realm(doc))` — and the realm
+       was the authority because solver/world.c held an instance-global (document -> realm) row. It does not,
+       because no single value in such a row is right once two timelines have each materialized one; the
+       NAVIGABLE is the authority now, and the realm is read off it. The round trip is asserted below rather
+       than argued: the two directions of the binding must name one object. */
     if (world_doc_hosted(doc)) {
-        JSContext *realm = world_doc_realm(doc);
+        JSValueConst held = live_nav_of_document(doc);
+        JSContext *realm;
 
+        DCHECK(!JS_IsUndefined(held),
+               "the WindowProxy of a document THIS AGENT HOSTS was asked for and this agent holds no navigable "
+               "of that name AT ALL — hosting is decided by §7.4 before any navigable is minted "
+               "(world_doc_adopt), so the two statements were made in the wrong order, or a proxy that answered "
+               "for this document has been collected while a peer still held a reference into it");
+        if (JS_IsUndefined(held)) return JS_UNDEFINED;
+        realm = window_proxy_realm_of_document(doc);
         DCHECK(realm != NULL,
-               "the WindowProxy of a document THIS AGENT HOSTS was asked for before that document's realm was "
-               "materialized. The navigable exists — whatever created it holds its proxy — but a hosted "
-               "navigable has no row here, so there is nowhere else to answer from. A peer can only name a "
-               "document it has a reference into, and a reference into a document whose realm was never built "
-               "cannot have been lent, so a name reaching this state came from somewhere that is not a lend");
+               "the WindowProxy of a document THIS AGENT HOSTS was asked for before THIS TIMELINE materialized "
+               "that document's realm. The navigable exists — the row above is it — and its initial about:blank "
+               "Document is materialized by the first read that reaches through it IN A GIVEN FLOW "
+               "(navigable.h), so a sibling arm having built one says nothing about this one. A peer can only "
+               "name a document it has a reference into, and a reference into a Document this timeline never "
+               "built cannot have been lent to it");
         if (!realm) return JS_UNDEFINED;
-        return JS_DupValue(ctx, document_window_proxy(realm));
+        DCHECK(JS_VALUE_GET_PTR(document_window_proxy(realm)) == JS_VALUE_GET_PTR(held),
+               "the realm answering for this document and the navigable the scan found are not one navigable — "
+               "§7.2.3 gives a navigable ONE WindowProxy and a realm IS a document (core/dom/document.h), so "
+               "the (document -> navigable) and (realm -> navigable) directions of one binding disagree");
+        return JS_DupValue(ctx, held);
     }
     for (i = 0; i < g_remote_navs_n; i++)
         if (g_remote_navs[i].doc == doc) return JS_DupValue(ctx, g_remote_navs[i].proxy);
@@ -3879,6 +4006,7 @@ void window_proxy_init(JSContext *ctx)
                          "one of §7.2.1.3.2 CrossOriginPropertyFallback ( P )'s names, interned");
     agent_state_ptr(WP_COMPONENT, &g_strings, "every origin and name string a proxy of this agent recorded");
     agent_state_ptr(WP_COMPONENT, &g_remote_navs, "the one WindowProxy per REMOTE document of this agent");
+    agent_state_ptr(WP_COMPONENT, &g_live_navs, "every live WindowProxy of this agent, scanned on its per-flow doc");
     realm_declare_intrinsic(window_proxy_install_proto);
 }
 
@@ -3926,6 +4054,12 @@ void window_proxy_free(JSRuntime *rt)
     free(g_remote_navs);
     g_remote_navs = NULL;
     g_remote_navs_n = g_remote_navs_cap = 0;
+    /* AND THE LIVE-NAVIGABLE TABLE, which borrows exactly as those rows do and is emptied for exactly that
+       reason: a finalizer running later in this teardown scans it, and a freed table with a nonzero count is
+       storage it would walk. */
+    free(g_live_navs);
+    g_live_navs = NULL;
+    g_live_navs_n = g_live_navs_cap = 0;
     /* THE STEP-9 ASK IS A CENSUS OF ONE AGENT, like navigable.h's three, so it goes back with the agent that
        performed the releases rather than accumulating across a host that builds a second browser. */
     g_step9_releases = 0;

@@ -292,11 +292,19 @@ static void navigable_realm_teardown(JSRuntime *rt, JSContext *cctx)
            row is compiled in as a `uint32_t` (solver/flow.h's `dyn_doc`), which holds nothing and stays
            perfectly readable after the realm behind it is gone — so it is the one way the frontier can still
            be standing on a document the collector has just decided is garbage, and that row would later be
-           compiled through the doc->realm row document_free is about to clear. */
+           compiled through a (document -> realm) answer this teardown is about to make unanswerable.
+           THIS SAID `the doc->realm row document_free is about to clear` AND IS REWRITTEN RATHER THAN DELETED,
+           because the hazard is unchanged and a reader who re-derives it will look for that row again.
+           solver/world.c held an instance-global `JSContext *` per document, cleared by document_free, and it is
+           gone: one slot cannot answer for two timelines that each materialized a navigable's initial
+           about:blank. The answer comes from the NAVIGABLE now (core/frame/window_proxy.h's
+           window_proxy_realm_of_document), which makes this assert STRICTLY more necessary rather than less —
+           the navigable's own `realm` field is borrowed from the proxy's `window`, so a handle whose realm has
+           been torn down resolves to a freed JSContext through a row no clear ever visits. */
         DCHECK(flow_programs_for_document(document_doc(cctx)) == 0,
                "a realm was torn down while the frontier still held QUEUED PROGRAMS for its document — a "
                "program row names its document by HANDLE and holds no reference, so the collector could not "
-               "see it and compiling that row afterwards asks a doc->realm row this teardown clears. Whatever "
+               "see it and compiling that row afterwards asks for a realm this teardown has released. Whatever "
                "still owns those rows has to own a reference to the document too, or drop them with it");
         /* AND THE THREE-NUMBER LAW, AT THE ONE SITE THAT LOWERS THE LIVE COUNT. It is asserted at both
            mutation sites rather than in a helper the two share, because a helper would report ITS line for
@@ -991,9 +999,17 @@ static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueCon
        PROXY_REC), so it answers about whichever TIMELINE is applied rather than about the navigable. A sibling
        flow materializing the initial about:blank through this same navigable flips it, and so does this job's
        flow simply being a different flow from the one that materialized it. NEITHER NEEDS A FORK.
-       WITHOUT IT THE STATE SURFACES TWO STAGES ON AND IN ANOTHER COMPONENT: `document_install` writes
-       solver/world.c's realm row, which aborts naming the (document, WORLD) binding — true about the row, and a
-       long way from the branch that chose the name. An instance-GLOBAL mint decided from a PER-FLOW read is
+       WITHOUT IT THE STATE SURFACED TWO STAGES ON AND IN ANOTHER COMPONENT, AND NOW IT DOES NOT SURFACE AT ALL
+       — kept in its own words because the reason this assert exists is the reason it was built: `document_install`
+       wrote solver/world.c's instance-global realm row, which aborted naming the (document, WORLD) binding,
+       true about the row and a long way from the branch that chose the name. That row is DELETED and the
+       (document -> realm) answer is the asking timeline's (core/frame/window_proxy.h), so the SECOND Document
+       wearing one name is no longer caught anywhere downstream of here. This assert is the only thing that
+       catches it, which is what made it worth landing ahead of the deletion rather than beside it.
+       Measured: this assert did NOT fire in either smoke stage of a completed frozen build whose log
+       carries the deleted row's abort twice, and its text occurs once in each of the two built
+       artifacts — so its silence is a HOLD and not an absence (§AN-ABSENT-CRASH-IS-NOT-A-CORRECT-VALUE).
+       An instance-GLOBAL mint decided from a PER-FLOW read is
        CLAUDE.md §AN-OPERATION-THAT-BECOMES-A-WORK-ITEM-TAKES-ITS-INPUTS-WITH-IT over `doc` rather than over the
        address, which is the same rule this file already obeys for the address and the about base URL.
        RETIREMENT: this record goes when the name travels as an argument of this job's own vector (a

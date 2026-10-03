@@ -178,6 +178,35 @@ JSValue window_proxy_for_document(JSContext *ctx, uint32_t doc, const Origin *or
    arriving identity's parent and opener slots). Owned on a hit. */
 JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc);
 
+/* WHICH REALM OF THIS AGENT THE DOCUMENT NAMED `doc` IS, IN THE TIMELINE THAT IS ASKING — NULL when this
+ * timeline has no Document for that name. This is the (document -> realm) direction HTML §7.3 states as "the
+ * navigable whose active document is node's node document", answered from the NAVIGABLE because that is the
+ * only place the answer can be per-flow.
+ *
+ * IT REPLACES AN INSTANCE-GLOBAL ROW, AND THE ROW'S FAILURE IS THE WHOLE ARGUMENT FOR THIS SHAPE. solver/world.c
+ * kept one `JSContext *` per document, written by document_install and cleared by document_free, and those two
+ * edges are exactly enough to keep it honest against a realm that is GONE and cannot make ONE value right while
+ * TWO are live. A realm is per-flow state: `ProxyData`'s own `realm` is a POD field inside the bytes proxy_of
+ * captures, so a navigable's initial about:blank is materialized once per TIMELINE that reads through it, and
+ * ANY TWO FLOWS suffice — a flow and the LOAD JOB it enqueued are two, with no fork anywhere. The row aborted on
+ * the second write, by name, and that crash was doing protective work rather than being over-strict: holding
+ * the LATEST or the FIRST would have handed a cross-instance read the wrong arm's realm.
+ *
+ * NO `JSContext *` ARGUMENT, AND THAT IS A GUARANTEE RATHER THAN A CONVENIENCE: it reads nothing but POD fields
+ * through a bare JS_GetOpaque, so it materializes nothing and captures nothing, and it may therefore stand
+ * inside a DCHECK CONDITION — which three of solver/engine.c's sixteen callers do, where a materializing call
+ * would be the side effect §Offensive-programming bans in a condition (a realm built in dev and not in
+ * release). What makes the answer this flow's with no ctx passed is that the COW machinery has already applied
+ * the running flow's delta.
+ *
+ * NULL IS A REAL ANSWER AND NEVER "NOT FOUND", and it is ONE answer for two states the caller may care about
+ * telling apart: this agent holds no navigable of that name, and it holds one whose Document THIS TIMELINE has
+ * never read through (navigable.h). Only the NAVIGABLE can materialize the second, so a caller that needs it
+ * materialized holds the proxy and calls window_proxy_realm; a caller that merely needs to know asks
+ * window_proxy_of_document, whose asserts separate the two. A REMOTE navigable answers NULL too — its Document
+ * is a peer's, so no realm of this heap is it — which is the answer `world_doc_hosted` already gates on. */
+JSContext *window_proxy_realm_of_document(uint32_t doc);
+
 /* THE NAVIGABLE A VALUE NAMES, whichever of its two spellings it is: the value itself when it IS a
    WindowProxy, and the asking realm's WindowProxy when it is that realm's Window GLOBAL — win_or_proxy's
    mapping read the other way round, stated here so a caller that must not tell the two apart (an encoder

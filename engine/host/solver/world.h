@@ -114,43 +114,41 @@ bool world_doc_hosted(uint32_t doc);
    agent's. Minting a name, hosting, and building the realm are three separate statements in that order. */
 void world_doc_adopt(uint32_t doc);
 
-/* AND THE THIRD OF THOSE THREE STATEMENTS: WHICH REALM `doc` IS. A realm IS a document (core/dom/document.c),
- * so this is a fact about the document and it lives on the document's own row rather than in a table of its
- * own — document.c rejects a second list of documents in as many words, and names the failure mode that would
- * bite here: a stale row answering for a realm that is gone. The two edges are the document's, which is what
- * keeps the row honest without a walk: `document_install` is the moment a realm becomes the realm OF a
- * document, and `document_free` — reached from the realm's own teardown hook — is the moment it stops being
- * one.
+/* AND THE THIRD OF THOSE THREE STATEMENTS IS NOT THIS REGISTRY'S, AND THIS RECORD IS WHY. WHICH REALM `doc` IS
+ * was answered here, by `world_doc_realm_set` / `world_doc_realm` over a `JSContext *` column on the document's
+ * own row. Both entries are gone and solver/world.c carries the full argument at the line they stood on,
+ * because the reasoning that put them there is reasoning a reader re-derives: a realm IS a document
+ * (core/dom/document.c), so which realm `doc` is reads as a fact about the document; and the two edges that
+ * would keep such a row honest are the document's own, `document_install` and `document_free`.
  *
- * AND THAT ARGUMENT IS ABOUT STALENESS AND IS SILENT ABOUT A SECOND LIVE REALM, WHICH MAKES THE ROW WRONG RATHER
- * THAN MERELY NARROW. The two edges do keep it honest against a realm that is GONE, and no pair of edges can
- * make ONE value right while TWO realms are live. A realm is per-flow state: this row is the one part of a
- * navigable's binding that does not ride the COW delta — a SECOND COPY of `ProxyData`'s own `realm`
- * (core/frame/window_proxy.c), kept where no world can be named. ANY TWO FLOWS that each read through one
- * srcless navigable each materialize their own Document, which is the per-flow isolation working rather than a
- * caller misbehaving, and `world_doc_realm_set` then aborts because the binding is (document, WORLD) and this
- * key is half of it. TWO ARMS OF A FORK ARE ONE WAY AND NOT THE ONLY ONE — that crash used to say `two arms`
- * and the run that fires it reads 0 fork(s), because a flow and the LOAD JOB it enqueued read that per-flow
- * field as NULL independently; that refutation and the second route are recorded at the crash itself.
- * What must be built is that resolution, answered from the navigable whose PER-FLOW `doc` is the one
- * asked about; the refutation at `world_doc_realm_set` records the two remedies its crash used to name and why
- * neither of them is available.
- * RETIREMENT: this record goes when these two entries no longer exist.
+ * WHAT THOSE EDGES CANNOT DO IS MAKE ONE VALUE RIGHT WHILE TWO REALMS ARE LIVE. A realm is PER-FLOW state —
+ * `ProxyData`'s own `realm` is a POD field inside the bytes proxy_of captures (core/frame/window_proxy.c) — so a
+ * navigable's initial about:blank Document is materialized once per TIMELINE that reads through it, and the row
+ * was keyed by DOCUMENT where the binding is (document, WORLD). ANY TWO FLOWS suffice and no fork is needed: a
+ * flow and the LOAD JOB it enqueued read that field as NULL independently. The row did not answer imprecisely,
+ * it ABORTED on the second write, and holding the LATEST or the FIRST instead would have handed a
+ * cross-instance read the wrong arm's realm.
  *
- * WHY THE QUESTION EXISTS AT ALL. An instance is an ORIGIN-KEYED AGENT CLUSTER (SECURITY.md), so SEVERAL
- * documents are this one's and a peer may hold a reference into any of them — `event.source` names the
- * document whose script posted, which is a child navigable as often as it is the root. A cross-instance
- * operation or delivery therefore arrives naming a document by NAME, and running it in this instance's root
- * realm instead would answer about the wrong document: `length` would be the count of the ROOT's child
- * navigables handed back as the child's. This is the direction HTML §7.3 states as "the navigable whose active
- * document is node's node document" — a document identifies exactly one of them, which is what makes the
- * answer a lookup rather than a search.
+ * SO THE ANSWER LIVES WITH THE NAVIGABLE: core/frame/window_proxy.h's `window_proxy_realm_of_document` scans
+ * this agent's live navigables and reads the match's own per-flow `realm`, with no `JSContext *` argument and no
+ * materialization, so it may stand in a DCHECK condition. A column re-added here would be a SECOND COPY of a
+ * field that already rides the delta, in the one place where no world can be named.
  *
- * NULL IS A REAL ANSWER AND NEVER "NOT FOUND": a hosted document with no realm is one whose initial
- * about:blank Document nothing has read through yet (navigable.h), and only the NAVIGABLE can materialize it.
- * The caller says what that means for it. */
-void       world_doc_realm_set(uint32_t doc, JSContext *realm);
-JSContext *world_doc_realm(uint32_t doc);
+ * WHY THE QUESTION EXISTS AT ALL, which is unchanged and is why it had a home here in the first place. An
+ * instance is an ORIGIN-KEYED AGENT CLUSTER (SECURITY.md), so SEVERAL documents are this one's and a peer may
+ * hold a reference into any of them — `event.source` names the document whose script posted, which is a child
+ * navigable as often as it is the root. A cross-instance operation or delivery therefore arrives naming a
+ * document by NAME, and running it in this instance's root realm instead would answer about the wrong document:
+ * `length` would be the count of the ROOT's child navigables handed back as the child's. This is the direction
+ * HTML §7.3 states as "the navigable whose active document is node's node document".
+ *
+ * RETIREMENT: this record goes when a build-time check refuses a SECOND declaration in this tree answering a
+ * `JSContext *` from a bare `uint32_t doc` — MEASURED at `origin/main` with
+ * `grep -rnE '^JSContext \*[a-z_]+\(uint32_t doc\);' engine/host --include=*.h`, which answers exactly ONE
+ * (window_proxy.h's), and no `.mjs` gate under the `engine` directory names that axis. A check is what makes
+ * a second answer a BUILD FAILURE instead of a paragraph somebody has to read; until then the two statements
+ * this file DOES make about a document — its NAME and whether this agent HOSTS it — read as an invitation to
+ * make the third here. */
 
 /* A DOCUMENT IS NAMED, AND A `uint32_t doc` IS THIS INSTANCE'S HANDLE FOR A NAME — an index into the local
    table, 1-based so zero stays the NONE value. Handles are local and mean nothing to a peer; the NAME is what

@@ -874,10 +874,18 @@ void worker_global_scope_free(JSRuntime *rt)
  *             line of it), and each of those entries names the realm to compile in as a `uint32_t doc` handle,
  *             which solver/engine.h says outright is WHERE THE PROGRAM IS COMPILED. solver/flow.h carries that
  *             handle and refuses a JSContext for it, because a handle survives a park and a realm does not.
- *             solver/world.h's `world_doc_realm` is written from exactly one place, core/dom/document.c's
- *             document_install, whose own header states the identity this subproblem has to break: a realm IS
- *             a document. And a WorkerGlobalScope realm has no Document, so `document_doc` of one reaches that
- *             file's DCHECK about a document member running in a realm with no Document.
+ *             and the handle is RESOLVED by core/frame/window_proxy.h's `window_proxy_realm_of_document`, which
+ *             scans this agent's live NAVIGABLES and reads the match's own per-flow realm — so the identity this
+ *             subproblem has to break is stated twice over: a realm IS a document (core/dom/document.c's own
+ *             header), and the only thing that answers a handle is a navigable. A WorkerGlobalScope realm has
+ *             NEITHER — no Document, so `document_doc` of one reaches that file's DCHECK about a document member
+ *             running in a realm with no Document, and no navigable, so the handle resolves to nothing at all.
+ *             THIS READ `world_doc_realm is written from exactly one place, core/dom/document.c's
+ *             document_install` AND IS REWRITTEN RATHER THAN DELETED, because the SET it named really was the
+ *             one write and a reader who re-derives the blocker from a document-keyed row will look for that row
+ *             again: solver/world.c held one `JSContext *` per document and does not, because one slot cannot
+ *             answer for two timelines that each materialized a navigable's initial about:blank. The blocker is
+ *             unchanged and its coordinate moved.
  *             IT IS NOT THIS DIRECTORY'S, AND IT IS NOT (i)'S EITHER. The handle blocks (iii)'s fetched source
  *             whether the worker realm belongs to a second agent or to the fixture, so it is independent of
  *             the runtime question and lands in solver/world and core/dom/document — which is why (iv) cannot

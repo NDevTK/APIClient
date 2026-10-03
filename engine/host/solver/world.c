@@ -68,7 +68,9 @@ static uint32_t g_session;
 /* THE DOCUMENT NAME TABLE. A handle is an index+1, so 0 stays the NONE value; the table is append-only for the
    life of the instance because a handle already stored in a WindowProxy or a WorldId must never come to mean a
    different document. It is small by construction — one entry per document this instance has ever named. */
-typedef struct { char *name; uint32_t next_child; bool hosted; JSContext *realm; } DocEntry;
+/* NO `JSContext *realm` COLUMN — see the record below, which is the whole of why and the only thing
+   standing between the next reader and re-adding one. */
+typedef struct { char *name; uint32_t next_child; bool hosted; } DocEntry;
 static DocEntry *g_docs;
 static uint32_t g_docs_n, g_docs_cap;
 
@@ -108,89 +110,65 @@ bool world_doc_hosted(uint32_t doc)
     return g_docs[doc - 1].hosted;
 }
 
+/* THE MESSAGES BELOW SAID `a realm was built` AND THIS ENTRY DOES NOT BUILD ONE, which the block below makes
+   load-bearing rather than pedantic: a document has one realm PER TIMELINE, so `a document has ONE realm, and a
+   second would give the same name two globals with two object graphs` — the retired second message, kept in its
+   own words — is a rule this engine does not obey and is exactly what a reader re-derives from the word `twice`.
+   What is instance-global and may be said once is HOSTING: whether this agent, rather than a peer, holds the
+   document named `doc`. No timeline can disagree about that, which is why it stays here and the realm did not. */
 void world_doc_adopt(uint32_t doc)
 {
-    DCHECK(doc != 0 && doc <= g_docs_n, "a realm was built for a document handle that names no document");
-    DCHECK(!g_docs[doc - 1].hosted, "a realm was built twice for one document — a document has ONE realm, and a "
-                                    "second would give the same name two globals with two object graphs");
+    DCHECK(doc != 0 && doc <= g_docs_n, "this agent was said to HOLD a document handle that names no document");
+    DCHECK(!g_docs[doc - 1].hosted,
+           "this agent was said to HOLD one document twice — hosting is §7.4 deciding that the document's realms "
+           "are built in THIS heap rather than a peer's, which is a statement about the instance and is made "
+           "once; a second one is either a name interned twice or a creating operation run twice over one name");
     g_docs[doc - 1].hosted = true;
 }
 
-/* See world.h. The realm is BORROWED: a realm is kept alive by its own function objects and dies with its
-   navigable (navigable.c), so a counted reference here would be an external root making every document this
-   instance ever named immortal. */
-void world_doc_realm_set(uint32_t doc, JSContext *realm)
-{
-    DCHECK(doc != 0, "a realm was recorded against the NONE document");
-    /* THE TABLE MAY ALREADY BE GONE, AND ONLY FOR THE CLEAR. A host frees the world registry and then the
-       runtime, so the agent's last realms are torn down after the table that named their documents — there is
-       no row left to clear because every row went with the table. Stated for the NULL write alone: a realm
-       ARRIVING after the registry is gone is a realm named by nothing, which is a real and different defect
-       and still crashes below. */
-    if (realm == NULL && g_docs_n == 0) return;
-    DCHECK(doc <= g_docs_n, "a realm was recorded against a document handle that names no document — a handle "
-                            "is this instance's index into its own name table and means nothing else");
-    DCHECK(g_docs[doc - 1].hosted,
-           "a realm was recorded for a document this agent does not HOLD — hosting is decided by §7.4 before "
-           "the realm is built (world_doc_adopt), so the two statements were made in the wrong order and every "
-           "cross-instance route keyed on `hosted` would still call this document a peer's");
-    /* THE TWO REMEDIES THIS CRASH NAMED ARE BOTH WRONG, AND THEY ARE RECORDED RATHER THAN DELETED BECAUSE A
-       READER WHO RE-DERIVES THEM FROM THE MESSAGE BELOW WILL BUILD ONE OF THEM. They were `either the built
-       realm is state the flow's delta carries, or the navigable is materialized once for all of its timelines`.
-         - THE FIRST WAS ALREADY TRUE WHEN IT WAS WRITTEN, so it sends its one reader to build what is standing.
-           `ProxyData` is a CowRecord captured in its own accessor (core/frame/window_proxy.c), and `realm` is a
-           POD field INSIDE the captured bytes exactly as `doc` and `origin` are — which that file states in as
-           many words. So each arm's materialization already rides its own delta and neither arm can observe the
-           other's, which is WHY two arms each reach this line rather than a thing still to build.
-         - THE SECOND IS UNBUILDABLE AT A LAZY MATERIALIZATION, and solver/cow.c states the rule it breaks: an
-           object a flow creates after its last fork is flow-PRIVATE and is never captured. A realm built by a
-           non-boot arm is therefore that arm's own and cannot be a sibling's baseline, so there is no `once for
-           all of its timelines` to be had at a materialization reached from a property read. Materializing
-           EAGERLY at creation would make it baseline only where the creation is boot's, and the
-           realm-per-navigable cost of that is what core/frame/navigable.h's deferral exists to avoid.
-       SO THE DEFECT IS THIS ROW AND NEITHER CALLER, AND NO VALUE IN IT IS RIGHT ONCE TWO WORLDS EXIST: it is keyed
-       by DOCUMENT where the binding is (document, WORLD), which window_proxy_window's own crash already names.
-       Holding the LATEST or the FIRST would hand a cross-instance read the wrong arm's realm — the one failure
-       the per-flow delta exists to prevent — so this crash is doing protective work and must not be softened.
-       The row is a SECOND COPY of a field that already rides the delta, kept where no world can be named.
-       AND THE WORD `FORK` IN THE MESSAGE BELOW IS A NARROWING A MEASUREMENT REFUTED, KEPT IN ITS OWN WORDS
-       BECAUSE A READER WHO RE-DERIVES IT FROM `PER-FLOW` WILL WRITE IT AGAIN. It read `two arms that each read
-       through one srcless navigable each build one`, and the smoke run that fires this abort has NO FORK IN IT:
-       its own census reads 0 fork(s), 1 flow created and an EMPTY fork table beside 313 CPU-seconds and 15.4M
-       source reads, so a reader who greps for a fork finds none and may conclude the crash is spurious — which
-       is what world_mint_doc's own retired message two functions down already cost once. ANY TWO FLOWS SUFFICE:
-       `realm` is a POD field inside the COW-captured bytes rather than a fact about the navigable, so a flow and
-       the LOAD JOB it enqueued read it as NULL independently and no fork relationship is needed.
-       AND THERE IS A SECOND ROUTE WITH NO SECOND MATERIALIZATION IN IT, which this message never named:
-       core/frame/navigable.c's §7.4 step 14 load chooses between MINTING a name and REUSING the navigable's own
-       from exactly that per-flow read, at its FETCH stage, and installs at its CREATE stage a JS_STEP_YIELD or
-       more later — so a navigable materialized in the interval gets a second Document under ONE name and this
-       row is merely where it surfaces. That branch asserts it at its own origin now.
-       RETIREMENT (this correction): it goes with the branch, when the name travels as an argument of that job's
-       own vector instead of being re-derived off the navigable.
-       RETIREMENT: this record goes when `world_doc_realm` is answered from the navigable whose PER-FLOW `doc` is
-       this one and this row no longer exists. */
-    DCHECK(realm == NULL || g_docs[doc - 1].realm == NULL,
-           "a SECOND realm was built for one document — a Document has one Window, so these are two of them "
-           "wearing one name, and a peer routing on that name cannot tell which one it asked. It is the LAZY "
-           "MATERIALIZATION meeting TWO FLOWS, which need NOT be two arms of a fork: proxy_realm builds the "
-           "initial about:blank Document's realm through the PER-FLOW WindowProxy record (navigable.h), so any "
-           "two flows that each read through one srcless navigable each build one — a flow and the LOAD JOB it "
-           "enqueued are two. THE FIX IS THIS ROW: it is keyed by DOCUMENT where the binding is "
-           "(document, WORLD), so no single value in it is right once TWO WORLDS exist — answer `world_doc_realm` "
-           "from the navigable whose PER-FLOW `doc` is this one, and delete the row. The comment above records "
-           "the two remedies this message used to name and why neither is available");
-    g_docs[doc - 1].realm = realm;
-}
-
-JSContext *world_doc_realm(uint32_t doc)
-{
-    DCHECK(doc != 0 && doc <= g_docs_n, "the realm of a document handle that names no document was asked for");
-    DCHECK(g_docs[doc - 1].hosted,
-           "the realm of a document this agent does not HOLD was asked for — that document lives in a peer "
-           "instance, so it has no realm here and every read through it crosses the seam");
-    return g_docs[doc - 1].realm;
-}
+/* THERE IS NO (document -> realm) ROW HERE, AND THIS RECORD IS WHAT STOPS ONE BEING RE-ADDED. Two entries
+   stood at this line — `world_doc_realm_set(uint32_t doc, JSContext *realm)` writing `g_docs[doc - 1].realm`
+   and `world_doc_realm(uint32_t doc)` returning it — with a `JSContext *realm` column on `DocEntry` above.
+ *
+ * THE ARGUMENT FOR THE ROW WAS SOUND AS FAR AS IT WENT, WHICH IS WHY A READER RE-DERIVES IT. A realm IS a
+ * document (core/dom/document.c), so which realm `doc` is is a fact about the document and belongs on the
+ * document's own row rather than in a table of its own; and the two edges that keep such a row honest are the
+ * document's own — `document_install` is the moment a realm becomes the realm OF a document, and
+ * `document_free`, reached from the realm's own teardown hook, is the moment it stops being one. A row written
+ * and cleared at those two edges needs no walk and can never answer for a realm that is GONE.
+ *
+ * AND THAT IS THE ONLY HAZARD A PAIR OF EDGES CAN CLOSE. No pair of edges can make ONE value right while TWO
+ * realms are LIVE, and two are the ordinary case rather than an edge: a realm is PER-FLOW state.
+ * `ProxyData`'s own `realm` is a POD field inside the bytes proxy_of captures (core/frame/window_proxy.c), so a
+ * navigable's initial about:blank Document is materialized once per TIMELINE that reads through it, and each
+ * arm's materialization rides its own delta where no other arm can observe it. ANY TWO FLOWS SUFFICE and no
+ * fork relationship is needed — a flow and the LOAD JOB it enqueued read that field as NULL independently,
+ * which is why the smoke run that fired this abort reads 0 fork(s) and an EMPTY fork table. The row was keyed
+ * by DOCUMENT where the binding is (document, WORLD), so it did not merely answer imprecisely: it ABORTED on
+ * the second write, and that crash was doing PROTECTIVE work rather than being over-strict, because holding the
+ * LATEST or the FIRST would have handed a cross-instance read the wrong arm's realm — the one failure the
+ * per-flow delta exists to prevent.
+ *
+ * AND NEITHER REMEDY THAT CRASH NAMED WAS AVAILABLE, kept here because a reader who re-derives the row will
+ * re-derive them with it. They were `either the built realm is state the flow's delta carries, or the navigable
+ * is materialized once for all of its timelines`. The FIRST was ALREADY TRUE when it was written — the field
+ * named above rides PROXY_REC — so it sent its one reader to build what was standing, which is WHY two arms
+ * each reached the write. The SECOND is unbuildable at a LAZY materialization: solver/cow.c makes an object a
+ * flow creates after its last fork flow-PRIVATE and never captured, so a realm built by a non-boot arm cannot
+ * be a sibling's baseline, and materializing EAGERLY at creation is the realm-per-navigable cost
+ * core/frame/navigable.h's deferral exists to avoid.
+ *
+ * SO THE ANSWER IS NOT A BETTER ROW, IT IS NO ROW. core/frame/window_proxy.c's
+ * `window_proxy_realm_of_document` scans this agent's live navigables and reads the match's PER-FLOW `realm`,
+ * so the answer is the ASKING TIMELINE's and two timelines holding two realms for one name is a question with
+ * two answers rather than a collision. A column re-added here would be a SECOND COPY of a field that already
+ * rides the delta, kept in the one place where no world can be named — and `g_docs` is reachable from host
+ * entries with no flow of their own, which is exactly what makes it look like the right home and exactly why
+ * it is not.
+ *
+ * WHAT STAYS HERE IS THE PAIR OF STATEMENTS THAT REALLY ARE INSTANCE-GLOBAL: minting a NAME and HOSTING it,
+ * neither of which any timeline can disagree about. Building the realm was the third, and it was never the
+ * registry's. */
 
 /* A NAME HAS NO MAXIMUM LENGTH, AND THE FIXED BUFFER THAT USED TO STAND HERE WAS A CAP IN §scheduler's SENSE.
  * It was `char buf[64]` with a DCHECK refusing anything longer, and the refusal's own advice was "the fix is to

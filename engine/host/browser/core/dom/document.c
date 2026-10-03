@@ -5501,12 +5501,16 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     /* THE REALM'S ACTIVE DOCUMENT FROM HERE ON — set before the early return below, because the policy was
        already built and §7.4 clones it for an about:blank child whether or not this document got an address. */
     JS_SetContextOpaque(ctx, d);
-    /* AND THE SAME SENTENCE FROM THE DOCUMENT'S SIDE: this realm is the realm OF `doc_id`, which is the only
-       direction a name arriving from ANOTHER INSTANCE can be read in. It is stated here rather than derived by
-       a walk for the reason document_realm_of's slot is: this is the one moment the pair exists, so a row
-       written here cannot disagree with anything. Before the no-address return, because a document with no
-       address still has a navigable a peer can hold a reference into. */
-    world_doc_realm_set(doc_id, ctx);
+    /* AND THE SAME SENTENCE FROM THE DOCUMENT'S SIDE IS NOT WRITTEN ANYWHERE, WHICH IS THE REPAIR AND NOT AN
+       OMISSION. A `world_doc_realm_set(doc_id, ctx)` stood on this line, and the argument for it was that this
+       is the one moment the (document, realm) pair exists so a row written here cannot disagree with anything.
+       That is true of the pair and false of the QUESTION: a row has ONE slot per document and a realm is
+       PER-FLOW state, so two timelines that each materialize one srcless navigable's initial about:blank reach
+       this line twice for one name and the row aborted on the second — which is the per-flow isolation working
+       rather than a caller misbehaving. The (document -> realm) direction is answered from the NAVIGABLE now
+       (core/frame/window_proxy.h's window_proxy_realm_of_document), whose answer is the ASKING timeline's; the
+       navigable's own `realm` field is written by the one site that materializes a Document, so there is no
+       second statement for this one to disagree with. solver/world.c carries the full argument. */
     /* §7.2.3's ONE WindowProxy FOR THIS NAVIGABLE, minted WITH the realm because that is what it is one of.
        Before the early return below: a document with no address still has a navigable, and `window.closed`
        reads the navigable's state through this object. */
@@ -5839,12 +5843,19 @@ void document_free(JSContext *ctx)
     /* THE DOCUMENTS THIS REALM CREATED AT BASELINE go first: each holds a wrapper of the ACTIVE document's realm
        and each owns a whole Lexbor tree, and the active record is what the chain hangs off. */
     for (c = d->next_created; c; c = next) { next = c->next_created; doc_rec_free(ctx, c); }
-    /* THIS REALM STOPS BEING THE REALM OF ITS DOCUMENT HERE, and the row goes with it. A stale one would hand
-       a peer's operation a JSContext the collector has freed — the failure mode this file names when it
-       refuses a registry, closed by writing the clear at the same site as the set rather than by not keeping
-       the row. The documents above never had a name in the world registry: they have no browsing context, so
-       no navigable names them and no peer can reach them. */
-    world_doc_realm_set(d->doc, NULL);
+    /* THIS REALM STOPS BEING THE REALM OF ITS DOCUMENT HERE, AND THERE IS NO ROW LEFT TO CLEAR — a
+       `world_doc_realm_set(d->doc, NULL)` stood on this line and is gone with the row it cleared. The argument
+       for it was sound about STALENESS and is kept because a reader re-derives it: a row left standing would
+       hand a peer's operation a JSContext the collector has freed, which is the failure mode this file names
+       when it refuses a registry, and writing the clear at the same site as the set closed it. What a pair of
+       edges cannot close is TWO LIVE REALMS for one name, which is the ordinary case for a per-flow
+       materialization and is what deleted the row (solver/world.c).
+       WHAT ANSWERS NOW CANNOT GO STALE THE SAME WAY, and it is the navigable rather than a second edge here:
+       core/frame/window_proxy.c's `realm` field is BORROWED from the proxy's own `window`, so the realm this
+       function is tearing down is alive exactly while a navigable still names it — there is no interval in
+       which a freed JSContext is reachable through a row nothing has visited. The documents released above
+       never had a name in the world registry at all: they have no browsing context, so no navigable names them
+       and no peer can reach them. */
     doc_rec_free(ctx, d);
 }
 

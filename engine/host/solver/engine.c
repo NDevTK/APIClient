@@ -40,6 +40,7 @@
 #include "core/frame/remote_op.h"        /* the receiving half of a cross-agent OPERATION: what performs it */
 #include "core/frame/remote_object.h"    /* …and the grammar its completion crosses back in */
 #include "core/frame/navigable.h"   /* HTML §7.3.1 Navigables: tree order over this agent's navigables */
+#include "core/frame/window_proxy.h" /* which realm of this agent a DOCUMENT NAME is, in the asking timeline */
 #include "core/frame/document_lifecycle.h"   /* HTML §7.4.6.1: what a navigation does to the Document it replaces */
 #include "core/timing/event_loop.h"   /* HTML §8.1.7.3 Processing model: the clock's second mover — the work the
                                          running flow retired, which the interpreter reports and this file relays */
@@ -2900,15 +2901,36 @@ void engine_routed_rebuilt(JSContext *ctx, struct Flow *f, const char *record, c
  * flow is scheduled, and the answer is a property of the run. */
 static JSContext *doc_realm(uint32_t doc)
 {
-    JSContext *realm = world_doc_realm(doc);
+    JSContext *realm = window_proxy_realm_of_document(doc);
 
+    /* THE ANSWER IS THIS TIMELINE'S, AND THAT IS WHAT CHANGED RATHER THAN WHAT A NULL MEANS. This read went to
+       solver/world.c's instance-global (document -> realm) row until that row was deleted: one `JSContext *`
+       per document, which cannot be right once two flows have each materialized a navigable's initial
+       about:blank, and which ABORTED on the second write rather than answer. The remedy the assert below used
+       to name — "build the (document -> navigable) direction HTML §7.3 calls the node navigable … and
+       materialize it here through window_proxy_realm" — is SPENT in its first half and REFUTED in its second,
+       and it is recorded rather than deleted because a reader who re-derives it will write it again: the
+       direction is built (core/frame/window_proxy.h), and materializing HERE is exactly what this entry must
+       not do, because three of this function's callers stand inside DCHECK conditions where a realm built in
+       dev and not in release is the side effect §Offensive-programming bans.
+       AND IT IS STRICTLY NARROWER THAN THE ROW IN ONE FURTHER WAY, SAID HERE BECAUSE IT IS A BEHAVIOUR CHANGE
+       AND NOT A TIDY-UP: the row stayed readable for a REPLACED document until document_free cleared it, and a
+       navigable answers for whichever Document is ACTIVE in it — so in the timeline that navigated, the outgoing
+       document's name answers NULL from the instant window_proxy_navigate moves `doc` rather than from that
+       realm's teardown. That is the correct answer, because that timeline's navigable holds a different
+       Document; and where it is reached with PROGRAMS still queued for the outgoing name it is the residue
+       core/frame/navigable.c's own teardown assert already names, which §7.5.10 step 7's removal of a destroyed
+       document's queued tasks is what discharges. A sibling arm that did not navigate still answers, which is
+       the whole point. */
     DCHECK(realm != NULL,
-           "a peer reached through a navigable this agent holds whose active document has never been "
-           "MATERIALIZED — §7.4 created it with the initial about:blank Document, and only a read through that "
-           "navigable's own WindowProxy builds the realm, which needs the NAVIGABLE and not just the "
-           "document's name. Build the (document -> navigable) direction HTML §7.3 calls the node navigable — "
-           "the navigable whose active document this is — and materialize it here through window_proxy_realm, "
-           "exactly as a local read does");
+           "a navigable this agent holds was asked for the realm of its active document and THIS TIMELINE has "
+           "never materialized one — §7.4 created it with the initial about:blank Document, and only a read "
+           "THROUGH that navigable's own WindowProxy builds the realm, per flow (core/frame/navigable.h). A "
+           "sibling arm having built one says nothing about this one. A caller that must materialize holds the "
+           "NAVIGABLE and calls window_proxy_realm; a caller that only has the NAME is reaching for a document "
+           "no timeline of this instance has opened, or one THIS timeline has navigated away from, or is "
+           "standing at HOST TIME with no owner named (engine_unload_document's residual says what that costs "
+           "and what closes it)");
     return realm;
 }
 
@@ -2994,7 +3016,6 @@ void engine_unload_document(uint32_t doc)
            "a Document this agent does not hold was reported replaced — the trusted zone is the only zone that "
            "knows which instance holds which document, and it named this one to the wrong instance; unloading "
            "here would destroy a document the browser did not navigate away from");
-    dctx = doc_realm(doc);
     n = flow_count();
     DCHECK(n > 0,
            "a Document was replaced while every timeline of this instance had already finished — there is no "
@@ -3009,6 +3030,31 @@ void engine_unload_document(uint32_t doc)
            aborts between these two lines aborts the process, so there is no unwind that could leave a stale
            owner naming a flow the registry has since freed. */
         g_enqueue_owner = f;
+        /* THE REALM IS ASKED INSIDE THE BRACKET, BECAUSE IT STOPPED BEING A FACT ABOUT THE DOCUMENT. It was one
+           read above this loop while solver/world.c held an instance-global row; the answer is now the ASKING
+           TIMELINE's (core/frame/window_proxy.h), so asking once for every flow would state a per-document fact
+           this engine does not have. Asked here it reads as what it is: the realm this flow's unload is queued
+           into.
+           NAMED RESIDUAL — WHAT IS NOT COVERED: the realm this answers is the one the APPLIED delta names, and
+           the applied delta at host time is whichever flow the last slice left switched in — engine_sched_step
+           returns the cooperative-quantum yield WITHOUT switching it out, which is the same fact g_enqueue_owner
+           above exists for. So for a navigable whose Document was materialized PER FLOW rather than handed over
+           at its mint, every iteration of this loop asks ONE timeline's question N times; `g_enqueue_owner`
+           cannot close it, because it names who owns the ENQUEUE while the realm is page state inside a delta
+           that only an apply can read, and solver/cow.h offers no read of a delta that is not applied.
+           WHAT THE NEXT DIFF BUILDS: the enqueue takes the DOCUMENT NAME and resolves its realm when the queued
+           task RUNS — core/frame/document_lifecycle.h's unload entry over a `uint32_t doc`, with the subtree
+           walk performed per flow under that flow's own delta — which is what this function's own header already
+           argues for in as many words ("NOTHING RUNS INSIDE THIS CALL. Each flow performs its own unload when
+           the scheduler next runs it, under its own delta and at its own rate"). The alternative, switching each
+           flow in around the body, is a second scheduler beside the one pick and is what §THERE-IS-NO-GRIND
+           forbids.
+           HOW ITS ABSENCE WOULD SHOW: doc_realm's `realm != NULL` abort, with THIS function on the frame list
+           and no flow-time caller anywhere on it, on a reported navigation of a navigable this engine created
+           and whose Document only some other timeline has read through. A host-installed document cannot
+           exhibit it — window_proxy_new_self adopts its realm at the mint, UNCAPTURED, so every timeline and
+           the host read one value. */
+        dctx = doc_realm(doc);
         document_lifecycle_unload_replaced(dctx);
         g_enqueue_owner = NULL;
         /* ASKABLE AGAIN, for engine_route's reason exactly: a flow that reported host-owed is out of the pick
