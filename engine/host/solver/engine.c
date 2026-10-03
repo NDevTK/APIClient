@@ -2898,10 +2898,58 @@ void engine_routed_rebuilt(JSContext *ctx, struct Flow *f, const char *record, c
  * ASKED WHERE THE WORK RUNS, never where the record arrived — the same sentence the world segment beside it
  * carries. A hosted navigable's realm is materialized by whichever flow first reads through it (navigable.h),
  * so a realm that does not exist when the trusted zone routes the record may exist by the time the receiving
- * flow is scheduled, and the answer is a property of the run. */
-static JSContext *doc_realm(uint32_t doc)
+ * flow is scheduled, and the answer is a property of the run.
+ *
+ * THE SITE TRAVELS WITH THE OPERATION, which is what this entry's name carries and the only thing it adds.
+ * Every abort below is about a DOCUMENT NAME a caller handed over, and a DCHECK stamps the file and line it is
+ * WRITTEN at — so ONE line inside this function was the address reported for all SIXTEEN asks, FIVE of which
+ * are in flow_step. The frame list of the measured abort was `doc_realm <- flow_step <- engine_sched_slice`,
+ * which names the function and cannot say which of its five asks it was, and localising that cost an afternoon
+ * of probing. CLAUDE.md's rule for exactly this shape is that the pair is captured at the CALLER.
+ *
+ * WHY A MACRO AND NOT A HELPER, and why no call site changed. __FILE__ and __LINE__ inside a function are THAT
+ * function's, so a forwarding hop would stamp this file again for every caller — the defect rather than the
+ * cure. A function-like macro is expanded AT THE CALL, so the pair is the caller's by construction and the
+ * sixteen existing calls are unchanged text, including the three inside DCHECK conditions where the expansion
+ * must stay an EXPRESSION and side-effect-free: it is, because the lookup is one scan and the dev block only
+ * aborts. This is solver/cow.h's `_at` convention, the sibling in this directory, whose asserts render the
+ * threaded pair into the REASON as `at %s:%d` — and not core/idl_args.h's IDL_SITE, whose own banner scopes it
+ * to the member-INSTALL site every entry under it carries and which nothing in solver/ names.
+ *
+ * THE RECORD'S `at` FIELD STILL NAMES THE CHECK, AND THAT IS TWO FACTS IN TWO FIELDS rather than one answering
+ * two questions: `at` says where the invariant is WRITTEN, which is how a reader finds the partition, and the
+ * reason says where it was REACHED FROM, which is how they find the ask.
+ *
+ * THE PAIR IS REQUIRED AND NOT DEFAULTED: both parameters are taken, so a caller reaching this without a site
+ * does not compile, and the file pointer is DCHECKed rather than tolerated — a defaulted address is what lets a
+ * caller that never came through the macro look like one with nothing to say. There is no `_INTERNAL` sentinel
+ * because there is no forwarder to want one: all sixteen asks are direct calls in TEN distinct functions and
+ * none of them exists in order to make this one, so no intermediate could capture an address on another
+ * caller's behalf (core/layout/box_subject.h is where that goes wrong and why it declined a pair). A forwarder
+ * added later threads the pair it was GIVEN and declares a named sentinel if it has none; it never spells
+ * __FILE__ here.
+ * RETIREMENT: this record goes when the build refuses a shared helper whose DFAIL names no caller site, so the
+ * address is owed by construction rather than by whoever next reads this paragraph. */
+static JSContext *doc_realm_at(uint32_t doc, const char *file, int line)
 {
-    JSContext *realm = window_proxy_realm_of_document(doc);
+    JSContext *realm;
+
+    /* WHAT THIS GUARD BUYS, MEASURED RATHER THAN ASSERTED, BECAUSE AT EVERY SITE TODAY IT CANNOT FAIL. The
+       macro hands over a string literal and a positive constant, so at a macro-expanded call this condition
+       FOLDS to true and the assert is eliminated — checked: the message does not occur in the -O1 object at
+       all, while the five arms' `at %s:%d` occur five times. Its live population is therefore a hand-written
+       `doc_realm_at` bypassing the macro, which is the same population core/idl_args.h's and
+       core/agent_state.h's identical DCHECKs stand on (`NULL is not an option either way: the check DCHECKs
+       the file pointer`), and nothing in C makes that unspellable for a static entry in one file.
+       AND IT IS WHAT KEEPS RELEASE QUIET, which is not a side effect but the reason it sits OUTSIDE the dev
+       partition below. In release a DCHECK is `(void)sizeof(cond)`: the operand is never evaluated and is
+       still a reference, so `file` and `line` do not read as unused parameters — probed both ways, with the
+       same function minus this line warning twice under -Wall -Wextra and with it warning not at all. */
+    DCHECK(file != NULL && line > 0,
+           "doc_realm_at was reached with no caller site — the `doc_realm` macro spells __FILE__ and __LINE__ "
+           "at the call, so a null file is a hand-written call that bypassed it, and an abort below would then "
+           "name THIS function for a sixteen-caller lookup, which is the defect this entry exists to end");
+    realm = window_proxy_realm_of_document(doc);
 
     /* THE ANSWER IS THIS TIMELINE'S, AND THAT IS WHAT CHANGED RATHER THAN WHAT A NULL MEANS. This read went to
        solver/world.c's instance-global (document -> realm) row until that row was deleted: one `JSContext *`
@@ -2965,49 +3013,56 @@ static JSContext *doc_realm(uint32_t doc)
                converts it is a design question this crash deliberately does not settle.
                HOW ITS ABSENCE WOULD SHOW: this abort, with flow_step on the frame list, on any instance one of
                whose timelines has closed or destroyed a document a peer still holds a reference into. */
-            DFAIL("a cross-agent operation or a queued program named a document whose active Document THIS "
-                  "TIMELINE DESTROYED — §7.5.10 \"Destroying documents\"' set-the-Document's-browsing-context-to-null "
-                  "step nulled it "
-                  "and window_proxy_set_destroyed nulled the navigable's realm with it, so there is no realm "
-                  "now and there will not be one: proxy_realm refuses to materialize a destroyed navigable by "
-                  "name. A sibling arm that did not close still answers, which is why this is one timeline's "
-                  "state and not the document's. §7.2.1's cross-origin list is what a peer may still read "
-                  "here, and window_proxy.c answers every one of those FROM THE RECORD with no realm — BUILD "
-                  "that route for the cross-instance seam (see the residual above this line); do not ask for "
-                  "an ACTIVE DOCUMENT, because this navigable has none");
+            DFAILF("a cross-agent operation or a queued program named a document whose active Document THIS "
+                   "TIMELINE DESTROYED, asked at %s:%d — §7.5.10 \"Destroying documents\"' "
+                   "set-the-Document's-browsing-context-to-null step nulled it "
+                   "and window_proxy_set_destroyed nulled the navigable's realm with it, so there is no realm "
+                   "now and there will not be one: proxy_realm refuses to materialize a destroyed navigable by "
+                   "name. A sibling arm that did not close still answers, which is why this is one timeline's "
+                   "state and not the document's. §7.2.1's cross-origin list is what a peer may still read "
+                   "here, and window_proxy.c answers every one of those FROM THE RECORD with no realm — BUILD "
+                   "that route for the cross-instance seam (see the residual above this line); do not ask for "
+                   "an ACTIVE DOCUMENT, because this navigable has none", file, line);
             break;
         case WP_DOC_INITIAL:
-            DFAIL("a navigable this agent holds was asked for the realm of its active document and THIS "
-                  "TIMELINE has never materialized one — §7.4 created it with the initial about:blank "
-                  "Document, and only a read THROUGH that navigable's own WindowProxy builds the realm, per "
-                  "flow (core/frame/navigable.h). A sibling arm having built one says nothing about this one. "
-                  "A caller that must materialize holds the NAVIGABLE and calls window_proxy_realm, and this "
-                  "lookup takes a NAME: resolve it with window_proxy_of_document first");
+            DFAILF("a navigable this agent holds was asked for the realm of its active document and THIS "
+                   "TIMELINE has never materialized one, asked at %s:%d — §7.4 created it with the initial "
+                   "about:blank Document, and only a read THROUGH that navigable's own WindowProxy builds the "
+                   "realm, per flow (core/frame/navigable.h). A sibling arm having built one says nothing "
+                   "about this one. A caller that must materialize holds the NAVIGABLE and calls "
+                   "window_proxy_realm, and this lookup takes a NAME: resolve it with "
+                   "window_proxy_of_document first", file, line);
             break;
         case WP_DOC_REMOTE:
-            DFAIL("the realm of a document a PEER INSTANCE holds was asked for — no realm of this heap is it, "
-                  "now or ever, and `world_doc_hosted` is the gate every caller of this lookup is supposed to "
-                  "have passed before reaching it");
+            DFAILF("the realm of a document a PEER INSTANCE holds was asked for at %s:%d — no realm of this "
+                   "heap is it, now or ever, and `world_doc_hosted` is the gate every caller of this lookup "
+                   "is supposed to have passed before reaching it", file, line);
             break;
         case WP_DOC_NO_NAVIGABLE:
-            DFAIL("a document name resolved to no navigable of THIS TIMELINE at all — it names a document no "
-                  "timeline of this instance has opened, or one THIS timeline has navigated away from (a "
-                  "navigation moves the navigable's `doc` from the instant window_proxy_navigate runs, so the "
-                  "outgoing name answers nothing in the timeline that navigated, and the programs still queued "
-                  "for it are the residue core/frame/navigable.c's teardown assert names), or the caller is "
-                  "standing at HOST TIME with no owner named (engine_unload_document's residual says what that "
-                  "costs and what closes it)");
+            DFAILF("a document name resolved to no navigable of THIS TIMELINE at all, asked at %s:%d — it "
+                   "names a document no timeline of this instance has opened, or one THIS timeline has "
+                   "navigated away from (a navigation moves the navigable's `doc` from the instant "
+                   "window_proxy_navigate runs, so the outgoing name answers nothing in the timeline that "
+                   "navigated, and the programs still queued for it are the residue "
+                   "core/frame/navigable.c's teardown assert names), or the caller is standing at HOST TIME "
+                   "with no owner named (engine_unload_document's residual says what that costs and what "
+                   "closes it)", file, line);
             break;
         case WP_DOC_ACTIVE:
-            DFAIL("the realm lookup answered NULL for a navigable whose own record says its active document IS "
-                  "materialized — the two reads walk one table in one applied delta, so they cannot disagree "
-                  "unless something between them moved the delta");
+            DFAILF("the realm lookup answered NULL for a navigable whose own record says its active document "
+                   "IS materialized, asked at %s:%d — the two reads walk one table in one applied delta, so "
+                   "they cannot disagree unless something between them moved the delta", file, line);
             break;
         }
     }
 #endif
     return realm;
 }
+/* THE CAPTURE, AT EVERY ASK. Takes the ENTRY'S OLD NAME, so the sixteen calls below are unchanged text and the
+   pair each one threads is its own; the parenthesised parameter keeps `doc_realm(f->dyn_doc[i])` and the three
+   inside DCHECK conditions expanding as one expression. Nothing takes this entry's ADDRESS — it is a call at
+   every site — so there is no use a function-like macro would break. */
+#define doc_realm(doc_) doc_realm_at((doc_), __FILE__, __LINE__)
 
 /* THE FLOW A QUEUED CALLBACK BELONGS TO WHEN THE QUEUER IS THE USER AGENT — set ONLY inside
    engine_unload_document's per-flow bracket, which is the same shape flow_job_external_begin/_end already
@@ -3124,11 +3179,12 @@ void engine_unload_document(uint32_t doc)
            the scheduler next runs it, under its own delta and at its own rate"). The alternative, switching each
            flow in around the body, is a second scheduler beside the one pick and is what §THERE-IS-NO-GRIND
            forbids.
-           HOW ITS ABSENCE WOULD SHOW: doc_realm's `realm != NULL` abort, with THIS function on the frame list
-           and no flow-time caller anywhere on it, on a reported navigation of a navigable this engine created
-           and whose Document only some other timeline has read through. A host-installed document cannot
-           exhibit it — window_proxy_new_self adopts its realm at the mint, UNCAPTURED, so every timeline and
-           the host read one value. */
+           HOW ITS ABSENCE WOULD SHOW: doc_realm's NULL-realm partition aborting with THIS LINE in its own
+           reason — the lookup threads the caller's pair, so the ask is named rather than recovered from a
+           frame list — and no flow-time caller anywhere on that frame list either, on a reported navigation
+           of a navigable this engine created and whose Document only some other timeline has read through. A
+           host-installed document cannot exhibit it — window_proxy_new_self adopts its realm at the mint,
+           UNCAPTURED, so every timeline and the host read one value. */
         dctx = doc_realm(doc);
         document_lifecycle_unload_replaced(dctx);
         g_enqueue_owner = NULL;
