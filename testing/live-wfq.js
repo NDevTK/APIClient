@@ -459,6 +459,30 @@ function wasmCeilingKiB() {
   return Number(hits[0][1]) / 1024;
 }
 
+/* AND THE NUMERATOR THAT ANSWERS THAT CEILING, WHICH IS NOT THE ENGINE'S TO EMIT AND SO IS NOT DERIVED FROM
+   result.c AT ALL. `workingSetBytes` is `M.HEAPU8.length` — the view over the instance's ENTIRE linear memory,
+   stated by renderer.html on every ABI reply, declared by mojom.js and carried onto the run row by bridge.js's
+   `linesToAnalysis`. It is checked by NAME here rather than derived, because there is no composer block to
+   parse: this is a PRESENCE check over one spelling and therefore a FLOOR, not a derivation — it catches the
+   field being renamed or dropped and nothing else.
+   IT IS WORTH MAKING EXACTLY BECAUSE bridge.js IS INTERPRETED FROM THE TREE. The wasm this driver samples is
+   live only after a build, so a source check against the engine can disagree with the artifact in the browser;
+   the trusted zone is DEPLOYED ON WRITE, so the file this reads and the code that produced the row are the same
+   bytes. Without it a renamed field reads as `null` on every row, which this stream spells as "the producer
+   never sent it" — the absence of a producer and a producer that stopped stating it rendering alike, which is
+   the one distinction the rest of this file spends its nulls to keep. It throws at startup rather than after a
+   window of samples, for the reason every other scope here is derived before the browser is touched. */
+const BRIDGE_JS = path.join(__dirname, "..", "extension", "bridge.js");
+function assertWorkingSetRow() {
+  const hits = [...fs.readFileSync(BRIDGE_JS, "utf8").matchAll(/\bworkingSetBytes:/g)];
+  if (hits.length !== 1)
+    throw new Error("[live-wfq] extension/bridge.js composes " + hits.length + " `workingSetBytes:` row(s) " +
+                    "and this reader samples the ONE the run record carries. Zero means the field was renamed " +
+                    "or dropped, and every ceiling share below it would read `null` as though the trusted zone " +
+                    "had never stated the instance's working set; more than one means the row is no longer the " +
+                    "only place that name is composed and a reader cannot tell which one reached the log.");
+}
+
 /* THE ONE COST IDENTITY result.c STATES AS CHECKABLE ON THIS DOCUMENT, in the same three-state shape the
    branch identities use and for the same reason: it is a DCHECK in flow_wfq_census, which is compiled OUT
    of the release build this driver samples, and result.c says in as many words that a break makes the
@@ -582,9 +606,15 @@ function sample(pg) {
        holding no bytes — returned as absent and never as an object of zeros, the rule every other
        absence in this driver follows. The NO_WFQ return above does NOT carry it: that path is bridge's
        `_wfq` assert already having failed, which is a broken relay rather than a reading of a page. */
+    /* AND THE TRUSTED ZONE'S OWN READING OF THE INSTANCE, WHICH RIDES THIS SAME ROW AND IS NOT PART OF THE
+       HEAP CENSUS. bridge.js composes `workingSetBytes` beside `egressAsked` and asserts its presence on the
+       arm that builds this row, so an absent one is that producer having stopped composing it rather than an
+       instance holding no bytes. Returned as absent and never as a zero: zero bytes of linear memory is not a
+       state a running module can be in, so a 0 here could only ever be a defaulted hole. */
     return { run: r.run, wfq: r.wfq, switches: r.switches, sched: sched,
              quantum: ("quantum" in r) ? r.quantum : null,
-             heap: ("heap" in r) ? r.heap : null };
+             heap: ("heap" in r) ? r.heap : null,
+             workingSetBytes: ("workingSetBytes" in r) ? r.workingSetBytes : null };
   });
 }
 
@@ -599,6 +629,7 @@ async function main() {
   const SPREADROWS = spreadScope();
   const HEAPROWS = heapScope();
   const CEIL_KIB = wasmCeilingKiB();
+  assertWorkingSetRow();
   console.log("# artifact " + JSON.stringify(artifactStamp()));
   console.log("# windowMs=" + WINDOW + " everyMs=" + EVERY +
               " — COUNTERS (may be differenced): " + COUNTERS.join(",") +
@@ -633,10 +664,25 @@ async function main() {
               "its latest value IS its high-water: " + HEAP_WASM_MONOTONE.join(",") + " | ceiling " +
               CEIL_KIB + " KiB, derived from engine/build.mjs's own -sMAXIMUM_MEMORY. `arenaCeilingShare` " +
               "is a FLOOR and not the artifact's share of its address space: it is the C ALLOCATOR's arena " +
-              "over that ceiling, and the linear memory also holds the stack and static data. The figure " +
-              "that is the whole of it is HEAPU8.length, which bridge.js carries as `workingSetBytes` on " +
-              "the POOL record and not on the row this driver samples — so a reader wanting the true share " +
-              "is waiting on that field reaching this row, and this one is the lower bound until it does.");
+              "over that ceiling, and the linear memory also holds the stack and static data.");
+  /* AND THE SHARE THAT IS NOT A FLOOR, WHICH IS A DIFFERENT OBSERVER AND THEREFORE A DIFFERENT BANNER. The
+     sentence above used to end "a reader wanting the true share is waiting on that field reaching this row",
+     and this is that field arriving: bridge.js composes `workingSetBytes` onto the run row beside its egress
+     census, so the NUMERATOR of the real question is now on the line this driver samples. It is printed under
+     its own banner rather than folded into the heap one because the heap rows are DERIVED from result_heap_json
+     and this is not a row the engine emits — naming it there would put a row with no producer inside the one
+     scope whose producer is checked. */
+  console.log("# working set, carried by bridge.js off every ABI reply (renderer.html's HEAPU8.length) — ONE " +
+              "row, MONOTONE: a wasm Memory never shrinks, so its latest value IS its high-water and " +
+              "`workingSetCeilingShare` over the " + CEIL_KIB + " KiB ceiling is a high-water question. It is " +
+              "the TRUE share where `arenaCeilingShare` is a floor — the arena is a SUBSET of this, which also " +
+              "holds the stack and static data. ABSENT IS null AND NEVER 0: a running module cannot hold zero " +
+              "bytes of linear memory, so a 0 could only be a defaulted hole. NOT DIVIDED BY ANY heap ROW: this " +
+              "is read at the END of the last round and that census is the instant qjs_emit_partial composed " +
+              "it, so a quotient of the two is a two-moments figure — the columns go side by side and the " +
+              "reader divides knowing what is in it. The denominator is the INSTANCE's and not the pool's: " +
+              "bridge.js sums this same number across live engines against a DEVICE RAM floor, and the wasm32 " +
+              "ceiling is per MODULE, so that sum is a fraction of the wrong denominator.");
 
   const { browser, extId } = await connect();
   try {
@@ -725,6 +771,18 @@ async function main() {
            heapScope's banner. Absent is said ONCE as a flag rather than as eleven nulls, which is the
            rule the branch block below states: filling a row per field would render a census the producer
            never sent exactly like one it sent reading zero. */
+        /* THE TRUSTED ZONE'S OWN BYTE FIGURE, PRINTED OUTSIDE THE HEAP GATE BECAUSE IT IS NOT IN THAT CENSUS
+           AND DOES NOT ARRIVE OR GO MISSING WITH IT. One row, so absence is said ONCE as `null` and there is
+           no flag to add: the rule the blocks around this one state — absent is said once rather than as a
+           field per row — is satisfied by the null itself when the population is one. THE SHARE IS COMPOSED
+           HERE AND IT IS THE ONLY QUOTIENT THIS ROW HAS: the numerator is MONOTONE (a wasm Memory never
+           shrinks) and the denominator is a LINK CONSTANT, so neither operand is an instant and the ceiling
+           question is sound — which is exactly what `arenaCeilingShare` can only bound from below. KiB on
+           both sides, and the division is exact: bridge.js asserts the byte figure is a whole number of 64 KiB
+           WASM pages where it reads it off the reply. A zero or absent denominator yields null and never 0. */
+        out.workingSetBytes = (typeof s.workingSetBytes === "number") ? s.workingSetBytes : null;
+        out.workingSetCeilingShare = (typeof s.workingSetBytes === "number")
+                                       ? share(s.workingSetBytes / 1024, CEIL_KIB) : null;
         if (!s.heap || typeof s.heap !== "object") { out.heapAbsent = true; }
         else {
           const h = s.heap;

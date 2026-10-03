@@ -741,6 +741,19 @@ function linesToAnalysis(lines, msg, outcome, eng) {
          "a run reached the counters arm with no egress census on its instance — `_egress` is declared in the " +
          "`eng` literal beside `_cold`, so an instance without one was built somewhere else, and the row would " +
          "report this zone's own refusals as absent for a run that had them");
+  /* AND THE SAME ARM READS THE INSTANCE'S WORKING SET OFF `eng`, SO ITS PRESENCE IS ASSERTED FOR THE REASON THE
+     LINE ABOVE ASSERTS `_egress` AND WITH THE SAME INVARIANT BEHIND IT. engineRecordFacts writes
+     `eng.residentBytes` BEFORE the reservation leaves the `booting` state — its own comment calls that ordering
+     the thing that makes "an engine the ranking has never heard from" a state that cannot occur rather than a
+     case to default — and this arm is reached only by an instance that has stepped. So an absent number here is
+     that ordering having moved, which is the identical sentence the pool probe asserts one level up, and the
+     symptom without this line is a row carrying `undefined` through a structured clone that DROPS the key: the
+     reader would then spell it as the absence of a producer rather than as a producer that stopped stating it. */
+  DCHECK(!(outcome !== "crashed" && result) || (eng && typeof eng.residentBytes === "number"),
+         "a run reached the counters arm with no reported working set on its instance — engineRecordFacts " +
+         "states it at the end of every round and before the reservation becomes hot, so its absence is that " +
+         "ordering having moved, and the one byte figure on this row that can answer what share of the wasm32 " +
+         "address space this instance has taken would be missing from a run that had it");
   const m = (outcome !== "crashed" && result)
     /* THE SCHEDULER'S OWN COUNTERS, so fairness/deep-preemption is OBSERVABLE (a real signal that the single
        BFS context-switches rather than running FIFO) — and they are the fields solver/result.c ACTUALLY emits.
@@ -850,6 +863,35 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            carries a plain object because every other census on it arrived through `JSON.parse` and is one,
            and a row is SERIALIZED out of this realm by whoever reads it. */
         egressAsked: eng._egress.asked, egressDeclined: Object.assign({}, eng._egress.declined),
+        /* AND WHAT THE INSTANCE'S WHOLE LINEAR MEMORY MEASURED, WHICH IS THE ONE BYTE FIGURE ON THIS ROW THAT IS
+           NOT THE ENGINE'S CENSUS OF ITSELF. `heap` above is result.c's reading of the quickjs runtime and the C
+           allocator; this is `M.HEAPU8.length` as renderer.html stated it on the reply engineRecordFacts last
+           awaited, which is the view over the ENTIRE memory — the allocator's arena plus the stack plus static
+           data — so it is the only field here that can answer what share of the wasm32 address space this
+           instance has taken. `arenaKiB / -sMAXIMUM_MEMORY` is what a reader had instead, and testing/live-wfq.js
+           printed it under its own banner as a FLOOR for exactly that reason: the arena is a SUBSET of this.
+           IT IS A SEPARATE FIELD AND IS NOT FOLDED INTO `heap`, WHICH IS NOT TIDINESS. That census's rows are
+           DERIVED from result_heap_json's own composer text by its reader, which THROWS when the set it names
+           disagrees — so a field the engine does not emit, made to look like one it does, would be a row with no
+           producer in the one place the producer is checked. It is also a different OBSERVER (this zone, off a
+           reply) at a different MOMENT (the end of the last round, where the census is the instant
+           qjs_emit_partial composed it), and the four censuses above are separate objects precisely because a
+           reader compares WITHIN one and never across. A quotient of this against `heap.arenaKiB` is therefore a
+           two-moments figure and is composed nowhere; what IS sound is this over the LINK'S OWN ceiling, which
+           is a constant.
+           IT IS MONOTONE, SO ITS LATEST VALUE IS ITS HIGH-WATER AND A CEILING SHARE OVER IT IS A HIGH-WATER
+           QUESTION. This file's own `_atRamFloor` states the mechanism — "a wasm Memory never shrinks" — and
+           engine.c says the same of the arena inside it, "which in wasm is LINEAR MEMORY AND ONLY EVER GROWS".
+           That is what makes this a distance-to-a-limit a reader may ask: every row of `heap` but `arenaKiB` is a
+           gauge that FALLS, and a share of a ceiling asked of one of those would publish whatever the allocator
+           happened to be holding at an instant as a distance to a limit the run may already have been nearer to.
+           AND THE DENOMINATOR IT IS A SHARE OF IS THE INSTANCE'S AND NOT THE POOL'S. `_residentBytes` sums this
+           same number across every live engine against a DEVICE RAM floor; the wasm32 ceiling is per MODULE, so
+           the two are two questions and the sum is a fraction of the wrong denominator.
+           THE WHOLE-WASM-PAGE CHECK IS NOT RESTATED HERE. engineRecordFacts asserts it on the one line that
+           reads it off the reply, which is where the value enters this zone; a second copy of that shape would
+           be the restated rule this tree refuses, and what this arm owes is PRESENCE, asserted above. */
+        workingSetBytes: eng.residentBytes,
         endpoints: result.fetchCallSites.length, sinks: result.securitySinks.length,
         /* AND WHAT COMPOSED EACH OF THOSE ADDRESSES, AND WHETHER THE PAGE'S CODE HAD RUN WHEN IT DID — the
            two facts `endpoints` cannot state and the pair CLAUDE.md's razor is a SUBTRACTION OF TWO TOTALS
