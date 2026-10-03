@@ -1,23 +1,38 @@
 #!/bin/bash
-# ONE CENSUS PASS: every site in the list, one virgin browser each, against a FROZEN ARTIFACT. Emits one JSON
-# row per line; feed it to report.mjs.
+# ONE CENSUS PASS: every site in the list, one virgin browser each, against a FROZEN ENGINE ARTIFACT.
+# Emits one JSON row per line; feed it to report.mjs.
+# FROZEN here is the LANE'S OWN COPY OF extension/, whose sha256 this script prints -- never a frozen copy
+# of the SITE, which is deleted and which the transport paragraph below is about. The two senses shared one
+# word in this header while both existed, and only one of them survives.
 #
-#   LANE=/tmp/mylane ./run.sh pass1                      # frozen bytes, sites.tsv
+#   LANE=/tmp/mylane ./run.sh pass1                      # sites.tsv
 #   LANE=/tmp/mylane ./run.sh pass1 excalidraw           # one site
-#   LANE=/tmp/mylane SITES=apps.tsv AT=live ./run.sh q5  # the live app-page census
+#   LANE=/tmp/mylane SITES=apps.tsv ./run.sh q5          # the app-page census
 #
-# WHERE THE BYTES COME FROM IS A PARAMETER, AND THERE IS ONE DRIVER. `AT=frozen` (the default) serves each
-# site from the mirror through serve-faithful; `AT=live` drives the row's own URL over the internet. They are
-# the SAME loop because everything that makes a row trustworthy — the lane, the virgin browser, the proof
-# that the browser is ours, the pass-qualified transcript — is identical in both and belongs to neither. A
-# SECOND SCRIPT FOR THE LIVE CASE IS WHAT THIS REPLACES, and the two copies had already drifted: the /tmp one
-# had `--noproxy 127.0.0.1` on its identity check and this one did not, so on a box exporting `http_proxy`
-# they were asking two different questions and only one of them was about our browser.
+# THE BYTES COME FROM THE NETWORK, AT THE MOMENT OF THE RUN, AND THERE IS ONE TRANSPORT. `AT` USED TO SELECT
+# one: `AT=frozen` served each site from a committed mirror through serve-faithful.mjs, `AT=live` drove the
+# row's own URL. The mirror, that server and every line here that existed only for them are DELETED, so
+# there is nothing left to select. `AT` is still READ, and ONLY so a stale caller is TOLD rather than
+# silently handed a different measurement than it asked for; that refusal is the whole of why `AT` survives.
 #
-# AND WHAT `AT=live` MEASURES IS NOT WHAT `AT=frozen` MEASURES. CLAUDE.md §Testing: a before/after belongs on
-# frozen bytes, where the only thing that changed is the engine; live sites are for DISCOVERING signatures.
-# A live pass is therefore a signature hunt whose endpoint counts are noise on any site that aborts, and the
-# report says so — it is not a cheaper frozen pass.
+# THE ONE-DRIVER ARGUMENT IS KEPT, BECAUSE IT IS WHY THERE IS STILL ONE SCRIPT HERE AND NOT TWO. Everything
+# that makes a row trustworthy — the lane, the virgin browser, the proof that the browser is ours, the
+# pass-qualified transcript — belonged to NEITHER transport, which is why A SECOND SCRIPT FOR THE LIVE CASE
+# IS WHAT THIS REPLACED. The two copies had already drifted: the /tmp one had `--noproxy 127.0.0.1` on its
+# identity check and this one did not, so on a box exporting `http_proxy` they were asking two different
+# questions and only one of them was about our browser. That is what a second driver costs, and the cost is
+# live for the next person who wants one.
+#
+# AND THE RULE THIS HEADER CITED FOR FROZEN BYTES IS RETIRED, SO ITS REPLACEMENT IS NAMED HERE RATHER THAN
+# LEFT TO BE RE-DERIVED — the reasoning for a mirror is sound and the next reader will reach it again. It
+# read: CLAUDE.md §Testing, a before/after belongs on FROZEN BYTES where the only thing that changed is the
+# engine, with live sites kept for DISCOVERING signatures. The project owner has RETIRED that: a page's
+# scripts and styles are COMPUTED AND FETCHED AT RUNTIME, so a frozen copy is a program no visitor is
+# served, and this repository may not carry one anyway. WHAT REPLACES IT NEEDS NOTHING THIS SCRIPT LACKS — a
+# run COUNT and a SPREAD rather than one number, compared on what does not move with reach: a crash's
+# IDENTITY, a conservation identity read WITHIN one sample, a count that cannot be true. So one pass settles
+# whether a site aborts and on what, and settles nothing about how much work got done; the endpoint column
+# is noise on any site that aborted, and report.mjs says so.
 #
 # THE LANE IS THE WHOLE POINT AND IT IS REQUIRED, NOT DEFAULTED. It is a directory holding a COPY of
 # `testing/harness.js` and a COPY of `extension/`, because harness.js derives EXT_DIR from its own location
@@ -33,9 +48,14 @@
 # for three healthy origins and called them dead. `restart` (never `start`) also wipes IndexedDB and the V8
 # code cache, so no row inherits the previous row's frontier.
 #
-# THE FIXTURE SERVER IS PER SITE AND ITS MISSES ARE KEPT. serve-faithful 404s loudly for a resource the
-# mirror lacks; that count goes to logs/<id>.serve so a row with a thin document can be told apart from a
-# row whose engine learned nothing.
+# WHAT THE BROWSER REQUESTED IS ON THE ROW NOW, NOT IN A SIDE FILE. The deleted fixture server 404'd loudly
+# for a resource the mirror lacked and that count went to logs/<id>.serve, which was the only record of what
+# the browser actually ASKED FOR — the half a census row could not reconstruct, and what told a row with a
+# thin document apart from a row whose engine learned nothing. THE MISS HALF HAS NO LIVE ANALOGUE AND NEEDS
+# NONE: a 404 from the real site is a fact about the site rather than about a capture. THE REQUESTED HALF IS
+# NOW THE ENGINE'S OWN RECORD AND IS BETTER PLACED — `egressAsked` and `egressDeclined` ride the census row
+# itself (site.mjs, where both keep ABSENT apart from zero), so the discrimination outlived the server and
+# no longer depends on a path the next pass can overwrite.
 set -u
 # WHERE THE CORPUS IS, AND IT IS OVERRIDABLE SO A LANE CAN RUN A PRIVATE COPY OF THIS SCRIPT.
 # BASH STREAMS ITS OWN SCRIPT. It reads the file INCREMENTALLY as it executes, so an edit to this file
@@ -50,7 +70,7 @@ set -u
 # checked the blast radius rather than assuming: one row corrupted, the rest valid, and it deleted and
 # re-queued the casualty.
 # NODE IS NOT LIKE THIS AND THE ASYMMETRY IS THE USEFUL PART: node reads a module WHOLE at import, so
-# site.mjs, serve-faithful.mjs and report.mjs are safe against a mid-edit in a way a bash script is not.
+# site.mjs, report.mjs, list.mjs and fetch.mjs are safe against a mid-edit in a way a bash script is not.
 # A LANE CANNOT DEFEND AGAINST IT EXCEPT BY COPYING THIS FILE, and a copy used to be impossible because
 # this line derived the corpus path from the SCRIPT'S OWN LOCATION — so a copy looked for site.mjs beside
 # itself and found nothing. The override is therefore not a convenience: it is the whole of what makes a
@@ -71,9 +91,11 @@ ONLY=${2:-}
 SITES=${SITES:-sites.tsv}
 case "$SITES" in /*) ;; *) SITES=$CORP/$SITES;; esac
 [ -f "$SITES" ] || { echo "no site list at $SITES"; exit 2; }
-# WHERE THE BYTES COME FROM. `frozen` serves the mirror; `live` drives the row's own URL. Anything else is a
-# typo and is fatal rather than silently taken as one of them -- a census that measured the other corpus
-# under this one's label is a row no counter in the output could contradict.
+# AN UNKNOWN `AT` IS FATAL RATHER THAN IGNORED, AND THAT ARGUMENT OUTLIVED THE PARAMETER IT WAS WRITTEN FOR.
+# With two transports, a typo silently taken as one of them was a census that measured the other corpus
+# under this one's label -- a row no counter in the output could contradict.
+# One transport does not retire that reason, it NARROWS it: the refusal below is the same refusal over a
+# smaller set, and the paragraph under it is the record of what the set used to hold.
 # THERE IS ONE PLACE THE BYTES COME FROM AND IT IS THE NETWORK. `AT=frozen` served a committed copy of
 # other people's sites through serve-faithful.mjs; that copy and that server are deleted, so the only
 # transport left is the row's own URL. A page's scripts and styles are FETCHED AT RUNTIME. `AT` is still
@@ -84,9 +106,12 @@ if [ "$AT" != "live" ]; then
   echo "        repository no longer carries. Drive the row's own URL with AT=live." >&2
   exit 2
 fi
-case "$AT" in frozen|live) ;; *) echo "AT must be frozen or live, not \`$AT\`"; exit 2;; esac
+# AND THERE IS NO SECOND VALIDATION UNDER THAT REFUSAL. A `case "$AT" in frozen|live) ;; *) exit 2;; esac`
+# stood here and COULD NOT FIRE: the guard above has already refused everything but `live`, so both of its
+# arms were unreachable -- a NON-check with a reassuring transcript, which is CLAUDE.md
+# §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE. It is deleted rather than narrowed, because a validation whose
+# whole population one line above it has already refused has no narrower form.
 PORT=${HARNESS_PORT:-9451}
-FIXPORT=${FIXPORT:-8951}
 export NODE_PATH=${NODE_PATH:-/home/user/APIClient/node_modules}
 export HARNESS_PROFILE=$LANE/prof HARNESS_LOCK=$LANE/harness.lock HARNESS_PORT=$PORT
 export HARNESS_EXT_DIR=$LANE/extension CDP=$PORT DWELL=${DWELL:-60000}
@@ -122,32 +147,19 @@ for _row in "${SITE_ROWS[@]}"; do
   case "$id" in \#*) continue;; esac
   [ -n "$ONLY" ] && [ "$ONLY" != "$id" ] && continue
   echo "=== $(date -u +%H:%M:%S) $id   load $(cut -d' ' -f1 /proc/loadavg)"
-  SRV=
-  TARGET=$url
-  if [ "$AT" = frozen ]; then
-    # THE SERVE LOG IS PASS-QUALIFIED FOR THE REASON site.mjs QUALIFIES THE CONSOLE TRANSCRIPT, and it was
-    # the one artifact still written to a single path per site. That file is the ONLY record of what the
-    # browser actually REQUESTED -- the MISS lines are how a lazy chunk the markup never named is known to
-    # have been composed at runtime -- so losing it loses the half of a run that the census row cannot
-    # reconstruct. MEASURED, BY A LANE THAT HAD ALREADY WRITTEN DOWN THE HAZARD AND STILL LOST THE DATA: a
-    # second pass launched seconds after the first finished, and the next pass's server TRUNCATED this file
-    # while the lane was copying it aside; the first pass's squoosh log survived as 43 bytes (its bind line)
-    # against the 37203 bytes and 1252 MISS lines the same site produced in the pass that was not raced. A
-    # snapshot taken "after the pass" is not protection, because the next pass owns the same path.
-    node "$CORP/serve-faithful.mjs" "$id" "$FIXPORT" >"$CORP/logs/$LABEL-$id.serve" 2>&1 &
-    SRV=$!
-    sleep 1
-    # THE SERVER MUST BE *THIS* SITE'S. One fixture port is reused for every row, so a server that failed to die
-    # would still be bound and would answer with the PREVIOUS site's document -- a row measuring the wrong site
-    # under the right name, which no counter in the census could contradict. serve-faithful prints "<id> on
-    # <port>" only after a successful listen, so that line is the proof, and its absence is fatal for the row.
-    if ! grep -q "^$id on $FIXPORT " "$CORP/logs/$LABEL-$id.serve"; then
-      echo "{\"id\":\"$id\",\"url\":\"$url\",\"fatal\":\"fixture server for $id did not bind $FIXPORT\"}" >> "$OUT"
-      kill $SRV 2>/dev/null; wait $SRV 2>/dev/null; continue
-    fi
-    TARGET=http://127.0.0.1:$FIXPORT/
-  fi
-  ( cd "$LANE" && timeout 240 node testing/harness.js restart "$PORT" ) >"$CORP/logs/$id.restart" 2>&1
+  # EVERY PER-PASS ARTIFACT THIS SCRIPT WRITES IS PASS-QUALIFIED, AND THIS RESTART LOG WAS THE LAST ONE THAT
+  # WAS NOT. The driver transcript carries `<label>-<id>` for the reason stated at the site.mjs call below;
+  # this log carried `<id>` alone, so the next pass owned the same path and a reader sent here by the fatal
+  # row below met ANOTHER PASS'S launch under this pass's id.
+  # MEASURED ON THE SIBLING THIS SCRIPT NO LONGER HAS, WHICH IS WHY THE INCIDENT OUTLIVES ITS CODE: the
+  # deleted frozen transport's serve log was the one artifact written to a single path per site, and a second
+  # pass launched seconds after the first finished TRUNCATED it while the lane was copying it aside -- the
+  # first pass's log survived as 43 BYTES (its bind line) against the 37203 bytes and 1252 MISS lines the
+  # same site produced in the pass that was not raced. The lane had already written that hazard down and lost
+  # the data anyway, which is why the rule is not "be careful": A SNAPSHOT TAKEN "AFTER THE PASS" IS NOT
+  # PROTECTION, BECAUSE THE NEXT PASS OWNS THE PATH. The only protection is that the path carries the pass,
+  # so it does here now, and the serve log's deletion cost the argument nothing.
+  ( cd "$LANE" && timeout 240 node testing/harness.js restart "$PORT" ) >"$CORP/logs/$LABEL-$id.restart" 2>&1
   RC=$?
   # A FAILED `restart` IS ITS OWN FATAL AND MUST NOT FALL THROUGH TO THE IDENTITY POLL BELOW, because that
   # poll answers with ONE SENTENCE for TWO STATES that take opposite work: somebody else's browser is on this
@@ -158,12 +170,19 @@ for _row in "${SITE_ROWS[@]}"; do
   # refusal, and that refusal lands in this log: the only thing missing was anything reading the status.
   # 124 is `timeout`'s, which is the launch taking longer than the window rather than refusing.
   if [ "$RC" -ne 0 ]; then
-    echo "{\"id\":\"$id\",\"url\":\"$url\",\"fatal\":\"harness restart exited $RC, so no browser of ours was ever launched on $PORT -- read logs/$id.restart, whose last paragraph names the cause; this is NOT the port-collision reading\"}" >> "$OUT"
-    [ -n "$SRV" ] && { kill $SRV 2>/dev/null; wait $SRV 2>/dev/null; }
+    echo "{\"id\":\"$id\",\"url\":\"$url\",\"fatal\":\"harness restart exited $RC, so no browser of ours was ever launched on $PORT -- read logs/$LABEL-$id.restart, whose last paragraph names the cause; this is NOT the port-collision reading\"}" >> "$OUT"
     continue
   fi
   # CONFIRM THE BROWSER IS OURS BEFORE DRIVING IT. `restart` can report "started" while its Chrome is
   # already gone, and one lane then silently drove another agent's browser and lost a whole pass.
+  # AND THE SHAPE IS A REUSED PORT, WHICH IS WHY THIS POLL IS THE RULE AND NOT A PRECAUTION. `PORT` is ONE
+  # port for every row of the pass, so a browser that failed to die would still be bound and would answer for
+  # the PREVIOUS row -- a row measuring the wrong thing under the right name, which no counter in the census
+  # could contradict. The deleted fixture transport had the identical hazard on its own reused port and
+  # refused it the same way, by a line only a successful listen could print; this poll is the surviving
+  # member of that pair, so the rule lives HERE now. `testing/corpus/control/serve.mjs` cites "run.sh's own
+  # rule" that such a line is the proof a server is this run's, which is a live citation of this paragraph:
+  # trimming it would leave that file deferring to a sentence this script no longer makes.
   MYID=$(node -e "const c=require('crypto');const h=c.createHash('sha256').update(Buffer.from(process.argv[1],'utf8')).digest('hex').slice(0,32);let i='';for(const x of h)i+=String.fromCharCode(97+parseInt(x,16));console.log(i)" "$LANE/extension")
   # POLLED, NOT ASKED ONCE, AND `--noproxy` BECAUSE THE ANSWER MUST COME FROM *THIS* BOX. `restart` prints
   # "started" when it has spawned Chrome, which is BEFORE the DevTools HTTP endpoint answers -- so a single
@@ -179,17 +198,15 @@ for _row in "${SITE_ROWS[@]}"; do
   done
   if [ -z "$OURS" ]; then
     echo "{\"id\":\"$id\",\"url\":\"$url\",\"fatal\":\"port $PORT is not serving our extension $MYID\"}" >> "$OUT"
-    [ -n "$SRV" ] && { kill $SRV 2>/dev/null; wait $SRV 2>/dev/null; }
     continue
   fi
   # THE PASS LABEL GOES TO THE DRIVER, so its transcript is logs/<label>-<id>.log rather than one path per
   # site that the next pass overwrites. Without it every pass's rows are read against the LAST pass's console
   # and a site that ran cleanly in one pass inherits another pass's abort. report.mjs reads the name off the
   # row, so passing it here is what makes a multi-pass census one measurement per (site, pass).
-  R=$(cd "$CORP" && timeout 360 node site.mjs "$id" "$TARGET" "$LABEL" 2>&1 | grep '^ROW ' | head -1)
+  R=$(cd "$CORP" && timeout 360 node site.mjs "$id" "$url" "$LABEL" 2>&1 | grep '^ROW ' | head -1)
   [ -z "$R" ] && R="ROW {\"id\":\"$id\",\"url\":\"$url\",\"fatal\":\"driver produced no row\"}"
   echo "${R#ROW }" >> "$OUT"
-  [ -n "$SRV" ] && { kill -TERM $SRV 2>/dev/null; wait $SRV 2>/dev/null; }
 done
 
 # TEAR DOWN BY THE PID IN *OUR* LOCK, never by a pattern. `pkill -f testing/harness.js` matches every lane's
