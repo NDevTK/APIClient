@@ -11,6 +11,7 @@
 #include "core/css/css_color.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_defaulting.h"
+#include "core/css/css_image.h"
 #include "core/css/css_length.h"
 #include "core/css/css_logical.h"
 #include "core/css/css_pending_substitution.h"
@@ -1478,10 +1479,16 @@ bool css_computed_models(const char *name)
               IT IS NOT THE WHOLE OF §3.2 AND THE ROW DOES NOT CLAIM TO BE, which is what the ORDER of that
               condition decides rather than a judgement made here: the arm ABOVE this one reads
               `list-style-image`, so a §3.2 built from this property alone would make true an arm that is only
-              reached once the one above it is false. That property's own row is the next landing and is a
-              different amount of work — css-lists-3 §3.3's `Computed value:` line is "the keyword none or the
-              computed <image>" — and core/css/css_style_declaration.c's unregistered-initial table states its
-              shape at the residual that named this one.
+              reached once the one above it is false. THE CLAUSE HERE READ THAT THAT PROPERTY'S OWN ROW IS THE
+              NEXT LANDING, AND IT IS RETIRED BY THAT ROW LANDING — kept in its own words, unquoted because a
+              run of this tree's prose is not a spec quotation, because a reader who re-derives §3.2's order
+              will write it again. §3.3's row is one entry down in this same predicate and its derivation is
+              one page up, so §3.2 can now read BOTH arms. What this row still does not claim is §3.2 itself:
+              its image arm is a VALIDITY question about the image ("list-style-image on the originating
+              element defines a marker image"), and css-images-3 §2 "Image Values: the <image> type" states
+              the answer for one that has not loaded — "an invalid image in list-style-image it is treated as
+              none, allowing the list-style-type to render in its place" — which is a FETCH and not a cascade
+              step. That is why the landing after this pair is §3.2 and not the marker member type.
               `Inherited: yes`, AND THE ROW IS WHAT MAKES THAT INHERITANCE §7.2's OWN: core/css/css_defaulting.c
               already carries the name, and `css_cv_specified`'s inherited arm routes a property THIS predicate
               answers for through `css_computed_value` of the parent — so css-cascade-5 §7.2 "Inheritance"'s own
@@ -1492,6 +1499,34 @@ bool css_computed_models(const char *name)
               §3.4's line IS `specified value`, so the two readings are byte-identical at every element, and
               what the row buys is that the question is now ASKED through the entry that derives one. */
            strcmp(name, "list-style-type") == 0 ||
+           /* css-lists-3 §3.3 "Image Markers: the list-style-image property", whose `Computed value:` line
+              is "the keyword none or the computed <image>" over a `Value:` line of `<image> | none` — read
+              off the fetched editor's draft, because engine/specindex carries no css-lists-3 row and nothing
+              in this tree judges a citation to it. IT IS NOT THE AS-SPECIFIED ARM and leaves
+              `css_computed_value` by name, which is why it is absent from that arm's own enumeration: two of
+              its three arms ARE the specified value and the third is a crash.
+              IT IS HERE BECAUSE §3.2 "Generating Marker Contents" READS IT AHEAD OF §3.4 AND COULD NOT.
+              That section is an ORDERED condition — "The contents of a marker box are determined by the
+              first of these conditions that is true" — whose SECOND arm is "list-style-image on the
+              originating element defines a marker image" and whose THIRD reads `list-style-type`. §3.4's row
+              landed first and cannot answer §3.2 alone: a narrowing built from it would make true an arm
+              that is only reached once the one above it is false, which is why core/layout/box_tree.c's
+              `bt_require_marker_box_is_spellable` still refuses EVERY list item. §3.2 reads the ORIGINATING
+              ELEMENT's own computed value, and `css_computed_value` is the entry a C spec algorithm asks.
+              `Inherited: yes`, AND THE ROW IS WHAT MAKES THAT INHERITANCE §7.2's OWN: core/css/
+              css_defaulting.c already carries the name, and `css_cv_specified`'s inherited arm routes a
+              property THIS predicate answers for through `css_computed_value` of the parent — so
+              css-cascade-5 §7.2 "Inheritance"' own sentence, "The inherited value of a property on an element
+              is the computed value of the property on the element's parent element", was answered with the
+              parent's SPECIFIED value for every list item on every page until this row.
+              THE ROW CHANGES WHAT CSSOM §9 ANSWERS FOR A GRADIENT AND THAT IS THE POINT rather than a side
+              effect: `css_resolved_value` asks this predicate first, so
+              `getComputedStyle(el).listStyleImage` on a `list-style-image: linear-gradient(red, blue)` page
+              reached `css_cv_specified` and answered the author's bytes under the word computed, and now
+              reaches the derivation's own crash. CSSOM §9 puts the property under "Any other property", so
+              its resolved value IS its computed value and `css_resolved_kind` needs no row of its own — the
+              name occurs ZERO times in that standard, measured against the fetched text. */
+           strcmp(name, "list-style-image") == 0 ||
            css_computed_models_length(name) ||
            css_border_side_of(name, "style") >= 0;
 }
@@ -1866,6 +1901,81 @@ bool css_computed_transform_list(lxb_dom_element_t *el, CssTransformList *out)
     return css_cv_transform_list(el, spec, out);
 }
 
+/* css-lists-3 §3.3 "Image Markers: the list-style-image property"' `Computed value:` line, which is a
+   KEYWORD AND TWO ARMS rather than one rule: "the keyword none or the computed <image>".
+   THE KEYWORD IS ANSWERED FIRST AND NOT THROUGH THE `<image>` PRODUCTION, because it is not in it.
+   §3.3's `Value:` line is `<image> | none`, so `none` is the PROPERTY's own term, and
+   core/css/css_image.h refuses it by name for exactly that reason — asking that entry about it would be
+   asking css-images-3 §2 "Image Values: the <image> type"'s grammar a question about a keyword belonging to
+   the property. It is also what every element no declaration reached answers, by §3.3's `Initial:` line of
+   `none` and core/css/css_style_declaration.c's row for it.
+   THE `<url>` ARM IS AS-SPECIFIED HERE, AND THAT IS A SENTENCE OF THE STANDARD RATHER THAN A SHORTCUT.
+   css-values-4 §4.5.1 "Relative URLs" states the resolution — "When a <url> appears in the computed value of
+   a property, it is resolved to an absolute URL" — and then states the answer for when it cannot be done:
+   "The computed value of a URL that the UA cannot resolve to an absolute URL is the specified value." This
+   engine cannot resolve one in the cascade, and that is a DECISION rather than an omission:
+   core/css/css_font_src.h holds a url as the page spelled it and assigns resolution to the fetching
+   component. §4.5.1 also names the base a style sheet's urls resolve against — "For CSS style sheets, the
+   base URL is that of the style sheet itself, not that of the styled source document" — and that base is a
+   NAMED RESIDUAL at core/css/css_style_sheet.c's CSSOM §6.1 step 3, so resolving against the DOCUMENT's base
+   url would be a WRONG absolute url rather than a narrower answer than one.
+   THE `<gradient>` ARM IS NOT, by css-images-3 §2's own last sentence: "A computed <image> value is the
+   specified value with any <url>s, <color>s, and <length>s computed". A `linear-gradient(red, blue)` has a
+   `<color>` to compute, so handing back the author's bytes would be a specified value under the word
+   computed — the one thing `css_cv_modelled` above exists to refuse. IT IS A CRASH AND NOT A RESIDUAL
+   BECAUSE THE ANSWER IS WRONG NOW rather than narrower, and the composition it names is this file's to make:
+   core/css/css_color.h computes the `<color>`s and core/css/css_length.h the `<length>`s, over a notation
+   core/css/css_image.c has only validated.
+   THE SPLIT IS ROUTED TO AND NOT DECIDED HERE. `css_image_kind` answers which arm of §2's production one
+   component value took, over the SAME walk `css_image_is_image` is a predicate over — so this rule and
+   core/css/css_shorthand.c's §3.3 grammar, which admits a value through that predicate, cannot come to
+   disagree about whether `radial-gradient(circle at left, red, blue)` is an image.
+   THE SWITCH IS EXHAUSTIVE AND CARRIES NO `default:` ON PURPOSE: core/css/css_image.h's banner records
+   css-images-4 §2 "2D Image Values: the <image> type"'s FOUR extra arms as NOT BUILT, so the day a fifth
+   `CssImageKind` lands `-Wswitch` names this site — which `-Wall` is not needed for and which the quiet list
+   in engine/build.mjs does not suppress, both measured.
+   OWNED: `spec` is this function's to return or to free. */
+static char *computed_list_style_image(char *spec)
+{
+    if (css_cv_is(spec, "none")) return spec;
+    switch (css_image_kind(spec, strlen(spec))) {
+    case CSS_IMAGE_URL:
+        break;
+    case CSS_IMAGE_GRADIENT:
+        DFAILF("`list-style-image: %s`: css-lists-3 §3.3 \"Image Markers: the list-style-image property\"' "
+               "`Computed value:` line is \"the keyword none or the computed <image>\", and the COMPUTED "
+               "`<image>` of a gradient is not the author's bytes: css-images-3 §2 \"Image Values: the "
+               "<image> type\" says \"A computed <image> value is the specified value with any <url>s, "
+               "<color>s, and <length>s computed\", so this notation's `<color>`s and `<length>`s are owed a "
+               "derivation nothing has made. Returning the specified value would be a specified value under "
+               "the word computed, which is the one answer this component crashes rather than give. BUILD the "
+               "composition: core/css/css_color.h computes a `<color>` and core/css/css_length.h a "
+               "`<length>`, and core/css/css_image.h's `css_image_kind` is what already says this value is "
+               "the gradient arm rather than the url one. The `<url>` arm needs none of it, by "
+               "css-values-4 §4.5.1 \"Relative URLs\"' own last sentence", spec);
+        break;
+    case CSS_IMAGE_NOT_AN_IMAGE:
+        /* A GUARD AND NOT A GAP — the kind is one this codebase enumerates, and §3.3's `Value:` line is the
+           proof: `css_shorthand_validates_longhand` answers TRUE for this property and
+           core/css/css_shorthand.c's `list_style_longhand_value` IS that grammar, so a declaration whose
+           value is neither `none` nor an `<image>` is one CSS Syntax drops and never one the cascade holds.
+           The operand is printed because the whole of the address is WHICH value arrived: the routes that
+           could produce one are a write that bypassed that hook and a cascade step that produced a value
+           without re-asking the grammar, and this crash does not guess between them. */
+        DFAILF("`list-style-image: %s`: a cascaded value reached css-lists-3 §3.3 \"Image Markers: the "
+               "list-style-image property\"' computed-value rule that is outside that section's own `Value:` "
+               "line of `<image> | none` — so it is neither the keyword nor a value css-images-3 §2 \"Image "
+               "Values: the <image> type\"'s `<image> = <url> | <gradient>` admits. "
+               "`css_shorthand_validates_longhand` answers TRUE for this property and this engine's grammar "
+               "for it is core/css/css_shorthand.c's, which admits a non-`none` value only through "
+               "`css_image_is_image` — so the declaration a page wrote was DROPPED and this value did not "
+               "come from one. Find what put it in the cascade; the computed-value rule is not the defect",
+               spec);
+        break;
+    }
+    return spec;
+}
+
 char *css_computed_value(lxb_dom_element_t *el, const char *name)
 {
     char *spec;
@@ -1935,6 +2045,13 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
        What is returned for `none` is byte-identical either way. */
     if (strcmp(name, "transform") == 0)
         return computed_transform(el, spec);
+    /* css-lists-3 §3.3's row leaves here by NAME rather than through the as-specified assert below, which
+       would fire with a true message about the wrong thing: §3.3's `Computed value:` line is "the keyword
+       none or the computed <image>", and only two of its three arms are the specified value. See the
+       derivation above for which two, and for the sentence of css-values-4 §4.5.1 "Relative URLs" that makes
+       the `<url>` one of them. */
+    if (strcmp(name, "list-style-image") == 0)
+        return computed_list_style_image(spec);
     /* `float` (CSS2 §9.5.1), `position` (css-position §2) and `box-sizing` (css-sizing §5) all state "Computed
        value: as specified" (`box-sizing`'s line is "specified keyword"), and a keyword has no absolutization to
        do — so the specified value IS the answer here rather than a stand-in for one. css-backgrounds-3 §3.2

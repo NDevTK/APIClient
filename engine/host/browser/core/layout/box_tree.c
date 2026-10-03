@@ -285,6 +285,19 @@ static void bt_require_answer_is_in_sequence(lxb_dom_element_t *box, lxb_dom_nod
    core/css/css_computed_value.c's as-specified arm answers whole), §3.5's is NOT TO BE BUILT ("keyword, but see
    prose" over the positioning scheme this file records as unbuilt, and §3.2 reads the property in no arm at
    all), and §3.3's is the one outstanding row.
+   THAT LAST CLAUSE IS RETIRED BY §3.3's ROW LANDING and is kept in its own words — unquoted, because a run of
+   this tree's prose is not a spec quotation — because a reader who counts the three longhands will re-derive
+   the whole trio. BOTH COMPUTED VALUES §3.2 READS ARE NOW DERIVABLE: core/css/css_computed_value.c carries
+   `list-style-image` in `css_computed_models` and answers §3.3's line out of a derivation of its own, so this
+   refusal's narrowing no longer waits on a cascade row at all.
+   WHAT IT WAITS ON INSTEAD IS §3.2's OWN ARMS, WHICH IS A DIFFERENT KIND OF WORK AND IS WHY THIS CRASH STANDS
+   UNCHANGED. §3.2's second condition is "list-style-image on the originating element defines a marker image",
+   which is a question about the IMAGE and not about the property: css-images-3 §2 "Image Values: the <image>
+   type" states the answer for one that has not loaded — "an invalid image in list-style-image it is treated as
+   none, allowing the list-style-type to render in its place" — so a FETCH stands between §3.3's computed value
+   and §3.2's arm, and §3.2's third arm reaches css-counter-styles-3 §6.3 "Symbolic: disc, circle, square,
+   disclosure-open, disclosure-closed" for the symbol a `disc` is filled with. NEITHER IS A CASCADE ROW, which
+   is the whole reason the narrowing is its own landing rather than part of the row's.
    THE ORDER IS WHAT MAKES §3.4's ROW INSUFFICIENT ON ITS OWN, which is this crash's own ordered-condition
    sentence read forward rather than a new fact: §3.2's IMAGE arm precedes its TYPE arm, so a narrowing that
    read `list-style-type` and not `list-style-image` would answer an arm whose predecessor it never asked.
@@ -300,7 +313,8 @@ static void bt_require_answer_is_in_sequence(lxb_dom_element_t *box, lxb_dom_nod
    rather than as a second walk. THIS CLAUSE SAID THAT HEADER EXPORTS `css_image_is_image` AND NOTHING FINER,
    and it is kept in its own words — unquoted, because a run of this tree's prose is not a spec quotation —
    since a reader who greps that header for an arm test will re-derive it, and since the ORDER it states is
-   still the right one: the entry came before the row, and the ROW is what is left. The named residual at
+   still the right one: the entry came before the row, and the ROW is what is left. THE ROW LANDED, so what is
+   left is neither — it is §3.2 itself, for the two reasons three paragraphs up. The named residual at
    core/css/css_style_declaration.c's unregistered-initial table states that shape; verify each
    `Computed value:` line against the fetched draft rather than taking it from here.
    §3.1's LAST SENTENCE IS WHY THE `list-item` TEST IS THE WHOLE POPULATION AND NOT A FIRST APPROXIMATION OF IT:

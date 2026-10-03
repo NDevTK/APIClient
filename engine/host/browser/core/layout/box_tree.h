@@ -122,8 +122,17 @@
  * `css_image_kind` over a `CssImageKind` whose two arms are §2's own, so what is left is the ROW alone. THIS
  * CLAUSE SAID THAT ENTRY IS ONE THE HEADER DOES NOT EXPORT YET, kept in its own words because the ORDER it
  * states is still the order — the entry before the row — and a reader who greps that header will re-derive it.
+ * §3.3's ROW LANDED TOO, AND THE CLAUSE SAYING IT WAS THE OUTSTANDING ONE IS KEPT IN ITS OWN WORDS —
+ * unquoted, because a run of this tree's prose is not a spec quotation — because a reader who counts the three
+ * longhands will re-derive the trio. core/css/css_computed_value.c carries `list-style-image` in
+ * `css_computed_models` and answers §3.3's line out of a derivation of its own, keyword arm first and then
+ * core/css/css_image.h's `css_image_kind`, so BOTH values §3.2 reads are derivable.
  * §3.2 still
- * cannot be asked, because its IMAGE arm precedes its TYPE arm and §3.4's row answers only the second.
+ * cannot be asked, and THIS CLAUSE READ THAT THE REASON IS §3.4's ROW ANSWERING ONLY THE SECOND ARM, which is
+ * retired with the row — kept because the ordering argument above re-derives it. The reason now is that §3.2's
+ * own arms are not cascade questions: its IMAGE arm asks whether the image is VALID, which css-images-3 §2
+ * "Image Values: the <image> type" answers over a FETCH ("an invalid image in list-style-image it is treated as
+ * none, allowing the list-style-type to render in its place"), and its TYPE arm needs the symbol below.
  * §3.2's arms then reach css-counter-styles-3 §6.3 "Symbolic: disc, circle, square, disclosure-open,
  * disclosure-closed" for the
  * symbol a `disc` marker is filled with, and any NUMERIC style additionally needs css-lists-3 §4.6 "The

@@ -3072,14 +3072,26 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
        expansion and all three `Value:` lines — so a declared value has been through its own grammar and is
        canonicalized, and both spellings of one declaration agree.
          WHAT IS NOT COVERED: `css_computed_value` — the entry a C spec algorithm asks, and the only one — goes
-         on crashing for `list-style-image` and `list-style-position` at `css_cv_modelled`'s FIRST assert. Its
+         on crashing for `list-style-position` at `css_cv_modelled`'s FIRST assert. Its
          SECOND, `css_shorthand_complete_for`, answers TRUE for all three, which is what §3.6's row bought.
+         THE CLAUSE HERE NAMED `list-style-image` BESIDE IT AND IS RETIRED BY §3.3's ROW LANDING — kept in its
+         own words, unquoted because a run of this tree's prose is not a spec quotation, because a reader who
+         counts the three longhands will re-derive the pair. That row is in `css_computed_models` and leaves
+         `css_computed_value` by NAME rather than through its as-specified arm, because only two of §3.3's
+         three arms are the specified value.
          THE CLAUSE HERE READ `all three names`, AND css-lists-3 §3.4's ROW LANDED — kept in its own words
          because a reader who counts the three longhands will re-derive it. §3.4's `Computed value:` line is
          `specified value`, which is core/css/css_computed_value.c's as-specified arm whole, so that row is in
          `css_computed_models` and in that arm's own enumeration; the other two are each a different amount of
          work and neither is one row.
-         WHAT THE NEXT DIFF BUILDS: css-lists-3 §3.3's row, WHICH IS TWO ARMS AND NOT ONE — and the clause that
+         WHAT THE NEXT DIFF BUILDS: css-lists-3 §3.2 "Generating Marker Contents"' NARROWING of
+         core/layout/box_tree.c's refusal, which §3.3's row and §3.4's together are what it waited on — and
+         its IMAGE arm is a VALIDITY question rather than a cascade one, since css-images-3 §2 "Image Values:
+         the <image> type" states that "an invalid image in list-style-image it is treated as none, allowing
+         the list-style-type to render in its place", so a FETCH stands between the computed value and §3.2's
+         second condition. THE CLAUSE HERE NAMED §3.3's ROW AS THE NEXT DIFF AND IS RETIRED BY THAT ROW
+         LANDING; what follows is its reasoning, kept because a reader who reads §3.3's line alone will
+         re-derive every step of it. §3.3's row IS TWO ARMS AND NOT ONE — and the clause that
          stood here read that its `Computed value:` line is "NOT as-specified" because "a computed `<image>` has
          its `<url>` resolved against css-values-4 §4.5.1 "Relative URLs", which that file's text arm does not
          do", which is kept because a reader who reads §3.3's line alone will re-derive it. IT IS TRUE OF THE
@@ -3110,9 +3122,15 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
          prose", its prose is the positioning scheme above, and §3.2 reads the property in NO arm — so a row
          would answer a keyword whose two arms nothing distinguishes, for no caller.
          HOW ITS ABSENCE WOULD SHOW: core/layout/box_tree.c's `bt_require_marker_box_is_spellable` goes on
-         refusing EVERY list item rather than only the ones css-lists-3 §3.2 gives a marker box, because §3.2 is
-         an ORDERED condition whose image arm precedes its type arm — so the narrowing it names cannot be built
-         from §3.4's row alone, and reads `list-style-image` through `css_computed_value`, which crashes.
+         refusing EVERY list item rather than only the ones css-lists-3 §3.2 gives a marker box — observed as
+         a dev abort naming that section on a document holding any `li` at all, at whichever walk over
+         core/layout/box_tree.h's child sequence a page reaches first. THE CLAUSE HERE ENDED BY SAYING THAT
+         NARROWING CANNOT BE BUILT FROM §3.4's ROW ALONE BECAUSE READING `list-style-image` CRASHES, and the
+         second half is retired while the first stands — kept in its own words because a reader who re-derives
+         §3.2's order will write it again. Both computed values are now derivable; what the narrowing waits on
+         is §3.2's own arms, whose image condition is a fetch and whose type condition reaches
+         css-counter-styles-3 §6.3 "Symbolic: disc, circle, square, disclosure-open, disclosure-closed" for the
+         symbol a `disc` is filled with.
        A SECOND NARROWNESS THAT WAS RECORDED HERE IS RETIRED, AND THE RETIRED WORDING IS KEPT BECAUSE A READER
        WHO FINDS A RAW DECLARED VALUE IN THE CASCADE WILL RE-DERIVE IT — in its own words, unquoted because a
        run of this tree's prose is not a spec quotation: A DECLARED VALUE IS STORED AS THE AUTHOR'S OWN BYTES,
