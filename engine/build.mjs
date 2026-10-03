@@ -6782,8 +6782,21 @@ const TO_COMPILE = SHARED_SOURCES.concat([ENTRY_SMOKE, ENTRY_ABI]);
 async function compileAll(tc, sources) {
   const objOf = new Map();
   const identityT0 = Date.now();
+  /* THIS SCAN'S OWN POPULATION, AND IT USED TO BE `fileHashes.size`, WHICH IS A MODULE-SCOPE MEMO `adopt` ALSO
+     FILLS. One entry per file a COMPILE's dependency list named, so by the time a SECOND toolchain reaches this
+     line the memo is dominated by the FIRST one's compile, and the count on the second line is a fact about the
+     first phase. MEASURED on one cold frozen build: emcc printed `over 0 files` (no records existed, so
+     `contentId` never ran) and clang printed `over 1117 files` having found ZERO records of its own — that
+     figure was emcc's 458 adopts, printed on clang's line, under the banner directly above whose whole argument
+     is that two compiles' counts must be distinguishable in a log. It is the shared-memo shape of a count read
+     at the wrong MOMENT: every number on this line except that one is this phase's.
+     WHAT THIS COUNTS IS WHAT THE RECORDS NAME, not what was hashed — `contentId` returns on the first absent
+     file, so the hashes are at most this many — and a cold scan honestly answers 0, because a scan with no
+     records to consult is a scan that asked about nothing. */
+  const consulted = new Set();
   for (const src of sources) {
     const deps = recordedDeps(tc, src);
+    if (deps) for (const d of deps) consulted.add(d);
     const id = deps && contentId(tc, deps);
     if (id && existsSync(objFor(id))) objOf.set(src, objFor(id));
   }
@@ -6791,7 +6804,8 @@ async function compileAll(tc, sources) {
   const stale = sources.filter((s) => !objOf.has(s));
   console.log("[build] " + tc.name + ": " + sources.length + " sources, " + stale.length + " to compile" +
               (stale.length < sources.length ? " (rest cached)" : "") +
-              " [identity " + identityMs + " ms over " + fileHashes.size + " files]");
+              " [identity " + identityMs + " ms over " + consulted.size +
+              " distinct input(s) named by the records THIS scan read]");
 
   /* DECLARED OUT HERE BECAUSE THE RETURN CARRIES IT — see the paragraph at the return. */
   let failed = 0;
