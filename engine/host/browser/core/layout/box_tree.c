@@ -7,11 +7,49 @@
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
+/* ONE ENUM AND NOT <lexbor/css/css.h>, which is what this directory's other lexbor-CSS consumers take: the
+   decision below needs the pseudo-element NAME SPACE and nothing in the CSS parser, and this header is a pure
+   generated enum with no includes of its own. */
+#include <lexbor/css/selectors/pseudo_const.h>
 
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
+
+/* THE MEMBER TYPE THIS SEQUENCE MUST GAIN — DECIDED HERE AND PINNED, with the answers it refuses and why in
+   `bt_require_marker_box_is_spellable`'s abort below and the ORDER of the landing in box_tree.h. THE DECISION:
+   the member becomes a BY-VALUE PAIR of the ORIGINATING DOM NODE and an
+   `lxb_css_selector_pseudo_element_id_t`, with `__UNDEF` naming every member that is a source-document node.
+   IT IS THE STANDARD'S OWN NAMING AND NOT A SHAPE PICKED HERE. css-pseudo-4 §1 "Introduction": "Each
+   pseudo-element is associated with an originating element and has syntax of the form ::name-of-pseudo".
+   §4 "Tree-Abiding Pseudo-elements", which §4.2 "List Markers: the ::marker pseudo-element" is inside, says
+   they "always fit within the box tree" and "inherit any inheritable properties from their originating
+   element; non-inheritable properties take their initial values as usual". css-lists-3 §3.2 "Generating Marker
+   Contents" states each of its arms over "the originating element". So the pair IS (that element, that name),
+   and a box so named needs nothing allocated to exist — which is what core/layout/block_flow.h's NOTHING IS
+   STORED and this file's own "two steps and not a materialised list" both require of a member.
+   IT IS A PAIR AND NOT A BIT, because §3.1 puts the marker "before the ::before pseudo-element" and this
+   sequence therefore owes THREE pseudo members in a defined order; a marker-only flag is a field that has to
+   be widened twice.
+   IT NAMES WHICH BOX A MEMBER IS AND NEVER THAT ONE EXISTS, which is what keeps a CONTENTLESS marker out: a
+   list item whose §3.2 answer is that section's last arm ("otherwise: The marker box has no contents and
+   ::marker does not generate a box") has a complete sequence with NO pseudo member in it, and the pair simply
+   does not yield one. A member type that forced a marker member per list item would be exactly the no-content
+   box §3.2 says is not generated — which is why §3.2 is the landing BEFORE this one and not after it.
+   THE DISCRIMINATOR IS ROUTED TO AND NOT INVENTED, which is the whole reason the asserts below are here:
+   `lxb_css_selector_pseudo_element_id_t` already carries `_MARKER`, `_BEFORE` and `_AFTER`, and it is already
+   the type CSSOM §7.2's step 3.1 wants — core/css/css_style_declaration.c's getComputedStyle abort names that
+   id as §7.2's `type` and points its reader back to this component for step 3.3, so ONE spelling answers the
+   style side and the box side. A second enum for one of them is the two right answers that drift.
+   `__UNDEF == 0` IS WHAT MAKES A ZERO-INITIALISED MEMBER A SOURCE-DOCUMENT NODE, and engine/lexbor is VENDORED
+   AND SYNCED — so this is the one premise of the decision an upstream sync can falsify in silence: renumber
+   `__UNDEF` off zero and every `{0}` member names a REAL pseudo-element instead of none, which is a wrong box
+   rather than an absent one. Here it is a build failure at the site that recorded the decision. */
+_Static_assert(LXB_CSS_SELECTOR_PSEUDO_ELEMENT__UNDEF == 0,
+               "a zero-initialised box-tree child must name NO pseudo-element");
+_Static_assert(LXB_CSS_SELECTOR_PSEUDO_ELEMENT_MARKER != LXB_CSS_SELECTOR_PSEUDO_ELEMENT__UNDEF,
+               "css-lists-3 §3.1's ::marker must be a nameable value of the discriminator this sequence takes");
 
 /* IS THIS NODE ONE §2.5 REPLACES BY ITS CONTENTS — "the element must be treated as if it had been replaced in
    the element tree by its contents"? Only an ELEMENT can be, and only for the one computed value: §2.5's other
@@ -99,6 +137,15 @@ static lxb_dom_node_t *bt_resolve_back(lxb_dom_element_t *box, lxb_dom_node_t *n
     return n;
 }
 
+/* IS `n` A MEMBER OF `box`'s SEQUENCE? `box_tree_parent` is the nearest ancestor that GENERATES a box, so
+   "n is in box's sequence" and "box is n's box parent" are ONE equality — and this is a function rather than
+   that comparison written at each of the two refusals below because an input-refusal and an answer-refusal
+   spelling it separately are two tests only one of which gets taught about a tree. */
+static bool bt_in_sequence(lxb_dom_element_t *box, lxb_dom_node_t *n)
+{
+    return box_tree_parent(n) == box;
+}
+
 /* REFUSES A STEP FROM A NODE THAT IS NOT IN `box`'s SEQUENCE — one that is neither a DOM child of `box` nor a
    child of a chain of elements §2.5 replaced by their contents inside it. It is the relation the step below
    would otherwise ASSUME, and it is asked at the ENTRY rather than inside the ascent because the ascent returns
@@ -116,11 +163,10 @@ static void bt_require_in_sequence(lxb_dom_element_t *box, lxb_dom_node_t *child
 #if APICLIENT_DEV
     char nbuf[160], bbuf[160];
 
-    /* THE MEMBERSHIP TEST IS THE ASCENT'S OWN ANSWER AND IS NOT A SECOND WALK OF IT. `box_tree_parent` is the
-       nearest ancestor that GENERATES a box, so "child is in box's sequence" and "box is child's box parent"
-       are one equality — and writing the loop twice is how the step and the refusal would come to disagree
-       about a tree only one of them had been taught about. */
-    if (box_tree_parent(child) == box) return;
+    /* THE MEMBERSHIP TEST IS THE ASCENT'S OWN ANSWER AND IS NOT A SECOND WALK OF IT — `bt_in_sequence` above,
+       which the answer-refusal below shares, because writing the loop twice is how the step and the refusal
+       would come to disagree about a tree only one of them had been taught about. */
+    if (bt_in_sequence(box, child)) return;
     DFAILF("%s, stepped as a child of %s: css-display-3 §2.5 \"Box Generation: the none and contents "
            "keywords\"' spliced child sequence was stepped from a node that is not IN it. Between that node and "
            "this box stands an element that GENERATES A BOX, so the node is a child of THAT box's sequence and "
@@ -135,12 +181,54 @@ static void bt_require_in_sequence(lxb_dom_element_t *box, lxb_dom_node_t *child
 #endif
 }
 
+/* REFUSES AN ANSWER THAT IS NOT A MEMBER OF THE SEQUENCE IT CAME OUT OF — the refusal above read the other
+   way, over the same one spelling, and it exists because `box_tree_first_child`'s answer is the ONE answer this
+   component makes that no later step re-checks. A walk that seeds a loop and steps it hands every later node
+   back to `bt_require_in_sequence`; a caller that takes the first child and uses it WITHOUT stepping hands it
+   to nothing, and core/layout/block_flow.c has such callers.
+   WHAT IT MAKES IMPOSSIBLE IS ONE OF THE ANSWERS THE DECISION AT THE TOP OF THIS FILE REFUSES, and it is the
+   attractive one: MINTING a synthetic `lxb_dom_node_t` for css-lists-3 §3.1's marker box keeps every signature
+   and every call site exactly as they are, so nothing else in this tree would notice. This does. A minted node
+   is not in any box's sequence — its ascent reaches no box at all, or reaches one through a `->parent` the
+   minting assigned — so the equality the whole sequence is stated over is the thing it cannot satisfy without
+   being linked into the document, at which point it is the OTHER refused answer and the page's own
+   `childNodes` can see it. */
+static void bt_require_answer_is_in_sequence(lxb_dom_element_t *box, lxb_dom_node_t *answer)
+{
+#if APICLIENT_DEV
+    char nbuf[160], bbuf[160];
+
+    if (answer == NULL || bt_in_sequence(box, answer)) return;
+    DFAILF("%s, answered as the first child of %s: css-display-3 §2.5 \"Box Generation: the none and contents "
+           "keywords\"' spliced child sequence ANSWERED a node that is not in it. Every node this sequence can "
+           "yield stands under `box` through nothing but elements §2.5 replaced by their contents, so "
+           "`box_tree_parent` of it IS `box` — the one equality the sequence is stated over, and the one a "
+           "MINTED node cannot satisfy. A marker box is not minted as a node: this sequence's member type is "
+           "(ORIGINATING NODE, `lxb_css_selector_pseudo_element_id_t`) and the decision is at the top of this "
+           "file",
+           box_subject_node(answer, nbuf, sizeof nbuf), box_subject(box, bbuf, sizeof bbuf));
+#else
+    (void) box;
+    (void) answer;
+#endif
+}
+
 /* REFUSES TO STATE THE CHILD SEQUENCE OF A BOX WHOSE FIRST MEMBER THIS SEQUENCE CANNOT NAME. css-lists-3 §3.1
    "The ::marker Pseudo-Element": "The marker box is generated by the ::marker pseudo-element of a list item as
    the list item's first child, before the ::before pseudo-element (if it exists on the element)." That box has
    no source-document node — css-display-3 §1 "Introduction" names it as one of the boxes an element generates
    beside its principal box, "a principal block box and a child marker box" — and this sequence's member type
-   is `lxb_dom_node_t *`, so the member EXISTS and is UNSPELLABLE here.
+   is `lxb_dom_node_t *`, so the member EXISTS and is UNSPELLABLE here. WHAT IT MUST BECOME IS DECIDED AT THE
+   TOP OF THIS FILE.
+   THIS CRASH USED TO NAME `bt_require_in_sequence` AS WHERE THAT DECISION LANDS, "because its membership test
+   IS `box_tree_parent(child) == box` and a member with no DOM parent cannot satisfy it", AND THE CLAUSE IS
+   RECORDED RATHER THAN DELETED BECAUSE A READER WHO RE-DERIVES IT FROM THAT EQUALITY WILL WRITE IT AGAIN. It
+   is right that the equality is the test a half-landing fails and WRONG about which way that cuts: a marker
+   member's node half IS its originating element, so under the decided type `box_tree_parent` of it is that
+   element — the equality HOLDS, by a second arm the entry does not have yet, and the thing the decision
+   constrains is therefore `box_tree_parent` rather than the refusal. The refusal that DOES do work is the one
+   over an ANSWER (`bt_require_answer_is_in_sequence`), which refuses the minted node the old clause read as
+   already impossible.
    IT IS A CRASH AND NOT A RESIDUAL BECAUSE THE ANSWER IS WRONG NOW RATHER THAN NARROWER. Without it
    `box_tree_first_child` of a list item returns that element's first SOURCE-DOCUMENT child, which is a real
    node standing one position too early: the sequence is one member short AT ITS HEAD for every list item in
@@ -157,6 +245,9 @@ static void bt_require_in_sequence(lxb_dom_element_t *box, lxb_dom_node_t *child
    is in neither lexbor's property registry nor core/css/css_style_declaration.c's unregistered-initial table,
    so css-cascade-5 §7.1 "Initial Values" has no initial value to fall to and it answers NULL for every
    element. Making §3.2 answerable is the diff after this one.
+   §3.1's LAST SENTENCE IS WHY THE `list-item` TEST IS THE WHOLE POPULATION AND NOT A FIRST APPROXIMATION OF IT:
+   "Marker boxes only exist for list items: on any other element, the ::marker pseudo-element's content property
+   must compute to none, which suppresses its creation."
    THE `list-item` TEST IS A THIRD QUESTION AND NOT A THIRD COPY of the same spelling in core/layout/
    block_flow.c and core/layout/used_value.c: those two ask whether the PRINCIPAL box is block-level, this asks
    whether a SECOND box is generated beside it. What it inherits from them is one narrowing it does not widen —
@@ -182,10 +273,26 @@ static void bt_require_marker_box_is_spellable(lxb_dom_element_t *box)
            "answering. BUILD the marker as a member it can yield: css-lists-3 §3.2 \"Generating Marker "
            "Contents\" decides whether one exists at all, css-pseudo-4 §4 \"Tree-Abiding Pseudo-elements\" "
            "gives it its style (\"They inherit any inheritable properties from their originating element; "
-           "non-inheritable properties take their initial values as usual\"), and this sequence's MEMBER TYPE "
-           "is what has to name it — `bt_require_in_sequence` is where that decision lands, because its "
-           "membership test IS `box_tree_parent(child) == box` and a member with no DOM parent cannot satisfy "
-           "it. ANSWERING INSTEAD WOULD RETURN A REAL NODE AT THE WRONG POSITION",
+           "non-inheritable properties take their initial values as usual\"), and THE MEMBER TYPE IS DECIDED "
+           "AND IS AT THE TOP OF THIS FILE: a BY-VALUE PAIR of the ORIGINATING NODE and an "
+           "`lxb_css_selector_pseudo_element_id_t`, whose `__UNDEF` names every member that is a "
+           "source-document node and whose `_MARKER` names this box. SO `box_tree_parent` OF A PSEUDO MEMBER IS "
+           "ITS OWN NODE HALF rather than an ascent from it, which is the one arm the entry does not have yet. "
+           "FOUR ANSWERS ARE REFUSED AND EACH FOR ITS OWN REASON, because three of them keep every signature in "
+           "this directory exactly as it is and would therefore land without anything noticing: a REAL DOM node "
+           "inserted as the list item's first child is a node the page's own `childNodes`, `firstChild` and "
+           "selectors would then see, which no browser answers and which is what a PSEUDO-element is not — "
+           "css-pseudo-4 §1 \"Introduction\" says so informatively (\"Since they are not restricted to fitting "
+           "into the document tree\") and css-display-3 §2.5's own Note states the invariant it would break "
+           "(\"any semantics based on the document tree, such as selector-matching, event handling, and property "
+           "inheritance, are not affected\"); a SYNTHETIC "
+           "off-tree node is refused by this entry's own signature, which returns a pointer NO caller frees, so "
+           "ONE IS LEAKED PER CALL, at every one of this directory's walks over that container, and it is "
+           "malloc'd C rather than a GC object so "
+           "`JS_FreeRuntime`'s `gc_obj_list` walk cannot report; a TAGGED pointer encodes a second fact in a "
+           "value the node type admits as valid; and a SECOND ACCESSOR beside this sequence leaves the sequence "
+           "itself one member short at its head, which is the state this refusal stands at. "
+           "ANSWERING INSTEAD WOULD RETURN A REAL NODE AT THE WRONG POSITION",
            box_subject(box, bbuf, sizeof bbuf));
 #else
     (void) box;
@@ -217,7 +324,12 @@ lxb_dom_node_t *box_tree_first_child(lxb_dom_element_t *box)
            "them in that element's own box parent's sequence instead. Ask the box parent, which "
            "core/css/css_computed_value.h's `css_box_parent_display` is the other direction of");
     bt_require_marker_box_is_spellable(box);
-    return bt_resolve(box, lxb_dom_interface_node(box)->first_child);
+    {
+        lxb_dom_node_t *first = bt_resolve(box, lxb_dom_interface_node(box)->first_child);
+
+        bt_require_answer_is_in_sequence(box, first);
+        return first;
+    }
 }
 
 lxb_dom_node_t *box_tree_next_sibling(lxb_dom_element_t *box, lxb_dom_node_t *child)

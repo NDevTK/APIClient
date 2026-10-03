@@ -97,11 +97,16 @@
  * reach css-counter-styles-3 §6.3 "Symbolic: disc, circle, square, disclosure-open, disclosure-closed" for the
  * symbol a `disc` marker is filled with, and any NUMERIC style additionally needs css-lists-3 §4.6 "The
  * Implicit list-item Counter" — which is why that arm is a crash of its own and not part of the same landing.
- * THE MEMBER TYPE IS THE LANDING AFTER THAT, and `bt_require_in_sequence` is where its decision lands: that
- * test IS `box_tree_parent(child) == box`, which a member with no DOM parent cannot satisfy, so it REFUSES a
- * half-landing rather than answering one plausibly. `box_tree_prev_sibling`'s round trip is the second such
- * guard, so a sequence taught to only ONE of its two directions is already a crash rather than one that reads
- * one way forward and another way back. THE STYLE AND THE LAYOUT ARE TWO MORE AND ARE NOT THIS COMPONENT'S:
+ * THE MEMBER TYPE IS THE LANDING AFTER THAT AND IS NO LONGER AN OPEN QUESTION: it becomes a BY-VALUE PAIR of
+ * the ORIGINATING NODE and an `lxb_css_selector_pseudo_element_id_t`, decided and PINNED at box_tree.c beside
+ * the four answers it refuses and the reason each is refused. Read it there rather than re-deriving it, because
+ * three of those four leave every signature in this file exactly as it is and would land with nothing noticing.
+ * THE CLAUSE THAT STOOD HERE NAMED `bt_require_in_sequence` AS WHERE THAT DECISION LANDS, and the refutation is
+ * recorded at that crash rather than here: a pseudo member's node half IS its originating element, so the
+ * equality HOLDS for it — by a `box_tree_parent` arm that does not exist yet — and what the decision constrains
+ * is therefore the ASCENT and not the refusal. `box_tree_prev_sibling`'s round trip is still the guard that
+ * makes a sequence taught in only ONE of its two directions a crash rather than one that reads one way forward
+ * and another way back. THE STYLE AND THE LAYOUT ARE TWO MORE AND ARE NOT THIS COMPONENT'S:
  * css-pseudo-4 §4 "Tree-Abiding Pseudo-elements" gives the box its properties ("They inherit any inheritable
  * properties from their originating element; non-inheritable properties take their initial values as usual"),
  * over a box core/css/css_computed_value.h can only key on an ELEMENT; and css-lists-3 §3.5 "Positioning
