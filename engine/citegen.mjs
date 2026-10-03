@@ -1191,8 +1191,59 @@ const SPECS = [
     base: "https://drafts.csswg.org/css-transforms-1/", edition: "maintained", anchors: ["css-transforms-1"] },
   { key: "csscascade5", label: "CSS Cascading and Inheritance Level 5", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-cascade-5/", edition: "maintained", anchors: ["css-cascade-5"] },
+  /* THE SPACED NAME IS AN ANCHOR BECAUSE WITHOUT IT AN `OTHER_SPECS` ROW SHADOWED THIS CORPUS, AND A ROW
+     THAT SHADOWS AN INDEXED STANDARD DOES NOT MERELY FILE PROSE AS FOREIGN — IT SPENDS THE CORPUS.
+     `classifyAnchor` asks `ANCHOR_TO_KEY` and `OTHER_SPECS` in ONE scan over the tokens LONGEST FIRST, so a
+     window ending `CSS Syntax ` offers `css syntax` before `syntax` and whichever list holds either one
+     decides. Holding only the hyphenated shortname meant a LEVELLED `CSS Syntax Module Level 3` citation
+     resolved here and an UNLEVELLED `CSS Syntax` one fell through to `other:syntax` — FOREIGN, so no section
+     was resolved, no title matched and NO QUOTATION COMPARED, against 76 committed sections sitting here.
+     The audit said so in its own output and it read as a fact about the world rather than about itself:
+     `standards seen but not indexed: … syntax=114`.
+     MEASURED THROUGH THE CONSUMER'S OWN MATCHER AND NEVER THROUGH A SYNTHESISER, because an earlier sweep
+     over this list answered differently when its synth set was strengthened, which makes producibility by
+     synthesis a property of the PROBE. The instrument was `anchorTokens`/`classifyAnchor` themselves, hooked
+     at their two membership tests over every section sign the audited tree writes: of the 114 sites deciding
+     `other:syntax`, `css syntax` was offered BEFORE the deciding token at 114 of 114.
+     AND ONLY THIS STANDARD, WHICH IS THE WHOLE OF WHY THIS IS ONE LINE AND NOT FIVE. The same census found an
+     `OTHER_SPECS` row shadowing an INDEXED standard at 129 sites across five of them — `syntax` 114,
+     `display` 8, `fonts` 4, `text` 1, `positioned layout` 2 — and the other four MUST KEEP THEIR SHADOW.
+     CLAUDE.md's levels rule is why: an unlevelled citation resolves to whichever level somebody indexed, and
+     `drafts.csswg.org` answers 200 for `css-display-4`, `css-fonts-5`, `css-text-4` and `css-position-4`, so
+     anchoring their spaced names would resolve a citation against a level its author never wrote — a real
+     section with its real title from the wrong document, which this project rates worse than no citation at
+     all. `css-syntax-4` answers 404, so Level 3 is the only level and the spaced name asserts nothing the
+     name does not already determine. THAT IS THE ADMISSIBILITY TEST FOR THE NEXT ROW SOMEBODY WANTS TO ADD A
+     SPACED ANCHOR TO, and it is one `curl` rather than a judgement.
+     PRICED ON THE WHOLE CORPUS, NEVER ON THIS STANDARD, because an index entry is a NEIGHBOUR of every other.
+     Frozen pair at b39e431f, subject count IDENTICAL at both ends (74392 citations read), which is the
+     precondition rather than a result: findings 1055 -> 1064, resolved 53078 -> 53238, VERIFIED 9052 -> 9086,
+     quotations compared 10727 -> 10769 of 14655 standing, step references 15801 -> 15801 of 19983. The
+     quotation arithmetic closes to the digit — 34 newly VERIFIED plus 8 new quotation findings is exactly the
+     42 newly compared — so no newly compared quotation went unaccounted.
+     WHAT IT COSTS IS SIX FINDINGS IN ONE FILE AND THEY ARE NOT FABRICATIONS, WHICH IS WHY THIS LANDED RATHER
+     THAN BEING DECLINED ON ITS NUMBERS. `core/css/css_font_src.c` writes `CSS Syntax` 24 times and `CSS Fonts`
+     NOT ONCE, with 64 of its 84 section signs bare. Before this line its only named standard was FOREIGN, so
+     the file had NO VOTE AT ALL and those bare numbers were unjudged — the number-only band, which is
+     UN-AUDITED rather than clean. This line gives that file a vote where it had none, the vote is carried by
+     the one standard the file names, and the bare numbers are about the OTHER one: at the number those six
+     sites cite, the committed corpora say `cssfonts4` is "Parsing the src descriptor" and holds both quoted
+     sentences while `csssyntax3` is "Consume a token" and holds neither — THE ARGUMENT IS CARRIED IN TITLES
+     AND NOT IN THE NUMBER ON PURPOSE, because this file is itself audited and the bare dotted number would
+     enter the population as two more citations, which a first draft of this comment did (74392 read became
+     74394) and which is a diff measuring its own prose. So the auditor is RIGHT at all six and names the
+     correct standard
+     in each message; the widening did not create that defect, it REVEALED it, and what those sites were
+     resting on was a competing standard being invisible to the vote.
+     NAMED RESIDUAL — NOT COVERED: the six bare citations in `core/css/css_font_src.c` still resolve by a file
+     vote to the only standard that file names, so they are reported against `csssyntax3` while being
+     `cssfonts4`'s. NEXT DIFF: name `CSS Fonts` at those sites, which is this project's standing repair for a
+     vote-carried citation and is a COMPONENT edit rather than an instrument one. HOW ITS ABSENCE SHOWS: a
+     QUOTE-WRONG-STANDARD whose message names the standard the reader wanted, in a file whose own name states
+     the standard it never cites. */
   { key: "csssyntax3", label: "CSS Syntax Module Level 3", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-syntax-3/", edition: "maintained", anchors: ["css-syntax-3"] },
+    base: "https://drafts.csswg.org/css-syntax-3/", edition: "maintained",
+    anchors: ["css-syntax-3", "css syntax"] },
   { key: "cssfonts4", label: "CSS Fonts Module Level 4", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-fonts-4/", edition: "maintained", anchors: ["css-fonts-4"] },
   { key: "csscolor4", label: "CSS Color Module Level 4", kind: "bikeshed",
