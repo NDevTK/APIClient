@@ -57,7 +57,11 @@ static int64_t g_picks_total = 0;
    difference WAS what the retired members took — described, in the register of something checked.
    IT IS THE SAME MOVE `g_departures_teardown` IS, ONE QUANTITY OVER: a total over a population nobody had
    partitioned, given the arm that accounts for what left, so the identity between the two halves can be
-   written down at all. What it does NOT do is publish a row — see flow.h's `picks_lifetime` for what remains.
+   written down at all. AND IT IS NO LONGER THE SAME MOVE IN THE ONE RESPECT THAT MATTERED: this banner read
+   "what it does NOT do is publish a row", and it does — `WfqCensus.picks_departed` carries it and
+   result_wfq_json emits it as `picksDeparted`, so the identity is checkable on the document and not only in a
+   dev process. The retired clause is recorded rather than struck because `g_departures_teardown` is STILL the
+   unpublished one, so a reader who re-derives the analogy from the two banners will conclude both are.
    RAISED AT flow_remove AND NOT BESIDE `g_departures`, WHICH IS A DIFFERENCE OF TWO LINES AND IS FORCED
    RATHER THAN CHOSEN: the departure is counted after `free(f)`, and this reads `f->picks`, so the two arms of
    one departure are credited at two lines of one block by necessity. An early return added between them is
@@ -6802,6 +6806,10 @@ void flow_wfq_census(WfqCensus *out) {
        `nonreward_max` is — the same number on an empty scan as on a full one — and it is the only one of the
        three pick rows a reader may difference across two censuses. */
     out->picks_lifetime = g_picks_total;
+    /* …AND THE SHARE OF IT THAT LEFT, ASSIGNED IN THE SAME BREATH FOR THE SAME REASON AND FOR ONE MORE: it is
+       the half of the distribution the two gauges above structurally cannot see, so publishing it beside them is
+       what makes their partition checkable from OUTSIDE this process, where the DCHECK below is compiled out. */
+    out->picks_departed = g_picks_departed;
     /* …AND ITS UNFRAMED SUBSET, ASSIGNED IN THE SAME BREATH AND FOR THE SAME REASON: it is a count of
        dispatches this instance has made, not a reading of this walk, so it is the same number on an empty scan
        as on a full one. Publishing the two together is what makes the containment below checkable from
@@ -7506,8 +7514,14 @@ void flow_wfq_census(WfqCensus *out) {
        the total and the reading above divides a numerator by its own population.
        BOTH ASSERTS STAND AND THEY ARE NOT ONE COPY TWICE: the equality holds with a NEGATIVE departed total
        and the inequality does not, so the pair is what separates a lost credit from a fabricated one, and each
-       message names a different next diff. Two comparisons of integers already in hand. */
-    DCHECKF(out->picks_live + g_picks_departed == out->picks_lifetime,
+       message names a different next diff. Two comparisons of integers already in hand.
+       IT READS THE PUBLISHED FIELD AND NOT THE FILE-STATIC, WHICH IS A DIFFERENCE OF ONE TOKEN AND IS THE WHOLE
+       POINT OF THE ROW. The departed total is emitted now (flow.h's `picks_departed`, result_wfq_json's
+       `picksDeparted`), so asserting over `g_picks_departed` would check a quantity no reader outside this
+       process holds while the one they DO hold went unchecked — two numbers wearing one name, with the identity
+       standing over whichever of them the assignment above did not carry. Asserted over `out->`, the dev build
+       and the document are checking the same three integers. */
+    DCHECKF(out->picks_live + out->picks_departed == out->picks_lifetime,
             "solver/flow.c: the frontier's live members hold %lld dispatches and departed members took %lld, "
             "against %lld the scheduler has ever made — every dispatch is credited to exactly one member at "
             "flow_credit_pick, a member arrives holding none and no fork carries one, and flow_remove moves "
@@ -7515,7 +7529,7 @@ void flow_wfq_census(WfqCensus *out) {
             "and a difference is a dispatch credited to a member that left without going through flow_remove "
             "or a `Flow.picks` with a second writer. Every reading of `(picksLifetime - picksLive)` as what "
             "the departed members held is then a quotient over the wrong population",
-            (long long)out->picks_live, (long long)g_picks_departed, (long long)out->picks_lifetime);
+            (long long)out->picks_live, (long long)out->picks_departed, (long long)out->picks_lifetime);
     DCHECK(out->picks_live <= out->picks_lifetime,
            "the frontier's live members hold MORE dispatches between them than the scheduler has ever made — "
            "flow_credit_pick raises both in one statement and is the only writer of either, so a member's "

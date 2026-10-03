@@ -733,7 +733,7 @@ static char *errs_json_array(ErrsArray which) {
 
    @kinds-of wfq
    @kind gauge: members jobsReady jobsFramed jobsOwed jobWGap jobsReadyTask jobsReadyMicro memUnframed visZero
-   @kind lifetime: picksLifetime unframedPicksLifetime readyPicksLifetime
+   @kind lifetime: picksLifetime picksDeparted unframedPicksLifetime readyPicksLifetime
    @kind lifetime: taskHeldDelivLifetime taskHeldSeqLifetime taskArmOlderLifetime taskArmNoRowLifetime
    AND EVERY REMAINING ROW OF THIS COMPOSER, DETERMINED FROM THE ACCESSOR THAT FILLS IT AND NEVER FROM ITS
    KEY. Most need no argument: a row folded by this census's own walk over the live frontier is a reading at
@@ -1008,6 +1008,29 @@ char *result_wfq_json(void) {
                         document and is the reason it is emitted at all: it must EQUAL `_switches`, since
                         flow_credit_pick has one caller and engine.c raises the switch count beside it. */
                      "\"picksLive\":%lld,\"picksMax\":%lld,\"picksLifetime\":%lld,"
+                     /* …AND THE HALF OF THAT COUNTER THE FRONTIER NO LONGER HOLDS, WHICH IS WHAT MAKES
+                        THE THREE ABOVE A PARTITION AND NOT A TOTAL WITH TWO GAUGES BESIDE IT. A reader
+                        who wants what a departed member held used to subtract `picksLive` from
+                        `picksLifetime` — a GAUGE from a LIFETIME COUNTER, which is a number for every
+                        pair of inputs including the pair where the gauge stopped describing the
+                        counter's population. This is that quantity stated, so
+                        `picksLive + picksDeparted == picksLifetime` is checkable HERE and not only in a
+                        dev process (asserted over these same three fields at the end of
+                        flow_wfq_census).
+                        AND IT IS THE RETIRE-VERSUS-SELL DISCRIMINATOR FOR `departures` TWELVE ROWS
+                        DOWN, WHICH IS WHY IT IS HERE RATHER THAN IN `_cold` BESIDE THE ARMS. That total
+                        is one number over three causes and engine.c asserts
+                        `finished + sold + teardown == departures` — in a SIBLING object with its own
+                        sample index, so a reader of this census alone could not tell a frontier that
+                        RETIRED members from one that SOLD them. A finish costs a dispatch by
+                        construction: flow_finish is reached only from the `FLOW_STEP_DONE` arm, whose
+                        subject is the switched-in member, and `cur = best` is assigned inside the one
+                        `if (best != cur)` block that credits flow_credit_pick. So `departures` above
+                        zero WITH this row at zero proves `finished` is zero and every departure was a
+                        sale or a teardown. THE CONVERSE IS NOT AVAILABLE: a sold member may have been
+                        dispatched, so a nonzero here proves nothing retired — the implication runs one
+                        way and only the zero names a cause. */
+                     "\"picksDeparted\":%lld,"
                      /* THE SEVEN NOTCH ROWS ARE QUOTIENTS AND THEIR NAMES DO NOT SAY SO, WHICH IS THE ONE
                         THING A READER OF THIS DOCUMENT CANNOT RECOVER FROM IT. `svcMax`, `svcMin`,
                         `svcFamMax`, `svcFamMin`, `candSvcMax`, `topSvc` and `topSvcFam` are every one of them
@@ -1674,6 +1697,7 @@ char *result_wfq_json(void) {
                      w.val_zero, w.val_arrived, w.val_unplaced, w.self_emit, w.unrun,
                      w.never_picked, w.never_picked_gap, w.never_picked_at_top,
                      (long long)w.picks_live, (long long)w.picks_max, (long long)w.picks_lifetime,
+                     (long long)w.picks_departed,
                      (long long)w.svc_max, (long long)w.svc_min,
                      (long long)w.svc_fam_max, (long long)w.svc_fam_min, w.families,
                      w.sil_phases, w.sil_carry,

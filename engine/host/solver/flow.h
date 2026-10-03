@@ -1923,20 +1923,27 @@ typedef struct {
        beside each other, and it is exactly right on a run that never tore down (which every run measured here
        was, teardown 0), so it is a claim that looks confirmed on the evidence nearest to hand. WITHIN one run at one census
        nothing here applies and the table stands exactly as written; this is about comparing two.
-       RETIREMENT: this record goes when the census PUBLISHES the dispatches departed members took with them as
-       a ROW rather than as that subtraction, so `picks_max` cannot be read as the distribution's maximum. IT IS
-       NOT MET, AND THE QUANTITY NOW EXISTS — worth separating, because that condition was one sentence over two
-       halves and only the arithmetic half is closed. flow.c's `g_picks_departed` is the counter, raised at
-       flow_remove on the one line that can still read a departing member, and the identity below is asserted
-       over it. WHAT IS NOT COVERED: it is a dev-build assert operand, so no reader outside this process holds
-       it, and `(picksLifetime - picksLive) / departures` is still a subtraction a reader performs across two
-       rows of different KIND. WHAT THE NEXT DIFF BUILDS: one more row in the @WFQ composer that already writes
-       `picksLive`, `picksMax` and `picksLifetime` — solver/result.c's `result_wfq_json`, which is the one
-       function that spells those three keys — fed from the counter that exists rather than from a second walk.
-       HOW ITS ABSENCE SHOWS: a census reporting `departures` above zero with no row anywhere stating what those
-       members held, so a reader who wants the average subtracts a GAUGE from a LIFETIME COUNTER and takes the
-       quotient on trust, and `picks_max` beside it still reads as the distribution's maximum on exactly the runs
-       where the top member departed.
+       RETIREMENT — MET BY A CONSTRUCTION, AND THE RECORD IS REWRITTEN RATHER THAN DELETED BECAUSE WHAT A READER
+       RE-DERIVES IS THE SUBTRACTION. The condition read: this goes when the census PUBLISHES the dispatches
+       departed members took with them as a ROW rather than as that subtraction, so `picks_max` cannot be read as
+       the distribution's maximum. `picks_departed` below is that row, assigned from flow.c's `g_picks_departed`
+       in the same breath as `picks_lifetime` and emitted by result_wfq_json beside the other three, so the
+       partition is checkable OUTSIDE this process on the document where the DCHECK is compiled out. A reader who
+       re-derives the average from `(picksLifetime - picksLive)` is subtracting a GAUGE from a LIFETIME COUNTER
+       and will write that reading again unless this says why it is the wrong one.
+       AND THE ROW ANSWERS A SECOND QUESTION THE RESIDUAL DID NOT NAME, WHICH IS WORTH MORE THAN THE AVERAGE IT
+       DID: IT IS THE RETIRE-VERSUS-SELL DISCRIMINATOR, FROM THE @WFQ DOCUMENT ALONE. `departures` is one number
+       over three causes (engine.c's engine_frontier_census asserts `finished + sold + teardown == departures`),
+       and those three live in a SIBLING object with its own sample index — so a reader holding only this census
+       has had no way to tell a frontier that RETIRED its members from one that SOLD them, which are opposite
+       verdicts. A finish costs a dispatch BY CONSTRUCTION: flow_finish is reached only from engine.c's
+       `FLOW_STEP_DONE` arm, whose subject is the switched-in member, and `cur = best` is assigned inside the one
+       `if (best != cur)` block that calls flow_credit_pick — so every member that has ever held the thread has
+       `picks >= 1`, and `picks_departed >= finished`. THEREFORE `departures > 0` WITH `picks_departed == 0`
+       PROVES `finished == 0`: every departure was a SALE or a teardown, read off two rows of one object.
+       THE CONVERSE IS NOT AVAILABLE AND MUST NOT BE READ: a SOLD member may have been dispatched too, so
+       `picks_departed > 0` does not prove that anything retired. The implication is one-way and the row states
+       the cause only on the zero.
        THE IDENTITY THAT DEFINES THEM, and it is asserted rather than described — WHICH IT WAS NOT, AND THAT IS
        RECORDED HERE BECAUSE THE METHOD IS THE FINDING AND THE SENTENCE IS ONLY ITS SYMPTOM. It read: "checked in
        both directions rather than described: within the census, `picks_live <= picks_lifetime` WITH THE
@@ -1955,6 +1962,15 @@ typedef struct {
     int64_t picks_live;       /* GAUGE: dispatches held by the members standing now */
     int64_t picks_max;        /* GAUGE: the most any one of them holds */
     int64_t picks_lifetime;   /* LIFETIME: every dispatch this instance has made, departed members included */
+    /* LIFETIME: the share of the row above that left with the members that departed — the arm that turns
+       `picks_lifetime` from a bare total into a PARTITION, and the one row of the four that is not a reading of
+       the census walk at all (flow.c's `g_picks_departed`, raised at flow_remove on the one line that can still
+       read a departing member's count). It is a LIFETIME counter and may be differenced; the two gauges above
+       may not. The identity `picks_live + picks_departed == picks_lifetime` is asserted at the end of
+       flow_wfq_census over THESE fields rather than over the file-static, so what a reader checks on the
+       document is what the dev build checks in the process. See the banner above for the two readings it
+       supplies and for the one direction the sale implication runs in. */
+    int64_t picks_departed;
     /* THE FRONTIER'S ARRIVAL AND DEPARTURE PROCESSES — the pair that says whether the ORDER is deciding
        anything at all, which every other row in this struct presupposes and none of them asks. Each row above
        describes the SHAPE of an order over the members standing NOW; a comparator is only a scheduler over a
