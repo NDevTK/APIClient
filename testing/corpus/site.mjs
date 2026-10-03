@@ -755,6 +755,60 @@ const frontierPrograms = (() => {
    RETIREMENT: it goes when the three rows are one field, which is a rename and waits for a pass that can
    re-derive every archived comparison rather than being smuggled in beside a fix. */
 const learnedAddrs = [...new Set(mine.flatMap(d => d.sites))];
+/* THE FOUR ENDPOINT FACT PARTITIONS THE SHIPPED PATH ALREADY WRITES, OF WHICH ONE IS CLAUDE.md
+   §What-the-tool-produces' HARD BAR AND THE OTHER THREE ARE WHAT IT IS COMPOSED OUT OF. The owner's
+   statement of that bar is "an address, a key or a value that NO PARSE of the served bytes can state,
+   because it exists only at run time", and solver/endpoint.c composes it PER ROW as `razorClass` out of
+   `endpoint_razor_class_of(door, addr_class)` -- `runtime-only` where the run reached the address holding a
+   value it had not determined OR where the door handed it bytes that were never in the served document,
+   `unproven` otherwise. extension/bridge.js relays all four onto every engine-run record and asserts each
+   one SUMS to `endpoints`; engine/build.mjs, extension/popup.js and testing/live-run.js read them. THIS
+   FILE -- the one that ranks the CORPUS -- was the consumer that never asked, so the bar this product is
+   judged by was scored one DOCUMENT at a time and over no corpus at all. That is the write-with-no-reader
+   half of the contract on the column this project is measured by, and the EIGHTH time this row has been the
+   consumer missing a field written to answer its own ambiguity, after `orphansAsked`, `unitsDone`, the @S
+   arrival census, the WFQ split, the arrivals/departures pair, the step histogram and the out-of-programs
+   partition.
+   THE UNION IS NOT COMPOSED HERE AND MAY NOT BE, which is not tidiness. extension/bridge.js argues it at
+   its own emit: a classification that grows in the ENGINE and is duplicated in a consumer drifts the day a
+   door is added, and the operand a consumer assembles by hand out of `endpointDoors` and
+   `endpointAddressClass` is the figure CLAUDE.md DEMOTED -- `EPR_BEYOND` is what a MARKUP parse cannot
+   reach and `fetch`, `xhr` and `module-import` are all in it, so a union built that way answers the weaker
+   question while wearing the stronger one's name. `endpointRazorClass` arrives ALREADY COMPOSED, at the one
+   line in the engine where both operands are in hand, and this row relays it whole.
+   THREE HISTOGRAMS ARE TWO OBSERVATIONS AND FOUR FIELDS ARE STILL TWO, said here because here is where the
+   numbers are (CLAUDE.md §EVIDENCE-INFLATION). `endpointDoors` and `endpointMintedAt` are one fact about an
+   address at two grains; `endpointAddressClass` is the second; `endpointRazorClass` is DERIVED from the
+   second and from the door's own bytes column and adds no observation to either. A reader counting four
+   agreeing rows as four signals is counting two.
+   IT IS A FLOOR AND A DIAGNOSTIC AND NEVER A TARGET. `runtime-only: 0` beside a nonzero `endpoints` is this
+   engine's REFUSAL TO CLAIM the bar on that document and not a smaller version of the capability:
+   solver/endpoint.h enumerates what `concrete` hides -- a literal, the document's own address, and a source
+   a flow PINNED AND RE-READ, which really is past every parse and which no field on the record can say.
+   Optimising toward this column is optimising toward a measurement.
+   THREE ABSENCES, THREE TOKENS, AND NONE FOLDED INTO ANOTHER -- which is the whole reason this is a helper
+   and not four `counted[last].X` reads. `null` is NO RUN CARRIED COUNTERS: bridge.js writes none on a
+   crashed run, deliberately, "because seven zeroes read as a run that explored nothing", so this agrees with
+   `endpoints: null` one line up and `runOutcomesMine` says which outcome it was. `(field-absent)` is a run
+   record that carried counters and NOT this key -- an ARTIFACT older than the field, which is a fact about
+   the BUILD and never about an address, and it is a STRING rather than a dropped key precisely so a reader
+   can tell it from a census written by a site.mjs that predates the field at all (that one leaves the key
+   missing, which is the channel report.mjs's per-pass arrival test reads). `{}` is a run that stated the
+   partition of an EMPTY SURFACE, which is a finding about the page. And `(unstated)` INSIDE a histogram is
+   bridge.js's own bucket for a wasm older than the key, which that zone asserts is all-or-nothing.
+   THE DENOMINATOR IS `endpoints` AT `countersFrom`, WHICH IS THE SAME ENTRY THESE ARE READ OFF. Each
+   partition sums to it by the producer's own assertion, so the pair is ONE moment and a share of it is a
+   share of a population that ran -- and `endpointFactsDisagree` below is that containment asked HERE, where
+   the DCHECK that asks it in the offscreen is compiled out: this driver measures whatever artifact is
+   installed, release included, so this is the only reader of that identity in a release census rather than a
+   second copy of a live check.
+   THE FIELD NAMES ARE ONE LIST, so the row's keys and the check below cannot disagree about which fields
+   they are about, and each is the SHIPPED spelling -- a query written against extension/bridge.js's own name
+   answers at both grains. */
+const EP_FACT_ABSENT = '(field-absent)';
+const EP_FACT_FIELDS = ['endpointDoors', 'endpointMintedAt', 'endpointAddressClass', 'endpointRazorClass'];
+const epFact = (k) => !counted.length ? null
+  : (k in counted[counted.length - 1]) ? counted[counted.length - 1][k] : EP_FACT_ABSENT;
 const row = {
   id, url, finalUrl, status, nav, artifact, measuredAt: new Date().toISOString(),
   dwellMs: DWELL, cores: cpus().length, loadBefore, loadAfter,
@@ -775,6 +829,13 @@ const row = {
      is still the right thing to watch a live run advance by. */
   endpoints: counted.length ? counted[counted.length - 1].endpoints : null,
   endpointSnapshots: counted.length,
+  /* …AND WHAT EACH OF THOSE ADDRESSES WAS, OF WHICH `endpointRazorClass` IS THE HARD BAR AND THE OTHER
+     THREE ARE ITS OPERANDS AND ITS GRAINS -- see the helper above for why the union is not composed here,
+     why four fields are two observations, why a zero is a REFUSAL TO CLAIM rather than a small capability,
+     and what each of the three absence tokens means. Read WITH `endpoints` and `countersFrom`: all four are
+     taken off the SAME counted entry, so each sums to that number by the producer's own assertion and the
+     set is one moment rather than four. The keys are bridge.js's own spellings, derived from ONE list. */
+  ...Object.fromEntries(EP_FACT_FIELDS.map((k) => [k, epFact(k)])),
   sinks: counted.length ? counted[counted.length - 1].sinks : null,
   /* THE RUNG THE @S SEARCH DIED AT, WHICH `sinks` ALONE CANNOT NAME. Emission is working-PoC-only and
      fire-verified, so `sinks: 0` is the reading for BOTH "no tainted value ever reached a sink" and "sinks
@@ -1269,6 +1330,38 @@ row.unaskedRelatives = (() => {
       if (k !== t && k.startsWith(t) && /^[A-Z]/.test(k.slice(t.length))) { out.push(k + ' extends ' + t); break; }
   }
   return out.sort();
+})();
+/* AND THE FOUR PARTITIONS ARE PARTITIONS, ASKED HERE BECAUSE HERE IS THE ONLY PLACE LEFT THAT CAN ASK.
+   extension/bridge.js asserts each of them sums to `endpoints` at the one composition where every side is in
+   one hand -- and it asserts it with a `DCHECK`, which `-DAPICLIENT_DEV=0` compiles out. This driver measures
+   WHATEVER ARTIFACT IS INSTALLED, so on a release census that assertion is not weakened, it is ABSENT: a
+   histogram built over a filtered or deduped walk of `fetchCallSites` would be read as a statement about the
+   surface this row publishes, and a sum that cannot be true is the cheapest finding this pair has. So this is
+   the release-mode reader of an identity the dev build already holds rather than a second copy of a live
+   check (CLAUDE.md §AN-AUDITOR-DERIVES-THE-RULE: the rule is derived from the ONE field list above, so the
+   row's keys and this check cannot disagree about which fields they are about).
+   IT IS A LIST AND NOT A COLOUR, AND IT DOES NOT STOP THE ROW, for `unaskedRelatives`' reason one block up: a
+   census run that died because an artifact disagreed with this arithmetic would stop every lane over a row
+   nobody reads. THREE STATES AND NONE FOLDED: `null` is NOTHING TO ASK -- no run carried counters, or the
+   artifact predates the fields, or `endpoints` itself is not a number -- `[]` is an OBSERVED CLEAN ANSWER,
+   and a non-empty list names each field with both sides of the sum it failed. A `[]` here is worth having
+   only because the `null` beside it is a different sentence.
+   ARMED, AND THE CONTROL IS THE ARITHMETIC ITSELF RATHER THAN AN INVENTED FIELD: the check is exercised by
+   handing it a histogram whose sum is deliberately wrong, which this file cannot do to a live artifact --
+   so the shape is kept to one expression a reader can evaluate by eye against the `endpoints` on the same
+   row, and the row carries both operands so the claim is CHECKABLE by whoever reads the census rather than
+   trusted. */
+row.endpointFactsDisagree = (() => {
+  if (typeof row.endpoints !== 'number') return null;
+  const out = [];
+  for (const k of EP_FACT_FIELDS) {
+    const h = row[k];
+    if (!h || typeof h !== 'object' || Array.isArray(h)) continue;
+    let n = 0;
+    for (const b of Object.keys(h)) n += h[b];
+    if (n !== row.endpoints) out.push(k + ' sums to ' + n + ' over ' + row.endpoints + ' emitted row(s)');
+  }
+  return out.length || EP_FACT_FIELDS.some((k) => row[k] && typeof row[k] === 'object') ? out : null;
 })();
 try { writeFileSync(new URL(LOG_NAME, OUT), j); } catch (e) { row.logWriteErr = String(e.message); }
 console.log('ROW ' + JSON.stringify(row));

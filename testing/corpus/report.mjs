@@ -103,7 +103,21 @@ const passes = files.map((f) => {
               pair AND no names, and that is one fact about the artifact rather than two about two fields. */
            absentNames: measured.length === 0 ? 'nothing-measured'
              : measured.some((r) => 'absentFatal' in r) ? 'fatal'
-             : measured.some((r) => 'absentOwedNames' in r) ? 'carried' : 'predates' };
+             : measured.some((r) => 'absentOwedNames' in r) ? 'carried' : 'predates' ,
+           /* AND A SIXTH, FOR THE COLUMN THIS PRODUCT IS ACTUALLY JUDGED BY, asked separately for the
+              reason the five above are and with one more: CLAUDE.md §What-the-tool-produces' HARD BAR is
+              "an address, a key or a value that NO PARSE of the served bytes can state, because it exists
+              only at run time", solver/endpoint.c composes it PER ROW as `razorClass`, and until site.mjs
+              began carrying it the bar was scored one DOCUMENT at a time and over no corpus at all.
+              IT IS A QUESTION ABOUT THE INSTRUMENT AND NOT ABOUT THE ARTIFACT, which is why there are TWO
+              channels and not one. This state answers whether the site.mjs that wrote the pass carried the
+              FIELD -- a missing key. Whether the WASM that answered stated the fact is a DIFFERENT fact,
+              carried per row as the string `(field-absent)` inside a key that is present, and it is read
+              per site below. Folding the two would report a census taken against an old artifact as one
+              taken by an old instrument, and those prescribe opposite work: rebuild and reinstall, against
+              wait for a newer pass. */
+           razor: measured.length === 0 ? 'nothing-measured'
+             : measured.some((r) => 'endpointRazorClass' in r) ? 'carried' : 'predates' };
 });
 /* THE LIST THIS CENSUS MEASURED, NAMED AND THEN CHECKED AGAINST THE ROWS. This file used to read `sites.tsv`
    unconditionally and look every row's id up in it — and the app-page census walks twelve ids that appear in
@@ -529,6 +543,27 @@ for (const p of passes) for (const r of p.rows) {
        another — a `|| []` here would turn all three into the clean bill, which is the one this file most
        exists not to publish. */
     anames: r.absentOwedNames,
+    /* THE HARD BAR PER ADDRESS, AND THE OPERAND IT IS COMPOSED OUT OF, which is the one column in this file
+       that can tell a run that learned a GATED API SURFACE from one that counted a `<head>` back.
+       §What-the-tool-produces' bar is "an address, a key or a value that NO PARSE of the served bytes can
+       state, because it exists only at run time"; solver/endpoint.c composes `razorClass` per row out of
+       `endpoint_razor_class_of`, extension/bridge.js relays it onto every engine-run record, and
+       engine/build.mjs, extension/popup.js and testing/live-run.js all read it. This file was the consumer
+       that never asked -- so the bar was scored per DOCUMENT and over no CORPUS, which is the write-with-no-
+       reader half of the contract on the column the product is measured by.
+       THE UNION IS NEVER ASSEMBLED HERE. A consumer unioning `doors` with `addressClass` by hand builds the
+       figure CLAUDE.md DEMOTED, because `EPR_BEYOND` is what a MARKUP parse cannot reach and `fetch`, `xhr`
+       and `module-import` are all in it. `epRazor` arrives already composed; `epAddr` is carried BESIDE it
+       as the operand that cannot state the bar alone, never as an input to a sum made here.
+       THEY ARE TWO FIELDS AND ONE OBSERVATION MORE THAN `epAddr` ALONE (CLAUDE.md §EVIDENCE-INFLATION):
+       `epRazor` is DERIVED from `epAddr` and from the door's own bytes column, so a reader counting them as
+       two independent signals is counting one and a half.
+       LEFT AS WHATEVER site.mjs WROTE, which is three facts and no default: an OBJECT is a stated
+       partition (`{}` being the partition of an EMPTY surface, a finding about the page), the string
+       `(field-absent)` is an ARTIFACT older than the field, `null` is a pass whose runs carried no counters
+       at all, and ABSENT is a pass predating the field entirely. A `|| {}` here would turn all four into
+       the one this file most exists not to publish -- an engine that answered and proved nothing. */
+    epRazor: r.endpointRazorClass, epAddr: r.endpointAddressClass,
     sigs, wasm: (r.artifact && r.artifact.wasmSha256 || '').slice(0, 12),
     /* THE ARTIFACT IS NAMED BY ITS HASH ALONE. This read `r.artifact.head`, a field site.mjs deliberately
        renamed to `builtFromHeadClaim` when it stopped being trustworthy, so it resolved to '' for every row
@@ -886,6 +921,120 @@ const withEp = table.filter((t) => t.epAnswered > 0);
    THE CENSUS TABLE'S CONTRACT IS THE RUN OUTCOME AND THE ABORT QUEUE; provenance is a different axis over
    different inputs (the TRACKED mirror rather than these untracked rows) and it lives in its own file:
        node reach.mjs <the same census files> */
+/* CLAUDE.md §What-the-tool-produces' HARD BAR, OVER THE CORPUS, WHICH NOTHING HAS EVER SCORED. That bar is
+   "an address, a key or a value that NO PARSE of the served bytes can state, because it exists only at run
+   time". solver/endpoint.c composes it PER ROW, extension/bridge.js relays the partition onto every
+   engine-run record, and three consumers read it -- all of them at the grain of ONE DOCUMENT. The retirement
+   condition CLAUDE.md states for that record names exactly the construction missing: a corpus row saying,
+   with its RUN COUNT and its SPREAD, how many of a drive's addresses cleared the bar. This is that row.
+   IT IS A FLOOR, A DIAGNOSTIC, AND NEVER A TARGET, which is the first thing a reader of it must hold.
+   `runtime-only: 0` against a nonzero emitted surface is this engine's REFUSAL TO CLAIM the bar on that
+   document -- solver/endpoint.h enumerates the three populations `concrete` hides, of which a source a flow
+   PINNED AND RE-READ really is past every parse and cannot be said so by any field -- so a low number is an
+   under-claim published as a floor and not a weak capability. Optimising toward this column is optimising
+   toward a measurement, which §netdiff already refuses by name for `--unused`.
+   THE UNION IS NOT COMPOSED HERE AND MAY NOT BE. The engine composes it at the one line where both operands
+   are in hand; a consumer assembling one out of `doors` and `addressClass` builds the figure CLAUDE.md
+   DEMOTED, since `EPR_BEYOND` is what a MARKUP parse cannot reach and `fetch`, `xhr` and `module-import` are
+   all in it. The `unproven` margin beside the `runtime-only` one is the SAME partition's other bucket and is
+   not a second observation of anything (CLAUDE.md §EVIDENCE-INFLATION): `razorClass` is DERIVED from
+   `addressClass` and the door's own bytes column, so these two numbers are one fact about a surface read two
+   ways round, and a reader counting them as corroborating signals is counting one.
+   FOUR STATES AND NONE FOLDED, because a zero on this column has four readings that take different work and
+   three of them are not about the page at all. `no-field` is a pass written by a site.mjs predating the
+   field; `artifact-predates` is a run record that carried counters and not this key, which is a fact about
+   the BUILD and prescribes a rebuild rather than a wait; `no-counters` is a pass whose runs carried none at
+   all, which bridge.js writes deliberately for a crashed run "because seven zeroes read as a run that
+   explored nothing"; and `{}` is a stated partition of an EMPTY SURFACE, which is the only one of the four
+   that is a finding about the page. A `|| {}` anywhere above would publish all four as the last.
+   THE PER-SITE SEQUENCE IS PRINTED AND NOT ONLY A TOTAL, which is `cold`'s rule in testing/live-run.js and
+   holds for its reason: a RANGE over bucket names is not a quantity, and one run of a live site is not a
+   measurement -- so the passes are listed in order, the spread of the cleared count is stated beside them,
+   and the run count is the denominator of both. A site answering once cannot then be read as one answering
+   the same way twice.
+   THE PAIR IS TAKEN FROM ONE PASS PER SITE AND THE TOTALS SAY SO. `endpointsTotalBestPass` beside it already
+   sums a per-site BEST, and the question a headline answers is what the tool CAN prove about the page -- so
+   the site's pass with the most `runtime-only` rows is chosen and BOTH buckets are read off THAT pass. Taking
+   each margin from whichever pass maximised it would be two margins of two different observations summed into
+   one line, which is the two-moments defect this file has already had to publish two indices to refuse.
+   IT IS A SECTION AND NOT A COLUMN, for the owed-globals queue's reason: `pad` TRUNCATES, and a truncated
+   histogram is a number whose denominator the reader cannot see. */
+const RAZOR_RUNTIME = 'runtime-only', RAZOR_UNPROVEN = 'unproven';
+const rzPredates = passes.filter((p) => p.razor === 'predates').map((p) => p.label);
+const rzCarried = passes.filter((p) => p.razor === 'carried').map((p) => p.label);
+if (rzPredates.length)
+  console.log('\n*** THE HARD-BAR SECTION BELOW IS OVER ' + rzCarried.length + ' OF ' + passes.length +
+    ' PASS(ES) — ' + rzPredates.join(', ') + ' predate(s) the razor field entirely (their rows carry no ' +
+    '`endpointRazorClass`), so a site reading `no-field` over those passes is this instrument being unable ' +
+    'to ask. It is NOT a page whose every address a parse of the served bytes could have stated, and it is ' +
+    'NOT an artifact too old to say — that one is `artifact-predates` and prescribes a rebuild. ***');
+/* WHAT ONE PASS SAID ABOUT THE BAR, AS A TOKEN OR AS THE PARTITION, with the four states above kept apart at
+   the point the string is composed rather than by a reader holding the convention in their head. */
+const rzOne = (m) => {
+  if (!('epRazor' in m) || m.epRazor === undefined) return { tok: 'no-field' };
+  if (m.epRazor === null) return { tok: 'no-counters' };
+  if (typeof m.epRazor === 'string') return { tok: 'artifact-predates' };
+  const h = m.epRazor;
+  let tot = 0;
+  for (const k of Object.keys(h)) tot += h[k];
+  return { ro: h[RAZOR_RUNTIME] || 0, un: h[RAZOR_UNPROVEN] || 0, tot, h };
+};
+const rzRows = table.map((t) => {
+  const per = t.measurements.map(rzOne);
+  const stated = per.filter((x) => x.h);
+  /* THE PASS WHOSE PARTITION PROVED THE MOST, AND BOTH BUCKETS READ OFF IT. Ties keep the FIRST, so the
+     choice is the earliest pass that reached the maximum rather than whichever the sort happened to leave. */
+  let best = null;
+  for (const x of stated) if (!best || x.ro > best.ro) best = x;
+  return { id: t.id, n: t.measurements.length, per, stated: stated.length, best,
+           /* A SPREAD OVER THE PASSES THAT STATED A PARTITION, never over the ones that could not be asked --
+              `-` where none did, which is absent and is not a zero. */
+           spread: stated.length ? (() => {
+             const v = stated.map((x) => x.ro), lo = Math.min(...v), hi = Math.max(...v);
+             return lo === hi ? String(lo) : lo + '-' + hi;
+           })() : '-' };
+});
+const rzStated = rzRows.filter((r) => r.stated > 0);
+const rzCleared = rzStated.filter((r) => r.best.ro > 0);
+console.log('\nTHE HARD BAR (CLAUDE.md §What-the-tool-produces) OVER ' + rzCarried.length + '/' + passes.length +
+  ' PASS(ES) — an address, key or value NO PARSE of the served bytes can state. A FLOOR AND A DIAGNOSTIC:\n' +
+  '  `runtime-only: 0` beside a nonzero surface is this engine REFUSING TO CLAIM the bar on that document,\n' +
+  '  never a smaller capability, and `unproven` is the SAME partition\'s other bucket rather than a second fact.');
+/* EVERY COLUMN SIZES ITSELF TO ITS WIDEST VALUE, for `termW`'s reason one table up: `pad` TRUNCATES, and a
+   clipped `artifact-predates` is not a narrow value but a wrong one -- `0-4` clipped to `0` is the difference
+   between a site that cleared the bar in one pass and one that never did.
+   AND THE STACK IS NOT A COLUMN HERE, WHICH IS WHY THE RULE ABOVE IS NOT ENOUGH ON ITS OWN. A width derived
+   from the rows is only an improvement over a fixed one where the field is a VALUE; `list.byId`'s third
+   column in `apps.tsv` is a PARAGRAPH -- a site's whole evidence note, hundreds of characters with its own
+   prose and citations -- so deriving a width from it printed a 1200-column line and a fixed width would have
+   clipped it into a sentence that stops mid-claim. The main table above prints no stack for exactly that
+   reason and this section does the same; a reader wanting it reads the list. MEASURED on this corpus's own
+   `apps.tsv` while building this section, which is the one artifact that could have shown it. */
+const rzShown = rzRows.filter((r) => r.n > 0);
+const rzCell = (x) => x.h ? (x.ro + '+' + x.un + '=' + x.tot) : x.tok;
+const rzClear = (r) => r.spread + ' of ' + r.stated + '/' + r.n + ' pass(es)';
+const rzIdW = Math.max('site'.length, ...rzShown.map((r) => r.id.length)) + 2;
+const rzClW = Math.max('cleared'.length, ...rzShown.map((r) => rzClear(r).length)) + 2;
+if (rzShown.length) {
+  console.log('  ' + pad('site', rzIdW) + pad('cleared', rzClW) +
+    'runtime-only+unproven=emitted, PER PASS IN ORDER');
+  for (const r of rzShown)
+    console.log('  ' + pad(r.id, rzIdW) + pad(rzClear(r), rzClW) +
+      r.per.map(rzCell).join(' | '));
+}
+/* AND THE CORPUS FIGURE, WITH ITS RUN COUNT AND THE DENOMINATOR OF EVERY SHARE IN IT ON THE SAME LINE. A
+   count over a corpus that does not state how many passes it is over, and over how many sites could be asked
+   at all, is a figure belonging to a population a reader cannot name. */
+console.log('hard bar totals: ' + JSON.stringify({
+  passes: passes.length, passesCarryingTheField: rzCarried.length,
+  sitesStatingAPartition: rzStated.length,
+  sitesClearingTheBar: rzCleared.length,
+  /* BOTH BUCKETS OFF ONE PASS PER SITE -- the site's best by `runtime-only` -- so the pair is one observation
+     and their sum is that pass's own emitted surface rather than two passes' margins added together. */
+  runtimeOnlyBestPass: rzStated.reduce((n, r) => n + r.best.ro, 0),
+  unprovenAtThatSamePass: rzStated.reduce((n, r) => n + r.best.un, 0),
+  emittedAtThatSamePass: rzStated.reduce((n, r) => n + r.best.tot, 0),
+}));
 console.log('totals: ' + JSON.stringify({
   sites: table.length,
   netFixture: table.filter((t) => t.outcome === 'NET/FIXTURE').length,
