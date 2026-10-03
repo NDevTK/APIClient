@@ -83,6 +83,7 @@
 #include "core/html/unhandled_rejection.h"
 #include "core/css/css_at_rule_prelude.h"
 #include "core/css/css_computed_value.h"   /* css-display-3 §2.8's root rule, asserted where a page could otherwise abort the engine */
+#include "core/css/css_logical.h"   /* css-writing-modes-4 §6.4's table — the one component that answers in a vertical writing mode */
 #include "core/css/css_property_syntax.h"
 #include "core/css/css_var.h"   /* css-variables-1 §3's var() substitution, the syntax half */
 #include "core/css/css_pending_substitution.h"   /* css-values-5 "Substitution in Shorthand Properties" */
@@ -28689,6 +28690,211 @@ static void box_paint_inline_break_selftest(JSContext *ctx, lxb_html_document_t 
     display_list_free(&box);
 }
 
+/* css-writing-modes-4 §6.4 "Abstract-to-Physical Mappings"' TABLE, READ IN A WRITING MODE THAT IS NOT
+ * `horizontal-tb` — which is a question no document this host drives has ever asked.
+ *
+ * THE DERIVATION THAT MADE THIS WORTH WRITING, AS COMMANDS RATHER THAN AS COUNTS, because a count of how many
+ * sites declare the property shrinks the moment this row lands and its only reader would be whoever landed it:
+ * `grep -oic writing-mode` over this file against `font-size` as the armed control, `git grep -il writing-mode`
+ * over the tracked `*.html` under `testing` against `<style`, and `grep -c css_logical` over this file. Before
+ * this row the first two answered nothing for the property and the third nothing for the component, so
+ * css-writing-modes-4 §6.4's four VERTICAL columns had never been selected by any run — not by a fixture, and
+ * not by a page, since nothing else in this host declares the property either.
+ *
+ * WHY THE TABLE AND NOT THE LAYOUT, WHICH IS A SPEC-ORDER ARGUMENT AND NOT A RISK ONE. Every writing-mode
+ * refusal in the layout tree names the same two sections as what to build — core/layout/flow_position.c for
+ * CSS 2 §9.4.1's stacking, core/layout/line_box.c for CSS 2.2 §9.4.2's line boxes, and core/layout/block_flow.c,
+ * flex_cross_size.c, flex_intrinsic_size.c, flex_line.c, intrinsic_block_size.c and scrolling_area.c for the
+ * sizes — and each says BUILD css-writing-modes-4 §7.4 "Flow-Relative Mappings" with
+ * css-writing-modes-4 §6.4 "applied once at the end". That table is therefore the subproblem UNDERNEATH all
+ * of them, and core/css/css_logical.h has carried it, transcribed cell by cell, for longer than those
+ * refusals have stood. A
+ * row that drove a vertical document into CSS 2 §9.4.1's physical stack would be asserting a step whose own
+ * predecessor had never been measured, which is CLAUDE.md's "Do subproblems IN ORDER" read in the direction
+ * that matters: the table is first because everything else is written over it.
+ *
+ * AND IT CANNOT ABORT, WHICH IS A PROPERTY OF WHICH CELLS ARE ASKED AND IS DERIVED CELL BY CELL BELOW RATHER
+ * THAN HOPED FOR. core/css/css_logical.c answers a BLOCK side and either DIMENSION for all five writing modes
+ * without ever reading a used direction. css-writing-modes-4 §6.2 "Flow-relative Directions"' closing Note is
+ * why — "determining the block-start and block-end sides of a box depends only on the writing-mode property" —
+ * and `css_logical_init` asserts the table agrees with that Note column by column. So the forward lookups here
+ * take `logical_physical_role`'s `LG_DIR_LTR` shortcut, and the inverse ones match in the two BLOCK columns
+ * that are tried first. Nothing below reaches `logical_used_direction`.
+ *
+ * THE `horizontal-tb` SIBLING IS THE NEGATIVE CONTROL AND IS THE WHOLE REASON THE EQUALITIES MEAN ANYTHING.
+ * A lookup that ignored the writing mode entirely would satisfy any single column of assertions; what it
+ * cannot produce is ONE abstract name answering TWO different physical ones on two elements of one document.
+ * So every cell is asked twice and the pair is the claim — `margin-block-start` is `margin-right` on the
+ * vertical element and `margin-top` on the control, which css-writing-modes-4 §6.4's table gives as `right`
+ * and `top`.
+ *
+ * NAMED RESIDUAL — THE INLINE-AXIS CELLS OF THE FOUR VERTICAL COLUMNS ARE NOT ASKED, AND ASKING THEM ABORTS.
+ * WHAT IS NOT COVERED: css-writing-modes-4 §6.4 gives `inline-start` and `inline-end` a cell per writing mode
+ * AND per direction, and in a vertical mode core/css/css_logical.c refuses both halves of that pair by name —
+ * forward, because `logical_physical_role` reads the used direction for an inline side; inverse, because a
+ * physical `top` or `bottom` matches neither BLOCK column and falls through to the same read. Its own `DFAIL`
+ * says what the read needs: css-writing-modes-4 §6.4's closing Note makes the used direction a question about
+ * `text-orientation` in a vertical mode ("in vertical writing modes, a text-orientation value of upright
+ * forces the used direction to ltr"), and this engine computes no value for that property.
+ * WHAT THE NEXT DIFF BUILDS: `text-orientation` as one row of core/css/css_computed_value.c's as-specified arm
+ * — css-writing-modes-4 §5.1 "Orienting Text: the text-orientation property" gives `Value: mixed | upright |
+ * sideways`, `Initial: mixed`, `Inherited: yes` and `Computed value: specified value`, and lexbor's registry
+ * carries the property — plus the matching row of `css_shorthand_complete_for`, after which
+ * css-writing-modes-4 §6.4's used direction is answerable and the eight inline cells join the sixteen asked here.
+ * HOW ITS ABSENCE WOULD BE OBSERVED: a reader who completes the table in this row meets that `DFAIL` rather
+ * than a wrong answer, so the absence shows as this host aborting in core/css/css_logical.c and never as a
+ * mapping quietly resolved against the wrong column.
+ * RETIREMENT: this record goes when a cell of css-writing-modes-4 §6.4's inline-axis rows is asserted here in
+ * a vertical writing mode.
+ *
+ * BOTH ELEMENTS ARE TAKEN OUT AGAIN AND THE REMOVAL IS ASSERTED RATHER THAN TRUSTED, which is the one way this
+ * row could break every row after it. A `vertical-rl` element left in the fixture's own active document is an
+ * element that every later paint walks, and core/layout/line_box.c's refusal is on that walk — so the host
+ * would abort in a component this row is not about, naming a document this row wrote. The check is the node's
+ * own parent, read after the removal, because `dom_cow_remove_baseline`'s answer is a fact about the tree and
+ * not about the call. */
+static void tf_wm_partner(lxb_dom_element_t *el, const char *mode, const char *from, const char *to,
+                          unsigned *held)
+{
+    const char *got = css_logical_partner_of(el, from);
+
+    CHECKF(got != NULL && strcmp(got, to) == 0,
+           "css-writing-modes-4 §6.4 \"Abstract-to-Physical Mappings\" paired `%s` with `%s` on an element "
+           "whose computed `writing-mode` is `%s`, where that section's table gives `%s`. The table is "
+           "transcribed cell by cell in core/css/css_logical.c and `css_logical_init` asserts each column is a "
+           "PERMUTATION of the four physical sides and that its two dimension cells differ — so a column that "
+           "is internally consistent and answers the wrong physical name is a cell transcribed from the wrong "
+           "column of the document, which no invariant over the table alone can see. A `(none)` is this "
+           "property being in no css-logical-1 §4 \"Flow-Relative Box Model Properties\" group at all, at "
+           "which point the pair has no second member and the cascade resolves its declarations alone",
+           from, got == NULL ? "(none)" : got, mode, to);
+    (*held)++;
+}
+
+static void css_logical_writing_mode_selftest(lxb_html_document_t *dom)
+{
+    lxb_dom_document_t *d = lxb_dom_interface_document(dom);
+    lxb_dom_node_t *body = tf_ib_body(dom);
+    lxb_dom_element_t *vert, *horz;
+    char *wm_v, *wm_h;
+    unsigned held = 0;
+    bool vblock, vinline, hblock, hinline, armed, gone;
+
+    vert = tf_ib_box(d, body, "p", "writing-mode:vertical-rl");
+    horz = tf_ib_box(d, body, "p", NULL);
+
+    /* THE ARMING CHECK, AND IT IS THE ONE ASSERTION HERE THAT IS NOT ABOUT THE TABLE. Every equality below is
+       satisfied by a run in which the cascade never delivered the declaration at all — the control would then
+       answer `horizontal-tb` correctly and the subject would answer it too, and sixteen agreements about one
+       column would read as sixteen agreements about two. So the two computed values are read FIRST and the
+       pair is asserted, which is what makes the vertical column the column that was selected. */
+    wm_v = css_computed_value(vert, "writing-mode");
+    wm_h = css_computed_value(horz, "writing-mode");
+    armed = wm_v != NULL && wm_h != NULL && strcmp(wm_v, "vertical-rl") == 0 &&
+            strcmp(wm_h, "horizontal-tb") == 0;
+    CHECKF(armed,
+           "the two elements this row writes computed `writing-mode` `%s` and `%s`, where it declares "
+           "`vertical-rl` on the first and nothing on the second — css-writing-modes-4 §3.2 \"Block Flow "
+           "Direction: the writing-mode property\" gives `Initial: horizontal-tb`, lexbor's registry carries "
+           "the property and its five keywords, and core/css/css_computed_value.c's `css_computed_models` "
+           "carries the row, so the last layer of the cascade always answers. A pair that agrees is this row "
+           "measuring css-writing-modes-4 §6.4's `horizontal-tb` column TWICE under two names, which every "
+           "equality below would pass",
+           wm_v == NULL ? "(none)" : wm_v, wm_h == NULL ? "(none)" : wm_h);
+    free(wm_v);
+    free(wm_h);
+
+    /* 1. css-writing-modes-4 §6.4's BLOCK-START AND BLOCK-END ROWS, FORWARD. The document's own cells:
+       `block-start` is `right` under the `vertical-rl, sideways-rl` column and `top` under `horizontal-tb`;
+       `block-end` is `left` and `bottom`. These are the two rows
+       css-writing-modes-4 §6.2 "Flow-relative Directions"' Note makes independent of the used direction,
+       which is what lets them be asked at all in a mode whose direction this engine cannot compute. */
+    tf_wm_partner(vert, "vertical-rl", "margin-block-start", "margin-right", &held);
+    tf_wm_partner(vert, "vertical-rl", "margin-block-end", "margin-left", &held);
+    tf_wm_partner(horz, "horizontal-tb", "margin-block-start", "margin-top", &held);
+    tf_wm_partner(horz, "horizontal-tb", "margin-block-end", "margin-bottom", &held);
+
+    /* 2. AND THE SAME TWO ROWS INVERTED, over a DIFFERENT css-logical-1 §4 "Flow-Relative Box Model
+       Properties" group so the pairing is exercised in both of its mapping logics rather than in one group
+       twice. core/css/css_logical.h states the pairing is an INVOLUTION and `css_logical_init` asserts it over
+       the table, so these four are that assertion read at the boundary — the physical side whose preimage is a
+       BLOCK one, which is the only physical side the inverse lookup resolves in a vertical mode without
+       reading a used direction. */
+    tf_wm_partner(vert, "vertical-rl", "padding-right", "padding-block-start", &held);
+    tf_wm_partner(vert, "vertical-rl", "padding-left", "padding-block-end", &held);
+    tf_wm_partner(horz, "horizontal-tb", "padding-top", "padding-block-start", &held);
+    tf_wm_partner(horz, "horizontal-tb", "padding-bottom", "padding-block-end", &held);
+
+    /* 3. AND css-writing-modes-4 §6.4's TWO DIMENSION ROWS, BOTH WAYS. "block-size | height | width" and
+       "inline-size | width | height" — so a vertical mode trades them, which
+       css-writing-modes-4 §6.1 "Abstract Dimensions" states in prose as well ("the vertical axis in
+       horizontal writing modes and the horizontal axis in vertical writing modes"). Neither row names a
+       direction in the document and `css_logical_init`
+       asserts neither moves with the direction column. */
+    tf_wm_partner(vert, "vertical-rl", "block-size", "width", &held);
+    tf_wm_partner(vert, "vertical-rl", "inline-size", "height", &held);
+    tf_wm_partner(vert, "vertical-rl", "width", "block-size", &held);
+    tf_wm_partner(vert, "vertical-rl", "height", "inline-size", &held);
+    tf_wm_partner(horz, "horizontal-tb", "block-size", "height", &held);
+    tf_wm_partner(horz, "horizontal-tb", "inline-size", "width", &held);
+    tf_wm_partner(horz, "horizontal-tb", "width", "inline-size", &held);
+    tf_wm_partner(horz, "horizontal-tb", "height", "block-size", &held);
+
+    CHECKF(held == 16u,
+           "this row asked %u of css-writing-modes-4 §6.4 \"Abstract-to-Physical Mappings\"' cells where it "
+           "spells SIXTEEN — eight on each of its two elements, which is the block-side pair forward, the same "
+           "pair inverted through a second css-logical-1 §4 group, and both dimension rows in both directions. "
+           "A lower number is a call deleted from the sequence above and every remaining equality still "
+           "passing, which is the one way a count of agreements can shrink without any of them failing",
+           held);
+
+    /* 4. AND THE AXIS ENTRY THE LAYOUT TREE ALREADY CALLS, which is the same two dimension rows reached
+       through the export rather than through a property name — core/layout/flex_item.c, flex_cross_size.c and
+       flex_line.c each ask it. css-writing-modes-4 §6.1 "Abstract Dimensions" defines the block axis as "the
+       vertical axis in horizontal writing modes and the horizontal axis in vertical writing modes", so the
+       four answers are a pair and its exact inverse: an element in a vertical mode has a HORIZONTAL block axis
+       and a VERTICAL inline one. Reading all four rather than two is what separates a correct table from an
+       entry that returns a constant. */
+    vblock = css_logical_axis_is_vertical(vert, CSS_LOGICAL_AXIS_BLOCK);
+    vinline = css_logical_axis_is_vertical(vert, CSS_LOGICAL_AXIS_INLINE);
+    hblock = css_logical_axis_is_vertical(horz, CSS_LOGICAL_AXIS_BLOCK);
+    hinline = css_logical_axis_is_vertical(horz, CSS_LOGICAL_AXIS_INLINE);
+    CHECKF(!vblock && vinline && hblock && !hinline,
+           "css-writing-modes-4 §6.1 \"Abstract Dimensions\"' two axes answered vertical=%d/%d on an element "
+           "in `vertical-rl` and vertical=%d/%d on one in `horizontal-tb`, where that section's own definition "
+           "makes them exact inverses — the block axis is \"the vertical axis in horizontal writing modes and "
+           "the horizontal axis in vertical writing modes\". FOUR EQUAL ANSWERS is this entry reading no "
+           "writing mode at all; two equal answers on ONE element is css-writing-modes-4 §6.4's dimension pair "
+           "having collapsed onto one physical dimension, which `css_logical_init` asserts the table cannot do "
+           "and which would make css-writing-modes-4 §6.1's two measurements one",
+           vblock ? 1 : 0, vinline ? 1 : 0, hblock ? 1 : 0, hinline ? 1 : 0);
+
+    /* AND OUT AGAIN, CHECKED. The parent is read back off each node because that is the fact the rows after
+       this one depend on: core/layout/line_box.c refuses a box whose computed `writing-mode` is not
+       `horizontal-tb`, so a `vertical-rl` element still in this document would abort the next row that paints
+       it — in a component this row is not about, over markup this row wrote. */
+    dom_cow_remove_baseline(lxb_dom_interface_node(vert));
+    dom_cow_remove_baseline(lxb_dom_interface_node(horz));
+    gone = lxb_dom_interface_node(vert)->parent == NULL && lxb_dom_interface_node(horz)->parent == NULL;
+    CHECK(gone,
+          "one of the two elements this row appended to the fixture's own active document is still parented "
+          "after its removal. The `vertical-rl` one is the hazard: every later row that paints this document "
+          "walks it, and core/layout/line_box.c's `DFAIL` for a box that is not `horizontal-tb` is on that "
+          "walk — so the host would abort in a component this row does not measure, naming markup this row "
+          "wrote and no page did");
+
+    /* THE ROW. Sixteen of css-writing-modes-4 §6.4's cells and four of
+       css-writing-modes-4 §6.1's axes, over one
+       document holding two writing modes. ON AN ARTIFACT BUILT BEFORE THIS FUNCTION EXISTED THE ROW IS ABSENT
+       ENTIRELY rather than a row of zeros — `grep -c '@LOGICALWM'` answers 0 there, which is this row's own
+       artifact-side control and is the same one `@INLINEBREAK` states for itself. The two mode strings are
+       printed because every other field is conditional on them: a row reading `horizontal-tb` twice would be
+       sixteen agreements about one column, and the arming check above is what makes that unreachable. */
+    printf("@LOGICALWM subject=vertical-rl control=horizontal-tb cells=%u vblock=%d vinline=%d hblock=%d "
+           "hinline=%d removed=%d\n",
+           held, vblock ? 1 : 0, vinline ? 1 : 0, hblock ? 1 : 0, hinline ? 1 : 0, gone ? 1 : 0);
+}
+
 /* A ROOT ELEMENT THAT GENERATES NO BOX — core/paint/document_paint.h's own arm, and the ONE keyword that can
  * reach it.
  *
@@ -31585,6 +31791,12 @@ int main(int argc, char **argv) {
        walks enumerate that sequence rather than a DOM child list. It runs no layout, so it is safe anywhere
        after the realm exists; it is here because it uses the same helper as the two above. */
     flex_contents_splice_selftest(ctx);
+    /* AND THE SAME DOCUMENT IN A WRITING MODE NOTHING ELSE IN THIS HOST DECLARES — css-writing-modes-4 §6.4
+       "Abstract-to-Physical Mappings"' table, asked once in `vertical-rl` and once in `horizontal-tb`, which is
+       the subproblem underneath every writing-mode refusal in the layout tree. It runs NO layout and NO paint,
+       which is the whole reason a vertical element may be appended at all, and it asserts both of them out of
+       the tree again before it returns — see the function for the cells it must not ask and why. */
+    css_logical_writing_mode_selftest(dom);
     /* AFTER the platform init above, because the two rows it checks are declared by window_message_init. */
     message_source_selftest();   /* §9.3.3's sources, and the unforgeable-origin rule that decides their findings */
     /* AT THE BASELINE, where no flow has narrowed anything — the pins it writes are cleared after each one,
