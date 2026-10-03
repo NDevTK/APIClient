@@ -2633,8 +2633,8 @@ void engine_orphan_census(long *driven, long *asked);
  * number for THREE different facts, each taking a different action: the task ran and the page saw the message;
  * the task ran and HTML §9.3.3 "Posting messages" step 8.1 declined it (the target's origin is not the one the
  * sender asked for); the task ran, or was taken off the queue before it could, and there was no Document left
- * to fire at (HTML §7.5.10 "Destroying documents" step 7 — reachable both ways, because engine.c's flow_deliver
- * enqueues a ROUTED delivery in the RECEIVING document's realm, which is exactly the realm step 7's removal
+ * to fire at (HTML §7.5.10 "Destroying documents" step 5 — reachable both ways, because engine.c's flow_deliver
+ * enqueues a ROUTED delivery in the RECEIVING document's realm, which is exactly the realm step 5's removal
  * walk keys on); or the task never ran at all, which is a work item the ONE frontier dropped and is the only
  * one of the four that is a defect.
  * That is §@S's rule about a search that cannot be directed at a gap it reports with the same number as two
@@ -2649,13 +2649,13 @@ void engine_orphan_census(long *driven, long *asked);
 enum {
     ROUTED_TASK_FIRED = 0,        /* §9.3.3 step 8.7: the event was fired at the target Window */
     ROUTED_TASK_TARGET_ORIGIN,    /* §9.3.3 step 8.1: the target is not same origin with the requested origin */
-    ROUTED_TASK_TARGET_GONE,      /* §7.5.10 step 7: the target's Document was destroyed */
+    ROUTED_TASK_TARGET_GONE,      /* §7.5.10 step 5: the target's Document was destroyed */
     ROUTED_TASK_THREW,            /* the task itself went abrupt before it could fire anything */
     ROUTED_TASK_END_N
 };
-/* REPORTED AT THE LINE THAT IS THAT END, and TARGET_GONE has two such lines because §7.5.10 step 7 is reachable
+/* REPORTED AT THE LINE THAT IS THAT END, and TARGET_GONE has two such lines because §7.5.10 step 5 is reachable
  * at two moments and is ONE fact either way. core/frame/window_message.c reports it when the task RUNS and
- * finds the navigable destroyed; solver/flow.c's flow_job_drop_realm reports it when step 7's own removal walk
+ * finds the navigable destroyed; solver/flow.c's flow_job_drop_realm reports it when step 5's own removal walk
  * takes the still-queued task off a destroyed document's queue ("without running those tasks"), which is the
  * path that used to leave no trace at all — and a delivery that vanished there is indistinguishable from one
  * the scheduler lost, which is the whole distinction this census exists to make.

@@ -2119,14 +2119,14 @@ int html_link_connected_step(JSContext *ctx)
             /* NOT AN IMPOSSIBLE STATE — A COUPLING THAT IS NOT BUILT, which is why it crashes here naming it
                rather than skipping the entry. The entry is appended by the install that BUILDS that realm, so
                a null means the Document's record went away while a timeline still owed its preloads a request:
-               HTML §7.5.10 "Destroying documents"' step 7 removes that document's queued TASKS, and this
+               HTML §7.5.10 "Destroying documents"' step 5 removes that document's queued TASKS, and this
                inventory is not one of them, so the destruction must drop this timeline's entry the same way.
                Skipping instead would leave the flow's cursor standing on a document that no longer exists and
                call the preloads served, which is a page whose whole chunk graph silently never loads. */
             DCHECK(dctx != NULL,
                    "the parsed-document list holds a document with no realm — a Document was DESTROYED while a "
                    "timeline still owed its parsed `<link>` elements HTML §4.6.8.20 Link type \"preload\"'s "
-                   "browsing-context-connected time. HTML §7.5.10 \"Destroying documents\"' step 7 takes that "
+                   "browsing-context-connected time. HTML §7.5.10 \"Destroying documents\"' step 5 takes that "
                    "document's queued tasks off the flow and this inventory is not one of them: drop this "
                    "timeline's entry there, beside that removal");
             el = link_parsed_nth(dctx, root, served);

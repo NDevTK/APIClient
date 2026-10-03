@@ -176,7 +176,7 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
     JSContext *tctx;
     int r;
 
-    /* HTML §7.5.10 Destroying documents STEP 7 FROM THE OTHER SIDE — "Remove any tasks whose document is
+    /* HTML §7.5.10 Destroying documents STEP 5 FROM THE OTHER SIDE — "Remove any tasks whose document is
        document from any task queue (without running those tasks)". This task's document is the TARGET's, and
        whether that walk reaches it depends on WHICH HALF OF THIS FILE ENQUEUED IT, which is why the same
        fact has to be stated here as well:

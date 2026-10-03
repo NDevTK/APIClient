@@ -3883,7 +3883,7 @@ void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueCons
     JS_SetPropertyUint32(ctx, e, JOB_FN, JS_NewInt32(ctx, job_fn_id(fn)));
     JS_SetPropertyUint32(ctx, e, JOB_TASK, JS_NewInt32(ctx, task ? 1 : 0));
     JS_SetPropertyUint32(ctx, e, JOB_EXTERNAL, JS_NewInt32(ctx, g_job_external));
-    /* THE KEY §7.5.10 "Destroying documents"'s step 7 COMPARES, held as a reference — see flow.h.
+    /* THE KEY §7.5.10 "Destroying documents"'s step 5 COMPARES, held as a reference — see flow.h.
        JS_GetGlobalObject is the realm's identity and the one thing about it that is a JS value; a destroyed
        document's jobs are then found by comparing two objects rather than two pointers, one of which used to
        be able to be freed underneath the comparison. */
@@ -4041,7 +4041,7 @@ int flow_job_drop_realm(JSContext *ctx, Flow *f, JSContext *realm) {
     JSValue global;
 
     if (n == 0) return 0;
-    DCHECK(realm != NULL, "destroy a document step 7 was asked to remove the tasks of no realm at all");
+    DCHECK(realm != NULL, "destroy a document step 5 was asked to remove the tasks of no realm at all");
     global = JS_GetGlobalObject(realm);
     cow_engine_write_begin();
     /* COMPACTED IN ONE FORWARD PASS rather than spliced per hit: the walk that used this queue removed from
@@ -4052,14 +4052,14 @@ int flow_job_drop_realm(JSContext *ctx, Flow *f, JSContext *realm) {
         JSValue g = JS_GetPropertyUint32(ctx, e, JOB_GLOBAL);
         int mine;
 
-        DCHECK(JS_IsObject(g), "a job record carries no enqueuing realm — §7.5.10 step 7 keys on it, so a "
+        DCHECK(JS_IsObject(g), "a job record carries no enqueuing realm — §7.5.10 step 5 keys on it, so a "
                                "record without one can neither be dropped with its document nor safely left "
                                "queued");
         mine = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(global);
 
         JS_FreeValue(ctx, g);
         /* THE ONE JOB THIS WALK TAKES THAT NOTHING WILL EVER RE-CAUSE, AND IT LEFT NO TRACE.
-           HTML §7.5.10 "Destroying documents" step 7 is explicit that what it removes never runs ("remove any
+           HTML §7.5.10 "Destroying documents" step 5 is explicit that what it removes never runs ("remove any
            tasks whose document is document from any task queue (without running those tasks)"), and that is
            CORRECT for a routed cross-document delivery too: the Document the message was for is gone, so there
            is no listener left to fire and no page left to notice. What is not correct is doing it silently. A
@@ -4069,7 +4069,7 @@ int flow_job_drop_realm(JSContext *ctx, Flow *f, JSContext *realm) {
            code ran — a delivery removed here is INDISTINGUISHABLE from one the scheduler lost, and those take
            opposite actions. It is one of the four ends solver/engine.h declares, and it is the SAME end
            core/frame/window_message.c reports when the task does get to run and finds the navigable destroyed
-           (§7.5.10 step 7 stated where the task runs) — the two paths are one fact reached at two moments.
+           (§7.5.10 step 5 stated where the task runs) — the two paths are one fact reached at two moments.
            IT IS SOUND TO NAME IT WITHOUT ASKING WHAT THE JOB IS because flow.h's sentence is what makes the
            EXTERNAL bit mean this: the routed delivery is the only work on a flow's queue that came from
            outside the replayed program. A second kind of external job would have to revisit this line, and
@@ -4114,7 +4114,7 @@ int flow_job_remove(Flow *f, JSTaskHandle handle) {
                           "a removal made with it would take some other timeline's task off the queue "
                           "instead of finding none") == (uint64_t)handle) {
             /* AND THE OTHER REMOVAL MAY NOT TAKE A ROUTED DELIVERY AT ALL, which is a different statement from
-               §7.5.10 step 7's above rather than the same one twice. That walk removes the tasks OF A DOCUMENT
+               §7.5.10 step 5's above rather than the same one twice. That walk removes the tasks OF A DOCUMENT
                THAT IS GONE, so the delivery it takes has no page left to receive it; this one is a tracker
                coalescing its OWN queued callback (HTML §4.11.4 "The dialog element", §4.11.1 "The details
                element") in a document that is still running, and a routed delivery taken here would be a live
@@ -8445,7 +8445,7 @@ int flow_dyn_row_by_id(const Flow *f, uint64_t id) {
     return -1;
 }
 
-/* IS ROW `k` ONE HTML §7.5.10 "Destroying documents"' STEP 7 TAKES — the criterion, in ONE place, because the
+/* IS ROW `k` ONE HTML §7.5.10 "Destroying documents"' STEP 5 TAKES — the criterion, in ONE place, because the
    count below and the removal below THAT are one question asked twice. A second copy of it is the shape where
    the assert that FIRES and the mechanism that ANSWERS it disagree about which rows they are about, and that
    disagreement is silent in the direction that matters: the count would report a document clean while the
@@ -8489,7 +8489,7 @@ int flow_programs_unstarted_for_document(const Flow *f, uint32_t doc) {
     return n;
 }
 
-/* See flow.h. HTML §7.5.10 STEP 7 PERFORMED ON THE ONE TASK QUEUE `JS_DropJobsForContext` CANNOT REACH — this
+/* See flow.h. HTML §7.5.10 STEP 5 PERFORMED ON THE ONE TASK QUEUE `JS_DropJobsForContext` CANNOT REACH — this
    flow's own program sequence. The rows go, the nine columns shrink together, and every index anything still
    holds into the sequence is brought down with them.
  *
@@ -8513,8 +8513,8 @@ int flow_programs_unstarted_for_document(const Flow *f, uint32_t doc) {
 int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
     int removed, lowest = -1, w = 0;
 
-    DCHECK(f != NULL, "§7.5.10 step 7's program removal was asked of no flow");
-    DCHECK(doc != 0, "§7.5.10 step 7's program removal was asked about the NONE document — a handle is this "
+    DCHECK(f != NULL, "§7.5.10 step 5's program removal was asked of no flow");
+    DCHECK(doc != 0, "§7.5.10 step 5's program removal was asked about the NONE document — a handle is this "
                      "instance's index into its own name table and zero names nothing");
     /* THROUGH THE COUNT, so the removal cannot run over a cursor pair the count would have refused: that
        function asserts `script_i >= last_compiled`, which every index below is derived from. */
@@ -8523,7 +8523,7 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
     for (int k = 0; k < f->dyn_n; k++)
         if (prog_row_removed_by_destroy(f, k, doc)) { lowest = k; break; }
     DCHECK(lowest >= 0,
-           "§7.5.10 step 7's removal counted rows to take and then could not find one — the count and this "
+           "§7.5.10 step 5's removal counted rows to take and then could not find one — the count and this "
            "walk ask prog_row_removed_by_destroy over the same column with the same document, so they cannot "
            "disagree unless something wrote the sequence between them");
     /* THE WHOLE OF WHY THE CURSOR PAIR SURVIVES THIS UNTOUCHED, ASSERTED RATHER THAN ARGUED — `lowest` is the
@@ -8535,7 +8535,7 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
        WHILE-THE-SET-IS-FIXED with nothing to say it happened. The criterion is what holds this, so this fires
        the moment the criterion stops holding it. */
     DCHECK(lowest > f->last_compiled && lowest >= f->script_i,
-           "§7.5.10 step 7's removal is about to take a row at or below this flow's cursor — `script_i` and "
+           "§7.5.10 step 5's removal is about to take a row at or below this flow's cursor — `script_i` and "
            "`last_compiled` are ABSOLUTE positions this walk deliberately does not repair, and they are only "
            "safe because every removed row sits above BOTH. A row taken below either one leaves the cursor "
            "naming a different program than the one it stood at, with every index still in range and nothing "
@@ -8550,7 +8550,7 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
        algorithm in the context of document, discarding any tasks queued for them, and discarding any further
        data received from the network for them". The reply has nowhere to land once the row is gone, and a
        reply that DID land would be a program of a destroyed Document compiled into a realm whose browsing
-       context is null, which is the exact thing step 7 exists to prevent. Walked BACKWARDS because
+       context is null, which is the exact thing step 5 exists to prevent. Walked BACKWARDS because
        pending_remove is a swap-remove: it moves the LAST entry into the hole, and descending means that entry
        has already been visited.
        AN ENTRY WHOSE ROW SURVIVES BUT SHIFTS NEEDS NOTHING DOING TO IT, AND AN ABORT USED TO STAND HERE
@@ -8608,7 +8608,7 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
                the rest of the session and nothing anywhere names what it is waiting for. The token is still
                freed below, because in release there is nothing better to do with it than not leak it. */
             DCHECK(f->dyn_token[k] == NULL,
-                   "§7.5.10 step 7 removed a destroyed Document's program that still OWED A CROSS-AGENT "
+                   "§7.5.10 step 5 removed a destroyed Document's program that still OWED A CROSS-AGENT "
                    "ANSWER — a peer instance is parked on this row's rendezvous token and the destruction "
                    "would leave it suspended for the rest of the session. The destruction has to ANSWER it "
                    "first, with the completion a destroyed document gives, before the row may go");
@@ -8629,7 +8629,7 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
             f->dyn_id[w]    = f->dyn_id[k];
             /* AND SO DOES THE ARRIVAL STAMP, by a sentence the name's does not make: a compaction moves a row
                within one flow's sequence and changes nothing about WHEN it became runnable, so a row that is
-               older than a queued callback before §7.5.10 step 7 is older than it afterwards. Re-minting here
+               older than a queued callback before §7.5.10 step 5 is older than it afterwards. Re-minting here
                would let a destroy reorder a surviving row against this flow's own queue. */
             f->dyn_run[w]   = f->dyn_run[k];
             f->dyn_token[w] = f->dyn_token[k];
@@ -8638,14 +8638,14 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
         w++;
     }
     DCHECK(w == f->dyn_n - removed,
-           "§7.5.10 step 7's compaction kept a different number of rows than the count said it would take — "
+           "§7.5.10 step 5's compaction kept a different number of rows than the count said it would take — "
            "the count and the walk ask one predicate over one column, so a disagreement means the sequence "
            "was written between them and the ten columns no longer describe one queue");
     f->dyn_n = w;
     /* `script_i` AND `last_compiled` ARE DELIBERATELY UNTOUCHED — the proof is the `lowest` assert above, which
        is where it is checkable: there the columns still hold the positions the claim is about. */
     DCHECK(flow_programs_unstarted_for_document(f, doc) == 0,
-           "§7.5.10 step 7 removed a destroyed Document's queued programs and the document still has some — "
+           "§7.5.10 step 5 removed a destroyed Document's queued programs and the document still has some — "
            "the compaction is over the same predicate the count is, so a survivor means a row moved ACROSS the "
            "cursor and became unstarted, which nothing in this walk can do");
     return removed;

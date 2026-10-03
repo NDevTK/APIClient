@@ -2967,7 +2967,7 @@ static JSContext *doc_realm_at(uint32_t doc, const char *file, int line)
        document's name answers NULL from the instant window_proxy_navigate moves `doc` rather than from that
        realm's teardown. That is the correct answer, because that timeline's navigable holds a different
        Document; and where it is reached with PROGRAMS still queued for the outgoing name it is the residue
-       core/frame/navigable.c's own teardown assert already names, which §7.5.10 step 7's removal of a destroyed
+       core/frame/navigable.c's own teardown assert already names, which §7.5.10 step 5's removal of a destroyed
        document's queued tasks is what discharges. A sibling arm that did not navigate still answers, which is
        the whole point. */
     /* AND THE NULL IS PARTITIONED RATHER THAN DESCRIBED, WHICH IS THE WHOLE OF WHAT CHANGED HERE AND IS A
@@ -3138,7 +3138,7 @@ static Flow *g_enqueue_owner;
  * page's own listeners were never registered.
  *
  * NO FLOW IS DROPPED, STARVED OR PAGED TO MAKE THIS HAPPEN, and none has to be. A flow suspended inside the
- * replaced document keeps its snapshot and its place on the ONE frontier; §7.5.10 step 7 removes QUEUED TASKS,
+ * replaced document keeps its snapshot and its place on the ONE frontier; §7.5.10 step 5 removes QUEUED TASKS,
  * which is work that has not started; and what keeps the realm alive under a suspended continuation is the
  * counted references that continuation already holds (core/frame/navigable.c's teardown states the argument
  * beside the assert that rests on it). §NO BOUNDS is untouched: nothing here is a scheduler decision.
@@ -3156,7 +3156,7 @@ static Flow *g_enqueue_owner;
  * cross-origin loads it into a PEER, and there is no such realm on this side to queue anything in. The outgoing
  * Document is local by construction — it is the one this agent has been running — so asking IT for the queue
  * home is the one question that has an answer for every navigation.
- * §7.5.10 "Destroying documents" STEP 7 DOES NOT EAT THE OPERATION. It removes queued tasks "without running
+ * §7.5.10 "Destroying documents" STEP 5 DOES NOT EAT THE OPERATION. It removes queued tasks "without running
  * those tasks", and the unload reaches it from inside its own body (§7.5.9 step 20), by which time the task has
  * left the queue; the other half of that is the SCOPE of the removal, which is the timeline performing the
  * destruction and not every timeline of this instance (engine_drop_jobs). */
@@ -8231,7 +8231,7 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
        where a program is QUEUED, and it is the only one that can name the program that is about to be lost.
        A row at a slot BELOW the cursor is never compiled — flow_step's ladder is `script_i < dyn_n` and walks
        forward only — and flow_programs_unstarted_for_document does not count it either, because it selects
-       `k >= script_i`, so HTML §7.5.10 "Destroying documents" step 7 reads zero tasks to remove for a row
+       `k >= script_i`, so HTML §7.5.10 "Destroying documents" step 5 reads zero tasks to remove for a row
        that is unstarted. The program does not fail, throw, or appear anywhere: it is written into the column
        and nothing ever looks at that slot again.
        IT IS ASKED OF THE FLOW BEING QUEUED INTO AND NOT OF THE RUNNING ONE, which is the whole reason it
@@ -9824,7 +9824,7 @@ static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueCo
     DCHECK(f != NULL, "a job was enqueued with no flow running — there is no global drain, so it would be "
                       "dropped: seed it as a flow on the frontier instead of declining it here");
     if (!f) return 0;
-    DCHECK(ctx != NULL, "a job was enqueued with no realm — §7.5.10 step 7 removes a destroyed document's tasks "
+    DCHECK(ctx != NULL, "a job was enqueued with no realm — §7.5.10 step 5 removes a destroyed document's tasks "
                         "by comparing this, so a job without one outlives its document");
     /* THE NAME ARRIVES WITH THE JOB AND IS RECORDED, never defaulted: the host that takes ownership is the only
        thing that can find this callback again, so a record that dropped it is a task no tracker can remove and
@@ -9891,12 +9891,12 @@ static int engine_remove_job(JSTaskHandle handle) {
 }
 
 /* THE OTHER HALF OF engine_enqueue_job (installed as JS_SetJobDropHook): HTML §7.5.10 "Destroying documents"
-   step 7, for the jobs this scheduler TOOK. Nothing else can do it — declining to register this hook would
+   step 5, for the jobs this scheduler TOOK. Nothing else can do it — declining to register this hook would
    leave every destroyed document's reactions queued on whichever flow enqueued them, and each one would later
    run in a Document whose browsing context is null.
    IT IS THE RUNNING FLOW'S QUEUE AND NO OTHER, for the reason JSJobRemoveHook's own contract states one line
    down in quickjs.h: a flow IS a timeline, a fork gives each arm its own copy of the parent's queued jobs, and
-   a destruction is a fact in the timeline that performed it. §7.5.10 step 7 removes tasks from the event loop
+   a destruction is a fact in the timeline that performed it. §7.5.10 step 5 removes tasks from the event loop
    whose task it is running inside; a sibling flow is a different timeline in which this Document may not be
    destroyed at all — a `<iframe>` removed in one arm is still in the document in the other — so sweeping its
    queue deletes work from a world where the removal never happened. That is the shared-state write this
@@ -9904,14 +9904,14 @@ static int engine_remove_job(JSTaskHandle handle) {
    STANDARD'S queue home unusable, since §7.5.9 step 6 puts every timeline's unload task on the OUTGOING
    document's own global and the first flow to reach its step 20 would take all the others with it.
    A DESTRUCTION EVERY TIMELINE MUST PERFORM IS FANNED OUT AT THE SEAM THAT REPORTS IT, never here:
-   engine_unload_document gives each flow its own unload, and each one's step 7 then removes its own queue's
+   engine_unload_document gives each flow its own unload, and each one's step 5 then removes its own queue's
    tasks. That is one operation per timeline rather than one timeline's operation applied to all of them. */
 static int engine_drop_jobs(JSContext *ctx) {
     Flow *f = flow_running();
     int dropped;
 
     DCHECK(f != NULL,
-           "§7.5.10 step 7 removed a destroyed Document's queued tasks with no flow running — a destruction is "
+           "§7.5.10 step 5 removed a destroyed Document's queued tasks with no flow running — a destruction is "
            "performed by a timeline (§7.5.9's unload task is a job of one), so a caller here is a platform edge "
            "reaching for a queue that belongs to a timeline it is not in");
     if (!f) return 0;   /* release path under the assert: nothing this hook can honestly reach */
@@ -12899,7 +12899,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
            slot `dyn_n`. From that instant the flow was one slot AHEAD of every program anything could ever
            queue onto it: the row is written, `dyn_n` grows past the cursor, and the row is never compiled and
            never run. flow_programs_unstarted_for_document then answers 0 for it as well — it selects
-           `k >= script_i` — so HTML §7.5.10 "Destroying documents" step 7's count of tasks to remove reads
+           `k >= script_i` — so HTML §7.5.10 "Destroying documents" step 5's count of tasks to remove reads
            zero for a row that is unstarted, and nothing anywhere says a program was lost.
            MEASURED, on the `--cold-park` fixture: an orphan drive at `script_i=3, dyn_n=2, last_compiled=1`
            was handed a cross-agent operation, which engine_perform appends to EVERY live timeline. It landed
@@ -14331,7 +14331,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        a seam that picked one for all of them would be choosing a page's timer order at random. */
     g_sess_forking = forking;
     JS_SetJobEnqueueHook(engine_enqueue_job);   /* ASYNC-AS-FLOW: reactions route to the enqueuing flow's queue */
-    JS_SetJobDropHook(engine_drop_jobs);        /* …and §7.5.10 step 7 takes them back off it */
+    JS_SetJobDropHook(engine_drop_jobs);        /* …and §7.5.10 step 5 takes them back off it */
     JS_SetJobRemoveHook(engine_remove_job);     /* …and a toggle task tracker takes ONE back off, by name */
     /* AND AN INHERITED DRIVE IS HANDED ITS BODY THE MOMENT THAT BODY EXISTS — engine_orphan_born, which is a
        SECOND READER of the routing walk and not a second door onto the frontier (it routes; it never mints).

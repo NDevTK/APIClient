@@ -1447,7 +1447,7 @@ long    flow_world_commit_rows_written(void);
  *     them for every job whose CAUSE is inside the replayed program, which is all of them except one; see
  *     cold_park_flow for the exception and for what closes it.
  *   - THE ENQUEUING REALM'S GLOBAL OBJECT, which is the key HTML §7.5.10 "Destroying documents"'s destroy a
- *     document step 7 uses: a task whose document has been destroyed is removed WITHOUT running. It is the
+ *     document step 5 uses: a task whose document has been destroyed is removed WITHOUT running. It is the
  *     realm's global rather than its JSContext* because the record must hold no pointer, and holding it as
  *     a REFERENCE also closes what the borrowed pointer left open — a realm freed without the drop hook
  *     running left every job of it holding a dangling key the next §7.5.10 walk would compare against.
@@ -1525,7 +1525,7 @@ JSValue flow_job_take(JSContext *ctx, Flow *f);
 /* RUN ONE — the callee called with its own arguments. The record's shape has exactly one reader and this is
    it, so a caller holds an opaque entry and never an argument vector. Returns the callee's result, owned. */
 JSValue flow_job_run(JSContext *ctx, JSValueConst entry);
-/* HTML §7.5.10 "Destroying documents", destroy a document step 7, for ONE flow: remove every job whose
+/* HTML §7.5.10 "Destroying documents", destroy a document step 5, for ONE flow: remove every job whose
    enqueuing realm is `realm`, WITHOUT running it.
    Returns how many went. */
 int  flow_job_drop_realm(JSContext *ctx, Flow *f, JSContext *realm);
@@ -4002,7 +4002,7 @@ int   flow_programs_for_document(uint32_t doc);
  * instant flow A destroys a document, flow B has not destroyed it and its rows for that document are rows of a
  * document that is still there. A sum over the frontier would call B's ordinary queue A's defect.
  *
- * AND IT IS UNSTARTED BECAUSE §7.5.10 STEP 7 IS. "Remove any tasks whose document is document from any task
+ * AND IT IS UNSTARTED BECAUSE §7.5.10 STEP 5 IS. "Remove any tasks whose document is document from any task
  * queue (without running those tasks)" is about work that has not run; a row the flow has already compiled is
  * a program it may be SUSPENDED INSIDE, and the standard has no object at all for a continuation suspended
  * mid-program — that one is the flow's own state and §NO BOUNDS forbids touching it. `last_compiled` is the
@@ -4011,11 +4011,11 @@ int   flow_programs_for_document(uint32_t doc);
  * PURE: no allocation, no JS value touched, no reference taken, so a DCHECK may ask it. */
 int   flow_programs_unstarted_for_document(const Flow *f, uint32_t doc);
 
-/* TAKE THEM OUT — HTML §7.5.10 "Destroying documents"' step 7, "Remove any tasks whose document is document
+/* TAKE THEM OUT — HTML §7.5.10 "Destroying documents"' step 5, "Remove any tasks whose document is document
  * from any task queue (without running those tasks)", performed on the queue the runtime's own job walk cannot
  * see. Returns how many rows went, which is exactly what the count above answered one instant earlier.
  *
- * WHY THIS QUEUE IS ONE STEP 7 IS ABOUT. `JS_DropJobsForContext` empties the runtime's job queues, and a
+ * WHY THIS QUEUE IS ONE STEP 5 IS ABOUT. `JS_DropJobsForContext` empties the runtime's job queues, and a
  * document's SCRIPTS are not in them: they are rows of the running flow's one program sequence. A row is a task
  * by the standard's own reckoning — §8.1.4.4 "Calling scripts" runs it and §4.12.1.1 "Processing model" queues
  * it ("queue an element task on the DOM manipulation task source") — so a row of a destroyed Document left

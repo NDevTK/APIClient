@@ -275,14 +275,14 @@ bool window_proxy_closing(JSValueConst proxy);
    fact asked from one place so both spellings of close() make the same test. */
 bool window_proxy_is_top_level(JSValueConst proxy);
 
-/* HTML §7.5.10 "Destroying documents" STEPS 8 AND 9, WHICH ARE ONE WRITE HERE.
+/* HTML §7.5.10 "Destroying documents" STEPS 6 AND 7, WHICH ARE ONE WRITE HERE.
  *
- * Step 8 is "Set document's browsing context to null" — the half of §7.2.2.1's `closed` that destruction owns,
- * and what §7.5.10 step 5's wait reads off each child navigable. Step 9 is "Set document's node navigable's
+ * Step 6 is "Set document's browsing context to null" — the half of §7.2.2.1's `closed` that destruction owns,
+ * and what §7.5.10 step 5's wait reads off each child navigable. Step 7 is "Set document's node navigable's
  * active session history entry's document state's document to null", and that is the NAVIGABLE letting go of
  * the Document: §7.3.1 "Navigables" says "a navigable's active document is its active session history entry's
  * document" and §7.4.1.1 "Session history entries" says "to get a session history entry's document, return its
- * document state's document", so step 9 makes this navigable's ACTIVE DOCUMENT null.
+ * document state's document", so step 7 makes this navigable's ACTIVE DOCUMENT null.
  *
  * THAT SECOND HALF IS THE ENGINE'S ONLY RECLAMATION EDGE, which is why the two may not be separate calls. A
  * realm is kept alive by its own function objects and those hang off its Window (core/frame/navigable.h), so
@@ -302,7 +302,7 @@ bool window_proxy_is_top_level(JSValueConst proxy);
 void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy);
 bool window_proxy_destroyed(JSValueConst proxy);
 
-/* HOW MANY TIMES §7.5.10 "Destroying documents" STEP 9'S RELEASE HAS RUN — the ASK, counted where the release
+/* HOW MANY TIMES §7.5.10 "Destroying documents" STEP 7'S RELEASE HAS RUN — the ASK, counted where the release
  * is PERFORMED and never inferred from whether a realm came back.
  *
  * IT EXISTS BECAUSE THE OUTCOME IS GATED AND THE GATE MAY DECLINE FOR A GOOD REASON. A realm is given back
@@ -376,7 +376,7 @@ bool window_proxy_realm_dangling(JSValueConst proxy, JSContext *realm);
  * question three members ask and it is asked in ONE place.
  *
  * IT IS A FOURTH FACT AND NOT A SPELLING OF THE THREE ABOVE, AND THE DIFFERENCE IS WHEN IT BECOMES TRUE.
- * §7.5.10's step 9 is one writer, and §7.5.10's descendant form runs in parallel and queues a task per
+ * §7.5.10's step 7 is one writer, and §7.5.10's descendant form runs in parallel and queues a task per
  * document — so `window_proxy_destroyed` is not true until a job has run. §7.3.1.6's destroy-a-child-navigable
  * step 3 is the other, it is SYNCHRONOUS inside the tree mutation, and it is the one a page reads: §7.2.2.4's
  * own closing example asserts `iframeWindow.top === null` on the line after `element.remove()`. So this is a

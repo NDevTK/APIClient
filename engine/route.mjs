@@ -1116,7 +1116,7 @@ const zeroDeliveryRead = [], zeroDeliveryUndrained = [], zeroDeliveryAbsent = []
 /* …AND WHAT BECAME OF THE TASKS THOSE DELIVERIES QUEUED, which is the half this file used to INFER and could
    not. §9.3.3 step 8's task has four ends and only one of them runs a listener; solver/engine.h declares them,
    core/frame/window_message.c reports the end a task RUNS to, and solver/flow.c reports the one §7.5.10 step
-   7's removal walk reaches before it can run. */
+   5's removal walk reaches before it can run. */
 const ENDS = ['_routedTasksFired', '_routedTasksTargetOrigin', '_routedTasksTargetGone', '_routedTasksThrew'];
 const ends = { _routedTasksFired: 0, _routedTasksTargetOrigin: 0, _routedTasksTargetGone: 0, _routedTasksThrew: 0 };
 for (const e of engines) {
@@ -1382,7 +1382,7 @@ if (endsTotal < delivered)
 /* AND AT LEAST ONE OF THEM REACHED A PAGE. This is deliberately NOT `fired >= posts.length`, and the reason is
    a real ordering rather than caution: `b`'s own listener calls `window.close()`, §7.2.2.1 step 6.2 queues the
    definitely-close, and a LATER record delivered into a timeline that has already run it is removed by §7.5.10
-   step 7 before its task can fire — a correct end, and one whose count is a function of which of `b`'s
+   step 5 before its task can fire — a correct end, and one whose count is a function of which of `b`'s
    timelines got the thread first. An assertion over it would be the schedule-dependent claim this file already
    made once. Zero, on the other hand, is not schedule-dependent at all: it is the whole inbound half never
    having happened. */

@@ -4079,7 +4079,7 @@ int JS_EnqueueTaskJob(JSContext *ctx, JSJobFunc *job_func,
     return js_enqueue(ctx, job_func, argc, argv, true, source, js_task_handle_new(ctx->rt));
 }
 
-/* HTML §7.5.10 step 7 — see quickjs.h. BOTH runtime queues are walked because a document queues into both: a
+/* HTML §7.5.10 step 5 — see quickjs.h. BOTH runtime queues are walked because a document queues into both: a
    promise reaction is a microtask and a navigation load is a task, and a drop that took only one of them would
    leave exactly the entries whose whole purpose is to run later. The hook is asked LAST so that its count and
    this walk's are one number.
@@ -4109,7 +4109,7 @@ int JS_DropJobsForContext(JSContext *ctx)
 
     n  = js_drop_jobs_from(rt, &rt->job_list, ctx);
     n += js_drop_jobs_from(rt, &rt->task_list, ctx);
-    /* AND THE BASELINE'S, which is a THIRD place a destroyed document's work can be standing. §7.5.10 step 7
+    /* AND THE BASELINE'S, which is a THIRD place a destroyed document's work can be standing. §7.5.10 step 5
        removes every queued task of the Document being destroyed "without running those tasks", and a document
        destroyed before the first flow ever executed — a boot flow that removes the `<iframe>` its own markup
        carried — still has its §7.4 step 14 navigation waiting for adoption. Left here it would be adopted

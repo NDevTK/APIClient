@@ -4161,7 +4161,7 @@ static const char *HTML =
        IT IS NOT WHAT MAKES THE REALM COUNT CLIMB, though, and that distinction is what the two lines added
        above are for. A srcless navigable that something READS THROUGH is materialized exactly as a src'd one
        is, so the probe now costs ONE CHILD REALM PER FLOW with no load in it — the ceiling's shape, isolated
-       from the fetch. What the removal then exercises is §7.5.10 step 9: the navigable lets go of the Document,
+       from the fetch. What the removal then exercises is §7.5.10 step 7: the navigable lets go of the Document,
        which is the one counted reference this engine holds to a child realm, and the realm is garbage as soon
        as no world still names it (core/frame/window_proxy.h). WHETHER IT COMES BACK IS THE `realm-reclaim`
        ROW, and it is a row rather than the instruction that used to stand here. This note said "READ
@@ -8882,7 +8882,7 @@ static void world_registry_selftest(JSContext *ctx)
  *   - a FORK gives the arm its OWN Array naming the parent's RECORDS, so consuming or appending on one arm
  *     leaves the other exactly where it was, and the inheritance costs a refcount rather than a malloc per job
  *     plus a dup per argument;
- *   - §7.5.10 "Destroying documents"'s destroy a document step 7 removes every task of a destroyed document
+ *   - §7.5.10 "Destroying documents"'s destroy a document step 5 removes every task of a destroyed document
  *     WITHOUT running it, keyed on the enqueuing REALM, and the survivors keep their arrival order;
  *   - the PROVENANCE bracket says which jobs a replay would not re-cause, which is what cold_park_flow reads.
  *
@@ -9175,7 +9175,7 @@ static void flow_job_selftest(JSContext *ctx)
     JS_FreeValue(ctx, r);
     JS_FreeValue(ctx, e);
 
-    /* HTML §7.5.10 "Destroying documents", destroy a document STEP 7 — every task of the destroyed document
+    /* HTML §7.5.10 "Destroying documents", destroy a document STEP 5 — every task of the destroyed document
        removed WITHOUT running.
        The key is the enqueuing realm, and there is exactly one realm in this fixture, so the whole queue goes
        and the count is the answer document_lifecycle.c asserts on. */
@@ -9183,7 +9183,7 @@ static void flow_job_selftest(JSContext *ctx)
     tf_job_push_int(ctx, &a, 6, 0);
     dropped = flow_job_drop_realm(ctx, &a, ctx);
     CHECK(dropped == 2 && flow_job_pending(&a) == 0,
-          "destroy a document step 7 left a destroyed document's tasks queued — each of them runs page code "
+          "destroy a document step 5 left a destroyed document's tasks queued — each of them runs page code "
           "in a Document whose browsing context is null");
     CHECK(flow_job_drop_realm(ctx, &a, ctx) == 0,
           "a second drop of the same realm found more — the walk is not seeing all of the queue");
@@ -15376,7 +15376,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        on saying the ceiling was real. A verdict that is red on every run becomes furniture, and this one was:
        it is what a coordinator reads when dispatching somebody to build a reclamation that is already built.
        WHAT IT ASSERTS NOW IS INDEPENDENT OF EVERY ARM THE GATE HAS. HTML §7.5.10 "Destroying documents" step
-       9 ("Set document's node navigable's active session history entry's document state's document to null")
+       7 ("Set document's node navigable's active session history entry's document state's document to null")
        is the one release — the fixture's `document.body.removeChild(_if)` reaches it and
        core/frame/window_proxy.c's window_proxy_set_destroyed performs it — and whether it RAN is a fact about
        this codebase's own components, which is the only kind an assert may stand on. A 0 there is a defect
@@ -15396,7 +15396,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "is answered from the navigable's own record and no realm is ever built. That is the SCHEDULE "
              "reaching the statement, not the reclamation");
     fold_row(&realmback_tt, &realmback_why, window_proxy_destroy_releases() > 0,
-             "child realms were built and §7.5.10 step 9's RELEASE NEVER RAN — not once in this whole run did "
+             "child realms were built and §7.5.10 step 7's RELEASE NEVER RAN — not once in this whole run did "
              "a navigable stop naming its Document, so nothing downstream of it can have run either and the "
              "ceiling is real for a reason this row CAN name. The removal reached neither "
              "core/frame/document_lifecycle.c's destroy job nor window_proxy_set_destroyed: read "
@@ -31621,7 +31621,7 @@ int main(int argc, char **argv) {
        inside the agent's own init, so a context named after it is a context named too late. */
     dom_cow_set_ctx(ctx);
     world_registry_selftest(ctx);   /* the peer half: worlds minted as if by another document */
-    flow_job_selftest(ctx);         /* §8.1.7's two queues, §7.5.10 step 7, and the fork's copy-on-nothing */
+    flow_job_selftest(ctx);         /* §8.1.7's two queues, §7.5.10 step 5, and the fork's copy-on-nothing */
     sort_merge_selftest(ctx);       /* 23.1.3.30.1 step 4 rests per element, and both schedules agree */
     concat_keyed_selftest(ctx);     /* §23.1.3.2's keyed walk rests per request, declaring no yield of its own */
     endpoint_init();

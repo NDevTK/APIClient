@@ -3614,7 +3614,7 @@ function coldRoundTrip(v1, v2, store) {
         ALONE DECIDES NOTHING — a small `childRealms` is the answer both for a run that built none and for a
         run that built a great many and reclaimed every one, which are opposite facts. `made` is monotone and
         `peak` is the high-water live, so `made == peak` says not one realm was ever given back (the ceiling)
-        and `made > peak` says HTML §7.5.10 "Destroying documents" step 9's reference drop ran. This line used
+        and `made > peak` says HTML §7.5.10 "Destroying documents" step 7's reference drop ran. This line used
         to assert "none reclaimed" as a standing fact, which stopped being true when that step landed —
         core/frame/window_proxy.c's window_proxy_set_destroyed releases the Window that is the one counted
         reference to a child realm. navigable.c's OOM CHECK sends its reader to these numbers BY NAME.
@@ -3932,7 +3932,7 @@ function censusReading(out) {
                   delta and §NO BOUNDS never terminates those arms. Those take opposite work: one is a defect
                   with a single localisation, the other is the expected steady state until the frontier drains,
                   and a verdict that cannot tell them apart is red on every forking run and becomes furniture.
-                  `destroyStep9Releases` is the discriminator (HTML §7.5.10 "Destroying documents" step 9,
+                  `destroyStep9Releases` is the discriminator (HTML §7.5.10 "Destroying documents" step 7,
                   counted where it is performed), published BESIDE the comparison rather than replacing it:
                   relocating the number would have changed what it means and left the old meaning unread. */
                (h.b.childRealmsMade === 0
@@ -3940,9 +3940,9 @@ function censusReading(out) {
                  : h.b.childRealmsMade > h.b.childRealmsPeak
                    ? ` — RECLAIMED: at least one realm died while others were being made`
                    : h.b.destroyStep9Releases === 0
-                     ? ` — NOT ONE RECLAIMED and §7.5.10 step 9's release NEVER RAN: no navigable stopped ` +
+                     ? ` — NOT ONE RECLAIMED and §7.5.10 step 7's release NEVER RAN: no navigable stopped ` +
                        `naming its Document, which is a DEFECT with one localisation`
-                     : ` — NOT ONE RECLAIMED, and step 9's release ran ${h.b.destroyStep9Releases} time(s): ` +
+                     : ` — NOT ONE RECLAIMED, and step 7's release ran ${h.b.destroyStep9Releases} time(s): ` +
                        `UNATTRIBUTABLE here, because a parked arm's COW delta holding the child's Window is ` +
                        `correct and reads the same as a leak from this line`) +
                /* AND WHO IS HOLDING THEM, WHICH THE THREE COUNTS ABOVE CANNOT SAY. They establish THAT a realm

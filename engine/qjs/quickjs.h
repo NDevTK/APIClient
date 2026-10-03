@@ -3351,7 +3351,7 @@ typedef int (*JSJobEnqueueHook)(JSContext *ctx, JSJobFunc *job_func, int argc, J
 JS_EXTERN void JS_SetJobEnqueueHook(JSJobEnqueueHook h);
 
 /* THE OTHER HALF OF OWNERSHIP. A host that TOOK a job is the only thing that can give it back, so the drop
-   below asks it — HTML §7.5.10 step 7 removes every task whose document is a destroyed Document "without
+   below asks it — HTML §7.5.10 step 5 removes every task whose document is a destroyed Document "without
    running those tasks", and a task that ran anyway would script a document whose browsing context is null.
    The hook answers how many it dropped, and is asked for a REALM because that is what a queued job records:
    the enqueue hook is handed `ctx` and a document is one realm. A host that registers the enqueue hook and
@@ -3360,7 +3360,7 @@ JS_EXTERN void JS_SetJobEnqueueHook(JSJobEnqueueHook h);
 typedef int (*JSJobDropHook)(JSContext *ctx);
 JS_EXTERN void JS_SetJobDropHook(JSJobDropHook h);
 
-/* HTML §7.5.10 step 7 — remove every queued job belonging to `ctx` WITHOUT running it, from the runtime's own
+/* HTML §7.5.10 step 5 — remove every queued job belonging to `ctx` WITHOUT running it, from the runtime's own
    two queues and from whatever the enqueue hook's owner is holding. Answers the number removed, so a caller
    can assert that a second call finds none. */
 JS_EXTERN int JS_DropJobsForContext(JSContext *ctx);

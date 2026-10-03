@@ -79,7 +79,7 @@
  * nothing else's. TWO OF THE FOUR DIFFER FOR A SECOND REASON OF THEIR OWN, worth stating because it is not the
  * first: `_routedTasksTargetOrigin` is step 8.1 checked INSIDE the task, so the origin it compares is the one
  * the target has THEN and a navigation may land between the post and the delivery; and `_routedTasksTargetGone`
- * is §7.5.10 "Destroying documents"'s destroy-a-document step 7 ("remove any tasks whose document is document
+ * is §7.5.10 "Destroying documents"'s destroy-a-document step 5 ("remove any tasks whose document is document
  * from any task queue (without running those tasks)") reaching a task before it runs. Both are outcomes of an
  * ORDER between two work items, which is the one thing a schedule is free to choose.
  * AND THE THIRD KIND IS ONE NUMBER, `_routedZeroDelivery`, WHOSE ARGUMENT IS NOT THE PAIR'S AND MUST NOT BE

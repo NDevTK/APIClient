@@ -89,8 +89,8 @@ int navigation_abort_inform_run(JSContext *ctx, NavigationAbortWork *w, JSValue 
  * container's own removing steps and the destruction entry both read "destroy-a-child-navigable steps 4-5"
  * while performing only step 5, so a removed `<iframe>` whose Navigation had an ONGOING NAVIGATE EVENT kept it
  * for ever: no `abort` at the event's AbortSignal, so a `fetch(url, {signal: event.signal})` a `navigate`
- * listener started was never cancelled; no `navigateerror`; and then §7.5.10 step 7 dropped the queued tasks
- * and step 8 nulled the browsing context underneath it. Nothing crashed and nothing could — the step was
+ * listener started was never cancelled; no `navigateerror`; and then §7.5.10 step 5 dropped the queued tasks
+ * and step 6 nulled the browsing context underneath it. Nothing crashed and nothing could — the step was
  * described as performed, which is the failure mode a missing step does not have.
  *
  * `cctx` IS THE DESTROYED NAVIGABLE'S OWN REALM AND NEVER THE CONTAINER'S. All four steps are written over

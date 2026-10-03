@@ -110,7 +110,7 @@ static int         g_realms_n, g_realms_cap;
    child's Window (window_proxy.c's `PROXY_VALS`), an arm §NO BOUNDS never terminates. So `made == peak` is the
    EXPECTED steady state there until the frontier drains, and a row asserting the comparison fires on every
    correct refusal — which is what the fixture row did, on every forking run, until it was changed. What IS
-   assertable is the ASK: whether HTML §7.5.10 "Destroying documents" step 9's release ran at all, counted at
+   assertable is the ASK: whether HTML §7.5.10 "Destroying documents" step 7's release ran at all, counted at
    the site that performs it (window_proxy.h's window_proxy_destroy_releases) and published beside these two as
    `destroyStep9Releases`. That is the discriminator saying which of the comparison's two readings applies, and
    it is a fact about this codebase's own components, which is the only kind an assert may stand on.
@@ -321,7 +321,7 @@ static void navigable_realm_teardown(JSRuntime *rt, JSContext *cctx)
                "reader of these three numbers (this file's OOM CHECK, the result document's `_heap`, the "
                "fixture row that asks whether reclamation ever ran) is then reporting a register that is not "
                "being kept");
-        /* AND THE PROXY SIDE OF §7.5.10 STEP 9, WHICH IS THE OTHER HALF OF A BRACKET. The first half is inside
+        /* AND THE PROXY SIDE OF §7.5.10 STEP 7, WHICH IS THE OTHER HALF OF A BRACKET. The first half is inside
            window_proxy_set_destroyed: after the write it asserts that the record names NEITHER a realm nor a
            Window. This is the same pairing asked from the far end — at the one instant a realm actually dies,
            no record may still name it while having already given the Window back. The two fields are a pair
@@ -337,7 +337,7 @@ static void navigable_realm_teardown(JSRuntime *rt, JSContext *cctx)
            core/frame/window_proxy.h, which states which routes into this hook leave each of those false. */
         DCHECK(!window_proxy_realm_dangling(document_window_proxy(cctx), cctx),
                "a realm was torn down while its navigable's §7.2.3 WindowProxy still BORROWED it with the "
-               "Window already given back — HTML §7.5.10 \"Destroying documents\" step 9 (\"Set document's "
+               "Window already given back — HTML §7.5.10 \"Destroying documents\" step 7 (\"Set document's "
                "node navigable's active session history entry's document state's document to null\") clears "
                "the two together for exactly this reason, so a record in the split state is a live navigable "
                "naming a JSContext this hook is about to free. Whatever released the Window has to release "
@@ -531,7 +531,7 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len, co
           "churn allocates outside the realm, not at the realms. PEAK EQUAL TO MADE: not one realm was ever "
           "reclaimed, which is the ceiling itself — the working set is REACHABLE NAVIGABLES, a flow per src'd "
           "iframe each holding its document, and the question is then what still names them rather than "
-          "whether reclamation exists: HTML §7.5.10 \"Destroying documents\" step 9 has the navigable let go "
+          "whether reclamation exists: HTML §7.5.10 \"Destroying documents\" step 7 has the navigable let go "
           "of the Document (core/frame/window_proxy.c's window_proxy_set_destroyed), after which a realm is a "
           "garbage CYCLE its function objects and its Window hold together, the collector breaks it, and the "
           "teardown that follows is split by phase in quickjs.c so the reference releases run inside the "

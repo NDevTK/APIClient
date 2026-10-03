@@ -3664,7 +3664,7 @@ char *result_cold_json(void) {
    AND `childRealms` ALONE ANSWERS TWO QUESTIONS WITH ONE NUMBER, which is why `childRealmsMade` and
    `childRealmsPeak` ride beside it. The live count is small for a run that built no child realm and small for
    a run that built a great many and reclaimed every one — opposite facts about the ceiling, and the second is
-   what HTML §7.5.10 "Destroying documents" step 9's reference drop exists to produce. `made` is monotone and
+   what HTML §7.5.10 "Destroying documents" step 7's reference drop exists to produce. `made` is monotone and
    `peak` is the high-water live, so `made == peak` says every realm this run built was live at one instant and
    NOT ONE was reclaimed, while `made > peak` says the reclamation ran. An absent count and a zero count are
    different facts; so are a zero that means "none built" and a zero that means "all given back".
@@ -3919,7 +3919,7 @@ char *result_json(JSContext *ctx) {
         /* AND WHAT BECAME OF THE TASKS THOSE DELIVERIES QUEUED. `_routedDelivered` alone is the shape §@S
            forbids in a search and forbids here for the same reason: a page whose listener ran fewer times than
            the engine delivered has ONE number covering "the spec declined it" (§9.3.3 step 8.1), "there was no
-           Document left to fire at" (§7.5.10 step 7) and "the scheduler lost the task", and only the last is a
+           Document left to fire at" (§7.5.10 step 5) and "the scheduler lost the task", and only the last is a
            defect. All four ride the document rather than a log, for the reason the counts above them do. */
         long routedEnds[ROUTED_TASK_END_N];
         /* THE RENDER'S GEOMETRY CENSUS, taken at the same instant as every other row here: it is read once,

@@ -100,7 +100,7 @@
                                             and §7.4.3's reload, which `reload()`'s last step IS */
 #include "core/frame/remote_location.h"   /* §7.2.1.3.1's CrossOriginProperties(Location), spelled once */
 #include "core/frame/session_history.h"  /* §7.4.2.2's same-document test, and §7.4.2.3.3's own machine */
-#include "core/frame/window_proxy.h"     /* §7.5.10 step 8's null browsing context — the relevant Document */
+#include "core/frame/window_proxy.h"     /* §7.5.10 step 6's null browsing context — the relevant Document */
 #include "core/html/dom_string_list.h"   /* §2.6.5's DOMStringList — `ancestorOrigins` answers with one */
 
 /* THE MEMBER LIST, IN ONE PLACE, in the order §7.2.4's IDL declares them, and with the cross-origin entry
@@ -227,7 +227,7 @@ static void loc_assert_this_realm(JSContext *ctx, JSValueConst this_val)
  * not broken — a whole WPT file (no-browsing-context.window.js, 46 subtests) is nothing but that distinction.
  *
  * WHAT ANSWERS IT IS THE FACT AND NOT ONE OF ITS WRITERS. "Its browsing context is null" is written by
- * §7.5.10 "Destroying documents" step 8 ("set document's browsing context to null") AND by §7.1.3.2's
+ * §7.5.10 "Destroying documents" step 6 ("set document's browsing context to null") AND by §7.1.3.2's
  * opener-policy browsing context group swap, and core/frame/window_proxy.h names both in as many words. Asking
  * `window_proxy_destroyed` would report the first and answer NO for the second, so a swapped-out window would
  * fall through step 1 and NAVIGATE where the spec returns — which is why the reader for the combined fact was

@@ -551,7 +551,7 @@ int navigable_realm_peak(void);
  * core/frame/document_lifecycle.c's descend job and then its self job, and at that line neither has run. Every
  * child's Window is therefore still held by its own navigable's record, exactly as it should be, and the
  * mark-sweep that WeakRef witnesses CANNOT free a child realm however correct the reclamation is. The removal
- * it witnesses is step 3's SLOT CLEAR, never HTML §7.5.10 "Destroying documents" step 9's RELEASE.
+ * it witnesses is step 3's SLOT CLEAR, never HTML §7.5.10 "Destroying documents" step 7's RELEASE.
  * SO THE COLLECTOR IS NOT ELIMINATED, AND IT IS THE CHEAPER CANDIDATE. A realm is held by a CYCLE — the list
  * note in navigable.c names it, record->proxy->Window->function objects->realm — so refcounting alone can never
  * free one and ONLY a mark-sweep can. The probe forces exactly one and forces it BEFORE the release, and the
@@ -573,9 +573,9 @@ int navigable_realm_peak(void);
  * next-diff clause discharged rather than a claim left standing. It asserted the OUTCOME of an operation whose
  * gate legitimately declines, so it was red on every forking run — and a verdict red on every run becomes
  * furniture, which is how a reader comes to dispatch somebody at a reclamation that is already built. It now
- * asserts the ASK — HTML §7.5.10 "Destroying documents" step 9's release, counted where it is performed and
+ * asserts the ASK — HTML §7.5.10 "Destroying documents" step 7's release, counted where it is performed and
  * published as `destroyStep9Releases` — and reports the comparison unasserted beside it.
- * RETIREMENT: this record goes when a run is quoted whose collection is known to have followed step 9 — the
+ * RETIREMENT: this record goes when a run is quoted whose collection is known to have followed step 7 — the
  * probe's late control RAN beside its realm counts — so which candidate stands is a measurement and not an
  * argument.
  * WHO TOOK THEM IS ANSWERED BY navigable_realm_ref_sites BELOW — per ORIGIN, counted where the reference is

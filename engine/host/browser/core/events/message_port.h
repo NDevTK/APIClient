@@ -23,10 +23,20 @@ void message_port_free(JSRuntime *rt);
    and a transfer list has to recognise one before it can refuse or move it. */
 bool message_port_is(JSValueConst v);
 
-/* HOW MANY LIVE MessagePorts HAVE THIS REALM AS THEIR RELEVANT REALM — §7.5.10 step 4's set, counted.
-   Destroying a Document must disentangle exactly those ports, and this is the enumeration the step needs; the
-   disentangle itself is a per-flow WRITE and a borrowed-pointer list cannot say whose flow a port belongs to,
-   so document_lifecycle.c uses the count to STOP rather than to reach into a timeline it cannot see. */
+/* HOW MANY LIVE MessagePorts HAVE THIS REALM AS THEIR RELEVANT REALM — AND IT NO LONGER STANDS ON A STEP OF
+   §7.5.10. It was written for that section's steps 4 and 5, which the 3 October 2026 edition DELETED: the
+   enumeration and the disentangle both went, `disentangle` occurs nowhere in §7.5.10, and the obligation was
+   RETIRED upstream rather than renumbered, so there is no step here to re-key to. §9.4.6 "Ports and garbage
+   collection" states liveness as a strong reference and mentions disentangling only as author advice.
+   THE RETIRED ARGUMENT IS KEPT BECAUSE A READER RE-DERIVES IT: the SET was enumerable (message_port.c keeps
+   the live ports and each records its realm) and the DISENTANGLE was not, a disentangle being a per-flow WRITE
+   that a borrowed-pointer list cannot attribute — so document_lifecycle.c used the count to STOP rather than to
+   reach into a timeline it cannot see.
+   WHETHER THIS COUNT STILL HAS A CONSUMER IS NOT DECIDED HERE. Its one caller is the DCHECK in
+   core/frame/document_lifecycle.c's destroy_a_document, and that assert carries the NAMED RESIDUAL deciding
+   it: either the guard goes with the deleted steps, or it is incidentally protecting THIS ENGINE's own realm
+   ownership, and retiring it would leave this producer with no reader. Read that residual before touching
+   either site. */
 int message_port_count_in_realm(JSContext *realm);
 
 /* §9.4.3's two entangled ports, for a caller that is not the MessageChannel constructor — a transferred port

@@ -967,7 +967,7 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
         /* §7.3.1.3 "Child navigables" STEP 2 CAN BIND NULL, and that is a DIFFERENT null from step 1's. Step 1
            is "container's content navigable is null" — §7.3.1.6's destroy-a-child-navigable clearing the slot,
            which is the line above. Step 2 is "let document be container's content navigable's ACTIVE DOCUMENT",
-           and §7.5.10 step 9 nulls that for every document in a destroyed SUBTREE while leaving each inner
+           and §7.5.10 step 7 nulls that for every document in a destroyed SUBTREE while leaving each inner
            container's slot exactly as it was: destroy-a-document-and-its-descendants destroys documents, and
            only the container the page removed ever has its content navigable cleared. So a page holding an
            `<iframe>` from inside a removed subtree reaches here with a navigable that has no active document,

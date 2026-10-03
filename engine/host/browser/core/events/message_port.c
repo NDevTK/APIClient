@@ -163,9 +163,12 @@ bool message_port_is(JSValueConst v)
  * is a record the collector owns, so the entry is removed where the record is destroyed and the list is
  * therefore bounded by LIVE ports rather than by every port the run ever had.
  *
- * IT EXISTS BECAUSE HTML §7.5.10 Destroying documents ASKS A QUESTION NOTHING COULD ANSWER. Its step 4 is
- * "Let ports be the list of MessagePorts whose relevant global object's associated Document is document" and
- * step 5 disentangles each of them. A port's realm is on the port — but there was no way to reach the ports
+ * IT EXISTS BECAUSE HTML §7.5.10 Destroying documents ASKED A QUESTION NOTHING COULD ANSWER, AND THAT SECTION
+ * NO LONGER ASKS IT. The RETIRED EDITION'S steps 4 and 5 read "Let ports be the list of MessagePorts whose
+ * relevant global object's associated Document is document" and then disentangled each of them; the 3 October
+ * 2026 edition DELETED both, so `disentangle` occurs nowhere in §7.5.10 and no number here is a renumber —
+ * core/frame/document_lifecycle.c's destroy_a_document carries the named residual that decides whether the
+ * guard goes with them. A port's realm is on the port — but there was no way to reach the ports
  * at all, so the step could not even be attempted. This is the
  * enumeration half of it; the disentangle half is not built here, because a disentangle is a WRITE and a write
  * belongs to the flow that made it. A list of borrowed pointers is agent-global and cannot tell whose port it

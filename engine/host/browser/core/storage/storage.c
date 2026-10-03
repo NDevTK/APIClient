@@ -321,7 +321,7 @@ static void st_reorder(JSContext *ctx, JSValueConst self) { (void)ctx; (void)sel
  * core/frame/session_history.c uses for §7.4.6.2's hashchange on this same DOM manipulation task source. It is
  * enqueued in the TARGET's realm, which is what §8.1.7.2 "Queuing tasks"' queue-a-global-task says
  * ("let document be global's associated Document … queue a task given source, event loop, document, and
- * steps"): the task belongs to the receiving document, so HTML §7.5.10's step 7 removal of a destroyed
+ * steps"): the task belongs to the receiving document, so HTML §7.5.10's step 5 removal of a destroyed
  * document's tasks reaches it, which it would not if the broadcaster had queued it in its own.
  *
  * A TARGET THAT IS NOT FULLY ACTIVE IS NOT AN ERROR HERE, and §12.2.1 says so in its own words: "The Document

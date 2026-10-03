@@ -418,7 +418,7 @@ static void ua_notify_descendants(JSContext *ctx, JSContext *from)
         bool same;
 
         JS_SetPropertyUint32(ctx, stack, ntop, JS_UNDEFINED);
-        /* A DESTROYED NAVIGABLE IS NOT A DESCENDANT NAVIGABLE — §7.5.10 step 8 made its browsing context null,
+        /* A DESTROYED NAVIGABLE IS NOT A DESCENDANT NAVIGABLE — §7.5.10 step 6 made its browsing context null,
            so it has no active document for the walk to reach and no active window to activate. */
         if (window_proxy_destroyed(kid)) {
             JS_FreeValue(ctx, kid);

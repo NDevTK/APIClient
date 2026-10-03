@@ -75,7 +75,7 @@ typedef struct {
        reference to a child realm by name: what keeps it alive is `window` — the Window's C function objects
        each hold the realm that defined them (js_call_c_function reads `p->u.cfunc.realm`) — and this pointer
        is a raw borrow that is only ever valid while that field is set. The two are written and cleared
-       together for that reason, and HTML §7.5.10 "Destroying documents" step 9 clearing them is the whole of
+       together for that reason, and HTML §7.5.10 "Destroying documents" step 7 clearing them is the whole of
        this engine's reclamation edge (window_proxy_set_destroyed). A stale claim about WHO OWNS A REALM is not
        a wording detail here: a reader chasing a leak would go looking for the agent's release, find none, and
        conclude the reclamation is unbuilt.
@@ -243,7 +243,7 @@ typedef struct {
        its is closing is true". They are two because they happen at two TIMES. `close()` sets is-closing at its
        own call site and QUEUES the destruction; §7.3.1.6 "Navigable destruction"'s destroy-a-child-navigable
        queues one without setting is-closing at all; and the browsing context does not become null until
-       §7.5.10 step 8 runs, in a task.
+       §7.5.10 step 6 runs, in a task.
        Held as ONE byte those two times collapsed into the removal's, so a frame's WindowProxy reported a
        destruction that had not happened — while its Document, its queued tasks and its entangled ports were
        all still live, with nothing anywhere holding the fact that they had not been dealt with. */
@@ -274,12 +274,12 @@ typedef struct {
        nothing to capture. */
     uint8_t created_by_web_content;
     uint8_t closing;     /* §7.3's IS CLOSING — §7.2.2.1's close(), and only ever a top-level traversable */
-    uint8_t destroyed;   /* §7.5.10 step 8 ran on this navigable's active document: its browsing context is null */
+    uint8_t destroyed;   /* §7.5.10 step 6 ran on this navigable's active document: its browsing context is null */
     /* §7.1.3.2 step 10's SWAP LEFT THIS BROWSING CONTEXT BEHIND — "browsingContext will not be used by the new
        Document that we are about to create" — so §7.2.2.1's "this's browsing context is null" is true of it for
        a reason that has nothing to do with destruction. It is a SECOND byte and not a second writer of the one
        above, because the two states differ in everything except `closed`: a destroyed navigable has NO active
-       document (step 9 released the Window and nulled the realm), while a swapped-past one still has the exact
+       document (step 7 released the Window and nulled the realm), while a swapped-past one still has the exact
        Document it had — which is what makes a read through the opener's handle answer about THAT document
        rather than about the one the navigation went on to create in another instance. Reusing `destroyed` would
        have told proxy_realm that a navigable with a live realm has no document, which is the assert it makes. */
@@ -312,7 +312,7 @@ typedef struct {
    WRITTEN ONCE HERE so that no member can ask half of it: a `closed` that read only the destroy
    flag would report a closing popup as open, and one that read only is-closing would report a removed frame
    as open. Both of those were the single byte this replaced, in the two directions it could be wrong.
-   "BROWSING CONTEXT IS NULL" HAS TWO WRITERS AND THIS IS WHERE THEY MEET — §7.5.10 step 8's destruction and
+   "BROWSING CONTEXT IS NULL" HAS TWO WRITERS AND THIS IS WHERE THEY MEET — §7.5.10 step 6's destruction and
    §7.1.3.2 step 10's swap, which discards a browsing context without destroying anything. Reading either alone
    is the same class of half-answer as the two above: after a COOP group swap the opener's handle would report
    the window it can no longer reach as open, and the engine would model a page real Chrome has cut off.
@@ -669,7 +669,7 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
            "the realm of a navigable whose active document is a PEER's was asked for — a same-origin navigable "
            "is a realm of this agent by construction, so this proxy is cross-origin and the read that reached "
            "here should have been a SecurityError");
-    /* AND A DESTROYED NAVIGABLE IS NEVER MATERIALIZED. §7.5.10 step 9 nulled this navigable's active document,
+    /* AND A DESTROYED NAVIGABLE IS NEVER MATERIALIZED. §7.5.10 step 7 nulled this navigable's active document,
        so a NULL realm on a destroyed navigable means "there is no document" and not "there is not one YET" —
        the two are the same field and only this tells them apart. Without it the next read through the proxy
        would BUILD a fresh Document for a navigable whose browsing context is null: navigable.h's deferral
@@ -679,7 +679,7 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
        from this record without a realm, so a caller that reaches here has asked for an ACTIVE DOCUMENT. */
     DCHECK(!p->destroyed,
            "the ACTIVE DOCUMENT of a navigable §7.5.10 destroyed was asked for — that navigable has none "
-           "(step 9 nulls it), and materializing one here would build a Document for a browsing context that "
+           "(step 7 nulls it), and materializing one here would build a Document for a browsing context that "
            "is null; the members readable after a destruction are §7.2.1's list, answered from this record");
     if (!p->realm) {
         DCHECK(p->url != NULL, "a WindowProxy with no realm and no address was read through — a proxy over a "
@@ -726,13 +726,13 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
                           "a cross-origin destination is a peer's document, which is a host route and not this");
     DCHECK(world_doc_hosted(doc), "a navigable was navigated to a document this agent does not hold");
     /* A DESTROYED NAVIGABLE IS NOT NAVIGATED. §7.4.2.2 acts on the navigable's active document and §7.5.10
-       step 9 nulled it; the §7.4 step 14 load that could still have been in flight when the container was
-       removed is exactly what §7.5.10 step 7 takes off the queue without running (quickjs.c's
+       step 7 nulled it; the §7.4 step 14 load that could still have been in flight when the container was
+       removed is exactly what §7.5.10 step 5 takes off the queue without running (quickjs.c's
        JS_DropJobsForContext walks the baseline list for that case by name). Reaching here means one of those
        two stopped holding, and the write below would give a destroyed navigable a live Window again. */
     DCHECK(!p->destroyed,
            "a navigable whose active document §7.5.10 destroyed was NAVIGATED — §7.4.2.2 replaces an active "
-           "document and this navigable has none, so either the load job outlived step 7's drop or a "
+           "document and this navigable has none, so either the load job outlived step 5's drop or a "
            "destroyed navigable was chosen as a navigation target");
     /* AND A SWAPPED-PAST BROWSING CONTEXT IS NOT NAVIGATED EITHER, for a different reason with the same shape.
        §7.1.3.2's swap moved this navigable's next Document into a browsing context in ANOTHER instance, so the
@@ -1273,7 +1273,7 @@ JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc)
            A `DCHECK(realm != NULL, …)` STOOD HERE NAMING ONE CAUSE FOR A POPULATION OF TWO. It is recorded
            rather than deleted because its reasoning is what a reader re-derives: it read
            `before THIS TIMELINE materialized that document's realm`, and the OTHER state is a navigable whose
-           active document HTML §7.5.10 "Destroying documents" has destroyed — its step 8, "Set document's
+           active document HTML §7.5.10 "Destroying documents" has destroyed — its step 6, "Set document's
            browsing context to null", reaches window_proxy_set_destroyed, which nulls this record's realm while
            the row stays in the table, since only the collector takes one out. So a timeline that ran
            `window.close()` fired an abort about materialization ORDER, and the two readings take OPPOSITE work:
@@ -1399,16 +1399,16 @@ bool window_proxy_closed(JSContext *ctx, JSValueConst proxy)
     return p->closing != 0 || window_proxy_browsing_context_null(ctx, proxy);
 }
 
-/* THE ASK §7.5.10 STEP 9 IS, COUNTED WHERE IT IS PERFORMED — see window_proxy.h for why the OUTCOME cannot
+/* THE ASK §7.5.10 STEP 7 IS, COUNTED WHERE IT IS PERFORMED — see window_proxy.h for why the OUTCOME cannot
    be asserted and this can. Lifetime, per agent, and NOT on the record: it counts asks across arms, so a
    rewound arm that destroys again is a second ask rather than the same one seen twice. */
 static long long g_step9_releases;
 
 long long window_proxy_destroy_releases(void) { return g_step9_releases; }
 
-/* §7.5.10 STEPS 8 AND 9 — the completion of a destruction, written only by the destroy job. See window_proxy.h
+/* §7.5.10 STEPS 6 AND 7 — the completion of a destruction, written only by the destroy job. See window_proxy.h
    for why the two steps are one write and why the second of them is this engine's only reclamation edge.
-   Step 8 is also what §7.5.10 step 5's wait reads off each child, which is why it is asked separately from
+   Step 6 is also what §7.5.10 step 5's wait reads off each child, which is why it is asked separately from
    `closed`: a navigable whose top-level traversable is merely CLOSING has not been destroyed, and a wait that
    accepted `closed` would finish before its subtree had. */
 void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy)
@@ -1416,7 +1416,7 @@ void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy)
     ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — the WHOLE binding rides the delta */
 
     DCHECK(p != NULL, "something that is not a WindowProxy had its browsing context set to null");
-    /* ONCE PER DOCUMENT, ASSERTED, because step 9 hands a reference back and a second run would hand back one
+    /* ONCE PER DOCUMENT, ASSERTED, because step 7 hands a reference back and a second run would hand back one
        it no longer holds. Every path that could reach here twice already refuses to: descend_enqueue returns
        for a destroyed navigable, the fan-out reports a destroyed child instead of queuing it, and §7.3's
        close chains unload-then-destroy over a subtree whose members destroyed themselves at §7.5.9 step 20.
@@ -1431,8 +1431,8 @@ void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy)
            "§7.5.10 was run over a navigable whose ACTIVE DOCUMENT is in another WASM instance — the ports, "
            "the queued tasks and the Window are all the peer's, so the destruction is the peer's to perform "
            "and this side has nothing to null");
-    p->destroyed = 1;                                          /* step 8 */
-    /* STEP 9 — the navigable stops naming the Document. THE DELTA ALREADY HOLDS ITS OWN DUP of this Window
+    p->destroyed = 1;                                          /* step 6 */
+    /* STEP 7 — the navigable stops naming the Document. THE DELTA ALREADY HOLDS ITS OWN DUP of this Window
        (the capture above ran before the write), so releasing the live slot leaves every parked arm's copy
        intact and rewinding this flow restores the binding exactly. That is the same argument
        window_proxy_navigate makes one screen up, for the same field, and it is the whole reason a destruction
@@ -1442,7 +1442,7 @@ void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy)
     /* AND `materialized` NOW ANSWERS THE TRUTH: this navigable has no active document. proxy_realm asserts the
        other side of that pair — a NULL realm on a DESTROYED navigable means "there is none", never "not yet". */
     DCHECK(p->realm == NULL && JS_IsUndefined(p->window),
-           "§7.5.10 step 9 left a destroyed navigable still naming a Document — the realm behind it can then "
+           "§7.5.10 step 7 left a destroyed navigable still naming a Document — the realm behind it can then "
            "never be reclaimed, because this reference is the one the collector cannot get past");
     /* THE ASK IS RECORDED HERE AND NOWHERE ELSE, after the release has happened rather than at the call that
        asked for it: this line is the release, so a count taken here cannot report a step that returned early.
@@ -3169,7 +3169,7 @@ static JSValue win_or_proxy(JSContext *ctx, JSValue v)
  * `frameElement` with a null test over it, so it is ONE question three members ask, asked in one place.
  *
  * IT BECOMES TRUE AT TWO DIFFERENT TIMES AND THE EARLIER ONE IS THE ONE PAGES READ. §7.5.10 "Destroying
- * documents" step 9 — "set document's node navigable's active session history entry's document state's
+ * documents" step 7 — "set document's node navigable's active session history entry's document state's
  * document to null" — is what makes the reverse lookup fail, and §7.5.10's descendant form performs its steps
  * IN PARALLEL and queues a global task per document to run them. So `destroyed` is not true until a job has
  * run. But §7.3.1.6 "Navigable destruction"'s destroy-a-child-navigable step 3, "set container's content

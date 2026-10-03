@@ -102,7 +102,7 @@ static void pc_prepare_lists(JSContext *ctx, JSValueConst changes, JSValue *out_
  * about this tree's own prose — a run in quotation marks beside a §7.4 citation is judged AGAINST §7.4, so
  * quoting another file here manufactures a fabricated-quotation finding at a comment that is right.
  * THE TASK IS ENQUEUED IN THE TARGET'S REALM, which is what HTML §8.1.7.2 "Queuing tasks"' queue-a-global-task
- * says: the task belongs to the receiving document, so HTML §7.5.10 "Destroying documents"' step 7 removal of a
+ * says: the task belongs to the receiving document, so HTML §7.5.10 "Destroying documents"' step 5 removal of a
  * destroyed document's tasks reaches it.
  * `changes` is BORROWED. */
 static void pc_fire_change_event(JSContext *ctx, JSValueConst changes, JSValueConst target)
