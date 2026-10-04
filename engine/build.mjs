@@ -8041,10 +8041,30 @@ const ABI_LIST = abiCheck("renderer", join(HOST, "main.c"), "QJS_EXPORT", "qjs_"
    sanitized program stops being the program.
    `-Wformat-truncation` IS NOT IN IT, DELIBERATELY. It was, and it hid a real defect: a lane's new DFAIL wrote
    526 bytes into 320, which is silent truncation of the one mechanism this project uses to say what to build —
-   a crash that names less than it knows. The diagnostic caught it and this build had switched it off. Measured
-   before removing it rather than argued: at the level `-Wall` gives, ONE warning across 40 host translation
-   units, plus three in url.c that are all `u->port` (max 65535) into a 7-byte buffer where the compiler cannot
-   see the range. That is the whole cost. The rest of the list stays quiet for the reason below. */
+   a crash that names less than it knows. The diagnostic caught it and this build had switched it off. Keeping
+   that suppression out is the decision, and the DEFECT SHAPE is what makes it permanent: a `-Wno-` on a
+   diagnostic about a BOUNDED WRITE is a decision to stop being told that a crash message was cut, and a cut
+   crash message is this project's forcing function arriving short.
+   THE PRICE THAT USED TO BE QUOTED HERE WAS `ONE warning across 40 host translation units, plus three in url.c
+   that are all u->port into a 7-byte buffer`, AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE A READER WHO
+   MEETS A NOISY DIAGNOSTIC RE-DERIVES THE URGE TO SUPPRESS IT AND WILL WANT TO KNOW WHAT IT COST LAST TIME.
+   Both halves had gone stale, in the direction that argues for suppressing: `40` was the host cone when the
+   figure was taken and `sources.filter(p => p.startsWith("engine/host/")).length` answers 456 today, so a
+   reader pricing the flag was reading a denominator an order of magnitude low — and the FOUR warnings it
+   quotes are GONE, url.c's three included, so the price a reader weighs against the flag is now nothing at
+   all. A stale cost is the one coordinate that makes a live protection look expensive.
+   SO THE DERIVATION IS THE ARTIFACT AND NOT THE FIGURE, and it is one loop a reader can run over this very
+   list: compile each of `sources` with exactly this CFLAGS array and `-fsyntax-only`, and count
+   `[-Wformat-truncation]`. MEASURED THAT WAY AT 24ff01a: ZERO, over all 456.
+   AND THE ONE THING NO FIGURE HERE EVER SAID, WHICH IS THE HALF A READER ACTUALLY NEEDS: `at the level -Wall
+   gives` reads as a price measured at a level THIS BUILD DOES NOT USE, since `-Wall` is nowhere in CFLAGS —
+   so the sentence quietly invited the reading that the diagnostic is off here. It is NOT. Established with an
+   armed control rather than inferred: a deliberately truncating `snprintf` into an 8-byte buffer is reported
+   `[-Wformat-truncation]` by this exact flag array with NO `-Wall`, identically with `-Wall` added, and
+   identically with the flag named explicitly — clang enables it by default, so the protection above is live in
+   the shipped build. The same control settles the neighbouring question for free: adding `-Wall` to this array
+   produces ZERO diagnostics across all 456, so `-Wall` is free AND buys nothing visible, which is why it is
+   not here either. The rest of the list stays quiet for the reason below. */
 const CFLAGS = [
   ...dashI(ENGINE_INCLUDE_ROOTS),   // declared once beside the source sets; see ENGINE_INCLUDE_ROOTS
   /* -Werror ON IMPLICIT DECLARATIONS, and the reason `-w` is NOT here beside it. A missing #include makes C
