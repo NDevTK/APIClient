@@ -501,8 +501,45 @@ uint64_t engine_preempt_asks(void);
    generation OR the incumbent — and both rows publish only how often it MISSED, so every reading of that miss
    rate has to assume which disjunct supplied it. The two take opposite diffs: a miss on the GENERATION is the
    page branching and the rescan is the order genuinely having changed, while a miss on the INCUMBENT is a
-   rescan for a frontier nothing moved in — the rival is `best eligible other than cur`, so only the EXCLUDED
-   member changed, and a walk that folded its top two would answer it without one.
+   walk for a frontier whose GENERATION stood still — which is not the same statement, and the clause that
+   said it was is retired below.
+   IT READ: a rescan for a frontier nothing moved in, the rival being best eligible other than cur, so only the
+   EXCLUDED member changed, and a walk that folded its top two would answer it without one. IT IS REWRITTEN
+   RATHER THAN DELETED BECAUSE A READER WHO RE-DERIVES IT FROM THE KEY WILL WRITE IT AGAIN: the generation is
+   what the rescan keys on, so a generation that stood still reads as a frontier that stood still. TWO THINGS
+   MOVE UNDER A CUR-ONLY MISS AND EITHER ONE ALONE DEFEATS A TOP-TWO FOLD.
+   (a) THE ORDER MOVES, and it is solver/flow.c that says so rather than this header. flow_silence_carry's
+   banner calls the carry bit THE ONE PART OF A NON-RUNNING MEMBER'S WEIGHT THAT MOVES WITH NO GENERATION BUMP
+   BEHIND IT; its threshold is the family's residue, sweeps DOWNWARD as the family burns, and members flip it
+   in descending order of their own residue — so any two members within one FLOW_AGE_QUANTUM of each other may
+   be in either order by the time the fold is asked. The exact precondition for a cached maximum is that the
+   bit be a COMMON offset, which is the frontier standing on ONE residue, and `sil_phases` is the row that
+   says whether it does. NO FIGURE IS QUOTED HERE DELIBERATELY: solver/flow.h carries that row's measurement
+   with the corpus it was taken over and the derivation as a command, and a count copied away from its
+   derivation is a claim competing with a command. Run it before building anything over a cached maximum.
+   (b) THE POPULATION MOVES, WHICH IS A PROPERTY OF THE CODE AND NOT OF A ROW — no census row was found that
+   prices it, and the three rows here cannot, since all three are raised before the walk and none of them
+   reads a weight. flow_pick_skipped drops the EXCLUDED member and returns before flow_weight is called, so a
+   rival scan never takes the incumbent's weight at all — and a cur-only
+   miss REMOVES the new incumbent from the population and RE-ADMITS the old one, which is the one member the
+   key change is about and the one member a retained pair can hold no reading of. The common shape is the
+   costly one: the yield fires because the cached rival outweighs the incumbent, the loop dispatches that
+   rival, and the outgoing flow is what the next ask's answer most often is.
+   WHAT A SOUND FOLD WOULD BE, so the next reader starts from a design rather than from this refutation. (b)
+   costs one more weighing per scan: retain the pair over the FULL eligible set instead of over the set minus
+   the incumbent, and the top-two identity holds for ANY incumbent. (a) has no key that fixes it — invalidating
+   on the carry invalidates on nearly every step, which is the population the fold was for — so what is left is
+   a MARGIN, and the test is a COMPARISON rather than a quantum. Every member's weight is monotone
+   NON-INCREASING between two generations — the member half is fixed and the notch divides two operands
+   flow_age_running only adds to, which engine.c's hook now asserts over the one member it holds — so the
+   scan's THIRD-best weight is an upper bound on every member outside the pair FOR AS LONG AS THE GENERATION
+   STANDS, however long that is. Recompute the pair's two weights at the fold, return the better of those that
+   is not the incumbent, and the answer is the walk's EXACTLY WHEN that recomputed weight exceeds the retained
+   third — strictly, so no tie-break over members the fold never held can arise. Over a one-step interval that
+   amounts to a gap of about one FLOW_AGE_QUANTUM, because one step is where the fall is one notch or none;
+   over a longer one it is the whole fall. Either way, on the large EQUAL-WEIGHT cohort solver/result.c calls
+   the ordinary state of a one-family page there is no gap at all and the test never licenses the fold. The
+   answer is a structure over the FIXED residue domain, which is what solver/flow.h already prefers.
    THE THIRD ROW IS THE ONE THAT DECIDES WHETHER EITHER DIFF IS WORTH ANYTHING, and it is why this is a
    partition rather than a pair. Where both moved in one interval, removing one invalidator alone buys NOTHING:
    the other would have forced the same walk. So `both` is not a rounding row — a large `cur` beside a large
@@ -520,9 +557,13 @@ uint64_t engine_preempt_asks(void);
    beside a nonzero total and read as a hook that never missed rather than as a build that never classified.
    IT DECIDES NOTHING, for the scan counters' reason exactly: no term of flow_weight reads any of the three, no
    pick branches on them, nothing is bounded by them.
-   RETIREMENT: this goes when the rival is no longer a WALK — a fold that names the top two members answers an
-   incumbent change in O(1), so the `cur` arm stops costing a scan and there is nothing left for the partition
-   to be about. */
+   RETIREMENT: this goes when the rival is no longer a WALK — when the ask is answered over the fixed residue
+   domain solver/flow.h's `sil_phases` record prefers, so the `cur` arm stops costing a scan and there is
+   nothing left for the partition to be about. IT READ: a fold that names the top two members answers an
+   incumbent change in O(1). It is kept in its own words because it is CLAUDE.md's fourth bad condition — one
+   SATISFIABLE BY NOTHING, since the clause above refutes the mechanism it names, and a condition nothing can
+   satisfy never comes up again, so the record it guards becomes permanent by accident rather than by anybody
+   deciding it should be. A reader who re-derives that mechanism from the key will write the condition again. */
 typedef struct {
     uint64_t gen;    /* the frontier GENERATION had moved and the incumbent had not */
     uint64_t cur;    /* the INCUMBENT had changed and the generation had not */

@@ -292,10 +292,16 @@ uint64_t flow_work_seq_next(void) {
    sum to `scanRivalRuns`. So the quotient above is a measurement whose CAUSE is open, and the sentence it
    replaces was a mechanism named without one — the move this file records going wrong three times one screen
    up. The two arms take opposite diffs: a `gen` arm is the order genuinely having changed and the walk is what
-   a forking page owes, while a `cur` arm is a walk for a frontier in which only the EXCLUDED member moved,
-   which a fold naming the top two members would answer in O(1) — and `rivalMissBoth` is what says whether
-   either repair buys anything at all, since where both halves moved in one interval removing one changes
-   nothing.
+   a forking page owes, while a `cur` arm is a walk for a frontier whose GENERATION stood still — and
+   `rivalMissBoth` is what says whether either repair buys anything at all, since where both halves moved in
+   one interval removing one changes nothing.
+   THAT CLAUSE READ: a frontier in which only the EXCLUDED member moved, which a fold naming the top two
+   members would answer in O(1). It is kept in its own words because a reader who re-derives it from the key
+   will write it again, and it is refuted by two mechanisms this file already states — flow_silence_carry's
+   bit moves with no generation bump behind it, so members within one FLOW_AGE_QUANTUM reorder between two
+   rescans, and flow_pick_skipped drops the EXCLUDED member before flow_weight, so a rival scan holds no
+   reading whatever of the one member a cur change re-admits. solver/engine.h carries the retirement, the
+   sound shape and its margin; `sil_phases` here carries what prices it.
    SUMMED, THE TWO RUNS EVALUATED 2.17 AND 2.22 BILLION MEMBER WEIGHTS TO PERFORM `unitsDone` 380 AND 522 —
    5.70 and 4.25 million weight evaluations per unit of work — a figure whose 34% spread is ENTIRELY its
    denominator's, which the sentence below names as the one column that moves, so it is quoted as the pair it

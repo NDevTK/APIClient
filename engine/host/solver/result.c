@@ -1400,9 +1400,15 @@ char *result_wfq_json(void) {
                         not follow from these rows — a raise is not a miss, and raises made inside one C call
                         with no interpreter opcode between them collapse into ONE miss at the next poll.
                         READ AS A PARTITION AND NEVER AS THREE RATES. `rivalMissGen` is the order genuinely
-                        having changed and the walk is what a forking page owes; `rivalMissCur` is a rescan for
-                        a frontier in which nothing moved but the EXCLUDED member, which a walk that folded its
-                        top two would answer without one. `rivalMissBoth` is the row that prices either repair:
+                        having changed and the walk is what a forking page owes; `rivalMissCur` is a walk for a
+                        frontier whose GENERATION stood still, which is NOT a frontier nothing moved in — see
+                        solver/engine.h, where this clause is retired with its two mechanisms, and `silPhases`
+                        twelve lines up for the row that prices the repair it used to recommend. IT READ: a
+                        rescan for a frontier in which nothing moved but the EXCLUDED member, which a walk that
+                        folded its top two would answer without one. Kept in its own words because the carry
+                        bit moves with no generation bump behind it and the excluded member's weight is never
+                        taken at all, and a reader who re-derives the clause from the key will write it again.
+                        `rivalMissBoth` is the row that prices either repair:
                         where both moved in one interval, removing one invalidator buys NOTHING because the
                         other would have forced the same walk, so a large `cur` beside a large `both` and a
                         large `cur` beside a zero `both` recommend the same diff at completely different

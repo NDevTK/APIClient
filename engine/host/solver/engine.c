@@ -9309,6 +9309,56 @@ static double g_rival_val = 0.0, g_rival_dist = 0.0;
    term is a pure function of it, so this comparison entails the term's and is exact where a double's would be
    a last-bit question asked of a quotient recomputed at another instant. */
 static long g_rival_branch_born = 0;
+/* …AND THE WEIGHT ITSELF, WHICH IS THE ONE CLAUSE THE FIVE ABOVE CANNOT BE SPELLED AS AND THE ONLY ONE THAT
+   SURVIVES A SUMMAND BEING ADDED. Those five are sibling FIELDS of one computed value whose accessor exists,
+   and CLAUDE.md's rule for exactly that shape is that the assert goes over the ACCESSOR: a term summed into
+   flow_weight and NOT added to the enumeration leaves the enumeration agreeing across the one change it exists
+   to catch, which is the failure the `g_ranked_*` block below records twice in its own history — three clauses
+   while the aging read the member's own service, four when the fitness distance became a term, each revision
+   found by the formula moving rather than by the assertion. This one is term-agnostic by construction and
+   cannot be short by a summand.
+   IT IS ONE-SIDED AND THAT IS THE CLAIM RATHER THAN A WEAKENING. Between two frontier generations a member's
+   member half stands still — the five clauses here, and solver/flow.c's walk over every member of every scan —
+   and the aging notch is `(own + fam) / FLOW_SERVICE_US` over two operands flow_age_running only ever ADDS to.
+   So the notch is monotone NON-DECREASING and the weight monotone NON-INCREASING, for every member, over any
+   interval with no generation bump. An EQUALITY here would fire on the one movement the interval exists to
+   permit; the `<=` is the exact statement of what flow_silence_phase's decomposition licenses, and the five
+   equalities are what stop it being satisfied by a fall this hook has no account of.
+   WHAT STATE MAKES IT FIRE — asked because an assert whose two sides cannot disagree is a non-check with a
+   reassuring transcript, and answered with the ONE state no clause above can see rather than with a
+   disjunction. The five read the member's OWN half and deliberately omit the FAMILY's, so a forgiveness of the
+   family's silence with the generation standing still RAISES every member of that family's weight and moves
+   nothing any of them watches. flow_credit_emit is that writer and it is listed at flow.c's walk among the
+   ones that bump, so the assert passes today; what it is written for is that raise being lost, which is the
+   shape the host-owed mark had before a mark became a ranking change. A summand added to flow_weight that
+   moves UP, and a notch that can decrease, are the other two.
+   IT IS THE PRECONDITION EVERY SUB-LINEAR ASK OVER THIS FRONTIER IS DERIVED FROM, WHICH IS WHY IT IS HERE AND
+   NOT IN A DESIGN NOTE. A cached maximum, a heap, an index over flow_index_key, and the top-two fold this
+   hook's own census rows used to recommend, all rest on knowing which DIRECTION a member's weight may move
+   between two generations; the magnitude is solver/flow.h's `sil_phases` to price and the direction is this.
+   ITS SILENCE IS NOT EVIDENCE TODAY AND THE NEXT READER MUST NOT SCORE IT AS SUCH, which is the one thing a
+   clause ordered after an enumeration owes. Given the five equalities above, flow_weight's remaining freedom is
+   the family half and the carry, both monotone up, so under TODAY's term list this clause is ENTAILED by its
+   neighbours and a zero here is arithmetic rather than a measurement — CLAUDE.md's evidence-inflation rule read
+   from the far side, where the derived row is the one with no reason of its own. What it buys is the day the
+   term list MOVES: a summand added to flow_weight is outside the five by construction and inside this by
+   construction, so the clause that is entailed now is the only one of the six that cannot be short tomorrow.
+   WRITTEN IN EVERY BUILD AND READ IN NONE BUT DEV, in the block above's pattern and for its stated reason. The
+   price is ONE weighing in a branch that has just walked the whole frontier — O(1) against O(members), and it
+   raises no scan counter, because solver/flow.c raises those inside flow_pick's loop and nowhere else; in
+   release the condition is unevaluated (it stands inside a `sizeof`), so what ships is the one store.
+   NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: every member that is not the cached rival.
+   solver/flow.c's walk already stamps each member's MEMBER HALF and asserts it EQUAL across a generation, and
+   that is a different claim — the weight also carries the family half and the carry, which legitimately move,
+   so no equality over the whole weight can stand there and none does. The DIRECTION is asserted here for one
+   member and nowhere for the rest. WHAT THE NEXT DIFF BUILDS: a per-member weight stamp beside `key_last`,
+   compared with `<=` rather than `==` at the same walk, which is already holding every member, its weight and
+   its stamp — one more double per Flow and one more compare per member per scan, dev-only, in the class of the
+   three stamps that are there. HOW ITS ABSENCE WOULD SHOW: a member whose weight RISES between two generations
+   passes every check in this tree while it is not the member this hook happens to be caching, so a cached
+   maximum, a heap or an index over the frontier returns a member the walk would not have, and the clause above
+   reads silent — the reader sees an order that disagrees with its own comparator and no assert naming why. */
+static double g_rival_w = 0.0;
 /* WHAT THE FLOW HOLDING THE THREAD WAS RANKED ON WHEN IT TOOK IT — the quantities the value yield's
    verdict is a pure function of, recorded at the switch-in and read by the assertion in the hook's value
    clause. They are not policy and they are not a cache: nothing is decided from them, and the hook's answer is
@@ -9499,6 +9549,7 @@ static int preempt_hook(int kind) {
             g_rival_own_notch = flow_service_notch(g_rival); g_rival_visits = g_rival->visits;
             g_rival_val = flow_reward(g_rival); g_rival_dist = flow_distance(g_rival);
             g_rival_branch_born = flow_branch_born(g_rival);
+            g_rival_w = flow_weight(g_rival);
         }
     }
     /* (0) BLOCKED BEATS BOTH RANKINGS. A flow holding an unanswered synchronous host request cannot make
@@ -9585,6 +9636,27 @@ static int preempt_hook(int kind) {
             g_rival_dist, flow_distance(g_rival),
             g_rival_branch_born, flow_is_member(g_rival) ? flow_branch_born(g_rival) : -1L,
             flow_is_member(g_rival));
+    /* …AND THE SAME CLAIM OVER THE WHOLE WEIGHT, ORDERED AFTER THE FIVE SO THAT A FIRE HERE IS A MOVEMENT THE
+       ENUMERATION HAS NO NAME FOR. Any member-half move trips the clauses above first and they say WHICH term
+       it was, which is what that message exists for and is not a thing this one could do; what reaches this
+       line has five matching terms and a weight that nevertheless ROSE, and the only quantity that can do that
+       is the half the five deliberately omit. See the declaration for the state and for why the bound is
+       one-sided. */
+    DCHECKF(!g_rival || flow_weight(g_rival) <= g_rival_w,
+            "the cached RIVAL's weight ROSE while the frontier generation stood still — cached %.17g against "
+            "current %.17g. Between two generations a non-running member's member half is fixed (the five "
+            "clauses above, and solver/flow.c's walk over every member) and its aging notch is a quotient of "
+            "two operands flow_age_running only ADDS to, so the weight may FALL and may not rise. The five "
+            "clauses above read this member's OWN silence and deliberately not its FAMILY's, so the movement "
+            "they cannot see and this one can is a forgiveness of the family's silence with no rank change "
+            "raised behind it — flow_credit_emit sends both operands to zero for a whole family in one "
+            "statement and is listed at that walk among the writers that bump, so a fire here is that bump "
+            "having been lost or a second forgiver having been added without one. The other two readings are a "
+            "summand added to flow_weight that moves UP while the five named terms stand still, and a notch "
+            "that can decrease. Every cached maximum, heap and index anybody builds over this frontier is "
+            "derived from the direction this line asserts; solver/flow.h's `sil_phases` prices the MAGNITUDE "
+            "and this is the SIGN. Raise frontier_rank_changed() at whichever writer sent the silence back",
+            g_rival_w, flow_weight(g_rival));
     if (cur && g_rival && flow_weight(g_rival) > flow_weight(cur)) {   /* value yield */
         /* THE VALUE YIELD MAY ONLY FIRE ON A RANK CHANGE, AND THIS IS WHERE THAT IS EITHER TRUE OR A SENTENCE
            IN CLAUDE.md. §scheduler says the yield fires "the moment a parked flow outranks (or on an emit/fork/
