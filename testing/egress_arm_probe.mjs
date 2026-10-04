@@ -64,11 +64,19 @@ const SITES = [
     grep: "git grep -n 'destination: \"document\"' extension/bridge.js",
     facts: { destination: 'document', actor: 'page', pinned: 'unstated',
              provenance: 'derived', docReach: 'observed', credentialed: true, headers: null } },
-  { label: '…the same, if it STATED its witness mark',
+  /* THE SAME CALL SITE WITH THE WITNESS MARK STATED, AND THE WHOLE VALUE OF THESE TWO ROWS IS THAT THEY NOW
+     AGREE WITH THE ONE ABOVE. They are not transcriptions of anything — the mark does not travel for a
+     navigation — they are the HYPOTHETICAL the plumbing CLAUDE.md §A-REAL-NAVIGABLE calls owed would
+     create. Before the destination row named navigations they read FIRES, so a correct plumbing diff would
+     have begun firing every derived child navigable at every origin with nobody having decided it; the row
+     that refuses them is now the DESTINATION, which no plumbing can move. A day on which either of these
+     reads FIRES again is a day an arm started naming `navigation`, which is the project owner's decision and
+     would be deliberate — or a day the destination row stopped saying what a navigation is. */
+  { label: '…the same, if it STATED its witness mark (must still REFUSE)',
     grep: 'solver/engine.c engine_pinned_of_running_path — the fact exists and does not travel',
     facts: { destination: 'document', actor: 'page', pinned: 'unpinned',
              provenance: 'derived', docReach: 'observed', credentialed: true, headers: null } },
-  { label: '…the same, on a FORCED path, witness stated',
+  { label: '…the same, on a FORCED path, witness stated (must still REFUSE)',
     grep: 'as above; the provenance word is engine_provenance_of_running_path\'s',
     facts: { destination: 'document', actor: 'page', pinned: 'unpinned',
              provenance: 'forced', docReach: 'observed', credentialed: true, headers: null } },

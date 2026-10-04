@@ -570,6 +570,54 @@ function _isDocumentSubresource(d) {
     d === "json" || d === "manifest" || d === "paintworklet" || d === "script" ||
     d === "style" || d === "text" || d === "track" || d === "video" || d === "xslt";
 }
+// FETCH §2.2.5 "Requests"' NAVIGATION REQUEST, AND IT IS HERE FOR THE REASON THE SUBRESOURCE
+// PREDICATE ABOVE IS: this file is the one that decides from the destination, and the standard already has
+// the term. §2.2.5 defines it as "A navigation request is a request whose destination is
+// `document`, `embed`, `frame`, `iframe`, or `object`", and that POSITIVE LIST is what this is, never a
+// complement — the argument the subresource predicate makes about `webidentity` being in neither of
+// §2.2.5's other two sets holds here too.
+//
+// WHAT IT CLOSES IS AN ACCIDENT AND NOT A GAP, WHICH IS WHY IT CHANGES NO VERDICT. A navigation used to
+// fall through both questions above and read `value`, so the ONLY thing keeping it out of the owner's data
+// arm was that arm's `witness: unpinned` conjunct answering `unstated` — and `unstated` is there
+// because a notice carries no witness mark, which is a fact about PLUMBING rather than a decision about
+// navigations. CLAUDE.md §A-REAL-NAVIGABLE says in as many words that the mark SHOULD travel
+// ("`engine_pinned_of_running_path()` exists; which arm it lands on is the owner's call"), so the day
+// somebody lands that plumbing — correct, owed, and not a policy diff — every derived child
+// navigable at every origin would START FIRING with nobody having decided it. That is the shape
+// CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS names at the one boundary where the consumer is the
+// PERSON: a permission whose reach moves when an unrelated field starts being stated.
+//
+// AND THE ROW'S OWN PROSE WAS ALREADY WRONG ABOUT IT, WHICH IS THE CHEAPEST EVIDENCE THAT THE VALUE WAS
+// DOING TWO JOBS: the destination signal says a `value` request "is this tool spending somebody else's
+// server", and a child navigable the analysed document's OWN MARKUP names is the page loading itself by
+// exactly the sentence the two arms above are drawn from. One value, two meanings, and the refusal's
+// stated reason was about the wrong question — §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS.
+//
+// WHERE IT IS ASKED CANNOT MATTER, AND THAT IS ASSERTED RATHER THAN ARGUED. §2.2.5's navigation set
+// is DISJOINT from the script-like set and from the subresource set — no destination is both — so
+// this question's position in the cascade cannot change any answer, which is what makes the two existing
+// values byte-identical after this diff. `_signalRegistryCheck` walks `_DESTINATION_TYPES` and DCHECKs it,
+// so the day a later edition of §2.2.5 moves a destination into two sets the host aborts at startup
+// instead of this paragraph being quietly false. It is asked LAST of the three regardless, because the two
+// above are the ones whose order IS load-bearing and the reason for theirs is written at the row.
+//
+// NO ARM NAMES `navigation`, WHICH IS THE WHOLE OF THE VERDICT TODAY AND IS NOT A REFUSAL THIS FILE DREW.
+// A value no arm names is refused — the row above already relies on that property in the other
+// direction — so an unconfigured origin refuses a navigation exactly as it did before, and names the
+// destination when it does. Whether a child navigable the page's own markup names SHOULD fire is the
+// project owner's decision and is open; what this diff does is make that decision ONE ARM rather than a
+// question about what an unrelated plumbing fix would do.
+// AND THE ARM THAT ALREADY FIRES A NAVIGATION IS UNTOUCHED, which is said here so nobody reads this as a
+// narrowing: the `observed` arm reads `provenance` and `doc-reach` and no destination, so the ambient seed
+// — which states both — still fires, and every document this tool opens still opens.
+// HOW ITS ABSENCE WOULD SHOW: a drive log whose navigation refusals read `blocked-signal:destination=value`
+// — the chokepoint naming a pinning question as its reason for refusing a document load.
+// RETIREMENT: this record goes when an arm names `navigation`, because the owner's decision is then IN the
+// table and the hazard this closes has a deliberate answer in front of it rather than an absent field.
+function _isNavigation(d) {
+  return d === "document" || d === "embed" || d === "frame" || d === "iframe" || d === "object";
+}
 // FETCH §2.2.5 "Requests"' DESTINATION TYPE, ENUMERATED — "A destination type is one
 // of: the empty string, `audio`, `audioworklet`, `document`, `embed`, `font`, `frame`,
 // `iframe`, `image`, `json`, `manifest`, `object`, `paintworklet`, `report`, `script`,
@@ -1273,10 +1321,12 @@ var _SIGNALS = [
      served identically to every visitor, revealing nothing about this person — and a VALUE request is this
      tool spending somebody else's server. That line is where the defaults below are drawn, and it is
      CLAUDE.md §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS's rather than this file's. */
-  { name: "destination", gates: true, certainty: "stated", values: ["program", "subresource", "value"],
+  { name: "destination", gates: true, certainty: "stated",
+    values: ["program", "subresource", "navigation", "value"],
     of: function (f) {
       if (_isScriptLike(f.destination)) return "program";
-      return _isDocumentSubresource(f.destination) ? "subresource" : "value";
+      if (_isDocumentSubresource(f.destination)) return "subresource";
+      return _isNavigation(f.destination) ? "navigation" : "value";
     } },
   /* WHOSE ACT THIS REQUEST IS — see `_actorOf`, which carries why no other row can answer it and why the
      word is TYPED at each asker rather than inferred from who the callers are.
@@ -1421,6 +1471,25 @@ function _signalRegistryCheck() {
           "(`method` is a literal, `invalidity` cannot be stated through a closed option set) and stops " +
           "being true the moment that structure changes. Make it gate");
   }
+  /* AND THE DESTINATION CASCADE'S ONE STRUCTURAL ASSUMPTION IS ASSERTED HERE RATHER THAN WRITTEN DOWN AT
+     IT. `_isNavigation`'s banner argues that its position in that cascade cannot change any answer, and the
+     whole of that argument is that §2.2.5's navigation set is DISJOINT from the other two — which is
+     a property of a standard that RENUMBERS AND REWORDS, so a paragraph claiming it is a paragraph that can
+     go quietly false. The operands are every one of them this file's own literals, which is what makes a
+     DCHECK the right macro: no page, no engine and no remote party can reach it, so it is this codebase
+     asserting its own logic and never an abort switch somebody else holds.
+     WHAT IT WOULD CATCH IS AN ORDERING BUG WITH NO SYMPTOM. If a later edition puts a destination in two
+     sets, the cascade silently answers whichever question is asked FIRST and the row a person reads moves
+     with it — no crash, no diagnostic, and a permission about a different population than its own
+     prose claims. In dev it aborts at the host's own startup instead. */
+  for (i = 0; i < _DESTINATION_TYPES.length; i++)
+    DCHECK(!_isNavigation(_DESTINATION_TYPES[i]) ||
+           (!_isScriptLike(_DESTINATION_TYPES[i]) && !_isDocumentSubresource(_DESTINATION_TYPES[i])),
+           "the destination " + JSON.stringify(_DESTINATION_TYPES[i]) + " answers BOTH §2.2.5's " +
+           "navigation question and one of the two above it, so which value the cascade computes is decided " +
+           "by the order the questions are asked in — and `_isNavigation`'s banner says that order cannot " +
+           "matter. One of the two is now wrong, and the arm a person permitted is about a population they " +
+           "did not see");
   /* AND THE DEFAULT ARMS ARE CHECKED AGAINST THE SAME REGISTRY, HERE, BECAUSE AN ARM IS A PERMISSION AND A
      PERMISSION THAT CANNOT MATCH IS A PERMISSION THAT WAS SILENTLY REVOKED. An arm naming a signal this file
      does not declare compares `undefined` against its value and is false for every request for ever — the
@@ -1758,7 +1827,15 @@ var _DEFAULT_ARMS = [
      destinations §2.2.5 leaves in this row's `value` bucket, the only ones any caller can reach with a
      witness mark of `unpinned` AND an actor of `page` are the EMPTY STRING's, and there are TWO of them: the
      analysed page's own `fetch()`, relayed off the engine's pending line, and the analysed page's own XHR,
-     relayed off the `xhr.send` record. A navigation is `document` and states `unstated`; the seed and the
+     relayed off the `xhr.send` record. A navigation never reaches this row at all, because its
+     destination is one of §2.2.5's NAVIGATION set and the destination signal now says so — and THIS
+     SENTENCE USED TO READ `a navigation is `document` and states `unstated``, which is kept because it was
+     TRUE and a reader will re-derive it: the mark really is absent, so the enumeration really did hold. What
+     was wrong is that it held BY AN ACCIDENT OF PLUMBING. CLAUDE.md §A-REAL-NAVIGABLE says the witness
+     mark should travel and `engine_pinned_of_running_path()` already computes it, so the day that lands —
+     a plumbing diff, correct and owed — this arm would have begun firing every derived child navigable at
+     every origin, and this enumeration would have become false in the same commit with nothing anywhere
+     saying so. `_isNavigation`'s banner carries the whole argument. The seed and the
      residue re-fetch state `tool`; the sweep and the peer gate state `tool`. So what this arm admits today is
      exactly the analysed document's own data requests — through either door — on a path that pinned nothing,
      and nothing else.
