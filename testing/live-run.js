@@ -1308,9 +1308,27 @@ const COLD_ROWS = COLD_STEP_UNITS.concat(COLD_FRONTIER, COLD_SEED, COLD_COUNTERS
      cache's own question, and `scanRivalRuns <= preemptAsksLifetime` is a `DCHECK` at result.c — compiled out
      of the release artifact a live drive measures — so the ratio is published here as a rate that may not
      exceed 1 and refused by name when it does.
-     ALL TEN ARE LIFETIME COUNTS, as the producer declares, and the six scan rows are TWO QUANTITIES OVER
-     THREE ENTRIES rather than a partition of anything on this line — there is no total here for a sum check to
-     be made against, which result.c states at the group and which is why no identity between them is asserted.
+     EVERY ROW HERE IS A LIFETIME COUNT, as the producer declares, and the scan rows are TWO QUANTITIES —
+     a RUN count and a WEIGHT count — over the entries of `FLOW_SCANS`, rather than a partition of anything on
+     this line: there is no total here for a sum check to be made against, which result.c states at the group
+     and which is why no identity between them is asserted. NO COUNT OF EITHER IS WRITTEN IN THIS PARAGRAPH,
+     and that is a repair rather than a style: it read `ALL TEN ARE LIFETIME COUNTS … the six scan rows are TWO
+     QUANTITIES OVER THREE ENTRIES`, and the list it was written over is eleven lines below it holding TWELVE
+     rows over FOUR entries. Both figures were wrong when written, in the UNDER-counting direction, and the
+     enumeration they count was in the same comment block — CLAUDE.md's cheapest check, needing no tree, no
+     command and no revision, because the evidence is already in the sentence.
+     THE ARITY ERROR GENERATED A PUBLISHED SCOPE OVER-CLAIM AND THAT IS WHY IT IS RECORDED RATHER THAN QUIETLY
+     FIXED. `FLOW_SCANS` has FOUR entries — NEXT, RIVAL, OTHER, CENSUS — and a reader who believes THREE and
+     sees CENSUS named separately concludes that NEXT plus RIVAL is everything that is not reporting. A
+     coordinator holding this paragraph published `the preempt hook does 61.3% of ALL frontier-weighing` off
+     `hookWeighShare`, whose denominator is `scanNextWeights + scanRivalWeights` and whose own banner correctly
+     says ORDERING. The row was right, the share was right, and the sentence relaying it was wrong because this
+     comment had mis-stated the enumeration the share is a subset of. A stale count in a banner is not inert: it
+     is the premise a reader composes their claim from.
+     A DERIVED REFUSAL STANDS WHERE THE COUNT WAS, because a number in prose cannot be checked and a shape can:
+     `scanRowShape` below asserts that these rows are exactly `{Runs,Weights} × entries` with no entry missing
+     a twin, so a fifth `FLOW_SCANS` entry whose Weights row is carried and whose Runs row is not is refused by
+     name rather than silently halving a denominator.
      An artifact older than them prints `-`, this driver's absent-versus-zero rule. */
 const WFQ_SCAN_ROWS = ["preemptAsksLifetime",
   /* …AND WHICH HALF OF THE HOOK'S KEY HAD MOVED WHEN IT MISSED, WHICH IS THE ROW THAT TURNS A LARGE
@@ -1358,7 +1376,68 @@ const WFQ_SCAN_ROWS = ["preemptAsksLifetime",
   "rivalMissGen", "rivalMissCur", "rivalMissBoth",
   "scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeights",
   "scanOtherRuns", "scanOtherWeights", "scanCensusRuns", "scanCensusWeights"];
-const WFQ_ROWS = ["members"].concat(WFQ_JOB_SPLIT, WFQ_PICKS, WFQ_LADDER, WFQ_SCAN_ROWS);
+
+/* THE SHAPE THOSE SCAN ROWS MUST HAVE, ASSERTED RATHER THAN COUNTED IN PROSE. Two quantities over the entries
+   of `FLOW_SCANS`, so every entry this driver carries owes BOTH a `Runs` row and a `Weights` row. The one that
+   matters is the WEIGHTS half: `hookWeighShare` is a quotient over a chosen SUBSET of the weight rows, and a
+   subset is only readable as one while a reader can see what it is a subset OF — so an entry carried on one
+   axis and not the other does not make a figure merely incomplete, it makes the denominator of every share here
+   a number nobody can name. It refuses BY ENTRY rather than by total, because a count that is short and a count
+   that is lopsided are different defects and only the second is repairable from this line.
+   WHAT IT CANNOT SEE, stated so the gap is not inferred: whether this list covers every entry the PRODUCER
+   emits. That is a fact about `FLOW_SCANS` in solver/flow.h, which no JavaScript here reads, and the honest
+   consequence is that a fifth entry added there and carried nowhere is invisible to this check — `census`
+   prints `-` for an absent row and a row that was never listed has no cell to print. This asserts CONSISTENCY
+   of what is carried and never COMPLETENESS of it. */
+const scanRowShape = () => {
+  const by = new Map();
+  for (const k of WFQ_SCAN_ROWS) {
+    const m = /^scan([A-Z][A-Za-z]*?)(Runs|Weights)$/.exec(k);
+    if (!m) continue;
+    const e = by.get(m[1]) || {};
+    e[m[2]] = k;
+    by.set(m[1], e);
+  }
+  const lop = [];
+  for (const [entry, axes] of by)
+    if (!axes.Runs || !axes.Weights)
+      lop.push(entry + " carries only " + (axes.Runs || axes.Weights));
+  if (lop.length)
+    throw new Error("live-run.js: a FLOW_SCANS entry is carried on one axis only — " + lop.join("; ") +
+      ". Two quantities over the entries, both or neither: `hookWeighShare` and `censusWeighShare` are " +
+      "quotients over a SUBSET of the weight rows, and a half-carried entry makes their denominator a " +
+      "number no reader can name. Add the missing row to WFQ_SCAN_ROWS, or remove its twin.");
+  return by;
+};
+const SCAN_ENTRIES = scanRowShape();
+/* …AND THE TWO ROWS THAT PRICE THE REPAIR THE SCAN ROWS RECOMMEND, WHICH NO REAL-SITE DRIVER HAS CARRIED. The
+   lane sent to FOLD the rival scan's top two refused the brief and asked for these by name, in its own words:
+   `the hook rows alone cannot price their own recommended repair`. solver/engine.h now holds the design that
+   replaced the fold — a MARGIN rather than a quantum, the scan's third-best weight bounding every member
+   outside a retained pair for as long as the frontier generation stands — and the one quantity that says
+   whether any margin exists is the carry, because solver/flow.c calls its bit `THE ONE PART OF A NON-RUNNING
+   MEMBER'S WEIGHT THAT MOVES WITH NO GENERATION BUMP BEHIND IT`.
+   WHAT EACH ONE IS, in the producer's words. `silPhases` is how many DISTINCT sub-quantum residues the frontier
+   is standing on — the count of distinct `flow_silence_phase` values over the members — and `silCarry` is how
+   many members are on the far side of the boundary right now. Members sharing a residue flip the bit TOGETHER,
+   so `silPhases` is exactly the number of groups that can reorder between two generations: at 1 the bit is a
+   COMMON OFFSET, nothing reorders, and a single cached maximum is exact. BOTH ARE GAUGES and `silCarry` may
+   FALL between samples — the threshold sweeps downward as the family burns and resets every member at once —
+   so neither may be differenced and `census` nulls both on an empty frontier through the producer's own
+   `@kind` line rather than through any list here.
+   `picksLifetime` IS CARRIED FOR THESE TWO AND FOR NOTHING ELSE. solver/flow.h names the reading: a member that
+   has never held the thread carries the phase it was FORKED with, so `silPhases` far below the dispatch count
+   says the residues are INHERITED rather than EARNED — which is a different finding from a frontier that has
+   genuinely spread, and the two recommend different structures. It is the one row of this group that may be
+   differenced, and `picksLifetime == _switches` is an identity result.c checks at the one moment both terms are
+   in one hand.
+   NO FIGURE FROM EITHER HOST IS COPIED HERE. solver/flow.h carries both measurements with the corpus each was
+   taken over and the derivation as a command, and they disagree by two orders of magnitude in the ratio AND in
+   its direction — about every other member its own group on the native host and rising, against a flat 120 on
+   the vehicle while the frontier grew 4.9x. A count copied away from its derivation is a claim competing with a
+   command, and this driver's whole purpose is to take the reading rather than to quote one. */
+const WFQ_CARRY_ROWS = ["silPhases", "silCarry", "picksLifetime"];
+const WFQ_ROWS = ["members"].concat(WFQ_JOB_SPLIT, WFQ_PICKS, WFQ_LADDER, WFQ_SCAN_ROWS, WFQ_CARRY_ROWS);
 const OUT_NAME = { members: "wfqMembers" };
 /* WHICH `wfq` ROWS ARE LIFETIME COUNTS, TAKEN FROM THE PRODUCER AND NEVER LISTED HERE — the set `census` gates
    on. A hand-kept list of which rows survive an empty frontier would be a second copy of a fact only the
@@ -1566,6 +1645,17 @@ function census(r) {
   o.hookWeighShare = (nw === null || rw === null) ? null : ratio(rw, nw + rw);
   o.hookWeighShareOf = (o.hookWeighShare === null) ? null
     : "scanRivalWeights / (scanNextWeights + scanRivalWeights)";
+  /* AND WHAT THAT DENOMINATOR IS NOT OVER, DERIVED FROM THE CARRIED ENTRIES RATHER THAN NAMED HERE — the
+     exclusion a reader cannot see from the quotient and the one a coordinator has already got wrong in print.
+     `hookWeighShare` is a share of ORDERING weighing; `FLOW_SCANS` has entries this share's denominator omits,
+     and omitting them is deliberate (OTHER is the best-and-eviction tail and CENSUS is this instrument's own
+     cost, neither of which is the dispatch-versus-hook question). Printing the omitted set beside the figure is
+     what stops `the hook does N% of ORDERING work` being relayed as `N% of all frontier-weighing`, which is the
+     exact over-claim recorded at WFQ_SCAN_ROWS. It is composed from SCAN_ENTRIES, so an entry added to this
+     driver appears in the exclusion the day it is carried and never on the day somebody remembers to say so. */
+  o.hookWeighShareNotOf = (o.hookWeighShare === null) ? null
+    : Array.from(SCAN_ENTRIES.keys()).filter((e) => e !== "Next" && e !== "Rival")
+        .map((e) => "scan" + e + "Weights").join(" + ") || "nothing — this driver carries no other entry";
   o.censusWeighShare = (nw === null || rw === null || cw === null) ? null
     : ratio(2 * cw, nw + rw + 2 * cw);
   o.censusWeighShareOf = (o.censusWeighShare === null) ? null
@@ -1595,9 +1685,23 @@ function census(r) {
       o.rivalMissGen = o.rivalMissCur = o.rivalMissBoth = null;
     } else if (mc !== null && rr !== null && rr > 0) {
       /* THE ONE SHARE WORTH COMPOSING, AND ITS PRICE BESIDE IT RATHER THAN UNDER IT. `avoidableRivalShare` is
-         the fraction of the hook's rescans whose ONLY invalidator was the excluded incumbent — the half a
-         top-two fold would answer without a walk — and `rivalMissBoth` is carried unmixed because a `both`
-         near `cur` means that repair buys nothing. Two numbers, one diff, two prices. */
+         the fraction of the hook's rescans whose ONLY invalidator was the excluded incumbent, and
+         `rivalMissBoth` is carried unmixed because a `both` near `cur` means the repair buys nothing. Two
+         numbers, one diff, two prices.
+         THE CLAUSE NAMING THAT REPAIR IS RETIRED AND IS KEPT IN ITS OWN WORDS: it read `the half a top-two fold
+         would answer without a walk`. The lane sent to build that fold refused it and solver/engine.h now
+         carries the refutation — flow_silence_carry's bit moves with no generation bump behind it, so members
+         within one FLOW_AGE_QUANTUM reorder between two rescans, and flow_pick_skipped drops the EXCLUDED member
+         before flow_weight is ever called, so a rival scan holds no reading whatever of the one member a `cur`
+         change re-admits. It is rewritten rather than deleted because a reader who re-derives it from the cache
+         key will write it again: the key is a disjunction over the generation, so a generation that stood still
+         reads as a frontier that stood still, and it is not.
+         THIS IS THE FIFTH SITE OF THAT ARGUMENT AND THE LANE REPAIRED FOUR, which is the reason it is recorded
+         here rather than silently corrected. The lane's scope was the solver and this clause is in the driver,
+         so its grep for the retired argument could not reach it — CLAUDE.md's rule that a fix's CODE DELTA is
+         not its SIZE, with the missing site one component over rather than one file over. What the share still
+         measures is unchanged and is still worth taking: `cur` is the arm whose repair is cheap IF a margin
+         exists, and `silPhases` below is the row that says whether one does. */
       o.avoidableRivalShare = mc / rr;
       o.avoidableRivalShareOf = "rivalMissCur / scanRivalRuns";
     }
@@ -1606,6 +1710,49 @@ function census(r) {
       o.avoidableRivalShareOf = null;
     }
   }
+  /* AND THE TWO READINGS THE CARRY ROWS EXIST FOR, WHICH ARE THE PRICE OF THE MARGIN solver/engine.h NOW
+     PRESCRIBES. Both are composed from GAUGES and are therefore statements about ONE census — never differenced,
+     never accumulated — and both are read at the TERMINAL census or not at all.
+       `phaseShare`      = silPhases / wfqMembers — how finely the frontier is split across sub-quantum residues.
+                           solver/flow.h's own instruction is to read `silPhases` against `members` and NEVER
+                           alone, because 1 at one member is the frontier being empty of the question and 1 at
+                           tens of thousands is the finding. Near 0 is a frontier standing on few residues, where
+                           the carry bit is close to a COMMON OFFSET and a margin is wide; near 1 is every member
+                           its own group, where nearly any two members may reorder between generations and no
+                           cached pair is sound at any margin.
+       `phasesPerPick`   = silPhases / picksLifetime — flow.h's INHERITED-versus-EARNED reading. A member that has
+                           never held the thread carries the phase it was FORKED with, so far below 1 says the
+                           residues came from forking rather than from being charged. The two states recommend
+                           different structures and no other row separates them.
+     AND ONE PREDICATE RATHER THAN A MAGNITUDE, because flow.h states it as a RETIREMENT CONDITION on its own
+     correction and a condition is answered yes or no: `carryCommonObserved` is `silPhases === 1` with more than
+     one member, which flow.h says has NEVER been observed in this repository except degenerately — 48
+     occurrences of `silPhases == 1` across its whole archived corpus and `members == 1` in all forty-eight. A
+     true here on a real page is the observation that would make the strongest index design available, and a
+     false is this driver declining to claim it. It is a PREDICATE and not a share for the reason CLAUDE.md gives
+     where run lengths are uncontrolled: `did this ever happen` does not depend on how far a run got, and `how
+     far did it get` is nothing but that.
+     NEITHER FIGURE IS COMPARED AGAINST A STORED ONE. flow.h's two host readings disagree by two orders of
+     magnitude AND in direction, so what is quoted from a drive is the pair plus its host's slice measure, and
+     the derivation lives there rather than here. */
+  const sp = num("silPhases"), sc = num("silCarry"), pk = num("picksLifetime"), mem = num("wfqMembers");
+  o.phaseShare = ratio(sp, mem);
+  o.phaseShareOf = (o.phaseShare === null) ? null : "silPhases / wfqMembers";
+  o.phasesPerPick = ratio(sp, pk);
+  o.phasesPerPickOf = (o.phasesPerPick === null) ? null : "silPhases / picksLifetime";
+  o.carryCommonObserved = (sp === null || mem === null) ? null : (sp === 1 && mem > 1);
+  /* AND WHAT `silCarry` ADDS THAT `silPhases` CANNOT, read at the same instant and refused when the two
+     disagree about the population. The carry count is how many members stand on the far side of the boundary
+     NOW, so 0 or `members` is the bit contributing nothing AT THAT SAMPLE — an observation about one census and
+     never the structural claim `silPhases: 1` makes, which is the same two-states-one-number split result.c
+     draws one scope down. A count ABOVE the member total is not a reading at all: the two are taken from one
+     walk of one frontier, so it names a second writer or a sample composed across two walks. */
+  o.carryInert = (sc === null || mem === null) ? null : (sc === 0 || sc === mem);
+  o.carryRefused = (sc !== null && mem !== null && sc > mem)
+    ? "`silCarry` " + sc + " exceeds `wfqMembers` " + mem + " — both are gauges taken from ONE walk of ONE " +
+      "frontier at this census, so the carry cannot name more members than are standing. This is a second " +
+      "writer of one accumulator or a sample composed across two walks, and every reading above is void"
+    : null;
   o.scanRefused = (o.rivalMissRate !== null && o.rivalMissRate > 1)
     ? "the hook's rescan count " + o.scanRivalRuns + " exceeds the " + o.preemptAsksLifetime +
       " asks its own policy raised — the rescan branch is INSIDE that policy and runs after it raises its " +
