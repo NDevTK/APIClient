@@ -365,6 +365,25 @@ int pending_pinned_compose(int kind, int path_forced, int path_pinned);
     /* §4.12.1.1's NULL type: a park owing a PROGRAM with no type crashes at the delivery */ \
     X(SCRIPT_TYPE, "scriptType", PEND_SHARE, JS_NewInt32(pend_ctx(), SCRIPT_TYPE_NONE))  \
     X(REQ,        "req",       PEND_SHARE,  JS_NewInt64(pend_ctx(), 0))                \
+    /* …AND THE SAME RENDEZVOUS AS THE HOST NAMES IT, WHICH IS A SECOND FACT AND NOT A COPY. One integer was
+       answering two questions and the stricter one decided it. `req` above is the name the ASKING MACHINE
+       holds: it is the return of engine_host_request, it lives in that machine's step state INSIDE THE FRAME,
+       and a fork CLONES that frame — so it cannot be rewritten by anything outside the machine and must
+       therefore never move. This one is the name the HOST holds: engine_host_requests emits it, and
+       engine_host_answer, _terminate and _decline quote it back. It MUST move at a branch fork, because the
+       answer is computed under the ASKING FLOW'S WORLD and the sibling's world is not the parent's from the
+       branch onward — two arms that navigated a frame differently must not resolve to one Window.
+         THE TWO SITES THAT DISAGREED ABOUT THIS ARE BOTH IN THE TREE AND BOTH WERE RIGHT ABOUT THEIR OWN HALF.
+       engine_fork_finalize's re-issue says sharing the id "would deliver one answer into two call sites in two
+       contradictory worlds"; engine_host_terminate's answer-fork guard says an arm "carries the issuer's id"
+       because "the id lives in the step state inside the frame the arm is a clone of". Neither could be
+       satisfied while one field carried both, and the looser requirement lost silently: a branch fork re-minted
+       the register and the arm's frame went on naming the parent's id, so the arm's next re-entry asked about a
+       rendezvous its own register no longer held. MEASURED: an abort reading `asked 1 … register 0/k2+v 2/k3`,
+       sha256-identical on a document WITH a child navigable and one with none.
+         AT THE FIRST ASK THE TWO ARE EQUAL, which is why `mint_req` is still called exactly once there and the
+       asked/answered inequality is untouched; they diverge only where a fork re-mints this one. */             \
+    X(REQ_HOST,   "reqHost",   PEND_SHARE,  JS_NewInt64(pend_ctx(), 0))                \
     X(OP,         "op",        PEND_SHARE,  JS_NULL)                                   \
     X(METHOD,     "method",    PEND_SHARE,  JS_NULL)                                   \
     /* no DESTINATION STATED, which the join refuses to list rather than classifying */ \

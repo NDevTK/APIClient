@@ -1373,8 +1373,37 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
                      /*parser_inserted*/0);
     pending_set(e, PEND_OP, JS_NewString(ctx, op));
     id = mint_req();   /* the ASK half of the rate above — counted at the mint, which is the only place it is */
+    /* BOTH NAMES OF ONE RENDEZVOUS, EQUAL AT THE FIRST ASK AND NOT THE SAME FIELD. `PEND_REQ` is what this
+       function RETURNS and therefore what the asking machine stores in its own step state, inside a frame a
+       fork clones verbatim; `PEND_REQ_HOST` is what the host is shown and quotes back. They are written
+       together here because at the first ask there is one world and one asker, so there is nothing yet to
+       disagree about — and a single `mint_req()` for the pair is what keeps the ask counted once. See
+       solver/pending.h's REQ_HOST for why a branch fork moves one and not the other. */
     pending_set_int(e, PEND_REQ, id);
+    pending_set_int(e, PEND_REQ_HOST, id);
     JS_FreeValue(ctx, e);
+    /* THE MACHINE'S NAME IS UNIQUE ON ITS OWN REGISTER, WHICH IS WHAT MAKES IT A NAME AND NOT A HINT.
+       engine_host_answered and engine_host_take search THIS FLOW only and return the FIRST match, so a register
+       holding two HOSTREQs under one machine name would hand one machine the other's answer — and that is a
+       wrong value rather than a crash, which is the direction this file rates worst. It holds by construction
+       today (every name comes from `mint_req`, which is monotone, and a fork duplicates a register entry for
+       entry rather than merging two), and that is the point: this is what fires the day a second write to
+       PEND_REQ appears. Read under the dev guard and outside the DCHECK because `pending_count` interns an
+       atom, and check.h forbids a side effect in a condition. */
+#if APICLIENT_DEV
+    {
+        int dups = 0, n = pending_count(f->pending);
+        for (int i = 0; i < n; i++) {
+            JSValue a = pending_entry(f->pending, i);
+            if (pending_get_int(a, PEND_KIND) == FLOW_PENDING_HOSTREQ &&
+                (uint32_t)pending_get_int(a, PEND_REQ) == id) dups++;
+            JS_FreeValue(ctx, a);
+        }
+        DCHECKF(dups == 1, "minting host request %u left %d entr(y/ies) on this flow's register under that "
+                           "MACHINE name — engine_host_answered returns the first match, so a second would "
+                           "hand one step machine another's answer with nothing to say so", id, dups);
+    }
+#endif
     /* THE REQUEST IS WHAT MAKES THE FLOW BLOCKED, AND THE YIELD THAT FOLLOWS IS ONLY A PARK BECAUSE OF IT.
        Every caller of this returns JS_STEP_YIELD, whose contract is written at quickjs.c's own arm for it:
        "I have more work; re-enter me." and, in the sentence immediately after, "It ASKS NOTHING, and that is
@@ -1467,8 +1496,9 @@ int engine_host_answered(uint32_t req, JSValueConst *out) {
         int off = 0, shown = 0, n = pending_count(f->pending);
         for (int i = 0; i < n; i++) {
             JSValue e = pending_entry(f->pending, i);
-            int w = snprintf(reg + off, sizeof reg - (size_t)off, "%s%u/k%d%s", off ? " " : "",
+            int w = snprintf(reg + off, sizeof reg - (size_t)off, "%s%u~%u/k%d%s", off ? " " : "",
                              (uint32_t)pending_get_int(e, PEND_REQ),
+                             (uint32_t)pending_get_int(e, PEND_REQ_HOST),
                              (int)pending_get_int(e, PEND_KIND),
                              pending_get_int(e, PEND_HAVE_VALUE) ? "+v" : "");
             JS_FreeValue(pending_ctx(), e);
@@ -1479,8 +1509,10 @@ int engine_host_answered(uint32_t req, JSValueConst *out) {
         if (!off) snprintf(reg, sizeof reg, "(nothing)");
         DFAILF("a machine asked about host request %u and it is not on its flow's register — it either never "
                "issued that request or it inherited the id across a fork, which re-issues under the sibling's "
-               "own world. THE REGISTER HOLDS %d entr(y/ies), %d of them listed as id/kKIND with +v where the "
-               "host has already answered: %s. The KIND integers are the FLOW_PENDING_* defines in "
+               "own world. THE REGISTER HOLDS %d entr(y/ies), %d of them listed as MACHINE~HOST/kKIND with +v "
+               "where the host has already answered: %s. A machine name EQUAL to the asked one with a "
+               "different host name beside it is the split working; the two DIFFERING is this flow never "
+               "having issued that question. The KIND integers are the FLOW_PENDING_* defines in "
                "solver/pending.h and are printed as numbers deliberately — a name table for them here would "
                "be a second copy of that header's list and would drift from it. A HOSTREQ (k3) at a DIFFERENT "
                "id is the FORK reading; no HOSTREQ at all, or an empty register, is the MACHINE reading.",
@@ -1679,8 +1711,12 @@ void engine_host_terminate(JSContext *ctx, uint32_t req) {
     for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
         for (int i = 0, n = pending_count(f->pending); i < n; i++) {
             JSValue p = pending_entry(f->pending, i);
+            /* MATCHED ON THE HOST'S NAME, because `req` here came FROM the host (see pending.h's REQ_HOST).
+               The arm of an ANSWER fork shares the issuer's host name deliberately, which is what the
+               ANSWER_FIXED guard below is about; the arm of a BRANCH fork has its own, which is what makes a
+               withdrawal reach exactly the rendezvous the host is withdrawing. */
             if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
-                (uint32_t)pending_get_int(p, PEND_REQ) != req) { JS_FreeValue(ctx, p); continue; }
+                (uint32_t)pending_get_int(p, PEND_REQ_HOST) != req) { JS_FreeValue(ctx, p); continue; }
             /* AN ARM'S ENTRY IS NOT THE ISSUER'S AND MUST NOT BE WITHDRAWN THROUGH ITS ID. An answer fork
                leaves the arm holding the SAME rendezvous id (the id lives in the step state inside the frame
                the arm is a clone of) with its answer FIXED — engine_host_answer skips exactly those — so a
@@ -1813,8 +1849,9 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
     for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
         for (int i = 0, n = pending_count(f->pending); i < n; i++) {
             JSValue p = pending_entry(f->pending, i);
+            /* MATCHED ON THE HOST'S NAME — `req` is the id this zone was shown and is quoting back. */
             if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
-                (uint32_t)pending_get_int(p, PEND_REQ) != req) { JS_FreeValue(ctx, p); continue; }
+                (uint32_t)pending_get_int(p, PEND_REQ_HOST) != req) { JS_FreeValue(ctx, p); continue; }
             if (!pending_get_int(p, PEND_HAVE_VALUE)) {
                 DCHECK(!pending_get_int(p, PEND_ANSWER_FIXED),
                        "a request whose answer was FIXED by an answer fork is UNANSWERED — the arm is built from "
@@ -1996,7 +2033,11 @@ const char *engine_host_requests(void) {
             int idlen;
             if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
                 pending_get_int(p, PEND_HAVE_VALUE)) { JS_FreeValue(pending_ctx(), p); continue; }
-            idlen = snprintf(idbuf, sizeof idbuf, "%u\t", (uint32_t)pending_get_int(p, PEND_REQ));
+            /* THE HOST'S NAME IS WHAT THE HOST IS SHOWN, and it is the whole of why the field exists: this
+               buffer is the only place an id leaves the engine, so every id the zone can ever quote back came
+               from this line. Emitting the machine's name here would hand the host two arms' identical names
+               and one answer would land in two contradictory worlds. */
+            idlen = snprintf(idbuf, sizeof idbuf, "%u\t", (uint32_t)pending_get_int(p, PEND_REQ_HOST));
             o = pending_get(p, PEND_OP);
             s = JS_ToCStringLen(pending_ctx(), &ol, o);
             DCHECK(s != NULL, "an outstanding host request has no text — the host routes on it");
@@ -5317,8 +5358,9 @@ int engine_host_decline(JSContext *ctx, uint32_t req, const char *reason) {
     for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
         for (int i = 0, n = pending_count(f->pending); i < n; i++) {
             JSValue p = pending_entry(f->pending, i);
+            /* MATCHED ON THE HOST'S NAME — a refusal is the zone answering about an id it was shown. */
             if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
-                (uint32_t)pending_get_int(p, PEND_REQ) != req) { JS_FreeValue(ctx, p); continue; }
+                (uint32_t)pending_get_int(p, PEND_REQ_HOST) != req) { JS_FreeValue(ctx, p); continue; }
             /* A REFUSAL AND AN ANSWER CANNOT BOTH BE TRUE OF ONE RENDEZVOUS, asserted here rather than left to
                the fork: `haveValue` says the zone computed a value, `declined` says it refused to. A record
                carrying both would have the asking machine take an answer AND a sibling arm wait for one. */
@@ -6715,8 +6757,14 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
             p = pending_unshare(sib->pending, i);
             /* AND THIS IS AN ASK LIKE ANY OTHER, which is what the census could not see while the count sat at
                the other mint site: the host is shown this id by engine_host_requests exactly as it is shown the
-               parent's, and it must pay both. `mint_req` counts it. */
-            pending_set_int(p, PEND_REQ, mint_req());
+               parent's, and it must pay both. `mint_req` counts it.
+               AND IT MOVES THE HOST'S NAME ALONE. The machine's name is in its step state, inside the frame
+               this sibling is a clone of, so this code cannot reach it — and for as long as this line wrote
+               `PEND_REQ` the arm's very next re-entry asked `engine_host_answered` about an id its own register
+               no longer held, and aborted. That is not a defect in the re-issue, whose argument above is
+               correct; it is one field having carried two facts. solver/pending.h's REQ_HOST holds the whole
+               of it. */
+            pending_set_int(p, PEND_REQ_HOST, mint_req());
         }
         JS_FreeValue(ctx, p);
     }
@@ -6742,6 +6790,37 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
                "a fork left the arm's pending register a different length from its parent's — the arm is that "
                "timeline continued, so it names the same records in the same order, and a fork that lengthens "
                "one defers that arm's script sequence by replies no flow on its path ever asked for");
+        /* AND THE RE-ISSUE MOVED EXACTLY ONE OF THE TWO NAMES, CHECKED ENTRY BY ENTRY AGAINST THE PARENT'S
+           REGISTER — which is possible only here, because this is the one place both registers are in one hand
+           and the lengths have just been proved equal, so position i is the same record in both. It is the
+           two-sided form of the loop above, and both sides matter for opposite reasons: a MACHINE name that
+           moved strands the arm's frame (the defect this split closes, measured as `asked 1 … register
+           0/k2+v 2/k3`), and a HOST name that did NOT move hands one answer to two arms in two contradictory
+           worlds (the defect the re-issue was written to close). An un-forked ANSWERED record is exempt from
+           the second half by the re-issue's own stated rule: "An ALREADY-ANSWERED one keeps its id", because
+           the answer was computed before the fork existed and both arms genuinely observed it. */
+        for (int i = 0; i < sib_pend_n; i++) {
+            JSValue pp = pending_entry(parent->pending, i);
+            JSValue sp = pending_entry(sib->pending, i);
+            if (pending_get_int(sp, PEND_KIND) == FLOW_PENDING_HOSTREQ) {
+                uint32_t pm = (uint32_t)pending_get_int(pp, PEND_REQ);
+                uint32_t sm = (uint32_t)pending_get_int(sp, PEND_REQ);
+                uint32_t ph = (uint32_t)pending_get_int(pp, PEND_REQ_HOST);
+                uint32_t sh = (uint32_t)pending_get_int(sp, PEND_REQ_HOST);
+                int answered = pending_get_int(sp, PEND_HAVE_VALUE) != 0;
+                DCHECKF(sm == pm, "a fork moved the arm's MACHINE name for host request %u to %u — that name "
+                                  "lives in the asking machine's step state, inside the frame this arm is a "
+                                  "clone of, so nothing out here can rewrite the asker and the arm's next "
+                                  "re-entry would poll a register that no longer holds its question", pm, sm);
+                DCHECKF(answered || sh != ph,
+                        "a fork left an UNANSWERED host request sharing its parent's HOST name %u — the answer "
+                        "is computed under the asking flow's world and the arm's world is not the parent's from "
+                        "this instant, so one answer would be delivered into two call sites in two "
+                        "contradictory worlds", ph);
+            }
+            JS_FreeValue(ctx, pp);
+            JS_FreeValue(ctx, sp);
+        }
     }
 #endif
     engine_reclaim_set(prev_reclaim);   /* the sibling is fully assembled: it may be paged like any other member */
@@ -7313,10 +7392,13 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
            navigable at the initial `about:blank` §7.3.1.3 "Child navigables" created it holding. The crash that
            named this capability asked for the navigable to keep its pre-operation document and the creating flow
            to park; that is this arm, and the error-page document a browser shows is the other one. */
-        DCHECK(kind != FLOW_PENDING_HOSTREQ || pending_get_int(e, PEND_REQ) != 0,
+        DCHECK(kind != FLOW_PENDING_HOSTREQ ||
+                   (pending_get_int(e, PEND_REQ) != 0 && pending_get_int(e, PEND_REQ_HOST) != 0),
                "a synchronous host request carries a refusal and NO rendezvous id — the id is the only identity "
                "this kind has, engine_host_decline found the record BY it, and an arm forked from a record that "
-               "names none could not be matched to the machine that is parked");
+               "names none could not be matched to the machine that is parked. BOTH names are asserted because "
+               "they are two facts and a fork moves one of them: a zero MACHINE name is a record no asker can "
+               "ever poll, and a zero HOST name is one the zone can never be shown");
         /* BOTH HOMES OF THE SUSPENSION ARE ASKED, AND NEITHER IS REQUIRED — which is the one place this fork
            differs from flow_answer_fork's and is not a weakening of it. That one forks a flow suspended AT a
            synchronous cross-instance read, so it always holds a call site: a frame if it was inside a program,
