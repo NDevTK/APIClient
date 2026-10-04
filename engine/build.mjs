@@ -8407,6 +8407,16 @@ console.log("[build] GATES ASKED — about HALF AN HOUR of running and auditing,
           + "never a precondition for the next compile, the next edit, the next commit or the next push. Build "
           + "and change code while this runs. The " + GATE_SEAM + " stage(s) ABOVE are the only ones whose red "
           + "blocks anything, because they are the only ones that decide whether an artifact EXISTS.");
+/* AND THE RULE IS STRICTER THAN `IT BLOCKS NOTHING`, WHICH IS ABOUT A RED, SO IT IS SAID SEPARATELY. The line
+   above tells a reader what a FAILING stage entitles; this one tells them what the RUNNING one does, and the
+   thing that costs a day is neither a red nor the builder slot — it is sitting here. §Testing: NEVER WAIT ON A
+   TEST. Asking is the end of the asker's involvement until the result arrives, and a turn whose only
+   outstanding thing is a suite is the eight-hour nobody-re-invoked failure wearing diligence. */
+console.log("[build] DO NOT WAIT FOR THIS. Asking was the whole of your involvement: go and build, edit, commit "
+          + "and push, and read the verdict when it lands. A turn that ends with this suite as its only "
+          + "outstanding thing has nothing to re-invoke it, which §Testing measures at EIGHT HOURS of silence. "
+          + "Not waiting is about the INTERVAL and never about the ANSWER — the queue below is still drained "
+          + "deliberately, and error-free is still the standing target.");
 
 const NATIVE_SMOKE = NATIVE_BUILT.bin === null
   ? skipped("native smoke test", "the native program did not link")
