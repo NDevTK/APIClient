@@ -1264,12 +1264,23 @@ if (jnShown.length) {
    runnable — and the round partition is what separates them. MEASURED over the five gitpod passes that carry
    both rows, sorted by share descending: the fraction of rounds ENDING IN A FETCH SERVICE rises monotonically
    as the share falls (54, 64, 72, 78, 91 per cent against 48.3, 37.3, 11.4, 10.3, 0.9), and so does the POOL
-   the level-1 order was choosing between (2, 3, 4, 5, 6). Five of five, no exception — so the share is not a
-   fact about this engine at all, it is what one engine gets when the one thread is shared N ways and most
-   rounds go to serving somebody's bytes.
-   WHICH OF THE TWO IS THE DRIVER IS NOT ESTABLISHED AND MAY NOT BE INFERRED HERE: `pool` and the service
-   fraction move together on this corpus, so no sample in it can separate them, and both are printed rather
-   than one being named the cause. What IS established is that the reach mode is partly a property of the
+   the level-1 order was choosing between (2, 3, 4, 5, 6). Five of five, no exception.
+   AND THE MECHANISM THAT CORRELATION INVITES IS REFUTED BY THE PRODUCER, which is recorded here because the
+   commit that landed this block published it: it said the share is "what one engine gets when the one thread
+   is shared N ways and MOST ROUNDS GO TO SERVING SOMEBODY'S BYTES", and a serviced round is not a round the
+   engine did not get. bridge.js sets `rd.shape = "serviced"` AFTER `ops.step(target)` has already answered —
+   `st !== 0` IS that answer — so every serviced round STEPPED this engine and then paid what it asked for. The
+   N-ways half stands and the serving half does not, and a reader who takes `rServiced` for a round spent
+   elsewhere has the arithmetic backwards.
+   SO THE MECHANISM IS NOT ESTABLISHED BY ANY ROW HERE, WHICH IS THE HONEST STATE RATHER THAN A GAP TO FILL
+   WITH A GUESS. Three candidates are each refuted or unseparated by what is printed: a DELIVERY ceiling cannot
+   be it, since `canDeliver` and `stackEmpty` are 4 at every pass and `pendReady` does not predict the share in
+   either direction (0 ready reads 37.3% and 10.3%, 279 ready reads 0.9%); WAITING ON THE NETWORK cannot be it
+   alone, since the highest-share pass asked for the MOST replies (479) and still ran 96.1%; and `pool` against
+   the service fraction cannot be separated at all, because they move together in every pass this corpus has.
+   `round` is also the HOST's count over the WHOLE pool while `slices` is this engine's own, so the two are
+   §AND-TWO-INSTRUMENTS-CAN-DISAGREE's different units and their quotient is not a quantity — which is why
+   neither is divided by the other here. What IS established is that the reach mode is partly a property of the
    DRIVE — how many documents of the origin the harness had open — which is §A-FIXTURE-BUILT-TO-EXERCISE-EVERY-
    MECHANISM's hazard read from the other end: a figure a reader takes for the engine's.
    AND THE OTHER SIX ARMS ARE ZERO AT EVERY ONE OF THOSE PASSES, which is why only two are printed: the
