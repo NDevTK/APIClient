@@ -6170,8 +6170,46 @@ function report(stages, findings) {
   /* A POSITIVE STATEMENT EITHER WAY. The sources that were COMPILED are not necessarily the sources on disk
      now, and a reader who runs `git show` after this build would be reading a different program. Saying "did
      not move" is what makes the silence readable as an answer rather than as a question nobody asked. */
-  if (moved) console.error("[rev] THE TREE MOVED UNDER THIS BUILD — " + moved + ". The stages below measured " +
-                           "the sources as they were read, which no revision now describes.");
+  /* AND WHOSE PROBLEM A MOVED TREE IS, WHICH DEPENDS ENTIRELY ON WHAT THE STAGES BELOW TOOK AS THEIR SUBJECT
+     AND WAS BEING REPORTED AS ONE ALARM FOR BOTH. §Testing: a gate suite is a MOMENT-IN-TIME reading and CODE
+     CHANGES CONTINUE DURING IT — that is the project owner's decision and it is the whole point of never
+     waiting on a test, so for a gate run a moved tree is the EXPECTED state and printing it as a defect tells
+     every reader the opposite of the policy. For a COMPILE run it is the real hazard the line was written for:
+     the stages above the seam measured SOURCES, so a tree that moved under them means the program compiled
+     from bytes no revision describes.
+     THE SPLIT IS NOT WHICH VERB WAS TYPED, IT IS WHAT EACH STAGE'S SUBJECT IS, and the stage list already
+     carries it. A stage past `GATE_SEAM` RUNS AN ARTIFACT this run stamped, so its verdict is about that
+     artifact and the working tree cannot reach it — the artifact is immutable the moment it is linked. A
+     SOURCE-hosted stage past the seam AUDITS THE TREE, so it is the one population a mid-run edit really does
+     move, and naming those rows is what keeps this line an answer rather than a blanket.
+     `gateRun` IS DERIVED FROM THE REPORT AND NOT FROM ARGV, which is a decision: a second
+     `process.argv.includes("gates")` would be a second answer to "which act is this", and the report already
+     holds the fact — stages past the seam exist exactly when the gate suite ran. It also keeps this readable
+     from the `native` verb, whose report has no seam and therefore takes the compile arm. */
+  const gateRun = GATE_SEAM !== null && stages.length > GATE_SEAM;
+  const treeAudits = gateRun
+    /* READ OFF THE TAG AND NOT BY IDENTITY, for the reason the vehicle filter two screens down reads
+       `s.host.vehicle`: `onHost` validates the SHAPE of a host and not its address, so a stage pushed with a
+       structurally-valid host that is not the very object in `STAGE_HOST` is legitimate and an identity test
+       would silently drop it from this list — which is the direction that makes a moved tree look like it
+       reached nothing. */
+    ? stages.slice(GATE_SEAM).filter((s) => s.host.tag === STAGE_HOST.SOURCE.tag).map((s) => s.label)
+    : [];
+  if (moved && gateRun)
+    console.log("[rev] THE TREE MOVED UNDER THIS GATE RUN, WHICH IS EXPECTED AND IS NOT A DEFECT — " + moved +
+                ". §Testing: a gate suite is a MOMENT-IN-TIME reading and code changes continue during it, " +
+                "which is why nobody waits on one. Every stage past the seam RAN AN ARTIFACT this run stamped " +
+                "at the revision named above, and an artifact is immutable once linked, so its verdict is " +
+                "quotable against that revision whatever the tree did afterwards." +
+                (treeAudits.length
+                  ? " WHAT THE MOVEMENT DOES REACH is the stage(s) that AUDIT THE TREE rather than run the " +
+                    "artifact — " + treeAudits.join(", ") + " — whose counts are about the sources as they " +
+                    "were read and therefore about no single revision. Re-run those from a frozen snapshot if " +
+                    "you mean to quote them."
+                  : " No stage past the seam audits the tree, so nothing in this report is about the sources " +
+                    "that moved."));
+  else if (moved) console.error("[rev] THE TREE MOVED UNDER THIS BUILD — " + moved + ". The stages below " +
+                           "measured the sources as they were read, which no revision now describes.");
   else console.log("[rev] the tree did not move under this build");
   /* AND BY CONTENT, OVER THE SOURCES THIS BUILD'S CONTRACTS WERE DERIVED FROM — the finer question, and the one
      the line above structurally cannot answer. `revisionMoved` compares HEAD and the `git status` PORCELAIN,
