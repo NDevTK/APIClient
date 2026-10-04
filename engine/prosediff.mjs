@@ -241,10 +241,23 @@ function main() {
 
   let worst = 0;
   for (const p of paths) {
-    if (p.endsWith(".h")) {
-      console.log("\n" + p + ": NO TRANSLATION UNIT — a header emits nothing on its own, so this cannot answer");
-      console.log("  about it. Pass a `.c` that includes it; a silence here is the instrument declining, never");
-      console.log("  a prose-only verdict. See this file's named residual.");
+    /* A PATH THIS CANNOT ANSWER ABOUT IS DECLINED BY NAME AND NEVER ATTEMPTED, in two kinds, because an
+       attempt would produce an answer. A header has no translation unit; anything that is not C has no
+       preprocessor at all, and `clang -E` on a `.mjs` or a `.js` does not refuse — it returns the text with its
+       `//` comments intact and its `#`-less lines untouched, so the comparison would run, the control would
+       speak, and a VERDICT would be printed over a pipeline that models nothing about how that file executes.
+       That is the §A-PROBE-FOR-LIVENESS shape: a check answering about the wrong artifact is worse than one
+       refusing, because its output looks like a result. Both arms exit nonzero, so a `--prose` claim naming one
+       REFUSES rather than passing vacuously. */
+    if (!p.endsWith(".c")) {
+      const why = p.endsWith(".h")
+        ? "NO TRANSLATION UNIT — a header emits nothing on its own, so this cannot answer about it. Pass a `.c`"
+          + "\n  that includes it; a silence here is the instrument declining, never a prose-only verdict. See"
+          + "\n  this file's named residual."
+        : "NOT A C TRANSLATION UNIT — this measures what a C PREPROCESSOR emits, and `clang -E` over a non-C"
+          + "\n  file does not refuse: it would return text and this would print a verdict over a pipeline that"
+          + "\n  models nothing about how that file runs. Declined rather than attempted.";
+      console.log("\n" + p + ": " + why);
       worst = Math.max(worst, 1);
       continue;
     }

@@ -57,16 +57,31 @@ const die = (code, ...lines) => { for (const l of lines) process.stderr.write("[
 const argv = process.argv.slice(2);
 const flag = (n) => { const i = argv.indexOf(n); return i < 0 ? null : argv[i + 1]; };
 const rev = argv.find((a) => !a.startsWith("--") && argv[argv.indexOf(a) - 1] !== "--expect"
-                                                && argv[argv.indexOf(a) - 1] !== "--remote") || null;
+                                                && argv[argv.indexOf(a) - 1] !== "--remote"
+                                                && argv[argv.indexOf(a) - 1] !== "--prose") || null;
 const expect = flag("--expect");
 const remote = flag("--remote") || "origin";
+/* THE PATHS THE PUBLISHER CLAIMS ARE PROSE-ONLY, AS AN INPUT RATHER THAN AS A SENTENCE IN A MESSAGE. CLAUDE.md
+   requires a large share of this project's diffs to be comment-only — a retired argument is REWRITTEN rather
+   than deleted, an incident is kept at its site — and the evidence offered for one is always the same sentence,
+   `I only added comments`, which is a claim about the EMITTED PROGRAM that no gate here measures. `prosediff.mjs`
+   measures it, and the reason it is spawned HERE is the reason `--expect` is required here: nothing connects a
+   command somebody remembers to the act it was supposed to gate. A claim stated at the publish is a claim with
+   an exit status in front of it.
+   IT IS A CLAIM AND NEVER A SCAN, which is the whole of why it is opt-in. Preprocessing every changed `.c` on
+   every publish costs minutes on a large translation unit and would make a prose fix unlandable, which CLAUDE.md
+   refuses by name: a citation is prose and a build that cannot land a spelling fix stops every lane. So this
+   asks nothing of a publisher who claims nothing, and refuses the one who claims wrongly. */
+const prose = (flag("--prose") || "").split(",").map((x) => x.trim()).filter(Boolean);
 
 if (rev === null || expect === null)
   die(2, "usage: node engine/publish.mjs <sha> --expect <n> [--remote origin]",
          "  <sha> is the CUT -- the commit to publish, and everything beneath it.",
          "  --expect <n> is how many commits you believe that publishes. It is REQUIRED, and it is required",
          "  here for the same reason engine/pubgate.mjs requires it: the count is the part a redirection hides,",
-         "  so it is an input. Run the gate with no --cut first to read the chain and every allowed cut.");
+         "  so it is an input. Run the gate with no --cut first to read the chain and every allowed cut.",
+         "  --prose <a.c,b.c> states that those paths' diffs across this range emit NO code. It is checked by",
+         "  engine/prosediff.mjs before anything is pushed, and a nonzero verdict pushes nothing.");
 
 /* THE SHA IS RESOLVED ONCE AND EVERY LATER COMMAND NAMES THE RESOLVED VALUE, never the ref it came from.
    CLAUDE.md: `HEAD` is a MOVING REFERENCE in a shared checkout, and two evaluations of one are two questions. */
@@ -162,6 +177,27 @@ if (String(n) !== String(expect).trim())
          `  git log --oneline ${old.slice(0, 7)}..${sha.slice(0, 7)}`);
 say(`${n} commit(s) to publish, which is the --expect you stated and the remote's own tip says so: ` +
     `${old.slice(0, 7)}..${sha.slice(0, 7)}`);
+
+/* THE PROSE-ONLY CLAIM, CHECKED AGAINST THE REMOTE'S OWN TIP AND BEFORE ANY PUSH. The base is `old` and not a
+   tracking ref: it is what this push's range is defined against, read from `ls-remote` above, so the residue is
+   over exactly the commits about to be published rather than over whatever a local ref last fetched.
+   SPAWNED WITH stdio INHERITED AND A NONZERO VERDICT PUSHES NOTHING, which is the gate's shape for the gate's
+   reason — `if <check>; then <act>` and never `<check>; <act>`, the second being a NON-check with a reassuring
+   transcript above an unconditional irreversible act. */
+if (prose.length) {
+  say(`checking the --prose claim over ${prose.length} path(s) against ${old.slice(0, 7)} ────────────────────`);
+  const pd = spawnSync(process.execPath,
+                       [new URL("prosediff.mjs", import.meta.url).pathname, ...prose, "--base", old],
+                       { stdio: "inherit" });
+  if (pd.status !== 0)
+    die(pd.status === null ? 3 : pd.status,
+        "──────────────────────────────────────────────────────────────────────────────────────────────────────",
+        `the prose-only claim FAILED (prosediff exited ${pd.status}) and NOTHING was pushed. Read its verdict`,
+        "above: a NON-NUMERIC difference is a statement, an expression or a datum your diff emits; an",
+        "UNEXPLAINED numeric delta is one no hunk boundary accounts for; a header is DECLINED rather than",
+        "cleared. Either the claim is wrong, or drop --prose and say in the message what the diff emits.");
+  say("the prose-only claim HELD ─────────────────────────────────────────────────────────────────────────────");
+}
 
 /* EACH PUSH IS ITS OWN SPAWN AND CARRIES NOTHING ELSE. A retry is only ever for a NETWORK failure: a refusal
    is a verdict and retrying one is arguing with it. */
