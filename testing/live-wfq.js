@@ -65,8 +65,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
    A LIFETIME COUNTER raised at the same line and under the same condition as its superset, so
    `starvedPicksIdle <= starvedPicks` is an identity of one evaluation; it is checked below rather than
    trusted, for the reason every other identity on this stream is. */
-/* `epochRebuildLifetime` AND `epochResetsLifetime` ARE COUNTERS AND THE READING THIS DRIVER CANNOT COMPOSE
-   FROM ONE SAMPLE.  They are the whole maintenance an index over solver/flow.c's `flow_index_key` would pay:
+/* `epochRebuildLifetime` AND `epochResetsLifetime` ARE COUNTERS AND BOTH READINGS THEY CARRY ARE COMPOSED
+   FROM ONE SAMPLE, BELOW.  THIS HEADLINE READ "THE READING THIS DRIVER CANNOT COMPOSE FROM ONE SAMPLE" AND
+   IS REWRITTEN RATHER THAN DELETED, because a reader who re-derives it from where the operands SIT in this
+   file will write it again: `epochRebuildLifetime` is named in COUNTERS and `scanNextWeights` in COST, so
+   they read as two documents and are one.  MEASURED through this driver's own `wfqComposerKeys()` rather
+   than argued -- all four epoch rows AND both `scanNext*` rows are keys of the SINGLE composer
+   `result_wfq_json(void)`, with an invented name absent from that same set as the control -- so result.c's
+   own "READ IT AGAINST `scanNextWeights`, WHICH IS ALREADY ON THIS LINE" is literal, and the retired
+   headline was a claim about THIS FILE'S LAYOUT mistaken for one about the census.
+   WHAT THE WRONG HEADLINE COST IS WHY IT IS RECORDED AND NOT JUST FIXED: `share`'s contract is that a
+   quotient is printed where result.c PRESCRIBES it and nowhere else, and result.c prescribes BOTH of these
+   in its own words.  A headline saying this driver could not compose them is therefore not a cautious
+   omission -- it is the one sentence standing between a published row and the reading it exists for, which
+   is the write-with-no-READING half of the record-field contract and the half no producer-side check can
+   see, because the producer is correct.  Both are LIFETIME over LIFETIME, so neither carries the defect
+   that makes a lifetime total over a terminal GAUGE under-read by the factor the frontier grew.
+   They are the whole maintenance an index over solver/flow.c's `flow_index_key` would pay:
    flow_credit_emit sends a family back to its epoch base by moving a generation with NO per-member write, so
    such an index rebuilds exactly the members standing AWAY, and the first of these is that count summed at
    every emission.  Read it against `scanNextWeights` on the COST scope — the lifetime sum over scans of the
@@ -364,6 +379,35 @@ function costScope() {
                     "measurable only on the fixture that chose its own frontier.");
   return COST;
 }
+/* THE EPOCH FAMILY'S OWN TWO-WAY CHECK, AND IT IS OWED FOR THE REASON THE COST SCOPE'S IS. The four scopes
+   above each guard one family of published rows in both directions, and the `epoch*` family matched NONE of
+   their selectors -- so these four rows were named by hand in COUNTERS and GAUGES with nothing comparing
+   that list against the producer, and a FIFTH epoch row added to result.c would be composed on every census
+   of every run and read by nobody.  That is precisely the state the other four guards exist to end,
+   arriving through the gap between their selectors rather than through any of them.
+   IT IS ONE FAMILY AND NOT A SWEEP OF THE UNGUARDED REMAINDER, deliberately: the rows this driver now
+   composes a reading from are these, and a guard over every published row nobody has partitioned is the
+   uniform repair CLAUDE.md forbids.  The remainder is REPORTED rather than swept.
+   DERIVED FROM THE COMPOSER and never from a count: a renamed row throws naming the row, and a published
+   `epoch*` row no reader here names throws too. */
+function epochScope() {
+  const keys = wfqComposerKeys();
+  const named = [...COUNTERS, ...GAUGES].filter((k) => /^epoch[A-Z]/.test(k));
+  for (const k of named)
+    if (!keys.has(k))
+      throw new Error("[live-wfq] result_wfq_json no longer publishes `" + k + "` — this driver takes the " +
+                      "epoch family from result.c's own composer, so a row that has gone is one the producer " +
+                      "renamed or dropped rather than one this file invented, and both readings composed " +
+                      "from it would divide an absent field as undefined.");
+  const published = [...keys].filter((k) => /^epoch[A-Z]/.test(k));
+  const unread = published.filter((k) => !named.includes(k));
+  if (unread.length)
+    throw new Error("[live-wfq] result_wfq_json publishes epoch-scope row(s) no reader here names: " +
+                    unread.join(", ") + ". Name the row in COUNTERS or GAUGES with its KIND, because a row " +
+                    "whose kind a reader cannot take from this output is one they are not entitled to do " +
+                    "arithmetic on.");
+  return named;
+}
 /* ── THE HEAP CENSUS'S BYTE ROWS, WHICH HAVE NEVER BEEN READ ON A REAL PAGE ───────────────────────────────
    WHY THIS SCOPE EXISTS AND WHY IT IS THIS DRIVER'S. bridge.js composes `heap: result._heap` on the SAME
    `_engineLog` row it composes `wfq: result._wfq` on, and DCHECKs `_heap`'s presence on every result
@@ -627,6 +671,7 @@ async function main() {
   const COSTROWS = costScope();
   const KEYROWS = keyScope();
   const SPREADROWS = spreadScope();
+  const EPOCHROWS = epochScope();
   const HEAPROWS = heapScope();
   const CEIL_KIB = wasmCeilingKiB();
   assertWorkingSetRow();
@@ -659,6 +704,17 @@ async function main() {
               "order's own points and `nonrewardMax` is the bound every term but the reward is under. Read " +
               "beside `neverPickedGap`: a gap of 0.000 says something else decided, and these say whether " +
               "anything could have.");
+  console.log("# epoch scope, derived from result_wfq_json (" + EPOCHROWS.length + " rows) — the KIND is in " +
+              "each key: " + EPOCHROWS.join(",") + ". `epochRebuildLifetime` is the whole maintenance an " +
+              "index over solver/flow.c's `flow_index_key` would pay, summed AT EACH EMISSION; the two " +
+              "`Away` gauges are its shape at one instant and are a CONSERVATION IDENTITY, never the cost. " +
+              "Both readings are composed per census below: `epochRebuildWalkShare` against " +
+              "`scanNextWeights` — the walk an index would REPLACE — where well below it the epoch is a " +
+              "COST and an index narrows, and at or above it the rebuild is the walk moved rather than " +
+              "removed; and `epochRebuildPerEmit`, which tells a large total over many cheap emissions " +
+              "from a small one over few expensive ones. A ZERO IS READ AGAINST `epochResetsLifetime` " +
+              "FIRST: zero resets is a run that never emitted, and the pair is then SILENT about the design " +
+              "rather than favourable to it.");
   console.log("# heap scope, derived from result_heap_json (" + HEAPROWS.length + " byte rows) — GAUGES at " +
               "the census instant, never differenced: " + HEAP_GAUGE.join(",") + " | MONOTONE IN WASM, so " +
               "its latest value IS its high-water: " + HEAP_WASM_MONOTONE.join(",") + " | ceiling " +
@@ -752,6 +808,22 @@ async function main() {
           out.censusMeanFrontier = share(w.scanCensusWeights, w.scanCensusRuns);
           out.censusWeighShare   = share(w.scanCensusWeights, w.scanNextWeights);
           out.rivalMissRate      = share(w.scanRivalRuns, w.preemptAsksLifetime);
+          /* THE TWO READINGS result.c PRESCRIBES FOR THE EPOCH, COMPOSED HERE AND NOT WITH THE COUNTERS
+             ABOVE, because one of the denominators is a COST row: result.c emits the epoch rows and both
+             `scanNext*` rows in ONE `composef` past its empty-frontier return, so they are present and
+             absent TOGETHER and this gate is exactly their gate. Composed after that return in the heap
+             block's sense would be composed where neither operand exists.
+             BOTH ARE LIFETIME OVER LIFETIME, which is what makes them readings rather than lotteries. The
+             numerator is summed at each EMISSION and the denominators are lifetime counts of the same run,
+             so no operand is an instant and neither quotient is the gauge-denominated under-read a lifetime
+             total over a terminal `members` would be. The `Away` gauges are deliberately NOT divided into
+             anything here: a census lands at an arbitrary point between two emissions, so that population
+             reads near zero just after one and at its peak just before.
+             THE THREE-WAY VERDICT IS NOT COMPUTED, for the reason the crowd and minter shares state: well
+             below / at / above `scanNextWeights` take different diffs, and classifying would pick a
+             threshold result.c's contract leaves to a reader. A ZERO DENOMINATOR YIELDS null AND NEVER 0. */
+          out.epochRebuildWalkShare = share(w.epochRebuildLifetime, w.scanNextWeights);
+          out.epochRebuildPerEmit   = share(w.epochRebuildLifetime, w.epochResetsLifetime);
         }
         /* THE SCORE OF THE WALK'S OWN PREDICTED ABSENCE, printed RAW and with no quotient composed from it.
            result.c prescribes reading `keyArmedLifetime` as the score and the other three as why, and states

@@ -4965,11 +4965,52 @@ long flow_branch_born(const Flow *f) {
    doors copy a silence that is already in hand (flow_fork_inherit takes the parent's, flow_arrive_at_virtual_time
    takes the running member's). So the set of members standing away from the epoch's base is bounded by
    DISPATCHES PLUS FORKS since the family last emitted, and never by the size of the frontier — which is the
-   quantity that decides whether an index here is sub-linear, and which nothing in this engine counts.
-   HOW ITS ABSENCE SHOWS: a reader prices an index over this key against `members` and gets a figure that is
-   right between emissions and wrong across one, with no row anywhere reporting how many members stand away
-   from their family's epoch base — so the rebuild is invisible in every census this file publishes and in
-   every reading taken from them.
+   quantity that decides whether an index here is sub-linear.
+   THIS SENTENCE ENDED ", AND WHICH NOTHING IN THIS ENGINE COUNTS", AND THE CLAUSE BELOW IT SAID THE REBUILD
+   WAS INVISIBLE IN EVERY CENSUS THIS FILE PUBLISHES. Both were TRUE WHEN WRITTEN and both are false now, and
+   they are rewritten rather than deleted because a reader who re-derives the gap from the epoch's own O(1)
+   reset will write them again: a generation bump leaves no per-member trace, so the natural conclusion is
+   that the population it moves cannot be known, and the four incremental sites are what make it knowable.
+   WHAT COUNTS IT: `FlowAcct.away_n`, maintained at four sites and never walked, summed at each emission into
+   `g_epoch_rebuild` by flow_credit_emit's own statement group BEFORE the bump that empties it, published by
+   result.c as `epochRebuildLifetime` against `epochResetsLifetime`, and checked against a direct walk of
+   flow_own_silence at the end of flow_wfq_census so a FIFTH transition site fires rather than drifts.
+   HOW ITS ABSENCE WOULD SHOW, STATED AS AN OBSERVATION AND NOT AS AN INSTANCE: a reader pricing an index over
+   this key would have only `members` to price it against, so their figure would be right between two
+   emissions and wrong across one, with the rebuild appearing in no census and in no reading taken from one.
+   THE READING IS THE ONE result.c PRESCRIBES AND IT HAS BEEN TAKEN: `epochRebuildLifetime` over
+   `scanNextWeights` — the lifetime maintenance against the lifetime walk it would REPLACE — read off the
+   terminal census of each smoke segment of four build logs at four revisions, and SEPARATED BY HOST, because
+   one build log holds a native segment and a wasm one and a figure quoted out of the directory would be a
+   figure about whichever stage the grep reached. It read 0.186% to 0.274%, and FELL MONOTONICALLY with the
+   frontier in every segment on both hosts — from above 100% at one member to about a fifth of one percent at
+   a hundred and fifty — which is the shape the bound above predicts: the rebuild is bounded by dispatches
+   plus forks since the last emission while the walk is the frontier once per ask. On result.c's own stated
+   rule ("well below it the epoch is a COST and an index narrows"), that is WELL BELOW, and the per-emission
+   quotient agreed to three digits ACROSS THE TWO HOSTS (1.652 against 1.663 at the last interval).
+   THIS CLAUSE ENDED ", WHICH NO CLOCK-COARSENING READING DOES", AND THAT WAS AN OVER-CLAIM WITHDRAWN BEFORE
+   IT LANDED. It is a promise about readings its author had not measured, and one counterexample would have
+   discarded the true part with it. What IS measured is narrower and is the whole of why the agreement is
+   worth stating: BOTH of these quotients are counts of MEMBERS over counts of MEMBERS, so neither operand is
+   denominated in a clock at all, and a host's slice measure cannot reach either. That is the property, and it
+   is checkable from the accessors rather than from a comparison with other rows.
+   IT IS THEREFORE NOT THE FIGURE flow.h DECLINES TO PRICE AN INDEX WITH, and the two must not be conflated
+   by a reader who meets both. That refusal is about `sil_phases` — a count of distinct sub-quantum RESIDUES,
+   which is a reading OF THE CLOCK and whose own banner says so. This is `away_n` summed at each emission
+   against the walk, which flow_epoch_rebuild's own declaration calls "the reading that decides whether a
+   sub-linear order over this frontier is buildable at all" and prescribes against exactly this denominator.
+   Same design question, two rows, and only one of them has a microsecond anywhere in it.
+   NEITHER DENOMINATOR IS `members`, WHICH IS THE OTHER WAY A READING HERE WOULD HAVE BEEN UNSTABLE: a
+   per-member denominator moves with how much of the frontier was ever charged, and a lifetime numerator over
+   a TERMINAL gauge under-reads by the factor the frontier grew. Both of these are lifetime over lifetime.
+   AND IT IS A FIXTURE READING, WHICH IS THE HALF THAT MAKES IT A HYPOTHESIS ABOUT REAL DOCUMENTS RATHER THAN
+   A PROPERTY OF THE ENGINE: those segments drive the build smoke's own document, whose frontier size and fork
+   factor are its author's design decisions, so the RATIO is partly a statement about that fixture. What the
+   fixture cannot make up is the DIRECTION, which is monotone in eight independent segments, and the
+   denominator is this engine's own walk either way. The number is not quoted here as the engine's; the
+   derivation is, and it is one command per log: read the terminal `@WFQ` census of each segment, partition
+   by the `@QUANTUM` line's `isCpu`, and divide `epochRebuildLifetime` by `scanNextWeights` — or read
+   `epochRebuildWalkShare`, which testing/live-wfq.js now composes per census so no reader has to.
    THE POPULATION IS EXACT AND IS READ OFF THE ACCESSOR RATHER THAN INFERRED FROM THIS PARAGRAPH:
    flow_own_silence is `f->cpu_gen == f->family->emit_gen ? f->cpu : 0`, so a member stands away from its
    family's epoch base exactly when `f->family && f->cpu_gen == f->family->emit_gen && f->cpu > 0`. That
@@ -4991,10 +5032,29 @@ long flow_branch_born(const Flow *f) {
    scoped to flow.c and flow.h alone can only produce the half that nothing reads — the clause used to say
    "a row" and left its reader to be discovered at the boundary, which is a residual reasoning from where its
    author was standing rather than from where its consumer lives.
-   RETIREMENT: this clause goes when that population is counted — the maintained away count raised where a
-   member's own silence first leaves its family's epoch base, zeroed where flow_credit_emit clears the epoch,
-   summed INTO a lifetime row at that same statement, and emitted by result.c — because the rebuild is then a
-   number beside the walk's rather than an argument here.
+   RETIREMENT — MET, AND THE CLAUSE IS REWRITTEN RATHER THAN DELETED BECAUSE WHAT A READER RE-DERIVES IS THE
+   ABSENCE AND NOT THE ROW. It read: "this clause goes when that population is counted — the maintained away
+   count raised where a member's own silence first leaves its family's epoch base, zeroed where
+   flow_credit_emit clears the epoch, summed INTO a lifetime row at that same statement, and emitted by
+   result.c — because the rebuild is then a number beside the walk's rather than an argument here." Every one
+   of those four is standing, in the four files this clause said could not land apart, and `away_n`'s own
+   declaration holds the derivation.
+   IT WAS MET THIRTY-ONE MINUTES AFTER IT WAS WRITTEN AND STOOD FOR HUNDREDS OF COMMITS AFTERWARDS, which is
+   the part worth keeping, because the failure is not the clause and not the landing. The commit that wrote
+   this residual did not count the population — verified at that revision rather than inferred, with a
+   control that spoke — and the commit that counted it says so in its own subject. So this is ORDINARY
+   STALENESS and not a clause that was wrong at birth: the mechanism WORKED, somebody read a residual and
+   built exactly the thing it asked for. What did not happen is the half CLAUDE.md puts in the same breath —
+   a diff that satisfies a retirement condition removes that record IN THE SAME COMMIT — and the cost of
+   skipping it is measured and specific: a coordinator read this clause, built a brief out of it, and
+   dispatched a lane to build a row that was already emitted, already kind-declared and already checked by a
+   conservation identity. A residual is read by exactly one person, once, at the moment they have already
+   decided to do the work, so a met condition left standing does not mislead a reader — it SPENDS one.
+   RETIREMENT: this record goes when a retirement condition in this tree cannot be written without the
+   command that showed its mechanism absent, AND the build refuses a diff that satisfies one while leaving
+   it standing — because the condition is then closed by construction at both ends, and neither a clause born
+   met nor a clause met and kept is spellable. Not "when no met condition stands here": that is satisfied by
+   an absence over this file's own prose, which an edit meets and no construction does.
    WHAT THE NEXT DIFF BUILDS: that enumeration — the distinct `branch` nodes of the live frontier, maintained
    where membership moves (flow_new opens one, the fork's join is the only thing that ever retires one from
    use, and acct_depart is where a bucket loses its last member), so one offset can be read for a whole arm
