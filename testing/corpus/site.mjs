@@ -884,6 +884,14 @@ const epFact = (k) => !counted.length ? null
    EXTENDS one of these when a lane adds one. That check is blind to this ladder's ARRIVAL and always was —
    its shape is a name that extends a carried name, and not one of these eleven extends anything this row
    carried — which is why the gap sat here with every instrument in the tree reading clean. */
+/* THE REPLY DOOR'S FOUR ENDS, ITS OUTSTANDING GAUGE AND THE DELIVERY DEBT, IN THE PRODUCER'S OWN ORDER AND AS
+   ONE LIST — so the row's keys and the identity check below cannot disagree about which terms they are about,
+   which is the same reason `EP_FACT_FIELDS` is one list. `REPLY_DOOR_SUM`'s FIRST member is the TOTAL and the
+   rest are its parts, in solver/result.c's own assertion order, so the check derives the arithmetic from the
+   list rather than restating it. `rowsAwaitingBytes` is in the carried set and NOT in the sum: it is a gauge
+   over PROGRAM ROWS and the five are over KEYED RECORDS, two populations whose addition would be a unit error. */
+const REPLY_DOOR_SUM = ['replyAsked', 'replyAnswered', 'replyDeclined', 'replyDropped', 'replyOutstanding'];
+const REPLY_DOOR_ROWS = [...REPLY_DOOR_SUM, 'rowsAwaitingBytes'];
 const NET_ASK_ROWS = [
   'epFetchAskNamedLife', 'epFetchAskNamedTypeofLife', 'epFetchAskCalledLife',
   'epFetchAskBeganLife', 'epFetchAskOfferedLife',
@@ -1339,6 +1347,77 @@ const row = {
     if (!counted.length) return null;
     const d = counted[counted.length - 1].egressDeclined;
     return (d && typeof d === 'object' && !Array.isArray(d)) ? d : null;
+  })(),
+  /* AND THE REPLY DOOR'S FOUR ENDS AND ITS OUTSTANDING GAUGE, AS THE WHOLE PARTITION AND NEVER A TERM OF IT —
+     which is what the decision one block up REQUIRES rather than what it forbids, and the distinction is the
+     reason this is here at all. That paragraph refuses to publish `cold.replyDeclined` BESIDE `egressDeclined`,
+     and its reason is exact: that counter "is a PART of a five-term partition … and its own siblings' prose says
+     the five mean nothing read apart -- so ONE OF THEM ALONE in this row would be a part with no total". Read for
+     what the reason COVERS rather than for where it sits (CLAUDE.md §AND-OPENING-IT-IS-NOT-ENOUGH), it forbids a
+     LONE term and argues FOR the complete set: the five carried together ARE the total, and the identity below
+     is the thing that makes them mean something.
+     THE QUESTION IT ANSWERS IS THE PRODUCT'S, AND solver/result.c STATES IT IN THE ASSERTION'S OWN WORDS: "a
+     host that still owes replies and a surface this tool refused to ask for are opposite findings and only one
+     of them is about the reply door". Measured on gitpod at one artifact, one 60s dwell and one site, two runs
+     differed by whether the page's code contributed ANY address — 92 of 190 minted post-program in one and 0 of
+     99 in the other, with `evaluate-a-module-program` reading 4 against 0 and `deliver-one-reply` 107 against 5
+     over an `egressAsked` of 291 against 99. A module graph cannot evaluate until its chunks arrive, so WHICH
+     END the unarrived ones are in is the whole question, and no row this file carried could name it: `egressAsked`
+     counts what the chokepoint was HANDED and `egressDeclined` what it REFUSED, and neither says whether the
+     engine is still owed.
+     IT IS A DIFFERENT DENOMINATOR FROM `egressDeclined` AND IS NOT A SUBTRACTION FROM IT, which that same
+     paragraph already establishes and this does not restate as its own claim: a chokepoint refusal names a
+     (method, url) PAIR and `engine_decline` marks every parked RECORD keyed on it, so one refusal can raise the
+     engine's counter several times. The cross-check stays a READER'S to make while holding both objects — this
+     row nonzero with `replyDeclined` at 0 is a refusal that never reached the engine — and it is still not a
+     subtraction anything here may perform.
+     THREE OF THE FOUR ENDS ARE LIFETIME COUNTS AND `replyOutstanding` IS A GAUGE, which is the producer's own
+     statement at `@kind` and not this file's guess, and it is why the identity is asked of ONE ENTRY: it holds
+     "at the moment all five are in one hand and at no other" (solver/result.c, citing
+     CLAUDE.md §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE). Taken off `counted[last]` like every other
+     counter on this row, so `countersFrom` keeps naming the one entry they all came from — and NEVER off
+     `coldLive`, which picks the last entry with a LIVE frontier and is a different moment.
+     `rowsAwaitingBytes` IS CARRIED BESIDE THEM AND IS NOT A TERM OF THE SUM. It is a gauge over PROGRAM ROWS
+     waiting on bytes where the five are over KEYED RECORDS, so they are two populations and adding them would
+     be the unit error CLAUDE.md §AND-TWO-INSTRUMENTS-CAN-DISAGREE names. It is the quantity the low mode's
+     question is actually about — how much of the document is blocked — and it is a gauge, so it is read as a
+     statement about the instant the census was composed and never differenced against the lifetime terms.
+     ABSENT STAYS ABSENT, for `egressAsked`'s reason exactly: a row written before these fields existed omits
+     them, and a `0` here would read as a door that was asked nothing, which is one of the states the set exists
+     to separate. */
+  replyDoor: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    const out = {};
+    for (const k of REPLY_DOOR_ROWS) {
+      taken.add(k);
+      out[k] = typeof c[k] === 'number' ? c[k] : EP_FACT_ABSENT;
+    }
+    return out;
+  })(),
+  /* AND THE IDENTITY ASKED HERE, BECAUSE HERE IS THE ONLY PLACE LEFT THAT CAN ASK IT. solver/result.c asserts
+     `replyAsked == replyAnswered + replyDeclined + replyDropped + replyOutstanding` with a `DCHECK`, which
+     `-DAPICLIENT_DEV=0` compiles out — and this driver measures WHATEVER ARTIFACT IS INSTALLED, release
+     included, so on a release census that assertion is not weakened, it is ABSENT. This is therefore the
+     release-mode reader of an identity the dev build already holds rather than a second copy of a live check,
+     and the rule is DERIVED from the one field list above so the row's keys and this check cannot disagree
+     about which terms they are about (CLAUDE.md §AN-AUDITOR-DERIVES-THE-RULE).
+     IT IS A STRING AND NOT A COLOUR, AND IT DOES NOT STOP THE ROW, for `unaskedRelatives`' reason: a census run
+     that died because an artifact disagreed with this arithmetic would stop every lane over a row nobody reads.
+     THREE STATES AND NONE FOLDED: `null` is NOTHING TO ASK — no counters, or an artifact predating the terms —
+     `''` is an OBSERVED CLEAN ANSWER, and a non-empty string names both sides of the sum that failed. The `''`
+     is worth having only because the `null` beside it is a different sentence. */
+  replyDoorSumsWrong: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    const v = {};
+    for (const k of REPLY_DOOR_SUM) { if (typeof c[k] !== 'number') return null; v[k] = c[k]; }
+    const parts = REPLY_DOOR_SUM.slice(1).reduce((n, k) => n + v[k], 0);
+    return parts === v[REPLY_DOOR_SUM[0]] ? ''
+      : REPLY_DOOR_SUM[0] + ' ' + v[REPLY_DOOR_SUM[0]] + ' against ' +
+        REPLY_DOOR_SUM.slice(1).map((k) => k + ' ' + v[k]).join(' + ') + ' = ' + parts;
   })(),
   pageErrors: [...new Set(mine.flatMap(d => d.errs))].slice(0, 40),
   globalEndpoints: (cur.global || []).length,
