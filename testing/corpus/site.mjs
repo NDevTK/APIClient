@@ -100,9 +100,23 @@ const PROBE = `(() => ({
        KEYED \`door|witnessClass\` AND NOT SUMMARISED, with both halves taken as whatever the row carries so a
        wasm older than either key lands in its own bucket rather than being folded into a present one: the
        engine writes both unconditionally, so a missing key is a fact about the BUILD and the keys above keep
-       absence apart from a zero for exactly that reason. This walk takes the SAME array those histograms are
-       built from, so its own total is their denominator and a disagreement is a filtered walk. */
-    doorWitness: (d._astResults || []).reduce((h, a) => {
+       absence apart from a zero for exactly that reason.
+       OVER THE LAST RESULT AND NOT OVER ALL OF THEM, WHICH THE COMMIT THAT LANDED THIS GOT WRONG AND ITS OWN
+       STATED CHECK CAUGHT ON THE FIRST RUN. \`_astResults\` holds one entry per RUN of this document — the
+       incremental partials and the finalize — so a \`reduce\` over all of them counts every address once per
+       snapshot that held it, and the first pass read \`{document-script|unasked: 5, link-element|no-witness: 485,
+       module-import|may-rest-on: 368}\` summing to 858 against an \`endpoints\` of 190, at 5, 5 and 4 copies (the
+       module rows absent from the earliest snapshot, which is what a partial taken before the imports ran looks
+       like). The PAIRING was exactly right and the DENOMINATOR was five times the surface.
+       THE SIBLING WALK ONE LINE UP IS SOUND WITH THE SAME SHAPE, WHICH IS WHY THIS IS WORTH A PARAGRAPH RATHER
+       THAN A QUIET REPAIR: \`sites\` flatMaps the same way and is consumed through \`new Set\`, so duplicates
+       collapse and the file's own banner at \`learnedAddrs\` argues the union over runs deliberately. A SET and
+       a COUNT are not the same aggregation, so a walk that is correct for one is wrong for the other — and the
+       wrong one reads as a plausible histogram rather than as an error.
+       THE DENOMINATOR IS THEREFORE \`result.fetchCallSites\` OF ONE RESULT, which is what bridge.js builds every
+       one of the four histograms from, so this join's total is their total and a disagreement is a filtered
+       walk rather than a different population. */
+    doorWitness: (d._astResults || []).slice(-1).reduce((h, a) => {
       for (const x of (a.fetchCallSites || [])) {
         const k = ('door' in x ? x.door : '(no-door-key)') + '|' +
                   ('witnessClass' in x ? x.witnessClass : '(no-witness-key)');
