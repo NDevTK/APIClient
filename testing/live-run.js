@@ -1760,6 +1760,62 @@ function census(r) {
       "hook and `rivalPerFork` beside it is a rate over a denominator that is not the population"
     : null;
 
+  /* AND WHAT EVERY ORDERING FIGURE ABOVE WAS DENOMINATED IN, WHICH IS THE ONE FIELD ON THIS RECORD THAT
+     QUALIFIES ALL OF THEM AND WHICH THIS DRIVER HAS NEVER ASKED FOR. solver/flow.h states it as the
+     RETIREMENT CONDITION on its own correction — "it goes when a census row in this tree carries the host's
+     slice measure beside it, so a live-page figure cannot be quoted without saying which clock it was
+     denominated in" — and the WFQ_CARRY_ROWS banner above repeats the demand in this file's own words: what
+     is quoted from a drive is the pair PLUS its host's slice measure. The engine composes it
+     (solver/quantum.c's `quantum_json`), bridge.js relays it onto every run record this driver reads
+     (`quantum: result._quantum`) and the popup renders it; this driver never asked, which is the same broken
+     contract as a field written with no reader and is the defect `absent` below was taken for one rung out.
+     WHY IT IS NOT A READING OF AN INSTANT AND NOT A TOTAL: it is a property of the HOST and the BUILD,
+     constant for the session, and the reason flow.h's two prior live readings are not comparable with each
+     other at all — one is thread-CPU and one is wall, and neither says so at the figure. A `phaseShare`
+     quoted without it is a number whose denominator a later reader cannot reconstruct.
+     THREE FIELDS AND NOT ONE, because each answers what the others cannot: `sliceIsCpu` is whether the
+     loaded-machine caveat applies at all, `sliceMeasure` is what the slice was billed in instead, and
+     `sliceMs` is how coarse the slicing was — and that last one is what stops `meanSliceUs` being priced
+     against a constant this file names in PROSE. bridge.js DCHECKs all three, which a RELEASE artifact
+     compiles out, so this is the only place the contract is checked on the artifact a live drive measures —
+     exactly the argument `rivalMissRefused` and `scanRefused` above are made on.
+     ABSENT AND MALFORMED ARE DIFFERENT FACTS AND NEITHER IS A DEFAULT. `null` is this driver's
+     absent-versus-zero rule and means the run did not state the quantum; `sliceMeasureRefused` means it DID
+     and a field is not the kind the producer composes, which is a fact about the seam and not about the host.
+     The default a reader would reach for is `isCpu: false`, and that is the WRONG one to guess in both
+     directions: guessed false it attaches a caveat to a host that has a real CPU clock, and guessed true it
+     removes one from the host that ships. */
+  {
+    const q = ("quantum" in r && r.quantum && typeof r.quantum === "object" && !Array.isArray(r.quantum))
+      ? r.quantum : null;
+    const bad = [];
+    if (q) {
+      if (typeof q.measure !== "string" || q.measure === "") bad.push("`measure` is not a non-empty string");
+      if (typeof q.isCpu !== "boolean") bad.push("`isCpu` is not a boolean");
+      if (typeof q.sliceMs !== "number" || !Number.isFinite(q.sliceMs) || q.sliceMs <= 0)
+        bad.push("`sliceMs` is not a positive finite number");
+    }
+    const ok = q !== null && bad.length === 0;
+    o.sliceMeasure = ok ? q.measure : null;
+    o.sliceIsCpu = ok ? q.isCpu : null;
+    o.sliceMs = ok ? q.sliceMs : null;
+    o.sliceMeasureRefused = (q !== null && bad.length)
+      ? "the run stated a `_quantum` this driver cannot resolve — " + bad.join(", ") + ". solver/quantum.c " +
+        "composes all three from compile-time constants of its own file and bridge.js DCHECKs each by name, " +
+        "so on a release artifact a field of the wrong kind is a second composer of this seam rather than a " +
+        "host without a clock, and every ordering figure on this row is a figure whose denomination is unknown"
+      : null;
+    /* AND THE ONE READING THE CARRIED `sliceMs` MAKES DERIVABLE RATHER THAN PROSE. `meanSliceUs`'s own banner
+       above reads the mean slice "against solver/quantum.h's quantum" and names that quantum as a NUMBER in a
+       comment, so the comparison a reader actually wants has been theirs to do by hand against a constant that
+       moves in another file. ENGINE_QUANTUM_MS rides the record; the quotient is the overshoot, and FAR above 1
+       with `sliceOverruns` small is that banner's own reading — a quantum not bounding slices at all, which on
+       a host with no asynchronous edge is solver/quantum.h's named transport gap and not a busy box. It is
+       `null` whenever either operand is, so a run that stated no quantum composes no overshoot. */
+    o.sliceOvershoot = ratio(num("meanSliceUs"), o.sliceMs === null ? null : o.sliceMs * 1000);
+    o.sliceOvershootOf = (o.sliceOvershoot === null) ? null : "meanSliceUs / (sliceMs * 1000)";
+  }
+
   /* AND WHAT THE PAGE ASKED FOR AND DID NOT GET, WHICH IS THE ONE ABSENCE NOTHING ELSE ON THIS ROW CAN
      STATE. Every other column here is the engine reporting what it DID; this is solver/absent.c reporting
      what a document READ that a STANDARD owns and this realm does not answer. CLAUDE.md §NO-STUBS: a page
