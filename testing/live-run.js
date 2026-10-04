@@ -888,6 +888,34 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      be made against, which result.c states at the group and which is why no identity between them is asserted.
      An artifact older than them prints `-`, this driver's absent-versus-zero rule. */
   "forks", "preemptAsksLifetime",
+  /* …AND WHICH HALF OF THE HOOK'S KEY HAD MOVED WHEN IT MISSED, WHICH IS THE ROW THAT TURNS A LARGE
+     `hookWeighShare` FROM A FINDING INTO A DIFF. `scanRivalRuns` and `preemptAsksLifetime` together cannot ask
+     it: the cache is keyed on a DISJUNCTION — the frontier GENERATION or the INCUMBENT — and both of those rows
+     publish only the miss, so every reading of that rate has had to ASSUME which disjunct supplied it.
+     result.c's own words for what each one decides, because they are the repair and its price:
+       `rivalMissGen`  — the order GENUINELY changed. "the walk is what a forking page owes", so this half is
+                         not a defect and no diff removes it.
+       `rivalMissCur`  — "a rescan for a frontier in which nothing moved but the EXCLUDED member, WHICH A WALK
+                         THAT FOLDED ITS TOP TWO WOULD ANSWER WITHOUT ONE." This is the avoidable half and the
+                         producer names the repair.
+       `rivalMissBoth` — "the row that prices either repair: where both moved in one interval, removing one
+                         invalidator buys NOTHING because the other would have forced the same walk, so a large
+                         `cur` beside a large `both` and a large `cur` beside a zero `both` recommend the SAME
+                         DIFF AT COMPLETELY DIFFERENT PRICES."
+     READ AS A PARTITION AND NEVER AS THREE RATES — their sum is asserted equal to `scanRivalRuns` at a `DCHECK`,
+     which a release artifact compiles out, so `census` checks it here for the reason every other identity on
+     this list is checked here.
+     THEY ARE READ BY NOBODY AT ALL, WHICH IS WORSE THAN THE FIXTURE-ONLY ROWS ABOVE AND IS WHY THEY ARE HERE.
+     Measured tree-wide with an invented control: all three occur in the installed wasm and in NO consumer —
+     not engine/build.mjs, not this driver, not testing/corpus/site.mjs. A computed writer with no reader is
+     CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS' own defect, and these three are the ones that decide whether the
+     ordering's dominant cost has a repair or is what a forking page owes.
+     AND THE MISREADING THEY END IS RECORDED AT THE PRODUCER: `scanRivalRuns / forks` near 2.0 was taken as
+     evidence that something raises the generation twice per fork, and "that inference does not follow from
+     these rows — a raise is not a miss, and raises made inside one C call with no interpreter opcode between
+     them collapse into ONE miss at the next poll." So `rivalPerFork` above is a COST and never a cadence, and
+     this trio is what a reader needs beside it. LIFETIME, raised in every build. */
+  "rivalMissGen", "rivalMissCur", "rivalMissBoth",
   "scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeights",
   "scanOtherRuns", "scanOtherWeights", "scanCensusRuns", "scanCensusWeights",
   "unitMidProgram", "unitParked", "unitCheckpointOwed",
@@ -1468,6 +1496,35 @@ function census(r) {
      checked on the artifact a live drive measures. A STRING field, for `absentRefused`'s reason. */
   o.rivalMissRate = ratio(num("scanRivalRuns"), num("preemptAsksLifetime"));
   o.rivalMissRateOf = (o.rivalMissRate === null) ? null : "scanRivalRuns / preemptAsksLifetime";
+  /* AND THE PARTITION'S OWN IDENTITY, which is the one thing that makes the three miss rows readable as a
+     partition rather than as three rates. `rivalMissGen + rivalMissCur + rivalMissBoth == scanRivalRuns` is
+     asserted at a `DCHECK` where all four are in one hand; release compiles it out, so a live drive measures
+     an artifact on which nothing has checked it. A disagreement means a fourth invalidator was added without a
+     row, at which point every share composed from the three is a share of the wrong total — so the parts are
+     dropped and the refusal is named, exactly as the `outOfPrograms` partition does one list up. */
+  o.rivalMissRefused = null;
+  {
+    const mg = num("rivalMissGen"), mc = num("rivalMissCur"), mb = num("rivalMissBoth"),
+          rr = num("scanRivalRuns");
+    if (mg !== null && mc !== null && mb !== null && rr !== null && mg + mc + mb !== rr) {
+      o.rivalMissRefused = "the hook's miss rows " + mg + " + " + mc + " + " + mb + " sum to " +
+        (mg + mc + mb) + " against `scanRivalRuns` " + rr + " — they are one if/else over one key at one " +
+        "site and the engine DCHECKs the identity, so a difference on this RELEASE artifact is a fourth " +
+        "invalidator added without a row and every share composed from the three is over the wrong total";
+      o.rivalMissGen = o.rivalMissCur = o.rivalMissBoth = null;
+    } else if (mc !== null && rr !== null && rr > 0) {
+      /* THE ONE SHARE WORTH COMPOSING, AND ITS PRICE BESIDE IT RATHER THAN UNDER IT. `avoidableRivalShare` is
+         the fraction of the hook's rescans whose ONLY invalidator was the excluded incumbent — the half a
+         top-two fold would answer without a walk — and `rivalMissBoth` is carried unmixed because a `both`
+         near `cur` means that repair buys nothing. Two numbers, one diff, two prices. */
+      o.avoidableRivalShare = mc / rr;
+      o.avoidableRivalShareOf = "rivalMissCur / scanRivalRuns";
+    }
+    if (o.avoidableRivalShare === undefined) {
+      o.avoidableRivalShare = null;
+      o.avoidableRivalShareOf = null;
+    }
+  }
   o.scanRefused = (o.rivalMissRate !== null && o.rivalMissRate > 1)
     ? "the hook's rescan count " + o.scanRivalRuns + " exceeds the " + o.preemptAsksLifetime +
       " asks its own policy raised — the rescan branch is INSIDE that policy and runs after it raises its " +
