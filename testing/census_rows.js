@@ -392,5 +392,65 @@ function requireWhole(carried, keys) {
   }
 }
 
+/* AND THE DIRECTION NEITHER OF THE TWO ABOVE CAN ASK: A ROW CARRIED FROM THE WRONG OBJECT. `kindsOf` asks
+   whether a carried row is published by ANY composer and `requireWhole` asks whether one composer's rows are
+   all carried; a consumer that reads its census objects SEPARATELY — `r.cold` for one list and `r.wfq` for
+   another, which is what every driver here does — can satisfy both and still look a row up in the object that
+   does not publish it. The row is then `null` ON EVERY RUN FOR EVER, which is this project's
+   absent-versus-zero pair landing on the consumer's own lookup: a reader meets `-` and reads it as an artifact
+   too old to state the row.
+   MEASURED, AND BY THE AUTHOR OF THE TWO CHECKS ABOVE, IN THE DIFF THAT ADDED ROWS TO CLOSE EXACTLY THIS
+   DEFECT ELSEWHERE. Twelve `wfq`-composer rows (`preemptAsksLifetime`, the four `scan*Runs`/`scan*Weights`
+   pairs and the three `rivalMiss*`) were added to `live-run.js`'s COLD_COUNTERS, which reads `r.cold`. Both
+   checks above PASSED — every one of the twelve is published, and no composer was declared whole — and a
+   180 s drive of a real page read `null` for all twelve. The defect was found by asking which composer owned
+   them, which is the question this function makes unspellable-to-get-wrong.
+   IT NAMES THE COMPOSER THAT REALLY OWNS THE ROW, because the repair is to MOVE the row rather than to think
+   about it: a message that says only "wrong object" sends a reader back to the producer's format string, which
+   is the lookup they already got wrong. */
+function requireFrom(spec) {
+  const all = censusKinds();
+  for (const k of Object.keys(spec)) {
+    /* AN OBJECT IS NOT A COMPOSER, WHICH THIS FUNCTION ASSUMED AND THE TREE REFUTED ON ITS FIRST RUN. A census
+       DOCUMENT splices SEVERAL producers into one object — `_cold` carries `rungEntry`, `fetchEdge` and
+       `xhrEdge` rows beside `cold`'s own, which is exactly why `live-run.js` declares those three TAKEN WHOLE
+       — so the permitted set for an object is the UNION of the composers spliced into it and never one
+       composer's rows. Written the narrow way, this refused eleven correctly-placed `rungEntry` rows the first
+       time it ran: a check whose first output is an accusation against correct code is the over-strict
+       direction CLAUDE.md rates as needing more suspicion than the quiet one, and it is recorded here rather
+       than quietly widened because a reader who re-derives `one object, one composer` from the names will
+       narrow it again. The caller states the union; it cannot be inferred, because which producers a document
+       splices is the producer's own arrangement. */
+    const names = spec[k].composers;
+    const rows = spec[k].rows;
+    const pub = new Set();
+    for (const cn of names) {
+      const c = all[cn];
+      if (!c)
+        throw new Error("testing/census_rows.js: no composer `" + cn + "` named as spliced into the `" + k +
+                        "` object — " + Object.keys(all).join(", ") + ". A composer named here and nowhere " +
+                        "else would widen this check to a row set that does not exist, which passes for any " +
+                        "placement at all.");
+      for (const n of [...c.numeric, ...c.object]) pub.add(n);
+    }
+    const wrong = rows.filter((n) => !pub.has(n));
+    if (wrong.length) {
+      const owner = (n) => {
+        const o = Object.keys(all).filter((x) => all[x].numeric.includes(n) || all[x].object.includes(n));
+        return o.length ? o.join("/") : "NO COMPOSER";
+      };
+      throw new Error("testing/census_rows.js: the consumer reads [" +
+                      wrong.map((n) => n + " (published by `" + owner(n) + "`)").join(", ") +
+                      "] out of the `" + k + "` object, which splices [" + names.join(", ") +
+                      "] and does not publish " +
+                      (wrong.length === 1 ? "it" : "them") + ". A row looked up in the wrong census object is " +
+                      "`null` on every run for ever and renders identically to an artifact too old to state " +
+                      "it — two different facts, and a consumer cannot tell them apart. MOVE the row to the " +
+                      "list that reads its own composer's object; the owner is named above so the repair is " +
+                      "the move and not another reading of the producer's format string.");
+    }
+  }
+}
+
 module.exports = { KINDS, COMPOSERS, composerRowsFromText, kindDeclarationFromText, censusKindsFromText,
-                   censusKinds, kindsOf, requireWhole };
+                   censusKinds, kindsOf, requireWhole, requireFrom };

@@ -37,7 +37,7 @@ const { absentPair } = require("./absent_census.js");
    first of those is this file's to answer. The curation is a driver's own and is deliberately a SUBSET
    (the `census()` banner refuses to take everything, in as many words); the KIND is a fact only the
    composer can state, and until this it was stated in no artifact at all. */
-const { kindsOf, requireWhole } = require("./census_rows.js");
+const { kindsOf, requireWhole, requireFrom } = require("./census_rows.js");
 
 const LOCK_FILE = process.env.HARNESS_LOCK
   ? path.resolve(process.env.HARNESS_LOCK) : path.join(__dirname, "harness.lock");
@@ -854,70 +854,7 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      and a sample below its predecessor is the engine and not the run. An artifact older than them prints `-`,
      which is this driver's absent-versus-zero rule and is the honest answer: the run did not state them. */
   "slices", "instanceUs", "loopUs", "betweenSlicesUs",
-  /* …AND WHAT ASKING THE ORDER COST, WHICH IS THE ONE QUANTITY THE THREE ACCUMULATORS ABOVE CANNOT BOUND AND
-     WHICH A READER OF `schedUs` WILL BOUND ANYWAY. solver/engine.h says it in as many words at the row that
-     exists for it: "`sched_us` bounds what the PICK cost — flow_next_to_run runs before the step bracket opens
-     — and the preempt hook's OWN rescan of the frontier does not land there: it is called from the
-     interpreter, so an O(members) walk through flow_rival_of is charged to `slice_us`, inside the very turns
-     this row counts. A reader who takes a small `sched_us` for `the ordering is not the cost` has bounded the
-     pick and said nothing about the hook."
-     MEASURED, AND THE READER WHO DID THAT WAS THIS FILE'S OWN AUTHOR ONE COMMIT EARLIER. The hunk that landed
-     `instanceUs` above carries, in its own commit message, `schedUs/stepUs = 10.3%` read as "the ordering is
-     NOT the constraint and a weight change is still the wrong diff" — on a 180 s drive of gitlab.com/explore
-     at 13600 members. That is the sentence engine.h forbids, and the row that would have contradicted it is
-     `scanRivalWeights`, which no real-site driver has ever carried. History is not rewritten to repair a
-     published message, so the correction lives here, where the row does.
-     WHAT THE SIX ARE FOR, in the producer's words rather than mine: "the tail is not being reached" has TWO
-     causes — not enough thread time for the members standing, or the thread spent ASKING the order rather than
-     running it — and no row separated them. It names the readings too: `scanNextWeights / steps` against
-     `members` for the first, and `scanRivalRuns / forks` for the second, the dispatch loop asking once per STEP
-     and the hook once per frontier GENERATION, which a forking page moves per fork. `forks` is on this list
-     for that second reading and for nothing else; it was not carried either.
-     `scanCensus*` IS THE INSTRUMENT'S OWN COST AND IS THE REASON IT IS NOT OPTIONAL. `scanCensusWeights`
-     against `scanNextWeights` is "the share of all frontier-weighing that went to REPORTING rather than to
-     running — the only way to settle whether an instrument is heavy enough to change the run it samples", and
-     the census weighs the frontier TWICE per sample, so the share is `scanCensusWeights` DOUBLED. A driver
-     that publishes scheduler cost and not its own observer's is one whose numbers nobody can clear.
-     `preemptAsksLifetime` IS `scanRivalRuns`' DENOMINATOR AND ITS CONTRACT. `scanRivalRuns / scanNextRuns` is
-     a COST and was being read as the hook's CADENCE, which it is not; the ask count is what answers the
-     cache's own question, and `scanRivalRuns <= preemptAsksLifetime` is a `DCHECK` at result.c — compiled out
-     of the release artifact a live drive measures — so the ratio is published here as a rate that may not
-     exceed 1 and refused by name when it does.
-     ALL TEN ARE LIFETIME COUNTS, as the producer declares, and the six scan rows are TWO QUANTITIES OVER
-     THREE ENTRIES rather than a partition of anything on this line — there is no total here for a sum check to
-     be made against, which result.c states at the group and which is why no identity between them is asserted.
-     An artifact older than them prints `-`, this driver's absent-versus-zero rule. */
-  "forks", "preemptAsksLifetime",
-  /* …AND WHICH HALF OF THE HOOK'S KEY HAD MOVED WHEN IT MISSED, WHICH IS THE ROW THAT TURNS A LARGE
-     `hookWeighShare` FROM A FINDING INTO A DIFF. `scanRivalRuns` and `preemptAsksLifetime` together cannot ask
-     it: the cache is keyed on a DISJUNCTION — the frontier GENERATION or the INCUMBENT — and both of those rows
-     publish only the miss, so every reading of that rate has had to ASSUME which disjunct supplied it.
-     result.c's own words for what each one decides, because they are the repair and its price:
-       `rivalMissGen`  — the order GENUINELY changed. "the walk is what a forking page owes", so this half is
-                         not a defect and no diff removes it.
-       `rivalMissCur`  — "a rescan for a frontier in which nothing moved but the EXCLUDED member, WHICH A WALK
-                         THAT FOLDED ITS TOP TWO WOULD ANSWER WITHOUT ONE." This is the avoidable half and the
-                         producer names the repair.
-       `rivalMissBoth` — "the row that prices either repair: where both moved in one interval, removing one
-                         invalidator buys NOTHING because the other would have forced the same walk, so a large
-                         `cur` beside a large `both` and a large `cur` beside a zero `both` recommend the SAME
-                         DIFF AT COMPLETELY DIFFERENT PRICES."
-     READ AS A PARTITION AND NEVER AS THREE RATES — their sum is asserted equal to `scanRivalRuns` at a `DCHECK`,
-     which a release artifact compiles out, so `census` checks it here for the reason every other identity on
-     this list is checked here.
-     THEY ARE READ BY NOBODY AT ALL, WHICH IS WORSE THAN THE FIXTURE-ONLY ROWS ABOVE AND IS WHY THEY ARE HERE.
-     Measured tree-wide with an invented control: all three occur in the installed wasm and in NO consumer —
-     not engine/build.mjs, not this driver, not testing/corpus/site.mjs. A computed writer with no reader is
-     CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS' own defect, and these three are the ones that decide whether the
-     ordering's dominant cost has a repair or is what a forking page owes.
-     AND THE MISREADING THEY END IS RECORDED AT THE PRODUCER: `scanRivalRuns / forks` near 2.0 was taken as
-     evidence that something raises the generation twice per fork, and "that inference does not follow from
-     these rows — a raise is not a miss, and raises made inside one C call with no interpreter opcode between
-     them collapse into ONE miss at the next poll." So `rivalPerFork` above is a COST and never a cadence, and
-     this trio is what a reader needs beside it. LIFETIME, raised in every build. */
-  "rivalMissGen", "rivalMissCur", "rivalMissBoth",
-  "scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeights",
-  "scanOtherRuns", "scanOtherWeights", "scanCensusRuns", "scanCensusWeights",
+  "forks",
   "unitMidProgram", "unitParked", "unitCheckpointOwed",
   /* AND THE ROW THAT DECIDES WHICH READING OF `orphansAsked: 0` IS EVEN AVAILABLE, which this driver carries
      the numerator of in COUNTERS and has never carried the denominator of. flow_step's whole work ladder —
@@ -1312,8 +1249,83 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
   "epRazorClass"];
 
 const COLD_ROWS = COLD_STEP_UNITS.concat(COLD_FRONTIER, COLD_SEED, COLD_COUNTERS);
-const WFQ_ROWS = ["members"].concat(WFQ_JOB_SPLIT, WFQ_PICKS, WFQ_LADDER);
+/* WHAT ASKING THE ORDER COST — READ OFF THE `wfq` OBJECT, WHICH IS THE COMPOSER THAT PUBLISHES IT.
+   These twelve were first added to COLD_COUNTERS, which reads `r.cold`, and a 180 s drive of a real page
+   read `null` for every one of them while `kindsOf` and `requireWhole` both PASSED — the first asks
+   whether a carried row is published by ANY composer and the second whether one composer's rows are all
+   carried, and neither can see a row looked up in the wrong object. `requireFrom` in
+   testing/census_rows.js is that question, added with this repair and armed on this exact defect, so the
+   mistake is now a startup throw naming the composer that really owns the row.
+   WHAT THEY ARE FOR, UNCHANGED BY THE MOVE: they are the one quantity the three microsecond
+   accumulators in COLD_COUNTERS cannot bound, and a reader of `schedUs` will bound it anyway. solver/engine.h says it in as many words at the row that
+     exists for it: "`sched_us` bounds what the PICK cost — flow_next_to_run runs before the step bracket opens
+     — and the preempt hook's OWN rescan of the frontier does not land there: it is called from the
+     interpreter, so an O(members) walk through flow_rival_of is charged to `slice_us`, inside the very turns
+     this row counts. A reader who takes a small `sched_us` for `the ordering is not the cost` has bounded the
+     pick and said nothing about the hook."
+     MEASURED, AND THE READER WHO DID THAT WAS THIS FILE'S OWN AUTHOR ONE COMMIT EARLIER. The hunk that landed
+     `instanceUs` above carries, in its own commit message, `schedUs/stepUs = 10.3%` read as "the ordering is
+     NOT the constraint and a weight change is still the wrong diff" — on a 180 s drive of gitlab.com/explore
+     at 13600 members. That is the sentence engine.h forbids, and the row that would have contradicted it is
+     `scanRivalWeights`, which no real-site driver has ever carried. History is not rewritten to repair a
+     published message, so the correction lives here, where the row does.
+     WHAT THE SIX ARE FOR, in the producer's words rather than mine: "the tail is not being reached" has TWO
+     causes — not enough thread time for the members standing, or the thread spent ASKING the order rather than
+     running it — and no row separated them. It names the readings too: `scanNextWeights / steps` against
+     `members` for the first, and `scanRivalRuns / forks` for the second, the dispatch loop asking once per STEP
+     and the hook once per frontier GENERATION, which a forking page moves per fork. `forks` is on this list
+     for that second reading and for nothing else; it was not carried either.
+     `scanCensus*` IS THE INSTRUMENT'S OWN COST AND IS THE REASON IT IS NOT OPTIONAL. `scanCensusWeights`
+     against `scanNextWeights` is "the share of all frontier-weighing that went to REPORTING rather than to
+     running — the only way to settle whether an instrument is heavy enough to change the run it samples", and
+     the census weighs the frontier TWICE per sample, so the share is `scanCensusWeights` DOUBLED. A driver
+     that publishes scheduler cost and not its own observer's is one whose numbers nobody can clear.
+     `preemptAsksLifetime` IS `scanRivalRuns`' DENOMINATOR AND ITS CONTRACT. `scanRivalRuns / scanNextRuns` is
+     a COST and was being read as the hook's CADENCE, which it is not; the ask count is what answers the
+     cache's own question, and `scanRivalRuns <= preemptAsksLifetime` is a `DCHECK` at result.c — compiled out
+     of the release artifact a live drive measures — so the ratio is published here as a rate that may not
+     exceed 1 and refused by name when it does.
+     ALL TEN ARE LIFETIME COUNTS, as the producer declares, and the six scan rows are TWO QUANTITIES OVER
+     THREE ENTRIES rather than a partition of anything on this line — there is no total here for a sum check to
+     be made against, which result.c states at the group and which is why no identity between them is asserted.
+     An artifact older than them prints `-`, this driver's absent-versus-zero rule. */
+const WFQ_SCAN_ROWS = ["preemptAsksLifetime",
+  /* …AND WHICH HALF OF THE HOOK'S KEY HAD MOVED WHEN IT MISSED, WHICH IS THE ROW THAT TURNS A LARGE
+     `hookWeighShare` FROM A FINDING INTO A DIFF. `scanRivalRuns` and `preemptAsksLifetime` together cannot ask
+     it: the cache is keyed on a DISJUNCTION — the frontier GENERATION or the INCUMBENT — and both of those rows
+     publish only the miss, so every reading of that rate has had to ASSUME which disjunct supplied it.
+     result.c's own words for what each one decides, because they are the repair and its price:
+       `rivalMissGen`  — the order GENUINELY changed. "the walk is what a forking page owes", so this half is
+                         not a defect and no diff removes it.
+       `rivalMissCur`  — "a rescan for a frontier in which nothing moved but the EXCLUDED member, WHICH A WALK
+                         THAT FOLDED ITS TOP TWO WOULD ANSWER WITHOUT ONE." This is the avoidable half and the
+                         producer names the repair.
+       `rivalMissBoth` — "the row that prices either repair: where both moved in one interval, removing one
+                         invalidator buys NOTHING because the other would have forced the same walk, so a large
+                         `cur` beside a large `both` and a large `cur` beside a zero `both` recommend the SAME
+                         DIFF AT COMPLETELY DIFFERENT PRICES."
+     READ AS A PARTITION AND NEVER AS THREE RATES — their sum is asserted equal to `scanRivalRuns` at a `DCHECK`,
+     which a release artifact compiles out, so `census` checks it here for the reason every other identity on
+     this list is checked here.
+     THEY ARE READ BY NOBODY AT ALL, WHICH IS WORSE THAN THE FIXTURE-ONLY ROWS ABOVE AND IS WHY THEY ARE HERE.
+     Measured tree-wide with an invented control: all three occur in the installed wasm and in NO consumer —
+     not engine/build.mjs, not this driver, not testing/corpus/site.mjs. A computed writer with no reader is
+     CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS' own defect, and these three are the ones that decide whether the
+     ordering's dominant cost has a repair or is what a forking page owes.
+     AND THE MISREADING THEY END IS RECORDED AT THE PRODUCER: `scanRivalRuns / forks` near 2.0 was taken as
+     evidence that something raises the generation twice per fork, and "that inference does not follow from
+     these rows — a raise is not a miss, and raises made inside one C call with no interpreter opcode between
+     them collapse into ONE miss at the next poll." So `rivalPerFork` above is a COST and never a cadence, and
+     this trio is what a reader needs beside it. LIFETIME, raised in every build. */
+  "rivalMissGen", "rivalMissCur", "rivalMissBoth",
+  "scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeights",
+  "scanOtherRuns", "scanOtherWeights", "scanCensusRuns", "scanCensusWeights"];
+const WFQ_ROWS = ["members"].concat(WFQ_JOB_SPLIT, WFQ_PICKS, WFQ_LADDER, WFQ_SCAN_ROWS);
 const OUT_NAME = { members: "wfqMembers" };
+/* WHICH `wfq` ROWS ARE LIFETIME COUNTS, TAKEN FROM THE PRODUCER AND NEVER LISTED HERE — the set `census` gates
+   on. A hand-kept list of which rows survive an empty frontier would be a second copy of a fact only the
+   composer's `@kind` line states, which is the drift `kindsOf` exists to end. */
+const WFQ_LIFETIME = new Set(kindsOf(WFQ_ROWS).byKind.lifetime);
 
 /* WHERE THE FRONTIER STOOD, WHAT ITS STEPS DID, AND WHAT GREW IT — read off the row bridge.js wrote, never
    recomputed. `forkAt` is taken WHOLE and is not truncated to its heaviest rows: it is already a Space-Saving
@@ -1407,6 +1419,27 @@ function census(r) {
      bridge.js holds at composition, against this from the engine's `_cold` census — so no identity between
      THOSE and this is asserted anywhere and none may be read. `epReach` is the one that shares a document
      with the subtraction beside it. */
+  o.epBeyondMarkup = (typeof o.epEmitted === "number" && typeof o.epPreProgram === "number")
+    ? o.epEmitted - o.epPreProgram : null;
+  o.epBeyondMarkupOf = (o.epBeyondMarkup === null) ? null : "epEmitted - epPreProgram";
+  /* THE ORDER'S OWN CENSUS, AND `members: 0` IS NOT A READING. extension/bridge.js states the contract it
+     asserts: no `wfq` is a BROKEN CONTRACT, `{members: 0}` is an EMPTY FRONTIER carrying NO term rows at
+     all, and a full object is a READING. A finalize document is composed after the frontier drained or parked,
+     so `members: 0` is the true reading of that instant and not of the run — its rows are absent, and they
+     stay `null` here rather than becoming zeroes, because a frontier that was never observed standing and one
+     observed with no backlog are different findings. */
+  const w = ("wfq" in r) ? r.wfq : null;
+  const live = w && typeof w === "object" && w.members > 0;
+  o.wfqMembers = w && typeof w.members === "number" ? w.members : null;
+  /* AND THE GATE IS BY THE PRODUCER'S DECLARED KIND AND NOT BY `live`, WHICH THIS LOOP DID FOR EVERY ROW.
+     `members: 0` is a finalize census composed after the frontier drained or parked, so a GAUGE there is a
+     reading of an instant this driver would rather report as unobserved than as 0 — that argument is the
+     banner's above and is unchanged. It is WRONG for a LIFETIME count: those accumulated over the whole run
+     and are not a statement about the instant at all, so nulling them because the frontier is momentarily
+     empty discards the run's own totals and reads as an artifact too old to state them. The kinds are the
+     PRODUCER's, read through census_rows.js, so this is not a second hand-kept list of which rows are which. */
+  for (const k of WFQ_ROWS)
+    if (k !== "members") o[k] = (live || WFQ_LIFETIME.has(k)) && typeof w[k] === "number" ? w[k] : null;
   /* THE THREE SHARES OF THE INSTANCE'S SPAN, COMPUTED HERE FOR `epBeyondMarkup`'s REASON — a derivation a
      reader must perform is one nobody performs, and these are the three a reader of the four time rows above
      will otherwise do by hand against the WRONG denominator. Each carries its derivation in an `…Of` field so
@@ -1531,19 +1564,7 @@ function census(r) {
       "count, and flow_rival_of has no other caller, so a rate above 1 is a second caller rather than a busy " +
       "hook and `rivalPerFork` beside it is a rate over a denominator that is not the population"
     : null;
-  o.epBeyondMarkup = (typeof o.epEmitted === "number" && typeof o.epPreProgram === "number")
-    ? o.epEmitted - o.epPreProgram : null;
-  o.epBeyondMarkupOf = (o.epBeyondMarkup === null) ? null : "epEmitted - epPreProgram";
-  /* THE ORDER'S OWN CENSUS, AND `members: 0` IS NOT A READING. extension/bridge.js states the contract it
-     asserts: no `wfq` is a BROKEN CONTRACT, `{members: 0}` is an EMPTY FRONTIER carrying NO term rows at
-     all, and a full object is a READING. A finalize document is composed after the frontier drained or parked,
-     so `members: 0` is the true reading of that instant and not of the run — its rows are absent, and they
-     stay `null` here rather than becoming zeroes, because a frontier that was never observed standing and one
-     observed with no backlog are different findings. */
-  const w = ("wfq" in r) ? r.wfq : null;
-  const live = w && typeof w === "object" && w.members > 0;
-  o.wfqMembers = w && typeof w.members === "number" ? w.members : null;
-  for (const k of WFQ_ROWS) if (k !== "members") o[k] = live && typeof w[k] === "number" ? w[k] : null;
+
   /* AND WHAT THE PAGE ASKED FOR AND DID NOT GET, WHICH IS THE ONE ABSENCE NOTHING ELSE ON THIS ROW CAN
      STATE. Every other column here is the engine reporting what it DID; this is solver/absent.c reporting
      what a document READ that a STANDARD owns and this realm does not answer. CLAUDE.md §NO-STUBS: a page
@@ -1874,6 +1895,13 @@ async function main() {
      composer publishes — and the two together are the set equality; on its own it is satisfied by any subset,
      which is correct for a curated list and silent for a ladder. See COLD_WHOLE. */
   requireWhole(COLD_ROWS, COLD_WHOLE);
+  /* AND THAT EVERY CARRIED ROW IS READ OUT OF THE OBJECT THAT PUBLISHES IT, which neither check above can ask
+     and which this driver got WRONG: twelve `wfq` rows were listed under COLD_COUNTERS, read out of `r.cold`,
+     and printed `null` on a 180 s real-page drive while both of those passed. Asked third because it is the
+     cheapest of the three and because its failure makes the kind partition below a partition of rows the
+     driver will never populate. */
+  requireFrom({ cold: { rows: COLD_ROWS, composers: ["cold"].concat(COLD_WHOLE) },
+                wfq:  { rows: WFQ_ROWS,  composers: ["wfq"] } });
   const K = kindsOf(COLD_ROWS.concat(WFQ_ROWS));
   const show = (names) => names.map((n) => OUT_NAME[n] || n).join(",");
   console.log("# frontier.* — LIFETIME (may be differenced): " + show(K.byKind.lifetime) + "," +
