@@ -1314,6 +1314,12 @@ void    endpoint_edge_member_asked(const char *const *steps);
    are unchanged and are the whole of what this file keeps; the answer is derived from the SAME `entry` compare, so
    there is no second list and no way for the order and the census to disagree about which names are doors. */
 int     endpoint_compile_global_named(const char *name, int typeof_only);
+/* …AND THE PROPERTY SPELLING OF ONE, reached through solver/concolic.c's dispatch for the two reasons stated at
+   the definition: it is that hook's SECOND consumer, and the GLOBAL-RECEIVER TEST IS NOT THIS FILE'S — the
+   dispatch holds the one statement of which names denote a realm's own global, so no `base` arrives here. It
+   raises `ep*AskNamedPropLife` and answers the orphan order; there is no `typeof` parameter and there cannot be,
+   because §13.5.3 step 2.a has nothing to patch for a property of an object. */
+int     endpoint_compile_global_member(const char *member);
 void    endpoint_fetch_edge_began(void);
 void    endpoint_fetch_edge_offered(void);
 void    endpoint_fetch_edge_freed(int stage, int offered);

@@ -110,23 +110,17 @@ void rung_entry_declare(StepUnit u, const char *const *names) {
    holds `GLOBAL_OBJECTS` for the same purpose over a mirrored corpus, and the two differ today — it carries
    `global` and not `frames`, which is correct for a pass that must refuse to guess and wrong for an engine
    that knows what it installed. The residual at the foot of this file names what removes the copy. */
-static const char *const GLOBAL_SELF_NAMES[] = { "window", "self", "globalThis", "frames", NULL };
-
-static int base_is_global(const char *base) {
-    for (int i = 0; GLOBAL_SELF_NAMES[i]; i++)
-        if (strcmp(GLOBAL_SELF_NAMES[i], base) == 0) return 1;
-    return 0;
-}
-
-void rung_entry_compile_global_member(const char *base, const char *member) {
-    if (!base || !member) return;
-    /* THE RECEIVER FIRST, BECAUSE IT IS WHAT MAKES THIS A REFINEMENT RATHER THAN A LOUDER ROW. A wrapper's own
-       member, a bundler's `(0,o.requestIdleCallback)` re-export shim and an `api.fetch` each read a property of
-       a receiver that is NOT the global, and every one of them would raise a denominator this document does not
-       owe — the direction that manufactures a finding out of a correctly-silent rung. Their SHARE of the
-       property reads of these names is a fact about real bundles and is measured by
-       `node testing/static_surface.mjs`, never asserted here. */
-    if (!base_is_global(base)) return;
+/* THE RECEIVER TEST IS NO LONGER HERE AND THE `base` NO LONGER ARRIVES, which is a deletion and not a loss. A
+   wrapper's own member, a bundler's `(0,o.requestIdleCallback)` re-export shim and an `api.fetch` each read a
+   property of a receiver that is NOT the global, and every one of them would raise a denominator this document
+   does not owe — that refusal still happens, ONCE, at solver/concolic.c's dispatch, which is the file that owns
+   the hook table and reaches both of its consumers. What this file held was a SECOND statement of which names a
+   realm binds to its own global, and the residual below records that it was already the second of three; a
+   property channel for solver/endpoint.c's doors would have made it four, so the set moved to the one place both
+   consumers pass through instead. Their SHARE of the property reads of these names is a fact about real bundles
+   and is measured by `node testing/static_surface.mjs`, never asserted anywhere. */
+void rung_entry_compile_global_member(const char *member) {
+    if (!member) return;
     /* …and then exactly the walk its sibling performs, over the SAME tables, for the same reason: every
        declared rung is offered the name and none is told which matched. */
     for (int s = 0; s < RUNG_SLOT_N; s++) {
@@ -306,11 +300,16 @@ char *rung_entry_rows(void) {
    RETIREMENT: this residual goes when a row on this census states how many reads of a global self-name took a
    COMPUTED key, because the floor is then a number a reader can weigh rather than a sentence they must believe.
 
-   AND A SECOND ONE, ABOUT THE RECEIVER TEST RATHER THAN THE MEMBER. WHAT IS NOT COVERED: `GLOBAL_SELF_NAMES` is
-   a SECOND STATEMENT of which names a realm binds to its own global — testing/static_surface.mjs states the same
-   set as `GLOBAL_OBJECTS` for the same purpose, and the two already differ, so this is a copy and not merely a
-   risk of one. The names are installed in browser/core/frame/window.c and by the interpreter's own intrinsics,
-   which is where the fact is, and neither of those tells either copy anything.
+   AND A SECOND ONE, ABOUT THE RECEIVER TEST RATHER THAN THE MEMBER — AND ITS FIRST CLAUSE IS NOW ABOUT ANOTHER
+   FILE, which is why it is rewritten here rather than deleted: the hazard is unchanged and only its address
+   moved. WHAT IS NOT COVERED: the receiver set is still a SECOND STATEMENT of which names a realm binds to its
+   own global — testing/static_surface.mjs states the same set as `GLOBAL_OBJECTS` for the same purpose, and the
+   two already differ, so it is a copy and not merely a risk of one. What changed is that this file no longer
+   holds one: `GLOBAL_SELF_NAMES` lives at solver/concolic.c's dispatch, which both consumers of
+   `.global_member_named` are reached through, so a door channel added for solver/endpoint.c did not make it a
+   third. The names are installed in browser/core/frame/window.c — which binds `window`, `self` and `frames` to
+   the global BY VALUE — and `globalThis` by the interpreter's own intrinsics, which is where the fact is, and
+   neither of those tells either remaining copy anything.
    WHAT THE NEXT DIFF BUILDS: the set declared where it is installed, borrowed and never copied, exactly as a
    rung's entry table is — a realm's global installer lending its own table at its per-realm install, so a realm
    that binds a fourth self-reference gains the receiver test for it with no edit here and the mirrored-corpus

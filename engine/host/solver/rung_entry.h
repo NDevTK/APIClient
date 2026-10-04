@@ -129,7 +129,11 @@ void  rung_entry_compile_global_named(const char *name, int typeof_only);
    parse cannot make (is this receiver object the realm's global) needs an OBJECT, so it lives downstream of
    reach, which is the one place a row whose whole purpose is to be upstream of reach may not put its question.
    IT RECORDS AND DECIDES NOTHING, like its sibling. */
-void  rung_entry_compile_global_member(const char *base, const char *member);
+/* THE RECEIVER IS NO LONGER A PARAMETER. solver/concolic.c's dispatch performs the global-receiver test ONCE,
+   for both consumers of `.global_member_named`, so what arrives here is a MEMBER already known to have been read
+   off this realm's own global — see that dispatch for why the set of self-names lives there and the residual at
+   this file's own census for what is still owed about it. */
+void  rung_entry_compile_global_member(const char *member);
 
 /* The rows on the heap (caller frees; NULL only on allocation failure). ROWS AND NOT A CENSUS OF THEIR OWN, for
    the reason solver/endpoint.h gives for the edge rows: they are spliced into `_cold` beside `stepUnitRuns`,

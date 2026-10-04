@@ -72767,8 +72767,15 @@ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
            A host must therefore not sum this into the population it keeps for uses. */
         if (next_field != JS_ATOM_NULL && g_concolic.global_member_named) {
             char mn_buf[ATOM_GET_STR_BUF_SIZE];
-            g_concolic.global_member_named(JS_AtomGetStr(ctx, gn_buf, sizeof(gn_buf), var_name),
-                                           JS_AtomGetStr(ctx, mn_buf, sizeof(mn_buf), next_field));
+            /* INTO THE SAME BIT AS THE FREE-IDENTIFIER REPORT, because `globalThis.fetch(u)` and `fetch(u)` are
+               one fact about this body — its source reaches a network door — and the walk below orders on the
+               fact and not on which spelling carried it. The two reports are kept apart in the HOST'S CENSUS
+               for a reason this file states above (the `typeof` split exists for one and not the other); the
+               ORDER has no such distinction to preserve, so an OR here is right and a second bit would be two
+               names for one question. */
+            if (g_concolic.global_member_named(JS_AtomGetStr(ctx, gn_buf, sizeof(gn_buf), var_name),
+                                               JS_AtomGetStr(ctx, mn_buf, sizeof(mn_buf), next_field)))
+                s->spells_net_entry = true;
         }
     }
 

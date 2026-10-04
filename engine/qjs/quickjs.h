@@ -2663,7 +2663,16 @@ typedef struct JSConcolicHooks {
        Installed with `.global_named` or not at all: a host taking one spelling and not the other has a census
        whose zero is a fact about which spelling the page happened to use, which is the defect both exist to
        end. */
-    void (*global_member_named)(const char *base, const char *member);
+    /* AND IT ANSWERS TOO, into the SAME bit as the member above — see that one for what the bit is and why the
+       engine reads it. A host answers nonzero when `base` denotes this realm's own global AND `member` is a
+       network door's entry, which are two facts only the host holds: `window`, `self`, `frames` and `globalThis`
+       are the embedder's and the interpreter's intrinsics respectively, and which name a door installs itself
+       under is that door's. Neither belongs in this file, so neither is here.
+       THE `typeof` SPLIT CANNOT BE REPRODUCED HERE and that is a fact about the language rather than an omission
+       (see the paragraph above): `typeof window.x` emits the same field get as `window.x`. So a host's nonzero
+       may be a FEATURE DETECT, and that costs the order a position and never an answer — the walk hands over
+       every body regardless, so a probe ordered early is a probe taken early. */
+    int (*global_member_named)(const char *base, const char *member);
     int (*rel)(JSContext *ctx, JSValue *sp, int op);
     /* `typeof v`. Returns the type STRING to use, or JS_UNINITIALIZED to run the real js_operator_typeof. An
        unknown value's type is unknown, and the engine must not answer it from the host object's REPRESENTATION

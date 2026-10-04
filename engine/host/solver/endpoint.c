@@ -489,6 +489,20 @@ typedef struct {
        property reads and reach neither row. */
     long  named;
     long  named_typeof;
+    /* …AND THE PROPERTY SPELLING OF THE SAME ENTRY, WHICH IS A SECOND FACT ABOUT ONE OCCURRENCE AND NOT A
+       SECOND OCCURRENCE. `globalThis.fetch(u)` names this edge's entry and resolves no scope for it: the
+       member is a FIELD GET and only the BASE is a free identifier, so the row above is structurally blind
+       to it. It is a row of ITS OWN and is never summed into `named`, because the `typeof` SPLIT CANNOT BE
+       REPRODUCED for a property — ECMAScript §13.5.3 "The typeof Operator" step 2.a needs a non-throwing
+       read only for an unresolvable REFERENCE, and a property of an object is `undefined` when absent, so
+       `typeof globalThis.fetch` emits the same field get as a use and merging would put feature detection
+       into the population a reader takes for uses.
+       MEASURED, which is why this row exists at all rather than as a widening of the one above: on
+       app.gitpod.io the property spelling is TWO occurrences against 33 bare ones — and both are
+       `await (e.fetch ?? globalThis.fetch)(r.url, …)` inside connect-es's transport, which is every one of
+       that application's 131 protobuf RPC methods. A thin population is not a small one when it is the only
+       door an app's whole API goes through. */
+    long  named_prop;
     /* ASK, ONE FRAME FURTHER OUT THAN `began`, AND IT IS A SECOND ROW RATHER THAN A RELOCATION OF THE FIRST.
        `began` is raised at the member's own FIRST STAGE, and core/idl_args.h numbers a declared member's
        stages from IDL_STEP_FIRST because stages 0 and 1 belong to the hosting machine — the argument-count
@@ -524,7 +538,7 @@ static long  g_xhr_offered;
 /* THE COUNTERS BACK TO ZERO, THE ALLOCATION LEFT ALONE. endpoint_init asserts the array ABSENT rather than
    zeroing it — see its own comment — so this resets what a new session owns and touches nothing it does not. */
 static void edge_reset(EndpointEdge *e) {
-    e->named = e->named_typeof = 0;
+    e->named = e->named_typeof = e->named_prop = 0;
     e->called = e->began = e->reached = e->freed = e->freed_reached = 0;
 }
 
@@ -2535,6 +2549,26 @@ void endpoint_xhr_edge_declare(const char *entry, const char *const *steps, int 
    length-guarded compares per free identifier of every compiled program, once per compile, on the compiler's
    own time and inside no flow's slice. It allocates nothing and raises no ask, so it cannot move the ask rows
    it exists to make readable. */
+/* THE PROPERTY SPELLING OF AN ENTRY — `JSConcolicHooks.global_member_named`, reached through
+   solver/concolic.c's dispatch and NOT installed on that table directly, because this is its second consumer
+   and because THE RECEIVER TEST IS NOT THIS FILE'S. Whether `base` denotes the global OBJECT is a fact about
+   which names a realm binds to itself; the dispatch owns the one statement of it, so the `base` never arrives
+   here and no list in this file can be the one that drops a name.
+   THE MEMBER IS KEYED ON THE EDGE'S OWN `entry` and on nothing else, exactly as its sibling is and over the
+   same field, so the order and the census cannot disagree about which names are doors. Both edges are offered
+   the member and neither is told which matched, for the reason stated at the sibling.
+   IT RAISES ITS OWN ROW AND ANSWERS THE ORDER. There is no `typeof` parameter and there cannot be — see the
+   field. So the answer is as good as the row: a body that spells `globalThis.fetch` may be probing rather than
+   calling, and ordering a probe early costs a position and never an answer, because that walk is an ORDER. */
+int endpoint_compile_global_member(const char *member) {
+    int hit = 0;
+
+    if (!member) return 0;
+    if (g_fetch_edge.entry && strcmp(g_fetch_edge.entry, member) == 0) { g_fetch_edge.named_prop++; hit = 1; }
+    if (g_xhr_edge.entry   && strcmp(g_xhr_edge.entry,   member) == 0) { g_xhr_edge.named_prop++;   hit = 1; }
+    return hit;
+}
+
 /* THE RETURN VALUE IS THE ORDER'S AND THE ROWS ARE THE CENSUS'S, and both edges are asked whatever the first
    one answers — a short-circuit here would leave the second edge's row unraised for a name that somehow belonged
    to two, which is the silent double-attribution no total reveals and which the paragraph above keeps both
@@ -3108,7 +3142,7 @@ static void edge_stage_hist(JsonBuf *b, const EndpointEdge *e) {
    readable fact about these rows anywhere.
 
    @kinds-of fetchEdge
-   @kind lifetime: epFetchAskNamedLife epFetchAskNamedTypeofLife
+   @kind lifetime: epFetchAskNamedLife epFetchAskNamedTypeofLife epFetchAskNamedPropLife
    @kind lifetime: epFetchAskCalledLife epFetchAskBeganLife epFetchAskOfferedLife
    @kind lifetime: epFetchOutFreedLife epFetchOutFreedOfferedLife epFetchOutDiedAtLife
 */
@@ -3194,6 +3228,8 @@ char *endpoint_fetch_edge_rows(void) {
     json_buf_raw(&b, ",");
     json_buf_key(&b, "epFetchAskNamedTypeofLife");  edge_num(&b, g_fetch_edge.named_typeof);
     json_buf_raw(&b, ",");
+    json_buf_key(&b, "epFetchAskNamedPropLife");    edge_num(&b, g_fetch_edge.named_prop);
+    json_buf_raw(&b, ",");
     json_buf_key(&b, "epFetchAskCalledLife");       edge_num(&b, g_fetch_edge.called);
     json_buf_raw(&b, ",");
     json_buf_key(&b, "epFetchAskBeganLife");        edge_num(&b, g_fetch_edge.began);
@@ -3255,7 +3291,7 @@ char *endpoint_fetch_edge_rows(void) {
    read as one population.
 
    @kinds-of xhrEdge
-   @kind lifetime: epXhrAskNamedLife epXhrAskNamedTypeofLife
+   @kind lifetime: epXhrAskNamedLife epXhrAskNamedTypeofLife epXhrAskNamedPropLife
    @kind lifetime: epXhrAskCalledLife epXhrAskBeganLife epXhrAskPlacedLife epXhrAskOfferedLife
    @kind lifetime: epXhrOutFreedLife epXhrOutFreedPlacedLife epXhrOutDiedAtLife
 */
@@ -3322,6 +3358,8 @@ char *endpoint_xhr_edge_rows(void) {
     json_buf_key(&b, "epXhrAskNamedLife");        edge_num(&b, g_xhr_edge.named);
     json_buf_raw(&b, ",");
     json_buf_key(&b, "epXhrAskNamedTypeofLife");  edge_num(&b, g_xhr_edge.named_typeof);
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "epXhrAskNamedPropLife");    edge_num(&b, g_xhr_edge.named_prop);
     json_buf_raw(&b, ",");
     json_buf_key(&b, "epXhrAskCalledLife");       edge_num(&b, g_xhr_edge.called);
     json_buf_raw(&b, ",");

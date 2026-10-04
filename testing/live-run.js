@@ -1214,6 +1214,14 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      containment in either direction. Read as a BIT; the magnitude counts compiler resolutions and rises with
      every flow that replays the document. */
   "epFetchAskNamedLife", "epFetchAskNamedTypeofLife",
+  /* AND THE PROPERTY SPELLING, WHICH IS WHY THE FLOOR SENTENCE ABOVE NO LONGER NAMES `window.fetch(u)` AS A
+     MISS IT CANNOT SEE. It is a row of its own and is NEVER SUMMED with the two above, because the `typeof`
+     split does not exist for a property — §13.5.3 step 2.a has nothing to patch when a missing key is already
+     `undefined` — so this population mixes uses with feature detection and the two above do not. Read it
+     BESIDE them: a document whose named row is zero and whose prop row is not is a bundle that reaches the
+     door only through a global receiver, which is what connect-es's `(e.fetch ?? globalThis.fetch)(url, …)` is
+     and therefore what every protobuf-over-HTTP app in this corpus looks like. */
+  "epFetchAskNamedPropLife",
   "epFetchAskCalledLife",
   "epFetchAskBeganLife", "epFetchAskOfferedLife",
   "epFetchOutFreedLife", "epFetchOutFreedOfferedLife", "epFetchOutDiedAtLife",
@@ -1257,6 +1265,7 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      and `send` — reached through a receiver — is never a global. Same floor, same two ordinary inequalities,
      same reason the `…Typeof…` half travels with it. */
   "epXhrAskNamedLife", "epXhrAskNamedTypeofLife",
+  "epXhrAskNamedPropLife",
   "epXhrAskCalledLife",
   "epXhrAskBeganLife", "epXhrAskPlacedLife", "epXhrAskOfferedLife",
   "epXhrOutFreedLife", "epXhrOutFreedPlacedLife", "epXhrOutDiedAtLife",

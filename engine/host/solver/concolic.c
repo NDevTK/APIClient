@@ -6214,6 +6214,46 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
    the first; a reader who ORs them has widened the preferred population to every body that touches a timer,
    which on a real bundle is most of them, and an order whose preferred set is nearly everything is the heap
    order again with a pass wasted in front of it. */
+/* WHICH NAMES DENOTE THIS REALM'S OWN GLOBAL OBJECT — the ONE statement of it on the consumer side of
+   `.global_member_named`, held HERE because this file owns the table and both consumers are reached through it.
+   It was solver/rung_entry.c's `GLOBAL_SELF_NAMES`, and that copy is DELETED rather than joined by a second:
+   its own residual records that the set was already stated twice (there and as testing/static_surface.mjs's
+   `GLOBAL_OBJECTS`) and that the two already differ, so a third copy in solver/endpoint.c would have been the
+   drift that residual exists to forbid. Moving it to the dispatch takes the count from two to one on this side.
+   IT IS A SOURCE-TEXT TEST AND CANNOT BE ANYTHING ELSE. quickjs.h says why the hook takes no `JSContext`: what
+   is reported is a fact about SOURCE, and a realm is a fact about the state that text will be RUN against — so
+   asking the realm whether its own `window` property IS the global is a question this seam structurally cannot
+   put. That is also why the set is a list rather than a derivation, and why the residual's next diff is to have
+   the INSTALLERS lend it (browser/core/frame/window.c binds three of these to the global by value and the
+   interpreter's own intrinsics bind the fourth) rather than to compute it here.
+   `parent` AND `top` ARE DELIBERATELY ABSENT: HTML §7.2.2's `parent` and `top` are the NAVIGABLE's and may
+   denote another window entirely, so a member read through one is not a read of this global. Excluding them can
+   only cost a consumer a MISS, which is the direction a report must take. */
+static const char *const GLOBAL_SELF_NAMES[] = { "window", "self", "globalThis", "frames", NULL };
+
+static int base_is_global(const char *base) {
+    for (int i = 0; GLOBAL_SELF_NAMES[i]; i++)
+        if (strcmp(GLOBAL_SELF_NAMES[i], base) == 0) return 1;
+    return 0;
+}
+
+/* `<free identifier>.<member>` WHERE THE IDENTIFIER DENOTES THE GLOBAL — the sibling of the dispatch below, and
+   the receiver test is performed ONCE, here, so neither consumer is handed a `base` it would have to judge. A
+   wrapper's own member, a bundler's `(0,o.requestIdleCallback)` re-export shim and an `api.fetch` each read a
+   property of a receiver that is NOT the global, and every one of them would raise a denominator neither census
+   owes — the direction that manufactures a finding out of a correctly-silent door.
+   EXACTLY ONE CONSUMER ANSWERS THE ENGINE, for the reason stated at its sibling: quickjs orders its orphan
+   candidates by whether driving a body could reach a NETWORK DOOR, and a rung's entry composes no address. */
+static int compile_global_member_dispatch(const char *base, const char *member) {
+    int net;
+
+    if (!base || !member) return 0;
+    if (!base_is_global(base)) return 0;
+    net = endpoint_compile_global_member(member);
+    rung_entry_compile_global_member(member);
+    return net;
+}
+
 static int compile_global_named_dispatch(const char *name, int typeof_only) {
     int net = endpoint_compile_global_named(name, typeof_only);
 
@@ -6286,7 +6326,7 @@ static JSConcolicHooks g_hooks = {
        line to add. The figure is corpus-dependent and is therefore the command and never a number.
        IT DECIDES NOTHING, like its sibling: a void report of a fact about SOURCE TEXT, raised at the same funnel
        and changing no arm of any run. */
-    .global_member_named = rung_entry_compile_global_member,
+    .global_member_named = compile_global_member_dispatch,
     .lead = concolic_lead_hook };
 
 /* Concolic VALUE propagation stays installed across scheduling AND verification, because taint must flow
