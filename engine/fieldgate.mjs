@@ -6350,7 +6350,11 @@ if (coerced.length) {
   log(`  ${String(coercedCompared.length).padStart(5)}  COMPARED — the token is an equality operand AND an absence MATCHES it. This band is the verdict's`);
   for (const c of coercedCompared)
     log(`         ${place(c)}  ${c.recv}.${c.name}  ${c.to} via ${c.how}; the record is ${c.disp}  — ${c.sec}`);
-  if (coercedNaN.length) {
+  /* PRINTED ON THE CLEAN DAY TOO, like every sibling band in this block — §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN:
+     "a line that appears ONLY on the bad day is one nobody learns to look for". A decided NEGATIVE nobody can
+     see is also the concealment this file exists to report, which is §the THREE BANDS' own reason for keeping
+     the A VALUE count. */
+  {
     log(`  ${String(coercedNaN.length).padStart(5)}  DECIDED, NOT COMPARABLE — an equality operand whose absence token is NaN. §7.2.15 ` +
         `IsStrictlyEqual and §7.2.14 IsLooselyEqual answer FALSE for NaN against every value INCLUDING ITSELF, so an ` +
         `absent field cannot match here at all: the comparison takes its NOT-EQUAL arm, which is the loud outcome this ` +
