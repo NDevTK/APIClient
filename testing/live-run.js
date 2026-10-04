@@ -854,6 +854,42 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      and a sample below its predecessor is the engine and not the run. An artifact older than them prints `-`,
      which is this driver's absent-versus-zero rule and is the honest answer: the run did not state them. */
   "slices", "instanceUs", "loopUs", "betweenSlicesUs",
+  /* …AND WHAT ASKING THE ORDER COST, WHICH IS THE ONE QUANTITY THE THREE ACCUMULATORS ABOVE CANNOT BOUND AND
+     WHICH A READER OF `schedUs` WILL BOUND ANYWAY. solver/engine.h says it in as many words at the row that
+     exists for it: "`sched_us` bounds what the PICK cost — flow_next_to_run runs before the step bracket opens
+     — and the preempt hook's OWN rescan of the frontier does not land there: it is called from the
+     interpreter, so an O(members) walk through flow_rival_of is charged to `slice_us`, inside the very turns
+     this row counts. A reader who takes a small `sched_us` for `the ordering is not the cost` has bounded the
+     pick and said nothing about the hook."
+     MEASURED, AND THE READER WHO DID THAT WAS THIS FILE'S OWN AUTHOR ONE COMMIT EARLIER. The hunk that landed
+     `instanceUs` above carries, in its own commit message, `schedUs/stepUs = 10.3%` read as "the ordering is
+     NOT the constraint and a weight change is still the wrong diff" — on a 180 s drive of gitlab.com/explore
+     at 13600 members. That is the sentence engine.h forbids, and the row that would have contradicted it is
+     `scanRivalWeights`, which no real-site driver has ever carried. History is not rewritten to repair a
+     published message, so the correction lives here, where the row does.
+     WHAT THE SIX ARE FOR, in the producer's words rather than mine: "the tail is not being reached" has TWO
+     causes — not enough thread time for the members standing, or the thread spent ASKING the order rather than
+     running it — and no row separated them. It names the readings too: `scanNextWeights / steps` against
+     `members` for the first, and `scanRivalRuns / forks` for the second, the dispatch loop asking once per STEP
+     and the hook once per frontier GENERATION, which a forking page moves per fork. `forks` is on this list
+     for that second reading and for nothing else; it was not carried either.
+     `scanCensus*` IS THE INSTRUMENT'S OWN COST AND IS THE REASON IT IS NOT OPTIONAL. `scanCensusWeights`
+     against `scanNextWeights` is "the share of all frontier-weighing that went to REPORTING rather than to
+     running — the only way to settle whether an instrument is heavy enough to change the run it samples", and
+     the census weighs the frontier TWICE per sample, so the share is `scanCensusWeights` DOUBLED. A driver
+     that publishes scheduler cost and not its own observer's is one whose numbers nobody can clear.
+     `preemptAsksLifetime` IS `scanRivalRuns`' DENOMINATOR AND ITS CONTRACT. `scanRivalRuns / scanNextRuns` is
+     a COST and was being read as the hook's CADENCE, which it is not; the ask count is what answers the
+     cache's own question, and `scanRivalRuns <= preemptAsksLifetime` is a `DCHECK` at result.c — compiled out
+     of the release artifact a live drive measures — so the ratio is published here as a rate that may not
+     exceed 1 and refused by name when it does.
+     ALL TEN ARE LIFETIME COUNTS, as the producer declares, and the six scan rows are TWO QUANTITIES OVER
+     THREE ENTRIES rather than a partition of anything on this line — there is no total here for a sum check to
+     be made against, which result.c states at the group and which is why no identity between them is asserted.
+     An artifact older than them prints `-`, this driver's absent-versus-zero rule. */
+  "forks", "preemptAsksLifetime",
+  "scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeights",
+  "scanOtherRuns", "scanOtherWeights", "scanCensusRuns", "scanCensusWeights",
   "unitMidProgram", "unitParked", "unitCheckpointOwed",
   /* AND THE ROW THAT DECIDES WHICH READING OF `orphansAsked: 0` IS EVEN AVAILABLE, which this driver carries
      the numerator of in COUNTERS and has never carried the denominator of. flow_step's whole work ladder —
@@ -1392,6 +1428,52 @@ function census(r) {
         "difference is a slice whose span was never charged, a second writer of one accumulator, or a clock " +
         "that is no longer monotone";
   }
+  /* THE FOUR READINGS THE SCAN ROWS EXIST FOR, COMPUTED HERE FOR `epBeyondMarkup`'s REASON and each carrying
+     its derivation, because a reader holding ten bare counts composes none of them:
+       `scanPerStep`     = scanNextWeights / steps — the frontier the DISPATCH loop actually walked per step.
+                           Read against `wfqMembers`: near it is an O(members) walk at every ask, and far below
+                           it is a walk that stops early.
+       `rivalPerFork`    = scanRivalRuns / forks — the producer's own named reading for the second cause, the
+                           hook asking once per frontier GENERATION against a page that moves one per fork.
+       `hookWeighShare`  = scanRivalWeights / (scanNextWeights + scanRivalWeights) — the share of all ORDERING
+                           work done by the preempt hook, which is the share charged to `sliceUs` and therefore
+                           the share `schedUs` cannot see. This is the number that settles whether a small
+                           `dispatchShare`-era reading of `schedUs` was a bound on the ordering or only on the
+                           pick.
+       `censusWeighShare` = 2 * scanCensusWeights / (scanNextWeights + scanRivalWeights + 2*scanCensusWeights)
+                           — the share of frontier-weighing spent REPORTING, doubled because the census weighs
+                           twice per sample and the second walk lands in `scanOther*` where a shared entry
+                           makes it unattributable. Large means this driver's own observation is changing the
+                           run it measures, which no other row here can say.
+     DIAGNOSTICS AND NEVER TARGETS, and identities read WITHIN one run rather than totals to compare across
+     two. `null` rather than 0 when any operand is absent or the denominator is 0. */
+  const num = (k) => (typeof o[k] === "number") ? o[k] : null;
+  const ratio = (a, b) => (a === null || b === null || b <= 0) ? null : a / b;
+  o.scanPerStep = ratio(num("scanNextWeights"), num("steps"));
+  o.scanPerStepOf = (o.scanPerStep === null) ? null : "scanNextWeights / steps";
+  o.rivalPerFork = ratio(num("scanRivalRuns"), num("forks"));
+  o.rivalPerForkOf = (o.rivalPerFork === null) ? null : "scanRivalRuns / forks";
+  const nw = num("scanNextWeights"), rw = num("scanRivalWeights"), cw = num("scanCensusWeights");
+  o.hookWeighShare = (nw === null || rw === null) ? null : ratio(rw, nw + rw);
+  o.hookWeighShareOf = (o.hookWeighShare === null) ? null
+    : "scanRivalWeights / (scanNextWeights + scanRivalWeights)";
+  o.censusWeighShare = (nw === null || rw === null || cw === null) ? null
+    : ratio(2 * cw, nw + rw + 2 * cw);
+  o.censusWeighShareOf = (o.censusWeighShare === null) ? null
+    : "2*scanCensusWeights / (scanNextWeights + scanRivalWeights + 2*scanCensusWeights)";
+  /* AND THE ONE CONTRACT THOSE RATES REST ON, REFUSED BY NAME. `scanRivalRuns <= preemptAsksLifetime` is a
+     `DCHECK` at result.c, where both are in one hand and where the rescan branch sits INSIDE the policy that
+     raises the ask — so the two are one event counted twice and a miss rate above 1 is a second caller of
+     flow_rival_of rather than a busy hook. Release compiles that assert out, so this is the only place it is
+     checked on the artifact a live drive measures. A STRING field, for `absentRefused`'s reason. */
+  o.rivalMissRate = ratio(num("scanRivalRuns"), num("preemptAsksLifetime"));
+  o.rivalMissRateOf = (o.rivalMissRate === null) ? null : "scanRivalRuns / preemptAsksLifetime";
+  o.scanRefused = (o.rivalMissRate !== null && o.rivalMissRate > 1)
+    ? "the hook's rescan count " + o.scanRivalRuns + " exceeds the " + o.preemptAsksLifetime +
+      " asks its own policy raised — the rescan branch is INSIDE that policy and runs after it raises its " +
+      "count, and flow_rival_of has no other caller, so a rate above 1 is a second caller rather than a busy " +
+      "hook and `rivalPerFork` beside it is a rate over a denominator that is not the population"
+    : null;
   o.epBeyondMarkup = (typeof o.epEmitted === "number" && typeof o.epPreProgram === "number")
     ? o.epEmitted - o.epPreProgram : null;
   o.epBeyondMarkupOf = (o.epBeyondMarkup === null) ? null : "epEmitted - epPreProgram";
