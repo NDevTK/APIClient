@@ -147,6 +147,28 @@ const PROBE = `(() => ({
     }, { entries: 0, cspBlocked: 0, ttRequired: 0, policies: [], ttGroups: [] }),
   })),
   global: [...globalStore.endpoints.keys()],
+  /* AND THE HOST'S OWN LAST SCHEDULER ROUND, WHICH IS THE COMPONENT solver/result.c's WALL-SPAN FORK NAMES AS
+     THE NEXT QUESTION AND WHICH NO CORPUS CONSUMER HAS EVER READ. That fork's own pair-reading is "\`loopUs\`
+     small says the engine was barely GIVEN the thread and the next question is the DRIVER", and measured over
+     four passes \`loopUs\` is 0.5-2.2% of \`instanceUs\` while \`stepUs\` is 93-95% of \`loopUs\` -- so the engine uses
+     almost everything it is handed and the question is how often it is handed anything. \`slices\` read 2-3.
+     bridge.js composes that answer at its own pick and stores it, and it is read here for the first time.
+     IT IS ONE ROUND AND NOT A SERIES, WHICH IS A PROPERTY OF THE PRODUCER AND IS STATED RATHER THAN WORKED
+     AROUND: \`self._level1\` is a SINGLE OVERWRITTEN GLOBAL, so this is the LAST round of the drive and is read
+     as one instant -- never differenced, never averaged, and never quoted as a rate. What it can say is whether
+     the one engine was HOT at that round (\`pool\` against \`hot\`) or in some other state, which is exactly the
+     state question the DRIVER answer points at.
+     NAMED RESIDUAL. What is NOT covered is the DISTRIBUTION over rounds -- how many of a drive's rounds had a
+     non-empty pool and \`hot: 0\` -- which is the quantity that would turn "the engine was not hot at the end"
+     into "the engine was not hot for N of M rounds". The next diff is a per-shape ROUND COUNTER in
+     extension/bridge.js beside \`_level1Round\`, which that file already increments once per round, so the
+     denominator is already there and only the partition is missing. Its absence shows as this row answering
+     \`hot: 0\` on a pass whose \`slices\` is 2 while being unable to say whether that was the whole drive or its
+     last moment -- and a reader who takes the one round for the drive is reading a gauge as a lifetime count.
+     SPREAD RATHER THAN SUMMARISED, for the reason every other column on this row is: \`pool\`, \`hot\`, \`booting\`,
+     \`loading\` and \`waiting\` are five states a seat can be in and folding them into "idle" would be the
+     several-states-behind-one-answer shape at the one place the host's own order is readable. */
+  level1: self._level1 ? JSON.parse(JSON.stringify(self._level1)) : null,
   /* THE DOMAIN COLUMNS, AND WHY THEY ARE NOT READ OFF \`endpoints\`. That map is endpointKey → the record
      lib/merge.js builds, which is {method, service, key, headers, firstSeen} and carries NO parameters at
      all — so a probe pointed there reports "no parameter carries a domain" for every run of every site,
@@ -1564,6 +1586,12 @@ const row = {
      RESTATED HERE either — this sentence listed four of the six and drifted with the one above it, which is
      why the probe's own banner now carries the set and these two carry none. */
   domains: cur.domains === undefined ? null : cur.domains,
+  /* THE HOST'S LAST SCHEDULER ROUND, RELAYED WHOLE AND NOT SUMMARISED — see the probe for why it is ONE round
+     rather than a series, what it can and cannot say, and the named residual (a per-shape round counter in
+     bridge.js, whose denominator `_level1Round` already exists). `null` is a probe that found no round at all,
+     which is a drive in which the host never completed one and is a different fact from a round that found
+     nothing to run. */
+  hostRound: cur.level1 === undefined ? null : cur.level1,
   /* THE ENGINE'S OWN RECORD FIRST, THE CONSOLE ONLY AS A SUPPLEMENT. A console scrape is the wrong surface by
      construction -- the renderer does not tee its stdout -- so a run whose abort reached the result document
      and not the console read `why: []`, and this harness reported a site that ABORTED as one that ran clean
