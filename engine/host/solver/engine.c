@@ -3062,7 +3062,47 @@ static JSContext *doc_realm_at(uint32_t doc, const char *file, int line)
                engine/qjs/quickjs.c answers from the TAG without reading `ctx`. So any realm of this agent
                converts them identically, flow_perform hands its own, and the one thing that would be wrong —
                an OBJECT, whose name the encoder keys on the realm it was handed — is a DCHECK at that call
-               rather than an argument here. */
+               rather than an argument here.
+               AND THE REMEDY CLAUSE ABOVE IS REFUTED ON ITS PREMISE, RECORDED HERE RATHER THAN DELETED BECAUSE
+               THIS ABORT WOULD OTHERWISE GO ON INSTRUCTING EVERY LATER READER IN A DESIGN ITS AUTHOR ABANDONED.
+               It said to build (2) first and that the object verbs are "a THROW rather than a value, since the
+               operation cannot be performed at all", on the ground that the lent object "is gone with its
+               realm". The object is NOT gone: core/frame/remote_object.c's export table stores
+               `JS_DupValue(ctx, v)` and says at that line why ("the peer's reference outlives whatever else in
+               this agent points at the object, and an export the collector took away would leave that reference
+               naming freed memory"), and `remote_object_by_id`'s gate is `world_session()` and not the document
+               — so an exported object outlives its document's destruction BY DESIGN, for the whole session.
+               AND THE OPERATION DOES NOT NEED THE DESTROYED REALM AT ALL, which is the split the clause drew in
+               the wrong place: remote_op_program's non-`windowproxy.get` branch resolves the object out of that
+               table, installs it and its key on whatever realm it is HANDED, and answers pure syntax
+               (`__apiclientLent[__apiclientKey]`, a sloppy `delete`, `k in o`) or this realm's own captured
+               %Reflect.set% / %Reflect.apply% — ECMA-262 10.1.7 / 10.1.8 / 10.1.9 / 10.1.10 / 10.2.1 are
+               operations on the OBJECT and take no realm. The `windowproxy.get` branch is the one that genuinely
+               cannot move: §7.2.1.3.4 "CrossOriginGetOwnPropertyHelper ( O , P )" runs the getter's steps ON O,
+               and O is the target document's Window — this realm's global. So the two populations are split by
+               WHOSE REALM THE OPERATION NEEDS, not by value against throw, and a throw for the object verbs
+               would be a fidelity divergence rather than a spec-defined refusal.
+               WHAT IS STILL OPEN FOR (2) IS WHICH REALM OF THIS AGENT PERFORMS IT, and it is a real question
+               rather than a detail: `world_local_doc()` is this INSTANCE'S root document and is therefore
+               realm-independent (solver/world.h), so an operand that comes home resolves identically whichever
+               realm decodes it — but `ref_mint` and the navigable decoder MINT in the realm they are handed, and
+               engine_queue_into names the row's DOCUMENT, which decides the world segment the program runs
+               against. Those are what a diff for (2) has to answer; none of them is a throw.
+               AND THE MEASURED POPULATION WAS NEITHER (1) NOR (2), WHICH IS WHY THE ORDERING ABOVE MOVED
+               NOTHING. Both of those arrive through flow_perform. The two-instance ABI drive's abort arrives
+               through flow_deliver — a ROUTED CROSS-DOCUMENT MESSAGE, `windowproxy.post`, for a navigable whose
+               active Document that timeline destroyed — and that one has a spec-defined answer the other two do
+               not: §7.5.10 step 5 removes the task, so the record is consumed and no task is queued. It is BUILT
+               at flow_deliver's own §7.5.10 arm and is reported as
+               `routed-delivery-the-target-document-was-destroyed`.
+               THE CLAUSE THAT HELD WAS HOW-ITS-ABSENCE-WOULD-SHOW, AND IT IS ALSO WHAT HID THIS. It said "this
+               abort, with flow_step on the frame list", and the measured frame list is exactly
+               `doc_realm_at <- flow_step <- engine_sched_slice` — but flow_perform AND flow_deliver are both
+               called from flow_step, so the witness a reader is told to check cannot tell the two callers apart.
+               What separates them is the ASKING SITE this message already prints, and nothing told a reader to
+               read it: the measured one is the routed-delivery lookup and not either of the two the enumeration
+               named. An absence clause names an OBSERVATION; this one named an observation that two different
+               populations satisfy. */
             DFAILF("a cross-agent operation or a queued program named a document whose active Document THIS "
                    "TIMELINE DESTROYED, asked at %s:%d — §7.5.10 \"Destroying documents\"' "
                    "set-the-Document's-browsing-context-to-null step nulled it "
@@ -3073,9 +3113,15 @@ static JSContext *doc_realm_at(uint32_t doc, const char *file, int line)
                    "IT ANSWERS: flow_perform routes a `windowproxy.get` for `length` or `closed` through "
                    "window_proxy_record_member_of_document ahead of this lookup, so reaching here means either "
                    "a §7.2.1 member whose answer is an OBJECT of the realm that is gone, or an `object.*` verb "
-                   "on an object lent out of it — two different answers, and the residual above this line says "
-                   "which to build first and why the object verbs are a THROW rather than a value. Do not ask "
-                   "for an ACTIVE DOCUMENT, because this navigable has none", file, line);
+                   "on an object lent out of it — two different answers, split by WHOSE REALM THE OPERATION "
+                   "NEEDS: §7.2.1.3.4 runs a member's getter ON the target's own Window, and an `object.*` verb "
+                   "runs on an object the export table still holds and takes no realm of the target at all. "
+                   "READ THE ASKING SITE ABOVE BEFORE BUILDING EITHER: a ROUTED DELIVERY reaches this lookup "
+                   "from flow_deliver and is answered there under §7.5.10 step 5, so a frame list with "
+                   "flow_step on it does not say which of the three callers this is. The residual above this "
+                   "line records what each population needs AND which half of its own remedy clause was "
+                   "refuted — do not build a THROW for the object verbs on its say-so. Do not ask for an "
+                   "ACTIVE DOCUMENT, because this navigable has none", file, line);
             break;
         case WP_DOC_INITIAL:
             DFAILF("a navigable this agent holds was asked for the realm of its active document and THIS "
@@ -3642,6 +3688,66 @@ static void flow_deliver(JSContext *ctx, Flow *f)
            "first script and this delivery is taken off the queue before any of it runs. Make a parked "
            "delivery at the position in the replay where its message arrived, rather than ahead of the "
            "programs that build the navigable it names");
+    /* HTML §7.5.10 "Destroying documents" STEP 5, PERFORMED WHERE THE RECORD IS STILL A RECORD — "Remove any
+       tasks whose document is document from any task queue (without running those tasks)". §9.3.3 "Posting
+       messages"' window post message steps step 8 is "queue a global task on the posted message task source
+       given targetWindow", so the delivery below IS that task; a navigable whose active Document THIS TIMELINE
+       destroyed is one step 5 removes the task of, and HTML §8.1.7.1 "Definitions" makes it unrunnable in any
+       case ("A task is runnable if its document is either null or fully active"). So the record is CONSUMED and
+       no task is queued, which is the spec's answer and not a dropped work item.
+       ASKED BEFORE THE REALM, WHICH IS THE WHOLE OF THE FIX AND IS THE MOVE flow_perform ALREADY MADE. That
+       entry says it at its own site: a destroyed navigable "has no realm now and will not have one … so asking
+       for one FIRST aborted on the one population §7.2.1 … says is still readable", and the repair there was to
+       ask for the realm "where its answer is spent". Here the answer is spent on the dispatch, and nothing above
+       this line needs it — so the lookup is unchanged, its partition is unchanged, and this is simply the one
+       question that has an answer without it, asked first.
+       IT IS THIS TIMELINE'S STATE AND NOT THE DOCUMENT'S. `destroyed` is COW-captured on the navigable's record
+       (core/frame/window_proxy.h), so a sibling arm that never destroyed the Document holds its own copy of this
+       same entry and delivers it — which is why this is counted per ARM and why one record legitimately reaches
+       this line in one timeline and §9.3.3 step 8.7's fire in another.
+       AND IT IS A THIRD MOMENT OF A FACT THIS ENGINE ALREADY REPORTS AT TWO, WHICH IS WHY IT DOES NOT RAISE
+       `ROUTED_TASK_TARGET_GONE`. core/frame/window_message.c raises that end when the task RAN and found the
+       navigable destroyed, and solver/flow.c raises it when §7.5.10 step 5's removal walk drops the QUEUED job;
+       both are ends of a task that EXISTED. Here no task is ever queued, so an end raised for it would add to a
+       sum whose own law is `sum >= g_routed_delivered` — and `delivered` is not raised on this path, so the
+       extra end would be slack that can mask exactly the one outcome that law exists to catch: a task that was
+       queued and never ran. The end census stays a census of tasks; this line is a refusal of a RECORD.
+       COUNTED IN `g_routed_refused` FOR THE REASON THE REFUSAL ABOVE IS, and the pair is not this engine's to
+       re-split: solver/engine.h pairs `refused` with `delivered` and engine/route.mjs differences the two
+       against the records a zone handed a document, so every consumed record that queues no task has to be in
+       one of them or that pigeonhole reports a loss. WHICH refusal it was is the STEP UNIT, which partitions the
+       same population inside a census already keyed per arm.
+       AND IT MAKES `_routedZeroDelivery` NONZERO FOR A CORRECT REASON, said here because that gauge is read as
+       a loss: a record whose every live receiving timeline destroyed the Document is admitted by none, which is
+       what the gauge counts, and this row is the discriminator that says the frontier declined it under §7.5.10
+       rather than never having been offered it. */
+    if (window_proxy_document_state(doc_id) == WP_DOC_DESTROYED) {
+        /* THE TWO READS THAT MUST NOT DISAGREE, ASSERTED WHERE THE DISCARD IS DECIDED. doc_realm_at's own
+           WP_DOC_ACTIVE arm asserts this equivalence from the other side ("the two reads walk one table in one
+           applied delta, so they cannot disagree"); this is the direction THIS line stands on, and its failure
+           mode is the one that cannot be recovered — a navigable that still had a realm would have had a
+           Document to fire at, so the message would be discarded where it could have been delivered. Both
+           operands are values THIS CODEBASE COMPUTED, off one record in one applied delta, which is what makes
+           them an invariant a DCHECK may stand on rather than input (§WHOSE-BYTES-STATE-THE-VALUE); neither
+           read takes a ctx, materializes a realm or captures anything, so the condition has no side effect. */
+        DCHECK(window_proxy_realm_of_document(doc_id) == NULL,
+               "a navigable whose own record says THIS TIMELINE destroyed its active Document still answered "
+               "with a realm — the state partition and the realm read walk ONE table in ONE applied delta, so "
+               "they cannot disagree unless something between them moved the delta, and this delivery is about "
+               "to be discarded under §7.5.10 \"Destroying documents\" step 5 for a Document that is still "
+               "there to fire at");
+        g_routed_refused++;
+        g_step_unit = STEP_UNIT_ROUTED_TARGET_DESTROYED;
+        /* THE RECORD IS NOT MARKED ADMITTED, which is the positive statement and not an omission: no timeline
+           heard this message, and `_routedZeroDelivery` is the one number that can say so. */
+        free(dup);
+        JS_FreeCString(ctx, record);
+        JS_FreeCString(ctx, origin);
+        JS_FreeValue(ctx, rv);
+        JS_FreeValue(ctx, ov);
+        JS_FreeValue(ctx, entry);
+        return;
+    }
     rctx = doc_realm(doc_id);
     /* THE SENDING DOCUMENT IS THE HEAD OF THE WORLD VECTOR — a world is minted by a flow of exactly one
        document, so the vector already names the sender and a second field for it could disagree with it. */

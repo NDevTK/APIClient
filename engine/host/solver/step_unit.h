@@ -122,6 +122,32 @@
     /* new one wherever this row reads zero, which is every session in which */ \
     /* nothing crosses an instance boundary.                                 */ \
     X(ROUTED_ARM_OWED,    "routed-delivery-an-arm-is-owed")                       \
+    /* AND THE FOURTH REFUSAL, WHICH IS THE ONE WHERE NO FLOW HOLDS THE      */ \
+    /* RECORD AFTERWARDS AND THAT IS THE CORRECT ANSWER. The three above     */ \
+    /* each name a flow that still has it — the sibling a delivery-time fork */ \
+    /* minted, the parent that took the subtree, or an arm another mechanism */ \
+    /* owes later — so each is a claim about WHERE the message went. This    */ \
+    /* one is HTML §7.5.10 "Destroying documents" step 5, "Remove any tasks  */ \
+    /* whose document is document from any task queue (without running those */ \
+    /* tasks)": the receiving navigable's active Document was destroyed in   */ \
+    /* THIS timeline, so the one global task §9.3.3 "Posting messages" step  */ \
+    /* 8 would queue is a task the standard removes, and nothing is supposed */ \
+    /* to hold it. Filing it under `routed-delivery-not-this-timeline` would */ \
+    /* assert the opposite of the truth — that row's own comment promises    */ \
+    /* "the flow on that side holds its own copy" — and a reader hunting a   */ \
+    /* lost message would go looking for a timeline that is not there.       */ \
+    /* IT IS PER TIMELINE AND NOT PER DOCUMENT, which is why it is a count   */ \
+    /* of ARMS and not of records: `destroyed` is COW-captured on the        */ \
+    /* navigable's record (core/frame/window_proxy.h), so a sibling arm that */ \
+    /* never destroyed the Document delivers its own copy of the same        */ \
+    /* record, and one record legitimately reaches this row in one timeline  */ \
+    /* and the fire in another.                                             */ \
+    /* IT NARROWS NO ROW ABOVE, and an archived census is comparable with a  */ \
+    /* new one wherever it reads zero: before this row existed the           */ \
+    /* population ABORTED at solver/engine.c's doc_realm partition, so no    */ \
+    /* earlier census can have filed it anywhere at all.                    */ \
+    X(ROUTED_TARGET_DESTROYED,                                                    \
+                          "routed-delivery-the-target-document-was-destroyed")    \
     X(CROSS_AGENT_OP,     "cross-agent-operation")                                \
     X(MICROTASK,          "microtask-checkpoint")                                 \
     X(DELIVER_REPLY,      "deliver-one-reply")                                    \
