@@ -835,6 +835,72 @@ const EP_FACT_ABSENT = '(field-absent)';
 const EP_FACT_FIELDS = ['endpointDoors', 'endpointMintedAt', 'endpointAddressClass', 'endpointRazorClass'];
 const epFact = (k) => !counted.length ? null
   : (k in counted[counted.length - 1]) ? counted[counted.length - 1][k] : EP_FACT_ABSENT;
+/* …AND WHETHER THE TWO DATA DOORS' MACHINES WERE EVER REACHED AT ALL, WHICH `endpointDoors` STRUCTURALLY
+   CANNOT SAY AND WHICH THIS ROW'S OWN MEASUREMENT OPENED. Driven over two real app bundles, `endpointDoors`
+   above read addresses through `document-script`, `link-element` and `module-import` and ZERO through `fetch`
+   or `xhr` — and a zero there has at least three readings that take OPPOSITE work: the bundle names no such
+   call at all, or it names one and the machine never ran, or the machine ran to the door and the SURFACE
+   SUPPRESSED the record. solver/endpoint.h's own pair is what tells them apart: the offer counter is raised
+   on the line BEFORE `endpoint_record` at Fetch §5.6 step 12, so `…AskOfferedLife` is the ASK and
+   `endpointDoors.fetch` is what survived the gate, and that site says in as many words that "telling those
+   two apart is what the census this pair feeds exists for". It was the consumer that never asked.
+   THEY ARE RELAYED AND NOT DIFFERENCED, WHICH IS NOT TIMIDITY — THE TWO ARE NOT IN AN IDENTITY. The slack
+   between an offer and a door row IS the suppression, so a consumer asserting them equal would assert
+   something the producer deliberately does not, and the whole measurement would be destroyed by the check
+   meant to guard it. `endpointFactsDisagree` below is a CONTAINMENT this engine does assert and whose dev
+   `DCHECK` release compiles out; this is a MEASUREMENT with no identity behind it. Publish both and let the
+   reader subtract — which is also why no verdict is composed here, exactly as the razor's union is not.
+   ELEVEN ROWS ARE ONE LADDER WITH PARTIAL ENTAILMENT AND NOT ELEVEN SIGNALS (CLAUDE.md §EVIDENCE-INFLATION).
+   The producer asserts `…AskOfferedLife <= epAsks`, asserts NO relation between xhr's PLACED and OFFERED (a
+   placed send whose task never runs offers nothing), and asserts NO containment between NAMED and CALLED in
+   EITHER direction — `window.fetch(u)` is a property read and a bundle that shadows the name uses a local
+   slot, so `called > named` and `named > called` are both ORDINARY and the NAMED rows are read as a BIT whose
+   magnitude counts compiler resolutions. A reader counting agreeing rows as independent confirmations is
+   counting one chain.
+   BOTH DOORS AND NOT THE ONE THIS MEASUREMENT WAS ABOUT, because the fetch zero read alone IS the misreading
+   solver/endpoint.h names by name: a document whose fetch rows are zero taken for a page that reached no
+   network call site, when what it reached was XMLHttpRequest — which axios's browser adapter IS, so it is a
+   large share of real bundles. Five fetch rungs and six xhr ones; they are NEVER SUMMED, because they count
+   states of two DIFFERENT machines whose stages are each their own.
+   THE `Out` ROWS ARE DELIBERATELY NOT HERE AND THAT IS A DECISION RATHER THAN A GAP. `…OutFreedLife`,
+   `…OutFreedOfferedLife` and `…OutDiedAtLife` answer WHERE A REQUEST DIED — a partition over one teardown,
+   and a different question from whether the door was reached. Carrying them would make this row a second copy
+   of testing/live-run.js's census, which is the split testing/census_rows.js argues at its own banner: the
+   CURATION is the driver's and deliberately a subset, and only the KIND is the producer's.
+   READ OFF THE SAME ENTRY AS `endpoints` AND `endpointDoors`, NEVER OFF `coldLive`. `coldLive` picks the last
+   entry with a LIVE frontier, which is a DIFFERENT MOMENT, and an offer count at one instant beside a door
+   histogram at another is the cross-sample comparison CLAUDE.md
+   §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE forbids — the entire value of these rows is that they are
+   read BESIDE that histogram, so they have to be one sample with it.
+   AND AN ABSENT EDGE IS TWO FACTS HERE WHERE EVERY OTHER FIELD'S ABSENCE IS ONE, with a discriminator that
+   needs no second artifact. solver/endpoint.c omits a whole edge's rows — the EMPTY STRING and not five
+   zeroes — when that edge was never DECLARED, in its own words because "a host that installs no fetch runs no
+   fetch machine, so there is no population" and five zeroes would be the average of an absence and a zero
+   that §Testing forbids. So `(field-absent)` here means EITHER an artifact older than the field OR a host that
+   declared no such edge. The two edges are declared INDEPENDENTLY, so the SIBLING settles it with no second
+   run: one edge present and the other absent is a current artifact whose absent machine was never installed,
+   and BOTH absent is the older artifact.
+   REGISTERED IN `taken` LIKE EVERY OTHER `.cold` PICK, so `unaskedRelatives` below can report a row that
+   EXTENDS one of these when a lane adds one. That check is blind to this ladder's ARRIVAL and always was —
+   its shape is a name that extends a carried name, and not one of these eleven extends anything this row
+   carried — which is why the gap sat here with every instrument in the tree reading clean. */
+const NET_ASK_ROWS = [
+  'epFetchAskNamedLife', 'epFetchAskNamedTypeofLife', 'epFetchAskCalledLife',
+  'epFetchAskBeganLife', 'epFetchAskOfferedLife',
+  'epXhrAskNamedLife', 'epXhrAskNamedTypeofLife', 'epXhrAskCalledLife',
+  'epXhrAskBeganLife', 'epXhrAskPlacedLife', 'epXhrAskOfferedLife',
+];
+const netAsk = () => {
+  if (!counted.length) return null;
+  const c = counted[counted.length - 1].cold;
+  if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+  const out = {};
+  for (const k of NET_ASK_ROWS) {
+    taken.add(k);
+    out[k] = typeof c[k] === 'number' ? c[k] : EP_FACT_ABSENT;
+  }
+  return out;
+};
 const row = {
   id, url, finalUrl, status, nav, artifact, measuredAt: new Date().toISOString(),
   dwellMs: DWELL, cores: cpus().length, loadBefore, loadAfter,
@@ -862,6 +928,7 @@ const row = {
      taken off the SAME counted entry, so each sums to that number by the producer's own assertion and the
      set is one moment rather than four. The keys are bridge.js's own spellings, derived from ONE list. */
   ...Object.fromEntries(EP_FACT_FIELDS.map((k) => [k, epFact(k)])),
+  netDoorAsk: netAsk(),
   sinks: counted.length ? counted[counted.length - 1].sinks : null,
   /* THE RUNG THE @S SEARCH DIED AT, WHICH `sinks` ALONE CANNOT NAME. Emission is working-PoC-only and
      fire-verified, so `sinks: 0` is the reading for BOTH "no tainted value ever reached a sink" and "sinks
