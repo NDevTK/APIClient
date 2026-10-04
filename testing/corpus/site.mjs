@@ -897,6 +897,19 @@ const REPLY_DOOR_SUM = ['replyAsked', 'replyAnswered', 'replyDeclined', 'replyDr
    so they are a statement about the instant the census was composed and are never differenced against the
    LIFETIME step counts beside them. */
 const DELIVER_GUARD_ROWS = ['pend', 'pendReady', 'stackEmpty', 'canDeliver'];
+/* WHERE A DRIVE'S WALL TIME WENT, AS THE FORK solver/result.c STATES AND NOT AS A MEAN. `instanceUs` is the
+   span `loopUs` and `betweenSlicesUs` PARTITION — the producer asserts the identity and says in as many words
+   that a reader "ADDS two published rows instead of subtracting one from a total and inferring what is left" —
+   and `slices` is "THE DENOMINATOR NEITHER SPAN WOULD OTHERWISE HAVE". `stepUs` is the fourth because the
+   producer's reading is a PAIR: "`loopUs` small says the engine was barely GIVEN the thread and the next
+   question is the DRIVER; `loopUs` large with `stepUs` small says it had the thread and spent it outside a turn,
+   and the next question is this scheduler". All five are LIFETIME counts by the producer's own `@kind`.
+   THE OVERRUN ROWS ARE DELIBERATELY NOT HERE AND BECOME THE QUESTION ONLY IF THIS FORK SAYS SCHEDULER.
+   `sliceOverruns`, `sliceOverrunAsks` and `sliceOverrunSeamless` answer WHICH ARM overran and whether those
+   turns offered a suspend point at all — a different question, downstream of this one, and the producer says
+   their own reading is also a pair. Carrying them now would make this row a second copy of
+   testing/live-run.js's census rather than this driver's curated set. */
+const WALL_SPAN_ROWS = ['instanceUs', 'loopUs', 'betweenSlicesUs', 'slices', 'stepUs'];
 const REPLY_DOOR_ROWS = [...REPLY_DOOR_SUM, 'rowsAwaitingBytes'];
 const NET_ASK_ROWS = [
   'epFetchAskNamedLife', 'epFetchAskNamedTypeofLife', 'epFetchAskCalledLife',
@@ -1459,6 +1472,61 @@ const row = {
       out[k] = typeof c[k] === 'number' ? c[k] : EP_FACT_ABSENT;
     }
     return out;
+  })(),
+  /* AND WHERE THE DRIVE'S WALL TIME WENT, WHICH IS THE DENOMINATOR OF `steps` AND THE QUESTION EVERY ROW ABOVE
+     NOW POINTS AT. Measured over thirteen gitpod passes on one artifact, one site and one 60s dwell: the
+     step-unit partition SUMS TO `steps` exactly in every pass, `link-connected-time` is 97 in EVERY ONE of them
+     (the document's `<link>` count), and `steps` is 98-115 on the five passes whose code contributed no address
+     against 205-217 on the three that did — so `steps - 97` is 1-18 against 108-120, and the bimodality is a
+     STEP-BUDGET THRESHOLD at about 98 rather than anything about the doors or the bytes. With `pendReady` at
+     393-395 and the delivery arm consuming ONE naming per visit, a hundred-step budget cannot drain that debt,
+     and no module program ever evaluates. The number left to explain is ~100-220 scheduler steps per 60 seconds
+     of wall clock, and nothing this file carried could price it.
+     IT IS A FORK AND NOT A RATE, which is the producer's framing and not a caution invented here: `stepUs/steps`
+     is "A MEAN NO TURN IS NEAR" because "the marginal cost between consecutive censuses of one run spans four
+     orders of magnitude". What IS readable is the partition — `instanceUs == loopUs + betweenSlicesUs`, asserted
+     by the producer, with the pair read as it states: `loopUs` SMALL means the engine was barely given the
+     thread and the next question is the DRIVER, while `loopUs` LARGE beside a small `stepUs` means it had the
+     thread and spent it outside a turn and the next question is this SCHEDULER. Two readings, opposite
+     components, opposite diffs.
+     ADDED AND NEVER SUBTRACTED, which is why both halves are carried rather than the total and one part: the
+     producer emits `betweenSlicesUs` from the same clock `instanceUs` closes on precisely so a reader adds two
+     published rows instead of inferring the remainder, and a remainder inferred from a total is a number whose
+     reading nobody can check.
+     `slices` IS THE DENOMINATOR NEITHER SPAN WOULD OTHERWISE HAVE, in the producer's own words, and the two
+     quotients it makes are in the slice's own measure and therefore comparable against the `@QUANTUM` line a run
+     prints. `steps` is the other denominator and this row has carried it all along — so `slices` against `steps`
+     is the producer's own next question, "the slices that dispatched nobody", and both terms are now present.
+     ALL FIVE ARE LIFETIME COUNTS by the producer's `@kind` statement, so they may be differenced across samples
+     — unlike the delivery guard above, which is four GAUGES — and they are taken off the SAME entry as every
+     other counter so the identity holds at one instant. ABSENT STAYS ABSENT: a `0` here would read as a drive
+     that was given no thread at all, which is one of the two states the fork exists to separate. */
+  wallSpan: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    const out = {};
+    for (const k of WALL_SPAN_ROWS) {
+      taken.add(k);
+      out[k] = typeof c[k] === 'number' ? c[k] : EP_FACT_ABSENT;
+    }
+    return out;
+  })(),
+  /* AND THE PARTITION ASKED HERE, for `replyDoorSumsWrong`'s reason exactly: the producer asserts
+     `instanceUs == loopUs + betweenSlicesUs` at engine_step_unit_runs with a `DCHECK` that release compiles
+     out, and this driver measures whatever artifact is installed. Derived from the one list above so the row's
+     keys and this check cannot disagree. A string and not a colour, and it does not stop the row: `null` is
+     nothing to ask, `''` is an observed clean answer, and a non-empty string names both sides. */
+  wallSpanSumsWrong: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    for (const k of ['instanceUs', 'loopUs', 'betweenSlicesUs'])
+      if (typeof c[k] !== 'number') return null;
+    const parts = c.loopUs + c.betweenSlicesUs;
+    return parts === c.instanceUs ? ''
+      : 'instanceUs ' + c.instanceUs + ' against loopUs ' + c.loopUs + ' + betweenSlicesUs ' +
+        c.betweenSlicesUs + ' = ' + parts;
   })(),
   /* AND THE CONTAINMENT CHAIN ASKED HERE, FOR `replyDoorSumsWrong`'s REASON EXACTLY. solver/result.c asserts
      `canDeliver <= stackEmpty <= live` with a `DCHECK` that `-DAPICLIENT_DEV=0` compiles out, and this driver
