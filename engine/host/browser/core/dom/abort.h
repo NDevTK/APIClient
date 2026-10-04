@@ -93,6 +93,37 @@ void abort_signal_remove_algorithm(JSContext *ctx, JSValueConst sig, JSValueCons
 bool    abort_signal_aborted_at(JSContext *ctx, JSValueConst sig, const char *site);
 #define abort_signal_aborted(ctx, sig) abort_signal_aborted_at((ctx), (sig), SOLVER_SITE_HERE)
 
+/* THE SAME QUESTION, ASKED FROM INSIDE A STEP MACHINE — and it is the PARKING form, which is the whole
+ * difference. The form above returns a `bool` and therefore CANNOT say "I forked": a first-time fork on an
+ * unknown flag reaches solver/engine.c's seam with no resume point and aborts, naming the ask site. A machine
+ * HAS a resume point — the driver clones it at its ask — so the only thing missing was a way for the question
+ * to return the fork code, which is this.
+ *
+ * IT ASKS THE BRANCH SEAM AND NOT THE OUTCOME SEAM. `step_tobool_run` (quickjs-step.h) keys by the OPERAND'S
+ * OWN identity, which is the same constraint entry a page's `if (signal.aborted)` records, so the two cannot
+ * fork twice over one predicate; the outcome seam keys by (operand, operation, completion), which is for a
+ * machine asking which of ITS completions it reaches and would both re-fork a predicate the flow may already
+ * have fixed and file a domain-less shape for a parameter the page had gated. The abort's own remedy clause
+ * used to name step_fork_run and is corrected at that crash.
+ *
+ * `held` IS A SLOT ON THE CALLER'S STATE AND THE CALLER'S `visit` MUST NAME IT. The seam's operand is BORROWED
+ * for the length of the request, so it has to live where the SIBLING'S SNAPSHOT CARRIES it: a deep fork
+ * byte-copies the state and re-takes only what `visit` walks, so a flag held in a C local is gone in the arm
+ * that resumes and a flag held in an unvisited field is freed by both. The caller sets it to JS_UNINITIALIZED
+ * once, before its first ask — a zeroed step state's JSValue is the INTEGER 0 rather than JS_UNDEFINED, so the
+ * emptiness of this slot is a thing the caller STATES and never a thing read off the slot.
+ *
+ * Returns JS_STEP_FORK (the caller returns it unchanged; the operand stays held for the resume), or 0 once
+ * `*out` is 0 or 1. It never throws.
+ *
+ * THE NON-FORKING ARM IS NOT A PARAMETER HERE AND THAT IS NOT AN OMISSION. The form above passes
+ * `signal_aborted_nonforking`, §3.2's answer with one world in it; this seam has no such parameter, because a
+ * step machine's fork in a session that explores nothing takes the NUMBERING rule — outcome 0, which for a
+ * two-armed truth is FALSE. Those agree, and they agree by construction rather than by luck: the one mint of
+ * this flag states FALSE as its example, which abort.c asserts at that mint so a future producer cannot make
+ * the two answers diverge in silence. */
+int     abort_signal_aborted_step(JSContext *ctx, JSStepHdr *h, JSValueConst sig, JSValue *held, int *out);
+
 /* IS THIS AN AbortSignal? Web IDL's `AbortSignal signal` member is an interface type, so a value that is not
    one is a TypeError — Streams §4.2.4's options carry one, and a union arm is a brand test. */
 bool    abort_signal_is(JSContext *ctx, JSValueConst v);

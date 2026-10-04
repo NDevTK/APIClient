@@ -239,6 +239,14 @@ typedef struct {
     JSStepHdr hdr;        /* FIRST — the driver writes the def and the operand bounds through it */
     uint8_t   phase;      /* step_call_run's own, held across the callback's suspension */
     JSValue   cb[3];      /* [this, func, arg] — §4.4 invokes the callback with exactly one argument */
+    /* §4.4's SIGNAL TEST HELD WHERE THE SIBLING'S SNAPSHOT CARRIES IT — abort_signal_aborted_step's operand.
+       An `AbortSignal.timeout()` the page passed as §3.2.1's `signal` has an UNKNOWN `aborted`, so this test
+       FORKS: one world where the grant is released and one where the callback is invoked, and both lead to code
+       worth reaching. The seam borrows the flag for the length of the request and the state is BYTE-COPIED at a
+       deep fork, so a flag in a C local would be gone in the arm that resumes — which is why it is a field and
+       why `lk_grant_visit` names it. JS_UNINITIALIZED is the EMPTY value and is written explicitly, because a
+       zeroed step state's JSValue is the INTEGER 0 rather than JS_UNDEFINED. */
+    JSValue   sig_flag;
 } LkGrant;
 
 static void lk_grant_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -247,6 +255,7 @@ static void lk_grant_visit(JSContext *ctx, void *st, JSStepVisit *v)
     int i;
 
     STEP_CB_FOREACH(s->cb, i) v->val(ctx, &s->cb[i]);
+    v->val(ctx, &s->sig_flag);
 }
 
 static void lk_release(JSContext *ctx, JSValueConst manager, JSValueConst lock);
@@ -290,6 +299,8 @@ static int lk_grant_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         int i;
 
         STEP_CB_FOREACH(s->cb, i) s->cb[i] = JS_UNDEFINED;
+        /* STATED, never read off the slot: a zeroed step state's JSValue is the INTEGER 0. */
+        s->sig_flag = JS_UNINITIALIZED;
         /* §4.4's TWO SIGNAL STEPS, which §4.1's ifAvailable arm does not have — and cannot, because §3.2.1
            rejects a call that passes both a signal and ifAvailable before any request exists. `lock` is null
            for that arm, which is what tells the two enqueues apart. */
@@ -297,7 +308,24 @@ static int lk_grant_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
             JSValue signal = lk_get(ctx, request, LKF_SIGNAL);
 
             if (!JS_IsUndefined(signal)) {
-                if (abort_signal_aborted(ctx, signal)) {
+                int aborted = 0, r;
+
+                /* THE PARKING FORM, because this ask CAN fork and this machine CAN carry the sibling. §3.2.1
+                   lets the page pass any AbortSignal, so an `AbortSignal.timeout()` makes this test's operand
+                   unknown input; the plain `abort_signal_aborted` returns a bool and therefore cannot say "I
+                   forked", so it reached solver/engine.c's seam from inside a C activation with nowhere for the
+                   sibling to resume and ABORTED. There is nothing to build here — this machine already holds
+                   the resume point the driver clones at, so the whole repair is asking through the seam that
+                   can return the fork code. */
+                r = abort_signal_aborted_step(ctx, &s->hdr, signal, &s->sig_flag, &aborted);
+                if (r) {
+                    /* PARKED. `signal` is released and `cb_result` is NOT: the driver re-enters this body with
+                       the same cb_result, and the stage is unchanged, so the re-read of §3.2.1's signal below
+                       is the same read with the same answer. */
+                    JS_FreeValue(ctx, signal);
+                    return r;
+                }
+                if (aborted) {
                     /* "If signal is aborted, then run these steps: Enqueue the following step to the lock task
                        queue: Release the lock lock. Return." The release is the queue's step and runs where
                        every other one of that queue's steps runs. The REQUEST's promise is not settled here:

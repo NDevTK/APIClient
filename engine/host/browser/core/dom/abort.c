@@ -610,6 +610,43 @@ bool abort_signal_aborted_at(JSContext *ctx, JSValueConst sig, const char *site)
     return b;
 }
 
+/* THE PARKING FORM OF "IS THIS SIGNAL ABORTED" — see abort.h for the contract and for why it is the BRANCH
+   seam. It takes no `site`, and that is not an omission: a site exists so an abort can name what to convert,
+   and this form is what a converted caller uses — reaching it means the question has a resume point and there
+   is no abort to name anything at. */
+int abort_signal_aborted_step(JSContext *ctx, JSStepHdr *h, JSValueConst sig, JSValue *held, int *out)
+{
+    int r;
+
+    DCHECK(h != NULL, "the parking form of §3.2's aborted test was asked without a step header — the header is "
+                      "where the driver reads the outstanding ask and writes its answer, so a NULL one is a "
+                      "plain C body that has not been declared a machine and must use the non-parking form");
+    DCHECK(held != NULL, "the parking form of §3.2's aborted test was asked with no slot to hold its operand — "
+                         "the seam borrows the flag for the length of the request, so a caller with nowhere to "
+                         "keep it would hand the resuming sibling a freed value");
+    if (JS_IsUninitialized(*held)) {
+        JSValue slots = signal_slots(ctx, sig);
+
+        /* NOT AN AbortSignal, OR ONE WITH NO SLOT RECORD: §3.2's own answer is that it is not aborted, and
+           there is no unknown to fork over. The non-parking form answers the same way for the same state. */
+        if (!JS_IsObject(slots)) {
+            JS_FreeValue(ctx, slots);
+            *out = 0;
+            return 0;
+        }
+        *held = JS_GetPropertyStr(ctx, slots, "aborted");
+        JS_FreeValue(ctx, slots);
+    }
+    r = step_tobool_run(ctx, h, *held, "DOM §3.2 Interface AbortSignal `aborted`", out);
+    if (r) return r;            /* JS_STEP_FORK — the operand stays held, because the sibling resumes AT it */
+    DCHECK(*out == 0 || *out == 1,
+           "§3.2's aborted test came back from the branch seam with neither truth value — the seam answers a "
+           "two-armed question, so a third value is an arm this file never declared");
+    JS_FreeValue(ctx, *held);
+    *held = JS_UNINITIALIZED;
+    return 0;
+}
+
 JSValue abort_signal_reason_at(JSContext *ctx, JSValueConst sig, const char *site)
 {
     JSValue slots = signal_slots(ctx, sig), v;
@@ -1015,6 +1052,26 @@ static int js_timeout_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
        A timeout signal's flag is the one §3.2 value a page branches on (`if (signal.aborted)` picks the
        fallback path and its endpoints), so a shape naming no hole meant that gate recorded nothing. */
     flag = concolic_new(ctx, "{AbortSignal.timeout().aborted}", "AbortSignal.timeout().aborted", JS_FALSE);
+    /* THE EXAMPLE IS FALSE AND TWO SEAMS DEPEND ON IT AGREEING. A session that explores nothing answers this
+       predicate two different ways depending on which form asked: the plain one takes
+       signal_aborted_nonforking, which is ToBoolean of THIS example, and the parking one takes the step
+       driver's numbering rule, which for a two-armed truth is arm 0 — false. They agree only while the example
+       below is false, and a producer that minted a true one would make a conformance run's two forms disagree
+       about one signal with nothing to say so. Asserted HERE, at the mint, because this is the only line that
+       decides it. */
+#if APICLIENT_DEV
+    /* THE READ IS INSIDE THE DEV GUARD BECAUSE concolic_example DUPS, and a DCHECK's condition must be
+       side-effect-free: the allocation happens here, the assert reads two locals, and release does neither. */
+    {
+        JSValue ex = concolic_example(ctx, flag);
+        DCHECK(JS_IsBool(ex) && !JS_ToBool(ctx, ex),
+               "§3.2's timeout signal was minted with an `aborted` example that is not FALSE — abort.h's "
+               "parking form documents that the plain and parking seams give a non-forking session the same "
+               "answer, and that equality is this example being false: the plain form answers ToBoolean of it "
+               "and the parking form answers the step driver's arm 0");
+        JS_FreeValue(ctx, ex);
+    }
+#endif
     CHECK(!JS_IsException(flag), "minting the timeout signal's aborted flag failed");
     s->result = signal_new(ctx, flag, abort_reason_default(ctx, "TimeoutError", "signal timed out"));
     /* DOM §3.2 STEP 3: "run steps after a timeout given global, \"AbortSignal-timeout\", milliseconds, and the
