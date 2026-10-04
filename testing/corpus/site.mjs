@@ -101,22 +101,33 @@ const PROBE = `(() => ({
        wasm older than either key lands in its own bucket rather than being folded into a present one: the
        engine writes both unconditionally, so a missing key is a fact about the BUILD and the keys above keep
        absence apart from a zero for exactly that reason.
-       OVER THE LAST RESULT AND NOT OVER ALL OF THEM, WHICH THE COMMIT THAT LANDED THIS GOT WRONG AND ITS OWN
-       STATED CHECK CAUGHT ON THE FIRST RUN. \`_astResults\` holds one entry per RUN of this document — the
+       OVER EVERY RESULT, AND THE REPAIR IS THE DENOMINATOR RATHER THAN THE WALK. The commit that landed this
+       join read its own stated check, found the total five times \`endpoints\`, and scoped the walk to
+       \`.slice(-1)\` on the theory that \`_astResults\` holds one snapshot per RUN of this document — the
        incremental partials and the finalize — so a \`reduce\` over all of them counts every address once per
-       snapshot that held it, and the first pass read \`{document-script|unasked: 5, link-element|no-witness: 485,
-       module-import|may-rest-on: 368}\` summing to 858 against an \`endpoints\` of 190, at 5, 5 and 4 copies (the
-       module rows absent from the earliest snapshot, which is what a partial taken before the imports ran looks
-       like). The PAIRING was exactly right and the DENOMINATOR was five times the surface.
-       THE SIBLING WALK ONE LINE UP IS SOUND WITH THE SAME SHAPE, WHICH IS WHY THIS IS WORTH A PARAGRAPH RATHER
-       THAN A QUIET REPAIR: \`sites\` flatMaps the same way and is consumed through \`new Set\`, so duplicates
-       collapse and the file's own banner at \`learnedAddrs\` argues the union over runs deliberately. A SET and
-       a COUNT are not the same aggregation, so a walk that is correct for one is wrong for the other — and the
-       wrong one reads as a plausible histogram rather than as an error.
-       THE DENOMINATOR IS THEREFORE \`result.fetchCallSites\` OF ONE RESULT, which is what bridge.js builds every
-       one of the four histograms from, so this join's total is their total and a disagreement is a filtered
-       walk rather than a different population. */
-    doorWitness: (d._astResults || []).slice(-1).reduce((h, a) => {
+       snapshot that held it. THAT MECHANISM IS REFUTED AND IS KEPT HERE IN ITS OWN WORDS, because a reader who
+       re-derives it from the incremental-merge sentence one banner up will write it again: the SCOPED walk's
+       next pass summed 956 against an \`endpoints\` of 98, so the scope changed nothing material, and that
+       pass's per-key ratios were \`6/1\` and \`582/97\` — EXACTLY its \`docsSeenMine: 6\`. The multiplier is
+       the DOCUMENTS the row walk unions and not the snapshots one document holds, and \`doorWitnessSnaps\`
+       below settles which by COUNT rather than by either theory.
+       THE ROW WALK'S SCOPE IS THE ONE \`countersScope\` ALREADY NAMES, IN THIS FILE'S OWN WORDS: a counted
+       run's figures are "NOT comparable with docsAnswered/docsSeenMine/siteEndpoints/distinctEndpoints, which
+       union every run". \`endpoints\` and the four margins are ONE engine run, read off \`counted[last]\`;
+       this join is every document's every analysis. Differencing them is CLAUDE.md
+       §AND-TWO-INSTRUMENTS-CAN-DISAGREE's category error — two ROWS of two units — so the gap is a
+       denominator to STATE and never a scope to chase.
+       AND A PAIRING IS NOT A MAGNITUDE, WHICH IS WHY THE SCOPE WAS NEVER THE FINDING. This join exists to say
+       WHICH door pairs with WHICH witness class, and a pairing that holds in every document holds in their
+       union — the first pass's THREE keys and no fourth were the whole statement already, at five copies
+       each. So the walk is the SAME one \`sites\` uses one line up, and the two then describe one population
+       at two grains: \`sites\` through a \`Set\` for distinct addresses, this as a COUNT of rows.
+       THE CHECK THAT SURVIVES IS A CONTAINMENT THIS PROBE CAN ACTUALLY ASSERT. \`doorWitnessRows\` counts the
+       same arrays by LENGTH while the join counts them by ITERATION, so an entry carrying neither key still
+       lands in \`(no-door-key)|(no-witness-key)\` and the two agree — a disagreement is this walk having
+       filtered rows the length still counts, which is what the original check was reaching for with the wrong
+       operand on its right-hand side. */
+    doorWitness: (d._astResults || []).reduce((h, a) => {
       for (const x of (a.fetchCallSites || [])) {
         const k = ('door' in x ? x.door : '(no-door-key)') + '|' +
                   ('witnessClass' in x ? x.witnessClass : '(no-witness-key)');
@@ -124,6 +135,12 @@ const PROBE = `(() => ({
       }
       return h;
     }, {}),
+    /* THE JOIN'S OWN DENOMINATOR AND ITS OWN UNION AXIS, carried so no reader differences a union over
+       documents against one run's \`endpoints\`. \`doorWitnessRows\` is those same arrays' total by LENGTH;
+       \`doorWitnessSnaps\` is how many analyses this document held, which is the quantity the retired
+       mechanism above was a theory about and is cheaper to carry than to argue. */
+    doorWitnessRows: (d._astResults || []).reduce((n,a) => n + ((a.fetchCallSites||[]).length), 0),
+    doorWitnessSnaps: (d._astResults || []).length,
     sinks: (d._astResults || []).reduce((n,a) => n + ((a.securitySinks||[]).length), 0),
     errs:  (d._astResults || []).flatMap(a => (a.resolverErrors || []).map(e => e.context + ': ' + e.message)),
     /* THE @S POLICY ENVELOPE, WHICH THE ENGINE COMPUTES ON EVERY DETECTED SINK AND WHICH THIS LINE IS THE
@@ -1669,14 +1686,26 @@ const row = {
      the one statement the four census histograms cannot make, and for the measurement that was read off their
      margins and needed it. The union is over `mine` for the reason every other column on this row is: a
      document of another origin is another page's surface.
-     ITS OWN TOTAL IS THE DENOMINATOR AND IS NOT RESTATED HERE, because it is the same `fetchCallSites` array
-     the `endpoints` figure is the LENGTH of and the four partitions sum to — so a join whose counts do not sum
-     to that figure is this walk having filtered rows the figure still counts, which is the one finding this
-     column has that the margins do not. A reader checks it by addition and needs no second field. */
+     ITS OWN TOTAL IS THE DENOMINATOR AND IT IS PUBLISHED BESIDE IT, which the commit that landed this column
+     got exactly backwards. It read "it is the same `fetchCallSites` array the `endpoints` figure is the LENGTH
+     of and the four partitions sum to — so a join whose counts do not sum to that figure is this walk having
+     filtered rows the figure still counts … A reader checks it by addition and needs no second field", and
+     that is retired rather than deleted because it is what a reader re-derives from the four margins sitting
+     on this same row. `endpoints` and those margins are ONE engine run at `countersFrom`; this join unions
+     every document's every analysis, which is the scope `countersScope` on this row already calls NOT
+     comparable with a counted run's figures. Two units, so the addition was a category error and the
+     `endpoints` disagreement it prescribed was never a finding.
+     WHAT IS CARRIED INSTEAD IS THE JOIN'S OWN ARITHMETIC: `doorWitnessRows` is those same arrays' total by
+     LENGTH, `doorWitnessSnaps` is how many analyses were walked, and `doorWitnessDocs` is how many documents
+     contributed — so the sum this column IS checkable against is on the row, and a reader never has to reach
+     for a number of another unit to check it. */
   doorWitness: mine.reduce((h, d) => {
     for (const k of Object.keys(d.doorWitness || {})) h[k] = (h[k] === undefined ? 0 : h[k]) + d.doorWitness[k];
     return h;
   }, {}),
+  doorWitnessRows: mine.reduce((n, d) => n + (typeof d.doorWitnessRows === 'number' ? d.doorWitnessRows : 0), 0),
+  doorWitnessSnaps: mine.reduce((n, d) => n + (typeof d.doorWitnessSnaps === 'number' ? d.doorWitnessSnaps : 0), 0),
+  doorWitnessDocs: mine.length,
   /* THE ENGINE'S OWN RECORD FIRST, THE CONSOLE ONLY AS A SUPPLEMENT. A console scrape is the wrong surface by
      construction -- the renderer does not tee its stdout -- so a run whose abort reached the result document
      and not the console read `why: []`, and this harness reported a site that ABORTED as one that ran clean

@@ -583,6 +583,21 @@ for (const p of passes) for (const r of p.rows) {
        publish. It is NOT an input to the hard bar and is never summed with it: the bar is about WHAT AN
        ADDRESS WAS, and this is about whether a door's machine was REACHED AT ALL. */
     epNetAsk: r.netDoorAsk,
+    /* AND THE DOOR × WITNESS JOIN WITH ITS OWN THREE DENOMINATORS, which is what makes this file its first
+       reader. site.mjs composed the join and NOTHING ANYWHERE READ IT — a write with no reader on the one
+       statement neither margin can make, scored by a coordinator's grep one document at a time, which is the
+       shape CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS names and the ninth time this corpus reader has been the
+       consumer that never asked.
+       WHAT IS READ IS THE PAIRING AND NOT THE MAGNITUDE. The join's counts are a union over every document at
+       the origin and every analysis each held, so they are a DIFFERENT UNIT from `epRazor`'s — those are one
+       engine run — and site.mjs's own banner says differencing them is a category error. A PAIRING is
+       scope-invariant where a count is not: which door goes with which witness class holds in the union exactly
+       where it holds per document, so the KEY SET is the finding and `doorWitnessRows` is what the counts are
+       checkable against.
+       LEFT AS WHATEVER site.mjs WROTE, for `epRazor`'s reason: ABSENT is a pass predating the field, and an
+       object is a stated join whose `{}` is an empty surface. */
+    epJoin: r.doorWitness, epJoinRows: r.doorWitnessRows,
+    epJoinSnaps: r.doorWitnessSnaps, epJoinDocs: r.doorWitnessDocs,
     sigs, wasm: (r.artifact && r.artifact.wasmSha256 || '').slice(0, 12),
     /* THE ARTIFACT IS NAMED BY ITS HASH ALONE. This read `r.artifact.head`, a field site.mjs deliberately
        renamed to `builtFromHeadClaim` when it stopped being trustworthy, so it resolved to '' for every row
@@ -1128,6 +1143,80 @@ console.log('hard bar totals: ' + JSON.stringify({
      surface twice. Read the two as a RANGE, which is the only thing a moving quantity supports. */
   mayRestOnAtItsOwnBestPass: rzStated.reduce((n, r) => n + r.wMax, 0),
 }));
+/* WHICH DOOR PAIRS WITH WHICH WITNESS CLASS, OVER THE CORPUS — the one statement the two margins above
+   structurally cannot make, and the column that had no reader anywhere until this block. A reader holding
+   `doors {document-script:1, link-element:97, module-import:92}` beside `witness {unasked:1, no-witness:97,
+   may-rest-on:92}` can see the three numbers AGREE and cannot see that they agree ROW BY ROW: two partitions
+   of one population whose buckets happen to be the same sizes are consistent with every pairing there is.
+   THE KEY SET IS THE FINDING AND THE COUNTS ARE NOT, which is why this prints pairings and not magnitudes.
+   site.mjs's join unions every document at the origin and every analysis each held, so its counts are a
+   DIFFERENT UNIT from `epRazor`'s — one engine run at `countersFrom` — and differencing the two is
+   CLAUDE.md §AND-TWO-INSTRUMENTS-CAN-DISAGREE's category error. A PAIRING survives that where a count does
+   not: which door goes with which class holds in the union exactly where it holds per document.
+   SO THE ARITHMETIC CHECKED HERE IS THE JOIN'S OWN. `epJoinRows` counts those same arrays by LENGTH while the
+   join counts them by ITERATION, so a row carrying neither key still lands in `(no-door-key)|(no-witness-key)`
+   and the two agree; a disagreement is this walk having FILTERED rows the length still counts, which is the
+   one defect this column can have and the only one worth a verdict. `epJoinSnaps` and `epJoinDocs` are the
+   union's axes, printed so no reader reaches for a number of another unit to check it.
+   AND A `(no-…-key)` BUCKET IS AN ARTIFACT FACT AND NEVER A PAGE FACT, kept apart from every pairing for
+   that reason: the engine writes both keys unconditionally, so such a bucket is a wasm older than one of them
+   and says nothing about an address. */
+const jnOne = (m) => {
+  if (!('epJoin' in m) || m.epJoin === undefined) return { tok: 'no-field' };
+  if (m.epJoin === null) return { tok: 'no-counters' };
+  if (typeof m.epJoin === 'string') return { tok: 'artifact-predates' };
+  const keys = Object.keys(m.epJoin);
+  const sum = keys.reduce((n, k) => n + m.epJoin[k], 0);
+  const rows = typeof m.epJoinRows === 'number' ? m.epJoinRows : null;
+  return { h: m.epJoin, keys, sum, rows,
+           snaps: typeof m.epJoinSnaps === 'number' ? m.epJoinSnaps : null,
+           docs: typeof m.epJoinDocs === 'number' ? m.epJoinDocs : null,
+           /* THREE STATES AND NOT TWO: a pass that carries no `epJoinRows` cannot be checked at all, which is
+              an ARTIFACT fact, and folding it into `filtered` would accuse a walk nothing measured. */
+           held: rows === null ? null : sum === rows,
+           stray: keys.filter((k) => k.includes('(no-door-key)') || k.includes('(no-witness-key)')) };
+};
+const jnSites = table.map((t) => {
+  const per = t.measurements.map(jnOne);
+  const stated = per.filter((j) => j.h);
+  /* THE UNION OF PAIRINGS OVER EVERY PASS OF THIS SITE, which is the scope-invariant half. A key present in
+     one pass and not another is a pass that did not reach that door, never a pairing that changed. */
+  const keys = [...new Set(stated.flatMap((j) => j.keys))].sort();
+  return { id: t.id, n: per.length, statedN: stated.length, keys,
+           /* A VERDICT OVER THE PASSES THAT COULD BE CHECKED, and the count of them beside it, so `ok` over
+              zero checkable passes cannot read as a clean bill. */
+           checkable: stated.filter((j) => j.held !== null).length,
+           filtered: stated.filter((j) => j.held === false).length,
+           stray: [...new Set(stated.flatMap((j) => j.stray))].sort(),
+           /* `null` WHERE NO PASS STATED THE AXIS AND NEVER A ZERO, which the first version of this cell got
+              wrong in exactly the direction this file spends pages on: it read `j.snaps === null ? 0` and then
+              took a MAX, so a pair of passes predating the two denominators printed `0 doc(s) 0 analys(es)` —
+              a measurement of nothing rendered as a measurement of zero, on the row whose whole purpose is to
+              carry a denominator. It was caught by RUNNING the reader over the archived passes rather than by
+              reading it, which is why that run happened before the commit. */
+           snaps: (() => { const v = stated.map((j) => j.snaps).filter((x) => x !== null);
+                           return v.length ? Math.max(...v) : null; })(),
+           docs: (() => { const v = stated.map((j) => j.docs).filter((x) => x !== null);
+                          return v.length ? Math.max(...v) : null; })(),
+           tok: stated.length ? null : (per.length ? per[0].tok : 'no-pass') };
+});
+const jnShown = jnSites.filter((r) => r.statedN || r.tok !== 'no-field');
+if (jnShown.length) {
+  const jnIdW = Math.max('site'.length, ...jnShown.map((r) => r.id.length)) + 2;
+  console.log('');
+  console.log('door \u00d7 witness pairings (site, passes stating the join, its own denominators, the pairings):');
+  for (const r of jnShown)
+    console.log('  ' + pad(r.id, jnIdW) +
+      pad(r.statedN ? r.statedN + '/' + r.n + ' stated' : (r.tok || '-'), 16) +
+      pad(r.checkable ? (r.filtered ? r.filtered + '/' + r.checkable + ' FILTERED'
+                                    : 'sums ' + r.checkable + '/' + r.checkable) : 'uncheckable', 20) +
+      pad(r.docs === null || r.snaps === null ? 'axes not stated'
+                                                : r.docs + ' doc(s) ' + r.snaps + ' analys(es)', 24) +
+      (r.keys.length ? r.keys.join(' ') : '(empty surface)') +
+      (r.stray.length ? '   ARTIFACT-OLDER-THAN-A-KEY: ' + r.stray.join(' ') : ''));
+  console.log('  the PAIRINGS are the finding; the counts are a union over documents and are NOT `epRazor`\'s');
+  console.log('  unit, so they are checked against `epJoinRows` on the same row and never against `emitted`');
+}
 /* WHICH READING A ZERO DATA-DOOR ROW IS, OVER THE CORPUS — the one discrimination the hard-bar section above
    structurally cannot make, and the question this corpus's own measurement opened. Driven over two real app
    bundles, `endpointDoors` read addresses through `document-script`, `link-element` and `module-import` and
