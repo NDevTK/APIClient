@@ -610,6 +610,11 @@ for (const p of passes) for (const r of p.rows) {
        only the first two may be differenced across samples — which is why nothing below does that to the
        third. */
     span: r.wallSpan, rdoor: r.replyDoor, dguard: r.deliverGuard,
+    /* AND THE FORK PAIR, LEFT AS WHATEVER site.mjs WROTE. It is the population size for a refusal that is NOT
+       YET BUILT, so what this file does with it is print the FRACTION and never a verdict: the numerator alone
+       is meaningless (§Solver-half's pin MINT arms make most such branches unreachable at a hook) and the pair
+       is carried off ONE census entry, so the containment the engine asserts is checkable here too. */
+    fkPair: r.forkPinned,
     /* AND THE HOST'S LAST ROUND, BECAUSE THE SHARE ABOVE IS THE ENGINE'S HALF OF ONE FACT AND THIS IS THE
        DRIVER'S. A loop share says how little of its instance's span an engine got; it cannot say WHY, and the
        two readings that answer that — the host was servicing somebody's fetch, or the host was waiting —
@@ -1295,12 +1300,14 @@ const spOne = (m) => {
   const w = (m.span && typeof m.span === 'object') ? m.span : null;
   const d = (m.dguard && typeof m.dguard === 'object') ? m.dguard : null;
   const r = (m.rdoor && typeof m.rdoor === 'object') ? m.rdoor : null;
-  if (!w && !d && !r && !(m.hround && typeof m.hround === 'object'))
+  if (!w && !d && !r && !(m.hround && typeof m.hround === 'object')
+        && !(m.fkPair && typeof m.fkPair === 'object'))
     return { tok: !('span' in m) ? 'no-field' : (m.span === null ? 'no-counters' : String(m.span)) };
   const n = (o, k) => (o && typeof o[k] === 'number' ? o[k] : null);
   const loop = n(w, 'loopUs'), inst = n(w, 'instanceUs');
   const hr = (m.hround && typeof m.hround === 'object') ? m.hround : null;
-  return { w, d, r, hr,
+  const fk = (m.fkPair && typeof m.fkPair === 'object') ? m.fkPair : null;
+  return { w, d, r, hr, fk,
            /* `null` AND NEVER A ZERO where either operand is absent, and never where `instanceUs` is 0 — a
               share of a span that did not happen is not a small share. */
            share: (loop === null || !inst) ? null : (100 * loop / inst),
@@ -1312,11 +1319,17 @@ const spOne = (m) => {
               share. `pool` is how many engines the level-1 order was choosing between, carried because the
               two move together on this corpus and no sample here can separate them. */
            round: n(hr, 'round'), rServ: n(hr, 'rServiced'), rWait: n(hr, 'rWaited'), pool: n(hr, 'pool'),
-           servShare: (n(hr, 'round') && n(hr, 'rServiced') !== null) ? (100 * hr.rServiced / hr.round) : null };
+           servShare: (n(hr, 'round') && n(hr, 'rServiced') !== null) ? (100 * hr.rServiced / hr.round) : null,
+           /* THE PAIR AND ITS SHARE, `null` WHERE EITHER OPERAND IS ABSENT AND NEVER A ZERO — including for a
+              zero DENOMINATOR, because a share of no forks is not a small share: a document that forked nothing
+              has not declined to re-fork a proved subject, it was never asked. */
+           forks: n(fk, 'forks'), forkPinned: n(fk, 'forkOverPinned'),
+           pinShare: (n(fk, 'forks') && n(fk, 'forkOverPinned') !== null)
+             ? (100 * fk.forkOverPinned / fk.forks) : null };
 };
 const spRows = table.map((t) => {
   const per = t.measurements.map(spOne);
-  const stated = per.filter((x) => x.w || x.d || x.r || x.hr);
+  const stated = per.filter((x) => x.w || x.d || x.r || x.hr || x.fk);
   return { id: t.id, n: per.length, per, stated,
            tok: stated.length ? null : (per.length ? per[0].tok : 'no-pass') };
 });
@@ -1329,14 +1342,17 @@ if (spShown.length) {
     (x.stackEmpty === null ? '-' : x.stackEmpty) + ' of ' +
     (x.pendReady === null ? '-' : x.pendReady) + '/' + (x.pend === null ? '-' : x.pend) +
     ' ' + (x.servShare === null ? '-' : x.servShare.toFixed(0) + '%serv') +
-    '/' + (x.pool === null ? '-' : 'pool' + x.pool);
+    '/' + (x.pool === null ? '-' : 'pool' + x.pool) +
+    ' ' + (x.forkPinned === null ? '-' : x.forkPinned) + '/' +
+    (x.forks === null ? '-' : x.forks) + 'fk';
   console.log('');
   console.log('ENGINE SPAN, DELIVERY CAPACITY AND THE DRIVER\'S OWN ROUND (site, then PER PASS IN ORDER):');
   /* EVERY QUANTITY THE CELL PRINTS IS NAMED HERE, which is not decoration: a reader takes a legend as the
      key to a row, so a cell carrying more than the legend names is read as whichever of its fields the
      legend happens to list — the orientation defect CLAUDE.md records for a ratio, arriving in a column. */
   console.log('  <loop share of the instance\'s span>/<slices>  <canDeliver>≤<stackEmpty> of ' +
-              '<pendReady>/<pend>  <rounds ending in a fetch service>serv/pool<engines the order chose between>');
+              '<pendReady>/<pend>  <rounds ending in a fetch service>serv/pool<engines the order chose ' +
+              'between>  <forks over an already-proved subject>/<forks>fk');
   for (const r of spShown)
     console.log('  ' + pad(r.id, spIdW) + r.stated.map(cell).join(' | '));
   /* THE GAUGE'S DISTRIBUTION OVER THE PASSES, which is the cross-run fact no single run can state and the

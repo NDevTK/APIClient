@@ -779,6 +779,18 @@ const ABSENT_ROWS = ["absentAsked", "absentOwed"];
    `members` IS THE COMPOSER'S SPELLING AND `wfqMembers` IS THIS DRIVER'S, which is why the alias is stated
    rather than guessed either way round — the kind is asked under the name the producer emits and the
    header prints the name a reader will meet in the output. */
+/* FORKS TAKEN OVER A SUBJECT THE FLOW HAD ALREADY PROVED, READ BESIDE THE FORK TOTAL IT IS A PART OF. §Solver-
+   half's CONCRETIZE-ON-PIN says a branch over a source this flow's own equality determined "is decided by
+   RUNNING the real predicate on a real string and does not fork at all" — true of the two pin MINT arms, whose
+   bare primitive never reaches a branch hook, and NOT of a source the page materialised before its gate, which
+   keeps its record and arrives at the hook with a singleton domain and one arm the run itself contradicted.
+   IT IS A POPULATION SIZE AND NOT A DEFECT COUNT, carried here because it is the reachability witness for the
+   refusal it precedes: a guard whose population is empty is the stub §NO-STUBS forbids, and this driver is the
+   one reader that drives REAL documents rather than a fixture whose fork shape its own author chose.
+   READ AS A FRACTION OF `forks` OR NOT AT ALL, which is why the pair is named in one place: the engine asserts
+   `forkOverPinned <= forks` where both are in one hand, and a bare numerator says nothing about whether any
+   spellable branch was reached at all. */
+const COLD_FORK_PINNED = ["forkOverPinned"];
 const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered",
   /* AND THE OTHER THREE ENDS OF THE REPLY DOOR, WITHOUT WHICH `replyAsked - replyAnswered` IS A NUMBER WITH
      THREE READINGS THAT TAKE OPPOSITE WORK. A record ends answered, REFUSED by this tool's own egress policy,
@@ -1330,7 +1342,7 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      which rested on a pin. */
   "epWitnessClass"];
 
-const COLD_ROWS = COLD_STEP_UNITS.concat(COLD_FRONTIER, COLD_SEED, COLD_COUNTERS);
+const COLD_ROWS = COLD_STEP_UNITS.concat(COLD_FRONTIER, COLD_SEED, COLD_COUNTERS, COLD_FORK_PINNED);
 /* WHAT ASKING THE ORDER COST — READ OFF THE `wfq` OBJECT, WHICH IS THE COMPOSER THAT PUBLISHES IT.
    These twelve were first added to COLD_COUNTERS, which reads `r.cold`, and a 180 s drive of a real page
    read `null` for every one of them while `kindsOf` and `requireWhole` both PASSED — the first asks

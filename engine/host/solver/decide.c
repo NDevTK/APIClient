@@ -254,6 +254,27 @@ static long g_fork_total;
    lever left against a frontier that cannot drain — on the premise that every arm re-executes its parent's
    prefix — and there is no such re-execution to spare. solver/flow.c carries the unit half of this and
    engine.c's flow_switch_in carries the comment that produced it. */
+/* FORKS TAKEN OVER A SUBJECT THIS FLOW HAD ALREADY DETERMINED — an OBSERVATION with no behaviour attached,
+   landed before the refusal it is the precondition for, because §Testing requires a prediction to state its
+   own reachability witness and a guard with no population is the stub §NO-STUBS forbids.
+   WHAT IT IS ABOUT. §Solver-half's CONCRETIZE-ON-PIN says a source this flow's own equality proved is read
+   back as the REAL value, so a later branch on it "is decided by RUNNING the real predicate on a real string
+   and does not fork at all". That holds for the two MINT arms, which hand back a bare primitive — such a
+   condition never reaches this function. It does NOT hold for a source the page MATERIALISED before its gate:
+   `concolic_example` leaves the record intact, so `var role = q("role"); if (role === "admin") …` still holds
+   a concolic afterwards, and a SECOND predicate over it — `role.length > 3` — arrives here with a subject
+   whose value this flow has proved and FORKS. The domain is a singleton, so one of those two arms is a world
+   the run itself contradicted.
+   IT COUNTS THE ASK AND NOT THE OUTCOME, deliberately: the raise is gated on `forked`, which is the fork
+   actually taken, so it is a count of EVENTS that happened and not of opportunities — but it asks
+   `concolic_src_pinned` about the SUBJECT'S SOURCE, which is a fact about this flow's constraint and is
+   therefore available whether or not the pin is ever read back. A version keyed on the value's own pin bytes
+   would answer about the comparison result rather than its subject (see concolic.h for why the two accessors
+   are not interchangeable).
+   A LIFETIME COUNT, released in decide_free exactly as `g_fork_total` is, and reported BESIDE that total in one
+   call for decide_replay_stats' reason: `over_pinned <= total` is an assertion about ONE MOMENT, and two
+   getters would let a caller read the numerator after a fork and the denominator before it. */
+static long g_fork_over_pinned;   /* EVENTS: forks whose subject this flow had already pinned             */
 static long g_replay_hits;        /* ARMS consumed on a matching question (dec_replay)                  */
 static long g_replay_left;        /* EVENTS: divergences (dec_leave_path)                               */
 static long g_replay_left_arms;   /* ARMS abandoned by those divergences, summed                        */
@@ -680,6 +701,7 @@ void decide_free(void) {
        describes THIS session's rebuild, and a ledger that outlived the session would be a lifetime count
        under a per-session discriminator — two moments published on one line. */
     g_replay_hits = g_replay_left = g_replay_left_arms = 0;
+    g_fork_over_pinned = 0;
     /* AND THE REFINEMENT PAIR, RELEASED WITH THEM FOR THEIR REASON: it is read BESIDE `replayHits` (the two
        are two arms of one partition) and beside `resumed`, which describes THIS session's rebuild, so a pair
        that outlived the session would be a lifetime count under a per-session discriminator. */
@@ -1402,6 +1424,16 @@ char *decide_fork_json(void)
 }
 
 long decide_fork_total(void) { return g_fork_total; }
+
+/* See decide.h. THE TOTAL IS RE-REPORTED HERE RATHER THAN LEFT TO `decide_fork_total` FOR THE SIBLINGS' REASON:
+   `over_pinned <= total` is an assertion about ONE MOMENT, and a caller joining two getters by hand could read
+   the numerator after a fork and the denominator before it and publish a fraction above 1 that no instant of
+   this session held. It is not a second answer to the total's question — it is the same answer, handed over in
+   the one call that makes the containment checkable. */
+void decide_fork_pinned_stats(long *total, long *over_pinned) {
+    if (total) *total = g_fork_total;
+    if (over_pinned) *over_pinned = g_fork_over_pinned;
+}
 
 /* See decide.h. THE THREE ARE HANDED BACK IN ONE CALL BECAUSE THE IDENTITY OVER THEM IS AN ASSERTION ABOUT ONE
    MOMENT, and this session has already paid for the other shape: two rows read at two ends of a run were
@@ -2414,6 +2446,14 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     key = decide_key(cond);
     arm = decide_arm(ctx, key, cond, restartable, nonforking, real, &forked);
     free(key);
+    /* AND WHETHER THAT FORK WAS TAKEN OVER A SUBJECT THIS FLOW HAD ALREADY PROVED — see the counter for what
+       the population is and why it is observed before anything refuses it. It is raised HERE because this is
+       the one line that holds both operands: `forked` is decide_arm's own answer about what just happened, and
+       `src` is the SUBJECT's source path as concolic_cmp read it off the comparison — neither is recoverable
+       later, and asking the pin of `cond` instead would answer about the comparison's own record. The pin this
+       consults is necessarily from an EARLIER branch of this flow, because the `concolic_pin` for THIS one is
+       written further down. */
+    if (forked && concolic_src_pinned(src)) g_fork_over_pinned++;
 
     forced_arm = decide_note_forced_arm(cond, real, arm);
 

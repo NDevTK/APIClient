@@ -1957,6 +1957,17 @@ const char *concolic_pin_bytes(JSValueConst v) {
     return e->val;
 }
 
+/* …AND THE SAME QUESTION ASKED OF A SOURCE PATH RATHER THAN OF A VALUE — see concolic.h for why both exist and
+   which to reach for. It is the same lookup `pin_of` makes and the same two-part test (`e && e->val`), spelled
+   once here so a caller outside this file cannot reach a different answer than the mint does. */
+int concolic_src_pinned(const char *src) {
+    const Cons *e;
+
+    if (!src) return 0;
+    e = cons_lookup(src);
+    return (e && e->val) ? 1 : 0;
+}
+
 static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     Concolic *c = JS_GetOpaque(val, g_concolic_class);
     if (!c) return;

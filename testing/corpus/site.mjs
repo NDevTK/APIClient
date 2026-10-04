@@ -1504,6 +1504,27 @@ const row = {
      ABSENT STAYS ABSENT, for `egressAsked`'s reason exactly: a row written before these fields existed omits
      them, and a `0` here would read as a door that was asked nothing, which is one of the states the set exists
      to separate. */
+  /* FORKS TAKEN OVER A SUBJECT THE FLOW HAD ALREADY PROVED, BESIDE THE TOTAL THEY ARE A PART OF — the one
+     population §Solver-half's CONCRETIZE-ON-PIN is silent about, and the reachability witness for the refusal
+     it precedes. The pin's two MINT arms hand back a bare primitive, so such a branch never reaches a hook; a
+     source the page MATERIALISED before its gate keeps its record, and a SECOND predicate over it arrives with
+     a singleton domain and one arm the run itself contradicted.
+     BOTH OR NEITHER, AND NEVER THE NUMERATOR ALONE. The engine asserts `forkOverPinned <= forks` where both
+     are in one hand, and a bare count says nothing about whether any spellable branch was reached — so this
+     carries the DENOMINATOR off the SAME entry rather than leaving a reader to find `forks` elsewhere, which
+     would be the two-moments read §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE forbids.
+     `(field-absent)` RATHER THAN A ZERO for an artifact older than the row, for `epFact`'s reason exactly. */
+  forkPinned: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    const out = {};
+    for (const k of ['forks', 'forkOverPinned']) {
+      taken.add(k);
+      out[k] = typeof c[k] === 'number' ? c[k] : EP_FACT_ABSENT;
+    }
+    return out;
+  })(),
   replyDoor: (() => {
     if (!counted.length) return null;
     const c = counted[counted.length - 1].cold;

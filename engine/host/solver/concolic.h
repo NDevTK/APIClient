@@ -192,6 +192,22 @@ void        concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example
  * from, none of which a caller running no page code can reach. */
 const char *concolic_pin_bytes(JSValueConst v);
 
+/* WHETHER THIS FLOW HAS DETERMINED A SOURCE, ASKED BY ITS PATH — the sibling above answered of a VALUE and a
+ * caller holding only a source path had no way to ask at all.
+ * THE TWO ARE NOT INTERCHANGEABLE AND THE DIFFERENCE IS WHOSE PRECONDITION IS BEING MET. `concolic_pin_bytes`
+ * requires the value's own `src` to NAME it (`src_self`), so it answers NONE for a derived value whose record
+ * legitimately carries its operand's `src` — which is correct for a caller that wants THIS value's bytes. A
+ * caller at a BRANCH holds the comparison's result, not the subject, and `concolic_cmp` hands it the subject's
+ * SOURCE PATH; asking the comparison for its own pin would answer about the wrong value, and asking it to be
+ * `src_self` would exclude every ordinary `x === 'v'` there is.
+ * IT ANSWERS ABOUT THE FLOW'S CONSTRAINT AND NOTHING ELSE. 1 means this flow's own equality pinned that path;
+ * 0 is the positive statement that it has not, and is also the answer for a NULL path — a value with no
+ * injection identity has nothing to be pinned under, so there is no third state to report.
+ * SIDE-EFFECT-FREE AND ALLOCATION-FREE, so it may stand in a DCHECK condition and inside a branch hook, which
+ * is where its first caller is. Its answer is valid until this flow pins again, is reset or is switched away
+ * from — the same bound the sibling states, and for the same reason: both read one borrowed chain. */
+int concolic_src_pinned(const char *src);
+
 /* INSTALL THE WHOLE HOOK SET. It exists because the set was written out as a struct literal at each entry —
    main.c and test_forced.c — and the two DRIFTED: the fixture harness installed three of the ten, so every
    targeted test in this repo ran against a weaker engine than the one that ships, and a relational compare on a

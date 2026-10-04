@@ -2525,6 +2525,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind lifetime: hostAsked hostAnswered replyAsked replyAnswered replyDeclined replyDropped
    @kind lifetime: replayHits replayLeft replayLeftArms
    @kind lifetime: branchAsked branchRefined
+   @kind lifetime: forkOverPinned
    @kind lifetime: steps sliceUs sliceOverruns sliceOverrunAsks sliceOverrunSeamless stepUs schedUs
    @kind lifetime: unitMidProgram unitParked unitCheckpointOwed unframedStepsLifetime
    @kind lifetime: stepReachedRenderingLife stepReachedTimerLife stepReachedIdleLife
@@ -2637,6 +2638,7 @@ char *result_cold_json(void) {
     /* AND THE REFINEMENT PAIR, IN ONE CALL FOR THE SAME REASON — see decide.h. It is decide_arm's THIRD arm,
        whose two siblings are `replayHits` and the `_forkAt` census, and it is what a naming diff moves. */
     long rf_asked, rf_refined;
+    long fk_total, fk_pinned;
     long awaiting_rows;   /* the awaited-rows gauge, read ONCE below and used by the assert and the row */
     /* what the emitted @H array is a fraction of, and what of it predates any program — endpoint.h */
     long ep_minted, ep_assets, ep_emitted, ep_pre_program;
@@ -2820,6 +2822,18 @@ char *result_cold_json(void) {
            "not hold");
     decide_replay_stats(&rp_hits, &rp_left, &rp_left_arms);
     decide_refine_stats(&rf_asked, &rf_refined);
+    /* THE PAIR'S OWN CONTAINMENT, ASSERTED WHERE BOTH ARE IN ONE HAND — which is the whole reason the accessor
+       hands back the total this document gets its `forks` row from elsewhere. It is NOT a restatement of
+       decide.c's own bookkeeping: that file raises the two counters at two different lines, and this is the one
+       place a reader holds both AT ONE MOMENT, which is the condition solver/decide.h says makes the identity
+       checkable at all. `fk_total` has no other reader here deliberately — a value read into a frame and never
+       consulted is the write-with-no-reader §A-FIELD-A-CONSUMER-DEFAULTS names, and this is its consumer. */
+    decide_fork_pinned_stats(&fk_total, &fk_pinned);
+    DCHECKF(fk_pinned >= 0 && fk_pinned <= fk_total,
+            "forks taken over an already-proved subject (%ld) outnumber the forks this session took (%ld) — "
+            "the two are raised in decide.c at the SAME decision, the subset's raise being gated on the very "
+            "`forked` answer the total counts, so this is a numerator that outran its denominator and the "
+            "share is about to be published above 1", fk_pinned, fk_total);
     /* THE CURSOR HISTOGRAM AGAINST THE MAXIMUM IT IS READ BESIDE — the one identity that says the two rows are
        about the same run, asserted here because this is the only place both are in one hand. It is not a
        restatement of the partition above: that one asks whether the walk saw every member, and this asks
@@ -3170,6 +3184,20 @@ char *result_cold_json(void) {
                     exotic case; beside a non-zero `branchAsked` the same zero is a finding about refinement.
                     Read them as a fraction or not at all. */
                  "\"branchAsked\":%ld,\"branchRefined\":%ld,"
+                 /* AND THE ONE POPULATION THE THREE ROWS ABOVE PARTITION AND NONE OF THEM SIZES: of the NEW
+                    decisions, how many FORKED over a subject this flow had already PROVED. §Solver-half's
+                    CONCRETIZE-ON-PIN says such a branch "is decided by RUNNING the real predicate on a real
+                    string and does not fork at all", and that holds for the two pin MINT arms, whose bare
+                    primitive never reaches a branch hook. It does NOT hold for a source the page MATERIALISED
+                    before its gate — `concolic_example` leaves the record intact — so a SECOND predicate over
+                    it arrives with a singleton domain and one arm the run itself contradicted.
+                    IT IS A POPULATION SIZE AND NOT A DEFECT COUNT, which is why it is a row and not an assert:
+                    §Testing requires a prediction to state its own reachability witness, and the refusal this
+                    is the precondition for would be the stub §NO-STUBS forbids if the number were zero.
+                    READ AGAINST `forks`, WHICH IS ITS DENOMINATOR AND IS ON THIS SAME DOCUMENT: both come out
+                    of ONE call for solver/decide.h's stated reason, so `forkOverPinned <= forks` is an
+                    assertion about one moment rather than two getters joined by hand. */
+                 "\"forkOverPinned\":%ld,"
                  "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
                  "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersExtra\":%ld,"
                  "\"hostAnswersLate\":%ld,\"hostTerminated\":%ld,"
@@ -3637,6 +3665,7 @@ char *result_cold_json(void) {
                  ran, resumed.segs, resumed.flows, resumed.cands, resumed.worlds,
                  rp_hits, rp_left, rp_left_arms,
                  rf_asked, rf_refined,
+                 fk_pinned,
                  resumed.orphans, e.claims_met, e.claims_unmet,
                  e.host_asked, e.host_answered, e.host_answers_extra, e.host_answers_late, e.host_terminated,
                  pending_index_asked_total(), pending_index_answered_total(),

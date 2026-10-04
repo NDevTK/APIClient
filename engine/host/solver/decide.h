@@ -330,6 +330,32 @@ long  decide_fork_total(void);
  * or the same numbers read the other way and a real loss excused as a moved peer. */
 void decide_replay_stats(long *hits, long *left, long *left_arms);
 
+/* FORKS TAKEN OVER A SUBJECT THIS FLOW HAD ALREADY DETERMINED, beside the total they are a part of — an
+ * OBSERVATION landed before the refusal it is the precondition for, because §Testing requires a prediction to
+ * state its own reachability witness and a guard whose population is empty is the stub §NO-STUBS forbids.
+ * WHAT IT IS ABOUT, AND WHY IT IS NOT ALREADY ZERO BY CONSTRUCTION. §Solver-half's CONCRETIZE-ON-PIN says a
+ * source this flow's own equality proved reads back as the REAL value, so a later branch on it "is decided by
+ * RUNNING the real predicate on a real string and does not fork at all". That is true of the two MINT arms,
+ * which hand back a bare primitive: such a condition never reaches a branch hook. It is NOT true of a source
+ * the page MATERIALISED BEFORE its gate — `concolic_example` asks the same chain and leaves the record intact,
+ * so `var role = q("role"); if (role === "admin") …` still holds a concolic afterwards, and a SECOND predicate
+ * over it arrives at the hook with a subject whose value this flow has PROVED. Its domain is a singleton, so
+ * one of the two arms is a world the run itself contradicted, and §Solver-half's feasible refinement says a
+ * contradicted branch is PRUNED rather than explored.
+ * KIND: a LIFETIME COUNT over the SESSION, released with it, monotone within one, differenceable between two
+ * samples of ONE session. UNIT: EVENTS — forks taken, not opportunities, because the raise is gated on
+ * decide_arm's own `forked` answer.
+ * IDENTITY, checkable off the emitted numbers: `over_pinned <= total`. BOTH IN ONE CALL for
+ * decide_replay_stats' reason exactly — that containment is an assertion about ONE MOMENT, and a caller
+ * joining this with `decide_fork_total()` by hand could read the numerator after a fork and the denominator
+ * before it and publish a fraction above 1 that no instant of this session held. The total here is the SAME
+ * answer that getter gives and never a second one.
+ * WHAT IT CANNOT SAY, STATED SO IT IS NOT INFERRED: it is a count of forks whose subject was pinned and NOT a
+ * count of worlds the run contradicted. A fork's two arms are over the PREDICATE, and a pinned subject makes
+ * at most one of them feasible — but which, and whether the engine then eliminated the other some other way,
+ * is not in this number. It is a POPULATION SIZE for the refusal, which is what it was landed to be. */
+void decide_fork_pinned_stats(long *total, long *over_pinned);
+
 /* WHAT A NAME BOUGHT — the ASK and the OUTCOME of decide_arm's FIRST arm, which is the one of its three that
  * had no row at all.
  *
