@@ -610,6 +610,13 @@ for (const p of passes) for (const r of p.rows) {
        only the first two may be differenced across samples — which is why nothing below does that to the
        third. */
     span: r.wallSpan, rdoor: r.replyDoor, dguard: r.deliverGuard,
+    /* AND THE HOST'S LAST ROUND, BECAUSE THE SHARE ABOVE IS THE ENGINE'S HALF OF ONE FACT AND THIS IS THE
+       DRIVER'S. A loop share says how little of its instance's span an engine got; it cannot say WHY, and the
+       two readings that answer that — the host was servicing somebody's fetch, or the host was waiting —
+       are this row's own partition. Left as whatever site.mjs wrote, which keeps FOUR states apart by
+       presence (see its banner): `(field-absent)` is a probe that threw, `(relay-absent)` is bridge.js not
+       loaded in the realm it ran in, `null` is no round completed, and an object is a round. */
+    hround: r.hostRound,
     sigs, wasm: (r.artifact && r.artifact.wasmSha256 || '').slice(0, 12),
     /* THE ARTIFACT IS NAMED BY ITS HASH ALONE. This read `r.artifact.head`, a field site.mjs deliberately
        renamed to `builtFromHeadClaim` when it stopped being trustworthy, so it resolved to '' for every row
@@ -1252,6 +1259,23 @@ if (jnShown.length) {
    this corpus it is a single value at every one of them while `pend` runs into the hundreds. A constant
    receiving capacity beside a queue that is not constant is a statement about the SEAM rather than about any
    run, and it is invisible from inside one.
+   AND THE DRIVER'S OWN ROUND IS ON THE SAME CELL BECAUSE THE SHARE ALONE CANNOT SAY WHY. A low share has two
+   readings that take opposite work — the HOST did not re-enter this engine's loop, or the engine had nothing
+   runnable — and the round partition is what separates them. MEASURED over the five gitpod passes that carry
+   both rows, sorted by share descending: the fraction of rounds ENDING IN A FETCH SERVICE rises monotonically
+   as the share falls (54, 64, 72, 78, 91 per cent against 48.3, 37.3, 11.4, 10.3, 0.9), and so does the POOL
+   the level-1 order was choosing between (2, 3, 4, 5, 6). Five of five, no exception — so the share is not a
+   fact about this engine at all, it is what one engine gets when the one thread is shared N ways and most
+   rounds go to serving somebody's bytes.
+   WHICH OF THE TWO IS THE DRIVER IS NOT ESTABLISHED AND MAY NOT BE INFERRED HERE: `pool` and the service
+   fraction move together on this corpus, so no sample in it can separate them, and both are printed rather
+   than one being named the cause. What IS established is that the reach mode is partly a property of the
+   DRIVE — how many documents of the origin the harness had open — which is §A-FIXTURE-BUILT-TO-EXERCISE-EVERY-
+   MECHANISM's hazard read from the other end: a figure a reader takes for the engine's.
+   AND THE OTHER SIX ARMS ARE ZERO AT EVERY ONE OF THOSE PASSES, which is why only two are printed: the
+   partition sums to `round` exactly in all five, so the host never found nothing to do, never released, never
+   finished an engine and never threw. A reader wanting the full vocabulary reads `hostRound` whole on the row,
+   which site.mjs relays unsummarised for exactly that reason.
    NOTHING IS DIFFERENCED AND NO VERDICT IS COMPOSED. `deliverGuard` is a GAUGE, so a difference of it across
    two passes is not a quantity; the share is per-pass and is printed per-pass; and the mode is read off the
    endpoint door rather than inferred from either, so the separation above is a statement a reader can check
@@ -1260,20 +1284,28 @@ const spOne = (m) => {
   const w = (m.span && typeof m.span === 'object') ? m.span : null;
   const d = (m.dguard && typeof m.dguard === 'object') ? m.dguard : null;
   const r = (m.rdoor && typeof m.rdoor === 'object') ? m.rdoor : null;
-  if (!w && !d && !r) return { tok: !('span' in m) ? 'no-field' : (m.span === null ? 'no-counters' : String(m.span)) };
+  if (!w && !d && !r && !(m.hround && typeof m.hround === 'object'))
+    return { tok: !('span' in m) ? 'no-field' : (m.span === null ? 'no-counters' : String(m.span)) };
   const n = (o, k) => (o && typeof o[k] === 'number' ? o[k] : null);
   const loop = n(w, 'loopUs'), inst = n(w, 'instanceUs');
-  return { w, d, r,
+  const hr = (m.hround && typeof m.hround === 'object') ? m.hround : null;
+  return { w, d, r, hr,
            /* `null` AND NEVER A ZERO where either operand is absent, and never where `instanceUs` is 0 — a
               share of a span that did not happen is not a small share. */
            share: (loop === null || !inst) ? null : (100 * loop / inst),
            slices: n(w, 'slices'), stackEmpty: n(d, 'stackEmpty'), canDeliver: n(d, 'canDeliver'),
            pend: n(d, 'pend'), pendReady: n(d, 'pendReady'),
-           asked: n(r, 'replyAsked'), answered: n(r, 'replyAnswered'), outstanding: n(r, 'replyOutstanding') };
+           asked: n(r, 'replyAsked'), answered: n(r, 'replyAnswered'), outstanding: n(r, 'replyOutstanding'),
+           /* THE TWO ARMS THAT HAVE EVER BEEN NONZERO, AND THE SHARE OF ROUNDS THAT ENDED IN A FETCH SERVICE.
+              It is a ratio of two fields of ONE round object, so it is read within one sample like the span
+              share. `pool` is how many engines the level-1 order was choosing between, carried because the
+              two move together on this corpus and no sample here can separate them. */
+           round: n(hr, 'round'), rServ: n(hr, 'rServiced'), rWait: n(hr, 'rWaited'), pool: n(hr, 'pool'),
+           servShare: (n(hr, 'round') && n(hr, 'rServiced') !== null) ? (100 * hr.rServiced / hr.round) : null };
 };
 const spRows = table.map((t) => {
   const per = t.measurements.map(spOne);
-  const stated = per.filter((x) => x.w || x.d || x.r);
+  const stated = per.filter((x) => x.w || x.d || x.r || x.hr);
   return { id: t.id, n: per.length, per, stated,
            tok: stated.length ? null : (per.length ? per[0].tok : 'no-pass') };
 });
@@ -1284,10 +1316,16 @@ if (spShown.length) {
     '/' + (x.slices === null ? '-' : x.slices + 'sl') +
     ' ' + (x.canDeliver === null ? '-' : x.canDeliver) + '≤' +
     (x.stackEmpty === null ? '-' : x.stackEmpty) + ' of ' +
-    (x.pendReady === null ? '-' : x.pendReady) + '/' + (x.pend === null ? '-' : x.pend);
+    (x.pendReady === null ? '-' : x.pendReady) + '/' + (x.pend === null ? '-' : x.pend) +
+    ' ' + (x.servShare === null ? '-' : x.servShare.toFixed(0) + '%serv') +
+    '/' + (x.pool === null ? '-' : 'pool' + x.pool);
   console.log('');
-  console.log('ENGINE SPAN AND DELIVERY CAPACITY (site, then PER PASS IN ORDER: loop share of the instance\'s');
-  console.log('  span / slices, then canDeliver ≤ stackEmpty of pendReady/pend):');
+  console.log('ENGINE SPAN, DELIVERY CAPACITY AND THE DRIVER\'S OWN ROUND (site, then PER PASS IN ORDER):');
+  /* EVERY QUANTITY THE CELL PRINTS IS NAMED HERE, which is not decoration: a reader takes a legend as the
+     key to a row, so a cell carrying more than the legend names is read as whichever of its fields the
+     legend happens to list — the orientation defect CLAUDE.md records for a ratio, arriving in a column. */
+  console.log('  <loop share of the instance\'s span>/<slices>  <canDeliver>≤<stackEmpty> of ' +
+              '<pendReady>/<pend>  <rounds ending in a fetch service>serv/pool<engines the order chose between>');
   for (const r of spShown)
     console.log('  ' + pad(r.id, spIdW) + r.stated.map(cell).join(' | '));
   /* THE GAUGE'S DISTRIBUTION OVER THE PASSES, which is the cross-run fact no single run can state and the
