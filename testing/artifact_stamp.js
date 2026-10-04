@@ -192,5 +192,63 @@ function artifactStamp(extDir) {
            assertsAtBuild: assertRegimeReading(j) };
 }
 
-module.exports = { artifactStamp, stampReading, trustedZoneAtRun,
+/* WHETHER THE SHIPPED BYTES CARRY THE ROWS A CALLER IS ABOUT TO ASK FOR — the one axis every field above
+   is silent about. A driver prints `-` for a row its run did not state, and that `-` has TWO readings no
+   stamp can separate: the engine emitted no such row because the population is empty, or THIS BUILD HAS NO
+   SUCH COUNTER because it predates the commit that landed it. CLAUDE.md: those take opposite work, one being
+   a finding and the other an install, and they render identically — so the distance a reader needs is per
+   ROW, and `head` cannot supply it however carefully it is read.
+   IT ARMS ITS OWN CONTROLS, because a probe whose expected answer is an ABSENCE and which has never been
+   shown to speak is reporting on itself rather than on the artifact. An invented name must read ABSENT (else
+   the probe matches anything) AND at least one asked name must read PRESENT — the positive control, derived
+   from the CALLER'S OWN SET rather than from a literal here, which would be a coordinate that rots the day
+   that row is renamed. Where either fails this returns a VOID reading naming which, never a classification,
+   on the same ground stampReading refuses to fold "could not ask" into "clean".
+   IT ANSWERS ABOUT ROW NAMES AND NOT ABOUT MARKERS, which is measured rather than assumed: the installed
+   production artifact carries `epFetchAskNamedLife` and carries NEITHER `@COLD` nor `censusSeq`, because the
+   census printf that spells those is unreachable from the ABI entry and is eliminated while the row name
+   survives in the JSON key the ABI composes. So an absent MARKER is no evidence about an absent ROW, and a
+   caller that hands this a marker is asking a question it cannot answer.
+   A NAME MATCHES AT A WORD BOUNDARY, so a row that is a prefix of a longer key cannot read PRESENT off its
+   own superstring — the floor-wearing-a-total shape arriving as a false presence rather than a false absence.
+   RETIREMENT: this goes when the build stamp records the row names its composers spell, because the question
+   is then answered FROM the stamp and no caller reads 20 MiB to ask it. */
+const ROW_IDENT = /[A-Za-z0-9_]/;
+const INVENTED_ROW_CONTROL = "apiclientRowNoBuildHasEverSpelled";
+function artifactRowsPresent(names, extDir) {
+  const dir = path.join(extDir || process.env.HARNESS_EXT_DIR || DEFAULT_EXT, "lib", "qjs");
+  const p = path.join(dir, "qjs.wasm");
+  const none = { asked: names.length, present: [], absent: [] };
+  let buf;
+  try { buf = fs.readFileSync(p); }
+  catch (e) {
+    return Object.assign({}, none,
+      { reading: "void(unreadable artifact at " + p + ": " + e.message + " — this is NOT a statement that the " +
+                 "build lacks any row)" });
+  }
+  const occurs = (n) => {
+    for (let i = buf.indexOf(n, 0); i >= 0; i = buf.indexOf(n, i + 1)) {
+      const end = i + n.length;
+      if (end >= buf.length || !ROW_IDENT.test(String.fromCharCode(buf[end]))) return true;
+    }
+    return false;
+  };
+  if (occurs(INVENTED_ROW_CONTROL))
+    return Object.assign({}, none,
+      { reading: "void(the invented control " + INVENTED_ROW_CONTROL + " reads PRESENT, so this probe matches " +
+                 "anything and every answer it gives is about itself)" });
+  const present = [], absent = [];
+  for (const n of names) (occurs(n) ? present : absent).push(n);
+  if (!present.length)
+    return Object.assign({}, none,
+      { reading: "void(NONE of the " + names.length + " asked rows reads PRESENT, so no positive control is " +
+                 "armed — consistent with an artifact predating every one of them AND with a probe that " +
+                 "cannot read " + path.basename(p) + ", and those are not the same fact)" });
+  return { asked: names.length, present: present, absent: absent,
+           reading: "classified(" + present.length + " present, " + absent.length + " absent in " +
+                    path.basename(p) + "; controls armed: an invented name reads ABSENT and " + present.length +
+                    " asked name(s) read PRESENT)" };
+}
+
+module.exports = { artifactStamp, artifactRowsPresent, stampReading, trustedZoneAtRun,
                    assertRegimeReading, absentAbortIsEvidence };

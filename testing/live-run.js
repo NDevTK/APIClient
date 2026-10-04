@@ -30,7 +30,7 @@
 const path = require("path");
 const fs = require("fs");
 const puppeteer = require("puppeteer");
-const { artifactStamp } = require("./artifact_stamp.js");
+const { artifactStamp, artifactRowsPresent } = require("./artifact_stamp.js");
 const { absentPair } = require("./absent_census.js");
 /* WHAT KIND EACH CENSUS ROW IS, ASKED OF THE PRODUCER THAT EMITS IT. The six lists below used to answer
    TWO questions with one array — WHICH ROWS THIS DRIVER CARRIES and WHAT KIND EACH IS — and only the
@@ -1120,12 +1120,21 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      and is the honest answer: the run did not state them. The engine's absent form is the rows being ABSENT
      from `_cold` rather than five zeroes — a host that installs no fetch runs no fetch machine and has no
      population — so `k in c` is false and this list yields `null`, with no arm anywhere that could turn that
-     into a 0. MEASURED at the revision this was written, with `epAsks` and `epEmitted` as the armed controls
-     answering 1 each and an invented name answering 0: all five read 0 occurrences in the installed
-     `extension/lib/qjs/qjs.wasm`, whose stamp is 54 commits behind and is NOT a descendant of the commit that
-     landed them — so the first reader of this list sees five `-` and that is the rows working, not the run.
-     RETIREMENT: that measurement goes when this driver prints the artifact's own distance from the rows it
-     asks for, because the absence is then derivable from the output rather than stated here. */
+     into a 0. THAT MEASUREMENT IS REWRITTEN RATHER THAN DELETED, because the reasoning above it is what a reader
+     re-derives and the COORDINATE is the only part that rotted. It read: with `epAsks` and `epEmitted` as the
+     armed controls answering 1 each and an invented name answering 0, all five read 0 occurrences in the
+     installed `extension/lib/qjs/qjs.wasm`, whose stamp was 54 commits behind and was NOT a descendant of the
+     commit that landed them — so the first reader of this list saw five `-` and that was the rows working,
+     not the run. EVERY ONE OF THEM READS PRESENT IN THE INSTALLED ARTIFACT NOW, measured twice by two readers
+     with an invented name as the armed control, so the sentence had become AN ABSENCE ASSERTED AFTER IT WAS
+     FILLED — the direction CLAUDE.md rates worst, since the only reader of a named absence is somebody about
+     to go and build it, and the thing they would build is already here.
+     IT IS NOT REPLACED BY A FRESH NUMBER, WHICH WOULD RESTART THE SAME CLOCK. The `# artifactRows` line this
+     driver prints before its first row names the rows the installed wasm does not carry, so the absence is
+     DERIVED at the moment a reader meets a `-` instead of being recalled here — and it covers every row this
+     driver asks for rather than the five somebody once measured by hand.
+     RETIREMENT: that line goes when the build stamp itself records the row names its composers spell, because
+     the question is then answered FROM the stamp and no reader probes the bytes at all. */
   /* AND THE ROW WITHOUT WHICH `epFetchAskBeganLife`'s ZERO IS THREE READINGS, which is the reading this driver
      is pointed at every day and the one it could not answer. The begun row is raised at Fetch §5.4's first
      stage, and core/idl_args.h numbers a declared member's stages from IDL_STEP_FIRST because stages 0 and 1
@@ -2180,6 +2189,21 @@ async function main() {
   requireFrom({ cold: { rows: COLD_ROWS, composers: ["cold"].concat(COLD_WHOLE) },
                 wfq:  { rows: WFQ_ROWS,  composers: ["wfq"] } });
   const K = kindsOf(COLD_ROWS.concat(WFQ_ROWS));
+  /* AND WHETHER THE INSTALLED ARTIFACT CARRIES THE ROWS THIS DRIVER IS ABOUT TO ASK FOR, which none of the
+     three refusals above can ask: every one of them checks this driver against the PRODUCERS IN THE TREE, and
+     the program that answers a drive is the one that was BUILT. A row the build predates prints `-`
+     identically to a row this run did not state, and those take opposite work — an install against a finding.
+     PRINTED BEFORE THE FIRST ROW so that a `-` below is already explained, and REPORTED rather than REFUSED,
+     because an artifact older than a row is the ordinary state of a tree that lands rows faster than it
+     installs — refusing there would stop every drive whenever anyone adds a counter. The probe arms its own
+     controls and says so in its reading; a VOID reading is a statement about the probe and never about the
+     build, so it is printed whole rather than folded into an absence. */
+  const askedRows = artifactRowsPresent(COLD_ROWS.concat(WFQ_ROWS));
+  console.log("# artifactRows " + askedRows.reading +
+              (askedRows.absent.length
+                 ? " | ABSENT FROM THE INSTALLED wasm, so a `-` on these is THIS BUILD and not this run: " +
+                   askedRows.absent.join(",")
+                 : ""));
   const show = (names) => names.map((n) => OUT_NAME[n] || n).join(",");
   console.log("# frontier.* — LIFETIME (may be differenced): " + show(K.byKind.lifetime) + "," +
               ABSENT_ROWS.join(",") +
