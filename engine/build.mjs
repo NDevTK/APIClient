@@ -5662,9 +5662,12 @@ function dialogText(out) {
      CENSUS   — a stage that read the SOURCES and reported N finding categories. A fact about the revision, and
                 a COUNT: its magnitude is a work queue, only a MOVE is news, and no run of this file can see a
                 move. Said in those words rather than implied.
-     TERMINAL — the run ended on its CPU budget or the deadlock backstop. §Testing: "a statement about THIS RUN
-                and this interleaving, never about the revision", and the stage's own verdict already says so
-                at length.
+     TERMINAL — the run ended on its CPU budget, the deadlock backstop, or a GATE'S OWN WATCHDOG cutting its
+                child short. §Testing: "a statement about THIS RUN and this interleaving, never about the
+                revision", and the stage's own verdict already says so at length. The third producer is the
+                CHILD's and not this file's — BACKSTOP_WITNESS reads the sentence the gate prints when its
+                watchdog, rather than a check, ended the run — which is why this band's membership is not a
+                list of arms in runOutcome any more.
    THE RANK IS WHAT A READER SHOULD OPEN FIRST and nothing else. DEFECT above NOT ASKED because a hole is
    usually the CONSEQUENCE of one; NOT ASKED above CENSUS because a question nobody asked outranks a count
    everybody has; CENSUS above TERMINAL because a census is about the tree and a budget kill is not. Within one
@@ -5884,6 +5887,41 @@ const CENSUS_WITNESS = /^\[[a-z][a-z-]*\] FAILED — (\d+) (?:FINDING )?category
    SINGLE-LINE BY CONSTRUCTION and anchored at line start, on CENSUS_WITNESS's own two arguments. */
 const NOT_ASKED_WITNESS = /^\[[a-z][a-z-]*\] NOT ASKED — this host cannot put: ([^—\n]+?) — /m;
 
+/* AND A STAGE THAT KILLED ITS OWN CHILD, RECOGNISED THE SAME WAY AND FOR A REASON THE OTHER TWO DO NOT COVER.
+   `STAGE_KIND.TERMINAL` is already this file's band for a run that ENDED ON A LIMIT RATHER THAN ON AN ANSWER —
+   a statement about THIS RUN and this interleaving, never about the revision. ITS TWO PRODUCERS WERE BOTH ARMS
+   OF THIS FUNCTION (the CPU budget and the deadlock backstop), so a stage whose CHILD enforces its own watchdog
+   had no route into it, and the band's definition enumerated those two rather than the property they share —
+   which is why the enumeration had to be rewritten with this arm and not merely appended to:
+   a gate that cuts its child short exits non-zero with no assertion line and lands in DEFECT, the band whose
+   own definition reads "a fact about the revision, and the stage names what to fix or build".
+   THE CHILD ALREADY PUBLISHED THE DISTINCTION AND NOTHING READ IT, which is the write-with-no-reader half of
+   §A-FIELD-A-CONSUMER-DEFAULTS arriving in an exit code. `engine/peergate.mjs` exits 3 on that path and says
+   in as many words that "the status is the HARNESS's and not these rows'" and that its exit code "refuses to
+   claim" a verdict on the transport — so the fact was stated, by the only process that knows it, and this file
+   summed it into the loudest category it has. MEASURED: the stage reported `FAILED rc=3` and `DEFECT` while
+   its own body printed `BACKSTOP — this gate's own idle watchdog fired after 182s` with the load average
+   beside it, and the three rows under it (`exit`, `result`, `onlist`) each name the kill as their cause.
+   THE CLASSIFYING SENTENCE IS THE WITNESS AND NOT THE `BACKSTOP` LINE ITSELF, which is the whole of why this
+   is safe. That line is printed BEFORE the gate decides which of two non-zero paths it is on — the kill, or
+   its own failure to decide a declared check — and the second is a defect in the gate. Matching the line
+   would classify both; matching the sentence the KILL path alone prints classifies one.
+   THE ABORT ARMS ABOVE KEEP THEIR PRECEDENCE AND THAT IS LOAD-BEARING. `t.signal` and `t.status !== 0 &&
+   aborted` are both tested before this block, so a child that aborted at an assertion AND was then cut short
+   stays DEFECT — which is the precedence peergate itself states ("the engine's own aborts, if any, are on the
+   stderr above the BACKSTOP line"). A reader must never be sent to the harness for an assertion.
+   IT FAILS LOUD, like every other prose witness here: a gate that rewords this sentence stops matching and
+   its stage falls back to DEFECT, so drift makes this build noisier and can never make a red stage read as a
+   smaller one. SINGLE-LINE BY CONSTRUCTION — the sentence is one template literal with no newline in it — and
+   anchored at line start, because a stage QUOTING another gate's verdict is not that gate.
+   IT CARRIES THE LIST AND NOT A COUNT, on NOT_ASKED_WITNESS's own argument: the names are what a reader acts
+   on, and a digit beside them would be a second thing to keep in step with them.
+   RETIREMENT: this goes when a child can state its own STAGE_KIND to this file in a form that is not prose —
+   a declared exit-code vocabulary this file reads from the child rather than a sentence it matches — because
+   the classification is then the child's by construction and no wording can drift out of it. */
+const BACKSTOP_WITNESS =
+  /^\[[a-z][a-z-]*\] the BACKSTOP above ended this run, [^\n]*? did not pass: ([^.\n]+)\./m;
+
 function runOutcome(label, t, hint) {
   /* APPENDED TO EVERY VERDICT THIS FUNCTION PRODUCES, which is why it is computed once here and folded into
      `bad` rather than added at each arm — an arm added later would otherwise be the one that drops it, and
@@ -6058,6 +6096,22 @@ function runOutcome(label, t, hint) {
                     `outputs of one child disagree about what it measured, so this stage falls through to ` +
                     `DEFECT rather than being excused by a sentence nothing corroborates.`);
     }
+    /* THE HARNESS'S OWN KILL, ASKED BEFORE THE CENSUS AND AFTER THE HOLE, because the three questions are
+       in the order a reader needs them answered: did the child answer everything it could ASK, did the child
+       CUT ITSELF SHORT, and did it read the SOURCES and count. Only the second is a statement about neither
+       the revision nor the tree, and it is the one that had no band. */
+    const backstop = t.captured.match(BACKSTOP_WITNESS);
+    if (backstop)
+      return bad("HARNESS BACKSTOP — this gate cut its own child short; the row(s) that did not pass are " +
+                   "observations about a run it ended: " + backstop[1].trim() +
+                   (stand ? " — " + standingText(stand) : ""),
+        t.status || 1, STAGE_KIND.TERMINAL,
+        `CUT ITS OWN CHILD SHORT and exited rc=${t.status} — its watchdog fired, so this is a statement about ` +
+        `THIS RUN and this interleaving and NOT about the revision. The rows it names were decided from what ` +
+        `that process was holding when it fired and every one of them has the kill as its cause; the gate's ` +
+        `own BACKSTOP line above carries the load average that qualifies it. Nothing here names a thing to ` +
+        `fix in the engine — an abort would have been caught by the arms above this one and would have kept ` +
+        `DEFECT, which is why reaching here means there was none.`);
     const census = t.captured.match(CENSUS_WITNESS);
     return bad("FAILED rc=" + t.status + (stand ? " — " + standingText(stand) : "") +
                  (census ? ` — ${census[1]} finding category(ies), each with its own count and denominator in ` +
@@ -6411,8 +6465,11 @@ function report(stages, findings) {
       "runs yourself if you want the trend. A count is not a regression and this line does not claim one.",
     [STAGE_KIND.TERMINAL.tag]:
       "NO DEFECT IN THIS BUILD. What decided the verdict is a TERMINAL EVENT — a run that ended on its CPU " +
-      "budget or the deadlock backstop, which §Testing makes a statement about THIS RUN and this interleaving " +
-      "and never about the revision. A repeat is what addresses it; a diff is not.",
+      "budget, on the deadlock backstop, or on a gate's own watchdog cutting its child short, which §Testing " +
+      "makes a statement about THIS RUN and this interleaving and never about the revision. A repeat is what " +
+      "addresses it; a diff is not. AND A REPEAT ON A QUIET BOX, because every one of the three is a function " +
+      "of how much of this machine the run got: the stage above carries the load average it fired at, and a " +
+      "verdict taken under load is one §Testing says may only ever be read as the run doing LESS.",
   }[bad.kind.tag];
   /* AND WHAT THIS VERDICT IS ENTITLED TO STOP, WHICH IS A DIFFERENT QUESTION FROM WHAT DECIDED IT AND WAS
      STATED NOWHERE. The category above says what the red is ABOUT. It does not say whether the reader may
