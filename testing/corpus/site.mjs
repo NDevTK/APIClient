@@ -167,8 +167,20 @@ const PROBE = `(() => ({
      last moment -- and a reader who takes the one round for the drive is reading a gauge as a lifetime count.
      SPREAD RATHER THAN SUMMARISED, for the reason every other column on this row is: \`pool\`, \`hot\`, \`booting\`,
      \`loading\` and \`waiting\` are five states a seat can be in and folding them into "idle" would be the
-     several-states-behind-one-answer shape at the one place the host's own order is readable. */
-  level1: self._level1 ? JSON.parse(JSON.stringify(self._level1)) : null,
+     several-states-behind-one-answer shape at the one place the host's own order is readable.
+     AND THIS ARM READ \`self._level1 ? ... : null\` IN THE COMMIT THAT LANDED IT, WHICH COLLAPSED TWO OF THE
+     PRODUCER'S OWN THREE STATES INTO ONE -- recorded here rather than quietly repaired, because a reader who
+     re-derives the arm from "is there a round" will write the truthiness test again. bridge.js states the
+     vocabulary ten lines from its own write, under the heading "THREE FACTS, KEPT APART BY PRESENCE AND NEVER
+     BY A ZERO": \`undefined\` means THIS FILE DID NOT LOAD AND THE RELAY IS BROKEN, and \`null\` means no round
+     has completed in this session. Both are falsy, so a truthiness test reports a BROKEN RELAY as a host that
+     never completed a round -- which is a claim about the engine composed out of a fact about the harness, and
+     it is the flattering direction: it reads as a finding about scheduling rather than as a probe that found
+     nothing to read. bridge.js writes \`self._level1 = null\` AT LOAD, so the PROPERTY EXISTS iff the file
+     loaded and \`in\` is the discriminator the producer's own wording names. */
+  level1: !('_level1' in self) ? '(relay-absent)'
+    : self._level1 === null ? null
+    : JSON.parse(JSON.stringify(self._level1)),
   /* THE DOMAIN COLUMNS, AND WHY THEY ARE NOT READ OFF \`endpoints\`. That map is endpointKey → the record
      lib/merge.js builds, which is {method, service, key, headers, firstSeen} and carries NO parameters at
      all — so a probe pointed there reports "no parameter carries a domain" for every run of every site,
@@ -1588,10 +1600,22 @@ const row = {
   domains: cur.domains === undefined ? null : cur.domains,
   /* THE HOST'S LAST SCHEDULER ROUND, RELAYED WHOLE AND NOT SUMMARISED — see the probe for why it is ONE round
      rather than a series, what it can and cannot say, and the named residual (a per-shape round counter in
-     bridge.js, whose denominator `_level1Round` already exists). `null` is a probe that found no round at all,
-     which is a drive in which the host never completed one and is a different fact from a round that found
-     nothing to run. */
-  hostRound: cur.level1 === undefined ? null : cur.level1,
+     bridge.js, whose denominator `_level1Round` already exists).
+     FOUR STATES, AND THE COMMIT THAT LANDED THIS FIELD KEPT TWO. It read `cur.level1 === undefined ? null`
+     under the sentence "`null` is a probe that found no round at all, which is a drive in which the host never
+     completed one" -- and that is TRUE of one state and FALSE of the other two it was mapping onto it, which is
+     retired here rather than deleted because the collapse is what a reader re-derives from the word "absent".
+     What the column says now, each kept apart BY PRESENCE as bridge.js keeps them:
+       · `(field-absent)`  the PROBE did not answer -- it threw, and its catch path returns no such key. A fact
+                           about this harness and about nothing else.
+       · `(relay-absent)`  the probe ran and bridge.js was NOT LOADED in the realm it ran in. Also a fact about
+                           the harness, and a DIFFERENT one: the probe worked and the file was missing.
+       · `null`            the relay is live and NO ROUND HAS COMPLETED in this session. The first reading here
+                           that is about the host at all.
+       · an object         a round. Its own conditional rows carry the rest of the producer's vocabulary (a
+                           `cands` that is ABSENT is a round that never asked the non-resident order, which is
+                           not the same as `cands: 0`), and they are relayed WHOLE for exactly that reason. */
+  hostRound: ('level1' in cur) ? cur.level1 : EP_FACT_ABSENT,
   /* THE ENGINE'S OWN RECORD FIRST, THE CONSOLE ONLY AS A SUPPLEMENT. A console scrape is the wrong surface by
      construction -- the renderer does not tee its stdout -- so a run whose abort reached the result document
      and not the console read `why: []`, and this harness reported a site that ABORTED as one that ran clean
