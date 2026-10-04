@@ -996,6 +996,21 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            `ENDPOINT_RAZOR_CLASSES` reaches this reader unedited and a row from a wasm older than the key
            lands in the `(unstated)` bucket — a fact about the BUILD and never about an address. */
         endpointRazorClass: endpointFactHistogram(result.fetchCallSites, "razorClass"),
+        /* …AND THE BOUND ON THE ONE POPULATION THE ROW ABOVE NAMES AND CANNOT SIZE. Its own paragraph ends
+           "a source a flow PINNED and re-read lands there and really is past every parse, which
+           solver/endpoint.h enumerates and WHICH NO FIELD ON THE ROW CAN SAY" — and that last clause was a
+           statement about the engine's emitted row, which now carries `witnessClass`. The sentence stays where
+           it is because it is the ARGUMENT a reader needs (the bar is a floor, not a complement over parses);
+           this is the quantity it was missing.
+           IT IS NOT UNIONED INTO THE BAR HERE OR ANYWHERE, which is the same refusal the row above makes
+           about `endpointDoors` and for a sharper reason: that one would be a SECOND COPY of a union the
+           engine already composes, and this would be a THIRD OPERAND the engine deliberately does not —
+           `may-rest-on` is a MAY (the pin is a fact about the PATH, not about this address's bytes), so
+           folding it in turns a floor into an over-claim. The two columns are rendered side by side and a
+           person reads the pair.
+           RENDERED AND ASSERTED GENERICALLY for the three rows above's reason, so a class added to
+           `ENDPOINT_WITNESS_CLASSES` reaches this reader unedited. */
+        endpointWitnessClass: endpointFactHistogram(result.fetchCallSites, "witnessClass"),
         park: result._park.length, resumed: resumed,
         coldLookup: cold.lookup, coldOther: cold.other, bundleId: cold.bundle,
         url: (msg && msg.sourceUrl) || "" }
@@ -1048,7 +1063,7 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            "request(s) asked of it — the two are raised in one loop, one `asked` per delivered pending line " +
            "and at most one refusal inside that same iteration, so a sum above the denominator is a second " +
            "site raising one of them and every share read off this pair is over a population that never ran");
-    /* AND THE FOUR ENDPOINT PARTITIONS ARE PARTITIONS, ASSERTED WHERE EVERY SIDE IS IN ONE HAND. Two claims,
+    /* AND THE ENDPOINT PARTITIONS ARE PARTITIONS, ASSERTED WHERE EVERY SIDE IS IN ONE HAND. Two claims,
        and only the second can fail against today's producer. (a) Each histogram SUMS to `endpoints` — one row,
        one bucket, one array — which is asserted for the reason the egress containment above is: the edit that
        breaks it is precisely the one the residual this landing retires proposed, a histogram built over a
@@ -1057,9 +1072,13 @@ function linesToAnalysis(lines, msg, outcome, eng) {
        disagree: one instance emits one document shape, so a run stating a door for some rows and not others
        is that emit having become conditional — and a half-unstated histogram says "this artifact predates the
        key" about part of one array, which is true of no build. */
+    /* FIVE NOW RATHER THAN FOUR, and the list is the only place that number is written: both claims below are
+       about a histogram over ONE array, so the set they are asked of is whatever this literal holds and a row
+       added to the composer above without a line here is a partition nothing checks. */
     for (const _p of [["endpointDoors", m.endpointDoors], ["endpointMintedAt", m.endpointMintedAt],
                       ["endpointAddressClass", m.endpointAddressClass],
-                      ["endpointRazorClass", m.endpointRazorClass]]) {
+                      ["endpointRazorClass", m.endpointRazorClass],
+                      ["endpointWitnessClass", m.endpointWitnessClass]]) {
       let _n = 0;
       for (const k of Object.keys(_p[1])) _n += _p[1][k];
       DCHECK(_n === m.endpoints,
@@ -1070,7 +1089,8 @@ function linesToAnalysis(lines, msg, outcome, eng) {
       const _u = _p[1][ENDPOINT_FACT_UNSTATED] === undefined ? 0 : _p[1][ENDPOINT_FACT_UNSTATED];
       DCHECK(_u === 0 || _u === m.endpoints,
              "this run's `" + _p[0] + "` partition states the fact for some rows and not others (" + _u +
-             " unstated of " + m.endpoints + ") — solver/endpoint.c writes all three keys unconditionally in " +
+             " unstated of " + m.endpoints + ") — solver/endpoint.c writes every one of these keys " +
+             "unconditionally in " +
              "one loop over one array, so a mixed run is that emit having become conditional, and the " +
              "bucket that means 'this artifact predates the key' would be read as a property of some " +
              "addresses");

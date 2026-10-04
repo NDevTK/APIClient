@@ -866,7 +866,17 @@ const learnedAddrs = [...new Set(mine.flatMap(d => d.sites))];
    they are about, and each is the SHIPPED spelling -- a query written against extension/bridge.js's own name
    answers at both grains. */
 const EP_FACT_ABSENT = '(field-absent)';
-const EP_FACT_FIELDS = ['endpointDoors', 'endpointMintedAt', 'endpointAddressClass', 'endpointRazorClass'];
+/* …AND THE BOUND ON THE ONE POPULATION `endpointRazorClass` CANNOT SIZE, which is a FIFTH member of this one
+   list rather than a field of its own for the reason the banner above gives: the row's keys and the
+   containment check below are driven from here, so a partition added in one place and not the other is a
+   column nothing checks. `may-rest-on` is the count of emitted addresses composed by a path that had pinned a
+   source's value on an arm its own example contradicted -- a MAY and NEVER summed with the bar, because a pin
+   is a fact about the PATH and says nothing about whether this address read that source. Its whole use is a
+   fork: `unproven` beside `may-rest-on` 0 is the bar having genuinely proved nothing on this document, and
+   beside a nonzero one it is a population the bar could not look at, because `pin_mint` hands a pinned read
+   back as a BARE primitive and the address then grades `concrete`. Those take opposite diffs. */
+const EP_FACT_FIELDS = ['endpointDoors', 'endpointMintedAt', 'endpointAddressClass', 'endpointRazorClass',
+                        'endpointWitnessClass'];
 const epFact = (k) => !counted.length ? null
   : (k in counted[counted.length - 1]) ? counted[counted.length - 1][k] : EP_FACT_ABSENT;
 /* …AND WHETHER THE TWO DATA DOORS' MACHINES WERE EVER REACHED AT ALL, WHICH `endpointDoors` STRUCTURALLY

@@ -552,6 +552,66 @@ typedef enum {
    decided as this engine's answer to the product's own bar. */
 const char *endpoint_razor_class_token(int cls);
 
+/* WHETHER THIS ADDRESS MAY REST ON A WITNESS THIS ENGINE CHOSE — the NECESSARY CONDITION under the one
+   population `EPZ_UNPROVEN` holds that really is past every parse, published as its own word per row because
+   nothing anywhere published it and the razor's zero cannot be read without it.
+   IT IS NOT THE BAR AND IS NEVER UNIONED INTO IT, which is the whole reason it is a third list rather than a
+   third operand of `endpoint_razor_class_of`. The razor's own banner states the hazard and the reason, and
+   this is that reason obeyed rather than repeated: `may-rest-on` is a MAY, so folding it in would turn a FLOOR
+   into an OVER-claim — the same defect as unioning over `EPR_BEYOND` one operand back, which CLAUDE.md
+   §a-widening-in-the-coverage-gaining-direction prices in both directions.
+   WHAT IT IS FOR, AND IT IS A DECISION BETWEEN TWO OPPOSITE WORK PROGRAMMES RATHER THAN A COLUMN. The razor
+   reads `unproven` for every address a run DETERMINED, and `address_class_of` asks `concolic_is`, which
+   CONCRETIZE-ON-PIN makes answer FALSE for a source this flow pinned and re-read — `pin_mint` hands a pinned
+   read back as a BARE primitive, so the taint is gone by the time the address is composed. A surface of
+   `concrete` rows is therefore consistent with an engine that genuinely computed every address (in which case
+   the SOLVER must keep more values unknown) AND with one whose pin erased a taint the bar should have seen (in
+   which case the pin owes the address a provenance it can still carry). Those take opposite diffs, and no
+   figure published before this list could tell them apart.
+   THE CONSERVATIVE MEMBER IS FIRST AND IS ZERO BY CONSTRUCTION, for `ENDPOINT_DOOR_BYTES`' reason exactly —
+   and here the member that proves nothing is the one for THE QUESTION NOT HAVING BEEN ASKED, because the
+   accessor that answers it is only answerable while a flow stands. A mint that forgets to ask reads as having
+   asked nothing, which is the direction CLAUDE.md §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT rates as the
+   invisible one.
+   THE ORDER ENCODES HOW MUCH IS CLAIMED, AND THAT IS WHAT MAKES THE MERGE A `MAX`. A record merges sightings,
+   and the two directions are not alike: a sighting that ASKED outranks one that could not (a real reading
+   beats a hole), and a sighting whose path HAD chosen a witness cannot be taken back by a later one that had
+   not — which is `addr_class`' own union rule stated over three members instead of two. So the merge is
+   `if (new > old) old = new` and the list's order is load-bearing; it is asserted at the walk. */
+#define ENDPOINT_WITNESS_CLASSES(X)                                                                 \
+    /* no flow stood when this address was recorded, so the question was not asked. It proves        \
+       NOTHING either way and is zero on any run whose every record is minted inside a flow — a      \
+       nonzero row here is a door composing a request outside the scheduler, which is a finding      \
+       about that door and not about the address. */                                                 \
+    X(EPW_UNASKED,     "unasked")                                                                   \
+    /* a flow stood and its path had chosen no witness: nothing this run pinned can be under this    \
+       address, so `unproven` here really is the run having proved nothing. */                       \
+    X(EPW_NO_WITNESS,  "no-witness")                                                                \
+    /* a flow stood whose path HAD determined a source's value on an arm its own concrete example    \
+       contradicted (solver/flow.h's `path_pinned`). The address MAY rest on bytes this engine        \
+       chose rather than on bytes a server sent — a MAY and never a bar, because the pin is a fact   \
+       about the PATH and this row does not say the address read that source at all. */              \
+    X(EPW_MAY_REST_ON, "may-rest-on")
+
+typedef enum {
+#define ENDPOINT_WITNESS_CLASS_MEMBER(id, token) id,
+    ENDPOINT_WITNESS_CLASSES(ENDPOINT_WITNESS_CLASS_MEMBER)
+#undef ENDPOINT_WITNESS_CLASS_MEMBER
+    EPW_COUNT           /* the list's own end — dense by construction, for `EPR_COUNT`'s reason, and ORDERED,
+                           which this one is not free to be arbitrary about: the merge is a MAX over it. */
+} EndpointWitnessClass;
+
+/* THE ONE WIRE SPELLING OF A WITNESS CLASS, and `endpoint_address_class_token`'s severity for its reason: it
+   runs once per emitted ROW and once per census row in EVERY build, so a release build falling through would
+   put whatever the register held into a JSON string. */
+const char *endpoint_witness_class_token(int cls);
+
+/* THE EMITTED SURFACE PARTITIONED BY IT, as a malloc'd JSON OBJECT (caller frees) — one row per member,
+   zeroes included, summing to the same `emitted` figure the other three walks sum to, for the reason stated
+   at `endpoint_address_hist_json`: an `unasked` that is ABSENT and one that read 0 are the two facts a reader
+   most needs kept apart, the first being an instrument that stopped writing the field. */
+char *endpoint_witness_hist_json(void);
+
 /* …AND THE UNION ITSELF, COMPOSED WHERE BOTH FACTS ARE IN ONE HAND. It takes the two fields rather than a
    record because that is what makes it a function of exactly what the wire carries: a consumer holding a row
    can check this answer against the row's own `door` and `addressClass`, which is the one property of a

@@ -571,6 +571,12 @@ for (const p of passes) for (const r of p.rows) {
        at all, and ABSENT is a pass predating the field entirely. A `|| {}` here would turn all four into
        the one this file most exists not to publish -- an engine that answered and proved nothing. */
     epRazor: r.endpointRazorClass, epAddr: r.endpointAddressClass,
+    /* AND THE BOUND ON THE ONE POPULATION THE BAR CANNOT SIZE, LEFT AS WHATEVER site.mjs WROTE for `epRazor`'s
+       reason exactly. It is NEVER summed with the bar: `may-rest-on` is a MAY — a pin is a fact about the PATH
+       that composed the address and says nothing about whether this address read that source — so adding it to
+       `runtime-only` composes an over-claim out of a floor. It is read AT THE SAME PASS as the bar below, not
+       at its own best, because the pair is one observation of one run. */
+    epWitness: r.endpointWitnessClass,
     /* AND THE TWO DATA DOORS' ASK LADDER, LEFT AS WHATEVER site.mjs WROTE for `epRazor`'s reason exactly —
        an OBJECT is a stated ladder, `null` is a pass whose runs carried no counters, and ABSENT is a pass
        predating the field. A `|| {}` would turn all three into the one state this file most exists not to
@@ -992,14 +998,34 @@ const rzOne = (m) => {
   for (const k of Object.keys(h)) tot += h[k];
   return { ro: h[RAZOR_RUNTIME] || 0, un: h[RAZOR_UNPROVEN] || 0, tot, h };
 };
+/* …AND THE SAME FOUR STATES OVER THE WITNESS PARTITION, which is a SEPARATE reader rather than a field of
+   `rzOne` because the two partitions can arrive independently: a pass written by a site.mjs that carries the
+   razor field and predates this one leaves `epWitness` missing while `epRazor` is an object, and folding them
+   would report the pair as unaskable when half of it is there. */
+const wzOne = (m) => {
+  if (!('epWitness' in m) || m.epWitness === undefined) return { tok: 'no-field' };
+  if (m.epWitness === null) return { tok: 'no-counters' };
+  if (typeof m.epWitness === 'string') return { tok: 'artifact-predates' };
+  const h = m.epWitness;
+  let tot = 0;
+  for (const k of Object.keys(h)) tot += h[k];
+  return { may: h['may-rest-on'] || 0, none: h['no-witness'] || 0, un: h['unasked'] || 0, tot, h };
+};
 const rzRows = table.map((t) => {
   const per = t.measurements.map(rzOne);
   const stated = per.filter((x) => x.h);
   /* THE PASS WHOSE PARTITION PROVED THE MOST, AND BOTH BUCKETS READ OFF IT. Ties keep the FIRST, so the
      choice is the earliest pass that reached the maximum rather than whichever the sort happened to leave. */
-  let best = null;
-  for (const x of stated) if (!best || x.ro > best.ro) best = x;
-  return { id: t.id, n: t.measurements.length, per, stated: stated.length, best,
+  let best = null, bestAt = -1;
+  for (let i = 0; i < per.length; i++)
+    if (per[i].h && (!best || per[i].ro > best.ro)) { best = per[i]; bestAt = i; }
+  /* THE WITNESS READ AT THE BAR'S OWN PASS AND NEVER AT ITS OWN BEST — CLAUDE.md
+     §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE. The bound and the bar are a PAIR and the sentence a
+     reader composes from them ("part of this run's `unproven` is a population the bar could not look at") is
+     about ONE run; taking each from the pass that maximises it would be two runs' margins read as one
+     document, which is the defect this file's own data-door section records having committed once. */
+  const wAtBest = bestAt >= 0 ? wzOne(t.measurements[bestAt]) : null;
+  return { id: t.id, n: t.measurements.length, per, stated: stated.length, best, wAtBest,
            /* A SPREAD OVER THE PASSES THAT STATED A PARTITION, never over the ones that could not be asked --
               `-` where none did, which is absent and is not a zero. */
            spread: stated.length ? (() => {
@@ -1028,12 +1054,21 @@ const rzCell = (x) => x.h ? (x.ro + '+' + x.un + '=' + x.tot) : x.tok;
 const rzClear = (r) => r.spread + ' of ' + r.stated + '/' + r.n + ' pass(es)';
 const rzIdW = Math.max('site'.length, ...rzShown.map((r) => r.id.length)) + 2;
 const rzClW = Math.max('cleared'.length, ...rzShown.map((r) => rzClear(r).length)) + 2;
+/* THE BOUND'S OWN CELL, SIZED LIKE EVERY OTHER COLUMN HERE AND FOR ITS REASON. It reads `-` only where no
+   pass stated a bar partition at all, so there was no pass to read it AT; a pass that stated the bar and not
+   the bound prints its own token, which is the instrument or the artifact and never a zero. */
+const wzCell = (w) => w === null ? '-' : (w.h ? (w.may + ' may / ' + w.un + ' unasked of ' + w.tot) : w.tok);
+const rzWW = Math.max('may-rest-on'.length, ...rzShown.map((r) => wzCell(r.wAtBest).length)) + 2;
 if (rzShown.length) {
-  console.log('  ' + pad('site', rzIdW) + pad('cleared', rzClW) +
+  console.log('  ' + pad('site', rzIdW) + pad('cleared', rzClW) + pad('may-rest-on', rzWW) +
     'runtime-only+unproven=emitted, PER PASS IN ORDER');
   for (const r of rzShown)
-    console.log('  ' + pad(r.id, rzIdW) + pad(rzClear(r), rzClW) +
+    console.log('  ' + pad(r.id, rzIdW) + pad(rzClear(r), rzClW) + pad(wzCell(r.wAtBest), rzWW) +
       r.per.map(rzCell).join(' | '));
+  console.log('  the `may-rest-on` column is read AT THE SAME PASS as that site\'s best bar reading, so the');
+  console.log('  pair is one run. It is NOT added to `runtime-only`: a pin is a fact about the PATH that');
+  console.log('  composed the address, so `may` BOUNDS the part of `unproven` the bar could not look at —');
+  console.log('  0 there means the bar\'s zero is the engine having genuinely proved nothing on that document.');
 }
 /* AND THE CORPUS FIGURE, WITH ITS RUN COUNT AND THE DENOMINATOR OF EVERY SHARE IN IT ON THE SAME LINE. A
    count over a corpus that does not state how many passes it is over, and over how many sites could be asked
@@ -1047,6 +1082,12 @@ console.log('hard bar totals: ' + JSON.stringify({
   runtimeOnlyBestPass: rzStated.reduce((n, r) => n + r.best.ro, 0),
   unprovenAtThatSamePass: rzStated.reduce((n, r) => n + r.best.un, 0),
   emittedAtThatSamePass: rzStated.reduce((n, r) => n + r.best.tot, 0),
+  /* THE BOUND AT THAT SAME PASS, AND THE COUNT OF SITES IT COULD BE ASKED OF — two figures and not one,
+     because a corpus total over the bound alone cannot say whether a 0 is every site answering 0 or most
+     sites not carrying the field. Never added to `runtimeOnlyBestPass`. */
+  sitesStatingTheBound: rzStated.filter((r) => r.wAtBest && r.wAtBest.h).length,
+  mayRestOnAtThatSamePass: rzStated.reduce((n, r) => n + ((r.wAtBest && r.wAtBest.h) ? r.wAtBest.may : 0), 0),
+  unaskedAtThatSamePass: rzStated.reduce((n, r) => n + ((r.wAtBest && r.wAtBest.h) ? r.wAtBest.un : 0), 0),
 }));
 /* WHICH READING A ZERO DATA-DOOR ROW IS, OVER THE CORPUS — the one discrimination the hard-bar section above
    structurally cannot make, and the question this corpus's own measurement opened. Driven over two real app

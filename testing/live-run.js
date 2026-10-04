@@ -1306,7 +1306,29 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      ITS KIND AND ITS ABSENCE FOLLOW THE TWO ROWS ABOVE IT EXACTLY: an object copied whole and never spread,
      and an artifact older than the row prints `null`, which is the run not stating the bar and is a
      different fact from the bar answering and refusing to claim it. */
-  "epRazorClass"];
+  "epRazorClass",
+  /* …AND THE BOUND ON THE ONE POPULATION THAT ROW'S OWN BANNER NAMES AND COULD NOT SIZE. It says
+     "solver/endpoint.h enumerates the three populations it holds, one of which (a source this flow PINNED and
+     re-read) really is past every parse" — a sentence that was true, was load-bearing, and pointed at a
+     quantity NO census published: `path_pinned` is written at five request sites and read by one accessor,
+     and no row anywhere carried it, so a reader meeting `runtime-only: 0` could not tell a run that genuinely
+     determined every address from one whose pin erased a taint the bar should have seen.
+     IT IS NOT A THIRD OPERAND OF THE BAR AND MUST NEVER BE READ AS ONE. The bar is a FLOOR made of two
+     POSITIVE statements and this is a MAY — the pin is a fact about the PATH, and this row does not say the
+     address read that source at all — so unioning it in would turn a floor into an OVER-claim, which is the
+     defect solver/endpoint.h states at the list itself and the reason it is a separate word.
+     WHAT THE PAIR SAYS, AND IT IS A DECISION BETWEEN TWO OPPOSITE DIFFS rather than a column: `unproven`
+     beside `may-rest-on` 0 is a run on which no address was composed by a path that had pinned anything, so
+     the bar's zero is the run having genuinely proved nothing and the next diff belongs to the SOLVER keeping
+     more values unknown; a nonzero `may-rest-on` is the population the bar's zero does not account for, and
+     the next diff belongs to the PIN carrying a provenance through a determined read.
+     `unasked` IS NOT A SMALL `no-witness`, which is the one misreading this row most invites: it is the
+     question not having been asked, because no flow stood when the record was minted, and a nonzero row there
+     is a door composing a request outside the scheduler — a finding about that door and not about an address.
+     ITS KIND AND ITS ABSENCE FOLLOW THE THREE ROWS ABOVE IT EXACTLY: an object copied whole and never spread,
+     and an artifact older than the row prints `null`, which is a different fact from a surface no address of
+     which rested on a pin. */
+  "epWitnessClass"];
 
 const COLD_ROWS = COLD_STEP_UNITS.concat(COLD_FRONTIER, COLD_SEED, COLD_COUNTERS);
 /* WHAT ASKING THE ORDER COST — READ OFF THE `wfq` OBJECT, WHICH IS THE COMPOSER THAT PUBLISHES IT.

@@ -95,6 +95,13 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
                     composed the address out of a value it had not determined, and a later determined
                     sighting cannot take that back. It is `has_hole`'s rule one grain out. */
                  int addr_class;
+                 /* `witness_class` IS WHETHER THIS ADDRESS MAY REST ON A WITNESS THIS ENGINE CHOSE — see
+                    endpoint.h's ENDPOINT_WITNESS_CLASSES for what each word claims and for why it is the
+                    NECESSARY CONDITION under the razor rather than an operand of it. Like `addr_class` it is
+                    merged and not re-armed, and unlike it the merge is a MAX over three members rather than a
+                    union over two: a sighting that could ASK outranks one that could not, and a path that HAD
+                    chosen a witness cannot be taken back by a later path that had not. */
+                 int witness_class;
                  /* THE BODY THIS ENGINE HAD NO FIELD READER FOR — see endpoint.h. Set only where
                     `body_params` named NOTHING, so it is never a second spelling of fields already on
                     `params`, and never overwritten once set: a request body is ONE example, not a set.
@@ -224,6 +231,35 @@ const char *endpoint_razor_class_token(int cls) {
                 "word about to be published is this engine's answer to CLAUDE.md §What-the-tool-produces' hard "
                 "bar with no measurement under it",
                 cls);
+}
+
+/* See endpoint.h. `endpoint_address_class_token`'s construct and its severity, one list over, and with the
+   extra reason that list's own banner gives: this word is the only published bound on the one population the
+   razor's `unproven` holds that really is past every parse, so a release build publishing a word nothing
+   decided would put a measurement under a figure nobody took. */
+const char *endpoint_witness_class_token(int cls) {
+    switch (cls) {
+#define ENDPOINT_WITNESS_CLASS_ARM(id, token) case id: return token;
+    ENDPOINT_WITNESS_CLASSES(ENDPOINT_WITNESS_CLASS_ARM)
+#undef ENDPOINT_WITNESS_CLASS_ARM
+    }
+    CHECK_FAILF("endpoint: an @H record states the witness class %d, which is none of endpoint.h's "
+                "ENDPOINT_WITNESS_CLASSES — every value comes off `witness_class_now`, which returns one of "
+                "exactly three members, so this is a field nothing in this file wrote and the word about to "
+                "be published is the only bound anybody has on what the product's own bar did not measure",
+                cls);
+}
+
+/* WHAT THE RUNNING PATH HAS CHOSEN, ASKED ONLY WHERE THERE IS A PATH TO ASK — see endpoint.h for what each
+   member claims. The gate is not defensive: `engine_pinned_of_running_path` DCHECKs that a flow stands and
+   says why in its own words, and a record minted while this instance had started no program at all is a real
+   and ordinary population (`pre_program` counts it, and on one real page it is 98 of 190), so asking
+   unconditionally would abort a dev build on the commonest document shape there is. The third member is what
+   makes the gate a STATEMENT rather than a default: `unasked` says the question was not asked, which is a
+   different fact from `no-witness` and is the one a reader must not have folded into it. */
+static int witness_class_now(void) {
+    if (flow_running() == NULL) return EPW_UNASKED;
+    return engine_pinned_of_running_path() ? EPW_MAY_REST_ON : EPW_NO_WITNESS;
 }
 
 /* See endpoint.h. THE UNION, AND IT IS A UNION RATHER THAN AN INTERSECTION FOR THE REASON THE ADDRESS CLASS'S
@@ -2028,6 +2064,12 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        read BEFORE any of the scans, for §scheduler's `an operation takes its inputs with it` at the smallest
        scale there is: nothing below this line holds the JSValue. */
     int acls = address_class_of(url);
+    /* …AND WHAT THE PATH THAT COMPOSED IT HAD CHOSEN, read on the same line as the address class and for the
+       same reason: both the merge arm and the mint below need it, and it is a fact about the RUNNING FLOW,
+       which is what §scheduler's `an operation takes its inputs with it` is about at this scale — nothing
+       below this line is entitled to re-ask, because by then this call has suspended nowhere but the flow
+       standing is no longer this read's to assume. */
+    int wcls = witness_class_now();
     char *disp = url_display(ctx, url);
     char *ex = url_example(ctx, url);
     char *shape_path = url_path_of(disp);
@@ -2104,6 +2146,14 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                is its SHAPE and a determined one's is its bytes, so agreement here is not something the
                identity has already forced and is not something this line may assume. */
             if (acls == EPA_UNKNOWN) g_eps[i].addr_class = EPA_UNKNOWN;
+            /* …AND THE SAME MERGE OVER THE WITNESS, WRITTEN AS A `MAX` BECAUSE THE LIST IS ORDERED BY HOW
+               MUCH IS CLAIMED. The arm above is a union over two members and can be spelled as one `if`
+               against the raising value; this one has three, and the two directions are different facts:
+               a sighting that could ASK outranks one that could not, and a path that HAD chosen a witness is
+               not taken back by a later path that had not. Spelling it as `if (wcls == EPW_MAY_REST_ON)`
+               would be correct about the second and would leave an `unasked` record `unasked` forever once
+               any later sighting read `no-witness`, which is a hole certified by a reading. */
+            if (wcls > g_eps[i].witness_class) g_eps[i].witness_class = wcls;
             if (endpoint_merge_headers(&g_eps[i], hdrs, nhdrs) > 0)
                 flow_credit_emit(1.0);
             /* THE ARM THE SURFACE HAS NO ROW FOR. A sighting that merges teaches the record structure and
@@ -2140,6 +2190,11 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        element: a first sighting's class IS the record's class, and every later one can only raise it to
        `EPA_UNKNOWN`. */
     e->addr_class = acls;
+    /* …AND WHAT THE PATH THAT COMPOSED IT HAD CHOSEN, written UNCONDITIONALLY for `addr_class`' reason one
+       line up: it is the MAX's identity element only because `EPW_UNASKED` happens to be zero, and depending
+       on that would make this record's correctness a property of the member ORDER in a list whose order a
+       later diff is free to think is arbitrary. */
+    e->witness_class = wcls;
     /* AND THAT THE ASK AND THE MINT ARE ONE INSTANT. The bit is monotone and `++`-only at engine.c's single
        program-start line, so the only way these can differ is a program having started between this function's
        entry and this line — which would mean something on the path above (a display spelling, a path scan, a
@@ -2876,6 +2931,65 @@ char *endpoint_razor_hist_json(void) {
     return json_buf_take(&b);
 }
 
+/* THE FIFTH WALK, OVER THE ONE FACT THE BAR'S `unproven` DOES NOT CARRY — see endpoint.h for what each member
+   claims and for why this is the NECESSARY CONDITION under that bar rather than a part of it. It is a separate
+   walk and not a sum over any table above for `endpoint_reach_hist_json`'s stated reason: each of these walks
+   asserts its OWN subscript against its OWN list, and a walk that derived its rows from another's would
+   certify what it never examined.
+   THE RANGE ASSERT IS NOT THE ONLY ONE HERE AND THAT IS THE DIFFERENCE FROM THE FOUR ABOVE. Those classes are
+   unordered sets, so a corrupt value can only be outside the table; this list is ORDERED and the record's
+   merge is a MAX over that order, so the thing a later diff can break without going out of range is the
+   ORDER ITSELF — and the one property that would then be false is checkable here, where the whole array is in
+   one hand: `EPW_UNASKED` is the identity element the `memset` leaves behind, so it must be the lowest member
+   or a merge could silently lower a record that had already read something. */
+char *endpoint_witness_hist_json(void) {
+    JsonBuf b = { 0 };
+    long n[EPW_COUNT];
+    long minted, assets, emitted, pre_program, sum = 0;
+    int c, i;
+
+    DCHECK(EPW_UNASKED == 0,
+           "endpoint.h's ENDPOINT_WITNESS_CLASSES no longer begins with the member that proves NOTHING — the "
+           "record's merge is a MAX over this list's order and `memset` leaves a fresh record at 0, so a "
+           "reordering makes that zero mean a CLAIM the mint never made, and every row minted outside a flow "
+           "would publish it");
+    memset(n, 0, sizeof n);
+    for (i = 0; i < g_eps_n; i++) {
+        if (g_eps[i].is_asset) continue;
+        DCHECKF(g_eps[i].witness_class >= 0 && g_eps[i].witness_class < EPW_COUNT,
+                "an @H record reached the witness census carrying the class %d, which is none of endpoint.h's "
+                "ENDPOINT_WITNESS_CLASSES — the mint writes this field unconditionally from "
+                "`witness_class_now`, which returns one of exactly three members, so this is a record minted "
+                "by something that is not that line and the count about to be raised is at an index outside "
+                "the table this census is a partition of", g_eps[i].witness_class);
+        n[g_eps[i].witness_class]++;
+    }
+    endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
+
+    /* EVERY CLASS IS EMITTED INCLUDING THE ZEROES, for the four walks' reason and with its own sharpest form
+       here: a `may-rest-on` that is ABSENT and one that read 0 are the two facts this row exists to keep
+       apart, and they take OPPOSITE work. Absent is an instrument that stopped writing the field. Zero is a
+       run on which no address was composed by a path that had pinned anything — which makes the bar's
+       `unproven` beside it the run having genuinely proved nothing, and sends the next diff to the SOLVER
+       rather than to the pin. */
+    json_buf_raw(&b, "{");
+    for (c = 0; c < EPW_COUNT; c++) {
+        if (c) json_buf_raw(&b, ",");
+        json_buf_str(&b, endpoint_witness_class_token(c));
+        json_buf_raw(&b, ":");
+        edge_num(&b, n[c]);
+        sum += n[c];
+    }
+    json_buf_raw(&b, "}");
+    DCHECKF(sum == emitted,
+            "the @H surface's per-witness-class counts sum to %ld against the %ld rows it emits — the three "
+            "classes are a PARTITION of the emitted surface and this walk carries the same `is_asset` skip "
+            "the four censuses beside it do, so a difference is one of those walks having stopped describing "
+            "the population the others count, and the BOUND a reader reads off this row would be a share of a "
+            "number that is not the surface's size", sum, emitted);
+    return json_buf_take(&b);
+}
+
 /* THE STAGE ARMS THE PARTITION IS MADE OF, SUMMED ONCE FOR THE IDENTITY AND WRITTEN ONCE FOR THE DOCUMENT —
    two edges, one walk each, and the arithmetic in one place. */
 static long edge_stage_sum(const EndpointEdge *e) {
@@ -3344,6 +3458,15 @@ char *endpoint_json_array(void) {
            about the BUILD and never about an address. */
         json_buf_raw(&b, ","); json_buf_key(&b, "razorClass");
         json_buf_str(&b, endpoint_razor_class_token(endpoint_razor_class_of(e->door, e->addr_class)));
+        /* …AND THE ONE FACT THAT BAR DOES NOT CARRY, BESIDE IT RATHER THAN INSIDE IT. endpoint.h's
+           ENDPOINT_WITNESS_CLASSES states why: `razorClass` is a FLOOR and this is a MAY, so a consumer that
+           wants the bound reads this column and one that wants the bar reads that one. They are adjacent here
+           precisely so the pair is legible per row — `unproven` beside `may-rest-on` is the population the
+           razor's zero does not account for, and `unproven` beside `no-witness` is the run having genuinely
+           proved nothing about this address.
+           WRITTEN UNCONDITIONALLY ON EVERY ROW IN EVERY BUILD, for the four columns above it. */
+        json_buf_raw(&b, ","); json_buf_key(&b, "witnessClass");
+        json_buf_str(&b, endpoint_witness_class_token(e->witness_class));
         json_buf_raw(&b, ","); json_buf_key(&b, "params"); json_buf_raw(&b, "[");
         for (int j = 0; j < e->np; j++) {
             if (j) json_buf_raw(&b, ",");

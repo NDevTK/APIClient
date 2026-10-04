@@ -371,7 +371,7 @@ const loadNow = () => {
 const coldFields = sourceFact(() => censusRowSet(
   "solver/result.c", "char *result_cold_json(void)", "\n}\n",
   ["stepUnits", "stepUnitRuns", "stepUnitOverruns", "outOfProgramsAtTheLadderUnits", "programCursors",
-   "programsAhead", "epDoors", "epReach", "epAddressClass", "epRazorClass"],
+   "programsAhead", "epDoors", "epReach", "epAddressClass", "epRazorClass", "epWitnessClass"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
   "composer rather than from a list beside it"));
 /* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason

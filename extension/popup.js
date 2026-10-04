@@ -1816,9 +1816,16 @@ function renderEngineRuns() {
            m.endpointAddressClass && typeof m.endpointAddressClass === "object" &&
            !Array.isArray(m.endpointAddressClass) &&
            m.endpointRazorClass && typeof m.endpointRazorClass === "object" &&
-           !Array.isArray(m.endpointRazorClass),
-           "an engine run record reached the popup without its endpoint partitions — bridge.js builds all " +
-           "four off the same `fetchCallSites` array that the `endpoints` figure beside them is the LENGTH " +
+           !Array.isArray(m.endpointRazorClass) &&
+           /* …AND THE BOUND ON THE ONE POPULATION THE RAZOR'S `unproven` CANNOT SIZE, asserted here like the
+              four beside it because the SAME argument applies: it is composed by the same zone, off the same
+              array, and this is the only reader that can tell a broken relay from an engine too old to state
+              it. An engine older than `witnessClass` makes every bucket read `(unstated)` — a partition that
+              still SUMS, so the loop below passes and the person is told the build rather than the address. */
+           m.endpointWitnessClass && typeof m.endpointWitnessClass === "object" &&
+           !Array.isArray(m.endpointWitnessClass),
+           "an engine run record reached the popup without its endpoint partitions — bridge.js builds every " +
+           "one of them off the same `fetchCallSites` array that the `endpoints` figure beside them is the LENGTH " +
            "of, and writes them onto every non-crashed record, so their absence is that relay broken and the " +
            "razor's raw material goes back to being a number no reader can partition");
     /* THE PARTITION IS RE-ASSERTED HERE AND IT IS NOT A SECOND COPY OF BRIDGE.JS'S CHECK, because the two are
@@ -1830,7 +1837,8 @@ function renderEngineRuns() {
        that does not sum to the figure beside it is a share of a population nobody holds. */
     for (const _p of [["endpointDoors", m.endpointDoors], ["endpointMintedAt", m.endpointMintedAt],
                       ["endpointAddressClass", m.endpointAddressClass],
-                      ["endpointRazorClass", m.endpointRazorClass]]) {
+                      ["endpointRazorClass", m.endpointRazorClass],
+                      ["endpointWitnessClass", m.endpointWitnessClass]]) {
       let _n = 0;
       for (const k of Object.keys(_p[1])) _n += _p[1][k];
       DCHECK(_n === m.endpoints,
@@ -2090,7 +2098,8 @@ function renderEngineRuns() {
           ? `hard bar, composed — NONE of ${esc(String(m.endpoints))} emitted address(es) is one this run `
             + `PROVED exists only at run time. That is a REFUSAL TO CLAIM the bar on this document and NOT a `
             + `small number. Still a FLOOR: "unproven" claims nothing about what a parse could reach, and a `
-            + `source this flow pinned and re-read really is past every parse and cannot be seen from here.`
+            + `source this flow pinned and re-read really is past every parse — the row below is how large `
+            + `that population can be.`
           : `hard bar, composed — ${esc(String(_only))} of ${esc(String(m.endpoints))} emitted address(es) `
             + `is one this run PROVED exists only at run time: it reached the address holding a value it had `
             + `not determined, or read the address out of bytes that were never in the served document. This `
@@ -2098,6 +2107,47 @@ function renderEngineRuns() {
             + `to bracket. Still a FLOOR: "unproven" claims nothing about what a parse could reach. A `
             + `DIAGNOSTIC AND NEVER A TARGET, read WITHIN this run; its denominator is the emitted array's `
             + `own length above and not the engine's census figure.`;
+    /* AND THE BOUND ON THE ONE POPULATION THAT BAR CANNOT SIZE, WHICH IS WHAT THE SENTENCE ABOVE USED TO SAY
+       "cannot be seen from here" ABOUT. That clause was true until the engine carried `witnessClass`, and it
+       is retired at BOTH of its sites rather than at one, because a reader meeting the surviving copy would
+       conclude the row below is about something else (CLAUDE.md §A-FIX-THAT-RETIRES-AN-ARGUMENT).
+       IT IS RENDERED AS ITS OWN SENTENCE AND NEVER ADDED TO THE BAR. `may-rest-on` is a MAY — the pin is a
+       fact about the PATH that composed the address, and this says nothing about whether the address read that
+       source — so a person who adds it to `runtime-only` has composed an OVER-claim out of a floor, which is
+       the one arithmetic solver/endpoint.h forbids at the list itself.
+       WHAT A PERSON ACTS ON, which is the whole reason it is here: a zero says this run's `unproven` really is
+       the engine having proved nothing, and a nonzero says part of that `unproven` is a population the bar
+       could not look at. Those take opposite work — the first is the solver keeping more values unknown, the
+       second is the pin carrying a provenance through a determined read — and no figure shown before this row
+       could tell them apart.
+       THE READABILITY TEST IS THE BAR ROW'S OWN, FOR ITS REASONS: it asks whether a class name this reader
+       knows APPEARS, never whether the `(unstated)` bucket is full, so it covers both an engine older than the
+       key and one whose class list moved under this zone — and it names no constant from the other realm. */
+    const _wCls = m.endpointWitnessClass;
+    const _mayRest = _wCls["may-rest-on"] === undefined ? 0 : _wCls["may-rest-on"];
+    const _unasked = _wCls["unasked"] === undefined ? 0 : _wCls["unasked"];
+    const _wReadable = _wCls["may-rest-on"] !== undefined || _wCls["no-witness"] !== undefined ||
+                       _wCls["unasked"] !== undefined;
+    const witnessRow = m.endpoints === 0
+      ? ``
+      : !_wReadable
+        ? `may rest on a witness — NOT READABLE FROM THIS BUILD. No emitted address carries a witness class `
+          + `this reader knows, which is an installed engine older than the key or one whose class list moved `
+          + `under this zone. A fact about the BUILD and NOT a zero.`
+        : (_mayRest === 0
+            ? `may rest on a witness — NONE of ${esc(String(m.endpoints))} emitted address(es) was composed `
+              + `by a path that had pinned a source's value on an arm its own example contradicted. So this `
+              + `run's "unproven" above is the bar having genuinely proved nothing, rather than a population `
+              + `the bar could not look at.`
+            : `may rest on a witness — ${esc(String(_mayRest))} of ${esc(String(m.endpoints))} emitted `
+              + `address(es) was composed by a path that HAD pinned a source's value on an arm its own `
+              + `example contradicted. That is a MAY and never a bar: it does not say the address read that `
+              + `source. It is the bound on the one population "unproven" above cannot look at, because `
+              + `a pinned read comes back as a bare value and the address then grades "concrete".`)
+          + (_unasked === 0 ? ``
+             : ` ${esc(String(_unasked))} address(es) could not be asked at all — no flow stood when the `
+               + `record was minted, which is a door composing a request outside the scheduler and is a `
+               + `finding about that door rather than about an address.`);
     /* AND WHETHER THIS TOOL'S OWN EGRESS POLICY IS WHY THAT SURFACE IS THE SIZE IT IS — bridge.js's
        `egressAsked`/`egressDeclined`, written onto this record and, exactly like the two partitions above,
        read by nobody. They are not engine counters and are not in `FULL` or in `CENSUS`: bridge.js raises
@@ -2280,6 +2330,11 @@ function renderEngineRuns() {
          + `<span class="deep-label">${razor}</span>`
          + `<span class="deep-label">${hardBar}</span>`
          + `<span class="deep-label">${composedBar}</span>`
+         /* IMMEDIATELY AFTER THE BAR AND BEFORE THE EGRESS SENTENCE, because it is the bar's own missing
+            population and its text points AT the row above it — "this run's `unproven` above" — so the two
+            must be adjacent for the same reason the bar and the surface figure are. It renders as the empty
+            string on a run that emitted no address, where there is no surface to bound. */
+         + `<span class="deep-label">${witnessRow}</span>`
          + `<span class="deep-label">${egress}</span>`
          + `<span class="deep-label">${order}</span>` + denom + censusRows.join("") + `</div>`;
   }).join("");

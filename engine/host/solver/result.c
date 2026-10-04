@@ -2532,7 +2532,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind lifetime: classicCompileAgain classicCompileAgainBytes classicCompileOwnDecode
    @kind lifetime: classicCompileResumed classicParseShared
    @kind lifetime: epMinted epAssets
-   @kind gauge: epEmitted epPreProgram epDoors epReach epAddressClass epRazorClass
+   @kind gauge: epEmitted epPreProgram epDoors epReach epAddressClass epRazorClass epWitnessClass
    @kind lifetime: epAsks epAskPreProgram epAskSuppressed epAskMerged epAskMinted epAskMergedPreProgram
    @kind lifetime: netProgQueuedLife netProgFetchAsksLife netProgFetchQueuedLife
    @kind lifetime: netProgXhrAsksLife netProgXhrQueuedLife
@@ -2675,6 +2675,12 @@ char *result_cold_json(void) {
        what each class claims, why it is a FOURTH walk rather than a sum of the two tables, and why it is a
        CROSS-CHECK against the emitted array's per-row `razorClass` and never a sum with it. */
     char *razor;
+    /* …AND THE ONE FACT THAT BAR DOES NOT CARRY, which is published here because nothing published it
+       anywhere: `path_pinned` is written at five request sites and read by one accessor, and no census in this
+       engine had a row for it, so the razor's own banner could name the population its `unproven` holds that
+       really is past every parse and no reader could ask how large it was. See solver/endpoint.h for why it is
+       a SEPARATE row and may never be unioned into the bar. */
+    char *witness;
 
     cold_census(&c);
     engine_step_unit_runs(&r);
@@ -2984,7 +2990,8 @@ char *result_cold_json(void) {
     reach = endpoint_reach_hist_json();
     acls  = endpoint_address_hist_json();
     razor = endpoint_razor_hist_json();
-    if (!cursors || !ahead || !edge || !xedge || !rungs || !doors || !reach || !acls || !razor) {
+    witness = endpoint_witness_hist_json();
+    if (!cursors || !ahead || !edge || !xedge || !rungs || !doors || !reach || !acls || !razor || !witness) {
         free(cursors);
         free(ahead);
         free(edge);
@@ -2994,6 +3001,7 @@ char *result_cold_json(void) {
         free(reach);
         free(acls);
         free(razor);
+        free(witness);
         cold_census_release(&c);
         return NULL;
     }
@@ -3560,6 +3568,24 @@ char *result_cold_json(void) {
                     nothing whatever about a parse. Its denominator is `epEmitted` five rows up and travels on
                     this line; solver/endpoint.c asserts the sum where both halves are in one hand. */
                  "\"epRazorClass\":%s,"
+                 /* …AND THE NECESSARY CONDITION UNDER THAT BAR, BESIDE IT AND NEVER INSIDE IT. The bar is a
+                    FLOOR composed of two POSITIVE statements; this is a MAY, and solver/endpoint.h states why
+                    folding a necessary condition into a floor turns it into an OVER-claim.
+                    WHAT THE PAIR SAYS, WHICH IS THE WHOLE REASON THIS ROW EXISTS. `unproven` is three
+                    populations and one of them really is past every parse — an address composed out of a
+                    source this flow PINNED and re-read, which `concolic_is` cannot see because `pin_mint`
+                    answers a pinned read with a BARE primitive, so `addressClass` calls it `concrete`. This row
+                    BOUNDS that population: `unproven` beside `may-rest-on` 0 is a run on which no address was
+                    composed by a path that had pinned anything, so the bar's zero is the run having genuinely
+                    proved nothing and the next diff belongs to the SOLVER; a nonzero `may-rest-on` is the
+                    population the bar's zero does not account for, and the next diff belongs to the PIN.
+                    Those are opposite diffs and no figure published before this row could tell them apart.
+                    `unasked` IS NOT A SMALL `no-witness`. It is the question not having been asked, because no
+                    flow stood when the record was minted; a nonzero row there is a door composing a request
+                    outside the scheduler, which is a finding about that door. Its denominator is `epEmitted`
+                    six rows up and travels on this line; solver/endpoint.c asserts the sum where both halves
+                    are in one hand. */
+                 "\"epWitnessClass\":%s,"
                  "\"epAsks\":%ld,\"epAskPreProgram\":%ld,\"epAskSuppressed\":%ld,"
                  /* AND THE ONE CUT INSIDE THE MERGED ARM — endpoint.h states what it is and what its four-state
                     zero can mean. It is NOT summed with the three arms beside it: they partition the door's
@@ -3651,7 +3677,7 @@ char *result_cold_json(void) {
                  c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
                  ladder, hist, cursors, ahead,
-                 ep_minted, ep_assets, ep_emitted, ep_pre_program, doors, reach, acls, razor,
+                 ep_minted, ep_assets, ep_emitted, ep_pre_program, doors, reach, acls, razor, witness,
                  ep_asks, ep_ask_pre, ep_ask_sup, ep_ask_merged, ep_ask_minted, ep_ask_merged_pre,
                  edge, xedge, rungs);
     free(cursors);
@@ -3663,6 +3689,7 @@ char *result_cold_json(void) {
     free(reach);
     free(acls);
     free(razor);
+    free(witness);
     cold_census_release(&c);
     return out;
 }
