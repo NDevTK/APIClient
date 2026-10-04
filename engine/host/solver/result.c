@@ -827,7 +827,17 @@ char *result_wfq_json(void) {
        flow_pick, over ONE loop, where both deltas are in one hand. This is the containment only, which is what
        makes a violation unambiguous: the check has been moved off the line that weighs.
        IN RELEASE ALL FOUR ARE ZERO AND THIS PASSES VACUOUSLY, which is stated rather than relied on — the
-       discriminator a reader uses is the one solver/flow.h names, four zeros beside a nonzero scan row. */
+       discriminator a reader uses is the one solver/flow.h names, four zeros beside a nonzero scan row.
+       AND THIS LINE HAS FIRED, REPRODUCIBLY, WITH THE CONTAINMENT CLAIM ABOVE ENTIRELY CORRECT — recorded here
+       because a reader who meets the abort reads THIS text and would repair the identity, which was never what
+       was wrong. Both sides were `long`, `long` is FOUR bytes on wasm32 and eight natively, and these rows are
+       raised once per member per scan: the right-hand side wrapped past 2^31 and `LHS <= RHS` went false. So
+       the fire was the observed behaviour of a 32-BIT ACCUMULATOR, which is §NO BOUNDS' step cap arriving as a
+       type, and the repair is a WIDTH at the declaration rather than a word in this message. solver/flow.h's
+       FlowKeyChecks carries the measurement and the static assertion that makes a future `long` there a compile
+       error on the host it would cap; nothing about this assert's reasoning changed.
+       THE TELL, IF IT EVER FIRES AGAIN: read the two sides' MAGNITUDES before their difference. Near 2^31 with
+       a negative right-hand side is a width; anything else is the block having moved off the line it is about. */
     DCHECK(kc.armed + kc.stale_gen + kc.first_seen + kc.running
                <= flow_scan_weights(FLOW_SCAN_NEXT) + flow_scan_weights(FLOW_SCAN_RIVAL)
                 + flow_scan_weights(FLOW_SCAN_OTHER) + flow_scan_weights(FLOW_SCAN_CENSUS),
@@ -1356,9 +1366,9 @@ char *result_wfq_json(void) {
                         quantities over three entries and not a partition of any total on this line — there is
                         nothing for a histogram's sum check to be checked against, and a shape whose contract
                         cannot be stated is one a reader has to hold a second rule about. */
-                     "\"scanNextRuns\":%ld,\"scanNextWeights\":%ld,"
-                     "\"scanRivalRuns\":%ld,\"scanRivalWeights\":%ld,"
-                     "\"scanOtherRuns\":%ld,\"scanOtherWeights\":%ld,"
+                     "\"scanNextRuns\":%ld,\"scanNextWeights\":%lld,"
+                     "\"scanRivalRuns\":%ld,\"scanRivalWeights\":%lld,"
+                     "\"scanOtherRuns\":%ld,\"scanOtherWeights\":%lld,"
                      /* …AND WHAT THIS CENSUS ITSELF COSTS, which every row above is silent about because every
                         row above is about the engine and this one is about the instrument. flow_wfq_census
                         weighs the frontier TWICE per sample — once in its own walk, counted here, and once
@@ -1372,7 +1382,7 @@ char *result_wfq_json(void) {
                         it samples. A count and not a clock, for the reason solver/flow.h gives at FLOW_SCANS:
                         this host's quantum is wall-denominated, so a duration here would be a fact about the
                         machine and these are facts about what the engine did. */
-                     "\"scanCensusRuns\":%ld,\"scanCensusWeights\":%ld,"
+                     "\"scanCensusRuns\":%ld,\"scanCensusWeights\":%lld,"
                      /* …AND HOW OFTEN THE HOOK WAS ASKED, which every scan row above is silent about because
                         every scan row above counts a walk PERFORMED. The rival entry is the preempt policy's
                         rescan and is close to half of all the frontier weighing this engine does, and until
@@ -1438,8 +1448,8 @@ char *result_wfq_json(void) {
                         emitted in one build only would fail every release census. In a dev build every member
                         the dispatch loop weighs raises exactly one of the four, so the four summing to zero
                         while the order demonstrably weighed something is the build, and nothing else. */
-                     "\"keyArmedLifetime\":%ld,\"keyStaleGenLifetime\":%ld,"
-                     "\"keyFirstSeenLifetime\":%ld,\"keyRunningLifetime\":%ld,"
+                     "\"keyArmedLifetime\":%lld,\"keyStaleGenLifetime\":%lld,"
+                     "\"keyFirstSeenLifetime\":%lld,\"keyRunningLifetime\":%lld,"
                      /* …AND WHETHER AN INDEX OVER THAT KEY WOULD HAVE ANSWERED WHAT THE COMPARATOR ANSWERED,
                         WHICH THE FOUR ROWS ABOVE CANNOT SAY AND WHICH IS THE ONE QUESTION A SUB-LINEAR ORDER
                         IS UNBUILDABLE WITHOUT. Those score whether the member key STANDS STILL between two
@@ -1519,7 +1529,7 @@ char *result_wfq_json(void) {
                         `keyIndexAskedLifetime` is the reachability witness for both, exactly as it is for
                         the row above — a zero band beside a zero ask is a fold that never ran, and two zeros
                         are a question about the BUILD before they are a question about the run. */
-                     "\"keyIndexBandMembersLifetime\":%ld,\"keyIndexBandWeighedLifetime\":%ld,"
+                     "\"keyIndexBandMembersLifetime\":%lld,\"keyIndexBandWeighedLifetime\":%lld,"
                      /* AND THE DENOMINATOR THE HOOK'S RESCAN COUNT HAS. `scanRivalRuns / scanNextRuns` is
                         a COST — scan work per step — and it was being read as the hook's cadence, which it
                         is not: the rescan fires on a rank change or an incumbent switch, so a step that
@@ -1729,16 +1739,22 @@ char *result_wfq_json(void) {
                      w.deliv_ready, w.deliv_framed, w.deliv_owed, w.deliv_w_gap,
                      (long long)w.deliv_w_gap_vis, (long long)w.w_top_vis,
                      w.cur_deep, w.cur_deep_live, w.cur_deep_w_gap,
-                     flow_scan_runs(FLOW_SCAN_NEXT),  flow_scan_weights(FLOW_SCAN_NEXT),
-                     flow_scan_runs(FLOW_SCAN_RIVAL), flow_scan_weights(FLOW_SCAN_RIVAL),
-                     flow_scan_runs(FLOW_SCAN_OTHER), flow_scan_weights(FLOW_SCAN_OTHER),
-                     flow_scan_runs(FLOW_SCAN_CENSUS), flow_scan_weights(FLOW_SCAN_CENSUS),
+                     /* THE WEIGHT COUNTERS ARE 64-BIT AND THE RUN COUNTERS ARE NOT, which is not an
+                        inconsistency: a run is raised ONCE PER SCAN and a weight ONCE PER MEMBER PER SCAN,
+                        so they differ by the frontier size and only the second reached 2^31. The cast is
+                        here rather than a PRI macro because int64_t is `long` where this links native and
+                        `long long` on wasm32, so no fixed specifier is right on both targets. */
+                     flow_scan_runs(FLOW_SCAN_NEXT),  (long long)flow_scan_weights(FLOW_SCAN_NEXT),
+                     flow_scan_runs(FLOW_SCAN_RIVAL), (long long)flow_scan_weights(FLOW_SCAN_RIVAL),
+                     flow_scan_runs(FLOW_SCAN_OTHER), (long long)flow_scan_weights(FLOW_SCAN_OTHER),
+                     flow_scan_runs(FLOW_SCAN_CENSUS), (long long)flow_scan_weights(FLOW_SCAN_CENSUS),
                      (unsigned long long)engine_preempt_asks(),
                      (unsigned long long)rm.gen, (unsigned long long)rm.cur, (unsigned long long)rm.both,
-                     kc.armed, kc.stale_gen, kc.first_seen, kc.running,
+                     (long long)kc.armed, (long long)kc.stale_gen,
+                     (long long)kc.first_seen, (long long)kc.running,
                      ic.index_asked, ic.index_differed,
                      ic.differed_tie, ic.differed_strict,
-                     ic.band_members, ic.band_weighed,
+                     (long long)ic.band_members, (long long)ic.band_weighed,
                      w.epoch_away_live, w.epoch_away_walk,
                      flow_epoch_rebuild(), flow_epoch_resets(),
                      flow_starved_picks(), flow_starved_picks_idle(),

@@ -5600,7 +5600,7 @@ static unsigned char g_phase_seen[(size_t)FLOW_SERVICE_US];
    quantity is a COUNT and not a clock, and why nothing may read these. Lifetime, never reset, and `long`
    because they are compared against `steps` and `forks`, which are. */
 static long g_scan_runs[FLOW_SCAN_N];
-static long g_scan_weights[FLOW_SCAN_N];
+static int64_t g_scan_weights[FLOW_SCAN_N];   /* per member per scan — see FlowKeyChecks in flow.h */
 /* …AND WHAT THE ONE ASSERTION IN THAT SAME WALK DID WITH THOSE WEIGHTS — solver/flow.h states the partition,
    the kind, why the four are read through ONE call, and why all four reading zero beside a nonzero scan row
    is a build that makes no check rather than a check that never armed. Raised only inside the dev block in
@@ -5612,7 +5612,7 @@ FlowKeyChecks flow_key_checks(void) { return g_key_checks; }
 static FlowIndexChecks g_index_checks;
 FlowIndexChecks flow_index_checks(void) { return g_index_checks; }
 #if APICLIENT_DEV
-static long key_checks_total(void) {
+static int64_t key_checks_total(void) {
     return g_key_checks.armed + g_key_checks.stale_gen + g_key_checks.first_seen + g_key_checks.running;
 }
 #endif
@@ -5622,7 +5622,7 @@ long flow_scan_runs(FlowScan s) {
            "read past the array, and the caller is about to publish whatever it found as a cost of this run");
     return g_scan_runs[s];
 }
-long flow_scan_weights(FlowScan s) {
+int64_t flow_scan_weights(FlowScan s) {
     DCHECK((unsigned)s < (unsigned)FLOW_SCAN_N,
            "an order-scan weight count was asked for an entry that is not in solver/flow.h's list — the index "
            "would read past the array, and the caller is about to publish whatever it found as a cost of this "
@@ -5793,7 +5793,7 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
 #if APICLIENT_DEV
     /* THE TWO SIDES OF THE ONE IDENTITY THAT MAKES THE ARMING COUNT A MEASUREMENT RATHER THAN A SUM OF ITS OWN
        SUMMANDS — snapshotted here and compared where the loop ends. See solver/flow.h's FlowKeyChecks. */
-    long kc_before = key_checks_total(), sw_before = g_scan_weights[why];
+    int64_t kc_before = key_checks_total(), sw_before = g_scan_weights[why];
     /* …AND THE MEMBER AN INDEX OVER THE MEMBER KEY WOULD HAVE RETURNED, folded beside the comparator's own
        maximum over exactly the same population and with exactly the same tie-break. See solver/flow.h's
        FlowIndexChecks for what the comparison licenses and why it is a reading rather than an argument. */
@@ -5913,7 +5913,12 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
                fires, and a predicted ABSENCE is satisfied identically by an invariant that holds and by a walk
                that compared nothing; `armed` is the number of comparisons actually made, and the three
                exemptions say which arm absorbed the rest. Solver/flow.h carries the reading. */
-            long *kind = m == g_running      ? &g_key_checks.running
+            /* THE SELECTOR CARRIES THE COUNTER'S OWN WIDTH, which is not a transcription detail: this
+               pointer is the ONLY writer of all four rows, so a `long *` here would have narrowed every
+               one of them back to 32 bits on the host that ships whatever the struct said — and the
+               compiler names it as an incompatible pointer rather than as an overflow, which is the one
+               diagnostic that cannot be mistaken for style. */
+            int64_t *kind = m == g_running   ? &g_key_checks.running
                        : !m->key_stamped     ? &g_key_checks.first_seen
                        : m->key_gen != g_gen ? &g_key_checks.stale_gen
                        :                       &g_key_checks.armed;
@@ -6026,9 +6031,12 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
             "are raised on the statement after the scan's own weight counter with nothing between them, so "
             "over one loop the two deltas are the same number by adjacency. A difference is a branch that has "
             "been introduced between them, and `keyArmedLifetime` is then a count over a subset of the "
-            "frontier the order walked while reading as a count over all of it. This scan weighed %ld "
-            "member(s) and the check classified %ld",
-            g_scan_weights[why] - sw_before, key_checks_total() - kc_before);
+            "frontier the order walked while reading as a count over all of it. This scan weighed %lld "
+            "member(s) and the check classified %lld",
+            /* CAST, BECAUSE NO FIXED SPECIFIER IS RIGHT ON BOTH HOSTS: int64_t is `long` where this links
+               native and `long long` on wasm32, so `%ld` warns on one target and `%lld` on the other. The
+               cast settles the type at the call and is this file's existing idiom for a 64-bit operand. */
+            (long long)(g_scan_weights[why] - sw_before), (long long)(key_checks_total() - kc_before));
 #endif
     /* THE SEED FOLDED IN AFTER THE SCAN, WITH A NON-STRICT COMPARISON, WHICH IS THE SAME ANSWER AND NOT A NEW
        TIE-BREAK — and that equality is what makes this a RELOCATION rather than a policy change. Seeded before
@@ -6374,8 +6382,8 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
                     "into one of the two walks or a skip arm that reached one of them and not the other. "
                     "`keyIndexBandWeighedLifetime` is then a denominator over a set the order did not walk, "
                     "and the band share published against it is a fraction of the wrong thing. The scan "
-                    "weighed %ld member(s) and the band walk tested %ld",
-                    g_scan_weights[why] - sw_before, band_of);
+                    "weighed %lld member(s) and the band walk tested %ld",
+                    (long long)(g_scan_weights[why] - sw_before), band_of);
             DCHECKF(cand == best,
                     "a candidate set carrying the derived margin did not contain the member this comparator "
                     "returned, or contained it and did not return it — and those are the only two ways this "

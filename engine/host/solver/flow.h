@@ -17,6 +17,7 @@
 #ifndef ENGINE_HOST_SOLVER_FLOW_H
 #define ENGINE_HOST_SOLVER_FLOW_H
 
+#include <stdint.h>   /* int64_t — a LIFETIME WEIGHING COUNT may not be `long`; see FlowKeyChecks */
 #include <lexbor/dom/dom.h>
 
 #include "quickjs.h"
@@ -3424,7 +3425,7 @@ static inline const char *flow_scan_name(FlowScan s)
    member of which is waiting on the host prices nobody — which is the STALL engine.c names at the pick's own
    `if (!best) break`. So there is no floor to assert between these two rows and none is asserted. */
 long flow_scan_runs(FlowScan s);
-long flow_scan_weights(FlowScan s);
+int64_t flow_scan_weights(FlowScan s);   /* per member per scan — 64-bit for FlowKeyChecks' reason */
 
 /* …AND WHAT THE ONE ASSERTION IN THAT SAME WALK DID WITH THE WEIGHTS THOSE ROWS COUNT — the partition the
    banner above is the exact complement of. FLOW_SCANS counts the flow_weight the scan PERFORMED "and never
@@ -3474,12 +3475,41 @@ long flow_scan_weights(FlowScan s);
    RETIREMENT: this goes when the ask no longer walks the frontier — the invariant is then held at the index's
    own update site, where it is not a disjunction and has nothing to be exempt from, so there is no arming
    left to count. */
+/* THE WIDTH IS PART OF THE DECLARATION AND `long` WAS THE WRONG ONE — A 32-BIT ACCUMULATOR IS A STEP CAP
+   ARRIVING AS A TYPE, WHICH IS THE ONE THING §NO BOUNDS FORBIDS AND THE ONE SHAPE NO REVIEWER READS AS A BOUND.
+   These four and `flow_scan_weights` are raised ONCE PER MEMBER PER SCAN, so their unit is O(members × scans)
+   and on a real page's frontier that is BILLIONS within the hour — while every other counter in this header is
+   O(members) or O(steps) and is orders of magnitude from any wall. `long` is 8 bytes on the native host and
+   FOUR on wasm32 (measured with both controls: `_Static_assert(sizeof(long)==4)` passes for `--target=wasm32`
+   and `==8` fails), so the same source is unbounded on one host this project builds for and capped at 2^31 on
+   the one that SHIPS. That is worse than a bound, because it is a bound only the vehicle has, and the native
+   gates can never see it.
+   MEASURED, AND IT IS NOT A HAZARD BUT A REPRODUCED ABORT: a real app page driven on the shipped artifact died
+   at 19m13s, 18m53s and again inside a 25-minute window, byte-identical frame list each time, at the DCHECK in
+   solver/result.c that compares exactly these four against those four scan weights. One census before the
+   abort the right-hand side stood at 2,147,352,163 — ONE HUNDRED AND THIRTY-ONE THOUSAND short of INT32_MAX —
+   with the engine weighing tens of thousands of members a second. It wraps negative, `LHS <= RHS` turns false,
+   and the assert fires. The IDENTITY IS CORRECT and is not what was wrong; signed overflow is UB, so this
+   assert is the OBSERVED behaviour of the defect and not the defect.
+   AND THE CONSEQUENCE IS THE PRODUCT'S, NOT THE INSTRUMENT'S: every long real-page run ended at ~19 minutes,
+   inside the incremental-snapshot path, at a working set of 357-429 MiB — so the 512 MiB RAM floor that is one
+   of the two routes to the cross-session store was not merely unreached, it was UNREACHABLE, and the razor read
+   ZERO on every one of those runs.
+   SO THE RULE IS A WIDTH AND IT IS ASSERTED RATHER THAN ARGUED: a counter raised per member per scan is a
+   FIXED-WIDTH 64-bit type, and the static assertion below is what makes a future `long` here a compile error on
+   the host it would cap rather than a nineteen-minute abort nobody connects to a declaration.
+   RETIREMENT: this record goes when no lifetime counter in this header is declared `long` at all, because the
+   width is then not a thing a reader has to get right per field. */
 typedef struct {
-    long armed;       /* comparisons the check actually MADE — the row that scores its predicted absence */
-    long stale_gen;   /* exempt: the frontier generation moved since this member was last weighed */
-    long first_seen;  /* exempt: this member had never been weighed, so there was nothing to compare against */
-    long running;     /* exempt: it held the thread, which is the one writer that may move its own half */
+    int64_t armed;       /* comparisons the check actually MADE — the row that scores its predicted absence */
+    int64_t stale_gen;   /* exempt: the frontier generation moved since this member was last weighed */
+    int64_t first_seen;  /* exempt: this member had never been weighed, so there was nothing to compare against */
+    int64_t running;     /* exempt: it held the thread, which is the one writer that may move its own half */
 } FlowKeyChecks;
+_Static_assert(sizeof(((FlowKeyChecks *)0)->armed) >= 8,
+               "a per-member-per-scan lifetime counter is narrower than 64 bits — on the host where that is "
+               "true it is a STEP CAP, which §NO BOUNDS forbids, and it fires as a wrapped comparison in "
+               "solver/result.c rather than as anything a reader would connect to this declaration");
 FlowKeyChecks flow_key_checks(void);
 
 /* …AND WHETHER AN INDEX OVER THAT KEY WOULD HAVE RETURNED THE SAME MEMBER THE COMPARATOR DID, WHICH IS THE
@@ -3591,9 +3621,23 @@ typedef struct {
                               real disagreement, which is the arm the TIE IDENTITY decision is about. The pair
                               is read against `index_differed`, which it partitions, and flow_pick asserts the
                               sum because the three are raised by two statements over one condition */
-    long band_members;     /* members the derived-margin candidate set admitted, summed over those scans */
-    long band_weighed;     /* …and the members that set was tested over — the denominator of the row above */
+    /* AND THE WIDTH IN THIS STRUCT IS THE UNIT, WHICH IS WHY THE TWO BELOW ARE WIDER THAN THE FOUR ABOVE AND
+       NOT AN INCONSISTENCY SOMEBODY WILL TIDY. The four `long` rows are raised ONCE PER ASK, so they count
+       PICKS; these two are raised inside the band walk, so they count MEMBERS × PICKS. The derivation is the
+       raises themselves and is three greps: `index_asked++`, `index_differed++` and the `differed_tie` /
+       `differed_strict` pair all sit outside the member loop, and `band_members += band` / `band_weighed +=
+       band_of` sit in it. On a real page's frontier — measured 18,724 and 25,650 members — that is four orders
+       of magnitude between the two groups, which is the whole of why only one group reached a 32-bit wall. */
+    int64_t band_members;  /* members the derived-margin candidate set admitted, summed over those scans */
+    int64_t band_weighed;  /* …and the members that set was tested over — the denominator of the row above.
+                              PER MEMBER PER SCAN, so 64-bit for FlowKeyChecks' reason: measured 23.6 M from
+                              the same 2^31 wall as the counters that reached it. */
 } FlowIndexChecks;
+_Static_assert(sizeof(((FlowIndexChecks *)0)->band_members) >= 8
+                   && sizeof(((FlowIndexChecks *)0)->band_weighed) >= 8,
+               "a per-member-per-scan lifetime counter in FlowIndexChecks is narrower than 64 bits — the two "
+               "band rows share FlowKeyChecks' unit and therefore its wall, and the comment above says which "
+               "rows of this struct are which so the answer is read rather than guessed");
 FlowIndexChecks flow_index_checks(void);
 
 /* HOW MANY TIMES THE ORDER CHANGED — the denominator the hook's rescan count has and `scanNextRuns` is NOT,
