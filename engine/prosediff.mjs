@@ -232,14 +232,18 @@ function main() {
   if (!paths.length)
     die(2, "usage: node engine/prosediff.mjs <path.c>… [--base <rev>] [--release]",
            "  Answers whether a diff is PROSE-ONLY by preprocessing both sides and comparing.",
-           "  A `.h` has no translation unit of its own — pass a `.c` that includes it (see the residual).");
+           "  A `.h` has no translation unit of its own — pass a `.c` that includes it (see the residual).",
+           "  EXIT: 0 every named path cleared; 1 a FINDING (not prose-only); 5 VOID (a control did not speak);",
+           "  6 NOT ASKED (every path DECLINED, so nothing was judged); 2 usage; 3 the include-root derivation;",
+           "  4 a command failed. A DECLINE and a FINDING used to share code 1, so the one caller that reads this",
+           "  status could only say `the claim FAILED` over a path nothing had examined.");
   const roots = includeRoots();
   console.log("# include roots DERIVED from engine/build.mjs's own `-I` line:");
   for (const r of roots) console.log("#   " + r);
   console.log("# base " + base + " (" + (run("git", ["rev-parse", "--short", base]).stdout || "?").trim() +
               ")  -DAPICLIENT_DEV=" + dev);
 
-  let worst = 0;
+  let worst = 0, findings = 0, declined = 0, voided = 0, cleared = 0;
   for (const p of paths) {
     /* A PATH THIS CANNOT ANSWER ABOUT IS DECLINED BY NAME AND NEVER ATTEMPTED, in two kinds, because an
        attempt would produce an answer. A header has no translation unit; anything that is not C has no
@@ -258,7 +262,7 @@ function main() {
           + "\n  file does not refuse: it would return text and this would print a verdict over a pipeline that"
           + "\n  models nothing about how that file runs. Declined rather than attempted.";
       console.log("\n" + p + ": " + why);
-      worst = Math.max(worst, 1);
+      declined++;
       continue;
     }
     const dir = mkdtempSync(join(tmpdir(), "prosediff-src-"));
@@ -284,6 +288,7 @@ function main() {
       if (!ctl.gained.length) {
         console.log("\n" + p + ": CONTROL DID NOT SPEAK — an injected statement produced no masked difference,");
         console.log("  so a zero below would mean `my input never reached this check` and is not published.");
+        voided++;
         worst = Math.max(worst, 5);
         continue;
       }
@@ -325,13 +330,41 @@ function main() {
       if (unexplained.length)
         console.log("      UNEXPLAINED: {" + unexplained.join(", ") + "} — no hunk boundary accounts for these,");
       if (masked.gained.length + masked.lost.length === 0 && !unexplained.length)
-        console.log("  VERDICT: PROSE-ONLY — every difference is a line stamp a hunk above it explains.");
+        { console.log("  VERDICT: PROSE-ONLY — every difference is a line stamp a hunk above it explains."); cleared++; }
       else {
         console.log("  VERDICT: NOT PROSE-ONLY.");
+        findings++;
         worst = Math.max(worst, 1);
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }
+  /* THE BANDS ARE PRINTED APART AND THE EXIT CODE SAYS WHICH ONE DECIDED, which is CLAUDE.md's "a gate states
+     its FINDINGS and its BLIND SPOTS as separate verdicts" owed by the one instrument that sits in the PATH of
+     every publication. A DECLINE used to raise the SAME code as a real finding, and the header's own argument for
+     that is sound as far as it goes — "both arms exit nonzero, so a `--prose` claim naming one REFUSES rather
+     than passing vacuously" — and it is silent about WHICH code, so `publish.mjs` could only say "the claim
+     FAILED" and offer a remedy list of three unrelated causes. For a declined path neither half of that sentence
+     is true: the claim was not wrong, it was NEVER JUDGED, and a reader told their claim may be wrong goes
+     looking for a statement in a diff nothing examined. The refusal is UNCHANGED — a declined path still pushes
+     nothing — and what changes is that the two readings stop sharing one answer.
+     THE PRECEDENCE IS FINDING, THEN VOID, THEN DECLINE, and it is stated rather than left to `Math.max`: a
+     FINDING is a fact about the DIFF and the most actionable thing here; a VOIDED answer is a fact about one
+     path's measurement; a DECLINE is a fact about this INSTRUMENT'S REACH and asks nothing of the diff at all.
+     The counts below are printed whatever the code, so the precedence can never hide a band — which is the
+     half a partition usually loses, and the reason this line prints on the CLEAN day too. */
+  console.log("\nBANDS — printed every run, clean day and red day alike, because a precedence that hides a band" +
+              " is the folded answer this file exists to refuse:");
+  console.log("  cleared  " + cleared + "  prose-only: (1) at zero and (2) accounted");
+  console.log("  findings " + findings + "  NOT prose-only — a statement, expression, datum or unexplained delta");
+  console.log("  voided   " + voided + "  the control did not speak, so that path's answer is not published");
+  console.log("  declined " + declined + "  this instrument CANNOT ANSWER about the path — a blind spot, not a finding");
+  if (!findings && !voided && declined) worst = 6;
+  console.log("VERDICT: exit " + worst + " — " +
+              (worst === 0 ? "every named path cleared"
+               : worst === 1 ? "a FINDING: at least one path is not prose-only"
+               : worst === 5 ? "VOID: at least one path's control did not speak"
+               : worst === 6 ? "NOT ASKED: every named path was DECLINED, so nothing was judged and nothing is cleared"
+               : "see above"));
   process.exit(worst);
 }
 main();

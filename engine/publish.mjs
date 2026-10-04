@@ -189,13 +189,36 @@ if (prose.length) {
   const pd = spawnSync(process.execPath,
                        [new URL("prosediff.mjs", import.meta.url).pathname, ...prose, "--base", old],
                        { stdio: "inherit" });
-  if (pd.status !== 0)
-    die(pd.status === null ? 3 : pd.status,
-        "──────────────────────────────────────────────────────────────────────────────────────────────────────",
+  /* THE SENTENCE IS CHOSEN BY WHICH BAND DECIDED, NEVER ONE SENTENCE OVER EVERY NONZERO STATUS. This used to
+     read `the prose-only claim FAILED (prosediff exited N)` for every refusal and then offer a remedy list of
+     three unrelated causes, which is the `aborted` column standing for three diagnoses that CLAUDE.md names —
+     and for a DECLINED path both halves of it are false: the claim was not wrong, it was NEVER JUDGED, so a
+     reader is sent hunting a statement in a diff nothing examined. prosediff now bands its answers and says
+     which one decided; this reads that and nothing else. THE REFUSAL IS UNCHANGED in every band: a `--prose`
+     claim naming a path this instrument cannot answer about pushes nothing, which is the half the old shared
+     exit code got RIGHT and is the reason only the message moves here. */
+  if (pd.status !== 0) {
+    const bar = "──────────────────────────────────────────────────────────────────────────────────────────────────────";
+    if (pd.status === 6)
+      die(6, bar,
+          "the --prose claim was NOT JUDGED and NOTHING was pushed. Every path you named was DECLINED: this",
+          "instrument measures what a C PREPROCESSOR emits, so it answers about a `.c` and about nothing else —",
+          "a header has no translation unit, and a `.md`, `.mjs` or `.js` has no preprocessor at all.",
+          "That is a BLIND SPOT and not a finding about your diff, so there is no statement to go looking for.",
+          "Name the `.c` path(s) you are claiming about, or drop --prose: for a file the build does not compile",
+          "the claim is not one this check can hold, and the push needs no claim it cannot verify.");
+    if (pd.status === 5)
+      die(5, bar,
+          "the --prose claim is VOID and NOTHING was pushed. A path's CONTROL DID NOT SPEAK — an injected",
+          "statement produced no masked difference — so a clean answer for it would mean `my input never reached",
+          "this check`, which is indistinguishable from `this check cannot see this`. Nothing is published off an",
+          "unarmed control. Read which path above; the include roots or the base revision are where to look.");
+    die(pd.status === null ? 3 : pd.status, bar,
         `the prose-only claim FAILED (prosediff exited ${pd.status}) and NOTHING was pushed. Read its verdict`,
         "above: a NON-NUMERIC difference is a statement, an expression or a datum your diff emits; an",
-        "UNEXPLAINED numeric delta is one no hunk boundary accounts for; a header is DECLINED rather than",
-        "cleared. Either the claim is wrong, or drop --prose and say in the message what the diff emits.");
+        "UNEXPLAINED numeric delta is one no hunk boundary accounts for. Either the claim is wrong, or drop",
+        "--prose and say in the message what the diff emits.");
+  }
   say("the prose-only claim HELD ─────────────────────────────────────────────────────────────────────────────");
 }
 
