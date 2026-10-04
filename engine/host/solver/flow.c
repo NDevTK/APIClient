@@ -4691,8 +4691,24 @@ double flow_distance(const Flow *f) {
    that sentence and anything built was that the term had no spelling in which the BUCKET IS THE OPERAND:
    flow_branch_bonus takes a Flow, so a candidate set could only ever bake it into a per-member key and pay
    O(live members of the bucket) per fork. This takes the bucket, so one read covers a whole arm — and today
-   its only caller is flow_branch_bonus, which asks it once per member, because there is nothing that
-   enumerates buckets for it to be asked by. The residual at flow_index_key says what that costs and does not.
+   its only caller is flow_branch_bonus, which asks it once per member.
+   THE REASON THAT CLAUSE GAVE WAS FALSE AND IS KEPT IN ITS OWN WORDS, BECAUSE IT IS AN ABSENCE AND THE ONLY
+   READER OF A NAMED ABSENCE IS SOMEBODY ABOUT TO GO AND BUILD IT. It read "because there is nothing that
+   enumerates buckets for it to be asked by", and `branch_take` IS that enumeration: it opens each distinct
+   `branch` node into the census ONCE PER SCAN however many doors reach it, through a per-node generation mark
+   held apart from the census and fan marks for exactly that reason, and its completeness over the live-bearing
+   ones is ASSERTED rather than described (`br_live_sum == members`, a live bucket holding at least one member
+   by construction). Its count is PUBLISHED — `branches`, declared a gauge, emitted by result.c.
+   WHAT IS ACTUALLY ABSENT IS NARROWER BY ONE WORD AND IT IS THE WORD THE DESIGN TURNS ON: nothing enumerates
+   them WITHOUT WALKING THE MEMBERS. A walk-free enumeration is what an ask that does not walk would need; a
+   walking one prices the fold and cannot perform it. The difference is not pedantry — a reader who greps for
+   an enumeration, finds `branch_take`, and believes the retired sentence builds a SECOND one beside it, which
+   is the dual system §A-superseded-system-is-DELETED forbids, reached by trusting a stale absence over a grep.
+   AND THE CONSUMER IS WHAT IS MISSING BEFORE EITHER OF THEM: a walk-free count is consumed only by a
+   per-bucket index fold at the pick, which does not exist, so building the count alone is a write with no
+   reader. The residual at flow_index_key says what the WALK costs; it is not a licence to land the count by
+   itself. Measured by the lane that refuted this, from the field writers rather than from the clause: `branch`
+   and `sub_born` have two writers each, `sub_gone` and `f->acct` two each, over exactly three functions.
    THE GUARD IS THIS DIFF'S ONE REAL CHECK AND IT IS TWO WRITERS AGAINST ONE READER. The stored double is
    maintained at flow_new and at flow_fork_inherit's join; the quotient on the right is recomputed HERE from
    the integer those same statements wrote. They are the same expression on the same operand at ONE INSTANT,
@@ -5011,6 +5027,15 @@ long flow_branch_born(const Flow *f) {
    derivation is, and it is one command per log: read the terminal `@WFQ` census of each segment, partition
    by the `@QUANTUM` line's `isCpu`, and divide `epochRebuildLifetime` by `scanNextWeights` — or read
    `epochRebuildWalkShare`, which testing/live-wfq.js now composes per census so no reader has to.
+   AND THAT FILE IS A HARD GATE RATHER THAN A CONVENIENCE, WHICH THIS SENTENCE UNDER-STATES AND WHICH CHANGES
+   WHAT A BRANCH-SCOPE LANDING COSTS. `branchScope()` there reads THIS COMPONENT'S SOURCE TEXT — result.c's
+   `result_wfq_json` body — and THROWS on any branch-scope row matching its own prefix that its instant and
+   diffable lists do not name. Measured with controls on COPIES rather than argued: unmodified, 23 branch-scope
+   keys and no unread rows, passing; with one new `br`-prefixed row, it throws; with a row named outside the
+   prefix, it passes — which is the evasion to REFUSE, since the gate exists to stop a reader-less column and
+   dodging it defeats a working check. So publishing a new branch-scope row is a FOUR-file landing whose fourth
+   file is deploy-on-write across a C-to-JS seam WITH NO BUILD IN IT: the throw fires the moment result.c is
+   saved. A lane scoped to this component alone cannot land one.
    THE POPULATION IS EXACT AND IS READ OFF THE ACCESSOR RATHER THAN INFERRED FROM THIS PARAGRAPH:
    flow_own_silence is `f->cpu_gen == f->family->emit_gen ? f->cpu : 0`, so a member stands away from its
    family's epoch base exactly when `f->family && f->cpu_gen == f->family->emit_gen && f->cpu > 0`. That
@@ -5055,10 +5080,32 @@ long flow_branch_born(const Flow *f) {
    it standing — because the condition is then closed by construction at both ends, and neither a clause born
    met nor a clause met and kept is spellable. Not "when no met condition stands here": that is satisfied by
    an absence over this file's own prose, which an edit meets and no construction does.
-   WHAT THE NEXT DIFF BUILDS: that enumeration — the distinct `branch` nodes of the live frontier, maintained
-   where membership moves (flow_new opens one, the fork's join is the only thing that ever retires one from
-   use, and acct_depart is where a bucket loses its last member), so one offset can be read for a whole arm
-   instead of once per member of it. It is the operand acct_branch_offset already takes and nothing supplies.
+   WHAT THE NEXT DIFF BUILDS, AND THE CLAUSE THIS REPLACES NAMED A THING THAT IS HALF STANDING — kept in its
+   own words because it is an ABSENCE, and the only reader of a named absence is somebody about to build it.
+   It read: "that enumeration — the distinct `branch` nodes of the live frontier, maintained where membership
+   moves (flow_new opens one, the fork's join is the only thing that ever retires one from use, and
+   acct_depart is where a bucket loses its last member), so one offset can be read for a whole arm instead of
+   once per member of it. It is the operand acct_branch_offset already takes and nothing supplies."
+   THE SITE LIST IS EXACT AND THE ABSENCE IS NOT. `branch_take` already enumerates the distinct buckets, once
+   per scan, with its live-bearing completeness asserted and its count published as `branches` — see
+   acct_branch_offset's own banner for what that retired sentence said and why it is kept there too. What is
+   absent is a WALK-FREE enumeration, and the three sites named here are complete for a LIVE-BEARING count and
+   SHORT BY ONE for a mirror of `branches` itself, which takes empties and therefore also needs `acct_unref`,
+   where a bucket node is freed. The clause does not say which shape it meant, and the two have different
+   maintenance.
+   AND IT IS NOT A LANDABLE FIRST MEMBER, WHICH IS THE PART THAT DECIDES WHETHER TO BUILD IT AT ALL. A
+   walk-free count's only consumer is a per-bucket index fold at the pick, which does not exist — so landed
+   alone it is the write with no reader this file refuses everywhere else, and §Do-subproblems-IN-ORDER's own
+   test (name the CALL that will consume it and confirm that call exists today) answers none. The landable
+   pair is ONE commit: the walk-free enumeration AND the per-bucket fold over flow_index_key, with the walk
+   retained inside a DCHECK as a cross-check rather than as a fallback — nothing selects between them, the
+   index always answers and the assert only compares.
+   AND BEFORE EITHER, A NUMBER PER DOCUMENT, BECAUSE TWO RELAYED READINGS OF THE DECIDING QUANTITY DISAGREE BY
+   FIFTY-FOLD AND NEITHER IS THIS FILE'S. One says ~50 buckets with a single one holding 38836 of 75113
+   members, where a bucket fold narrows 75113 to 50 and this design is the right half of the right one; the
+   other says 18724 members in ONE family and ONE bucket, where the offset is a common constant, the fold
+   narrows nothing, and the pick would want an index over flow_index_key alone. They are about DIFFERENT
+   DOCUMENTS, and the row that settles it per document is `branches` — read it there before spending the pair.
    HOW ITS ABSENCE WOULD SHOW, AND THE READING IS A DIFFERENCE RATHER THAN A QUOTIENT OF TWO TOTALS: on
    consecutive @WFQ censuses of ONE run, `scanNextWeights` differenced between two samples, divided by the same
    interval's `scanNextRuns` delta and priced against the `members` gauge over that same interval, reads about
