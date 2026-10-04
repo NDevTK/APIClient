@@ -1188,6 +1188,21 @@ void engine_routed_rebuilt(JSContext *ctx, struct Flow *f, const char *record, c
    instance that minted it, and two peers may ask this one the same number. Nothing runs inside this call. */
 void engine_perform(JSContext *ctx, const char *token, const char *record);
 
+/* WHAT THE ASK SIDE DID, counted at the ARRIVAL and at the ATTACHMENT — two LIFETIME counts over this process,
+ * neither a gauge and neither able to decrease. `asks` is how many cross-agent operations reached this instance
+ * at all, raised before any DCHECK, before the parse and before the routing assert, so no refusal below can
+ * suppress it; `attached` is how many (operation x timeline) pairs engine_perform's walk made.
+ * THEY EXIST TO PARTITION ONE ZERO. engine_retract_census's `flows` reads 0 at a park for three reasons that
+ * take OPPOSITE work: nothing arrived; something arrived and every live timeline CONTRADICTED its addressee;
+ * or something was attached and every holder left the frontier before the park walked. The first two are
+ * separated by `asks`, the second two by `attached`, and the third is what is left.
+ * THE CONTAINMENT IS ONE-SIDED AND THE OTHER SIDE IS NOT A BOUND AT ALL, which is the part a reader would
+ * otherwise assume: a member cannot hold a question that was never attached to it, so `flows <= attached`
+ * holds and is asserted where both numbers are in one hand (the park ladder in engine/host/test_forced.c)
+ * rather than restated here. `attached <= asks` is FALSE — one arrival attaches to EVERY live timeline, so on a
+ * forked document `attached` is routinely far above `asks` and no order between the two means anything. */
+void        engine_perform_census(long *asks, long *attached);
+
 /* WHICH TIMELINE OF `doc_name` THIS FLOW HAS ALREADY COMMITTED TO — the ADDRESSEE a cross-agent operation
  * carries, read out of the commitment record flow.h calls "what it has already BECOME". Heap; the caller
  * frees. NULL when this flow addresses nobody, which is a POSITIVE answer and the common one.

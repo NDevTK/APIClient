@@ -16997,7 +16997,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        first one opened a route around the second one's assert. `engine_frontier_paged` is true on both
        paths, so nothing downstream could tell them apart, and a dev assert that does not fire has two
        readings (it held, or it was never reached) with no witness for the second.
-       `park-remoteop-window` IS THAT WITNESS and is this ladder's lowest rung; see where it is computed.
+       `park-remoteop-window` IS THAT WITNESS; see where it is computed. IT IS NOT THIS LADDER'S LOWEST
+       RUNG, which this sentence used to claim and which is kept because the reasoning above makes a reader
+       re-derive it: `park-remoteop-arrived` stands below it and this rung's own gate names it, because a
+       park cannot be REQUESTED by this host without the peer's question having been performed first.
        RETIREMENT: this record goes when the token claim is asserted where the park is TAKEN rather than
        where it is REQUESTED, because the guarantee is then true as first written and needs no qualifier.
        It is also why the
@@ -17093,11 +17096,28 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        last-holder rule the row exists for. A finding about a contract is a finding; it is not a licence to
        change the contract. */
     long retract_flows = 0, retract_started = 0, retract_back = 0;
+    long perform_asks = 0, perform_attached = 0;
     int cold_park_remoteop, cold_park_remoteop_once, cold_park_remoteop_asked, cold_park_remoteop_many;
-    int cold_park_remoteop_window;
+    int cold_park_remoteop_window, cold_park_remoteop_arrived, cold_park_remoteop_attached;
 
     engine_retract_census(&retract_flows, &retract_started, &retract_back);
-    /* THE LADDER'S FOUR SENTENCES, WRITTEN WHERE THE RUNGS ARE COMPUTED AND PRINTED WHERE A ROW IS 0. They
+    /* AND WHAT THE ASK SIDE DID, which is a different pair of events from what the RETRACTION found and was
+       unpublished until there was a rung that needed it. Both are lifetime counts; see solver/engine.h. */
+    engine_perform_census(&perform_asks, &perform_attached);
+    /* THE CONTAINMENT, ASSERTED WHERE BOTH NUMBERS ARE IN ONE HAND rather than restated in either producer's
+       header. A member cannot hold a question that was never attached to it, so the park's `flows` is bounded
+       by the ask side's `attached` — and that bound is the whole of why the ladder's lowest 0 is a
+       LOCALISATION rather than three readings of one number.
+       IT IS ONE-SIDED ON PURPOSE. `attached <= perform_asks` is FALSE and asserting it would fire on the
+       ordinary case: one arrival is attached to EVERY live timeline, so a forked document makes `attached`
+       many times `asks` and no order between those two means anything at all. */
+    DCHECK(retract_flows <= perform_attached,
+           "more members held a cross-agent question at this park than engine_perform ever ATTACHED — a "
+           "question reached a flow's arrival slot or a program's row without going through the attach loop, "
+           "so something other than engine_perform is writing the place the retraction walks");
+    /* THE LADDER'S SENTENCES — ONE PER RUNG, AND DELIBERATELY NOT COUNTED HERE, because a count beside the
+       list it counts is the half nobody adds up and this one read FOUR for as long as the ladder had four.
+       WRITTEN WHERE THE RUNGS ARE COMPUTED AND PRINTED WHERE A ROW IS 0. They
        stood here as comments, which is the one place a reader of a LOG never looks: probes_report narrates a
        0 row only when it carries a `why`, and this ladder carried none — so the lowest rung, whose 0 is a
        NAMED RESIDUAL and not a defect, printed a bare `park-remoteop=0` that a reader then has to localise
@@ -17110,14 +17130,50 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        cannot read them: probes_report prints the `why` of every 0 row, so a sentence asserting that another
        rung is 1 would be printed on the run where it is not.
        RETIREMENT: these go when a probe row's 0 cannot be printed without a diagnostic beside it. */
-    /* Rung 0: THE PARK THIS FIXTURE TOOK IS THE ONE IT ASKED FOR, which is the rung every other one in this
+    /* Rung 0a: A PEER QUESTION REACHED THIS INSTANCE AT ALL. Its observation site is engine_perform's own
+       first statement, which is strictly earlier than every rung above it and strictly earlier than the park,
+       so a 0 here is a statement about the ASK PATH and can be about nothing else. It is also the rung that
+       makes the three rungs above it statements rather than guesses: `retract_flows` is measured AT THE PARK
+       and cannot distinguish a question that never came from one whose holders had gone.
+       NO GATE, for `park-remoteop-window`'s reason: nothing below implies it, so a gate would suppress it on
+       the one run that most needs it. */
+    const char *remoteop_arrived_why =
+        "no cross-agent operation ever reached this instance — engine_perform was never called, so nothing was "
+        "ever attached to any timeline and the park had nothing to walk. Read fixture_ask_remote_op and the "
+        "moment that gates it, and the zone's routing; never engine_retract_span and never the attach loop, "
+        "neither of which ran.";
+    cold_park_remoteop_arrived = g_sess == SESS_PARK && perform_asks > 0;
+    /* Rung 0b: AND IT WAS ATTACHED TO A TIMELINE. This is the one state neither of its neighbours can
+       separate: engine_perform skips every live flow whose world CONTRADICTS the addressee the peer named, and
+       its own `attached > 0` DCHECK is what fires in a dev build when that empties the loop — so a 0 here in
+       RELEASE is that abort's silent form, and a 0 here in dev means the abort was bypassed and is itself the
+       finding. Gated on the rung below, which it entails: nothing can be attached that never arrived. */
+    const char *remoteop_attached_why =
+        "a cross-agent operation ARRIVED and was attached to NO live timeline — every member's world "
+        "CONTRADICTS the addressee the peer named. engine_perform's own `attached > 0` DCHECK carries what to "
+        "build for it, which is that a document a peer still holds a reference into must keep the timelines it "
+        "answered from alive. Nothing about the retraction walk is in question at this rung.";
+    cold_park_remoteop_attached = g_sess == SESS_PARK && perform_attached > 0;
+    /* Rung 0c: THE PARK THIS FIXTURE TOOK IS THE ONE IT ASKED FOR, which is the rung every other one in this
        ladder was resting on without saying so. Its observation site is strictly earlier than theirs — this
-       host's own decision, taken before the park walks anything — which is what makes it the lowest rung
-       and makes the lowest 0 the localisation.
-       IT HAS NO GATE AND THAT IS DELIBERATE, for the reason the paragraph above gives about this ladder
-       generally: a gate declares an ENTAILMENT, and `park-remoteop-asked` does not imply this one — the
-       engine's survivors exit runs the identical retract walk, so a frontier holding an arrival slot reads
-       1 there with this rung at 0. A gate here would suppress a real row on the one run that most needs it.
+       host's own decision, taken before the park walks anything.
+       IT IS NO LONGER THE LOWEST RUNG AND IT NOW CARRIES A GATE, both of which this paragraph used to deny.
+       It read `which is what makes it the lowest rung and makes the lowest 0 the localisation` and `IT HAS NO
+       GATE AND THAT IS DELIBERATE … a gate declares an ENTAILMENT, and `park-remoteop-asked` does not imply
+       this one — the engine's survivors exit runs the identical retract walk, so a frontier holding an arrival
+       slot reads 1 there with this rung at 0. A gate here would suppress a real row on the one run that most
+       needs it.` THAT ARGUMENT IS SOUND AND IT IS ABOUT THE WRONG ROW, and it is kept in its own words because
+       a reader who re-derives it from the survivors exit will re-add it: it establishes only that `-asked` does
+       not imply this rung, which remains true, and says nothing about a rung BELOW both of them.
+       `park-remoteop-arrived` IS THAT RUNG AND THIS ONE ENTAILS IT, BY CONTROL FLOW AND NOT BY ANALOGY.
+       `g_park_requested` is written at exactly one line, which `fixture_want_park` reaches only past
+       `if (!g_op_asked) { fixture_ask_remote_op(…); return 0; }`; `g_op_asked` has exactly ONE writer, which
+       sets it and then calls `engine_perform` with no `return` between the two (the one guard in that span is a
+       CHECK, fatal in both regimes, so it ends the process rather than skipping the ask). So a run that
+       REQUESTS the park has performed the ask, `fixture_park_requested() ⟹ perform_asks > 0`, and the gate
+       groups a 0 here under a 0 there rather than suppressing anything. Without it this ladder would have had
+       TWO independent bottom rungs on two axes, and "the lowest 0 localises" is a sentence about a graph with
+       one bottom.
        WHAT IT REPLACES IS A GUARANTEE THAT DID NOT HOLD, recorded here rather than quietly repaired
        because a reader who re-derives it writes it again. The banner above and `park-remoteop`'s own `why`
        both said that fixture_want_park ASSERTS at the park that a token is on a row, "so a 0 here can no
@@ -17139,9 +17195,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     cold_park_remoteop_window = g_sess == SESS_PARK && fixture_park_requested();
     /* Rung 1: the park MET a peer's question at all. */
     const char *remoteop_asked_why =
-        "nothing was attached to any member at all — no peer question reached this frontier, so the walk's "
-        "arrival-slot half never ran. Read fixture_ask_remote_op and the moment that gates it, never "
-        "engine_retract_span.";
+        "every member a question was attached to had LEFT THE FRONTIER before this park walked, so the walk "
+        "found nobody holding one. This row is gated on `park-remoteop-attached`, so for it to be printed a "
+        "question DID arrive and WAS attached — what its 0 says is that the timelines it was attached to are "
+        "gone, which is the same capability engine_perform's `attached > 0` abort names from the other end. "
+        "THIS SENTENCE USED TO READ `nothing was attached to any member at all — no peer question reached this "
+        "frontier, so the walk's arrival-slot half never ran`, and it is kept because a reader who re-derives "
+        "it from `retract_flows` will write it again: that is an assertion about the ASK SIDE, which this "
+        "rung's predicate cannot make at all — `retract_flows` is measured AT THE PARK and reads 0 for three "
+        "reasons that take opposite work. The two rungs below this one are what separate them. Read "
+        "fixture_ask_remote_op only when `park-remoteop-arrived` is the lowest 0; never engine_retract_span.";
     cold_park_remoteop_asked = g_sess == SESS_PARK && retract_flows > 0;
     /* Rung 2: MANY timelines held the one question — the precondition that makes rung 3 a statement about a
        RULE rather than about a single free(). */
@@ -18597,8 +18660,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "park-commit", cold_park_commit, "cfg.admin", SESS_PARK, .gate = "park-wrote" },
         { "resumed-commit", cold_resumed_commit, "cfg.admin", SESS_RESUME, .gate = "resumed" },
         /* THE LADDER, LOWEST RUNG FIRST — read them in this order and the lowest 0 is the answer. */
-        { "park-remoteop-window", cold_park_remoteop_window, "cfg.admin", SESS_PARK, remoteop_window_why },
-        { "park-remoteop-asked", cold_park_remoteop_asked, "cfg.admin", SESS_PARK, remoteop_asked_why },
+        { "park-remoteop-arrived", cold_park_remoteop_arrived, "cfg.admin", SESS_PARK, remoteop_arrived_why },
+        { "park-remoteop-window", cold_park_remoteop_window, "cfg.admin", SESS_PARK, remoteop_window_why,
+          .gate = "park-remoteop-arrived" },
+        { "park-remoteop-attached", cold_park_remoteop_attached, "cfg.admin", SESS_PARK,
+          remoteop_attached_why, .gate = "park-remoteop-arrived" },
+        { "park-remoteop-asked", cold_park_remoteop_asked, "cfg.admin", SESS_PARK, remoteop_asked_why,
+          .gate = "park-remoteop-attached" },
         { "park-remoteop-many", cold_park_remoteop_many, "cfg.admin", SESS_PARK, remoteop_many_why,
           .gate = "park-remoteop-asked" },
         { "park-remoteop-once", cold_park_remoteop_once, "cfg.admin", SESS_PARK, remoteop_once_why },

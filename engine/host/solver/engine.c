@@ -3996,11 +3996,43 @@ char *engine_flow_addressee(JSContext *ctx, Flow *f, const char *doc_name)
     return best;
 }
 
+/* WHAT THE ASK SIDE DID — counted at the ARRIVAL and at the ATTACHMENT, which are two different events and
+   were ONE unpublished number for as long as neither was counted. Both are LIFETIME counts over this process,
+   neither is a gauge, and neither can decrease: `asks` is how many cross-agent operations reached this instance
+   at all, `attached` is how many (operation x timeline) pairs the walk in engine_perform made.
+   WHY THE ARRIVAL IS COUNTED BEFORE EVERY `DCHECK` BELOW IT. CLAUDE.md's rule for an instrument over a gated
+   operation is that it censuses the ASK and never the OUTCOME, or it re-implements the gate's own refusals as
+   failures. The gates here are the attach loop's CONTRADICT exclusion and, one step earlier, the parse and the
+   routing assert — so `asks` is raised as the first statement of the body, where nothing has yet had the chance
+   to decline, and `attached` is raised inside the loop that decides.
+   WHAT A READER GETS FOR IT IS A PARTITION OF ONE ZERO INTO THREE, AND THE THREE TAKE OPPOSITE WORK.
+   engine_retract_census's `flows` reads 0 at a park because (i) no question ever arrived — the asking path or
+   the zone's routing, and nothing about this file; (ii) one arrived and every live timeline CONTRADICTED the
+   addressee the peer named, which is the `attached > 0` DCHECK at the foot of this function in release clothing;
+   or (iii) one was attached and every holder left the frontier before the park walked, which is the same
+   capability that DCHECK names from the other end. A single count cannot say which, and the park ladder's
+   `park-remoteop-asked` row asserted (i) in its own diagnostic sentence while its predicate could establish
+   none of the three.
+   RETIREMENT: these go when an operation's ARRIVAL and its ATTACHMENT are each a step unit the frontier already
+   counts, because the partition is then readable off `stepUnitRuns` and needs no counter of its own. */
+static long g_perform_asks, g_perform_attached;
+
+void engine_perform_census(long *asks, long *attached)
+{
+    DCHECK(asks != NULL && attached != NULL, "the cross-agent ask census was asked to fill nothing");
+    *asks = g_perform_asks; *attached = g_perform_attached;
+}
+
 void engine_perform(JSContext *ctx, const char *token, const char *record)
 {
     RemoteOp *op;
     char *addressee = NULL;
     int n, attached = 0;
+
+    /* THE ASK, RAISED BEFORE ANYTHING CAN DECLINE — see the census above for why it is here rather than below
+       the DCHECKs. A malformed arrival is still an arrival: the question reached this instance, and whether it
+       was spellable is what the asserts below are about. */
+    g_perform_asks++;
 
     DCHECK(record != NULL && *record, "a cross-agent operation arrived with no text to perform");
     DCHECK(token != NULL && *token, "a cross-agent operation arrived with no rendezvous token — the completion "
@@ -4090,6 +4122,7 @@ void engine_perform(JSContext *ctx, const char *token, const char *record)
            this loop. */
         if (addressee != NULL && world_vec_relate_held(addressee, f->world) == WORLD_REL_CONTRADICT) continue;
         attached++;
+        g_perform_attached++;
         /* APPENDED, BECAUSE THEY ARE SEQUENTIAL. A second operation arriving before this flow has started the
            first is an ordinary second question — the asking side parks on each in turn — so it goes on the
            queue behind it, and each is answered under its own token because the token rides the program's row
