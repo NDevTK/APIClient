@@ -2374,7 +2374,33 @@ typedef struct {
      * pointer load, one generation compare, one increment on the parent node and two compares per member — no
      * charge-time work at all, no node retained that the compression would otherwise free, and no walk of any
      * ancestry. No new walk, nothing per-opcode, and nothing whose cost grows with the fork depth. */
-    long branches;      /* GAUGE: distinct top-level-arm buckets holding at least one live member */
+    /* GAUGE: DISTINCT TOP-LEVEL-ARM BUCKETS THE WALK TOOK, EMPTIES INCLUDED — AND THIS READ "holding at
+       least one live member", WHICH IS A TRUE SENTENCE ABOUT A POPULATION THIS ROW IS NOT. It is rewritten
+       rather than deleted because the wrong reading is the one a reader re-derives from the rows beneath it:
+       every extremum below is folded INSIDE branch_take's `live > 0` guard, so the natural conclusion is that
+       the count above them is over the same set. `branches` is raised BEFORE that guard, and the empty arm
+       exists on purpose — the family-root door takes a root's bucket whenever its own flow has DEPARTED, to
+       keep that root's lifetime burn (boot's, on a real page) inside `br_us_sum + br_retired_us ==
+       charged_us`. So an empty bucket is the ORDINARY state of any frontier whose boot flow has finished, and
+       `branches` exceeds the live-bearing count by one per such family.
+       WHAT IT MAY THEREFORE NOT BE READ AS — the population the four rows below range over. That matters
+       because it is the FOLD WIDTH an order that asked per BUCKET instead of per MEMBER would pay, which is
+       the one quantity this whole scope is priced by, and a reader taking `branches` for it over-counts on
+       every census of a document that has got past boot.
+       NAMED RESIDUAL — THE LIVE-BEARING COUNT IS NOT PUBLISHED AND IS NOT DERIVABLE FROM WHAT IS.
+       `br_empty_us` is nonzero only for an empty bucket that was ever CHARGED, so a departed root that burned
+       nothing is invisible in it, and no other row separates the two sets. WHAT THE NEXT DIFF BUILDS: that
+       count, folded inside branch_take's existing live guard and emitted beside this row — and it is a
+       FOUR-FILE landing rather than three, because `testing/live-wfq.js` derives its row set by READING
+       result.c's composer text and THROWS on a branch-scope row (`^(?:branches|br[A-Z])`) no reader there
+       names. That is deploy-on-write across a C-to-JS seam with no build in it, so the halves land together or
+       the live-page driver stops. HOW ITS ABSENCE SHOWS: a reader pricing a bucket-fold order quotes
+       `branches` against `members` as the narrowing, and the figure is high by the number of families whose
+       root flow has departed — one, on a page whose flows all descend from boot.
+       RETIREMENT: this record goes when the live-bearing bucket count is emitted beside this row, because the
+       fold width is then a published number rather than a sentence here saying which published number is not
+       it. */
+    long branches;
     long br_live_max;   /* GAUGE: the most live members in one bucket — the fat side of a branch */
     long br_live_min;   /* GAUGE: the fewest; see above for why the root's bucket usually owns this */
     long br_live_sum;   /* GAUGE: their sum, published because `== members` is the partition identity */

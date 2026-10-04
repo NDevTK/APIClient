@@ -6797,6 +6797,27 @@ static void branch_take(WfqCensus *out, FlowAcct *br) {
            is the ORDINARY state of any frontier whose boot flow has finished, because the family-root door
            takes exactly such a bucket on purpose to keep boot's burn inside the identity. That burn is real
            receipt and it is what makes `br_us_sum` the wrong denominator for a live arm's share. */
+        /* …AND WHICH BUCKETS MAY BE HERE AT ALL, ASSERTED RATHER THAN ARGUED, BECAUSE IT IS WHAT MAKES
+           `branches` MINUS THE LIVE-BEARING COUNT A KNOWN QUANTITY INSTEAD OF A RESIDUE. The member door
+           passes `f->acct->branch` for a LIVE `f`, and that member's own mint has not been shed, so a bucket
+           reached that way holds at least one and cannot arrive here. Everything here therefore came through
+           the family-root door, where `Flow.family` names a ROOT (`up == NULL`, asserted at the dispatch) and
+           a root's bucket stands at the `sub_born == 1` flow_new wrote — so `live == 0` is its own flow having
+           departed, and acct_depart clears `owner` BEFORE it raises `sub_gone`, which is why both halves are
+           readable at one instant.
+           IT IS NOT THE PARTITION IDENTITY RESTATED, WHICH IS THE TEST THIS FILE APPLIES TO EVERY ADDED
+           ASSERTION. `br_live_sum == members` compares two SUMS and is satisfied by any COMPENSATING pair —
+           one bucket short a mint and another over by one sum correctly while a live member stands in a bucket
+           whose count says nobody does. That pair passes the partition, leaves `br_live_min` untouched (the
+           extrema are folded in the arm above and an empty bucket never reaches them), and fires here. */
+        DCHECK(br->up == NULL && br->owner == NULL,
+               "the census took a branch bucket with no live member that is not a departed family root — the "
+               "member door only ever reaches a bucket it is itself counted in, so a NON-ROOT bucket here is a "
+               "join that raised `sub_born` for one bucket while leaving `branch` naming another, or a "
+               "departure that raised `sub_gone` twice, and a root still OWNING its flow here is a root that "
+               "has been forked into. Either way a live member is standing in a bucket whose own count says "
+               "nobody is, so `branches` minus the live-bearing buckets is no longer the departed roots and "
+               "every per-branch extremum is about to be published over a population nobody can name");
         out->br_empty_us += br->sub_us;
     }
     if (out->branches == 1 || br->sub_us > out->br_us_max) out->br_us_max = br->sub_us;
