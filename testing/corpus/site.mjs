@@ -891,6 +891,12 @@ const epFact = (k) => !counted.length ? null
    list rather than restating it. `rowsAwaitingBytes` is in the carried set and NOT in the sum: it is a gauge
    over PROGRAM ROWS and the five are over KEYED RECORDS, two populations whose addition would be a unit error. */
 const REPLY_DOOR_SUM = ['replyAsked', 'replyAnswered', 'replyDeclined', 'replyDropped', 'replyOutstanding'];
+/* THE DELIVERY ARM'S OWN GUARD AND THE DEBT IT IS THE DENOMINATOR OF, AS ONE LIST AND IN THE PRODUCER'S
+   CONTAINMENT ORDER — `canDeliver <= stackEmpty <= live`, which solver/result.c asserts and whose top term this
+   row already carries through `frontierPrograms`. All four are GAUGES by the producer's own `@kind` statement,
+   so they are a statement about the instant the census was composed and are never differenced against the
+   LIFETIME step counts beside them. */
+const DELIVER_GUARD_ROWS = ['pend', 'pendReady', 'stackEmpty', 'canDeliver'];
 const REPLY_DOOR_ROWS = [...REPLY_DOOR_SUM, 'rowsAwaitingBytes'];
 const NET_ASK_ROWS = [
   'epFetchAskNamedLife', 'epFetchAskNamedTypeofLife', 'epFetchAskCalledLife',
@@ -1408,6 +1414,70 @@ const row = {
      THREE STATES AND NONE FOLDED: `null` is NOTHING TO ASK — no counters, or an artifact predating the terms —
      `''` is an OBSERVED CLEAN ANSWER, and a non-empty string names both sides of the sum that failed. The `''`
      is worth having only because the `null` beside it is a different sentence. */
+  /* AND WHETHER THE DELIVERY ARM WAS REACHABLE AT ALL, WHICH IS THE OTHER HALF OF A PAIR THE PRODUCER CALLS ONE
+     FACT AND OF WHICH THIS ROW CARRIED ONLY THE HALF THAT CANNOT SPEAK ALONE. solver/cold.h says of the debt, in
+     as many words, that it "IS THE DENOMINATOR OF `deliver-one-reply` AND NOTHING ELSE IN THIS CENSUS IS" — and
+     `deliver-one-reply` is a row this file has carried all along inside `stepUnitRuns`, so the numerator was
+     published and its only lawful denominator was not. That is CLAUDE.md
+     §THE-TELL-IS-THAT-YOUR-METRIC-IS-A-FRACTION-WHOSE-NUMERATOR-IS-PUBLISHED-AND-WHOSE-DENOMINATOR-IS-NOT, on a
+     row this driver reads every pass.
+     THE SAME HEADER NAMES THE PAIR AS ONE FACT: "a rising `pend_ready` beside `finished 0` is one fact and not
+     two", because a flow cannot reach flow_step's FINISHED arm while its register holds a deliverable (the
+     delivery rung returns first) and a flow that does not finish never releases its register. `finished` is in
+     `stepUnitRuns` and reads 0 on every real-site pass this corpus holds, so the OTHER half of that one fact was
+     the missing one.
+     `pendReady` AND `replyAnswered` MAY NOT BE DIVIDED BY ONE ANOTHER AND THIS ROW DOES NOT, which is the
+     producer's own prohibition and not a caution invented here: that arm "consumes exactly one NAMING per
+     visit" while `replyAsked`/`replyAnswered` count RECORDS, and one record is NAMED BY EVERY REGISTER that
+     forked while it was in flight — so "the reply door's rate can be `asked == answered` while this number
+     climbs without bound". Measured: a gitpod pass read `replyAsked == replyAnswered == 99` with
+     `replyOutstanding 0` and ran the delivery arm FOUR times, which is exactly that shape, and the ratio a
+     reader would reach for there is the one the producer forbids. The four rows are carried so the question can
+     be asked in the units it is about.
+     WHAT `canDeliver` ANSWERS IS WHICH OF TWO OPPOSITE REPAIRS IS OWED, in solver/cold.h's own framing: the arm
+     "is being reached and consuming one entry at a time against a debt that forks faster than it drains, or the
+     arm is not being reached at all because its guard is false for nearly every member", which "differ in what
+     to fix — the drain's granularity, or whatever is upstream of a flow ever reaching an empty stack — and no
+     row of this census separated them". `canDeliver` at 0 beside a large `pendReady` is the second.
+     `stackEmpty` IS NOT `live - framed` AND IS NOT DERIVED HERE, which is the part that looks derivable and is
+     not. The guard is `flow_stack_empty` and it is a CONJUNCTION: no live frame, AND the row at the cursor is
+     not a `DYN_POS_IMMEDIATE` one — §4.12.1.1 "Processing model"'s "immediately execute the script element",
+     which runs INSIDE the program that inserted it and so does not empty the stack either. `framed` answers the
+     first half only, so `live - framed` is an UPPER BOUND and a reader who takes it for the count is reading a
+     different question's answer. It is taken from the predicate the arm itself is guarded on.
+     ALL FOUR ARE GAUGES AND ARE READ OFF THE SAME ENTRY AS EVERY OTHER COUNTER ON THIS ROW, so the containment
+     chain holds at the one instant all of it is in one hand — never off `coldLive`, which picks the last entry
+     with a LIVE frontier and is a different moment. ABSENT STAYS ABSENT, for `egressAsked`'s reason: a `0` here
+     would read as a frontier holding no debt, which is one of the states the set exists to separate. */
+  deliverGuard: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    const out = {};
+    for (const k of DELIVER_GUARD_ROWS) {
+      taken.add(k);
+      out[k] = typeof c[k] === 'number' ? c[k] : EP_FACT_ABSENT;
+    }
+    return out;
+  })(),
+  /* AND THE CONTAINMENT CHAIN ASKED HERE, FOR `replyDoorSumsWrong`'s REASON EXACTLY. solver/result.c asserts
+     `canDeliver <= stackEmpty <= live` with a `DCHECK` that `-DAPICLIENT_DEV=0` compiles out, and this driver
+     measures whatever artifact is installed, release included — so on a release census that assertion is not
+     weakened, it is ABSENT, and this is its release-mode reader rather than a second copy of a live check. The
+     chain is DERIVED from the one list above plus `live`, so the row's keys and this check cannot disagree.
+     A STRING AND NOT A COLOUR, AND IT DOES NOT STOP THE ROW: `null` is nothing to ask, `''` is an observed clean
+     answer, and a non-empty string names the two terms that failed and their values. */
+  deliverGuardChainWrong: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    const chain = ['canDeliver', 'stackEmpty', 'live'];
+    for (const k of chain) if (typeof c[k] !== 'number') return null;
+    for (let i = 0; i + 1 < chain.length; i++)
+      if (c[chain[i]] > c[chain[i + 1]])
+        return chain[i] + ' ' + c[chain[i]] + ' exceeds ' + chain[i + 1] + ' ' + c[chain[i + 1]];
+    return '';
+  })(),
   replyDoorSumsWrong: (() => {
     if (!counted.length) return null;
     const c = counted[counted.length - 1].cold;
