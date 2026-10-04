@@ -1025,7 +1025,30 @@ const rzRows = table.map((t) => {
      about ONE run; taking each from the pass that maximises it would be two runs' margins read as one
      document, which is the defect this file's own data-door section records having committed once. */
   const wAtBest = bestAt >= 0 ? wzOne(t.measurements[bestAt]) : null;
+  /* AND THE SPREAD OF THE BOUND OVER EVERY PASS THAT STATED IT, WHICH IS NOT DECORATION BESIDE THE
+     AT-BEST VALUE — IT IS WHAT MAKES THAT VALUE READABLE AT ALL. The at-best pass is chosen by MAX
+     `runtime-only` with ties keeping the first, and on a document where the bar reads 0 on every pass EVERY
+     PASS TIES, so the choice is whichever ran first and the bound printed beside it is one sample of a
+     quantity that moves.
+     MEASURED, AND IT IS THE FLATTERING DIRECTION, WHICH IS WHY THIS IS A REPAIR AND NOT A REFINEMENT: two
+     gitpod passes off ONE artifact, one site, one dwell, no abort in either, both partitions summing to their
+     own 190 — `{unasked:1, no-witness:189}` and `{unasked:1, no-witness:97, may-rest-on:92}`. The first says
+     the bar's zero is the engine having genuinely proved nothing and sends the next diff to the SOLVER; the
+     second says 92 of 190 addresses are a population the bar could not look at and sends it to the PIN. Those
+     are opposite diffs, the bar ties at 0 across both, and the at-best rule prints the FIRST.
+     THE REASON THE BOUND MOVES AND THE BAR DOES NOT IS THAT IT IS A FACT ABOUT THE PATH. `may-rest-on` says
+     the path that composed the address had pinned a source's value; the same address composed on two
+     interleavings genuinely has two answers, and the record merges MAX over sightings — so a spread here is
+     the field working rather than noise, and a single pass of it is not a measurement. */
+  const wStated = per.map((x, i) => (x.h ? wzOne(t.measurements[i]) : null)).filter((w) => w && w.h);
+  const wMays = wStated.map((w) => w.may);
+  const wMax = wMays.length ? Math.max(...wMays) : 0;
+  const wSpread = wMays.length
+    ? (() => { const lo = Math.min(...wMays);
+               return lo === wMax ? String(lo) : lo + '-' + wMax; })()
+    : '-';
   return { id: t.id, n: t.measurements.length, per, stated: stated.length, best, wAtBest,
+           wSpread, wMax, wStatedN: wStated.length,
            /* A SPREAD OVER THE PASSES THAT STATED A PARTITION, never over the ones that could not be asked --
               `-` where none did, which is absent and is not a zero. */
            spread: stated.length ? (() => {
@@ -1057,18 +1080,26 @@ const rzClW = Math.max('cleared'.length, ...rzShown.map((r) => rzClear(r).length
 /* THE BOUND'S OWN CELL, SIZED LIKE EVERY OTHER COLUMN HERE AND FOR ITS REASON. It reads `-` only where no
    pass stated a bar partition at all, so there was no pass to read it AT; a pass that stated the bar and not
    the bound prints its own token, which is the instrument or the artifact and never a zero. */
-const wzCell = (w) => w === null ? '-' : (w.h ? (w.may + ' may / ' + w.un + ' unasked of ' + w.tot) : w.tok);
-const rzWW = Math.max('may-rest-on'.length, ...rzShown.map((r) => wzCell(r.wAtBest).length)) + 2;
+const wzCell = (r) => r.wAtBest === null ? '-'
+  : !r.wAtBest.h ? r.wAtBest.tok
+  /* THE SPREAD FIRST AND THE AT-BEST VALUE SECOND, because the spread is the claim and the at-best value is
+     one sample of it. They are printed TOGETHER and never one without the other: where they differ, the
+     at-best pass was chosen by a tie and the spread is what a reader may act on. */
+  : r.wSpread + ' may (' + r.wAtBest.may + ' at best) / ' + r.wAtBest.un + ' unasked of ' + r.wAtBest.tot
+    + ' over ' + r.wStatedN + '/' + r.n;
+const rzWW = Math.max('may-rest-on, spread'.length, ...rzShown.map((r) => wzCell(r).length)) + 2;
 if (rzShown.length) {
-  console.log('  ' + pad('site', rzIdW) + pad('cleared', rzClW) + pad('may-rest-on', rzWW) +
+  console.log('  ' + pad('site', rzIdW) + pad('cleared', rzClW) + pad('may-rest-on, spread', rzWW) +
     'runtime-only+unproven=emitted, PER PASS IN ORDER');
   for (const r of rzShown)
-    console.log('  ' + pad(r.id, rzIdW) + pad(rzClear(r), rzClW) + pad(wzCell(r.wAtBest), rzWW) +
+    console.log('  ' + pad(r.id, rzIdW) + pad(rzClear(r), rzClW) + pad(wzCell(r), rzWW) +
       r.per.map(rzCell).join(' | '));
-  console.log('  the `may-rest-on` column is read AT THE SAME PASS as that site\'s best bar reading, so the');
-  console.log('  pair is one run. It is NOT added to `runtime-only`: a pin is a fact about the PATH that');
-  console.log('  composed the address, so `may` BOUNDS the part of `unproven` the bar could not look at —');
-  console.log('  0 there means the bar\'s zero is the engine having genuinely proved nothing on that document.');
+  console.log('  `may` BOUNDS the part of `unproven` the bar could not look at and is NEVER added to');
+  console.log('  `runtime-only`: a pin is a fact about the PATH that composed the address. The SPREAD is the');
+  console.log('  claim and the `at best` figure is one sample of it — where they differ, the at-best pass was');
+  console.log('  chosen by a TIE, because that rule maximises `runtime-only` and every pass ties at 0 on a');
+  console.log('  document the bar refuses. MEASURED: two gitpod passes off one artifact read 0 and 92 of 190,');
+  console.log('  which are opposite next diffs (the SOLVER against the PIN), so one pass of this is no answer.');
 }
 /* AND THE CORPUS FIGURE, WITH ITS RUN COUNT AND THE DENOMINATOR OF EVERY SHARE IN IT ON THE SAME LINE. A
    count over a corpus that does not state how many passes it is over, and over how many sites could be asked
@@ -1088,6 +1119,14 @@ console.log('hard bar totals: ' + JSON.stringify({
   sitesStatingTheBound: rzStated.filter((r) => r.wAtBest && r.wAtBest.h).length,
   mayRestOnAtThatSamePass: rzStated.reduce((n, r) => n + ((r.wAtBest && r.wAtBest.h) ? r.wAtBest.may : 0), 0),
   unaskedAtThatSamePass: rzStated.reduce((n, r) => n + ((r.wAtBest && r.wAtBest.h) ? r.wAtBest.un : 0), 0),
+  /* AND THE OTHER END OF THE SPREAD, LABELLED AS A DIFFERENT PASS AND NEVER SUMMED WITH THE FOUR FIGURES
+     ABOVE. The row above is the bound at the BAR'S pass, which on a document the bar refuses is whichever pass
+     ran first — so a corpus total of it is a sum of arbitrary samples. This is the bound at ITS OWN maximum,
+     per site, and the pair brackets what the bar could not look at. They are two passes of one document by
+     construction and are therefore NOT an identity with anything here: adding either to
+     `runtimeOnlyBestPass` composes an over-claim out of a floor, and adding them to each other counts one
+     surface twice. Read the two as a RANGE, which is the only thing a moving quantity supports. */
+  mayRestOnAtItsOwnBestPass: rzStated.reduce((n, r) => n + r.wMax, 0),
 }));
 /* WHICH READING A ZERO DATA-DOOR ROW IS, OVER THE CORPUS — the one discrimination the hard-bar section above
    structurally cannot make, and the question this corpus's own measurement opened. Driven over two real app
