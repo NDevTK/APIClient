@@ -840,8 +840,10 @@ function safeFetchReachJoin(outer, own) {
    strength of a witness mark — what they cost is the sentence a person reads". `document` IS in the `value`
    bucket: `_isScriptLike` answers false for it and `_isDocumentSubresource` does not list it, so the
    `destination` row above computes `value` — which is the first conjunct of the OWNER'S arm at the end of
-   `_DEFAULT_ARMS`, and a navigation already satisfies its third (`actor: page`). The witness mark is the ONLY
-   conjunct refusing it.
+   `_DEFAULT_ARMS`, and a CHILD NAVIGABLE already satisfies its third: `bridge.js`'s loader takes the actor
+   word from its caller, and the two callers that are the page's own doing — a child navigable and a
+   route an application declared of itself — state `page`, while the ambient seed states `tool`. The
+   witness mark is the ONLY conjunct refusing the child navigable.
    MEASURED THROUGH THIS FILE'S OWN WALK, AS A COMMAND AND NOT A FIGURE, because a row here moves with the
    table: `node testing/egress_arm_probe.mjs` loads this file verbatim into a realm, states the EMPTY table a
    host states, and asks `safeFetchFiringRefusal` with the navigation relay's own vector — which answers

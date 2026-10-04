@@ -2752,7 +2752,8 @@ function navigationCarriesSession(absUrl, principalOrigin) {
    caller that omits it composes `undefined` — which `_docReachOf` refuses with a fatal CHECK rather than
    taking a permissive arm. What the document this load PRODUCES will be reached under is the JOIN of the two
    (`safeFetchReachJoin`), composed by whoever states that document's analyze record. */
-async function navigationLoad(u, base, principalUrl, principalOrigin, provenance, fromReach, canDecline) {
+async function navigationLoad(u, base, principalUrl, principalOrigin, provenance, fromReach, canDecline,
+                              actor) {
   /* `canDecline` IS WHETHER THIS CALLER HOLDS A RENDEZVOUS, and it is a REQUIRED positive statement rather
      than a defaulted one: a caller that forgets it takes the REFUSING arm, which is the arm that crashes, so
      forgetting is not a way to be exempted. See the decline arm below for why the two kinds differ. */
@@ -2760,6 +2761,33 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
          "a \u00a77.4 navigation was loaded without saying whether its caller can carry a REFUSAL — only a " +
          "caller parked on a rendezvous can be told one, and a caller that does not state which it is " +
          "would have this function pick for it");
+  /* AND `actor` IS WHOSE ACT THIS NAVIGATION IS, WHICH THIS FUNCTION USED TO ANSWER WITH A LITERAL FOR THREE
+     CALLERS THAT ARE NOT ALL THE SAME KIND. It is CLAUDE.md \u00a7AND-AN-EXEMPTION-SCOPED-BY-WHO-ACTED
+     verbatim: a fact about who acted is a VALUE stated by the site that knows, carried down every frame and
+     asserted where it is relied on, never re-derived — and a literal inside a loader several kinds of
+     caller share is exactly the shape that rule is written from. `safe-fetch.js`'s own `_actorOf` states the
+     rule this was breaking: "A REQUEST THIS TOOL COMPOSED AT A PERSON'S DIRECTION IS STILL `tool`".
+     IT CHANGES NO OUTCOME TODAY AND THAT IS WHAT MAKES IT AUDITABLE, measured rather than argued: the
+     ambient seed fires on the arm keyed on `provenance=observed` AND `doc-reach=observed`, which names no
+     actor at all, so `node testing/egress_arm_probe.mjs`'s vector answers FIRES at `page` and FIRES at
+     `tool`. What moves is the row a PERSON reads on their own egress control — and `actor` is the one
+     signal that registry grades `certain`, "this tool computed it", which is the strongest thing that
+     surface can say, so a false value there is CLAUDE.md \u00a7A-FIELD-A-CONSUMER-DEFAULTS at the one
+     boundary where the consumer is the person.
+     AND THE OWNER'S VALUE ARM ALREADY RESTED ON THE WORD THIS WAS GETTING WRONG, which is why it is not
+     cosmetic: that arm's enumeration says in as many words that "the seed and the residue re-fetch state
+     `tool`", and it was the one caller stating `page`. Nothing fires differently while the seed's
+     provenance is `observed`; the day a seed reaches here on any other grade, the arm would have admitted it.
+     THE VALUE SPACE IS ASKED OF THE CHOKEPOINT AND NEVER COPIED HERE — a second list of the words
+     would be the copy that drifts, and this zone is the one that must not hold one. */
+  DCHECK(typeof self.safeFetchSignalUsable === "function" &&
+         self.safeFetchSignalUsable("actor", actor) === null,
+         "a \u00a77.4 navigation was loaded with an actor word the chokepoint's own registry does not " +
+         "gate on: " + JSON.stringify(actor) + " — the word says whether the ANALYSED PAGE composed " +
+         "this navigation or THIS TOOL did, which no other signal can answer, and safe-fetch.js aborts on an " +
+         "absent one. It is stated per caller rather than once here because this loader serves a child " +
+         "navigable (the page), a route an application declared of itself (the page), and an ambient seed " +
+         "this tool composed from an address the person's browser navigated to (the tool)");
   /* THE ADDRESS THIS LOAD ASKED FOR, RESOLVED ONCE AND UP HERE BECAUSE EVERY ARM BELOW OWES A URL. §7.4.5
      determines the loaded Document's ORIGIN over the RESPONSE's URL, and a navigable whose load did not load
      still gets a Document — so "there was no response" is not a reason to answer without one, and the honest
@@ -2882,7 +2910,7 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
        a page navigates itself on a forced arm as readily as on an observed one. */
     const r = await self.safeFetch(abs, { pageUrl: principalUrl, pageOrigin: principalOrigin,
                                           destination: "document", provenance: provenance,
-                                          docReach: fromReach, actor: "page",
+                                          docReach: fromReach, actor: actor,
                                           /* `unstated` BECAUSE THIS PROVENANCE IS A VARIABLE. A navigation's
                                              word comes from `engine_provenance_of_running_path` by way of a
                                              notice, and a notice is not a park, so no witness mark was ever
@@ -2897,7 +2925,10 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
                                              sentence". The premise is right and the conclusion does not
                                              follow — NOT being script-like is what puts `document` in the
                                              `value` bucket, which is the FIRST conjunct of safe-fetch.js's
-                                             owner arm, whose third (`actor: page`) this call already states.
+                                             owner arm, whose third (`actor: page`) the CHILD NAVIGABLE
+                                             and the route-declaration seed state while the ambient seed
+                                             states `tool` — so the arm is one field from admitting
+                                             exactly the population #117 is about and no other.
                                              MEASURED, as a command rather than a figure:
                                              `node testing/egress_arm_probe.mjs` asks the real walk with THIS
                                              vector and answers REFUSED, and FIRES with `pinned` alone moved
@@ -3992,7 +4023,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      cookies, for as long as the record said nothing. */
   const fetchedDocument = async (u, provenance) => {
     const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance, msg.provenance,
-                                   /*canDecline*/true);
+                                   /*canDecline*/true, /*actor*/"page");
     /* …AND THE REFUSAL CROSSES WITH THEM, which is the one field this function used to drop. `unavailable` is
        still not carried and the comment above still holds for it — a child navigable's page does not appear in
        the popup's page-source row, so its REASON has no reader there. `declined` is a different fact with a
@@ -7393,7 +7424,14 @@ const _hostOps = {
         admitLoadSeat({ kind: "seed", seed: seed },
                       () => navigationLoad(seed.url, seed.principalUrl, seed.principalUrl,
                                            seed.principalOrigin, seed.provenance, seed.reach,
-                                           /*canDecline*/false));
+                                           /*canDecline*/false,
+                                           /* `page` — HTML \u00a77.4.4's URL and history update
+                                              steps RAN IN THE ANALYSED DOCUMENT and it announced the route
+                                              (solver/route_seed.h), so the address is one the page's own
+                                              code composed. This is the one of the two seed kinds the word
+                                              is `page` for, which is why the two are no longer answered by
+                                              one literal. */
+                                           /*actor*/"page"));
         return pick.census;
       }
       if (cand.kind === "doc") {
@@ -8226,8 +8264,27 @@ self.astDispatch = async function astDispatch(msg) {
     /* AND `observed` FOR THE ISSUING CONTEXT TOO, WHICH IS A SECOND STATEMENT AND NOT A RESTATEMENT: the
        browser really navigated to the page this seed came from, which is the same sentence the word beside
        it makes about the navigation itself. */
+    /* AND `tool` FOR WHOSE ACT IT IS, WHICH IS NOT IN TENSION WITH THE `observed` ABOVE AND IS THE ONE WORD
+       THIS CALL USED TO GET WRONG. The two answer different questions: `observed` says the person's own
+       browser really made this exact request seconds ago, and `actor` says who composed the request THIS
+       ZONE is about to make — which is this tool, from an address an ambient observer reported, with
+       no analysed page's code anywhere in it. safe-fetch.js's `_actorOf` decides it: "A REQUEST THIS TOOL
+       COMPOSED AT A PERSON'S DIRECTION IS STILL `tool`", and it names this file's residue re-fetch and
+       trusted.mjs's command-line seed as the two it had in mind. The owner's value arm's enumeration says
+       "the seed and the residue re-fetch state `tool`", so this is the word that arm was already written
+       against. It fires either way today — measured, `node testing/egress_arm_probe.mjs` —
+       because the arm that admits it is keyed on the PATH and names no actor.
+       AND THE SIBLING HOST ALREADY ANSWERED THIS QUESTION THE OTHER WAY, WHICH IS WHAT MAKES THIS A
+       REPAIR RATHER THAN A PREFERENCE: `engine/trusted.mjs`'s own command-line seed states
+       `actor: 'tool'` and gives the identical reasoning in its own words — "no analysed document
+       exists yet when a seed is fetched, so `page` would be false. It changes no outcome: the
+       observed/observed arm already admits this load". So ONE question had TWO answers in TWO hosts,
+       each with confident prose under it, which is the shape CLAUDE.md records for the firing policy
+       itself before it moved to the chokepoint. The native zone was right and this line was wrong, and
+       the two zones now state one word for one act. */
     const loaded = await navigationLoad(msg.seedUrl, msg.sourceUrl, msg.sourceUrl, msg.origin,
-                                        PROVENANCE_OBSERVED, PROVENANCE_OBSERVED, /*canDecline*/false);
+                                        PROVENANCE_OBSERVED, PROVENANCE_OBSERVED, /*canDecline*/false,
+                                        /*actor*/"tool");
     /* THE SEED'S OWN RULE, ON TOP OF THE LOADER'S, AND IT IS THE SEED'S BECAUSE IT IS ABOUT A BUNDLE. §7.4.5
        gives an OK response with a zero-length body a perfectly ordinary empty Document, and a child navigable
        gets exactly that — but a SEEDED document with no bytes cannot be the program this run exists to

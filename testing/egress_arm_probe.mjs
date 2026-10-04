@@ -72,8 +72,18 @@ const SITES = [
     grep: 'as above; the provenance word is engine_provenance_of_running_path\'s',
     facts: { destination: 'document', actor: 'page', pinned: 'unpinned',
              provenance: 'forced', docReach: 'observed', credentialed: true, headers: null } },
-  { label: 'bridge.js SEED (the document a person asked for)',
+  /* THE AMBIENT SEED AT BOTH ACTOR WORDS, WHICH IS THE PAIR THAT MAKES ONE REPAIR AUDITABLE. The loader used
+     to answer `page` for all three of its callers out of one literal, and the seed is the one that is this
+     TOOL's act — safe-fetch.js's `_actorOf` says so in its own words. The two rows are kept together because
+     the whole claim the repair rests on is that they AGREE: the arm that admits a seed is keyed on the PATH
+     and names no actor, so the row a person reads changes and nothing fires differently. A day on which these
+     two disagree is a day the repair stopped being free, and nothing else in this tree would say so. */
+  { label: 'bridge.js AMBIENT SEED, actor=tool (what it states)',
     grep: "git grep -n 'PROVENANCE_OBSERVED, PROVENANCE_OBSERVED' extension/bridge.js",
+    facts: { destination: 'document', actor: 'tool', pinned: 'unstated',
+             provenance: 'observed', docReach: 'observed', credentialed: true, headers: null } },
+  { label: '…the same at actor=page (the retired literal)',
+    grep: 'must agree with the row above, or the repair is no longer outcome-free',
     facts: { destination: 'document', actor: 'page', pinned: 'unstated',
              provenance: 'observed', docReach: 'observed', credentialed: true, headers: null } },
   { label: "bridge.js page fetch() relay, unpinned address",
