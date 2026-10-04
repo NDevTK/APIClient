@@ -1307,11 +1307,26 @@ const WFQ_SCAN_ROWS = ["preemptAsksLifetime",
      READ AS A PARTITION AND NEVER AS THREE RATES — their sum is asserted equal to `scanRivalRuns` at a `DCHECK`,
      which a release artifact compiles out, so `census` checks it here for the reason every other identity on
      this list is checked here.
-     THEY ARE READ BY NOBODY AT ALL, WHICH IS WORSE THAN THE FIXTURE-ONLY ROWS ABOVE AND IS WHY THEY ARE HERE.
-     Measured tree-wide with an invented control: all three occur in the installed wasm and in NO consumer —
-     not engine/build.mjs, not this driver, not testing/corpus/site.mjs. A computed writer with no reader is
-     CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS' own defect, and these three are the ones that decide whether the
-     ordering's dominant cost has a repair or is what a forking page owes.
+     THE COMMIT THAT ADDED THESE SAID THEY WERE "READ BY NOBODY AT ALL", AND THAT ABSOLUTE WAS FALSE AT BIRTH.
+     `testing/live-wfq.js` reads all three — four occurrences — at EVERY commit of that series and before it,
+     measured with `git show <sha>:testing/live-wfq.js | grep -c rivalMissGen` against an invented name
+     answering 0; and it is not a passive carry, it ASSERTS the conservation identity below. History is not
+     rewritten to repair a message, so the correction is here, at the row.
+     THE TRUE CLAIM IS THE NARROW ONE AND IT IS WHY THE ROWS ARE STILL CARRIED: THIS driver did not read them,
+     so no reading taken with it could compose the share below. The absolute was an over-claim of exactly the
+     shape CLAUDE.md §AN-OVER-CLAIM-IS-REFUTABLE names — one counterexample ends the sentence and takes the
+     true part with it.
+     THE CAUSE WAS A HAND-CHOSEN DENOMINATOR AND IT IS THE PART WORTH KEEPING. The sweep behind that commit
+     tested THREE consumers named by hand (this file, engine/build.mjs, testing/corpus/site.mjs); census rows
+     are spelled by TWELVE files, and `live-wfq.js` is the second-largest consumer of them in the tree. A
+     population derived from the files somebody happened to open is §AND-THE-COMMONEST-WAY-TO-GET-THAT-LIST-WRONG
+     exactly, and the prefix-blindness that sweep self-reported was the SMALLER half of its error.
+     AND THE READERLESS AXIS IS ALREADY ASKED, SO DO NOT BUILD AN INSTRUMENT FOR IT. `engine/fieldgate.mjs`
+     carries a `WRITE-NO-READER` band — "a producer emits a field nothing reads: a measurement that has never
+     once been looked at, or the surviving half of a rename" — with a DERIVED-READER channel that credits rows
+     no construct spells, and `engine/build.mjs`'s `censusRowSet` THROWS on a spliced object row with no
+     reader, so the axis is closed by construction and not merely audited. A stale "nothing asks this" is the
+     one direction that argues for the redundant second auditor §AN-AUDITOR-DERIVES-THE-RULE forbids.
      AND THE MISREADING THEY END IS RECORDED AT THE PRODUCER: `scanRivalRuns / forks` near 2.0 was taken as
      evidence that something raises the generation twice per fork, and "that inference does not follow from
      these rows — a raise is not a miss, and raises made inside one C call with no interpreter opcode between

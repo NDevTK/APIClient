@@ -19,10 +19,21 @@
  * table: those lists said WHICH ROWS A DRIVER CARRIES and WHAT KIND EACH IS, and the two have different
  * owners. The curation is the DRIVER'S and is deliberately a subset — `live-run.js`'s `census()` banner
  * refuses to take everything in as many words, because "a driver that took everything would be a second copy
- * of the popup" — so deriving it would not repair the driver, it would replace its output. MEASURED at the
- * revision this landed: `result_cold_json` publishes 124 rows and that driver carries 56; `result_wfq_json`
- * publishes 107 and it carries 9. The KIND is the PRODUCER'S and is what no artifact stated. So a consumer
- * keeps one curated list and asks this file what each member is.
+ * of the popup" — so deriving it would not repair the driver, it would replace its output. The KIND is the
+ * PRODUCER'S and is what no artifact stated. So a consumer keeps one curated list and asks this file what each
+ * member is.
+ *
+ * AND THE FOUR FIGURES THAT USED TO STAND HERE ARE REPLACED BY THE COMMAND THAT DERIVES THEM, because they
+ * were dated status in the file whose whole job is to end a drift. They read "`result_cold_json` publishes 124
+ * rows and that driver carries 56; `result_wfq_json` publishes 107 and it carries 9", and every one of the four
+ * had moved: both composers grew. The derivation, which cannot go stale:
+ *     node -e 'const {censusKinds}=require("./testing/census_rows.js"), a=censusKinds();
+ *              for (const k of Object.keys(a)) console.log(k, Object.keys(a[k].kindOf).length)'
+ * and the carried half by spelling a consumer's own text against that row set — a FLOOR, because a consumer
+ * may DERIVE rows by prefix and spell none of them.
+ * THE TRAP IS ARITHMETIC AND IS WHY THIS IS WORTH MORE THAN A REFRESH: the retired "124 cold" is numerically
+ * equal to what `wfq` emits TODAY, so a reader reproducing 124 would think they had matched `cold` when they
+ * had matched its sibling — two composers' totals crossing over, with nothing in either number to say which.
  *
  * THREE EMISSION SHAPES AND NOT ONE, which a consumer must not paper over. `solver/result.c` composes with
  * printf format strings; `solver/endpoint.c` composes its two host-edge row sets with a key-emitting macro
@@ -341,8 +352,9 @@ function kindsOf(carried, keys) {
 /* AND THE DIRECTION `kindsOf` CANNOT ASK: A ROW THE PRODUCER PUBLISHES THAT A CONSUMER TAKING THAT COMPOSER
    WHOLE DOES NOT CARRY. `kindsOf` refuses `carried ⊄ published` — a driver asking for a row nobody emits — and
    is silent the other way round, deliberately and correctly, because a consumer's CURATION is its own: this
-   file's banner says so in as many words, and `live-run.js` carries 56 of `result_cold_json`'s 124 rows by
-   design. A SUBSET IS NOT A DEFECT and cannot be made one in general.
+   file's banner says so in as many words, and `live-run.js` carries a deliberate MINORITY of
+   `result_cold_json`'s rows by design — the figures are not quoted here for the reason the banner above gives,
+   and the command that derives them is there. A SUBSET IS NOT A DEFECT and cannot be made one in general.
    WHAT IS A DEFECT IS A SUBSET NOBODY DECLARED. A consumer that takes a whole composer — because the producer
    says its rows are ONE READING, as `rung_entry_rows`' three-per-rung ladder does — has a length that is
    CHECKABLE, and until it says so nothing anywhere can tell a curated six from a missed nine. MEASURED at
