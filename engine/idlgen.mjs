@@ -3421,9 +3421,34 @@ if (withGaps.length) {
      it, so a gap here may belong in a component the annotation does not name. */
   const derivedSet = new Set(derivedIfaces);
   const w = Math.max(...withGaps.map((r) => r.iface.length));
+  /* THE ORIENTATION ON THE ROW AND NOT ONLY IN THE PARAGRAPH ABOVE THE TABLE, because the ROW is what a reader
+     quotes and a qualification on a neighbouring line is the one a relay drops. The paragraph above already
+     says BOTH COLUMNS COUNT MEMBERS THAT ARE MISSING, printed as missing/surface, and it says it ONCE, before
+     a table of tens of rows — so a reader who lands in the table, or reads a tail of this output, is holding a
+     ratio with no orientation and supplies the one every progress ratio they have ever seen has: done/total.
+     MEASURED TWICE, AND THE SORT DELIVERS READERS STRAIGHT TO THE ROWS WHERE IT IS WRONG. This table ranks by
+     OWN work DESCENDING for the reason the comment above gives, so every row whose own surface is COMPLETE is
+     at the BOTTOM — which is exactly where somebody hunting a small tractable number looks. Both measured
+     instances are the same shape and both are the ZERO numerator: a coordinator read nine `OWN 0/N` rows as
+     nine interfaces with no members built and briefed a lane to build them, every one complete; and a second
+     read `HTMLOListElement OWN 0/4` and `HTMLLIElement OWN 0/2` off the tail of this output as four and two
+     unbuilt reflections, while html_element.c's `R_OL` and `R_LI` hold exactly those four and two rows with
+     the `[ReflectDefault=1]` on `start` that the banner there argues at length. The second one cost no lane
+     only because the rows were read before the brief was written.
+     SO THE CLAUSE GOES ON THE ROWS THE MISREADING IS ABOUT. A header line restates the orientation adjacent
+     to the data rather than a screen above it, and a row whose OWN numerator is 0 says in words that its own
+     surface is complete and that it is printed for its inherited gaps alone — which is the sentence that
+     stops a reader taking it for work. It is not put on every row: `OWN 12/40` has a nonzero numerator, so
+     neither reading makes it complete and a reader who acts on it opens the interface either way.
+     RETIREMENT: this record goes when a gap count emitted by this file carries its orientation in the VALUE
+     rather than beside it — a formatter that cannot print a bare `n/m` for a missing count at all — because
+     the reading is then unavailable instead of merely argued against. */
+  console.log(`[idl-audit]   ${"interface".padEnd(w)}  OWN missing/surface   ABSENT missing/surface  ` +
+              `(BOTH NUMERATORS ARE WHAT IS MISSING — a 0 is COMPLETE, never "nothing built")`);
   for (const r of withGaps)
     console.log(`[idl-audit]   ${r.iface.padEnd(w)}  OWN ${String(r.own).padStart(3)}/${String(r.ownSpec).padEnd(4)}` +
                 ` ABSENT ${String(r.absent).padStart(3)}/${String(r.spec).padEnd(4)}` +
+                (r.own === 0 ? `  OWN SURFACE COMPLETE — this row is printed for its INHERITED gaps alone` : "") +
                 (r.noop ? `  js_noop-STUB ${r.noop}` : "") +
                 (r.unproven ? `  UNPROVEN ${r.unproven}` : "") +
                 (derivedSet.has(r.iface)
