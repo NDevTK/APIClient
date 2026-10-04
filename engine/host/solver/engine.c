@@ -1098,6 +1098,32 @@ static int g_root_n;
    for. That reading has already settled a real question about a real page, and it settled it by somebody
    counting a document's `<script src>` elements off the page and writing "ten script rows" into a comment,
    which is in no log and comparable with no other document.
+   AND THAT VERDICT IS AN `IF` AND IS STATED AS THE VERDICT, SO THE CONVERSE IS WHAT A READER TAKES — AND THE
+   CONVERSE IS FALSE, ON A REAL PAGE, WITH THE COUNTEREXAMPLE REPRODUCING. `asks exactly equal what the bundle
+   owes ⇒ it learned nothing` is sound. What a reader standing at a census does is read the INEQUALITY and
+   conclude the run learned something, and `replyAsked` counts EVERY reply-door opening — which includes the
+   openings the MARKUP named and the seed never awaited, because a `<link>` element is not a program row.
+   So a document with one stylesheet per chunk clears the inequality by its own `<head>` and has learned
+   nothing at all.
+   MEASURED at bed765f, two fresh browsers per document, 90 s wall budget, wall-denominated slice, terminal
+   censuses, with the endpoint columns IDENTICAL across both runs of each document while the work counters
+   differed 2.5x: `gitlab.com/explore` reads `rootProgramsAwaitedAtSeed 31` against `replyAsked 48`, an excess
+   of SEVENTEEN — and its door histogram is `document-script: 31, link-element: 17`, so the 31 awaited rows ARE
+   the 31 script doors and the whole excess is stylesheets. That run's razor is `unproven: 48, runtime-only: 0`:
+   every address it emitted was in the served markup, nothing was learned, and the inequality held by 17.
+   `play.grafana.org` reads 5 against 23 with `fetch: 4` doors and a razor of `runtime-only: 1`, so there the
+   inequality IS evidence — which is why this is a correction and not a refutation of the pair.
+   THE DISCRIMINATOR IS ALREADY PRINTED BESIDE IT AND IS THE DOOR HISTOGRAM, which is what makes this a repair
+   a reader can perform rather than a caution. A `document-script` or `link-element` opening is the MARKUP's
+   own; `fetch`, `xhr`, `module-import` and `beacon` are the RUN's. So the quantity this verdict wants is
+   `replyAsked` less the markup doors, which on that gitlab run is 48 - 48 = ZERO and agrees with the razor
+   exactly, and on grafana is 23 - 6 = 17 beside four emitted `fetch` doors.
+   IT IS THE §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS SHAPE AND NOT A WRONG COUNT. `replyAsked` answers HOW MANY
+   OPENINGS THE DOOR GOT, honestly; this record asked it to answer DID THIS RUN LEARN, and the two agree on
+   every document whose markup names no subresource it does not execute. Neither number is repaired by the
+   other and nothing here changes what either counts.
+   RETIREMENT: this record goes when the census composes the markup-less remainder itself, so a reader cannot
+   be handed `replyAsked` against this pair without the door partition that decides what the gap is made of.
    RAISED AT THE ONE LINE `g_root_n` IS, ON THE SAME FIELD THE SEED ITSELF BRANCHES ON — engine_seed_scripts
    chooses DYN_PAGE_SCRIPT or DYN_SCRIPT_SRC by `rows[i].body`, so keying these on that same column is what
    stops the census and the seed being two opinions about one row. The identity against `g_root_n` is asserted
