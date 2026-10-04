@@ -29,9 +29,14 @@
    `lxb_css_selector_pseudo_element_id_t`, with `__UNDEF` naming every member that is a source-document node.
    IT IS THE STANDARD'S OWN NAMING AND NOT A SHAPE PICKED HERE. css-pseudo-4 §1 "Introduction": "Each
    pseudo-element is associated with an originating element and has syntax of the form ::name-of-pseudo".
-   §4 "Tree-Abiding Pseudo-elements", which §4.2 "List Markers: the ::marker pseudo-element" is inside, says
-   they "always fit within the box tree" and "inherit any inheritable properties from their originating
-   element; non-inheritable properties take their initial values as usual". css-lists-3 §3.2 "Generating Marker
+   css-pseudo-4 §4 "Tree-Abiding Pseudo-elements" says they "always fit within the box tree" and "inherit any
+   inheritable properties from their originating element; non-inheritable properties take their initial values
+   as usual", and css-pseudo-4 §4.2 "List Markers: the ::marker pseudo-element" is the subsection that names
+   this box. THE TWO NUMBERS CARRY THEIR STANDARD BECAUSE THEY USED TO CARRY NONE, which is this tree's own
+   rule read in the direction it is usually not: a named standard with no number cannot be looked up, and a
+   NUMBER WITH NO STANDARD cannot either — an anchor is NEAREST-PRECEDING over a bounded window, so the
+   `css-pseudo-4` one sentence up placed neither of these and all three quotations under them were compared
+   against no document at all. css-lists-3 §3.2 "Generating Marker
    Contents" states each of its arms over "the originating element". So the pair IS (that element, that name),
    and a box so named needs nothing allocated to exist — which is what core/layout/block_flow.h's NOTHING IS
    STORED and this file's own "two steps and not a materialised list" both require of a member.
@@ -284,6 +289,36 @@ static void bt_require_answer_is_in_sequence(lxb_dom_element_t *box, lxb_dom_nod
    core/layout/list_marker.h's, with §3.1's sentence and css-display-3 §2.3's keyword quoted at the entry that
    now answers for every element. A fourth copy of the comparison here would be the fifth answer to one
    box-generation question, which is the shape the top of this file is about.
+   AND THIS ABORT'S OWN BUILD CLAUSE WENT ON NAMING §3.2 AFTER §3.2 LANDED, WHICH IS THE ONE SITE WHERE THAT
+   COSTS A DISPATCH RATHER THAN A READING. The narrowing above rewrote this banner, box_tree.h and three other
+   files, and the commit that landed it did not touch the DFAILF's message: `git show <that commit>` over this
+   file matches the clause on NEITHER side of the diff, so the top of this file said §3.2 HAS LANDED in capitals
+   while the crash a reader MEETS went on listing it first among the things to build. A banner is read by
+   whoever opens the file and a crash message is read by everyone the crash stops, so the stale half was the
+   half with traffic. MEASURED, and it is why this paragraph exists rather than a tidier message: a coordinator
+   read this abort, took §3.2 for the subject, and dispatched a lane to build §3.2's CONTENTS arm — which has
+   NO CONSUMER anywhere in this tree, since a contents answer is consumed by laying the marker box out and
+   nothing can hold one until the member type exists. That is the inverted landing order, reached by reading
+   the crash correctly.
+   THE TELL IS GRAMMATICAL AND FREE: a crash whose remedy is a LIST names items of different ages, and the
+   first one is the one a reader starts with. A BUILD clause therefore names, for each item, the component
+   that answers it or the fact that none does. THAT IS STILL PROSE AND IS STILL THE WEAK FORM: the message
+   SPELLS `list_marker_box_generated` and does not REFERENCE it, so the clause can go stale again exactly as
+   it did — which is what the retirement condition below is for and why it is not written as satisfied.
+   AND THE MEMBER TYPE IS NOT A ONE-FILE LANDING, which is the part no reader of this crash could derive from
+   it: the pair replaces `lxb_dom_node_t *` in all four of box_tree.h's entries, and those entries' answers
+   are stored in core/layout/block_flow.h's `BlockFlowRun` and `BlockFlowRunStart` fields and compared by
+   pointer identity at walks outside this directory. Derive the scope rather than taking a number from here:
+   `git grep -lE '\bbox_tree_(first_child|next_sibling|prev_sibling|parent)\s*\(' -- '*.c' '*.h'` names the
+   files and the same pattern without `-l` names the sites, and core/paint and engine/host/test_forced.c are
+   both among them. SO EVERY CONSUMER GAINS A MEMBER IT HAS NO STEP FOR ON THE DAY THIS SEQUENCE YIELDS ONE,
+   and css-lists-3 §3.5 "Positioning Markers: The list-style-position property"' `Initial:` of `outside` is a
+   positioning scheme box_tree.h records this engine as having no component for — so the landing order is a
+   question about those consumers and not about §3.2.
+   RETIREMENT: this record goes when this abort's BUILD clause is DERIVED from the capabilities it rests on
+   rather than restated — the answering predicate's name reaching the message as an argument rather than as
+   prose — because a capability that stops being called is then a compile failure instead of a sentence here
+   that nothing can contradict.
    RETIREMENT: this function and its two call sites go when this sequence can yield the marker itself. */
 static void bt_require_marker_box_is_spellable(lxb_dom_element_t *box)
 {
@@ -298,10 +333,16 @@ static void bt_require_marker_box_is_spellable(lxb_dom_element_t *box)
            "sequence — \"The marker box is generated by the ::marker pseudo-element of a list item as the list "
            "item’s first child\" — and css-display-3 §2.5's spliced child sequence is a sequence of DOM NODES, "
            "which that box is not. So this sequence is one member short at its head and cannot say so by "
-           "answering. BUILD the marker as a member it can yield: css-lists-3 §3.2 \"Generating Marker "
-           "Contents\" decides whether one exists at all, css-pseudo-4 §4 \"Tree-Abiding Pseudo-elements\" "
-           "gives it its style (\"They inherit any inheritable properties from their originating element; "
-           "non-inheritable properties take their initial values as usual\"), and THE MEMBER TYPE IS DECIDED "
+           "answering. BUILD THE MEMBER TYPE, WHICH IS THE ONE THING THIS CLAUSE NAMES THAT IS STILL "
+           "OUTSTANDING AND STILL THIS FILE'S. css-lists-3 §3.2 \"Generating Marker Contents\" decides "
+           "whether one exists at all and HAS LANDED: it is `list_marker_box_generated`, called at the guard "
+           "one line above this message, and it is what narrowed this refusal from every list item to the "
+           "ones §3.2 gives a marker box — so a reader who builds §3.2 again is building a second answer to a "
+           "question this file already asks. css-pseudo-4 §4 \"Tree-Abiding Pseudo-elements\" gives the box "
+           "its style (\"They inherit any inheritable properties from their originating element; "
+           "non-inheritable properties take their initial values as usual\") over a box "
+           "core/css/css_computed_value.h can only key on an ELEMENT, and box_tree.h records that as ANOTHER "
+           "COMPONENT'S. THE MEMBER TYPE IS DECIDED "
            "AND IS AT THE TOP OF THIS FILE: a BY-VALUE PAIR of the ORIGINATING NODE and an "
            "`lxb_css_selector_pseudo_element_id_t`, whose `__UNDEF` names every member that is a "
            "source-document node and whose `_MARKER` names this box. SO `box_tree_parent` OF A PSEUDO MEMBER IS "
