@@ -12530,6 +12530,31 @@ static int flow_step(JSContext *ctx, Flow *f) {
                census when they share a row, and "the members are not retiring" is exactly the state in which
                the difference is the whole diagnosis. */
             int started_here = (f->last_compiled != last_compiled0);
+            /* NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: a start whose PARSE SPANNED
+               SEVERAL STINTS. `f->last_compiled = f->script_i` runs at the TOP of the compile site, above the
+               shared-parse consult and above JS_FlowCompileStep, so a parse that hands the thread back parks
+               with the field ALREADY at the cursor — and the later stint that finishes that parse, installs
+               the frame and falls through to this line reads the field UNMOVED. So `started_here` is
+               `last_compiled MOVED ON THIS STEP`, which is `this step is the FIRST stint of this row's parse`,
+               and the five start rows (`start-a-classic-program`, `start-blocked-on-a-host-answer`,
+               `start-ended-its-frame`, `start-reported-an-exception`, `start-detached-its-base`) are the
+               classic starts whose parse finished in ONE stint plus those taken from a parse another timeline
+               had already finished — never the starts. Every step that installs a frame for a multi-stint
+               parse is filed under `resume-program` or one of its three siblings, which is exactly the merge
+               solver/step_unit.h's start/resume split exists to END, arriving through this PREDICATE rather
+               than through a missing arm.
+               WHAT THE NEXT DIFF BUILDS: the question asked of the FRAME rather than of the cursor pair.
+               `framed_at_entry` is read before the loop and is already exactly "this call did not install the
+               frame it is about to resume", so a call that reaches this line having entered UNFRAMED installed
+               one here — true on every stint that installs a frame and on no stint that does not, for a shared
+               parse as for a parsed one. It is the same SELECT-rather-than-skip the four outcomes of
+               JS_FlowResume below already are, over a reading this function already takes.
+               HOW ITS ABSENCE WOULD SHOW: on a document whose programs are long enough for the parse to rest,
+               `sum(start rows) - classicParseShared` stands BELOW `classicCompiles` while
+               `compile-handed-the-thread-back` is nonzero, with the missing starts sitting in `resume-program`
+               and its three siblings — so a reader of that census reads a frontier grinding inside its
+               programs at steps where a program of the document was starting for the first time, which is the
+               one reading those two rows were split apart to be able to tell from each other. */
             /* AND A PROGRAM THIS STEP STARTED IS NEVER A CALL, which is not decoration: three consumers below
                (`g_completed`, §4.12.1.1 step 4's restore, and the cursor advance at the tail) are each guarded
                by `is_call` on the premise that a call frame holds no row of the sequence, and the frame the
