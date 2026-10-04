@@ -614,8 +614,31 @@ const COLD_WHOLE = ["rungEntry", "fetchEdge", "xhrEdge"];
    distance, so the buckets sum to `live`, and the set is DENSE over [0, the greatest distance any standing
    member is at] because the ZEROES are the signal. It is never `{}` — cold.c gives an empty frontier distance
    0 — and an artifact older than the row prints `null`, which is this driver's absent-versus-zero rule. */
+/* AND THE ROW THE ENGINE ITSELF SAYS TO READ BEFORE SPENDING A LANE ON ANY ARM OF THAT LADDER, which no
+   real-site driver carried. solver/engine.c, at the arm a reader of a frozen `deepest` reaches for first:
+   "Read `stepUnitRuns` beside @COLD's `live`/`framed` before spending a lane here: those two converge to
+   within ten members at every census of every run measured, and the whole ladder below `if (!f->frame)` is
+   unreachable for the population they name, so NO ORDERING OF THE ARMS INSIDE IT CAN BE ITS FIRST CAUSE."
+   This driver carried `live` and not `framed`, so the one comparison that sentence prescribes was unmakeable
+   from a real page — and every arm-by-arm reading taken with it was a reading of a ladder whose reachability
+   was unstated.
+   WHY IT DECIDES THE QUESTION `programsAhead` OPENS: the ladder is where a member's NEXT program row is
+   started, and it sits inside `if (!f->frame)`. A fork is BORN FRAMED — engine.h: "an arm is born holding the
+   frame taken AT its branch, so it is inside a program by construction" — so `framed` near `live` is not a
+   population to shed but the design running, and a member cannot reach its next row until the program at its
+   current one ENDS. That is why a frontier can hold tens of thousands of members 31 rows from retirement with
+   the start arm's own precondition perfectly satisfiable: what is unsatisfied is the precondition for ASKING
+   it.
+   THE CONVERGENCE CLAIM IS THE ENGINE'S AND IS A CLAIM TO CHECK, NOT AN AXIOM. "every census of every run
+   measured" is a statement about the runs its author had, and CLAUDE.md
+   §A-FIXTURE-BUILT-TO-EXERCISE-EVERY-MECHANISM is exactly about a proportion whose denominator a fixture's own
+   design set. A real document is the check, and carrying the row is what makes it one.
+   A GAUGE, like `live` and `outOfPrograms` beside it, and COMPOUND BY DESIGN — result.c refuses to split it,
+   because "the first is the park's re-execution COST … a pager pays for a member whichever population it
+   belongs to, so a split would be a row no consumer could state anything new from." An artifact older than it
+   prints `null`, this driver's absent-versus-zero rule. */
 const COLD_FRONTIER = ["stepUnits", "programCursors", "replyOutstanding", "rowsAwaitingBytes",
-                       "live", "outOfPrograms", "outOfProgramsAtTheLadderUnits", "programsAhead"];
+                       "live", "framed", "outOfPrograms", "outOfProgramsAtTheLadderUnits", "programsAhead"];
 /* …AND THE CONSTANT IT IS READ AGAINST, WHICH IS NEITHER OF THE TWO KINDS EVERY OTHER LIST HERE STATES.
    solver/engine.c writes both arms at the ONE line `rootPrograms` is written and never again, because the pair
    is a DENOMINATOR — a fact about what the DOCUMENT owed the reply door when its rows were laid down — so it
@@ -1373,6 +1396,16 @@ function census(r) {
      exactly: `null` means the run did not state the rows, and a message means it DID and they do not hold
      together. `spread` takes numbers only, so a refusal folded into the pair would print as `-` — the silence
      the field exists to end. */
+  /* AND THE COMPARISON engine.c PRESCRIBES, COMPOSED HERE because a reader holding two bare gauges does not
+     make it. `framedShare` near 1 says the whole work ladder — every arm of it, including the one that starts a
+     member's next program row — is unreachable for essentially the whole frontier, so no ordering of those arms
+     can be a first cause and a lane spent on one is spent on a population that never reaches it. Near 0 says
+     the ladder IS being descended and an arm inside it is a fair subject.
+     IT IS A GAUGE OVER A GAUGE, so it is read at ONE census and never differenced, and it is `null` rather
+     than 0 when either half is absent or `live` is 0 — a share of an empty frontier is not a small share. */
+  o.framedShare = (typeof o.framed === "number" && typeof o.live === "number" && o.live > 0)
+    ? o.framed / o.live : null;
+  o.framedShareOf = (o.framedShare === null) ? null : "framed / live";
   o.outOfProgramsRefused = null;
   if (c && typeof o.outOfPrograms === "number") {
     const parts = Object.keys(c).filter((k) => k !== "outOfPrograms" && k.startsWith("outOfPrograms")
