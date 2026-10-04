@@ -637,8 +637,31 @@ const COLD_WHOLE = ["rungEntry", "fetchEdge", "xhrEdge"];
    because "the first is the park's re-execution COST … a pager pays for a member whichever population it
    belongs to, so a split would be a row no consumer could state anything new from." An artifact older than it
    prints `null`, this driver's absent-versus-zero rule. */
+/* AND THE THREE ROWS OF THIS SAME @kind DECLARATION THAT NO LIVE DRIVER ASKED FOR, which is why the one
+   question a real-page drive keeps arriving at could not be answered from a drive. `programsAhead` below is
+   carried; `dynBodies`, `dynKiB` and `sharedKiB` are declared on the SAME line of solver/result.c and were
+   carried by nothing in testing/ — read only by engine/build.mjs, which reports on a FIXTURE. So the rows were
+   in the shipped artifact the whole time and absent from every real-site log, and those are different facts:
+   CLAUDE.md §AND-THE-IDENTITY-IS-CHECKED-PER-COUNTER's install against finding, settled here by asking the
+   artifact rather than by inferring from the logs — all three read PRESENT in the installed wasm with an
+   invented name as the armed control, so nothing had to be built to begin asking for them.
+   WHAT THEY SEPARATE, AND IT IS NOT A MAGNITUDE. A drive that reports `completed` and `deepest` standing at a
+   document program well short of `rootPrograms` has TWO readings a reader cannot tell apart from those rows:
+   the engine reached that cursor and stalled, or the cursor over-reads and the stall is EARLIER because fewer
+   program BODIES were ever compiled than the cursor implies. `dynBodies` is a count of the bodies the engine
+   HOLDS, so it is upstream of any cursor and answers which of the two it is. The same disagreement arrives one
+   row over whenever a free-identifier hook reads low against a bundle's own spelling count — a hook that
+   under-counts and a document whose programs never compiled are the same two readings again.
+   ALL THREE AND NOT `dynBodies` ALONE, because solver/result.c prices `dynKiB` WITH the shared half at its own
+   site, so a `dynKiB` carried without `sharedKiB` is a numerator whose denominator this driver would not
+   print — CLAUDE.md §THE-TELL-IS-THAT-YOUR-METRIC-IS-A-FRACTION. They are GAUGES, which this driver takes from
+   the producer's declaration rather than from their position here, so none of them may be differenced.
+   RETIREMENT: this record goes when a row a composer declares and no driver in testing/ carries is a build
+   failure, because the gap is then closed by construction and no reader has to notice a fourth name on a
+   three-name line. */
 const COLD_FRONTIER = ["stepUnits", "programCursors", "replyOutstanding", "rowsAwaitingBytes",
-                       "live", "framed", "outOfPrograms", "outOfProgramsAtTheLadderUnits", "programsAhead"];
+                       "live", "framed", "outOfPrograms", "outOfProgramsAtTheLadderUnits", "programsAhead",
+                       "dynBodies", "dynKiB", "sharedKiB"];
 /* …AND THE CONSTANT IT IS READ AGAINST, WHICH IS NEITHER OF THE TWO KINDS EVERY OTHER LIST HERE STATES.
    solver/engine.c writes both arms at the ONE line `rootPrograms` is written and never again, because the pair
    is a DENOMINATOR — a fact about what the DOCUMENT owed the reply door when its rows were laid down — so it
