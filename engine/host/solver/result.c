@@ -2565,7 +2565,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind gauge: segKiB domSegKiB pinSegs pinSegEntries pinSegKiB decSegs decSegEntries decSegKiB
    @kind gauge: dynBodies dynKiB sharedKiB programsAhead
    @kind lifetime: finishedFlows finishedCands progStarts progStartsCand progStartsOther progQueuedCand
-   @kind lifetime: sold soldFlows soldCands forks orphanClaimsMet orphanClaimsUnmet
+   @kind lifetime: sold soldFlows soldCands forks orphanClaimsMet orphanClaimsUnmet orphanPreferred
    @kind lifetime: hostAnswersExtra hostAnswersLate hostTerminated
    @kind lifetime: pagedReqs pagedAsks pagedUnarmed pagedFloor
    @kind lifetime: previewAsks previewAsksRefusing previewAsksEmpty previewAsksWritable
@@ -2639,6 +2639,7 @@ char *result_cold_json(void) {
        whose two siblings are `replayHits` and the `_forkAt` census, and it is what a naming diff moves. */
     long rf_asked, rf_refined;
     long fk_total, fk_pinned;
+    long orph_pref;
     long awaiting_rows;   /* the awaited-rows gauge, read ONCE below and used by the assert and the row */
     /* what the emitted @H array is a fraction of, and what of it predates any program — endpoint.h */
     long ep_minted, ep_assets, ep_emitted, ep_pre_program;
@@ -2829,6 +2830,36 @@ char *result_cold_json(void) {
        checkable at all. `fk_total` has no other reader here deliberately — a value read into a frame and never
        consulted is the write-with-no-reader §A-FIELD-A-CONSUMER-DEFAULTS names, and this is its consumer. */
     decide_fork_pinned_stats(&fk_total, &fk_pinned);
+    /* …AND THE ORPHAN WALK'S OWN ORDER WITNESS, read here rather than in the block below for the same reason the
+       pair above is: its DENOMINATOR is `_orphansDriven`, which this document already carries, and the two are
+       in one hand only here.
+       WHAT IT SEPARATES, which is the whole reason it exists: `JS_OrphanTakeOne` prefers a body whose source
+       resolved a network door's own entry name against the global object, and falls through to any body when no
+       such candidate remains. A run in which NOTHING carries that bit behaves byte-identically to a run with no
+       order at all, so without this row a reader cannot tell AN ORDER THAT FIRED from AN ORDER WHOSE PREFERRED
+       POPULATION WAS EMPTY — and those take opposite work. Nonzero says read the addresses; zero beside a
+       nonzero `epFetchAskNamedLife` says the bundle's `fetch` occurrences are in PROGRAM bodies, which this
+       walk skips by construction, and the next diff is about those and not about the order. */
+    orph_pref = engine_orphan_preferred();
+    {
+        /* THE CONTAINMENT, ASSERTED WHERE BOTH ARE IN ONE HAND. A preferred take IS a take, so the engine's
+           count of the first can never exceed the host's count of the second — and the two are kept in two
+           different address spaces by two different mechanisms (one is a runtime field bumped inside the walk,
+           the other is this solver's own `g_orphans_driven` raised by the visitor the walk calls), so the
+           inequality is the ONE thing that says they are about the same walk. It fires on exactly the defect a
+           two-pass refactor produces: a preferred take that marks the body and returns without the visitor
+           having run, which would publish an order that fired over drives that did not happen.
+           `od` HAS NO OTHER READER HERE DELIBERATELY — this is its consumer, for the reason the fork pair above
+           states one paragraph up. */
+        long od, oa;
+
+        engine_orphan_census(&od, &oa);
+        DCHECKF(orph_pref >= 0 && orph_pref <= od,
+                "the orphan walk reports %ld PREFERRED takes against %ld drives — a preferred take is a take, "
+                "so a numerator above this denominator means the walk marked a body `entered` and returned "
+                "without its visitor seeding a flow, which loses that body for the life of the instance and "
+                "publishes an order that fired over work that never happened", orph_pref, od);
+    }
     DCHECKF(fk_pinned >= 0 && fk_pinned <= fk_total,
             "forks taken over an already-proved subject (%ld) outnumber the forks this session took (%ld) — "
             "the two are raised in decide.c at the SAME decision, the subset's raise being gated on the very "
@@ -3198,6 +3229,11 @@ char *result_cold_json(void) {
                     of ONE call for solver/decide.h's stated reason, so `forkOverPinned <= forks` is an
                     assertion about one moment rather than two getters joined by hand. */
                  "\"forkOverPinned\":%ld,"
+                 /* THE ORPHAN WALK'S PREFERRED TAKES — see where it is read for what a zero beside a nonzero
+                    `epFetchAskNamedLife` means and why that is a different next diff. Its denominator is
+                    `_orphansDriven` on this same document, and the containment between them is asserted where
+                    both are in one hand. */
+                 "\"orphanPreferred\":%ld,"
                  "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
                  "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersExtra\":%ld,"
                  "\"hostAnswersLate\":%ld,\"hostTerminated\":%ld,"
@@ -3666,6 +3702,7 @@ char *result_cold_json(void) {
                  rp_hits, rp_left, rp_left_arms,
                  rf_asked, rf_refined,
                  fk_pinned,
+                 orph_pref,
                  resumed.orphans, e.claims_met, e.claims_unmet,
                  e.host_asked, e.host_answered, e.host_answers_extra, e.host_answers_late, e.host_terminated,
                  pending_index_asked_total(), pending_index_answered_total(),

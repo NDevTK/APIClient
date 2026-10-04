@@ -2620,7 +2620,21 @@ typedef struct JSConcolicHooks {
        other member here answers about a value in a live frame and needs the realm to answer at all; this one
        would hold a parameter no reader consults, which is the shape §A-FIELD-A-CONSUMER-DEFAULTS names one
        argument over. A per-realm census of this fact is a different row and would take it back deliberately. */
-    void (*global_named)(const char *name, int typeof_only);
+    /* AND IT ANSWERS, WHICH IS THE ONE MEMBER OF THIS TABLE WHOSE RETURN VALUE IS READ BY THE ENGINE RATHER
+       THAN BY THE HOST. Nonzero says THIS IDENTIFIER IS AN ENTRY SOME NETWORK DOOR DECLARED — the host's own
+       fact, because which name a component installs itself under is that component's and a table of them here
+       would be the drifting second copy a generated-from-the-declaration audit forbids, drifting in the
+       direction where a name that stopped matching reads as a corpus of programs none of which spells it.
+       WHAT THE ENGINE DOES WITH THE ANSWER IS AN ORDER AND NEVER A BOUND: `JS_OrphanTakeOne` prefers a body
+       that carries the bit and still hands over every other body afterwards, so nothing is dropped, nothing is
+       capped and no candidate is decided not to happen — only WHEN each is taken moves. The reason it must be
+       an order at all is measured: that walk enumerates `rt->gc_obj_list` in HEAP ALLOCATION ORDER, so on a
+       real application bundle the first thousand candidates are whichever vendor chunk was evaluated first.
+       A `typeof` READ MUST NOT RAISE IT and the host is the one that knows: `typeof fetch === "function"` is a
+       FEATURE DETECT and driving the body that spells it reaches no call, so a consumer answering nonzero for
+       the guarded read would order a page's capability probes ahead of its request builders. The parameter
+       beside the name is what lets the host answer that without a second entry here. */
+    int (*global_named)(const char *name, int typeof_only);
     /* …AND THE SAME FACT FOR THE PROPERTY SPELLING OF ONE NAME, WHICH IS THE ONE SHAPE THE MEMBER ABOVE IS
        STRUCTURALLY BLIND TO. `window.requestIdleCallback` names the same entry as a bare
        `requestIdleCallback` and reaches no global resolution at all: the member is a FIELD GET and only the
@@ -2978,6 +2992,11 @@ JS_EXTERN int      JS_FlowIsProgram(const JSValue *flow);
    BORROWED. Returns 1 if one was handed over, 0 if this heap holds none. */
 typedef void JSOrphanVisitFn(JSContext *ctx, JSValueConst fn, int arg_count, void *opaque);
 JS_EXTERN int      JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque);
+/* HOW MANY OF THAT WALK'S TAKES CAME FROM ITS PREFERRED PASS — a body whose source resolved a network door's own
+   entry name against the global object, which `JSConcolicHooks.global_named`'s answer is what decides. A host
+   reading only how many orphans it drove cannot tell an order that FIRED from one whose preferred population was
+   EMPTY, and those take opposite work. Lifetime, non-decreasing, and nothing in this engine branches on it. */
+JS_EXTERN uint64_t JS_OrphanPreferredTakes(JSRuntime *rt);
 /* COULD THE ORPHAN SET HAVE GROWN — the count of function objects this runtime has ever made. Creating one is
    the only event that can add to the set (running a body only marks it entered, taking one only marks it
    taken, collecting one only removes it), so a host that took the orphans at generation G may skip the heap

@@ -351,6 +351,13 @@ struct JSRuntime {
     /* …AND WHO WANTS TO BE TOLD AS IT HAPPENS — JS_SetOrphanBornHook. The generation above answers "could the
        set have grown"; this is for the part of the set no later walk can see, a body whose only closure is
        released with the frame that built it. NULL on every runtime until a host installs one. */
+    /* HOW MANY TAKES CAME FROM JS_OrphanTakeOne's PREFERRED pass — the one witness that walk's order is doing
+       anything at all. Without it a run in which no body carries `spells_net_entry` is byte-identical to a run
+       with no order in it, so a reader could not tell an order that fired from an order whose preferred
+       population was empty, and the two take opposite work: the first says read the addresses, the second says
+       find out why the bundle's request builders are not compiled bodies.
+       IT IS A LIFETIME COUNT AND NOT A GAUGE, so it may be differenced across two censuses of one run. */
+    uint64_t orphan_preferred_takes;
     JSOrphanBornFn *orphan_born;
     void *orphan_born_opaque;
     JSMallocFunctions mf;
@@ -1274,6 +1281,22 @@ typedef struct JSFunctionBytecode {
        IT IS ALSO SET BY JS_OrphanTakeOne, which is what makes an orphan a work item taken once rather than a
        question re-asked: see that function for why that is not a seen-set. */
     uint8_t entered : 1;
+    /* THIS BODY'S SOURCE RESOLVED A NETWORK DOOR'S OWN ENTRY NAME AGAINST THE GLOBAL OBJECT — the one fact
+       about a function that is knowable BEFORE it has ever run, and the reason `JS_OrphanTakeOne` can order its
+       candidates at all. A body nothing ever called has no frame, no operand and no moment, so every other
+       thing this engine knows about it is a fact about its CALLERS; this is a fact about its TEXT, recorded by
+       the compiler at the instant it established that nothing binds the identifier.
+       IT IS PER BODY AND NOT INHERITED. A nested function that spells `fetch` says nothing about the body that
+       declares it — driving the OUTER one runs a declaration and reaches no call — so unlike `from_eval` and
+       `from_inline_script` beside it this does NOT ride down the nest, and the enclosing def is deliberately
+       left alone at the site that sets it.
+       WHICH NAMES COUNT IS THE HOST'S AND NEVER THIS FILE'S: the bit is whatever `JSConcolicHooks.global_named`
+       answered, so a door declared later needs no edit here and a list of door names in this engine — which is
+       what a reader reaching for `!strcmp(name, "fetch")` would write — cannot drift out of agreement with the
+       components that own those names, because there is none.
+       A GUARDED READ DOES NOT SET IT: the host is handed the `typeof` split and answers for one of the two, so
+       a page's capability probes cannot be ordered ahead of its request builders. */
+    uint8_t spells_net_entry : 1;
     /* THIS CODE CAME FROM AN INLINE `<script>` — its source text arrived in the DOCUMENT'S OWN RESPONSE rather
        than in a separately-fetched subresource (HTML §4.12.1 "The script element": `src` "denotes that instead
        of using the element's child text content as the script content, the script will be fetched from the
@@ -56124,6 +56147,11 @@ typedef struct JSFunctionDef {
     bool has_parameter_expressions : 1; /* if true, an argument scope is created */
     bool has_use_strict : 1; /* to reject directive in special cases */
     bool has_eval_call : 1; /* true if the function contains a call to eval() */
+    /* THE COMPILER'S HALF OF JSFunctionBytecode.spells_net_entry — see that bit for what it is and why it does
+       not ride down the nest. It is set during variable resolution, which is after the parse and before the
+       bytecode exists, so it has to be held here and handed over at js_create_function like every other
+       per-body fact this pass computes. */
+    bool spells_net_entry : 1;
     bool has_arguments_binding : 1; /* true if the 'arguments' binding is
                                    available in the function */
     bool has_this_binding : 1; /* true if the 'this' and new.target binding are
@@ -72715,9 +72743,16 @@ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
        buffer, and a truncated name can only cost the host a MISS. */
     if (op == OP_scope_get_var || op == OP_scope_get_var_undef) {
         char gn_buf[ATOM_GET_STR_BUF_SIZE];
-        if (g_concolic.global_named)
+        /* AND THE ANSWER IS RECORDED ON THE BODY BEING RESOLVED, which is the only thing in this file that
+           reads a hook's return value. `s` is the def whose source holds THIS occurrence, so the bit lands on
+           the body a drive would have to enter to reach the call — never on its enclosing def, because driving
+           a declaration reaches nothing, and never on the nest, because the fact is about one body's text.
+           IT IS AN OR AND NOT A STORE: one body can resolve several entry names and several occurrences of one,
+           and the bit answers whether ANY of them is there. */
+        if (g_concolic.global_named &&
             g_concolic.global_named(JS_AtomGetStr(ctx, gn_buf, sizeof(gn_buf), var_name),
-                                    op == OP_scope_get_var_undef);
+                                    op == OP_scope_get_var_undef))
+            s->spells_net_entry = true;
         /* AND THE PROPERTY SPELLING OF THE SAME ENTRY, WHICH IS A SECOND FACT ABOUT THE SAME OCCURRENCE AND NOT
            A SECOND OCCURRENCE. `window.requestIdleCallback` raises the report above for `window` — which is
            what the base IS, a free identifier resolved against the global object — and nothing at all for the
@@ -75686,6 +75721,10 @@ static JSValue js_create_function_post(JSContext *ctx, JSFunctionDef *fd)
     b->from_eval = fd->from_eval;
     b->from_inline_script = fd->from_inline_script;
     b->is_program = (fd->parent == NULL);
+    /* HANDED OVER AND NOT INHERITED, which is the difference between this line and the two above it: those two
+       facts belong to the SCRIPT and ride down the nest, and this one belongs to THIS body's own text. A nested
+       function that spells a door's entry name says nothing about the body that declares it. */
+    b->spells_net_entry = fd->spells_net_entry;
     b->eval_origin = fd->eval_origin;   /* HANDED OVER, like filename above; the def no longer owns it */
     fd->eval_origin = JS_ATOM_NULL;
     b->line_num = fd->line_num;
@@ -112531,6 +112570,11 @@ JSValue *JS_FlowNewCall(JSContext *ctx, JSValueConst func, JSValueConst this_val
  * parameter count, which is how many unknowns its caller has to supply. */
 uint32_t JS_OrphanGen(JSRuntime *rt) { return rt->orphan_gen; }
 
+/* …AND HOW MANY OF THE WALK'S TAKES CAME FROM ITS PREFERRED PASS. See the field for why a host that reads
+   `orphansDriven` and not this one cannot tell an order that fired from one whose preferred population was
+   empty. It is the ORDER's own reachability witness and nothing branches on it. */
+uint64_t JS_OrphanPreferredTakes(JSRuntime *rt) { return rt->orphan_preferred_takes; }
+
 /* WHO IS TOLD WHEN ONE IS BORN — see quickjs.h for why a generation is not enough and what a nonzero answer
    commits the runtime to. Installed and taken down by the host around the span in which it has a frontier to
    route to; a runtime with no hook reaches nothing below. */
@@ -112538,6 +112582,29 @@ void JS_SetOrphanBornHook(JSRuntime *rt, JSOrphanBornFn *hook, void *opaque)
 {
     rt->orphan_born = hook;
     rt->orphan_born_opaque = opaque;
+}
+
+/* IS THIS GC OBJECT A BODY THE PAGE DEFINED AND NOBODY HAS EVER ENTERED — the candidate test, factored out so
+   that the two passes of the walk below ask ONE question and cannot come apart. It is a pure predicate: it
+   decides nothing, marks nothing and allocates nothing, and it hands back the object and its body so neither
+   caller re-derives them.
+   A TOP-LEVEL PROGRAM IS NOT A FUNCTION THE PAGE DEFINED. A script, a module body and an eval's body are each
+   compiled as a function because that is how the interpreter runs them, and the scheduler already owns running
+   them — calling one as an orphan would run a whole script a second time, with its side effects, against a
+   delta that may already hold them. */
+static bool orphan_candidate(JSGCObjectHeader *gp, JSObject **pp, JSFunctionBytecode **pb)
+{
+    JSObject *p;
+    JSFunctionBytecode *b;
+
+    if (JS_GC_TYPE(gp) != JS_GC_OBJ_TYPE_JS_OBJECT) return false;
+    p = (JSObject *)gp;
+    if (!js_class_has_bytecode(p->class_id)) return false;
+    b = p->u.func.function_bytecode;
+    if (!b || !b->byte_code_buf || b->entered) return false;
+    if (b->is_program) return false;
+    *pp = p; *pb = b;
+    return true;
 }
 
 int JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque)
@@ -112551,25 +112618,52 @@ int JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque)
 
     DCHECK(visit != NULL, "JS_OrphanTakeOne was given no visitor — the orphan would be marked taken and handed "
                           "to nobody, which is the one way to lose it permanently");
-    list_for_each(el, &rt->gc_obj_list) {
-        JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
-        JSObject *p;
-        JSFunctionBytecode *b;
+    /* TWO PASSES OVER ONE POPULATION, WHICH IS AN ORDER AND NOT A BOUND. The candidate test is `orphan_candidate`
+       below and BOTH passes ask exactly it; the only thing that differs is that the first pass additionally
+       requires `spells_net_entry`. So every body this walk would ever have handed over it still hands over, and
+       all that moves is WHEN — nothing is dropped, no candidate is decided not to happen, and there is no
+       seen-set here beyond the pre-existing `entered` mark that makes a body a work item taken once.
+       WHY AN ORDER IS OWED AT ALL, MEASURED RATHER THAN ARGUED: this walk enumerates `rt->gc_obj_list`, which is
+       HEAP ALLOCATION ORDER, so it is a property of which chunk a bundle happened to evaluate first. On
+       app.gitpod.io — an application whose entire API surface is 131 protobuf RPC methods — 179 drives in 75
+       seconds of engine time all landed inside the HLS video player its `@mux` chunk ships: every fork site the
+       census recorded names `BYTERANGE`, `encryptedFragments`, `canSkipUntil`, `skippedSegments`, `videoCodec`,
+       `deltaPTS`, `fragments.length`. The run learned 194 addresses and NOT ONE was an endpoint; the fetch and
+       xhr doors read zero; and the compiler had meanwhile resolved the free identifier `fetch` against the
+       global 92 TIMES, so the bundle's request builders were sitting in the same heap, unreached, while the
+       walk spent the thread on a media library.
+       IT IS NOT A SCORE AND NOT A NAME MATCH. The bit is one fact the COMPILER established — nothing binds this
+       identifier, and a door declared it — so no text is matched here, no heuristic ranks anything, and a
+       minified bundle's meaningless names are never read. A body that spells a door's entry is a body whose
+       drive CAN reach that door; a body that spells none cannot, through that door, however it is named. */
+    for (int prefer = 1; prefer >= 0 && !n; prefer--) {
+        int saw = 0;   /* a candidate this pass could have taken — see the conservation DCHECK below */
 
-        if (JS_GC_TYPE(gp) != JS_GC_OBJ_TYPE_JS_OBJECT) continue;
-        p = (JSObject *)gp;
-        if (!js_class_has_bytecode(p->class_id)) continue;
-        b = p->u.func.function_bytecode;
-        if (!b || !b->byte_code_buf || b->entered) continue;
-        /* A TOP-LEVEL PROGRAM IS NOT A FUNCTION THE PAGE DEFINED. A script, a module body and an eval's body
-           are each compiled as a function because that is how the interpreter runs them, and the scheduler
-           already owns running them — calling one as an orphan would run a whole script a second time, with
-           its side effects, against a delta that may already hold them. */
-        if (b->is_program) continue;
-        b->entered = 1;   /* TAKEN: this body is now scheduled, so a second closure of it is not a second orphan */
-        visit(ctx, JS_MKPTR(JS_TAG_OBJECT, p), b->arg_count, opaque);
-        n = 1;
-        break;   /* ONE per call — see above; the caller's next step walks again for the next one */
+        list_for_each(el, &rt->gc_obj_list) {
+            JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
+            JSObject *p;
+            JSFunctionBytecode *b;
+
+            if (!orphan_candidate(gp, &p, &b)) continue;
+            saw = 1;
+            if (prefer && !b->spells_net_entry) continue;
+            if (prefer) rt->orphan_preferred_takes++;
+            b->entered = 1;   /* TAKEN: this body is now scheduled, so a second closure of it is not a second orphan */
+            visit(ctx, JS_MKPTR(JS_TAG_OBJECT, p), b->arg_count, opaque);
+            n = 1;
+            break;   /* ONE per call — see above; the caller's next step walks again for the next one */
+        }
+        /* THE CONSERVATION THE TWO PASSES OWE, AND THE ONE WAY THIS REFACTOR GOES WRONG. A second pass is only
+           an ORDER if its population is the WHOLE population; a predicate that accidentally excludes a body from
+           both passes turns a reordering into a silent cap on the candidate set, and nothing downstream could
+           say so — a body never handed over is indistinguishable from a bundle that does not ship it, which is
+           exactly the three-state zero `orphansDriven` already has to warn its readers about. So the FALLBACK
+           pass asserts what it cannot be allowed to do: having seen a candidate, it took one. */
+        DCHECK(prefer || !saw || n,
+               "JS_OrphanTakeOne's fallback pass saw an untaken non-program body and handed over nothing — the "
+               "two passes are supposed to differ only in PREFERENCE, so a candidate visible to the second one "
+               "and taken by neither is a body this walk will never hand over and an orphan lost for the life "
+               "of the instance");
     }
 #if APICLIENT_DEV
     DCHECK(rt->malloc_state.malloc_count == mc0,

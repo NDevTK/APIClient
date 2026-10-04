@@ -6202,11 +6202,23 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
    THIS FILE RATHER THAN A REGISTRY, because this is already the file that points one table at two components'
    functions — `.absent`, `.present` and `.publish` are solver/absent.c's — so the consumer list is where the
    table is, and a third consumer is a line here beside the line that installs the table it belongs to.
-   IT DECIDES NOTHING AND THE ORDER OF THE TWO CALLS IS NOT A FACT: both are void reports over disjoint name
-   tables, so neither can see the other's effect and a reader may not read one as happening first. */
-static void compile_global_named_dispatch(const char *name, int typeof_only) {
-    endpoint_compile_global_named(name, typeof_only);
+   THE ORDER OF THE TWO CALLS IS NOT A FACT: both report over disjoint name tables, so neither can see the other's
+   effect and a reader may not read one as happening first. Both run whatever either answers, for that reason.
+   AND EXACTLY ONE OF THEM ANSWERS THE ENGINE, WHICH IS NOT AN ASYMMETRY TO BE TIDIED. quickjs reads the return
+   value to ORDER its orphan candidates (JS_OrphanTakeOne), and the question it is asking is `would driving this
+   body reach a NETWORK DOOR` — so solver/endpoint.c's edges answer it and solver/rung_entry.c's rungs do not,
+   because a rung's entry is `requestAnimationFrame`, `setTimeout` or `requestIdleCallback` and a body that
+   spells one composes no address through any door. Including the rungs would order a bundle's scheduling
+   plumbing ahead of its request builders, which is the one direction the order exists to undo.
+   SO IT IS NOT `a || b` OVER THE TWO CONSUMERS. The two answer different questions and the engine asked only
+   the first; a reader who ORs them has widened the preferred population to every body that touches a timer,
+   which on a real bundle is most of them, and an order whose preferred set is nearly everything is the heap
+   order again with a pass wasted in front of it. */
+static int compile_global_named_dispatch(const char *name, int typeof_only) {
+    int net = endpoint_compile_global_named(name, typeof_only);
+
     rung_entry_compile_global_named(name, typeof_only);
+    return net;
 }
 
 static JSConcolicHooks g_hooks = {

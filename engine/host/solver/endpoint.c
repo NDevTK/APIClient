@@ -2455,10 +2455,19 @@ static void edge_declare(EndpointEdge *e, const char *who, const char *entry,
    leak report at JS_FreeRuntime would name — so a match is a compare and never a keep. An edge that has not
    declared has a NULL `entry` and matches nothing, which is `endpoint_edge_member_asked`'s rule for a member
    that declares no steps: the caller has no arm to get wrong and no reason to know this file has two edges. */
-static void edge_named(EndpointEdge *e, const char *name, int typeof_only) {
-    if (!e->entry || strcmp(e->entry, name) != 0) return;
-    if (typeof_only) e->named_typeof++;
-    else             e->named++;
+/* …AND IT ANSWERS WHETHER THIS EDGE CLAIMS THE NAME AS A USE, which is a second fact about one call and not a
+   second question: `JS_OrphanTakeOne` orders its candidates by it, so the answer has to come from whoever owns
+   the entry name and the one place that is, is here.
+   A `typeof` READ ANSWERS NO AND STILL RAISES ITS OWN ROW. `typeof fetch === "function"` is a FEATURE DETECT:
+   driving the body that spells it reaches the guard and never the call, so an edge that claimed it would order a
+   bundle's capability probes ahead of its request builders — the direction that spends the walk on the one
+   population it cannot learn an address from. The split already exists two lines down and this is what it is
+   for; the census keeps both and only the ORDER reads one. */
+static int edge_named(EndpointEdge *e, const char *name, int typeof_only) {
+    if (!e->entry || strcmp(e->entry, name) != 0) return 0;
+    if (typeof_only) { e->named_typeof++; return 0; }
+    e->named++;
+    return 1;
 }
 
 /* …AND THE STATE IS GONE. `stage` is where it was standing, `reached` whether its construction had completed
@@ -2526,10 +2535,17 @@ void endpoint_xhr_edge_declare(const char *entry, const char *const *steps, int 
    length-guarded compares per free identifier of every compiled program, once per compile, on the compiler's
    own time and inside no flow's slice. It allocates nothing and raises no ask, so it cannot move the ask rows
    it exists to make readable. */
-void endpoint_compile_global_named(const char *name, int typeof_only) {
-    if (!name) return;
-    edge_named(&g_fetch_edge, name, typeof_only);
-    edge_named(&g_xhr_edge, name, typeof_only);
+/* THE RETURN VALUE IS THE ORDER'S AND THE ROWS ARE THE CENSUS'S, and both edges are asked whatever the first
+   one answers — a short-circuit here would leave the second edge's row unraised for a name that somehow belonged
+   to two, which is the silent double-attribution no total reveals and which the paragraph above keeps both
+   compares for. So the two calls are unconditional and the answers are OR'd. */
+int endpoint_compile_global_named(const char *name, int typeof_only) {
+    int a, b;
+
+    if (!name) return 0;
+    a = edge_named(&g_fetch_edge, name, typeof_only);
+    b = edge_named(&g_xhr_edge, name, typeof_only);
+    return a || b;
 }
 
 void endpoint_edge_member_asked(const char *const *steps) {

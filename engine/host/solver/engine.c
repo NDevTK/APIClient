@@ -7634,6 +7634,22 @@ void engine_orphan_census(long *driven, long *asked) {
     *driven = g_orphans_driven; *asked = g_orphan_asks;
 }
 
+/* …AND HOW MANY OF THOSE DRIVES THE WALK'S PREFERRED PASS CHOSE — a body whose source resolved a network door's
+   own entry name against the global object. The count lives on the RUNTIME because the walk is quickjs's, and it
+   is forwarded through this file because this file is what holds the session's context: a composer with no
+   runtime in hand would otherwise have to be given one for a single row, and the row's denominator is the drive
+   count directly above, which is also here.
+   WHY IT IS A ROW AND NOT AN INFERENCE: a run in which NO body carries that bit behaves byte-identically to a run
+   with no order in it, so `orphansDriven` alone cannot tell AN ORDER THAT FIRED from AN ORDER WHOSE PREFERRED
+   POPULATION WAS EMPTY, and those two take opposite work — the first says read the addresses the drives produced,
+   the second says find out why a bundle whose compiler resolved `fetch` dozens of times has no FUNCTION body
+   spelling it, which is a question about PROGRAM bodies this walk skips by construction. */
+long engine_orphan_preferred(void) {
+    DCHECK(g_sess_ctx != NULL, "the orphan order's witness was asked for outside a session — the count is on the "
+                               "runtime this file holds, so with no context there is no walk to report about");
+    return (long)JS_OrphanPreferredTakes(JS_GetRuntime(g_sess_ctx));
+}
+
 /* AND THE GENERATION AT WHICH THIS DOCUMENT LAST WALKED THE HEAP. Creating a function object is the only event
    that can add to the orphan set (JS_OrphanGen), so a walk at an unchanged generation can only find what the
    previous one already took — and the walk is O(live objects) while a frontier has one finishing flow after

@@ -1309,7 +1309,11 @@ void    endpoint_edge_member_asked(const char *const *steps);
    that withholds a finding rather than manufactures one, and no containment between these rows and the call row
    may be asserted in either direction — solver/endpoint.c states at the fields which spellings make each
    inequality ordinary, and that is why those are the only ask rows in this file with no identity over them. */
-void    endpoint_compile_global_named(const char *name, int typeof_only);
+/* …AND IT ANSWERS, for the one consumer that is not a census: nonzero means an edge declared THIS name and the
+   read was not a `typeof` guard, which is what quickjs's orphan walk orders its candidates by. The rows it raises
+   are unchanged and are the whole of what this file keeps; the answer is derived from the SAME `entry` compare, so
+   there is no second list and no way for the order and the census to disagree about which names are doors. */
+int     endpoint_compile_global_named(const char *name, int typeof_only);
 void    endpoint_fetch_edge_began(void);
 void    endpoint_fetch_edge_offered(void);
 void    endpoint_fetch_edge_freed(int stage, int offered);

@@ -791,6 +791,11 @@ const ABSENT_ROWS = ["absentAsked", "absentOwed"];
    `forkOverPinned <= forks` where both are in one hand, and a bare numerator says nothing about whether any
    spellable branch was reached at all. */
 const COLD_FORK_PINNED = ["forkOverPinned"];
+/* THE ORPHAN WALK'S ORDER WITNESS. Its denominator is `_orphansDriven`, which is NOT a `_cold` row — it sits on
+   the document beside `_wfq` — so this driver reads the pair across two keys and the ONE place they are asserted
+   against each other is the composer that emits them. Zero here beside a nonzero `epFetchAskNamedLife` is not a
+   broken order: it says the bundle's `fetch` occurrences are in PROGRAM bodies, which that walk skips. */
+const COLD_ORPHAN_ORDER = ["orphanPreferred"];
 const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered",
   /* AND THE OTHER THREE ENDS OF THE REPLY DOOR, WITHOUT WHICH `replyAsked - replyAnswered` IS A NUMBER WITH
      THREE READINGS THAT TAKE OPPOSITE WORK. A record ends answered, REFUSED by this tool's own egress policy,
@@ -1342,7 +1347,8 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      which rested on a pin. */
   "epWitnessClass"];
 
-const COLD_ROWS = COLD_STEP_UNITS.concat(COLD_FRONTIER, COLD_SEED, COLD_COUNTERS, COLD_FORK_PINNED);
+const COLD_ROWS = COLD_STEP_UNITS.concat(COLD_FRONTIER, COLD_SEED, COLD_COUNTERS, COLD_FORK_PINNED,
+                                        COLD_ORPHAN_ORDER);
 /* WHAT ASKING THE ORDER COST — READ OFF THE `wfq` OBJECT, WHICH IS THE COMPOSER THAT PUBLISHES IT.
    These twelve were first added to COLD_COUNTERS, which reads `r.cold`, and a 180 s drive of a real page
    read `null` for every one of them while `kindsOf` and `requireWhole` both PASSED — the first asks
