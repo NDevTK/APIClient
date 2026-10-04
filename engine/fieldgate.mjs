@@ -1056,7 +1056,7 @@ const GLOBAL_CONVERSION = new Map([
    its argument goes through ToString and its RESULT is a number.
    `String(undefined)` is the string "undefined", which a JSON body's own key can BE — §isEqualityOperand's
    measured incident exactly. `Number(undefined)` is NaN (§7.1.4 ToNumber, Table 15: Undefined -> NaN), and
-   §7.2.15 IsStrictlyEqual and §7.2.14 IsLooselyEqual both answer FALSE for NaN against every value INCLUDING
+   §7.2.14 "IsStrictlyEqual ( x, y )" and §7.2.13 "IsLooselyEqual ( x, y )" both answer FALSE for NaN against every value INCLUDING
    ITSELF — so an absent field cannot match anything here. It takes the NOT-EQUAL arm, which is the loud
    outcome this file exists to ask for and is the opposite of a token that matches. `parseInt` and
    `parseFloat` are NaN one step later, for the same reason: ToString first, then a parse that fails.
@@ -6355,8 +6355,8 @@ if (coerced.length) {
      see is also the concealment this file exists to report, which is §the THREE BANDS' own reason for keeping
      the A VALUE count. */
   {
-    log(`  ${String(coercedNaN.length).padStart(5)}  DECIDED, NOT COMPARABLE — an equality operand whose absence token is NaN. §7.2.15 ` +
-        `IsStrictlyEqual and §7.2.14 IsLooselyEqual answer FALSE for NaN against every value INCLUDING ITSELF, so an ` +
+    log(`  ${String(coercedNaN.length).padStart(5)}  DECIDED, NOT COMPARABLE — an equality operand whose absence token is NaN. ECMAScript ` +
+        `§7.2.14 "IsStrictlyEqual ( x, y )" and §7.2.13 "IsLooselyEqual ( x, y )" answer FALSE for NaN against every value INCLUDING ITSELF, so an ` +
         `absent field cannot match here at all: the comparison takes its NOT-EQUAL arm, which is the loud outcome this ` +
         `file asks for. Decided, not passed — the token is asked of the LANGUAGE, by calling the global with \`undefined\``);
     for (const c of coercedNaN)
