@@ -385,6 +385,17 @@ static int  fixture_cold_moment(void);
    A probe clause is read as side-effect-free everywhere in this tree (check.h), and a clause that moved a
    census would make this run's own diagnostic a function of how often it was reported. */
 static int  fixture_cold_moment_met(void);
+/* AND WHETHER THE WINDOW EVER CLOSED — a THIRD read-only entry, for fixture_cold_moment_met's reason and
+   one claim further in. The latch says this host DECIDED to park; this says it reached the consultation
+   that REQUESTED one, which is a different fact because the engine has a second park exit of its own
+   (solver/engine.c closes a session over survivors when every member is parked on a refusal, and
+   `engine_frontier_paged` is true on that path too). The remoteop ladder's rungs are all read off the
+   retract census, which both exits run, so without this the four of them read 0 together for two
+   mechanisms that take OPPOSITE work — a strip that walked a frontier holding a token and stripped
+   nothing, or a window that never closed so the token assert never ran at all.
+   RETIREMENT: this entry goes when the engine states which of its park exits ran and the ladder reads
+   that instead, because the fact is then the engine's rather than a flag this host sets beside it. */
+static int  fixture_park_requested(void);
 static void fixture_ask_remote_op(JSContext *ctx);
 static void fixture_route_peer_post(JSContext *ctx);
 
@@ -16972,8 +16983,24 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        beside it that a token is on a program row at the instant the park is requested.
        WHAT IS STILL A RESIDUAL AFTER THEM, because building a precondition is not the same as discharging
        the question: this row reads the STRIP, and the two halves only make the strip REACHABLE. A 0 here
-       now means engine_retract_span walked a frontier that held a token and stripped nothing, which is a
-       DEFECT and no longer a named residual — that is the whole point of the assert, and it is why the
+       means engine_retract_span walked a frontier that held a token and stripped nothing, which is a
+       DEFECT and no longer a named residual — ON THE RUNS WHERE THE ASSERT RAN.
+       AND THAT QUALIFIER IS THE CORRECTION, BECAUSE THE SENTENCE READ `that is the whole point of the
+       assert` AND THE ASSERT HAS A SECOND PATH AROUND IT. It is kept in its own words because the
+       reasoning is sound and a reader re-derives it: the assert really is at the tail of
+       fixture_want_park, it really does read the token off a program row, and it really does make a 0
+       here a statement about the strip — on the path where it RUNS. It runs only when this function
+       RETURNS 1, and solver/engine.c parks a second way: a session closed over survivors, every member
+       of the frontier parked on a request the zone REFUSED, reached without the host asking at all. The
+       FIRST half built above is what makes that exit reachable for this document — a declined external
+       script is exactly a member parked on a refusal — so the two halves did not merely compose, the
+       first one opened a route around the second one's assert. `engine_frontier_paged` is true on both
+       paths, so nothing downstream could tell them apart, and a dev assert that does not fire has two
+       readings (it held, or it was never reached) with no witness for the second.
+       `park-remoteop-window` IS THAT WITNESS and is this ladder's lowest rung; see where it is computed.
+       RETIREMENT: this record goes when the token claim is asserted where the park is TAKEN rather than
+       where it is REQUESTED, because the guarantee is then true as first written and needs no qualifier.
+       It is also why the
        `unaskable` declaration below is left exactly as it is: it retires itself the moment the
        cross-agent-operation arm of `stepUnitRuns` leaves 0, with no edit at that line.
        AND THE INDEPENDENT WITNESS FOR THE FIRST HALF ALONE IS `fork-over-a-declined-request`, which stands
@@ -17067,6 +17094,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        change the contract. */
     long retract_flows = 0, retract_started = 0, retract_back = 0;
     int cold_park_remoteop, cold_park_remoteop_once, cold_park_remoteop_asked, cold_park_remoteop_many;
+    int cold_park_remoteop_window;
 
     engine_retract_census(&retract_flows, &retract_started, &retract_back);
     /* THE LADDER'S FOUR SENTENCES, WRITTEN WHERE THE RUNGS ARE COMPUTED AND PRINTED WHERE A ROW IS 0. They
@@ -17082,6 +17110,33 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        cannot read them: probes_report prints the `why` of every 0 row, so a sentence asserting that another
        rung is 1 would be printed on the run where it is not.
        RETIREMENT: these go when a probe row's 0 cannot be printed without a diagnostic beside it. */
+    /* Rung 0: THE PARK THIS FIXTURE TOOK IS THE ONE IT ASKED FOR, which is the rung every other one in this
+       ladder was resting on without saying so. Its observation site is strictly earlier than theirs — this
+       host's own decision, taken before the park walks anything — which is what makes it the lowest rung
+       and makes the lowest 0 the localisation.
+       IT HAS NO GATE AND THAT IS DELIBERATE, for the reason the paragraph above gives about this ladder
+       generally: a gate declares an ENTAILMENT, and `park-remoteop-asked` does not imply this one — the
+       engine's survivors exit runs the identical retract walk, so a frontier holding an arrival slot reads
+       1 there with this rung at 0. A gate here would suppress a real row on the one run that most needs it.
+       WHAT IT REPLACES IS A GUARANTEE THAT DID NOT HOLD, recorded here rather than quietly repaired
+       because a reader who re-derives it writes it again. The banner above and `park-remoteop`'s own `why`
+       both said that fixture_want_park ASSERTS at the park that a token is on a row, "so a 0 here can no
+       longer be either half failing silently". The assert is real and it is on the REQUESTED path only;
+       the engine parks a second way, with that line never reached, and on that run a 0 is exactly "either
+       half failing silently" again. A guarantee whose assert a second exit bypasses is a finding about the
+       code and not a wording repair.
+       RETIREMENT: this rung goes when the token assert is reachable from BOTH park exits — when the claim
+       is made where the park is TAKEN rather than where it is REQUESTED — because the guarantee is then
+       true as originally written and there is nothing left for this rung to separate. */
+    const char *remoteop_window_why =
+        "this host never reached the consultation that REQUESTS the park, so the window it opens after the "
+        "peer's question never closed and the token assert at the tail of fixture_want_park never ran. The "
+        "engine parked by its OTHER exit — a session closed over survivors, every member parked on a "
+        "refusal (solver/engine.c) — which runs the same retract walk, so the three rungs above this one "
+        "read 0 about a walk that happened and this one reads 0 about a window that did not. Read "
+        "fixture_want_park's own control flow and the frontier's refusal state, and never "
+        "engine_retract_span: nothing below this rung is a statement about the strip while this reads 0.";
+    cold_park_remoteop_window = g_sess == SESS_PARK && fixture_park_requested();
     /* Rung 1: the park MET a peer's question at all. */
     const char *remoteop_asked_why =
         "nothing was attached to any member at all — no peer question reached this frontier, so the walk's "
@@ -17109,9 +17164,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         "ROW WAITED FOR ARE BUILT: HTML_COLD ends in an external script fixture_provide DECLINES, so a member "
         "rests at the one cursor flow_step cannot pass and an appended row lands behind it; and this host now "
         "lets ONE slice of picks run between the ask and the park, so flow_perform can convert the question "
-        "to a program row at all. fixture_want_park ASSERTS at the park that a token is on a row, so a 0 here "
-        "can no longer be either half failing silently — it is the STRIP, which is what this row has always "
-        "been about. Read this row's banner, and never engine_retract_span. THIS ROW IS NOT ABOUT THE "
+        "to a program row at all. fixture_want_park ASSERTS at the park that a token is on a row — ON THE "
+        "PATH WHERE IT ASKED FOR ONE. READ `park-remoteop-window` FIRST: while that rung reads 0 this row "
+        "is NOT a statement about the strip, because the engine parked by its survivors exit and the "
+        "assert was never reached. With that rung at 1 a 0 here is the STRIP, which is what this row has "
+        "always been about. Read this row's banner, and never engine_retract_span. THIS ROW IS NOT ABOUT THE "
         "RESIDUE KINDS: it reads engine_retract_census, so what "
         "park.recipes carries, and whether a resume rebuilt it, says nothing about it in either direction. "
         "The rungs printed beside this one are where what the park DID exercise is stated. THIS ROW IS "
@@ -18540,6 +18597,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "park-commit", cold_park_commit, "cfg.admin", SESS_PARK, .gate = "park-wrote" },
         { "resumed-commit", cold_resumed_commit, "cfg.admin", SESS_RESUME, .gate = "resumed" },
         /* THE LADDER, LOWEST RUNG FIRST — read them in this order and the lowest 0 is the answer. */
+        { "park-remoteop-window", cold_park_remoteop_window, "cfg.admin", SESS_PARK, remoteop_window_why },
         { "park-remoteop-asked", cold_park_remoteop_asked, "cfg.admin", SESS_PARK, remoteop_asked_why },
         { "park-remoteop-many", cold_park_remoteop_many, "cfg.admin", SESS_PARK, remoteop_many_why,
           .gate = "park-remoteop-asked" },
@@ -19213,7 +19271,7 @@ static int fixture_have_answers(void) {
  * rungs `park-remoteop-asked`, `park-remoteop-many` and `park-remoteop-once`, split apart because a single
  * folded row could not say which of those three a 0 was about. The last of them is the one a per-flow hand-back
  * would fail. The `dyn_token` half is named where its row is. */
-static int g_cold_moment, g_op_asked, g_post_routed;
+static int g_cold_moment, g_op_asked, g_post_routed, g_park_requested;
 
 static int fixture_cold_moment(void) {
     ColdPreview would;
@@ -19272,6 +19330,9 @@ static int fixture_cold_moment(void) {
    between this conjunction and those counters is this host's to state, and the probe table below is where
    it is stated. */
 static int fixture_cold_moment_met(void) { return g_cold_moment; }
+
+/* AND THE WINDOW, READ THE SAME WAY — see the forward declaration. */
+static int fixture_park_requested(void) { return g_park_requested; }
 
 /* A PEER'S POSTED MESSAGE, ROUTED IN AS THE TRUSTED ZONE ROUTES ONE — the other half of what this fixture
  * stands in for, and the only producer of an 'r' record there is on a host with one instance.
@@ -19479,6 +19540,20 @@ static int fixture_want_park(void) {
            "whose sequence is exhausted. Read fixture_provide's decline branch and `seq_awaits`, and "
            "never engine_retract_span. `fork-over-a-declined-request` in this run's `stepUnitRuns` says "
            "whether the decline forked at all, which separates those two");
+    /* THE WINDOW CLOSED, RECORDED AT THE ACT AND NOT INFERRED FROM ITS OUTCOME. This line is the only
+       one that returns 1, so the flag is exactly "this host asked for the park" — and asking is a fact
+       about THIS HOST's decision, which is the recording point CLAUDE.md names for an invariant over an
+       operation something else may legitimately do another way. The outcome cannot stand in for it:
+       `engine_frontier_paged` is true for the survivors exit as well, so a frontier that was written
+       says nothing about whether this function ever got here.
+       IT IS ALSO THE REACHABILITY WITNESS FOR THE DCHECK ABOVE IT, which is the whole reason it is set
+       on this line rather than beside the ask. A dev-only assert that does not fire has two readings —
+       it held, or it was never reached — and nothing in the report could separate them, so the four
+       zeros below were being read as a statement about the strip on the strength of an assert that may
+       not have run.
+       RETIREMENT: this flag goes when the engine names the exit its park took, because the ladder then
+       reads that and nothing has to be remembered here. */
+    g_park_requested = 1;
     return 1;
 }
 
