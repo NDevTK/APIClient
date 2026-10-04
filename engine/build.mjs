@@ -8835,6 +8835,32 @@ STAGES.push(onHost(runProgram("CLAUDE.md record-landing gate", [join(ENGINE, "md
                        "word: the slip is a record appended after an emphasised run whose closing `**` was " +
                        "then consumed as the new headline's opener. There is no baseline to update and no " +
                        "allowlist: the findings ARE the disagreement."), STAGE_HOST.SOURCE));
+/* AND THE EGRESS POLICY'S OWN ARMS, WHICH IS THE ONE AUDIT ON THIS LIST WHOSE SUBJECT IS A DECISION RATHER
+   THAN A CONTRACT. `extension/lib/safe-fetch.js` decides whether an act may be spent, from a SIGNAL VECTOR
+   whose fields the two trusted zones type out at each call site — so "would this request fire?" lives in
+   neither file, and three sites in this tree had reasoned about it in PROSE with one of the three wrong.
+   IT IS PUSHED HERE FOR THE REASON EVERY OTHER AUDIT ON THIS LIST IS, AND THAT REASON IS THE DEFECT IT WAS
+   BUILT OUT OF. A probe nobody invokes is a reader with no data (CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS
+   inverted: "a write with no reader at least leaves a name a grep can find, and a reader with no data leaves
+   a well-formed table of `-`"), and two comments in `bridge.js` and `safe-fetch.js` now cite this probe BY
+   NAME as the authority for saying a repair changes no outcome. Left uninvoked, the day somebody edits
+   `_DEFAULT_ARMS` those two go silently stale again — which is exactly the rot they were landed to end.
+   WHAT IT ASSERTS IS ITS OWN CONTROLS AND NEVER AN EXPECTED TABLE. It stores no arm list and no verdict list,
+   so a policy the owner widens passes unchanged and there is nothing to update: a stored expectation would be
+   the change detector CLAUDE.md bans, and a SECOND copy of the arms would be the copy that drifts. It fails
+   only when it can no longer make the policy REFUSE, or no longer make it FIRE — at which point every row
+   it prints, and every comment citing it, is reporting on the probe instead of on the policy.
+   IT IS A SOURCE STAGE ON THE SAME ARGUMENT AS THE FOUR ABOVE: it compiles no C, reads no artifact and opens
+   no engine slice, so it has no denomination to state and its finding is about the REVISION on every host. */
+STAGES.push(onHost(runProgram("egress default-arm probe", [join(ROOT, "testing", "egress_arm_probe.mjs")],
+                       "the chokepoint can no longer be made to refuse, or can no longer be made to fire, so " +
+                       "its own answers are not readings. Nothing here stores an expected arm list: a widened " +
+                       "policy passes, and this red means the PROBE lost its grip on the walk — read which " +
+                       "control failed and what it was asking, then fix the probe or the signal registry it " +
+                       "asks through. Two comments cite this stage by name as the authority for a repair " +
+                       "being outcome-free, in extension/bridge.js and extension/lib/safe-fetch.js, so a red " +
+                       "here also means those two sentences are unsupported until it is green."),
+  STAGE_HOST.SOURCE));
 /* THE FIFTH AREA: IS EVERY FILE IN THE TEST CORPUS COLLECTED BY SOMEBODY. §Testing — "A TEST FILE THE GATE
    DOES NOT COLLECT IS AN EXCLUDED TEST, AND AN EXCLUDED TEST IS A FAILURE … worse, because the total LOOKS
    complete." engine/gate_collect.mjs is the walk that answers it: a file under engine/tests is either a
