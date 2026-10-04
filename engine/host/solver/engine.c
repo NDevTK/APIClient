@@ -1440,9 +1440,56 @@ int engine_host_answered(uint32_t req, JSValueConst *out) {
     }
     /* NOT ON THIS FLOW'S REGISTER AT ALL. A machine asking about an id it never issued, or issued before a
        fork that re-issued it under the sibling's own world — either way, answering "no" would park the flow
-       forever on a question nothing is going to answer. */
+       forever on a question nothing is going to answer.
+     *
+     * THE TWO READINGS THE MESSAGE NAMES TAKE OPPOSITE WORK, AND FOR AS LONG AS THIS ABORT CARRIED NEITHER
+     * THE ASKED ID NOR THE REGISTER'S CONTENTS IT COULD NOT TELL THEM APART. `never issued` sends a reader to
+     * the MACHINE — a step that composed an id out of a field its own frame never wrote. `inherited across a
+     * fork` sends them to the SCHEDULER, where a sibling's frame still names the parent's id while the
+     * sibling's own COW'd register carries a different one. A reader holding only `file:line` can reason
+     * about both and measure neither, which is §A-DFAIL-OUTLIVES-THE-ABSENCE's remedy clause with the
+     * coordinate missing instead of wrong: the crash is correct, its instruction is correct, and there is
+     * nowhere to apply it. The register listing is the discriminator and it is FREE here, because the walk
+     * that just failed to find `req` had every entry in its hand.
+     *   HOW TO READ IT: a register holding a HOSTREQ at a DIFFERENT id is the FORK reading — the question was
+     * issued, and under another world. A register holding NO HOSTREQ at all is the MACHINE reading. An EMPTY
+     * register is the machine reading in its sharpest form, since nothing was ever issued on this flow. */
+#if APICLIENT_DEV
+    {
+        /* COMPOSED AT THE CALL SITE AND NOT IN A HELPER, for the reason §AND-THE-SAME-LOCALITY-THAT-LETS-A-
+           MACRO-KNOW-THE-SIZE gives: `-Wformat-truncation` fires only where the destination's SIZE and the
+           format LITERAL are both visible at the call, so hoisting this write behind a function boundary
+           would take the compiler's only check off the one write that needs it — silently, with the code
+           reading better. The bound is a CHARACTER budget and the loop stops on the snprintf return rather
+           than on a length guess, so a register longer than the buffer truncates at an entry boundary and
+           `shown` says so beside `n`. */
+        char reg[512];
+        int off = 0, shown = 0, n = pending_count(f->pending);
+        for (int i = 0; i < n; i++) {
+            JSValue e = pending_entry(f->pending, i);
+            int w = snprintf(reg + off, sizeof reg - (size_t)off, "%s%u/k%d%s", off ? " " : "",
+                             (uint32_t)pending_get_int(e, PEND_REQ),
+                             (int)pending_get_int(e, PEND_KIND),
+                             pending_get_int(e, PEND_HAVE_VALUE) ? "+v" : "");
+            JS_FreeValue(pending_ctx(), e);
+            if (w < 0 || w >= (int)(sizeof reg - (size_t)off)) break;
+            off += w;
+            shown++;
+        }
+        if (!off) snprintf(reg, sizeof reg, "(nothing)");
+        DFAILF("a machine asked about host request %u and it is not on its flow's register — it either never "
+               "issued that request or it inherited the id across a fork, which re-issues under the sibling's "
+               "own world. THE REGISTER HOLDS %d entr(y/ies), %d of them listed as id/kKIND with +v where the "
+               "host has already answered: %s. The KIND integers are the FLOW_PENDING_* defines in "
+               "solver/pending.h and are printed as numbers deliberately — a name table for them here would "
+               "be a second copy of that header's list and would drift from it. A HOSTREQ (k3) at a DIFFERENT "
+               "id is the FORK reading; no HOSTREQ at all, or an empty register, is the MACHINE reading.",
+               req, n, shown, reg);
+    }
+#else
     DFAIL("a machine asked about a host request that is not on its flow's register — it either never issued "
           "the request or it inherited an id across a fork, which re-issues under the sibling's own world");
+#endif
     return 0;
 }
 
