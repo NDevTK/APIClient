@@ -88,7 +88,7 @@ void pending_index_answered(JSValueConst rec);
        collapses two states into one answer.
    WHAT IT DOES NOT CHANGE IS WHETHER THE FLOW IS STILL WAITING, and that distinction is the point. This moves
    the record out of the set the HOST is looked up in; it stays OUTSTANDING on every register naming it, which
-   is solver/pending.c's `pend_owed` against its `pend_host_owed` — the flow is parked at the line that asked,
+   is solver/pending.c's `pend_owed` against its `pending_entry_host_owed` — the flow is parked at the line that asked,
    and a flow that reads as FINISHED has its whole timeline torn down. Two sets, and this is one of them. */
 void pending_index_declined(JSValueConst rec);
 

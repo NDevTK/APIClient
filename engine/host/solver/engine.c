@@ -2031,8 +2031,16 @@ const char *engine_host_requests(void) {
             size_t ol = 0;
             char idbuf[24];
             int idlen;
+            /* "CAN THE HOST STILL BE ASKED" AND NOT "IS THIS FLOW STILL WAITING" — routed to the one exported
+               predicate rather than spelled here, which is what this line used to do and why it was wrong. It
+               asked `PEND_HAVE_VALUE` alone, and that is TRUE of an entry the trusted zone has already
+               REFUSED: a refusal is an ANSWER to "will you make this request", so a declined rendezvous was
+               re-joined on the next round, declined again, and aborted at engine_host_decline's
+               `!pending_entry_declined`. The ADDRESS-keyed join one file over has carried exactly this filter
+               and exactly this argument the whole time ("WHICH IS WHAT KEEPS A DECLINE A FORK RATHER THAN A
+               SPIN"), so this was one defect repaired at one of its two sites. */
             if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
-                pending_get_int(p, PEND_HAVE_VALUE)) { JS_FreeValue(pending_ctx(), p); continue; }
+                !pending_entry_host_owed(p)) { JS_FreeValue(pending_ctx(), p); continue; }
             /* THE HOST'S NAME IS WHAT THE HOST IS SHOWN, and it is the whole of why the field exists: this
                buffer is the only place an id leaves the engine, so every id the zone can ever quote back came
                from this line. Emitting the machine's name here would hand the host two arms' identical names
@@ -12293,7 +12301,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
             /* …AND IT IS NOW ONE BIT LOOSER THAN THE ASSERT IT LEADS TO, DELIBERATELY, WHICH IS THE OPPOSITE
              * OF THE DEFECT THE PARAGRAPH ABOVE DESCRIBES AND HAS TO BE SAID WHERE THE READER STANDS. That one
              * is about a SELECTING predicate weaker than the asserting one by ACCIDENT, which hides a state.
-             * This is `pend_owed` selecting and `pend_host_owed` asserting, and the gap between them is exactly
+             * This is `pend_owed` selecting and `pending_entry_host_owed` asserting, and the gap between them is exactly
              * the DECLINED entry — a flow the trusted zone has refused, which is still WAITING (so this arm is
              * right to keep it out of the two FINISHED arms below, and pending.h's own paragraph says a
              * predicate answering otherwise would tear its timeline down) and is owed NOTHING by any host (so

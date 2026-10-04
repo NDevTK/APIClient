@@ -609,7 +609,7 @@ int  pending_deliverable_count(JSValueConst reg);
    event, and no host event is coming. Counting outstanding entries is what makes that state a crash at the mark
    instead of a flow that silently leaves the pick and never comes back.
    THIS HEADLINE READ "IS THE HOST STILL OWED ANYTHING ON THIS REGISTER — the exact question
-   `flow_set_host_owed`'s mark is a claim about", AND THAT IS THE OTHER QUESTION. `pend_host_owed` below this
+   `flow_set_host_owed`'s mark is a claim about", AND THAT IS THE OTHER QUESTION. `pending_entry_host_owed` below this
    file, in pending.c, says so in its own words — "'is this flow still waiting' is `pend_owed`, and 'can the
    host still be asked' is this" — so this header held both answers to one question and the two readers that
    most needed the second one took this line at its word. A refused entry is the input that tells them apart:
@@ -637,7 +637,7 @@ int  pending_host_outstanding(JSValueConst reg);
 
 /* IS THIS FLOW PARKED ON SOMETHING THE TRUSTED ZONE HAS REFUSED — the THIRD answer, and the one whose absence
    made the two above read as a difference rather than as a partition. Per entry `owed` splits exactly two
-   ways (`pend_host_owed` is `pend_owed && !declined`), so this is the other half at register arity, and the
+   ways (`pending_entry_host_owed` is `pend_owed && !declined`), so this is the other half at register arity, and the
    identity `outstanding == host_outstanding || declined_outstanding` is asserted where all three are in one
    hand.
    IT EXISTS BECAUSE A MARK AND A BILL ARE DIFFERENT CLAIMS AND ONLY ONE OF THEM IS ABOUT THE HOST.
@@ -682,9 +682,27 @@ int  pending_outstanding_kind(JSValueConst reg, int kind);
    question, and a flow parked on a refusal was reported to the host as a debt for the rest of the session.
    The rule that replaces the list is the property rather than the population: the host question has a spelling
    at BOTH arities, and a caller that needs it at one of them never composes it out of the other.
-   RETIREMENT: this note goes when `pend_owed` and `pend_host_owed` can no longer both be reached from one
+   RETIREMENT: this note goes when `pend_owed` and `pending_entry_host_owed` can no longer both be reached from one
    exported predicate — that is, when no register-level caller can ask the wrong one at all. */
 int  pending_entry_declined(JSValueConst e);
+
+/* …AND "CAN THE HOST STILL BE ASKED FOR THIS ONE", WHICH IS THE ENTRY ARITY THE NOTE ABOVE DOES NOT MENTION AND
+   WHICH A THIRD CALLER HAD TO COMPOSE WRONGLY FOR WANT OF IT. That note names two arities — the host-owed MARK
+   and the frontier-wide BILL — and its rule is the right one: "the host question has a spelling at BOTH arities,
+   and a caller that needs it at one of them never composes it out of the other." `engine_host_requests` needs it
+   at neither: it walks ONE ENTRY AT A TIME, and with no spelling at that arity it asked `PEND_HAVE_VALUE` alone
+   — which is `pend_owed`, the FLOW question, and is TRUE of an entry the zone has already refused.
+     WHAT THAT COST IS A SPIN AND THEN AN ABORT, and the sibling join had the whole argument written out while
+   this one went without it: engine_pending_fetches' own comment says "A REQUEST THE ZONE HAS ALREADY REFUSED IS
+   NOT ON THIS LIST, WHICH IS WHAT KEEPS A DECLINE A FORK RATHER THAN A SPIN… a zone that declined it once would
+   be shown it again on the next round and would decline it again". The rendezvous-keyed join is the same list
+   for the other kind, and a second decline reaching the engine aborts at engine_host_decline's
+   `!pending_entry_declined` — MEASURED on a control document, one abort deeper than the register abort that had
+   been standing in front of it.
+   SO THE PREDICATE IS EXPORTED RATHER THAN RE-SPELLED, which is the whole point: `pend_owed && !declined` now
+   has exactly one definition and three callers at two arities, so a fourth question asked of an entry routes
+   here instead of becoming a second right answer that can drift. */
+int  pending_entry_host_owed(JSValueConst e);
 
 /* APPEND an entry of `kind` with every field present at its default (no URL, no answer, scriptRow 0, req 0).
    Creates the register if this is the flow's first. Returns the new entry, OWNED by the caller.

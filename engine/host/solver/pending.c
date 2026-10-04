@@ -255,7 +255,7 @@ static int pend_owed(JSValueConst e)
    reply the host genuinely mispaired (pending.h says exactly that at pending_owed_replies).
    So the two diverge here and nowhere else: "is this flow still waiting" is `pend_owed`, and "can the host
    still be asked" is this. */
-static int pend_host_owed(JSValueConst e)
+int pending_entry_host_owed(JSValueConst e)
 {
     return pend_owed(e) && !pending_entry_declined(e);
 }
@@ -373,8 +373,8 @@ int pending_outstanding(JSValueConst reg)
     return 0;
 }
 
-/* …AND THE SAME WALK OVER THE OTHER PREDICATE, WHICH IS THE ARITY `pend_host_owed` WAS MISSING. The paragraph
-   at `pend_host_owed` says the two questions diverge "here and nowhere else" and pending.h says the host half
+/* …AND THE SAME WALK OVER THE OTHER PREDICATE, WHICH IS THE ARITY `pending_entry_host_owed` WAS MISSING. The paragraph
+   at `pending_entry_host_owed` says the two questions diverge "here and nowhere else" and pending.h says the host half
    "IS ASKED OF AN ENTRY AND NOT OF A REGISTER, which is a statement about who needs it" — and that was an
    enumeration of readers (the join, the reply debt, the fork) rather than a property, so it went wrong the way
    an enumeration does: TWO readers of the host question stand at a REGISTER, and both of them re-derived it
@@ -388,7 +388,7 @@ int pending_host_outstanding(JSValueConst reg)
     int n = pend_len(reg), i;
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(reg, i);
-        int hit = pend_host_owed(e);
+        int hit = pending_entry_host_owed(e);
         JS_FreeValue(pend_ctx(), e);
         if (hit) return 1;
     }
@@ -396,7 +396,7 @@ int pending_host_outstanding(JSValueConst reg)
 }
 
 /* …AND THE THIRD MEMBER OF THE PARTITION, WHICH IS WHAT MAKES THE PAIR ABOVE A PAIR RATHER THAN A
-   DIFFERENCE. `pend_host_owed` is `pend_owed && !declined`, so per entry "owed" splits exactly two ways and
+   DIFFERENCE. `pending_entry_host_owed` is `pend_owed && !declined`, so per entry "owed" splits exactly two ways and
    this is the other half: an entry the trusted zone has REFUSED and this flow is still parked at. It is
    written as its own walk rather than left to be composed out of the two above for the reason pending.h
    already gives about the host question — what differs between callers is which KINDS they ask about, never
@@ -444,11 +444,11 @@ int pending_owed_replies(JSValueConst reg)
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(reg, i);
         int kind = (int)pending_get_int(e, PEND_KIND);
-        /* `pend_host_owed` AND NOT `pend_owed`: A DECLINED PARK IS A REPLY THAT CANNOT ARRIVE. The zone has
+        /* `pending_entry_host_owed` AND NOT `pend_owed`: A DECLINED PARK IS A REPLY THAT CANNOT ARRIVE. The zone has
            said it will not ask, so crediting a debt for it would hand the surplus to the next reply the host
            genuinely mispaired — which is the exact defect the paragraph below and pending.h both describe,
            reached through the one entry kind for which no reply exists at all. */
-        if (kind != FLOW_PENDING_HOSTREQ && pend_host_owed(e)) {
+        if (kind != FLOW_PENDING_HOSTREQ && pending_entry_host_owed(e)) {
             /* A DEBT IS A REPLY THAT CAN STILL ARRIVE, AND ONLY THE PAIR MAKES ONE ARRIVE. engine_pending_fetches
                lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and engine_provide delivers
                against the pair, so an owed
@@ -669,7 +669,7 @@ static void pend_index_sync(JSValueConst e, int field)
        IT LEAVES THE PAIR INDEX AND IT STAYS OUTSTANDING, AND THOSE ARE TWO SETS. This one answers "can the
        host still be asked"; `pend_owed` above answers "is this flow still waiting", and the refused flow IS
        still waiting — parked at the line that asked, owed the failure arm §@S requires. Collapsing them would
-       read the flow as FINISHED and tear its whole timeline down, which is why `pend_host_owed` exists and why
+       read the flow as FINISHED and tear its whole timeline down, which is why `pending_entry_host_owed` exists and why
        the assert below stands on the field this arm does not touch. */
     if (field == PEND_DECLINED) {
         DCHECK(pending_entry_declined(e),
