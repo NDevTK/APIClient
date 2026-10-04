@@ -6324,7 +6324,43 @@ function macroYield() {
    message is documented as JSON-ifiable — a -Infinity would arrive as `null` and the consumer's own shape
    assert would fire on a value this producer never wrote. */
 let _level1Round = 0;
+/* THE DISTRIBUTION OVER ROUNDS, WHICH IS WHAT MAKES A SINGLE OVERWRITTEN RECORD READABLE AT ALL. `_level1`
+   holds the LAST round, so every per-round row on it is a GAUGE at an instant THIS LOOP CHOSE — and the
+   instant it chooses is the worst one for the question the record is most often asked. A round that steps an
+   engine and takes the yield arm sets `state = "fetching"` and then records from its own `finally`, so a
+   terminal round of a drive that was still exploring reports `hot: 0` BY CONSTRUCTION, every single time,
+   whatever the drive did. MEASURED: one gitpod pass, 60s dwell, `pool: 1, booting: 0, loading: 0, hot: 0` at
+   round 34 — a reading consistent with an engine that was unrankable all drive AND with one that was hot in
+   every round but the last, and the row cannot separate them.
+   SO THE SHAPES ARE COUNTED OVER THE LIFETIME AND RIDE EVERY RECORD, which is the §A-GAUGE-AND-A-LIFETIME-
+   COUNTER pair stated as two rows rather than inferred from one: the gauge says where the loop IS and these
+   say what it has BEEN DOING, and only the second can answer "was the engine rankable" over a drive.
+   THEY ARE AN EXACT PARTITION AND THE ASSERT IS WHAT KEEPS THEM ONE: a round assigns `rd.shape` at the single
+   point it leaves the body and `_level1Record` is the ONLY incrementer, so the six cannot drift from each
+   other or from `round` — and a round that leaves by a THROW arrives here with no shape and is counted as
+   `rThrew`, which is a reading rather than a hole in the sum. Counting at the exits instead would have made
+   every future exit a place to forget, which is the shape of defect this project keeps paying for. */
+const _level1Shapes = { rNoPool: 0, rIdle: 0, rWaited: 0, rReleased: 0, rFinished: 0, rServiced: 0,
+                        /* A ROUND THAT LEFT BY A THROW, AND A ROUND WHOSE EXIT NAMED A SHAPE THIS PARTITION HAS
+                           NO ARM FOR, ARE TWO ARMS AND NOT ONE. The second is unreachable until somebody adds
+                           an exit, and it exists because the DCHECK that names that edit is COMPILED OUT in
+                           release: without it the release build would increment a key that is not here, read
+                           `undefined`, store NaN, and hand the popup a non-finite row — so the arm is what
+                           keeps the sum exact in the build that cannot assert. Folding it into `rThrew` would
+                           have been the two-facts-one-number shape in the one place this record exists to
+                           refuse it. */
+                        rUnknown: 0, rThrew: 0 };
+const _LEVEL1_SHAPE_KEY = { nopool: "rNoPool", idle: "rIdle", waited: "rWaited",
+                            released: "rReleased", finished: "rFinished", serviced: "rServiced" };
 function _level1Record(pool, rd) {
+  /* THE SHAPE IS COUNTED BEFORE THE ROW IS COMPOSED, so `round` and the arms are read at one instant and the
+     identity below is over one set of numbers rather than over two. An empty shape is a round that left the
+     body by a THROW: every normal exit assigns one, so the fallback is a POSITIVE statement and not a default. */
+  DCHECK(rd.shape === "" || _LEVEL1_SHAPE_KEY[rd.shape] !== undefined,
+         "the Level-1 round recorded shape `" + rd.shape + "`, which this partition has no arm for — the arms " +
+         "sum to `round` by construction, so an unknown shape is a new exit added to the loop without a row, " +
+         "and the dev build refuses it here rather than letting release carry it as `rUnknown` unread");
+  _level1Shapes[rd.shape === "" ? "rThrew" : (_LEVEL1_SHAPE_KEY[rd.shape] || "rUnknown")]++;
   const r = { round: ++_level1Round, pool: pool.length, booting: _bootingCount(),
               /* AND THE SEATS WHOSE DOCUMENT IS STILL ON THE NETWORK, WHICH IS A SECOND REASON ADMISSION WAS
                  NOT ASKED AND THEREFORE A SECOND ROW. Folded into `booting` it would say a reservation was
@@ -6381,6 +6417,20 @@ function _level1Record(pool, rd) {
      state, so their sum is a subset of the pool and a sum that outruns it is a seat counted in both — which is
      the one failure a per-row bound cannot see and which would make `loading` look like a reason admission was
      held when the reservation beside it was the reason. All three are read on the same line above. */
+  /* AND THE LIFETIME DISTRIBUTION RIDES EVERY RECORD, UNCONDITIONALLY, because it is not a reading of
+     anything this round walked — it is what every round before it did, and its whole value is that it survives
+     being read at an instant the loop chose. */
+  for (const k of Object.keys(_level1Shapes)) r[k] = _level1Shapes[k];
+  /* THE ARMS SUM TO `round` AND THAT IS ASSERTED RATHER THAN DOCUMENTED, which is the one property that makes
+     them readable as a partition instead of as seven numbers that happen to sit together. A reader who sees
+     `rServiced` at 3 against `round` at 34 is entitled to conclude the other 31 rounds were NOT service rounds
+     only if nothing can be in two arms or in none; this is what says so, and it fires on the one way that
+     breaks — a new exit from the loop body with no `rd.shape` on it, which arrives here as a silent `rThrew`. */
+  DCHECK(Object.keys(_level1Shapes).reduce((n, k) => n + _level1Shapes[k], 0) === r.round,
+         "the Level-1 round shapes sum to " +
+         Object.keys(_level1Shapes).reduce((n, k) => n + _level1Shapes[k], 0) + " against " + r.round +
+         " round(s) — this function is the ONLY incrementer and every exit of the round body assigns a shape, " +
+         "so a sum that disagrees is an exit that assigns none being counted as a throw, or a second caller");
   DCHECK(r.booting + r.loading <= r.pool,
          "the Level-1 census reports " + r.booting + " booting record(s) and " + r.loading + " loading seat(s) " +
          "in a pool of " + r.pool + " — all three are read at the same instant, at the end of the round, and " +
@@ -6467,7 +6517,7 @@ async function hostSchedule(pool, ops) {
        ABSENT rather than zero, which is what `_hostDead` beside it is read against). One write site is the
        whole of "one census, one place": there is no arrangement of this loop in which the order is taken and
        nothing records it, which is precisely how a Level-1 rank frozen at a constant survived. */
-    const rd = { hot: null, cand: null, candAsk: 0 };
+    const rd = { hot: null, cand: null, candAsk: 0, shape: "" };
     try {
     if (ops.admit) rd.cand = await ops.admit();   // gate creation to cap: seat waiting docs into freed slots
     /* ADMISSION ANSWERS WITH THE ORDER IT TOOK, OR WITH THE POSITIVE `null` THAT SAYS IT TOOK NONE. `undefined`
@@ -6479,7 +6529,7 @@ async function hostSchedule(pool, ops) {
            "returns the census `_bestCandidate` composed, or null where it never asked the order, and an " +
            "undefined answer is an arm that returns nothing being read as an order that was never taken");
     if (rd.cand) rd.candAsk++;
-    if (!pool.length) break;
+    if (!pool.length) { rd.shape = "nopool"; break; }
     const hot = pool.filter((e) => e.state === "hot");
     if (!hot.length) {   // every live engine is mid-something: wait for the earliest to become hot, then re-rank
       rd.hot = { n: 0, drained: 0 };   // a rankable set of none is a READING; the census omits the weights, not the row
@@ -6500,12 +6550,13 @@ async function hostSchedule(pool, ops) {
          wait a reservation gets, and the next iteration re-asks. */
       const pending = pool.filter((e) => e.state === "fetching" || e.state === "booting" ||
                                          e.state === "loading");
-      if (!pending.length) break;
+      if (!pending.length) { rd.shape = "idle"; break; }
       for (const e of pending)
         DCHECK(e._readyP && typeof e._readyP.then === "function",
                "an engine in state `" + e.state + "` carries no readiness promise — this arm is the only " +
                "thing that resumes the pool when nothing is hot, so an engine it cannot wait on is one the " +
                "loop spins on or abandons, and both are silent");
+      rd.shape = "waited";
       await Promise.race(pending.map((e) => e._readyP));
       continue;
     }
@@ -6648,8 +6699,9 @@ async function hostSchedule(pool, ops) {
        any of them does that outlives the round.
        The membership test is the POLICY'S own — `pool` is this function's array — so the pure scheduler stays
        free of any knowledge of frames; `release` is what turns that into a teardown. */
-    if (pool.indexOf(target) < 0) { await ops.release(target); continue; }
+    if (pool.indexOf(target) < 0) { rd.shape = "released"; await ops.release(target); continue; }
     if (st === 0) {   // fully explored, or self-parked under RAM pressure: finalize (residue -> IDB cold tier)
+      rd.shape = "finished";
       await ops.finish(target);
     } else {   // ENGINE_STEP_YIELD (a cooperative quantum) or ENGINE_STEP_STALLED (a bill) — see below.
       /* PAY EVERYTHING THE ENGINE SAYS IT IS OWED, in ONE round: the replies parked flows wait on, the lazy
@@ -6667,6 +6719,7 @@ async function hostSchedule(pool, ops) {
          WHAT WOULD BE A DEFAULT is treating an unknown code this way, which the enumeration above refuses.
          NON-BLOCKING, the way the unreachable branch was: the engine drops out of the hot set while its round
          runs, so a slow reply on this document never stalls another's. */
+      rd.shape = "serviced";
       target.state = "fetching";
       /* ONE FIELD FOR ONE QUESTION, WHICH IS "WHEN DOES THIS ENGINE BECOME RANKABLE AGAIN". It was `_fetchP`,
          and a boot is not a fetch — naming the reservation's provisioning promise after the reply round would
