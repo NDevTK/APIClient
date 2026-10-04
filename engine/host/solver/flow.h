@@ -2219,25 +2219,72 @@ typedef struct {
        **120** at census 9 and **120** at census 60 while `members` goes 2757 -> 13389 — FLAT across a 4.9x
        frontier growth, ratio 0.009 and FALLING, which is the opposite direction. Against `picksLifetime`
        5449 it is the reading the paragraph below already names: the residues are INHERITED rather than
-       earned. A second vehicle document did not settle it — gitlab.com/explore reaches four members on the
-       vehicle where the native corpus reaches 6243 on the same page — so what is established is ONE
-       document's series and not a host law. That 120 is `FLOW_SERVICE_US / 100` and that a non-isolated
-       `performance.now()` is coarsened to 100us are an INFERENCE about the cause and are recorded as one.
-       SO NEITHER FIGURE MAY PRICE AN INDEX, AND THE DESIGN IS CHOSEN SO THAT NEITHER HAS TO. A structure
+       earned. That 120 is `FLOW_SERVICE_US / 100` and that a non-isolated `performance.now()` is coarsened to
+       100us were an INFERENCE about the cause and were recorded as one; THE INFERENCE IS NOW CONFIRMED AS THE
+       MECHANISM AND THE CONSTANT IS SPENT, which is the one way this figure could rot and the one nobody had
+       looked for. `flow_silence_phase` is `flow_own_silence(f) % FLOW_SERVICE_US` and `flow_age_running` bills
+       in the quantum clock's own currency, so the count of distinct residues is CAPPED at that span divided by
+       the clock's granularity however large the frontier grows — 120 is that ceiling for a 100us clock and
+       nothing else. MEASURED on a later artifact over SEVEN fresh-browser runs of two documents: the gcd of
+       `instanceUs`, `loopUs`, `betweenSlicesUs`, `sliceUs`, `stepUs` and `schedUs` is exactly 5 in all seven
+       and none is a multiple of 100, so the ceiling is `FLOW_SERVICE_US / 5` and codesandbox read 2056-2322
+       rather than 120 — 97% of the new ceiling, with 71% more picks buying 13% more phases, which is
+       saturation and not a frontier fact. Attributing the 5us to the landed COOP flip is an INFERENCE and is
+       recorded as one, exactly as the 100us was. SO THE CEILING IS READ OFF THE RUN AND NEVER COPIED FROM
+       HERE: take that gcd, divide `FLOW_SERVICE_US` by it, and compare — near the ceiling the figure is about
+       the CLOCK and may price nothing, far below it the figure is about the FRONTIER.
+       AND THE SENTENCE THAT DECLINED TO GENERALISE THIS IS REFUTED, WHICH MATTERS MORE THAN EITHER NUMBER
+       BECAUSE IT WAS THE WHOLE OF THE REASON. It read: *A second vehicle document did not settle it —
+       gitlab.com/explore reaches four members on the vehicle where the native corpus reaches 6243 on the same
+       page — so what is established is ONE document's series and not a host law.* It is REWRITTEN RATHER THAN
+       DELETED because a reader who re-derives the caution from a four-member vehicle run will write it again.
+       The same seven runs read gitlab.com/explore at 5124, 6820, 6843 and 7341 members on the VEHICLE, and
+       THREE OF THE FOUR EXCEED the native corpus's 6243 — so the vehicle/native comparison this passage calls
+       unavailable IS AVAILABLE, and gitlab's `sil_phases` of 891-1837 against the same 2400 ceiling is 77% of
+       it with phases tracking picks linearly. That is the first vehicle reading here that is about the
+       FRONTIER rather than about the clock. WHAT IS NOT ESTABLISHED, AND IS SAID SO RATHER THAN LEFT TO BE
+       INFERRED: no native reading was taken at that later artifact, so the comparison is against the figures
+       recorded above and those are a DIFFERENT artifact; and no run was observed pinned AT 2400, the ceiling
+       being arithmetic plus the saturation evidence rather than an observed wall.
+       SO NEITHER FIGURE MAY PRICE AN INDEX — WHICH HOLDS FOR THE PINNED DOCUMENT AND IS RELAXED FOR THE ONE
+       THAT IS NOT PINNED — AND THE DESIGN IS CHOSEN SO THAT NEITHER HAS TO. A structure
        that SWEEPS the distinct phases costs `sil_phases` per query and is therefore a 100x win on one host
        and a 2x win on the other — a design whose value is a fact about a clock. A structure over the FIXED
        phase domain `[0, FLOW_SERVICE_US)` costs a logarithm of that domain whatever `sil_phases` reads, and
        the two contiguous ranges the carry splits it into are `[0, S-R)` and `[S-R, S)` however many members
        stand in them. Prefer the second and the question stops being load-bearing.
-       RETIREMENT (this correction): it goes when a census row in this tree carries the host's slice measure
-       beside it, so a live-page figure cannot be quoted without saying which clock it was denominated in.
+       RETIREMENT (this correction) — MET BY A CONSTRUCTION, AND REWRITTEN RATHER THAN DELETED BECAUSE A
+       READER WHO MEETS TWO LIVE FIGURES IN DIFFERENT DENOMINATIONS RE-DERIVES THE DEMAND. It read: *it goes
+       when a census row in this tree carries the host's slice measure beside it, so a live-page figure cannot
+       be quoted without saying which clock it was denominated in.* `testing/live-run.js` carries
+       `sliceMeasure`, `sliceIsCpu` and `sliceMs`, read off the `_quantum` this engine composes and bridge.js
+       relays, with ABSENT and MALFORMED kept apart and no default — the default a reader reaches for being
+       `isCpu: false`, which is wrong in both directions. THE DEFECT IT CLOSED IS THE ONE THIS PASSAGE CAUSED:
+       the producer and the relay both predated the reader by a long way, so the field that makes these two
+       figures comparable was written with nothing asking for it, on the one quantity whose absence is why the
+       two readings above cannot be held beside each other at all.
+       RETIREMENT: this record goes when the residue CEILING is published as a row beside `sil_phases` rather
+       than derived by a reader from six accumulators' gcd, because a figure near its own ceiling is then a
+       comparison the census makes instead of one a reader must know to make.
        RETIREMENT: this record goes when a census in this tree reports `sil_phases == 1` with `members > 1` —
        the one observation that would make the retired headline a statement about this engine rather than
        about its arithmetic.
        READ IT AGAINST `members`, NEVER ALONE: `sil_phases` at 1 with `members` at one is the frontier being
        empty of the question, and at tens of thousands it is the finding. Read it against `picksLifetime` too
        — a member that has never held the thread carries the phase it was forked with, so a reading far below
-       the dispatch count says the residues are inherited rather than earned. */
+       the dispatch count says the residues are inherited rather than earned.
+       AND THAT ORDER IS BACKWARDS FOR STABILITY, WHICH THE SEVEN RUNS SETTLED AND WHICH IS A PROPERTY OF THE
+       DENOMINATORS RATHER THAN OF ANY DOCUMENT. Over FOUR runs of ONE document in four fresh browsers,
+       `sil_phases / picksLifetime` held inside 0.424-0.538 while `sil_phases / members` swung 0.131-0.359 —
+       more than a factor of two on one page. Only a CHARGED member mints a new residue, so `picksLifetime` is
+       the population that PRODUCES the numerator while `members` is decided by how far a wall-denominated run
+       happened to get before its budget elapsed: one denominator is the numerator's cause and the other is a
+       lottery. So the SECONDARY reading above is the one to quote and the PRIMARY is the one to quote with its
+       run count, which inverts the emphasis these two sentences were written with.
+       A FALLING `picksLifetime` QUOTIENT IS A DIFFERENT FINDING FROM A SWINGING `members` ONE, and conflating
+       them is how the ceiling above gets mistaken for instability: where the picks quotient falls MONOTONICALLY
+       as picks rise, the residue count is SATURATING at the clock ceiling, which is a fact about the clock and
+       not about the frontier. Codesandbox fell 0.331 -> 0.218 that way; gitlab did not. */
     long sil_phases;
     /* …AND HOW MANY MEMBERS ARE STANDING ON THE FAR SIDE OF THAT BOUNDARY RIGHT NOW. It is a GAUGE and may
        fall between two samples — the threshold sweeps downward as the family burns and RESETS every member at
