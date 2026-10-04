@@ -55,8 +55,21 @@
  * SECURITY.md's rule exists to forbid. The character set never checked injectivity; it checked legibility.
  *
  * And it was FACTUALLY FALSE ABOUT THIS TREE, so it was a live landmine. `bridge.js` rehydrates a cold recipe
- * with `groupId: "cold:" + c.key` and that frontier key is `origin + "|" + bundleId` — a `|` in the group half,
- * on every cross-session resume there has ever been. In a dev build the char assert aborts the offscreen at the
+ * with `groupId: "cold:" + c.key` and that frontier key carries a `|` in the group half, on every cross-session
+ * resume there has ever been.
+ * THIS SENTENCE SAID THE KEY WAS `origin + "|" + bundleId` AND IT IS `address + "|" + bundleId`, and the wording
+ * is REWRITTEN rather than deleted because the retired half is the one a reader re-derives: the group id is
+ * `"cold:" + key`, so `origin` is what a reader supplies for the first half when they have not opened the
+ * composer. The composer is `bridge.js`'s `const fkey = msg.sourceUrl + "|" + _bid`, and that file says it in
+ * prose too — "a frontier key is `address|bundle`". THE CORRECTION STRENGTHENS THIS PARAGRAPH RATHER THAN
+ * weakening it: an ORIGIN is a scheme, host and port and admits a small character set, while an ADDRESS carries
+ * a path and a QUERY, so the group half can hold very nearly anything — which is exactly why a character set was
+ * the wrong instrument and injectivity is the right one. A stale coordinate that makes an argument look weaker
+ * than it is costs the argument, which is why it is corrected here and not only where it was quoted.
+ * IT HAS ALREADY BEEN QUOTED ONCE, in a published commit message (a072775) that lifted it as the key — so the
+ * cost of this one was not hypothetical and the correction is recorded at the site a reader lands on. */
+/* AND WHAT THE ASSERT COST, which is the half the correction above does not change. In a dev build the char
+ * assert aborts the offscreen at the
  * admission; in release it compiles out and the ambiguity it was there to keep out of a DIAGNOSTIC arrives
  * silently. The group half is NOT a URL origin — it is a browser-stated tab id or that frontier key — and a
  * rule that constrains what a producer may put in it is this table legislating for a producer it does not own.

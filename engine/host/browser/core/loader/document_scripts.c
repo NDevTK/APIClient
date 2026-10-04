@@ -134,8 +134,26 @@ unsigned document_bundle_id(lxb_html_document_t *dom) {
         /* AN INLINE SCRIPT CONTRIBUTES ITS POSITION AND NEVER ITS BYTES, WHICH IS THE WHOLE OF WHAT THIS ID IS
            FOR AND IS THE OPPOSITE OF WHAT IT USED TO DO.
            WHAT THIS ID IS: half the CROSS-SESSION FRONTIER KEY and nothing else. extension/bridge.js says so in
-           those words ("it is half the frontier key") and extension/render-process-host.js gives the key as
-           `origin + "|" + bundleId`. There is no other consumer: a program identity nobody asks for was being
+           those words ("it is half the frontier key") and COMPOSES it at `const fkey = msg.sourceUrl + "|" +
+           _bid` — the key is `address|bundle`, which that file also states in prose.
+           THIS RECORD FIRST GAVE THE KEY AS `origin + "|" + bundleId`, LIFTED FROM A COMMENT IN
+           extension/render-process-host.js THAT IS STALE, and it is corrected here rather than quietly fixed
+           because the mis-citation reached a PUBLISHED commit message (a072775) before anybody read the
+           composer. The stale half is also the one a reader re-derives: the group id is `"cold:" + key`, so
+           `origin` is what you supply for the first half when you have not opened the composer. Nothing about
+           the defect or the fix moves — the bundle id is half the key under either spelling, and it was the
+           half that was unstable — and the correction is recorded at the stale site too.
+           AND THE FIX DOES NOT ON ITS OWN MAKE A SECOND VISIT RESUME, WHICH THAT COMMIT MESSAGE LEFT A READER
+           TO ASSUME. The same three-visit drive reads `park 0` and `resumed 0` on every visit, and parking is
+           requested ONLY from the RAM-pressure eviction path and a dev-only `?__forcepark=1` hook — never at
+           teardown, where extension/bridge.js's `engineFinalize` says in its own words that "the flows that
+           were parked on them went with the instance". A lone document is never evicted, so nothing is written
+           under the key at all. So the drive's three `unvisited` readings have TWO sufficient causes, this diff
+           closes ONE of them, and the bundle ids differing is the evidence for that one INDEPENDENT of the
+           other: it is a property of the document, not of whether anything parked. The second cause is a
+           missing production trigger for a mechanism that exists and is gated — which is the next diff and is
+           not this file's.
+           There is no other consumer: a program identity nobody asks for was being
            computed, and the one question actually asked — IS THIS THE DOCUMENT I PARKED A FRONTIER FOR — needs
            an answer that is STABLE ACROSS RESPONSES.
            THE RETIRED CODE HASHED EVERY INLINE SCRIPT'S FULL TEXT, and its argument is kept here because it is
