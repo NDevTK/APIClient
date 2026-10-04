@@ -27,19 +27,34 @@
   a widening that admits navigations would turn these rungs from a decline into a load, which is a reading and
   not a regression.
 
-  THE ORACLE IS THIS SERVER'S ACCESS LOG AND NOT A CENSUS ROW, because the thing to prove is an ABSENCE and
-  the engine cannot be the witness to its own silence. Two clients load this document — real Chrome at the
-  row's URL and the engine through its own chokepoint — and `serve.mjs` appends `sec-fetch-dest` for exactly
-  that reason. So the pair is in ONE log:
-    · `REQ control-navdecline GET /nav/child.html dest=iframe` (or `document`) — CHROME loaded the child, which
-      is what proves the markup is right, the path is reachable and the server answers it.
-    · NO `REQ control-navdecline GET /nav/child.html dest=empty` — the ENGINE did not, because the policy
-      refused it. That is the scored absence, and it is scored only because the line above it exists.
-    · NO `/api/nav-child` from `dest=empty` either: the child's own code never ran. The day #117's decision
-      admits navigations, that line appears and this fixture reads it as the capability arriving.
-  `/nav/child.html` is SERVED rather than 404'd, for `/f/bare.js`'s reason exactly: a 404 cannot tell "never
-  requested" from "requested and missing", and both rungs here read an absence.
+  THE ORACLE PARAGRAPH THAT STOOD HERE IS WRONG AND IS REWRITTEN RATHER THAN DELETED, BECAUSE A READER WILL
+  RE-DERIVE IT FROM `serve.mjs`'s `sec-fetch-dest` COLUMN. It read: two clients load this document, Chrome at
+  the row's URL and the engine through its own chokepoint, so the pair is in ONE log — a
+  `GET /nav/child.html dest=iframe` from CHROME, and NO such line at `dest=empty` from the ENGINE, which is
+  the scored absence. The positive half is exactly right and was measured. THE ABSENCE IS NOT OBSERVABLE,
+  because `dest=empty` is NOT the engine's own signature: it is what any `fetch()` carries, and TWO of this
+  tree's mechanisms make one for this address. MEASURED over two drives of this fixture: the log carries
+  `GET /nav/child.html dest=empty` FOUR times while the zone logged NO navigation refusal at all, and
+  `docsSeenMine` reads 3 then 6 — the AMBIENT SEED. Chrome loads each child, the content script in each child
+  frame ships its document, and the zone fetches it as a seed, which FIRES through the default table's
+  `provenance=observed AND doc-reach=observed` arm — an arm that reads no destination and that
+  safe-fetch.js's `_isNavigation` deliberately left alone. So the engine's own §7.4 navigation and the seed
+  of a document Chrome loaded produce the SAME LINE, and no reading of this log separates them.
 
+  THE SOUND ORACLE IS THE ZONE'S OWN REFUSAL RECORD, WHICH IS A DIRECT WITNESS OF THE THING BEING SCORED
+  rather than a proxy for it: `blocked-signal:destination=navigation` in the drive's console transcript is the
+  chokepoint refusing a §7.4 `document.fetch`, so its PRESENCE says the engine reached step 14 and issued the
+  request. It is the engine reporting on itself, which is weaker than an outside oracle — and an outside
+  oracle that cannot tell two mechanisms apart is not an oracle at all. ITS ABSENCE IS THE READING THIS
+  FIXTURE CURRENTLY RETURNS: neither drive logged one, so what this document has established so far is that
+  the engine does NOT reach a child-navigable load here — which is a finding about REACH and not about the
+  policy, and is why the access log's positive half is still worth having (it proves the markup, both rungs
+  and the route).
+  WHAT WOULD MAKE THE SERVER THE ORACLE AGAIN is a request header only one of the two paths sets, which is
+  the shape §LIVE-VERIFY already uses to separate a real browser's control run from the engine's; this fixture
+  does not have one and does not invent one here.
+  `/nav/child.html` is SERVED rather than 404'd, for `/f/bare.js`'s reason exactly: a 404 cannot tell "never
+  requested" from "requested and missing".
   AND THE CENSUS ROW IS A SECOND, WEAKER ORACLE WITH ITS LIMIT STATED. `stepUnitRuns`'
   `fork-over-a-declined-request` and `await-a-refused-request` are the two halves of `flow_decline_fork`'s
   pair; nonzero there with `egressDeclined == {}` is the signature of a decline that did NOT come through the

@@ -252,10 +252,16 @@ DOCS.forEach(([doc, name], i) => {
     /* THE CHILD DOCUMENT THE `nav-decline` RUNGS NAME, SERVED BY EVERY ORIGIN AND EXPECTED TO BE REQUESTED BY
        EXACTLY ONE OF THE TWO CLIENTS. It is served rather than 404'd for `/f/bare.js`'s reason: a 404 cannot
        tell "never requested" from "requested and missing", and the rung that names it reads an ABSENCE.
-       REAL CHROME WILL ASK FOR IT (`dest=iframe`, or `document` on some versions) and THE ENGINE WILL NOT
-       (`dest=empty`), because the default egress table refuses a navigation — so the scored absence has
-       a presence beside it in the same log, which is the whole of what makes it a reading rather than a
-       silence. It is a PATH UNDER `/nav/` rather than `/nav-child.html` so that the `.js`-and-root rule below
+       REAL CHROME WILL ASK FOR IT (`dest=iframe`, or `document` on some versions), AND THAT HALF IS MEASURED
+       AND IS WHAT PROVES THE MARKUP, BOTH RUNGS AND THIS ROUTE. The clause that stood here added "and THE
+       ENGINE WILL NOT (`dest=empty`), because the default egress table refuses a navigation", and it is kept
+       in its own words because a reader will re-derive it from the column one paragraph up: `dest=empty` is
+       NOT the engine's own signature, it is what ANY `fetch()` carries, and the AMBIENT SEED makes one for
+       this very address — Chrome loads each child, the content script in each child frame ships its
+       document, and the zone fetches it as a seed, which FIRES through the default table's
+       `provenance=observed AND doc-reach=observed` arm. MEASURED over two drives: four such lines with NO
+       navigation refusal logged anywhere. So this column cannot separate the engine's own §7.4 navigation
+       from the seed of a document Chrome loaded, and `nav-decline.html` names the sound oracle instead. It is a PATH UNDER `/nav/` rather than `/nav-child.html` so that the `.js`-and-root rule below
        cannot serve it by accident: this route is the only thing that answers it, and a reader grepping for who
        serves it finds one line. */
     if (p === '/nav/child.html') {
