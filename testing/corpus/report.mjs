@@ -598,6 +598,18 @@ for (const p of passes) for (const r of p.rows) {
        object is a stated join whose `{}` is an empty surface. */
     epJoin: r.doorWitness, epJoinRows: r.doorWitnessRows,
     epJoinSnaps: r.doorWitnessSnaps, epJoinDocs: r.doorWitnessDocs,
+    /* AND THE THREE ROWS THAT SAY WHETHER THE ENGINE RAN AT ALL AND WHETHER IT COULD TAKE A DELIVERY, left as
+       whatever site.mjs wrote for `epRazor`'s reason. All three were write-with-no-reader in THIS file — the
+       tenth, eleventh and twelfth time this corpus reader has been the consumer that never asked — and they
+       are the three the endpoint columns above cannot be read without: a surface of 98 addresses and one of 190
+       are the same engine on the same bytes, and what separates them is how much of the instance's span its own
+       loop actually got.
+       THEY ARE ONE QUESTION AT THREE GRAINS AND ARE NEVER SUMMED. `wallSpan` is the instance's own span split
+       into loop and between-slices; `replyDoor` is what the reply seam was asked and answered; `deliverGuard`
+       is how many flows could RECEIVE one. The first two are lifetime counts and `deliverGuard` is a GAUGE, so
+       only the first two may be differenced across samples — which is why nothing below does that to the
+       third. */
+    span: r.wallSpan, rdoor: r.replyDoor, dguard: r.deliverGuard,
     sigs, wasm: (r.artifact && r.artifact.wasmSha256 || '').slice(0, 12),
     /* THE ARTIFACT IS NAMED BY ITS HASH ALONE. This read `r.artifact.head`, a field site.mjs deliberately
        renamed to `builtFromHeadClaim` when it stopped being trustworthy, so it resolved to '' for every row
@@ -1216,6 +1228,80 @@ if (jnShown.length) {
       (r.stray.length ? '   ARTIFACT-OLDER-THAN-A-KEY: ' + r.stray.join(' ') : ''));
   console.log('  the PAIRINGS are the finding; the counts are a union over documents and are NOT `epRazor`\'s');
   console.log('  unit, so they are checked against `epJoinRows` on the same row and never against `emitted`');
+}
+/* HOW MUCH OF THE INSTANCE'S SPAN THE ENGINE'S OWN LOOP GOT, AND HOW MANY FLOWS COULD TAKE A DELIVERY — the
+   two readings the endpoint columns above cannot be read without, and the pair that reconciles two measurements
+   of this corpus that each refuted the other.
+   THE SHARE IS A RATIO OF TWO FIELDS OF ONE ROW, which is the only form a span figure may take here: `loopUs`
+   and `instanceUs` are read WITHIN one sample, so no two-moments comparison is being made
+   (CLAUDE.md §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE), and the producer asserts
+   `instanceUs == loopUs + betweenSlicesUs` so the complement needs no second field here.
+   MEASURED, AND IT IS WHY THIS BLOCK EXISTS RATHER THAN A PARAGRAPH: on gitpod the share SEPARATES the endpoint
+   mode where `slices` does not. Every pass whose `module-import` door is nonzero reads a share at or above
+   10.3% and every pass whose door is zero reads at or below 2.2%, five each. `slices` does not merely overlap,
+   it INVERTS on a pair: a LOW pass at ELEVEN slices sits beside a HIGH pass at SIX, so the slice count orders
+   those two the wrong way round and a scheduler reading taken off it was never able to tell the modes apart.
+   That is also why the share and the count are printed TOGETHER rather than one standing for the other — the
+   same number of visits can be 0.9% or 37.3% of a span. Two earlier readings of this corpus therefore each described ONE mode and were quoted as
+   the engine's: "0.5-2.2% of its span in 2-3 slices" is exactly the four low-mode passes, and "48-96% in 12-16
+   slices" is exactly the high-mode pair. Neither was wrong and both were under-scoped, which is
+   §a-bare-count-over-a-population-you-have-not-partitioned read across runs instead of within one.
+   AND `stackEmpty` IS THE ONE FIGURE THAT DOES NOT MOVE, which no producer can see because it is a CROSS-RUN
+   fact. The engine asserts `canDeliver <= stackEmpty <= live` WITHIN a sample and this file does not restate it
+   (§AN-AUDITOR-DERIVES-THE-RULE); what it publishes is the DISTRIBUTION of that gauge over the passes, and on
+   this corpus it is a single value at every one of them while `pend` runs into the hundreds. A constant
+   receiving capacity beside a queue that is not constant is a statement about the SEAM rather than about any
+   run, and it is invisible from inside one.
+   NOTHING IS DIFFERENCED AND NO VERDICT IS COMPOSED. `deliverGuard` is a GAUGE, so a difference of it across
+   two passes is not a quantity; the share is per-pass and is printed per-pass; and the mode is read off the
+   endpoint door rather than inferred from either, so the separation above is a statement a reader can check
+   against the door column and not one this block asserts. */
+const spOne = (m) => {
+  const w = (m.span && typeof m.span === 'object') ? m.span : null;
+  const d = (m.dguard && typeof m.dguard === 'object') ? m.dguard : null;
+  const r = (m.rdoor && typeof m.rdoor === 'object') ? m.rdoor : null;
+  if (!w && !d && !r) return { tok: !('span' in m) ? 'no-field' : (m.span === null ? 'no-counters' : String(m.span)) };
+  const n = (o, k) => (o && typeof o[k] === 'number' ? o[k] : null);
+  const loop = n(w, 'loopUs'), inst = n(w, 'instanceUs');
+  return { w, d, r,
+           /* `null` AND NEVER A ZERO where either operand is absent, and never where `instanceUs` is 0 — a
+              share of a span that did not happen is not a small share. */
+           share: (loop === null || !inst) ? null : (100 * loop / inst),
+           slices: n(w, 'slices'), stackEmpty: n(d, 'stackEmpty'), canDeliver: n(d, 'canDeliver'),
+           pend: n(d, 'pend'), pendReady: n(d, 'pendReady'),
+           asked: n(r, 'replyAsked'), answered: n(r, 'replyAnswered'), outstanding: n(r, 'replyOutstanding') };
+};
+const spRows = table.map((t) => {
+  const per = t.measurements.map(spOne);
+  const stated = per.filter((x) => x.w || x.d || x.r);
+  return { id: t.id, n: per.length, per, stated,
+           tok: stated.length ? null : (per.length ? per[0].tok : 'no-pass') };
+});
+const spShown = spRows.filter((r) => r.stated.length);
+if (spShown.length) {
+  const spIdW = Math.max('site'.length, ...spShown.map((r) => r.id.length)) + 2;
+  const cell = (x) => (x.share === null ? '-' : x.share.toFixed(1) + '%') +
+    '/' + (x.slices === null ? '-' : x.slices + 'sl') +
+    ' ' + (x.canDeliver === null ? '-' : x.canDeliver) + '≤' +
+    (x.stackEmpty === null ? '-' : x.stackEmpty) + ' of ' +
+    (x.pendReady === null ? '-' : x.pendReady) + '/' + (x.pend === null ? '-' : x.pend);
+  console.log('');
+  console.log('ENGINE SPAN AND DELIVERY CAPACITY (site, then PER PASS IN ORDER: loop share of the instance\'s');
+  console.log('  span / slices, then canDeliver ≤ stackEmpty of pendReady/pend):');
+  for (const r of spShown)
+    console.log('  ' + pad(r.id, spIdW) + r.stated.map(cell).join(' | '));
+  /* THE GAUGE'S DISTRIBUTION OVER THE PASSES, which is the cross-run fact no single run can state and the
+     reason this block is not just a span column. Printed as the set of values with how many passes each, so a
+     constant is visible as a constant rather than having to be inferred from a column. */
+  const seen = {};
+  for (const r of spShown) for (const x of r.stated)
+    if (x.stackEmpty !== null) seen[x.stackEmpty] = (seen[x.stackEmpty] === undefined ? 0 : seen[x.stackEmpty]) + 1;
+  const vals = Object.keys(seen);
+  console.log('  stackEmpty over every pass stating it: ' + JSON.stringify(seen) +
+    (vals.length === 1 ? '  — ONE value at all of them, while `pend` is not constant: a RECEIVING CAPACITY'
+                       : '  — more than one value, so it is not the constant this block was written about'));
+  console.log('  the share is read WITHIN one row (loopUs/instanceUs); `deliverGuard` is a GAUGE and is never');
+  console.log('  differenced across passes; the MODE is read off the door column above and not inferred here');
 }
 /* WHICH READING A ZERO DATA-DOOR ROW IS, OVER THE CORPUS — the one discrimination the hard-bar section above
    structurally cannot make, and the question this corpus's own measurement opened. Driven over two real app
