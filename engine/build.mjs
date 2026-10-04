@@ -4443,7 +4443,7 @@ function engineRecords(out, kind) {
     throw new Error(`[build] ${seen} line(s) of this stage's output END in an @${k} record and this reader ` +
                     `took ${rows.length}. The ${seen - rows.length} it could not take are in a relay shape ` +
                     `its grammar does not know — this reader speaks the DIRECT form and engine/trusted.mjs's ` +
-                    `\`[trusted] [<tag>] \` prefix with an optional \`@KIND#<n> \` ordinal, and nothing else. ` +
+                    `\`[trusted] [<tag>] \` prefix with an optional \`@${k}#<n> \` ordinal, and nothing else. ` +
                     `A new relay must TEACH this grammar rather than shrink its answer, which is what the ` +
                     `anchor this replaced did silently: it read 0 and that read as "the stage printed none".`);
   return rows;

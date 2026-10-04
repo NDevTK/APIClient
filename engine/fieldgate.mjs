@@ -1049,6 +1049,33 @@ const GLOBAL_CONVERSION = new Map([
   ["parseFloat", { to: "ToString", sec: "ECMAScript §19.2.4 parseFloat ( string )" }],
 ]);
 
+/* WHAT THE CALL YIELDS WHEN THE FIELD IS ABSENT, ASKED OF THE LANGUAGE RATHER THAN WRITTEN DOWN — because
+   §the THREE BANDS accuses on exactly this premise and states it in its own words: "the token is an equality
+   operand, so an absence MATCHES". That premise is a fact about the VALUE THE CALL RETURNS, and `to` above is
+   a fact about what its FIRST STEP does to the argument. The two come apart, and §19.2.5 parseInt is where:
+   its argument goes through ToString and its RESULT is a number.
+   `String(undefined)` is the string "undefined", which a JSON body's own key can BE — §isEqualityOperand's
+   measured incident exactly. `Number(undefined)` is NaN (§7.1.4 ToNumber, Table 15: Undefined -> NaN), and
+   §7.2.15 IsStrictlyEqual and §7.2.14 IsLooselyEqual both answer FALSE for NaN against every value INCLUDING
+   ITSELF — so an absent field cannot match anything here. It takes the NOT-EQUAL arm, which is the loud
+   outcome this file exists to ask for and is the opposite of a token that matches. `parseInt` and
+   `parseFloat` are NaN one step later, for the same reason: ToString first, then a parse that fails.
+   SO IT IS COMPUTED AND NOT TABULATED, which is §AN-AUDITOR-DERIVES-THE-RULE at the one place where the owner
+   of the rule is the ECMAScript implementation this gate is ALREADY RUNNING ON. A name added to the map above
+   gets its answer for free, and a name that is not a global THROWS here rather than being credited by a
+   default — the hand-kept second copy this file refuses everywhere else, arriving in its own record. */
+for (const [name, g] of GLOBAL_CONVERSION) {
+  const fn = globalThis[name];
+  if (typeof fn !== "function")
+    throw new Error(`[field-gate] ${name} is named above as a §19.2 global conversion and this realm has no ` +
+                    `such function, so what its call yields for an absent field cannot be asked. A listed ` +
+                    `answer would be the second copy of a fact the language owns.`);
+  const tok = fn(undefined);
+  /* NaN is the ONE value not equal to itself, and it is the one token no comparison can match. */
+  g.absenceMatches = tok === tok;
+  g.absenceToken = tok === tok ? JSON.stringify(tok) : "NaN";
+}
+
 /* The conversion a read at [from,to) stands under, or null. `subst` is the masker's list of `${ }` interiors;
    `boundHere` is the file's own scope answer, so a corpus that declares its own `String` is not credited with
    the language's. */
@@ -1110,6 +1137,7 @@ function coercionOf(struct, code, from, to, subst, boundHere) {
                of the read — `String(x.f) === k` compares the token, and `x.f === k` compares the field. */
             const idAt = head + w.index;
             return { to: g.to, how: `the argument of \`${w[1]}()\``, sec: g.sec,
+                     absenceMatches: g.absenceMatches, absenceToken: g.absenceToken,
                      use: isEqualityOperand(struct, idAt, matchAt(struct, open)) ? "an equality operand" : "a value" };
           }
         }
@@ -2176,7 +2204,30 @@ function endsInThrow(body) {
 
 /* A swallowing try: its catch body neither rethrows nor asserts, so every read inside the try is a read whose
    absence the consumer has already decided to survive. §Architecture names `a catch {} around a read` in the
-   same breath as `|| 0` for exactly this reason. */
+   same breath as `|| 0` for exactly this reason.
+   NAMED RESIDUAL — THIS ASKS WHETHER THE CATCH RE-RAISES AND NEVER WHETHER THE FIELD CAN BE ABSENT AT ALL, and
+   the second is the question the verdict makes. "Would an absence survive as a value" is false OUTRIGHT where
+   the record's PRODUCER has already made the absence impossible — a driver that splits a seam line and FAILS
+   LOUDLY on its field count has made every field of its return a string before any consumer reads one, so a
+   `try` around the one act that CAN throw conceals nothing and a catch yielding the record's DECLARED ABSENCE
+   under a named reason is §WHOSE BYTES STATE THE VALUE's refusal rather than §Architecture's `catch {}`.
+   THE CHEAP NARROWINGS ARE REFUSED AND NOT MERELY UNBUILT, because each reads as the obvious fix: "the catch
+   does not FALL THROUGH" credits `catch { return ""; }`, which hands the CALLER the fabricated datum one frame
+   out; "the same field is read OUTSIDE every swallowing span too" credits a read on the strength of another
+   that conceals as much, since neither a `cs(…)` nor a `log.push({…})` throws on an absent member; and an arm
+   keyed on a BARE `return` credits one spelling and leaves its sibling standing, which is
+   §a-sweep-certifies-its-survivors with the certification granted by the repair.
+   WHAT THE NEXT DIFF BUILDS: the presence question asked of the RECEIVER'S ORIGIN rather than of the catch —
+   where a receiver is a parameter every caller passes one corpus-declared function's return to, and that
+   function's body asserts the SHAPE its return is composed from, the field is not absent-able. Both halves of
+   the walk are here already (`returnsOf`, §the ORIGIN of a value); the missing step is from an asserted shape
+   to a field's presence, and nothing spells one — `git grep -c instanceofGuards engine/fieldgate.mjs` answers
+   2 for the guard machinery that DOES exist and every spelling of a shape-assert one answers 0.
+   HOW ITS ABSENCE SHOWS: a DEFAULTED row whose `try` wraps exactly ONE act that can throw and whose catch
+   returns a named refusal rather than falling through to a consumer — met as an accusation asking for an assert
+   the producer has already made, and settleable only by opening a file the row does not name.
+   RETIREMENT: this record goes when this arm consults the receiver's ORIGIN for a shape assert before deciding
+   a read is defaulted, because the presence question is then asked of the party that answers it. */
 function swallowingTrySpans(struct) {
   const rethrowers = alwaysThrowingNames(struct);
   const spans = [];
@@ -6274,16 +6325,39 @@ for (const d of defaulted) dByForm.set(d.form, (dByForm.get(d.form) || 0) + 1);
                 exists to keep out. The COUNT stays, per construct, because a decided negative nobody can see is
                 the concealment this file exists to report; it is also the standing evidence for the refusal,
                 which a comment could not be. */
-const coercedCompared = coerced.filter((c) => c.use === "an equality operand" && !c.where);
+/* AN EQUALITY OPERAND STATES WHAT ITS ABSENCE TOKEN IS, OR THIS THROWS RATHER THAN PICKING A BAND FOR IT.
+   Only §the GLOBAL CONVERSION arm of `coercionOf` returns `use: "an equality operand"` — the template
+   substitution, the `+` chain and the arithmetic arms all hardcode `"a value"` and the computed key hardcodes
+   `"a property key"` — so every row reaching the split below carries `absenceMatches`. That is a fact about
+   this file and it is ASSERTED rather than relied on: a fourth arm added later without stating what its call
+   yields for an absent field would otherwise be sorted by `undefined`, which is §A-FIELD-A-CONSUMER-DEFAULTS
+   performed on this gate's own record — a band chosen by a hole rather than by a statement. */
+for (const c of coerced)
+  if (c.use === "an equality operand" && typeof c.absenceMatches !== "boolean")
+    throw new Error(`[field-gate] a coerced read at ${place(c)} is an equality operand through ${c.how} and ` +
+                    `states no absence token, so whether an absence MATCHES it is not decidable here. The ` +
+                    `conversion arm that returned it must state what its call yields for an absent argument.`);
+
+const coercedCompared = coerced.filter((c) => c.use === "an equality operand" && !c.where && c.absenceMatches);
+/* THE OTHER HALF OF THE SAME `use`, AND IT IS A DECIDED NEGATIVE RATHER THAN A QUIETER ACCUSATION. */
+const coercedNaN = coerced.filter((c) => c.use === "an equality operand" && !c.where && !c.absenceMatches);
+const inEq = coerced.filter((c) => c.use === "an equality operand" && c.where);
 const coercedKeyed = coerced.filter((c) => c.use === "a property key");
 const coercedValue = coerced.filter((c) => c.use === "a value");
 if (coerced.length) {
   log(`── COERCED — ${coerced.length} read(s) of a record field standing under a conversion that turns its ` +
       `absence into a value rather than into a crash ──`);
-  log(`  ${String(coercedCompared.length).padStart(5)}  COMPARED — the token is an equality operand, so an absence MATCHES. This band is the verdict's`);
+  log(`  ${String(coercedCompared.length).padStart(5)}  COMPARED — the token is an equality operand AND an absence MATCHES it. This band is the verdict's`);
   for (const c of coercedCompared)
     log(`         ${place(c)}  ${c.recv}.${c.name}  ${c.to} via ${c.how}; the record is ${c.disp}  — ${c.sec}`);
-  const inEq = coerced.filter((c) => c.use === "an equality operand" && c.where);
+  if (coercedNaN.length) {
+    log(`  ${String(coercedNaN.length).padStart(5)}  DECIDED, NOT COMPARABLE — an equality operand whose absence token is NaN. §7.2.15 ` +
+        `IsStrictlyEqual and §7.2.14 IsLooselyEqual answer FALSE for NaN against every value INCLUDING ITSELF, so an ` +
+        `absent field cannot match here at all: the comparison takes its NOT-EQUAL arm, which is the loud outcome this ` +
+        `file asks for. Decided, not passed — the token is asked of the LANGUAGE, by calling the global with \`undefined\``);
+    for (const c of coercedNaN)
+      log(`         ${place(c)}  ${c.recv}.${c.name}  ${c.how} yields ${c.absenceToken} for an absent field; the record is ${c.disp}  — ${c.sec}`);
+  }
   for (const [w, n] of [...inEq.reduce((m, c) => m.set(c.where, (m.get(c.where) || 0) + 1), new Map())])
     log(`         (and ${n} more inside ${w === "assert" ? "a should-never-happen, where the absence ABORTS" : "a console emission, where a person reads the token"})`);
   log(`  ${String(coercedKeyed.length).padStart(5)}  KEYED — the token becomes a property key (§7.1.21 ToPropertyKey). Listed, not accused`);
@@ -6293,6 +6367,17 @@ if (coerced.length) {
   const byHow = new Map();
   for (const c of coercedValue) byHow.set(c.how, (byHow.get(c.how) || 0) + 1);
   for (const [h, n] of [...byHow].sort((a, b) => b[1] - a[1])) log(`         ${String(n).padStart(5)}  ${h}`);
+  /* THE BANDS SUM TO THE POPULATION, ASSERTED RATHER THAN HOPED — §the PARTS SUM TO THE TOTAL's reason exactly,
+     owed here because this band now has FIVE members where it had four: a split that silently swallowed a row
+     would shrink the accusation and leave `coerced.length` alone, which is coverage collapsing and reading as
+     accuracy. `use` is the partition and `where` splits one of its arms, so this is arithmetic. */
+  if (coercedCompared.length + coercedNaN.length + inEq.length + coercedKeyed.length + coercedValue.length
+      !== coerced.length)
+    throw new Error(`[field-gate] ${coercedCompared.length} compared + ${coercedNaN.length} not-comparable + ` +
+                    `${inEq.length} in an assert or a log + ${coercedKeyed.length} keyed + ${coercedValue.length} ` +
+                    `a value does not reach ${coerced.length} coerced read(s). These are a PARTITION of one ` +
+                    `population this file computes entirely, so a total that does not close is this scan ` +
+                    `double-counting or dropping a row.`);
 }
 if (defaulted.length) {
   log(`── DEFAULTED reads — ${defaulted.length} read(s) of a record field through a form that survives its absence ──`);

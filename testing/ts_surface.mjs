@@ -1093,8 +1093,21 @@ async function main(argv) {
         if (v.lit) b.lit[v.lit]++;
         const texts = v.texts || (v.text !== null && (v.kind === "literal" || v.kind === "folded") ? [v.text] : []);
         for (const s of texts) b.complete.add(s);
+        /* THE EXAMPLE ROW CARRIES THE SAME NORMALISATION THE COUNT DOES, AND ONE FIELD RATHER THAN TWO ARMS OF
+           A UNION WHOSE TAG IT DID NOT CARRY. §tsVerdict folds a literal to `{text}` and a union to
+           `{text: null, texts}`, so this row used to hold BOTH — `url: v.text` and `urls: v.texts || undefined` —
+           and its one reader coalesced them with `r.urls || r.url`. That is two right answers to one question
+           three lines apart: `texts` above is the row's contribution as `b.complete` counts it, and the printed
+           example was composed a second way, so the example column and the count column could disagree about
+           what a row contributed with nothing saying so. It also made the column's SHAPE vary per row — a bare
+           string for a literal and an array for a union — where the quantity is one list either way.
+           SO THE STALE HALF GOES RATHER THAN BEING DEFAULTED PAST: `url` on these rows had exactly one reader
+           and it was the fallback arm of that coalesce. `texts` is never absent here (a folded literal yields
+           `[v.text]` and a folded union yields its own members), so the reader needs no `||` and an absence
+           would reach `JSON.stringify` and die at the `.slice` — the loud outcome rather than a substituted
+           datum. CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS' third answer, which is the one this shape wanted. */
         if (nExamples && v.kind === "folded")
-          b.rows.push({ door: door.id, cls: door.cls, kind: v.kind, url: v.text, urls: v.texts || undefined,
+          b.rows.push({ door: door.id, cls: door.cls, kind: v.kind, urls: texts,
                         file: relative(corpusDir, f), tsPath: tsPathOf(f) === f ? undefined : "renamed",
                         line: sf.getLineAndCharacterOfPosition(node.getStart()).line + 1 });
       });
@@ -1367,7 +1380,7 @@ async function main(argv) {
     }
     console.log(`THE ADVERSARY'S \`folded\` ROWS — a value its CHECKER recovered from a non-literal expression:`);
     for (const r of out.foldedExamples.slice(0, nExamples))
-      console.log(`  [${r.door}] ${JSON.stringify(r.urls || r.url).slice(0, 110)}   ${r.file}:${r.line}`);
+      console.log(`  [${r.door}] ${JSON.stringify(r.urls).slice(0, 110)}   ${r.file}:${r.line}`);
   }
 }
 
