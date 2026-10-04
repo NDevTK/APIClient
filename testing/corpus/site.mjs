@@ -85,6 +85,31 @@ const PROBE = `(() => ({
     run: d._astRun === undefined ? null : d._astRun,
     astError: d._astError ? String(d._astError).slice(0,300) : null,
     sites: (d._astResults || []).flatMap(a => (a.fetchCallSites || []).map(x => (x.method||'?') + ' ' + (x.url||''))),
+    /* THE DOOR AND THE WITNESS CLASS JOINED PER ROW, WHICH IS THE ONE STATEMENT NO MARGINAL CARRIES. The
+       census publishes four histograms over this same array and CLAUDE.md's own rule for them is that "a union
+       is a statement about per-row MEMBERSHIP and two marginals carry no overlap between them" — so a reader
+       holding \`doors {document-script:1, link-element:97, module-import:92}\` beside
+       \`witness {unasked:1, no-witness:97, may-rest-on:92}\` can see the three numbers AGREE and cannot see
+       that they agree ROW BY ROW. Two partitions of one population whose buckets happen to be the same sizes
+       are consistent with every pairing there is.
+       MEASURED, WHICH IS WHY THIS IS HERE RATHER THAN INFERRED: those two histograms are exactly what two
+       gitpod passes published, the arithmetic agreement was three-way and exact, and the sentence it supports
+       — "every address the page's own code composed may rest on a witness this engine chose, and the one the
+       markup walk minted was composed with NO FLOW standing" — is a claim about which rows are which. It was
+       read off the margins and it needed this.
+       KEYED \`door|witnessClass\` AND NOT SUMMARISED, with both halves taken as whatever the row carries so a
+       wasm older than either key lands in its own bucket rather than being folded into a present one: the
+       engine writes both unconditionally, so a missing key is a fact about the BUILD and the keys above keep
+       absence apart from a zero for exactly that reason. This walk takes the SAME array those histograms are
+       built from, so its own total is their denominator and a disagreement is a filtered walk. */
+    doorWitness: (d._astResults || []).reduce((h, a) => {
+      for (const x of (a.fetchCallSites || [])) {
+        const k = ('door' in x ? x.door : '(no-door-key)') + '|' +
+                  ('witnessClass' in x ? x.witnessClass : '(no-witness-key)');
+        h[k] = (h[k] === undefined ? 0 : h[k]) + 1;
+      }
+      return h;
+    }, {}),
     sinks: (d._astResults || []).reduce((n,a) => n + ((a.securitySinks||[]).length), 0),
     errs:  (d._astResults || []).flatMap(a => (a.resolverErrors || []).map(e => e.context + ': ' + e.message)),
     /* THE @S POLICY ENVELOPE, WHICH THE ENGINE COMPUTES ON EVERY DETECTED SINK AND WHICH THIS LINE IS THE
@@ -1626,6 +1651,18 @@ const row = {
                            `cands` that is ABSENT is a round that never asked the non-resident order, which is
                            not the same as `cands: 0`), and they are relayed WHOLE for exactly that reason. */
   hostRound: ('level1' in cur) ? cur.level1 : EP_FACT_ABSENT,
+  /* THE DOOR × WITNESS JOIN, UNIONED OVER THIS ORIGIN'S DOCUMENTS — see the probe for why a per-row join is
+     the one statement the four census histograms cannot make, and for the measurement that was read off their
+     margins and needed it. The union is over `mine` for the reason every other column on this row is: a
+     document of another origin is another page's surface.
+     ITS OWN TOTAL IS THE DENOMINATOR AND IS NOT RESTATED HERE, because it is the same `fetchCallSites` array
+     the `endpoints` figure is the LENGTH of and the four partitions sum to — so a join whose counts do not sum
+     to that figure is this walk having filtered rows the figure still counts, which is the one finding this
+     column has that the margins do not. A reader checks it by addition and needs no second field. */
+  doorWitness: mine.reduce((h, d) => {
+    for (const k of Object.keys(d.doorWitness || {})) h[k] = (h[k] === undefined ? 0 : h[k]) + d.doorWitness[k];
+    return h;
+  }, {}),
   /* THE ENGINE'S OWN RECORD FIRST, THE CONSOLE ONLY AS A SUPPLEMENT. A console scrape is the wrong surface by
      construction -- the renderer does not tee its stdout -- so a run whose abort reached the result document
      and not the console read `why: []`, and this harness reported a site that ABORTED as one that ran clean
