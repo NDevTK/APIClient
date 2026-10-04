@@ -769,9 +769,12 @@ typedef struct Flow {
      *
      * NAMED RESIDUAL — A PIN TAKEN WHERE THE FLOW HAD NO EXAMPLE AT ALL IS NOT MARKED. What is not covered:
      * `decide_note_forced_arm` returns early on REAL_ARM_UNOBSERVED, so an equality over a source this run
-     * never observed pins a witness and leaves both bits clear. What the next diff builds: an arm of
-     * `decide_real_arm`'s answer that separates "the example contradicts this" from "there is no example",
-     * and a third state on this field for the second. How its absence would show: a flow that pinned such a
+     * never observed pins a witness and leaves both bits clear. What the next diff builds: a third state on
+     * this field for "there is no example", and the arm of `decide_real_arm` that answers it — which is now
+     * HALF IN HAND rather than a mechanism to build, because that function already reads
+     * `concolic_example_state` for the DETERMINED population and therefore holds the operand that tells NONE
+     * from CONTRADICTED at the one line that would report it. The remaining work is the FIELD and the arm, and
+     * the accessor is not part of it. How its absence would show: a flow that pinned such a
      * source, took a contradicted arm on an UNRELATED gate afterwards, and then parked — the request is graded
      * FORCED, this bit reads clear, and the chokepoint fires an address holding the earlier witness. It is
      * left narrow deliberately: §@H rules that a value pinned by the page's own equality is DETERMINED and not

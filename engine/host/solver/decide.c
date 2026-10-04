@@ -2230,7 +2230,8 @@ static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, int
  * object is true, a string is its length — so this cannot re-enter the interpreter from inside a branch hook,
  * which is what makes it askable here at all. */
 static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
-    JSValue ex = concolic_example(ctx, cond);
+    ConcolicExState st;
+    JSValue ex;
     int real;
 
     /* JS_UNDEFINED IS THE ABSENCE, WHICH IS concolic.h'S OWN SPELLING OF IT ("the concrete example (dup'd) or
@@ -2241,19 +2242,33 @@ static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
        does not make", and that clause is retired rather than deleted because it is what a reader re-derives
        from one tag standing for two facts: the class DOES make the distinction now
        (`concolic_example_state`), so the collapse here is a choice and no longer a limit.
-       NAMED RESIDUAL — A DETERMINED ARM READS AS UNOBSERVED. What is not covered: a condition whose value this
-       flow's own equality PINNED, where the pinned value's own SPELLING is the one `pin_mint` hands back as
-       JS_UNDEFINED. Every OTHER falsy pin is already decided correctly by the line below, because the test is
-       the TAG and not truthiness — a pin of `null`, `0` or `""` arrives non-undefined and reaches `JS_ToBool`
-       — so the gap is the tag the absence shares and nothing wider: the run has PROVED which arm a real session
-       takes and this function answers REAL_ARM_UNOBSERVED, which is sound (neither arm is marked, both are
-       kept) and narrower than what the flow knows. What the next diff builds: read the state here and
-       answer `JS_ToBool` for DETERMINED even where the value is undefined, so dec_fork_here keeps the arm the
-       proof names as primary and decide_note_forced_arm marks the other FORCED. How its absence would show: a
-       request built past `if (x === undefined) { … }`'s inner gate graded as though nothing had been observed
-       — §A-REQUEST-CARRIES-THE-PROVENANCE's FORCED under-claimed, which is the grade safeFetch's firing
-       decision reads, so the under-claim is in the direction that permits an act rather than refusing one. */
-    if (JS_IsUndefined(ex)) return REAL_ARM_UNOBSERVED;
+       THAT RESIDUAL IS BUILT AND IS KEPT IN ITS OWN WORDS, because the collapse is what a reader re-derives
+       from the JS_UNDEFINED in front of them. It read: "A DETERMINED ARM READS AS UNOBSERVED. What is not
+       covered: a condition whose value this flow's own equality PINNED, where the pinned value's own SPELLING
+       is the one `pin_mint` hands back as JS_UNDEFINED. Every OTHER falsy pin is already decided correctly by
+       the line below, because the test is the TAG and not truthiness — a pin of `null`, `0` or `""` arrives
+       non-undefined and reaches `JS_ToBool` — so the gap is the tag the absence shares and nothing wider …
+       What the next diff builds: read the state here and answer `JS_ToBool` for DETERMINED even where the value
+       is undefined, so dec_fork_here keeps the arm the proof names as primary and decide_note_forced_arm marks
+       the other FORCED. How its absence would show: a request built past `if (x === undefined) { … }`'s inner
+       gate graded as though nothing had been observed — §A-REQUEST-CARRIES-THE-PROVENANCE's FORCED
+       under-claimed, which is the grade safeFetch's firing decision reads, so the under-claim is in the
+       direction that permits an act rather than refusing one."
+       THE STATE IS ASKED BEFORE THE VALUE AND BOTH COME OFF ONE DECISION, which is what makes this one reading
+       rather than two free to disagree: concolic.h says the state "IS DERIVED FROM THE ONE DECISION
+       `concolic_example` ITSELF SWITCHES ON and is never a second reading of the chain", so a DETERMINED here
+       and the bytes below are the same lookup's two halves. It takes no JSContext, mints nothing and is
+       side-effect-free, so asking it costs this branch hook nothing it is not already allowed to spend.
+       ONLY THE TAG MOVES AND ONLY FOR A PROOF. `CONCOLIC_EX_NONE` and `CONCOLIC_EX_CONTRADICTED` both still
+       answer UNOBSERVED through this line, which is the sound direction concolic.h names for them — NONE has no
+       bytes and CONTRADICTED has bytes this very path disproved — and `CONCOLIC_EX_HELD` cannot reach the
+       undefined tag with a real example, since an example that IS `undefined` is the producer's own encoding of
+       having none. So the one population that changes answer is a pin of `undefined`, and for it the flow has
+       PROVED the condition falsy: §7.1.2 ToBoolean of `undefined` is false, which is the arm a real session
+       takes, so the primary is kept and its sibling is marked FORCED. */
+    st = concolic_example_state(cond);
+    ex = concolic_example(ctx, cond);
+    if (JS_IsUndefined(ex) && st != CONCOLIC_EX_DETERMINED) return REAL_ARM_UNOBSERVED;
     real = JS_ToBool(ctx, ex);
     JS_FreeValue(ctx, ex);
     /* §7.1.2 ToBoolean's only failure is an exception VALUE, which an example can never be: an example rides

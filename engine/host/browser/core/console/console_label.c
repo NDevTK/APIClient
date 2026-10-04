@@ -77,21 +77,39 @@ void console_label_chain_visit(JSContext *ctx, ConsoleLabelChain *c, JSStepVisit
  * kept in its own words because a reader who re-derives it from the JS_UNDEFINED in front of them will write it
  * again: `concolic_example_state` is the third answer, so the collapse IS this file's choice now, and it is
  * still the right one for the states that genuinely carry nothing.
- * NAMED RESIDUAL — A DETERMINED LABEL IS READ AS UNSTATED. What is not covered: a label whose example this
- * flow's own equality PINNED (`if (lbl === undefined) console.time(lbl)`, and every pin whose value coerces
- * through §7.1.21 ToPropertyKey ( arg ) to a key) answers CONCOLIC_EX_DETERMINED, which is a PROOF, and this
- * function reads it as JS_ATOM_NULL — correct, because unstated keeps every key arm, and narrower than the
- * run's own knowledge.
+ * THAT RESIDUAL IS BUILT AND IS KEPT IN ITS OWN WORDS, for the paragraph above's reason exactly. It read: "A
+ * DETERMINED LABEL IS READ AS UNSTATED. What is not covered: a label whose example this flow's own equality
+ * PINNED (`if (lbl === undefined) console.time(lbl)`, and every pin whose value coerces through §7.1.21
+ * ToPropertyKey ( arg ) to a key) answers CONCOLIC_EX_DETERMINED, which is a PROOF, and this function reads it
+ * as JS_ATOM_NULL — correct, because unstated keeps every key arm, and narrower than the run's own knowledge.
  * What the next diff builds: ask `concolic_example_state` here and take DETERMINED as the label, so the chain
  * matches the key the flow proved instead of eliminating all of them. How its absence would show: a §1.2/§1.4
  * chain that walks every key of a map it has a proved label for, eliminates all of them, and mints a fresh
- * per-source slot — a `console.timeEnd` that reports no `startTime` for a timer the same run started. */
+ * per-source slot — a `console.timeEnd` that reports no `startTime` for a timer the same run started."
+ * THE OBJECT EXCLUSION IS NOT WIDENED WITH IT AND THE TWO TESTS ARE NOW SEPARATE, which is the whole of what
+ * this diff had to get right: the object arm is here because §7.1.21 ToPropertyKey reaches the page's code
+ * through §7.1.1 ToPrimitive and this is a C activation with no flow base under it, and that is a fact about
+ * the SHAPE rather than about how much the run knows. So a DETERMINED object would still refuse — and cannot
+ * arise, which is asserted rather than assumed: `pin_mint` answers only a String, a Number, a Boolean,
+ * `null` or `undefined`, so a DETERMINED example is a primitive by construction and an object one would be a
+ * pin store that accepted a kind it may not hold.
+ * ONE SITE OF TWO, AND THE SIBLING IS NAMED BECAUSE THE QUESTION IS ONE QUESTION. solver/decide.c's
+ * `decide_real_arm` read the same JS_UNDEFINED as "no example" to decide an ARM where this one decides a
+ * LABEL, and CLAUDE.md §AND-THE-MIRROR-OF-THAT-IS-A-FIX-WHOSE-SITE-COUNT requires the sibling to be repaired
+ * in the SAME diff rather than rediscovered — neither had an invariant standing under it to turn its silent
+ * shortfall loud, which is that rule's own test for which sites may be left alone. */
 static JSAtom console_label_example_atom(JSContext *ctx, JSValueConst label, const char *algorithm)
 {
+    ConcolicExState st = concolic_example_state(label);
     JSValue ex = concolic_example(ctx, label);
     JSAtom a;
 
-    if (JS_IsUndefined(ex) || JS_IsObject(ex)) {
+    DCHECK(!(st == CONCOLIC_EX_DETERMINED && JS_IsObject(ex)),
+           "a pinned label was handed back as an OBJECT — pin_mint answers a String, a Number, a Boolean, null "
+           "or undefined and nothing else, so a DETERMINED example that is an object is a pin store holding a "
+           "kind the read-back cannot mint, and §7.1.21 ToPropertyKey over it would re-enter the page's code "
+           "from a C activation with no flow base under it");
+    if (JS_IsObject(ex) || (JS_IsUndefined(ex) && st != CONCOLIC_EX_DETERMINED)) {
         JS_FreeValue(ctx, ex);
         return JS_ATOM_NULL;
     }
