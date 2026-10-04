@@ -558,7 +558,26 @@ function _recordEnginePageErrors(doc, analysis) {
            "an engine page-error row carried no context/message pair — bridge.js writes both as strings on " +
            "every row it builds, so a row missing one is that relay broken and the popup's diagnostic view " +
            "would print an undefined attribution beside a real error");
-    console.debug("[AST:page-error] %s: %s", _re.context, _re.message);
+    /* THE ROW IS RENDERED HERE RATHER THAN HANDED TO A FORMAT, BECAUSE THE ONE TRANSPORT THAT READS IT DOES
+       NOT INTERPOLATE. `console.debug("%s: %s", a, b)` reaches a human's devtools as `a: b` and reaches a CDP
+       `console` event as THE FORMAT AND THE ARGS SIDE BY SIDE, so the only reader of this tag in the tree had
+       to strip an uninterpolated specifier pair by regex and was left with the two fields joined by a SPACE --
+       the `: ` the format existed to supply gone, and unrecoverable, because a context and a message may both
+       contain spaces and that string is the KEY the reader collapses distinct errors on. The compensating
+       regex is DELETED in the same diff: a per-reader workaround for a producer's choice is the state
+       §Fix-the-ROOT forbids, and the root is one string.
+       EVERY OTHER `console.*` IN THIS ZONE STILL PASSES A FORMAT, AND THAT IS A DECISION RATHER THAN A SWEEP
+       LEFT UNDONE. The population is `grep -rn 'console\.\(log\|debug\|warn\|error\|info\)("[^"]*%[dsifoOc]'
+       extension/`, and the discriminator is whether any reader MATCHES the line -- derived by grepping
+       `testing/` and `engine/*.mjs` for the console tags they test for, which answers this tag and no other.
+       A site nothing reads is prose in a channel a human sees interpolated, so converting it would be the
+       uniform repair over an undistinguished population that CLAUDE.md forbids.
+       HOW ITS ABSENCE WOULD SHOW: a driver's collected engine-error rows carrying a context and a message with
+       no delimiter between them, so no reader can say where the first one ends.
+       RETIREMENT: this record goes when this zone writes its console through a helper that takes ONE RENDERED
+       STRING, because a format cannot then be handed to a transport that drops it -- MEASURED ABSENT when this
+       was written: no such helper exists under `extension/`. */
+    console.debug("[AST:page-error] " + _re.context + ": " + _re.message);
   }
   if (analysisHasDocument(analysis)) {
     /* ABSENT AND EMPTY STAY DIFFERENT FACTS. lib/serialize.js reads an absent `_resolverErrors` as "the

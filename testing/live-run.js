@@ -101,11 +101,16 @@ function attachEnginePageErrors(pg) {
       try { t = m.text(); } catch (e) { return; }
       if (!t || t.indexOf(ENGINE_ERR_TAG) < 0) return;
       if (buf.length >= ENGINE_ERR_CAP) { buf.truncated = true; return; }
-      /* The producer calls console.debug with a `%s: %s` format and two args; a transport that does not
-         interpolate hands back the format and the args together, so the marker and an uninterpolated
-         specifier pair are both stripped and what is left is the row either way. */
-      buf.push(t.slice(t.indexOf(ENGINE_ERR_TAG) + ENGINE_ERR_TAG.length)
-                .replace(/^\s*(%s:\s*%s)?\s*/, ""));
+      /* THE PRODUCER RENDERS THE ROW, SO ONLY THE TAG AND ITS SEPARATING SPACE COME OFF HERE. THIS USED TO
+         STRIP AN UNINTERPOLATED `%s: %s` AS WELL, and that clause is written out rather than merely removed
+         because its reasoning was sound and a reader who re-derives it will put it back: a
+         `console.debug("%s: %s", a, b)` reaches THIS transport as the format and the args side by side, so the
+         specifier pair really did have to go. What it could not do is RECOVER the `: ` -- the two fields
+         arrived joined by a space, and `distinctEngineErrors` collapses on exactly that string, so a context
+         and a message both containing spaces could not be told apart again by anything downstream. The fix is
+         at the producer and the workaround is gone with it; if a `%s` ever appears in a collected row again,
+         that is a producer still passing a format and it is now VISIBLE rather than silently flattened. */
+      buf.push(t.slice(t.indexOf(ENGINE_ERR_TAG) + ENGINE_ERR_TAG.length).replace(/^\s+/, ""));
     });
   } catch (e) { return null; }      // absent: this driver could not ask, which is not "no errors"
   return buf;
