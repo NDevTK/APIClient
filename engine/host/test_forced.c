@@ -9636,6 +9636,24 @@ static TfErrEdges g_tf_err_edges[] = {
        document throws — and never a word of any engine message, which is the line the printer's paragraph
        draws and the side of it a fixture-owned marker sits on. */
     { "synmove",      0, 0, 0 },
+    /* …AND THE SECOND ONE THIS DOCUMENT RAISES ITSELF, which is the OTHER OBSERVABLE of a guard this fixture
+       already tests from the inside and could not see from the outside.
+       HTML §8.1.4.6 "Runtime script errors"' report-an-exception puts its whole fire inside one condition —
+       "if global is not in error reporting mode … set notHandled to the result of firing an event named error
+       at global … set global's in error reporting mode to false" — so a `reportError` called from INSIDE an
+       `error` listener performs NO second fire and arrives at the next step with notHandled still the TRUE it
+       was initialised to. That has TWO consequences and rung (4) of the reportError block only ever checked
+       one of them: the INNER CALL RETURNS `undefined` and fires nothing, which `/api/reporterrormode` asserts
+       by `reInner === 1 && reInnerRet === undefined`, and THE INNER EXCEPTION IS THEREFORE REPORTED, because
+       notHandled is true and no listener was offered the chance to cancel it. The second is a page-error
+       stream fact, so no `fetch` rung could reach it.
+       SO IT IS A TOKEN AND NOT A STAGED ADDRESS, on the line this file's printer paragraph draws and the same
+       side of it as `synmove`: the throw is raised at `https://x.test/p`, this document's OWN address, where a
+       staged declaration would cover every statement of a two-thousand-statement program. `reentrant` is the
+       string THIS DOCUMENT throws (`reportError(new RangeError('reentrant'))`) and never a word of any engine
+       message. The OUTER TypeError is cancelled by that listener's `ev.preventDefault()` and so does not
+       stand, which is why this pair expects exactly one announcement and not two. */
+    { "reentrant",    0, 0, 0 },
 };
 /* THIS DOCUMENT'S OWN ADDRESS, TAKEN FROM THE ONE CALL THAT ESTABLISHES IT rather than spelled a sixth time.
    `https://x.test/p` is already a literal at several sites and one of their comments complains about it, so a
@@ -16334,6 +16352,40 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "two routes disagree about an error that stands, and a consumer reading only the document would "
              "be told this page raised nothing");
 
+    /* §8.1.4.6'S ERROR-REPORTING-MODE GUARD, READ FROM THE OUTSIDE — the half `/api/reporterrormode` cannot
+     * see. That rung asserts the inner `reportError` fired NOTHING and returned `undefined`; this one asserts
+     * the consequence that makes the guard observable to a page at all, which is that the inner exception is
+     * REPORTED. Both are facts about one condition, and a build that skipped the fire and then ALSO swallowed
+     * the exception would pass the inside rung and fail this one — which is precisely the regression a
+     * fixture with only the inside rung cannot distinguish from correct behaviour.
+     * IT IS NOT A NEW CAPABILITY AND WAS NOT A NEW DEFECT. This announcement has been in every run of this
+     * fixture, counted as `1 UNSTAGED UNCAUGHT PAGE ERROR` because the edge table declared no pair for it, so
+     * what landed here is a row where a standing unexplained line was — which is the better trade by this
+     * file's own rule: a declaration EXCUSES an error and a row CHECKS it, and the two cost the same. */
+    const TfErrEdges *e_remode = tf_err_edges("reentrant");
+    const char *remodereport_why = NULL; int remodereport_tt = 1;
+    fold_row(&remodereport_tt, &remodereport_why, e_remode->stands > 0,
+             "NOT REACHED: the stream never announced `reentrant`, so the exception the INNER `reportError` "
+             "was handed went unreported — HTML §8.1.4.6 \"Runtime script errors\" encloses the whole fire in "
+             "\"if global is not in error reporting mode\", so a call made from inside an `error` listener "
+             "offers no listener the chance to cancel and reaches the report with notHandled still true. An "
+             "absent announcement is therefore either the inner call not running at all — which "
+             "`/api/reporterrormode`'s own rung would also fail — or this engine swallowing an exception the "
+             "standard reports");
+    fold_row(&remodereport_tt, &remodereport_why, e_remode->retracted == 0,
+             "the stream printed a CORRECTION for `reentrant` — a reported exception is not a rejection and "
+             "has no handler that could arrive later, so a retraction here is this engine withdrawing a "
+             "report §8.1.4.6 requires it to make");
+    fold_row(&remodereport_tt, &remodereport_why, e_remode->stands_here == e_remode->stands,
+             "`reentrant` was announced from an address that is NOT this document's own — the value is "
+             "constructed and reported by a listener this document installs, so §8.1.4.6's throw site is this "
+             "document and a different one means the position was derived from something other than the "
+             "reported value's own backtrace");
+    fold_row(&remodereport_tt, &remodereport_why, tf_err_listed(js, "pageErrors", "reentrant"),
+             "the stream announced `reentrant` and the result document does not carry it in `pageErrors` — "
+             "the two routes disagree about an error that stands, and a consumer reading only the document "
+             "would be told this page reported nothing");
+
     const TfErrEdges *e_take = tf_err_edges("rejTAKEBACK");
     const TfErrEdges *e_mute = tf_err_edges("rejMUTE");
     const TfErrEdges *e_lapse = tf_err_edges("rejRELAPSE");
@@ -18300,6 +18352,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            the five rows above name a chunk, and naming one here would be the relocation this row exists to
            refuse. See its fold_row block for why staging it is measured to be wrong. */
         { "move-throw", movethrow_tt, "https://x.test/p", SESS_EXPLORE, movethrow_why },
+        /* …AND THE SECOND DOCUMENT-RAISED ONE, whose address column is the document's for the same reason. */
+        { "remode-report", remodereport_tt, "https://x.test/p", SESS_EXPLORE, remodereport_why },
         { "pushfork", pushfork_tt, "/api/pushfork", SESS_EXPLORE, pushfork_why },
         { "mapfork", mapfork_tt, "/api/mapfork", SESS_EXPLORE, mapfork_why },
         { "fefork", fefork_tt, "/api/fefork", SESS_EXPLORE, fefork_why },
