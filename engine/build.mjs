@@ -6960,7 +6960,8 @@ console.log("[rev] the source-derived field contracts were taken at that revisio
    it holds by construction rather than by a check. `unroot` removes ROOT and EMSDK; a snapshot IS a tree and
    ROOT is its top, so every path that differs between two snapshots is ROOT-prefixed and goes. Read for both
    toolchains: emcc's four `-I` roots and its `-ffile-prefix-map` are ROOT-relative, the native dialect's four
-   are the same four, and neither list holds another absolute path; the shared identity in `engine/obj_store.mjs`
+   are the same four AND `NATIVE_CFLAGS` now carries the same `-ffile-prefix-map` for the reason stated there,
+   which `unroot` collapses identically, and neither list holds another absolute path; the shared identity in `engine/obj_store.mjs`
    drops the one line of a version string that carries one — THAT CLAUSE READ ``toolchain()` drops'' until the
    identity moved there, and the drop is the same drop at a different address, which is the kind of detail a
    reader checks by opening the file the sentence names.
@@ -7005,8 +7006,16 @@ console.log("[rev] the source-derived field contracts were taken at that revisio
    directory — differing in the linked binary, which is a comparison anybody can make and which names no header
    and no translation unit.
 
-   RESIDUAL — A NATIVE OBJECT IS NOT PATH-INDEPENDENT, SO A SHARED ONE CARRIES THE DONOR SNAPSHOT'S DIRECTORY.
-   WHAT IS NOT COVERED: `CFLAGS` carries `-ffile-prefix-map=<ROOT>/=` and `NATIVE_CFLAGS` carries no such flag.
+   RESIDUAL — MET, AND KEPT RATHER THAN DELETED BECAUSE A READER WHO MEETS A NATIVE ABORT NAMING A FOREIGN
+   SNAPSHOT WILL RE-DERIVE THE GAP AND NOT THIS RECORD OF IT. The flag this names is in `NATIVE_CFLAGS`, with
+   the measurement and a two-sided control at that site. ITS OWN `HOW ITS ABSENCE WOULD SHOW` CLAUSE IS WHAT
+   FIRED, which is the part worth copying: the observation it named — a `@WHY` whose directory prefix is a
+   snapshot OTHER than the one the run's `act` line names — was found by a reader scoring an unrelated
+   prediction, needing no knowledge of which assertion fired and no instrument at all. An absence clause stated
+   as an OBSERVATION rather than as an instance is the one of the three that keeps working. AND THE DEFERRAL
+   REASON BELOW IS SPENT: the controlled pair it protected has been run and scored, so a full native recompile
+   is no longer ambiguous with a key that moved. The retired text follows.
+   WHAT WAS NOT COVERED: `CFLAGS` carries `-ffile-prefix-map=<ROOT>/=` and `NATIVE_CFLAGS` carries no such flag.
    Every source reaches both compilers by ABSOLUTE path, and clang expands `__FILE__` to the path as it was
    written on the command line (measured directly, and measured rewritten under `-ffile-prefix-map`), while
    `check.h` emits `__FILE__` verbatim into the `@WHY` every DCHECK and DFAIL prints. A native object shared
@@ -7760,7 +7769,31 @@ async function nativeProgram(kind, dev) {
      that cannot masquerade as each other — the recorded defect that made `release` have to be verified with
      `-fsyntax-only`). What is NOT here is every link input: the archive, the runtime, `-o`, `-lm`, `-lpthread`.
      A link input in a compile identity would take a warm cache cold for a file the objects do not contain. */
-  const NATIVE_CFLAGS = ["-O1", "-g", "-fno-omit-frame-pointer", ...SAN_INSTRUMENT, ...NATIVE_DIALECT];
+  const NATIVE_CFLAGS = ["-O1", "-g", "-fno-omit-frame-pointer", ...SAN_INSTRUMENT, ...NATIVE_DIALECT,
+    /* `__FILE__` IS REPO-RELATIVE HERE TOO, AND IT IS THE SHARED STORE THAT MADE THIS LOAD-BEARING RATHER THAN
+       TIDY. `CFLAGS` has carried this flag for the emcc half all along; this list did not, and while every
+       snapshot compiled its own objects that cost only an ugly path in an abort from a tree that still existed.
+       A store shared BETWEEN snapshots turns it into a wrong answer: an object is a CORRECT compile of the right
+       inputs whose `__FILE__` names the directory of whichever snapshot compiled it FIRST, so a `@WHY` names a
+       tree the run was not in — and, measured, sometimes one that has since been reclaimed.
+       MEASURED ON BOTH ARTIFACTS OF ONE SNAPSHOT, which is what makes this a defect rather than an argument:
+       `strings` over the wasm artifact answers ZERO absolute snapshot paths against 456 repo-relative ones, and
+       over the native binary beside it ~1390 absolute paths naming SIX different snapshots — monotone, each
+       snapshot adding its own name to the mosaic, with one of the six no longer on disk. The abort that scored
+       the park ladder is the worked example: a run whose `act` line names `snap-coord-main-after-<id>` emitted
+       `"at":"/tmp/apiclient-frozen/snap-coord-main-f8cdde7-<id>/engine/host/browser/core/layout/box_tree.c:324"`.
+       (A WILDCARD STOOD IN THAT PATH AND CLOSED THIS COMMENT. A snapshot name ends in a hash, so the natural
+       way to elide it is a star followed by the separator — which is this comment's own terminator, and the
+       parser reported it four lines later as an unexpected colon, nowhere near the cause. The repair then hit
+       the identical wall a second time, because DESCRIBING the terminator writes it: prose about a delimiter may
+       not spell the delimiter, which is the same self-reference a scan's own markers have. Prose inside C and
+       inside a module is COMPILED, so a path in a comment is edited like code and checked like code.)
+       THE FLAG IS IN THE COMPILE IDENTITY ON PURPOSE AND COSTS ONE COLD NATIVE COMPILE, ONCE: `unroot` turns
+       `<ROOT>` into `<root>` before `flagId` is hashed, so the token is IDENTICAL across snapshots and the
+       sharing it protects is not the sharing it breaks. Verified with a two-sided control on this clang rather
+       than inferred — one `__FILE__` probe compiled twice from the same path, 3 absolute occurrences and 0
+       relative without the flag, 0 and 3 with it. */
+    "-ffile-prefix-map=" + ROOT + "/="];
   /* THE SECOND TOOLCHAIN THIS CACHE WAS ALWAYS PARAMETERISED FOR, AND THE FOUR THINGS ITS ARGUMENTS DECIDE.
      NAME: `clang`, so the compile line says which of the two compiles a "0 to compile (rest cached)" belongs
      to — the reason that banner gives for naming the toolchain at all.
