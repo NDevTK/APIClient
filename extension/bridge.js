@@ -2888,9 +2888,25 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
                                              notice, and a notice is not a park, so no witness mark was ever
                                              composed for it — see safe-fetch.js's `_pinnedOf` for why
                                              `unpinned` would be false exactly where it matters and for what
-                                             retires this. It changes no outcome: `document` is not
-                                             §2.2.5 SCRIPT-LIKE, so a forced navigation is refused either
-                                             way; what it costs is the specificity of the sentence. */
+                                             retires this.
+                                             AND THE PRICE THIS COMMENT CARRIED IS REFUTED BY THE CHOKEPOINT
+                                             ITSELF, KEPT IN ITS OWN WORDS BECAUSE IT IS WHAT A READER
+                                             RE-DERIVES FROM `document`: it read "It changes no outcome:
+                                             `document` is not §2.2.5 SCRIPT-LIKE, so a forced navigation is
+                                             refused either way; what it costs is the specificity of the
+                                             sentence". The premise is right and the conclusion does not
+                                             follow — NOT being script-like is what puts `document` in the
+                                             `value` bucket, which is the FIRST conjunct of safe-fetch.js's
+                                             owner arm, whose third (`actor: page`) this call already states.
+                                             MEASURED, as a command rather than a figure:
+                                             `node testing/egress_arm_probe.mjs` asks the real walk with THIS
+                                             vector and answers REFUSED, and FIRES with `pinned` alone moved
+                                             to `unpinned` — on a FORCED path too, so "refused either way" is
+                                             false in both halves. The lever is one field and the fact is
+                                             computable (`engine_pinned_of_running_path`); what it needs is a
+                                             DECISION, because that arm's own enumeration names the
+                                             navigation as not admitted. See `_pinnedOf`'s residual, which
+                                             carries the decision and is where this is priced. */
                                           pinned: "unstated",
                                           credentials: "include",
                                           credentialed: navigationCarriesSession(abs, principalOrigin) });

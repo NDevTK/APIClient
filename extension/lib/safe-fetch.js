@@ -833,11 +833,35 @@ function safeFetchReachJoin(outer, own) {
    two seams named in the residual above, and they are DOCUMENT acts — which is why the paragraph below prices
    the remainder as a sentence rather than as an outcome, and why "larger than it was" was true of the
    residual as that diff left it and is no longer true of the residual as this one does.
-   AND THE TWO REMAINING SEAMS ARE A SPECIFICITY RESIDUAL AND NOT A FIRING ONE, WHICH IS THE DIFFERENCE THIS
-   LANDING MADE AND IS WORTH STATING SO THE NEXT READER PRICES IT HONESTLY. Both are `document` acts, and
+   AND THAT PRICE IS REFUTED BY ASKING THIS FILE ITSELF, WHICH IS WHY THE CLAUSE IS REWRITTEN RATHER THAN
+   DELETED: ITS PREMISE IS ONE A READER RE-DERIVES FROM THE WORD `document` AND IT IS FALSE. It read: "AND THE
+   TWO REMAINING SEAMS ARE A SPECIFICITY RESIDUAL AND NOT A FIRING ONE … Both are `document` acts, and
    `document` is not in this row's `value` bucket at all, so no setting of this table fires either one on the
-   strength of a witness mark — what they cost is the sentence a person reads, where the XHR's cost was an
-   OUTCOME. The direction is still the safe one and the work is smaller than it was. */
+   strength of a witness mark — what they cost is the sentence a person reads". `document` IS in the `value`
+   bucket: `_isScriptLike` answers false for it and `_isDocumentSubresource` does not list it, so the
+   `destination` row above computes `value` — which is the first conjunct of the OWNER'S arm at the end of
+   `_DEFAULT_ARMS`, and a navigation already satisfies its third (`actor: page`). The witness mark is the ONLY
+   conjunct refusing it.
+   MEASURED THROUGH THIS FILE'S OWN WALK, AS A COMMAND AND NOT A FIGURE, because a row here moves with the
+   table: `node testing/egress_arm_probe.mjs` loads this file verbatim into a realm, states the EMPTY table a
+   host states, and asks `safeFetchFiringRefusal` with the navigation relay's own vector — which answers
+   REFUSED on `witness=unstated` and FIRES with that one field changed to `unpinned`, everything else held,
+   with a `actor: tool` control refusing and a program-load control firing in the same run.
+   SO THE REMAINDER IS A FIRING RESIDUAL AND THE UNDER-CLAIM WAS THE WHOLE OF ITS COST. CLAUDE.md
+   §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT is exact about why it stood: a clause saying a seam cannot
+   change an outcome tells its reader there is nothing here to look at, so nobody looks, and the lever stays
+   unbuilt with no later moment at which the claim is contradicted. The fact is COMPUTABLE today —
+   `engine_pinned_of_running_path()` stands beside the provenance function the three notices already call.
+   WHAT IT IS NOT IS A DIFF ANYBODY MAY LAND ON THIS ARGUMENT ALONE, WHICH IS THE OTHER HALF AND IS WHY THIS
+   STAYS A RESIDUAL. The arm's own enumeration names the navigation as NOT admitted, by name, and prices its
+   population as "exactly the analysed document's own data requests — through either door — on a path that
+   pinned nothing, and nothing else". Writing the true mark would reach past that stated population, and the
+   owner's sentence the arm cites is about a DATA FETCH rather than about a document. So what is owed is a
+   DECISION about whether a child navigable the page's own markup names is the page loading itself for the
+   purposes of that arm — which CLAUDE.md §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS answers YES for a
+   SUBRESOURCE and is silent about for a NAVIGATION — and the mark travelling is the diff that follows it,
+   never the one that presumes it. The direction is still the safe one; what changed is that the work is a
+   firing question and not a sentence. */
 var _PINNED_MARKS = ["pinned", "unpinned", "unstated"];
 function _pinnedOf(opts) {
   CHECK(_PINNED_MARKS.indexOf(opts.pinned) >= 0,
