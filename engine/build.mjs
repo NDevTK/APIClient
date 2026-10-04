@@ -7792,7 +7792,41 @@ async function nativeProgram(kind, dev) {
        `<ROOT>` into `<root>` before `flagId` is hashed, so the token is IDENTICAL across snapshots and the
        sharing it protects is not the sharing it breaks. Verified with a two-sided control on this clang rather
        than inferred — one `__FILE__` probe compiled twice from the same path, 3 absolute occurrences and 0
-       relative without the flag, 0 and 3 with it. */
+       relative without the flag, 0 and 3 with it.
+       SCORED ON TWO FREEZES OF ONE REVISION AGAINST ONE STORE, WHICH IS THE READING THE PARAGRAPH ABOVE
+       DEFERRED FOR. First freeze: `clang: 460 sources, 460 to compile` — every native object renamed, exactly
+       once, as predicted — beside `emcc: 460 sources, 0 to compile (rest cached)`, which is the ARMED CONTROL
+       in the same log: that half's flags did not move, so a warm hit there proves the store was reachable and
+       the 460 is the flag rather than a cold store. Second freeze, SAME revision, DIFFERENT snapshot directory:
+       `clang: 460 sources, 0 to compile (rest cached)`. The store went 3732 to 4652 entries, which is the 460
+       objects and their dependency records. `unroot` holds.
+       AND MY OWN PREDICTION OVER-CLAIMED, WHICH IS RECORDED HERE BECAUSE THE ABSOLUTE IS THE PART A READER
+       WOULD HAVE REFUTED IN ONE COMMAND. It said a `strings` of the native binary answers ZERO for the snapshot
+       prefix. It answers TWO, against 1404 repo-relative paths with an invented path as the negative control at
+       zero. Both survivors are `DW_AT_comp_dir` — the DWARF COMPILATION DIRECTORY — and the flag cannot reach
+       it by construction: the mapping's prefix is `<ROOT>` plus a separator, and comp_dir is the bare directory
+       with nothing after it, so there is no match to make. They carry NO FILENAME, so no `@WHY` can be composed
+       out of them and the defect this flag was landed for is closed; what is left is a debug attribute.
+       AND THE TWO ARTIFACTS ARE BYTE-IDENTICAL, 54712776 bytes each by `cmp`, WHICH IS WHAT BOUNDS THIS. The
+       second snapshot's binary names the FIRST snapshot's directory, because its objects came out of the shared
+       store — so comp_dir is a fact about where a cached object was first compiled rather than a per-snapshot
+       leak, and the native binary is reproducible across snapshots of one revision PRECISELY BECAUSE the store
+       is content-keyed. A reader who greps for an absolute path and finds two has found this.
+
+       RESIDUAL — `DW_AT_comp_dir` NAMES A SNAPSHOT THAT MAY BE GONE, AND THE COST IS gdb RATHER THAN A `@WHY`.
+       WHAT IS NOT COVERED: the attribute is the compilation directory of whichever snapshot first compiled the
+       cached object, and the reclaim loop sheds snapshots, so a frozen binary can carry a comp_dir no longer on
+       disk. gdb resolves a relative `DW_AT_name` against comp_dir, and §Architecture names gdb as the tool for
+       a memory crash, so the sources it would open are exactly the ones it cannot find.
+       WHAT THE NEXT DIFF BUILDS: `-fdebug-compilation-dir=.` beside the mapping, which clang honours for this
+       attribute, and which makes gdb resolve against the directory it is run from — the snapshot root, where
+       those relative paths are correct. Its price is the same one this flag just paid: the token is part of
+       `flagId`, so every native object is renamed once and one native compile is cold. It is NOT in this diff
+       because the pair above is what scores `unroot`, and a second flag landing inside it would make a full
+       recompile ambiguous between the two.
+       HOW ITS ABSENCE WOULD SHOW: `readelf --debug-dump=info` over a native binary from a surviving snapshot
+       reports a `DW_AT_comp_dir` that is not a directory on this disk. The observation is that one string tested
+       for existence; it names no translation unit and needs no knowledge of which object was cached. */
     "-ffile-prefix-map=" + ROOT + "/="];
   /* THE SECOND TOOLCHAIN THIS CACHE WAS ALWAYS PARAMETERISED FOR, AND THE FOUR THINGS ITS ARGUMENTS DECIDE.
      NAME: `clang`, so the compile line says which of the two compiles a "0 to compile (rest cached)" belongs
