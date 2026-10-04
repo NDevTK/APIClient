@@ -1482,8 +1482,8 @@ if (naShown.length) {
     '  offered, and `prop` is the SAME rung as `named` (`globalThis.fetch` resolves the same entry name), so\n' +
     '  four rungs are printed as five numbers deliberately: which spelling a bundle uses is a fact about the\n' +
     '  bundle and summing them would hide it. `-` is a rung the artifact did not carry. `reached-the-door`\n' +
-    '  BESIDE a doors column with no such\n' +
-    '  key is the SURFACE having suppressed the record; the two are not in an identity and are not summed.');
+    '  BESIDE a doors column with no such key is the SURFACE having suppressed the record; the two are not\n' +
+    '  in an identity and are not summed.');
   const naIdW = Math.max('site'.length, ...naShown.map((r) => r.id.length)) + 2;
   console.log('  ' + pad('site', naIdW) + 'PER PASS IN ORDER');
   for (const r of naShown) console.log('  ' + pad(r.id, naIdW) + r.per.map(naCell).join(' | '));
