@@ -724,6 +724,51 @@ function linesToAnalysis(lines, msg, outcome, eng) {
      question "must there be one" is the caller's; the question "is this one result.c's composition" is the
      document's own and has one answer. */
   if (result) assertResultDocument(result);
+  /* AND THE ONE THING A COMPLETE RUN'S DOCUMENT CLAIMS ABOUT ITS OWN FRONTIER, ASSERTED HERE BECAUSE THE HOST
+     ACTS ON IT BY DELETING THIS ORIGIN'S CROSS-SESSION RESIDUE. `finish` composes `recipes: result._park.join(";")`
+     and `frontierWrite` DELETES the entry when that string is empty — which is the HONEST report for a frontier
+     that DRAINED (solver/cold.h: "that emptiness is the POSITIVE answer engine_sched_begin reads as `no residue,
+     seed a boot flow` (a document that drained deletes its cold entry rather than storing one)") and is an
+     ERASURE of a previous session's parked flows for a frontier that did not. Nothing in this zone could tell
+     those two apart: an empty `_park` is the same empty array either way, and the delete is the same delete.
+     THE ENGINE ALREADY GUARANTEES IT AND THE GUARANTEE IS DEV-ONLY AND IN ANOTHER COMPONENT, which is the whole
+     reason this line exists rather than a comment pointing at it. solver/engine.c's session close asserts
+     `flow_count() == 0 || engine_frontier_paged()` — "the session closed over LIVE members whose recipes were
+     never written ... A resting member is deprioritized and PAGED, never dropped" — and that is a `DCHECK`,
+     compiled out in release, while THIS zone's delete runs in every build. A release engine that closed over
+     members without parking, or a new session-closing exit that does not take the park above it, reaches here
+     and erases a residue nobody in this session measured, with nothing anywhere naming the loss.
+     IT IS ONE-DIRECTIONAL ON PURPOSE. `_park` NONEMPTY with `live` at 0 is an honest state and is not asserted
+     against: solver/cold.h names two ways to reach it (a peer holding a reference keeps the session live past
+     its own last flow, and an engine that met the RAM floor may have SOLD every flow it had), and
+     engine_park_frontier does not free what it writes — "the flows themselves are released by the teardown the
+     host takes after this returns" — so a park taken over a standing frontier reports both nonzero. The state
+     with no reading is the other one.
+     SCOPED TO `complete` BECAUSE ONLY THAT OUTCOME MEANS THE SESSION CLOSED. `engineFinalize` is reached only
+     from `finish`, which runs only on ENGINE_STEP_DONE, which is the engine returning from one of its own two
+     session-closing exits. A `partial` snapshot is composed MID-RUN by qjs_emit_partial, where a live frontier
+     and an empty `_park` are what a healthy document looks like, so asserting it there would fire on every page.
+     AND `live` IS READ AS A PRESENT FIELD RATHER THAN DEFAULTED. `assertResultDocument` requires every `_cold`
+     row to be a finite number and the census to be non-empty; it does not require THIS row, whose presence is
+     guaranteed by build.mjs's `coldFields()` derivation against result_cold_json's own format string. An absent
+     one read through `=== 0` would be `undefined`, which fails this comparison and would accuse a healthy run —
+     so the shape is asserted on its own line and the invariant is asserted on the value. */
+  if (result && outcome === "complete") {
+    DCHECK(typeof result._cold.live === "number" && Number.isFinite(result._cold.live),
+           "a complete run's `_cold` census carries no `live` member count (`" + String(result._cold.live) +
+           "`) — it is the gauge of flows still standing when the session closed (solver/cold.c counts one per " +
+           "flow_at), and it is the only thing in this document that can say whether an empty `_park` means " +
+           "the frontier DRAINED or that its members were dropped, which is what the frontier delete below " +
+           "turns into an erasure of a previous session's residue");
+    DCHECK(result._park.length > 0 || result._cold.live === 0,
+           "a COMPLETE run closed its session over " + result._cold.live + " live frontier member(s) and " +
+           "wrote NO park recipes — every one of them holds a snapshot, a COW delta and an unexplored " +
+           "timeline, and `finish` is about to join that empty array into the empty string, which " +
+           "frontierWrite reads as DELETE THIS ORIGIN'S ENTRY. So this is both a dropped work item (CLAUDE.md " +
+           "\u00a7NO BOUNDS: a resting member is deprioritized and PAGED, never terminated) and the erasure " +
+           "of whatever a PREVIOUS session parked at this address. solver/engine.c asserts the engine half of " +
+           "this at its session close; that assert is dev-only and this delete is not");
+  }
   /* THE TWO CASES ARE WRITTEN AS TWO CASES. `result = result || {}` merged them into one, and everything after
      it then had to read a document that might not be there — which is where each `|| 0` and `|| []` below came
      from, one per field, each individually reasonable and collectively the defaulting the rule forbids. With
