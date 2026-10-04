@@ -3010,10 +3010,19 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
                 "a navigable showing an error page for an address nothing ever fetched. A child navigable's " +
                 "load is a HOSTREQ and declines through the rendezvous the engine is parked on " +
                 "(engineDeliverDocument → HostDecline → engine_host_decline); this caller has no rendezvous, so " +
-                "the refusal has nowhere to go. BUILD the SEED's decline: an instance asked to root itself at " +
-                "an address this zone will not fetch holds no document at all, so the thing to decide is what " +
-                "the POOL does with a seat whose seed was refused — which is admitSeatLand's question and not " +
-                "this function's");
+                "the refusal has nowhere to go. THREE CALLERS REACH THIS ARM AND THEY ARE NOT ONE " +
+                "POPULATION, so the thing to build differs and the crash says which you are standing in. " +
+                "(1) A SEED: an instance asked to root itself at an address this zone will not fetch holds " +
+                "no document at all, so what has to be decided is what the POOL does with a seat whose " +
+                "seed was refused — admitSeatLand's question and not this function's. (2) A " +
+                "`navigable.create` NOTICE and (3) a `navigable.swap` notice: both are peer-provisioning " +
+                "records with no request id, and both of their own arms for a bytes-less load fabricate an " +
+                "EMPTY DOCUMENT — so what has to be built is a refusal the NOTICE channel can carry, " +
+                "or the creating engine's own park reached some other way. Until one of those exists this " +
+                "abort is the correct answer and is the pre-decline behaviour, preserved deliberately at " +
+                "exactly the callers that cannot carry a refusal: a3a93fd widened `canDecline` to all three " +
+                "with a literal, which turned a refused child navigable into a silently empty one, and " +
+                "fetchedDocument takes the word from its consumer now");
         /* THE THIRD OUTCOME, AND THE PAIRING ABOVE IS RESTATED RATHER THAN BROKEN: `bytes` is null here as it
            is for a load that failed, and `unavailable` is ALSO null, because this zone has nothing to say
            about a response that does not exist. `declined` is the reason, and it is the ONLY field that
@@ -4021,14 +4030,46 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      exists rather than being defaulted: an address alone cannot distinguish a frame a person's own session
      would have loaded from one that exists because a gate was forced, and this zone was fetching both, with
      cookies, for as long as the record said nothing. */
-  const fetchedDocument = async (u, provenance) => {
+  /* AND `canDecline` IS THIS CALLER'S AND NOT THIS FUNCTION'S, WHICH IS THE REGRESSION THIS PARAMETER REPAIRS
+     AND IT WAS MINE. `navigationLoad`'s own `canDecline` asks WHETHER THIS CALLER HOLDS A RENDEZVOUS, and this
+     function serves THREE consumers of which exactly ONE does: `document.fetch` is answered through
+     `engineDeliverDocument`, which routes a refusal to the id the engine is parked on, while `navigable.create`
+     and `navigable.swap` are NOTICES with no id to refuse. Passing a literal `true` for all three was the same
+     shared-literal shape as the `actor` word one parameter over, in the same function family, and it widened a
+     capability to two consumers that had none.
+     WHAT IT COST IS A SILENT EMPTY DOCUMENT WHERE A LOUD ABORT USED TO BE. Before the decline existed every
+     refused navigation hit a `DFAIL`, so a declined create could not happen; after it, the create arm's
+     `loaded.bytes === null ? new Uint8Array(0) : loaded.bytes` and the swap arm's identical line turned a load
+     NOTHING ATTEMPTED into a child provisioned as an EMPTY DOCUMENT. That is CLAUDE.md
+     \u00a7A-FIELD-A-CONSUMER-DEFAULTS exactly, and the direction is the worst one: an empty document is a
+     PLAUSIBLE DATUM, so a frame the chokepoint refused reads as a frame the server served nothing for, and
+     every flow forked inside it explores a document no visitor is ever shown.
+     IT IS A PRECONDITION AND NOT A GUARD, by \u00a7C-stack's own test: delete the decline and this question
+     still has to be asked, because `navigationLoad` has always had two kinds of caller and only ever asked one
+     of them. A false here reaches that function's standing `DFAIL`, which is the pre-decline behaviour restored
+     at the two sites that cannot carry a refusal and nowhere else.
+     FOUND BY A LANE READING THE TREE, not by a run \u2014 and then confirmed here by reading the two
+     fabrication lines. No drive has ever reached them: no corpus row documents an iframe and no control fixture
+     contains one, which is the subject this entry still has no witness for. */
+  const fetchedDocument = async (u, provenance, canDecline) => {
+    DCHECK(typeof canDecline === "boolean",
+           "a \u00a77.4 document load was asked for without saying whether ITS consumer can carry a refusal " +
+           "—" +
+           " this function serves a request that holds a rendezvous and two notices that hold none, and a " +
+           "literal here is how a refusal reached a consumer whose only arm for it fabricates an empty " +
+           "document");
     const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance, msg.provenance,
-                                   /*canDecline*/true, /*actor*/"page");
+                                   canDecline, /*actor*/"page");
     /* …AND THE REFUSAL CROSSES WITH THEM, which is the one field this function used to drop. `unavailable` is
        still not carried and the comment above still holds for it — a child navigable's page does not appear in
        the popup's page-source row, so its REASON has no reader there. `declined` is a different fact with a
        different reader: engineDeliverDocument routes it to the rendezvous instead of answering it, so the
        navigable keeps the `about:blank` it was created holding rather than being handed an error page. */
+    DCHECK(canDecline || r.declined === null,
+           "a \u00a77.4 document load came back DECLINED for a consumer that cannot carry a refusal " +
+           "—" + " `navigationLoad` is supposed to have aborted instead, so either its " +
+           "`canDecline` arm or this forward has come apart. The two arms are not interchangeable: a notice " +
+           "has no rendezvous, and the only thing this consumer could do with a refusal is turn it into bytes");
     DCHECK(r.declined === null || typeof r.declined === "string",
            "a §7.4 navigation's result does not STATE whether it was declined — `r.declined` is `" +
            String(r.declined) + "`. The field used to be read as `r.declined || null`, and that default is the " +
@@ -5195,7 +5236,10 @@ async function hostNotice(eng, line) {
        makes a crash at the decision rather than a load. The engine states it; `navigationLoad` decides on it;
        this arm neither re-derives it nor acts on it, which is why it is passed through rather than tested
        here — one decision, at the one document-load path, for every caller of it. */
-    const loaded = await eng.fetchedDocument(f[3], f[15]);
+    /* `false` \u2014 A NOTICE HOLDS NO RENDEZVOUS. \u00a77.3.1.3's create arrives as a notice, so there is no
+       request id a refusal could be addressed to and the only arm below for a bytes-less load fabricates an
+       EMPTY DOCUMENT. `navigationLoad` aborts instead, naming what to build. */
+    const loaded = await eng.fetchedDocument(f[3], f[15], /*canDecline*/false);
     /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED — derived HERE and not read off the
        notice, even though the notice carries one at f[4]. SECURITY.md draws that line at this exact record:
        "identity may be minted by the untrusted side because it is only a name, but ROUTING and the ORIGIN
@@ -5504,7 +5548,9 @@ async function hostNotice(eng, line) {
        ONE WAS, because it is the SAME NAVIGATION: the provenance on this record is the load job's own
        (core/frame/browsing_context_group.c takes it from there), so a swap cannot become a way for an address
        this zone declined at `document.fetch` to be fetched anyway one notice later. */
-    const swapped = await eng.fetchedDocument(f[2], f[4]);
+    /* `false` FOR THE CREATE ARM'S REASON EXACTLY \u2014 \u00a77.1.3.2's swap is a notice too, and its own
+       `pageHtml` line turns a null body into an empty Uint8Array. */
+    const swapped = await eng.fetchedDocument(f[2], f[4], /*canDecline*/false);
     DCHECK(swapped && (swapped.bytes === null || swapped.bytes instanceof Uint8Array),
            "the swapped-to document load answered neither bytes nor the null that means it did not load");
     DCHECK(swapped.headers && typeof swapped.headers === "object",
@@ -5982,7 +6028,11 @@ async function engineServiceHostRequests(eng) {
        is. The navigable that asked stays parked on its load, which is what a navigation in flight is; every
        other flow in the document keeps running. */
     did += engineIssue(eng, "doc\n" + id,
-      () => eng.fetchedDocument(fetchArgs.slice(fetchTab + 1), fetchArgs.slice(0, fetchTab)),
+      /* `true` \u2014 THE ONE CONSUMER THAT HOLDS A RENDEZVOUS. `engineDeliverDocument` reads `r.declined`
+         and routes it to `hostDecline` against the id the engine is parked on, so a refusal has somewhere to
+         go and the navigable keeps the `about:blank` \u00a77.3.1.3 created it holding. */
+      () => eng.fetchedDocument(fetchArgs.slice(fetchTab + 1), fetchArgs.slice(0, fetchTab),
+                                /*canDecline*/true),
       (r) => engineDeliverDocument(eng, id, r));
     continue;
   }
