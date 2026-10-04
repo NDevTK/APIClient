@@ -742,6 +742,32 @@ const frontierPrograms = (() => {
   }
   const pc = c.programCursors;
   if (pc && typeof pc === 'object' && !Array.isArray(pc)) out.programCursors = pc;
+  /* …AND THE THREE GLOBAL MAXIMA THE DISTRIBUTION STRUCTURALLY CANNOT CARRY, WITHOUT WHICH A CURSOR READING
+     HAS TWO MEANINGS THAT TAKE OPPOSITE WORK. solver/cold.h states the split in its own words — "`program_
+     cursors` is its distribution, `deepest`/`deepestLeft`/`completed` are GLOBAL MAXIMA over it" — and that
+     `deepest` "means the deepest program STARTED and is still the right thing to read against for coverage".
+     A cursor is closed on both ends, so a bucket at `c` means those members LEFT program `c - 1` and are
+     STANDING AT `c`'s DOOR; it says nothing whatever about whether the programs above `c` ever started. Read
+     without a maximum beside it, a mass at one bucket is equally `the document has no more programs` — a
+     reach wall, which sends you to the loader — and `the programs ran and these members are stuck holding
+     nothing` — a scheduler fact, which sends you somewhere else entirely. CLAUDE.md §A-COORDINATE-THAT-MEANS-
+     THE-OPPOSITE-OF-HOW-IT-READS is about exactly this ceiling being read as non-arrival, and it names the
+     discriminator as "the deepest index ever COMPILED … printed on the same line".
+     MEASURED, AND IT IS WHY THIS IS A ROW AND NOT A NOTE: gitlab's archived passes read `programCursors
+     {"7": 7910, "8": 13}` over 7923 live members with ZERO departures, and the three maxima are absent from
+     the row — so the one real-site census that completed cannot say which of the two it is, and a reader
+     holding it reaches for the flattering one. This row is the NINTH time this file has been the consumer
+     that never asked for a field the engine already writes, after the eight the endpoint block below
+     enumerates.
+     THE INEQUALITY IS NOT RE-ASSERTED HERE, DELIBERATELY. cold.h derives `every live member's cursor is at
+     most deepestLeft + 1` and says it is asserted where both are in one hand, which is the engine; a second
+     copy in a consumer is the shape that drifts from the producer it is checking. What this does is RELAY the
+     operands so the reader who holds the distribution also holds what to compare it against.
+     EACH IS ADDED ONLY WHERE THE ARTIFACT STATED IT, by the `typeof === 'number'` rule the partition above
+     uses: an artifact older than one of these keys leaves it out rather than contributing a zero, because
+     -1 is `deepestLeft`'s own "no member has left a row" and a dropped key is an ARTIFACT fact. */
+  for (const k of ['deepest', 'deepestLeft', 'completed'])
+    if (typeof c[k] === 'number') out[k] = c[k];
   /* THE KEYS THIS OBJECT ENDED UP WITH ARE WHAT IT TOOK, so the derived partition above registers itself
      without being named twice. `from` is this file's own index and not a census row, so it is added after. */
   for (const k of Object.keys(out)) taken.add(k);
