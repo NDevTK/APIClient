@@ -224,10 +224,18 @@ static int signal_aborted_nonforking(JSContext *ctx, JSValueConst flag)
     return r;
 }
 
-static int signal_is_aborted(JSContext *ctx, JSValueConst slots)
+/* `site` IS THE CALLER'S AND IS NOT COMPOSED HERE, which is the whole reason it is a parameter.
+   This helper is the ONLY route in this engine by which a plain C body reaches solver_decide — `solver_decide`
+   has exactly two callers in the tree and the other is the interpreter's own branch hook, which holds a frame
+   and therefore never reaches the abort. So when that abort fires, the component is this one BY CONSTRUCTION
+   and the only open question is WHICH ask, and there are 26 of them: five calls below, two of which are
+   exported and called from 24 further sites across nine files. A site composed with SOLVER_SITE_HERE *here*
+   would name this function for every one of them, which is the forwarding-function answer
+   §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE forbids — the same answer for 26 candidates is no answer. */
+static int signal_is_aborted(JSContext *ctx, JSValueConst slots, const char *site)
 {
     JSValue flag = JS_GetPropertyStr(ctx, slots, "aborted");
-    int d = solver_decide(ctx, flag, signal_aborted_nonforking(ctx, flag));
+    int d = solver_decide_at(ctx, flag, signal_aborted_nonforking(ctx, flag), site);
     int r;
 
     if (d < 0) {
@@ -286,7 +294,7 @@ static JSValue js_sig_get_reason(JSContext *ctx, JSValueConst this_val, int argc
         JS_FreeValue(ctx, slots);
         return JS_ThrowTypeError(ctx, "reason called on something that is not an AbortSignal");
     }
-    v = signal_is_aborted(ctx, slots) ? JS_GetPropertyStr(ctx, slots, "reason") : JS_UNDEFINED;
+    v = signal_is_aborted(ctx, slots, SOLVER_SITE_HERE) ? JS_GetPropertyStr(ctx, slots, "reason") : JS_UNDEFINED;
     JS_FreeValue(ctx, slots);
     return v;
 }
@@ -299,7 +307,7 @@ static JSValue js_sig_throw_if_aborted(JSContext *ctx, JSValueConst this_val, in
         JS_FreeValue(ctx, slots);
         return JS_ThrowTypeError(ctx, "throwIfAborted called on something that is not an AbortSignal");
     }
-    if (signal_is_aborted(ctx, slots)) {
+    if (signal_is_aborted(ctx, slots, SOLVER_SITE_HERE)) {
         JSValue reason = JS_GetPropertyStr(ctx, slots, "reason");
         JS_FreeValue(ctx, slots);
         return JS_Throw(ctx, reason);
@@ -492,7 +500,7 @@ static bool signal_abort_state(JSContext *ctx, JSValueConst sig, JSValue reason)
 {
     JSValue slots = signal_slots(ctx, sig);
 
-    if (!JS_IsObject(slots) || signal_is_aborted(ctx, slots)) {
+    if (!JS_IsObject(slots) || signal_is_aborted(ctx, slots, SOLVER_SITE_HERE)) {
         JS_FreeValue(ctx, slots);
         JS_FreeValue(ctx, reason);
         return false;
@@ -594,20 +602,20 @@ JSClassID abort_signal_class(void)
     return g_sig_class;
 }
 
-bool abort_signal_aborted(JSContext *ctx, JSValueConst sig)
+bool abort_signal_aborted_at(JSContext *ctx, JSValueConst sig, const char *site)
 {
     JSValue slots = signal_slots(ctx, sig);
-    bool b = JS_IsObject(slots) && signal_is_aborted(ctx, slots);
+    bool b = JS_IsObject(slots) && signal_is_aborted(ctx, slots, site);
     JS_FreeValue(ctx, slots);
     return b;
 }
 
-JSValue abort_signal_reason(JSContext *ctx, JSValueConst sig)
+JSValue abort_signal_reason_at(JSContext *ctx, JSValueConst sig, const char *site)
 {
     JSValue slots = signal_slots(ctx, sig), v;
 
     if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return JS_UNDEFINED; }
-    v = signal_is_aborted(ctx, slots) ? JS_GetPropertyStr(ctx, slots, "reason") : JS_UNDEFINED;
+    v = signal_is_aborted(ctx, slots, site) ? JS_GetPropertyStr(ctx, slots, "reason") : JS_UNDEFINED;
     JS_FreeValue(ctx, slots);
     return v;
 }

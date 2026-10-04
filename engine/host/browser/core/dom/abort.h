@@ -7,6 +7,7 @@
 
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "solver/decide.h"             /* SOLVER_SITE_HERE — the ask site these two forms carry */
 #include "core/events/event_target.h"   /* EventFireCb — the width of the fire request this machine parks on */
 
 void abort_init(JSContext *ctx);
@@ -83,7 +84,14 @@ void abort_signal_remove_algorithm(JSContext *ctx, JSValueConst sig, JSValueCons
    THE FORK ITSELF IS NOT COMPLETE HERE and abort.c's header says why: these members are plain C bodies, so a
    FIRST-TIME fork on an unknown flag has no place to build its sibling and crashes at the seam. Replaying a
    decision this flow has already taken is unaffected — that consumes a recorded arm and forks nothing. */
-bool    abort_signal_aborted(JSContext *ctx, JSValueConst sig);
+/* AND THE ASK SITE IS THE CALLER'S, which is what the `_at` form and the macro are for. The crash these two
+   can reach names a REMEDY — convert this body to a step machine — and a remedy needs an OBJECT: the ask lives
+   in abort.c's one shared helper, so a site composed anywhere below this line would name that helper for all
+   24 of these call sites at once. The macro expands HERE, at each caller, so the abort names the file and line
+   of the component that branched. An INTERMEDIATE of its own (one of these called from another helper that is
+   itself called from several places) takes the `_at` form and forwards what it was handed, never the macro. */
+bool    abort_signal_aborted_at(JSContext *ctx, JSValueConst sig, const char *site);
+#define abort_signal_aborted(ctx, sig) abort_signal_aborted_at((ctx), (sig), SOLVER_SITE_HERE)
 
 /* IS THIS AN AbortSignal? Web IDL's `AbortSignal signal` member is an interface type, so a value that is not
    one is a TypeError — Streams §4.2.4's options carry one, and a union arm is a brand test. */
@@ -93,7 +101,8 @@ bool    abort_signal_is(JSContext *ctx, JSValueConst v);
    states the class its Web IDL §3.2.15 conversion brands against. It is the same one fact the predicate above answers —
    the class every instance wears — asked in the form the declaration surface takes. */
 JSClassID abort_signal_class(void);
-JSValue abort_signal_reason(JSContext *ctx, JSValueConst sig);   /* dup'd */
+JSValue abort_signal_reason_at(JSContext *ctx, JSValueConst sig, const char *site);   /* dup'd */
+#define abort_signal_reason(ctx, sig) abort_signal_reason_at((ctx), (sig), SOLVER_SITE_HERE)
 
 /* §3.2 "CREATE A DEPENDENT ABORT SIGNAL" — one signal that aborts when ANY of `signals` does, with that one's
  * reason. It is a real §3.2 concept and not a convenience: it is the WHOLE of `AbortSignal.any(signals)`, whose

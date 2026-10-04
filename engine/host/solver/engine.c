@@ -6274,7 +6274,8 @@ int engine_session_forks(void) { return g_sess_forking; }
    per unconsumed fork, of the shared decision chain reference the sibling was going to stand on, so the whole
    frozen prefix under it stays alive too. It stays as the BACKSTOP it always was; what it can no longer be is
    the diagnosis, because the two ways to reach it without a consumer now crash where they are born. */
-int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const char *asked, int restartable) {
+int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const char *asked, int restartable,
+                        const char *site) {
     Flow *f = flow_running();
 
     DCHECK(f != NULL, "a sibling was prepared with no flow running — the blobs were frozen off whatever "
@@ -6310,8 +6311,28 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
         /* AND A C BODY MID-ALGORITHM HAS NEITHER, WHICH IS AN UNBUILT DECLARATION AND NOT A REASON TO ASK
            LESS. It is already inside its own activation, so there is no machine state for the other arm to be
            snapshotted at and no way to re-reach the ask by re-running anything. What it needs is to become a
-           step machine — JS_CFUNC_STEP_DEF at its definition, the ask moved into step_fork_run — after which
-           the driver holds the resume point and takes the first branch above. */
+           step machine — JS_CFUNC_STEP_DEF at its definition, with the ask moved into the machine's own fork
+           seam — after which the driver holds the resume point and takes the first branch above.
+
+           THIS CRASH'S REMEDY CLAUSE SAID `step_fork_run`, AND THAT IS THE WRONG SEAM FOR THE ONE QUESTION
+           THAT REACHES IT. It is corrected rather than deleted because the clause was PLAUSIBLE: `step_fork_run`
+           is the seam a machine reaches for, this abort fires from a fork, and a reader who re-derives the
+           remedy from "a machine forks through step_fork_run" will write it again. What arrives here through
+           solver_decide is a BRANCH question — keyed by the operand's own identity, which is what decide_key
+           composes — and quickjs-step.h states in its own words why the outcome seam is wrong for one, twice
+           over: it "would fork a second time over a predicate the flow may already have fixed, and it would
+           file a domain-less shape for a parameter the page had gated", because it keys by (operand,
+           OPERATION, completion) rather than by the value. The seam a ToBoolean belongs on is
+           `step_tobool_run` (JS_FORK_KIND_TOBOOL), which is BUILT and has live consumers, so this is a
+           re-aiming and not a thing to build. A machine answering about one of ITS OWN completions still asks
+           step_fork_run; the clause was wrong about which of the two this population is.
+
+           AND THE CLAUSE THAT NAMED NO SITE WAS THE HALF THAT COST A READING, which is why `site` exists. The
+           abort held the PREDICATE, which is a fact about the VALUE and names nobody: the whole population
+           reaching it is one helper in core/dom/abort.c whose two exported forms are called from 24 further
+           sites across 9 files, so a reader was handed 26 candidates and a remedy with no object —
+           §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE, measured on a real page twice over two virgin
+           profiles before the site was threaded. */
 #if APICLIENT_DEV
         {
             char name[192];
@@ -6327,8 +6348,10 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
             DFAILF("a C builtin forked over unknown input from inside its own activation, so the sibling has "
                    "nowhere to resume: nothing will clone a frame for it and re-running the flow's step does "
                    "not re-reach the ask. Declare that builtin a step machine (JS_CFUNC_STEP_DEF) and move "
-                   "this question into its step_fork_run, so the driver snapshots the machine AT the ask. "
-                   "The question was: %s", asked ? name : "(no source identity)");
+                   "this question into the machine's BRANCH seam, step_tobool_run — not step_fork_run, which "
+                   "keys by (operand, operation, completion) and is for a machine's own completions — so the "
+                   "driver snapshots the machine AT the ask. The ask site was: %s. The question was: %s",
+                   site ? site : "(no ask site)", asked ? name : "(no source identity)");
         }
 #endif
         (void)asked;

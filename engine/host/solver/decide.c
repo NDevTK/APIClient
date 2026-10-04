@@ -1996,7 +1996,7 @@ static int dec_replay(uint32_t asked) {
    in ONE place for all three ways a decision is reached — and so that the seam, which may assemble the sibling
    before this returns, sees the parent's constraint exactly as the sibling's frozen copy left it. */
 static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, uint32_t asked,
-                        int restartable, int real_arm, int *forked) {
+                        int restartable, int real_arm, int *forked, const char *site) {
     int take = real_arm < 0 ? 1 : real_arm;
     void *dblob;
     void *pblob;
@@ -2043,7 +2043,7 @@ static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, 
         fork_key_count(fork_site_name(subject), FORK_ROW_SITE);
     }
     pblob = concolic_pins_suspend();
-    *forked = engine_prepare_fork(ctx, dblob, pblob, key, restartable);
+    *forked = engine_prepare_fork(ctx, dblob, pblob, key, restartable, site);
     /* THIS FLOW'S OWN ARM, onto the head the freeze above emptied — and only where there is a question to
        record it under. Where there is not, this flow's path is UNCHANGED by the branch: it recorded no
        constraint either (decide_arm's tail asks `if (key)` for the same reason), so what it carries forward is
@@ -2134,7 +2134,7 @@ static int dec_answer_here(const char *key, uint32_t asked, int nonforking) {
  * reads this engine cannot tell apart decide each other. Both entries assert it is a concolic before they get
  * here (decide_branch's guard, solver_outcome's DCHECK), so it is never a value with no record behind it. */
 static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, int restartable, int nonforking,
-                      int real_arm, int *forked) {
+                      int real_arm, int *forked, const char *site) {
     uint32_t asked = dec_key_hash(key);
     int arm;
     *forked = 0;
@@ -2217,7 +2217,8 @@ static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, int
            mints the sibling, and one that does not takes the arm the SITE declared and records it. It is not a
            fallback selecting between two implementations of a decision: there is one decision, and this is
            what the other arm's absence means. */
-        arm = engine_session_forks() ? dec_fork_here(ctx, key, subject, asked, restartable, real_arm, forked)
+        arm = engine_session_forks() ? dec_fork_here(ctx, key, subject, asked, restartable, real_arm, forked,
+                                                     site)
                                      : dec_answer_here(key, asked, nonforking);
     }
     /* ONE PLACE, ALL THREE ARMS — a replayed arm and a refined one narrow this flow exactly as a forked one
@@ -2404,7 +2405,8 @@ static int decide_note_forced_arm(JSValueConst v, int real_arm, int arm) {
 
 /* THE ONE BODY BEHIND BOTH BRANCH ENTRIES — see decide.h. `restartable` is the CALLER's declaration about
    where its sibling comes back, and it is the only thing that differs between them. */
-static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int nonforking) {
+static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int nonforking,
+                         const char *site) {
     const char *src = NULL, *tok = NULL;
     ConcolicLit tok_kind = CONCOLIC_LIT_NONE;
     char *key;
@@ -2444,7 +2446,7 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
        run saw says which arm is real, and XORing it would turn that into the arm 0. */
     if (real != REAL_ARM_UNOBSERVED) real ^= neg;
     key = decide_key(cond);
-    arm = decide_arm(ctx, key, cond, restartable, nonforking, real, &forked);
+    arm = decide_arm(ctx, key, cond, restartable, nonforking, real, &forked, site);
     free(key);
     /* AND WHETHER THAT FORK WAS TAKEN OVER A SUBJECT THIS FLOW HAD ALREADY PROVED — see the counter for what
        the population is and why it is observed before anything refuses it. It is raised HERE because this is
@@ -2654,12 +2656,15 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     return forked ? (arm | SOLVER_FORKED_BIT) : arm;   /* the bit tells the interpreter to snapshot-fork this frame */
 }
 
-int solver_decide(JSContext *ctx, JSValueConst cond, int nonforking) {
-    return decide_branch(ctx, cond, 0, nonforking);
+int solver_decide_at(JSContext *ctx, JSValueConst cond, int nonforking, const char *site) {
+    DCHECK(site != NULL, "a branch decision was asked for with no ask site — the site is captured at the "
+                         "CALLER by SOLVER_SITE_HERE and threaded by every intermediate, so a NULL here is "
+                         "a chain that dropped it and an abort that cannot name what to convert");
+    return decide_branch(ctx, cond, 0, nonforking, site);
 }
 
-int solver_decide_restartable(JSContext *ctx, JSValueConst cond, int nonforking) {
-    int r = decide_branch(ctx, cond, 1, nonforking);
+int solver_decide_restartable_at(JSContext *ctx, JSValueConst cond, int nonforking, const char *site) {
+    int r = decide_branch(ctx, cond, 1, nonforking, site);
     DCHECK(r < 0 || !SOLVER_FORKED(r),
            "a restartable branch was told to snapshot a frame — the seam assembles this sibling itself "
            "(there is no activation to clone), so the bit can only mean the seam took the other path and the "
@@ -2908,7 +2913,8 @@ static void outcome_settle(JSValueConst over, const char *op, int n, int c) {
     }
 }
 
-int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int real) {
+int solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n, int real,
+                      const char *site) {
     int i, forked = 0;
 
     if (!g_running) return -1;
@@ -3012,7 +3018,7 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int
            ordinary completion there (core/timing/timer.c says so at §8.7's step 4). So this entry cannot be
            reached in a non-forking session, and SOLVER_NO_NONFORKING_ARM is what says so: if it ever is, the
            crash names the machine's question rather than recording an arm nobody chose. */
-        arm = decide_arm(ctx, key, over, 0, SOLVER_NO_NONFORKING_ARM, real_arm, &forked);
+        arm = decide_arm(ctx, key, over, 0, SOLVER_NO_NONFORKING_ARM, real_arm, &forked, site);
         free(key);
         /* THE ARM THIS FLOW ENDS ON, AGAINST THE MACHINE'S DECLARATION — the same statement decide_branch
            makes one screen up, made here BEFORE the forked bit is composed because the bit is a message to the

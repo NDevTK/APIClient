@@ -433,7 +433,8 @@ void engine_set_checkpoint_hook(void (*fn)(JSContext *ctx));
  * IT USED TO STASH UNCONDITIONALLY, and the cost of that was a diagnosis three layers from the cause: a C body
  * took the FORKED bit, nothing consumed it, and the NEXT fork anywhere in the agent aborted on a stash that
  * was still full — 20 documents of one WPT area, with nothing in the message about where the blobs came from. */
-int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const char *asked, int restartable);
+int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const char *asked, int restartable,
+                        const char *site);
 
 /* DOES THIS SESSION FORK AT ALL — the explore/verify bit, asked rather than copied.
  *

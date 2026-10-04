@@ -57,7 +57,33 @@
  * predicate) and a replayed arm (the vector recorded it) are reached first and unchanged, so a candidate
  * re-fire replaying its recorded path never asks a site for this at all. */
 #define SOLVER_NO_NONFORKING_ARM (-1)
-int  solver_decide(JSContext *ctx, JSValueConst cond, int nonforking);
+
+/* WHO ASKED — a compile-time `file:line` captured AT THE ASK SITE, because the one thing the C-builtin fork's
+ * abort could not say was which site it was about.
+ *
+ * That abort names a REMEDY ("declare that builtin a step machine") and, for as long as it had no site, named
+ * no OBJECT: the seam holds the PREDICATE's identity, which is a fact about the VALUE and says nothing whatever
+ * about who branched on it. §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE is exactly this, and a shared helper
+ * is how it happened — the whole population reaching that abort is ONE helper in core/dom/abort.c, whose two
+ * exported forms are called from 24 further sites across 9 files, so the crash reported a predicate and a
+ * reader had 26 candidates and no way to choose.
+ *
+ * IT IS CAPTURED AT THE CALLER AND NEVER DERIVED AT THE HELPER, which is why this is a MACRO and the entries
+ * below are `_at` functions: a site composed inside the helper would name the forwarding function for the whole
+ * tree, which is the same answer for every one of those 26 and therefore no answer at all. An INTERMEDIATE
+ * (abort.c's own `signal_is_aborted`, its `abort_signal_aborted`) takes a site PARAMETER and forwards what its
+ * caller handed it, so the chain carries one site end to end.
+ *
+ * ONE `const char *` AND NOT A PAIR: the line number is stringified at compile time, so the whole thing is a
+ * string literal in rodata with no runtime cost, nothing to format at the abort, and no way for a caller to
+ * pass a file that disagrees with its line. */
+#define SOLVER_SITE_STR2(x) #x
+#define SOLVER_SITE_STR(x)  SOLVER_SITE_STR2(x)
+#define SOLVER_SITE_HERE    __FILE__ ":" SOLVER_SITE_STR(__LINE__)
+
+int  solver_decide_at(JSContext *ctx, JSValueConst cond, int nonforking, const char *site);
+#define solver_decide(ctx, cond, nonforking) \
+    solver_decide_at((ctx), (cond), (nonforking), SOLVER_SITE_HERE)
 
 /* THE SAME DECISION, ASKED BY ENGINE CODE THAT IS RE-REACHED BY RE-RUNNING THE FLOW'S SCHEDULER STEP — and the
  * difference from the call above is not the QUESTION, it is where the sibling comes back.
@@ -83,7 +109,9 @@ int  solver_decide(JSContext *ctx, JSValueConst cond, int nonforking);
  * real predicate, so the sibling MUST carry the other arm at the cursor. A sibling given its parent's path
  * unchanged would re-reach this walk with nothing recorded, re-fork, take the same arm as its parent, and mint
  * another sibling exactly like itself — an unbounded chain at one site whose second arm never runs. */
-int  solver_decide_restartable(JSContext *ctx, JSValueConst cond, int nonforking);
+int  solver_decide_restartable_at(JSContext *ctx, JSValueConst cond, int nonforking, const char *site);
+#define solver_decide_restartable(ctx, cond, nonforking) \
+    solver_decide_restartable_at((ctx), (cond), (nonforking), SOLVER_SITE_HERE)
 
 /* JSFlowControlHooks.outcome — the same decision, asked by a C BUILTIN that has no OP_if to ask it at. `over`
    is the unknown operand its completion depends on, `op` names the operation ("JSON.parse"), `n` is how many
@@ -128,7 +156,10 @@ int  solver_decide_restartable(JSContext *ctx, JSValueConst cond, int nonforking
    C body is already inside its activation when it asks and has no machine state for the other arm to be
    snapshotted at, so a fork from one crashes at the seam naming the operation — and what that names is the
    DECLARATION to build: JS_CFUNC_STEP_DEF, with the ask moved into the machine's own step_fork_run. */
-int  solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int real);
+int  solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n, int real,
+                       const char *site);
+#define solver_outcome(ctx, over, op, n, real) \
+    solver_outcome_at((ctx), (over), (op), (n), (real), SOLVER_SITE_HERE)
 
 /* Take the decision vector out of a fork blob (ownership transfers; blob struct freed). For the replay fork. */
 
