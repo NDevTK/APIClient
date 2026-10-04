@@ -1543,6 +1543,52 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         JS_FreeCString(ctx, addr);
         return JS_STEP_YIELD;
     }
+    /* §7.4.5's `return null` ARM, WHICH IS THE FIRST THING ASKED OF AN ANSWER BECAUSE EVERY FIELD READ
+       BELOW IS A FIELD ONLY A RESPONSE HAS. "Create navigation params by fetching" ends its redirect loop
+       with HTML §7.4.5 "Populating a session history entry": "If any of the following are true: response
+       is a network error, locationURL is failure, or locationURL is a URL whose scheme is a fetch scheme,
+       then return null" — and a null navigation params is a navigation that CREATES NO DOCUMENT, so the
+       navigable keeps the one it has. For a child navigable that is the initial `about:blank`
+       §7.3.1.3 "Child navigables" created it holding, which is exactly what the refusal this arm serves
+       asked for.
+       JS_NULL IS FETCH §2.2.6 "Responses"' NETWORK ERROR AND THAT SPELLING IS NOT THIS FILE'S CHOICE:
+       (§2.2.6 is where the term is DEFINED, which is the number this cites. Several sites in this tree write
+       `§5.6` beside the words `network error`, and that is NOT swept here: §5.6 is "Fetch methods", whose
+       `fetch()` REJECTS on one, so a citation of the algorithm that makes it OBSERVABLE is a different and
+       plausible claim. `node engine/citegen.mjs --since origin/main` is what caught this one, by its TITLE
+       rather than its number.)
+       core/fetch/fetch.h documents it as one, and solver/engine.c's `flow_decline_fork` writes exactly it
+       onto the arm that carries a trusted-zone REFUSAL forward — with ENGINE_COMPLETION_NORMAL beside it,
+       because a refusal is not a program that threw. So ONE arm answers both populations and neither is
+       special-cased: whatever hands this job §5.6's network error gets §7.4.5's `return null`.
+       WHAT IT REPLACES IS AN ABORT, MEASURED RATHER THAN ARGUED. The decline landed before this arm did, so a
+       same-origin child navigable the default egress policy refuses reached the `url` DCHECK below with a
+       JS_NULL answer and took the engine down: one drive of a two-iframe control fixture, `crashedRuns 1`,
+       `@WHY ... "cond":"JS_IsString(urlv)"` at this function. The assert was RIGHT — a response with no URL
+       is a producer that stopped writing one — and what was missing is that a NETWORK ERROR IS NOT A
+       RESPONSE, so it must never reach a line written over one.
+       THE REGISTER IS TAKEN HERE AND NOT LEFT, for the reason the take further down gives: a record the
+       machine is finished with and does not consume is a rendezvous nothing will ever clear, and this exit is
+       as final as that one. The completion is asserted NORMAL on the same argument — the trusted zone
+       answered out of the network, and there is no peer's program here to have thrown in.
+       HOW ITS ABSENCE WOULD SHOW: a dev run that aborts at this function's own `url` assert on a document the
+       chokepoint refused, which is a crash naming a MISSING RESPONSE FIELD for a request that never got a
+       response at all.
+       RETIREMENT: this record goes when §7.4.5's OTHER two `return null` conditions are asked here too — a
+       `locationURL` of failure and one whose scheme is a fetch scheme — because the arm is then keyed on the
+       standard's whole condition rather than on the one disjunct this engine can currently produce. */
+    if (fetches && JS_IsNull(answer)) {
+        int completion = ENGINE_COMPLETION_NORMAL;
+        JSValue taken = engine_host_take(ctx, s->req, &completion);
+        DCHECK(completion == ENGINE_COMPLETION_NORMAL,
+               "§5.6's network error was delivered to a document load with a THROW completion — this request "
+               "is answered by the trusted zone out of the network and by `flow_decline_fork`'s refusal arm, "
+               "and neither is a program of a peer's for it to have thrown in");
+        JS_FreeValue(ctx, taken);
+        s->req = 0;
+        JS_FreeCString(ctx, addr);
+        return JS_STEP_DONE;
+    }
     /* §7.4.2.2's initiatorOriginSnapshot, CARRIED AS A HANDLE. It is an INPUT of the operation — the origin of
        the document whose script ran — and a handle is what preserves its identity across a JSValue: §7.3.2.1's
        determine-the-origin steps 3 and 4 return this record ITSELF for an `about:` destination, and a
