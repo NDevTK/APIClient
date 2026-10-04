@@ -153,6 +153,22 @@ const DOCS = [
      primary oracle is this server rather than the census row, which is also why they may share one document
      where every other question got an origin: the log survives an abort that would blind every column. */
   ['preload-image.html', 'control-preload'],
+  /* THE ONE DOCUMENT HERE WITH A CHILD NAVIGABLE, APPENDED FOR THE REASON STATED AT THE TOP OF THIS
+     TABLE. It exists because an engine entry landed with NO SUBJECT: `qjs_host_decline` routes a
+     §7.4.5 document load the chokepoint refuses to the rendezvous the engine is parked on, and
+     nothing in this tree exercised it — no apps.tsv row documents an iframe, no fixture here
+     contained one, and the mirrored corpus's single markup iframe is SRCLESS. So the entry's
+     predictions were UNSCORABLE, which CLAUDE.md §THE-SAME-HOLE-SWALLOWS-A-PREDICTION is exactly
+     about: an absent abort is confirmed identically by a correct fix and by a path nobody took.
+     ITS REGRESSION MODE IS A SILENT ZERO AND NOT AN ABORT, which is why it is its own origin rather
+     than a rung in another document: a child navigable the policy stops refusing becomes a LOAD, and
+     that moves this origin's own log rather than another channel's published baseline.
+     SAME-ORIGIN IS THE DESIGN. core/frame/navigable.c branches on `child_in_this_agent`: a child in
+     THIS agent reaches the zone as a `document.fetch` REQUEST carrying a rendezvous id, which is the
+     one consumer that can be told a refusal; a CROSS-ORIGIN child crosses as a `navigable.create`
+     NOTICE with no id, where `bridge.js` correctly aborts instead. Both are right and only one is a
+     decline, so a cross-origin iframe would measure the abort and never the park. */
+  ['nav-decline.html', 'control-navdecline'],
 ];
 
 /* THE ONE NON-SCRIPT SUBRESOURCE ANY ROW FETCHES, and it is answered by every origin for the same reason the
@@ -232,6 +248,19 @@ DOCS.forEach(([doc, name], i) => {
     if (p === '/cfg.json') {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(CONFIG);
+    }
+    /* THE CHILD DOCUMENT THE `nav-decline` RUNGS NAME, SERVED BY EVERY ORIGIN AND EXPECTED TO BE REQUESTED BY
+       EXACTLY ONE OF THE TWO CLIENTS. It is served rather than 404'd for `/f/bare.js`'s reason: a 404 cannot
+       tell "never requested" from "requested and missing", and the rung that names it reads an ABSENCE.
+       REAL CHROME WILL ASK FOR IT (`dest=iframe`, or `document` on some versions) and THE ENGINE WILL NOT
+       (`dest=empty`), because the default egress table refuses a navigation — so the scored absence has
+       a presence beside it in the same log, which is the whole of what makes it a reading rather than a
+       silence. It is a PATH UNDER `/nav/` rather than `/nav-child.html` so that the `.js`-and-root rule below
+       cannot serve it by accident: this route is the only thing that answers it, and a reader grepping for who
+       serves it finds one line. */
+    if (p === '/nav/child.html') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      return res.end(readFileSync(join(D, 'nav-child.html')));
     }
     if (p === '/route.rsc') {
       res.writeHead(200, { 'content-type': 'text/x-component' });

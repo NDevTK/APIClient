@@ -1,0 +1,65 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>control — a SAME-ORIGIN child navigable the egress policy refuses</title>
+<!--
+  THE ONE DOCUMENT IN THIS DIRECTORY WITH A CHILD NAVIGABLE, AND IT EXISTS BECAUSE AN ENGINE ENTRY LANDED
+  WITH NO SUBJECT. `qjs_host_decline` / `engine_host_decline` / `flow_decline_fork`'s HOSTREQ arm route a
+  §7.4.5 document load the chokepoint REFUSES to the rendezvous the engine is parked on, so the navigable
+  keeps the initial `about:blank` HTML §7.3.1.3 "Child navigables" created it holding rather than being handed
+  an error page. Nothing in this tree exercised it: no row of apps.tsv documents an iframe, no control fixture
+  contained one, and the one markup iframe in the mirrored corpus is SRCLESS (`about:blank`, no network load).
+  So the entry's predictions were UNSCORABLE — an absent abort is confirmed identically by a correct fix and by
+  a path nobody took, which CLAUDE.md §THE-SAME-HOLE-SWALLOWS-A-PREDICTION is exactly about.
+
+  IT IS SAME-ORIGIN AND THAT IS THE WHOLE DESIGN RATHER THAN A SIMPLIFICATION. core/frame/navigable.c branches
+  on `child_in_this_agent(origin)`: a child in THIS agent enqueues §7.4 step 14's load, which reaches the
+  trusted zone as a `document.fetch` REQUEST carrying a rendezvous id — the one consumer that can be told a
+  refusal. A CROSS-ORIGIN child takes the other arm and crosses as a `navigable.create` NOTICE, which has no
+  id, so a refusal there has nowhere to go and `bridge.js` aborts by name. Both behaviours are correct and only
+  one of them is a DECLINE, so a cross-origin iframe here would measure the abort and never the park.
+
+  WHY IT IS REFUSED AT ALL, WHICH IS A PROPERTY OF THE DEFAULT TABLE AND NOT OF THIS DOCUMENT. Fetch §2.2.5
+  "Requests"' destination for a navigation is `document`, which is neither script-like nor a subresource, so
+  `safe-fetch.js`'s `destination` signal reads `value`; the only default arm admitting that for a page's own act
+  additionally requires `witness=unpinned`, and a navigation states `unstated` because its provenance arrives on
+  a notice and a notice carries no witness mark. `node testing/egress_arm_probe.mjs` prints that row. So EVERY
+  derived child navigable is refused at the default policy — this document does nothing clever to earn it, and
+  a widening that admits navigations would turn these rungs from a decline into a load, which is a reading and
+  not a regression.
+
+  THE ORACLE IS THIS SERVER'S ACCESS LOG AND NOT A CENSUS ROW, because the thing to prove is an ABSENCE and
+  the engine cannot be the witness to its own silence. Two clients load this document — real Chrome at the
+  row's URL and the engine through its own chokepoint — and `serve.mjs` appends `sec-fetch-dest` for exactly
+  that reason. So the pair is in ONE log:
+    · `REQ control-navdecline GET /nav/child.html dest=iframe` (or `document`) — CHROME loaded the child, which
+      is what proves the markup is right, the path is reachable and the server answers it.
+    · NO `REQ control-navdecline GET /nav/child.html dest=empty` — the ENGINE did not, because the policy
+      refused it. That is the scored absence, and it is scored only because the line above it exists.
+    · NO `/api/nav-child` from `dest=empty` either: the child's own code never ran. The day #117's decision
+      admits navigations, that line appears and this fixture reads it as the capability arriving.
+  `/nav/child.html` is SERVED rather than 404'd, for `/f/bare.js`'s reason exactly: a 404 cannot tell "never
+  requested" from "requested and missing", and both rungs here read an absence.
+
+  AND THE CENSUS ROW IS A SECOND, WEAKER ORACLE WITH ITS LIMIT STATED. `stepUnitRuns`'
+  `fork-over-a-declined-request` and `await-a-refused-request` are the two halves of `flow_decline_fork`'s
+  pair; nonzero there with `egressDeclined == {}` is the signature of a decline that did NOT come through the
+  fetch seam. It is ONE-WAY: a single fetch refusal can raise the fork count several times, so a NONZERO
+  `egressDeclined` cannot exclude a navigation decline riding along — which is why this document issues no
+  `fetch()` of its own, so that pair is clean here and the signature is readable.
+
+  TWO RUNGS, BECAUSE THERE ARE TWO WAYS A CHILD NAVIGABLE IS CREATED AND core/html/html_iframe.c runs both.
+  The first is the PARSER inserting an `<iframe src>`; the second is a script inserting one and assigning `src`
+  afterwards, which is §4.8.5's "process the iframe attributes" reached from an attribute change rather than
+  from insertion. Both compose their address on a path nothing observed, so both arrive `derived` and both are
+  refused — the point is not that they differ in the verdict but that the verdict covers both routes.
+-->
+<h1>a same-origin child navigable the policy refuses</h1>
+<p>Two child navigables at the same origin, one named by the parser and one by script. Both are
+   <code>destination=document</code>, both arrive <code>provenance=derived</code>, and both are refused at the
+   default egress table — so each navigable keeps the <code>about:blank</code> §7.3.1.3 created it with.</p>
+
+<!-- RUNG 1 — THE PARSER NAMES IT. §4.8.5 processes the iframe attributes at insertion, so the load is
+     enqueued while the parse is still running and the creating flow is the boot flow. -->
+<iframe id="markup" src="/nav/child.html" width="200" height="60"></iframe>
+
+<script src="/nav-decline.js"></script>

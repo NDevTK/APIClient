@@ -1,0 +1,14 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>control — the child document the parent's navigables name</title>
+<!--
+  SERVED AND NOT EXPECTED TO BE REQUESTED BY THE ENGINE, which is `/f/bare.js`'s rule in this directory: a 404
+  cannot tell "never requested" from "requested and missing", and the rung that names this file reads an
+  ABSENCE. Real Chrome WILL load it — that is the positive half of the pair, and it is what proves the path is
+  reachable and the parent's markup right.
+  ITS OWN CODE ASKS FOR ONE ADDRESS, so a day on which the engine DOES explore inside the frame is a day
+  `/api/nav-child` appears in the access log with `dest=empty`. That is the capability arriving rather than a
+  defect, and it is the line to look for after any widening that admits navigations.
+-->
+<h1>child</h1>
+<script>fetch('/api/nav-child');</script>
