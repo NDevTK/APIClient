@@ -3121,16 +3121,18 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
          css-lists-3 §3.5's IS STILL NOT TO BE BUILT and the reason is unchanged: its line is "keyword, but see
          prose", its prose is the positioning scheme above, and §3.2 reads the property in NO arm — so a row
          would answer a keyword whose two arms nothing distinguishes, for no caller.
-         HOW ITS ABSENCE WOULD SHOW: core/layout/box_tree.c's `bt_require_marker_box_is_spellable` goes on
-         refusing EVERY list item rather than only the ones css-lists-3 §3.2 gives a marker box — observed as
-         a dev abort naming that section on a document holding any `li` at all, at whichever walk over
-         core/layout/box_tree.h's child sequence a page reaches first. THE CLAUSE HERE ENDED BY SAYING THAT
-         NARROWING CANNOT BE BUILT FROM §3.4's ROW ALONE BECAUSE READING `list-style-image` CRASHES, and the
-         second half is retired while the first stands — kept in its own words because a reader who re-derives
-         §3.2's order will write it again. Both computed values are now derivable; what the narrowing waits on
-         is §3.2's own arms, whose image condition is a fetch and whose type condition reaches
+         HOW ITS ABSENCE WOULD SHOW IS RETIRED AND IS KEPT IN ITS OWN WORDS, because this row's own value is
+         what a reader re-derives it from: it read that core/layout/box_tree.c's
+         `bt_require_marker_box_is_spellable` GOES ON REFUSING EVERY LIST ITEM rather than only the ones
+         css-lists-3 §3.2 gives a marker box — observed as a dev abort naming that section on a document
+         holding any `li` at all, at whichever walk over core/layout/box_tree.h's child sequence a page reaches
+         first. The narrowing LANDED at core/layout/list_marker.h and reads this row's two names, so the abort
+         now stands only where §3.2 gives a marker box. WHAT IT WAITED ON WAS NOT BOTH OF §3.2's ARMS: its
+         image condition is a fetch and still crashes, and its type condition was recorded here as reaching
          css-counter-styles-3 §6.3 "Symbolic: disc, circle, square, disclosure-open, disclosure-closed" for the
-         symbol a `disc` is filled with.
+         symbol a `disc` is filled with — which is §3.2's CONTENTS answer and not its existence one, since
+         css-counter-styles-3 §5 "Extending list-style-type, counter(), and counters()" settles that a name
+         defines a marker string without naming which.
        A SECOND NARROWNESS THAT WAS RECORDED HERE IS RETIRED, AND THE RETIRED WORDING IS KEPT BECAUSE A READER
        WHO FINDS A RAW DECLARED VALUE IN THE CASCADE WILL RE-DERIVE IT — in its own words, unquoted because a
        run of this tree's prose is not a spec quotation: A DECLARED VALUE IS STORED AS THE AUTHOR'S OWN BYTES,

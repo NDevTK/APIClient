@@ -82,16 +82,21 @@
  * pierced by it, and its marker is a child of that box. What §2.5's sentence really carries through the splice
  * is the pseudo-elements it names — "its children and pseudo-elements still generate boxes and text sequences
  * as normal" — which is the empty pair above. TWO positions are touched and not six, and both now refuse.
- * HOW ITS ABSENCE WOULD SHOW, NOW THAT IT IS A CRASH: a document containing a list item reaches
- * `box_tree_first_child` of that item through any walk over its contents and ABORTS naming css-lists-3 §3.1,
- * where before the same walk got the item's first SOURCE-DOCUMENT child and a list rendered with no marker.
- * In release, where the refusal compiles out, that earlier answer is what is still returned.
- * WHAT THE NEXT DIFF BUILDS IS css-lists-3 §3.2 "Generating Marker Contents", NOT THE MEMBER TYPE, and the
- * order is forced rather than chosen: §3.2 is what makes the refusal PRECISE instead of blanket, because its
- * `otherwise` arm reads "The marker box has no contents and ::marker does not generate a box" — a list item
- * §3.2 answers that arm for has a COMPLETE sequence here and must not be refused. It needs
+ * HOW ITS ABSENCE WOULD SHOW, NOW THAT IT IS A CRASH: a document containing a list item THAT HAS A MARKER BOX
+ * reaches `box_tree_first_child` of that item through any walk over its contents and ABORTS naming
+ * css-lists-3 §3.1, where before the same walk got the item's first SOURCE-DOCUMENT child and a list rendered
+ * with no marker. In release, where the refusal compiles out, that earlier answer is what is still returned.
+ * THIS CLAUSE READ `a document containing a list item` AND IS REWRITTEN RATHER THAN DELETED, because a reader
+ * who re-derives the population from §3.1's `list-item` keyword alone will write it again: §3.2's last arm
+ * gives some list items no marker box at all, and those are no longer refused.
+ * WHAT THE NEXT DIFF BUILDS IS THE MEMBER TYPE, AND THE CLAUSE THAT SAID IT WAS css-lists-3 §3.2 "Generating
+ * Marker Contents" INSTEAD IS KEPT IN ITS OWN WORDS BECAUSE THE ORDER IT ARGUED FOR IS THE ORDER THAT HAPPENED:
+ * WHAT THE NEXT DIFF BUILDS IS §3.2, NOT THE MEMBER TYPE, and the order is forced rather than chosen — §3.2 is
+ * what makes the refusal PRECISE instead of blanket, because its `otherwise` arm reads "The marker box has no
+ * contents and ::marker does not generate a box", so a list item §3.2 answers that arm for has a COMPLETE
+ * sequence here and must not be refused. core/layout/list_marker.h is that answer. It needed
  * `list-style-type` (css-lists-3 §3.4 "Text-based Markers: the list-style-type property", whose `Initial:`
- * line is `disc` and whose `Inherited:` line is `yes`) to be a computed value at all.
+ * line is `disc` and whose `Inherited:` line is `yes`) to be a computed value at all, and it is one.
  * THIS CLAUSE USED TO READ "a list item with no marker string", AND BOTH HALVES OF WHAT FOLLOWED IT ARE
  * REWRITTEN RATHER THAN DELETED, because a reader who reaches for `list-style-type` alone re-derives both.
  * The FIRST half enumerated ONE of §3.2's three conditions: that section is ORDERED ("The contents of a
@@ -127,17 +132,21 @@
  * longhands will re-derive the trio. core/css/css_computed_value.c carries `list-style-image` in
  * `css_computed_models` and answers §3.3's line out of a derivation of its own, keyword arm first and then
  * core/css/css_image.h's `css_image_kind`, so BOTH values §3.2 reads are derivable.
- * §3.2 still
- * cannot be asked, and THIS CLAUSE READ THAT THE REASON IS §3.4's ROW ANSWERING ONLY THE SECOND ARM, which is
- * retired with the row — kept because the ordering argument above re-derives it. The reason now is that §3.2's
- * own arms are not cascade questions: its IMAGE arm asks whether the image is VALID, which css-images-3 §2
+ * §3.2 CAN BE ASKED, AND THE CLAUSE SAYING IT COULD NOT IS REWRITTEN RATHER THAN DELETED BECAUSE ITS REASON IS
+ * THE ONE A READER RE-DERIVES AND ONE HALF OF IT WAS A CONFLATION. It read: §3.2 still cannot be asked, because
+ * its own arms are not cascade questions — its IMAGE arm asks whether the image is VALID, which css-images-3 §2
  * "Image Values: the <image> type" answers over a FETCH ("an invalid image in list-style-image it is treated as
- * none, allowing the list-style-type to render in its place"), and its TYPE arm needs the symbol below.
- * §3.2's arms then reach css-counter-styles-3 §6.3 "Symbolic: disc, circle, square, disclosure-open,
- * disclosure-closed" for the
+ * none, allowing the list-style-type to render in its place"), and its TYPE arm needs a symbol, so §3.2's arms
+ * reach css-counter-styles-3 §6.3 "Symbolic: disc, circle, square, disclosure-open, disclosure-closed" for the
  * symbol a `disc` marker is filled with, and any NUMERIC style additionally needs css-lists-3 §4.6 "The
- * Implicit list-item Counter" — which is why that arm is a crash of its own and not part of the same landing.
- * THE MEMBER TYPE IS THE LANDING AFTER THAT AND IS NO LONGER AN OPEN QUESTION: it becomes a BY-VALUE PAIR of
+ * Implicit list-item Counter". THE IMAGE HALF STANDS and is where core/layout/list_marker.h still crashes. THE
+ * TYPE HALF WAS A PREREQUISITE ON AN ARM'S VALUE WHERE THE CALLER NEEDS ITS TRUTH: §3.2's third arm asks
+ * whether `list-style-type` DEFINES a marker string, and css-counter-styles-3 §5 "Extending list-style-type,
+ * counter(), and counters()" answers that for every name without naming the string — "If a <counter-style-name>
+ * is used that does not refer to any existing counter style, it must act identically to the decimal counter
+ * style" — so §6.3 and §4.6 are the CONTENTS and a later component's, exactly as core/css/css_counter_style.h
+ * already assigns them.
+ * THE MEMBER TYPE IS THE NEXT LANDING AND IS NO LONGER AN OPEN QUESTION: it becomes a BY-VALUE PAIR of
  * the ORIGINATING NODE and an `lxb_css_selector_pseudo_element_id_t`, decided and PINNED at box_tree.c beside
  * the four answers it refuses and the reason each is refused. Read it there rather than re-deriving it, because
  * three of those four leave every signature in this file exactly as it is and would land with nothing noticing.

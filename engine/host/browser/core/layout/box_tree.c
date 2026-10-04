@@ -21,6 +21,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
+#include "core/layout/list_marker.h"
 
 /* THE MEMBER TYPE THIS SEQUENCE MUST GAIN — DECIDED HERE AND PINNED, with the answers it refuses and why in
    `bt_require_marker_box_is_spellable`'s abort below and the ORDER of the landing in box_tree.h. THE DECISION:
@@ -41,7 +42,12 @@
    list item whose §3.2 answer is that section's `otherwise` arm ("The marker box has no contents and
    ::marker does not generate a box") has a complete sequence with NO pseudo member in it, and the pair simply
    does not yield one. A member type that forced a marker member per list item would be exactly the no-content
-   box §3.2 says is not generated — which is why §3.2 is the landing BEFORE this one and not after it.
+   box §3.2 says is not generated — which is why §3.2 was the landing BEFORE this one and not after it.
+   §3.2 HAS LANDED, AT core/layout/list_marker.h, AND THE SENTENCE IS KEPT IN THE PAST TENSE RATHER THAN
+   DELETED BECAUSE IT IS THE WHOLE REASON THE PAIR NAMES A BOX WITHOUT ASSERTING ONE EXISTS: a reader who
+   reaches this decision with §3.2 already answered will ask why the discriminator is not simply read off the
+   `list-item` keyword, and the answer is that §3.2's last arm gives some list items no marker member at all.
+   `list_marker_box_generated` is the predicate this sequence consults to decide whether to yield one.
    THE DISCRIMINATOR IS ROUTED TO AND NOT INVENTED, which is the whole reason the asserts below are here:
    `lxb_css_selector_pseudo_element_id_t` already carries `_MARKER`, `_BEFORE` and `_AFTER`, and it is already
    the type CSSOM §7.2's step 3.1 wants — core/css/css_style_declaration.c's getComputedStyle abort names that
@@ -243,101 +249,51 @@ static void bt_require_answer_is_in_sequence(lxb_dom_element_t *box, lxb_dom_nod
    THE RELEASE ARM IS TODAY'S ANSWER AND IS COHERENT, which is what a `DFAIL`'s shipped arm owes the components
    downstream of it: the entry goes on returning the first source-document child, which is the marker-less list
    every consumer of this sequence already handles. No component is left holding a state it has no step for.
-   IT REFUSES EVERY LIST ITEM, AND css-lists-3 §3.2 "Generating Marker Contents" IS WHAT WOULD NARROW IT:
-   that section's `otherwise` arm reads "The marker box has no contents and ::marker does not generate a
-   box", so a list item §3.2 answers that arm for has a COMPLETE sequence here and must not be refused.
-   §3.2's CONDITION IS THREE ARMS AND NOT ONE, AND THIS CLAUSE USED TO STATE ONE OF THEM — "a list item
-   with no marker string" — WHICH IS KEPT BECAUSE A READER WHO REACHES FOR `list-style-type` ALONE WILL
-   RE-DERIVE IT. §3.2 is ORDERED: "The contents of a marker box are determined by the first of these
-   conditions that is true", fetched from drafts.csswg.org/css-lists-3/ because engine/specindex has no
-   css-lists-3 row and nothing in this tree checks a citation to it. So the `otherwise` arm is reached only
-   once all three are false: `content` on the ::marker is `normal`, which this engine cannot move it off at
-   all (box_tree.h states that derivation and its armed control); no `list-style-image` on the originating
-   element defines a marker image; and no `list-style-type` defines a marker string. A narrowing built from
-   the third arm alone would answer §3.2 for an arm whose predecessors it never read.
-   THE TWO PROPERTIES §3.2 READS OFF THE ORIGINATING ELEMENT NOW HAVE AN INITIAL VALUE, A GRAMMAR AND — FOR
-   ONE OF THE TWO — A COMPUTED VALUE. THIS CLAUSE READ `AND ARE STILL NOT A COMPUTED VALUE` OF BOTH, and it is
-   kept because a reader who counts §3.6's three longhands will re-derive it: §3.4's `css_computed_models` row
-   landed and §3.3's did not, so the pair is HALF answered and §3.2 still cannot be asked, for the ORDERING
-   reason two clauses down rather than for want of both. What it used to say is that it read that
-   `list-style-type` "is in neither lexbor's property registry nor
-   core/css/css_style_declaration.c's unregistered-initial table", and the second half is RETIRED — that table
-   carries css-lists-3 §3.4 "Text-based Markers: the list-style-type property"'s `disc`, css-lists-3 §3.3
-   "Image Markers: the list-style-image property"'s `none` and css-lists-3 §3.5 "Positioning Markers: The
-   list-style-position property"'s `outside`, so css-cascade-5 §7.1 "Initial Values" has an initial value to
-   fall to and §7.2 "Inheritance" has a base case for each.
-   THE CLAUSE THAT REPLACED IT NAMED css-lists-3 §3.6 "Styling Markers: the list-style shorthand property" AS
-   THE ONE ROW IN A THIRD FILE, AND IT IS RETIRED BY THAT ROW LANDING — kept in its own words because a reader
-   who re-derives the ordering will write it again: "`css_computed_value` is the entry a C algorithm asks and it
-   asserts `css_shorthand_complete_for` FIRST, which must answer FALSE while css-lists-3 §3.6 has no row in
-   core/css/css_shorthand.c — that shorthand sets both longhands, nothing takes it apart, so a
-   `ul { list-style: none }` would read as `disc` and this refusal would fire on exactly the list items §3.2
-   says have no marker box." That row exists, with css-lists-3 §3.6's own `none` distribution ("a value of none
-   in the shorthand must be applied to whichever of the two properties aren’t otherwise set by the
-   shorthand") as a
-   kind of its own, so the predicate answers TRUE for all three names and a `list-style: none` page reads
-   `none`.
-   IT NAMED THE WRONG ASSERT, AND THAT IS WHAT THE NEXT READER NEEDS RATHER THAN THE COORDINATE: the predicate
-   it called FIRST is `css_cv_modelled`'s SECOND, and `css_computed_models` is the first — so building only the
-   thing the clause named leaves this narrowing blocked one line earlier than it said.
-   WHAT STILL BLOCKS §3.2 IS ONE ROW AND NOT THREE, AND THIS CLAUSE READ `A ROW APIECE` — kept in its own words
-   because the three longhands invite it. §3.4's row LANDED (`Computed value: specified value`, which
-   core/css/css_computed_value.c's as-specified arm answers whole), §3.5's is NOT TO BE BUILT ("keyword, but see
-   prose" over the positioning scheme this file records as unbuilt, and §3.2 reads the property in no arm at
-   all), and §3.3's is the one outstanding row.
-   THAT LAST CLAUSE IS RETIRED BY §3.3's ROW LANDING and is kept in its own words — unquoted, because a run of
-   this tree's prose is not a spec quotation — because a reader who counts the three longhands will re-derive
-   the whole trio. BOTH COMPUTED VALUES §3.2 READS ARE NOW DERIVABLE: core/css/css_computed_value.c carries
-   `list-style-image` in `css_computed_models` and answers §3.3's line out of a derivation of its own, so this
-   refusal's narrowing no longer waits on a cascade row at all.
-   WHAT IT WAITS ON INSTEAD IS §3.2's OWN ARMS, WHICH IS A DIFFERENT KIND OF WORK AND IS WHY THIS CRASH STANDS
-   UNCHANGED. §3.2's second condition is "list-style-image on the originating element defines a marker image",
-   which is a question about the IMAGE and not about the property: css-images-3 §2 "Image Values: the <image>
-   type" states the answer for one that has not loaded — "an invalid image in list-style-image it is treated as
-   none, allowing the list-style-type to render in its place" — so a FETCH stands between §3.3's computed value
-   and §3.2's arm, and §3.2's third arm reaches css-counter-styles-3 §6.3 "Symbolic: disc, circle, square,
-   disclosure-open, disclosure-closed" for the symbol a `disc` is filled with. NEITHER IS A CASCADE ROW, which
-   is the whole reason the narrowing is its own landing rather than part of the row's.
-   THE ORDER IS WHAT MAKES §3.4's ROW INSUFFICIENT ON ITS OWN, which is this crash's own ordered-condition
-   sentence read forward rather than a new fact: §3.2's IMAGE arm precedes its TYPE arm, so a narrowing that
-   read `list-style-type` and not `list-style-image` would answer an arm whose predecessor it never asked.
-   §3.3's ROW IS TWO ARMS AND THE CLAUSE HERE NAMED ONLY ONE OF THEM: it said the line resolves a `<url>`
-   against css-values-4 §4.5.1 "Relative URLs", and §4.5.1's own last sentence is what that omits — "The
-   computed value of a URL that the UA cannot resolve to an absolute URL is the specified value." So the `<url>`
-   arm HAS a defined answer in the cascade today, and core/css/css_font_src.h holds the DECISION that this
-   engine does not resolve one there. What is genuinely not as-specified is the `<gradient>` arm, by css-images-3
-   §2 "Image Values: the <image> type"'s sentence that core/css/css_image.h already quotes — "A computed <image>
-   value is the specified value with any <url>s, <color>s, and <length>s computed" — so a row must tell the two
-   apart, AND THE ENTRY THAT TELLS THEM APART IS EXPORTED NOW: core/css/css_image.h publishes `css_image_kind`
-   over a `CssImageKind` whose two arms are §2's own, with `css_image_is_image` kept as a PREDICATE over it
-   rather than as a second walk. THIS CLAUSE SAID THAT HEADER EXPORTS `css_image_is_image` AND NOTHING FINER,
-   and it is kept in its own words — unquoted, because a run of this tree's prose is not a spec quotation —
-   since a reader who greps that header for an arm test will re-derive it, and since the ORDER it states is
-   still the right one: the entry came before the row, and the ROW is what is left. THE ROW LANDED, so what is
-   left is neither — it is §3.2 itself, for the two reasons three paragraphs up. The named residual at
-   core/css/css_style_declaration.c's unregistered-initial table states that shape; verify each
-   `Computed value:` line against the fetched draft rather than taking it from here.
-   §3.1's LAST SENTENCE IS WHY THE `list-item` TEST IS THE WHOLE POPULATION AND NOT A FIRST APPROXIMATION OF IT:
-   "Marker boxes only exist for list items: on any other element, the ::marker pseudo-element’s content property
-   must compute to none, which suppresses its creation."
-   THE `list-item` TEST IS A THIRD QUESTION AND NOT A THIRD COPY of the same spelling in core/layout/
-   block_flow.c and core/layout/used_value.c: those two ask whether the PRINCIPAL box is block-level, this asks
-   whether a SECOND box is generated beside it. What it inherits from them is one narrowing it does not widen —
-   css-display-3 §2.3's two-value form `block flow list-item` is not a computed value this engine produces, and
-   core/css/css_computed_value.c's `blockified` crashes on it by name before this entry is reached.
+   IT NO LONGER REFUSES EVERY LIST ITEM, AND THE CLAUSE THAT SAID IT DID IS REWRITTEN RATHER THAN DELETED
+   BECAUSE A READER WHO COUNTS §3.2's UNANSWERED ARMS WILL RE-DERIVE IT. It read: IT REFUSES EVERY LIST ITEM,
+   AND css-lists-3 §3.2 "Generating Marker Contents" IS WHAT WOULD NARROW IT — that section's `otherwise` arm
+   reads "The marker box has no contents and ::marker does not generate a box", so a list item §3.2 answers
+   that arm for has a COMPLETE sequence here and must not be refused. That is now what happens, and the
+   narrowing is core/layout/list_marker.h's `list_marker_box_generated` rather than a predicate here: §3.2's
+   answer has three consumers and that header states why they are one component.
+   WHAT MADE THE NARROWING BUILDABLE WAS A CONFLATION AND NOT A NEW CAPABILITY, which is the part worth
+   keeping rather than the coordinate. THREE FILES RECORDED §3.2 AS BLOCKED ON css-counter-styles-3 §6.3
+   "Symbolic: disc, circle, square, disclosure-open, disclosure-closed" for the symbol a `disc` is filled with,
+   and that symbol is §3.2's CONTENTS answer: its third arm is "list-style-type on the originating element
+   defines a marker string", and css-counter-styles-3 §5 "Extending list-style-type, counter(), and
+   counters()" settles whether one is DEFINED without naming it — "If a <counter-style-name> is used that does
+   not refer to any existing counter style, it must act identically to the decimal counter style". So every
+   value of css-lists-3 §3.4 "Text-based Markers: the list-style-type property"' `Value:` line but its own
+   `none` keyword defines a marker string, and the symbol is a later component's. A prerequisite stated over
+   an arm's VALUE where the caller needs its TRUTH is how an answerable condition came to read as blocked.
+   §3.2's IMAGE ARM IS STILL A FETCH AND THE REFUSAL THERE IS THE COMPONENT'S, not this one's: a
+   `list-style-image` that is not `none` reaches `list_marker_box_generated`'s own crash, which names the load
+   to build. Its release arm falls through to §3.2's third arm, which is css-images-3 §2 "Image Values: the
+   <image> type"'s own error-handling clause for an image that turns out invalid.
+   WHAT THIS REFUSAL IS LEFT WITH IS A LIST ITEM THAT HAS A MARKER BOX, which is most of them — §3.4's
+   `Initial:` line is `disc` and core/css/css_style_declaration.c's UA rule table carries
+   `li { display: list-item }`, so a page that sets no list properties at all still reaches it. What it no
+   longer refuses is a `list-style: none` list, and css-lists-3 §3.6 "Styling Markers: the list-style shorthand
+   property"' own `none` distribution is what makes that one declaration set both longhands.
+   THE `list-item` TEST IS NOT HERE ANY MORE AND THE PARAGRAPH THAT HELD IT IS REWRITTEN RATHER THAN DELETED,
+   because a reader who sees this refusal reading a computed `display` for itself will put it back. It said that
+   §3.1's last sentence makes the test the whole population rather than a first approximation of it, and that
+   the test is a THIRD QUESTION rather than a third copy of the `list-item` comparison in core/layout/
+   block_flow.c and core/layout/used_value.c — those two ask whether the PRINCIPAL box is block-level where this
+   asks whether a SECOND box is generated beside it. Both halves still hold and neither is this file's: they are
+   core/layout/list_marker.h's, with §3.1's sentence and css-display-3 §2.3's keyword quoted at the entry that
+   now answers for every element. A fourth copy of the comparison here would be the fifth answer to one
+   box-generation question, which is the shape the top of this file is about.
    RETIREMENT: this function and its two call sites go when this sequence can yield the marker itself. */
 static void bt_require_marker_box_is_spellable(lxb_dom_element_t *box)
 {
 #if APICLIENT_DEV
-    char bbuf[160], *d;
-    bool list_item;
+    char bbuf[160];
 
-    d = css_computed_value(box, "display");
-    DCHECK(d != NULL, "the cascade produced no computed `display` — the UA layer answers `inline` for every "
-                      "element it does not name, so this cannot be unset");
-    list_item = strcmp(d, "list-item") == 0;
-    free(d);
-    if (!list_item) return;
+    /* §3.2's OWN ANSWER AND NOT A `list-item` TEST, which is what narrowed this refusal from every list item
+       to the ones that have a marker box — core/layout/list_marker.h states why that question is a component
+       and which of §3.2's four arms it can answer. */
+    if (!list_marker_box_generated(box)) return;
     DFAILF("%s: css-lists-3 §3.1 \"The ::marker Pseudo-Element\" puts a MARKER BOX first in this box's child "
            "sequence — \"The marker box is generated by the ::marker pseudo-element of a list item as the list "
            "item’s first child\" — and css-display-3 §2.5's spliced child sequence is a sequence of DOM NODES, "

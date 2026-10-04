@@ -1472,9 +1472,11 @@ bool css_computed_models(const char *name)
               IT IS HERE BECAUSE ONE ALGORITHM ASKS FOR IT BY NAME AND COULD NOT: css-lists-3 §3.2 "Generating
               Marker Contents" is an ORDERED condition — "The contents of a marker box are determined by the
               first of these conditions that is true" — whose third arm is "list-style-type on the originating
-              element defines a marker string", and core/layout/box_tree.c's
-              `bt_require_marker_box_is_spellable` refuses EVERY list item for want of it rather than only the
-              ones §3.2's `otherwise` arm gives no marker box. §3.2 reads the ORIGINATING ELEMENT's own
+              element defines a marker string". THIS CLAUSE SAID core/layout/box_tree.c's
+              `bt_require_marker_box_is_spellable` REFUSES EVERY LIST ITEM FOR WANT OF IT rather than only the
+              ones §3.2's `otherwise` arm gives no marker box, AND IT IS KEPT IN ITS OWN WORDS because it is
+              why this row exists and a reader who asks what the row bought will re-derive it: that narrowing
+              LANDED, at core/layout/list_marker.h, and this row is one of the two values it reads. §3.2 reads the ORIGINATING ELEMENT's own
               computed value, and `css_computed_value` is the entry a C spec algorithm asks.
               IT IS NOT THE WHOLE OF §3.2 AND THE ROW DOES NOT CLAIM TO BE, which is what the ORDER of that
               condition decides rather than a judgement made here: the arm ABOVE this one reads
@@ -1488,7 +1490,10 @@ bool css_computed_models(const char *name)
               element defines a marker image"), and css-images-3 §2 "Image Values: the <image> type" states
               the answer for one that has not loaded — "an invalid image in list-style-image it is treated as
               none, allowing the list-style-type to render in its place" — which is a FETCH and not a cascade
-              step. That is why the landing after this pair is §3.2 and not the marker member type.
+              step, and is where core/layout/list_marker.h crashes today. THE CLAUSE HERE READ THAT THE
+              LANDING AFTER THIS PAIR IS §3.2 AND NOT THE MARKER MEMBER TYPE, and it is kept in its own words
+              because that order is the order that happened and a reader who re-derives it will write it again:
+              §3.2 landed on this pair, and the MEMBER TYPE is what core/layout/box_tree.h now names as next.
               `Inherited: yes`, AND THE ROW IS WHAT MAKES THAT INHERITANCE §7.2's OWN: core/css/css_defaulting.c
               already carries the name, and `css_cv_specified`'s inherited arm routes a property THIS predicate
               answers for through `css_computed_value` of the parent — so css-cascade-5 §7.2 "Inheritance"'s own
@@ -1516,8 +1521,11 @@ bool css_computed_models(const char *name)
               first of these conditions that is true" — whose SECOND arm is "list-style-image on the
               originating element defines a marker image" and whose THIRD reads `list-style-type`. §3.4's row
               landed first and cannot answer §3.2 alone: a narrowing built from it would make true an arm
-              that is only reached once the one above it is false, which is why core/layout/box_tree.c's
-              `bt_require_marker_box_is_spellable` still refuses EVERY list item. §3.2 reads the ORIGINATING
+              that is only reached once the one above it is false. THE CLAUSE HERE ENDED BY SAYING THAT IS
+              WHY core/layout/box_tree.c's `bt_require_marker_box_is_spellable` STILL REFUSES EVERY LIST ITEM,
+              and it is kept in its own words because the ORDERING argument it rests on is still the argument:
+              with this row beside §3.4's, both arms are askable and the narrowing landed at
+              core/layout/list_marker.h, which reads this property BEFORE that one for exactly that reason. §3.2 reads the ORIGINATING
               ELEMENT's own computed value, and `css_computed_value` is the entry a C spec algorithm asks.
               `Inherited: yes`, AND THE ROW IS WHAT MAKES THAT INHERITANCE §7.2's OWN: core/css/
               css_defaulting.c already carries the name, and `css_cv_specified`'s inherited arm routes a
