@@ -131,16 +131,50 @@ unsigned document_bundle_id(lxb_html_document_t *dom) {
             continue;
         }
         if (!script_type_executes(script_block_type(el))) continue;   /* data block: not part of JS identity */
-        /* THE SAME CONCATENATION THE PROGRAM ITSELF IS TAKEN FROM — core/dom/text_content.h — because identity
-           is over the bytes that RUN. Two spellings of "this element's text" would let a document's id and its
-           program disagree, which for an XHTML bundle is precisely what happened: the id was computed over an
-           empty string for every script whose body is a CDATA section.
-           THE BYTES ARE HASHED UNSIGNED. `char` is signed on the hosts this builds for, so a byte at or above
-           0x80 would sign-extend into the mix and the id would differ from the same document's under an
-           unsigned buffer — a difference in the frontier key, from a cast. */
-        size_t tl = 0; char *txt = dom_child_text_content(lxb_dom_interface_node(el), &tl);
-        if (tl) { for (size_t k = 0; k < tl; k++) { bh ^= (unsigned char)txt[k]; bh *= 16777619u; } bh ^= '|'; bh *= 16777619u; }
-        free(txt);
+        /* AN INLINE SCRIPT CONTRIBUTES ITS POSITION AND NEVER ITS BYTES, WHICH IS THE WHOLE OF WHAT THIS ID IS
+           FOR AND IS THE OPPOSITE OF WHAT IT USED TO DO.
+           WHAT THIS ID IS: half the CROSS-SESSION FRONTIER KEY and nothing else. extension/bridge.js says so in
+           those words ("it is half the frontier key") and extension/render-process-host.js gives the key as
+           `origin + "|" + bundleId`. There is no other consumer: a program identity nobody asks for was being
+           computed, and the one question actually asked — IS THIS THE DOCUMENT I PARKED A FRONTIER FOR — needs
+           an answer that is STABLE ACROSS RESPONSES.
+           THE RETIRED CODE HASHED EVERY INLINE SCRIPT'S FULL TEXT, and its argument is kept here because it is
+           SOUND ABOUT A PROGRAM IDENTITY and a reader will re-derive it: identity is over the bytes that RUN, so
+           two spellings of "this element's text" would let a document's id and its program disagree, which for
+           an XHTML bundle is precisely what happened — the id was computed over an empty string for every script
+           whose body is a CDATA section. That reasoning answers a question this engine does not ask, and
+           answering it broke the one it does.
+           MEASURED on gitlab.com/explore at bed765f, and it is not an edge case: THREE visits in ONE browser
+           with IndexedDB PRESERVED (`testing/harness.js restart-keep`) read `cold.lookup` = `unvisited` every
+           time, with a DIFFERENT bundle id on each — so §ONE-global-continuous-cross-session-frontier, the
+           product's headline design claim, could never hit. Two fetches of that URL minutes apart have all 31
+           `<script src>` attributes BYTE-IDENTICAL (the positive control: a real bundler content-hashes its
+           chunk names) and exactly ONE executable inline script differing — 5977 bytes at a similarity of
+           0.9972, the delta being a 13-character trace id and a timestamp. SIXTEEN BYTES OF SIX THOUSAND MOVE
+           THE WHOLE HASH, and a CSRF token, a CSP nonce or an SSR state blob does the same thing on nearly every
+           real application.
+           SO THE POSITION AND NOT THE TEXT. `i` is the element's index in the document's own collected script
+           list, so what an inline script contributes is WHERE IT SITS AMONG THE OTHERS — which is stable across
+           responses by construction, and which a redeploy that adds, removes or reorders a script changes. The
+           `src` half above is untouched and is the strong half: it is what distinguishes two bundles, and the
+           probe in extension/renderer-host.js that asserts two peers compute DIFFERENT ids hands them two
+           documents differing only in their `src`, so that check is answered by the half this diff keeps.
+           AND A WRONG KEY IS CHEAP WHERE THE OLD BEHAVIOUR WAS NOT. If an application changes an inline
+           script's CODE without touching any chunk URL or the script shape, this id stays put and a stale
+           recipe rehydrates — and a recipe is (path, reward) replayed against the CURRENT document, so a
+           divergence is DISCARDED at the first question that does not match, which is the designed answer. The
+           retired behaviour discarded EVERY recipe on EVERY visit instead.
+           NAMED RESIDUAL — WHAT IS NOT COVERED: a document whose executable scripts are ALL inline contributes
+           only positions, so two such documents of one origin with the same script shape collide on one key.
+           WHAT THE NEXT DIFF BUILDS: a stable contribution for an inline script that is not its raw bytes — the
+           §4.12.1.1 type, the element's `nonce`-stripped attribute set, and a hash over the text with the
+           document's own per-response tokens excluded, which requires knowing which they are and is a question
+           about the response rather than about the element. HOW ITS ABSENCE WOULD SHOW: two inline-only
+           documents of one origin reading each other's parked frontier — observable as a `cold.lookup` of `hit`
+           whose rehydrated recipes all diverge at their first question. */
+        bh ^= (unsigned char)(i & 0xff); bh *= 16777619u;
+        bh ^= (unsigned char)((i >> 8) & 0xff); bh *= 16777619u;
+        bh ^= '|'; bh *= 16777619u;
     }
     free(c.els);
     return bh ? bh : 1;
