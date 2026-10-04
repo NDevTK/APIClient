@@ -795,7 +795,7 @@ const COLD_FORK_PINNED = ["forkOverPinned"];
    the document beside `_wfq` — so this driver reads the pair across two keys and the ONE place they are asserted
    against each other is the composer that emits them. Zero here beside a nonzero `epFetchAskNamedLife` is not a
    broken order: it says the bundle's `fetch` occurrences are in PROGRAM bodies, which that walk skips. */
-const COLD_ORPHAN_ORDER = ["orphanPreferred"];
+const COLD_ORPHAN_ORDER = ["orphanPreferred", "orphanScripts"];
 const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered",
   /* AND THE OTHER THREE ENDS OF THE REPLY DOOR, WITHOUT WHICH `replyAsked - replyAnswered` IS A NUMBER WITH
      THREE READINGS THAT TAKE OPPOSITE WORK. A record ends answered, REFUSED by this tool's own egress policy,

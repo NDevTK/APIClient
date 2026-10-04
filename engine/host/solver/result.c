@@ -2565,7 +2565,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind gauge: segKiB domSegKiB pinSegs pinSegEntries pinSegKiB decSegs decSegEntries decSegKiB
    @kind gauge: dynBodies dynKiB sharedKiB programsAhead
    @kind lifetime: finishedFlows finishedCands progStarts progStartsCand progStartsOther progQueuedCand
-   @kind lifetime: sold soldFlows soldCands forks orphanClaimsMet orphanClaimsUnmet orphanPreferred
+   @kind lifetime: sold soldFlows soldCands forks orphanClaimsMet orphanClaimsUnmet orphanPreferred orphanScripts
    @kind lifetime: hostAnswersExtra hostAnswersLate hostTerminated
    @kind lifetime: pagedReqs pagedAsks pagedUnarmed pagedFloor
    @kind lifetime: previewAsks previewAsksRefusing previewAsksEmpty previewAsksWritable
@@ -2640,6 +2640,7 @@ char *result_cold_json(void) {
     long rf_asked, rf_refined;
     long fk_total, fk_pinned;
     long orph_pref;
+    long orph_scripts;
     long awaiting_rows;   /* the awaited-rows gauge, read ONCE below and used by the assert and the row */
     /* what the emitted @H array is a fraction of, and what of it predates any program — endpoint.h */
     long ep_minted, ep_assets, ep_emitted, ep_pre_program;
@@ -2841,6 +2842,7 @@ char *result_cold_json(void) {
        nonzero `epFetchAskNamedLife` says the bundle's `fetch` occurrences are in PROGRAM bodies, which this
        walk skips by construction, and the next diff is about those and not about the order. */
     orph_pref = engine_orphan_preferred();
+    orph_scripts = engine_orphan_scripts();
     {
         /* THE CONTAINMENT, ASSERTED WHERE BOTH ARE IN ONE HAND. A preferred take IS a take, so the engine's
            count of the first can never exceed the host's count of the second — and the two are kept in two
@@ -2859,6 +2861,16 @@ char *result_cold_json(void) {
                 "so a numerator above this denominator means the walk marked a body `entered` and returned "
                 "without its visitor seeding a flow, which loses that body for the life of the instance and "
                 "publishes an order that fired over work that never happened", orph_pref, od);
+        /* THE SAME CONTAINMENT FOR THE FAIRNESS WITNESS, AND IT IS A SEPARATE CLAIM RATHER THAN A SECOND
+           CONJUNCT OF THE ONE ABOVE. A script enters the take table only when a take is charged to it, so the
+           distinct-script count can never exceed the drive count — and the two numerators come out of two
+           different mechanisms on the runtime, so an equality between them is not available and only the
+           inequality is. Asserted apart so a reader meeting the abort is told WHICH of the two witnesses
+           disagreed with the drive count; folding them would name one defect for two states. */
+        DCHECKF(orph_scripts >= 0 && orph_scripts <= od,
+                "the orphan walk reports takes charged to %ld distinct SCRIPTS against %ld drives — a script is "
+                "charged only when a take is made, so a numerator above this denominator means the per-script "
+                "take table gained a row for a body that was never handed to a visitor", orph_scripts, od);
     }
     DCHECKF(fk_pinned >= 0 && fk_pinned <= fk_total,
             "forks taken over an already-proved subject (%ld) outnumber the forks this session took (%ld) — "
@@ -3234,6 +3246,14 @@ char *result_cold_json(void) {
                     `_orphansDriven` on this same document, and the containment between them is asserted where
                     both are in one hand. */
                  "\"orphanPreferred\":%ld,"
+                 /* …AND OVER HOW MANY DISTINCT SCRIPTS THE SAME DRIVES WERE SPREAD, which is the order's OTHER
+                    witness and the one that answers the defect it was built for. The two are independent: a run
+                    can be all-preferred and all from one chunk, and a run can be fairly spread with no
+                    preferred body in it. Its denominator is `_orphansDriven` on this same document — one
+                    script against a hundred drives is the monopoly, a count near the page's chunk count is the
+                    order working — and `orphanScripts <= orphansDriven` is asserted where both are in one
+                    hand, because a script cannot be charged a take that was not made. */
+                 "\"orphanScripts\":%ld,"
                  "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
                  "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersExtra\":%ld,"
                  "\"hostAnswersLate\":%ld,\"hostTerminated\":%ld,"
@@ -3703,6 +3723,7 @@ char *result_cold_json(void) {
                  rf_asked, rf_refined,
                  fk_pinned,
                  orph_pref,
+                 orph_scripts,
                  resumed.orphans, e.claims_met, e.claims_unmet,
                  e.host_asked, e.host_answered, e.host_answers_extra, e.host_answers_late, e.host_terminated,
                  pending_index_asked_total(), pending_index_answered_total(),

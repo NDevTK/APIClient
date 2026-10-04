@@ -1413,7 +1413,8 @@ const naOne = (m) => {
     doors[d.key] = !rows.length ? { tok: 'no-rows' }
       : !nums.length ? { tok: 'edge-absent' }
       : nums.length !== rows.length ? { tok: 'rows-partial' }
-      : { named: g('Named'), called: g('Called'), began: g('Began'), offered: g('Offered') };
+      : { named: g('Named'), prop: g('NamedProp'), called: g('Called'),
+          began: g('Began'), offered: g('Offered') };
   }
   return { doors };
 };
@@ -1426,7 +1427,16 @@ const naVerdict = (x) => {
   if (x.offered === null || x.began === null || (x.named === null && x.called === null)) return 'rows-partial';
   if (x.offered > 0) return 'reached-the-door';
   if (x.began > 0) return 'began-never-offered';
-  if ((x.named || 0) > 0 || (x.called || 0) > 0) return 'named-never-began';
+  /* THE PROPERTY SPELLING SITS ON THE **NAMED** RUNG AND NOT ON ONE OF ITS OWN, because the rung is a claim
+     about what the COMPILER RESOLVED in this page's source and `globalThis.fetch` resolves the same door's
+     entry name as a bare `fetch` does — one fact, two spellings. Giving it a rung would make the ladder
+     non-monotone: a page that only ever writes the member form would read 0 on a rung BELOW a nonzero one,
+     and `the lowest 0 is the localisation` is false of a ladder whose rungs are not entailed. It is NOT
+     folded into `named` at the producer either: which spelling a bundle uses is a fact about the bundle, and
+     the cell below prints both so a zero on one with a nonzero on the other is readable rather than summed.
+     `prop` is absent on an older artifact and is therefore OR'd as 0 rather than making the pass partial —
+     the rung's own two operands already decide `rows-partial` above. */
+  if ((x.named || 0) > 0 || (x.prop || 0) > 0 || (x.called || 0) > 0) return 'named-never-began';
   return 'never-named';
 };
 const naPredates = passes.filter((p) => p.netAsk === 'predates').map((p) => p.label);
@@ -1463,13 +1473,16 @@ const naCell = (x) => {
   return NET_DOORS.map((d) => {
     const c = x.doors[d.key];
     return d.key + '=' + (c.tok ? c.tok
-      : naVerdict(c) + '(' + [c.named, c.called, c.began, c.offered].map((v) => v === null ? '-' : v).join('/') + ')');
+      : naVerdict(c) + '(' + [c.named, c.prop, c.called, c.began, c.offered].map((v) => v === null ? '-' : v).join('/') + ')');
   }).join(' ');
 };
 if (naShown.length) {
   console.log('\nTHE TWO DATA DOORS\' ASK LADDER OVER ' + naCarried.length + '/' + passes.length +
-    ' PASS(ES) — WHICH READING A ZERO `fetch` OR `xhr` DOOR ROW IS. Rungs are named/called/began/offered,\n' +
-    '  `-` being a rung the artifact did not carry. `reached-the-door` BESIDE a doors column with no such\n' +
+    ' PASS(ES) — WHICH READING A ZERO `fetch` OR `xhr` DOOR ROW IS. The cell is named/prop/called/began/\n' +
+    '  offered, and `prop` is the SAME rung as `named` (`globalThis.fetch` resolves the same entry name), so\n' +
+    '  four rungs are printed as five numbers deliberately: which spelling a bundle uses is a fact about the\n' +
+    '  bundle and summing them would hide it. `-` is a rung the artifact did not carry. `reached-the-door`\n' +
+    '  BESIDE a doors column with no such\n' +
     '  key is the SURFACE having suppressed the record; the two are not in an identity and are not summed.');
   const naIdW = Math.max('site'.length, ...naShown.map((r) => r.id.length)) + 2;
   console.log('  ' + pad('site', naIdW) + 'PER PASS IN ORDER');

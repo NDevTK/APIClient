@@ -3006,6 +3006,14 @@ JS_EXTERN int      JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void
    reading only how many orphans it drove cannot tell an order that FIRED from one whose preferred population was
    EMPTY, and those take opposite work. Lifetime, non-decreasing, and nothing in this engine branches on it. */
 JS_EXTERN uint64_t JS_OrphanPreferredTakes(JSRuntime *rt);
+/* HOW MANY DISTINCT SCRIPTS THE WALK HAS CHARGED A TAKE TO — the FAIRNESS half of that order's witness, and the
+   one row that says whether the drives were spread or spent on one chunk. `orphansDriven` alone cannot: 179
+   drives that all landed in one media library and 179 spread over a hundred chunks are the same number, and
+   they are the difference between a run that learned nothing and a run that learned the page. Read it as a
+   RATIO against the drive count and never alone — one script with a hundred drives is the monopoly this order
+   exists to answer, and a hundred scripts with a hundred drives is it working.
+   Lifetime, non-decreasing, and nothing in this engine branches on it. */
+JS_EXTERN int      JS_OrphanScriptsDrawn(JSRuntime *rt);
 /* COULD THE ORPHAN SET HAVE GROWN — the count of function objects this runtime has ever made. Creating one is
    the only event that can add to the set (running a body only marks it entered, taking one only marks it
    taken, collecting one only removes it), so a host that took the orphans at generation G may skip the heap

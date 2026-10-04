@@ -358,6 +358,40 @@ struct JSRuntime {
        find out why the bundle's request builders are not compiled bodies.
        IT IS A LIFETIME COUNT AND NOT A GAUGE, so it may be differenced across two censuses of one run. */
     uint64_t orphan_preferred_takes;
+    /* HOW MANY TAKES EACH SCRIPT HAS ALREADY HAD, AND THE QUOTA EVERY SCRIPT IS CURRENTLY ENTITLED TO — the
+       FAIRNESS half of JS_OrphanTakeOne's order, which the preference bit alone does not supply. The walk
+       enumerates `gc_obj_list`, i.e. HEAP ALLOCATION ORDER, so without this the whole orphan budget goes to
+       whichever chunk a bundle happened to evaluate first: measured on app.gitpod.io, 179 drives in 75 seconds
+       all landed inside the HLS player its `@mux` chunk ships, while the request builders of the same page sat
+       in the same heap unreached. That is one flow class monopolising the thread, which is exactly what
+       §ONE-WFQ-policy forbids, arriving in a population the WFQ does not order.
+       IT IS A QUOTA AND NOT A CAP. `orphan_script_round` is the number of takes every script is entitled to
+       before any script gets another, and it only RISES — when no candidate's script is under quota the round
+       goes up and the same walk runs again, so every body this walk would ever have handed over it still hands
+       over and all that moves is WHEN. A script newly seen carries zero takes and is therefore under quota at
+       every round, which is what makes a chunk that arrives late still get its drive immediately.
+       THE TABLE IS KEYED ON THE BODY'S OWN `filename` ATOM, which is O(1) to read and needs no fold — the
+       locator's text half exists to tell two bodies of one script apart and is irrelevant to which script a
+       body is IN. Atoms are interned, so the comparison is an integer one. Grown with the host allocator and
+       recorded AFTER the walk, because an allocation inside it would trip the take's own no-allocation
+       assert. */
+    struct JSOrphanScriptTakes { JSAtom script; uint32_t takes; } *orphan_script_takes;
+    int orphan_script_takes_count;
+    int orphan_script_takes_cap;
+    uint32_t orphan_script_round;
+    /* THE LAST ANSWER THE TABLE GAVE, ON THE RUNTIME RATHER THAN IN A FUNCTION-LOCAL STATIC. The walk asks per
+       CANDIDATE and a module's bodies are created while that module evaluates, so they are contiguous in
+       allocation order and a run of them asks about one atom — without this the lookup is O(scripts) per
+       candidate over an O(heap) walk, which on a bundle with 54k bodies and a hundred chunks is millions of
+       integer compares per take for an answer that did not change. It lives HERE and not in the function
+       because a static would be shared by every runtime in the process and keyed on a pointer that can be
+       reused by a later one; a field cannot be wrong about which runtime it belongs to.
+       `orphan_takes_memo_valid` is the separate bit rather than a reserved atom, because JS_ATOM_NULL is a
+       LEGITIMATE key here (a body compiled with no filename) and a sentinel over a live population is the
+       defect CLAUDE.md names: the one value that means "ask again" would also be a script's real answer. */
+    JSAtom orphan_takes_memo_script;
+    uint32_t orphan_takes_memo_takes;
+    bool orphan_takes_memo_valid;
     JSOrphanBornFn *orphan_born;
     void *orphan_born_opaque;
     JSMallocFunctions mf;
@@ -4619,6 +4653,12 @@ void JS_FreeRuntime(JSRuntime *rt)
         }
     }
     js_free_rt(rt, rt->host_step_defs);   /* the defs themselves are static data the host owns */
+    /* THE ORPHAN ORDER'S PER-SCRIPT TAKE TABLE. It holds ATOMS, and it does NOT own a reference to any of them:
+       the key is read off a body's `filename`, which that body's own bytecode holds for as long as the body
+       exists, and the table is only ever COMPARED against a live body's atom. Duping them here would root a
+       script name for the life of the runtime for no reader, and releasing them would release a reference this
+       table never took — so the only thing owed is the array. */
+    js_free_rt(rt, rt->orphan_script_takes);
     js_free_rt(rt, rt->class_array);
 
     /* THE ATOMS NOBODY RELEASED, ON THE SAME TERMS AS THE OBJECTS ABOVE — AND UNCONDITIONALLY, WHICH IS THE
@@ -112582,6 +112622,11 @@ uint32_t JS_OrphanGen(JSRuntime *rt) { return rt->orphan_gen; }
    empty. It is the ORDER's own reachability witness and nothing branches on it. */
 uint64_t JS_OrphanPreferredTakes(JSRuntime *rt) { return rt->orphan_preferred_takes; }
 
+/* …AND HOW MANY DISTINCT SCRIPTS THOSE TAKES WERE SPREAD OVER. It is the take table's own length, which is
+   exactly the count of scripts this walk has ever charged — the table gains a row the first time a script is
+   taken from and never loses one, so nothing has to be counted a second time. */
+int JS_OrphanScriptsDrawn(JSRuntime *rt) { return rt->orphan_script_takes_count; }
+
 /* WHO IS TOLD WHEN ONE IS BORN — see quickjs.h for why a generation is not enough and what a nonzero answer
    commits the runtime to. Installed and taken down by the host around the span in which it has a frontier to
    route to; a runtime with no hook reaches nothing below. */
@@ -112614,11 +112659,80 @@ static bool orphan_candidate(JSGCObjectHeader *gp, JSObject **pp, JSFunctionByte
     return true;
 }
 
+/* HOW MANY TAKES THIS SCRIPT HAS HAD — see the field for why fairness over scripts is owed at all. A script
+   this runtime has never taken from answers 0, which is what makes a chunk that arrives late immediately
+   under quota rather than queued behind every chunk already counted.
+   THE LAST ANSWER IS MEMOIZED BECAUSE THE WALK ASKS IT PER CANDIDATE AND THE HEAP IS SORTED BY SCRIPT IN
+   PRACTICE: a module's bodies are created while that module evaluates, so they are contiguous in allocation
+   order and a run of them asks about one atom. Without the memo this is O(scripts) per candidate and the walk
+   is O(heap), which on a bundle with 54k bodies and a hundred chunks is millions of integer compares per take
+   for an answer that did not change. The memo is a pure cache of the table and is invalidated by the only
+   thing that writes it. */
+static uint32_t orphan_script_takes_of(JSRuntime *rt, JSAtom script)
+{
+    int i;
+
+    if (rt->orphan_takes_memo_valid && rt->orphan_takes_memo_script == script)
+        return rt->orphan_takes_memo_takes;
+    rt->orphan_takes_memo_takes = 0;
+    for (i = 0; i < rt->orphan_script_takes_count; i++) {
+        if (rt->orphan_script_takes[i].script != script) continue;
+        rt->orphan_takes_memo_takes = rt->orphan_script_takes[i].takes;
+        break;
+    }
+    rt->orphan_takes_memo_script = script;
+    rt->orphan_takes_memo_valid = true;
+    return rt->orphan_takes_memo_takes;
+}
+
+/* ONE TAKE CHARGED TO ONE SCRIPT, CALLED AFTER THE WALK HAS FINISHED. It allocates, which is why it is not
+   called at the line that takes: `JS_OrphanTakeOne` asserts its own malloc count is unchanged across the walk,
+   and that assert is about the VISITOR but is written over the whole span, so a table growth inside it would
+   fire it on a correct take.
+   A FAILED GROWTH IS NOT FATAL AND IS NOT SILENT EITHER. The quota is an ORDER: a script whose take goes
+   uncounted is merely treated as fresher than it is, which costs fairness and loses nothing — so this cannot
+   be allowed to abort a run over an allocation the engine does not need. It is a DCHECK because a host that
+   cannot allocate sixteen bytes here has a defect worth stopping a dev build for. */
+static void orphan_script_take_record(JSRuntime *rt, JSAtom script)
+{
+    int i;
+
+    for (i = 0; i < rt->orphan_script_takes_count; i++) {
+        if (rt->orphan_script_takes[i].script != script) continue;
+        rt->orphan_script_takes[i].takes++;
+        /* THE MEMO IS A CACHE OF THIS TABLE, so the one line that writes the table is the one line that clears
+           it. Clearing the VALID bit rather than re-reading, because a re-read here would be a second answer
+           composed at the one moment the table is mid-write. */
+        rt->orphan_takes_memo_valid = false;
+        return;
+    }
+    if (rt->orphan_script_takes_count == rt->orphan_script_takes_cap) {
+        int cap = rt->orphan_script_takes_cap ? rt->orphan_script_takes_cap * 2 : 16;
+        void *t = js_realloc_rt(rt, rt->orphan_script_takes,
+                                sizeof(*rt->orphan_script_takes) * (size_t)cap);
+        DCHECK(t != NULL,
+               "the orphan walk could not grow its per-script take table — the quota that keeps one chunk from "
+               "taking every drive is an ORDER and a lost count only makes that script look fresher than it "
+               "is, so nothing here is corrupt; what a host that cannot allocate this is, is broken");
+        if (!t) return;
+        rt->orphan_script_takes = t;
+        rt->orphan_script_takes_cap = cap;
+    }
+    rt->orphan_script_takes[rt->orphan_script_takes_count].script = script;
+    rt->orphan_script_takes[rt->orphan_script_takes_count].takes = 1;
+    rt->orphan_script_takes_count++;
+    rt->orphan_takes_memo_valid = false;
+}
+
 int JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque)
 {
     JSRuntime *rt = ctx->rt;
     struct list_head *el;
     int n = 0;
+    /* THE SCRIPT THE TAKE WAS CHARGED TO, CARRIED OUT OF THE WALK — the charge itself allocates and so cannot
+       be made at the line that takes; see orphan_script_take_record. JS_ATOM_NULL is a legitimate script key,
+       so `n` and not this value is what says a take happened. */
+    JSAtom took_script = JS_ATOM_NULL;
 #if APICLIENT_DEV
     size_t mc0 = rt->malloc_state.malloc_count;
 #endif
@@ -112644,22 +112758,65 @@ int JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque)
        minified bundle's meaningless names are never read. A body that spells a door's entry is a body whose
        drive CAN reach that door; a body that spells none cannot, through that door, however it is named. */
     for (int prefer = 1; prefer >= 0 && !n; prefer--) {
-        int saw = 0;   /* a candidate this pass could have taken — see the conservation DCHECK below */
+        int saw = 0;        /* a candidate this pass could have taken — see the conservation DCHECK below */
+        int quota_seen = 0; /* …and whether any candidate passed THIS pass's own filter, which bounds the scan */
+        uint32_t quota = 0; /* the fewest takes any script this pass can draw from has had */
 
+        /* THE SCAN THAT MAKES THE SECOND HALF OF THIS ORDER — FAIRNESS OVER SCRIPTS, for the reason
+           `orphan_script_takes`'s own field states. It reads the SMALLEST per-script take count among the
+           candidates this pass can take, and the walk below then takes the first candidate standing at it, so
+           a page's drives are spread across its chunks instead of going to whichever one the heap allocated
+           first. Ties keep HEAP ORDER, which is the order the take had before this existed.
+           TWO WALKS AND NOT ONE, DELIBERATELY. A single walk could remember the best candidate and visit it at
+           the end, and that would move the `visit` OUTSIDE the list iteration — which is the one thing the
+           assert at the bottom of this function exists to make impossible to get wrong, and an assert whose
+           hazard has been engineered away is a non-check with a reassuring transcript. So the minimum is read
+           first and the take is still made from inside the walk, at the line that marks the body. The second
+           walk costs one more pass over the heap per take and nothing else; it ends early at a script with no
+           takes at all, because no script can be under that.
+           IT IS AN ORDER AND NOT A BOUND: every body this walk would ever have handed over it still hands over,
+           and all that moves is WHEN. */
         list_for_each(el, &rt->gc_obj_list) {
+            JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
+            JSObject *p;
+            JSFunctionBytecode *b;
+            uint32_t t;
+
+            if (!orphan_candidate(gp, &p, &b)) continue;
+            saw = 1;
+            if (prefer && !b->spells_net_entry) continue;
+            t = orphan_script_takes_of(rt, b->filename);
+            if (!quota_seen || t < quota) { quota = t; quota_seen = 1; }
+            if (!quota) break;
+        }
+
+        if (quota_seen) list_for_each(el, &rt->gc_obj_list) {
             JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
             JSObject *p;
             JSFunctionBytecode *b;
 
             if (!orphan_candidate(gp, &p, &b)) continue;
-            saw = 1;
             if (prefer && !b->spells_net_entry) continue;
+            if (orphan_script_takes_of(rt, b->filename) != quota) continue;
             if (prefer) rt->orphan_preferred_takes++;
             b->entered = 1;   /* TAKEN: this body is now scheduled, so a second closure of it is not a second orphan */
+            took_script = b->filename;
             visit(ctx, JS_MKPTR(JS_TAG_OBJECT, p), b->arg_count, opaque);
             n = 1;
             break;   /* ONE per call — see above; the caller's next step walks again for the next one */
         }
+        /* THE TWO WALKS SEE ONE POPULATION, AND THAT IS WHAT MAKES THE SCAN AN ORDER. They ask the identical
+           three questions — the candidate test, the pass's filter, the script's take count — so a quota the
+           first walk found is a quota the second walk can match, and a pass that saw a candidate takes one.
+           Nothing between them can move: the scan marks nothing, the table is written only after this function
+           returns, and no GC object is created in either (the assert below is that statement made enforceable).
+           Without this the scan and the take could silently disagree and the pass would hand over nothing while
+           believing it had a candidate, which is a body lost for the life of the instance. */
+        DCHECK(!quota_seen || n,
+               "JS_OrphanTakeOne's per-script scan found a candidate at a quota and its take walk matched "
+               "none — the two walks ask the same three questions over the same list with nothing between "
+               "them, so a quota that is findable and not matchable means one of the three answered "
+               "differently on the second reading and this body will never be handed over");
         /* THE CONSERVATION THE TWO PASSES OWE, AND THE ONE WAY THIS REFACTOR GOES WRONG. A second pass is only
            an ORDER if its population is the WHOLE population; a predicate that accidentally excludes a body from
            both passes turns a reordering into a silent cap on the candidate set, and nothing downstream could
@@ -112679,6 +112836,11 @@ int JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque)
            "visits it or runs off a freed link. A visitor RECORDS (a dup costs no allocation) and acts after "
            "the take returns");
 #endif
+    /* THE CHARGE, AFTER THE WALK AND AFTER THE ASSERT THAT FORBIDS ALLOCATING DURING IT. It is not conditional
+       on which pass took the body: the quota is ONE budget over both, so a script whose door-spelling bodies
+       the preferred pass has been drawing from is correctly treated as having had its turn when the fallback
+       pass comes to choose. */
+    if (n) orphan_script_take_record(rt, took_script);
     return n;
 }
 

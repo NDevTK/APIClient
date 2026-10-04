@@ -2712,6 +2712,10 @@ void engine_orphan_census(long *driven, long *asked);
 /* …AND HOW MANY OF THOSE DRIVES CAME FROM THE WALK'S PREFERRED PASS — see the definition for why the pair is a
    row rather than an inference, and quickjs.h's JS_OrphanPreferredTakes for what the preference is. */
 long engine_orphan_preferred(void);
+/* …AND OVER HOW MANY DISTINCT SCRIPTS THE DRIVES WERE SPREAD — see the definition for why this and the
+   preference count are two independent facts about one walk, and quickjs.h's JS_OrphanScriptsDrawn for why a
+   drive count alone cannot tell a spread run from a monopolised one. */
+long engine_orphan_scripts(void);
 
 /* ---- THE FOUR ENDS OF §9.3.3 STEP 8'S TASK, AND WHY ONE NUMBER COULD NOT SAY WHICH ---------------------
  *

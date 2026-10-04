@@ -1012,10 +1012,10 @@ const DELIVER_GUARD_ROWS = ['pend', 'pendReady', 'stackEmpty', 'canDeliver'];
 const WALL_SPAN_ROWS = ['instanceUs', 'loopUs', 'betweenSlicesUs', 'slices', 'stepUs'];
 const REPLY_DOOR_ROWS = [...REPLY_DOOR_SUM, 'rowsAwaitingBytes'];
 const NET_ASK_ROWS = [
-  'epFetchAskNamedLife', 'epFetchAskNamedTypeofLife', 'epFetchAskCalledLife',
-  'epFetchAskBeganLife', 'epFetchAskOfferedLife',
-  'epXhrAskNamedLife', 'epXhrAskNamedTypeofLife', 'epXhrAskCalledLife',
-  'epXhrAskBeganLife', 'epXhrAskPlacedLife', 'epXhrAskOfferedLife',
+  'epFetchAskNamedLife', 'epFetchAskNamedTypeofLife', 'epFetchAskNamedPropLife',
+  'epFetchAskCalledLife', 'epFetchAskBeganLife', 'epFetchAskOfferedLife',
+  'epXhrAskNamedLife', 'epXhrAskNamedTypeofLife', 'epXhrAskNamedPropLife',
+  'epXhrAskCalledLife', 'epXhrAskBeganLife', 'epXhrAskPlacedLife', 'epXhrAskOfferedLife',
 ];
 const netAsk = () => {
   if (!counted.length) return null;
@@ -1175,6 +1175,41 @@ const row = {
      picks out the middle one, which is the only one of the three that is a scheduling result to act on. */
   orphansDriven: counted.length ? counted[counted.length - 1].orphansDriven : null,
   orphansAsked: counted.length ? counted[counted.length - 1].orphansAsked : null,
+  /* AND WHICH OF THOSE DRIVES THE WALK PREFERRED, which is the one row that says whether the ORDER did
+     anything. The pair above says a drive happened; it cannot say whether the body driven was one whose own
+     source resolved a network door's entry name, and that is the whole content of the ordering: a run with
+     `orphansDriven` large and `orphanPreferred` zero drove the heap in allocation order exactly as it did
+     before the preference existed. It is a LIFETIME count and `orphanPreferred <= orphansDriven` is asserted
+     by the producer where both operands are in one hand, so a reader is comparing two numbers one process
+     already refused to let disagree. */
+  orphanPreferred: (() => {
+    taken.add('orphanPreferred');
+    if (!counted.length) return null;
+    /* IT IS A `.cold` ROW AND THE PAIR ABOVE IS NOT, WHICH IS WHY THIS IS A BLOCK AND NOT A THIRD SIBLING ON
+       THAT LINE. `_orphansDriven`/`_orphansAsked` are TOP-LEVEL fields of the result document, forwarded by
+       bridge.js and asserted by its own loop; `orphanPreferred` is a row of solver/result.c's COLD census,
+       which crosses as the nested `cold` object. Written the obvious way — beside its two siblings, off the
+       counted entry — it reads `undefined` on EVERY run for ever, which JSON.stringify drops, so the row is
+       simply absent and a reader meets it as an artifact too old to state it. That is the wrong-object defect
+       testing/census_rows.js's `requireFrom` exists to refuse, and this driver does not run those checks, so
+       the placement is argued HERE instead: MEASURED, read off the counted entry it answered absent on a run
+       whose census carried the row, and read off `.cold` it answers the number. */
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    return typeof c.orphanPreferred === 'number' ? c.orphanPreferred : null;
+  })(),
+  /* …AND THE SAME WALK'S OTHER WITNESS, WHICH IS THE ONE THE DRIVE COUNT CANNOT SUBSTITUTE FOR. `orphanPreferred`
+     says which KIND of body was chosen; this says whether the choosing kept coming back to ONE CHUNK, and the
+     two are independent — a run can be all-preferred and all from one script. Read as a ratio against
+     `orphansDriven` above: one script per hundred drives is the monopoly the order exists to answer, a count
+     near the page's chunk count is it working. Also a `.cold` row, for the reason stated one block up. */
+  orphanScripts: (() => {
+    taken.add('orphanScripts');
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    return typeof c.orphanScripts === 'number' ? c.orphanScripts : null;
+  })(),
   flows: counted.length ? counted[counted.length - 1].flows : null,
   switches: counted.length ? counted[counted.length - 1].switches : null,
   /* QUEUED BESIDE RUN, for the same reason held is emitted beside made: `jobsRun: 0` alone cannot say whether

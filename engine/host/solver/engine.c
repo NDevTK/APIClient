@@ -7650,6 +7650,21 @@ long engine_orphan_preferred(void) {
     return (long)JS_OrphanPreferredTakes(JS_GetRuntime(g_sess_ctx));
 }
 
+/* …AND OVER HOW MANY DISTINCT SCRIPTS THOSE DRIVES WERE SPREAD — the order's OTHER witness, and the one that
+   answers the defect the order was built for. The preference bit above says WHICH KIND of body the walk chose;
+   this says whether the walk kept choosing from ONE CHUNK. They are two independent facts about one walk and
+   neither implies the other: a run can be all-preferred and all from one script, and a run can be fairly spread
+   with no preferred body in it.
+   READ AS A RATIO AGAINST THE DRIVE COUNT, which is why all three rows are composed on one line of the census.
+   One script per hundred drives is the monopoly measured on app.gitpod.io — 179 drives, every recorded fork site
+   inside the HLS player one chunk ships — and a count near the page's chunk count is that order working. */
+long engine_orphan_scripts(void) {
+    DCHECK(g_sess_ctx != NULL, "the orphan order's fairness witness was asked for outside a session — the table "
+                               "is on the runtime this file holds, so with no context there is no walk to "
+                               "report about");
+    return (long)JS_OrphanScriptsDrawn(JS_GetRuntime(g_sess_ctx));
+}
+
 /* AND THE GENERATION AT WHICH THIS DOCUMENT LAST WALKED THE HEAP. Creating a function object is the only event
    that can add to the orphan set (JS_OrphanGen), so a walk at an unchanged generation can only find what the
    previous one already took — and the walk is O(live objects) while a frontier has one finishing flow after
