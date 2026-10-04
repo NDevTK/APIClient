@@ -117,7 +117,14 @@ const passes = files.map((f) => {
               taken by an old instrument, and those prescribe opposite work: rebuild and reinstall, against
               wait for a newer pass. */
            razor: measured.length === 0 ? 'nothing-measured'
-             : measured.some((r) => 'endpointRazorClass' in r) ? 'carried' : 'predates' };
+             : measured.some((r) => 'endpointRazorClass' in r) ? 'carried' : 'predates',
+           /* AND THE SAME TWO-CHANNEL SPLIT FOR THE DATA DOORS' ASK LADDER, for the reason stated one clause
+              up and not restated: whether the site.mjs that wrote the pass carried the FIELD is a question
+              about the INSTRUMENT, and whether the wasm that answered DECLARED the edge is a different fact
+              carried per row and read per site below. They prescribe opposite work — wait for a newer pass,
+              against a host that installs no such machine — so they are two channels here too. */
+           netAsk: measured.length === 0 ? 'nothing-measured'
+             : measured.some((r) => 'netDoorAsk' in r) ? 'carried' : 'predates' };
 });
 /* THE LIST THIS CENSUS MEASURED, NAMED AND THEN CHECKED AGAINST THE ROWS. This file used to read `sites.tsv`
    unconditionally and look every row's id up in it — and the app-page census walks twelve ids that appear in
@@ -564,6 +571,12 @@ for (const p of passes) for (const r of p.rows) {
        at all, and ABSENT is a pass predating the field entirely. A `|| {}` here would turn all four into
        the one this file most exists not to publish -- an engine that answered and proved nothing. */
     epRazor: r.endpointRazorClass, epAddr: r.endpointAddressClass,
+    /* AND THE TWO DATA DOORS' ASK LADDER, LEFT AS WHATEVER site.mjs WROTE for `epRazor`'s reason exactly —
+       an OBJECT is a stated ladder, `null` is a pass whose runs carried no counters, and ABSENT is a pass
+       predating the field. A `|| {}` would turn all three into the one state this file most exists not to
+       publish. It is NOT an input to the hard bar and is never summed with it: the bar is about WHAT AN
+       ADDRESS WAS, and this is about whether a door's machine was REACHED AT ALL. */
+    epNetAsk: r.netDoorAsk,
     sigs, wasm: (r.artifact && r.artifact.wasmSha256 || '').slice(0, 12),
     /* THE ARTIFACT IS NAMED BY ITS HASH ALONE. This read `r.artifact.head`, a field site.mjs deliberately
        renamed to `builtFromHeadClaim` when it stopped being trustworthy, so it resolved to '' for every row
@@ -1035,6 +1048,158 @@ console.log('hard bar totals: ' + JSON.stringify({
   unprovenAtThatSamePass: rzStated.reduce((n, r) => n + r.best.un, 0),
   emittedAtThatSamePass: rzStated.reduce((n, r) => n + r.best.tot, 0),
 }));
+/* WHICH READING A ZERO DATA-DOOR ROW IS, OVER THE CORPUS — the one discrimination the hard-bar section above
+   structurally cannot make, and the question this corpus's own measurement opened. Driven over two real app
+   bundles, `endpointDoors` read addresses through `document-script`, `link-element` and `module-import` and
+   ZERO through `fetch` or `xhr`; that zero has at least three readings that take OPPOSITE work — the bundle
+   names no such call at all, or it names one and the machine never ran, or the machine ran to the door and
+   the SURFACE SUPPRESSED the record — and a door histogram alone cannot separate any of them.
+   THE LADDER ALONE ANSWERS THE FIRST THREE AND NEEDS NO DOOR COLUMN TO DO IT, which is why this is a
+   composition and not the union CLAUDE.md demoted. `…AskNamedLife` is whether the bundle SPELLS the name,
+   `…AskBeganLife` whether the machine was ENTERED, `…AskOfferedLife` whether it reached the line BEFORE
+   `endpoint_record` at Fetch §5.6 step 12. The FOURTH reading — reached the door and was suppressed — is the
+   one thing composed from TWO columns, so it is NOT composed here: read `reached-the-door` BESIDE the doors
+   column, because the slack between an offer and a door row IS the suppression and the producer asserts no
+   identity between them (asserting one would destroy the measurement with the check meant to guard it).
+   BOTH DOORS AND NEVER SUMMED. The fetch ladder read alone IS the misreading solver/endpoint.h names by
+   name: a page taken for having reached no network call site when what it reached was XMLHttpRequest, which
+   axios's browser adapter IS. The two count states of two DIFFERENT machines whose stages are each their own,
+   so there is no total of them and none is printed.
+   IT IS A LADDER WITH PARTIAL ENTAILMENT AND NOT FOUR SIGNALS (CLAUDE.md §EVIDENCE-INFLATION). The producer
+   asserts NO containment between NAMED and CALLED in EITHER direction — `window.fetch(u)` is a property read
+   and a bundle shadowing the name uses a local slot — so the verdict below reads NAMED-or-CALLED as one rung
+   and never as two, and a reader counting agreeing rungs as independent confirmations is counting one chain.
+   FIVE STATES AND NONE FOLDED INTO ANOTHER, which is the whole reason this is a helper. `no-field` is a pass
+   whose site.mjs predates the ladder (the pass channel above says so for the corpus); `no-counters` is a run
+   that carried none; `edge-absent` is an artifact whose engine DECLARED NO SUCH EDGE — solver/endpoint.c omits
+   a whole edge's rows, the empty string and not five zeroes, because "a host that installs no fetch runs no
+   fetch machine, so there is no population" — and `rows-partial` is an artifact mid-way through gaining them.
+   Only the remaining four are statements about a PAGE.
+   AND `edge-absent` HAS A DISCRIMINATOR THAT NEEDS NO SECOND ARTIFACT, PRINTED RATHER THAN LEFT TO A READER.
+   The two edges are declared INDEPENDENTLY, so one door answering numbers while the other reads `edge-absent`
+   is a CURRENT artifact whose absent machine was never installed, and BOTH absent is the older artifact. That
+   is a fact about the pair and it is composed on the one line that holds both. */
+const NET_DOORS = [{ key: 'fetch', pre: 'epFetch' }, { key: 'xhr', pre: 'epXhr' }];
+const naOne = (m) => {
+  if (!('epNetAsk' in m) || m.epNetAsk === undefined) return { tok: 'no-field' };
+  if (m.epNetAsk === null) return { tok: 'no-counters' };
+  const o = m.epNetAsk;
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return { tok: 'malformed' };
+  const doors = {};
+  for (const d of NET_DOORS) {
+    const rows = Object.keys(o).filter((k) => k.startsWith(d.pre + 'Ask'));
+    const nums = rows.filter((k) => typeof o[k] === 'number');
+    const g = (suf) => { const v = o[d.pre + 'Ask' + suf + 'Life']; return typeof v === 'number' ? v : null; };
+    doors[d.key] = !rows.length ? { tok: 'no-rows' }
+      : !nums.length ? { tok: 'edge-absent' }
+      : nums.length !== rows.length ? { tok: 'rows-partial' }
+      : { named: g('Named'), called: g('Called'), began: g('Began'), offered: g('Offered') };
+  }
+  return { doors };
+};
+/* THE VERDICT FOR ONE DOOR OF ONE PASS, READ DOWN THE LADDER AND STOPPING AT THE HIGHEST RUNG THAT SPOKE —
+   which is the lowest-0-is-the-localisation discipline, with NAMED and CALLED as ONE rung for the reason in
+   the paragraph above. A rung the artifact did not carry makes the verdict `rows-partial` rather than being
+   defaulted to zero, because a missing rung and a zero rung are the two facts this whole section is about. */
+const naVerdict = (x) => {
+  if (x.tok) return x.tok;
+  if (x.offered === null || x.began === null || (x.named === null && x.called === null)) return 'rows-partial';
+  if (x.offered > 0) return 'reached-the-door';
+  if (x.began > 0) return 'began-never-offered';
+  if ((x.named || 0) > 0 || (x.called || 0) > 0) return 'named-never-began';
+  return 'never-named';
+};
+const naPredates = passes.filter((p) => p.netAsk === 'predates').map((p) => p.label);
+const naCarried = passes.filter((p) => p.netAsk === 'carried').map((p) => p.label);
+if (naPredates.length)
+  console.log('\n*** THE DATA-DOOR SECTION BELOW IS OVER ' + naCarried.length + ' OF ' + passes.length +
+    ' PASS(ES) — ' + naPredates.join(', ') + ' predate(s) the ask ladder entirely (their rows carry no ' +
+    '`netDoorAsk`), so a site reading `no-field` over those passes is this instrument being unable to ask. ' +
+    'It is NOT a page that reached no network call, and it is NOT an artifact whose engine declared no such ' +
+    'edge — that one is `edge-absent` and is a fact about the BUILD. ***');
+const naRows = table.map((t) => {
+  const per = t.measurements.map(naOne);
+  const stated = per.filter((x) => x.doors);
+  /* ONE PASS PER SITE AND PER DOOR: the HIGHEST rung any pass reached, because these are LIFETIME counts and
+     a pass that got further is a pass that saw more — never an average, and never a sum across passes, which
+     would add two runs' margins and belong to no moment. Ties keep the EARLIEST such pass. */
+  const best = {};
+  for (const d of NET_DOORS) {
+    const order = ['never-named', 'named-never-began', 'began-never-offered', 'reached-the-door'];
+    let b = null;
+    for (const x of stated) {
+      const v = naVerdict(x.doors[d.key]);
+      const r = order.indexOf(v);
+      if (r < 0) continue;
+      if (!b || r > b.rank) b = { rank: r, verdict: v, cell: x.doors[d.key] };
+    }
+    best[d.key] = b;
+  }
+  return { id: t.id, n: t.measurements.length, per, stated: stated.length, best };
+});
+const naShown = naRows.filter((r) => r.n > 0);
+const naCell = (x) => {
+  if (x.tok) return x.tok;
+  return NET_DOORS.map((d) => {
+    const c = x.doors[d.key];
+    return d.key + '=' + (c.tok ? c.tok
+      : naVerdict(c) + '(' + [c.named, c.called, c.began, c.offered].map((v) => v === null ? '-' : v).join('/') + ')');
+  }).join(' ');
+};
+if (naShown.length) {
+  console.log('\nTHE TWO DATA DOORS\' ASK LADDER OVER ' + naCarried.length + '/' + passes.length +
+    ' PASS(ES) — WHICH READING A ZERO `fetch` OR `xhr` DOOR ROW IS. Rungs are named/called/began/offered,\n' +
+    '  `-` being a rung the artifact did not carry. `reached-the-door` BESIDE a doors column with no such\n' +
+    '  key is the SURFACE having suppressed the record; the two are not in an identity and are not summed.');
+  const naIdW = Math.max('site'.length, ...naShown.map((r) => r.id.length)) + 2;
+  console.log('  ' + pad('site', naIdW) + 'PER PASS IN ORDER');
+  for (const r of naShown) console.log('  ' + pad(r.id, naIdW) + r.per.map(naCell).join(' | '));
+}
+/* AND THE CORPUS FIGURE, WITH EVERY SHARE'S DENOMINATOR ON THE SAME LINE. A count over a corpus that does not
+   say how many passes it is over, and over how many sites could be asked at all, belongs to a population a
+   reader cannot name — and the two doors are counted SEPARATELY for the reason above. */
+console.log('data-door totals: ' + JSON.stringify(Object.assign({
+  passes: passes.length, passesCarryingTheField: naCarried.length,
+  sitesStatingALadder: naRows.filter((r) => r.stated > 0).length,
+}, ...NET_DOORS.map((d) => ({
+  [d.key + 'ReachedTheDoor']: naRows.filter((r) => r.best[d.key] && r.best[d.key].verdict === 'reached-the-door').length,
+  [d.key + 'NeverNamed']: naRows.filter((r) => r.best[d.key] && r.best[d.key].verdict === 'never-named').length,
+  [d.key + 'EdgeAbsentEverywhere']: naRows.filter((r) => r.stated > 0 && !r.best[d.key]).length,
+})))));
+/* THE PAIR FACT, WHICH NO PER-DOOR COLUMN ABOVE CAN STATE — AND IT IS ASKED PER PASS, NEVER OF THE BEST PASS.
+   One door answering numbers while the other reads `edge-absent` is a CURRENT artifact whose absent machine was
+   never installed; BOTH absent is an older artifact. Both are facts about ONE ARTIFACT, so they are read within
+   one pass: a site's `best` is a maximum over passes, and asking the pair of it compares two edges observed in
+   two different builds, which is the cross-sample comparison CLAUDE.md
+   §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE forbids and which the paragraph above already cites about
+   this very ladder. THE FIRST VERSION OF THIS BLOCK DID EXACTLY THAT and is recorded rather than quietly
+   repaired: it read the pair off `r.best`, so a corpus holding ONE pass whose fetch edge reached the door made
+   `best.fetch` non-null and the split went UNREPORTED for every other pass of that site — the line printed
+   nothing at all on a corpus deliberately built to make it speak. A reader who re-derives the aggregation from
+   the per-door totals beside it will reach for `best` again, which is why the reason is here and not just the
+   fix.
+   IT IS PRINTED ONLY WHEN IT HAS SOMETHING TO SAY, because a line that reads `none` on every clean run is
+   furniture that buries the next real thing under it; and it names the PASS as well as the site, since which
+   build said so is the whole content of a claim about a build. */
+{
+  const naPairs = [];
+  naRows.forEach((r) => r.per.forEach((x, i) => {
+    if (!x.doors) return;
+    const absent = NET_DOORS.filter((d) => x.doors[d.key].tok === 'edge-absent');
+    if (!absent.length) return;
+    naPairs.push({ id: r.id, pass: passes[i] ? passes[i].label : '#' + i,
+                   all: absent.length === NET_DOORS.length,
+                   which: absent.map((d) => d.key).join('+') });
+  }));
+  const split = naPairs.filter((x) => !x.all), bothOut = naPairs.filter((x) => x.all);
+  if (split.length)
+    console.log('  ONE EDGE DECLARED AND THE OTHER NOT, on a CURRENT artifact — that machine was never ' +
+      'installed, which is a fact about the BUILD and not about the page: ' +
+      split.map((x) => x.id + '@' + x.pass + '(' + x.which + ')').join(' '));
+  if (bothOut.length)
+    console.log('  NEITHER EDGE DECLARED — that artifact predates both row sets, so the site is UNASKED ' +
+      'rather than silent in that pass: ' + bothOut.map((x) => x.id + '@' + x.pass).join(' '));
+}
 console.log('totals: ' + JSON.stringify({
   sites: table.length,
   netFixture: table.filter((t) => t.outcome === 'NET/FIXTURE').length,
