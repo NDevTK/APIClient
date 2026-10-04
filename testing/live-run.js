@@ -825,6 +825,35 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      both and could refute neither — the engine has computed `schedUs` on every census of every run and no
      tracked driver in this tree has ever printed it. */
   "stepUs", "schedUs",
+  /* …AND THE SPAN ALL THREE ARE SHARES OF, PLUS THE DENOMINATOR `sliceUs` ACTUALLY HAS — the rows that turn
+     the three accumulators above from a RATIO BETWEEN THEMSELVES into a share of the thread. The banner above
+     reads `schedUs` against `stepUs` and separates the ORDERING from the QUANTUM, which is a real split and is
+     silent about how much of the instance either of them is: `stepUs` is "the share of the engine's thread
+     that reached a dispatch turn" ONLY against `instanceUs`, which solver/engine.c says in those words at the
+     assert, and `instanceUs` was on no real-site driver's line.
+     `slices` IS THE DENOMINATOR `sliceUs` HAS AND `steps` IS NOT, which result.c states at the group and which
+     a reader without it gets WRONG IN A DIRECTION THAT INVENTS A FINDING. Measured, by the author of this
+     hunk, one command before this landed: `sliceUs / steps` on a 180 s drive of gitlab.com/explore reads
+     21.6 ms against solver/quantum.h's 12 ms, which looks like a quantum overshooting by 1.8x on every slice
+     while `sliceOverruns` reports 179 of 3769 asks — two rows contradicting each other because one of them was
+     divided by the wrong row. A slice spans as many steps as the flow takes before it yields, so `steps` and
+     `slices` are two units and `sliceUs/slices` is the mean slice.
+     `instanceUs` IS A SPAN AND THE OTHER TWO ARE ACCUMULATORS, which is why this file says so beside the kind
+     the producer declares: it is ONE subtraction of two clock readings rather than a sum of anything, so it is
+     the only row here a reader may put UNDER an accumulator. `loopUs + betweenSlicesUs == instanceUs` is the
+     one pair on the whole census that may be read against EACH OTHER at a single census, and
+     `betweenSlicesUs` is the half nothing else here can state: the thread the HOST held while the engine was
+     not in its slice bracket. A budget that is mostly `betweenSlicesUs` and one that is mostly `loopUs` are
+     opposite diagnoses — the first is this extension's own relay and message pump, the second is the engine —
+     and every real-site reading ever taken with this driver was consistent with both.
+     BOTH IDENTITIES ARE CHECKED IN `census` BECAUSE BOTH ARE `DCHECKF`s, at solver/engine.c's
+     engine_step_unit_runs, which a RELEASE artifact compiles out — and a live drive measures release. That is
+     the same argument the `outOfPrograms` partition and `programsAhead` bucket 0 carry one list up, and it is
+     the whole reason carrying a row and checking its contract are one diff rather than two.
+     LIFETIME, PER INSTANCE, as the producer declares all four — so they may be differenced and accumulated,
+     and a sample below its predecessor is the engine and not the run. An artifact older than them prints `-`,
+     which is this driver's absent-versus-zero rule and is the honest answer: the run did not state them. */
+  "slices", "instanceUs", "loopUs", "betweenSlicesUs",
   "unitMidProgram", "unitParked", "unitCheckpointOwed",
   /* AND THE ROW THAT DECIDES WHICH READING OF `orphansAsked: 0` IS EVEN AVAILABLE, which this driver carries
      the numerator of in COUNTERS and has never carried the denominator of. flow_step's whole work ladder —
@@ -1314,6 +1343,55 @@ function census(r) {
      bridge.js holds at composition, against this from the engine's `_cold` census — so no identity between
      THOSE and this is asserted anywhere and none may be read. `epReach` is the one that shares a document
      with the subtraction beside it. */
+  /* THE THREE SHARES OF THE INSTANCE'S SPAN, COMPUTED HERE FOR `epBeyondMarkup`'s REASON — a derivation a
+     reader must perform is one nobody performs, and these are the three a reader of the four time rows above
+     will otherwise do by hand against the WRONG denominator. Each carries its derivation in an `…Of` field so
+     a figure quoted out of this document into a brief carries what it is made of, which is the one copy a
+     relay preserves, and each is `null` rather than 0 when either half is absent.
+     WHAT EACH ONE SEPARATES, NAMED HERE BECAUSE A SHARE WITH NO READING IS A NUMBER NOBODY ACTS ON:
+       `dispatchShare`  = stepUs / instanceUs — solver/engine.c's own words, "the share of the engine's thread
+                          that reached a dispatch turn". ABOVE 1 is a broken reading and not a busy scheduler,
+                          which is the direction its assert exists to catch and which this driver can see on a
+                          RELEASE artifact where that assert is compiled out.
+       `loopShare`      = loopUs / instanceUs — the share the engine held at all. A budget that is mostly its
+                          COMPLEMENT is the host's relay and message pump rather than the engine, and the two
+                          take opposite work.
+       `meanSliceUs`    = sliceUs / slices — the mean slice against solver/quantum.h's quantum. FAR ABOVE it
+                          with `sliceOverruns` small is the quantum not bounding slices at all, which is that
+                          header's named transport gap (a C activation declaring no step boundary answers no
+                          poll however the request was raised); NEAR it is a quantum doing its job and the cost
+                          being the NUMBER of slices.
+     A DIAGNOSTIC AND NEVER A TARGET: these are identities read WITHIN one run, not totals to compare across
+     two, and §Testing's spread rule governs any comparison of them. */
+  const spanOf = (num, den) => (typeof o[num] === "number" && typeof o[den] === "number" && o[den] > 0)
+    ? o[num] / o[den] : null;
+  o.dispatchShare = spanOf("stepUs", "instanceUs");
+  o.dispatchShareOf = (o.dispatchShare === null) ? null : "stepUs / instanceUs";
+  o.loopShare = spanOf("loopUs", "instanceUs");
+  o.loopShareOf = (o.loopShare === null) ? null : "loopUs / instanceUs";
+  o.meanSliceUs = spanOf("sliceUs", "slices");
+  o.meanSliceUsOf = (o.meanSliceUs === null) ? null : "sliceUs / slices";
+  /* AND THE TWO CONTRACTS THOSE SHARES REST ON, REFUSED BY NAME RATHER THAN LEFT TO A READER. Both are
+     `DCHECKF`s at solver/engine.c's engine_step_unit_runs where every operand is in one hand, so a release
+     artifact — the one a live drive measures — checks neither, and a share composed over a span that is not
+     the sum of its halves is a share of nothing. The refusal is a STRING field for `absentRefused`'s reason:
+     `null` means the run did not state the rows, and a message means it DID and they do not hold together. */
+  o.spanRefused = null;
+  if (typeof o.instanceUs === "number") {
+    if (typeof o.stepUs === "number" && o.stepUs > o.instanceUs)
+      o.spanRefused = "the dispatch loop's total " + o.stepUs + " exceeds the " + o.instanceUs +
+        " the instance has measured since its first slice — every turn's charge is a sub-interval of that " +
+        "span, so this is a baseline taken after a turn was charged or a measure that is no longer monotone, " +
+        "and `dispatchShare` would read above 1, which is the one direction a reader takes for a busy " +
+        "scheduler rather than for a broken reading";
+    else if (typeof o.loopUs === "number" && typeof o.betweenSlicesUs === "number"
+             && o.loopUs + o.betweenSlicesUs !== o.instanceUs)
+      o.spanRefused = "the instance's span is not partitioned by its two halves (" + o.loopUs +
+        " inside the slice bracket + " + o.betweenSlicesUs + " between slices against " + o.instanceUs +
+        " measured since the first slice) — the readings TELESCOPE from engine_sched_step's own pair, so a " +
+        "difference is a slice whose span was never charged, a second writer of one accumulator, or a clock " +
+        "that is no longer monotone";
+  }
   o.epBeyondMarkup = (typeof o.epEmitted === "number" && typeof o.epPreProgram === "number")
     ? o.epEmitted - o.epPreProgram : null;
   o.epBeyondMarkupOf = (o.epBeyondMarkup === null) ? null : "epEmitted - epPreProgram";
