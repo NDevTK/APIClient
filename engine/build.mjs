@@ -6139,6 +6139,19 @@ let REV_AT_START = null;
 const revAtStart = () => (REV_AT_START ||= gateRevision(
   ["engine/host", "engine/qjs", "engine/build.mjs", "engine/gate_revision.mjs", "engine/probe_rows.mjs"]));
 
+/* HOW MANY STAGES THE COMPILE PRODUCED, WHICH IS THE ONE FACT THAT SEPARATES A RED THAT MEANS `THERE IS NO
+   ARTIFACT` FROM A RED THAT MEANS `THE PROGRAM DID SOMETHING WRONG`. The gate seam's own banner already states
+   it — "the array is already exactly the first set at this line" — and until this nothing READ it, so every
+   verdict this file printed was silent about whether a reader may carry on. That silence is not neutral: the
+   gate suite is about half an hour, so a red read as a blocker stops the next compile and the next edit for
+   thirty minutes over a statement about what the program DOES rather than about whether there is one.
+   IT IS A `let` AND IT IS NULL UNTIL THE SEAM EXECUTES, which is a decision and not laziness: the `native`
+   verb reports and exits ABOVE the seam, so a `const` declared there would be read in its temporal dead zone
+   by a call site that is perfectly correct, and a target that never reached the seam has nothing to say about
+   the split rather than belonging to either arm. A null is therefore reported as UNSTATED, for the reason
+   every other absence in this file is spelled that way and never folded into a value. */
+let GATE_SEAM = null;
+
 /* `findings` IS A REQUIRED ARGUMENT AND AN EMPTY ARRAY IS A POSITIVE STATEMENT. It carries the lines that are
    NOT stages - the vehicle-agreement sentence is the only one today - and it is required rather than
    defaulted for the reason every other required argument in this file is: `undefined` from a caller that
@@ -6363,6 +6376,33 @@ function report(stages, findings) {
       "budget or the deadlock backstop, which §Testing makes a statement about THIS RUN and this interleaving " +
       "and never about the revision. A repeat is what addresses it; a diff is not.",
   }[bad.kind.tag];
+  /* AND WHAT THIS VERDICT IS ENTITLED TO STOP, WHICH IS A DIFFERENT QUESTION FROM WHAT DECIDED IT AND WAS
+     STATED NOWHERE. The category above says what the red is ABOUT. It does not say whether the reader may
+     carry on, and in the absence of that sentence a red reads as a blocker — which for the gate suite is FALSE
+     and expensive in the one direction nobody notices, because the cost is paid by work that does not happen.
+     THE DISCRIMINATOR IS PUSH ORDER AND IT IS A FACT THIS FILE ALREADY RELIES ON. Every stage pushed before
+     `GATE_SEAM` is a COMPILE OR A LINK, so its red means THERE IS NO ARTIFACT and nothing downstream of one
+     can proceed — that block is correct and is not softened here. Every stage pushed after it RUNS a program
+     or AUDITS the tree, so its red is a statement about what the program DOES, which blocks no compile, no
+     edit, no commit and no push: it is an accepted risk taken deliberately for progress, recorded as a queue,
+     and the standing target is that the queue reaches zero.
+     THE EXIT CODE DOES NOT MOVE AND THAT IS THE POINT. A caller scoring a prediction reads `$?` and a reader
+     deciding what to do next reads this line, and collapsing the two would be the three-states-behind-one-
+     answer shape: softening a gate red to 0 would make `the suite was asked and passed` and `the suite was
+     asked and a stage is red` the same observation, which is the measurement this whole file exists to keep
+     separable. What changes is that the line now SAYS which of the two a reader is holding. */
+  const badAt = stages.indexOf(bad);
+  const stops = GATE_SEAM === null
+    ? "WHAT THIS BLOCKS IS UNSTATED — this target reported before the gate seam executed, so this file holds " +
+      "no split for it and will not guess one. Read the deciding stage and decide yourself."
+    : badAt < GATE_SEAM
+      ? "THIS BLOCKS THE ARTIFACT. The deciding stage is a COMPILE OR A LINK, so there is no program to " +
+        "install, to drive or to publish, and the next act is to fix the tree rather than to carry on."
+      : "THIS BLOCKS NOTHING. The deciding stage RUNS or AUDITS and produces no artifact, so it is a " +
+        "statement about what the program DOES and not about whether there is one. " +
+        "The gate suite is about HALF AN HOUR, so it may not stand in front of the next compile or the next " +
+        "edit — a red here is an ACCEPTED RISK TAKEN FOR PROGRESS, carried as a work queue, with error-free " +
+        "as the standing target and not as a precondition. Build, change code, commit and push; drain this.";
   /* EVERY CATEGORY KEEPS THE DECIDING STAGE'S OWN NON-ZERO CODE, AND NOT ONE OF THEM EXITS 0. Softening the
      census to a pass is choosing a green result over the forcing function — the count IS the gap and the gap
      is the queue — and softening a terminal event would hide that a run did not finish. What changes is WHICH
@@ -6372,6 +6412,7 @@ function report(stages, findings) {
   console.error("[build] BUILD FAILED — " + census + " [verdict from the " + decidedBy + " stage(s)" +
                 (vehicle.length ? "; " + vehicle.length + " vehicle stage(s) decided nothing" : "") + "]");
   console.error("[build]   " + says);
+  console.error("[build]   " + stops);
   /* THE HOST IS IN THE DECIDING LINE FOR THE SAME REASON IT IS IN THE ROW: this is the sentence that gets
      quoted at another agent, and a verdict that does not say which host produced it is a verdict whose
      denomination the reader has to go and look up. */
@@ -8322,6 +8363,10 @@ STAGES.push(onHost(NATIVE_BUILT.stage, STAGE_HOST.NATIVE));
  * `--list-sources` or `lexbor` invocation still parses and loads the whole gate suite before answering, and a
  * reader asking what gates this project has has to grep a file named for something else. */
 const GATES = process.argv.includes("gates");
+/* THE SEAM, RECORDED RATHER THAN DESCRIBED. The banner above says the array is exactly the compile set at this
+   line, and `report()` needs that as a NUMBER to say whether a red blocks the artifact or blocks nothing — so
+   the claim is now read by the code that depends on it instead of being a sentence a reader has to trust. */
+GATE_SEAM = STAGES.length;
 if (!GATES) {
   console.log("[build] NO GATE RAN — THIS VERDICT IS THE COMPILE'S AND NOTHING ELSE. The stages above are the "
             + "ABI declaration list, the two emcc links and the native link; they say the tree COMPILED and "
@@ -8330,11 +8375,38 @@ if (!GATES) {
             + "ABI drive, the browser-process layer, the cross-process peer transport and the source audits — "
             + "is a SEPARATE ACT and is asked for by name:");
   console.log("[build]       node engine/build.mjs gates");
-  console.log("[build]   it re-reads the artifacts this run just produced, so it is not a second build; and it "
-            + "is where every reach, census and abort reading in this project comes from. A green line here is "
-            + "not one of those readings.");
+  /* THE `NOT A SECOND BUILD` CLAUSE IS TRUE OF THE STAGES AND FALSE OF THE COMMAND, AND IT SAYS SO RATHER
+     THAN BEING QUIETLY DROPPED — a reader who re-derives it from what the gate stages DO will write it again.
+     The stages below the seam re-read artifacts; the INVOCATION reaches the seam only after this whole compile,
+     both links, the stamp and the install have run, so asking for gates is asking for a build AND the half
+     hour, and the one-builder rule then has a gate run holding the slot for all of it. That is the TEMPORAL
+     blocking the verdict policy cannot reach, and it is named here because this is the line a reader prices
+     their next half hour on. */
+  console.log("[build]   its STAGES re-read the artifacts this run just produced; the COMMAND still performs "
+            + "this whole compile first, so asking for gates costs a build AND the half hour. It is where "
+            + "every reach, census and abort reading in this project comes from, and a green line here is not "
+            + "one of those readings.");
+  /* AND WHAT A GATE RESULT IS WORTH TO A READER WHO IS DECIDING WHAT TO DO NEXT, said on the run that did NOT
+     ask for it as well as on the one that did. A policy stated only where it bites is a policy only the person
+     already blocked ever reads, and the person who needs this sentence is the one about to decide whether to
+     wait half an hour before editing. */
+  console.log("[build]   IT BLOCKS NOTHING AND IT TAKES ABOUT HALF AN HOUR. A red gate stage is a statement "
+            + "about what the program DOES, so it stops no compile, no code change, no commit and no push: it "
+            + "is an ACCEPTED RISK TAKEN FOR PROGRESS, carried as a work queue whose standing target is zero. "
+            + "Only the " + GATE_SEAM + " stage(s) above can block anything, because only they decide whether "
+            + "an artifact EXISTS.");
   report(STAGES, FINDINGS);
 }
+/* SAID BEFORE THE HALF HOUR AND NOT AFTER IT, because the reader who needs it is the one deciding whether to
+   wait. The same sentence is composed per-verdict in `report()` for the red day; this one is unconditional, so
+   a run that ends CLEAN has also said it — §Testing's rule that a line appearing only on the bad day is a line
+   nobody learns to look for. */
+console.log("[build] GATES ASKED — about HALF AN HOUR of running and auditing, and its verdict BLOCKS NOTHING. "
+          + "Every stage below this line RUNS a program or AUDITS the tree and produces no artifact, so a red "
+          + "one is a statement about what the program DOES: a work queue whose standing target is zero, and "
+          + "never a precondition for the next compile, the next edit, the next commit or the next push. Build "
+          + "and change code while this runs. The " + GATE_SEAM + " stage(s) ABOVE are the only ones whose red "
+          + "blocks anything, because they are the only ones that decide whether an artifact EXISTS.");
 
 const NATIVE_SMOKE = NATIVE_BUILT.bin === null
   ? skipped("native smoke test", "the native program did not link")
