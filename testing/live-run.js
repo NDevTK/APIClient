@@ -1734,7 +1734,33 @@ function census(r) {
      far did it get` is nothing but that.
      NEITHER FIGURE IS COMPARED AGAINST A STORED ONE. flow.h's two host readings disagree by two orders of
      magnitude AND in direction, so what is quoted from a drive is the pair plus its host's slice measure, and
-     the derivation lives there rather than here. */
+     the derivation lives there rather than here.
+     AND THE READING HAS NOW BEEN TAKEN, WHICH SETTLES WHICH OF THE TWO QUOTIENTS IS THE STABLE ONE AND PUTS
+     flow.h'S PRESCRIBED ORDER THE WRONG WAY ROUND. flow.h says to read `sil_phases` against `members` and
+     NEVER alone, and to read it against `picksLifetime` TOO — primary and secondary in that order. Over FOUR
+     runs of ONE document in FOUR fresh browsers, `phasesPerPick` held inside a narrow band while `phaseShare`
+     swung by more than a factor of two. **THE REASON IS IN THE DENOMINATORS AND IS NOT A PROPERTY OF THAT
+     DOCUMENT**: only a CHARGED member mints a new residue, so `picksLifetime` is the population that PRODUCES
+     phases, while `members` is decided by how far a wall-denominated run happened to get before its budget
+     elapsed. One denominator is the cause of the numerator and the other is a lottery, which is why the
+     secondary reading is the one to quote and the primary is the one to quote WITH ITS RUN COUNT.
+     A FALLING `phasesPerPick` IS A DIFFERENT FINDING FROM A SWINGING `phaseShare`, AND THE SECOND DOCUMENT IS
+     WHAT SEPARATES THEM. Where `phasesPerPick` falls MONOTONICALLY as picks rise, the residue count is
+     SATURATING rather than the quotient being unstable — and saturation here is a CLOCK PIN and not a
+     frontier fact, because `flow_silence_phase` is `flow_own_silence(f) % FLOW_SERVICE_US` (flow.c) and
+     `FLOW_SERVICE_US` is `ENGINE_QUANTUM_MS * 1000` (flow.c, solver/engine.h), so the count of distinct
+     residues cannot exceed that span divided by the clock's own granularity however large the frontier grows.
+     flow.h records a vehicle reading pinned at `FLOW_SERVICE_US / 100`; a drive whose six microsecond
+     accumulators share a gcd of 5 is pinned at `FLOW_SERVICE_US / 5` instead, which is why the pin is read off
+     the RUN rather than copied from that record. THE DISCRIMINATOR IS ONE DIVISION AND NEEDS NO SECOND RUN:
+     take the gcd of `instanceUs`, `loopUs`, `betweenSlicesUs`, `sliceUs`, `stepUs` and `schedUs` on the row in
+     front of you, divide `sliceMs * 1000` by it, and compare `silPhases` against that ceiling. Near it, the
+     figure is about the CLOCK and may not price anything; far below it, the figure is about the FRONTIER.
+     NO MAGNITUDE FROM THAT DRIVE IS WRITTEN HERE AND THE DERIVATION IS WHAT IS HANDED OVER, because a live
+     figure is a fact about a document at an hour and this file is the thing that takes it: run
+     `node testing/harness.js restart` and `node testing/live-run.js 1 <url>` per run, ONE FRESH BROWSER EACH
+     — the frontier is cross-session BY DESIGN and lives in RAM, so clearing storage does not reach it — and
+     read the pair at the terminal census with `sliceMeasure` beside it. */
   const sp = num("silPhases"), sc = num("silCarry"), pk = num("picksLifetime"), mem = num("wfqMembers");
   o.phaseShare = ratio(sp, mem);
   o.phaseShareOf = (o.phaseShare === null) ? null : "silPhases / wfqMembers";
