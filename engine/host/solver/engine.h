@@ -1574,6 +1574,34 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
  * chose not to make, and it is what tells a reader whether a widening would change the answer. */
 int engine_decline(JSContext *ctx, const char *method, const char *url, const char *reason);
 
+/* THE SAME REFUSAL FOR A SYNCHRONOUS REQUEST, KEYED ON THE RENDEZVOUS AND NOT ON AN ADDRESS — because the one
+ * above provably cannot reach one, and the first thing that needs it is a §7.4 NAVIGATION.
+ *
+ * `engine_decline` finds its records through `pending_index_find(method, url)`, and `pending_push` deliberately
+ * tracks every kind BUT `FLOW_PENDING_HOSTREQ` into that pair index. So a declined navigation matched NOTHING:
+ * the refusal was recorded for nobody, the flow stayed parked for the session, and `flow_decline_fork` never
+ * saw a record to fork. That is not a gap in the index — a synchronous request has no (method, url) to be
+ * keyed by, since its whole identity is the rendezvous id the asking machine holds — so the door is keyed on
+ * what the host already has: `qjs_host_requests` answers `id<TAB>op`, and the id is what comes back.
+ *
+ * IT IS A SECOND ENTRY AND NOT A THIRD `completion`, BY THE TEST `qjs_host_answer` ITSELF APPLIES. That entry
+ * makes the completion a PARAMETER rather than a second entry point because a return and a throw are two
+ * completions of ONE call — ECMA-262 6.2.4 has exactly those, which is what its own DCHECK says. A decline is
+ * not a completion of the operation at all: the operation did not happen. Widening that enum would let a
+ * refusal arrive at `engine_host_take` as a value the asking machine consumes, which is the state the assert
+ * in `flow_decline_fork` exists to refuse.
+ *
+ * EXACTLY ONE FLOW'S REGISTER CAN NAME THE ID, which is what makes the walk stop at the first match: an
+ * unanswered synchronous request is the one record a fork does NOT share (`engine_sibling_assemble` unshares it
+ * and mints a fresh rendezvous, because its answer is computed under the ASKING flow's world). So there is no
+ * shared-record hazard here of the kind the pair index's per-register `declineTaken` was written for.
+ *
+ * WHAT IT WRITES IS THE FACT AND NOTHING ELSE, exactly as the address-keyed one does: `flow_decline_fork` builds
+ * the pair, so this may not settle the rendezvous — a machine whose request is DECLINED is not a machine with
+ * an answer, and the arm that goes on waiting is the whole of what makes a per-origin widening mean anything.
+ * Returns 1 if a record was marked, 0 if no flow is parked on that id. */
+int engine_host_decline(JSContext *ctx, uint32_t req, const char *reason);
+
 /* Install as JSTimeTravelHooks.gen_fork: a concolic branch inside a synchronously-driven generator body forked
    the flow, and clone_deep_flow built a per-flow gen_data clone. Stash the swap; engine_fork_finalize drains it
    onto the new sibling's COW delta (so the shared generator object resolves per-flow). */

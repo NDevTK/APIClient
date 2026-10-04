@@ -5246,6 +5246,67 @@ int engine_decline(JSContext *ctx, const char *method, const char *url, const ch
                method, url, reason);
     return marked;
 }
+
+/* THE SAME REFUSAL FOR A SYNCHRONOUS REQUEST — see the contract in engine.h for why it is keyed on the
+   rendezvous and why it is a second entry rather than a third completion.
+   THE WALK IS engine_host_answer's, DELIBERATELY AND NOT BY COPYING AN IDIOM: that function is the only other
+   writer that reaches a HOSTREQ record from OUTSIDE the asking flow, so it is the only existing statement of
+   where such a record can be — on some flow's register, under the kind, under the id — and a refusal that
+   looked anywhere else would be refusing a population nothing answers.
+   IT STOPS AT THE FIRST MATCH FOR THE REASON STATED THERE: exactly one flow's register can name an unanswered
+   rendezvous, because a fork unshares that one record and mints a fresh id. */
+int engine_host_decline(JSContext *ctx, uint32_t req, const char *reason) {
+    DCHECK(req != 0, "a synchronous request with no id was refused — the id IS the request's identity for this "
+                     "kind, since a host request has no address to be keyed by, so a refusal naming none "
+                     "refuses nothing and leaves the asking machine parked");
+    /* THE REASON IS NOT OPTIONAL, for the reason the address-keyed refusal gives at length: it is the only
+       account anybody gets of a request nobody made, the flow parked on it will not drain this session, and it
+       is what tells a reader whether a widening would change the answer. */
+    DCHECK(reason != NULL && *reason != '\0',
+           "a synchronous request was refused with no REASON — the party that refused is the party that knows "
+           "why, and an unnamed refusal leaves a machine parked with nothing anywhere to say which rule holds "
+           "it");
+    if (!g_sess_live) return 0;
+    for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
+        for (int i = 0, n = pending_count(f->pending); i < n; i++) {
+            JSValue p = pending_entry(f->pending, i);
+            if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
+                (uint32_t)pending_get_int(p, PEND_REQ) != req) { JS_FreeValue(ctx, p); continue; }
+            /* A REFUSAL AND AN ANSWER CANNOT BOTH BE TRUE OF ONE RENDEZVOUS, asserted here rather than left to
+               the fork: `haveValue` says the zone computed a value, `declined` says it refused to. A record
+               carrying both would have the asking machine take an answer AND a sibling arm wait for one. */
+            DCHECK(!pending_get_int(p, PEND_HAVE_VALUE),
+                   "a synchronous request carries BOTH an answer and a refusal — the trusted zone answered this "
+                   "rendezvous and then refused it, or refused one whose answer had already been written, and "
+                   "the asking machine would consume a value while an arm waited for the real one");
+            DCHECK(!pending_entry_declined(p),
+                   "a synchronous request was refused TWICE — the second reason would replace the one the "
+                   "waiting arm is going to report, and that arm was built from the first");
+            {
+                JSValue rv = JS_NewString(ctx, reason);
+                CHECK(!JS_IsException(rv),
+                      "engine: OOM recording the trusted zone's refusal of a synchronous request");
+                pending_set(p, PEND_DECLINED, rv);
+            }
+            JS_FreeValue(ctx, p);
+            /* AND THE FLOW IS ASKABLE AGAIN, on the flow the refusal reached and not at a slice boundary — the
+               same event, and the same line, as an ANSWER arriving: a flow parked on a synchronous request is
+               waiting for the one thing that can change what it told the scheduler, and a refusal is one of the
+               two things that can. Without this the record would sit marked while the pick went on skipping the
+               flow that asked, and `flow_decline_fork` runs on a flow the scheduler picks. */
+            flow_clear_host_owed(f);
+            return 1;
+        }
+    }
+    /* NOBODY IS PARKED ON IT. The address-keyed refusal aborts here, and this one may not, because the two are
+       reached by different routes: that one is answering a record THE JOIN LISTED, so a miss is the host's
+       pending/decline pairing off by one. A rendezvous id is handed to the host by `qjs_host_requests` and the
+       asking flow can legitimately be GONE by the time the zone answers — which is exactly what
+       `qjs_host_answer`'s own comment says of the same miss on the same population ("a zero return means that
+       flow is gone, which is not an error: nobody is waiting on the answer"). A refusal is the same act with the
+       same timing, so it carries the same reading. */
+    return 0;
+}
 /* WHAT KIND OF PROGRAM a queued body is. It is ONE queue because they are one thing — code the page caused to
    run — and the kind decides exactly two questions, both of them at the ends of that program's life: may it
    fail to COMPILE, and does anything read its COMPLETION VALUE. */
@@ -7180,16 +7241,35 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
                "delivery and the flow would run its failure path over a body it already has");
         kind = (int)pending_get_int(e, PEND_KIND);
         reason = pending_get(e, PEND_DECLINED);
-        /* A SYNCHRONOUS REQUEST CANNOT BE HERE, AND IT IS THE STRUCTURE THAT SAYS SO RATHER THAN A KIND TEST.
-           pending_push TRACKS every kind but FLOW_PENDING_HOSTREQ into the pair index (solver/pending.c), a
-           refusal reaches a record only through pending_index_find, and this loop only ever sees records some
-           refusal marked. So the synchronous kind is unreachable by construction — which is worth asserting
-           because the arm below now answers EVERY kind it can see, and a HOSTREQ arriving would be answered
-           with a network error through a machine that parked expecting a rendezvous. */
-        DCHECK(kind != FLOW_PENDING_HOSTREQ,
-               "a SYNCHRONOUS host request carries a refusal — those records are never keyed into the pair "
-               "index, so engine_decline cannot reach one, and the answer below would settle a rendezvous "
-               "the asking machine consumes with engine_host_take");
+        /* A SYNCHRONOUS REQUEST CAN BE HERE NOW, AND THE ASSERT THAT SAID IT COULD NOT IS WHAT FORCED THE ORDER
+           OF THE DIFF THAT BUILT IT. It read:
+             "a SYNCHRONOUS host request carries a refusal — those records are never keyed into the pair
+              index, so engine_decline cannot reach one, and the answer below would settle a rendezvous
+              the asking machine consumes with engine_host_take"
+           Every clause of that was true and it is kept in its own words, because a reader who re-derives the
+           reachability argument from `pending_push` will write it again. What changed is a DOOR: a refusal
+           reaches a record through `pending_index_find` OR, for this kind, through `engine_host_decline`, which
+           is keyed on the rendezvous id because a synchronous request has no address to be keyed by.
+           ITS STATED HAZARD WAS REAL AND SPECIFIC, AND IS WHY THIS ARM EXISTS RATHER THAN THE KIND SIMPLY
+           BEING ADMITTED. `engine_host_take` reads PEND_COMPLETION and asserts it is a number, with the
+           sentence that the type and the value are ONE WRITE — so the failure side below, which writes a value
+           and no completion, WOULD have tripped that assert for a HOSTREQ. The hazard is the completion and not
+           the value: JS_NULL is already what a navigation's absent-bytes arm reads.
+           SO THE FAILURE SIDE OF THIS FORK IS KIND-AWARE IN EXACTLY TWO WRITES, both of them below: the
+           completion the taker requires, and `pending_answer_sync` rather than a bare `haveValue`, because the
+           register carries the count `pending_blocked` answers from and the generic setter refuses that field on
+           a synchronous record for that reason (solver/pending.h). Everything else about the pair — the waiting
+           arm, the unshare, the mark, the FORCED path — is kind-independent and is not duplicated here.
+           AND THE WAITING ARM IS WHAT THE §7.4 DECLINE ASKED FOR, with no navigation-specific line anywhere: it
+           holds the record with no value and no completion, so `engine_host_answered` goes on answering NO, so
+           the two-stage document load yields for ever and NAV_LOAD_CREATE never runs — which leaves the
+           navigable at the initial `about:blank` §7.3.1.3 "Child navigables" created it holding. The crash that
+           named this capability asked for the navigable to keep its pre-operation document and the creating flow
+           to park; that is this arm, and the error-page document a browser shows is the other one. */
+        DCHECK(kind != FLOW_PENDING_HOSTREQ || pending_get_int(e, PEND_REQ) != 0,
+               "a synchronous host request carries a refusal and NO rendezvous id — the id is the only identity "
+               "this kind has, engine_host_decline found the record BY it, and an arm forked from a record that "
+               "names none could not be matched to the machine that is parked");
         /* BOTH HOMES OF THE SUSPENSION ARE ASKED, AND NEITHER IS REQUIRED — which is the one place this fork
            differs from flow_answer_fork's and is not a weakening of it. That one forks a flow suspended AT a
            synchronous cross-instance read, so it always holds a call site: a frame if it was inside a program,
@@ -7252,7 +7332,22 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
         pe = pending_unshare(f->pending, i);
         pending_set_int(pe, PEND_DECLINE_TAKEN, 1);
         pending_set(pe, PEND_VALUE, JS_NULL);
-        pending_set_int(pe, PEND_HAVE_VALUE, 1);
+        if (kind == FLOW_PENDING_HOSTREQ) {
+            /* THE COMPLETION AND THE VALUE ARE ONE WRITE FOR THIS KIND, which is engine_host_take's own
+               sentence and its own assert: an answered rendezvous with no completion type is a delivery that
+               went round that file, and reading it as a normal completion is the silent lie the field exists to
+               make impossible. §5.6's network error is a NORMAL completion carrying null — the operation
+               returned the absence of a response — and never a THROW, which would re-raise at the parked call
+               site and make a declined navigation look like a document that threw.
+               …AND THROUGH THE REGISTER, not the generic setter. `haveValue` on a synchronous record is the
+               write that stops the flow being BLOCKED, so it is stated by whoever holds the register
+               (pending_answer_sync) — solver/pending.h refuses it otherwise, which is what keeps a path from
+               settling one without a register and leaving a flow reading as blocked with its answer on it. */
+            pending_set(pe, PEND_COMPLETION, JS_NewInt32(ctx, ENGINE_COMPLETION_NORMAL));
+            pending_answer_sync(f->pending, pe);
+        } else {
+            pending_set_int(pe, PEND_HAVE_VALUE, 1);
+        }
         JS_FreeValue(ctx, pe);
         /* AND WHAT THIS PATH IS EVIDENCE OF, FROM THIS INSTANT. Everything below this line stands on an
            outcome nothing observed, so every request it builds declares itself FORCED (pending_prov_compose

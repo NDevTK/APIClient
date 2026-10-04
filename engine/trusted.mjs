@@ -304,6 +304,19 @@ function decline(reason) { return `decline\t${b64(reason)}`; }
    sentence this zone composed and the channel is line-oriented. */
 function declineRequest(method, url, reason) { return `decline-request\t${method}\t${url}\t${b64(reason)}`; }
 
+/* …AND THE SAME ACT ADDRESSED BY REQUEST ID, WHICH IS A THIRD RECORD BECAUSE A THIRD INDEX ANSWERS IT. The pair
+   verb above is keyed on `(method, url)` because a fetch is, and solver/pending.h's `pending_push` deliberately
+   keeps a HOSTREQ out of that index: a request `qjs_host_requests` announced BY ID is answered by id, since the
+   id is the only thing that names the one flow's register holding it. So a §7.4.5 document load the chokepoint
+   refuses is unreachable from `declineRequest` at any spelling.
+   THIS ARM USED TO PUSH `decline`, AND THAT IS THE DEFECT IT REPLACES RATHER THAN A STYLE CHOICE. `decline`
+   owes nothing — it explains a notice this zone would not provision — so a refused document load SAID its
+   reason and marked nothing: the asking flow kept its park for the rest of the session, no arm was forked to
+   run the page's own failure path, and `paid` did not move, so the very next `stalled` read the zone as
+   refusing EVERYTHING and ended the session. One sentence, three losses, and from outside indistinguishable
+   from a page that merely never finished loading a frame. */
+function declineAnswer(id, reason) { return `decline-answer\t${id}\t${b64(reason)}`; }
+
 /* THE FIRING DECISION IS NOT HERE ANY MORE, AND ITS ABSENCE IS THE DIFF RATHER THAN A DELETION.
  * Three constants stood in this space: `PROVENANCE_DECLINE`, a per-class refusal for every DERIVED and FORCED
  * park; `NAVIGATION_WIDENING`, a Set this file held; and `FORCED_NAVIGATION`, the sentence it refused a
@@ -1535,7 +1548,7 @@ async function main() {
                             'the address read out of it would be a provenance token');
           const loaded = await navigate(args.slice(t + 1), e.docUrl, 'document.fetch', args.slice(0, t),
                                         e.docReach);
-          if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
+          if (loaded.declined) { e.ready.push(declineAnswer(id, loaded.declined)); return; }
           /* THE ANSWER IS §7.4.5's `{url, headers}` PLUS THE DOCUMENT AS BYTES: a Document is parsed from a
              byte sequence, so the bytes travel BESIDE the record rather than through a decode this zone would
              have had to run first — which is what left HTML §8.1.4.2's classic-script decode nothing to
@@ -1551,8 +1564,8 @@ async function main() {
         /* A REQUEST THIS ZONE DOES NOT CARRY IS REFUSED IN WORDS AND NOT LEFT SILENT: leaving it unanswered
            parks the asking flow for the rest of the session while the frontier reports nothing, which from
            outside is indistinguishable from a page that is merely slow. */
-        e.ready.push(decline(
-          `request ${id} \`${op.slice(0, 120)}\` — an operation this zone does not carry. It routes ` +
+        e.ready.push(declineAnswer(id,
+          `\`${op.slice(0, 120)}\` — an operation this zone does not carry. It routes ` +
           '`windowproxy.get`, the `object.*` internal methods and `document.fetch`, and an operation outside ' +
           'those is one the engine emits for and nothing performs'));
       }

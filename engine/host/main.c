@@ -2489,6 +2489,28 @@ QJS_EXPORT void qjs_host_answer(unsigned req, const char *json, unsigned complet
     }
 }
 
+/* THE TRUSTED ZONE REFUSING TO PERFORM A SYNCHRONOUS REQUEST — the entry `qjs_provide`'s sibling `qjs_decline`
+ * is for an address, and this one is for a RENDEZVOUS, because a synchronous request has no address to be keyed
+ * by. The id is the one the engine put on its own `qjs_host_requests` line, so the zone answers the question it
+ * was actually asked.
+ * IT IS NOT A `completion` ON THE ENTRY ABOVE, by that entry's own test: it makes the completion a PARAMETER
+ * because a return and a throw are two completions of ONE call and ECMA-262 6.2.4 has exactly those. A refusal
+ * is not a completion of the operation — the operation did not happen — and widening that enum would deliver a
+ * refusal to `engine_host_take` as a value the asking machine consumes.
+ * `reason` IS THE ZONE'S OWN WORDS, in the same vocabulary a blocked scheme and a blocked private-network load
+ * arrive in, because only the party that applied the rule knows which rule it was and whether a per-origin
+ * widening would make the request fire. It is the only account anybody gets of a request nobody made.
+ * A ZERO RETURN IS NOT AN ERROR and is the same reading `qjs_host_answer` gives for the same miss on the same
+ * population: the asking flow can be gone by the time the zone decides, and nobody is then waiting. */
+QJS_EXPORT int qjs_host_decline(unsigned req, const char *reason)
+{
+    DCHECK(g_begun, "a request was refused to an engine that never ran");
+    DCHECK(reason != NULL && *reason != '\0',
+           "the trusted zone refused a synchronous request with no REASON — the flow parked on it will not "
+           "drain this session, and a reader looking at a frontier that stops has nothing else to read");
+    return engine_host_decline(g_ctx, (uint32_t)req, reason);
+}
+
 /* THE RETURN PATH FOR A NOTICE — the entry that was missing, and its absence is why the shipped extension could
    send a cross-document message and never deliver one. `record` is the notice VERBATIM as the emitting instance
    wrote it (`qjs_host_notices`), routed here by the offscreen because this instance holds the document the

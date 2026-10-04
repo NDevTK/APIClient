@@ -30087,6 +30087,38 @@ static void abi_declined(const char *reason)
     g_abi_declined = grown;
 }
 
+/* THE SAME SENTENCE, PLUS WHETHER IT LANDED — and the two are one record because a reader holding only the
+   first cannot tell a refusal the engine ACTED ON from one that named nobody. `qjs_host_decline`'s 0 is not an
+   error (the asking flow can be gone), so it may not abort; what it may not do either is vanish, because a
+   refusal that matched nothing forks no arm and the frontier then stalls for a reason whose evidence this
+   process threw away. The id is carried too: the reason alone is the zone's words and says nothing about which
+   of several parked requests they were composed for. */
+static void abi_host_declined(unsigned id, const char *reason, int matched)
+{
+    /* THE PREFIX IS BOUNDED AND THE REASON IS NOT, WHICH IS WHY THEY ARE COMPOSED IN TWO STEPS. Everything in
+       the prefix is this process's own — an unsigned and one of two literals — so its width is known and a
+       fixed buffer cannot be overrun by it. The reason is the ZONE'S sentence, of any length, and `%s`-ing it
+       into a fixed buffer would TRUNCATE exactly the half this record exists to carry, silently, on the one
+       channel whose whole value is that a refusal is read in the words the party that made it chose. */
+    char head[96];
+    int hn = snprintf(head, sizeof head, "request %u (%s): ", id,
+                      matched ? "marked on the parked flow's record"
+                              : "NO flow holds this id — nothing was marked");
+    size_t rn = strlen(reason);
+    char *line;
+
+    CHECK(hn > 0 && (size_t)hn < sizeof head,
+          "the id-and-outcome prefix of a refusal did not fit its own buffer — every operand of it is this "
+          "process's own, so a truncation here is a fact about this code rather than about the zone's sentence");
+    line = malloc((size_t)hn + rn + 1);
+    CHECK(line != NULL, "OOM composing a refused request's record — the zone's reason and whether it landed are "
+                        "the whole of what the stall report has to say about why this frontier will not drain");
+    memcpy(line, head, (size_t)hn);
+    memcpy(line + hn, reason, rn + 1);
+    abi_declined(line);
+    free(line);
+}
+
 /* THE ROUND IN WHICH THIS HOST IS PAID. It runs after `stalled` and after `poll`, and the difference between
    those two is not in this function — it is in WHAT A ZERO MEANS, which is the caller's to read and is why
    this one only counts.
@@ -30402,10 +30434,43 @@ static int abi_pay(void)
             abi_declined(reason);
             free(reason);
             paid++;
+        } else if (!strcmp(verb, "decline-answer")) {
+            /* A REFUSAL ADDRESSED BY REQUEST ID, WHICH IS WHY IT IS NOT `decline-request`. That one is keyed on
+               the (method, url) PAIR because a fetch is, and `pending_push` deliberately keeps a HOSTREQ out of
+               that index: a request the zone was ASKED for by id is answered by id, since the id is the only
+               thing that names the one flow's register holding it. So the §7.4 navigation the firing policy
+               declines is unreachable from the pair verb above, at any spelling, and this arm is the only route
+               the native driver has to it.
+               IT READS THE RETURN, WHICH THE TWO PAIR VERBS HAVE NONE OF. `qjs_host_decline` answers 1 if a
+               parked flow's record was marked and 0 if none holds that id, and 0 is NOT an error — the asking
+               flow can legitimately be gone by the time the zone comes back, which is the same reading
+               `qjs_host_answer` gives. What it is also not is SILENCE: a driver that discarded it would read a
+               refusal landing on nobody exactly as it reads one landing on the flow it was composed for, so the
+               count is carried and the stall report prints it. */
+            const char *id_f = abi_take(&p, "refused request id");
+            char *end;
+            char *reason;
+            size_t rn = 0;
+
+            reason = abi_bytes(abi_take(&p, "refusal reason"), &rn, "refusal reason");
+            CHECKF(p == NULL, "a refused request carries a field after its reason. trailing=[%s]", p ? p : "");
+            DCHECK(rn == strlen(reason), "a refusal reason carries a NUL");
+            id = strtoul(id_f, &end, 10);
+            CHECKF(*id_f != '\0' && *end == '\0',
+                   "a refusal names a request id that is not a number: `%s` — the id is the rendezvous, so an "
+                   "unreadable one would refuse whatever request id zero belongs to and leave the flow that IS "
+                   "parked waiting for a session that has already answered it", id_f);
+            CHECK(id != 0,
+                  "a refusal named request id ZERO, which no request is: `qjs_host_requests` numbers from one "
+                  "precisely so an unset field cannot name a record, and refusing id zero would be this zone "
+                  "declining a request it never read");
+            abi_host_declined((unsigned)id, reason, qjs_host_decline((unsigned)id, reason));
+            free(reason);
+            paid++;
         } else {
             CHECKF(0, "a record arrived on this host's channel under the verb `%s`, which it does not carry — "
                       "the payment round takes `provide`, `answer`, `route`, `perform`, `remote`, "
-                      "`decline-request`, "
+                      "`decline-request`, `decline-answer`, "
                       "`world-gone`, `decline` and `go`, and a verb this host does not know is a zone "
                       "expecting a capability it has not", verb);
         }

@@ -716,6 +716,37 @@
                  "party that knows which rule fired, which is why the grade and the sentence both travel " +
                  "from the chokepoint rather than being re-derived by a reader" }],
         reply: [WORKING_SET] },
+
+      /* THE SAME REFUSAL FOR A SYNCHRONOUS REQUEST, AND IT IS A SEPARATE METHOD BECAUSE IT IS KEYED ON A
+         DIFFERENT THING. `Decline` above names a (method, url) pair, because that is what the engine's pending
+         register is keyed on. A synchronous request has no address to be keyed by — its whole identity is the
+         rendezvous id `GetHostRequests` handed out — and `pending_push` deliberately keeps that kind OUT of the
+         pair index, so `Decline` provably cannot reach one: it matched nothing, the refusal was recorded for
+         nobody, and the asking machine stayed parked for the session with no account of why.
+         IT IS ALSO NOT A `completion` ON `HostAnswer`, by that method's own test: the completion is a parameter
+         there because a return and a throw are ECMA-262 6.2.4's two completions of ONE call. A refusal is not a
+         completion of the operation; the operation did not happen. Widening that enum would deliver a refusal to
+         the asking machine as a value it consumes. */
+      { ordinal: 24, name: "HostDecline",
+        params: [
+          { name: "request", type: "int32", retained: false,
+            why: "the rendezvous id — the same one `GetHostRequests` put before the TAB and the same one " +
+                 "`HostAnswer` carries, because a refusal answers the question a reply answers. Exactly one " +
+                 "flow's register can name an unanswered id (a fork unshares that record and mints a fresh " +
+                 "one), so this reaches one call site or none" },
+          { name: "reason", type: "string", retained: false,
+            why: "why this zone will not perform the request, in the zone's own words and in the same " +
+                 "vocabulary `Decline` carries — `blocked-signal:<name>=<value>` names the ROW of the " +
+                 "person's own per-origin egress control that holds it, which is what says a widening would " +
+                 "make it fire. For a §7.4 navigation this is the whole account of a frame that stays at the " +
+                 "`about:blank` §7.3.1.3 \"Child navigables\" created it holding" }],
+        reply: [
+          { name: "matched", type: "int32",
+            why: "1 if a flow was parked on that id, 0 if none was. A zero is NOT an error and carries the " +
+                 "same reading `HostAnswer`'s does for the same miss: the asking flow can be gone by the time " +
+                 "this zone decides, and then nobody is waiting. It is reported rather than swallowed because " +
+                 "a zone that refuses requests nothing is parked on is a zone whose own pairing has drifted" },
+          WORKING_SET] },
     ],
   });
 

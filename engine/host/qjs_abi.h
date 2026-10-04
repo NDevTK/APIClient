@@ -80,6 +80,14 @@ QJS_EXPORT const char *qjs_host_requests(void);
 QJS_EXPORT const char *qjs_host_notices(void);
 QJS_EXPORT void qjs_host_answer(unsigned req, const char *json, unsigned completion,
                                 const char *body, unsigned body_len);
+/* …AND THE REFUSAL OF ONE, WHICH IS `qjs_decline`'S SIBLING AND NOT A CASE OF IT. `qjs_decline` is keyed on the
+   (method, url) PAIR, and `pending_push` deliberately keeps a HOSTREQ out of that index — a request this zone
+   was ASKED for by id is answered by id, because the id is the only thing that names the one flow's register
+   holding it. So a §7.4 navigation the firing policy declines has no spelling in the pair entry at all, and the
+   arm that fired instead was a `DFAIL` naming this entry as the thing to build. Returns 1 if a parked flow's
+   record was marked, 0 if none holds that id — the same reading `qjs_host_answer` gives, since the asking flow
+   can legitimately be gone by the time the trusted zone comes back. */
+QJS_EXPORT int qjs_host_decline(unsigned req, const char *reason);
 
 /* THE CROSS-INSTANCE SEAM — a record routed in, an operation performed here, a peer's completion coming back.
    `qjs_set_referenced` is the seam's LIFETIME half and is stated before the frontier is seeded, because it

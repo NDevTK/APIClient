@@ -8031,7 +8031,7 @@ const QJS_ABI = ["qjs_init", "qjs_join", "qjs_unload", "qjs_bundle_id", "qjs_beg
                  "qjs_result", "qjs_teardown",
                  "qjs_pending", "qjs_provide", "qjs_decline", "qjs_top_weight", "qjs_set_yield_floor",
                  "qjs_request_park", "qjs_emit_partial", "qjs_request_dump", "qjs_dumps",
-                 "qjs_host_requests", "qjs_host_answer", "qjs_host_notices", "qjs_route",
+                 "qjs_host_requests", "qjs_host_answer", "qjs_host_decline", "qjs_host_notices", "qjs_route",
                  "qjs_set_referenced", "qjs_perform", "qjs_host_answer_remote", "qjs_world_gone",
                  "qjs_paint", "qjs_paint_bytes",
                  "qjs_paint_width", "qjs_paint_height",
