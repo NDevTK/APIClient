@@ -2377,8 +2377,57 @@ const row = {
      and learned nothing. Those are opposite findings, and the empty array was a property of the instrument.
      `errs` is what the engine itself recorded; the console is unioned in because a crash before the document
      exists has nowhere else to go. */
-  why: [...new Set([...mine.flatMap(d => d.errs || []), ...(j.match(/@WHY[^\n]*/g) || [])]
+  /* AND A LINE THAT QUOTES AN ABORT IS NOT AN ABORT, which is the difference between one entry and two for
+     ONE event. extension/bridge.js composes a crash record's `err` as `<abort message> | ROOT: <the @WHY line
+     it found in eng.lines>` so that the RECORD carries its cause and not only the banner — and both the banner
+     and the record then print a line CONTAINING `@WHY`, JSON-escaped one level deeper because the record is
+     JSON. A substring match over the whole transcript therefore returns the abort once and its own quotations
+     twice, and the `Set` cannot collapse them because the escaping differs: the two ROOT copies are identical
+     to each other and NOT to the raw line.
+     MEASURED on a dev drive of app.gitpod.io: `grep -o '.\{0,22\}@WHY'` answers ONE `[ast-worker.html] @WHY`
+     and TWO `| ROOT: @WHY`, and the row read `why.length === 2` for ONE abort, with entry [1] unparseable at
+     722 characters against entry [0]'s 704. That is evidence inflation in the channel that reports aborts: a
+     reader counting entries counts two.
+     THE DISCRIMINATOR IS THE ONE CLAUDE.md ALREADY GIVES FOR A CITED SECTION — the text at the hit TALKS ABOUT
+     the thing rather than BEING it — and here the composing site spells it, so it costs no guesswork.
+     IT IS NOT ANCHORED TO `^`, WHICH IS THE REPAIR A READER REACHES FOR AND WHICH WOULD HAVE DROPPED THE REAL
+     LINE: the console capture prefixes every line with its document (`[ast-worker.html] `), so a start-anchored
+     match answers ZERO on exactly the population this field exists for. Recorded because the next reader will
+     re-derive the anchor from the shape of the defect rather than from the bytes.
+     AND THE DROP IS ASSERTED RATHER THAN ASSUMED (whyQuotedWithoutRaw below): a ROOT copy exists because
+     bridge found that line in `eng.lines`, and `eng.lines` is what reaches this transcript — so every quoted
+     payload must also appear raw. A quotation with no raw twin would mean this filter is LOSING the only copy
+     of an abort, which is the one way this repair could be worse than the double count. */
+  why: [...new Set([...mine.flatMap(d => d.errs || []), ...(j.match(/(?<!ROOT: )@WHY[^\n]*/g) || [])]
                    .filter(x => typeof x === 'string' && x.includes('@WHY')))],
+  /* THE FILTER'S OWN TWO-SIDED CHECK, AND IT HAD TO BE BUILT TWICE. Empty string = every quotation's payload
+     is CONTAINED in some raw one, which is what makes dropping the quotations lossless. A non-empty value names
+     the payloads that exist ONLY as a quotation, which would mean this lookbehind is losing the only copy of an
+     abort — the one way this repair could be worse than the double count.
+     THE FIRST DRAFT OF BOTH HALVES WAS WRONG AND ITS CHECK AGREED WITH IT, which is why the method is recorded
+     and not just the predicate. It tested `/ROOT: *$/` against `x.slice(0, x.indexOf('@WHY'))`, and a match of
+     the `@WHY` pattern BEGINS at `@WHY`, so that slice is always EMPTY and the test always false: the filter kept
+     everything and the orphan set was trivially empty — a check reading clean because it never asked, which is
+     the unarmed probe CLAUDE.md forbids. Three things fixed it and all three are load-bearing. The context has
+     to come from a LOOKBEHIND rather than from the match. The quotation set is a MULTISET DIFFERENCE and not
+     `!unq.includes(x)`, because the banner and the record quote at two different escaping depths and one of them
+     is byte-identical to the raw line. And the comparison is CONTAINMENT after stripping backslashes, not
+     equality, because the record's copy runs to the end of a JSON object and carries a closing `"}` the raw line
+     does not. Exercised on a real dev transcript: 3 matches, 1 not preceded by `ROOT: `, 2 quotations identified
+     (the positive control — zero here would mean the check never ran), an INVENTED quotation correctly reported
+     as an orphan (the negative control), and `why` going 2 -> 1 for ONE abort. */
+  whyQuotedWithoutRaw: (() => {
+    const all = j.match(/@WHY[^\n]*/g) || [];
+    if (!all.length) return null;
+    const unq = j.match(/(?<!ROOT: )@WHY[^\n]*/g) || [];
+    const norm = (s) => s.replace(/\\/g, '');
+    const raw = unq.map(norm);
+    const pool = [...unq], quoted = [];
+    for (const x of all) { const k = pool.indexOf(x); if (k >= 0) pool.splice(k, 1); else quoted.push(x); }
+    const orphans = [...new Set(quoted.map(norm))]
+      .filter(q => !raw.some(r => q.includes(r.slice(0, Math.min(r.length, 200)))));
+    return orphans.length ? orphans.map(q => q.slice(0, 160)) : '';
+  })(),
   atE: [...new Set(j.match(/@E [^\n]*/g) || [])].slice(0, 10),
   /* THE TWO HALVES OF ONE FACT, READ TOGETHER. A crashed run with no reason, or a reason with no crashed run,
      means one of the two producers is not being read -- which is the defect this row already suffered once.
