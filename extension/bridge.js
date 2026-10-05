@@ -2947,17 +2947,28 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
                                              `value` bucket, which is the FIRST conjunct of safe-fetch.js's
                                              owner arm, whose third (`actor: page`) the CHILD NAVIGABLE
                                              and the route-declaration seed state while the ambient seed
-                                             states `tool` — so the arm is one field from admitting
-                                             exactly the population #117 is about and no other.
-                                             MEASURED, as a command rather than a figure:
+                                             states `tool` — so the arm was one field from
+                                             admitting exactly the population #117 is about.
+                                             AND THAT CLAUSE IS RETIRED BY THE DECISION ITSELF, KEPT IN ITS
+                                             OWN WORDS BECAUSE A READER WHO RE-DERIVES THE `value` BUCKET
+                                             WILL RE-REACH FOR THE WITNESS MARK AS THE LEVER. The project
+                                             owner settled #117 in the affirmative and the table now carries
+                                             a navigation arm OF ITS OWN (`destination=navigation AND
+                                             actor=page AND provenance=derived`), so the population arrives
+                                             through a DIFFERENT arm and the witness mark is one field from
+                                             NOTHING — the lever this comment was pricing has no load left on
+                                             it. MEASURED, as a command rather than a figure:
                                              `node testing/egress_arm_probe.mjs` asks the real walk with THIS
-                                             vector and answers REFUSED, and FIRES with `pinned` alone moved
-                                             to `unpinned` — on a FORCED path too, so "refused either way" is
-                                             false in both halves. The lever is one field and the fact is
-                                             computable (`engine_pinned_of_running_path`); what it needs is a
-                                             DECISION, because that arm's own enumeration names the
-                                             navigation as not admitted. See `_pinnedOf`'s residual, which
-                                             carries the decision and is where this is priced. */
+                                             vector and answers FIRES, with the FORCED path still REFUSED,
+                                             which is the whole of what the decision bought and the whole of
+                                             what it did not.
+                                             WHAT SURVIVES AND IS WHY THIS PARAGRAPH IS NOT DELETED: the
+                                             premise is still exactly right — NOT being §2.2.5 script-like is
+                                             what puts `document` in the `value` bucket — and the lesson it was
+                                             written to record is that a conclusion drawn from that premise
+                                             ("refused either way") did not follow from it. That reasoning is
+                                             re-derivable from `document` by anybody, and the sentence above is
+                                             what stops them re-deriving it wrongly a second time. */
                                           pinned: "unstated",
                                           credentials: "include",
                                           credentialed: navigationCarriesSession(abs, principalOrigin) });

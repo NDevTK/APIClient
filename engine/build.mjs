@@ -6638,6 +6638,100 @@ const LEXBOR_INC = LEXBOR_SRC;
    213 sources are absent for the opposite reason — `lexborSourceId` IS their content. And `-r` is why the
    output is a relocatable partial-link object rather than an `.a`: emcc will not archive from `.c`. */
 const LEXBOR_CFLAGS = ["-I", LEXBOR_INC, "-O2", "-w", "-D_GNU_SOURCE", "-DENABLE_DUMPS", "-r"];
+/* ── NO SOURCE THIS REPOSITORY DOES NOT TRACK MAY REACH A COMPILE ────────────────────────────────────────
+   THREE WALKERS ENUMERATE BY EXTENSION AND NONE OF THEM ASKS GIT, WHICH IS CORRECT AND IS WHY THIS EXISTS.
+   `walkC` and `findC` below, and `lexbor_source.mjs`'s own walk, each take every `.c` (and for the content key
+   every `.h`) under a root off `readdirSync`, recursively, with no tracked-list filter. Their comments argue
+   for that and the argument is sound: "a list picked per component only ever describes what was needed the
+   last time someone remembered to edit it." So the cure is NOT a hand-kept filter, which would be that same
+   defect; it is a REFUSAL, because the source set is then still the directory and a directory that disagrees
+   with the index is a build nobody can name a revision for.
+   THE SHARED CHECKOUT IS WHAT MAKES IT LOAD-BEARING. Every lane works in ONE tree, so for the whole lifetime
+   of any stray `.c` or `.h` a lane creates under a walked root — a baseline copy for a syntax check, a probe,
+   a saved `.i`, an experiment — EVERY PEER'S BUILD COMPILES A DIFFERENT PROGRAM, and the failure lands under
+   the peer's own subject while the lane that caused it never sees one. MEASURED: a lane's baseline copy of
+   `engine.c` sat in `engine/host/solver/` for the span of two commands; any build in that window would have
+   met duplicate symbols for every function in that file.
+   AND THE LEXBOR ROOT FAILS QUIETER AND DURABLY, WHICH IS THE HALF A DELETION DOES NOT REPAIR. That archive
+   is CONTENT-KEYED — `lexborSourceId` IS the content of its sources, hashed path-and-bytes, carried in the
+   archive's NAME so that "there is nothing beside it to be wrong" — and the store is SHARED BY EVERY
+   SNAPSHOT ON THE BOX. So a stray file there does not add a symbol to one build: it mints a DIFFERENTLY
+   NAMED cached archive holding that file's symbols, which every later build hitting that key reuses, and
+   removing the stray evicts nothing. That is why this check covers `.h` as well as `.c` and runs over the
+   lexbor root too, even though `findC` collects only `.c`: the compile set and the cache key are two
+   populations and the quieter one is the wider.
+   IT IS A THROW AND NOT A STAGE. A stage REPORTS, and this build's own verdict line says only the four
+   compile and link stages can block "because only they decide whether an artifact EXISTS" — which is exactly
+   what is wrong here, so a red that lets the link proceed would hand out the artifact this refusal is about.
+   §Fix-the-ROOT: make the state impossible rather than describing it.
+   WHAT IT DOES NOT COVER, AS A PROPERTY AND NOT A LIST: a file git tracks and nobody wants compiled. This
+   asks only whether the index NAMES the path, so a committed stray is admitted — and that is the right line,
+   because a committed file is a reviewable act by a named author at a named revision, which is the whole
+   difference between this hazard and an ordinary bad diff. HOW ITS ABSENCE WOULD SHOW: a build whose
+   `--stat`-sized source count disagrees with `git ls-files` over the same roots, which no line prints today.
+   RETIREMENT: this record goes when the walkers take their root set from one declaration this check reads,
+   so a fourth walked root cannot be added without being covered — MEASURED ABSENT with the command, so the
+   condition is not born met: `grep -c 'WALKED_ROOTS' engine/build.mjs` answers 0 against `grep -c 'walkC('`
+   answering nonzero as the armed control. */
+let _trackedMemo = null;
+function trackedPaths() {
+  if (_trackedMemo) return _trackedMemo;
+  const r = spawnSync("git", ["ls-files", "-z"], { cwd: ROOT, encoding: "utf8", maxBuffer: 1 << 28 });
+  /* A CHECK THAT CANNOT ASK ITS QUESTION REFUSES RATHER THAN PASSING. git is already a hard dependency of
+     this script — it resolves the revision and reads the cone's cleanliness before any compiler runs — so a
+     failure here is a broken environment and never a tree to compile anyway. The `maxBuffer` is explicit
+     because `spawnSync`'s default is ONE MEGABYTE and an exceeded buffer returns stdout TRUNCATED with the
+     error on a field nobody reads, which for THIS consumer would silently shorten the tracked set and turn
+     every unlisted source into a refusal — a confident accusation produced by the reader's own default. */
+  if (r.status !== 0 || typeof r.stdout !== "string")
+    throw new Error("[build] `git ls-files` failed (" + r.status + "), so the tracked set is unknown and no " +
+                    "source enumeration below can be checked against it. git is already this script's " +
+                    "dependency for the revision and the cone, so this is an environment fault: " +
+                    String(r.stderr || "").trim());
+  _trackedMemo = new Set(r.stdout.split(" ").filter(Boolean));
+  return _trackedMemo;
+}
+function refuseStraySources(roots) {
+  const tracked = trackedPaths(), stray = [];
+  const walk = (dir) => {
+    if (!existsSync(dir)) return;
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const q = join(dir, e.name);
+      if (e.isDirectory()) walk(q);
+      else if (e.name.endsWith(".c") || e.name.endsWith(".h")) {
+        const rel = relative(ROOT, q).split(sep).join("/");
+        if (!tracked.has(rel)) stray.push(rel);
+      }
+    }
+  };
+  for (const d of roots) walk(d);
+  if (stray.length)
+    throw new Error("[build] " + stray.length + " source file(s) under a walked root are NOT TRACKED by this " +
+                    "repository, so this build would compile a program NO REVISION CONTAINS and its number " +
+                    "would belong to nothing:\n  " + stray.join("\n  ") +
+                    "\nThree walkers enumerate these roots BY EXTENSION with no index filter, deliberately, so " +
+                    "a stray .c gives the linker duplicate symbols and a stray .c OR .h under the lexbor root " +
+                    "additionally mints a differently-named entry in the SHARED content-keyed archive cache " +
+                    "that every later build reuses and that deleting the file does not evict. If this is a " +
+                    "baseline copy for a syntax check, put it in the session scratchpad and compile it with " +
+                    "`-x c` — the include set resolves unchanged. If it is meant to be built, commit it.");
+}
+/* AND THE REFUSAL IS ASKED HERE, AT THE TOP LEVEL, BEFORE ANY VERB OF THIS SCRIPT HAS CONSUMED A ROOT.
+   IT SITS BELOW THE TWO DECLARATIONS ABOVE AND NOT BESIDE THE ROOT CONSTANTS, WHICH IS NOT A STYLE CHOICE:
+   `_trackedMemo` is a `let`, so a call placed earlier in module order reaches it in its TEMPORAL DEAD ZONE
+   and throws `Cannot access '_trackedMemo' before initialization` — function declarations hoist and `let`
+   does not. Measured: that was this check's first form and it broke every verb of this script until the
+   call moved. Anything inserted between here and the root constants must stay below these two functions.
+   It is NOT deferred into the first consumer, because the three roots have SEVERAL consumers — the two emcc
+   links, the native link, the lexbor archive and its content key — and a check placed in one of them is a
+   check the other routes skip, which is the per-site plumbing whose omissions this file warns about one
+   function down. Asking once, unconditionally, costs one `git ls-files` for every invocation including the
+   ones that compile nothing, and that is the correct price: a tree holding a stray source cannot produce a
+   number belonging to a revision under ANY verb, so there is no mode of this script for which the answer is
+   allowed to differ. The roots are spelled here rather than derived because the walkers spell them too; the
+   retirement condition at `refuseStraySources` is about exactly that duplication. */
+refuseStraySources([join(HOST, "solver"), join(HOST, "browser"), join(LEXBOR_SRC, "lexbor")]);
+
 function findC(dir, out) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, e.name);
@@ -8867,14 +8961,34 @@ STAGES.push(onHost(runProgram("CLAUDE.md record-landing gate", [join(ENGINE, "md
    the change detector CLAUDE.md bans, and a SECOND copy of the arms would be the copy that drifts. It fails
    only when it can no longer make the policy REFUSE, or no longer make it FIRE — at which point every row
    it prints, and every comment citing it, is reporting on the probe instead of on the policy.
+   AND THAT IS NOW TRUE OF THE CONTROLS ALONE RATHER THAN OF THE WHOLE PROBE, WHICH IS A DISTINCTION THIS
+   PARAGRAPH DID NOT HAVE TO MAKE UNTIL AN OWNER DECISION ACQUIRED A BOUND. The clause above is RIGHT about
+   the ARMS — nothing stores a copy of them and a widening still passes — and it is WRONG as a reading of a
+   red, because the probe now scores a handful of rows against a stated expectation, and two of those rows
+   ARE the navigation decision's bound: the page-named child navigable must FIRE and the FORCED route must
+   still be REFUSED. A later widening that admits the forced route therefore turns this stage red while the
+   hint below says FIX THE PROBE, and the right answer is UPDATE THE ROW — the stage would be reporting a
+   decision being reversed, which is the one thing it exists to make loud.
+   THE TWO READINGS ARE ALREADY SEPARATED BY THE EXIT STATUS AND NOTHING HERE READS IT: the probe exits 2
+   when a CONTROL fails (its grip is gone, the arms are unreadable, no row was scored) and 1 when a SCORED
+   ROW disagrees (the walk is fine and an expectation moved). So the hint names both, and the status is what
+   says which. RETIREMENT: this paragraph goes when this stage reads that status rather than a boolean, so a
+   reader is handed the right instruction instead of choosing between two. MEASURED ABSENT with the command,
+   so the condition is not born met: `grep -cE 'status === 2|code === 2' engine/build.mjs` answers 0 against
+   `grep -cE '\.status' engine/build.mjs` answering nonzero as the armed control.
    IT IS A SOURCE STAGE ON THE SAME ARGUMENT AS THE FOUR ABOVE: it compiles no C, reads no artifact and opens
    no engine slice, so it has no denomination to state and its finding is about the REVISION on every host. */
 STAGES.push(onHost(runProgram("egress default-arm probe", [join(ROOT, "testing", "egress_arm_probe.mjs")],
                        "the chokepoint can no longer be made to refuse, or can no longer be made to fire, so " +
-                       "its own answers are not readings. Nothing here stores an expected arm list: a widened " +
-                       "policy passes, and this red means the PROBE lost its grip on the walk — read which " +
-                       "control failed and what it was asking, then fix the probe or the signal registry it " +
-                       "asks through. Two comments cite this stage by name as the authority for a repair " +
+                       "its own answers are not readings. READ THE EXIT STATUS, because this stage has TWO reds: 2 " +
+                       "means a CONTROL failed, so the probe lost its grip on the walk and no row was scored — " +
+                       "read which control failed and what it was asking, then fix the probe or the signal " +
+                       "registry it asks through. 1 means a SCORED ROW disagreed, so the walk is fine and a " +
+                       "stated expectation moved — and two of those rows are the project owner's navigation " +
+                       "decision and its BOUND (a page-named child navigable FIRES, a forced route stays " +
+                       "REFUSED), so the right answer there is to update the row and say who decided it, never " +
+                       "to fix the probe. Nothing here stores a copy of the ARM LIST, so a widening that keeps " +
+                       "those two rows passes unchanged. Two comments cite this stage by name as the authority for a repair " +
                        "being outcome-free, in extension/bridge.js and extension/lib/safe-fetch.js, so a red " +
                        "here also means those two sentences are unsupported until it is green."),
   STAGE_HOST.SOURCE));
