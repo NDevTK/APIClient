@@ -3635,7 +3635,17 @@ static const char *HTML =
     /* …AND THE SAME READ ON A FORKED PATH, because the real stack named a concolic frame as the arrow's
        caller. Both arms must read `mdfOK`: the binding is the PROGRAM's and neither world wrote it, so a world
        that reads it uninitialised is reading its own timeline wrongly rather than another world's state. */
-    "const mdFork = (i, m = mdFork) => (m === mdFork ? 'mdfOK' : 'mdfWRONG'); (async function(){ await 0; fetch('/api/mdforkpath?w=' + (cfg.admin ? 'A' : 'P') + mdFork([0])); })();"
+    /* …AND THE PER-WORLD REACH EMISSION AHEAD OF THE CLAIM, because without it `md-fork-both`'s 0 had TWO
+       readings and named only one. The row said a single arm meant the `cfg.admin` fork had not happened; the
+       banner of this document's FIRST `cfg.admin` branch says the opposite is the DESIGNED path -- that key is
+       composed once per document, so only the first test forks and "each later one is decided inside the arm
+       that already exists". This statement sits thousands of lines below that first branch, so a single arm
+       here is most likely ONE WORLD having reached this continuation, which is the SCHEDULE and not the fork.
+       THE REACH TOKEN CARRIES THE WORLD AND NOT THE BINDING: it is `cfg.admin`'s own arm letter and nothing
+       else, so two records of it say two worlds ran the continuation, while `/api/mdforkpath` carrying one arm
+       with BOTH reach letters present is the claim failing. An unconditional emission would not have done --
+       identical in both worlds, it merges into ONE record and says nothing about how many worlds made it. */
+    "const mdFork = (i, m = mdFork) => (m === mdFork ? 'mdfOK' : 'mdfWRONG'); (async function(){ await 0; fetch('/api/mdforkreach?w=' + (cfg.admin ? 'A' : 'P')); fetch('/api/mdforkpath?w=' + (cfg.admin ? 'A' : 'P') + mdFork([0])); })();"
     /* …AND THE SAME TWO READS AT MODULE TOP LEVEL, THROUGH A DYNAMIC `import()`, WHICH IS WHERE THE REAL
        BUNDLE'S ARE. `mdSelf` and `mdFork` above put the const at SCRIPT top level, and a script's lexical
        bindings and a module's are different cells written by different algorithms — a module's are written
@@ -14113,14 +14123,26 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&md_fork_ran, &md_fork_ran_why, !!strstr(js, "\"/api/mdforkpath\""),
              "NOT REACHED: there is no /api/mdforkpath record at all, so the statement never ran and the two "
              "rows gated on this one are unaskable. That is the SCHEDULE");
+    const char *md_fork_reach_why = NULL; int md_fork_reach = 1;
+    fold_row(&md_fork_reach, &md_fork_reach_why,
+             param_value_is(js, "/api/mdforkreach", "w", "A") &&
+             param_value_is(js, "/api/mdforkreach", "w", "P"),
+             "only ONE world reached this continuation: `/api/mdforkreach` carries one arm letter of "
+             "`cfg.admin` and not both. That is the SCHEDULE -- the other world's `await 0` continuation is a "
+             "flow of its own and was not handed the thread -- and it is why the binding rows gated on this "
+             "one cannot be read as the fork collapsing. The letters carry the world and NO binding read, so "
+             "this row moves for scheduling reasons alone");
     const char *md_fork_both_why = NULL; int md_fork_both = 1;
     fold_row(&md_fork_both, &md_fork_both_why,
              param_value_is(js, "/api/mdforkpath", "w", "AmdfOK") &&
              param_value_is(js, "/api/mdforkpath", "w", "PmdfOK"),
-             "the statement ran and only ONE arm of `cfg.admin` is in the document — a config field loaded from "
-             "a reply is opaque-for-control-flow, so §Solver-half forks it and BOTH arms run. One arm is that "
-             "fork not happening, which is a different defect from the binding read and is why this row is "
-             "separate from md-fork-bind");
+             "BOTH worlds reached this continuation and only ONE of them is in `/api/mdforkpath`: the gate "
+             "above proves two arm letters arrived, so this is the emission carrying the binding read being "
+             "lost in one world rather than the fork not happening. The retired wording said a single arm "
+             "meant `cfg.admin` had not forked, and it is kept because a reader re-derives it from "
+             "§Learning-from-replies: a config field IS opaque-for-control-flow, and this statement is not "
+             "the document's FIRST test of it, so the per-document branch key means the later tests are "
+             "DECIDED inside the arm that already exists -- which is correct and is not this row's subject");
     const char *md_fork_bind_why = NULL; int md_fork_bind = 1;
     /* THE PRESENCE CLAUSE IS FOLDED FIRST, AND THAT IS WHAT MAKES THIS A ROW RATHER THAN A FALSE CLEAN BILL:
        A BARE NEGATIVE IS SATISFIED BY THE STATEMENT NOT RUNNING. `!strstr(js, "mdfWRONG")` reads 1 on a table
@@ -18456,7 +18478,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            are folded for what each pairing localises. */
         { "md-self", md_self, "/api/selfdefault", SESS_EXPLORE, md_self_why },
         { "md-fork-ran", md_fork_ran, "/api/mdforkpath", SESS_EXPLORE, md_fork_ran_why },
-        { "md-fork-both", md_fork_both, "/api/mdforkpath", SESS_EXPLORE, md_fork_both_why, .gate = "md-fork-ran" },
+        { "md-fork-reach", md_fork_reach, "/api/mdforkreach", SESS_EXPLORE, md_fork_reach_why, .gate = "md-fork-ran" },
+        { "md-fork-both", md_fork_both, "/api/mdforkpath", SESS_EXPLORE, md_fork_both_why, .gate = "md-fork-reach" },
         { "md-fork-bind", md_fork_bind, "/api/mdforkpath", SESS_EXPLORE, md_fork_bind_why, .gate = "md-fork-ran" },
         { "mod-entered", mod_entered, "/api/modentered", SESS_EXPLORE, mod_entered_why },
         { "mod-const", mod_const, "/api/modconst", SESS_EXPLORE, mod_const_why, .gate = "mod-entered" },
