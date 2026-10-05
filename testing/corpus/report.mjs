@@ -34,6 +34,7 @@
 //                  `partial x n` is a different fact again.
 import { readFileSync, existsSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { siteList } from './list.mjs';
 
 const ROOT = new URL('.', import.meta.url).pathname;
@@ -970,9 +971,14 @@ for (const p of passes) for (const r of p.rows) {
      of the corpus and is the one sentence a work queue must not get wrong. */
   for (const s of sigs) {
     const [at, ...rest] = s.split(' :: ');
-    if (!bySig.has(at)) bySig.set(at, { sites: new Set(), reasons: new Set() });
+    if (!bySig.has(at)) bySig.set(at, { sites: new Set(), reasons: new Set(), revs: new Set() });
     bySig.get(at).sites.add(r.id);
     bySig.get(at).reasons.add(rest.join(' :: '));
+    /* AND THE REVISION THE ARTIFACT THAT SAW IT WAS BUILT FROM -- EVERY ONE, not the newest. See the staleness
+       column at the ranking for why the set and not an extremum. A row from a build of site.mjs that predates
+       the field carries no claim and contributes nothing, which the column reports as CANNOT ASK. */
+    if (r.artifact && typeof r.artifact.builtFromHeadClaim === 'string' && r.artifact.builtFromHeadClaim)
+      bySig.get(at).revs.add(r.artifact.builtFromHeadClaim);
   }
 }
 
@@ -1419,6 +1425,67 @@ if (nPredates.length)
    the head of it, because one 1169-character reason per row buries the RANKING, which is the thing this
    section exists to show. `-v` prints them whole. */
 const verbose = process.env.SIGS === 'full';
+/* HOW STALE EACH SIGNATURE'S COORDINATE IS, BESIDE IT, BECAUSE A RANKED FINDING LIST DECAYS FROM ITS TOP AND
+   THE TOP IS WHAT GETS DISPATCHED. The ordering here is staler than the rows: the highest entries are the ones
+   lanes were sent at, so they are the ones most likely to have a landed fix, and NOTHING IN THIS ARTIFACT SAID
+   SO -- each coordinate is a true fact about the artifact that measured it, so every one checks out
+   individually while the ORDER is about a tree nobody has had for hours.
+   IT IS A NECESSARY CONDITION AND NEVER A SUFFICIENT ONE, which is the whole of what it may be read as. `path
+   unmoved` does NOT mean the abort would still fire: an assert is a claim about state some OTHER component
+   produces, so its own file can be byte-identical while the thing it asserts about has been rewritten -- the
+   path to check for an abort is the one that WRITES the operand. And `PATH MOVED` does not mean retired; it
+   means the coordinate is not evidence and the signature must be re-derived BY CONSTRUCT (grep its own words
+   at the tip) before a lane is sent at it.
+   THE SET OF REVISIONS AND NEVER AN EXTREMUM, which is the one thing a reader would get wrong and is measured
+   rather than argued. The top signature of this ranking by sites hit was a CSS Conditional 5 §5.4
+   container-query abort, and it was seen at exactly ONE revision, 17fc107, in the three oldest passes of this
+   corpus. At 17fc107 `git grep -c 'cannot decide it'` answers 1 in that file and at HEAD it answers 0 -- the
+   abort is retired and replaced by a three-clause named residual. `git diff --quiet 17fc107 HEAD` on that file
+   says CHANGED, so keying on every revision answers MOVED and sends a reader to re-derive, which is right.
+   Keying on the NEWEST revision in the corpus answers UNMOVED for the same file, because the newer builds never
+   saw this signature at all -- so the extremum a reader reaches for certifies a retired abort as live, in the
+   direction that dispatches a lane at work already done.
+   RETIREMENT: this column goes when a signature's identity is carried as the CONSTRUCT its abort is written in
+   rather than as a `file:line`, because a drifted coordinate is then unspellable and there is nothing to grade
+   the staleness of. MEASURED ABSENT before being written, so this condition is not born met: `grep -c` over
+   this file answered 0 for each of `sigPathVerdict` and `pathMovedSince`, against `bySig` answering 6 as the
+   armed control and an invented token answering 0. */
+const GITTOP = (() => {
+  const r = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: ROOT, encoding: 'utf8' });
+  return r.status === 0 && r.stdout.trim() ? r.stdout.trim() : null;
+})();
+const _pathMoved = new Map();
+const sigPathVerdict = (at, revs) => {
+  /* THE KEY IS `path:line` OR `path (words)`, AND BOTH SPELLINGS LOSE THE SAME WAY -- a key this cannot reduce
+     to a path is reported as unaskable rather than guessed at, because a guess here accuses a file. */
+  const file = at.replace(/ \(.*\)$/, '').replace(/:\d+$/, '');
+  if (!/^[\w.\/-]+\.[A-Za-z]+$/.test(file)) return 'STALENESS: cannot ask — no path reduces out of this signature key';
+  if (!GITTOP) return 'STALENESS: cannot ask — no git toplevel resolves from this directory';
+  if (!revs || !revs.size) return 'STALENESS: cannot ask — no row carrying this signature names the revision its artifact was built from';
+  let moved = 0, unmoved = 0, unresolved = 0;
+  for (const rev of revs) {
+    const k = rev + '\u0000' + file;
+    if (!_pathMoved.has(k)) {
+      /* A REVISION OUTSIDE THE SHALLOW WINDOW IS `cannot ask` AND NEVER `unmoved`. `git diff` against a
+         revision it cannot resolve exits NONZERO, which this would otherwise read as MOVED -- the safe
+         direction, but a different fact, and a reader acting on it re-derives for no reason. The exit status is
+         read directly off each spawn and never through a pipe. */
+      if (spawnSync('git', ['cat-file', '-e', rev + '^{commit}'], { cwd: GITTOP }).status !== 0)
+        _pathMoved.set(k, 'unresolved');
+      else {
+        const d = spawnSync('git', ['diff', '--quiet', rev, 'HEAD', '--', file], { cwd: GITTOP });
+        _pathMoved.set(k, d.status === 0 ? 'unmoved' : d.status === 1 ? 'moved' : 'unresolved');
+      }
+    }
+    const v = _pathMoved.get(k);
+    if (v === 'moved') moved++; else if (v === 'unmoved') unmoved++; else unresolved++;
+  }
+  if (moved) return 'STALENESS: PATH MOVED since ' + moved + ' of the ' + revs.size +
+    ' revision(s) that saw it — this coordinate is NOT evidence; re-derive the signature BY CONSTRUCT at the tip before dispatching';
+  if (unmoved) return 'STALENESS: path unmoved since all ' + unmoved + ' revision(s) that saw it — NECESSARY and not sufficient: ' +
+    'the path that WRITES this assert\'s operand is a different question and is not asked here';
+  return 'STALENESS: cannot ask — all ' + unresolved + ' revision(s) that saw it are unresolvable in this shallow clone';
+};
 console.log('\n=== distinct crash signatures, ranked by sites hit ===');
 /* EACH SITE CARRIES ITS OBSERVED STACK HERE, WHICH IS WHAT MAKES THE RANKING GENERALISE. A signature hit by
    three sites is one number; a signature hit by three sites that all ship the same bundler is a statement
@@ -1432,7 +1499,8 @@ for (const [at, e] of [...bySig.entries()].sort((a, b) => b[1].sites.size - a[1]
      reader, and the thing a merged count would throw away in the act of merging. */
   const why = [...e.reasons].map((w) => verbose || w.length <= 300 ? w : w.slice(0, 300) + ' …(SIGS=full for the rest)');
   console.log(`${e.sites.size}  ${at}` + (e.reasons.size > 1 ? `   (${e.reasons.size} distinct operands)` : '') +
-              why.map((w) => '\n     ' + w).join('') + `\n     sites: ${sites}`);
+              why.map((w) => '\n     ' + w).join('') + `\n     sites: ${sites}` +
+              '\n     ' + sigPathVerdict(at, e.revs));
 }
 /* THE SAME QUEUE ONE LEVEL COARSER, BECAUSE A DEFECT FAMILY OUTRANKS ITS MEMBERS AND THE FINE RANKING HIDES
    IT. The queue above keys on `file:line`, which is right for "what do I open" and wrong for "what is the
