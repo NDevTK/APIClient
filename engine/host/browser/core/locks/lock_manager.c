@@ -296,11 +296,24 @@ static int lk_grant_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
 
     STEP_ARM(LKG_CALL);
     if (s->phase == 0) {
-        int i;
+        /* ONCE PER INVOCATION, NOT ONCE PER ENTRY — and `phase == 0` is not that test. A fork re-enters this
+           arm AT ITS TOP TWICE, once in the parent carrying the answer and once in the sibling re-asking, and
+           `phase` is written only by `step_call_run` BELOW the ask, so it still reads 0 on both. An unguarded
+           init here therefore runs again on each of them and OVERWRITES the owned reference that
+           `abort_signal_aborted_step` is holding in `sig_flag` across the park, with nothing left to free it:
+           about two leaked references to the concolic flag per fork, which §Testing counts as a failure.
+           `step_fork_pending` is the fact that separates a fork entry from a first entry, and it is declared in
+           `quickjs-step.h` precisely because every machine that reached for `fork_phase` instead got it wrong.
+           THE GUARD IS ON THE INIT AND NEVER ON THE BLOCK: §4.4's signal test below must be RE-ASKED on the
+           sibling's entry, because the arm it takes is replayed from the flow's own decision vector at the ask
+           and a clone with the answer baked in would be a second, weaker answer to a settled question. */
+        if (!step_fork_pending(&s->hdr)) {
+            int i;
 
-        STEP_CB_FOREACH(s->cb, i) s->cb[i] = JS_UNDEFINED;
-        /* STATED, never read off the slot: a zeroed step state's JSValue is the INTEGER 0. */
-        s->sig_flag = JS_UNINITIALIZED;
+            STEP_CB_FOREACH(s->cb, i) s->cb[i] = JS_UNDEFINED;
+            /* STATED, never read off the slot: a zeroed step state's JSValue is the INTEGER 0. */
+            s->sig_flag = JS_UNINITIALIZED;
+        }
         /* §4.4's TWO SIGNAL STEPS, which §4.1's ifAvailable arm does not have — and cannot, because §3.2.1
            rejects a call that passes both a signal and ifAvailable before any request exists. `lock` is null
            for that arm, which is what tells the two enqueues apart. */

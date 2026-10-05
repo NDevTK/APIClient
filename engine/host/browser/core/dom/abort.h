@@ -113,6 +113,19 @@ bool    abort_signal_aborted_at(JSContext *ctx, JSValueConst sig, const char *si
  * once, before its first ask — a zeroed step state's JSValue is the INTEGER 0 rather than JS_UNDEFINED, so the
  * emptiness of this slot is a thing the caller STATES and never a thing read off the slot.
  *
+ * AND `ONCE` IS NOT `ONCE PER ENTRY`, WHICH THIS SENTENCE NAMED AS A HAZARD AND LEFT ITS CALLER NO WAY TO ACT
+ * ON. A fork re-enters the asking arm AT ITS TOP TWICE — the parent carrying the answer and the sibling
+ * re-asking — so an init placed anywhere the arm reaches again runs again, and it overwrites the owned
+ * reference this seam is HOLDING across the park with nothing left to free it. The exit is
+ * `step_fork_pending(h)` (quickjs-step.h), which is true across both of those entries and false on a first
+ * entry and on a request's answer; `h->stage` and a machine's own phase counter are NOT that test, because a
+ * phase written below the ask still reads its initial value on both fork entries. The FIRST consumer of this
+ * seam was landed with exactly that defect and it leaked about two references to the concolic flag per fork,
+ * which is why the exit is named here rather than left to each caller to re-derive.
+ * THE GUARD GOES ON THE INIT AND NEVER ON THE ASK: the sibling MUST re-ask, because the arm it takes is
+ * replayed from the flow's own decision vector at the ask and an answer baked into the clone would be a second,
+ * weaker answer to a question the vector has already settled.
+ *
  * Returns JS_STEP_FORK (the caller returns it unchanged; the operand stays held for the resume), or 0 once
  * `*out` is 0 or 1. It never throws.
  *
