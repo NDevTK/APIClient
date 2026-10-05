@@ -366,7 +366,13 @@ struct JSFetchState {
     JSValue   input;    /* the argument ITSELF — a Request carries a captured blob URL entry the URL cannot */
     /* §5.4 steps 10-27, applied by request.c's ONE implementation of them over the CONVERTED dictionary. This
        used to be a lone `JSValue method`: the only one of `RequestInit`'s seventeen members this machine kept,
-       beside `headers` and `body`, with the other thirteen never read at all. */
+       beside `headers` and `body`, with the other thirteen never read at all.
+       ITS NINE FIELDS ARE JSValues AND THEY ARE DECLARED — `js_fetch_visit` names them through
+       `request_record_visit`, so a deep fork RE-TAKES them and the driver's teardown discharges them. They were
+       `js_strdup`'d `char *`, which is a heap pointer on a byte-copied struct, which is the rule stated on
+       `body_mime` below: freed by both arms. That is what `js_fetch_unforkable` had to refuse a fork for, and
+       the record is no longer one of its terms. BECAUSE THEY ARE DECLARED, THIS MACHINE'S `release` MUST NOT
+       FREE THEM — idl_args.c's release fold aborts on a release that moved a declared slot. */
     RequestRecord rec;
     BodyState body;     /* the bytes. A POST that dropped its body asked the server a different question */
     /* THE TYPE Fetch §5.2's extract a body RETURNS BESIDE THE BODY — Fetch §5.2 calls it `type` and never
@@ -409,12 +415,21 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->url);
     v->val(ctx, &s->input);
     v->val(ctx, &s->body_mime);
+    /* §2.2.5's REQUEST RECORD — its nine fields, through the record's own one list (request.h). It is here
+       rather than open-coded because the list belongs to the record: a tenth field is one edit in request.c and
+       this machine does not have to be told. This is the line that deleted a fork refusal. */
+    request_record_visit(ctx, &s->rec, v);
     headers_fill_visit(ctx, &s->fill, v);   /* the fill's own slots — it parks mid-conversion like any machine */
 }
 
-/* WHAT THE DECLARATION CANNOT NAME — the three foreign C allocations this machine makes: the extracted body's
-   bytes, the parsed header list, and §2.2.5's request record. None of them holds a declared slot, which is why
-   they are `release`'s and not `visit`'s. */
+/* WHAT THE DECLARATION CANNOT NAME — the two foreign C allocations this machine makes: the extracted body's
+   bytes and the parsed header list. Neither holds a declared slot, which is why they are `release`'s and not
+   `visit`'s.
+   §2.2.5's REQUEST RECORD WAS THE THIRD AND IS GONE FROM HERE, which is the half of the record's conversion
+   that is not optional: its nine fields are JSValues the `visit` above now names, and idl_args.c's release fold
+   folds every declared slot's identity on each side of this call — so a `request_record_free` left standing
+   here would not leak or double-free quietly, it would abort at the one point every member's teardown
+   converges on, naming this member. The record is discharged by the driver, exactly like `url` and `input`. */
 static void js_fetch_release(JSContext *ctx, void *st)
 {
     JSFetchState *s = st;
@@ -427,7 +442,6 @@ static void js_fetch_release(JSContext *ctx, void *st)
     if (s->captured) endpoint_fetch_edge_freed(s->stage_at, s->offered);
     body_state_free(JS_GetRuntime(ctx), &s->body);
     header_list_free(&s->hdrs);
-    request_record_free(JS_GetRuntime(ctx), &s->rec);
 }
 
 /* Park the request on the FLOW that issued it: the URL the trusted host must fetch, and the capability that
@@ -981,9 +995,21 @@ static void fetch_settle_local(JSContext *ctx, JSValue *resolving, JSValue value
     JS_FreeValue(ctx, value);
 }
 
-/* `method` and `destination` are the §2.2.5 request record's, so they arrive as the plain strings that record
-   holds rather than as values this function coerces: the record was filled by §5.4 steps 10-27 (request.h), and
-   a request that reached this seam is one whose method the standard has already normalized and refused. */
+/* FIVE FACTS OF THIS REQUEST COME OFF §2.2.5's RECORD, AND THIS IS WHERE BYTES ARE BORROWED OUT OF THEM. The
+   record carries JSValues so a deep fork can re-take them (request.h); the host seam below carries
+   `const char *`, because `FetchRequest` and `CspRequestMetadata` are read by the TRUSTED ZONE across a
+   boundary no JSValue crosses.
+   THEY SPLIT BY WHETHER ANYTHING DOWNSTREAM HOLDS THE POINTER, which is the only thing that decides where a
+   borrow is given back. `FetchRequest.method` and `.destination` are `const char *` members and
+   `CspRequestMetadata.integrity` is a borrowed pointer, so those THREE must outlive `fetch_owe` and are taken
+   near the top and released at the single exit. `mode` and `credentials` are CONSUMED INTO AN ENUM
+   (`FetchMode`, `FetchCredentialsMode`) and nothing downstream holds their tokens at all: the mode's borrow is
+   given back on the line after it is read, and `credentials` is hoisted beside the three only because its read
+   sits inside two nested blocks where a fourth local-and-free bracket would be noise — stated so a reader does
+   not take its position for a lifetime requirement it does not have.
+   A CONVERSION PER READ WOULD BE THE SAME BYTES SEVERAL TIMES AND THE SAME OWNERSHIP RULE SEVERAL TIMES, which
+   is the shape a later diff gets wrong by one. The record was filled by §5.4 steps 10-27, and a request that
+   reached this seam is one whose method the standard has already normalized and refused. */
 static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord *rec, JSValueConst input,
                           const HeaderList *hdrs, const char *body, size_t body_len)
 {
@@ -1012,6 +1038,12 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
        stated, and this record's three fields do not all come from one claim. */
     CspRequestMetadata csp_meta;
     FetchMode req_mode;
+    /* THE BORROWS THAT OUTLIVE THE SEAM — see this function's banner for which of them have to and which is
+       here for shape. NULL-initialized so the single exit's give-back is one unconditional run of four frees
+       rather than four tests: `JS_FreeCString` over NULL is a no-op, and the early return above happens before
+       any of them is taken. */
+    const char *m_method = NULL, *m_dest = NULL, *m_integrity = NULL, *m_cred = NULL;
+    size_t integrity_len = 0;
 
     promise = JS_NewPromiseCapability(ctx, resolving);
     if (JS_IsException(promise))
@@ -1035,21 +1067,39 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
     } else {
         u = JS_ToCString(ctx, url);
     }
-    /* ALWAYS FATAL, and it is an OOM rather than a design invariant: `init_str` builds every member of the
-       record with `js_strdup`, whose failure is the one way this field is absent, and the same allocation
-       failure is a CHECK inside `init_str` itself. It is not a DCHECK because the `strlen` below is a RELEASE
-       dereference of this pointer. */
-    CHECK(rec != NULL && rec->integrity != NULL,
+    /* ALWAYS FATAL, and it is a DESIGN INVARIANT rather than an OOM now: `request_init_apply` returns 0 only
+       with all nine fields placed as strings, which its own closing assert states field by field, so a
+       non-string here is a record that reached this seam without those steps having run. The `js_strdup` whose
+       failure this used to name is gone with the `char *`. It stays a CHECK and not a DCHECK because the BYTES
+       borrowed below are a RELEASE read of this value. */
+    CHECK(rec != NULL && JS_IsString(rec->integrity),
           "fetch() reached the host edge with a request record carrying no integrity metadata — Fetch §5.4 "
           "step 23 fills it on every path and §2.2.5 makes the empty string its initial value, so an absent "
-          "one is an allocation that failed inside request_init_apply");
+          "one is a record request_init_apply never filled");
+    /* AND THE BORROWS, TAKEN HERE. The LENGTH comes from the value rather than from a
+       `strlen` of it: §2.2.5's integrity metadata is a BYTE SEQUENCE and a JS string may hold an interior NUL,
+       which `strlen` would silently truncate the digest at — `JS_ToCStringLen` is the length the string has. */
+    m_integrity = JS_ToCStringLen(ctx, &integrity_len, rec->integrity);
+    m_method    = JS_ToCString(ctx, rec->method);
+    m_dest      = JS_ToCString(ctx, rec->destination);
+    m_cred      = JS_ToCString(ctx, rec->credentials);
+    CHECK(m_integrity && m_method && m_dest && m_cred,
+          "OOM borrowing the §2.2.5 request record's bytes for the trusted host seam");
     csp_meta = csp_request_metadata(/*cryptographic nonce metadata*/ "", 0,
-                                    rec->integrity, strlen(rec->integrity),
+                                    m_integrity, integrity_len,
                                     /*parser metadata*/ CSP_PARSER_METADATA_EMPTY);
     /* AND §2.2.5's MODE, READ HERE FOR csp_meta's REASON: the §4.3 block below declares its own `UrlRecord
        rec`, which shadows the request record, so both facts this function takes OFF that record are taken
        before the shadow rather than reached for inside it. */
-    req_mode = fetch_mode_of_token(rec->mode);
+    {
+        /* THE MODE IS CONSUMED INTO A DOMAIN AND NOT CARRIED, so its bytes are borrowed and given back right
+           here rather than joining the four above: `FetchMode` is an enum and nothing downstream holds the
+           token. */
+        const char *mode_c = JS_ToCString(ctx, rec->mode);
+        CHECK(mode_c != NULL, "OOM borrowing §2.2.5's mode for §4.1 step 7's Integrity Policy disjunct");
+        req_mode = fetch_mode_of_token(mode_c);
+        JS_FreeCString(ctx, mode_c);
+    }
     if (u) {
         /* §4.3 SCHEME FETCH: "Switch on request's current URL's scheme". The scheme is what the URL PARSER
            says it is and not what the string starts with, so the URL is parsed ONCE here and every arm below
@@ -1154,11 +1204,12 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
                (method, url) (solver/engine.h), so a request that reached the seam unnamed would collect another
                request's reply. IT IS ON THE RECORD NOW, which is where this comment said it belonged: §5.4
                step 25 writes it there, and `GET` is what step 12 leaves standing for a page that named none. */
-            DCHECK(rec != NULL && rec->method != NULL && *rec->method,
+            DCHECK(JS_IsString(rec->method) && *m_method,
                    "fetch() reached the host edge with a request record carrying no method — Fetch §5.4 step 25 "
                    "fills it on every path and §2.2.5 gives a request `GET` unless stated otherwise, so an "
-                   "absent one is a record request_init_apply never filled");
-            req.method = rec->method;
+                   "absent one is a record request_init_apply never filled. The EMPTY test is on the borrowed "
+                   "bytes rather than the value because that is what the park is keyed on");
+            req.method = m_method;
             /* AND THE METADATA THE CHECK ABOVE WAS GIVEN, ON THE REQUEST — so the park's own §4.1 step 7 asks
                the identical question of the identical request. It is the same value and not a second reading
                of §5.4: `csp_meta` is composed once, above, out of the record's integrity and §5.4's unstated
@@ -1177,7 +1228,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
                read off the request rather than a guess made about the address. It is READ off the record now
                rather than written here, because §2.2.5 puts it on the request and both of §5's entry points
                fill it through the one function that does. */
-            req.destination = rec->destination;
+            req.destination = m_dest;
             /* AND ITS CREDENTIALS MODE, OFF THE SAME RECORD — §5.4 step 19 is "If init[\"credentials\"] exists,
                then set request's credentials mode to it", over a request that already holds §2.2.5's
                `same-origin` for an input that named none, and request_init_apply writes exactly that. It is
@@ -1188,7 +1239,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
                of it: `{credentials: "include"}` has been CONVERTED and answerable through
                `request.credentials` since that diff, and it still reached the network as nothing at all,
                because this record had nowhere to put it. This line is the other half. */
-            req.credentials = fetch_credentials_of_token(rec->credentials);
+            req.credentials = fetch_credentials_of_token(m_cred);
             /* …AND FETCH §2.2.5's MODE, off the same record and for the identical reason. §5.4's constructor
                steps set it — "Let mode be init["mode"] if it exists, and fallbackMode otherwise", where a
                request built from a STRING has fallbackMode `cors`, which is what makes an ordinary
@@ -1213,6 +1264,13 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
         JS_FreeCString(ctx, u);
     }
     free(abs);
+    /* THE BORROWED STRINGS, BACK AT THE ONE EXIT — after `fetch_owe`, because `FetchRequest.method`,
+       `.destination` and `CspRequestMetadata.integrity` hold them BY POINTER and the trusted host reads them
+       inside that call. */
+    JS_FreeCString(ctx, m_integrity);
+    JS_FreeCString(ctx, m_method);
+    JS_FreeCString(ctx, m_dest);
+    JS_FreeCString(ctx, m_cred);
     JS_FreeValue(ctx, resolving[0]);
     JS_FreeValue(ctx, resolving[1]);
     return promise;
@@ -1305,6 +1363,11 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             endpoint_fetch_edge_began();
             s->input = JS_DupValue(ctx, input);
             s->url = s->body_mime = JS_UNDEFINED;
+            /* …AND §2.2.5's RECORD, FOR THE SAME REASON AS THE TWO SLOTS ABOVE AND ONE MORE: its nine fields
+               are DECLARED to this machine's `visit`, so a deep-fork copy arrives holding its own references to
+               them and inherits `captured` — running this on a sibling would drop nine references the clone
+               took. The flag is what keeps the init on the original's single first entry, which is the same
+               thing it does for `input`. */
             request_record_init(&s->rec);
         }
         /* §5.4: a USVString names the URL directly; a Request names it through its `url` attribute, and THAT is
@@ -1379,18 +1442,20 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
        constant. It was the literal HEADERS_GUARD_REQUEST, because `mode` was one of the thirteen members this
        machine never read: `fetch(u, {mode: "no-cors", headers: {Range: "bytes=0-"}})` kept a header the
        "request-no-cors" guard drops, and the request that reached the host was one no browser makes. */
-    DCHECK(s->rec.mode != NULL && s->rec.method != NULL,
+    DCHECK(JS_IsString(s->rec.mode) && JS_IsString(s->rec.method),
            "the fetch machine reached §5.4 step 32 with an unfilled request record — every stage from here on "
            "reads the mode and the method, and request_init_apply fills both or fails, so a record with "
-           "neither means a stage transition skipped FETCH_RECORD rather than a member being absent");
-    guard = !strcmp(s->rec.mode, "no-cors") ? HEADERS_GUARD_REQUEST_NO_CORS : HEADERS_GUARD_REQUEST;
+           "neither means a stage transition skipped FETCH_RECORD rather than a member being absent. The test "
+           "is for a STRING and not for a non-null pointer: a record these stages reach before FETCH_RECORD "
+           "holds JS_UNDEFINED, and one whose holder was allocated zeroed holds the integer 0");
+    guard = request_str_is(ctx, s->rec.mode, "no-cors") ? HEADERS_GUARD_REQUEST_NO_CORS : HEADERS_GUARD_REQUEST;
 
     if (hdr->stage == FETCH_HEADERS) {
         /* §5.4 step 32.1: under a "no-cors" mode the method must be a CORS-SAFELISTED METHOD — §2.2.1 Methods'
            `GET`, `HEAD` or `POST` — and anything else is a TypeError. The method here is normalized by step 25,
            so the comparison is against the uppercase spellings and nothing else. */
-        if (guard == HEADERS_GUARD_REQUEST_NO_CORS && strcmp(s->rec.method, "GET") &&
-            strcmp(s->rec.method, "HEAD") && strcmp(s->rec.method, "POST")) {
+        if (guard == HEADERS_GUARD_REQUEST_NO_CORS && !request_str_is(ctx, s->rec.method, "GET") &&
+            !request_str_is(ctx, s->rec.method, "HEAD") && !request_str_is(ctx, s->rec.method, "POST")) {
             JS_FreeValue(ctx, cb_result);
             JS_ThrowTypeError(ctx, "a fetch with mode \"no-cors\" must use a CORS-safelisted method");
             return -1;
@@ -1417,7 +1482,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             char *mime = NULL;
             /* §5.4 step 35: a body with a GET or a HEAD is a TypeError. The method is the record's, so this is
                the same test the constructor makes rather than a second reading of `init`. */
-            if (!strcmp(s->rec.method, "GET") || !strcmp(s->rec.method, "HEAD")) {
+            if (request_str_is(ctx, s->rec.method, "GET") || request_str_is(ctx, s->rec.method, "HEAD")) {
                 JS_FreeValue(ctx, bv);
                 JS_ThrowTypeError(ctx, "a fetch with a GET or HEAD method cannot have a body");
                 return -1;
@@ -1458,7 +1523,8 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                     JS_ThrowTypeError(ctx, "a fetch with a ReadableStream body must set duplex to \"half\"");
                     return -1;
                 }
-                if (strcmp(s->rec.mode, "same-origin") && strcmp(s->rec.mode, "cors")) {
+                if (!request_str_is(ctx, s->rec.mode, "same-origin") &&
+                    !request_str_is(ctx, s->rec.mode, "cors")) {
                     JS_FreeValue(ctx, bv);
                     JS_ThrowTypeError(ctx, "a fetch with a ReadableStream body must have mode \"same-origin\" "
                                            "or \"cors\"");
@@ -1637,7 +1703,17 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                "construction as two offers while the surface merged the second address into the first");
         s->offered = 1;
         endpoint_fetch_edge_offered();
-        endpoint_record(ctx, s->rec.method, s->url, eh, s->hdrs.n, ebp, prov, EPD_FETCH);
+        /* THE METHOD'S BYTES, BORROWED FOR THE ONE CALL — the surface identifies an endpoint by (method, url)
+           and takes a `const char *`, and the record carries a value. It is taken and given back HERE rather
+           than hoisted beside the host seam's four, because this is a different edge with a different
+           lifetime: `endpoint_record` is done with the bytes when it returns, where `FetchRequest` holds its
+           pointers across `fetch_owe`. */
+        {
+            const char *em = JS_ToCString(ctx, s->rec.method);
+            CHECK(em != NULL, "OOM borrowing §2.2.5's method for the @H surface's endpoint identity");
+            endpoint_record(ctx, em, s->url, eh, s->hdrs.n, ebp, prov, EPD_FETCH);
+            JS_FreeCString(ctx, em);
+        }
         if (ext_mime) JS_FreeCString(ctx, ext_mime);
         free(body_ct);
         js_free(ctx, espan);
@@ -1693,67 +1769,86 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     return r;
 }
 
-/* WHY THIS MACHINE'S STATE MUST NOT BE FORKED ONCE IT HOLDS §5.4's RECORD — see IdlStepDecl.unforkable.
+/* WHY THIS MACHINE'S STATE MUST NOT BE FORKED WHILE IT HOLDS A BODY OR A HEADER LIST — see IdlStepDecl.unforkable.
  *
- * THE RULE IS THIS STRUCT'S OWN AND IT IS STATED ON `body_mime` TWELVE LINES ABOVE THE FIELDS THAT BREAK IT:
- * "a step state is BYTE-COPIED at a deep fork and only what `visit` names is re-taken, so a heap pointer here
- * would be freed by both arms". `tramp_step_state_clone` is that byte copy — `memcpy(h, o, sz)` and then the
- * declared slots taken a second time through `visit` — and `js_fetch_release`'s own comment names the three
- * fields the visit CANNOT name: §2.2.5's request record (nine `js_strdup`'d strings), the extracted body
- * (`bytes`, plus a `stream` JSValue the visit does not reach either) and the parsed header list
- * (`HeaderList::e`). Each is freed by `release`, and every clone gets its own teardown, so a fork raised while
- * they are held gives two arms one set of pointers and two frees of it — a double free for the C allocations
- * and a reference-count underflow for the stream, neither of which is a wrong ANSWER that anything reports.
+ * THE RULE IS THIS STRUCT'S OWN AND IT IS STATED ON `body_mime` ABOVE THE FIELDS THAT BREAK IT: "a step state
+ * is BYTE-COPIED at a deep fork and only what `visit` names is re-taken, so a heap pointer here would be freed
+ * by both arms". `tramp_step_state_clone` is that byte copy — `memcpy(h, o, sz)` and then the declared slots
+ * taken a second time through `visit` — so every clone gets its own teardown, and a fork raised while an
+ * UNDECLARED allocation is held gives two arms one set of pointers and two frees of it: a double free for the C
+ * allocations and a reference-count underflow for the stream, neither of which is a wrong ANSWER that anything
+ * reports.
  *
- * IT IS REACHABLE ON THE ORDINARY SHAPE and not on an exotic one: the stages after FETCH_RECORD are exactly
- * the two that run the page's code — the §5.1 header fill's conversion of a `HeadersInit` (a getter, an
- * iterator, a Proxy trap, a `toString`) and Fetch §5.2's body extraction — so any concolic branch inside a page's
- * own header or body value forks the flow with this machine on its frame chain.
+ * WHAT IS LEFT, AND IT IS TWO TERMS RATHER THAN THREE. The extracted body — `bytes`, plus a `stream` and an
+ * `unknown` JSValue the visit does not reach either — and the parsed header list (`HeaderList::e`). Both are
+ * freed by `js_fetch_release` and neither holds a declared slot.
  *
- * THE PREDICATE ASKS ALL THREE AND NEVER ONE STAGE'S PROXY FOR THE OTHERS. `rec.method != NULL` reads as
- * exactly this window — the record is filled at FETCH_RECORD, the list and the body come after it — and it is
- * WRONG BY SEVEN FIELDS, because §5.4 fills the record in its own order and the method is step 25, the
- * second-to-last: a fork standing between step 13 and step 25 holds the strings steps 13-23 placed and answers
- * NO. That window is not hypothetical; it is precisely where §5.4 step 25's own fork will stand once the
- * method can carry unknown external input, so the one fork this guard exists to catch is the one a
- * method-shaped predicate would wave through. `request_record_holds` is the record's own question, asked out of
- * the same nine names its free releases.
- * A FORK BEFORE ANY OF THE THREE — the `input` ToString at FETCH_URL_STR — copies a state whose every filled
- * slot the visit names, and stays allowed. `body.stream` is NOT tested directly: a zeroed step state's JSValue
- * is the INTEGER 0 rather than JS_UNDEFINED (see `captured` above), so `!JS_IsUndefined(stream)` is true for
- * every fresh state and would refuse that fork too; `body.has` is the flag Fetch §5.2's stream arm sets, and it is
- * the question.
+ * §2.2.5's REQUEST RECORD WAS THE THIRD TERM AND IS GONE, which is what this block's own remedy clause asked
+ * for and is the whole of what that diff did: the record's nine fields are JSValues, `request_record_visit`
+ * declares them, `js_fetch_visit` calls it, and `js_fetch_release` no longer discharges them. A fork standing
+ * anywhere between §5.4 step 13 and step 25 — the window a `rec.method != NULL` predicate would have waved
+ * through, since the method is step 25 and the record is filled in §5.4's own order — is ALLOWED now, and that
+ * window is not hypothetical: it is where §5.4 step 25's own fork will stand once the method can carry unknown
+ * external input.
  *
- * WHAT THE NEXT DIFF BUILDS, AND IT IS THE SAME DIFF §5.4 STEP 25's METHOD IS WAITING FOR: the record's owned
- * fields as JSValues rather than `char *`, named by `js_fetch_visit` so a fork re-takes them, with
- * `js_fetch_release` no longer discharging what the declaration names (idl_args.c's release fold asserts that
- * pairing). §2.2.5's method has to become a JSValue anyway before it can BE unknown external input, so the two
- * are one conversion; the body's bytes and the header list's entries follow it. HOW ITS ABSENCE SHOWS: this
- * abort, on any page whose `fetch()` headers or body run code that forks. */
+ * IT IS STILL REACHABLE ON THE ORDINARY SHAPE and not on an exotic one, which is why the remaining two terms
+ * are a real refusal and not a formality: the stages after FETCH_RECORD are exactly the two that run the page's
+ * code — the §5.1 header fill's conversion of a `HeadersInit` (a getter, an iterator, a Proxy trap, a
+ * `toString`) and Fetch §5.2's body extraction — so any concolic branch inside a page's own header or body
+ * value forks the flow with this machine on its frame chain holding the result of the stage before it.
+ *
+ * AND THEY ARE LIVE AT FETCH_CALL, WHICH IS THE ONE THING A READER OF THIS BLOCK MUST NOT GET WRONG. The stage
+ * order is FETCH_URL, FETCH_URL_STR, FETCH_RECORD, FETCH_HEADERS, FETCH_BODY, FETCH_CALL — so §5.6 step 4's
+ * already-aborted signal test, which is the first thing FETCH_CALL does, runs with the header list ALREADY
+ * PARSED and the body ALREADY EXTRACTED. Converting the record therefore does NOT by itself make that step's
+ * question forkable for a request that carries either: `fetch(u, {headers: {...}, body: b, signal: s})` reaches
+ * §5.6 step 4 with `hdrs.e` and `body.has` both set, and a fork raised there still lands here. What the
+ * conversion DID unblock is a fork standing anywhere in FETCH_RECORD, and §5.6 step 4 for a request that
+ * carries neither a header nor a body.
+ *
+ * A FORK BEFORE EITHER TERM — the `input` ToString at FETCH_URL_STR, and now the whole of FETCH_RECORD — copies
+ * a state whose every filled slot the visit names, and is allowed. `body.stream` is NOT tested directly: a
+ * zeroed step state's JSValue is the INTEGER 0 rather than JS_UNDEFINED (see `captured` above), so
+ * `!JS_IsUndefined(stream)` is true for every fresh state and would refuse that fork too; `body.has` is the flag
+ * Fetch §5.2's stream arm sets, and it is the question.
+ *
+ * WHAT THE NEXT DIFF BUILDS, AND IT IS TWO THINGS BECAUSE THE TWO REMAINING TERMS ARE TWO ALLOCATIONS WITH
+ * DIFFERENT SHAPES. (1) THE PARSED HEADER LIST: `HeaderList` is a malloc'd array of malloc'd name/value pairs,
+ * and `headers_fill_visit` already declares the fill's own JSValue cursor beside it — so what the list needs is
+ * the same treatment the record just had, the pairs as values this machine's visit names, which is also what
+ * core/fetch/headers.c's own ctor state carries one copy of. (2) THE EXTRACTED BODY: `BodyState` holds `bytes`
+ * (a malloc'd buffer) and two JSValues this machine does not declare, `stream` and `unknown`; core/fetch/body.h
+ * already states the arm list those three belong to, and body.c's own machines declare them where they hold
+ * them — so what is owed here is a `body_state_visit` beside the existing `body_state_mark`, called from
+ * `js_fetch_visit`, with the bytes following the header list's pairs. Each is independent of the other and
+ * either one alone narrows this refusal further. HOW ITS ABSENCE SHOWS: this abort, on any page whose
+ * `fetch()` carries headers or a body AND whose §5.6 step 4 signal, header value or body value forks. */
 static const char *js_fetch_unforkable(const void *st)
 {
     const JSFetchState *s = st;
 
     DCHECK(s != NULL, "the fetch machine was asked whether it may be forked with no state to ask about");
     /* `has` IS WHAT REFUSES AN UNKNOWN BODY'S FORK, and it refuses it for a second reason the message below
-       now names: `unknown` is a JSValue this machine's `visit` does not name either, so a byte-copied fork
+       names: `unknown` is a JSValue this machine's `visit` does not name either, so a byte-copied fork
        would hold one reference and drop two. The pairing is asserted rather than re-tested, because a second
        term over one fact is a term that can never independently fire. */
     DCHECK(!concolic_is(s->body.unknown) || s->body.has,
            "a fetch state holds an UNKNOWN request body with `has` unset — the fork guard below refuses that "
            "body through `has`, so the two disagreeing would let a state carrying a JSValue the visit cannot "
            "name be byte-copied into two arms that both release it");
-    if (!request_record_holds(&s->rec) && !s->body.has && !s->body.bytes && !s->hdrs.e)
+    if (!s->body.has && !s->body.bytes && !s->hdrs.e)
         return NULL;
     return "Fetch §5.6 Fetch methods' fetch(input, init) was forked while holding C memory its `visit` "
-           "cannot name — §5.4's request record, the extracted body, or the parsed header list. A "
-           "step state is BYTE-COPIED at a deep fork and only what `visit` names is re-taken, and this "
-           "machine's record (nine engine-allocated strings), extracted body (`bytes`, and a `stream` and "
-           "an `unknown` the visit does not name either) and parsed header list are freed by its `release` "
-           "instead — so both "
-           "arms would hold one set of pointers and free it twice. Build §2.2.5's request record out of "
-           "JSValues the visit can name, which is the same conversion §5.4 step 25's method needs before it "
-           "can carry unknown external input, and delete this refusal with it";
+           "cannot name — the extracted body, or the parsed header list. A step state is BYTE-COPIED at a "
+           "deep fork and only what `visit` names is re-taken, and this machine's extracted body (`bytes`, "
+           "and a `stream` and an `unknown` the visit does not name either) and parsed header list are freed "
+           "by its `release` instead — so both arms would hold one set of pointers and free it twice. "
+           "§2.2.5's REQUEST RECORD IS NO LONGER ONE OF THESE TERMS: its nine fields are JSValues the visit "
+           "names, so a fork inside §5.4 steps 10-27 is allowed. Build the header list's pairs and the body's "
+           "bytes the same way — `body_state_visit` beside the existing `body_state_mark`, and the header "
+           "entries as values — and delete this refusal with them. NOTE THAT §5.6 STEP 4 RUNS AT FETCH_CALL, "
+           "AFTER both of those stages, so a request carrying headers or a body reaches its signal test with "
+           "both terms live";
 }
 
 static const IdlStepDecl js_fetch_decl = {

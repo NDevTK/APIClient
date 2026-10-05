@@ -1190,9 +1190,13 @@ void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, lon
    WHAT MAY NOT BE ASSERTED, AND THE REASON IS THE TRAP THE RESIDUAL ABOVE NAMED. `freed <= began` is FALSE
    and `offered <= began` is FALSE, both for one mechanism: a step state is BYTE-COPIED at a deep fork and the
    copy inherits the capture flag, so ONE `fetch()` whose `input` ToString forks composes TWO requests against
-   ONE capture. The fork is not exotic — core/fetch/fetch.c's own `unforkable` banner names the two stages
-   that permit it and both run the page's code — and it is exactly the population this tool exists for, since
-   a forked address is an address built out of unknown external input. `began - freed` is likewise not a live
+   ONE capture. The fork is not exotic — core/fetch/fetch.c's own `unforkable` banner names which stages permit
+   it, and the `input` ToString that composes the second request is one of them — and it is exactly the
+   population this tool exists for, since a forked address is an address built out of unknown external input.
+   THE PERMITTED SET GREW WHEN §2.2.5's REQUEST RECORD BECAME JSValues that machine's `visit` names, which is
+   why this sentence no longer counts those stages: it used to read "the two stages that permit it and both run
+   the page's code", and §5.4 steps 10-27 are now forkable as well. That strengthens this refusal to assert
+   rather than weakening it, and the banner is the one place the current set is stated. `began - freed` is likewise not a live
    count: it is that difference MINUS the copies, and a census taken while states are parked is taken with
    most of them live. So the begun row and the freed row are read as two facts and never subtracted.
    SCOPE IS THE FETCH EDGE AND THE ROWS SAY SO IN THEIR NAMES, and a row that averaged the two edges would
@@ -1388,9 +1392,13 @@ char   *endpoint_fetch_edge_rows(void);
        razor, which is why it is carried even though it belongs to no partition here.
    AND THERE IS NO `freed-and-placed <= placed`, WHICH core/fetch's SIBLING BLOCK DOES HAVE — a difference
    between the two machines and not an omission. A step state is BYTE-COPIED at a deep fork and the copy
-   inherits `placed`, so two copies file against one placement; core/fetch survives that only because
-   `js_fetch_unforkable` REFUSES the fork once the state holds §5.4's record, and XHR_SEND_DECL declares no
-   such guard. It is not a corner: §3.5.6's SYNCHRONOUS arm sets the flag and then PARKS inside its own call
+   inherits `placed`, so two copies file against one placement; core/fetch survives that because the span
+   between its offer and its teardown runs no page code and its offering stage RETURNS rather than parking, so
+   no state holding a raised flag can be cloned at all. THAT REASON USED TO READ "`js_fetch_unforkable` REFUSES
+   the fork once the state holds §5.4's record", and it is rewritten rather than deleted because a reader will
+   re-derive it: the §2.2.5 request record's fields are JSValues that guard's `visit` now names, so the record
+   is not one of its terms and a fork inside §5.4 steps 10-27 is allowed — which changes nothing about the
+   containment, because such a fork happens BEFORE the offer and gives two arms one offer each. It is not a corner: §3.5.6's SYNCHRONOUS arm sets the flag and then PARKS inside its own call
    to the lifecycle machine, which fires `readystatechange` and `progress` at the page's own listeners — page
    code, at a depth where the send frame is live and forkable. An assert would fire on a legitimate state,
    which is the concession shape §Offensive-programming refuses, so the two rows are read as two facts and

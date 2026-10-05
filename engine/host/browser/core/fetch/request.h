@@ -52,40 +52,81 @@ char *request_method_check(JSContext *ctx, const char *m);
  *
  * WHAT IS NOT ON IT: the request's URL. §2.2.5 gives a request one, and this engine cannot yet put it here —
  * see request_init_apply's residual. */
+/* THE NINE ARE JSValues AND NOT `char *`, WHICH IS AN OWNERSHIP FACT BEFORE IT IS A CONCOLIC ONE.
+ * A step machine's state is BYTE-COPIED at a deep fork (`tramp_step_state_clone`: `memcpy` and then the
+ * declared slots taken a second time through `visit`), so a heap pointer on a record a machine carries BY
+ * VALUE is held by two arms and freed twice, while a JSValue the machine's `visit` names is RE-TAKEN. That is
+ * the whole of why core/fetch/fetch.c's `js_fetch_unforkable` had to REFUSE a fork while this record was
+ * filled, and refusing a fork is a flow dropped. There is exactly one list of what a state owns — the
+ * declaration — and `request_record_visit` puts these nine on it.
+ * AND IT IS WHAT §5.4 STEP 25 NEEDS: "Set request's method to method" over a method that is UNKNOWN EXTERNAL
+ * INPUT has nowhere to go in a `char *`, because the ToString boundary owes C real bytes. A JSValue field is
+ * NECESSARY for that and is not SUFFICIENT — step 25.2's "is not a method or is a forbidden method" is a
+ * PREDICATE over those bytes, which an unknown cannot answer, so the step still owes a fork; see
+ * `request_init_apply`'s own block on it. This conversion is the storage half and says so. */
 typedef struct {
-    char *method;            /* §5.4 step 25, normalized */
-    char *mode;              /* "cors" | "no-cors" | "same-origin" | "navigate" */
-    char *credentials;       /* "omit" | "same-origin" | "include" */
-    char *cache;
-    char *redirect;
-    char *referrer;
-    char *referrer_policy;
-    char *integrity;
-    char *destination;       /* §2.2.5: "" for a request a script constructed */
-    int   keepalive;
+    JSValue method;          /* §5.4 step 25, normalized */
+    JSValue mode;            /* "cors" | "no-cors" | "same-origin" | "navigate" */
+    JSValue credentials;     /* "omit" | "same-origin" | "include" */
+    JSValue cache;
+    JSValue redirect;
+    JSValue referrer;
+    JSValue referrer_policy;
+    JSValue integrity;
+    JSValue destination;     /* §2.2.5: "" for a request a script constructed */
+    int     keepalive;
 } RequestRecord;
 
-/* Every field NULL/0 — the state `request_init_apply` requires, and the state a failed apply leaves behind, so
-   `request_record_free` over a record that was never filled is a no-op rather than nine wild frees. */
+/* Every field JS_UNDEFINED and keepalive 0 — the state `request_init_apply` requires, and the state a failed
+   apply leaves behind, so a free or a visit over a record that was never filled is a no-op.
+   IT IS NINE ASSIGNMENTS AND NOT A `memset`, AND THAT IS THE ONE THING TO GET RIGHT HERE: a zeroed JSValue is
+   the INTEGER 0 and not JS_UNDEFINED, so a record a `js_mallocz` produced reads as nine filled slots holding
+   the number zero. core/fetch/fetch.c states the same rule twice over its own `captured` flag and its
+   `body.stream` term for exactly this reason — "is this slot filled yet" asked of the slot is never the
+   question. A HOLDER THAT ALLOCATES ITSELF ZEROED THEREFORE STILL CALLS THIS before its first failure path:
+   a free over integer 0 is harmless and a READ of it is not, and `request_str_is` asserts the difference. */
 void request_record_init(RequestRecord *rec);
-/* Release every string the record owns and re-initialize it. Takes the RUNTIME because a finalizer has one and
-   has no context; every field is the ENGINE's allocator's (js_strdup), which is why a `url_serialize` result is
-   copied in and freed out at the one site that produces one. */
+/* THE DECLARATION — the nine slots a step machine carrying this record BY VALUE owns, handed to the one list
+   quickjs-step.h's `visit` contract is about. A machine embedding a RequestRecord calls this from its own
+   `visit` and then MUST NOT free the record: idl_args.c's release fold folds every declared slot's identity on
+   each side of a member's `release` and aborts when one moved, because a second list beside the declaration
+   leaks whatever the next field misses and double-frees whatever this one did not null. */
+void request_record_visit(JSContext *ctx, RequestRecord *rec, JSStepVisit *v);
+/* THE SAME NINE, FOR A HOLDER THAT IS A CLASS OPAQUE RATHER THAN A STEP STATE — the collector cannot see
+   through an opaque, so a Request's own record is MARKED here, FREED by `request_record_free` in the finalizer
+   and DUP'd by `request_record_copy` at clone. Those three sites are one obligation and are read together,
+   exactly as the Request's `headers`/`blob_entry`/`signal` trio is.
+   IT MARKS NOTHING WHILE ALL NINE ARE STRINGS, which is today: `JS_MarkValue` reaches the collector only for
+   JS_TAG_OBJECT and JS_TAG_FUNCTION_BYTECODE. It is not therefore dead code to delete — the field that makes it
+   fire is §5.4 step 25's method the day it can hold a CONCOLIC, which is a class-opaque OBJECT — and it is not
+   a mechanism to rely on yet either. The caller's site states both halves. */
+void request_record_mark(JSRuntime *rt, const RequestRecord *rec, JS_MarkFunc *mark_func);
+/* Release every value the record owns and re-initialize it. Takes the RUNTIME because a finalizer has one and
+   has no context.
+   FOR A CLASS-OPAQUE HOLDER ONLY. A STEP MACHINE'S record is discharged by the driver through
+   `request_record_visit`, so a machine's `release` that also called this would free each slot twice — which is
+   not a leak to be found later but the assert named above, firing on the one place every member's teardown
+   converges on. */
 void request_record_free(JSRuntime *rt, RequestRecord *rec);
-/* §5.4 step 12's carry-forward as a copy of the record. -1 with an exception live on OOM, and `dst` is then
-   safe to free: every field placed before the first that could fail is owned, and the rest are NULL. */
-int  request_record_copy(JSContext *ctx, RequestRecord *dst, const RequestRecord *src);
-/* DOES THIS RECORD HOLD ANY ALLOCATION — asked by a step machine that carries a record BY VALUE and must know
-   whether a fork would alias one (see core/fetch/fetch.c's js_fetch_unforkable, which is the one caller).
+/* §5.4 step 12's carry-forward as a copy of the record — a second reference to each of the nine, since a
+   JSValue string is immutable and the two records are two requests' answers to the same question rather than
+   two buffers. VOID, because a dup allocates nothing: the `-1 on OOM` this used to return was real when every
+   field was a `js_strdup`, and an int return no caller can act on is an invitation to write an `if` with no
+   arm — so the signature states that there is no failure to handle rather than leaving a reader to find out. */
+void request_record_copy(JSContext *ctx, RequestRecord *dst, const RequestRecord *src);
+/* THE RECORD'S OWN BYTE COMPARISON — is this field's value the byte sequence `lit`.
  *
- * IT IS THE RECORD'S OWN QUESTION AND NOT A TEST ON ONE FIELD, because the fields are filled IN §5.4's ORDER
- * and `method` is step 25 — the second-to-last. A caller that asked `rec->method != NULL` would answer NO for
- * a record holding the seven strings steps 13-23 already placed, which is precisely the window §5.4 step 25's
- * fork will stand in: the guard would permit the one fork it exists to refuse, and the hole would be invisible
- * because every field it misses is a real allocation belonging to a real step.
- * A PARTIALLY FILLED RECORD IS THE ANSWERABLE STATE, not an error one: `request_init_apply` leaves exactly that
- * behind when a step refuses, and its contract is that such a record is safe to free. */
-bool request_record_holds(const RequestRecord *rec);
+ * IT EXISTS BECAUSE THE NINE FIELDS BECAME VALUES AND §5.4 STILL COMPARES THEM TO SPEC CONSTANTS: step 17's
+ * "navigate", step 21's "only-if-cached" against "same-origin", step 32.1's CORS-safelisted method set, step 35's
+ * `GET`/`HEAD` and step 39.2's "same-origin"/"cors". Those were `strcmp` over a `char *` and the comparison is
+ * the same comparison; what is new is that the operand can now BE unknown external input, and a byte test over
+ * an unknown is the one answer §@H forbids — it would decide a gate by running a predicate over a string no
+ * run ever computed. So this operation ASSERTS its operand is a real string and names the fork that is owed,
+ * which is the refusal moving from "there is nowhere to store it" to "there is nobody to ask": the storage half
+ * of §5.4 step 25 is this record and the DECIDING half is `request_init_apply`'s own residual.
+ * NOT a general-purpose helper and not in a shared header: it is the record's question, over the record's
+ * fields, and the assert is only sound because those nine are the ones whose provenance this file states. */
+bool request_str_is(JSContext *ctx, JSValueConst v, const char *lit);
 /* A Request's own record, or NULL for a value that is not one — §5.4 step 6's "Set request to input's
    request", as the read its two callers make on a `RequestInfo` that took the interface arm. Borrowed. */
 const RequestRecord *request_record_of(JSValueConst v);

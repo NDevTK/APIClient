@@ -3167,11 +3167,25 @@ char *endpoint_fetch_edge_rows(void) {
        and not a tolerance: it is the constructions that offered an address and are STILL LIVE, parked on the
        reply they asked for, which on a page mid-run is most of them. An EQUALITY here would be that
        misreading frozen into an assert and would fire on the first document that parks.
-       IT HOLDS AT ALL ONLY BECAUSE THIS MACHINE REFUSES THE FORK THAT WOULD BREAK IT, which is why it is
-       stated here and not in the shared helper above. A deep-fork copy inherits `offered` and gets its own
-       teardown, so two copies would file against one offer — and `js_fetch_unforkable` refuses a fork once
-       the state holds §5.4's record, which it does at every stage from which an offer is reachable. The XHR
-       edge declares no such guard and therefore gets no such assert; its emitter says so. */
+       IT HOLDS BECAUSE THE SPAN BETWEEN THE OFFER AND THE TEARDOWN IS FORK-FREE, AND THAT REASON IS NARROWER
+       THAN THE ONE WRITTEN HERE BEFORE. The fork that breaks this containment is one raised AFTER the offer: a
+       deep-fork copy inherits `offered` and gets its own teardown, so two copies would then file against one
+       offer. A fork raised BEFORE it is harmless — both arms set their own flag and each makes its own offer,
+       which is two requests in two worlds and is what the surface is for.
+       THIS USED TO READ "`js_fetch_unforkable` refuses a fork once the state holds §5.4's record, which it does
+       at every stage from which an offer is reachable", AND THAT ARGUMENT IS RETIRED RATHER THAN RESTATED: the
+       §2.2.5 request record's nine fields are JSValues core/fetch's `visit` names, so the record is no longer
+       one of that guard's terms and a fork inside §5.4 steps 10-27 is allowed. It is kept in its own words
+       because a reader who re-derives the containment from that guard will write it again, and because the
+       guard's REMAINING terms — the extracted body and the parsed header list — still cover FETCH_CALL for any
+       request carrying either, so the retired reason is still TRUE of most of the population and would read as
+       sound.
+       WHAT ACTUALLY HOLDS IT IS THE OFFER'S POSITION: `s->offered = 1` is set at §5.6 step 12 and everything
+       after it in that stage is straight-line C that runs no page code (`endpoint_record`, the batch parse, the
+       park), and the stage then RETURNS its promise rather than parking — which core/fetch asserts at that
+       stage's own entry ("this stage does not park"). So there is no point at which a state holding a raised
+       `offered` can be cloned. The XHR edge gets no such assert for a reason its own emitter states, and it is
+       a different reason: its flag is set and the state then PARKS inside page code. */
     DCHECKF(g_fetch_edge.freed_reached <= g_fetch_edge.reached,
             "the fetch edge counted more torn-down states that had offered an address (%ld) than offers it "
             "made at all (%ld) — the offer is raised once, on the line before the door, and the teardown row "
