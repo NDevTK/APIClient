@@ -258,6 +258,19 @@ void event_loop_work_advance(JSContext *ctx, uint64_t units);
  *     never aborts — the abort runs after the reply lands, or not at all if no reply ever does. */
 int event_loop_may_advance(void);
 
+/* HOW OFTEN THAT LICENCE WAS WANTED AND HOW OFTEN IT WAS REFUSED — the partition of a count solver/result.c
+   already publishes, and the reason it needs one. `stepReachedIdleLife` is exactly the descents the TIMER rung
+   declined, which is TWO reasons at any value: no source became due, or a source WAS due and the function
+   above refused to manufacture its dueness. The first is a fact about the page's own timers; the second is
+   this engine declining to substitute a jump for a wait it cannot represent, which is the residual stated
+   above. A reader holding `fire-due-timer: 0` could separate "nobody asked" from "asked and nothing came of
+   it" once the ask rows landed, and could not separate those two — so the row that decides whether a run's
+   whole reach was lost to an unpaid debt did not exist.
+   BOTH OR NEITHER, and the kinds are LIFETIME counts released by nothing, matching the scope of the clock
+   asks a reader reads them against. `declined <= asked` holds by construction: both are raised in one
+   evaluation at the ask, ahead of the answer. */
+void event_loop_advance_census(long *asked, long *declined);
+
 /* MOVE THE CLOCK to the moment a task source becomes due. `due` is the earliest moment ANOTHER source is
    already due at, or JS_UNDEFINED when none is — the caller has it, because it is what decided this move.
    THREE invariants are asserted here rather than trusted to the caller: time may not run backwards, the

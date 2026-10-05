@@ -378,12 +378,46 @@ JSValue event_loop_moment_plus(JSContext *ctx, JSValueConst moment, JSValueConst
     return sp[0];
 }
 
+/* HOW OFTEN THE LICENCE BELOW WAS ASKED FOR AND REFUSED, WHICH PARTITIONS A NUMBER ALREADY PUBLISHED RATHER
+   THAN RESPELLING ONE. solver/result.c's clock suffix sums give `stepReachedIdleLife` as exactly the descents
+   the TIMER rung declined, and that count is TWO reasons: no source became due, or a source WAS due and this
+   function refused to manufacture its dueness. Those take opposite work — the first is a fact about the page's
+   own timers, the second is this engine substituting a jump for a wait it cannot represent — and no row
+   anywhere could tell them apart, so `fire-due-timer: 0` stayed two findings after the ask rows had already
+   separated it from a third.
+   RAISED HERE AND NOT AT THE TWO REFUSING ARMS, which is a change of recording point from the one this
+   function's own callers would suggest and is the §AN-AUDITOR-DERIVES-THE-RULE choice: the arms are in
+   core/timing/timer.c and core/rendering/rendering.c, two files that would each need their own counter and
+   could then come to disagree about what the licence answered. The DECISION is here, so the count is here and
+   cannot drift from it. What that costs is the per-rung attribution, and the rung is already readable from the
+   suffix sums beside these — so the loss is a subtraction a reader can do and the gain is that no second
+   spelling of the predicate exists.
+   BOTH OR NEITHER at the accessor, for engine_orphan_census's reason: a refusal count with no ask count beside
+   it cannot say whether the licence was ever wanted, which is the difference between a page with no timers and
+   an engine declining every one it had.
+   NEVER RESET, to match the scope of the clock asks they are read against (solver/engine.h's
+   `clock_render_asks`: lifetime per instance, released by nothing). A per-session reset here would make the
+   containment false from the first session close onward, which is the mismatch that file names as the wrong
+   precedent to copy.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on either, and the licence's answer is unchanged. */
+static long g_advance_asked, g_advance_declined;
+
+void event_loop_advance_census(long *asked, long *declined)
+{
+    DCHECK(asked != NULL && declined != NULL,
+           "the clock licence's census was asked for one of its two numbers — a refusal count with no ask "
+           "count beside it cannot say whether the licence was ever wanted, which is the difference between a "
+           "page that armed no timer and an engine that refused every one it had");
+    *asked = g_advance_asked; *declined = g_advance_declined;
+}
+
 /* THE JUMP'S PREMISE — see event_loop.h for the whole of why this is a question and what falsifies it.
    IT TAKES NO CONTEXT because it is not a question about a realm: the clock is the AGENT's and the debt is
    the RUNNING FLOW's, and neither is reached through a JSContext. */
 int event_loop_may_advance(void)
 {
     Flow *f = flow_running();
+    int may;
 
     /* ASKED ONLY BETWEEN A FLOW'S TASKS, which is where both callers stand — the scheduler's idle ladder,
        inside a flow's own step. With no flow running there is no timeline to move and no register to ask, so
@@ -397,7 +431,12 @@ int event_loop_may_advance(void)
           "the event loop was asked whether its clock may jump with NO FLOW RUNNING — the clock's fields ride "
           "the per-flow COW delta and the debt that licenses the jump is the running flow's own register, so "
           "outside a flow this question has no timeline to be about and no register to read it from");
-    return !pending_outstanding(f->pending);
+    /* COUNTED AT THE ASK, AHEAD OF THE ANSWER, so the pair is a partition of one event rather than two
+       writers agreeing — `declined <= asked` is then true by construction and not by inspection. */
+    g_advance_asked++;
+    may = !pending_outstanding(f->pending);
+    if (!may) g_advance_declined++;
+    return may;
 }
 
 void event_loop_advance_to(JSContext *ctx, JSValueConst when, JSValueConst due)

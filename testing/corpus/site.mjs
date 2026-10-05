@@ -893,7 +893,17 @@ const frontierPrograms = (() => {
      from a row that carries them. That is §THE-VERIFICATION-CAN-FAIL-IN-THE-VERIFIER at the shape of the
      record rather than at a path: an absent key and a key one level down render identically. */
   for (const k of ['stepReachedRenderingLife', 'stepReachedTimerLife', 'stepReachedIdleLife',
-                   'unframedStepsLifetime'])
+                   'unframedStepsLifetime',
+                   /* …AND WHICH OF THE TWO REASONS THE TIMER RUNG DECLINED FOR, WHICH `stepReachedIdleLife`
+                      IS AND CANNOT SPLIT. That row IS the descents the timer rung declined, and the reasons
+                      are: no source became due, or a source WAS due and core/timing/event_loop.h's licence
+                      refused to manufacture its dueness while the running flow held an unpaid debt. The
+                      first is a fact about the page's own timers; the second is this engine declining to
+                      substitute a jump for a wait it cannot represent, and it is the mechanism this corpus
+                      measured the two gitpod modes apart on. `Declined` is a SUBSET of `Asked`, asserted
+                      where both are in one hand, and the ask half spans BOTH refusing rungs so it is
+                      contained in no single suffix sum. */
+                   'clockAdvanceAskedLife', 'clockAdvanceDeclinedLife'])
     if (typeof c[k] === 'number') out[k] = c[k];
   /* …AND THE THREE GLOBAL MAXIMA THE DISTRIBUTION STRUCTURALLY CANNOT CARRY, WITHOUT WHICH A CURSOR READING
      HAS TWO MEANINGS THAT TAKE OPPOSITE WORK. solver/cold.h states the split in its own words — "`program_

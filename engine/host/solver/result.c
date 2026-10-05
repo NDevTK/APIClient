@@ -32,6 +32,7 @@
 #include "core/frame/window_proxy.h"   /* the ASK behind the realm census — see window_proxy_destroy_releases */
 /* §8.1.4.6 "Runtime script errors"'s throw site — one component derives it, this one reports it. */
 #include "core/events/report_exception.h"
+#include "core/timing/event_loop.h"   /* whether the clock's licence was wanted and refused — see event_loop_advance_census */
 
 /* THE PAGE'S OWN UNCAUGHT ERRORS, deduped. See result.h: a script that throws is the forcing function naming an
    unbuilt capability, and it was silent. The message is the page's own, so nothing here interprets it.
@@ -2529,6 +2530,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind lifetime: steps sliceUs sliceOverruns sliceOverrunAsks sliceOverrunSeamless stepUs schedUs
    @kind lifetime: unitMidProgram unitParked unitCheckpointOwed unframedStepsLifetime
    @kind lifetime: stepReachedRenderingLife stepReachedTimerLife stepReachedIdleLife
+   @kind lifetime: clockAdvanceAskedLife clockAdvanceDeclinedLife
    @kind lifetime: classicCompiles classicCompileOverruns finished
    @kind lifetime: classicCompileAgain classicCompileAgainBytes classicCompileOwnDecode
    @kind lifetime: classicCompileResumed classicParseShared
@@ -2641,6 +2643,9 @@ char *result_cold_json(void) {
     long fk_total, fk_pinned;
     long orph_pref;
     long orph_scripts;
+    /* THE CLOCK LICENCE'S PAIR — see core/timing/event_loop.h for what it partitions and why the
+       count beside it could not be asked without it. BOTH OR NEITHER at the accessor. */
+    long adv_asked, adv_declined;
     long awaiting_rows;   /* the awaited-rows gauge, read ONCE below and used by the assert and the row */
     /* what the emitted @H array is a fraction of, and what of it predates any program — endpoint.h */
     long ep_minted, ep_assets, ep_emitted, ep_pre_program;
@@ -2847,6 +2852,11 @@ char *result_cold_json(void) {
        walk skips by construction, and the next diff is about those and not about the order. */
     orph_pref = engine_orphan_preferred();
     orph_scripts = engine_orphan_scripts();
+    event_loop_advance_census(&adv_asked, &adv_declined);
+    DCHECK(adv_declined <= adv_asked,
+           "the clock licence was refused more often than it was asked for — both are raised in ONE "
+           "evaluation at the ask, ahead of the answer, so a refusal above the ask count is a second "
+           "writer of one of them and the partition this pair exists to be is no longer one");
     {
         /* THE CONTAINMENT, ASSERTED WHERE BOTH ARE IN ONE HAND. A preferred take IS a take, so the engine's
            count of the first can never exceed the host's count of the second — and the two are kept in two
@@ -3495,6 +3505,24 @@ char *result_cold_json(void) {
                     and not the run. See solver/engine.h's `clock_render_asks`. */
                  "\"stepReachedRenderingLife\":%ld,\"stepReachedTimerLife\":%ld,"
                  "\"stepReachedIdleLife\":%ld,"
+                 /* …AND WHICH OF THE TWO REASONS THE TIMER RUNG DECLINED FOR, WHICH THE SUFFIX SUMS
+                    ABOVE CANNOT BE ASKED AT ANY VALUE. `stepReachedIdleLife` IS the descents the
+                    timer rung declined, and that is two reasons: no source became due, or a source
+                    WAS due and core/timing/event_loop.h's licence refused to manufacture its
+                    dueness. The first is a fact about the page's own timers; the second is this
+                    engine declining to substitute a jump for a wait it cannot represent, which is
+                    the residual stated at that header. They take opposite work, and no row here
+                    could tell them apart — so a run whose WHOLE reach was lost to an unpaid debt
+                    read identically to a page that armed no timer at all.
+                    THE PAIR IS NOT A SECOND SPELLING OF `stepReachedIdleLife` and that is why it is
+                    admissible beside it (this file refuses a second spelling of one number in one
+                    document by name): it PARTITIONS that count rather than restating it, and its ask
+                    half spans BOTH refusing rungs — the timer's and the rendering one's — so it is
+                    not contained in any single suffix sum either.
+                    LIFETIME COUNTS RELEASED BY NOTHING, matching the scope of the three above so the
+                    four may be read on one line. `Declined <= Asked` is asserted where both are in
+                    one hand. */
+                 "\"clockAdvanceAskedLife\":%ld,\"clockAdvanceDeclinedLife\":%ld,"
                  "\"outOfPrograms\":%ld,"
                  "\"outOfProgramsUnrun\":%ld,\"outOfProgramsFramed\":%ld,"
                  "\"outOfProgramsAtTheLadder\":%ld,"
@@ -3774,6 +3802,7 @@ char *result_cold_json(void) {
                  r.unit_mid_program, r.unit_parked, r.unit_checkpoint_owed,
                  r.unframed_steps,
                  r.clock_render_asks, r.clock_timer_asks, r.clock_idle_asks,
+                 adv_asked, adv_declined,
                  c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
                  ladder, hist, cursors, ahead,
