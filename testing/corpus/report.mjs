@@ -1838,22 +1838,63 @@ const naRows = table.map((t) => {
   return { id: t.id, n: t.measurements.length, per, stated: stated.length, best };
 });
 const naShown = naRows.filter((r) => r.n > 0);
+/* THE CELL PRINTS A UNIT BOUNDARY AND NOT FIVE SLASH-SEPARATED NUMBERS, WHICH IS A REPAIR AND NOT A STYLE
+   CHOICE — this cell read `92/4/11/11/11`, and five numbers in one bracket IS a ladder to a reader, so it was
+   taken for `92 sites of which 11 were called` and the 81 for a reach gap. solver/endpoint.c forbids exactly
+   that, in its own capitals at the field: "IT IS A FLOOR OVER ONE SPELLING AND NO CONTAINMENT WITH `called`
+   MAY BE ASSERTED IN EITHER DIRECTION, which is not a caution but the reason there is no `DCHECKF` under these
+   two rows where there is one under every other pair in this file. `called > named` is ORDINARY … `named >
+   called` is ordinary too … this counts COMPILER RESOLUTIONS and never source sites — it is read as a BIT and
+   never as a magnitude."
+   SO THE SUBTRACTION IS NOT A QUANTITY AND THE CELL NOW SAYS SO WHERE IT IS READ. The banner above already
+   stated the partial entailment and the VERDICT already honours it (NAMED-or-CALLED is one rung), and neither
+   reached a reader of the OUTPUT: a banner lives in this file and a legend is what travels. That is this file's
+   own legend rule — "a reader takes a legend as the key to a row, so a cell carrying more than the legend
+   names is read as whichever of its fields the legend happens to list" — and the legend named five rungs.
+   MEASURED COST, BY THE AUTHOR OF THE CELL: the `92` and the `11` were carried into three separate task
+   records and into one coordinator reading as a reach gap of 81 `fetch` call sites, which is a magnitude of a
+   row declared to be a bit, over a denominator that is resolutions rather than sites. Nothing downstream
+   contradicts such a reading, because both numbers are real and both are correctly measured.
+   WHAT IS ASSERTED AND WHAT IS NOT, so the `>=` is a claim and not decoration. `called >= began` is asserted by
+   a `DCHECKF` at BOTH edges, and this prints the violation because `-DAPICLIENT_DEV=0` compiles that assert out
+   and this driver measures whatever artifact is installed. `offered` gets NO `>=`: at the fetch edge it is that
+   edge's own completed-construction row and is a subset of `began` by its field's own words, while at the xhr
+   edge it is a SEPARATE counter whose asserted relation is to the whole surface's ask population and not to
+   `began` — one spelling for two relations would be the drifting claim, so neither is claimed. */
 const naCell = (x) => {
   if (x.tok) return x.tok;
+  const num = (v) => (v === null ? '-' : String(v));
   return NET_DOORS.map((d) => {
     const c = x.doors[d.key];
-    return d.key + '=' + (c.tok ? c.tok
-      : naVerdict(c) + '(' + [c.named, c.prop, c.called, c.began, c.offered].map((v) => v === null ? '-' : v).join('/') + ')');
+    if (c.tok) return d.key + '=' + c.tok;
+    /* THE ONE ASSERTED RELATION ON THIS CELL, READ IN RELEASE WHERE THE `DCHECKF` IS ABSENT. A violation is
+       printed rather than silencing the cell, because the other terms are still facts. */
+    const broke = (typeof c.called === 'number' && typeof c.began === 'number' && c.began > c.called)
+      ? '!began>called ' : '';
+    return d.key + '=' + naVerdict(c) + '(' + broke +
+      'res ' + num(c.named) + '/' + num(c.prop) + ' \u2016 call ' + num(c.called) +
+      '\u2265' + num(c.began) + ' off ' + num(c.offered) + ')';
   }).join(' ');
 };
 if (naShown.length) {
   console.log('\nTHE TWO DATA DOORS\' ASK LADDER OVER ' + naCarried.length + '/' + passes.length +
-    ' PASS(ES) — WHICH READING A ZERO `fetch` OR `xhr` DOOR ROW IS. The cell is named/prop/called/began/\n' +
-    '  offered, and `prop` is the SAME rung as `named` (`globalThis.fetch` resolves the same entry name), so\n' +
-    '  four rungs are printed as five numbers deliberately: which spelling a bundle uses is a fact about the\n' +
-    '  bundle and summing them would hide it. `-` is a rung the artifact did not carry. `reached-the-door`\n' +
-    '  BESIDE a doors column with no such key is the SURFACE having suppressed the record; the two are not\n' +
-    '  in an identity and are not summed.');
+    ' PASS(ES) — WHICH READING A ZERO `fetch` OR `xhr` DOOR ROW IS.\n' +
+    '  THE CELL IS  res <named>/<prop> \u2016 call <called>\u2265<began> off <offered>  AND THE \u2016 IS A UNIT\n' +
+    '  BOUNDARY. Left of it the engine counts COMPILER RESOLUTIONS of the entry name — a program is recompiled\n' +
+    '  by every flow that replays it, so those are read as a BIT (zero against nonzero) and NEVER as a\n' +
+    '  magnitude, and `prop` is the SAME rung as `named` (`globalThis.fetch` resolves the same entry name),\n' +
+    '  printed apart because which spelling a bundle uses is a fact about the bundle. Right of it are stages\n' +
+    '  of ONE CALL.\n' +
+    '  NO CONTAINMENT HOLDS ACROSS THE \u2016 IN EITHER DIRECTION — solver/endpoint.c: `called > named` is\n' +
+    '  ORDINARY (`window.fetch(u)` is a property read and a shadowed parameter is a local slot) and so is\n' +
+    '  `named > called`. SO `named - called` IS NOT A QUANTITY: a cell reading `res 92 \u2016 call 11` is not\n' +
+    '  81 of anything, and this cell was read that way into three task records before the bar was printed.\n' +
+    '  `\u2265` IS THE ONE ASSERTED RELATION (a `DCHECKF` at both edges, compiled out in release, so a\n' +
+    '  `!began>called` prefix is this cell reading it back). `off` carries no `\u2265` deliberately: at the\n' +
+    '  fetch edge it is that edge\'s completed-construction row and at the xhr edge it is a separate counter\n' +
+    '  whose asserted relation is to the whole surface\'s ask population, so neither relation is claimed here.\n' +
+    '  `-` is a rung the artifact did not carry. `reached-the-door` BESIDE a doors column with no such key is\n' +
+    '  the SURFACE having suppressed the record; the two are not in an identity and are not summed.');
   const naIdW = Math.max('site'.length, ...naShown.map((r) => r.id.length)) + 2;
   console.log('  ' + pad('site', naIdW) + 'PER PASS IN ORDER');
   for (const r of naShown) console.log('  ' + pad(r.id, naIdW) + r.per.map(naCell).join(' | '));
