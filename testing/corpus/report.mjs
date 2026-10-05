@@ -645,6 +645,12 @@ for (const p of passes) for (const r of p.rows) {
        to `undefined`, print `-`, and void two of the four quantities on the cell while the cell still rendered.
        Both are LIFETIME and both come off the entry `countersFrom` names, the same one `tphase` does. */
     steps: r.steps, sur: r.stepUnitRuns,
+    /* AND WHAT THE ORDER COST INSIDE THOSE TURNS, which the phase split hands off: `schedUs` bounds the PICK,
+       and the preempt hook's own rescan is called FROM THE INTERPRETER and is charged to `sliceUs`, so a small
+       `schedUs` says nothing about it. Left RAW for `span`'s reason — site.mjs publishes the verdict
+       (`scanCostSumsWrong`) and a second copy of that arithmetic here is the one
+       §AN-AUDITOR-DERIVES-THE-RULE forbids. All lifetime, all off the entry `countersFrom` names. */
+    scost: r.scanCost, scostWrong: r.scanCostSumsWrong,
     /* AND THE FORK PAIR, LEFT AS WHATEVER site.mjs WROTE. It is the population size for a refusal that is NOT
        YET BUILT, so what this file does with it is print the FRACTION and never a verdict: the numerator alone
        is meaningless (§Solver-half's pin MINT arms make most such branches unreachable at a hook) and the pair
@@ -1628,6 +1634,90 @@ if (tpRows.length) {
     console.log('  NOT STATED: ' + silent.map((r) => r.id + '(' + r.tok + ')').join(' ') +
       '  — `predates-the-rows` is a fact about the DRIVER that wrote the census and `no-counters` one about' +
       ' the RUN; neither is a fact about the engine');
+}
+
+/* WHAT THE ORDER COST INSIDE THOSE TURNS — the half the block above hands off and the half that decides
+   whether the throughput question is the SCHEDULER's at all. solver/engine.h states the trap in its own words:
+   "A reader who takes a small `sched_us` for 'the ordering is not the cost' has bounded the pick and said
+   nothing about the hook" — `flow_next_to_run` runs before the step bracket opens and lands in `schedUs`, while
+   the preempt hook's rescan is called FROM THE INTERPRETER, so an O(members) walk through `flow_rival_of` is
+   charged to `sliceUs`, inside the very turns `sliceOverruns` counts. Measured over three drives of one release
+   artifact, `schedUs` is 0.026-0.117% of `stepUs` and the seamless count is NOT equal to the overrun count, so
+   engine.h's own exclusion for the hook does not hold and those turns offered about a MILLION consultations.
+   THREE QUESTIONS, THREE DENOMINATORS, AND THEY ARE NEVER MIXED. `rivalW/rivalR` is the frontier a rescan
+   actually WALKED, which no other row carries. `rivalR/asks` is the MISS RATE — "the share of CONSULTATIONS
+   that bought a walk" — and it separates a CACHE that absorbs nothing (repair at the cache) from a GENERATION
+   moving as fast as the hook is consulted (the page branching, and the repair is nowhere near it); both print
+   the same rival count, which is why the rate and not the count is the reading. And `rivalW` as a share of ALL
+   weighing says how much of this engine's frontier-pricing the hook does.
+   THE CENSUS WALK IS COUNTED APART AND IS NEVER IN THAT DENOMINATOR'S NUMERATOR BY ACCIDENT: its cadence is the
+   REPORT's, so folding it in "would put the instrument's own cost inside the rate that exists to price the
+   dispatch". It is printed as its own share so a reader can see whether the instrument is heavy enough to change
+   the run it samples, which is the only way that question can be settled.
+   THE THREE MISS ARMS ARE A PARTITION AND THE THIRD IS NOT A ROUNDING ROW, which is why they are printed as
+   three numbers and never summed into a verdict. engine.h: "a large `cur` beside a large `both` and a large
+   `cur` beside a zero `both` recommend the same work at completely different prices, and no arithmetic over two
+   rows can separate them" — where both invalidators moved in one interval, removing one buys NOTHING. `gen` is
+   the frontier generation having moved, `cur` the incumbent having changed, `both` both in one interval.
+   EVERY SHARE IS READ WITHIN ONE PASS and nothing is differenced across two; a `null` prints as `-` wherever an
+   operand is absent OR a denominator is zero, because a share of a walk that did not happen is not a small
+   share and a miss rate over no consultations is not a cache that absorbed everything — that is
+   `asks 0`, which the cell carries. The header and the silent list print unconditionally for the phase block's
+   reason: these rows are new, so every census already on disk predates them, and a section that renders nothing
+   in that state is indistinguishable from one that does not exist. */
+const scOne = (m) => {
+  const s = (m.scost && typeof m.scost === 'object') ? m.scost : null;
+  if (!s) return { tok: m.scost === undefined ? 'predates-the-rows'
+                   : (m.scost === null ? 'no-counters' : String(m.scost)) };
+  const n = (k) => (typeof s[k] === 'number' ? s[k] : null);
+  const rivalR = n('scanRivalRuns'), rivalW = n('scanRivalWeights');
+  const nextR = n('scanNextRuns'), nextW = n('scanNextWeights');
+  const otherW = n('scanOtherWeights'), censusW = n('scanCensusWeights'), censusR = n('scanCensusRuns');
+  const asks = n('preemptAsksLifetime');
+  const allW = [nextW, rivalW, otherW, censusW].every((x) => x !== null)
+    ? nextW + rivalW + otherW + censusW : null;
+  return { s,
+           rivalR, rivalW, nextR, nextW, censusR, censusW, asks,
+           rivalFrontier: (rivalR ? rivalW / rivalR : null),
+           nextFrontier: (nextR ? nextW / nextR : null),
+           missRate: (asks && rivalR !== null) ? (100 * rivalR / asks) : null,
+           hookShare: (allW && rivalW !== null) ? (100 * rivalW / allW) : null,
+           censusShare: (allW && censusW !== null) ? (100 * censusW / allW) : null,
+           gen: n('rivalMissGen'), cur: n('rivalMissCur'), both: n('rivalMissBoth'),
+           wrong: typeof m.scostWrong === 'string' && m.scostWrong !== '' ? m.scostWrong : '' };
+};
+const scRows = table.map((t) => {
+  const per = t.measurements.map(scOne);
+  const stated = per.filter((x) => x.s);
+  return { id: t.id, per, stated, tok: stated.length ? null : (per.length ? per[0].tok : 'no-pass') };
+});
+if (scRows.length) {
+  const scIdW = Math.max('site'.length, ...scRows.map((r) => r.id.length)) + 2;
+  const pc = (x) => (x === null ? '-' : x.toFixed(1) + '%');
+  const q = (x) => (x === null ? '-' : x.toFixed(1));
+  const cell = (x) => (x.wrong ? '[' + x.wrong + '] ' : '') +
+    'hook ' + pc(x.hookShare) + ' walks ' + (x.rivalR === null ? '-' : x.rivalR) + '/' +
+    (x.asks === null ? '-' : x.asks) + '(' + pc(x.missRate) + ') ' +
+    'front ' + q(x.rivalFrontier) + 'v' + q(x.nextFrontier) + ' ' +
+    'miss ' + (x.gen === null ? '-' : x.gen) + '/' + (x.cur === null ? '-' : x.cur) + '/' +
+    (x.both === null ? '-' : x.both) + ' ' +
+    'census ' + pc(x.censusShare);
+  console.log('');
+  console.log('WHAT THE ORDER COST INSIDE THOSE TURNS (site, then PER PASS IN ORDER):');
+  /* EVERY QUANTITY THE CELL PRINTS IS NAMED HERE, for the span block's reason: a cell carrying more than its
+     legend names is read as whichever field the legend lists. */
+  console.log('  hook <rival weights as a share of ALL frontier-weighing>  walks <rescans>/<hook ' +
+              'consultations>(<miss rate>)  front <members a rescan walked>v<members a PICK walked>  ' +
+              'miss <gen>/<cur>/<both>  census <the instrument\'s own share of all weighing>');
+  for (const r of scRows.filter((x) => x.stated.length))
+    console.log('  ' + pad(r.id, scIdW) + r.stated.map(cell).join(' | '));
+  console.log('  a `-` is an absent operand or a zero denominator and NEVER a zero share; the three miss arms');
+  console.log('  are a PARTITION of <rescans> and are never summed into a verdict — `both` says removing one');
+  console.log('  invalidator alone buys nothing; a bracketed string is site.mjs\'s own partition verdict');
+  const scSilent = scRows.filter((r) => !r.stated.length);
+  if (scSilent.length)
+    console.log('  NOT STATED: ' + scSilent.map((r) => r.id + '(' + r.tok + ')').join(' ') +
+      '  — `predates-the-rows` is a fact about the DRIVER and `no-counters` one about the RUN');
 }
 
 /* WHICH ARM OF `flow_step` TOOK THE STEP OF A MEMBER THAT WAS HOLDING A RUNNABLE TASK — the row the job split

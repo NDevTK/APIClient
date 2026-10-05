@@ -1196,6 +1196,50 @@ const WALL_SPAN_ROWS = ['instanceUs', 'loopUs', 'betweenSlicesUs', 'slices', 'st
    turn overran its slice, and an artifact predating the row has said nothing whatever. */
 const TURN_PHASE_SUM = ['stepUs', 'sliceUs', 'schedUs'];
 const TURN_PHASE_ROWS = [...TURN_PHASE_SUM, 'sliceOverruns', 'sliceOverrunAsks', 'sliceOverrunSeamless'];
+/* AND THE ROWS THAT PRICE THE ORDER INSIDE `sliceUs`, WITHOUT WHICH A SMALL `schedUs` IS READ AS AN
+   EXONERATION IT CANNOT GIVE. This is not a refinement of the partition above, it is the one thing that stops
+   it being mis-read, and solver/engine.h says so at the pair it belongs to: "A reader who takes a small
+   `sched_us` for 'the ordering is not the cost' has bounded the pick and said nothing about the hook" — because
+   `flow_next_to_run` runs BEFORE the step bracket opens and lands in `schedUs`, while the preempt hook's OWN
+   rescan is called FROM THE INTERPRETER, so an O(members) walk through `flow_rival_of` is charged to `sliceUs`,
+   inside the very turns `sliceOverruns` counts.
+   MEASURED, AND THE MIS-READING WAS MINE: over three drives of one release artifact on one real app, `schedUs`
+   is 0.026, 0.055 and 0.117 PER CENT of `stepUs` — three to four orders of magnitude below the thread — and I
+   read that as the ordering being excluded. It excludes the PICK. `sliceOverrunSeamless` is 39 of 71, 104 of 138
+   and 126 of 161, so it is NOT equal to `sliceOverruns`, and engine.h's own discriminator for the hook
+   (`slice_overrun_seamless == slice_overruns`, which would mean no consultation and therefore no rescan) does
+   not hold: 32, 34 and 35 of those turns offered consultations, 1.01, 1.12 and 1.06 MILLION of them.
+   EVERY ONE OF THESE ROWS IS IN THE SHIPPED ARTIFACT AND NONE HAD A READER HERE — the SEVENTH time this row has
+   been the consumer that never asked, after `orphansAsked`, `unitsDone`, the @S arrival census, the WFQ split,
+   the arrivals/departures pair and the step histogram, and this time on the one quantity the open throughput
+   question turns on. Confirmed by content with an invented control: all twelve keys occur in `qjs.wasm` and the
+   control occurs nowhere, with `stepUnitRuns` as the positive control for the probe itself.
+   THREE DENOMINATORS AND THREE QUESTIONS, which is why this is one list and not a count. `scanRivalWeights /
+   scanRivalRuns` is the frontier a rescan actually WALKED; `scanRivalRuns / preemptAsksLifetime` is the MISS
+   RATE, which engine.c calls "the share of CONSULTATIONS that bought a walk" and which separates "a cache that
+   absorbs nothing" from "a generation that moves as fast as the hook is consulted" — the first repairs the
+   CACHE and the second is the page branching and is nowhere near it; and `scanCensusWeights` is counted APART
+   from every other entry because its cadence is the REPORT's, so summing it in "would put the instrument's own
+   cost inside the rate that exists to price the dispatch".
+   THE THREE MISS ARMS ARE A PARTITION AND THE THIRD IS NOT A ROUNDING ROW. engine.h: "a large `cur` beside a
+   large `both` and a large `cur` beside a zero `both` recommend the same work at completely different prices,
+   and no arithmetic over two rows can separate them" — where both invalidators moved in one interval, removing
+   one buys NOTHING.
+   ALL TWELVE ARE LIFETIME COUNTS, raised in EVERY build (engine.h states why the partition is not compiled out
+   in release: three zeros beside a nonzero total would read as a hook that never missed rather than as a build
+   that never classified), and all are taken off the SAME entry so both identities below hold at one instant.
+   `SCAN_COST_MISS`'s FIRST member is the TOTAL and the rest are its parts, in the producer's own assertion
+   order, so the check derives the arithmetic from the list. ABSENT STAYS ABSENT: a `0` in `scanRivalRuns` is the
+   POSITIVE statement that the hook's cache absorbed every consultation. */
+const SCAN_COST_MISS = ['scanRivalRuns', 'rivalMissGen', 'rivalMissCur', 'rivalMissBoth'];
+const SCAN_COST_ROWS = [
+  'scanNextRuns', 'scanNextWeights',
+  'scanRivalRuns', 'scanRivalWeights',
+  'scanOtherRuns', 'scanOtherWeights',
+  'scanCensusRuns', 'scanCensusWeights',
+  'preemptAsksLifetime',
+  'rivalMissGen', 'rivalMissCur', 'rivalMissBoth',
+];
 const REPLY_DOOR_ROWS = [...REPLY_DOOR_SUM, 'rowsAwaitingBytes'];
 const NET_ASK_ROWS = [
   'epFetchAskNamedLife', 'epFetchAskNamedTypeofLife', 'epFetchAskNamedPropLife',
@@ -2086,6 +2130,41 @@ const row = {
       for (const k of arms)
         if (typeof runs[k] === 'number' && h[k] > runs[k])
           return 'arm ' + k + ' overran ' + h[k] + ' time(s) of ' + runs[k] + ' run(s)';
+    return '';
+  })(),
+  /* …AND WHAT THE ORDER COST INSIDE THOSE TURNS, which `turnPhase` hands off and cannot give — see
+     `SCAN_COST_ROWS` for why a small `schedUs` does not exclude the hook, for the three denominators and for
+     why the census walk is counted apart. DERIVED FROM THE ONE LIST so these keys and the two checks below
+     cannot disagree. ABSENT STAYS ABSENT for `turnPhase`'s reason exactly. */
+  scanCost: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    const out = {};
+    for (const k of SCAN_COST_ROWS) {
+      taken.add(k);
+      out[k] = typeof c[k] === 'number' ? c[k] : EP_FACT_ABSENT;
+    }
+    return out;
+  })(),
+  /* AND THE PARTITION AND THE CONTAINMENT ASKED HERE, for `turnPhaseSumsWrong`'s reason exactly: solver/
+     result.c asserts `gen + cur + both == scanRivalRuns` and `scanRivalRuns <= preemptAsks` with `DCHECK`s
+     that `-DAPICLIENT_DEV=0` compiles out, and this driver measures whatever artifact is installed — so on a
+     release census those assertions are not weakened, they are ABSENT, and this is their release-mode reader.
+     ONE FIELD AND NOT TWO, because they are one question: is the miss rate a fraction and is its partition a
+     partition. A STRING AND NOT A COLOUR, so a failure names both sides and does not stop the row. */
+  scanCostSumsWrong: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    for (const k of SCAN_COST_MISS) if (typeof c[k] !== 'number') return null;
+    const [tot, ...arms] = SCAN_COST_MISS;
+    const sum = arms.reduce((a, k) => a + c[k], 0);
+    if (sum !== c[tot])
+      return tot + ' ' + c[tot] + ' against ' + arms.map((k) => k + ' ' + c[k]).join(' + ') + ' = ' + sum;
+    if (typeof c.preemptAsksLifetime === 'number' && c[tot] > c.preemptAsksLifetime)
+      return tot + ' ' + c[tot] + ' exceeds preemptAsksLifetime ' + c.preemptAsksLifetime +
+        ', so the miss RATE is not a fraction';
     return '';
   })(),
   /* AND THE CONTAINMENT CHAIN ASKED HERE, FOR `replyDoorSumsWrong`'s REASON EXACTLY. solver/result.c asserts
