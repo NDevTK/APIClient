@@ -968,27 +968,53 @@ void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
    bindings it wrote stayed private to it. The sibling then read exports nothing had written in its world. There
    is no flow-private skip here: a module record is reachable from the realm's module map the moment it loads, so
    it is shared state whoever created it.
-   RESIDUAL — THE LINK PHASE WRITES THESE SAME FIELDS AND DOES NOT CALL THIS HOOK, AND THE OVER-CLAIM IS WHAT
-   MAKES THAT INVISIBLE: "the state that decides whether a flow evaluates at all" is the state that decides
-   whether a flow LINKS at all, and §16.2.1.6.1.2 Link ( ) writes `status`, `dfs_index`, `dfs_ancestor_index`
-   and `stack_prev` at THREE sites — the pre-order claim (UNLINKED->LINKING), the SCC pop (LINKING->LINKED) and
-   step 4's reset (LINKING->UNLINKED) — none of which announces itself, while `JSModuleEvalState` already holds
-   every one of those four fields. So the eval phase is per-flow and the link phase is baseline, which is one
-   phase isolated two ways: every world reads the module LINKED while only the linking world ran the §16.2.1.7.3.1
-   prologue that initialises its top-level FUNCTION DECLARATIONS, and those are cells born JS_UNINITIALIZED.
-   WHAT IS NOT COVERED is therefore a property of the engine's call graph and not a population: a write to a
-   field this blob holds, from a function this hook is not called by.
-   WHAT THE NEXT DIFF BUILDS is `js_module_eval_capture(ctx, m)` at those three sites — threading a `JSContext *`
-   into all three, none of which takes one today, and lifting that function's forward declaration above them.
+   RESIDUAL — MET FOR THE LINK PHASE AND REWRITTEN RATHER THAN DELETED, BECAUSE WHAT A READER RE-DERIVES IS THE
+   GAP AND NOT THE RECORD OF IT, AND BECAUSE THE COUNT THIS ENTRY STATED WAS WRONG IN THE DIRECTION THAT MADE THE
+   FIX LOOK BIGGER THAN IT IS. It read: the link phase writes these same fields and does not call this hook, and
+   the over-claim is what makes that invisible — "the state that decides whether a flow evaluates at all" is the
+   state that decides whether a flow LINKS at all, and §16.2.1.6.1.2 Link ( ) writes `status`, `dfs_index`,
+   `dfs_ancestor_index` and `stack_prev` at THREE sites (the pre-order claim UNLINKED->LINKING, the SCC pop
+   LINKING->LINKED and step 4's reset LINKING->UNLINKED), none of which announces itself; WHAT THE NEXT DIFF
+   BUILDS is `js_module_eval_capture(ctx, m)` at those three sites, threading a `JSContext *` into all three.
+   IT IS FIVE AND NOT THREE, and the two it missed are the `dfs_ancestor_index` minima in
+   `js_module_link_advance`, which every enumeration of this gap has missed for one reason worth keeping: THEY
+   ARE NOT STATUS WRITES AND DO NOT LOOK LIKE STATE. That is §THE-`WHAT-IS-NOT-COVERED`-CLAUSE's enumeration
+   hazard arriving in an entry whose NOT-COVERED clause was correctly written as a PROPERTY — `a write to a
+   field this blob holds, from a function this hook is not called by` — and whose illustration was a LIST. That
+   run is BACKTICKED and not quoted, deliberately: it is this tree's own prose being SHOWN, and a double-quoted
+   run after a § citation enters the quotation channel and is judged against the STANDARD, which reported it
+   diverging from ECMAScript after two words. A spelling being shown goes outside that channel by construction
+   rather than relying on a clearance some other file happens to supply.
+   AND FIVE MAKES THE CONSTRUCTION SMALLER RATHER THAN LARGER, WHICH IS WHY THE CLAUSE ASKING FOR A CALL AT EACH
+   SITE WAS THE WRONG REMEDY: `js_module_linking_enter` is the ONLY push onto the walk's SCC stack, so a module
+   reaches that stack or a frame on the walk's path only through it, and the host's dedup is first-baseline-wins
+   per flow — so ONE announcement before that claim covers all five, and the other four are the same flow writing
+   a record it has already announced. What landed is `js_module_link_set_status`, the only way that phase spells a
+   status write, so the announcement is STRUCTURAL there rather than remembered. The engine states all of this at
+   `js_module_eval_capture`'s own site, which is where a reader counting call sites must go.
+   WHAT IS STILL OUTSTANDING IS THE EVAL PHASE, and it is a different kind of gap: its status writes do not go
+   through a helper, so a site added there can still forget. The spec fact that made the link half urgent is
+   unchanged and is what a reader should carry — the eval phase is per-flow and the link phase WAS baseline, one
+   phase isolated two ways: every world read the module LINKED while only the linking world ran the
+   §16.2.1.7.3.1 prologue that initialises its top-level FUNCTION DECLARATIONS, and those are cells born
+   JS_UNINITIALIZED. A world that then read one got `_ is not initialized` out of the page's own bundle.
+   AND THE TELL THAT THIS RECORD SHOULD HAVE BEEN MARKED MET BY THE COMMIT THAT BUILT IT FIRED AND WAS NOT ACTED
+   ON: §AND-THE-SAME-COMMIT-HALF says a diff is not finished while a residual it satisfied still says the thing
+   is absent, and names the free tell as the commit's own SUBJECT naming what the residual asked for. That
+   commit's subject is "capture the link phase, so a sibling world's §16.2.1.7.3.1 prologue is its own". The
+   subject quoted the residual and the residual stood for a commit longer.
    IT IS NOT a `cow_capture_host_record` over the module graph, which is what the engine's own `unforkable`
    refusal prescribes: that primitive is a byte copy plus one dup per JSValue at a named offset, and a module
    record owns ATOMS and a counted array of JSVarRef* that no `val_off` can name — the identical reason cow.h
    gives for the for-in record not taking the byte arm. The refusal's premise ("no COW delta captures" those
    fields) is the claim this entry kind retired; its conclusion still holds for the var_ref double-count.
-   HOW ITS ABSENCE WOULD SHOW: a flow reaching module evaluation on a record whose status is BELOW linked, which
-   the engine asserts at its own §16.2.1.6.1.3.1 entry, and `cowStateAsks.module` rising only on reaches made
-   after a graph is already linked. RETIREMENT: this goes when a write to a field JSModuleEvalState holds cannot
-   compile without a capture in front of it. */
+   HOW ITS ABSENCE WOULD SHOW, for the half that is still open: a flow reaching module evaluation on a record
+   whose status is BELOW linked, which the engine asserts at its own §16.2.1.6.1.3.1 entry, and `cowStateAsks
+   .module` rising only on reaches made after a graph is already linked. RETIREMENT: this goes when the EVAL
+   phase spells its status writes through one helper the way `js_module_link_set_status` spells the link phase's,
+   so a site added there cannot forget — MEASURED ABSENT with the command, so this condition is not born met:
+   `grep -c 'js_module_eval_set_status' engine/qjs/quickjs.c` answers 0 against `js_module_link_set_status`
+   answering 6 as the armed control. */
 /* The setter/ownership pair for a coroutine-state entry, chosen by its kind. */
 static void cow_gd_install(const CowEntry *e, void *gd) {
     if (e->is_gendata == 2) JS_SetObjAsyncData(e->obj, gd);

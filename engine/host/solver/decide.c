@@ -1053,8 +1053,13 @@ static void fork_key_count(const char *key, ForkRowKind kind)
  * does clear it, and neither says anything whatever about a FORK. dec_fork_here calls concolic_pins_suspend
  * and hands that blob to engine_prepare_fork; concolic_pins_suspend's own comment says it serves a fork as
  * well as a park ("the sibling starts from what the parent had at the branch AND the parent goes on holding
- * it"); every one of engine.c's five engine_sibling_assemble call sites passes it and both paths through
- * engine_prepare_fork forward it; engine_sibling_assemble sets `started` AND `pin_blob` on the sibling; and
+ * it"); EVERY ONE of engine.c's engine_sibling_assemble call sites passes it and both paths through
+ * engine_prepare_fork forward it — and the number that stood here was FIVE where the construct answers SIX,
+ * which is why the derivation replaces it rather than the corrected digit: `grep -cE
+ * 'engine_sibling_assemble[[:space:]]*\\(ctx' engine/host/solver/engine.c` is the population, it moves on any
+ * commit that adds a fork, and engine.c states the same command at its own counting site. The PROPERTY is what
+ * this argument rests on and it was re-derived at all six (five pass `concolic_pins_suspend()` directly and two
+ * forward a caller's blob), so the count was wrong and the claim it supports was not; engine_sibling_assemble sets `started` AND `pin_blob` on the sibling; and
  * flow_switch_in's `started` arm calls concolic_pins_resume. So REFINEMENT CROSSES EVERY FORK: a question the
  * parent pinned before the branch is refined in both arms and in every descendant of either, so what a name
  * buys is not confined to one flow's own prefix.

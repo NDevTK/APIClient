@@ -6265,8 +6265,12 @@ static int g_sess_forking;
    hook table. It is not a routing predicate: it selects no implementation, it answers a question about the
    session. */
 int engine_session_forks(void) { return g_sess_forking; }
-/* (engine_sibling_assemble is declared above the delivery fork, which is the first of its three callers in
-   this file; a second declaration here would be a second place to keep its signature in step.) */
+/* (engine_sibling_assemble is declared above the delivery fork, which is the FIRST of its callers in this
+   file; a second declaration here would be a second place to keep its signature in step. THE NUMBER THAT STOOD
+   HERE WAS THREE AND THE CONSTRUCT ANSWERS SIX, which is the one thing a parenthesis like this should never have
+   carried: a count of call sites rises on every commit that adds a fork, so it is stale by construction and the
+   only thing this sentence needed was WHICH caller comes first. The derivation lives at this file's own counting
+   site and in decide.c's argument that rests on the same population.) */
 /* THE HANDOFF IS FILLED AND EMPTIED WITHIN ONE FORK, AND THAT IS ASSERTED HERE RATHER THAN HOPED FOR. Two
    pointers held between a `prepare` and a `finalize` are a slot with exactly one legal occupant: a second
    prepare arriving with the first still in it means the interpreter took the FORKED bit and never reached its
