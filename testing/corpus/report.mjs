@@ -67,16 +67,33 @@ const stacks = new Map([...list.byId].map(([id, r]) => [id, r.stack]));
    the population comes from and silently preferring either one would answer a question the reader did not
    ask. The NAMED mode keeps its throw exactly as it was: a reader who names a file and gets it wrong must be
    told, and that refusal is this reader working. */
+/* THE DERIVATION IS THE DEFAULT AND A HAND-NAMED SET IS THE FLAG, WHICH IS THE ONLY SHAPE IN WHICH A
+   PLACEHOLDER IS UNSPELLABLE. `--pair` landed as an OPT-IN, and an opt-in closes nothing: a reader who typed
+   the bare command still got a single-file default, so `node report.mjs <census files>` stayed a sentence
+   somebody could write and whatever set they picked stayed the population. CLAUDE.md records the cost of
+   exactly that placeholder -- this file THROWS on a census whose rows its site list does not name, so a reader
+   obeying the published command hand-picks a set that does not throw and reports whatever that set happens to
+   carry, which is a hand-chosen scope wearing a derivation's clothes and which answered `0` for a field that
+   110 of 119 passes carry. Inverting the default is what makes the derived population the thing a BARE command
+   reports over, and a hand-chosen one the thing somebody has to ask for by name.
+   A BARE FILENAME IS REFUSED RATHER THAN SILENTLY HONOURED, and the refusal names both forms. Honouring it
+   would leave the old hole open under a new spelling; refusing it is the one answer that cannot be mistaken
+   for either mode, which is the same reason `--pair` beside a named file was refused rather than arbitrated.
+   `--pair` IS KEPT AS A NO-OP ALIAS so a command somebody already wrote still means what it meant -- it is not
+   a second mode, it names the default. */
 const argv = process.argv.slice(2);
-const PAIR = argv.includes('--pair');
-const named = argv.filter((a) => a !== '--pair');
+const NAMED = argv.includes('--named');
+const named = argv.filter((a) => a !== '--pair' && a !== '--named');
+if (!NAMED && named.length)
+  throw new Error('report.mjs: ' + named.length + ' file(s) were named without `--named`. The DERIVED pass ' +
+    'set is the default now, because a command with a placeholder for its own population is a hand-chosen ' +
+    'scope wearing a derivation\'s clothes. Run `node report.mjs` ALONE for the derivation over every census ' +
+    'beside this one that measures the site list, or `node report.mjs --named ' + named.join(' ') + '` to ' +
+    'report over exactly those files and nothing else.');
 let files;
-if (PAIR) {
-  if (named.length)
-    throw new Error('report.mjs: `--pair` DERIVES the pass set from the site list and you also named ' +
-      `${named.length} file(s). Those are two different claims about which population this report is over, ` +
-      'and preferring either one silently would answer a question you did not ask. Use `--pair` alone, or ' +
-      'name every file and drop `--pair`.');
+if (!NAMED) {
+  /* The named-beside-derived refusal moved to the argv block above, where it covers BOTH spellings instead
+     of only `--pair` -- which is what it has to cover now that the derivation is what a bare command does. */
   const all = readdirSync(ROOT).filter((f) => /^census-.*\.jsonl$/.test(f)).sort();
   const paired = [], excluded = [];
   for (const f of all) {
@@ -103,8 +120,15 @@ if (PAIR) {
       `the corpus on this disk, or no pass has been taken against it. Try the other lists in this directory.`);
   files = paired;
 } else {
+  /* `--named` WITH NO FILES IS REFUSED RATHER THAN DEFAULTED TO ONE CONVENTIONAL NAME. The flag's whole
+     content is that the population is YOURS rather than derived, so an empty one is a claim with nothing
+     behind it -- and falling back to a single filename is the placeholder this flag exists to make explicit,
+     reappearing as a default nobody typed. */
+  if (!named.length)
+    throw new Error('report.mjs: `--named` was given no files. It is the flag that says the population is ' +
+      'yours rather than derived, so it cannot be empty, and it may not fall back to one conventional ' +
+      'filename -- that fallback IS the placeholder. Name the files, or drop `--named` for the derivation.');
   files = named;
-  if (!files.length) files.push('census.jsonl');
 }
 const passes = files.map((f) => {
   const rows = readFileSync(join(ROOT, f), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));

@@ -6462,7 +6462,10 @@ const _LEVEL1_SHAPE_KEY = { nopool: "rNoPool", idle: "rIdle", waited: "rWaited",
    round-robined past an order that had already picked a winner. That is the three-states-behind-one-answer
    shape CLAUDE.md §a-bare-count-over-a-population-you-have-not-partitioned refuses, and the discriminator was
    in a local variable at the moment the shape was assigned and thrown away. The derivation, rather than a
-   figure that rots on the next drive: `SITES=apps.tsv node report.mjs <census files>` from `testing/corpus`
+   figure that rots on the next drive: `SITES=apps.tsv node report.mjs` from `testing/corpus`, which DERIVES
+   its own pass set (a named set is `--named`, and a bare filename is refused; the `<census files>` placeholder
+   this line used to carry was a hand-chosen scope wearing a derivation's clothes, and CLAUDE.md records it
+   answering `0` for a field 110 of 119 passes carry)
    prints `<rounds ending in a fetch service>serv/pool<n>` per pass in its ENGINE SPAN block.
    AND THE BENCH IS NOT WHAT COSTS THE SECONDS, WHICH IS RECORDED HERE SO THE NEXT READER OF THESE TWO ROWS
    DOES NOT SPEND A DIFF ON IT. The obvious next move — keep a YIELDing engine rankable while its payment is in
