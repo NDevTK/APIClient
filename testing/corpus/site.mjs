@@ -2123,6 +2123,52 @@ const row = {
     const h = c.stepUnitOverruns;
     return (h && typeof h === 'object' && !Array.isArray(h)) ? h : null;
   })(),
+  /* …AND WHICH OF THOSE OVERRUNNING TURNS OFFERED NO SUSPEND POINT AT ALL, PER ARM — the join neither
+     `stepUnitOverruns` nor `sliceOverrunSeamless` can make, because the first is a histogram and the second is
+     a SCALAR. Without it a reader holding ONE arm at three quarters of all overruns and a seamless count at
+     three quarters of the same total cannot say whether those are the same turns, and the two readings take
+     OPPOSITE work: solver/engine.h states them — a seamless stretch is "a C activation that declares no step
+     boundary, which is a step-machine conversion (§C-stack) in whichever component owns that call", and a
+     stretch that offered points and ran anyway is "the page choosing a back-edge-free stretch, which no
+     ordering reaches and which §NO BOUNDS forbids capping".
+     MEASURED, WHICH IS WHY THE JOIN IS WORTH A ROW: over three drives of one release artifact on one real app,
+     `seed-one-orphan-flow` overran 36 of 55, 100 of 121 and 122 of 140 of its OWN runs — 51%, 72% and 76% of
+     all overrunning turns — while the seamless scalar read 55%, 75% and 78% of that same total. Two numbers
+     moving together over three passes with nothing able to say they are one population.
+     READ AS A TRIPLE AND NEVER ALONE: an arm's overruns against its RUNS says whether that arm can rest, and
+     this against those OVERRUNS says whether the thread was inside C with no step boundary. LIFETIME and off
+     the same entry as both, so the triple is one moment. ABSENT STAYS ABSENT: a `{}` would read as an engine
+     whose overrunning turns all offered a point, which is a different fact and the flattering one. */
+  stepUnitOverrunSeamlessArms: (() => {
+    taken.add('stepUnitOverrunSeamlessArms');
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    const h = c.stepUnitOverrunSeamlessArms;
+    return (h && typeof h === 'object' && !Array.isArray(h)) ? h : null;
+  })(),
+  /* AND ITS OWN ASSERTED TOTAL AND PER-ARM CONTAINMENT, for `stepUnitOverrunArmsWrong`'s reason exactly:
+     solver/engine.c raises the arm one statement after the scalar from ONE turn's arm and ONE turn's
+     consultation delta and asserts both there, and `-DAPICLIENT_DEV=0` compiles those out while this driver
+     measures whatever artifact is installed. A STRING AND NOT A COLOUR. */
+  stepUnitOverrunSeamlessArmsWrong: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    const h = c.stepUnitOverrunSeamlessArms, over = c.stepUnitOverruns;
+    if (!h || typeof h !== 'object' || Array.isArray(h)) return null;
+    if (typeof c.sliceOverrunSeamless !== 'number') return null;
+    const arms = Object.keys(h).filter((k) => typeof h[k] === 'number');
+    const sum = arms.reduce((a, k) => a + h[k], 0);
+    if (sum !== c.sliceOverrunSeamless)
+      return 'stepUnitOverrunSeamlessArms arms sum to ' + sum + ' against sliceOverrunSeamless ' +
+        c.sliceOverrunSeamless;
+    if (over && typeof over === 'object' && !Array.isArray(over))
+      for (const k of arms)
+        if (typeof over[k] === 'number' && h[k] > over[k])
+          return 'arm ' + k + ' was seamless in ' + h[k] + ' turn(s) of ' + over[k] + ' overrun(s)';
+    return '';
+  })(),
   /* AND ITS OWN ASSERTED TOTAL BESIDE IT, because an enumeration carried without the total it sums to is the
      defect CLAUDE.md §AND-A-CONSERVATION-IDENTITY names: an arm read from one place and summed against
      another's figure. These arms PARTITION `sliceOverruns` by where the overrunning turn ended, so they sum to

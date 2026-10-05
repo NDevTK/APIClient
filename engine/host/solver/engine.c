@@ -10723,6 +10723,33 @@ static inline long step_unit_over_total(void)
     for (i = 0; i < STEP_UNIT_N; i++) t += g_step_unit_over[i];
     return t;
 }
+/* …AND THE SAME LIST RESTRICTED ONE STEP FURTHER — the overrunning turns that offered NOT ONE suspend point.
+   THE TWO ROWS IT SITS BETWEEN CANNOT BE JOINED, WHICH IS THE WHOLE REASON IT EXISTS. `g_step_unit_over` says
+   WHICH ARM overran and `g_over_seamless` says HOW MANY overrunning turns were seamless, and the second is a
+   SCALAR — so a reader holding one arm at three quarters of all overruns and a seamless count at three
+   quarters of all overruns cannot say whether they are the same turns. Those take OPPOSITE work:
+   solver/engine.h's `over_arms` banner states it — a seamless stretch is "a C activation that declares no step
+   boundary, which is a step-machine conversion (§C-stack) in whichever component owns that call", and a
+   stretch that offered points and ran anyway is "the page choosing a back-edge-free stretch, which no ordering
+   reaches and which §NO BOUNDS forbids capping".
+   MEASURED, AND THE JOIN WAS THE THING A READER WANTED AND COULD NOT HAVE: over three drives of one release
+   artifact on one real app, `seed-one-orphan-flow` overran 36 of 55, 100 of 121 and 122 of 140 of its own runs
+   — 51%, 72% and 76% of ALL overrunning turns — while the seamless count stood at 55%, 75% and 78% of the same
+   total. Two numbers that move together over three passes and no row anywhere that could say they are one
+   population rather than two that happen to be the same size.
+   RAISED AT THE SAME LINE AS THE SCALAR, from the same turn's arm and the same turn's consultation delta, so
+   `sum == g_over_seamless` and the per-arm containment against `g_step_unit_over` are both exact THERE and are
+   asserted there. It decides nothing and bounds nothing (§NO BOUNDS), in every build for its scalar's reason. */
+static long g_step_unit_over_seamless[STEP_UNIT_N];
+/* ITS OWN SUM, WALKED RATHER THAN CARRIED, for `step_unit_over_total`'s reason exactly. */
+static inline long step_unit_over_seamless_total(void)
+{
+    long t = 0;
+    int i;
+
+    for (i = 0; i < STEP_UNIT_N; i++) t += g_step_unit_over_seamless[i];
+    return t;
+}
 /* …AND THE STEPS THEMSELVES, COUNTED WHERE THE HISTOGRAM ABOVE IS NOT, which is the whole of what makes the
    identity between the two an assertion rather than an arithmetic tautology. This is incremented where
    flow_step RESETS the name — its entry — and the histogram is incremented where the scheduler RECORDS the
@@ -13940,6 +13967,7 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        either row is the whole of it. Both are taken here, before the loop that reads the histogram. */
     out->classic_compile_resumed     = g_classic_compile_resumed;
     for (i = 0; i < STEP_UNIT_N; i++) out->over_arms[i] = g_step_unit_over[i];
+    for (i = 0; i < STEP_UNIT_N; i++) out->over_seamless_arms[i] = g_step_unit_over_seamless[i];
     /* …AND THE ARM HISTOGRAM ITSELF, TAKEN HERE RATHER THAN AT THIS FUNCTION'S TAIL, because the compile
        pair's containment below READS one of its arms: `arms[STEP_UNIT_COMPILE_YIELDED]` is the other half
        of the compile-stint population `classic_compile_overruns` is drawn from. Taken at the tail it would
@@ -15907,8 +15935,32 @@ static int engine_sched_slice(void) {
                         "second writer that resets it, and every `sliceOverrunAsks` reading taken since is a "
                         "difference of two unrelated instants",
                         (unsigned long long)g_preempt_asked, (unsigned long long)pa_slice0);
-                if (g_preempt_asked == pa_slice0) g_over_seamless++;
-                else                              g_over_asks += g_preempt_asked - pa_slice0;
+                if (g_preempt_asked == pa_slice0) {
+                    g_over_seamless++;
+                    /* …AND IN WHICH ARM, WHICH THE SCALAR ABOVE CANNOT SAY AND WHICH DECIDES WHETHER THE
+                       ANSWER IS A STEP-MACHINE CONVERSION OR NOTHING AT ALL — see g_step_unit_over_seamless.
+                       Same arm, same turn, same consultation delta, one statement apart, so both identities
+                       below are exact here and nowhere else. */
+                    g_step_unit_over_seamless[g_step_unit]++;
+                    DCHECKF(step_unit_over_seamless_total() == g_over_seamless,
+                            "the seamless-overrun histogram does not account for every seamless turn (%ld arm "
+                            "counts against %ld seamless) — both are raised on these two lines from one "
+                            "turn's arm, so a difference is a second raise site for one of them",
+                            step_unit_over_seamless_total(), g_over_seamless);
+                    /* AND THE PER-ARM CONTAINMENT, WHICH THE SUM ABOVE IS BLIND TO for the same reason the
+                       runs/overruns pair is: two sums agree with one arm's subset standing above its own
+                       population and another's below it. This turn raised `g_step_unit_over[g_step_unit]` a
+                       few lines up, same arm and no branch between, so it is true by construction HERE. */
+                    DCHECKF(g_step_unit_over_seamless[g_step_unit] <= g_step_unit_over[g_step_unit],
+                            "arm %d offered no suspend point in %ld overrunning turn(s) against %ld "
+                            "overrunning turn(s) of that arm — the overrun is counted a few lines above this "
+                            "one from the SAME `g_step_unit`, so a subset larger than its own population is "
+                            "that name having been rewritten between the two lines",
+                            (int)g_step_unit, g_step_unit_over_seamless[g_step_unit],
+                            g_step_unit_over[g_step_unit]);
+                } else {
+                    g_over_asks += g_preempt_asked - pa_slice0;
+                }
                 DCHECKF(g_over_seamless <= g_slice_over,
                         "more overrunning turns offered no suspend point (%ld) than overran at all (%lld) — "
                         "both are raised inside this one branch from one turn, the total unconditionally and "

@@ -2522,7 +2522,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    The only other frontier size on a driver's list is the WFQ walk's, taken at whichever entry that driver's
    own index names, so a consumer that carries the total and not `live` performs the two-moments subtraction
    instead of the one this composer already makes available.
-   @kind lifetime: stepUnitRuns stepUnitOverruns
+   @kind lifetime: stepUnitRuns stepUnitOverruns stepUnitOverrunSeamlessArms
    @kind lifetime: hostAsked hostAnswered replyAsked replyAnswered replyDeclined replyDropped
    @kind lifetime: replayHits replayLeft replayLeftArms
    @kind lifetime: branchAsked branchRefined
@@ -2618,6 +2618,11 @@ char *result_cold_json(void) {
     /* AND THE FOURTH EXPANSION OF THE SAME LIST — solver/step_unit.h's arms again, restricted to the turns
        that overran the cooperative slice. Same derivation, same width, for the same reason. */
     char over[STEP_UNITS_JSON_MAX];
+    /* AND THE FIFTH, RESTRICTED ONE STEP FURTHER: of those turns, the ones that offered NOT ONE suspend point.
+       Same derivation and same width. It is a row rather than a reader's subtraction because `over` and the
+       seamless SCALAR cannot be joined — see solver/engine.h's `over_seamless_arms` for the two opposite diffs
+       that join decides between. */
+    char seam[STEP_UNITS_JSON_MAX];
     /* AND THE TWO HISTOGRAMS ON THE HEAP, FOR THE ONE REASON THE FIXED ONES ABOVE ARE ON THE STACK: their
        extents are the FRONTIER's and not a list's, so there is no width to derive. See cursor_hist_json,
        which composes both and is handed each one's NAME because its asserts have to say which. */
@@ -2710,6 +2715,8 @@ char *result_cold_json(void) {
         long atladder = cold_hist_json(ladder, sizeof ladder, c.at_the_ladder_units,
                                        "outOfProgramsAtTheLadderUnits");
         long overran  = cold_hist_json(over, sizeof over, r.over_arms, "stepUnitOverruns");
+        long seamless = cold_hist_json(seam, sizeof seam, r.over_seamless_arms,
+                                       "stepUnitOverrunSeamlessArms");
         long atcursor = 0;
         long atahead = 0;
         int k;
@@ -2745,6 +2752,15 @@ char *result_cold_json(void) {
                "total are raised on one line from one turn's clock readings, so a total that is not "
                "`sliceOverruns` means a row was lost crossing into this document, and a sparse histogram "
                "losing a row reads as a loop that rested more often rather than as a broken count");
+        /* AND THE SAME IDENTITY ONE RESTRICTION FURTHER, for the same reason and with the sharper consequence.
+           A row lost HERE reads as an arm whose overruns offered suspend points and ran anyway — which is "the
+           page choosing a back-edge-free stretch, which no ordering reaches" — when the truth may be a C
+           activation with no step boundary at all, and those are opposite diffs in different components. */
+        DCHECK(seamless == r.slice_overrun_seamless,
+               "the seamless-overrun histogram does not account for every seamless turn — the arm and the "
+               "scalar are raised one statement apart from one turn's arm and one turn's consultation delta, "
+               "so a total that is not `sliceOverrunSeamless` means a row was lost crossing into this "
+               "document, and the loss reads as an arm that DID offer suspend points");
         /* AND THE CURSOR HISTOGRAM'S PARTITION, WHICH IS `standing`'s IDENTITY OVER A DIFFERENT QUESTION. Every
            live member stands at exactly one program cursor, so these counts sum to the frontier too — and the
            consequence of an inequality here is sharper than for the arm histogram, because this row exists
@@ -3374,6 +3390,13 @@ char *result_cold_json(void) {
                     no overruns is cheap however often it is taken, and an arm whose two counts are EQUAL is a
                     step that cannot rest. See solver/engine.h's `over_arms`. */
                  "\"stepUnitOverruns\":%s,"
+                 /* …AND WHICH OF THOSE TURNS OFFERED NO SUSPEND POINT AT ALL, PER ARM — the join neither
+                    `stepUnitOverruns` nor `sliceOverrunSeamless` can make, and the row that decides between a
+                    step-machine conversion and a page's own back-edge-free stretch. Read as a TRIPLE with the
+                    two rows it sits between: an arm's overruns against its runs says whether it can rest, and
+                    this against those overruns says whether the thread was inside C that declares no step
+                    boundary. See solver/engine.h's `over_seamless_arms`. */
+                 "\"stepUnitOverrunSeamlessArms\":%s,"
                  /* AND WHETHER THE PAGE'S OWN CODE WAS RUNNING IN THOSE TURNS AT ALL, which the arm row
                     above cannot say and which its reading rests on. An arm is where a step ENDED, and
                     `resume-program` and `start-a-classic-program` both end inside the same call whether the
@@ -3793,6 +3816,7 @@ char *result_cold_json(void) {
                  (long long)r.instance_us,
                  (long long)r.loop_us, (long long)r.between_slices_us, r.slices,
                  (long long)r.slice_us, (long long)r.sched_us, (long long)r.slice_overruns, runs, over,
+                 seam,
                  (unsigned long long)r.slice_overrun_asks, r.slice_overrun_seamless,
                  r.classic_compiles, r.classic_compile_overruns,
                  r.classic_compile_again, (long long)r.classic_compile_again_bytes,

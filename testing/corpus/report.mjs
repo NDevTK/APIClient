@@ -638,6 +638,12 @@ for (const p of passes) for (const r of p.rows) {
        cross-run fact no single census can state. All lifetime, all off the entry `countersFrom` names. */
     tphase: r.turnPhase, tphaseWrong: r.turnPhaseSumsWrong,
     suo: r.stepUnitOverruns, suoWrong: r.stepUnitOverrunArmsWrong,
+    /* AND THE THIRD MEMBER OF THAT TRIPLE — which of an arm's overrunning turns offered NO suspend point.
+       `suo` against `sur` says whether an arm can REST; this against `suo` says whether the thread was inside
+       C that declares no step boundary, which is a step-machine conversion, against the page choosing a
+       back-edge-free stretch, which no ordering reaches. Two components, two diffs, and neither the arm
+       histogram nor the seamless SCALAR can tell them apart on its own. */
+    suoSeam: r.stepUnitOverrunSeamlessArms, suoSeamWrong: r.stepUnitOverrunSeamlessArmsWrong,
     /* AND THE TWO DENOMINATORS THE FOUR SHARES ABOVE ARE OVER, which this file read off `r` directly in the
        `tlad` block and so could not reach from a measurement. `steps` is `sliceOverruns`' denominator and
        `stepUnitRuns` is `stepUnitOverruns`' — per arm, which is the whole of the producer's pair reading — and
@@ -1568,6 +1574,7 @@ const tpOne = (m) => {
   const p = (m.tphase && typeof m.tphase === 'object') ? m.tphase : null;
   const h = (m.suo && typeof m.suo === 'object' && !Array.isArray(m.suo)) ? m.suo : null;
   const runs = (m.sur && typeof m.sur === 'object' && !Array.isArray(m.sur)) ? m.sur : null;
+  const seamArms = (m.suoSeam && typeof m.suoSeam === 'object' && !Array.isArray(m.suoSeam)) ? m.suoSeam : null;
   /* THREE STATES READ OFF THE VALUE AND NEVER OFF THE KEY, and this block got it wrong once in the way the
      `tlad` block below already records: the mapping assigns `tphase` UNCONDITIONALLY, so an `'tphase' in m`
      test can never be false and the `predates` arm it guarded was DEAD — every pass older than these rows
@@ -1595,7 +1602,12 @@ const tpOne = (m) => {
            over, asks, steps,
            topArm: top, topOver: top === null ? null : h[top],
            topRuns: (top !== null && runs && typeof runs[top] === 'number') ? runs[top] : null,
-           wrong: [m.tphaseWrong, m.suoWrong].filter((x) => typeof x === 'string' && x !== '').join('; ') };
+           /* THE THIRD MEMBER OF THE TRIPLE FOR THAT SAME ARM, so the cell answers the question the pair
+              hands off instead of leaving a reader to join a histogram to a scalar. `null` where the row is
+              absent, which is an artifact predating it and NOT an arm whose turns all offered a point. */
+           topSeam: (top !== null && seamArms && typeof seamArms[top] === 'number') ? seamArms[top] : null,
+           wrong: [m.tphaseWrong, m.suoWrong, m.suoSeamWrong]
+             .filter((x) => typeof x === 'string' && x !== '').join('; ') };
 };
 const tpRows = table.map((t) => {
   const per = t.measurements.map(tpOne);
@@ -1620,14 +1632,16 @@ if (tpRows.length) {
     '(' + pc(x.overShare) + ') ' +
     pc(x.seamShare) + 'seam/' + (x.asks === null ? '-' : x.asks) + 'asks ' +
     (x.topArm === null ? '-' : x.topArm + ' ' + x.topOver + '/' +
-      (x.topRuns === null ? '-' : x.topRuns));
+      (x.topRuns === null ? '-' : x.topRuns) + ' seam ' +
+      (x.topSeam === null ? '-' : x.topSeam));
   console.log('');
   console.log('WHICH TURNS SPENT THE SPAN (site, then PER PASS IN ORDER):');
   /* EVERY QUANTITY THE CELL PRINTS IS NAMED HERE, for the span block's reason: a reader takes a legend as the
      key to a row, so a cell carrying more than its legend names is read as whichever field the legend lists. */
   console.log('  <schedUs as a share of stepUs>sched  <sliceOverruns>/<steps>over(<fraction>)  ' +
               '<seamless share of those overruns>seam/<suspend points they offered>asks  ' +
-              '<largest overrunning arm> <its overruns>/<its runs>');
+              '<largest overrunning arm> <its overruns>/<its runs> seam <of those overruns, how many offered ' +
+              'NO suspend point>');
   for (const r of tpShown)
     console.log('  ' + pad(r.id, tpIdW) + r.stated.map(cell).join(' | '));
   console.log('  a `-` is an absent operand or a zero denominator and NEVER a zero share; a bracketed string is');

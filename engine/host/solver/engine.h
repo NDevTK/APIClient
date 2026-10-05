@@ -2055,6 +2055,35 @@ typedef struct {
      * the same population and these rows are a second copy of it. */
     uint64_t slice_overrun_asks;      /* suspend points OFFERED, summed over the turns that met the slice */
     long     slice_overrun_seamless;  /* …and how many of those turns offered NOT ONE */
+    /* …AND IN WHICH ARM THOSE SEAMLESS TURNS WERE, WHICH IS THE JOIN THE TWO ROWS ABOVE AND `over_arms` CANNOT
+     * MAKE AND THE ONE THING THE WHOLE PAIR'S CONCLUSION RESTS ON. `over_arms` is a histogram and
+     * `slice_overrun_seamless` is a SCALAR, so a reader holding one arm at three quarters of all overruns and a
+     * seamless count at three quarters of the same total cannot say whether those are the same turns — and the
+     * two readings take OPPOSITE work, which is this pair's own argument: a seamless stretch is "a C activation
+     * that declares no step boundary, which is a step-machine conversion (§C-stack) in whichever component owns
+     * that call", and a stretch that offered points and ran anyway is "the page choosing a back-edge-free
+     * stretch, which no ordering reaches and which §NO BOUNDS forbids capping". Two components, two diffs, and
+     * until this row the evidence for either was two numbers of similar size.
+     * MEASURED, WHICH IS WHY IT IS A ROW RATHER THAN A CAUTION: over three drives of one release artifact on one
+     * real app, `seed-one-orphan-flow` overran 36 of 55, 100 of 121 and 122 of 140 of its OWN runs — 51%, 72%
+     * and 76% of all overrunning turns — while the seamless scalar read 55%, 75% and 78% of that same total. The
+     * two move together across three passes and nothing could join them.
+     * IT IS A PARTITION OF `slice_overrun_seamless` EXACTLY AND A SUBSET OF `over_arms` PER ARM, and both are
+     * asserted where all of them are in one hand — inside the overrun branch, one statement after the scalar,
+     * from the same turn's arm and the same turn's consultation delta. Asserting at the accessor instead would
+     * learn of a disagreement with the turn that caused it long gone.
+     * LIFETIME COUNTS, never reset, raised in EVERY build — the scalar they partition is raised unconditionally
+     * too, and a partition compiled out in release would print zeros beside a nonzero total and read as turns
+     * that all offered a point rather than as a build that never classified them.
+     * IT DECIDES NOTHING AND BOUNDS NOTHING (§NO BOUNDS), for the scan counters' reason exactly.
+     * HOW ITS ABSENCE SHOWS, as an observation and not an instance: a reader holding a nonzero
+     * `slice_overruns` finds one arm carrying most of them and the seamless scalar carrying a similar share,
+     * and states which of the two spans held the thread — with no row in the artifact that could contradict
+     * them in either direction.
+     * RETIREMENT: this goes when a seam verdict can judge a turn that ENDED at the slice boundary, which is
+     * the condition its own scalar carries, because the existing reader then names the same population per arm
+     * and this is a second copy of it. */
+    long     over_seamless_arms[STEP_UNIT_N];
     /* …AND THE ONE PHASE OF A START STEP THAT `slice_overruns` AND `over_arms` CAN LOCATE TO AN ARM AND
      * NEVER TO A PHASE. (This sentence said `the two rows above` until two rows were inserted between it and
      * them — a reference by POSITION resolves to whatever now occupies that position, which is why it
