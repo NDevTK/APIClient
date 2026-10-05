@@ -536,6 +536,21 @@ for (const p of passes) for (const r of p.rows) {
        while a paragraph certifies that it has one. `unitsDone` is read above now; `candidates` still is
        not, and saying so is the only thing that keeps that true or false rather than merely claimed. */
     oask: r.orphansAsked, odrv: r.orphansDriven,
+    /* AND WHICH EXIT EACH OF THOSE ASKS TOOK, which the pair above cannot say and which this file was again
+       the consumer that never asked. The pair answers HOW FAR the question got; it is silent about what the
+       ask DID, and the two readings of a high `asked` take OPPOSITE repairs — the generation cache answering
+       with no walk at all (`memo`), the walk running and the heap holding no takeable body (`empty`), or the
+       walk handing a body over (`took`). They sum to `asked`, which solver/result.c asserts where all four
+       were read together and which `-DAPICLIENT_DEV=0` compiles out, so site.mjs carries the release-mode
+       verdict and this line reads it rather than recomputing it.
+       WHY THIS COLUMN RATHER THAN SOME OTHER: measured over three drives of one release artifact on one real
+       app, `seed-one-orphan-flow` overran the cooperative slice in 204 of 221, 237 of 242 and 159 of 190 of
+       its OWN runs — 84%, 85% and 83% of ALL overrunning turns in the run — and `JS_OrphanTakeOne` enumerates
+       `rt->gc_obj_list` with no step boundary in it. That localisation came off `orphansDriven` sitting within
+       one or two of `orphansAsked`, which is an INFERENCE from two rows published for a different question;
+       these three STATE it, and they are the row that says whether the repair is per WALK or per ASK. */
+    omemo: r.orphanAskMemo, oempty: r.orphanAskEmpty, otook: r.orphanAskTook,
+    oexitWrong: r.orphanAskSumsWrong,
     /* THE ABSENT-GLOBAL PAIR, WHICH IS THE ONE ABSENCE THIS PROJECT'S FORCING FUNCTION CANNOT SURFACE AND
        WHICH THIS FILE WAS AGAIN THE CONSUMER THAT NEVER ASKED. §NO STUBS makes an unbuilt web API an HONEST
        absence whose forcing function is the page's own throw, and that argument rests on the page THROWING:
@@ -1734,6 +1749,67 @@ if (scRows.length) {
   const scSilent = scRows.filter((r) => !r.stated.length);
   if (scSilent.length)
     console.log('  NOT STATED: ' + scSilent.map((r) => r.id + '(' + r.tok + ')').join(' ') +
+      '  — `predates-the-rows` is a fact about the DRIVER and `no-counters` one about the RUN');
+}
+
+/* WHERE EACH ORPHAN ASK WENT — the half the `ask>drv` column hands off, and the one row that says which of two
+   opposite repairs the orphan walk needs. The column above answers HOW FAR the question got and is silent about
+   what the ask DID: a run with `asked` in the hundreds is consistent with a cache absorbing nearly all of them
+   and a handful of expensive walks, and equally consistent with nearly every ask being a full enumeration of
+   `rt->gc_obj_list`, and those two name repairs in different files. `memo` is the generation cache answering with
+   NO walk; `empty` is a walk that ran and found no takeable body, which solver/engine.c's residual at the take
+   states is a fact about the HEAP and not about the bundle, since the walk can only see a body with a live
+   function object of its own; `took` is a walk that handed one over.
+   WHY IT IS WORTH ITS OWN SECTION: measured over three drives of one release artifact on one real app,
+   `seed-one-orphan-flow` overran the cooperative slice in 204 of 221, 237 of 242 and 159 of 190 of its own runs
+   — 84%, 85% and 83% of ALL overrunning turns in the run — while the PICK was 0.16-0.24% of the thread and the
+   preempt hook's cache absorbed 99.5% of two to three million consultations, so the ordering is exonerated by
+   measurement and this walk is what is left. The repair's ADDRESS is what these three decide.
+   A PARTITION AND NEVER A VERDICT: the three are printed as three numbers with their total beside them, because
+   a share alone cannot separate `memo 0` from a census that never reached the question — that is `ask 0`, which
+   the cell carries. The bracketed string is site.mjs's own release-mode partition check and is reproduced here
+   rather than recomputed, for the span block's reason: a second copy of that arithmetic is the one that drifts.
+   The header and the silent list print UNCONDITIONALLY, also for the span block's reason — these rows are new,
+   so every census already on disk predates them, and a section that renders nothing in that state is
+   indistinguishable from one that does not exist. */
+const oxOne = (m) => {
+  const n = (k) => (typeof m[k] === 'number' ? m[k] : null);
+  const memo = n('omemo'), empty = n('oempty'), took = n('otook'), ask = n('oask');
+  const stated = [memo, empty, took].every((x) => x !== null);
+  return { stated, memo, empty, took, ask, drv: n('odrv'),
+           /* THE ABSENCE IS READ OFF THE VALUE AND NEVER OFF `in`, which is the construct the span block's own
+              comment records as having made its `predates` arm dead: the mapping assigns these keys
+              unconditionally, so `'omemo' in m` is true of a pass whose rows carry nothing. `undefined` is a
+              fact about the DRIVER that wrote the census and `null` one about the RUN it measured. */
+           tok: m.omemo === undefined ? 'predates-the-rows' : 'no-counters',
+           wrong: typeof m.oexitWrong === 'string' && m.oexitWrong !== '' ? m.oexitWrong : '' };
+};
+const oxRows = table.map((t) => {
+  const per = t.measurements.map(oxOne);
+  const stated = per.filter((x) => x.stated);
+  return { id: t.id, per, stated, tok: stated.length ? null : (per.length ? per[0].tok : 'no-pass') };
+});
+if (oxRows.length) {
+  const oxIdW = Math.max('site'.length, ...oxRows.map((r) => r.id.length)) + 2;
+  const v = (x) => (x === null ? '-' : String(x));
+  const cell = (x) => (x.wrong ? '[' + x.wrong + '] ' : '') +
+    'ask ' + v(x.ask) + ' = memo ' + v(x.memo) + ' + empty ' + v(x.empty) + ' + took ' + v(x.took) +
+    ' (drv ' + v(x.drv) + ')';
+  console.log('');
+  console.log('WHERE EACH ORPHAN ASK WENT (site, then PER PASS IN ORDER):');
+  /* EVERY QUANTITY THE CELL PRINTS IS NAMED HERE, for the span block's reason: a cell carrying more than its
+     legend names is read as whichever field the legend lists. */
+  console.log('  ask <orphan asks> = memo <the generation cache answered, NO walk> + empty <walked, heap held ' +
+              'no takeable body> + took <walked and handed one over>  (drv <bodies actually driven>)');
+  for (const r of oxRows.filter((x) => x.stated.length))
+    console.log('  ' + pad(r.id, oxIdW) + r.stated.map(cell).join(' | '));
+  console.log('  a high `memo` says the cache absorbs and the cost is PER WALK (repair inside the walk); a low');
+  console.log('  one says the orphan generation moves as fast as flows run out of work and nearly every ask');
+  console.log('  enumerates the GC object list, so the cost is PER ASK and the repair is the cache or the');
+  console.log('  rung\'s placement; a bracketed string is site.mjs\'s own partition verdict');
+  const oxSilent = oxRows.filter((r) => !r.stated.length);
+  if (oxSilent.length)
+    console.log('  NOT STATED: ' + oxSilent.map((r) => r.id + '(' + r.tok + ')').join(' ') +
       '  — `predates-the-rows` is a fact about the DRIVER and `no-counters` one about the RUN');
 }
 

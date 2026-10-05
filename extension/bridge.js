@@ -180,7 +180,8 @@ function assertResultDocument(r) {
                    "_routedDelivered", "_routedRefused", "_routedTasksFired",
                    "_routedTasksTargetOrigin", "_routedTasksTargetGone", "_routedTasksThrew",
                    "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed",
-                   "_orphansDriven", "_orphansAsked"]) {
+                   "_orphansDriven", "_orphansAsked",
+                   "_orphanAskMemo", "_orphanAskEmpty", "_orphanAskTook"]) {
     DCHECK(typeof r[k] === "number",
            "the engine's result document carries no " + k + " count. TWO CAUSES, AND THE SECOND IS THE " +
            "ORDINARY ONE — check it first. (1) THE LOADED WASM IS OLDER THAN THIS FILE: this half of the " +
@@ -825,6 +826,18 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            reached the question; `asked` is what separates a page that ships no uncalled code from a scheduler
            that never got to it. */
         orphansDriven: result._orphansDriven, orphansAsked: result._orphansAsked,
+        /* AND WHICH EXIT EACH OF THOSE ASKS TOOK, which the pair cannot say and which decides between two
+           OPPOSITE repairs. `memo` is an ask the generation cache answered with NO walk at all, so a high
+           `memo` says the cache absorbs and the cost is PER WALK; a low one says the orphan generation moves as
+           fast as flows run out of work and nearly every ask enumerates `rt->gc_obj_list`, so the cost is PER
+           ASK and the repair is the cache or the rung's placement. `empty` is a walk that ran and found
+           nothing, which solver/engine.c's residual at the take states is a fact about the HEAP and not about
+           the bundle — the walk can only see a body with a live function object of its own. They sum to
+           `asked`, which solver/result.c asserts where all four were read together, so a consumer may check
+           the partition rather than trust it. All three are asserted field-for-field above and there is
+           nothing to default. */
+        orphanAskMemo: result._orphanAskMemo, orphanAskEmpty: result._orphanAskEmpty,
+        orphanAskTook: result._orphanAskTook,
         /* WHAT THE RUN ACTUALLY LEARNED, beside what it cost. The counters above say the BFS switched, forked
            and pumped jobs; these two say it produced something, which is the only question a probe watching an
            engine that now lives behind a frame boundary can ask without reaching into the moat. Both arrays are

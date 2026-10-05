@@ -1420,6 +1420,41 @@ const row = {
      picks out the middle one, which is the only one of the three that is a scheduling result to act on. */
   orphansDriven: counted.length ? counted[counted.length - 1].orphansDriven : null,
   orphansAsked: counted.length ? counted[counted.length - 1].orphansAsked : null,
+  /* …AND WHICH EXIT EACH OF THOSE ASKS TOOK, WHICH THE PAIR ABOVE CANNOT SAY AND WHICH DECIDES BETWEEN TWO
+     OPPOSITE REPAIRS. `memo` high says the generation cache absorbs and the walks that happen are few, so the
+     cost is PER WALK and the repair is inside the walk; `memo` low says the orphan generation moves as fast as
+     flows run out of work and nearly every ask is a full enumeration of `rt->gc_obj_list`, so the cost is PER
+     ASK and the repair is the cache or the rung's placement. `empty` is a walk that ran and found nothing,
+     which solver/engine.c's residual at the take states is a fact about the HEAP and not about the bundle.
+     WHY IT MATTERS ON THIS ROW RATHER THAN ON SOME OTHER: measured over three drives of one release artifact
+     on one real app, `seed-one-orphan-flow` overran the cooperative slice in 204 of 221, 237 of 242 and 159 of
+     190 of its own runs — 84%, 85% and 83% of ALL overrunning turns in the run — and its walk has no step
+     boundary in it. `orphansDriven` within one or two of `orphansAsked` on all three passes says `took` is
+     essentially every ask, so the memo absorbs nothing; but that is an INFERENCE from two rows published for a
+     different question, and these three state it.
+     TOP-LEVEL FIELDS LIKE THE PAIR AND NOT `.cold` ROWS, which is why they sit on this line rather than in a
+     block: solver/result.c composes them into the result document itself and bridge.js forwards them beside
+     `orphansDriven`, asserting all three field-for-field. ABSENT STAYS ABSENT — an artifact predating them
+     omits them, and a `|| 0` would read as a cache that absorbed every ask, which is the flattering half of
+     the very fork these rows exist to decide. */
+  orphanAskMemo: counted.length ? counted[counted.length - 1].orphanAskMemo : null,
+  orphanAskEmpty: counted.length ? counted[counted.length - 1].orphanAskEmpty : null,
+  orphanAskTook: counted.length ? counted[counted.length - 1].orphanAskTook : null,
+  /* AND THE PARTITION ASKED HERE, for `wallSpanSumsWrong`'s reason exactly: solver/result.c asserts
+     `memo + empty + took == orphansAsked` with a `DCHECK` that `-DAPICLIENT_DEV=0` compiles out, and this
+     driver measures whatever artifact is installed — so on a release census that assertion is not weakened, it
+     is ABSENT, and this is its release-mode reader. A STRING AND NOT A COLOUR: `null` is nothing to ask, `''`
+     is an observed clean answer, and a non-empty string names both sides. */
+  orphanAskSumsWrong: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1];
+    const K = ['orphansAsked', 'orphanAskMemo', 'orphanAskEmpty', 'orphanAskTook'];
+    for (const k of K) if (typeof c[k] !== 'number') return null;
+    const [tot, ...parts] = K;
+    const sum = parts.reduce((a, k) => a + c[k], 0);
+    return sum === c[tot] ? ''
+      : tot + ' ' + c[tot] + ' against ' + parts.map((k) => k + ' ' + c[k]).join(' + ') + ' = ' + sum;
+  })(),
   /* AND WHICH OF THOSE DRIVES THE WALK PREFERRED, which is the one row that says whether the ORDER did
      anything. The pair above says a drive happened; it cannot say whether the body driven was one whose own
      source resolved a network door's entry name, and that is the whole content of the ordering: a run with
