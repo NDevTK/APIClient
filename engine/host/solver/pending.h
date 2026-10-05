@@ -749,7 +749,12 @@ JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, i
  * entry the arm cannot take and would starve the queue for as long as that entry stayed owed. Written here
  * beside the other walking predicates so the two cannot drift apart about what "ready" means, which is the
  * defect this file describes at pending_owed_replies. */
-uint64_t pending_ready_oldest_seq(JSValueConst reg);
+/* WHICH ENTRY THE NEXT DELIVERY TAKES, and its STAMP — one selector and one reader of it, because `which
+   reply is next` is ONE question and three callers ask it. pending.c states why the reader is not a minimum
+   over the deliverable set, and keeps the retired version that was. −1 / 0 for a register that can deliver
+   nothing, which is the same positive statement `pending_ready` makes as a boolean. */
+int pending_next_deliverable(JSValueConst reg);
+uint64_t pending_ready_next_seq(JSValueConst reg);
 
 /* Set a field. `v` is consumed. `pending_set_int` is the same for the numeric ones.
    IT REFUSES ONE WRITE: `PEND_HAVE_VALUE` on a SYNCHRONOUS request. See `pending_answer_sync` below — this

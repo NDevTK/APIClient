@@ -5459,8 +5459,8 @@ static int flow_pending_ready(const Flow *f) { return pending_ready(f->pending);
    arrival order instead of above it. Beside the predicate above and not at the ladder, for the reason
    solver/pending.c gives for writing the walk once: two spellings of "which register" is the shape that
    drifts, and these two are read on the same line of flow_step. */
-static uint64_t flow_pending_ready_oldest_seq(const Flow *f) {
-    return pending_ready_oldest_seq(f->pending);
+static uint64_t flow_pending_ready_next_seq(const Flow *f) {
+    return pending_ready_next_seq(f->pending);
 }
 
 /* HTML §8.1.4.2'S processResponseConsumeBody STEP THAT MAKES SOURCE TEXT — the point at which a fetched BYTE
@@ -5600,31 +5600,31 @@ static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, Scri
  * first"), so a corpus document with two concurrently answered fetches whose `.then` handlers observe each
  * other disagrees between `lastreply` and the `direct` reference. That is the gate reporting a real reorder, and
  * the fix is the ordinal — never a narrowing of the schedule set. */
+/* THE ENTRY IS ASKED FOR RATHER THAN SCANNED FOR, which is the whole of why the ladder above and this delivery
+   cannot be about different replies. `pending_next_deliverable` is the ONE answer to `which reply is next`;
+   `pending_ready` asks whether there is one and `pending_ready_next_seq` asks for its stamp so the arm can
+   order against it, and this asks for its INDEX so it can settle it. Three readers, one selector.
+   THE RETIRED WORDING IS KEPT BECAUSE A READER WILL RE-DERIVE THE SCAN. It read: a synchronous request's answer
+   is not this walk's to take, which is the same sentence the `else` branch below states as an assertion — said
+   HERE, where the entry is still on the register, because there is no way to state it below without the answer
+   having already been removed; `pending_ready` decides WHETHER this runs and asks the same two questions this
+   scan asks, this decides which entry it TOUCHES once it is running, and both are needed, because a register
+   can hold a fetch reply and an answered HOSTREQ at the same instant and it is the fetch reply that brought the
+   scan here. Every word of that is true and it describes TWO walks asking one question in two places, which is
+   what drifted: the ladder's reader took the MINIMUM stamp over the deliverable set while this took the FIRST
+   by index, and `pending_remove` is a swap-remove, so after any mid-register removal they named different
+   entries. pending.c carries the measurement.
+   WHAT STILL HAS TO BE SAID HERE, because it is about what this function must NOT do rather than about which
+   entry it gets: a HOSTREQ's answer stays where the machine parked at the call site will take it
+   (engine_host_take), so it is SKIPPED and never swap-removed — the predicate behind the selector is what
+   skips it, and a path here that removed one instead would leave the flow that asked resuming into a
+   rendezvous whose record is gone, waiting at that line for the rest of the session. */
 static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
-    int i = 0;
-    while (i < pending_count(f->pending)) {
+    int i = pending_next_deliverable(f->pending);
+    if (i >= 0) {
         JSValue p = pending_entry(f->pending, i);
         JSValue pv;
         int kind;
-        if (!pending_get_int(p, PEND_HAVE_VALUE)) {   /* the host still owes this one */
-            JS_FreeValue(ctx, p);
-            i++;
-            continue;
-        }
-        /* AND A SYNCHRONOUS REQUEST'S ANSWER IS NOT THIS WALK'S TO TAKE, which is the same sentence the `else`
-           branch below states as an assertion — said HERE, where the entry is still on the register, because
-           there is no way to state it below without the answer having already been removed. `pending_ready`
-           decides WHETHER this runs and asks the same two questions this scan asks (solver/pending.h); this
-           decides which entry it TOUCHES once it is running, and both are needed: a register can hold a fetch
-           reply and an answered HOSTREQ at the same instant, and it is the fetch reply that brought the scan
-           here. The answer stays where the machine parked at the call site will take it (engine_host_take), so
-           it is skipped exactly as an unanswered entry is — never swap-removed, or the flow that asked resumes
-           into a rendezvous whose record is gone and waits at that line for the rest of the session. */
-        if (pending_get_int(p, PEND_KIND) == FLOW_PENDING_HOSTREQ) {
-            JS_FreeValue(ctx, p);
-            i++;
-            continue;
-        }
         /* NO ENTRY IS DELIVERED WHILE A SETTLE OF THIS REGISTER IS STILL PARKED — the invariant this function
            was rewritten around, asserted where the next delivery would begin rather than left as a property
            somebody maintains. A settle that parked has not reached 27.5.1.4 "FulfillPromise" step 7 yet, so its
@@ -11792,11 +11792,19 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * member that has to spend them — so a branching frontier divides one shared pick budget among
              * every arm, and a register whose length exceeds a member's whole lifetime dispatch count defers
              * the sequence for that member's entire life. The bound holds and does not bind. */
-            /* WHEN THE OLDEST REPLY THIS FLOW CAN TAKE WAS ASKED FOR, AND WHETHER ANY TASK IT HOLDS IS
+            /* WHEN THE REPLY THIS ARM WOULD TAKE WAS ASKED FOR, AND WHETHER ANY TASK THIS FLOW HOLDS IS
                OLDER — the reply register joining the arrival order that already holds this flow's program
                sequence and its job queue. flow_task_precedes is asked with the REPLY'S stamp rather than a
                row's, which is the same comparison the sequence arm below makes against the same clock, so
                there is one ordering here and not two.
+               AND IT IS THE REPLY THE DELIVERY WILL ACTUALLY TAKE, WHICH THIS LINE FIRST GOT WRONG. It read
+               THE OLDEST REPLY THIS FLOW CAN TAKE, and the reader behind it walked the deliverable set for the
+               MINIMUM stamp while flow_deliver_one_reply took the FIRST by index — two answers to `which reply
+               is next`, which `pending_remove` being a swap-remove makes DIFFERENT answers after any
+               mid-register removal, so the arm ordered on one reply and the settle took another. Both now read
+               ONE selector, `pending_next_deliverable`; solver/pending.c carries the measurement and the
+               retired reasoning, and the assert that stood on the imagined ordering is deleted there because
+               the state it fired on is one the register's own removal routinely produces.
                WHY THIS ARM NEEDED IT. The arm ran on `stack empty && a reply is ready` and nothing else, and
                a register entry carried no stamp, so a delivery preceded every row and every queued callback
                of the flow whatever their ages — stated at `g_task_held_deliv` as the NOT COVERED clause of
@@ -11831,7 +11839,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                reply is fixed at that reply's birth and finite, so every reply is delivered after a bounded
                amount of work that already existed when it was asked for (§NO BOUNDS, and solver/flow.c's
                `g_work_seq` banner states the same argument for the two carriers it already ordered). */
-            uint64_t deliv_seq = flow_stack_empty(f) ? flow_pending_ready_oldest_seq(f) : 0;
+            uint64_t deliv_seq = flow_stack_empty(f) ? flow_pending_ready_next_seq(f) : 0;
             if (deliv_seq != 0 && !flow_task_precedes(f, deliv_seq)) {
                 /* …AND WHETHER THIS ARM JUST TOOK A STEP THE FLOW'S OWN TASK QUEUE COULD HAVE HAD — see
                    `g_task_held_deliv`, whose block states why a non-empty queue at this line is a TASK and

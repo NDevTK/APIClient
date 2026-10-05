@@ -334,64 +334,88 @@ static int pend_deliverable(JSValueConst e)
            pending_get_int(e, PEND_KIND) != FLOW_PENDING_HOSTREQ;
 }
 
-int pending_ready(JSValueConst reg)
+/* WHICH ENTRY THE NEXT DELIVERY WILL TAKE — the ONE answer to that question in this engine, and the reason it
+   is a function rather than a walk each caller writes. Three callers need it and they needed it for three
+   different-looking reasons: `pending_ready` asks WHETHER there is one, `pending_ready_next_seq` asks for its
+   ARRIVAL STAMP so the ladder can order against it, and flow_deliver_one_reply asks for the INDEX so it can
+   settle it. Those are one question, and this is §A-FIX-OF-THE-FORM-"X-IS-NOT-HOW-TO-ASK-Q"'s canonical
+   spelling: a second correct answer beside it is the shape that drifts, and it DID drift — see
+   `pending_ready_next_seq`, whose retired wording is kept there because the drift is re-derivable.
+   FIRST BY INDEX, which is what makes it an ANSWER and not a choice: the delivery walks from 0 and takes the
+   first entry past `pend_deliverable`, so the first such index IS the next reply by definition, whatever order
+   the register happens to be in. Nothing here needs the register to be sorted and nothing here asserts that it
+   is. −1 for a register that can deliver nothing, which is the same positive statement `pending_ready` used to
+   make as a boolean. */
+int pending_next_deliverable(JSValueConst reg)
 {
     int n = pend_len(reg), i;
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(reg, i);
         int hit = pend_deliverable(e);
         JS_FreeValue(pend_ctx(), e);
-        if (hit) return 1;
+        if (hit) return i;
     }
-    return 0;
+    return -1;
 }
 
-/* THE OLDEST DELIVERABLE ENTRY'S ARRIVAL STAMP — pending.h states what it is for and why it is the oldest
-   DELIVERABLE one rather than the oldest one. Walks for the minimum rather than taking the first hit, because
-   a register is not ordered: `pending_push` appends and `pending_remove` compacts, and a fork copies the
-   array, so index order is push order within one flow and says nothing across the ones a reply's own
-   out-of-order answer leaves. The minimum over a set is the only reading that does not depend on that.
+int pending_ready(JSValueConst reg)
+{
+    return pending_next_deliverable(reg) >= 0;
+}
+
+/* THE ARRIVAL STAMP OF THE ENTRY THE NEXT DELIVERY WILL TAKE — `pending_next_deliverable` decides WHICH entry
+   that is and this only reads its stamp, which is the whole of why it is correct. The ladder orders the
+   delivery arm against this number and then the delivery settles that same entry, so the two cannot be about
+   different replies: there is one selector and this is a reader of it.
+   THE RETIRED VERSION TOOK THE MINIMUM AND IS KEPT HERE BECAUSE IT IS WHAT A READER RE-DERIVES, and it was
+   wrong in both build regimes. It read: walks for the minimum rather than taking the first hit, because a
+   register is not ordered — `pending_push` appends and `pending_remove` compacts, and a fork copies the array,
+   so index order is push order within one flow and says nothing across the ones a reply's own out-of-order
+   answer leaves; the minimum over a set is the only reading that does not depend on that. The PREMISE is
+   exactly right and the CONCLUSION does not follow: the consumer does not want a well-defined quantity over an
+   unordered set, it wants THE STAMP OF THE REPLY THAT WILL BE DELIVERED, and the delivery takes the first by
+   index. A minimum is a second answer to that question, and after any mid-register removal it is a DIFFERENT
+   answer — so in release the arm earned its precedence from one reply's stamp and handed the turn to another.
+   AND THE ASSERT THAT STOOD HERE WAS BOTH VACUOUS AND FALSE, which is why it is DELETED rather than repaired.
+   It was `DCHECK(best == 0, …)` inside the deliverable branch, under a message about the register not being in
+   arrival order — and `best` is set on the FIRST deliverable entry, so it fired on the SECOND one whatever the
+   order. A COUNT test wearing an ordering message, and `pending_deliverable_count` exists precisely because a
+   register may owe several. Its comment claimed the ordering holds by construction because `pending_remove`
+   compacts and preserves relative order, and named a swap-remove as the thing that would break it:
+   `pending_remove` IS the swap-remove, by its own comment, and the delivery performs one whenever it skipped
+   an unanswered or HOSTREQ entry, which on a real page is the ordinary case. So it asserted a state the
+   register's own removal primitive routinely produces — §Offensive-programming's concession rule, and it
+   aborted the engine on every real site it was driven against. MEASURED: 12 corpus passes of 12 on two sites
+   named this one line, 15 engine runs of 15 crashed, every census row null.
    0 FOR A REGISTER THAT CAN DELIVER NOTHING, which is the same positive statement `pending_ready` makes as a
    boolean and is why the two are read together at the ladder: a caller that asked this of an unready register
-   and compared the 0 would put the delivery arm in front of everything, which is exactly backwards. */
-uint64_t pending_ready_oldest_seq(JSValueConst reg)
+   and compared the 0 would put the delivery arm in front of everything, which is exactly backwards.
+   RETIREMENT: this record goes when the ladder and the delivery take the entry through ONE call rather than two
+   reads of one selector — the arm holding the index it ordered on and handing it to the settle — because the
+   two cannot then be about different entries even in principle. MEASURED ABSENT with the command, so this
+   condition is not born met: `grep -c 'pending_next_deliverable' engine/host/solver/engine.c` answers 0
+   against `grep -c 'flow_pending_ready' engine/host/solver/engine.c` answering 3 as the armed control. */
+uint64_t pending_ready_next_seq(JSValueConst reg)
 {
-    int n = pend_len(reg), i;
-    uint64_t best = 0;
+    int i = pending_next_deliverable(reg);
+    JSValue e;
+    uint64_t s;
 
-    for (i = 0; i < n; i++) {
-        JSValue e = pending_entry(reg, i);
-        if (pend_deliverable(e)) {
-            uint64_t s = (uint64_t)pending_get_int(e, PEND_WORK_SEQ);
-            /* AND THE FIRST DELIVERABLE ENTRY IS THE OLDEST ONE — the invariant that makes this walk and
-               flow_deliver_one_reply's agree, asserted here because this is the one place both the minimum
-               and the index order are in one hand. That delivery walks from index 0 and takes the FIRST
-               entry past the same two skips `pend_deliverable` asks, so if the deliverable subsequence were
-               not in arrival order the ladder would be ORDERED BY ONE ENTRY AND DELIVER ANOTHER — a step
-               whose precedence was earned by a reply it did not take. It holds by construction rather than by
-               maintenance: pending_push APPENDS, so index order is push order and push order is stamp order;
-               pending_remove compacts and preserves the relative order of what is left; and a fork copies the
-               array whole. A path that inserted, sorted, swap-removed or re-stamped an entry would break all
-               three at once, which is what this fires on. */
-            DCHECK(best == 0,
-                   "this reply register's deliverable entries are not in arrival order — the first one the "
-                   "delivery walk would take is not the oldest, so the ladder's delivery arm earned its "
-                   "precedence from one reply's stamp and would hand the turn to a different reply");
-            /* THE PUSH ASSERTS THIS AND IT IS ASSERTED AGAIN HERE, which is not a second copy of one check:
-               the push's fires at the CONSTRUCTOR and this one fires on a record that was built elsewhere,
-               forked, copied or written onto from outside pending.c — the three paths pending.h names as the
-               ones a constructor's own assert cannot see. A 0 reaching this comparison would make the entry
-               the oldest work item in its flow unconditionally. */
-            DCHECK(s != 0,
-                   "a deliverable reply register entry carries no arrival stamp — every push stamps one and "
-                   "the fork copies it, so a zero here is a record built or rewritten outside pending.c, and "
-                   "this comparison would hand it precedence over every program row and queued callback its "
-                   "flow holds");
-            if (best == 0 || s < best) best = s;
-        }
-        JS_FreeValue(pend_ctx(), e);
-    }
-    return best;
+    if (i < 0) return 0;
+    e = pending_entry(reg, i);
+    s = (uint64_t)pending_get_int(e, PEND_WORK_SEQ);
+    /* THE PUSH ASSERTS THIS AND IT IS ASSERTED AGAIN HERE, which is not a second copy of one check: the push's
+       fires at the CONSTRUCTOR and this one fires on a record that was built elsewhere, forked, copied or
+       written onto from outside pending.c — the three paths pending.h names as the ones a constructor's own
+       assert cannot see. A 0 reaching this comparison would make the entry the oldest work item in its flow
+       unconditionally. THIS one is two-sided and the deleted neighbour was not: a register really cannot hold a
+       stamped-at-0 entry, and it really CAN hold two deliverable ones. */
+    DCHECK(s != 0,
+           "a deliverable reply register entry carries no arrival stamp — every push stamps one and the fork "
+           "copies it, so a zero here is a record built or rewritten outside pending.c, and this comparison "
+           "would hand it precedence over every program row and queued callback its flow holds");
+    JS_FreeValue(pend_ctx(), e);
+    return s;
 }
 
 /* HOW MANY DELIVERIES THIS REGISTER STILL OWES ITS OWN FLOW — see pending.h for what it is for. Deliberately
