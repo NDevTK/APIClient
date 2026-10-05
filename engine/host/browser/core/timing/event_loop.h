@@ -255,7 +255,30 @@ void event_loop_work_advance(JSContext *ctx, uint64_t units);
  *     reached by waiting as well as by working, and the order between a deadline and a reply is decided by
  *     two moments rather than by which mechanism happens to move.
  *   HOW ITS ABSENCE SHOWS: a page that arms `setTimeout(() => controller.abort(), N)` around a `fetch()`
- *     never aborts — the abort runs after the reply lands, or not at all if no reply ever does. */
+ *     never aborts — the abort runs after the reply lands, or not at all if no reply ever does.
+ *   AND THE `NEXT DIFF` CLAUSE IS WRONG, DERIVED RATHER THAN GUESSED, AND IS KEPT IN ITS OWN WORDS BECAUSE IT
+ *     IS THE DESIGN A READER RE-DERIVES FROM THE SPEC HALF ABOVE IT. A duration the HOST contributes is REAL
+ *     ELAPSED TIME, and §Testing's solver differential requires a document's finding set to be a function of
+ *     THE DOCUMENT ALONE under several schedules — so a clock any part of which is wall-derived makes the
+ *     finding set schedule-dependent and that gate unsatisfiable by construction. The clause would buy the
+ *     spec's ordering and spend the one property the whole differential rests on.
+ *     WHAT THE SPEC HALF ACTUALLY NAMES IS AN UNKNOWN, WHICH THIS ENGINE ALREADY HAS A MECHANISM FOR. Whether
+ *     the reply lands before the expiry depends on NETWORK LATENCY, which is external input, and §Solver-half
+ *     calls unknown external input the most general concolic value and FORKS control flow over one. So the
+ *     order between a deadline and an arrival is a branch, not a quantity: the PRIMARY arm delivers the reply
+ *     (which is what happens today, and it is the arm that carries a concrete example because the engine is
+ *     holding the bytes), and the forced sibling advances this clock to the expiry and fires the timer with the
+ *     reply still parked in the register. Both worlds are explored whatever the real timing was, which is the
+ *     property the host-duration design cannot have.
+ *     WHAT IS MEASURED AND WHAT IS NOT. The licence above is almost never the refuser on a healthy run: on
+ *     app.gitpod.io at a release artifact the pair reads `asked` in the thousands with `declined` at ONE, so
+ *     the 142 descents the timer rung declined on that run were 141 "no source due" and one refusal. The
+ *     population this residual is about is therefore NOT the common case there, and whether it is the whole of
+ *     a run that fires NO timer at all is a reading of the same pair on such a run — which is why the pair
+ *     exists and is not yet taken.
+ *     SO THE NEXT DIFF IS THE FORK AND ITS PRECONDITION IS A PREDICATE OVER THE LATENCY, not a field on a
+ *     reply: nothing crosses the ABI, nothing is stated by the trusted zone, and the two arms are this
+ *     scheduler's ordinary ones. */
 int event_loop_may_advance(void);
 
 /* HOW OFTEN THAT LICENCE WAS WANTED AND HOW OFTEN IT WAS REFUSED — the partition of a count solver/result.c
