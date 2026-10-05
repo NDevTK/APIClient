@@ -706,9 +706,36 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    row and the product's claim is false of it: nothing was LEARNED, because the hole is ours. A server-injected
    unknown the PAGE read, narrowed by the PAGE's own predicate and composed into a path the PAGE wrote, is the
    population the bar exists for and is indistinguishable here.
-   WHAT THE NEXT DIFF BUILDS: the mint stating WHOSE SOURCE it is, and this line reading that fact — a
-   MINT-SIDE statement and a CLASSIFIER-SIDE read, which §A-CROSS-BOUNDARY-DIFF makes ONE landing spanning
-   `solver/engine.c`, since a classifier reading a fact no mint states is incoherent rather than incomplete.
+   WHAT THE NEXT DIFF BUILDS: the mint stating WHOSE SOURCE it is, and this line reading that fact. THE SCOPE
+   IS NOT THE TWO FILES THIS CLAUSE USED TO NAME, and the retired wording is kept because a reader who
+   re-derives it from "the mint is in solver/engine.c" will write it again. It read: "a MINT-SIDE statement and
+   a CLASSIFIER-SIDE read, which §A-CROSS-BOUNDARY-DIFF makes ONE landing spanning `solver/engine.c`". Both
+   halves of that are true and the file list is SHORT, because the fact has to RIDE THE VALUE and the value's
+   record is solver/concolic.c's. TWO THINGS DECIDE IT AND NEITHER IS A PREFERENCE. (1) The question is a
+   DISJUNCTION OVER THE ROOT SET, since one page root is enough to clear the bar however many instrument roots
+   stand beside it — and `concolic_root_c` may name a SET whose walk `root_member` and whose one speller
+   `derived_root_join` are both STATIC to that file, so no sound form of the question is spellable from here.
+   Recovering the members by parsing the join is the matching §RUN-DON'T-MATCH forbids, and is what that file's
+   own `conj` field records as the banned move. (2) `concolic_new` RETURNS BEFORE IT MINTS on two arms its own
+   site names — a pinned source and an @S candidate re-fire — so what comes back there is a bare primitive with
+   nowhere for a mark to live, which rules out stating the fact from the CALLER after the call as firmly as the
+   walk rules out reading it here. So the statement is a parameter of the mint, evaluated past that arm, carried
+   beside `root` and unioned where the root already is. AND THE CODE DELTA IS NOT THE DIFF: a fourth member
+   falsifies every prose site in this file that states how many members this list has, which is the
+   §A-FIX-THAT-RETIRES-AN-ARGUMENT obligation and is handed over as a DERIVATION because a count of them
+   moves on any commit that writes one — `git grep -ni 'exactly three member\|three members' -- <this file>
+   <this file's header>`, of which the one naming `witness_class_now` is a DIFFERENT list and stays.
+   AND THREE CHEAPER ROUTES ARE REFUTED RATHER THAN UNTRIED, each recorded because each is what a reader
+   reaches for first and none leaves a trace once it is abandoned. `concolic_src_c` is PUBLIC and answers ONE
+   string, which is the whole of its appeal, and a derivation inherits its FIRST UNKNOWN OPERAND's `src` — so
+   `<an orphan argument> + <a page unknown>` answers the orphan's and that row would be DEMOTED, which is
+   §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT on the one number this product is judged by. Keying on whether
+   the DRIVING FLOW is an orphan drive is wrong for the product's best case: a drive that reaches
+   `fetch("/api/" + <a page unknown>)` has learned exactly what this tool exists to learn, and the drive is how
+   it got there rather than what the address is made of. And a registry of minted identities held in
+   solver/engine.c can only match a WHOLE root string, there being no walk, so it is silent about every joined
+   root AND it is engine state rather than a fact on the value — a resumed flow finds it empty, so one address
+   grades two ways in two sessions and the census stops being a fact about the document.
    It is NOT a prefix match on `{orphan`: that is a count of a spelling, which this subsystem has already been
    bitten by, and it would answer for whatever a later diff renames the identifier to.
    AND THE DISCRIMINATOR IS THE SOURCE IDENTITY AND NOT THE COMPOSITION, which is worth stating because
@@ -722,7 +749,33 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    censuses are untracked and a count here would be a claim competing with a command — from `testing/corpus`,
    read the terminal `endpointRazorClass` of a census beside the hole-bearing addresses that census emitted
    (`grep -o '"[A-Z]* [^"]*{[^"]*"' <census> | sort -u`), and compare a real-site capture against a
-   `127.0.0.1` fixture: the fixtures are the controlled half and their holes are the page's own. */
+   `127.0.0.1` fixture: the fixtures are the controlled half and their holes are the page's own. THE COMPARISON
+   IS THE EVIDENCE AND IT IS A COMMAND RATHER THAN A SPLIT SOMEBODY REMEMBERS — from `testing/corpus`, run that
+   same `grep -o` over EVERY census and read its hole-bearing rows beside the `"url"` the census names, because
+   which captures are real sites moves as captures are taken and a reader who inherits a hand-named pair
+   inherits whichever two were in front of its author.
+   RETIREMENT: this record goes when solver/concolic.h publishes a predicate answering a property over a
+   value's whole ROOT SET, because the classifier is then spellable from here and the scope argument above has
+   nothing left to decide. MEASURED ABSENT with the command, so this condition is not born met: over that
+   header, `concolic_root_all`, `concolic_roots_all`, `concolic_root_every`, `concolic_root_walk` and
+   `concolic_root_member` each answer NOTHING against `concolic_root_c` answering as the armed control.
+
+   AND A SECOND POPULATION IS OVER-CLAIMED FOR A DIFFERENT REASON, WHICH IS A SIBLING AND NOT A SMALLER CASE OF
+   THE ONE ABOVE. WHAT IS NOT COVERED: a value whose bytes STAND IN THE SERVED DOCUMENT and which is minted
+   unknown anyway, deliberately and correctly, so that a gate over it FORKS rather than being decided for the
+   whole run — HTML §4.12.1's data block, whose own component says "the bytes sit in the document", and an
+   injected global an inline script WROTE, which solver/absent.c's present arm mints carrying the real value as
+   its example. A parse of the bytes this engine was SERVED states such a value, so the clause the bar's own
+   sentence turns on — "because it exists only at run time" — is false of an address composed from one, and
+   `runtime-only` over-claims there exactly as it does for the hole above. The two are opposite in WHOSE the
+   unknown is and identical in what the bar does with it.
+   IT IS NOT ANSWERED BY THE EXAMPLE, which is the route to refute before it is reached for: concolic.h grades
+   HELD as "an example a document or a SERVER supplied", so a reply field is HELD and its bytes are off-document
+   while an ABSENT injected global is NONE exactly as the instrument hole above is. One accessor, two questions.
+   WHAT THE NEXT DIFF BUILDS: nothing of its own until the landing above lands, because both are the same
+   question asked of the ROOT and the second is then a MEMBER beside the first rather than a second mechanism.
+   HOW ITS ABSENCE WOULD SHOW: a run whose razor reads `runtime-only` for a row whose hole names an element or a
+   global the served markup itself spells. */
 static int address_class_of(JSValueConst url) {
     if (!concolic_is(url)) return EPA_CONCRETE;
     if (flow_running() != NULL && concolic_example_state(url) == CONCOLIC_EX_DETERMINED)
