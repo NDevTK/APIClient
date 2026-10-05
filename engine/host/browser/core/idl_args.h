@@ -1927,10 +1927,24 @@ typedef struct {
     /* WHY THIS MEMBER'S STATE MUST NOT BE FORKED RIGHT NOW — the reason, or NULL when it may be. Forwarded onto
        the pool's definition, so the fork asks the MEMBER through the same one door it asks everything else; see
        JSTrampStepDef.unforkable for the capability this restores and for why the question belongs at the fork
-       rather than inside the member's `visit`. NULL for a member that may always be forked, which is every one
-       of them but the FRAGMENT PARSE: between two of its one-byte steps it holds a live lxb_html_parser_t, and
-       lexbor exposes no copy of one. That declaration names the capability to build, and when it is built this
-       field goes with it. */
+       rather than inside the member's `visit`. NULL for a member that may always be forked.
+       WHICH MEMBERS ARE NOT NULL IS A DERIVATION AND NEVER A LIST HERE, BECAUSE THIS SENTENCE CARRIED ONE AND
+       IT WENT WRONG IN THE DIRECTION NOTHING REPORTS. It read `which is every one of them but the FRAGMENT
+       PARSE`, and that was an ENUMERATION OF AN ABSENCE: it asserts of every other member that it declares no
+       reason, so a reader is told the trajectory below is one machine from zero. Measured against the tree it
+       was false by two — the §5.6 fetch machine and the §5.4 Request constructor both declare one, for the
+       extracted body's bytes and the parsed header list rather than for any parser — and the error is the
+       UNDER-CLAIM §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT names, found by nobody acting on it, because
+       acting on it means not looking. Derive the set instead, with both forms, since this field is initialised
+       positionally at some definitions and designated at others:
+           git grep -nE '\.unforkable *= *[a-z_]' -- engine/
+           git grep -nE '^ *[0-9]+, *[a-z_]*unforkable' -- engine/
+       THE STRUCTURAL FACT, WHICH IS WHAT DOES NOT ROT: a declarer names a CAPABILITY and not a machine, so the
+       count of declarers and the count of things to build are different numbers and the first is the larger.
+       Two machines holding one missing capability retire together and neither names it twice — core/frame/
+       navigable.c's load says so of itself and points at the fragment parse's own list — so read each reason
+       for WHAT IT WOULD TAKE and group by that before pricing any of it. The field goes when every one of those
+       is built, and §A-superseded-system-is-DELETED is why it may not become anything else in the meantime. */
     const char *(*unforkable)(const void *state);
 } IdlStepDecl;
 /* DECLARE WHERE THE OPTIONAL ARGUMENTS START. §3.6 makes an `undefined` passed for an optional argument with

@@ -274,10 +274,24 @@ typedef struct JSTrampStepDef {
      * ownership list, which made it MANDATORY — and a machine that owns JSValues AND must not be forked in
      * some states had no way left to say the second half.
      *
-     * THE ONE MACHINE THAT NEEDS IT HOLDS A LEXBOR HTML PARSER. "C state cannot be forked" is not the reason
-     * and is not true — cow_capture_host_record exists precisely so a component's C record time-travels. What
-     * has no halves is specifically a tokenizer standing at a position, with an open-element stack and an
-     * insertion mode behind it, and lexbor exposes no copy of one.
+     * "C STATE CANNOT BE FORKED" IS NOT THE REASON AND IS NOT TRUE — cow_capture_host_record exists precisely
+     * so a component's C record time-travels. What has no halves is something specific each declarer names, and
+     * the commonest one is a tokenizer standing at a position with an open-element stack and an insertion mode
+     * behind it, which lexbor exposes no copy of.
+     *
+     * AND THIS PARAGRAPH SAID `THE ONE MACHINE THAT NEEDS IT HOLDS A LEXBOR HTML PARSER`, WHICH IS WRONG ABOUT
+     * THE COUNT AND WRONG ABOUT THE KIND — kept in its own words because the lexbor half is correct and a
+     * reader who meets only that half will write the sentence again. Derived rather than recalled:
+     *     git grep -nE '\.unforkable *= *[a-z_]' -- engine/
+     *     git grep -nE '^ *[0-9]+, *[a-z_]*unforkable' -- engine/
+     * and the reasons group into THREE capabilities, not one — a lexbor tokenizer plus a private DOM tree, an
+     * extracted body's bytes plus a parsed header list, and a half-finished ECMAScript 16.2.1.6.1.2 Link ( )
+     * walk cursor, the last of which is this file's own and holds no parser at all.
+     * THE DIRECTION IS WHY IT IS WORTH RECORDING: an undercount of declarers makes the trajectory below look
+     * nearly finished, which is the one reading that stops anybody deriving it — and a reader who prices the
+     * work from the lexbor sentence prices one capability where there are three. Group the reasons by WHAT EACH
+     * WOULD TAKE TO BUILD before pricing any of it: two machines holding one missing capability retire
+     * together, so the declarer count is an upper bound on the work and never an estimate of it.
      *
      * IT IS ALSO NOT A LICENCE, AND ITS ONLY CORRECT TRAJECTORY IS TO ZERO. There were two declarers; the
      * selector walk was the other, and its reason turned out to be false — the CSS parser it held had finished
