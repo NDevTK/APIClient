@@ -1223,6 +1223,28 @@ function linesToAnalysis(lines, msg, outcome, eng) {
              "bucket that means 'this artifact predates the key' would be read as a property of some " +
              "addresses");
     }
+    /* AND THE TWO READERS AGREE ABOUT THE ONE ROW BOTH CAN SEE, ASSERTED WHERE BOTH MAPS ARE IN ONE HAND.
+       solver/endpoint.c emits `addressRoot` as `null` on EXACTLY the rows whose `addressClass` is `concrete`
+       — the class is the discriminator, because `concolic_root_c` answers NULL both for a value that is not a
+       concolic and for one whose bytes entered through nothing the engine minted — so these two counts are one
+       fact read by two readers of one array at one moment, and a difference is the two having parted.
+       IT IS A CHECK AND NOT THE NON-CHECK §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE FORBIDS. The operands
+       come from TWO lines of a DIFFERENT file: one writes the class token through a generated switch, the
+       other chooses a JSON TYPE off `e->addr_class`. An edit to either alone makes this fail, which is the
+       whole reason it is worth a line — the pair is what lets a reader read `(no-concolic)` as a statement
+       about addresses rather than as a count of a spelling.
+       AN ARTIFACT OLDER THAN EITHER KEY SATISFIES IT RATHER THAN EVADING IT: both sides are then `(unstated)`,
+       both lookups are absent, and the comparison is 0 against 0. A run with ONE of the two keys is already
+       refused by the all-or-nothing claim above, per key, so there is no mixed state left for this to be
+       silent about. */
+    const _nc = m.endpointAddressRoot[ENDPOINT_ROOT_NO_CONCOLIC] === undefined
+                ? 0 : m.endpointAddressRoot[ENDPOINT_ROOT_NO_CONCOLIC];
+    const _cc = m.endpointAddressClass["concrete"] === undefined ? 0 : m.endpointAddressClass["concrete"];
+    DCHECK(_nc === _cc,
+           "this run counts " + _nc + " address(es) with no delivery root to ask against " + _cc + " the " +
+           "engine classed `concrete` — solver/endpoint.c writes `addressRoot: null` on exactly the rows " +
+           "whose `addressClass` is `concrete`, from the one stored class, so a difference is those two emits " +
+           "having parted and `(no-concolic)` would be read as a statement about addresses it is not about");
   }
   DCHECK(outcome !== "crashed" || (typeof crashErr === "string" && crashErr !== ""),
          "a crashed run reached the run log with no `engine-crash` line among its output — every crash path " +
