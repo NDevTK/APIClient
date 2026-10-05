@@ -370,7 +370,8 @@ const loadNow = () => {
    here would reach it in its temporal dead zone and `node --check` would pass on it. */
 const coldFields = sourceFact(() => censusRowSet(
   "solver/result.c", "char *result_cold_json(void)", "\n}\n",
-  ["stepUnits", "stepUnitRuns", "stepUnitOverruns", "outOfProgramsAtTheLadderUnits", "programCursors",
+  ["stepUnits", "stepUnitRuns", "stepUnitOverruns", "stepUnitOverrunSeamlessArms",
+   "outOfProgramsAtTheLadderUnits", "programCursors",
    "programsAhead", "epDoors", "epReach", "epAddressClass", "epRazorClass", "epWitnessClass"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
   "composer rather than from a list beside it"));
@@ -2886,6 +2887,21 @@ function stepUnitReading(b) {
 function stepUnitOverrunReading(b) {
   const rows = censusHistRows(b, "stepUnitOverruns", "sliceOverruns", STEP_UNIT_EXTENT);
   const runs = new Map(censusHistRows(b, "stepUnitRuns", "steps", STEP_UNIT_EXTENT));
+  /* AND THE THIRD MEMBER OF THE TRIPLE, VALIDATED AS A PARTITION OF `sliceOverrunSeamless` for the two above's
+     reason. It answers the one thing the pair cannot and the thing the pair's own conclusion rests on: an arm
+     is where a step ENDED, so an overrun says the slice was held and says nothing about whether the PAGE'S
+     CODE was running — and the two readings take OPPOSITE work. A seamless turn offered no suspend point at
+     all, which is a C activation that declares no step boundary and is a step-machine conversion (§C-stack) in
+     whichever component owns that call; a turn that offered points and ran anyway is the page choosing a
+     back-edge-free stretch, which no ordering reaches and which §NO BOUNDS forbids capping.
+     IT WAS A SCALAR AND THE JOIN WAS UNMAKEABLE. `sliceOverrunSeamless` is one number over all arms, so a
+     reader holding ONE arm at five sixths of every overrun and a seamless count at five sixths of the same
+     total could not say whether those were the same turns. Measured over three drives of one release artifact
+     on one real app: `seed-one-orphan-flow` overran 204 of 221, 237 of 242 and 159 of 190 of its own runs —
+     84%, 85% and 83% of ALL overrunning turns — while the seamless scalar read 86%, 86% and 84% of that same
+     total. Two numbers moving together over three passes with nothing able to join them. */
+  const seam = new Map(censusHistRows(b, "stepUnitOverrunSeamlessArms", "sliceOverrunSeamless",
+                                      STEP_UNIT_EXTENT));
   /* SORTED BY RATE AND NOT BY COUNT, WHICH IS A CORRECTION TO THIS READER'S FIRST VERSION AND THE WHOLE OF
      WHAT IT IS FOR. It quoted the denominator per arm — which was right — and then ordered the arms by the
      NUMERATOR, so the row a reader meets first is whichever arm simply RUNS most, and the rate that decides
@@ -2920,8 +2936,21 @@ function stepUnitOverrunReading(b) {
               another line — `4 overruns` is a magnitude and `4 of 4 runs` is a verdict, and they are the same
               number. A row whose two counts are EQUAL is the one to read first. */
            const n = Number(runs.get(r[0]) ?? 0);
+           /* AND HOW MANY OF THAT ARM'S OVERRUNS OFFERED NO SUSPEND POINT, which is what names the COMPONENT
+              where the rate above names only a symptom. `censusHistRows` has already refused a census whose
+              arm is non-numeric, so this read is direct; an arm absent from a SPARSE partition is genuinely 0
+              seamless turns and not an absence, because that partition is emitted with every row. */
+           const s = Number(seam.get(r[0]) ?? 0);
            return `${r[1]} of ${n} ${r[0]}` +
                   (n > 0 ? ` (${(100 * r[1] / n).toFixed(1)}%)` : "") +
+                  (r[1] > 0 ? `, ${s} of them SEAMLESS` +
+                              (s === r[1] ? " — every one offered NO suspend point, so the thread was inside C" +
+                                            " that declares no step boundary and the answer is a step-machine" +
+                                            " conversion in whichever component owns that call"
+                               : s === 0 ? " — every one OFFERED points and ran anyway, which is a question" +
+                                           " about the page and not about this engine"
+                               : "")
+                            : "") +
                   (n > 0 && r[1] === n ? " — EVERY run of that arm overran" : "");
          }).join(", ") +
          (busiest.length
