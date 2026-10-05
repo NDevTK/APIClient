@@ -34,8 +34,9 @@
 //                  `partial x n` is a different fact again.
 import { readFileSync, existsSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { siteList } from './list.mjs';
+import { condVerdict, armed as abortliveArmed, VERDICT_PRESENT, VERDICT_CHANGED, VERDICT_ABSENT }
+  from '../../engine/abortlive.mjs';
 
 const ROOT = new URL('.', import.meta.url).pathname;
 /* THE RUN-OUTCOME VOCABULARY, DERIVED FROM THE PRODUCER'S OWN DECLARATION AND NEVER RESTATED HERE. Four
@@ -353,6 +354,13 @@ function srcref(raw) {
    reached the gap; where it is the unconditional constant it is the macro's spelling and not an observation,
    and printing it is what made the queue unreadable. */
 const CHECK_H_UNCONDITIONAL = 'unreachable';   // check.h's `DFAIL`/`CHECK_FAIL` condstr; see engine/host/check.h
+/* THE PAIR BEHIND EACH SIGNATURE KEY, MEMOED WHERE IT IS PARSED AND NOWHERE ELSE. The ranking below needs the
+   `cond` and the `reason` as TWO fields to ask whether the abort it names would still be the same abort, and the
+   key it has is the two JOINED. Re-splitting that join is not available: the separator is ` -- ` and a reason is
+   English prose that carries one, so a split would read a sentence as a C expression for exactly the records
+   whose cond is the macro's unconditional constant. The key DETERMINES the pair -- it is built from it, one
+   key to one pair -- so this is a memo and not a second answer that could disagree. */
+const whyOf = new Map();
 const CHECK_H_RECORD = /"phase":"assert","cond":"([\s\S]*?)","at":"([^"]*)","reason":"([\s\S]*?)"\}(?=$|[\s,"\]])/;
 const JS_MIRROR_TAGS = 'DCHECK failed|DFAIL|CHECK failed|CHECK_FAIL';
 function signatures(text) {
@@ -369,14 +377,39 @@ function signatures(text) {
         `  check.h's APICLIENT_ASSERT_EMIT writes all four fields on one line, so this is that emitter and\n` +
         `  this parser having come apart -- teach this pattern the shape rather than letting the record\n` +
         `  through, because the ONE field it carries that a work queue can act on is \`reason\`.`);
-    out.add(srcref(m[2]) + ' :: ' +
-            (m[1] === CHECK_H_UNCONDITIONAL ? '' : degensym(m[1]) + ' -- ') + degensym(m[3]));
+    const k = srcref(m[2]) + ' :: ' +
+            (m[1] === CHECK_H_UNCONDITIONAL ? '' : degensym(m[1]) + ' -- ') + degensym(m[3]);
+    out.add(k);
+    whyOf.set(k, { at: srcref(m[2]), cond: m[1], reason: m[3] });
   }
   for (const m of t.matchAll(new RegExp(
         '@(?:WHY|E) (?!\\{)(?!(?:' + JS_MIRROR_TAGS + '):)([^\\n]*?) \\(([^()\\s]+:\\d+)\\)', 'g')))
-    out.add(srcref(m[2]) + ' :: ' + degensym(m[1].trim()));
-  for (const m of t.matchAll(new RegExp('@(?:WHY|E) (' + JS_MIRROR_TAGS + '): ([^\\n"]{4,200})', 'g')))
-    out.add('extension/check.js (js side) :: ' + m[1] + ' ' + degensym(m[2].trim()).slice(0, 120));
+    {
+      /* THE SUBMODULE'S EMITTER WRITES ONE LINE AND NO COND FIELD, so the whole message is the reason -- and by
+         quickjs's own `DCHECK(expr, "expr")` convention that message is very often the stringified expression,
+         which is why the checker asks its reason of the message corpus AND of the cond corpus rather than
+         choosing between them from the emitter. */
+      const k = srcref(m[2]) + ' :: ' + degensym(m[1].trim());
+      out.add(k);
+      whyOf.set(k, { at: srcref(m[2]), cond: '', reason: m[1].trim() });
+    }
+  for (const m of t.matchAll(new RegExp('@(?:WHY|E) (' + JS_MIRROR_TAGS + '): ([^\\n"]{4,200})', 'g'))) {
+    const k = 'extension/check.js (js side) :: ' + m[1] + ' ' + degensym(m[2].trim()).slice(0, 120);
+    out.add(k);
+    /* THE PAIR IS MEMOED WITH NO FILE AND THAT IS THE ANSWER RATHER THAN A HOLE. `extension/check.js` is where
+       the MACRO is defined and never where the assert is written: the js mirror throws an Error, so it carries a
+       message and NO file:line, and the message literal lives in whichever `extension/*.js` raised it. Keying
+       the construct check on `check.js` would read every one of these as ABSENT -- a false retirement for the
+       whole js side, which is the direction §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT rates worst. So the
+       pair is recorded with an EMPTY path and the verdict says why it cannot be asked.
+       NAMED RESIDUAL. WHAT IS NOT COVERED: every js-side assert, which is the band this ranking reports with
+       four sites hit and no verdict. WHAT THE NEXT DIFF BUILDS: a construct check whose corpus is the string
+       literals of the whole `extension/` tree rather than one named file, which is the same reassembly
+       `engine/abortlive.mjs` already does per file. HOW ITS ABSENCE WOULD SHOW: a js-side signature standing in
+       this ranking under `cannot ask` while its message has been reworded or deleted, so a reader cannot tell a
+       live js abort from a retired one at all. */
+    whyOf.set(k, { at: '', cond: '', reason: m[2].trim() });
+  }
   return [...out];
 }
 
@@ -1425,68 +1458,81 @@ if (nPredates.length)
    the head of it, because one 1169-character reason per row buries the RANKING, which is the thing this
    section exists to show. `-v` prints them whole. */
 const verbose = process.env.SIGS === 'full';
-/* HOW STALE EACH SIGNATURE'S COORDINATE IS, BESIDE IT, BECAUSE A RANKED FINDING LIST DECAYS FROM ITS TOP AND
-   THE TOP IS WHAT GETS DISPATCHED. The ordering here is staler than the rows: the highest entries are the ones
-   lanes were sent at, so they are the ones most likely to have a landed fix, and NOTHING IN THIS ARTIFACT SAID
-   SO -- each coordinate is a true fact about the artifact that measured it, so every one checks out
-   individually while the ORDER is about a tree nobody has had for hours.
-   IT IS A NECESSARY CONDITION AND NEVER A SUFFICIENT ONE, which is the whole of what it may be read as. `path
-   unmoved` does NOT mean the abort would still fire: an assert is a claim about state some OTHER component
-   produces, so its own file can be byte-identical while the thing it asserts about has been rewritten -- the
-   path to check for an abort is the one that WRITES the operand. And `PATH MOVED` does not mean retired; it
-   means the coordinate is not evidence and the signature must be re-derived BY CONSTRUCT (grep its own words
-   at the tip) before a lane is sent at it.
-   THE SET OF REVISIONS AND NEVER AN EXTREMUM, which is the one thing a reader would get wrong and is measured
-   rather than argued. The top signature of this ranking by sites hit was a CSS Conditional 5 §5.4
-   container-query abort, and it was seen at exactly ONE revision, 17fc107, in the three oldest passes of this
-   corpus. At 17fc107 `git grep -c 'cannot decide it'` answers 1 in that file and at HEAD it answers 0 -- the
-   abort is retired and replaced by a three-clause named residual. `git diff --quiet 17fc107 HEAD` on that file
-   says CHANGED, so keying on every revision answers MOVED and sends a reader to re-derive, which is right.
-   Keying on the NEWEST revision in the corpus answers UNMOVED for the same file, because the newer builds never
-   saw this signature at all -- so the extremum a reader reaches for certifies a retired abort as live, in the
+/* WHETHER THE ABORT A SIGNATURE NAMES WOULD STILL BE THE SAME ABORT, BESIDE IT, BECAUSE A RANKED FINDING LIST
+   DECAYS FROM ITS TOP AND THE TOP IS WHAT GETS DISPATCHED. The ordering here is staler than the rows: the
+   highest entries are the ones lanes were sent at, so they are the ones most likely to have a landed fix, and
+   NOTHING IN THIS ARTIFACT SAID SO -- each coordinate is a true fact about the artifact that measured it, so
+   every one checks out individually while the ORDER is about a tree nobody has had for hours.
+   THE VERDICT IS THE CONSTRUCT'S AND NEVER THE COORDINATE'S, AND THE COLUMN THAT GRADED THE COORDINATE IS GONE
+   RATHER THAN KEPT BESIDE IT. `engine/abortlive.mjs` keys on the `cond` the macro stringified and the message
+   literal it compiled in, reassembled across the line wraps a C reason is written with, out of the text with the
+   COMMENTS STRIPPED -- so it ignores the `:line` entirely, which is the whole point: a census line number drifts
+   the moment anybody edits above the assert, and it drifts in BOTH directions, so a deletion above it leaves the
+   recorded line RESOLVING, to code that is real, current and about something else. Measured on this corpus:
+   `engine.c:3275` is the line every gitpod row names and the construct stands seven lines earlier.
+   IT ANSWERS THREE VERDICTS, WHICH IS WHAT THE PATH COLUMN COULD NOT. PRESENT means this cond and this message
+   both still compile in. ABSENT means neither does. CHANGED is the one neither hand method has and is the one
+   this corpus most needs: a repair that fixes a WRONG INVARIANT removes nothing, so the assert stands with a
+   different predicate or a reworded refusal under it -- a reader who greps the old message gets 0 and files it
+   RETIRED, a reader who greps the cond gets a hit and files it LIVE, and both are wrong about the same site.
+   MEASURED over this corpus's eleven distinct records: 5 PRESENT, 4 CHANGED, 1 ABSENT, 1 unaskable.
+   AND THE REVISIONS ARE PRINTED RATHER THAN DIFFED, which is the half of the retired column worth keeping. The
+   raw fact a reader needs is WHICH artifact saw a signature, because a row measured before a landed repair is a
+   row about a program nobody runs: both artifacts that produced this corpus's `no navigable of THIS TIMELINE`
+   abort carry `navigable_seed_scripts` BEFORE `window_proxy_navigate`, which is the inversion `042c3362` landed
+   the fix for, and the next artifact measured answered 0 of 10.
+   RETIREMENT -- MET BY A CONSTRUCTION, AND THE RETIRED WORDING IS KEPT BELOW THE VERDICT BECAUSE A READER WHO
+   RE-DERIVES THE PATH ARGUMENT WILL WRITE THE PATH COLUMN AGAIN. It read: "this column goes when a signature's
+   identity is carried as the CONSTRUCT its abort is written in rather than as a `file:line`, because a drifted
+   coordinate is then unspellable and there is nothing to grade the staleness of." That is this, so the column
+   goes with it -- a path diff standing beside a construct verdict is the legacy fallback §A-superseded-system-is-
+   DELETED forbids, and its own reasoning was already a confession: `path unmoved` is NECESSARY AND NOT
+   SUFFICIENT, which is to say it is not an answer. Its load-bearing measurement is the one restated above and is
+   why the revision SET and never an extremum reaches this line: the newest artifact in a corpus is usually one
+   that never saw the signature at all, so an extremum answers UNMOVED for a file whose abort is retired, in the
    direction that dispatches a lane at work already done.
-   RETIREMENT: this column goes when a signature's identity is carried as the CONSTRUCT its abort is written in
-   rather than as a `file:line`, because a drifted coordinate is then unspellable and there is nothing to grade
-   the staleness of. MEASURED ABSENT before being written, so this condition is not born met: `grep -c` over
-   this file answered 0 for each of `sigPathVerdict` and `pathMovedSince`, against `bySig` answering 6 as the
-   armed control and an invented token answering 0. */
-const GITTOP = (() => {
-  const r = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: ROOT, encoding: 'utf8' });
-  return r.status === 0 && r.stdout.trim() ? r.stdout.trim() : null;
-})();
-const _pathMoved = new Map();
-const sigPathVerdict = (at, revs) => {
-  /* THE KEY IS `path:line` OR `path (words)`, AND BOTH SPELLINGS LOSE THE SAME WAY -- a key this cannot reduce
-     to a path is reported as unaskable rather than guessed at, because a guess here accuses a file. */
-  const file = at.replace(/ \(.*\)$/, '').replace(/:\d+$/, '');
-  if (!/^[\w.\/-]+\.[A-Za-z]+$/.test(file)) return 'STALENESS: cannot ask — no path reduces out of this signature key';
-  if (!GITTOP) return 'STALENESS: cannot ask — no git toplevel resolves from this directory';
-  if (!revs || !revs.size) return 'STALENESS: cannot ask — no row carrying this signature names the revision its artifact was built from';
-  let moved = 0, unmoved = 0, unresolved = 0;
-  for (const rev of revs) {
-    const k = rev + '\u0000' + file;
-    if (!_pathMoved.has(k)) {
-      /* A REVISION OUTSIDE THE SHALLOW WINDOW IS `cannot ask` AND NEVER `unmoved`. `git diff` against a
-         revision it cannot resolve exits NONZERO, which this would otherwise read as MOVED -- the safe
-         direction, but a different fact, and a reader acting on it re-derives for no reason. The exit status is
-         read directly off each spawn and never through a pipe. */
-      if (spawnSync('git', ['cat-file', '-e', rev + '^{commit}'], { cwd: GITTOP }).status !== 0)
-        _pathMoved.set(k, 'unresolved');
-      else {
-        const d = spawnSync('git', ['diff', '--quiet', rev, 'HEAD', '--', file], { cwd: GITTOP });
-        _pathMoved.set(k, d.status === 0 ? 'unmoved' : d.status === 1 ? 'moved' : 'unresolved');
-      }
-    }
-    const v = _pathMoved.get(k);
-    if (v === 'moved') moved++; else if (v === 'unmoved') unmoved++; else unresolved++;
-  }
-  if (moved) return 'STALENESS: PATH MOVED since ' + moved + ' of the ' + revs.size +
-    ' revision(s) that saw it — this coordinate is NOT evidence; re-derive the signature BY CONSTRUCT at the tip before dispatching';
-  if (unmoved) return 'STALENESS: path unmoved since all ' + unmoved + ' revision(s) that saw it — NECESSARY and not sufficient: ' +
-    'the path that WRITES this assert\'s operand is a different question and is not asked here';
-  return 'STALENESS: cannot ask — all ' + unresolved + ' revision(s) that saw it are unresolvable in this shallow clone';
+   RETIREMENT: this column goes when a signature's verdict carries a REACHABILITY WITNESS beside it -- the census
+   row that is nonzero when the assert's own component was executed in the run being graded -- because PRESENT is
+   a fact about a LINE until something says the run reached it, and §AN-ABSENT-CRASH-IS-NOT-A-CORRECT-VALUE's
+   mirror is that a present assert is not a live blocker. MEASURED ABSENT before being written, and the command is keyed on a
+   DEFINITION and never on the bare token, because a measured-absent clause that greps a bare name is satisfied by its
+   own text the moment the name is written into it -- the bare form of this grep answers 1 and the file it answers is
+   this one: `grep -cE 'const (sigReachWitness|witnessRowFor) *='` over this file answers 0, against the same shape over
+   `sigConstructVerdict` answering 1 as the armed control and `const zzNope *=` answering 0. */
+const _sigVerdict = new Map();
+const sigConstructVerdict = (at, reasonsJoined, revs) => {
+  const why = whyOf.get(at + ' :: ' + reasonsJoined);
+  /* A KEY WITH NO PAIR BEHIND IT IS REPORTED AS UNASKABLE AND NEVER GUESSED AT. The memo is filled by the same
+     parse that built the key, so a miss means a signature reached this ranking through a path that did not go
+     through `signatures()` -- which is a finding about this file and not about the tree. */
+  if (!why) return 'VERDICT: cannot ask — this signature key carries no cond/reason pair from the parse';
+  const k = at + '\u0000' + reasonsJoined;
+  if (!_sigVerdict.has(k)) _sigVerdict.set(k, condVerdict(why));
+  const v = _sigVerdict.get(k);
+  const seen = revs && revs.size ? '  [seen at ' + [...revs].map((r) => r.slice(0, 8)).join(' ') + ']' : '';
+  const head =
+    v.verdict === VERDICT_PRESENT ? 'VERDICT: PRESENT at the tip BY CONSTRUCT — ' + v.why +
+      '. This is the assert that fired and it is still written; whether it would still FIRE is a different fact ' +
+      'and only a run produces it'
+    : v.verdict === VERDICT_CHANGED ? 'VERDICT: CHANGED at the tip BY CONSTRUCT — ' + v.why +
+      '. Re-derive before dispatching: a widened predicate NARROWS the population an assert accuses and does ' +
+      'not remove it, and a reworded refusal is a different refusal'
+    : v.verdict === VERDICT_ABSENT ? 'VERDICT: ABSENT at the tip BY CONSTRUCT — ' + v.why +
+      '. This abort is RETIRED; a row naming it is a row about a program nobody runs'
+    : 'VERDICT: cannot ask — ' + v.why;
+  return head + seen;
 };
+/* THE CHECKER'S OWN CONTROL SPEAKS BEFORE ONE VERDICT IS PUBLISHED, AND IT THROWS RATHER THAN WARNS. A liveness
+   verdict nobody calibrated is a verdict about the probe, and the cheap failure is silent in the direction that
+   costs most: every record would read ABSENT and every retired-looking row would be a row somebody stops working
+   on. `armed()` runs eight synthetic cases that separate PRESENT, CHANGED and ABSENT -- synthetic rather than
+   taken from this tree, because a control keyed on a real file's content is a coordinate that rots and then
+   reads as this checker breaking on the day somebody repairs that file. */
+const abortliveCases = abortliveArmed();
 console.log('\n=== distinct crash signatures, ranked by sites hit ===');
+console.log(`# each signature's verdict is its CONSTRUCT asked of the working tree by engine/abortlive.mjs, whose ` +
+            `control separates\n#   PRESENT / CHANGED / ABSENT on ${abortliveCases} synthetic cases before any ` +
+            `verdict here is published. The \`:line\` is NOT the key: it drifts.`);
 /* EACH SITE CARRIES ITS OBSERVED STACK HERE, WHICH IS WHAT MAKES THE RANKING GENERALISE. A signature hit by
    three sites is one number; a signature hit by three sites that all ship the same bundler is a statement
    about what to reproduce, and one hit by three unrelated stacks is a statement that it is not the bundler.
@@ -1500,7 +1546,12 @@ for (const [at, e] of [...bySig.entries()].sort((a, b) => b[1].sites.size - a[1]
   const why = [...e.reasons].map((w) => verbose || w.length <= 300 ? w : w.slice(0, 300) + ' …(SIGS=full for the rest)');
   console.log(`${e.sites.size}  ${at}` + (e.reasons.size > 1 ? `   (${e.reasons.size} distinct operands)` : '') +
               why.map((w) => '\n     ' + w).join('') + `\n     sites: ${sites}` +
-              '\n     ' + sigPathVerdict(at, e.revs));
+              /* ONE VERDICT PER DISTINCT REASON AND NEVER ONE PER SIGNATURE, because the reasons under one line
+                 are the OPERANDS that reached the gap and a repair can retire one of them and keep the others.
+                 Measured on this corpus: `engine.c`'s C-builtin-fork line carries two reasons that differ only
+                 in their remedy tail, and at the tip ONE of the two survives -- so a single verdict for the line
+                 would have called a merged-away wording live or a standing one retired. */
+              [...e.reasons].map((w) => '\n     ' + sigConstructVerdict(at, w, e.revs)).join(''));
 }
 /* THE SAME QUEUE ONE LEVEL COARSER, BECAUSE A DEFECT FAMILY OUTRANKS ITS MEMBERS AND THE FINE RANKING HIDES
    IT. The queue above keys on `file:line`, which is right for "what do I open" and wrong for "what is the
