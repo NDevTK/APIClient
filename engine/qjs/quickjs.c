@@ -27196,31 +27196,55 @@ static void js_step_visit_free_reexec(JSContext *ctx, REExecContext *ec, uint8_t
     (void)ctx; (void)capture;
     lre_exec_end(ec);   /* which is exactly this side's job, and already knows both buffers */
 }
-/* THE DECLARATION IS THE HOST'S TO ACT ON — this engine owns no DOM, so both sides of a private tree are
+/* THE DECLARATION IS THE HOST'S TO ACT ON — this engine cannot walk the structure, so both sides of it are
    function pointers the machine's declaration carries and all this side decides is which one runs. Asserted
-   on both consumers that dereference them: a declaration naming a tree and no operations names nothing this
-   walk can do, and the state block would be freed with a whole parse still hanging off it. */
+   on both consumers that dereference them: a declaration naming a host allocation and no operations names
+   nothing this walk can do, and the state block would be freed with the whole structure still hanging off it.
+   THE MESSAGE USED TO SAY "a flow-private DOM TREE" AND "the engine owns no DOM", which was the reason wearing
+   its first instance's name: a DOM tree is one such structure and §5.1's header list is another, and neither
+   is a thing this engine can copy. quickjs-step.h's banner carries why, and why the FIELD is still called
+   `tree`. The clause kept here is the one a host has to MEET and not merely implement — the clone is fatal on
+   allocation failure — because a crash message that states the contract is what the next reader acts on. */
 #define JS_STEP_TREE_OPS_DCHECK(ops)                                                                         \
     DCHECK((ops) != NULL && (ops)->clone != NULL && (ops)->destroy != NULL,                                  \
-           "a step state declared a flow-private DOM tree and handed the walk no operations to act on it — "  \
-           "the engine owns no DOM, so the declaration carries the host's clone and destroy or the tree is "  \
-           "a field nothing can copy and nothing can free")
+           "a step state declared a host allocation only the host can copy and destroy, and handed the walk "  \
+           "no operations to act on it — the engine cannot walk one, so the declaration carries the host's "  \
+           "clone and destroy or it is a field nothing can copy and nothing can free")
+/* THE COUNT AND THE ARRAY ARE ONE DECLARATION AND A HOST STATES BOTH. A structure with no interior pointers
+   held declares `ncursors` 0 and passes NULL with it, and all three consumers are written to do nothing in
+   that case — the clone's own loop, the teardown's clear and the fold's walk are each `for (i = 0; i <
+   ncursors; …)`. So the SAFE pair is silent and the UNSAFE one is silent too: a declaration naming cursors it
+   did not hand over reads a NULL array `ncursors` times, and a negative count reads whatever is beside it.
+   Both operands are named because the pair is the invariant and neither half of it is an error alone. */
+#define JS_STEP_TREE_CURSORS_DCHECK(cursors, ncursors)                                                       \
+    do {                                                                                                     \
+        DCHECKF((ncursors) >= 0,                                                                             \
+                "a step state declared %d cursors standing inside a host allocation, and a count below zero " \
+                "is not a shorter walk — every consumer of this declaration loops to it", (int)(ncursors));   \
+        DCHECKF((ncursors) == 0 || (cursors) != NULL,                                                         \
+                "a step state declared %d cursors standing inside a host allocation and handed the walk NO "  \
+                "cursor array — the count and the array are one declaration, and a structure holding no "     \
+                "interior pointer declares ZERO and NULL together rather than a count with nothing under it",  \
+                (int)(ncursors));                                                                            \
+    } while (0)
 static void js_step_visit_dup_tree(JSContext *ctx, void **root, void **cursors[], int ncursors,
                                    const JSStepTreeOps *ops) {
     JS_STEP_TREE_OPS_DCHECK(ops);
+    JS_STEP_TREE_CURSORS_DCHECK(cursors, ncursors);
     if (!*root) return;
     *root = ops->clone(ctx, *root, cursors, ncursors);
     DCHECK(*root != NULL,
-           "a flow-private DOM tree's clone answered NULL — the copy is fatal on allocation failure by "
-           "contract, because a sibling arm holding half a tree has no arm it belongs to");
+           "a host allocation's clone answered NULL — the copy is fatal on allocation failure by contract, "
+           "because a sibling arm holding half a structure has no arm it belongs to");
 }
 static void js_step_visit_free_tree(JSContext *ctx, void **root, void **cursors[], int ncursors,
                                     const JSStepTreeOps *ops) {
     int i;
     JS_STEP_TREE_OPS_DCHECK(ops);
+    JS_STEP_TREE_CURSORS_DCHECK(cursors, ncursors);
     if (*root) { ops->destroy(ctx, *root); *root = NULL; }
-    /* The cursors named nodes the tree OWNED, so this side frees none of them and clears them all — a cursor
-       left naming a destroyed node is the one thing a later read of this state could still fault on. */
+    /* The cursors named what the structure OWNED, so this side frees none of them and clears them all — a
+       cursor left naming destroyed memory is the one thing a later read of this state could still fault on. */
     for (i = 0; i < ncursors; i++) *cursors[i] = NULL;
 }
 static const JSStepVisit js_step_visit_dup  = { js_step_visit_dup_val,  js_step_visit_dup_strbuf,  js_step_visit_dup_props,
@@ -27412,6 +27436,9 @@ static void js_step_visit_fp_tree(JSContext *ctx, void **root, void **cursors[],
 {
     int i;
     (void)ops;
+    /* The ops are the one thing this walk does NOT assert, because it calls neither of them; the cursor pair
+       it does walk, so it owes the same check its two siblings owe. */
+    JS_STEP_TREE_CURSORS_DCHECK(cursors, ncursors);
     js_step_fp_fold(ctx, (uint64_t)(uintptr_t)*root);
     js_step_fp_fold(ctx, (uint64_t)(uint32_t)ncursors);
     for (i = 0; i < ncursors; i++) js_step_fp_fold(ctx, (uint64_t)(uintptr_t)*cursors[i]);

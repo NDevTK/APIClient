@@ -27,20 +27,39 @@ struct JSMapRecord;
 struct REExecContext;
 struct JSStepHdr;
 
-/* WHAT A FLOW-PRIVATE TREE ANSWERS, declared by the HOST because the engine owns no DOM. A tree is not a
-   JSValue and not an allocation with a size, so no other operation below can name one; what the engine
-   contributes is only the decision of WHICH consumer is visiting, which is the one thing a machine must never
-   learn for itself.
+/* WHAT A HOST ALLOCATION ONLY THE HOST CAN COPY AND DESTROY ANSWERS. Declared by the HOST for the reason every
+   other operation below is declared by the ENGINE: this one names a structure the engine cannot walk, so both
+   halves of it are the host's and what the engine contributes is only the decision of WHICH consumer is
+   visiting — the one thing a machine must never learn for itself.
+   THIS BANNER READ "WHAT A FLOW-PRIVATE TREE ANSWERS, declared by the HOST because the engine owns no DOM",
+   AND THE REASON IT GAVE IS THE GENERAL ONE WEARING ITS FIRST INSTANCE'S NAME. It is kept in its own words
+   because a reader who re-derives the subject from the operation's NAME will narrow it again: the engine owns
+   no DOM, and it owns no header list either, and the sentence that was written is true of both. What makes a
+   structure belong here is stated negatively and that is what generalises — it is not a JSValue and not an
+   allocation with a size, so no other operation below can name it. A flow-private DOM tree is the first such
+   structure; §5.1's header list (an array of entries each owning two C-library strings) is the second, and its
+   `clone` and `destroy` are `header_list_*` exactly as the tree's are `dom_private_tree_*`.
+   AND THE OOM CONTRACT IS WHAT SEPARATES THIS OPERATION FROM ITS NEIGHBOURS RATHER THAN THE SUBJECT'S SHAPE.
+   `buf`, `array`, `props` and `slots` all COPY, and all four answer NULL on allocation failure — "the state a
+   machine that has not built it yet is in". `clone` below is FATAL instead, and the engine asserts it, so a
+   structure whose own allocation primitives are already fatal (a `CHECK` rather than a NULL return) meets this
+   contract by construction and meets no other copying operation's. That is a property of the primitives, not
+   of what the structure is called.
    TWO OPERATIONS AND NOT THREE. The consumer that clones needs a third — the old-node-to-new map it re-points
    its cursors through — and needs it only for the length of one `clone` call, because a map records a copy
    that has just been made and nothing about it parks. So it lives inside that call and never crosses this
    boundary, which is also why the cursors are an argument of `clone` rather than a slot kind of their own. */
 typedef struct JSStepTreeOps {
-    /* Deep-copy the tree at `root` into a tree with the same owner, and re-point each of the `ncursors` cursor
-       slots — every one of which names a node OF that tree — at the copy of the node it named. Fatal on
-       allocation failure rather than answering NULL: a half-copied private tree has no arm it belongs to. */
+    /* Deep-copy the structure at `root` into one with the same owner, and re-point each of the `ncursors`
+       cursor slots — every one of which names something INSIDE that structure — at the copy of what it named.
+       `ncursors` 0 (and `cursors` NULL with it) is a structure with no interior pointers held, which is the
+       whole of what a host declares when its machine holds only the root.
+       FATAL ON ALLOCATION FAILURE RATHER THAN ANSWERING NULL: a half-copied private structure has no arm it
+       belongs to, and the clone consumer asserts the answer. That is the one clause here a host has to MEET
+       rather than merely implement, and it is met by construction where the structure's own allocation
+       primitives are already fatal. */
     void *(*clone)(JSContext *ctx, void *root, void **cursors[], int ncursors);
-    /* Destroy the tree at `root` and everything under it. */
+    /* Destroy the structure at `root` and everything it owns, including `root` itself. */
     void  (*destroy)(JSContext *ctx, void *root);
 } JSStepTreeOps;
 
@@ -98,18 +117,33 @@ struct JSStepVisit {
        whichever copy it now belongs to. Every other pointer in the context aims into the subject string or the
        compiled bytecode, and both arms hold their own reference to those, so both stay valid unchanged. */
     void (*reexec)(JSContext *ctx, struct REExecContext *ec, uint8_t **capture);
-    /* A FLOW-PRIVATE DOM TREE a machine OWNS, and the CURSORS standing in it. Its own operation for the reason
-       `reexec` is one: the three consumers do different work over it and none of the others can name it. A
-       byte copy of the state leaves every one of those pointers aimed at the ORIGINAL arm's nodes, so a
-       sibling that took one would place the same nodes into two documents and both teardowns would destroy
-       them — which is exactly the corruption a fork abort exists to prevent.
-       THE CURSORS TRAVEL WITH THE TREE and are not slots of their own, because a cursor is only meaningful
+    /* A HOST ALLOCATION ONLY THE HOST CAN COPY AND DESTROY, and the CURSORS standing INSIDE it. Its own
+       operation for the reason `reexec` is one: the three consumers do different work over it and none of the
+       others can name it. A byte copy of the state leaves every one of those pointers aimed at the ORIGINAL
+       arm's structure, so a sibling that took one would hold what the first arm owns and both teardowns would
+       destroy it — which is exactly the corruption a fork abort exists to prevent.
+       THE NAME IS `tree` BECAUSE THE FIRST SUCH STRUCTURE WAS ONE, AND IT IS THE ONLY DOM-SPECIFIC THING LEFT
+       HERE. NOT COVERED: the field, the two engine consumers' identifiers and `JSStepTreeOps`'s own name still
+       say `tree`, so a reader meeting a header list routed through it has to read this banner to learn that
+       the operation is general. WHAT THE NEXT DIFF BUILDS: the rename, which is one edit here and one at each
+       consumer in quickjs.c and one at each caller — and a caller's file is why it is not this diff, since a
+       field rename that leaves a caller naming the old field does not compile and the DOM callers are not this
+       lane's to touch. HOW ITS ABSENCE SHOWS: a reader grepping the operation's name finds only DOM callers and
+       concludes the operation is for DOM trees, which is the narrowing the banner above records being made
+       once already.
+       NONE OF THE THREE CONSUMERS DEREFERENCES THE STRUCTURE, which is the fact that decides what may be
+       declared here and is checkable without trusting this sentence: the clone consumer calls `ops->clone` and
+       asserts its answer, the teardown calls `ops->destroy` and clears the cursors, and the fingerprint walk
+       folds the pointers and CALLS NO OPERATION AT ALL. A host allocation with no interior pointers declares
+       `ncursors` 0 and all three handle it; the cursor machinery below is about interior pointers and not about
+       nodes.
+       THE CURSORS TRAVEL WITH THE ROOT and are not slots of their own, because a cursor is only meaningful
        against the copy the clone has just made: the clone re-points each one through its map, the teardown
-       clears it (the tree owned the node, so a cursor is BORROWED and is never freed here), and the
-       fingerprint folds it. A cursor slot holding NULL is a cursor the algorithm has not taken yet and is
+       clears it (the root owned what the cursor named, so a cursor is BORROWED and is never freed here), and
+       the fingerprint folds it. A cursor slot holding NULL is a cursor the algorithm has not taken yet and is
        passed through untouched by all three.
        THE ROOT IS THE OWNED THING AND THE CURSORS ARE NOT, which is why they are two arguments and not one
-       array: getting that backwards is a double free of every node in the tree. */
+       array: getting that backwards is a double free of everything the structure owns. */
     void (*tree)(JSContext *ctx, void **root, void **cursors[], int ncursors, const JSStepTreeOps *ops);
 };
 
