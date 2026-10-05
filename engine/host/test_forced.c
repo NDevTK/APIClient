@@ -192,6 +192,27 @@ static JSValue js_url_sink(JSContext *ctx, JSValueConst this_val, int argc, JSVa
    did not stage. */
 typedef struct { const char *req; const char *at; const char *body; int stages_page_error; } TfChunk;
 static const TfChunk TF_CHUNKS[] = {
+    /* THE ONLY MODULE IN THIS DOCUMENT, AND BEFORE THIS ROW THERE WAS NONE AT ALL. Measured by command:
+       `grep -nc 'JS_EVAL_TYPE_MODULE' engine/host/test_forced.c` answered 0 and this file's own prose said it
+       "holds no dynamic `import()`" — so every module algorithm in the engine was exercised by real pages and
+       by nothing that runs on demand. That is the subsystem a real app's deterministic blocker is in: six of six
+       drives of one real bundle carried `<name> is not initialized` on a module-top-level binding AND an
+       ESM-interop `.default` reading undefined, both of which are module state read in a world nothing wrote it
+       in. A defect with no synthetic home is a defect localised by a site nobody controls.
+       IT CARRIES BOTH OBSERVABLES AND NOTHING ELSE. `mmDeps` is a top-level `const` read from its OWN DEFAULT
+       PARAMETER, which is the shape every rolldown/vite bundle ships for its dependency-list resolver, and
+       §10.2.11 FunctionDeclarationInstantiation evaluates a formal parameter's initializer as part of the CALL —
+       so by then §14.3.1 Let and Const Declarations has initialised the outer binding and `m === mmDeps` is
+       TRUE in a browser. The `default` export is the second: an interop wrapper reads it off the namespace, and
+       a module whose factory ran in another world hands back a namespace whose `default` is undefined.
+       THE REPLY IS COMPILED AS A MODULE BECAUSE THE PARK SAYS SO AND NOT BECAUSE OF A CONTENT TYPE: this table
+       carries no type column, and solver/pending.h's `FLOW_PENDING_MODULE` is the kind a dynamic `import()`
+       parks under — "whose delivery hands the source to a compiler that reads" it as one, in that file's own
+       words. The door it lands at is `EPD_MODULE_IMPORT`. */
+    { "/chunk/mdmod.js",    "https://x.test/chunk/mdmod.js",
+      "const mmDeps = (i, m = mmDeps) => (m === mmDeps ? 'mmOK' : 'mmBAD');"
+      "export default { tag: 'mmDEF' };"
+      "export function mmProbe(){ return mmDeps([0]); }", 0 },
     { "/chunk/admin.js",    "https://x.test/chunk/admin.js",
       "fetch('/api/admin/audit-log');", 0 },   /* chunk-only endpoint */
     /* A chunk that THROWS is what a page error IS — the report must name the capability. A DOMException is the
@@ -3591,6 +3612,23 @@ static const char *HTML =
        caller. Both arms must read `mdfOK`: the binding is the PROGRAM's and neither world wrote it, so a world
        that reads it uninitialised is reading its own timeline wrongly rather than another world's state. */
     "const mdFork = (i, m = mdFork) => (m === mdFork ? 'mdfOK' : 'mdfWRONG'); (async function(){ await 0; fetch('/api/mdforkpath?w=' + (cfg.admin ? 'A' : 'P') + mdFork([0])); })();"
+    /* …AND THE SAME TWO READS AT MODULE TOP LEVEL, THROUGH A DYNAMIC `import()`, WHICH IS WHERE THE REAL
+       BUNDLE'S ARE. `mdSelf` and `mdFork` above put the const at SCRIPT top level, and a script's lexical
+       bindings and a module's are different cells written by different algorithms — a module's are written
+       inside §16.2.1.6.1.3 Evaluate ( )'s own body with the link phase's prologue ahead of them, which is the
+       pair `solver/cow.c`'s `module_eval` hook exists to isolate. So the script-level statements and this one
+       are not two spellings of one test; they are the two halves the engine treats differently.
+       THE ENTRY WITNESS IS THE FIRST FETCH AND IT IS WHY THIS STATEMENT IS SCORABLE AT ALL. An absent token is
+       equally consistent with the binding being wrong and with the import never being ANSWERED, and those take
+       opposite work — §Testing's reachability witness, owed because this document had never parked a module
+       before and nothing establishes that its provide loop answers one. `mmENTER` fires before the await, so
+       the three tokens separate three states: no `mmENTER` means the statement did not run, `mmENTER` alone
+       means the import was never settled, and `mmENTER` with either of the others means the module evaluated
+       and the reads are what is being measured.
+       EVERY WITNESS IS A CONSTANT, for §A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE-UNKNOWN's
+       reason: a payload composed from anything this engine COMPUTED can itself be unknown, and then the request
+       is never made and the arm reads exactly like an arm that did not run. */
+    "(async function(){ fetch('/api/modentered?w=mmENTER'); var ns = await import('/chunk/mdmod.js'); fetch('/api/modconst?w=' + ns.mmProbe()); fetch('/api/moddefault?w=' + (ns.default && ns.default.tag ? ns.default.tag : 'mmNODEF')); })();"
     /* ORPHAN-INVOKE — the headline capability, and the ONE statement in this document that nothing in it calls.
        It asks two things at once because they are the two halves of the mechanism and either alone would pass
        while the other was broken: that the function RUNS at all (`/api/orphan/report`), and that its PARAMETER
