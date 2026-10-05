@@ -7354,10 +7354,55 @@ static JSValue js_new_string_len_or_null(JSContext *ctx, const char *buf, size_t
     if (unlikely(buf_len <= 0))
         return js_empty_string(ctx->rt);
 
+    /* THE BOUND IS ON THE LENGTH THIS ENTRY WAS HANDED, AND IT IS ASKED BEFORE ANYTHING READS THROUGH `buf`.
+       THE RETIRED SPELLING IS RECORDED BECAUSE IT IS THE ONE A READER RE-DERIVES: the check was
+       `if (len > JS_STRING_LEN_MAX) return JS_NULL;` placed AFTER the scan, which is correct about what this
+       function may ALLOCATE and silent about what it may READ — `utf8_scan` has already walked `buf_len` bytes
+       by the time it is reached, so there was no value of `buf_len` this function refused to read. The 16-bit
+       sibling thirty lines below asks the identical question the other way round, validating its `len` before
+       its `memcpy`, so the canonical spelling was already in this file: ONE question, TWO spellings, and only
+       one of them bounds the read. MEASURED, which is why this is a repair and not tidying: on app.gitpod.io a
+       `nonce` attribute's length reached here through core/html/nonce_attribute.c and killed the renderer with
+       `RuntimeError: memory access out of bounds` inside this function — 3 of 3 drives of the 3baab0d release
+       artifact and 3 of 3 of 06c2ef8, with `@WHY` and `@E` both EMPTY, so a run that took it learned nothing
+       and said nothing about why. A caller that computes a wrong length is still a caller to fix; what this
+       line settles is that it can no longer be fixed by reading somebody else's heap.
+       IT IS A DCHECK AND A REFUSAL, NOT ONE OR THE OTHER. Every `buf_len` that reaches this entry is a length
+       THIS CODEBASE COMPUTED — a page states strings as JSValues and never as a byte count — so an oversized
+       one is an invariant of ours and is assertable; and the release arm must still answer, because
+       §Offensive-programming's release exemption is not a licence to read. The abort names no caller because
+       this line is shared by every one of them; the host's own stack trace does, which is how the measurement
+       above was localised to ten frames. */
+    DCHECK(buf_len <= (size_t)JS_STRING_LEN_MAX,
+           "a UTF-8 buffer longer than any JS string can hold reached the engine's own string constructor — "
+           "every length here is one this codebase computed, so a value this large is a corrupt or stale "
+           "length rather than a long document, and the scan below would read every byte of it. Read the "
+           "stack: the frame above this one is the caller whose length is wrong");
+    if (unlikely(buf_len > (size_t)JS_STRING_LEN_MAX))
+        return JS_NULL;
+
     /* Compute string kind and length: 7-bit, 8-bit, 16-bit, 16-bit UTF-16 */
     kind = utf8_scan(buf, buf_len, &len);
-    if (unlikely(len > JS_STRING_LEN_MAX))
-        return JS_NULL;
+    /* AND THIS IS WHY MOVING THE BOUND ONTO `buf_len` REFUSES NOTHING THE OLD CHECK ACCEPTED, asserted rather
+       than argued: a scan emits at most one code unit per byte — a 4-byte sequence yields two UTF-16 units and
+       an invalid byte yields one U+FFFD — so `len <= buf_len` and the old post-scan test could never fire once
+       `buf_len` is bounded. It is deleted rather than kept beside this, because a check that cannot fail is a
+       non-check with a reassuring shape; what replaces it is the inequality that made it redundant. */
+    DCHECK(len <= buf_len,
+           "a UTF-8 scan produced more code units than the buffer had bytes — the bound on this string's "
+           "length is now carried by `buf_len` alone, and it is only sound while this holds");
+
+    /* NAMED RESIDUAL — WHAT IS NOT COVERED: `JS_NewAtomLen`, which reaches this bound only through
+       `JS_NewStringLen` and reads BEFORE it gets there — it dereferences `str[0]` and then hands `len` to
+       `__JS_FindAtom`, which hashes that many bytes, so an oversized length there walks the same heap this
+       line now refuses to walk. It is NOT bounded here because the bound would be a SECOND literal comparison
+       of one quantity, which is the spelling that drifts, and because its fast path cannot route through this
+       function without ceasing to be one. WHAT THE NEXT DIFF BUILDS: one predicate both entries ask — the
+       length test named once, with `JS_NewAtomLen`'s own refusal being the `JS_ATOM_NULL` its exception arm
+       already returns — so neither site states the constant. HOW ITS ABSENCE SHOWS: an out-of-bounds read
+       reported inside the atom table's hash rather than inside a string constructor, with `JS_NewAtomLen` as
+       the frame above it; a `nonce` or any other attribute cannot reach it, because every length this engine
+       hands that entry is a property name's. */
 
     switch (kind) {
     case UTF8_PLAIN_ASCII:

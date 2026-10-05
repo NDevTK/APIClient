@@ -179,6 +179,25 @@ static ScriptCspMeta script_csp_meta(JSContext *ctx, lxb_dom_element_t *el)
                "unconstrained domain does not answer. Fork the request here into the matching and "
                "non-matching arms and let each carry the narrowed domain, the way an opaque operand forks "
                "every other predicate; a coerced example reports ONE arm's verdict as though it were both");
+        /* THE SLOT READ CAN NOW REFUSE, AND A REFUSAL IS NOT OOM — two states behind one answer, separated
+           here because the composed one names the wrong subsystem. §2.5.6's read builds a JS string out of a
+           `nonce` attribute's bytes, and engine/qjs/quickjs.c's string constructor now BOUNDS the length it was
+           handed before it reads through the pointer: an oversized one is refused with a RangeError instead of
+           walking the heap, which is the repair for the measured out-of-bounds kill. That refusal arrives HERE
+           as an exception in the slot, and `JS_ToCString` of an exception is NULL — the same NULL an allocation
+           failure produces. Reporting it as OOM is the plausible-wrong-diagnosis this file rates below silence:
+           it names memory for a defect that is a corrupt length, in a subsystem that is working. */
+        if (JS_IsException(h.nonce_slot)) {
+            /* IT IS STILL FATAL, AND THAT IS CORRECT RATHER THAN A CONCESSION. A length this codebase computed
+               came back larger than any JS string can hold, so a dev build has already aborted inside the
+               string constructor with the caller's own stack above it; in release there is no narrower answer
+               this record can carry, because §4.12.1.1's metadata is what the request is graded on and a
+               request composed from a nonce nobody could read would report a load a browser refuses. */
+            CHECK_FAIL("§4.12.1.1: a `script` element's [[CryptographicNonce]] could not be READ — §2.5.6's "
+                       "slot held bytes whose length the engine's own string constructor refused, which is a "
+                       "corrupt or stale attribute length rather than an allocation failure. The dev build "
+                       "aborts inside that constructor and its stack names the seam that carried the element");
+        }
         h.nonce = JS_ToCString(ctx, h.nonce_slot);
         CHECK(h.nonce != NULL, "§4.12.1.1: OOM reading a script element's cryptographic nonce metadata");
         integrity = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"integrity", 9, &integrity_n);
