@@ -214,10 +214,74 @@ export const VERDICT_ABSENT  = 'ABSENT';    // neither the cond nor any run of t
 export const VERDICT_NO_FILE = 'NO-FILE';   // the path the record names is not in the tree at that revision
 export const VERDICT_UNKEYED = 'NOT-KEYED-ON-A-FILE';   // e.g. the js mirror, which emits no file:line
 
+/* THE TRUSTED ZONE'S OWN `.js`, DERIVED FROM WHAT GIT TRACKS AND NEVER A LIST HERE. The js mirror's records are
+   the ONE band this file could not grade, and they are not a small band: measured over one corpus, the js-side
+   key ranked FIRST by sites hit with SIX distinct operands under it, every one of them reading `cannot ask`.
+   A #1 queue entry nothing can grade is the §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN furniture, with the twist that
+   it is not red — it is UNREADABLE, which a reader skips for the same reason. */
+const zoneFiles = (rev) => {
+  const out = execFileSync('git', rev ? ['ls-tree', '-r', '--name-only', rev, '--', 'extension']
+                                     : ['ls-files', '--', 'extension'],
+                           { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 1 << 28 });
+  return out.split('\n').filter((f) => /\.js$/.test(f));
+};
+
+/* THE MESSAGE ASKED OF THE WHOLE ZONE, BECAUSE THE FILE THE RECORD NAMES IS THE WRONG FILE BY CONSTRUCTION.
+   `extension/check.js` is where the macro is DEFINED; the message is written at the CALLER, in whichever of the
+   zone's files holds it. Keying on the named file would answer ABSENT for every js record and retire the whole
+   band — which is the false ABSENT this file exists to refuse, so the population is widened rather than the
+   verdict weakened.
+   IT IS A MESSAGE-ONLY VERDICT AND SAYS SO, which is strictly weaker than the C arm's. The js mirror throws an
+   Error and emits no cond, so there is no predicate to compare and the message is the whole of the identity --
+   exactly the `COND_UNCONDITIONAL` case above, and the same three outcomes follow from the same two tests.
+   WHAT IT RESTS ON IS MEASURED AND NOT ASSUMED: `scanSource` reads DOUBLE-quoted runs, and over the zone's abort
+   calls the message opens with `"` 550 times, with `'` ZERO times and with a backtick ZERO times. A single-quoted
+   message would be consumed as a C char literal and produce no run, so the convention is the precondition --
+   and it is a precondition about the ZONE, which is why it is stated as a count and not as a promise.
+   AND IT NAMES THE FILE THAT HOLDS THE MESSAGE, which is the second half of what the band cost: a key on the
+   macro's own file buckets unrelated aborts under one entry, so the ranking's order is wrong and its count is
+   inflated. The holding file is the identity the record never carried. */
+function zoneVerdict(reason, rev) {
+  const want = ws(reason || '');
+  if (!want) return { verdict: VERDICT_UNKEYED, file: ZONE_LABEL,
+                      why: 'this record carries no reason text, so there is no message to ask the zone for' };
+  const full = [], part = [];
+  for (const f of zoneFiles(rev)) {
+    let s;
+    try {
+      s = scanSource(rev ? execFileSync('git', ['show', `${rev}:${f}`],
+                                        { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 1 << 28 })
+                         : readFileSync(resolve(REPO_ROOT, f), 'utf8'));
+    } catch { continue; }
+    if (s.runs.some((r) => literalIsReason(r.text, want))) { full.push(f); continue; }
+    if (partialWindow(want, s.runs) >= 0) part.push(f);
+  }
+  if (full.length)
+    return { verdict: VERDICT_PRESENT, file: full.join(' '), messageSeen: true,
+             why: 'the message still compiles in, segment for segment, at ' + full.join(' ') + ' — a MESSAGE-ONLY ' +
+                  'verdict over the trusted zone, because the js mirror emits no cond and there is no predicate ' +
+                  'to compare' };
+  if (part.length)
+    return { verdict: VERDICT_CHANGED, file: part.join(' '), messageSeen: false,
+             why: 'only part of the message survives, at ' + part.join(' ') + ' — the refusal was REWORDED, so ' +
+                  'the record and the site are two different asserts' };
+  return { verdict: VERDICT_ABSENT, file: ZONE_LABEL, messageSeen: false,
+           why: 'no run of this message is a string literal of ANY tracked `.js` in the trusted zone' };
+}
+const ZONE_LABEL = 'extension/**/*.js (the trusted zone, searched whole)';
+
 /* THE VERDICT FOR ONE `@WHY`. `at` may carry its drifted `:line` and it is DISCARDED; `rev` omitted reads the
    working tree, which is the revision a reader is standing in. */
-export function condVerdict({ at, cond, reason }, rev) {
+export function condVerdict({ at, cond, reason, zone }, rev) {
   const file = String(at || '').replace(/:\d+$/, '').trim();
+  /* A RECORD THAT NAMES ITS CORPUS IS ROUTED THERE, AND IT SAYS SO IN A FIELD RATHER THAN IN THE SHAPE OF A
+     LABEL. The js mirror throws an Error and carries no file:line, so its producer records `at: ''` on purpose —
+     and an empty path is indistinguishable from a malformed one, which is why answering `cannot ask` put six
+     unrelated aborts in one ungradeable bucket at the TOP of a work queue. `zone: true` is the producer saying
+     WHICH corpus holds the message, which is a fact it has and this file does not. It is a FLAG and never a
+     parse of `at`, because sniffing `extension/check.js (js side)` would key on the file the macro is DEFINED
+     in — the exact false-ABSENT the js band's own residual forbids. */
+  if (zone) return zoneVerdict(reason, rev);
   if (!file || /\s/.test(file) || !/\.(c|h|mjs|js)$/.test(file))
     return { verdict: VERDICT_UNKEYED, file,
              why: 'this record carries no source file, so there is no construct to ask for — the js mirror ' +
@@ -353,8 +417,35 @@ export function selftest() {
 /* ARMED OR NOTHING IS PUBLISHED. A checker whose own control has not spoken is a checker reporting on its own
    probe, and the cheap failure here is silent: every record would read ABSENT and every retired-looking row
    would be a row somebody stops working on. */
+/* THE ZONE ARM'S OWN SEPARATING PAIR, OVER REAL ZONE CONTENT AND NOT OVER A SYNTHETIC SOURCE. The synthetic
+   cases above cannot arm it, because its whole subject is the TREE: what it has to be shown doing is answering
+   PRESENT for a message the zone really holds and ABSENT for one it does not. The PRESENT half is taken from the
+   zone's own scan at run time rather than hand-picked, so it cannot go stale and cannot be a message somebody
+   retired; the ABSENT half is invented and can never be there. Two verdicts from one code path over one
+   population is what `armed` means -- §A-CONTROL-ARMS-ONLY-ON-A-SITE's two runs, and the first of them has to
+   SPEAK before the second is worth anything. */
+export function zoneSelftest() {
+  const fails = [];
+  let sample = null;
+  for (const f of zoneFiles('')) {
+    const s = scanSource(readFileSync(resolve(REPO_ROOT, f), 'utf8'));
+    const r = s.runs.find((x) => ws(x.text).split(' ').length >= PARTIAL_WORDS + 4 && !/%/.test(x.text));
+    if (r) { sample = ws(r.text); break; }
+  }
+  if (!sample) fails.push('zone: no run long enough to use as a PRESENT control was found in any zone `.js` — ' +
+                          'the arm cannot be armed, so its verdicts may not be believed');
+  else {
+    const got = zoneVerdict(sample, '').verdict;
+    if (got !== VERDICT_PRESENT) fails.push(`zone PRESENT control: wanted ${VERDICT_PRESENT} got ${got}`);
+  }
+  const absent = zoneVerdict('zzqq no run of this sentence is written in any file of this trusted zone at all ' +
+                             'and it never will be because it was invented for a control', '').verdict;
+  if (absent !== VERDICT_ABSENT) fails.push(`zone ABSENT control: wanted ${VERDICT_ABSENT} got ${absent}`);
+  return fails;
+}
+
 export function armed() {
-  const fails = selftest();
+  const fails = selftest().concat(zoneSelftest());
   if (fails.length)
     throw new Error('engine/abortlive.mjs: its own control does not separate the verdicts, so no verdict it\n' +
       '  produces may be believed — a false ABSENT retires a live blocker and nothing downstream contradicts it:\n' +

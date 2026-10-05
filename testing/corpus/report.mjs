@@ -402,13 +402,21 @@ function signatures(text) {
        the construct check on `check.js` would read every one of these as ABSENT -- a false retirement for the
        whole js side, which is the direction §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT rates worst. So the
        pair is recorded with an EMPTY path and the verdict says why it cannot be asked.
-       NAMED RESIDUAL. WHAT IS NOT COVERED: every js-side assert, which is the band this ranking reports with
-       four sites hit and no verdict. WHAT THE NEXT DIFF BUILDS: a construct check whose corpus is the string
-       literals of the whole `extension/` tree rather than one named file, which is the same reassembly
-       `engine/abortlive.mjs` already does per file. HOW ITS ABSENCE WOULD SHOW: a js-side signature standing in
-       this ranking under `cannot ask` while its message has been reworded or deleted, so a reader cannot tell a
-       live js abort from a retired one at all. */
-    whyOf.set(k, { at: '', cond: '', reason: m[2].trim() });
+       RESIDUAL — MET, AND ITS WORDING IS KEPT BELOW THE VERDICT BECAUSE WHAT A READER RE-DERIVES IS THE
+       ARGUMENT FOR THE EMPTY PATH AND NOT THE ROUTING. `engine/abortlive.mjs` now takes a `zone` flag and
+       searches the string literals of every tracked `.js` under `extension/`, which is what the clause named;
+       the record states that corpus instead of leaving the path empty, so the band grades and each verdict NAMES
+       THE FILE THAT HOLDS THE MESSAGE — which is the second half of what the band cost, since a key on the
+       macro's own file buckets unrelated aborts under one entry and inflates its count.
+       IT IS A FLAG AND NOT A PATH, which is the whole of why the argument below still stands: `check.js` is
+       still the wrong file to ask, and nothing here asks it.
+       The retired wording: "NAMED RESIDUAL. WHAT IS NOT COVERED: every js-side assert, which is the band this
+       ranking reports with four sites hit and no verdict. WHAT THE NEXT DIFF BUILDS: a construct check whose
+       corpus is the string literals of the whole `extension/` tree rather than one named file, which is the same
+       reassembly `engine/abortlive.mjs` already does per file. HOW ITS ABSENCE WOULD SHOW: a js-side signature
+       standing in this ranking under `cannot ask` while its message has been reworded or deleted, so a reader
+       cannot tell a live js abort from a retired one at all." */
+    whyOf.set(k, { at: '', cond: '', reason: m[2].trim(), zone: true });
   }
   return [...out];
 }
