@@ -1229,7 +1229,23 @@ void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, lon
    WHAT THE ROW STILL CANNOT DO, AND IT IS A PROPERTY OF THE MACHINE AND NOT AN OMISSION: `called == 0` does
    not separate a page that calls no `fetch()` from a flow that never reached a call the page does make, and no
    counter at this edge ever will — the prologue is not entered in either case. That question is the ORDER's,
-   and solver/flow.h's `readyPicksLifetime` legend is the instrument for it.
+   and `ready_picks_lifetime` is the instrument for it: solver/result.c declares its KIND beside the rest of the
+   WFQ census and states what the row answers (the dispatch REACHES a job holder, with the ladder quartet beside
+   it saying what the ladder then did with it), and solver/flow.c carries the three-reading enumeration that
+   makes a value of it actionable.
+   AND THIS SENTENCE SAID `solver/flow.h's legend`, WHICH IS A FILE THAT DOES NOT CONTAIN THE NAME — kept here
+   because the pointer is the load-bearing half of this paragraph and a reader who re-derives it from "the order
+   owns that question" will reach for `flow.h` again, the order's own header being the obvious place for it.
+   A MIS-AIMED POINTER IN A LEGEND IS WORSE THAN ONE IN A CITATION AND THIS IS WHY: a citation sends a reader to
+   a section that does not say what the code claims and they FIND OUT, while a legend naming the wrong file for
+   an instrument is read as `no such instrument` the moment the grep answers zero — which is exactly the
+   stale-absence direction, because the only reader of a named gap is somebody about to go and build one. It was
+   relayed verbatim out of this paragraph into a lane brief as "the whole brief" and cost that lane a reading
+   before it refuted the coordinate; it greped the named file, got zero, and said so rather than concluding the
+   row did not exist, which is the behaviour the pointer should not have required.
+   THE AUTHORING RULE THAT REMOVES THE NEED, AND IT IS FREE: a pointer to an instrument names the file that
+   DECLARES it, which is derivable rather than recalled — `git grep -n <row> -- engine/host/solver/` answers in
+   one command, and a pointer written without running it is a claim about this tree in the future tense.
    THE NARROWING THAT MAKES THIS ROW LIKELIER TO READ ZERO THAN ITS OWN ARGUMENT SUGGESTS, stated so that a
    zero here is not read as a broken hook: `idl_concolic_rule` answers IDL_CONCOLIC_CROSSES for IDL_USVSTRING,
    so a concolic URL — `fetch('/api/u?uid=' + state.id)`, the computed address this tool exists to report —
