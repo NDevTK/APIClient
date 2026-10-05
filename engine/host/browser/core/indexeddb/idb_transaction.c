@@ -470,13 +470,50 @@ void idb_transaction_set_state(JSContext *ctx, JSValueConst tx, int state)
    is now read by the CONDITION, where it may not be called twice without being two walks over one state --
    and once the condition needs it, the whole computation is dev-only and the preprocessor is what says so. */
 #if APICLIENT_DEV
-        /* A LIST OF THE HOLDERS IS STILL WHAT THIS LINE OWES, which the identity below does not retire: the
-           sum says how many references are ACCOUNTED FOR and still names no holder for the remainder, so the
-           next diff is the dev-only dump the paragraph above asks for (JS_DumpValue / JS_DumpGCObject, which
-           §Architecture names for exactly this). WHAT IS NOT COVERED: a remainder of N tells a reader to look
-           in a sibling's delta, a pending task's closure or the cold tier and does not say which. HOW ITS
-           ABSENCE SHOWS: this abort firing with a closed-looking partition and a nonzero remainder, and no
-           next step from the line it fired at. */
+        /* THE DUMP THIS CLAUSE NAMED IS WITHDRAWN: IT ANSWERS THE FORWARD QUESTION AND IS NOT CALLABLE FROM
+           HERE. A refcount says HOW MANY and the question is WHO, which is the REVERSE edge, and both names the
+           retired wording reached for answer the other way round: JS_DumpValue prints a value's own CONTENTS and
+           JS_DumpObject its address, refcount, shape, proto, class and props, so either one pointed at `changes`
+           prints the list's ENTRIES and nothing about the holders the sum could not account for. Both are also
+           `static __maybe_unused` in quickjs.c, and the only JS_Dump quickjs.h declares is JS_DumpMemoryUsage, a
+           runtime-wide memory report that names no holder of anything — grepped with an invented name as the
+           control rather than argued. THE RETIRED WORDING, kept because that section's own sentence sends a
+           reader to the same two names: it read `the next diff is the dev-only dump the paragraph above asks for
+           (JS_DumpValue / JS_DumpGCObject, which §Architecture names for exactly this)`. That section is right
+           that a bespoke probe is the wrong answer and this is not one: the reverse walk is already in the tree.
+           WHAT IS NOT COVERED: a holder that is not an entry of the RUNNING delta or of its ancestry — a
+           property of the holder rather than a list of places, which is why the message below names the doors
+           and this clause does not.
+           WHAT THE NEXT DIFF BUILDS: the SIBLING arm, off the frontier rather than off a dump. `flow_count` and
+           `flow_at` walk the members and `struct Flow`, defined in flow.h, names each member's CowDelta in its
+           `delta` field, so the missing count needs no engine change — and it is driven from the frontier's own
+           layer, because cow.c holds no registry (it includes no flow.h and every `flow_` it spells is PROSE:
+           `git show origin/main:engine/host/solver/cow.c | grep -c flow_at` answers 0) while CowSeg is private
+           to cow.c (0 hits in cow.h and in flow.h). Only cow.c can count; only its caller can enumerate.
+           THE DEDUP IS THE DIFFICULTY AND NOT A DETAIL. A CowSeg is REFCOUNTED AND STRUCTURALLY SHARED, one dup
+           per entry however many members stand on it — which the identity's own IT IS EXACT AND NOT A FLOOR
+           paragraph already states — so summing the existing own+base scan over every member counts each shared
+           segment once PER MEMBER. That sum EXCEEDS the refcount, and this assert reads a remainder below the
+           identity as a reference the delta claims and does not hold, so a naive walk does not over-count: it
+           reports a DOUBLE FREE THAT IS NOT THERE. Chains share SUFFIXES, so descending each member's chain and
+           stopping at the first segment already seen counts every distinct one exactly once.
+           AND THE CLOSURE DOOR IS SECOND BECAUSE IT HAS ITS OWN MECHANISM. quickjs.c's `gc_edge_census_run`
+           re-walks gc_obj_list and tmp_obj_list with a counting JS_MarkFunc and names the parents reporting one
+           child with the EDGE ORDINAL each reported it through (three of them; the rest counted and their
+           absence stated). It is `static` too, and its currency is MARK EDGES rather than REFERENCES — which is
+           a FEATURE here and not a mismatch, since a delta entry is a JSValue in host malloc and
+           JSTimeTravelHooks declares eleven write hooks and no mark hook, so neither a COW entry nor a C local
+           is reachable by mark_children. A holder it CAN name is an object or a closure, which is the second
+           door; one it cannot is host-side, which is the first. It may never be asked for a COUNT to difference
+           against the refcount — that differences two denominators.
+           HOW ITS ABSENCE SHOWS: this abort firing with a nonzero remainder and no row anywhere saying whether
+           the missing holders are delta entries at all.
+           RETIREMENT: this record goes when the sum below is composed from a walk over the frontier's MEMBERS
+           rather than over ONE CHAIN, because a remainder is then silent only about a door no delta holds.
+           MEASURED ABSENT with the command, so this condition is not born met: cow_entries_naming_frontier and
+           flow_entries_naming each answer 0 in cow.h, cow.c and flow.c, against `cow_entries_naming` answering
+           1 in cow.h and 1 in cow.c as the armed control, and that scan's only delta source is `cow_current()`.
+        */
         int cow_base = 0, cow_own = cow_entries_naming(changes, &cow_base);
 
         /* RE-KEYED ON THE IDENTITY RATHER THAN WEAKENED, AND THE MEASUREMENT IS WHAT DECIDED IT. The condition
@@ -503,8 +540,12 @@ void idb_transaction_set_state(JSContext *ctx, JSValueConst tx, int state)
                 "every caller of it frees before returning, and every COW capture dups its target, so one "
                 "entry naming this Array is one legitimate reference and a count above two is a measurement "
                 "of how many times a flow wrote it rather than a defect on its own. A REMAINDER ABOVE THE "
-                "IDENTITY is the finding and names three doors this walk cannot see: a SIBLING flow's delta, "
-                "a pending request task's operation closure, or the cold tier. A REMAINDER BELOW IT is the "
+                "IDENTITY is the finding and names TWO doors this walk cannot see: a SIBLING flow's delta, "
+                "or a pending request task's operation closure. THE COLD TIER IS NOT A THIRD — a member that "
+                "leaves the frontier has its delta RELEASED, and a released delta holds no live reference, "
+                "every arm of cow_entries_free being a free of its entry's object — so a walk over the "
+                "frontier's own members would close the first of the two and leave the closure the only one. "
+                "A REMAINDER BELOW IT is the "
                 "other defect entirely — a reference the delta claims and does not hold, which the next "
                 "unapply frees twice. The list is emptied on the next line, so what an unaccounted holder "
                 "leaks is an empty Array whose only remaining edge is Array.prototype, and that edge makes "
