@@ -16,7 +16,7 @@
 //                  TOGETHER and never `fin/n` alone: a `0/n` beside `partial x n` is a dwell that expired
 //                  while the engine was still exploring -- unbounded exploration behaving correctly -- and a
 //                  `0/n` beside anything else is a different fact entirely.
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { siteList } from './list.mjs';
 
@@ -95,7 +95,7 @@ if (!NAMED) {
   /* The named-beside-derived refusal moved to the argv block above, where it covers BOTH spellings instead
      of only `--pair` -- which is what it has to cover now that the derivation is what a bare command does. */
   const all = readdirSync(ROOT).filter((f) => /^census-.*\.jsonl$/.test(f)).sort();
-  const paired = [], excluded = [];
+  const paired = [], excluded = [], rowsOf = new Map();
   for (const f of all) {
     let rows;
     try {
@@ -105,7 +105,7 @@ if (!NAMED) {
     if (stray.length)
       excluded.push([f, `${stray.length} of ${rows.length} row(s) name a site \`${list.rel}\` does not — ` +
         `first \`${String(stray[0]).replace(/\s+/g, ' ').slice(0, 48)}\``]);
-    else paired.push(f);
+    else { paired.push(f); rowsOf.set(f, rows.length); }
   }
   console.log(`# --pair DERIVED the pass set from \`${list.rel}\`: ${paired.length} of ${all.length} ` +
     `census file(s) beside this one measure that list.`);
@@ -118,6 +118,56 @@ if (!NAMED) {
       `them measures \`${list.rel}\`. That is a statement about the pairing and not about the engine: the ` +
       `rows are scratch by design (\`.gitignore\` ignores them), so either this list is the wrong one for ` +
       `the corpus on this disk, or no pass has been taken against it. Try the other lists in this directory.`);
+  /* THE DERIVED POPULATION IS WRITTEN TO A FILE BEFORE ANY FIGURE IS PRINTED, BECAUSE A DERIVATION THAT
+     EXISTS ONLY IN A TERMINAL IS A DERIVATION THAT HAS TO BE TRUSTED. Everything above goes to stdout, which
+     is the right place for it and is not a record: a reader who captures the figures (or whose scrollback
+     scrolls, or who reads a relayed quotation of one line) holds a number whose population they cannot
+     reproduce from any artifact on the disk. CLAUDE.md's standing demand is that a figure travel with the
+     COMMAND that derives it, and the command here is bare `node report.mjs` — which is reproducible only if
+     the SET that bare command resolved to is recorded somewhere, since the set is a function of which census
+     files happen to be beside this one at the moment it ran, and those are scratch by design.
+     IT GOES UNDER `logs/`, WHICH `.gitignore` ALREADY COVERS, and that is a choice rather than a convenience:
+     a run's captured output is exactly what that directory is for, and writing a sibling of the censuses
+     instead would put an untracked file in a SHARED checkout, where it is noise on every peer's
+     `git status` for as long as it sits there.
+     A FAILED WRITE THROWS AND PUBLISHES NOTHING. The alternative — print the figures and warn — leaves a
+     reader holding exactly the state this record exists to end, with a warning they did not capture either;
+     and a report that cannot say what it measured is §AN-UNSTAMPED-ARTIFACT's refusal arriving one level out,
+     where the unnameable thing is the population rather than the revision.
+     IT IS WRITTEN AFTER THE EMPTY-PAIRING THROW, deliberately: an empty population is not a population to
+     record, and recording one would leave a file asserting that this list has no passes when the real finding
+     is that the wrong list was handed in. */
+  const RECDIR = join(ROOT, 'logs');
+  const RECORD = join(RECDIR, `population-${list.rel.replace(/[^A-Za-z0-9._-]+/g, '_')}.txt`);
+  const rec = [
+    `# THE DERIVED PASS SET, written by report.mjs before it printed one figure. This file IS the population`,
+    `# every number of that run is a part of; a figure quoted without it is a figure whose scope is a memory.`,
+    `# written: ${new Date().toISOString()}`,
+    `# site list: ${list.rel} (${list.byId.size} site(s))`,
+    `# selector: every census-*.jsonl beside report.mjs EVERY ROW of which names a site this list names.`,
+    `#   That is a CONSTRUCT and not a set anybody typed — but it is a NECESSARY condition only: a census`,
+    `#   measuring a DIFFERENT list whose ids all happen to occur in this one is kept, and no row-to-site`,
+    `#   test can see that. Read the exclusions below for what the construct rejected and why.`,
+    `# re-run, exactly: cd testing/corpus && SITES=${list.rel} node report.mjs`,
+    `# PAIRED ${paired.length} of ${all.length}`,
+    ...paired.map((f) => `  ${f}\t${rowsOf.get(f)} row(s)`),
+    `# EXCLUDED ${excluded.length}${excluded.length ? '' : ' — every census beside report.mjs measures this list'}`,
+    ...excluded.map(([f, why]) => `  ${f}\t${why}`),
+    '',
+  ].join('\n');
+  try {
+    mkdirSync(RECDIR, { recursive: true });
+    writeFileSync(RECORD, rec);
+  } catch (e) {
+    throw new Error(`report.mjs: the derived pass set could not be RECORDED at \`${RECORD}\` ` +
+      `(${e.code || e.message}), so nothing is printed. This is not a tidiness check: the population a bare ` +
+      `\`node report.mjs\` resolves to is a function of which census files are beside it at the moment it ` +
+      `runs, and those are scratch by design — so a figure published without that set recorded is a figure ` +
+      `whose scope exists nowhere and has to be taken on trust. Make that path writable, or name the ` +
+      `population yourself with \`--named\`, which is the mode that says the scope is YOURS to state.`);
+  }
+  console.log(`#   RECORDED at logs/${RECORD.split('/').pop()} — the set above, as a file, so a figure from ` +
+    `this run can be re-scoped by someone who did not watch it.`);
   files = paired;
 } else {
   /* `--named` WITH NO FILES IS REFUSED RATHER THAN DEFAULTED TO ONE CONVENTIONAL NAME. The flag's whole
