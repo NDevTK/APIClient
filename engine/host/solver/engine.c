@@ -8056,8 +8056,38 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
        spelling: the clause below carries why, and the difference is that re-evaluating reaches the cell never
        while re-linking cannot happen at all, the status being at baseline for every world. So "each world
        evaluates the module once" is not a cure that was merely out of reach — it is a cure for the wrong
-       phase. WHICH drives land inside a LINKING ancestry is therefore decided by which flow happened to run
-       out of work, a fact about the SCHEDULE, which is the same argument engine_orphan_born was built on for a
+       phase.
+       AND THE `AT BASELINE FOR EVERY WORLD` HALF OF THAT IS RETIRED BY THE CONSTRUCTION THIS RECORD STATES AS
+       MET THREE PARAGRAPHS DOWN, AND IS KEPT IN ITS OWN WORDS BECAUSE A READER WHO STOPS HERE BUILDS TO AN
+       ASYMMETRY THAT IS GONE — MEASURED, AND THE COST WAS A DISPATCHED BRIEF. `js_module_set_status` is the
+       only assignment to a module's status in the engine and its body is `js_module_eval_capture(ctx, m);
+       m->status = status;`, so the status is PER-FLOW exactly as the cells are. A coordinator read this clause
+       as the live mechanism, inferred that the cure was to make the link phase's cell writes BASELINE "matching
+       its status", and dispatched it; the repair had landed in the OPPOSITE direction, the status having been
+       moved to match the cells, so the proposed diff was already done and its premise was the half this clause
+       had not retired. THE TELL IS THAT A RESIDUAL'S HEAD IS READ AND ITS RETIREMENT NOTES ARE NOT.
+       WHAT IS LEFT IS A MISSING TRIGGER AND NOT AN ASYMMETRY, which takes different work. Both halves being
+       per-flow means a world whose cells read UNINITIALIZED also reads the status UNLINKED, so §16.2.1.6.1.2
+       Link ( ) is genuinely OWED in that world and a flow that IMPORTS performs it and writes its own cells. A
+       DRIVE has no import — its world is the discovering flow's, `engine_sibling_assemble` below being handed
+       `f` — so nothing in its timeline reaches the link and `OP_get_var_ref_check` throws at the first read.
+       The population is flows with NO IMPORT OF THEIR OWN, not flows outside a linking ancestry.
+       AND THE PAIR THAT IS STILL ASYMMETRIC IS CORRECT AS IT STANDS, which is the next error available:
+       `JSModuleEvalState` holds `status`, both dfs indices, `stack_prev`, `cycle_root`, the capability and the
+       async accounting, and NOT `loaded`, `func_created`, `func_obj` or the export `var_ref`s — so the
+       STRUCTURAL half of the link is baseline and built once. That is what makes a re-link in a second world
+       cheap and what keeps the cells ONE set of shared JSVarRefs whose VALUES the delta isolates; capturing it
+       would give each world its own cells and merge nothing, and re-running `js_create_module_function` per
+       world would re-dup every export's `var_ref`. Read JS_ModuleEvalStateSave's field list before proposing
+       either.
+       RETIREMENT: this record goes when a drive issues §16.2.1.6.1.2 Link ( ) for the module its body belongs
+       to IN ITS OWN WORLD before building the call, which needs the module back-pointer §16.2.1.7.3.1
+       InitializeEnvironment ( )'s "Set the ScriptOrModule of moduleContext to module" names and that
+       JSFunctionBytecode does not carry — MEASURED ABSENT with the command, so this condition is not born met:
+       over the struct's own line range `grep -c JSModuleDef` answers 0 against `grep -c 'JSContext \*realm'`
+       answering 1 as the armed control.
+       WHICH drives land inside a LINKING ancestry is therefore decided by which flow happened to run out of
+       work, a fact about the SCHEDULE, which is the same argument engine_orphan_born was built on for a
        different fact.
        AND THAT SCHEDULE FACT IS NOT THAT THE PARENT IS ARBITRARY — IT IS THAT THE PARENT IS SELECTED AGAINST,
        which is the stronger statement and the one a reader who sets out to measure the arbitrariness will not
@@ -8094,9 +8124,13 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
        own name occurring 28 times as the armed control.
        THE NEXT-DIFF CLAUSE THAT STOOD HERE IS WRONG AND IS RECORDED RATHER THAN DELETED, because it is what
        a reader re-derives from the paragraph above it and because its METHOD is the part that would otherwise
-       be copied. It said: "a world that reads an uninitialized module binding EVALUATES that module, keyed on
-       the per-flow state JS_ModuleEvalStateSave already carries, so a flow with no import of its own reaches
-       the exports it never wrote." Every premise above it is true and the remedy does not follow, because
+       be copied. IT IS GIVEN UNQUOTED, BECAUSE A QUOTED RUN THAT IS THIS TREE'S OWN PROSE IS COMPARED AGAINST
+       WHATEVER STANDARD THE NEAREST PRECEDING CITATION NAMES — measured: adding the retirement condition above
+       made this block's §16.2.1.7.3.1 that anchor and the citation audit reported this retired clause as a
+       divergence from ECMAScript, which is a false accusation produced by punctuation rather than by anything
+       about the text. It said — a world that reads an uninitialized module binding EVALUATES that module, keyed
+       on the per-flow state JS_ModuleEvalStateSave already carries, so a flow with no import of its own reaches
+       the exports it never wrote. Every premise above it is true and the remedy does not follow, because
        EVALUATION IS NOT WHAT WRITES THE CELL. A module's declaration instantiation is compiled into the body's
        own `OP_push_this; OP_if_false <body>` prologue and is selected by a TRUTHY `this` — the link walk's own
        comment in quickjs.c says so verbatim, and it is the one caller that passes `JS_TRUE`. Both evaluation
@@ -8380,8 +8414,14 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
        reached for once while this paragraph was being written. JS_OrphanTakeOne is plain C linkage — one
        JS_EXTERN in quickjs.h, one definition in quickjs.c, one caller in this file — so its sibling costs
        three files in one link and NOT §A-CROSS-BOUNDARY-DIFF's seven hops (build.mjs names it only inside a
-       diagnostic string). What it does still cost is a SUBMODULE commit plus the superproject's gitlink,
-       which land together or not at all.
+       diagnostic string). AND THE SUBMODULE HALF OF THAT IS RETIRED BY A SUBTREE MERGE AND IS KEPT IN ITS OWN
+       WORDS BECAUSE A READER WHO RE-DERIVES A FORK'S COST FROM ITS BEING A FORK WILL RE-ADD IT. It read:
+       "What it does still cost is a SUBMODULE commit plus the superproject's gitlink, which land together or
+       not at all." `engine/qjs` is ORDINARY TRACKED CONTENT of this one repository now — MEASURED with the
+       command: `git ls-files -s` names exactly ONE gitlink, `engine/qjs/test262`, and `git cat-file -t
+       <rev>:engine/qjs` answers `tree` — so the three files land in ONE commit and the cross-boundary pair the
+       clause warned about is unreachable rather than merely unlikely. The three-files-in-one-link half is
+       unchanged and is the operative number.
        HOW ITS ABSENCE SHOWS, measured rather than argued (artifact 9c757178, solvergate `direct`, 3 runs a
        side, identical on every run): two documents differing ONLY in whether the uncalled function's closure
        outlives its defining frame. Held on a live object -> `asked` 396, `driven` 2, and the two endpoints

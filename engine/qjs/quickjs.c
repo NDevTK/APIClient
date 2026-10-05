@@ -69243,14 +69243,19 @@ static void step_module_link_visit(JSContext *ctx, JSModuleLinkOp *op, JSStepVis
     v->buf(ctx, (void **)&op->walk.frames, (size_t)op->walk.cap * sizeof(*op->walk.frames));
 }
 
-/* WHY A HALF-FINISHED LINK MAY NOT BE FORKED (JSTrampStepDef.unforkable). Everything the walk's cursor names is
-   the REALM'S and not this flow's: a Module Record's [[Status]] and [[DFSAncestorIndex]] live in a JSModuleDef,
-   which no COW delta captures, and 16.2.1.6.1.2 step 2's own `stack` is threaded through those same records.
-   Two arms resuming one walk would each run 16.2.1.7.3.1 over the same records — every import binding's var_ref
-   counted twice, every module of the component set to linked twice — and the second arm's frames would name a
-   path the first has already popped. It is not "no page code runs here": a park inside a prologue is exactly
-   what this machine exists to allow, and RAM pressure and a cold-tier resume never ask what the page is doing.
-   The trajectory to zero is a cow_capture_host_record over the module graph, and nothing else. */
+/* WHY A HALF-FINISHED LINK MAY NOT BE FORKED (JSTrampStepDef.unforkable). Two arms resuming ONE walk would each
+   run 16.2.1.7.3.1 InitializeEnvironment over the same records — every import binding's var_ref counted twice,
+   every module of the component set to linked twice — and the second arm's frames would name a path the first
+   has already popped. It is not "no page code runs here": a park inside a prologue is exactly what this machine
+   exists to allow, and RAM pressure and a cold-tier resume never ask what the page is doing.
+   THE REFUSAL'S OLD REASON STOOD HERE AND IS RETIRED AT THE FUNCTION'S OWN SITE, WHICH IS THE ONE TO READ — it
+   is not restated here, because two copies of one argument is how the wrong half survives, and that is exactly
+   what happened: this banner went on saying a Module Record's [[Status]] and [[DFSAncestorIndex]] "belong to the
+   REALM" because "no COW delta captures" them, and prescribing "a cow_capture_host_record over the module
+   graph, and nothing else", for as long as the correction sat 25 lines below in js_module_loaded_unforkable.
+   JSModuleEvalState holds both fields; the remedy was never the right one; and what the refusal is about is the
+   WALK'S CURSOR being shared. A reader who meets a declaration scans declarations, so the stale copy was the
+   one with the traffic. */
 static const char *js_module_loaded_unforkable(const void *state);
 
 typedef struct JSModuleLoaded {
@@ -71138,8 +71143,19 @@ void JS_ModuleEvalStateFree(JSRuntime *rt, void *blob)
    reaches the SCC stack or a frame on the walk's path only through js_module_linking_enter, which announces
    before it claims, and the host's dedup is first-baseline-wins per flow. So the two minima are the same flow
    writing a record it has already announced — not an omission, and not a site to add a call to.
-   WHAT IS STILL REMEMBERED RATHER THAN STRUCTURAL is the eval phase: its status writes do not go through a
-   helper, so a site added there can still forget. That is the next construction, not this one. */
+   WHAT WAS SAID TO BE STILL REMEMBERED RATHER THAN STRUCTURAL IS RETIRED, AND IS KEPT IN ITS OWN WORDS BECAUSE
+   A READER COUNTING CALL SITES RE-DERIVES IT, AND IT IS GIVEN UNQUOTED BECAUSE A QUOTED RUN THAT IS THIS TREE'S
+   OWN PROSE IS COMPARED AGAINST WHATEVER STANDARD THE NEAREST PRECEDING CITATION NAMES — measured: quoted, the
+   citation audit reported this retired clause as a divergence from ECMAScript §16.2.1.6.1.2, which is a false
+   accusation produced by punctuation and not by anything about the text. It read — the eval phase: its status
+   writes do not go through a helper, so a site added there can still forget. That is the next construction, not
+   this one. The paragraph
+   two up says the opposite about the same fact, so this block contradicted itself and a reader reaching the end
+   of it got the wrong half. MEASURED WITH THE COMMAND: `grep -nE '\bm1?->status *= *[^=]'` over this file
+   answers TWO — js_module_set_status's own line, and JS_ModuleEvalStateRestore's, which the note above
+   deliberately exempts — against 38 for the `==` spelling as the armed control, so no status write in either
+   phase is remembered. What is still covered by a property of the WALK rather than by a write-site helper is
+   the three non-status fields of the paragraph above, and nothing else. */
 static void js_module_eval_capture(JSContext *ctx, JSModuleDef *m)
 {
     if (g_time_travel.module_eval)
