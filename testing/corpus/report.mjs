@@ -260,6 +260,29 @@ for (const p of passes) for (const r of p.rows) {
   if (r.logFile) { try { log = readFileSync(join(ROOT, 'logs', r.logFile), 'utf8'); } catch { } }
   const blob = log + '\n' + JSON.stringify(r.pageErrors || []) + '\n' + JSON.stringify(r.why || []) + '\n' + JSON.stringify(r.atE || []);
   const sigs = signatures(blob);
+  /* AND THE `why` CHANNEL'S OWN TWO-SIDED CHECK, READ HERE BECAUSE THIS IS WHERE `why` IS CONSUMED. site.mjs
+     drops the lines that QUOTE an abort — extension/bridge.js composes a crash record's `err` as
+     `<message> | ROOT: <the @WHY line>`, so one abort used to render as TWO entries with the second
+     JSON-escaped a level deeper and parseable by nothing. `whyQuotedWithoutRaw` is the assertion that the drop
+     is LOSSLESS: empty string means every quotation's payload is contained in some raw one, and a non-empty
+     value names payloads that exist ONLY as a quotation — which would mean that filter is discarding the only
+     copy of an abort, and every signature below it is drawn from a `why` with a hole in it.
+     IT IS A THROW AND NOT A COLUMN, for the reason this file already throws on a missing `logFile`: a signature
+     ranking composed from an incomplete `why` is not a worse ranking, it is a ranking of a different thing, and
+     the row that would explain it is the one being dropped. NULL IS NOT A FAILURE — site.mjs writes null when
+     the transcript holds no `@WHY` at all, which is every non-crashing run, and `no abort` and `every quotation
+     has its raw twin` are different facts. UNDEFINED is a row from a build of site.mjs that predates the field,
+     and is left alone rather than read as clean, which is the polarity the span block records as having made
+     its own `predates` arm dead. */
+  if (typeof r.whyQuotedWithoutRaw !== 'undefined' && r.whyQuotedWithoutRaw !== null &&
+      r.whyQuotedWithoutRaw !== '') {
+    throw new Error(`report.mjs: row \`${r.id}\` in ${p.label} holds @WHY payloads that appear ONLY as a\n` +
+      `  quotation inside a crash record, with no raw line anywhere in the transcript:\n` +
+      `    ${JSON.stringify(r.whyQuotedWithoutRaw)}\n` +
+      `  site.mjs drops ROOT-quoted lines so one abort stops reading as two, and that drop is sound only while\n` +
+      `  every quotation has a raw twin. These do not, so the \`why\` this ranking is built from is MISSING an\n` +
+      `  abort rather than merely de-duplicated. Read the transcript directly and fix the filter, not the row.`);
+  }
   const netBad = r.fatal || r.nav !== 'ok' || (r.status !== 200 && r.status !== 304);
   const outcome = netBad ? 'NET/FIXTURE'
     : sigs.length ? 'ENGINE-ABORT'
