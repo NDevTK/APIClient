@@ -978,8 +978,8 @@ static int lk_request_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     DCHECK(hdr->stage == LKR_RUN, "§3.2.1's request resumed into a stage it does not have");
     JS_FreeValue(ctx, cb_result);
     /* THE ONLY RE-ENTRY AFTER THIS BODY HAS BEGUN IS A FORK'S, AND THAT IS NOW A REAL INVARIANT RATHER THAN A
-       VACUOUS ONE. This assert used to read `!s->started` and say "its one stage makes no request, so there is
-       no suspension for it to come back from" — true of the machine as it stood, because step 9's signal test
+       VACUOUS ONE. This assert used to read `!s->started` and say `its one stage makes no request, so there is
+       no suspension for it to come back from` — true of the machine as it stood, because step 9's signal test
        answered a `bool` and could not park, and FALSE the moment it could. It is kept in its own words because
        the reasoning is the reasoning a reader re-derives: a member whose one stage issues no request really does
        have nothing to come back from, and the thing that made it wrong is a FORK, which is a re-entry no request
@@ -1243,8 +1243,8 @@ static int lk_query_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
 
     (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     DCHECK(hdr->stage == LKQ_RUN, "§3.2.2's query resumed into a stage it does not have");
-    /* STATED IN ITS OWN TERMS AND NO LONGER BY DEFERRAL. It used to read "see §3.2.1's assert for why its one
-       stage cannot be resumed into", and §3.2.1's assert now admits a fork's re-entry — so a deferral would
+    /* STATED IN ITS OWN TERMS AND NO LONGER BY DEFERRAL. It used to read `see §3.2.1's assert for why its one
+       stage cannot be resumed into`, and §3.2.1's assert now admits a fork's re-entry — so a deferral would
        have inherited a reason that has stopped holding where it was written while still holding here. §3.2.2
        declares no `signal` and asks nothing that can fork, so `started` alone is the whole of it. */
     DCHECK(!s->started, "§3.2.2's query was re-entered after it had begun — its one stage makes no request and "

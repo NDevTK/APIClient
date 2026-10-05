@@ -294,7 +294,7 @@ typedef struct JSObsState {
        the emptiness of this slot is STATED — and stating it at the ask would re-state it on the fork re-entry,
        dropping the reference the ask is standing on.
        AND WHAT MAKES S_ENTRY THE ONE PLACE THE STATEMENT CANNOT BE MADE TWICE IS THAT NO ASK PARKS INSIDE THAT
-       BLOCK — not, as this sentence used to say, that "every arm of it leaves the stage". Both are true and only
+       BLOCK — not, as this sentence used to say, that `every arm of it leaves the stage`. Both are true and only
        the first is the reason: a fork re-enters the arm it asked from AT ITS TOP TWICE with `hdr.stage`
        UNCHANGED, so an ask placed before the `obs_goto` that leaves S_ENTRY re-runs the whole block however
        tidily its arm ends — and the retired wording certified exactly the two sites that had one. Every ask of
