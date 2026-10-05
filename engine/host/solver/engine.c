@@ -6329,10 +6329,16 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
 
            AND THE CLAUSE THAT NAMED NO SITE WAS THE HALF THAT COST A READING, which is why `site` exists. The
            abort held the PREDICATE, which is a fact about the VALUE and names nobody: the whole population
-           reaching it is one helper in core/dom/abort.c whose two exported forms are called from 24 further
-           sites across 9 files, so a reader was handed 26 candidates and a remedy with no object —
-           §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE, measured on a real page twice over two virgin
-           profiles before the site was threaded. */
+           reaching it is one helper in core/dom/abort.c, so a reader was handed that helper's entire call
+           population and a remedy with no object — §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE, measured on a
+           real page twice over two virgin profiles before the site was threaded.
+           HOW BIG THAT POPULATION IS LIVES AT THAT HELPER AND NOT HERE, as the command that derives it. This
+           sentence read `24 further sites across 9 files, so a reader was handed 26 candidates`, which was the
+           SECOND COPY of a figure abort.c also carried — and when the §4.4 grant's test converted to the parking
+           form, the commit that retired the figure rewrote abort.c's copy into a derivation and left this one
+           standing, present-tense, one file over. That is the shape rather than the incident: a count is retired
+           by a routing change in a THIRD component, so every copy of it is a site the converting diff has to
+           find, and the copy in the file that does not own the fact is the copy nobody greps. */
 #if APICLIENT_DEV
         {
             char name[192];

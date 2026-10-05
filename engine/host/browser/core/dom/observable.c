@@ -331,6 +331,10 @@ static void js_obs_visit(JSContext *ctx, void *st, JSStepVisit *v)
     stream_work_visit(ctx, &s->sw, v);
     report_exception_work_visit(ctx, &s->rw, v);
     v->val(ctx, &s->rerr);
+    /* THE PARKING ASK'S OPERAND. Named here for the reason every other slot is: the sibling's snapshot is this
+       state byte-copied with the declared slots taken a second time, so a flag the ask is standing on and this
+       walk does not name is a reference the resuming arm does not hold. */
+    v->val(ctx, &s->sig_flag);
 }
 
 /* DELETED: js_obs_release, which restated js_obs_visit field for field — twenty-two values, three sub-records
@@ -594,6 +598,11 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
         report_exception_work_start(&s->rw);
         s->rerr = JS_UNDEFINED;
         s->rnext = 0;
+        /* STATED, never read off the slot: a zeroed step state's JSValue is the INTEGER 0 rather than
+           JS_UNDEFINED, and abort_signal_aborted_step reads JS_UNINITIALIZED as "this slot is empty". It is
+           stated HERE, once per invocation, rather than at the ask — an ask re-states it on the fork re-entry
+           that delivers its own answer, which drops the reference the seam is still borrowing. */
+        s->sig_flag = JS_UNINITIALIZED;
         s->i = 0;
         s->phase = s->next = s->emit = s->member = s->has_sig = s->has_reason = 0;
         s->async = 0;

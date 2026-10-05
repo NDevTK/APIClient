@@ -432,7 +432,6 @@ static int ops_subscribe_callback(JSContext *ctx, JSObsState *s, int *pr)
 {
     JSValue io, sig;
 
-    (void)pr;
     switch (s->kind) {
     case K_TAKEUNTIL: {
         /* §2.3.2 takeUntil's subscribe callback, steps 1-4: the notifier is subscribed to FIRST, with the
@@ -579,11 +578,42 @@ static int ops_subscribe_callback(JSContext *ctx, JSObsState *s, int *pr)
                "member's own conversion writes — the OP_WHEN entry decides it from the converted dictionary "
                "and puts -1, 0 or 1 on this record, so anything else is a second writer");
         sig = rec_sub_signal(ctx, s->st);
-        /* Step 2: "If subscriber's subscription controller's signal is aborted, abort these steps." */
-        if (abort_signal_aborted(ctx, sig)) {
-            JS_FreeValue(ctx, cfg); JS_FreeValue(ctx, type); JS_FreeValue(ctx, sig);
-            obs_goto(s, S_DONE);
-            return 0;
+        /* Observable §3 "EventTarget integration", when()'s subscribe callback step 2: "If subscriber's
+           subscription controller's signal is aborted, abort these steps."
+           THE PARKING FORM, AND THIS SITE CANNOT FORK TODAY — which is stated rather than claimed the other way
+           round, because the obvious justification is false here and a reader will reach for it. The signal under
+           test is the SUBSCRIBER'S OWN subscription controller's, minted by `abort_signal_new` as
+           `signal_new(ctx, JS_FALSE, …)`, so its `aborted` is a concrete false that "signal abort" later makes a
+           concrete true. The one mint of a CONCOLIC `aborted` in this engine is §3.2's `AbortSignal.timeout()`,
+           and nothing routes that flag onto a subscriber's controller: a page's signal reaches a subscription as
+           an ABORT ALGORITHM registered on it, and a dependent signal gets a fresh concrete flag of its own.
+           SO THIS IS A RE-AIMING THAT COSTS NOTHING AND ARMS THE SITE, not the repair of a live abort.
+           `step_tobool_run` answers a non-concolic operand with §7.1.2 itself — no request, no round trip, no
+           fork — which is the identical answer the non-parking form reaches through `solver_decide`'s `d < 0`
+           arm, so today's behaviour is byte-identical. What it buys is that the day a subscriber's controller
+           CAN carry unknown input, this site parks instead of reaching solver/engine.c's seam from inside a C
+           activation with nowhere for the sibling to resume. The sites that can fork today read a PAGE-SUPPLIED
+           signal, and every one of them is blocked on something else entirely — see the note at §2.3.3's promise
+           prologue, which is the nearest of them.
+           AND IT IS ONLY ROUTABLE BECAUSE THIS ARM IS IDEMPOTENT ABOVE THE ASK. A fork re-enters the arm at its
+           TOP twice — once carrying the answer, once as the sibling that re-asks — so every statement between
+           `STEP_DISPATCH`'s jump and the ask runs again. Here they are all READS that free what they took, so
+           re-running them changes nothing. */
+        {
+            int aborted = 0, fr = abort_signal_aborted_step(ctx, &s->hdr, sig, &s->sig_flag, &aborted);
+
+            if (fr) {
+                /* PARKED. The three reads are released and the stage is unchanged, so the re-entry re-takes
+                   them and re-asks the identical question. */
+                JS_FreeValue(ctx, cfg); JS_FreeValue(ctx, type); JS_FreeValue(ctx, sig);
+                *pr = fr;
+                return 1;
+            }
+            if (aborted) {
+                JS_FreeValue(ctx, cfg); JS_FreeValue(ctx, type); JS_FreeValue(ctx, sig);
+                obs_goto(s, S_DONE);
+                return 0;
+            }
         }
         io = obs_algo_new(ctx, OA_WHEN_INVOKE, s->st);
         tp = JS_ToCString(ctx, type);
@@ -1473,12 +1503,28 @@ static int ops_stage_tail(JSContext *ctx, JSObsState *s, int *pr)
     if (s->hdr.arg == OP_OP_SUBSCRIBE) {
         switch (s->kind) {
         case K_TAKEUNTIL: {
-            /* Step 5: "If subscriber's active is false, then return" — a notifier that emitted synchronously
-               has already completed this subscription, and the source must not be subscribed to at all. */
+            /* Observable §2.3.2 "Observable-returning operators", takeUntil's subscribe callback step 4: "If
+               subscriber's active is false, then return" — a notifier that emitted synchronously has already
+               completed this subscription, and the source must not be subscribed to at all.
+               THE NUMBER WAS 5 AND THE SPEC NUMBERS IT 4, and the quotation was exact the whole time, which is
+               why nothing caught it: the callback's six steps are a NESTED list inside the method's step 3, and
+               its own step 1 ("Let notifierObserver be a new internal observer, initialized as follows:")
+               carries a `dl` of three algorithms that a FLAT count of `li` promotes to peers. Counting with the
+               list depth tracked gives 4; counting without it gives more.
+               THE PARKING FORM, AND LIKE §3's when() THIS SITE CANNOT FORK TODAY: `rec_sub_signal` answers the
+               SUBSCRIBER'S OWN subscription controller's signal, whose `aborted` this engine mints concrete.
+               §2.3.2 step 2 does make that signal the options' signal for both of takeUntil's subscriptions, but
+               that is this signal being HANDED OUT and not a page value being read into it. The re-aiming is
+               worth making for the reason stated at when(): identical behaviour today through §7.1.2, and a
+               park rather than an abort on the day the flag can be unknown.
+               S_OP_TAIL IS A REST POINT AND THE ARM IS IDEMPOTENT ABOVE THE ASK — one read, freed immediately —
+               so the two re-entries a fork causes re-take it and re-ask the same question. */
             JSValue io, sig;
             JSValue active_sig = rec_sub_signal(ctx, s->st);
-            bool dead = abort_signal_aborted(ctx, active_sig);
+            int dead = 0, fr = abort_signal_aborted_step(ctx, &s->hdr, active_sig, &s->sig_flag, &dead);
+
             JS_FreeValue(ctx, active_sig);
+            if (fr) { *pr = fr; return 1; }
             if (dead) { obs_goto(s, S_DONE); return 0; }
             io = observer_passthrough(ctx, s->st);
             sig = rec_sub_signal(ctx, s->st);

@@ -268,6 +268,21 @@ typedef struct JSObsState {
     uint8_t   fnext;      /* the stage "convert to an Observable" returns to */
     uint8_t   kind;       /* K_* — which operator this invocation belongs to */
     uint8_t   alg;        /* OA_* — which internal-observer algorithm it is */
+    /* §3.2's `aborted` FLAG, HELD WHERE THE SIBLING'S SNAPSHOT CARRIES IT — abort_signal_aborted_step's
+       operand. A page may pass any AbortSignal to `subscribe` or to an operator, and an `AbortSignal.timeout()`
+       has an UNKNOWN `aborted`, so a test of it FORKS. The seam BORROWS the flag for the length of the request
+       and a deep fork BYTE-COPIES this state, re-taking only what `js_obs_visit` names — so a flag in a C local
+       is gone in the arm that resumes and one in an unvisited field is freed by both arms. It is therefore a
+       field, and `js_obs_visit` names it.
+       ONE SLOT SERVES EVERY ASK IN THIS MACHINE because only ONE is ever outstanding: step_fork_ask refuses a
+       second ask while the first one's operands are still on the header, and a machine that has returned
+       JS_STEP_FORK runs nothing else until the driver answers it.
+       IT IS INITIALISED IN THE S_ENTRY BLOCK and not at the ask, which is the whole of why the ask sites that
+       use it are the ones they are: a zeroed step state's JSValue is the INTEGER 0 rather than JS_UNDEFINED, so
+       the emptiness of this slot is STATED — and stating it at the ask would re-state it on the fork re-entry,
+       dropping the reference the ask is standing on. S_ENTRY runs once per invocation and every arm of it leaves
+       the stage, so that is the one place the statement cannot be made twice. */
+    JSValue   sig_flag;
 } JSObsState;
 
 /* ---- what observable.c lends observable_ops.c ------------------------------------------------------------- */
