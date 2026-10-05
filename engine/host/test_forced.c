@@ -3663,6 +3663,23 @@ static const char *HTML =
        reason: a payload composed from anything this engine COMPUTED can itself be unknown, and then the request
        is never made and the arm reads exactly like an arm that did not run. */
     "(async function(){ fetch('/api/modentered?w=mmENTER'); var ns = await import('/chunk/mdmod.js'); fetch('/api/modconst?w=' + ns.mmProbe()); fetch('/api/moddefault?w=' + (ns.default && ns.default.tag ? ns.default.tag : 'mmNODEF')); })();"
+    /* …AND THE SAME MODULE BINDING READ FROM TWO WORLDS, WHICH IS THE POPULATION THE STATEMENT ABOVE HAS NOT
+       GOT AND THE ONE THE REAL BUNDLE'S ERROR IS IN. `mod-const` reads 1, so a module's top-level `const` read
+       from its own default parameter binds correctly IN THE WORLD THAT EVALUATED THE MODULE. The real app's
+       deterministic page error is a module binding read in a world NOTHING WROTE IT IN, and one world cannot
+       exhibit that: a module is LINKED once and its status is a field of a C record, while the cells its body
+       writes go through the page's own write hooks and are PER-FLOW. So a second world finds the status saying
+       there is nothing to do and the cells saying nothing was done.
+       `cfg.admin` IS THE SECOND WORLD AND NOT A NEW FORK: this document's first test of it forked thousands of
+       lines above, so each arm here is an EXISTING world whose continuation reads the module. That is why the
+       read is placed behind the ternary rather than behind a fresh branch -- a fresh one would fork AFTER the
+       import and both arms would descend from the world that evaluated it, which is the one shape that cannot
+       show the defect.
+       THE REACH EMISSION IS SEPARATE AND CARRIES NO MODULE READ, for `md-fork-reach`'s reason: `mmProbe()`
+       THROWS when the cell is uninitialised, so the whole request is lost and an absent token reads exactly
+       like a world that was never scheduled. Two reach letters with one `mmOK` is the defect; one reach letter
+       is the schedule. */
+    "(async function(){ var mw = await import('/chunk/mdmod.js'); fetch('/api/modworldreach?w=' + (cfg.admin ? 'A' : 'P')); fetch('/api/modworld?w=' + (cfg.admin ? 'A' : 'P') + mw.mmProbe()); })();"
     /* …AND THE GATE THAT DECIDES WHETHER THOSE BYTES ARE A PROGRAM AT ALL, asked of a module served
        `application/json` whose body is VALID JavaScript. HTML §8.1.4.2's fetch a single module script extracts a
        MIME type and leaves `moduleScript` null for anything that is not a JavaScript MIME type, and
@@ -14215,6 +14232,24 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        branch an unknown cannot decide and §Solver-half forks it, putting BOTH constant tokens in the
        document. Exactly one of them is the record having carried the EXAMPLE alone — a wrong answer rather
        than a lossy one, because the arm it deletes is the gated surface this tool exists to reach. */
+    const char *mod_world_reach_why = NULL; int mod_world_reach = 1;
+    fold_row(&mod_world_reach, &mod_world_reach_why,
+             param_value_is(js, "/api/modworldreach", "w", "A") &&
+             param_value_is(js, "/api/modworldreach", "w", "P"),
+             "only ONE world reached the continuation after `await import()`: `/api/modworldreach` carries one "
+             "arm letter of `cfg.admin` and not both. That is the SCHEDULE, and it is why the row gated on this "
+             "one cannot be read as a module binding lost across worlds — the letters carry the world and no "
+             "module read, so this row moves for scheduling reasons alone");
+    const char *mod_world_why = NULL; int mod_world = 1;
+    fold_row(&mod_world, &mod_world_why,
+             param_value_is(js, "/api/modworld", "w", "AmmOK") &&
+             param_value_is(js, "/api/modworld", "w", "PmmOK"),
+             "BOTH worlds reached the continuation and the module's top-level `const` did not read back in "
+             "both: the gate above proves two arm letters arrived, so a missing `mmOK` is one world reading a "
+             "cell its own timeline never wrote. `mmBAD` is the default parameter having seen a DIFFERENT "
+             "value; the token ABSENT WITH ITS REACH LETTER PRESENT is the read having THROWN, which is the "
+             "real bundle's `is not initialized` reproduced with no network and no bundle in it. A module is "
+             "linked once and its status is a C record field, while the cells its body writes are per-flow");
     const char *sc_msg_ran_why = NULL; int sc_msg_ran = 1;
     fold_row(&sc_msg_ran, &sc_msg_ran_why, param_value_is(js, "/api/scmsg", "v", "scENTER"),
              "NOT REACHED: there is no /api/scmsg record, so §9.3.3 step 8's delivery task never ran its "
@@ -18486,6 +18521,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "mod-default", mod_default, "/api/moddefault", SESS_EXPLORE, mod_default_why, .gate = "mod-entered" },
         { "mod-typeask", mod_typeask, "/api/modtypeask", SESS_EXPLORE, mod_typeask_why },
         { "mod-type", mod_type, "/api/modtype", SESS_EXPLORE, mod_type_why, .gate = "mod-typeask" },
+        { "mod-world-reach", mod_world_reach, "/api/modworldreach", SESS_EXPLORE, mod_world_reach_why },
+        { "mod-world", mod_world, "/api/modworld", SESS_EXPLORE, mod_world_why, .gate = "mod-world-reach" },
         { "sc-msg-ran", sc_msg_ran, "/api/scmsg", SESS_EXPLORE, sc_msg_ran_why },
         { "sc-msg-fork", sc_msg_fork, "/api/scfork", SESS_EXPLORE, sc_msg_fork_why, .gate = "sc-msg-ran" },
         /* THE SEVEN ORPHAN ROWS SHARE ONE `why`, AND IT IS THE ONLY THING THAT MAKES THEIR 0 ACTIONABLE — see
