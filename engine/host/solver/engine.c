@@ -5535,6 +5535,48 @@ static char *reply_source_text(JSContext *ctx, JSValueConst reply, ScriptType st
     return src;
 }
 
+/* HTML §8.1.4.2 "Fetching scripts"' FETCH A SINGLE MODULE SCRIPT HAS A CONDITION THE TWO CLASSIC ALGORITHMS
+   DO NOT, AND THIS IS IT. Its processResponseConsumeBody opens with the same two-item list the three program
+   kinds share — "If any of the following are true: bodyBytes is null or failure; or response's status is not
+   an ok status" — and then states two steps the classic algorithms have no counterpart for: "Let mimeType be
+   the result of extracting a MIME type from response's header list." and "Let moduleScript be null." Every
+   arm that can make moduleScript non-null is GUARDED BY mimeType, and the JavaScript one reads "If mimeType
+   is a JavaScript MIME type and moduleType is "javascript-or-wasm", then set moduleScript to the result of
+   creating a JavaScript module script given sourceText, settingsObject, response's URL, and options." So a
+   module answered a non-JavaScript type leaves moduleScript NULL, and §8.1.6.7.3 HostLoadImportedModule's
+   onSingleFetchComplete turns a null moduleScript into a TypeError — the arm this file's failure branch
+   already reaches for a network error.
+   THERE IS NO SCHEME EXEMPTION HERE AND THAT IS NOT AN OVERSIGHT IN THE STANDARD. The CLASSIC algorithm's
+   gate is written "If all of the following are true: response's URL's scheme is an HTTP(S) scheme and the
+   result of extracting a MIME type from response's header list is not a JavaScript MIME type", with the
+   standard's own note that "other fetch schemes are exempted from MIME type checking for historical web
+   compatibility reasons". The module algorithm carries no such clause, so a `data:text/plain` import fails
+   where a `data:text/javascript` one loads — which is what a browser does, and is why this is asked of the
+   module kind ALONE rather than hoisted beside the status test.
+   AN ABSENT `Content-Type` IS FAILURE AND THEREFORE A REJECTION, which is mime_type_extract's own contract in
+   its own words ("NULL — the header is absent — is the spec's "values is null", which is failure") and not a
+   default this reads into it: a failed mimeType makes every one of those arms false, so moduleScript is null
+   for the same reason a `text/plain` body leaves it null.
+   NOTHING IS ASSERTED ON THE TYPE. It is a string a stranger's server chose, so §WHOSE-BYTES-STATE-THE-VALUE
+   makes the answer to a type this algorithm refuses the ALGORITHM'S OWN FAILURE and never a crash — the same
+   reason the status test one branch down stands on no assert. */
+static bool module_reply_is_javascript(JSContext *ctx, JSValueConst reply)
+{
+    HeaderList hl = { 0 };
+    char *content_type;
+    MimeType mt;
+    bool ok;
+
+    fetch_reply_header_list(ctx, reply, &hl);
+    content_type = header_list_get(&hl, "content-type");   /* joined by "get a header", which is what extract takes */
+    mime_type_init(&mt);
+    ok = mime_type_extract(&mt, content_type) && mime_type_is_javascript(&mt);
+    mime_type_free(&mt);
+    free(content_type);
+    header_list_free(&hl);
+    return ok;
+}
+
 /* WHAT THE PROGRAM QUEUE CAN CARRY IS `len` BYTES, WHICHEVER OF THEM ARE NUL. A `REPLY_SOURCE_WHOLE` macro
    stood here and asserted `strlen(src) == n` at each of the two decodes below, naming the fix — "build the
    queue over a LENGTH". It is built: `dyn_body_adopt` takes the decode's own `(src, src_n)`, the row keeps
@@ -5739,8 +5781,25 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
            looks like it wants to be: written as `is this a program kind` the DCHECK below could not
            disagree with it, and a vacuous assert is a non-check wearing the syntax of one. Negative, that
            assert is what a SIXTH kind delivered with no arm of its own crashes on. */
+        /* …AND THE MODULE KIND'S THIRD CONDITION, WHICH IS WHY THE SENTENCE ABOVE SAYS THE THREE KINDS SHARE
+           THE TEST AND NOT THAT THEY SHARE THE ALGORITHM. §8.1.4.2 states the two-item list identically in all
+           three, and fetch a single module script adds a MIME gate the two classic ones DO NOT HAVE — see
+           module_reply_is_javascript for the standard's own words and for why it carries no scheme exemption.
+           WHAT IT REPLACED WAS A COMPILE OF WHATEVER ARRIVED, and the symptom is the status half's one layer
+           on: a reply that arrived WITH an ok status was handed to reply_source_text whatever the server had
+           said about it, so a chunk served `application/json` was UTF-8 decoded and compiled as a module —
+           measured, a JSON object body reaching the module compile and throwing `expecting ';'` at its first
+           `:`, which is a SyntaxError INSIDE the import's own compile where a browser rejects the LOAD before
+           any source text exists. The two are not a severity apart: `import(u).catch(h)` runs `h` for the
+           rejection and NOT for a compile error inside a module that loaded, so a bundle whose CDN answers a
+           chunk with an error page took the wrong arm — and the fallback chunk behind that `catch` is the code
+           §What-the-tool-produces exists to reach.
+           IT IS ASKED LAST BECAUSE IT IS THE ONLY MEMBER OF THE DISJUNCTION THAT READS THE RECORD'S HEADERS: a
+           network error has no header list at all, which `JS_IsNull` answers first — the same ordering
+           argument the status test states for itself. */
         if (kind != FLOW_PENDING_RESOLVE && kind != FLOW_PENDING_RESOURCE &&
-            (JS_IsNull(pv) || !script_fetch_status_ok(fetch_reply_status(ctx, pv)))) {
+            (JS_IsNull(pv) || !script_fetch_status_ok(fetch_reply_status(ctx, pv)) ||
+             (kind == FLOW_PENDING_MODULE && !module_reply_is_javascript(ctx, pv)))) {
             DCHECK(kind == FLOW_PENDING_SCRIPT || kind == FLOW_PENDING_DOCSCRIPT ||
                    kind == FLOW_PENDING_MODULE,
                    "a FAILED answer reached the program kinds' failure arm for a kind that is not one of them "
