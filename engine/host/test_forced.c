@@ -12114,8 +12114,31 @@ static char *tf_park_load(const char *path) {
    RETIREMENT: this field goes when a row's entailment is derivable from the expressions that compute the rows
    — when the table holds the PREDICATE rather than the boolean it evaluated to — because there is then
    nothing for a declaration to be wrong about and nothing to assert. */
+/* AND WHETHER THIS ROW'S ANSWER IS A STATEMENT AT ALL, WHICH IS THE FOURTH STATE AND THE ONLY ONE WHOSE
+   DEFAULT READING IS A PASS. `ok` answers ANSWERED / NOT ANSWERED, `unaskable` answers whether this HOST
+   could put the question, `gate` answers which other row's 0 entails this one's — and none of the three
+   reaches a row whose claim is a NEGATIVE. A negative row is satisfied by its statement NOT RUNNING, so it
+   reads 1 on a table composed before anything happened and that 1 enters the conjunction as a statement the
+   run never tested. The other three states are all read by somebody: a 0 is a finding, an unaskable row is
+   printed as a hole, a gated 0 is grouped. A free 1 is read by nobody, which is why it is the one that
+   survives.
+   IT NAMES A ROW AND NOT A TOKEN, which is what keeps it from being a second copy of a fact the table
+   already states. The first form of this field was a reach TOKEN matched against the document, and a token
+   is a hand-kept spelling of what some other row's `ok` already computes — the shape CLAUDE.md
+   §AN-AUDITOR-DERIVES-THE-RULE refuses, and the shape this table has already paid for once in the `docs`
+   field whose hand-written value made the minimal gate unsatisfiable. A row name resolves through
+   `probe_gate_at`, so the premise is whatever that row computes and cannot drift from it.
+   IT IS NOT `gate`, AND THE DIFFERENCE IS THE POLARITY OF WHAT A SHUT PREMISE IMPLIES. For a POSITIVE row an
+   unreached statement means `ok` is 0, which is exactly the entailment `gate` declares and groups. For a
+   NEGATIVE row it means `ok` is 1, which `gate`'s own two-sided assert reads as a CONTRADICTION — a row at 1
+   beside a gate at 0 is precisely what that DCHECKF aborts on. So one row carrying both fields with the same
+   target asserts `ok == 0` and `ok == 1` at once, and the declaration check below refuses it.
+   IT IS NOT `key` EITHER: `key` is matched against `g_doc` at the selection, which is the fixture's own
+   SOURCE, so it is a document selector and says nothing about whether any statement ran.
+   AND IT IS DECLARED ON A NEGATIVE ROW ONLY, which is not a convention but the thing the value-side assert
+   PROVES: a banded row must read 1, and a positive row banded by this field would read 0 and abort. */
 typedef struct { const char *name; int ok; const char *key; unsigned char sess; const char *why;
-                 int unaskable; const char *gate; } Probe;
+                 int unaskable; const char *gate; const char *reach; } Probe;
 enum { SESS_EXPLORE = 0, SESS_PARK = 1, SESS_RESUME = 2 };
 
 /* WHERE A ROW'S GATE STANDS IN A TABLE, OR -1. SIDE-EFFECT-FREE, which is the whole reason it is a function
@@ -16745,6 +16768,28 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "retraction path and immediately withdrew it, which states that this engine named an error it "
              "never named");
     const char *rejmutedoc_why = NULL; int rejmutedoc_tt = 1;
+    /* THE PREMISE IS FOLDED FIRST HERE TOO, AND ITS ABSENCE WAS THE SAME DEFECT ITS OWN SIBLING NAMES ONE
+       PARAGRAPH UP. `rej-mute` folds `param_value_is(js, "/api/rejmute", "v", "ismute")` ahead of its
+       negatives and says why — "THE EVENT IS THE PREMISE — without it `nothing was announced` is equally
+       satisfied by a step 7.4 that never ran" — and this row, declared one line below it in the table and
+       carrying the same two-negative shape over the DOCUMENT's two error arrays, carried no premise at all.
+       That is CLAUDE.md §AND-THE-MIRROR-OF-THAT-IS-A-FIX-WHOSE-SITE-COUNT-IS-LARGER-THAN-ONE exactly: the
+       argument was written down at the site that was fixed and not carried to the sibling, because the wrong
+       spelling is the shorter one and reads as if it means what you want.
+       MEASURED: at the first table of a native smoke — one unit of engine work, ZERO switches, ZERO jobs —
+       this row read 1, so it had been publishing "the document does not name `rejMUTE` under two opposite
+       claims" about a document no flow had composed a byte of.
+       IT IS A FOLD AND NOT A `.reach`, because the premise here is a RECORD IN THE DOCUMENT rather than
+       another row's boolean: `rej-mute` itself folds three more clauses about what the engine announced, so
+       pointing at it would band this row whenever the engine announced WRONGLY — losing a statement on
+       exactly the runs where it is a finding. The reach field names a row that is purely a reach witness;
+       where there is none, the canonical spelling is `has_uid_param`'s, which this routes to. */
+    fold_row(&rejmutedoc_tt, &rejmutedoc_why,
+             param_value_is(js, "/api/rejmute", "v", "ismute"),
+             "NOT REACHED: there is no /api/rejmute record carrying `ismute`, so §8.1.6.4 step 7.4 never "
+             "fired for the cancelled rejection and the absence of `rejMUTE` from both error arrays is an "
+             "artifact of the statement not running rather than an engine that correctly named nothing. That "
+             "is the SCHEDULE and says nothing about what the composer did");
     fold_row(&rejmutedoc_tt, &rejmutedoc_why, !tf_err_listed(js, "pageErrors", "rejMUTE"),
              "the document names `rejMUTE` in `pageErrors` — a rejection §8.1.4.7 step 4.1.3 declined to "
              "report cannot stand in the console");
@@ -18916,7 +18961,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            spelling constructed out of the data state would show up here before it could ever arrive, escape or
            fire, which makes this the earliest rung at which a regressed transform is visible. */
         { "s-park-witnessed", s_park_wit, "location.hash", SESS_EXPLORE },
-        { "s-park-nobuild", !s_park_built, "location.hash", SESS_EXPLORE },
+        /* ITS PREMISE IS `s-park-ran` AND IS DECLARED, because this row is a NEGATIVE and a negative is
+           satisfied by its statement not running: `!s_park_built` reads 1 before any flow has been
+           dispatched, and that 1 went into the verdict as a statement about a search whose candidates had
+           never executed an opcode. MEASURED on the run that found it — at the first table of a native
+           smoke, composed at one unit of engine work with ZERO context switches and ZERO jobs run, this row
+           and `s-park-noescape` read 1 beside `s-park-ran` at 0. The prose above already names `-ran` as the
+           premise of this ladder in words; this is that sentence made a declaration. */
+        { "s-park-nobuild", !s_park_built, "location.hash", SESS_EXPLORE, .reach = "s-park-ran" },
         /* AND THE POSITIVE SEARCH'S OWN STAGES, so a 0 on `s-attr` names one — and now names ONE. The three
            rows that stood here read `seen`, `ran` and `atsink`, and the middle one was computed from `tried`,
            which is raised where a candidate FLOW IS CREATED: it said 1 for a search whose flows the scheduler
@@ -18958,7 +19010,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            asserts it emits no PoC; this asserts the rung BELOW the PoC, which is where a derivation that began
            producing something executable out of the data state would show up first and which a `poc`-shaped
            row cannot see until it has already fired. */
-        { "s-park-noescape", st_lpark < S_ESCAPED, "location.hash", SESS_EXPLORE },
+        { "s-park-noescape", st_lpark < S_ESCAPED, "location.hash", SESS_EXPLORE, .reach = "s-park-ran" },
         /* THE ANCHOR DOOR, LOWEST RUNG FIRST — and the lowest rung here is not an @S stage at all, it is
            whether the statement's own tail ran. Keyed on `lhLink.click()`, which only that statement puts in
            the document, so these two select on it and on nothing else. */
@@ -19116,6 +19168,27 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                 "row's is, so an unresolvable one publishes no grouping at all and an out-of-order one is a "
                 "declaration with a cycle in it. Fix the name, or move the gate above the row it gates",
                 probes[pi].name, probes[pi].gate);
+        /* AND A REACH NAMES AN EARLIER ROW TOO, FOR THE SAME THREE REASONS AND WITH THE SAME ONE REPAIR —
+           checked over the WHOLE table rather than this run's selection, so a typo in a row this invocation
+           does not select still aborts. */
+        DCHECKF(!probes[pi].reach ||
+                    probe_gate_at(probes, (int)pi, probes[pi].reach, probes[pi].sess) >= 0,
+                "the probe `%s` declares its answer a statement only while `%s` reads 1, and no EARLIER row "
+                "of this table in the same session carries that name. A reach is a row of this table whose "
+                "value is read where this row's is, so an unresolvable one bands nothing and an out-of-order "
+                "one is a declaration with a cycle in it. Fix the name, or move the reach row above the row "
+                "it is the premise of", probes[pi].name, probes[pi].reach);
+        /* AND IT IS NOT THE SAME ROW AS THE GATE, which is the one declaration that cannot be satisfied by
+           any value of `ok`. `gate` says this row's 0 is entailed by that row's 0; `reach` says this row's
+           answer is no statement while that row reads 0, which for the negative rows this field is for means
+           it reads 1. Pointing both at one row therefore asserts 0 and 1 of the same boolean, and the two
+           two-sided asserts in probes_report would abort against each other whichever way the run went. */
+        DCHECKF(!probes[pi].reach || !probes[pi].gate ||
+                    strcmp(probes[pi].reach, probes[pi].gate) != 0,
+                "the probe `%s` names `%s` as BOTH its gate and its reach — the first says this row reads 0 "
+                "whenever that one does and the second says it reads 1, so the declaration is a contradiction "
+                "and no run can satisfy it. A positive row owes a gate and a negative row owes a reach; "
+                "decide which this row is", probes[pi].name, probes[pi].gate);
         if (probes[pi].sess != g_sess) continue;
         if (!strstr(g_doc, probes[pi].key)) continue;
         /* AND THE SELECTION FITS TOO — WHICH THE ASSERTION ABOVE HAS ALREADY MADE TRUE. It stays because it
@@ -19167,6 +19240,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
 static int probes_report(const char *js, bool final, char *unanswered, size_t cap,
                          char *unasked, size_t ucap) {
     Probe rows[PROBE_MAX];
+    /* RESOLVED ONCE INTO AN ARRAY AND READ BY BOTH CONSUMERS, rather than re-derived at each. The band below
+       and the conjunction at the table are the two places a banded row must be left out of, and a predicate
+       computed twice is a predicate that can answer differently twice — which would publish a hole in one
+       place and count it as a statement in the other. */
+    unsigned char unreach[PROBE_MAX];
     int n = probes_eval(js, rows, PROBE_MAX), ok = 1, i;
     size_t at = 0;
     long work_at;
@@ -19259,6 +19337,58 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
             uat += nl;
         }
         if (unasked[0]) printf("@HUNASKED @%ld: %s\n", work_at, unasked);
+    }
+    /* AND THE ROWS WHOSE ANSWER IS NOT A STATEMENT THIS RUN MADE, which is the third band and the one whose
+       absence was a PASS rather than a hole. A negative row is satisfied by its statement not running, so
+       before this band those rows contributed a 1 to the verdict on every run that never reached them —
+       CLAUDE.md §a-sweep-certifies-its-survivors with the certificate granted by the arithmetic rather than
+       by anybody's reading.
+       ITS OWN MARKER, NOT `@HUNASKED`'s, BECAUSE THE TWO TAKE OPPOSITE WORK. `unaskable` says this HOST
+       cannot put the question, whose repair is to BUILD the capability; this says this RUN did not reach the
+       statement, whose repair is the SCHEDULE or the document. Folding them would be one answer over two
+       populations — the defect this whole table is a partition against.
+       PRINTED ON EVERY SAMPLE THAT HAS ONE AND BEFORE THE TABLE, on this function's own two rules.
+       NAMES PRINTED INLINE RATHER THAN COMPOSED INTO A BUFFER, as the gate grouping below does: a third
+       caller-supplied buffer would be a third capacity to keep in step, and the gate block already carries
+       the argument for why that is not needed when the list is written where it is read. */
+    {
+        int any = 0;
+
+        for (i = 0; i < n; i++) {
+            int ri;
+
+            unreach[i] = 0;
+            if (!rows[i].reach) continue;
+            /* A CHECK AND NOT A DCHECK, for the reason the gate's own resolution carries: the index is
+               dereferenced on the next line in EVERY build, so a dev-only guard would trade a named abort
+               for an out-of-bounds read in release. It cannot fire on a declaration this table has not made
+               — probes_eval aborts first on a reach naming no earlier row — so what is left for it is the
+               two KEYS coming apart, a premise row whose key is in a document this row's key is not. */
+            ri = probe_gate_at(rows, n, rows[i].reach, rows[i].sess);
+            CHECK(ri >= 0,
+                  "a probe was selected and the row it names as its reach was not. A reach is a row of this "
+                  "table whose value is read where this row's is, and both are selected by SESSION and by "
+                  "their key being in this document, so the two keys have come apart and this run is about "
+                  "to count a negative row's free 1 as a statement");
+            if (rows[ri].ok) continue;
+            /* THE TWO-SIDED HALF, AND THE ONE THAT PROVES THE FIELD IS FOR NEGATIVE ROWS. A banded row's
+               premise is shut, so the statement did not run and a negative claim about it is vacuously
+               satisfied: it must read 1. A 0 here says the row found evidence of its own violation on a run
+               that never made the statement, so the premise is about a different fact than the row is —
+               which is the single failure this mechanism can have, and it is the same shape as the
+               `unaskable` precondition's assert and the gate's. A POSITIVE row declared with a reach lands
+               here too and reads 0, which is how that mis-declaration is refused rather than described. */
+            DCHECKF(rows[i].ok,
+                    "the probe `%s` is banded UNREACHED because `%s` reads 0, and it reads 0 itself — a "
+                    "statement this run did not make cannot have been answered wrongly, so either the row "
+                    "is POSITIVE and owes a `gate` rather than a `reach`, or its premise names a fact the "
+                    "row is not about. Read the expression that computes `%s` against the one that computes "
+                    "`%s`", rows[i].name, rows[i].reach, rows[i].name, rows[i].reach);
+            unreach[i] = 1;
+            if (!any) { printf("@HUNREACHED @%ld:", work_at); any = 1; }
+            printf(" %s", rows[i].name);
+        }
+        if (any) printf("\n");
     }
     /* AND THE ROWS WHOSE 0 IS ENTAILED BY ANOTHER ROW'S, GROUPED BY THE ROW THAT ENTAILS THEM — because the
        one thing a reader does with a column of zeros is COUNT it, and rows behind one shut latch are ONE
@@ -19429,9 +19559,9 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
            SO `=> OK` CAN NOW STAND OVER A 0 ROW, which is a real change to what that token means and is why
            `@HUNASKED` prints directly above it on every sample that has one. The verdict says "every
            statement this run could put was answered"; the line above says which it could not put. */
-        if (!rows[i].unaskable) ok = ok && rows[i].ok;
+        if (!rows[i].unaskable && !unreach[i]) ok = ok && rows[i].ok;
         printf("%s=%d ", rows[i].name, rows[i].ok);
-        if (!rows[i].ok && !rows[i].unaskable) {
+        if (!rows[i].ok && !rows[i].unaskable && !unreach[i]) {
             size_t nl = strlen(rows[i].name);
 
             /* A VERDICT NAMING A PREFIX OF WHAT FAILED IS THE FOLDED ANSWER THIS TABLE EXISTS TO REFUSE, so a
