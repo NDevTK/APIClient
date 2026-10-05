@@ -7852,9 +7852,25 @@ static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64
     return n;
 }
 
-/* THE CALL A DRIVEN ORPHAN IS. Mints one concolic per declared parameter and one for the receiver — an orphan's
- * arguments are unknown external input by definition, since nothing in the page ever supplied any — and returns
+/* THE CALL A DRIVEN ORPHAN IS. Mints one concolic per declared parameter and one for the receiver, and returns
  * the flow base that calls `fn` with them.
+ * THIS SAID THE ARGUMENTS ARE UNKNOWN EXTERNAL INPUT "BY DEFINITION, SINCE NOTHING IN THE PAGE EVER SUPPLIED
+ * ANY", AND THE SECOND HALF IS FALSE IN THE ONE CASE WHERE A PAGE DOES SUPPLY ONE — kept in its own words
+ * because the reading it licenses is the one a reader re-derives, and the diff it licenses DELETES AN ARM. A
+ * DEFAULT INITIALIZER is a value the page itself built for a parameter, and the drive already reaches it: the
+ * parser emits `OP_get_arg k; OP_dup; OP_undefined; OP_strict_eq; OP_if_false` per defaulted parameter, so the
+ * unknown minted here meets the page's own `=== undefined` gate and FORKS — one arm dropping the unknown and
+ * running the page's default expression, one keeping it. The mint is therefore CORRECT and its stated reason
+ * was not, which matters because the natural repair for "a drive never takes a real value" is to hand this
+ * site one: that decides the gate, and §a-wrong-narrowing is exact about the cost — it deletes the arm in
+ * which the page's own default ran, with nothing contradicted. The invariant below is that line made
+ * checkable rather than argued.
+ * WHAT A PARAMETER WITH NO DEFAULT IS WORTH IS UNCHANGED AND IS WHY THE UNKNOWN STAYS: its value is its
+ * CALLER's, an orphan is a body no caller reached, so no value for it exists anywhere in the program and
+ * §Attacker-sources' symbolic argument is the only honest answer.
+ * RETIREMENT: this record goes when the defaulted-parameter arm is asserted where the fork is taken rather
+ * than described here, because the arm is then un-deletable by construction instead of by a reader meeting
+ * this paragraph.
  * IT RUNS IN THE TIMELINE OF THE FLOW THAT WILL DRIVE IT, which is why it is a function rather than two copies:
  * the receiver and every argument are objects, so they are stamped with the running flow's generation and are
  * that flow's private state for the rest of the session. Minting them under one flow and handing them to
@@ -7875,12 +7891,70 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
         args = (JSValue *)malloc((size_t)argc * sizeof(JSValue));
         CHECK(args, "engine: OOM minting a driven orphan's arguments");
     }
+    /* WHAT EVERY VALUE THIS SITE BINDS MUST STILL BE: SOMETHING THAT DECIDES NO BRANCH THIS RUN DID NOT PROVE.
+       That is the whole of what the banner's correction above is about, and it is spelled ONCE and expanded at
+       both mints rather than written twice, so the receiver and an argument cannot drift into two answers to
+       one question. §concolic.h grades HELD as "an example a document or a server SUPPLIED", and NOTHING
+       supplied this one — an orphan's parameter has no value anywhere in the program, its caller being the
+       thing that never ran — so a HELD value here is one this engine invented and then let mark a PRIMARY arm.
+       IT IS NOT VACUOUS AND THE ARMING INPUT IS EXACT, read off `example_state_of` rather than assumed: that
+       function returns NONE for `JS_IsUndefined(c->example)`, which is what this site passes today, and falls
+       through to HELD for any non-undefined example with no pin and no contradiction. So handing
+       `concolic_new` a real example at either mint fires this, which is precisely what the repair "let a drive
+       take a real value" invites.
+       WHY IT ASKS ONLY THIS AND NOT ALSO `concolic_is` — THE WIDER TEST WAS WRITTEN AND IS REFUSED, recorded
+       because it is the one a reader re-derives. `concolic_new` legitimately returns CONCRETE bytes at this
+       mint by two arms: a pinned source (§CONCRETIZE-ON-PIN, a fact the run proved) and an @S CANDIDATE
+       re-fire substituting the attacker's payload at this very source. A `concolic_is(v) ||
+       concolic_src_pinned(id)` disjunct admits the first and REFUSES the second, because `cand_matches` is
+       static to concolic.c and keyed on `g_cand_src`, and no public predicate asks whether a candidate is
+       substituting THIS source (`concolic_candidate_delivered` is a different fact — whether a delivery
+       happened at all). That assert would therefore abort a candidate verification run, which
+       §Offensive-programming names by hand as NOT a `@WHY`: "an unsolved `@S` sink (a parked search)" is the
+       exploration surface. Both refused arms answer NONE here, not HELD, so this test is sound in every one of
+       them. What it does NOT reach, stated so the guard is not read as wider than it is: a diff that REPLACES
+       the mint with a concrete value is invisible to it.
+       RETIREMENT: this record goes when concolic.h publishes the per-source candidate predicate, because the
+       wider disjunct is then spellable from here and the refusal above has nothing left to explain. */
+#define ORPHAN_BINDS_OPEN(v, nm) \
+    DCHECKF(concolic_example_state(v) != CONCOLIC_EX_HELD, \
+            "a driven orphan bound %s to a value carrying a HELD example — an orphan's parameter has no value " \
+            "anywhere in the program, its caller being the thing that never ran, so nothing supplied this " \
+            "example and it marks a PRIMARY arm for a value no session ever produced. Where the page itself " \
+            "holds a value for a parameter it holds it as a DEFAULT INITIALIZER, and that arm is already run " \
+            "by the fork over the page's own `=== undefined` gate; attaching an example here deletes it", (nm))
+
     for (k = 0; k < argc; k++) {
         snprintf(id, sizeof id, "{orphan%016llx.arg%d}", (unsigned long long)hash, k);
         args[k] = concolic_new(ctx, id, id, JS_UNDEFINED);
+        ORPHAN_BINDS_OPEN(args[k], id);
     }
     snprintf(id, sizeof id, "{orphan%016llx.this}", (unsigned long long)hash);
     self = concolic_new(ctx, id, id, JS_UNDEFINED);
+    ORPHAN_BINDS_OPEN(self, id);
+#undef ORPHAN_BINDS_OPEN
+
+    /* NAMED RESIDUAL — WHAT IS NOT COVERED: a drive cannot read a MODULE-LEVEL binding at all, so the values
+       an address is composed from are out of its reach whatever is done to its arguments. A module's bindings
+       are closure cells (quickjs.h's JSTimeTravelHooks.module_eval, in its own words) and ride the delta
+       through `cell_write`; `cow_capture_varref` has no flow-private skip, there being no per-cell generation
+       to ask; and a module's EVALUATION STATE is per-flow, which that hook's own banner says is "the state
+       that decides whether a flow evaluates AT ALL". So a cell written by the flow that evaluated the module
+       is restored to its baseline — UNINITIALIZED, a module binding being in TDZ before evaluation — for every
+       flow that is not that flow's descendant, and `OP_get_var_ref_check` throws rather than evaluating
+       anything. The residual's cure, "each world evaluates the module once", is reached by RUNNING AN IMPORT,
+       and a drive has none to run. WHICH drives land inside an evaluating ancestry is therefore decided by
+       which flow happened to run out of work — a fact about the SCHEDULE, which is the same argument
+       engine_orphan_born was built on for a different fact.
+       WHAT THE NEXT DIFF BUILDS: a world that reads an uninitialized module binding EVALUATES that module,
+       keyed on the per-flow state JS_ModuleEvalStateSave already carries, so a flow with no import of its own
+       reaches the exports it never wrote. That is quickjs's half and not this file's, which is why it is named
+       here rather than attempted: the read is `OP_get_var_ref_check` and the state is JSModuleDef's.
+       HOW ITS ABSENCE SHOWS: a drive reports an uncaught `<name> is not initialized` whose frame carries a
+       `Concolic.` receiver — the receiver being this site's mint, so the frame says the reading flow is a
+       drive — and the named binding resolves to a module-top-level declaration in the same script. A reader
+       holding such an error can state that the drive died at its first touch of a value the page had built,
+       and cannot state it from any count the run publishes. */
 
     /* take_result FALSE — A DRIVE IS FOR WHAT THE BODY REACHES, NOT FOR WHAT IT RETURNS, and here the two
        answers are not merely uninteresting-versus-interesting. `cv` is read by arms of flow_step that
