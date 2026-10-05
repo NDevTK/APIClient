@@ -138,8 +138,11 @@ enum {
     X(S_OBSERVER_READ, "Observable §2.2.1 subscribe step 3 (processing observer: the ObserverUnion's arm, and " \
                        "a SubscriptionObserver's members read in Web IDL §3.2.17's order)") \
     X(S_OPTIONS_READ, "Web IDL §3.2.17 (converting SubscribeOptions — the `signal` member's [[Get]])") \
-    X(S_ATTACH, "Observable §2.2.1 subscribe steps 5-9 (the reused-or-new Subscriber, and what the " \
-                "SubscribeOptions signal registers on it)") \
+    X(S_ATTACH, "Observable §2.2.1 subscribe steps 5-8 (the reused-or-new Subscriber, and the internal " \
+                "observer appended to its list)") \
+    X(S_ATTACH_SIGNAL, "Observable §2.2.1 subscribe steps 5.3 and 9 (what the SubscribeOptions signal does " \
+                       "to the subscription the internal observer has just joined — an aborted signal " \
+                       "un-joins it or closes the fresh Subscriber, a live one registers the abort algorithm)") \
     X(S_INVOKE, "Observable §2.2.1 subscribe step 10 (invoking the subscribe callback with the Subscriber, " \
                 "with \"rethrow\")") \
     X(S_EMIT_ENTER, "Observable §2.1 next/error/complete step 1 (the active check, and for error and complete " \
@@ -251,6 +254,12 @@ typedef struct JSObsState {
     uint8_t   emit;       /* EM_NEXT / EM_ERROR / EM_COMPLETE */
     uint8_t   member;     /* which dictionary member a read is on; the iteration's yield latch */
     uint8_t   has_sig;    /* the SubscribeOptions declared a signal */
+    /* §2.2.1 STEP 5's ANSWER, CARRIED ACROSS THE STAGE BOUNDARY STEP 5.3 SITS BEHIND — and it is a field
+       because it CANNOT BE RE-DERIVED once step 8 has run. S_ATTACH asks "is this Observable's weak subscriber
+       non-null and active", and the arm where it is not SETS it (step 8), so the identical read at the next
+       stage answers the OTHER way: a re-derivation would take the reuse arm for a subscription that had just
+       been minted fresh, which is step 5.4's bare return where step 10 is owed. */
+    uint8_t   reuse;
     uint8_t   has_reason; /* close was given a reason */
     /* §2.2.1's ARM: 0 = the sync iterable, 1 = the async one, 2 = the async one whose source turned out to
        have no %Symbol.asyncIterator% after all, so GetIterator(value, async) falls back to the sync protocol

@@ -604,7 +604,7 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
            that delivers its own answer, which drops the reference the seam is still borrowing. */
         s->sig_flag = JS_UNINITIALIZED;
         s->i = 0;
-        s->phase = s->next = s->emit = s->member = s->has_sig = s->has_reason = 0;
+        s->phase = s->next = s->emit = s->member = s->has_sig = s->has_reason = s->reuse = 0;
         s->async = 0;
         s->snext = s->fnext = S_DONE;
         s->kind = s->alg = 0;
@@ -881,11 +881,21 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
         }
 
         case S_ATTACH: {
-            /* §2.2.1 steps 5-9. */
+            /* §2.2.1 steps 5-8, AND NOT STEP 5.3 OR STEP 9 — those are the stage below, because the signal
+               test that selects between them CAN PARK and every statement in this arm is a SPEC STEP WITH AN
+               OBSERVABLE EFFECT. A fork re-enters the arm it asked from AT ITS TOP TWICE (the parent carrying
+               the answer and the sibling re-asking), so an ask placed under these steps would run them again:
+               `array_append` would register this internal observer a SECOND time and the page would be handed
+               every `next()` twice, and the re-read of the weak subscriber would answer the OTHER way, since
+               step 8 has by then set the slot step 5 tests. That is correctness and not a leak, so the guarded
+               init `step_fork_pending` licenses is the wrong repair here: a spec step with an observable effect
+               must run EXACTLY ONCE per invocation, which means suppressing it on the re-entry is as wrong as
+               repeating it. The stage boundary is the repair — it puts the arm boundary BETWEEN the effect and
+               the question, so the machine re-enters at a stage with nothing above the ask. */
             JSValue held = slot_get(ctx, s->obs, "subscriber");
-            bool reuse = subscriber_is(held) && subscriber_active(ctx, held);
 
-            if (reuse) {
+            s->reuse = (uint8_t)(subscriber_is(held) && subscriber_active(ctx, held));   /* step 5 */
+            if (s->reuse) {
                 s->sub = held;                                  /* step 5.1 */
             } else {
                 JS_FreeValue(ctx, held);
@@ -899,8 +909,38 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
                 array_append(ctx, arr, JS_DupValue(ctx, s->io));
                 JS_FreeValue(ctx, arr);
             }
-            if (s->has_sig && abort_signal_aborted(ctx, s->sig)) {
-                if (reuse) {
+            obs_goto(s, S_ATTACH_SIGNAL);
+            continue;
+        }
+
+        case S_ATTACH_SIGNAL: {
+            /* §2.2.1 steps 5.3 and 9, which are the SAME two arms over the same signal — "If options’s signal
+               is aborted" and "Otherwise, add the following abort algorithm" — differing only in what the
+               aborted arm does: step 5.3.1 removes the internal observer from a subscription that was already
+               running, step 9.1 closes the one this invocation just minted. `s->reuse` is which.
+               THE ASK IS AT THE TOP OF THIS STAGE AND THAT IS THE WHOLE POINT OF THE STAGE. Only a read of a
+               byte on this state stands above it, so the two entries a fork produces re-take nothing and
+               re-ask the identical question — and the sibling MUST re-ask, because the arm it takes is replayed
+               from the flow's own decision vector at the ask and an answer baked into the clone would be a
+               second, weaker answer to a question the vector has already settled. */
+            int aborted = 0;
+
+            if (!s->has_sig) {
+                obs_goto(s, s->reuse ? S_DONE : S_INVOKE);       /* step 5.4 returns; step 10 invokes */
+                continue;
+            }
+            /* THE PARKING FORM. `abort_signal_aborted` answers a `bool` and therefore cannot say "I forked", so
+               a page handing `subscribe` an `AbortSignal.timeout()` — whose `aborted` is unknown external input,
+               since whether the deadline has passed is not a thing this engine knows — reached
+               solver/engine.c's seam from inside a plain C activation with nowhere for the sibling to resume.
+               The operand is held in `sig_flag`, which the S_ENTRY block states once per invocation and
+               `js_obs_visit` names, so the arm that resumes still carries it. */
+            r = abort_signal_aborted_step(ctx, &s->hdr, s->sig, &s->sig_flag, &aborted);
+            /* PARKED. Nothing of this stage is released and nothing is re-derived: the stage is unchanged, the
+               operand stays HELD on the state, and the sibling re-enters AT this ask. */
+            if (r) return r;
+            if (aborted) {
+                if (s->reuse) {
                     /* step 5.3.1: the consumer is gone before it arrived, so it simply never joins. */
                     observers_remove(ctx, s->sub, s->io);
                     obs_goto(s, S_DONE);
@@ -908,11 +948,14 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
                 }
                 /* step 9.1: close the fresh subscriber with the signal's reason. The subscribe callback still
                    runs afterwards — step 10 is not conditional — which is what makes `addTeardown` inside an
-                   already-aborted subscription invoke its teardown immediately. */
-                obs_close_enter(ctx, s, 1, abort_signal_reason(ctx, s->sig), reuse ? S_DONE : S_INVOKE);
+                   already-aborted subscription invoke its teardown immediately.
+                   S_INVOKE AND NOT A TERNARY ON `reuse`: this arm is step 9.1, which the reuse branch above has
+                   already left, so the `reuse ? S_DONE : S_INVOKE` that used to stand here read as a live choice
+                   over a value that is provably 0. */
+                obs_close_enter(ctx, s, 1, abort_signal_reason(ctx, s->sig), S_INVOKE);
                 continue;
             }
-            if (s->has_sig) {
+            {
                 /* steps 5.3.2 / 9.2: the abort algorithm that unregisters this one consumer and closes the
                    subscription when it was the last. */
                 JSValueConst data[3];
@@ -925,7 +968,7 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
                 abort_signal_add_algorithm(ctx, s->sig, algo);
                 JS_FreeValue(ctx, algo);
             }
-            obs_goto(s, reuse ? S_DONE : S_INVOKE);              /* step 5.4 returns; step 10 invokes */
+            obs_goto(s, s->reuse ? S_DONE : S_INVOKE);           /* step 5.4 returns; step 10 invokes */
             continue;
         }
 
