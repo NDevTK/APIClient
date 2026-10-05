@@ -305,9 +305,19 @@ typedef struct JSObsState {
        BLOCK — not, as this sentence used to say, that `every arm of it leaves the stage`. Both are true and only
        the first is the reason: a fork re-enters the arm it asked from AT ITS TOP TWICE with `hdr.stage`
        UNCHANGED, so an ask placed before the `obs_goto` that leaves S_ENTRY re-runs the whole block however
-       tidily its arm ends — and the retired wording certified exactly the two sites that had one. Every ask of
-       this question now stands at the TOP of a stage of its own, which is what holds the invariant up; a reader
-       who puts one back inside this block has taken it away again. */
+       tidily its arm ends — and the retired wording certified exactly the two sites that had one.
+       AND `THE TOP OF A STAGE OF ITS OWN` IS TOO STRONG, WHICH THIS SENTENCE CLAIMED OF EVERY ASK AND IS KEPT
+       IN ITS OWN WORDS BECAUSE IT IS THE RULE A READER RE-DERIVES FROM THE TWO HOISTS BESIDE IT. S_ITER_STEP's
+       ask stands below a YIELD LATCH, and that is sound where a hoist was necessary two stages up, because what
+       decides it is not POSITION but whether what stands above the ask has an OBSERVABLE EFFECT. A latch is
+       bookkeeping: the fork's two entries re-run it, take the yield and come back, which costs one scheduler
+       round trip and repeats nothing a page can see. S_ITER_REG's predecessors had SPEC STEPS above the ask — a
+       read of the page's `next` property and a CreateAsyncFromSyncIterator that consumes its operands — and a
+       step that must run exactly once is as wrong repeated as suppressed, which is why those two are stages and
+       this one is a latch. What is forbidden above an ask in every case is an `obs_goto`: a fork may not outlive
+       the stage that asked it, which quickjs.c's step_fork_inflight and step_request_check now refuse at both
+       ends. So: nothing with an observable effect above an ask, and no departure from its stage; a reader who
+       puts either back has taken the invariant away again. */
     JSValue   sig_flag;
 } JSObsState;
 

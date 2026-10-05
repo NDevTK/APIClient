@@ -548,17 +548,17 @@ JSValue obs_operator_observable(JSContext *ctx, int kind, JSValueConst source, J
     return observable_new(ctx, JS_UNDEFINED, cb);
 }
 
-static bool sub_signal_aborted(JSContext *ctx, JSObsState *s)
-{
-    JSValue sig = slot_get(ctx, s->sub, "signal");
-    bool b = abort_signal_aborted(ctx, sig);
-    JS_FreeValue(ctx, sig);
-    return b;
-}
-
-/* THE SAME QUESTION IN THE PARKING FORM — the form above answers a `bool` and therefore cannot say "I forked",
-   so a first-time fork on an unknown flag reaches solver/engine.c's seam with no resume point and aborts. This
-   machine HAS one, so every ask of this question that stands at the TOP OF A STAGE comes here instead.
+/* §3.2's ABORTED TEST, AND THERE IS NOW ONLY THE PARKING FORM OF IT IN THIS MACHINE. The non-parking
+   `sub_signal_aborted` stood here and is DELETED WITH ITS LAST CALLER rather than left as a fallback: it
+   answered a `bool` and therefore could not say "I forked", so an unknown flag — an `AbortSignal.timeout()`
+   is one — reached solver/engine.c's seam from a plain C body with no resume point and ABORTED. This machine
+   HAS the resume point the driver clones at, so the question had nothing missing but a way to return the fork
+   code.
+   ITS DELETION IS WHAT MAKES THE ABORT'S DISAPPEARANCE STRUCTURAL, which no build could have shown while it
+   stood: it composed its site with SOLVER_SITE_HERE in its OWN body, so every one of its callers produced the
+   IDENTICAL abort identity — one answer for every candidate, which is the shared-forwarder shape
+   §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE forbids — and converting any one of them left the string
+   unchanged. With the function gone there is no caller left to compose it.
    `sig` IS FREED ON THE FORK PATH AND THAT IS NOT A DANGLING BORROW: the operand the seam holds across the park
    is the FLAG, which it puts in `sig_flag` (a field `js_obs_visit` names), and the signal object is read only to
    get at it. Returns what the caller returns unchanged, or 0 once `*aborted` is 0 or 1. */
@@ -1432,7 +1432,28 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
             if (s->phase == 0) {
                 if (s->member == 0) { s->member = 1; JS_FreeValue(ctx, cb_result); return JS_STEP_YIELD; }
                 s->member = 0;
-                if (sub_signal_aborted(ctx, s)) { obs_goto(s, S_DONE); continue; }
+                /* nextAlgorithm step 5.1 on the async arm, and step 8.7.6 on the sync one — the SAME test at
+                   the loop's other end, which is why one stage serves both and `s->async` need not be read.
+                   THE PARKING FORM, WITH THE YIELD LATCH ABOVE IT, AND THAT PAIR IS THE ONE THING ON THIS PATH
+                   WORTH ARGUING. `s->member` is reset to 0 on the entry that reaches the ask, so both entries a
+                   fork produces — the parent carrying the answer and the sibling re-asking — read 0, take the
+                   yield and come back; the ask is reached on the SECOND of each pair. That costs one scheduler
+                   round trip per fork and it returns JS_STEP_YIELD WHILE A FORK ANSWER IS OUTSTANDING ON THE
+                   HEADER, which is admissible and is now asserted to be: the driver's arm for that code reads
+                   nothing off the machine, sets the delivery to JS_UNDEFINED and jumps to its convergence
+                   point, and do_step_park moves that delivery into `park_in`/`park_exc` — so no field of the
+                   fork bookkeeping is touched anywhere on the path and the machine re-enters at the TOP OF THIS
+                   SAME STAGE with a filler, the identical shape a fork delivery already produces.
+                   WHAT WOULD NOT BE ADMISSIBLE IS LEAVING THE STAGE, and step_request_check refuses that now.
+                   So a LATCH may stand above an ask and an `obs_goto` may not: a latch is bookkeeping with no
+                   observable effect, which a re-run merely repeats, where the two sites hoisted into stages of
+                   their own had SPEC STEPS above them — a read of the page's property, a construction that
+                   consumes its operands — which a re-run performs twice and a guard performs never. */
+                int aborted = 0;
+
+                r = sub_signal_aborted_step(ctx, s, &aborted);
+                if (r) return r;
+                if (aborted) { obs_goto(s, S_DONE); continue; }
             }
             r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), s->iocb[0], s->io, 0, NULL, cb_result, &out,
                               out_cb, out_argc);
