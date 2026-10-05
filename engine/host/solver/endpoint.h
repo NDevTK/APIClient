@@ -439,13 +439,44 @@ int         endpoint_door_bytes(int door);
    manifest needs a scope pass to resolve, so what a static reader reaches is a moving frontier rather than a
    property — and this list deliberately does not pretend otherwise. Neither word may be read as its
    complement over parses.
-   WHAT A `concrete` ROW HIDES IS NAMED HERE RATHER THAN LEFT TO BE RE-DERIVED, because it is three
-   populations and `url_display`'s own banner enumerates them: an address composed OF LITERALS (a bundler's
-   module graph, the whole surface of a run that reached no API code); one composed of THE DOCUMENT'S OWN
-   ADDRESS, which is concrete for the document this engine loaded; and one PINNED AND RE-READ, where
-   §Solver-half's concretize-on-pin re-mints a proved source as the REAL value so the true arm of
-   `if (s.tier === 'silver') fetch('/api/' + s.tier)` composes an ordinary string. The third really did derive
-   from an unknown and this cannot say so, which is why the field is a floor.
+   IT IS ONE FACT AND TWO PREDICATES OVER IT, WHICH IS WHY IT IS A THREE-MEMBER LIST AND NOT A BIT. The field
+   was answering TWO questions with one bit and the two differ for one population, which is
+   §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS in a declared list. The questions:
+     Q1 — DID THE RUN DETERMINE THIS ADDRESS?  `cls != EPA_UNKNOWN`.
+     Q2 — DOES THIS ROW CLEAR THE HARD BAR?    `cls == EPA_UNKNOWN`, which is what `endpoint_razor_class_of`
+       already keys on, BYTE-IDENTICALLY, and is why that line did not change when this member landed.
+   They are two QUESTIONS asked of ONE stored member rather than two members, so they cannot disagree about a
+   row and there is no second field for a merge to get wrong. Where Q1 and Q2 both answer "proves nothing" the
+   member is `EPA_CONCRETE`; where Q1 answers DETERMINED and Q2 PROVES NOTHING it is `EPA_SOURCE_DETERMINED`;
+   where Q1 answers NOT DETERMINED it is `EPA_UNKNOWN` and Q2 clears.
+   THE POPULATION THAT FORCED THE SPLIT IS THE ONE Q1 WAS WRONG ABOUT, AND THE RAZOR WAS OVER-CLAIMING ON IT.
+   `concolic_is` is TRUE for a source value a flow has pinned and is STILL HOLDING — concolic.h's pin arm
+   re-mints a source on a RE-READ and hands back a bare primitive, but a value the page materialised into a
+   variable before its own gate stays this engine's own concolic, and `concolic_example_state` answers
+   DETERMINED for it. `var u = cfg.url; if (u === '/api/v2/items') fetch(u);` is the shape. Before this member
+   that row read `unknown` and the bar read `runtime-only` for an address whose bytes are a STRING LITERAL
+   STANDING IN THE BUNDLE, which is an over-claim on the one number CLAUDE.md §What-the-tool-produces judges
+   this product by. It now reads `source-determined` and the bar reads `unproven`.
+   AND THIS FILE USED TO ASSERT THE OPPOSITE AT THREE SITES — that a PINNED AND RE-READ source "really is past
+   every parse" — WHICH IS THE SAME OVER-CLAIM IN THE OTHER DIRECTION AND IS RETIRED RATHER THAN DELETED,
+   because a reader who re-derives it from "the taint is gone" will write it again. It read: the third
+   population "really did derive from an unknown and this cannot say so, which is why the field is a floor",
+   over the worked example `if (s.tier === 'silver') fetch('/api/' + s.tier)`. THE DERIVATION IS TRUE AND THE
+   CONCLUSION DOES NOT FOLLOW. A pin's bytes are `literal_tok` of the equality's OTHER operand, and
+   solver/concolic.c spells that operand ONLY where it is not itself concolic — so the bytes are a value the
+   page's own text determined, which in the dominant case is a literal the bundle spells. BOTH of that
+   example's segments (`'/api/'` and `'silver'`) stand in the served bytes, so `/api/silver` does NOT "exist
+   only at run time", which is the clause the bar's own sentence turns on. CLAUDE.md
+   §the-static-instrument-is-the-competitor forbids banking the difference: a parse that refines an unknown
+   under its own guard is one anybody can write, `testing/static_surface.mjs`' own banner says a real
+   extractor "would fold MORE", and a diff that teaches the parse to fold RAISES the bar rather than
+   regressing this engine's score. What a pin proves is WHICH WORLD the run explored — a reachability finding,
+   and a real one — and never that the bytes are absent from the document.
+   SO WHAT `concrete` STILL HIDES IS TWO POPULATIONS AND NOT THREE, and `url_display`'s banner enumerates
+   them: an address composed OF LITERALS (a bundler's module graph, the whole surface of a run that reached no
+   API code), and one composed of THE DOCUMENT'S OWN ADDRESS, which is concrete for the document this engine
+   loaded. Neither clears the bar and neither ever did. The third has its own member, and the half of it this
+   list still cannot reach is a NAMED RESIDUAL at `address_class_of`.
    AND THE SECOND THING IT CANNOT ANSWER IS AN ADDRESS WHOSE RUNTIME-NESS THE *DOOR* CARRIES. `reply-chunk`
    is the sharpest: solver/reply_decode.c hands this surface a plain string it read out of a REPLY, so the
    value is `concrete` while no parse of the DOCUMENT reaches that address at all. THAT SET IS NOW THE FOURTH
@@ -462,13 +493,19 @@ int         endpoint_door_bytes(int door);
    literal segments stand in the bundle. So the floor is the UNION of this column's `unknown` rows and the rows
    whose door is `EPB_OFF_DOCUMENT`, and `endpoint_razor_class_of` composes exactly that, per row, at the one
    line where both facts are in hand.
-   ITS MERGE IS A UNION, which is `valueClass`'s rule one grain out and holds for its reason: the four
-   domain reads are claims about a VALUE that a path reaching the request without obeying them disproves,
-   and this is a fact about whether SOME observed path composed the address out of an unknown, which a later
-   determined sighting cannot take back. Intersecting would answer `concrete` for an address one path built
-   out of a hole and make the floor read LOWER than what the run established. It is deliberately NOT the
-   door's never-re-armed rule: the door asks which mechanism composed the record's FIRST sighting, and this
-   asks what any sighting proved about the address.
+   ITS MERGE IS A MAX OVER THE ORDER, which is the two-member UNION it always was spelled for three members,
+   and it holds for that union's reason: this is a fact about what SOME observed path proved about the
+   address, which a later sighting that proved LESS cannot take back. Both steps are that one rule:
+   `concrete` ∨ `source-determined` is `source-determined`, because a sighting that saw the address enter at a
+   source is not taken back by a later one composed of literals; `source-determined` ∨ `unknown` is `unknown`,
+   because a path that did NOT determine it is not taken back by one that did — which is the union's own
+   sentence verbatim. Intersecting at either step would answer a lower member for an address one path already
+   proved more about, and at the second step would make the bar's floor read LOWER than what the run
+   established. It is deliberately NOT the door's never-re-armed rule: the door asks which mechanism composed
+   the record's FIRST sighting, and this asks what any sighting proved about the address.
+   THE ORDER IS THEREFORE LOAD-BEARING AT BOTH ENDS and is asserted at the census walk rather than argued
+   here — see `EPA_COUNT`. `valueClass` is still the same rule one grain out and is still spelled as a
+   two-member union, because a param's value has no pinned-and-still-held population to carve out of it.
    A LIST AND NOT TWO `#define`s, for `ENDPOINT_DOORS`' reason: the enum, the token table and the census over
    it are ONE list, so a class added to the enum and not to the table cannot come off the end of a name
    array. THE FIRST MEMBER IS THE CONSERVATIVE ONE AND ITS VALUE IS ZERO BY CONSTRUCTION — the mint writes
@@ -476,21 +513,41 @@ int         endpoint_door_bytes(int door);
    what makes a field some later diff forgot read as the claim that PROVES NOTHING rather than as the claim
    that clears the product's own bar. */
 #define ENDPOINT_ADDRESS_CLASSES(X)                                                                          \
-    /* the run had DETERMINED this address by the time it recorded it. It claims nothing about a parse: see  \
-       the three populations named above, of which one really did derive from an unknown. */                  \
+    /* the run had DETERMINED this address and this surface holds no evidence that any segment of it         \
+       entered the program at a source. It claims nothing about a parse, for the reason the banner gives,    \
+       and it is the member a later diff that forgot to write this field reads as. */                        \
     X(EPA_CONCRETE, "concrete")                                                                              \
-    /* the run reached this address holding a value it had NOT determined — some segment of it entered the   \
-       program at a source, so no parse of the served bytes can state it and this row clears the hard bar.   \
-       It includes the value this engine could not attribute to a source at all (concolic.h's NULL root),    \
-       which is a weaker claim about WHERE the bytes came from and the same claim about the run not having   \
-       determined them. */                                                                                   \
+    /* …and the run DETERMINED it OUT OF a value that entered at a source: the address is this engine's own  \
+       concolic, its own `src` names it, and THIS FLOW'S equality pinned that path — concolic.h's            \
+       CONCOLIC_EX_DETERMINED, which is the one answer of that accessor's four that is a PROOF.              \
+       IT IS THE MEMBER AT WHICH THE TWO QUESTIONS PART, and it answers them differently: Q1 DETERMINED, Q2  \
+       PROVES NOTHING. A pin's bytes are the equality's OTHER operand, which solver/concolic.c spells only   \
+       where that operand is NOT concolic, so they are bytes the page's own text determined — in the         \
+       dominant case a string literal standing in the bundle. The engine proved WHICH WORLD it explored; it  \
+       did not prove the address's bytes are absent from the served document, and the bar is keyed on the    \
+       bytes. So this row does NOT clear it. */                                                              \
+    X(EPA_SOURCE_DETERMINED, "source-determined")                                                            \
+    /* …and the run reached this address holding a value it had NOT determined — some segment of it entered  \
+       the program at a source and NOTHING on this path pinned it, so the bytes stand in no served byte and  \
+       this row clears the hard bar. It includes the value this engine could not attribute to a source at    \
+       all (concolic.h's NULL root), which is a weaker claim about WHERE the bytes came from and the same    \
+       claim about the run not having determined them.                                                       \
+       IT IS THE TOP MEMBER AND THE MERGE IS A MAX, so this is the one member a reordering could silently    \
+       lower a record OUT of; `endpoint_address_hist_json` asserts both ends of the order. */                \
     X(EPA_UNKNOWN,  "unknown")
 
 typedef enum {
 #define ENDPOINT_ADDRESS_CLASS_MEMBER(id, token) id,
     ENDPOINT_ADDRESS_CLASSES(ENDPOINT_ADDRESS_CLASS_MEMBER)
 #undef ENDPOINT_ADDRESS_CLASS_MEMBER
-    EPA_COUNT           /* the list's own end — dense by construction, for `EPR_COUNT`'s reason */
+    EPA_COUNT           /* the list's own end — dense by construction, for `EPR_COUNT`'s reason, and ORDERED,
+                           which this list is not free to be arbitrary about for `EPW_COUNT`'s reason exactly:
+                           the record's merge is a MAX over it. BOTH ENDS ARE LOAD-BEARING AND BOTH ARE
+                           ASSERTED at `endpoint_address_hist_json` — `EPA_CONCRETE` is the identity element
+                           the `memset` leaves behind, and `EPA_UNKNOWN` is the member the bar reads, so a
+                           reordering that moved it off the top would let a MAX carry a record out of the one
+                           class `endpoint_razor_class_of` keys on and the bar would stop claiming an address
+                           a path had proved */
 } EndpointAddressClass;
 
 /* THE ONE WIRE SPELLING OF AN ADDRESS CLASS, and `endpoint_reach_token`'s severity for its reason: it runs
@@ -519,19 +576,33 @@ const char *endpoint_address_class_token(int cls);
    sighting of the same address through `fetch` does not put them there. So the verdict is computed at the
    EMITTER from the two fields rather than stored, and there is no third merge rule to get wrong.
    WHAT `unproven` DOES NOT SAY IS THE WHOLE OF ITS HONESTY, and it is `EPA_CONCRETE`'s rule one grain out: it
-   is NOT the claim that a parse could have stated the address. Three populations land in it and one of them
-   really is past every parse — a source this flow PINNED and re-read, which `url_display`'s banner enumerates
-   and which `concolic_is` cannot see because `pin_mint` answers a pinned read with a BARE primitive. That
-   half is bounded by solver/flow.h's `path_pinned` and is NOT folded in here, deliberately: that bit is a
-   MAY-REST-ON (the necessary condition, recorded where the bytes are chosen) and reading a necessary
-   condition as the bar would turn this floor into an OVER-claim, which is the same defect as unioning over
-   `EPR_BEYOND` one operand back.
+   is NOT the claim that a parse could have stated the address. Whether a static reader could have stated one
+   is a MOVING FRONTIER rather than a property — a bundler's chunk manifest needs a scope pass to resolve —
+   and this list deliberately does not pretend otherwise in either direction.
+   THIS PARAGRAPH USED TO NAME A POPULATION OF `unproven` THAT "really is past every parse" — a source this
+   flow PINNED and re-read — AND THAT WAS AN OVER-CLAIM, retired rather than deleted because it is what a
+   reader re-derives from "the taint is gone by the time the address is composed". It went on: "That half is
+   bounded by solver/flow.h's `path_pinned` and is NOT folded in here, deliberately". The BOUNDING half
+   stands and `EPW_MAY_REST_ON` is still never unioned in; the claim that the population is past every parse
+   does not. A pin's bytes are the equality's OTHER operand, which solver/concolic.c spells only where that
+   operand is NOT concolic, so they are bytes the page's own text determined — a literal the bundle spells, in
+   the dominant case. `ENDPOINT_ADDRESS_CLASSES`' banner carries the derivation and the measurement; the
+   consequence HERE is that the pinned population is a population `unproven` holds CORRECTLY, and the honest
+   reading of this word is one floor rather than one floor plus an unquantified excuse.
+   SO THE ONE POPULATION STILL UNACCOUNTED FOR IS NARROWER THAN THE RETIRED SENTENCE CLAIMED, and it is not
+   about pins at all: a pin whose other operand was a non-concolic value that reached this engine from
+   OFF-DOCUMENT bytes. Those bytes stand in no served document, so such an address does clear the bar and is
+   not claimed here — and this engine cannot see it, because a non-concolic operand carries no provenance BY
+   CONSTRUCTION. `address_class_of` records that as a named residual; `EPB_OFF_DOCUMENT` catches the reply
+   DOOR independently, which is why the unseen half is a thin residue rather than the floor's main slack.
    A LIST AND NOT TWO `#define`s, and THE CONSERVATIVE MEMBER IS FIRST AND ZERO BY CONSTRUCTION, for
    `ENDPOINT_ADDRESS_CLASSES`' reasons exactly. */
 #define ENDPOINT_RAZOR_CLASSES(X)                                                                   \
-    /* this run proved nothing about whether a parse of the served bytes could state this address.  \
-       It is not the complement of the member below over parses: see the banner for the three       \
-       populations it holds, of which a PINNED AND RE-READ source really is past every parse. */    \
+    /* this run proved nothing about whether a parse of the served bytes could state this          \
+       address. It is not the complement of the member below over parses — what a static           \
+       reader reaches is a moving frontier — and it is NOT a hole with a population inside it      \
+       either: see the banner for why the pinned population it holds is held CORRECTLY, and        \
+       `address_class_of` for the one thin residue that is still unaccounted for. */               \
     X(EPZ_UNPROVEN,     "unproven")                                                                 \
     /* …and this run PROVED the address exists only at run time: it reached it holding a value it   \
        had not determined, or the door handed it bytes that were never in the served document. */   \
@@ -553,8 +624,16 @@ typedef enum {
 const char *endpoint_razor_class_token(int cls);
 
 /* WHETHER THIS ADDRESS MAY REST ON A WITNESS THIS ENGINE CHOSE — the NECESSARY CONDITION under the one
-   population `EPZ_UNPROVEN` holds that really is past every parse, published as its own word per row because
-   nothing anywhere published it and the razor's zero cannot be read without it.
+   population `EPZ_UNPROVEN` holds whose BYTES THIS ENGINE CHOSE RATHER THAN A SERVER SENT, published as its
+   own word per row because nothing anywhere published it.
+   THAT PURPOSE CLAUSE USED TO READ "the one population `EPZ_UNPROVEN` holds that really is past every parse",
+   and it is re-aimed rather than deleted for the reason `ENDPOINT_ADDRESS_CLASSES`' banner gives at length: a
+   pin's bytes are a literal the page's own predicate spelled, so that population is NOT past a parse and this
+   class was never a bound on the bar's slack. WHAT IT BOUNDS IS REPRODUCIBILITY, which is what its own member
+   comment below already says and is a first-class §@H fact: an address resting on bytes THIS ENGINE chose is
+   one a real session may never see, so a reader who takes such a row for an observation is taking the
+   invention §@H forbids. The class, its order, its MAX merge and its refusal to be unioned into the bar are
+   all unchanged — only the sentence saying what the population IS.
    IT IS NOT THE BAR AND IS NEVER UNIONED INTO IT, which is the whole reason it is a third list rather than a
    third operand of `endpoint_razor_class_of`. The razor's own banner states the hazard and the reason, and
    this is that reason obeyed rather than repeated: `may-rest-on` is a MAY, so folding it in would turn a FLOOR
@@ -833,21 +912,29 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    JS-object round-trip.
    `[ {"method":..,"url":..,"provenance":"observed"|"derived"|"forced",
       "door":"document-script"|…|"reply-chunk","mintedAt":"pre-program"|"post-program",
-      "addressClass":"concrete"|"unknown",
+      "addressClass":"concrete"|"source-determined"|"unknown",
       "params":[{"name":..,"location":..,"valueClass":"unknown"|"concrete","validValues":[..],"excludes":[..],
       "bounds":{"minimum"|"exclusiveMinimum":N,"maximum"|"exclusiveMaximum":N},
       "predicates":[{"method":..,"arguments":[..],"holds":true|false}],
       "looselyEquals":[{"value":..,"type":..}]}]}, ... ]`.
    `addressClass` IS WHETHER THE RUN HAD DETERMINED THIS ADDRESS WHEN IT RECORDED IT, and it is the one field
    on this record that answers CLAUDE.md §What-the-tool-produces' HARD BAR at the grain the bar is stated at.
-   It is ALWAYS PRESENT for `provenance`'s reason and `valueClass`'s: the two words are exhaustive over the
+   It is ALWAYS PRESENT for `provenance`'s reason and `valueClass`'s: the words are exhaustive over the
    states this engine can be in about an address value, so there is no absence to read as a statement. See
-   `ENDPOINT_ADDRESS_CLASSES` for what each word claims, for the three populations `concrete` hides, and for
-   why the honest field is a FLOOR under the bar rather than a boolean about what a parse could reach — a
+   `ENDPOINT_ADDRESS_CLASSES` for what each word claims, for the two populations `concrete` still hides, and
+   for why the honest field is a FLOOR under the bar rather than a boolean about what a parse could reach — a
    consumer that read `concrete` as `a static reader gets this for free` would be making a claim no producer
-   here makes. IT IS THE SAME VOCABULARY AS `valueClass` ONE GRAIN OUT and that is deliberate: a param is
-   "unknown" where some observed path minted it from a value the code did not compute, and this is the
-   identical question asked of the ADDRESS, so one pair of words means one thing at two grains.
+   here makes.
+   THREE WORDS AND NOT TWO, AND THE BAR IS KEYED ON ONE OF THEM RATHER THAN ON A COMPLEMENT. A consumer asks
+   Q1 (did the run determine this address) as `!= "unknown"` and Q2 (does this row clear the hard bar) as
+   `== "unknown"`, which is what `razorClass` already composes; `"source-determined"` answers Q1 DETERMINED
+   and Q2 PROVES NOTHING, so a consumer reading the bar as `!= "concrete"` over-claims on exactly it. A
+   consumer that knows only the two older words still reads the BAR correctly — `unknown` is unchanged and is
+   still the bar's address-side operand — and loses only the split inside the determined side, which is why
+   this widening needed no consumer to land with it.
+   IT IS STILL THE SAME VOCABULARY AS `valueClass` ONE GRAIN OUT for the two words they share, and `valueClass`
+   deliberately does NOT gain the third: a param's value has no pinned-and-still-held population to carve out,
+   so the pair means one thing at two grains wherever both spell it.
    A CONSUMER CANNOT RE-DERIVE IT FROM `url`, which is why it is carried. A concolic address is printed as
    its SHAPE, so a brace in `url` looks like the evidence — and extension/lib/learn.js's live-traffic path
    walk mints a `{path_*}` hole into a URL from two observed addresses that differ at one segment, which is a

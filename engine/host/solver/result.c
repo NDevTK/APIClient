@@ -2681,9 +2681,13 @@ char *result_cold_json(void) {
     char *razor;
     /* …AND THE ONE FACT THAT BAR DOES NOT CARRY, which is published here because nothing published it
        anywhere: `path_pinned` is written at five request sites and read by one accessor, and no census in this
-       engine had a row for it, so the razor's own banner could name the population its `unproven` holds that
-       really is past every parse and no reader could ask how large it was. See solver/endpoint.h for why it is
-       a SEPARATE row and may never be unioned into the bar. */
+       engine had a row for it, so the razor's own banner could name the population its `unproven` holds whose
+       BYTES THIS ENGINE CHOSE and no reader could ask how large it was. See solver/endpoint.h for why it is
+       a SEPARATE row and may never be unioned into the bar. (That clause read "really is past every parse"
+       until endpoint.h measured the claim: a pin's bytes are a literal the page's own predicate spelled, so
+       `unproven` holds that population CORRECTLY and what this row bounds is REPRODUCIBILITY — whether an
+       address rests on bytes this engine chose rather than on bytes a server sent, which is a §@H fact and
+       not a bar fact. The row, its denominator and its refusal to be unioned in are unchanged.) */
     char *witness;
 
     cold_census(&c);
@@ -3655,15 +3659,24 @@ char *result_cold_json(void) {
                  /* …AND THE NECESSARY CONDITION UNDER THAT BAR, BESIDE IT AND NEVER INSIDE IT. The bar is a
                     FLOOR composed of two POSITIVE statements; this is a MAY, and solver/endpoint.h states why
                     folding a necessary condition into a floor turns it into an OVER-claim.
-                    WHAT THE PAIR SAYS, WHICH IS THE WHOLE REASON THIS ROW EXISTS. `unproven` is three
-                    populations and one of them really is past every parse — an address composed out of a
-                    source this flow PINNED and re-read, which `concolic_is` cannot see because `pin_mint`
-                    answers a pinned read with a BARE primitive, so `addressClass` calls it `concrete`. This row
-                    BOUNDS that population: `unproven` beside `may-rest-on` 0 is a run on which no address was
-                    composed by a path that had pinned anything, so the bar's zero is the run having genuinely
-                    proved nothing and the next diff belongs to the SOLVER; a nonzero `may-rest-on` is the
-                    population the bar's zero does not account for, and the next diff belongs to the PIN.
-                    Those are opposite diffs and no figure published before this row could tell them apart.
+                    WHAT THE PAIR SAYS, WHICH IS THE WHOLE REASON THIS ROW EXISTS. `unproven` holds a
+                    population whose bytes THIS ENGINE CHOSE — an address composed out of a source this flow
+                    PINNED and re-read, which `addressClass` calls `concrete` because the pin arm hands a
+                    re-read back as a BARE primitive. This row BOUNDS that population: `unproven` beside
+                    `may-rest-on` 0 is a run on which no address was composed by a path that had pinned
+                    anything, so there is no chosen-bytes population under this run's surface at all; a
+                    nonzero `may-rest-on` is the population whose addresses may not reproduce for a real
+                    session, and the next diff belongs to the PIN. Those are opposite diffs and no figure
+                    published before this row could tell them apart.
+                    IT IS NOT A BOUND ON THE BAR'S SLACK, AND THAT CLAUSE IS RETIRED RATHER THAN DELETED
+                    BECAUSE IT IS WHAT A READER RE-DERIVES FROM "the taint is gone". It read that the pinned
+                    population "really is past every parse", so a nonzero `may-rest-on` was "the population
+                    the bar's zero does not account for" and a zero made the bar's zero "the run having
+                    genuinely proved nothing". solver/endpoint.h measured the claim and retired it: a pin's
+                    bytes are the equality's OTHER operand, which solver/concolic.c spells only where that
+                    operand is NOT concolic, so they are a literal the page's own text spells and the address
+                    does not exist only at run time. `unproven` holds that population CORRECTLY, and what the
+                    bar's zero accounts for is unchanged by this row in either direction.
                     `unasked` IS NOT A SMALL `no-witness`. It is the question not having been asked, because no
                     flow stood when the record was minted; a nonzero row there is a door composing a request
                     outside the scheduler, which is a finding about that door. Its denominator is `epEmitted`

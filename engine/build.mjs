@@ -2771,21 +2771,38 @@ function endpointReachReading(b) {
    population these two classes partition — and an EMPTY SURFACE is a sentence rather than `0 of 0`, for
    `endpointReachReading`'s reason exactly: the second reads as the bar ANSWERING when the run learned no
    address at all. */
+/* …AND THE DETERMINED SIDE IS DERIVED FROM THE PARTITION RATHER THAN NAMED, which is what let that list grow
+   a third member without this reading becoming an incomplete account of its own denominator. It named BOTH
+   classes by hand and printed `unknown of total (concrete it had)`, so the day `source-determined` landed the
+   parenthetical would have under-reported the determined side by exactly that row with nothing saying so —
+   CLAUDE.md §a-coverage-figure-states-what-it-is-a-fraction-of, in the one sentence a person reads off the
+   verdict. The NAMED-CLASS CHECK is kept and is now over the ONE name this reading is actually keyed on: the
+   bar's address-side operand is `unknown`, so a rename of THAT would be rendered as a 0 the engine never
+   reported, while a rename or an addition anywhere on the determined side is carried through by name from the
+   census's own rows.
+   SO IT IS CORRECT FOR A TWO-ROW CENSUS AND A THREE-ROW ONE, AND THAT IS DELIBERATE RATHER THAN INCIDENTAL.
+   This file is INTERPRETED FROM THE TREE and the engine's C is live only after a build, so a reading that
+   REQUIRED the new row would refuse every build between its own landing and the next engine build — the
+   asymmetric half-deployment CLAUDE.md §A-CROSS-BOUNDARY-DIFF names. Deriving the complement makes both
+   orders of deployment correct and leaves no window in either direction. */
 function endpointAddressClassReading(b) {
   const rows = censusHistRows(b, "epAddressClass", "epEmitted", "endpoint.h's ENDPOINT_ADDRESS_CLASSES list");
   const at = (k) => { const r = rows.find((x) => x[0] === k); return r ? r[1] : null; };
-  const unknown = at("unknown"), concrete = at("concrete");
-  if (unknown === null || concrete === null)
+  const unknown = at("unknown");
+  if (unknown === null)
     throw new Error(`[build] the @COLD census's \`epAddressClass\` names [${rows.map((r) => r[0]).join(", ")}] ` +
-                    "and not the two classes endpoint.h's ENDPOINT_ADDRESS_CLASSES declares — this reading is " +
-                    "the product's HARD BAR and is composed of those two by name, so a renamed class would be " +
-                    "rendered as a 0 the engine never reported.");
+                    "and not the class endpoint.h's ENDPOINT_ADDRESS_CLASSES keys the bar on — this reading is " +
+                    "the product's HARD BAR and `unknown` is its address-side operand by name, so a renamed " +
+                    "class would be rendered as a 0 the engine never reported.");
   const total = b.epEmitted;
   if (total === 0) return `@H hard bar: the surface emitted no endpoint, so there is nothing to claim`;
+  const det = rows.filter((r) => r[0] !== "unknown");
+  const detSum = det.reduce((t, r) => t + r[1], 0);
   return `@H hard bar: ${unknown} of ${total} address(es) the run had NOT determined` +
-         ` (${concrete} it had) — a FLOOR under "no parse of the served bytes can state this" and never its` +
-         ` value: a determined address may still be one no parse reaches (a pinned source re-read, a reply's` +
-         ` own chunk address), and this line will not guess. ${unknown === 0 ? "0 is a REFUSAL TO CLAIM the " +
+         ` (${detSum} it had: ${det.map(([k, v]) => `${v} ${k}`).join(", ")}) — a FLOOR under "no parse of the` +
+         ` served bytes can state this" and never its value: a determined address may still be one no parse` +
+         ` reaches (a reply's own chunk address, which \`razorClass\` catches through the door), and this line` +
+         ` will not guess. ${unknown === 0 ? "0 is a REFUSAL TO CLAIM the " +
          "bar on this document, not a smaller version of it" : "read WITHIN this run, never across two"}`;
 }
 
