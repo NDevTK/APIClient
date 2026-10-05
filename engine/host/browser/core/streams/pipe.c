@@ -310,6 +310,15 @@ typedef struct {
     uint8_t member;
     uint8_t reject;
     uint8_t through;    /* this entry is pipeThrough, so the answer is `readable` and a failure THROWS */
+    /* §4.9.1 STEP 14.2's `aborted` FLAG, HELD WHERE THE SIBLING'S SNAPSHOT CARRIES IT —
+       abort_signal_aborted_step's BORROWED operand. A page may hand `pipeTo` any AbortSignal, and an
+       `AbortSignal.timeout()` has an UNKNOWN `aborted` — whether the deadline has passed is not a thing this
+       engine knows — so step 14.2 FORKS. The seam borrows the flag for the length of the request and a deep
+       fork BYTE-COPIES this state, re-taking only what `js_pipe_visit` names, so a flag in a C local is gone in
+       the arm that resumes and one in an unvisited field is freed by both arms. It is therefore a field, and
+       `js_pipe_visit` names it. ONE SLOT SERVES THE MACHINE because only one ask is ever outstanding:
+       step_fork_ask refuses a second while the first one's operands are still on the header. */
+    JSValue sig_flag;
 } JSPipeState;
 
 static int g_op_stepid[OP_N];
@@ -338,6 +347,7 @@ static void js_pipe_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->act_recv);
     v->val(ctx, &s->promise);
     for (k = 0; k < 2; k++) v->val(ctx, &s->funcs[k]);
+    v->val(ctx, &s->sig_flag);
 }
 
 /* DELETED: js_pipe_release, which restated js_pipe_visit field for field. */
@@ -419,6 +429,12 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         s->prevent[0] = s->prevent[1] = s->prevent[2] = 0;
         s->member = 0;
         s->reject = 0;
+        /* STATED, never read off the slot: a zeroed step state's JSValue is the INTEGER 0 rather than
+           JS_UNDEFINED, and abort_signal_aborted_step reads JS_UNINITIALIZED as "this slot is empty". It is
+           stated HERE, once per invocation, and not at the ask — an ask that re-states it on the fork re-entry
+           delivering its own answer drops the reference the seam is still borrowing. S_ENTRY is the one place
+           the statement cannot be made twice, because no ask in this machine parks inside it. */
+        s->sig_flag = JS_UNINITIALIZED;
         /* BOTH ENTRIES THAT ANSWER A STREAM RATHER THAN A PROMISE. §4.2.4's `pipeThrough` and §9.5's "piped
            through" differ in how they GET the transform's two halves and in nothing after that, so from here
            on they are one path and this flag is what says so. */
@@ -793,22 +809,63 @@ run:
             bool close_queued = false;
             JSValue rc, wc;
 
-            /* THE ANSWER IS HANDED OVER NOW, before anything can fire. `pipeTo` returns this promise and
-               `pipeThrough` returns the transform's readable while marking it handled, and both of those are
-               decided before the first reaction runs. */
-            s->promise = s->through ? JS_DupValue(ctx, s->tr[TR_READABLE]) : JS_DupValue(ctx, p->promise);
-            if (s->through) JS_MarkPromiseHandled(ctx, p->promise);
+            /* §4.9.1 step 13 — THE ANSWER IS HANDED OVER NOW, before anything can fire. `pipeTo` returns this
+               promise and `pipeThrough` returns the transform's readable while marking it handled, and both of
+               those are decided before the first reaction runs. It cannot move below step 14.2: that step's
+               aborted arm RETURNS the promise ("perform abortAlgorithm and return promise"), so a handover
+               placed after the test would leave `pipeTo` answering undefined for every already-aborted signal.
+               ONCE PER INVOCATION AND NOT ONCE PER ENTRY, WHICH IS WHY IT IS GUARDED. Step 14.2's test below
+               CAN PARK, and a fork re-enters the arm it asked from AT ITS TOP TWICE — once in the parent
+               carrying the answer and once in the sibling re-asking — so an unguarded dup here runs again and
+               overwrites the reference it took on the first pass with nothing left to free it, one leaked
+               reference per fork, which §Testing counts as a failure. `step_fork_pending` (quickjs-step.h) is
+               the fact that separates a fork entry from a first entry; `hdr->stage` is not, because the stage is
+               unchanged across exactly those two entries, which is what makes the re-ask possible at all.
+               THE GUARD IS ON THE HANDOVER AND NEVER ON THE ASK. The sibling MUST re-ask, because the arm it
+               takes is replayed from the flow's own decision vector at the ask, and an answer baked into the
+               clone would be a second and weaker answer to a question the vector has already settled. And the
+               guard is sound HERE, where it would not be over a spec step with an observable effect: both
+               statements are idempotent in everything but the refcount — the dup names the same value and
+               `JS_MarkPromiseHandled` sets a flag — so suppressing them on the re-entry and performing them
+               are the same world, which is exactly what is NOT true of a step that registers or appends. */
+            if (!step_fork_pending(&s->hdr)) {
+                s->promise = s->through ? JS_DupValue(ctx, s->tr[TR_READABLE]) : JS_DupValue(ctx, p->promise);
+                if (s->through) JS_MarkPromiseHandled(ctx, p->promise);
+            }
 
             /* §4.9.1 step 14: the signal. An ALGORITHM, not a listener — it runs before the `abort` event and
                the page can neither see it nor remove it. A signal already aborted shuts the pipe down at once
                and the loop never starts. */
             if (!JS_IsUndefined(p->signal)) {
-                p->algo = JS_NewStepClosure(ctx, g_op_stepid[OP_ABORT_ALGO], 0, 1, (JSValueConst *)&s->pipe);
-                if (JS_IsException(p->algo)) return JS_STEP_ABRUPT;
-                if (abort_signal_aborted(ctx, p->signal)) {
+                int aborted = 0;
+
+                /* STEP 14.2, IN THE PARKING FORM. `abort_signal_aborted` answers a `bool` and therefore cannot
+                   say "I forked", so a page handing `pipeTo` an `AbortSignal.timeout()` reached
+                   solver/engine.c's seam with no resume point and aborted. This machine HAS a resume point —
+                   the driver clones it at the ask — and the operand is held in `sig_flag`, which the S_ENTRY
+                   block states once per invocation and `js_pipe_visit` names. */
+                r = abort_signal_aborted_step(ctx, &s->hdr, p->signal, &s->sig_flag, &aborted);
+                /* PARKED. Nothing of this arm is released and nothing is re-derived: the stage is unchanged, the
+                   operand stays HELD on the state, and the sibling re-enters AT this ask. */
+                if (r) return r;
+                if (aborted) {
                     pipe_begin_shutdown(ctx, s, p, 1, abort_signal_reason(ctx, p->signal), ACT_SIGNAL);
                     continue;
                 }
+                /* STEPS 14.1 AND 14.3, AND THE MINT IS BELOW THE ASK BY CONSTRUCTION RATHER THAN BY A GUARD.
+                   It used to stand above it, where a fork re-entry re-minted a SECOND closure over `p->algo`
+                   and leaked the first — and a guard would have been the wrong repair twice over, because the
+                   record this writes is a plain C struct behind a class opaque that nothing COW-captures, so
+                   `p->algo` is not a per-arm slot a clone re-takes. The spec puts no effect at 14.1 at all:
+                   "Let abortAlgorithm be the following steps" DEFINES the algorithm, and only 14.3 "Add
+                   abortAlgorithm to signal" registers it, while 14.2's aborted arm PERFORMS it — which this
+                   machine does by entering the shutdown directly above, never through this closure. So the
+                   aborted arm never needed one, and minting where it is REGISTERED makes the impossible state
+                   impossible instead of guarding it: the two-armed truth above means exactly one lineage ever
+                   reaches this line. It also makes `pipe_finalize`'s `!JS_IsUndefined(p->algo)` mean what it
+                   says — it used to remove an algorithm that had been minted and never added. */
+                p->algo = JS_NewStepClosure(ctx, g_op_stepid[OP_ABORT_ALGO], 0, 1, (JSValueConst *)&s->pipe);
+                if (JS_IsException(p->algo)) return JS_STEP_ABRUPT;
                 abort_signal_add_algorithm(ctx, p->signal, p->algo);
             }
 
