@@ -13,9 +13,25 @@
 //                  statement about the engine at all.
 //   RAN            no abort: the engine ran flows. `terminal` then says what those runs ENDED as, in the
 //                  producer's own words, and `fin/n` counts the passes that reached `complete`. Read the two
-//                  TOGETHER and never `fin/n` alone: a `0/n` beside `partial x n` is a dwell that expired
-//                  while the engine was still exploring -- unbounded exploration behaving correctly -- and a
-//                  `0/n` beside anything else is a different fact entirely.
+//                  TOGETHER and never `fin/n` alone, AND READ `dwellMs` BESIDE BOTH: a `0/n` beside
+//                  `partial x n` is ONE OF TWO FACTS and this header used to assert the flattering one.
+//                  THE RETIRED WORDING, KEPT BECAUSE A READER WHO RE-DERIVES IT FROM §NO BOUNDS WILL WRITE IT
+//                  AGAIN, read: "a `0/n` beside `partial x n` IS a dwell that expired while the engine was
+//                  still exploring -- unbounded exploration behaving correctly". That is one of the two reasons
+//                  the `finished` residual 440 lines below says leave the SAME WORD, and the other is that the
+//                  run reached `finish` and something under it failed. So the header was stating as settled
+//                  the thing the file's own residual declares undecidable, in the READING POSITION, where a
+//                  reader who meets it last obeys it -- CLAUDE.md §A-CONTRADICTION-INSIDE-ONE-BULLET inside
+//                  one instrument. Both halves were written by people who had the other in front of them.
+//                  WHAT IS CHECKABLE IS THE MAGNITUDE OF THE FIRST REASON, AND IT WAS ON DISK THE WHOLE TIME:
+//                  site.mjs writes `dwellMs` on every row and NOTHING in this tree read it, so the one
+//                  question the residual's own absence clause names -- "whether a longer dwell would change
+//                  any of it" -- had no column. The `dwellMs` column and the WOULD-A-LONGER-DWELL section
+//                  answer it per site, which kills "it just needed longer" where the span is wide and says
+//                  UNSPANNED where a site was measured at one dwell. It does NOT settle which reason holds:
+//                  a count of an OUTCOME cannot (§AN-INVARIANT-OVER-A-GATED-OPERATION), and stratifying one
+//                  by the dwell is still a count of outcomes. A `0/n` beside anything other than
+//                  `partial x n` is a different fact again.
 import { readFileSync, existsSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { siteList } from './list.mjs';
@@ -448,16 +464,49 @@ for (const p of passes) for (const r of p.rows) {
      WHY THIS IS NOT A MOVE INTO A DEAD CHANNEL, which is the one thing that would make it worse rather than
      better: `complete` has fired ZERO times in 63 run records here (36 `partial`, 27 `crashed`), so a bare
      `fin 0/n` off the new predicate would be precisely the silent zero the old one already printed. The
-     PARTITION is published beside it, so `0/5` now reads as `partial x5` -- a 60s dwell that expired while
-     the engine was still exploring, which under §NO BOUNDS is the engine behaving correctly and not a failure
-     -- and can never again be read as a result the trusted zone dropped. The discriminator is the deliverable;
-     the predicate is only what it explains.
-     NAMED RESIDUAL -- WHAT IS NOT COVERED: this pair says what a run ENDED as and cannot say WHY a `partial`
-     never became a `complete`, because the two candidate reasons leave the same word: the dwell expired with
-     the frontier still draining, or the run reached `finish` and something below it failed. WHAT THE NEXT DIFF
-     BUILDS: site.mjs carrying the engine's own frontier-drained statement off the last partial's document, so
-     a `partial` at dwell-end is separable from a frontier that emptied. HOW ITS ABSENCE WOULD SHOW: a corpus
-     in which every row reads `partial` and no column can say whether a longer dwell would change any of it. */
+     PARTITION is published beside it, so `0/5` now reads as `partial x5` -- and can never again be read as a
+     result the trusted zone dropped. The discriminator is the deliverable; the predicate is only what it
+     explains.
+     THIS SENTENCE WENT ON "-- a 60s dwell that expired while the engine was still exploring, which under
+     §NO BOUNDS is the engine behaving correctly and not a failure", AND IT IS KEPT HERE BECAUSE IT IS THE
+     READING A READER RE-DERIVES FROM §NO BOUNDS AND IS WRONG IN TWO WAYS AT ONCE. It states as a FACT the
+     first of the two reasons this comment's own residual declares undecidable, which is the same assertion
+     the file's header carried and is answered there. And its coordinate is narrow: `60s` is one of SIX dwell
+     values this corpus holds (60, 90, 120, 150, 180, 240 seconds -- read it off `dwellSecondsSeenAcross-
+     ThePairedSet`, never off this line), so a sentence pricing the whole column at the shortest of them
+     describes 47 of 125 rows. A magnitude written into prose beside a field the producer publishes is the
+     coordinate CLAUDE.md's opening calls status: read the column.
+     NAMED RESIDUAL -- HALF OF IT IS DISCHARGED BY THE DWELL COLUMN AND THE ABSENCE CLAUSE WAS EXACT.
+     IT READ, AND THE WORDING IS KEPT BECAUSE A READER WHO RE-DERIVES IT WILL WRITE IT AGAIN: "this pair says
+     what a run ENDED as and cannot say WHY a `partial` never became a `complete`, because the two candidate
+     reasons leave the same word: the dwell expired with the frontier still draining, or the run reached
+     `finish` and something below it failed. HOW ITS ABSENCE WOULD SHOW: a corpus in which every row reads
+     `partial` and no column can say whether a longer dwell would change any of it."
+     THE ABSENCE SHOWED EXACTLY THAT WAY AND THE SHOWING WAS THE DELIVERABLE, which is the one thing a
+     three-clause residual is for. MEASURED at the revision the dwell column landed, over the DERIVED pass set
+     (`SITES=apps.tsv node report.mjs`, bare -- a filename without `--named` is refused): 119 of 129 censuses
+     pair, 125 rows, `complete` occurs in ZERO of them, and the partition is 184 `partial` + 37 `crashed` over
+     221 run records. Every row of seven sites read `partial` or `crashed` and no column could say what a
+     longer dwell would do -- while site.mjs had been writing `dwellMs` on every one of those rows and
+     `git grep -in dwellms` answered ONE line in the whole tree, the write. The question was answerable from
+     data already on disk and the field had no reader.
+     WHAT THE DWELL HALF NOW SAYS, AND IT IS NOT A MAGNITUDE PROBLEM: the dwell spans SIX values over that set
+     -- 60s(47 rows) 90s(48) 120s(8) 150s(14) 180s(1) 240s(1) -- and ONE SITE, gitpod, is measured at all six,
+     101 rows and 200 run records, with `complete` ZERO at every value of a FOURFOLD span. So "it just needed
+     a longer dwell" is refuted WITHIN ONE SITE at 4x, which is a controlled comparison rather than an argument
+     because the document is held fixed. gitlab spans 60s..90s and reads the same; the other five sites are
+     UNSPANNED and this instrument cannot ask of them.
+     WHAT IS STILL NOT COVERED IS THE OTHER REASON, UNCHANGED: a `partial` that reached `finish` and failed
+     under it. The dwell stratification cannot reach it -- CLAUDE.md §AN-INVARIANT-OVER-A-GATED-OPERATION, a
+     count of an OUTCOME cannot separate two causes of that outcome, and stratifying one by an input is still
+     a count of outcomes. WHAT THE NEXT DIFF BUILDS, UNCHANGED AND NOW THE WHOLE OF IT: site.mjs carrying the
+     engine's own frontier-drained statement off the last partial's document, so a `partial` at dwell-end is
+     separable from a frontier that emptied. Grep for it before building it -- this clause is a claim about a
+     tree that moves, and the engine's `_cold` census is where such a statement would come from.
+     HOW ITS REMAINING ABSENCE WOULD SHOW: a site whose dwell span is wide, whose `complete` is 0 across it,
+     and for which no column can say whether its frontier ever emptied -- so a reader cannot tell unbounded
+     exploration behaving correctly from a `finish` step that is failing, which are the two readings the header
+     of this file used to collapse into the first. */
   const outc = r.runOutcomesMine || {};
   for (const w of Object.keys(outc))
     if (!RUN_OUTCOMES.includes(w))
@@ -494,6 +543,26 @@ for (const p of passes) for (const r of p.rows) {
   if (!seen.has(r.id)) seen.set(r.id, []);
   seen.get(r.id).push({
     pass: p.label, outcome, finished: (outc.complete || 0) > 0, outc,
+    /* THE BUDGET THE RUN WAS CUT AT, WHICH IS THE DENOMINATOR OF `fin/n` AND HAD NO READER ANYWHERE.
+       `(outc.complete || 0)` above is a `|| 0` on a producer's field, which CLAUDE.md
+       §A-FIELD-A-CONSUMER-DEFAULTS forbids by name -- and it is SAFE HERE for a reason that is asserted
+       rather than assumed: the `outcSum !== r.runsMine` throw below fires on any non-fatal row that
+       carries no `runOutcomesMine`, so a census predating the field cannot reach this line at all.
+       MEASURED over the derived pass set (`SITES=apps.tsv node report.mjs`, bare): 119 of 125 rows carry
+       `runOutcomesMine` and the SIX that do not are exactly the six `fatal` rows -- rows where no engine
+       ran, which `terminal` already prints as `no-run`. So `fin 0/n` is a fact about 221 run records
+       (184 partial, 37 crashed) and NOT an artifact of the default. It was worth checking: the symptom of
+       the forbidden shape and the symptom of a real zero are the same digit.
+       WHAT HAD NO READER IS THE DWELL. site.mjs:1278 writes `dwellMs` on every row it builds and
+       `git grep -in dwellms` answered ONE line in the whole tree -- that write -- which is the
+       write-with-no-reader half of the same rule, standing on the one field that prices the first of the
+       two reasons a `partial` can have. A reader meeting `fin 0/106 partial x169` could not tell a 60s
+       cut from a 240s one, and the corpus holds both. NOTHING IS ADDED TO ANY CENSUS BY THIS: the field is
+       the producer's own, under the producer's own name and in the producer's own unit (the `Ms` is in the
+       key so no consumer can read it as seconds), so no existing query over these files changes meaning --
+       CLAUDE.md's new-key-matching-an-old-query hazard has no subject here. `git grep -in dwell` over the
+       tree answers no programmatic reader at any spelling, so there was none to collide with either. */
+    dwell: r.dwellMs,
     runs: r.runsMine, crashed: r.crashedMine,
     /* THE HEADLINE IS `distinctEndpoints` -- distinct ADDRESSES learned, which is what "endpoints" has to
        mean in a report. `r.endpoints` is the last log entry's CUMULATIVE counter and is kept beside it under
@@ -951,6 +1020,10 @@ const table = [...seen.entries()].map(([id, ms]) => ({
      forks and sometimes does not, and a site whose denominator moves is a run that got a different distance.
      Measured on this corpus, gitlab is the first kind — `un` 39-48 across seven mirror passes while `flows`
      goes 2 to 193 — so its 116x is in the numerator, which is the quantity this column is about. */
+  /* A SPREAD LIKE EVERY OTHER COLUMN, AND FOR A SHARPER REASON THAN THE REST: the dwell is an INPUT the
+     drive chose, so a single value is a parameter and a RANGE is a controlled comparison. `spread` already
+     refuses to fold an absent operand into a range, which is what keeps the six fatal rows out of it. */
+  dwell: spread(ms, 'dwell'),
   un: spread(ms, 'units'), fpu: spread(ms, 'fpu'), gone: spread(ms, 'gone'),
   sk: spread(ms, 'sinks'), rn: spread(ms, 'runs'), ld: spread(ms, 'load'),
   /* `src>reach>taint>sup` READ LEFT TO RIGHT IS WHERE THE @S SEARCH GOT TO. A `-` here is one of two facts
@@ -986,20 +1059,81 @@ const pad = (s, n) => String(s).padEnd(n).slice(0, n);
 const termW = Math.max('terminal'.length, ...table.map((t) => t.terminal.length)) + 2;
 console.log(`${passes.length} pass(es): ${passes.map((p) => p.label + '(' + p.rows.length + ')').join(' ')}`);
 console.log(`list: ${list.rel} (${list.rows.length} sites, ${table.length} measured here)`);
+/* THE DWELL COLUMN SIZES ITSELF LIKE `terminal` DOES, for the reason stated there: `pad` TRUNCATES, and a
+   truncated range is not a narrower range, it is a WRONG one -- `60000-240000` clipped to `60000-24` reads
+   as a site measured at one budget. A width chosen today starts lying the first time a drive uses a longer one. */
+const dwellW = Math.max('dwellMs'.length, ...table.map((t) => String(t.dwell).length)) + 2;
 console.log('\n' + pad('site', 20) + pad('outcome', 20) + pad('abort/n', 8) + pad('fin/n', 7) +
-  pad('terminal', termW) +
+  pad('dwellMs', dwellW) + pad('terminal', termW) +
   pad('ep', 8) + pad('sinks', 7) + pad('src>reach>taint>sup', 21) + pad('ask>drv', 13) +
   pad('sink>csp>tt', 16) + pad('miss>owed', 13) +
   pad('flows', 12) + pad('switches', 12) + pad('units', 9) + pad('fl/unit', 14) + pad('gone', 6) +
   pad('load', 10) + 'signature');
 for (const t of table)
   console.log(pad(t.id, 20) + pad(t.outcome, 20) + pad(t.abortedPasses + '/' + t.n, 8) +
-    pad(t.finishedPasses + '/' + t.n, 7) + pad(t.terminal, termW) +
+    pad(t.finishedPasses + '/' + t.n, 7) + pad(t.dwell, dwellW) + pad(t.terminal, termW) +
     pad(t.ep, 8) + pad(t.sk, 7) + pad(t.arrival, 21) +
     pad(t.orphans, 13) +
     pad(t.policy, 16) + pad(t.absent, 13) +
     pad(t.fl, 12) + pad(t.sw, 12) + pad(t.un, 9) + pad(t.fpu, 14) + pad(t.gone, 6) +
     pad(t.ld, 10) + (t.sigs[0] ? t.sigs[0].split(' :: ')[0] : '-'));
+
+/* WOULD A LONGER DWELL CHANGE ANY OF IT -- the `finished` residual's own HOW-ITS-ABSENCE-WOULD-SHOW clause,
+   answered from data that was on disk before the clause was written.
+   WHY THIS IS A SECTION AND NOT A SECOND COLUMN. The `dwellMs` spread above says a site was measured across a
+   RANGE; it cannot say what the runs at each END of that range ended as, and that pairing is the whole question.
+   Printed per site, per dwell, in the producer's own words, so the reading is WITHIN ONE SITE: a terminal
+   partition compared across two SITES is a comparison of two documents, which is the confound this file's own
+   endpoint columns are careful about, and it would be worse here because the dwell is NOT randomly assigned --
+   a drive lengthens it for whichever site it is currently interested in.
+   THE SPAN IS OVER DWELLS AT WHICH THE SITE PRODUCED RUN RECORDS, WHICH IS THE REACHABILITY WITNESS AND NOT A
+   REFINEMENT. A dwell at which `runsMine` is 0 is a pass where no engine ran, so it is not one end of a
+   comparison -- it is the absence of one, and CLAUDE.md §THE-SAME-HOLE-SWALLOWS-A-PREDICTION is why: an
+   absence is confirmed identically by a correct answer and by a path nobody took. MEASURED: excalidraw's two
+   dwells are 60s with ZERO run records and 120s with one, so its apparent 2x span is ONE measurement, and this
+   section says UNSPANNED for it rather than quoting a ratio over a cell that never ran.
+   WHAT IT KILLS AND WHAT IT DOES NOT. Where the span is wide and `complete` is 0 at both ends, "it just needed
+   a longer dwell" is refuted AT THAT RATIO and nothing else is: the other reason -- the run reached `finish`
+   and something under it failed -- is untouched, and CLAUDE.md §AN-INVARIANT-OVER-A-GATED-OPERATION is why no
+   stratification of an OUTCOME count will ever separate them. Where the span is 1 the honest word is UNSPANNED,
+   which is this instrument saying it CANNOT ASK and never a site for which the dwell is known to be enough. */
+{
+  const strat = table.map((t) => {
+    const byDwell = new Map();
+    for (const m of t.measurements) {
+      if (typeof m.dwell !== 'number') continue;
+      const e = byDwell.get(m.dwell) || { rows: 0, runs: 0, outc: {} };
+      e.rows++; e.runs += (typeof m.runs === 'number' ? m.runs : 0);
+      for (const w of Object.keys(m.outc)) e.outc[w] = (e.outc[w] || 0) + m.outc[w];
+      byDwell.set(m.dwell, e);
+    }
+    const cells = [...byDwell.entries()].sort((a, b) => a[0] - b[0]);
+    const withRuns = cells.filter(([, e]) => e.runs > 0).map(([d]) => d);
+    const noDwell = t.measurements.filter((m) => typeof m.dwell !== 'number').length;
+    return { id: t.id, n: t.n, noDwell, cells,
+             span: withRuns.length > 1 ? [withRuns[0], withRuns[withRuns.length - 1]] : null,
+             completeAcross: cells.reduce((a, [, e]) => a + (e.outc.complete || 0), 0) };
+  });
+  const dwellCarried = strat.reduce((a, s) => a + (s.n - s.noDwell), 0);
+  const dwellRows = strat.reduce((a, s) => a + s.n, 0);
+  console.log('\nWOULD A LONGER DWELL CHANGE ANY OF IT — OVER ' + dwellCarried + '/' + dwellRows +
+    ' ROW(S) CARRYING `dwellMs`, which site.mjs writes on every row it builds.');
+  console.log('  A row without one is a `fatal` row that never drove the site (or predates the field): it is counted');
+  console.log('  in `n/N` and NEVER folded into a span. The `×` words are the producer\'s own, summed over the');
+  console.log('  rows at that dwell, and `(Nr/Mrun)` is how many rows and how many RUN RECORDS stand behind the cell.');
+  for (const s of strat) {
+    const cells = s.cells.map(([d, e]) => {
+      const parts = RUN_OUTCOMES.filter((w) => e.outc[w]).map((w) => w + '×' + e.outc[w]);
+      return (d / 1000) + 's ' + (parts.length ? parts.join(' ') : 'no-run') +
+             ' (' + e.rows + 'r/' + e.runs + 'run)';
+    }).join(' | ');
+    const verdict = s.span
+      ? 'SPANNED ' + (s.span[0] / 1000) + 's..' + (s.span[1] / 1000) + 's (' +
+        (s.span[1] / s.span[0]).toFixed(1) + 'x), complete×' + s.completeAcross + ' across it'
+      : 'UNSPANNED (one dwell with runs — this section cannot ask)';
+    console.log('  ' + pad(s.id, 14) + pad(verdict, 62) + (cells || 'no dwell carried'));
+  }
+}
 
 /* WHICH PASSES COULD ANSWER THE @S ARRIVAL QUESTION AT ALL, printed where the column is read. `n/N` above
    counts the passes that MEASURED; it says nothing about how many of them carried this particular counter,
@@ -2350,6 +2484,27 @@ console.log('totals: ' + JSON.stringify({
   abortedEveryPass: measurable.filter((t) => t.abortedPasses === t.n).length,
   cleanEveryPass: measurable.filter((t) => t.abortedPasses === 0).length,
   finishedEveryPass: measurable.filter((t) => t.finishedPasses === t.n).length,
+  /* THE BUDGET BESIDE THE COUNT, BECAUSE `finishedEveryPass` IS A FRACTION WHOSE DENOMINATOR IS A WALL-CLOCK
+     CUT AND HAD NEVER BEEN PRINTED. `0` here is read as a statement about the ENGINE and it is a statement
+     about the engine AND the dwell together, so the pair of extremes goes on the same line: a reader who sees
+     the span is 1 knows this corpus cannot say whether a longer drive would move it, and one who sees it wide
+     knows a longer drive was tried. `spanned` counts SITES whose dwells-with-runs are not all equal -- the
+     only cells a within-site comparison can be built from -- and `completeAtAnySpannedDwell` is the claim.
+     IT IS NOT A VERDICT ON WHY A `partial` STAYED ONE. See the WOULD-A-LONGER-DWELL section for which of the
+     two reasons this does and does not reach; a stratified count of an outcome reaches neither on its own. */
+  rowsMeasured: table.reduce((a, t) => a + t.n, 0),
+  rowsCarryingTheDwell: table.reduce((a, t) =>
+    a + t.measurements.filter((m) => typeof m.dwell === 'number').length, 0),
+  dwellSecondsSeenAcrossThePairedSet: [...new Set(table.flatMap((t) =>
+    t.measurements.map((m) => m.dwell).filter((d) => typeof d === 'number')))].sort((a, b) => a - b)
+    .map((d) => d / 1000),
+  sitesSpannedByMoreThanOneDwellWithRuns: table.filter((t) =>
+    new Set(t.measurements.filter((m) => typeof m.dwell === 'number' && m.runs > 0)
+      .map((m) => m.dwell)).size > 1).length,
+  completeAtAnySpannedDwell: table.filter((t) =>
+    new Set(t.measurements.filter((m) => typeof m.dwell === 'number' && m.runs > 0)
+      .map((m) => m.dwell)).size > 1)
+    .reduce((a, t) => a + t.measurements.reduce((b, m) => b + (m.outc.complete || 0), 0), 0),
   sitesReportingAnEndpointCount: withEp.length,
   sitesLearningAtLeastOneEndpoint: withEp.filter((t) => t.epMax > 0).length,
   endpointsTotalBestPass: withEp.reduce((n, t) => n + Math.max(0, t.epMax), 0),
