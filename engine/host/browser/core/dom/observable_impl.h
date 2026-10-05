@@ -167,6 +167,9 @@ enum {
                           "(GetMethod(value, %Symbol.asyncIterator%))") \
     X(S_FROM_PROBE_SYNC, "Observable §2.2.1 convert-to-an-Observable step 7, the step labeled " \
                          "\"From iterable\" (GetMethod(value, %Symbol.iterator%))") \
+    X(S_ITER_SIGNAL, "Observable §2.2.1 convert-to-an-Observable step 6.1 and step 8.1 (\"If subscriber’s " \
+                     "subscription controller’s signal is aborted, then return\" — the first step of the " \
+                     "subscribe callback BOTH iterable arms return, before the iterator method is read)") \
     X(S_ITER_METHOD, "ECMAScript §7.4.4 GetIterator ( obj, kind ) step 1.a / step 2.a (re-reading the " \
                      "iterator method off the source, which Observable §2.2.1 notes is deliberate)") \
     X(S_ITER_CALL, "ECMAScript §7.4.3 GetIteratorFromMethod ( obj, method ) step 1 (Call(method, obj))") \
@@ -289,8 +292,14 @@ typedef struct JSObsState {
        IT IS INITIALISED IN THE S_ENTRY BLOCK and not at the ask, which is the whole of why the ask sites that
        use it are the ones they are: a zeroed step state's JSValue is the INTEGER 0 rather than JS_UNDEFINED, so
        the emptiness of this slot is STATED — and stating it at the ask would re-state it on the fork re-entry,
-       dropping the reference the ask is standing on. S_ENTRY runs once per invocation and every arm of it leaves
-       the stage, so that is the one place the statement cannot be made twice. */
+       dropping the reference the ask is standing on.
+       AND WHAT MAKES S_ENTRY THE ONE PLACE THE STATEMENT CANNOT BE MADE TWICE IS THAT NO ASK PARKS INSIDE THAT
+       BLOCK — not, as this sentence used to say, that "every arm of it leaves the stage". Both are true and only
+       the first is the reason: a fork re-enters the arm it asked from AT ITS TOP TWICE with `hdr.stage`
+       UNCHANGED, so an ask placed before the `obs_goto` that leaves S_ENTRY re-runs the whole block however
+       tidily its arm ends — and the retired wording certified exactly the two sites that had one. Every ask of
+       this question now stands at the TOP of a stage of its own, which is what holds the invariant up; a reader
+       who puts one back inside this block has taken it away again. */
     JSValue   sig_flag;
 } JSObsState;
 

@@ -556,6 +556,21 @@ static bool sub_signal_aborted(JSContext *ctx, JSObsState *s)
     return b;
 }
 
+/* THE SAME QUESTION IN THE PARKING FORM — the form above answers a `bool` and therefore cannot say "I forked",
+   so a first-time fork on an unknown flag reaches solver/engine.c's seam with no resume point and aborts. This
+   machine HAS one, so every ask of this question that stands at the TOP OF A STAGE comes here instead.
+   `sig` IS FREED ON THE FORK PATH AND THAT IS NOT A DANGLING BORROW: the operand the seam holds across the park
+   is the FLAG, which it puts in `sig_flag` (a field `js_obs_visit` names), and the signal object is read only to
+   get at it. Returns what the caller returns unchanged, or 0 once `*aborted` is 0 or 1. */
+static int sub_signal_aborted_step(JSContext *ctx, JSObsState *s, int *aborted)
+{
+    JSValue sig = slot_get(ctx, s->sub, "signal");
+    int r = abort_signal_aborted_step(ctx, &s->hdr, sig, &s->sig_flag, aborted);
+
+    JS_FreeValue(ctx, sig);
+    return r;
+}
+
 /* Register an abort algorithm on this machine's subscriber's subscription controller. `algo` is CONSUMED. */
 static void sub_add_algo(JSContext *ctx, JSObsState *s, JSValue algo)
 {
@@ -708,10 +723,17 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
             DCHECK(subscriber_is(s->sub),
                    "§2.2.1's convert arm: its subscribe callback was invoked with a non-Subscriber");
             if (op == OP_FROM_PROMISE) { obs_goto(s, S_PROMISE_REACT); break; }
-            /* Both iterable arms begin the same way: an aborted subscription produces nothing at all. */
-            if (sub_signal_aborted(ctx, s)) { obs_goto(s, S_DONE); break; }
+            /* Both iterable arms begin the same way with step 6.1 / step 8.1's aborted test, AND IT IS A STAGE
+               OF ITS OWN RATHER THAN A TEST HERE. That test CAN PARK, and this block is behind
+               `s->hdr.stage == S_ENTRY` — so the two entries a fork produces re-enter it AT ITS TOP with the
+               stage unchanged and run the whole of it again: `s->result = s->obs = … = JS_UNDEFINED` would
+               overwrite the two references dup'd four lines up with nothing left to free them, the dups would
+               then be re-taken, and `s->sig_flag = JS_UNINITIALIZED` would drop the very reference the seam is
+               standing on. A guarded init is no exit here either: guarding the init alone leaves the dups to
+               re-run, and guarding the whole block leaves the stage at S_ENTRY with no arm to reach, which is
+               the `default:` arm's DFAIL. The stage boundary is the repair. */
             s->async = (uint8_t)(op == OP_FROM_ASYNC);
-            obs_goto(s, S_ITER_METHOD);
+            obs_goto(s, S_ITER_SIGNAL);
             break;
 
         case OP_ITER_CLOSE:
@@ -725,13 +747,30 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
             s->iocb[0] = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 2));
             s->iocb[1] = JS_DupValue(ctx, step_arg(&s->hdr, 0));   /* the iterator result */
             s->async = 1;
-            if (sub_signal_aborted(ctx, s)) { obs_goto(s, S_DONE); break; }
+            /* DELETED: an aborted-subscription short-circuit that stood here and is in NO STEP OF THE STANDARD.
+               It was the third of the asks a lane routing §3.2's aborted test to the parking form refused, and
+               its prerequisite turned out not to be ownership at all: the question is whether the test belongs,
+               and it does not. The fulfilled branch of step 5.6's "React to nextPromise" begins at "If
+               Type(iteratorResult) is not Object, then run subscriber’s error() method with a TypeError and
+               abort these steps" — there is no aborted test in front of it, and §2.1's members are what make
+               that deliberate rather than an omission: `next()` step 1 and `complete()` step 1 do return on an
+               inactive subscription, and `error()` step 1 does NOT. It reads "If this’s active is false, report
+               an exception with error and this’s relevant global object, then return", so the short-circuit was
+               SUPPRESSING AN OBSERVABLE EFFECT the standard requires: a page that unsubscribes from an
+               async-iterable Observable whose iterator then answers a non-object gets an `error` event at the
+               global in a real browser, and got silence here. It also skipped IteratorComplete, whose
+               `Get(iteratorResult, "done")` is the PAGE'S GETTER and which the branch runs unconditionally.
+               So deleting it is spec order restored, one more stretch of the page's code reached, and one ask
+               fewer that can reach solver/engine.c's seam from a stage with owned writes above it. The
+               iteration still terminates on an aborted signal, at the test the standard DOES have:
+               nextAlgorithm step 5.1, which S_ITER_STEP performs. */
             if (!JS_IsObject(s->iocb[1])) {
                 /* §2.2.1 convert step 5.6, nextAlgorithm's "React to nextPromise": its FULFILLED branch is
-                   an UNNUMBERED list, so the branch is named rather than given a sub-number it does not have.
-                   Its first step is "If Type(iteratorResult) is not Object, then run subscriber's error()
-                   method with a TypeError" — which is also where a `next` that threw or answered a non-object
-                   lands, because both were turned into this promise's settlement. */
+                   an UNNUMBERED list — a `ul` inside that step, VERIFIED in the fetched draft's markup — so the
+                   branch is named rather than given a sub-number it does not have. Its first step is "If
+                   Type(iteratorResult) is not Object, then run subscriber's error() method with a TypeError"
+                   — which is also where a `next` that threw or answered a non-object lands, because both were
+                   turned into this promise's settlement. */
                 JS_ThrowTypeError(ctx, "an async iterator's next() did not answer an object");
                 obs_fail(ctx, s);
                 break;
@@ -1235,6 +1274,28 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
             s->result = observable_from_arm(ctx, is_async ? OP_FROM_ASYNC : OP_FROM_ITER, s->obs);
             if (JS_IsException(s->result)) { s->result = JS_UNDEFINED; return JS_STEP_ABRUPT; }
             obs_goto(s, S_DONE);
+            continue;
+        }
+
+        case S_ITER_SIGNAL: {
+            /* §2.2.1 convert step 6.1 (the async-iterable arm) and step 8.1 (the sync one), which are one
+               sentence each and the same sentence: "If subscriber’s subscription controller’s signal is
+               aborted, then return." An aborted subscription produces nothing at all and the iterator method is
+               never even read.
+               THE ASK IS AT THE TOP OF THIS STAGE AND THAT IS WHY THE STAGE EXISTS. Nothing stands above it, so
+               the two entries a fork produces re-take nothing and re-ask the identical question — and the
+               sibling MUST re-ask, because the arm it takes is replayed from the flow's own decision vector at
+               the ask and an answer baked into the clone would be a second, weaker answer to a settled question.
+               Both arms' subscribe callbacks reach it, which is right: the two steps are the same step of two
+               algorithms the standard writes out twice, and `s->async` already says which arm this is. */
+            int aborted = 0;
+
+            r = sub_signal_aborted_step(ctx, s, &aborted);
+            /* PARKED. Nothing of this stage is released and nothing is re-derived: the stage is unchanged, the
+               operand stays HELD in `sig_flag`, and the sibling re-enters AT this ask. */
+            if (r) return r;
+            if (aborted) { obs_goto(s, S_DONE); continue; }
+            obs_goto(s, S_ITER_METHOD);
             continue;
         }
 
