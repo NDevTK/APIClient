@@ -203,6 +203,17 @@ JSValue abort_signal_dependent_new_at(JSContext *ctx, JSValueConst *signals, int
  *              element 0 would be asked about element 0's flag while the seam held element `at`'s — the exact
  *              disagreement the held-slot assert at every consumer of that seam names. It is a plain integer, so
  *              a deep fork's byte-copy carries it and `visit` must NOT name it.
+ *              AND IT IS LOAD-BEARING ON REAL PAGES AND NOT ONLY IN A FIXTURE, which is the half a synthetic row
+ *              cannot establish: the unknown has to be at an element OTHER than the first for a restart and a
+ *              cursor to differ at all, and every real call measured put it there. The derivation, because the
+ *              corpus is other people's bundles and is untracked by design — a figure here would be
+ *              unreproducible from a clone:
+ *                grep -rhoE 'AbortSignal\.any\(\[[^]]{0,160}\]' <a mirror of the app corpus> | sort -u
+ *              Over one 19-site mirror that answered THREE distinct argument lists, all three were
+ *              `[<a controller's signal>, AbortSignal.timeout(<n>)]` — the concrete flag first and the unknown
+ *              SECOND, 3 of 3, with an invented-member control answering zero files and `addEventListener`
+ *              answering 232. So element-0 forking is the case that does NOT arise on those pages, and a reader
+ *              who prices the cursor from the fixture's first row alone has priced the control.
  * All three are initialised ONCE, before the first ask. `step_fork_pending(h)` is the exit where an init and an
  * ask share a stage; a machine whose init is in a stage its asking stage cannot re-enter has a stronger guard
  * already and states that fact instead.

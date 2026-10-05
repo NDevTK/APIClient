@@ -1542,7 +1542,14 @@ static const char *HTML =
        aborted with the timeout's reason and the FALSE arm walks on to a signal nothing has aborted and yields a
        live dependent signal, so `anya.aborted` is CONCRETE and OPPOSITE on the two arms and both endpoints are
        learned. One endpoint here is one arm deleted.
-       `anylate` IS THE CURSOR, and it is the one shape in this fixture that can tell a cursor from a restart.
+       `anylate` IS THE CURSOR, AND IT IS THE ROW THE REAL PAGES ARE IN — which inverts which of these three is
+       the control. `anyfork` puts the unknown FIRST, and a measured mirror of the app corpus answered three
+       distinct `AbortSignal.any` argument lists, ALL THREE of them `[<a controller's signal>,
+       AbortSignal.timeout(<n>)]`: the concrete flag first and the unknown SECOND, 3 of 3. abort.h carries the
+       derivation as a command, because that corpus is other people's bundles and is untracked. So element-0
+       forking is the shape those pages do NOT take, and a reader who prices the cursor off `anyfork` alone has
+       priced the row that never fires in production.
+       IT IS ALSO the one shape in this fixture that can tell a cursor from a restart.
        The concrete signal is FIRST, so step 2's ask at element 0 answers without forking (a flag that is not
        unknown never reaches the seam) and the fork happens at element ONE. A resume that restarted step 2 at
        element 0 would be asked about `anyac.signal`'s flag while the seam held `tsig`'s — the two differ here
