@@ -1223,26 +1223,76 @@ function linesToAnalysis(lines, msg, outcome, eng) {
              "bucket that means 'this artifact predates the key' would be read as a property of some " +
              "addresses");
     }
-    /* AND THE TWO READERS AGREE ABOUT THE ONE ROW BOTH CAN SEE, ASSERTED WHERE BOTH MAPS ARE IN ONE HAND.
-       solver/endpoint.c emits `addressRoot` as `null` on EXACTLY the rows whose `addressClass` is `concrete`
-       — the class is the discriminator, because `concolic_root_c` answers NULL both for a value that is not a
-       concolic and for one whose bytes entered through nothing the engine minted — so these two counts are one
-       fact read by two readers of one array at one moment, and a difference is the two having parted.
-       IT IS A CHECK AND NOT THE NON-CHECK §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE FORBIDS. The operands
-       come from TWO lines of a DIFFERENT file: one writes the class token through a generated switch, the
-       other chooses a JSON TYPE off `e->addr_class`. An edit to either alone makes this fail, which is the
-       whole reason it is worth a line — the pair is what lets a reader read `(no-concolic)` as a statement
-       about addresses rather than as a count of a spelling.
-       AN ARTIFACT OLDER THAN EITHER KEY SATISFIES IT RATHER THAN EVADING IT: both sides are then `(unstated)`,
-       both lookups are absent, and the comparison is 0 against 0. A run with ONE of the two keys is already
-       refused by the all-or-nothing claim above, per key, so there is no mixed state left for this to be
-       silent about. */
+    /* AND THE TWO READERS AGREE ABOUT THE ONE ROW BOTH CAN SEE, ASKED ONLY WHERE BOTH OF THEM HAVE A ROW TO
+       READ. solver/endpoint.c emits `addressRoot` as `null` on EXACTLY the rows whose `addressClass` is
+       `concrete` — the class is the discriminator, because `concolic_root_c` answers NULL both for a value that
+       is not a concolic and for one whose bytes entered through nothing the engine minted — so these two counts
+       are one fact read by two readers of one array at one moment, and a difference is the two having parted.
+       IT IS A CHECK AND NOT THE NON-CHECK §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE FORBIDS, AND THE GATE
+       DOES NOT WEAKEN IT. The operands come from TWO lines of a DIFFERENT file: one writes the class token
+       through a generated switch, the other chooses a JSON TYPE off `e->addr_class`. An edit to either alone
+       makes this fail, which is the whole reason it is worth a line — the pair is what lets a reader read
+       `(no-concolic)` as a statement about addresses rather than as a count of a spelling. With both keys
+       stated the comparison below is byte-for-byte the one that stood here, and `(unstated)` is 0 or ALL by the
+       claim in the loop above, so the gate admits no partial state to be silent about.
+       THE RETIRED CLAUSE BELOW SAID THE GATE WAS UNNECESSARY AND IT WAS WRONG ABOUT THE ONE ARTIFACT THIS ZONE
+       IS ALWAYS ENTITLED TO BE NEWER THAN. It read: "AN ARTIFACT OLDER THAN EITHER KEY SATISFIES IT RATHER THAN
+       EVADING IT: both sides are then `(unstated)`, both lookups are absent, and the comparison is 0 against 0.
+       A run with ONE of the two keys is already refused by the all-or-nothing claim above, per key, so there is
+       no mixed state left for this to be silent about." The first sentence is the INTENT and is right. The
+       second is a claim about the loop above and is FALSE: that claim refuses a key stated for SOME rows
+       (`_u === 0 || _u === m.endpoints`), and a key the artifact does not emit AT ALL satisfies it on its RIGHT
+       arm — so a run whose artifact states `addressClass` and not `addressRoot` passes every per-key claim and
+       arrives here with `_nc` 0 against a real `_cc`, and the intent in the first sentence was never
+       implemented. It is kept in its own words because a reader who re-derives the exemption from that loop
+       will write it again: the loop really does refuse a mixed key, and a reader who checks only that half
+       stops where this one did.
+       THE ASYMMETRY IT MISSED IS PERMANENT RATHER THAN A TRANSITION, WHICH IS WHY THE GATE IS NOT SCAFFOLDING.
+       CLAUDE.md §A-CROSS-BOUNDARY-DIFF: this zone's JavaScript is INTERPRETED FROM THE TREE and is therefore
+       deployed on WRITE, while the engine's C is live only after somebody BUILDS — so this zone is routinely
+       newer than the wasm beside it, every engine-side key lands before the artifact that states it, and a
+       zone-side assert that cannot read an artifact one commit older than itself breaks the product on every
+       engine-side landing until a build happens. popup.js already states exactly that rule for the four
+       partitions it asserts, in its own words — an older wasm "makes one BUCKET read `(unstated)`, which is the
+       handled case and a fact about the build" — and cites the same section for it. This was the one reader of
+       these keys that did not honour it, which is why the repair is here and at no sibling: `addressRoot`
+       occurs nowhere in popup.js, and this is the only cross-key comparison among these partitions.
+       MEASURED, AND WHAT IT COST WAS THE WHOLE PRODUCT RATHER THAN ONE PAGE. Three passes over one real app
+       page through the installed artifact answered `runsTotal 0` with NO result document at all — the zone
+       aborting here rather than the engine aborting anywhere — at `_nc` 0 against `_cc` 2 in 3 of 3 with zero
+       spread across the three. The artifact states `"addressClass"`, `"razorClass"` and `"witnessClass"` and
+       does NOT state `"addressRoot"`: a fixed-string count over the installed `extension/lib/qjs/qjs.wasm`,
+       with those three as armed controls answering nonzero and an invented token as the negative control
+       answering zero. AND THE POPULATION IS NOT THAT PAGE, which is the part a reader must not take for an
+       anecdote: `concrete` is `ENDPOINT_ADDRESS_CLASSES`' conservative member and therefore the class an
+       ordinary address gets, so every census row that carries `endpointAddressClass` carries `concrete > 0`.
+       The derivation rather than the figure, because the archive grows: walk `testing/corpus/census-*.jsonl`,
+       count the rows whose `endpointAddressClass.concrete` is nonzero against the rows carrying that key at
+       all, and read the two against each other — they were equal, over every site id in the archive including
+       the controls, and no archived row carried `endpointAddressRoot` at all.
+       RETIREMENT: this record goes when a cross-key claim over these partitions cannot be WRITTEN without the
+       stated-ness of both of its operands in the same expression — a helper taking two partition names that
+       REFUSES a comparison either of whose keys the artifact did not state — because the gate is then
+       structural and the retired clause is no longer re-derivable from the loop above. MEASURED ABSENT with
+       the command, so this condition is not born met: over `extension/bridge.js`, `endpointPartitionPair`,
+       `crossKeyWhereStated` and `bothStatedOrSkip` each answer 0 against `endpointAddressRootHistogram`
+       answering nonzero as the armed control. */
+    const _rootUnstated = m.endpointAddressRoot[ENDPOINT_FACT_UNSTATED] === undefined
+                          ? 0 : m.endpointAddressRoot[ENDPOINT_FACT_UNSTATED];
+    const _clsUnstated = m.endpointAddressClass[ENDPOINT_FACT_UNSTATED] === undefined
+                         ? 0 : m.endpointAddressClass[ENDPOINT_FACT_UNSTATED];
+    /* BOTH OPERANDS AND NOT ONLY THE NEWER ONE, BECAUSE THE PRECONDITION OF A TWO-OPERAND COMPARISON IS
+       TWO-SIDED. Gating on `addressRoot` alone would be one bit answering a question about two keys — the
+       §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS shape — and would read as a claim that this zone knows which of
+       the two is the newer, which is a fact about a build order and not about either partition. */
+    const _bothStated = _rootUnstated === 0 && _clsUnstated === 0;
     const _nc = m.endpointAddressRoot[ENDPOINT_ROOT_NO_CONCOLIC] === undefined
                 ? 0 : m.endpointAddressRoot[ENDPOINT_ROOT_NO_CONCOLIC];
     const _cc = m.endpointAddressClass["concrete"] === undefined ? 0 : m.endpointAddressClass["concrete"];
-    DCHECK(_nc === _cc,
+    DCHECK(!_bothStated || _nc === _cc,
            "this run counts " + _nc + " address(es) with no delivery root to ask against " + _cc + " the " +
-           "engine classed `concrete` — solver/endpoint.c writes `addressRoot: null` on exactly the rows " +
+           "engine classed `concrete`, with BOTH keys stated by this artifact for every one of its " +
+           m.endpoints + " row(s) — solver/endpoint.c writes `addressRoot: null` on exactly the rows " +
            "whose `addressClass` is `concrete`, from the one stored class, so a difference is those two emits " +
            "having parted and `(no-concolic)` would be read as a statement about addresses it is not about");
   }
