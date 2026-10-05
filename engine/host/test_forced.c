@@ -209,10 +209,6 @@ static const TfChunk TF_CHUNKS[] = {
        carries no type column, and solver/pending.h's `FLOW_PENDING_MODULE` is the kind a dynamic `import()`
        parks under — "whose delivery hands the source to a compiler that reads" it as one, in that file's own
        words. The door it lands at is `EPD_MODULE_IMPORT`. */
-    { "/chunk/mdmod.js",    "https://x.test/chunk/mdmod.js",
-      "const mmDeps = (i, m = mmDeps) => (m === mmDeps ? 'mmOK' : 'mmBAD');"
-      "export default { tag: 'mmDEF' };"
-      "export function mmProbe(){ return mmDeps([0]); }", 0 },
     { "/chunk/admin.js",    "https://x.test/chunk/admin.js",
       "fetch('/api/admin/audit-log');", 0 },   /* chunk-only endpoint */
     /* A chunk that THROWS is what a page error IS — the report must name the capability. A DOMException is the
@@ -490,6 +486,34 @@ static const TfServed TF_SERVED[] = {
     { "https://x.test/chunk/injsrc.js",    "text/javascript",
       "fetch('/api/injran?el=' + (document.currentScript === null ? 'injnull'"
       " : document.currentScript.getAttribute('id')));" },
+    /* ─── AND THE FOURTH AND FIFTH ARE A DYNAMIC `import()`'s, WHICH IS THE THIRD PARK THIS TABLE ANSWERS ───
+     *
+     * THEY WERE IN `TF_CHUNKS` AND THAT WAS A DEFECT OF MINE, recorded here rather than silently moved because
+     * the two tables look interchangeable and are not. `TF_CHUNKS` is `loadScript`'s door: its host edge calls
+     * engine_queue_fetched_script DIRECTLY, parks nothing and takes no reply, so an address only IT holds can
+     * never answer an `import()` — which parks FLOW_PENDING_MODULE and is answered HERE. The symptom was not an
+     * absence: `fixture_provide` serves every unlisted address the same JSON object, so the import was settled
+     * with `{"region":"us-west-2"}` and the module compile threw `expecting ';'` at that body's `:` — a program
+     * error naming MY fixture, in a subsystem the whole row exists to measure.
+     *
+     * THE FIRST IS SERVED `text/javascript` AND MUST LOAD. Its body puts a module-level `const` behind an arrow
+     * whose own default parameter reads that same binding, which is the real bundle's shape: `mmProbe` is
+     * EXPORTED, so the cell is closed over and is a var_ref rather than a frame local — the population
+     * `solver/cow.c`'s `module_eval` hook is about, and the one a script-level `const` cannot stand in for.
+     *
+     * THE SECOND IS THE GATE'S CONTROL AND ITS BODY IS VALID JAVASCRIPT ON PURPOSE, for `replyctl.js`'s reason
+     * one table-row up: served `application/json`, HTML §8.1.4.2's fetch a single module script leaves
+     * moduleScript null and the LOAD rejects, so `mbRAN` can never be emitted — while a build that compiled
+     * whatever arrived would run it and emit `mbRAN` from bytes a browser refuses. A body that did not parse
+     * would ALSO fail before the fix, by throwing, so it could not tell the two engines apart; this one can,
+     * and `e.name` separates them a second way (`TypeError` for the rejected load, `SyntaxError` for a compile
+     * of the bytes). A control that cannot fail is not one, and a control both engines fail is not one either. */
+    { "https://x.test/chunk/mdmod.js", "text/javascript",
+      "const mmDeps = (i, m = mmDeps) => (m === mmDeps ? 'mmOK' : 'mmBAD');"
+      "export default { tag: 'mmDEF' };"
+      "export function mmProbe(){ return mmDeps([0]); }" },
+    { "https://x.test/chunk/mdbad.js",  "application/json",
+      "fetch('/api/modbadran?w=mbRAN');export default 1;" },
 };
 
 /* …ASKED OF THE ABSOLUTE SERIALIZED ADDRESS, which is what a park carries and what the caller holds by the
@@ -3629,6 +3653,16 @@ static const char *HTML =
        reason: a payload composed from anything this engine COMPUTED can itself be unknown, and then the request
        is never made and the arm reads exactly like an arm that did not run. */
     "(async function(){ fetch('/api/modentered?w=mmENTER'); var ns = await import('/chunk/mdmod.js'); fetch('/api/modconst?w=' + ns.mmProbe()); fetch('/api/moddefault?w=' + (ns.default && ns.default.tag ? ns.default.tag : 'mmNODEF')); })();"
+    /* …AND THE GATE THAT DECIDES WHETHER THOSE BYTES ARE A PROGRAM AT ALL, asked of a module served
+       `application/json` whose body is VALID JavaScript. HTML §8.1.4.2's fetch a single module script extracts a
+       MIME type and leaves `moduleScript` null for anything that is not a JavaScript MIME type, and
+       §8.1.6.7.3 HostLoadImportedModule's onSingleFetchComplete makes a null moduleScript a TypeError — so the
+       LOAD rejects and `mbRAN` is unreachable. THE THREE TOKENS ARE THREE DIFFERENT ENGINES: `mtASK` alone says
+       the import never settled; `mtASK` with `TypeError` is this gate refusing the bytes; `mtASK` with
+       `mtLOADED` AND `mbRAN` is an engine that compiled a JSON reply as a module, which is what this document
+       measured before the gate existed. `SyntaxError` would be a third — a compile of bytes that did not parse —
+       and is why the control's body parses. */
+    "(async function(){ fetch('/api/modtypeask?w=mtASK'); try { var bad = await import('/chunk/mdbad.js'); fetch('/api/modtype?w=' + (bad ? 'mtLOADED' : 'mtEMPTY')); } catch (e) { fetch('/api/modtype?w=' + e.name); } })();"
     /* ORPHAN-INVOKE — the headline capability, and the ONE statement in this document that nothing in it calls.
        It asks two things at once because they are the two halves of the mechanism and either alone would pass
        while the other was broken: that the function RUNS at all (`/api/orphan/report`), and that its PARAMETER
