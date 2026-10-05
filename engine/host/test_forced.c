@@ -14071,6 +14071,43 @@ static int probes_eval(const char *js, Probe *out, int cap) {
      * that is not a JavaScript MIME type, so §8.1.6.7.3 HostLoadImportedModule's onSingleFetchComplete
      * rejects the LOAD — and a rejected load cannot have run the body, which is what makes the two halves one
      * claim rather than two. */
+    /* ─── AND THE SCRIPT-LEVEL HALF OF THE SAME PAIR, WHICH HAD NO ROWS EITHER ───
+     *
+     * THESE EXIST TO BE COMPARED WITH `mod-const` AND THAT IS THE WHOLE REASON THEY ARE ROWS. A script's
+     * lexical bindings and a module's are different cells written by different algorithms — a module's inside
+     * §16.2.1.6.1.3 Evaluate ( )'s own body with the link phase's prologue ahead of them — so `md-self` reading
+     * 1 while `mod-const` reads 0 LOCALISES the defect to the module phase, and both reading 0 localises it to
+     * the self-referential default parameter instead. Neither reading is available while one of the two is
+     * scored by a human grepping the log, which is what both were.
+     *
+     * THE FORK HALF IS THREE ROWS BECAUSE IT IS THREE MECHANISMS AND THEIR ZEROS TAKE DIFFERENT WORK: whether
+     * the statement RAN at all, whether `cfg.admin` FORKED so both arms exist, and whether the binding read
+     * INITIALISED on the arms that ran. Folded into one, a 0 would say "something about the forked read is
+     * wrong", which is the three-states-behind-one-answer shape this table exists to refuse — and the two
+     * readings are gated on the first for `orphan-gate`'s reason, since a statement that did not run emits
+     * neither arm. */
+    const char *md_self_why = NULL; int md_self = 1;
+    fold_row(&md_self, &md_self_why, param_value_is(js, "/api/selfdefault", "w", "mdOK"),
+             "a SCRIPT-level `const` read UNINITIALISED at the arrow's call — `mdWRONG` means the default "
+             "parameter `m = mdSelf` saw the TDZ, which for a script-level binding is one cell written by one "
+             "algorithm, so this is not the module phase and not a world the write is missing from");
+    const char *md_fork_ran_why = NULL; int md_fork_ran = 1;
+    fold_row(&md_fork_ran, &md_fork_ran_why, !!strstr(js, "\"/api/mdforkpath\""),
+             "NOT REACHED: there is no /api/mdforkpath record at all, so the statement never ran and the two "
+             "rows gated on this one are unaskable. That is the SCHEDULE");
+    const char *md_fork_both_why = NULL; int md_fork_both = 1;
+    fold_row(&md_fork_both, &md_fork_both_why,
+             param_value_is(js, "/api/mdforkpath", "w", "AmdfOK") &&
+             param_value_is(js, "/api/mdforkpath", "w", "PmdfOK"),
+             "the statement ran and only ONE arm of `cfg.admin` is in the document — a config field loaded from "
+             "a reply is opaque-for-control-flow, so §Solver-half forks it and BOTH arms run. One arm is that "
+             "fork not happening, which is a different defect from the binding read and is why this row is "
+             "separate from md-fork-bind");
+    const char *md_fork_bind_why = NULL; int md_fork_bind = 1;
+    fold_row(&md_fork_bind, &md_fork_bind_why, !strstr(js, "mdfWRONG"),
+             "an arm of the forked path read the `const` UNINITIALISED — `mdfWRONG` is in the document. The "
+             "binding is the PROGRAM's and neither world wrote it, so a world that reads it uninitialised is "
+             "reading its own timeline wrongly rather than another world's state");
     const char *mod_entered_why = NULL; int mod_entered = 1;
     fold_row(&mod_entered, &mod_entered_why, param_value_is(js, "/api/modentered", "w", "mmENTER"),
              "NOT REACHED: there is no /api/modentered record, so the statement holding the dynamic "
@@ -18343,6 +18380,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         /* THE FIVE `import()` ROWS. The two entry rows are ungated — their 0 is a finding about the SCHEDULE —
            and the three readings are gated on them, for `orphan-gate`'s reason: an unconditional first emission
            that did not happen entails everything behind the `await` in the same statement. */
+        /* THE SCRIPT-LEVEL `const` ROWS, whose whole value is being read BESIDE `mod-const` — see where they
+           are folded for what each pairing localises. */
+        { "md-self", md_self, "/api/selfdefault", SESS_EXPLORE, md_self_why },
+        { "md-fork-ran", md_fork_ran, "/api/mdforkpath", SESS_EXPLORE, md_fork_ran_why },
+        { "md-fork-both", md_fork_both, "/api/mdforkpath", SESS_EXPLORE, md_fork_both_why, .gate = "md-fork-ran" },
+        { "md-fork-bind", md_fork_bind, "/api/mdforkpath", SESS_EXPLORE, md_fork_bind_why, .gate = "md-fork-ran" },
         { "mod-entered", mod_entered, "/api/modentered", SESS_EXPLORE, mod_entered_why },
         { "mod-const", mod_const, "/api/modconst", SESS_EXPLORE, mod_const_why, .gate = "mod-entered" },
         { "mod-default", mod_default, "/api/moddefault", SESS_EXPLORE, mod_default_why, .gate = "mod-entered" },
