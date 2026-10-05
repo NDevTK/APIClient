@@ -622,6 +622,35 @@ for (const p of passes) for (const r of p.rows) {
        presence (see its banner): `(field-absent)` is a probe that threw, `(relay-absent)` is bridge.js not
        loaded in the realm it ran in, `null` is no round completed, and an object is a round. */
     hround: r.hostRound,
+    /* AND WHICH ARM OF `flow_step` TOOK THE STEP OF A MEMBER HOLDING A RUNNABLE TASK, which is the one
+       reading the job-split rows above hand off and cannot give, and which was write-with-no-reader in THIS
+       file. The four are LIFETIME counts off ONE `_wfq` object and `run-a-task` is `stepUnitRuns`' row off
+       `countersFrom`, so BOTH INDICES travel with them: the identity
+       `taskArmOlderLifetime + taskArmNoRowLifetime == run-a-task` is EQUALITY only where the two entries are
+       the same one, and CONTAINMENT otherwise. Carried as five numbers and two indices rather than a verdict,
+       because site.mjs already publishes the verdict (`taskArmPartitionDisagrees`) and a second copy of that
+       arithmetic here would be the one §AN-AUDITOR-DERIVES-THE-RULE forbids — what this file adds is the
+       per-pass DISTRIBUTION, which is the cross-run fact no single census can state.
+       THE TWO SILENCES ARE SEPARATED HERE AND NOT AT THE CONSUMER, which is where this got it wrong once:
+       the mapping always assigns this key, so an `'tlad' in m` test — the shape `span` above uses, which is
+       sound because `span` is mapped RAW — can never be false and the `no-field` arm was DEAD, folding "this
+       pass predates the four rows" into "no census of it observed a standing frontier". Those are a fact
+       about the INSTRUMENT and a fact about the RUN and they take opposite work, so the three states are
+       VALUES here: `null` is predates, the string is a stated absence, and an object is a reading. */
+    tlad: (() => {
+      const K = ['taskHeldDelivLifetime', 'taskHeldSeqLifetime',
+                 'taskArmOlderLifetime', 'taskArmNoRowLifetime'];
+      if (!K.some((k) => k in r)) return null;
+      const sur = (r.stepUnitRuns && typeof r.stepUnitRuns === 'object'
+                   && !Array.isArray(r.stepUnitRuns)) ? r.stepUnitRuns : null;
+      const o = { deliv: r.taskHeldDelivLifetime, seq: r.taskHeldSeqLifetime,
+                  older: r.taskArmOlderLifetime, noRow: r.taskArmNoRowLifetime,
+                  task: sur && typeof sur['run-a-task'] === 'number' ? sur['run-a-task'] : null,
+                  wfqFrom: typeof r.wfqFrom === 'number' ? r.wfqFrom : null,
+                  cFrom: typeof r.countersFrom === 'number' ? r.countersFrom : null };
+      return ['deliv', 'seq', 'older', 'noRow'].some((k) => typeof o[k] === 'number')
+        ? o : 'no-live-frontier';
+    })(),
     sigs, wasm: (r.artifact && r.artifact.wasmSha256 || '').slice(0, 12),
     /* THE ARTIFACT IS NAMED BY ITS HASH ALONE. This read `r.artifact.head`, a field site.mjs deliberately
        renamed to `builtFromHeadClaim` when it stopped being trustworthy, so it resolved to '' for every row
@@ -1367,6 +1396,104 @@ if (spShown.length) {
                        : '  — more than one value, so it is not the constant this block was written about'));
   console.log('  the share is read WITHIN one row (loopUs/instanceUs); `deliverGuard` is a GAUGE and is never');
   console.log('  differenced across passes; the MODE is read off the door column above and not inferred here');
+}
+
+/* WHICH ARM OF `flow_step` TOOK THE STEP OF A MEMBER THAT WAS HOLDING A RUNNABLE TASK — the row the job split
+   hands off to, and the one number that says WHICH DIFF a stalled task queue names. The split above says a
+   backlog is RANK-ELIGIBLE (`jobsReady`) and `jobWGap` says whether the order is what holds it; where that
+   pair answers "the order is fine and the queue is not moving" the next question is the ladder's, and until
+   this block nothing in this corpus could ask it.
+   WHICH SIZE NAMES WHICH DIFF, taken from the RAISE SITES in solver/engine.c and not from solver/engine.h's
+   legend — the two disagree about `deliv` and the header is the stale copy, which engine.c's own block says in
+   as many words (retired and kept, so a reader meeting a large value does not re-derive it).
+   `dl` IS TWO QUANTITIES EITHER SIDE OF ONE DIFF, WHICH IS WHY THIS COLUMN PRINTS IT AND NEVER TRENDS IT. The
+   RETIRED reading: the arm stood above the whole arrival chain and was not in it, a reply register entry
+   carrying no stamp, so a delivery preceded every row and every queued callback whatever their ages, and the
+   row was the size of that EXCLUSION. The stamp is BUILT (`PEND_WORK_SEQ`) and the arm asks
+   `flow_task_precedes` with it, so `dl` is now the size of the arm going in front of a YOUNGER task — the
+   arrival order WORKING — and the old reading is what a NEAR-ZERO means afterwards. One large number, two
+   opposite findings, and no cell here can say which: the discriminator is the ARTIFACT
+   (`git grep -c PEND_WORK_SEQ <the pass's stamp> -- engine/host`), not the census, so two `dl` cells of one
+   row are comparable only once that grep has answered the same way at both. MEASURED: it is ABSENT at the head
+   the installed artifact carries and PRESENT at `HEAD`, so this corpus is about to hold both quantities in
+   this column. A large `seq` says the ARRIVAL COMPARISON answered NO: the
+   queued task is YOUNGER than the row at the cursor, so the sequence goes first, and the diff is at that
+   comparison. `older` above zero REFUTES both for the steps it counts — the comparison does hand the queue
+   the thread ahead of a startable row. `noRow` is the arm reached with no row to compare against at all,
+   which on a real page is most of it, and it is the row that says the sequence is not what excludes those
+   members.
+   NOTHING HERE IS A VERDICT AND THE ARITHMETIC IS NOT RESTATED. `older + noRow == run-a-task` is asserted in
+   `engine_ladder_task_census` and read on the installed artifact by site.mjs's `taskArmPartitionDisagrees`,
+   which is the release-mode reader of it; this block prints the five OPERANDS and the relation it is entitled
+   to claim, so a reader checks the sum by eye against the cell rather than trusting either of us
+   (§AN-AUDITOR-DERIVES-THE-RULE — a second copy of that check here is the copy that would drift).
+   `=` AND `<=` ARE PRINTED AND NEVER COLLAPSED, because the claim is weaker where the operands are. The four
+   come off whichever entry `wfqFrom` names and `run-a-task` off `countersFrom`; `wfqLive`'s backward walk can
+   only land at or before the last counted entry, so equal indices make the sum an EQUALITY by construction
+   and unequal ones make it a CONTAINMENT over two moments. A cell printing `=` is one sample and a cell
+   printing `<=` is two, which is the distinction CLAUDE.md §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE
+   records this corpus having paid three wrong mechanisms for, and it is a property of the PASS rather than of
+   the engine.
+   FIVE LIFETIME COUNTS AND NO GAUGE AMONG THEM, which is why a SHARE of `run-a-task` is printed for the two
+   that partition it and NOT for `deliv` or `seq`: those two are counts of steps the task arm never got, so
+   they have no denominator on this cell at all and dividing them by `run-a-task` would be a fraction of the
+   wrong population. Nothing is differenced across passes either — these may be differenced by their own
+   kind, but two passes are two runs, which is a different comparison and not one this column makes.
+   ABSENT IS NOT ZERO AT EITHER GRAIN. `no-field` is a pass predating the four rows, `no-live-frontier` is a
+   pass no census of which ever observed a standing frontier (`result_wfq_json` returns `{"members":0}` and no
+   term row at all when the frontier is empty, so a run that FINISHED carries none of these), and `-` in a
+   cell is one operand absent. A run that reached the arm zero times reads `0`, which result.c states is the
+   ladder never having reached it, and that is a finding rather than a silence. */
+const tlOne = (m) => {
+  /* THREE STATES READ OFF THE VALUE AND NEVER OFF THE KEY — see the mapping, where a key that is always
+     assigned made the `in` test this originally used unable to be false. */
+  const t = (m.tlad && typeof m.tlad === 'object') ? m.tlad : null;
+  if (!t) return { tok: m.tlad === null || m.tlad === undefined ? 'no-field' : String(m.tlad) };
+  return { t, oneSample: t.wfqFrom !== null && t.wfqFrom === t.cFrom,
+           /* `null` AND NEVER A ZERO where either operand is absent, and never where `run-a-task` is 0 — a
+              share of an arm that was never reached is not a small share. */
+           olderShare: (t.task && typeof t.older === 'number') ? (100 * t.older / t.task) : null };
+};
+const tlRows = table.map((t) => {
+  const per = t.measurements.map(tlOne);
+  const stated = per.filter((x) => x.t);
+  /* THE TOKEN IS THE SET OVER THE PASSES AND NOT THE FIRST PASS'S, which is the same separation the
+     mapping makes one level down: a site can predate the rows in one pass and have observed no standing
+     frontier in another, and `per[0].tok` reports whichever came first as though it were the site's. */
+  const toks = [...new Set(per.map((x) => x.tok).filter(Boolean))].sort();
+  return { id: t.id, n: per.length, per, stated,
+           tok: stated.length ? null : (toks.length ? toks.join('+') : 'no-pass') };
+});
+const tlShown = tlRows.filter((r) => r.stated.length);
+if (tlShown.length) {
+  const tlIdW = Math.max('site'.length, ...tlShown.map((r) => r.id.length)) + 2;
+  const num = (x) => (typeof x === 'number' ? String(x) : '-');
+  const cell = (x) => num(x.t.deliv) + 'dl/' + num(x.t.seq) + 'sq  ' +
+    num(x.t.older) + '+' + num(x.t.noRow) + (x.oneSample ? '=' : '<=') + num(x.t.task) +
+    (x.olderShare === null ? '' : ' (' + x.olderShare.toFixed(0) + '% older)');
+  console.log('');
+  console.log('WHICH LADDER ARM TOOK THE STEP OF A TASK HOLDER (site, then PER PASS IN ORDER):');
+  /* EVERY QUANTITY THE CELL PRINTS IS NAMED HERE, for the span legend's reason: a reader takes a legend as
+     the key to a row, so a cell carrying more than the legend names is read as whichever fields the legend
+     happens to list. */
+  console.log('  <taskHeldDelivLifetime>dl/<taskHeldSeqLifetime>sq  ' +
+              '<taskArmOlderLifetime>+<taskArmNoRowLifetime>{=|<=}<run-a-task> (<older> as % of run-a-task)');
+  console.log('  `=` is ONE census entry (wfqFrom === countersFrom) and `<=` is TWO, so only `=` cells carry');
+  console.log('  the engine\'s asserted equality; `dl` and `sq` are steps the task arm never got and have NO');
+  console.log('  denominator here. dl is TWO quantities: before PEND_WORK_SEQ a large dl is the delivery arm');
+  console.log('  EXCLUDING the queue, after it a large dl is the arm going in front of a YOUNGER task (the');
+  console.log('  order working) and a NEAR-ZERO dl is the old exclusion -- so compare two dl cells only after');
+  console.log('  `git grep -c PEND_WORK_SEQ <each pass\'s stamp> -- engine/host` answers the same at both.');
+  console.log('  sq large -> the arrival comparison is answering NO; older>0 refutes both for the steps it');
+  console.log('  counts; noRow is the arm reached with no row to compare at all. All five are LIFETIME counts.');
+  for (const r of tlShown)
+    console.log('  ' + pad(r.id, tlIdW) + r.stated.map(cell).join(' | '));
+  /* THE PASSES THAT COULD NOT BE ASKED, NAMED RATHER THAN OMITTED — a site absent from the column above is
+     either a build predating the rows or a run that never observed a standing frontier, and those are
+     different findings. */
+  const tlMute = tlRows.filter((r) => !r.stated.length && r.tok);
+  if (tlMute.length)
+    console.log('  not asked: ' + tlMute.map((r) => r.id + '(' + r.tok + ')').join(' '));
 }
 /* WHICH READING A ZERO DATA-DOOR ROW IS, OVER THE CORPUS — the one discrimination the hard-bar section above
    structurally cannot make, and the question this corpus's own measurement opened. Driven over two real app

@@ -1383,6 +1383,80 @@ const row = {
   jobWGap: wfqRow('jobWGap'),
   memUnframed: wfqRow('memUnframed'),
   wfqMembers: wfqLive ? wfqLive.w.members : null,
+  /* …AND WHICH ARM OF `flow_step` TOOK THE STEP INSTEAD, WHICH IS THE ANSWER THE FIVE ROWS ABOVE HAND OFF AND
+     CANNOT GIVE. `jobsReady` says a backlog is RANK-ELIGIBLE and `jobWGap` says whether the order is what
+     holds it, and on this corpus that pair routinely answers "the order is fine and the queue is not moving"
+     — `jobWGap: 0` with `jobsReady` in the hundreds, which result.c's own legend calls "the top of the queue
+     holding a runnable job and NO ORDERING PROBLEM AT ALL". Between that and a `run-a-task` of 0 there was
+     exactly one unmeasured step and it is the one that decides the diff: which arm of the ladder took the
+     step of a member that was holding a runnable task. These four are that, and until this row the corpus —
+     the one instrument that drives REAL documents rather than a fixture whose job shape its own author chose
+     — carried none of them.
+     WHICH SIZE NAMES WHICH DIFF, taken from the RAISE SITES in solver/engine.c and not from solver/engine.h's
+     legend, WHICH THE TWO DISAGREE ABOUT AND WHICH MATTERS FOR EXACTLY ONE OF THE FOUR. engine.h still carries
+     the reading engine.c's own block marks as RETIRED AND KEPT, so a reader who checks the header will find
+     this banner "wrong" about `taskHeldDelivLifetime` and the header is the stale copy — engine.c is where the
+     counter is raised and is the file that records the change.
+     `taskHeldDelivLifetime` IS TWO QUANTITIES EITHER SIDE OF ONE DIFF AND MUST NOT BE COMPARED ACROSS IT.
+     The RETIRED reading, kept because a reader meeting a large value will otherwise re-derive it: the arm
+     "stands above the whole arrival chain and is not in it", a reply register entry carrying no stamp, so a
+     delivery precedes every row and every queued callback whatever their ages — and the row was the size of
+     that EXCLUSION, with the diff being the stamp that folds the arm into the order. The stamp is BUILT
+     (`PEND_WORK_SEQ`): the arm asks `flow_task_precedes` with it, so a delivery no longer precedes a queued
+     callback that arrived first, and the row is now the size of the arm going in front of a YOUNGER task —
+     which is the arrival order WORKING. The old reading is what a NEAR-ZERO means afterwards, so the SAME
+     LARGE NUMBER means an exclusion before the diff and the mechanism working after it. It still precedes
+     every ROW, which engine.c records as a deadlock rather than an omission and keys its own next retirement
+     on. THE DISCRIMINATOR IS THE ARTIFACT AND NOT THE CENSUS, and this file cannot compute it: engine.c names
+     it as `git grep -c PEND_WORK_SEQ <the stamp> -- engine/host`, and the stamp this row can offer is
+     `builtFromHeadClaim`, which this file deliberately distrusts, beside `artifact.wasmSha256`. So the row
+     carries the numbers and NAMES THE READING THAT SETTLES THEM rather than defaulting to either, and whoever
+     compares two passes runs that grep at each pass's artifact first. MEASURED, which is why this is a hazard
+     and not a caution: `PEND_WORK_SEQ` is ABSENT at the head the installed artifact was stamped at and
+     PRESENT at `HEAD`, with `g_task_held_deliv` present at both as the armed control — so the next census
+     this corpus writes reads the NEW quantity and every census it writes before the next install reads the
+     OLD one, in one column.
+     A large `taskHeldSeqLifetime` says the arrival comparison answered NO: the queued task is
+     YOUNGER than the row at the cursor, so the sequence goes first, and the diff is at that comparison.
+     `taskArmOlderLifetime` above zero REFUTES both for the steps it counts — the comparison does hand the
+     queue the thread ahead of a startable row. `taskArmNoRowLifetime` is the arm reached with no row to
+     compare against at all, which on a real page is most of it, and it is the row that says the sequence is
+     not what excludes those members.
+     ALL FOUR OR NONE, BECAUSE TWO OF THEM ARE HALF OF AN IDENTITY. `taskArmOlderLifetime +
+     taskArmNoRowLifetime == run-a-task` is asserted in `engine_ladder_task_census` where both halves and the
+     histogram are in one hand; a reader holding three of the four cannot check it, so a subset of this group
+     is a figure nobody can falsify. `run-a-task` is `stepUnitRuns`' row above and comes from
+     `countersFrom`, which is a DIFFERENT entry from `wfqFrom` — see `taskArmPartitionDisagrees` below for
+     what may and may not be concluded from that.
+     LIFETIME COUNTS BESIDE A LINE OF GAUGES, which is why the names carry the suffix and why result.c states
+     it at the composition: a `jobsReadyTask` that FALLS between two samples is the backlog draining, and one
+     of THESE falling is a counter with a second writer. engine.c states the same at the raise sites and adds
+     that they may therefore be differenced, which `jobsReady` and `jobWGap` on this same line may not.
+     AND YET THEY TAKE `wfqLive`'s BACKWARD WALK AND NOT `counted[last]`, WHICH IS THE OPPOSITE OF WHAT THEIR
+     KIND PRESCRIBES AND IS THE ONE THING IN THIS BLOCK A READER WILL GET WRONG. `stepUnitRuns` and `steps`
+     are lifetime counts and take the LAST counted entry for exactly that reason — a lifetime count cannot
+     fall, so the terminal sample is the whole run. These four are lifetime counts and are NOT AVAILABLE
+     THERE: `result_wfq_json` returns `{"members":0}` and nothing else when the frontier is empty, so a
+     finalize document — composed after the frontier drained or parked, which is how a session answers DONE —
+     carries no term row at all. Taking them from the terminal entry would report `null` for every run that
+     FINISHED, which is the reading of that instant and not of the run. So the walk is right here for a
+     REASON THAT IS NOT THE GAUGE REASON stated for `jobsReady` above: not because the quantity can fall, but
+     because the only entries that carry it are the ones with a standing frontier. Both walks end at the same
+     entry on every row this corpus holds (`wfqFrom === countersFrom` in all 34 that state a live frontier),
+     and that is a property of these drives and not a guarantee.
+     `unaskedRelatives` AT THE FOOT IS STRUCTURALLY BLIND TO ALL FOUR, which is why they went uncarried and is
+     a statement about that check rather than about this row. It names an engine row whose name EXTENDS one
+     already taken — a total whose parts, a gauge whose split — and no row this file carries is a prefix of
+     `taskHeldDelivLifetime` or `taskArmOlderLifetime`, so the completeness mechanism built to catch exactly
+     this omission could not report it at any revision. Adding them to `taken` arms it for a FIFTH row named
+     under one of these and does nothing retroactively.
+     ABSENT STAYS ABSENT. An artifact predating these rows omits them and `wfqRow` yields `null`, never 0 —
+     "this build does not publish the row" and "the ladder never reached that arm" are different findings and
+     result.c states that `run-a-task: 0` means the second. */
+  taskHeldDelivLifetime: wfqRow('taskHeldDelivLifetime'),
+  taskHeldSeqLifetime: wfqRow('taskHeldSeqLifetime'),
+  taskArmOlderLifetime: wfqRow('taskArmOlderLifetime'),
+  taskArmNoRowLifetime: wfqRow('taskArmNoRowLifetime'),
   /* AND WHETHER ANYTHING HAS EVER LEFT, WHICH THIS ROW DERIVED BY SUBTRACTION WHEN THE ENGINE STATES IT.
      report.mjs composed `gone` as `flows - wfqMembers` under a guard that the two halves came from ONE
      census entry, and that subtraction is ARITHMETICALLY SOUND -- `_flows` is flow_created_count(), whose
@@ -1933,6 +2007,61 @@ row.unaskedRelatives = (() => {
       if (k !== t && k.startsWith(t) && /^[A-Z]/.test(k.slice(t.length))) { out.push(k + ' extends ' + t); break; }
   }
   return out.sort();
+})();
+/* AND THE TASK ARM'S PARTITION IS A PARTITION, ASKED HERE FOR `endpointFactsDisagree`'s REASON ONE BLOCK
+   DOWN. `engine_ladder_task_census` asserts `task_arm_older + task_arm_no_row == g_step_unit_runs[RUN_TASK]`
+   at the one accessor where all three are in one hand -- and it asserts it with a `DCHECKF`, which
+   `-DAPICLIENT_DEV=0` compiles out. This driver measures WHATEVER ARTIFACT IS INSTALLED, so on a release
+   census that assertion is not weakened, it is ABSENT: the two halves would be read as the arm's own reasons
+   when a second writer of the arm, or a return added between the choice and the convergence point engine.c
+   names, makes them a SELECTION being published as a partition. So this is the release-mode reader of an
+   identity the dev build already holds and not a second copy of a live check (CLAUDE.md
+   §AN-AUDITOR-DERIVES-THE-RULE: the operands are the row's own fields, so this and the row cannot disagree
+   about which numbers they are about).
+   IT IS NOT A FIFTH ROW DERIVED FROM THE FOUR. A row that is a sum or a conjunction of its neighbours carries
+   no information and inflates the apparent evidence (CLAUDE.md §EVIDENCE-INFLATION); this needs a FIFTH
+   operand the four do not contain -- `run-a-task` off `stepUnitRuns` -- and what it publishes is a
+   DISAGREEMENT and never a count, so there is no magnitude here for a reader to add to anything.
+   THE TWO OPERANDS COME FROM TWO ENTRIES AND THE CLAIM IS WEAKER WHERE THEY DO, WHICH IS STATED RATHER THAN
+   AVERAGED. The halves are `wfqRow` picks off `wfqFrom` and `run-a-task` is off `countersFrom`; `wfqLive`'s
+   backward walk can only land at or before the last counted entry, so where the indices differ the wfq side
+   is the EARLIER moment and all that holds is CONTAINMENT. A violation of the containment is still
+   unambiguous -- both sides are monotone lifetime counts, so a sum exceeding a later total is a second writer
+   whatever the gap between the samples -- and EQUALITY is checked only where the indices agree, which is the
+   same `wfqFrom === countersFrom` guard this row already publishes for the counters above rather than a
+   second rule. Checking equality across two entries would be the two-moments defect
+   (CLAUDE.md §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE) manufacturing a contradiction out of correct
+   data, which is exactly what this file had to publish two indices to refuse.
+   IT IS A LIST AND NOT A COLOUR, AND IT DOES NOT STOP THE ROW, for the reason the two blocks around it give:
+   a census run that died because an artifact disagreed with this arithmetic would stop every lane over a row
+   nobody reads. THREE STATES AND NONE FOLDED: `null` is NOTHING TO ASK -- no entry held a live frontier, or
+   the artifact predates the rows, or `run-a-task` is not a number -- `[]` is an OBSERVED CLEAN ANSWER, and a
+   non-empty list names BOTH sides and which relation was tested, so the claim is checkable by whoever reads
+   the census rather than trusted.
+   ARMED, AND THE CONTROL IS HISTORICAL RATHER THAN INVENTED: run against the carried set as it stood before
+   these four rows landed it returns `null` at every pass on disk, because no census this corpus holds carries
+   a single one of them -- which is the same control `unaskedRelatives` uses and is why a `[]` from the first
+   re-run is worth having. */
+row.taskArmPartitionDisagrees = (() => {
+  const sur = row.stepUnitRuns;
+  const rt = (sur && typeof sur === 'object' && !Array.isArray(sur)
+              && typeof sur['run-a-task'] === 'number') ? sur['run-a-task'] : null;
+  const a = row.taskArmOlderLifetime, b = row.taskArmNoRowLifetime;
+  if (rt === null || typeof a !== 'number' || typeof b !== 'number') return null;
+  const oneSample = row.wfqFrom !== null && row.wfqFrom === row.countersFrom;
+  const out = [];
+  if (oneSample) {
+    if (a + b !== rt)
+      out.push('taskArmOlderLifetime ' + a + ' + taskArmNoRowLifetime ' + b + ' is ' + (a + b) +
+               ' over run-a-task ' + rt + ' -- ONE SAMPLE (wfqFrom === countersFrom ' + row.wfqFrom +
+               '), so the engine asserts EQUALITY here and the arm has a second writer');
+  } else if (a + b > rt) {
+    out.push('taskArmOlderLifetime ' + a + ' + taskArmNoRowLifetime ' + b + ' is ' + (a + b) +
+             ' over run-a-task ' + rt + ' -- TWO ENTRIES (wfqFrom ' + row.wfqFrom + ', countersFrom ' +
+             row.countersFrom + '), so only containment is claimed and a sum above a LATER total is still a ' +
+             'second writer of the arm');
+  }
+  return out;
 })();
 /* AND THE FOUR PARTITIONS ARE PARTITIONS, ASKED HERE BECAUSE HERE IS THE ONLY PLACE LEFT THAT CAN ASK.
    extension/bridge.js asserts each of them sums to `endpoints` at the one composition where every side is in
