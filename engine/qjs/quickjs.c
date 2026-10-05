@@ -358,6 +358,30 @@ struct JSRuntime {
        find out why the bundle's request builders are not compiled bodies.
        IT IS A LIFETIME COUNT AND NOT A GAUGE, so it may be differenced across two censuses of one run. */
     uint64_t orphan_preferred_takes;
+    /* WHAT A TAKE COSTS AND HOW MANY CANDIDATES THERE WERE TO CHOOSE FROM — the four rows that price this walk
+       and the count solver/engine.c's residual at the ask names as the one thing nothing in this tree could
+       take. That residual states the question in its own words: "how many live, never-entered, non-program
+       JSFunctionBytecode exist at ask time", and that it is what separates the TWO READINGS of a `driven` 0 —
+       a page that ships no uncalled code, and a frontier that never reached the question.
+       `walks` AND `entries` ARE THE PRICE. The walk enumerates `gc_obj_list`, so `entries / walks` is the mean
+       heap length one take reads, which is the number every repair of this seam has to be weighed against: a
+       candidate list pays only if candidates are far fewer than entries, and until these rows existed nobody
+       could say. Both are LIFETIME counts and may be differenced across two censuses of one run.
+       `walks_full` AND `full_candidates` ARE THE POPULATION, AND THE SPLIT IS NOT DECORATION. This walk EXITS
+       EARLY when a preferred candidate's script stands at the lowest quota, so a walk that exited has seen a
+       FLOOR of the candidate set and not the set — a count over every walk would be a floor wearing a total's
+       clothes. Only a walk that ran to the end of the list is summed here, so `full_candidates / walks_full` is
+       a mean over the walks that could actually answer, and `walks_full` is its denominator rather than a
+       detail. A `walks_full` of 0 beside a nonzero `walks` is the positive statement that every take in this run
+       was decided early, which is the preference WORKING and is not an absence of data.
+       AND `walks` IS THE WITNESS FOR THE ONE-ENUMERATION CHANGE, which is why it is a count of walks rather than
+       implied by the take count: exactly one walk happens per ask that is not answered by the generation memo,
+       so `walks == asks_took + asks_empty` holds at the host, and the four-enumeration shape this function used
+       to have would read about four times that. The host asserts it where all three are in one hand. */
+    uint64_t orphan_walks;
+    uint64_t orphan_walk_entries;
+    uint64_t orphan_walks_full;
+    uint64_t orphan_walk_full_candidates;
     /* HOW MANY TAKES EACH SCRIPT HAS ALREADY HAD, AND THE QUOTA EVERY SCRIPT IS CURRENTLY ENTITLED TO — the
        FAIRNESS half of JS_OrphanTakeOne's order, which the preference bit alone does not supply. The walk
        enumerates `gc_obj_list`, i.e. HEAP ALLOCATION ORDER, so without this the whole orphan budget goes to
@@ -112868,6 +112892,20 @@ uint32_t JS_OrphanGen(JSRuntime *rt) { return rt->orphan_gen; }
    `orphansDriven` and not this one cannot tell an order that fired from one whose preferred population was
    empty. It is the ORDER's own reachability witness and nothing branches on it. */
 uint64_t JS_OrphanPreferredTakes(JSRuntime *rt) { return rt->orphan_preferred_takes; }
+/* …AND WHAT THE WALK BEHIND IT COST, AS FOUR NUMBERS AND NEVER AS A QUOTIENT. The two means a reader wants
+   (`entries / walks`, `full_candidates / walks_full`) have different denominators and one of them can be zero,
+   so composing either here would hand back a figure whose denominator the caller cannot see — which is the
+   fraction-with-no-denominator shape CLAUDE.md names. The fields' own comment carries what each one is. */
+JSOrphanWalkCost JS_OrphanWalkCost(JSRuntime *rt)
+{
+    JSOrphanWalkCost c;
+
+    c.walks = rt->orphan_walks;
+    c.entries = rt->orphan_walk_entries;
+    c.walks_full = rt->orphan_walks_full;
+    c.full_candidates = rt->orphan_walk_full_candidates;
+    return c;
+}
 
 /* …AND HOW MANY DISTINCT SCRIPTS THOSE TAKES WERE SPREAD OVER. It is the take table's own length, which is
    exactly the count of scripts this walk has ever charged — the table gains a row the first time a script is
@@ -112988,6 +113026,11 @@ int JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque)
     JSObject *best_p[2] = { NULL, NULL };
     JSFunctionBytecode *best_b[2] = { NULL, NULL };
     uint32_t best_q[2] = { 0, 0 };
+    /* AND WHAT THIS WALK SAW, FOR THE FOUR PRICE ROWS ON THE RUNTIME. `early` is the preferred-zero exit, which
+       is what makes `candidates` a FLOOR rather than the population — the fields' comment carries why only a
+       full walk may be summed. Neither is read by the take: they are published and nothing branches on them. */
+    long candidates = 0;
+    int early = 0;
 #if APICLIENT_DEV
     size_t mc0 = rt->malloc_state.malloc_count;
 #endif
@@ -113047,20 +113090,27 @@ int JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque)
        heap order, so nothing later in the list can displace it and the rest of the walk cannot change which
        body is handed over. The fallback set has no such exit here because reaching it means the preferred set
        is empty, which is the rare case and the one the old fallback pass walked twice anyway. */
+    rt->orphan_walks++;
     list_for_each(el, &rt->gc_obj_list) {
         JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
         JSObject *p;
         JSFunctionBytecode *b;
         uint32_t t;
 
+        rt->orphan_walk_entries++;
         if (!orphan_candidate(gp, &p, &b)) continue;
+        candidates++;
         t = orphan_script_takes_of(rt, b->filename);
         if (!best_p[0] || t < best_q[0]) { best_p[0] = p; best_b[0] = b; best_q[0] = t; }
         if (b->spells_net_entry && (!best_p[1] || t < best_q[1])) {
             best_p[1] = p; best_b[1] = b; best_q[1] = t;
         }
-        if (best_p[1] && !best_q[1]) break;
+        if (best_p[1] && !best_q[1]) { early = 1; break; }
     }
+    /* THE POPULATION IS SUMMED ONLY WHERE THE WALK COULD ANSWER FOR IT. An early exit has seen a FLOOR of the
+       candidate set, so folding it in would publish a floor as a mean; the exit is the preference working and
+       the honest row for it is the one it is left out of. */
+    if (!early) { rt->orphan_walks_full++; rt->orphan_walk_full_candidates += (uint64_t)candidates; }
 #if APICLIENT_DEV
     /* THE ONE HAZARD THE WALK ITSELF STILL HAS, ASSERTED AT THE END OF THE WALK AND NOT AT THE END OF THE
        FUNCTION. A GC object created while this list is being iterated is inserted into the very list the

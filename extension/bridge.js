@@ -181,7 +181,9 @@ function assertResultDocument(r) {
                    "_routedTasksTargetOrigin", "_routedTasksTargetGone", "_routedTasksThrew",
                    "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed",
                    "_orphansDriven", "_orphansAsked",
-                   "_orphanAskMemo", "_orphanAskEmpty", "_orphanAskTook"]) {
+                   "_orphanAskMemo", "_orphanAskEmpty", "_orphanAskTook",
+                   "_orphanWalks", "_orphanWalkEntries", "_orphanWalksFull",
+                   "_orphanWalkFullCandidates"]) {
     DCHECK(typeof r[k] === "number",
            "the engine's result document carries no " + k + " count. TWO CAUSES, AND THE SECOND IS THE " +
            "ORDINARY ONE — check it first. (1) THE LOADED WASM IS OLDER THAN THIS FILE: this half of the " +
@@ -829,8 +831,13 @@ function linesToAnalysis(lines, msg, outcome, eng) {
         /* AND WHICH EXIT EACH OF THOSE ASKS TOOK, which the pair cannot say and which decides between two
            OPPOSITE repairs. `memo` is an ask the generation cache answered with NO walk at all, so a high
            `memo` says the cache absorbs and the cost is PER WALK; a low one says the orphan generation moves as
-           fast as flows run out of work and nearly every ask enumerates `rt->gc_obj_list`, so the cost is PER
-           ASK and the repair is the cache or the rung's placement. `empty` is a walk that ran and found
+           fast as flows run out of work and nearly every ask enumerates `rt->gc_obj_list`. THE SECOND HALF OF
+           THAT SENTENCE READ `so the cost is PER ASK and the repair is the cache or the rung's placement`, AND
+           THE ROW BESIDE IT REFUTED IT — kept in its own words because it is what a reader re-derives from
+           `memo` alone. Measured over two 90 s drives of one release artifact, `memo` read ZERO of 87 asks and
+           ZERO of 228 while `took` read 86 and 227: essentially every ask is a PRODUCTIVE walk, and no cache
+           can skip a walk that succeeds, so ONE ask per run was the whole population a memo could have helped.
+           A low `memo` names the WALK, which is what `orphanWalks` and its three siblings price. `empty` is a walk that ran and found
            nothing, which solver/engine.c's residual at the take states is a fact about the HEAP and not about
            the bundle — the walk can only see a body with a live function object of its own. They sum to
            `asked`, which solver/result.c asserts where all four were read together, so a consumer may check
@@ -838,6 +845,17 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            nothing to default. */
         orphanAskMemo: result._orphanAskMemo, orphanAskEmpty: result._orphanAskEmpty,
         orphanAskTook: result._orphanAskTook,
+        /* …AND WHAT THOSE WALKS COST, WITH BOTH OF THEIR DENOMINATORS CARRIED. `entries / walks` is the mean
+           object-list length one take reads; `fullCandidates / walksFull` is the mean candidate population over
+           the walks that ran to the END of the list, and its denominator is NOT the first one — the take exits
+           early on a preferred candidate at the lowest quota, so such a walk has seen a FLOOR of the set and is
+           left out of the population rows on purpose. A `walksFull` of 0 beside a nonzero `walks` is the
+           positive statement that every take was decided early. `walks` is also the witness that one take is
+           ONE enumeration: solver/result.c asserts `walks == empty + took` where all three are in one hand, and
+           the four-enumeration shape that function used to have would read about four times it. */
+        orphanWalks: result._orphanWalks, orphanWalkEntries: result._orphanWalkEntries,
+        orphanWalksFull: result._orphanWalksFull,
+        orphanWalkFullCandidates: result._orphanWalkFullCandidates,
         /* WHAT THE RUN ACTUALLY LEARNED, beside what it cost. The counters above say the BFS switched, forked
            and pumped jobs; these two say it produced something, which is the only question a probe watching an
            engine that now lives behind a frame boundary can ask without reaching into the moat. Both arrays are

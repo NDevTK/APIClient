@@ -3001,6 +3001,24 @@ JS_EXTERN int      JS_FlowIsProgram(const JSValue *flow);
    BORROWED. Returns 1 if one was handed over, 0 if this heap holds none. */
 typedef void JSOrphanVisitFn(JSContext *ctx, JSValueConst fn, int arg_count, void *opaque);
 JS_EXTERN int      JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque);
+/* WHAT THAT TAKE'S WALK COST AND HOW MANY CANDIDATES IT HAD TO CHOOSE FROM. FOUR NUMBERS AND TWO
+ * DENOMINATORS: `entries / walks` is the mean heap length one take reads, and `full_candidates / walks_full`
+ * is the mean candidate population over the walks that ran to the END of the list. The second denominator is
+ * not the first — the take EXITS EARLY on a preferred candidate standing at the lowest quota, so such a walk
+ * has seen a floor of the candidate set and is deliberately left out of the population rows. A `walks_full` of
+ * 0 beside a nonzero `walks` is therefore a positive statement that every take was decided early, which is the
+ * preference working rather than a missing measurement.
+ * `walks` IS ALSO THE WITNESS THAT ONE TAKE IS ONE ENUMERATION: exactly one walk happens per call, so a host
+ * that counts its own asks can assert `walks == asks_that_walked` and would read about four times that against
+ * the shape this function had before. Every field is a LIFETIME count and may be differenced across two reads.
+ */
+typedef struct {
+    uint64_t walks;            /* calls that enumerated the object list at all */
+    uint64_t entries;          /* object-list entries those walks stepped over */
+    uint64_t walks_full;       /* …of which ran to the end of the list rather than exiting early */
+    uint64_t full_candidates;  /* candidates seen by THOSE walks only — see above for why not by all of them */
+} JSOrphanWalkCost;
+JS_EXTERN JSOrphanWalkCost JS_OrphanWalkCost(JSRuntime *rt);
 /* HOW MANY OF THAT WALK'S TAKES CAME FROM ITS PREFERRED PASS — a body whose source resolved a network door's own
    entry name against the global object, which `JSConcolicHooks.global_named`'s answer is what decides. A host
    reading only how many orphans it drove cannot tell an order that FIRED from one whose preferred population was

@@ -1424,7 +1424,11 @@ const row = {
      OPPOSITE REPAIRS. `memo` high says the generation cache absorbs and the walks that happen are few, so the
      cost is PER WALK and the repair is inside the walk; `memo` low says the orphan generation moves as fast as
      flows run out of work and nearly every ask is a full enumeration of `rt->gc_obj_list`, so the cost is PER
-     ASK and the repair is the cache or the rung's placement. `empty` is a walk that ran and found nothing,
+     ASK. THE `and the repair is the cache or the rung's placement` HALF OF THAT IS REFUTED BY THE ROW ITSELF and
+     is kept in its own words because it is what a reader re-derives from `memo` alone: measured over two drives,
+     `memo` read ZERO of 87 and ZERO of 228 asks while `took` read 86 and 227, so essentially every ask is a
+     PRODUCTIVE walk and no cache can skip one that succeeds — a low `memo` names the WALK, which the four
+     `orphanWalk*` rows below price. `empty` is a walk that ran and found nothing,
      which solver/engine.c's residual at the take states is a fact about the HEAP and not about the bundle.
      WHY IT MATTERS ON THIS ROW RATHER THAN ON SOME OTHER: measured over three drives of one release artifact
      on one real app, `seed-one-orphan-flow` overran the cooperative slice in 204 of 221, 237 of 242 and 159 of
@@ -1440,6 +1444,38 @@ const row = {
   orphanAskMemo: counted.length ? counted[counted.length - 1].orphanAskMemo : null,
   orphanAskEmpty: counted.length ? counted[counted.length - 1].orphanAskEmpty : null,
   orphanAskTook: counted.length ? counted[counted.length - 1].orphanAskTook : null,
+  /* AND WHAT THOSE WALKS COST, WHICH IS THE FIGURE EVERY FURTHER REPAIR OF THAT SEAM MUST BE WEIGHED AGAINST.
+     `orphanWalkEntries / orphanWalks` is the mean object-list length ONE take reads — the take enumerates
+     `rt->gc_obj_list`, so a candidate list pays only if candidates are far fewer than entries, and until these
+     rows existed nothing could say. `orphanWalkFullCandidates / orphanWalksFull` is the mean CANDIDATE
+     population and its denominator is deliberately NOT the first one: the take exits early on a preferred
+     candidate standing at the lowest quota, so such a walk saw a FLOOR of the set and is left out rather than
+     published as a mean. A `orphanWalksFull` of 0 beside a nonzero `orphanWalks` is the positive statement that
+     every take was decided early, which is the preference WORKING.
+     THAT POPULATION IS THE COUNT solver/engine.c's residual at the ask names as the one thing nothing in this
+     tree could take — "how many live, never-entered, non-program JSFunctionBytecode exist at ask time" — and the
+     reason it names it is that it separates the TWO READINGS of an `orphansDriven` 0: a page that ships no
+     uncalled code, and a frontier that never reached the question.
+     ABSENT STAYS ABSENT for the pair above's reason: an artifact predating them omits them, and a `|| 0` would
+     read as a walk that stepped over no entries, which is the one thing a walk cannot do. */
+  orphanWalks: counted.length ? counted[counted.length - 1].orphanWalks : null,
+  orphanWalkEntries: counted.length ? counted[counted.length - 1].orphanWalkEntries : null,
+  orphanWalksFull: counted.length ? counted[counted.length - 1].orphanWalksFull : null,
+  orphanWalkFullCandidates: counted.length ? counted[counted.length - 1].orphanWalkFullCandidates : null,
+  /* AND THE WALK COUNT ASKED AGAINST THE EXITS, which is this driver's release-mode reader for the equality
+     solver/result.c asserts with a `DCHECK` that `-DAPICLIENT_DEV=0` compiles out. One take is ONE enumeration
+     and the generation memo answers the rest, so `walks == empty + took`; a shape that read the list four times
+     per take — which that function had — reads about four times this. A STRING AND NOT A COLOUR, for
+     `orphanAskSumsWrong`'s reason: `null` is nothing to ask, `''` is an observed clean answer. */
+  orphanWalkCountWrong: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1];
+    const K = ['orphanWalks', 'orphanAskEmpty', 'orphanAskTook'];
+    for (const k of K) if (typeof c[k] !== 'number') return null;
+    return c.orphanWalks === c.orphanAskEmpty + c.orphanAskTook ? ''
+      : 'orphanWalks ' + c.orphanWalks + ' against orphanAskEmpty ' + c.orphanAskEmpty +
+        ' + orphanAskTook ' + c.orphanAskTook + ' = ' + (c.orphanAskEmpty + c.orphanAskTook);
+  })(),
   /* AND THE PARTITION ASKED HERE, for `wallSpanSumsWrong`'s reason exactly: solver/result.c asserts
      `memo + empty + took == orphansAsked` with a `DCHECK` that `-DAPICLIENT_DEV=0` compiles out, and this
      driver measures whatever artifact is installed — so on a release census that assertion is not weakened, it

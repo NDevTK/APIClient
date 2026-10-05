@@ -551,6 +551,15 @@ for (const p of passes) for (const r of p.rows) {
        these three STATE it, and they are the row that says whether the repair is per WALK or per ASK. */
     omemo: r.orphanAskMemo, oempty: r.orphanAskEmpty, otook: r.orphanAskTook,
     oexitWrong: r.orphanAskSumsWrong,
+    /* …AND WHAT THOSE WALKS COST. Two means with two DIFFERENT denominators, which is why four numbers travel
+       and no quotient is composed here: `oentries / owalks` is the mean object-list length one take reads, and
+       `ofull / owfull` is the mean candidate population over the walks that ran to the END of the list. A walk
+       that exited early saw a FLOOR of the candidate set and is excluded from the second pair on purpose, so
+       `owfull` is its denominator rather than a detail. `owCountWrong` is site.mjs's release-mode reader for
+       `walks == empty + took` — one take is ONE enumeration — which solver/result.c asserts in dev. */
+    owalks: r.orphanWalks, oentries: r.orphanWalkEntries,
+    owfull: r.orphanWalksFull, ofull: r.orphanWalkFullCandidates,
+    owCountWrong: r.orphanWalkCountWrong,
     /* THE ABSENT-GLOBAL PAIR, WHICH IS THE ONE ABSENCE THIS PROJECT'S FORCING FUNCTION CANNOT SURFACE AND
        WHICH THIS FILE WAS AGAIN THE CONSUMER THAT NEVER ASKED. §NO STUBS makes an unbuilt web API an HONEST
        absence whose forcing function is the page's own throw, and that argument rests on the page THROWING:
@@ -1776,7 +1785,12 @@ const oxOne = (m) => {
   const n = (k) => (typeof m[k] === 'number' ? m[k] : null);
   const memo = n('omemo'), empty = n('oempty'), took = n('otook'), ask = n('oask');
   const stated = [memo, empty, took].every((x) => x !== null);
+  const walks = n('owalks'), entries = n('oentries'), wfull = n('owfull'), full = n('ofull');
   return { stated, memo, empty, took, ask, drv: n('odrv'),
+           walks, entries, wfull, full,
+           perWalk: (walks ? entries / walks : null),
+           perFull: (wfull ? full / wfull : null),
+           cWrong: typeof m.owCountWrong === 'string' && m.owCountWrong !== '' ? m.owCountWrong : '',
            /* THE ABSENCE IS READ OFF THE VALUE AND NEVER OFF `in`, which is the construct the span block's own
               comment records as having made its `predates` arm dead: the mapping assigns these keys
               unconditionally, so `'omemo' in m` is true of a pass whose rows carry nothing. `undefined` is a
@@ -1792,21 +1806,27 @@ const oxRows = table.map((t) => {
 if (oxRows.length) {
   const oxIdW = Math.max('site'.length, ...oxRows.map((r) => r.id.length)) + 2;
   const v = (x) => (x === null ? '-' : String(x));
-  const cell = (x) => (x.wrong ? '[' + x.wrong + '] ' : '') +
+  const q = (y) => (y === null ? '-' : y.toFixed(0));
+  const cell = (x) => (x.wrong ? '[' + x.wrong + '] ' : '') + (x.cWrong ? '[' + x.cWrong + '] ' : '') +
     'ask ' + v(x.ask) + ' = memo ' + v(x.memo) + ' + empty ' + v(x.empty) + ' + took ' + v(x.took) +
-    ' (drv ' + v(x.drv) + ')';
+    ' (drv ' + v(x.drv) + ')  walks ' + v(x.walks) + ' x ' + q(x.perWalk) + ' entries, cand ' +
+    q(x.perFull) + ' over ' + v(x.wfull) + ' full';
   console.log('');
   console.log('WHERE EACH ORPHAN ASK WENT (site, then PER PASS IN ORDER):');
   /* EVERY QUANTITY THE CELL PRINTS IS NAMED HERE, for the span block's reason: a cell carrying more than its
      legend names is read as whichever field the legend lists. */
   console.log('  ask <orphan asks> = memo <the generation cache answered, NO walk> + empty <walked, heap held ' +
               'no takeable body> + took <walked and handed one over>  (drv <bodies actually driven>)');
+  console.log('  walks <enumerations of the object list> x <mean entries ONE walk stepped over>, ' +
+              'cand <mean candidates> over <walks that ran to the END of the list, which is that mean\'s own ' +
+              'denominator and not the first one>');
   for (const r of oxRows.filter((x) => x.stated.length))
     console.log('  ' + pad(r.id, oxIdW) + r.stated.map(cell).join(' | '));
-  console.log('  a high `memo` says the cache absorbs and the cost is PER WALK (repair inside the walk); a low');
-  console.log('  one says the orphan generation moves as fast as flows run out of work and nearly every ask');
-  console.log('  enumerates the GC object list, so the cost is PER ASK and the repair is the cache or the');
-  console.log('  rung\'s placement; a bracketed string is site.mjs\'s own partition verdict');
+  console.log('  a high `memo` says the cache absorbs and the walks that happen are few; a low one says the');
+  console.log('  orphan generation moves as fast as flows run out of work, so nearly every ask enumerates the');
+  console.log('  GC object list. READ IT BESIDE `took`: where took is nearly every ask the walks are PRODUCTIVE,');
+  console.log('  and no cache can skip a walk that succeeds — the repair is then the WALK, which the `walks`');
+  console.log('  and `cand` cells price; a bracketed string is site.mjs\'s own partition or walk-count verdict');
   const oxSilent = oxRows.filter((r) => !r.stated.length);
   if (oxSilent.length)
     console.log('  NOT STATED: ' + oxSilent.map((r) => r.id + '(' + r.tok + ')').join(' ') +

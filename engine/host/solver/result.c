@@ -4124,6 +4124,7 @@ char *result_json(JSContext *ctx) {
            `orphansDriven` small has had no row anywhere that could say whether the walks happened at all. See
            solver/engine.h's `EngineOrphanExits` for the two opposite repairs it decides between. */
         EngineOrphanExits orphanExits;
+        JSOrphanWalkCost orphanWalk;
         /* AND WHAT BECAME OF THE TASKS THOSE DELIVERIES QUEUED. `_routedDelivered` alone is the shape §@S
            forbids in a search and forbids here for the same reason: a page whose listener ran fewer times than
            the engine delivered has ONE number covering "the spec declined it" (§9.3.3 step 8.1), "there was no
@@ -4148,6 +4149,7 @@ char *result_json(JSContext *ctx) {
         engine_routed_census(&routedDelivered, &routedRefused, &routedZeroDelivery);
         engine_orphan_census(&orphansDriven, &orphansAsked);
         orphanExits = engine_orphan_exits();
+        orphanWalk = JS_OrphanWalkCost(JS_GetRuntime(ctx));
         /* THE PARTITION, ASSERTED HERE BECAUSE HERE IS WHERE ALL FOUR TERMS ARE IN ONE HAND. solver/engine.c
            asserts the same equality at engine_step_unit_runs; this is the one point in THIS composer where the
            total and its three parts have been read together, and a document that published three parts not
@@ -4159,6 +4161,19 @@ char *result_json(JSContext *ctx) {
                "the total is raised at engine_orphan_seed's entry past the forking gate and each part at "
                "exactly one of its exits, so a difference is an exit that records nothing and the residue a "
                "reader computes from these rows has silently stopped being the memo and the empty walk");
+        /* AND ONE WALK PER ASK THAT WALKED, WHICH IS THE WITNESS FOR THE ENUMERATION COUNT AND NOT A SECOND
+           SPELLING OF THE PARTITION ABOVE. `JS_OrphanTakeOne` enumerates the object list EXACTLY ONCE per
+           call and is called once per ask the generation memo did not answer, so the walk count is the memo's
+           complement. It is asserted here for the reason the partition is: this is the one point where the
+           quickjs-side count and the host's two exit counts are in one hand, and the equality is what a reader
+           would otherwise have to take on trust from two files. A shape that read the list four times per take
+           — which this function had — reads about four times this, so the assert is also the one durable
+           statement that the four-enumeration form is gone. */
+        DCHECK(orphanWalk.walks == (uint64_t)(orphanExits.empty + orphanExits.took),
+               "the orphan walk count does not equal the asks that walked — one take is one enumeration of the "
+               "object list and the memo answers the rest, so a difference means either a call enumerated the "
+               "list more than once or an ask walked without being charged to an exit, and every price this "
+               "document publishes per walk is then over the wrong denominator");
         engine_routed_task_census(routedEnds);
         out = composef("{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
                              /* THE ONES THIS ENGINE NAMED AND THEN TOOK BACK — beside `pageErrors` because
@@ -4268,17 +4283,40 @@ char *result_json(JSContext *ctx) {
                                 (`git grep -n 'solve_init\|concolic_init' -- engine/host`), and either would
                                 show here as a row FALLING between two `qjs_result` calls of one instance. */
                              "\"_orphansDriven\":%ld,\"_orphansAsked\":%ld,"
-                             /* …AND WHICH EXIT EACH OF THOSE ASKS TOOK, which the pair cannot say and which
-                                decides between two opposite repairs: `_orphanAskMemo` high says the generation
-                                cache absorbs and the walks that happen are few, so the cost is PER WALK; low
-                                says the orphan generation moves as fast as flows run out of work and nearly
-                                every ask enumerates `rt->gc_obj_list`, so the cost is PER ASK and the repair is
-                                the cache or the rung's placement. `_orphanAskEmpty` is a walk that ran and
-                                found nothing, which engine_orphan_seed's residual states is a fact about the
-                                HEAP and not about the bundle. They sum to `_orphansAsked` and that is asserted
-                                above, where all four were read together. See solver/engine.h's
-                                `EngineOrphanExits`. */
+                             /* …AND WHICH EXIT EACH OF THOSE ASKS TOOK, which the pair cannot say.
+                                `_orphanAskMemo` is an ask the generation cache answered with NO walk;
+                                `_orphanAskEmpty` is a walk that ran and found nothing, which
+                                engine_orphan_seed's residual states is a fact about the HEAP and not about the
+                                bundle. They sum to `_orphansAsked` and that is asserted above, where all four
+                                were read together. See solver/engine.h's `EngineOrphanExits`.
+                                THE FORK THIS COMMENT USED TO STATE IS REFUTED BY MEASUREMENT AND IS KEPT IN ITS
+                                OWN WORDS BECAUSE IT IS THE ONE A READER RE-DERIVES FROM `memo` ALONE. It read:
+                                memo high says the cache absorbs and the walks that happen are few, so the cost
+                                is PER WALK; LOW says the cost is PER ASK "and the repair is the cache or the
+                                rung's placement". The first half holds. The second does NOT, and the row that
+                                refutes it is the one printed beside it: over two 90 s drives of one release
+                                artifact on app.gitpod.io, `memo` read ZERO of 87 asks and ZERO of 228 while
+                                `took` read 86 and 227 and `empty` read 1 and 1. Essentially every ask is a
+                                PRODUCTIVE walk, and no cache can skip a walk that succeeds — ONE ask per run is
+                                the entire population a memo could ever have helped. So a low `memo` names the
+                                WALK as the repair, which is what the four rows below price. */
                              "\"_orphanAskMemo\":%ld,\"_orphanAskEmpty\":%ld,\"_orphanAskTook\":%ld,"
+                             /* …AND WHAT THOSE WALKS COST, WITH BOTH OF THEIR DENOMINATORS. `_orphanWalkEntries`
+                                over `_orphanWalks` is the mean object-list length one take reads, which is the
+                                figure every further repair of this seam has to be weighed against: a candidate
+                                list pays only if candidates are far fewer than entries. `_orphanWalkFullCandidates`
+                                over `_orphanWalksFull` is the mean candidate population, and its denominator is
+                                NOT the first one — the take exits early on a preferred candidate at the lowest
+                                quota, so such a walk has seen a FLOOR of the set and is deliberately left out.
+                                A `_orphanWalksFull` of 0 beside a nonzero `_orphanWalks` is the positive
+                                statement that every take was decided early, which is the preference working.
+                                THAT POPULATION IS THE COUNT engine_orphan_seed's residual NAMES as the one
+                                thing nothing in this tree could take — "how many live, never-entered,
+                                non-program JSFunctionBytecode exist at ask time" — and the reason it names it
+                                is that it separates the TWO READINGS of a `_orphansDriven` 0: a page that ships
+                                no uncalled code, and a frontier that never reached the question. */
+                             "\"_orphanWalks\":%llu,\"_orphanWalkEntries\":%llu,"
+                             "\"_orphanWalksFull\":%llu,\"_orphanWalkFullCandidates\":%llu,"
                              "\"_wfq\":%s,"
                              /* THE THREE SUBSYSTEM CENSUSES, EACH ONE NESTED OBJECT, for the reason `_wfq`
                                 is one: spreading them into siblings would put a cumulative switch count
@@ -4412,6 +4450,9 @@ char *result_json(JSContext *ctx) {
                      srcReads, sinkReached, sinkTainted, sinkSuppressed,
                      orphansDriven, orphansAsked,
                      orphanExits.memo, orphanExits.empty, orphanExits.took,
+                     (unsigned long long)orphanWalk.walks, (unsigned long long)orphanWalk.entries,
+                     (unsigned long long)orphanWalk.walks_full,
+                     (unsigned long long)orphanWalk.full_candidates,
                      wfq, cold, heap, swap, forkAt, absent,
                      place.asks, place.served, place.walks, place.placements, place.passes,
                      place.origin_asks, place.origin_served, place.origin_derived,
