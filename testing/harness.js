@@ -267,6 +267,25 @@ async function cmdRestart(args, keepIdb) {
   }
   try { await fsp.rm(path.join(PROFILE_DIR, "Default/Code Cache"), { recursive: true, force: true }); log("cleared Default/Code Cache"); }
   catch (e) { /* absent dir is fine */ }
+  /* AND THE PREVIOUS RUN'S TABS, WHICH IS A SEPARATE CARRIER FROM EVERY CACHE ABOVE AND THE ONE THAT BROKE
+     testing/corpus/run.sh's "ONE VIRGIN BROWSER PER SITE". Chrome writes the open-tab set to
+     Default/Sessions and RESTORES it on the next launch of the same profile, so the extension's brain mints
+     a document per restored tab and the engine RE-RUNS each of them -- a row measuring documents the pass
+     never navigated to, including documents of a DIFFERENT ORIGIN. The two clears above cannot reach it:
+     IndexedDB is the cold frontier and Code Cache is compiled bytecode, and a restored tab is neither.
+     MEASURED AS A CONTROLLED PAIR, one variable, everything else held (same lane, same profile, same
+     artifact e4d166b7, same site): with Default/Sessions present the third consecutive pass read
+     `runsTotal/runsMine 3/3` and `docsSeenMine 3`; with ONLY that directory removed the next pass read
+     `1/1` and `1`. And the cross-origin form is what makes it a defect rather than an inflated count -- a
+     gitlab pass in the same lane reported `docsAllOrigins ["https://app.gitpod.io","https://gitlab.com"]`
+     and `runsTotal 4` against `runsMine 1`, so three gitpod documents were analysed under a gitlab row.
+     NOT GATED ON `keepIdb`, because the cross-SESSION resume test `restart-keep` exists for is the parked
+     FRONTIER in IndexedDB and not Chrome's tab restore: that test re-visits deliberately, so nothing it
+     checks is carried by this directory. Default/Session Storage is left alone -- it was not the variable
+     the pair above moved, and widening a clear past what was measured is how a profile wipe starts
+     deleting the logins the comment at the head of this function promises to keep. */
+  try { await fsp.rm(path.join(PROFILE_DIR, "Default/Sessions"), { recursive: true, force: true }); log("cleared Default/Sessions (no tab of the previous run is restored)"); }
+  catch (e) { /* absent dir is fine */ }
   await cmdStart(args);
 }
 
