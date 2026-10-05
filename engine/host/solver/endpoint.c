@@ -3177,14 +3177,23 @@ char *endpoint_fetch_edge_rows(void) {
        §2.2.5 request record's nine fields are JSValues core/fetch's `visit` names, so the record is no longer
        one of that guard's terms and a fork inside §5.4 steps 10-27 is allowed. It is kept in its own words
        because a reader who re-derives the containment from that guard will write it again.
-       AND IT IS NOW TRUE OF LESS OF THE POPULATION THAN WHEN THAT RETIREMENT WAS WRITTEN, WHICH STRENGTHENS
-       THE ARGUMENT BELOW RATHER THAN WEAKENING IT. That clause went on to say the guard's REMAINING TERMS —
-       the extracted body and the parsed header list — still covered FETCH_CALL for any request carrying
-       EITHER, so the retired reason read as sound for most of the population. §5.2's extracted body is now a
-       list core/fetch/body.h declares, so the ONE term left is the header list and the only shape still
-       covered is a request whose init carries `headers`: a `fetch(u, {method:"POST", body: b})` reaches
-       FETCH_CALL with no refusal in front of it at all. So the population this containment rests on the guard
-       for has shrunk twice, and the real reason has to carry it alone.
+       AND THAT SHRINK HAS NOW COMPLETED, WHICH RETIRES THE CLAUSE THAT MEASURED IT RATHER THAN THE REASON
+       BELOW. This paragraph used to narrate a guard losing its terms one at a time — "the guard's REMAINING
+       TERMS — the extracted body and the parsed header list — still covered FETCH_CALL for any request
+       carrying EITHER", then "§5.2's extracted body is now a list core/fetch/body.h declares, so the ONE term
+       left is the header list". It is kept in its own words for the reason the retirement above is: a reader
+       who re-derives this containment from a refusal will narrate its terms the same way. THERE ARE NO TERMS
+       LEFT, BECAUSE THERE IS NO GUARD — `js_fetch_unforkable` is deleted, and so are the sibling refusals at
+       the `Headers` and `Request` constructors.
+       IT WAS VERIFIED AS A PRESENCE QUESTION AND READ RATHER THAN COUNTED, which is the one direction a count
+       cannot answer here: this file's own rules keep a retired argument AT its site, so the symbol still
+       greps nonzero across the tree and every one of those hits is prose that TALKS ABOUT the deletion ("the
+       deleted", "is DELETED", "USED TO READ"). A tally would have reported the guard alive on the strength of
+       the sentences recording that it is not.
+       SO THE REAL REASON BELOW CARRIES THE WHOLE POPULATION AND NO LONGER MERELY MOST OF IT, which makes this
+       containment STRONGER than when that narration was written rather than weaker — nothing the retired
+       clause rested on was holding anything up, and `fetch(u, {method:"POST", body: b})` was already the
+       shape it conceded reached FETCH_CALL with nothing in front of it.
        WHAT ACTUALLY HOLDS IT IS THE OFFER'S POSITION: `s->offered = 1` is set at §5.6 step 12 and everything
        after it in that stage is straight-line C that runs no page code (`endpoint_record`, the batch parse, the
        park), and the stage then RETURNS its promise rather than parking — which core/fetch asserts at that

@@ -1412,9 +1412,20 @@ char   *endpoint_fetch_edge_rows(void);
    between its offer and its teardown runs no page code and its offering stage RETURNS rather than parking, so
    no state holding a raised flag can be cloned at all. THAT REASON USED TO READ "`js_fetch_unforkable` REFUSES
    the fork once the state holds §5.4's record", and it is rewritten rather than deleted because a reader will
-   re-derive it: the §2.2.5 request record's fields are JSValues that guard's `visit` now names, so the record
-   is not one of its terms and a fork inside §5.4 steps 10-27 is allowed — which changes nothing about the
-   containment, because such a fork happens BEFORE the offer and gives two arms one offer each. It is not a corner: §3.5.6's SYNCHRONOUS arm sets the flag and then PARKS inside its own call
+   re-derive it from the word "survives": a sibling that cannot be forked needs no argument about where its
+   offer sits, so a reader reaching for one will reach for a refusal first.
+   THERE IS NO SUCH GUARD TO REACH FOR — `js_fetch_unforkable` is DELETED, along with the sibling refusals at
+   the `Headers` and `Request` constructors, so it has no `visit`, no terms and no population. This clause
+   used to say the record "is not one of its terms", which was a true statement about a guard that had terms
+   and is now a statement about nothing; the retired wording is kept because it is the shape a reader
+   re-derives, and the SYMBOL still greps nonzero in this tree for the reason this file's own rules give — a
+   retired argument stays at its site, so every surviving hit is prose that TALKS ABOUT the deletion, and the
+   lines were READ rather than tallied.
+   WHAT IT CHANGES ABOUT THE CONTAINMENT IS NOTHING, AND THAT WAS ALREADY THE CLAUSE'S OWN CONCLUSION: a fork
+   inside §5.4 steps 10-27 is allowed, it happens BEFORE the offer, and two arms each make their own offer. So
+   core/fetch's survival rests on the offer's POSITION alone and never on a refusal, which is what the
+   emitter's own paragraph at this census's containment states in its own words.
+   IT IS NOT A CORNER: §3.5.6's SYNCHRONOUS arm sets the flag and then PARKS inside its own call
    to the lifecycle machine, which fires `readystatechange` and `progress` at the page's own listeners — page
    code, at a depth where the send frame is live and forkable. An assert would fire on a legitimate state,
    which is the concession shape §Offensive-programming refuses, so the two rows are read as two facts and
