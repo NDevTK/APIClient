@@ -133,7 +133,7 @@ const PRODUCER = join(ROOT, "engine", "host", "test_forced.c");
    it happens to be handed, which is a fact about the stage list and not about the producer. */
 const ROSTER = [
   "@A2ENTER", "@A2OK", "@A2REALM", "@CANVAS2D", "@COLDPARK", "@COLDRESUME", "@FACE", "@FLEX", "@GCOMP",
-  "@GLYF", "@GLYPHMARK", "@H", "@HGATED", "@HUNASKED", "@HWORK", "@IMGMARK", "@INLINEBOX", "@INLINEBREAK",
+  "@GLYF", "@GLYPHMARK", "@H", "@HGATED", "@HUNASKED", "@HUNREACHED", "@HWORK", "@IMGMARK", "@INLINEBOX", "@INLINEBREAK",
   "@LOGICALWM", "@OCENSUS", "@PAGEERR", "@PAGEERR-EXPLORED", "@PAGEERR-RETRACTED", "@PAGEERR-STAGED",
   "@PAGEERR-STAGED-TOKEN", "@PAINT", "@PAINTTEXT", "@RASTER", "@RESULT", "@S", "@SCENSUS",
 ];
