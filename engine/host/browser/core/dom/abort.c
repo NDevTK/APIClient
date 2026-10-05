@@ -27,6 +27,20 @@
  * form, so the driver snapshots at the ask.
  *   THE TWO MEMBERS THAT TEST IT THEMSELVES ARE CONVERTED: `throwIfAborted()` and the `reason` getter are one
  * machine with two magics (sig_ask_step), and they ask abort.h's `abort_signal_aborted_step`.
+ *   AND SO IS `AbortSignal.any()`, WHOSE TEST IS NOT ITS OWN FLAG BUT EVERY INPUT SIGNAL'S — §3.2 "create a
+ * dependent abort signal" step 2, which is the WHOLE of that member's method steps. It asks through
+ * abort.h's `abort_signal_dependent_step`, and `js_any_def` had declared that body a machine the whole time:
+ * `AbortSignal.any([AbortSignal.timeout(n), c.signal])` is the spelling a bundle writes for "whichever comes
+ * first", so step 2 met the one flag §3.2 models as unknown on its FIRST element and crashed.
+ *   WHICH IS THE THIRD CONVERSION IN THIS ENGINE WHERE THE CRASH'S REMEDY CLAUSE WAS WRONG IN ONE DIRECTION, AND
+ * THE PATTERN IS WORTH MORE THAN ANY OF THEM. The clause says "declare that builtin a step machine
+ * (JS_CFUNC_STEP_DEF)", and at `fetch()`'s §5.6 step 4, at `navigator.locks.request()`'s §3.2.1 step 9 and here
+ * the builtin WAS ALREADY ONE — what was missing was never the declaration, it was that the ASK could not return
+ * a fork code. The remedy is right for a body that is not a machine and it is the rarer half of the population:
+ * a plain C body that branches on a signal is reached from a getter or a constructor, while the asks a real
+ * bundle actually drives arrive inside machines, because the members that TAKE a `signal` are the ones that also
+ * take a dictionary or an iterable and therefore had to be machines already. A reader meeting this abort checks
+ * whether the body is declared BEFORE reading its remedy, and that check is one grep of the `JSTrampStepDef`.
  *   THIS USED TO SAY THEY ASK "the machine's own step_fork_run", AND IT IS KEPT IN ITS OWN WORDS BECAUSE A
  * READER WHO RE-DERIVES THE REMEDY FROM "a machine forks at its own seam" WILL NAME THAT ONE AGAIN. The seam is
  * `step_tobool_run`, which keys by the OPERAND'S OWN identity — the same constraint entry a page's
@@ -35,8 +49,10 @@
  * file a domain-less shape for a parameter the page had gated. abort.h states that correction at the parking
  * form and the crash's own remedy clause carries it.
  *   WHAT IS STILL PLAIN C AND STILL CRASHES: every ask reached through `signal_is_aborted`'s non-parking form,
- * which is §3.2 signal abort's own step 1 test (signal_abort_state) and the two exported helpers this file
- * hands the rest of the engine. A page that branches on an `AbortSignal.timeout()` flag through one of those,
+ * which is §3.2 signal abort's own step 1 test (signal_abort_state), the two exported helpers this file hands the
+ * rest of the engine, and the NULL-`h` arm of the dependent-signal build — whose callers are the C-vector entry's,
+ * each of them pairing two locals rather than converting a page's iterable. A page that branches on an
+ * `AbortSignal.timeout()` flag through one of those,
  * on a decision this flow has not already taken, aborts HERE rather than stranding a prepared sibling for some
  * later fork elsewhere in the agent to trip over, which is what it did before and why it was never traced to
  * this file.
@@ -568,36 +584,96 @@ static void signal_adopt_reason(JSContext *ctx, JSValueConst sig, JSValue reason
  * captures, and a malloc'd vector parked across a suspension is a leak no GC walk can see.
  *
  * THE REALM is `ctx`'s — the algorithm's third parameter — because signal_new mints on that realm's
- * AbortSignal.prototype, which for a step machine is the realm that DEFINED the member. */
-static JSValue dependent_signal_new(JSContext *ctx, JSValueConst signals)
+ * AbortSignal.prototype, which for a step machine is the realm that DEFINED the member.
+ *
+ * AND STEP 2'S TEST CAN FORK, WHICH IS WHY THIS TAKES A STEP HEADER AND WHY ITS THREE SLOTS ARE THE CALLER'S.
+ * "If signal is aborted" is a test of each INPUT signal's flag, and the one flag §3.2 models as unknown is
+ * `AbortSignal.timeout()`'s — so `AbortSignal.any([AbortSignal.timeout(n), c.signal])`, which is the spelling a
+ * bundle writes for "whichever comes first", asks an unknown on its FIRST element. Asked through the
+ * non-parking form that is a fork with no resume point and it ABORTS at solver/engine.c's seam.
+ *   `h` IS A DECLARATION BY THE ONE CALLER THAT CAN MAKE IT AND NOT A ROUTING TABLE. There is nothing to look
+ * up: non-NULL means `a clone is coming, this ask may rest`, NULL means `there is no activation here` — the
+ * same shape engine.c's own `g_fork_snapshot_owed` is, moved from a global to an argument because here the fact
+ * is per-CALL rather than per-session. It selects no second implementation of the algorithm: every line below
+ * is shared, and the arm it picks is which of abort.h's TWO ASK ENTRIES answers one test. The NULL arm is not a
+ * softer path either — it reaches the identical seam and CRASHES where it cannot carry the sibling, naming the
+ * site it was handed, which is the forcing function intact.
+ *   `at` IS LOAD-BEARING AND NOT AN OPTIMISATION. The seam BORROWS the flag of the element it is asking about
+ * and holds it across the park, so a resume that restarted step 2 at element 0 would be asked about element 0's
+ * flag while the seam held element `at`'s — "the operand the resuming arm was about to be asked about", which is
+ * what every consumer of that seam asserts. It is a plain integer, so a deep fork's byte-copy carries it and the
+ * caller's `visit` must NOT name it.
+ *   `result` IS MINTED ONCE AND NOT ONCE PER ENTRY, for the reason abort.h gives for `held`: a fork re-enters the
+ * asking arm at its top twice, so a step-1 mint reached on a resume would leak the parent's signal and hand the
+ * sibling a DIFFERENT object than the arm it is replaying was about. */
+static int dependent_signal_build(JSContext *ctx, JSStepHdr *h, JSValueConst signals,
+                                  JSValue *result, JSValue *held, uint32_t *at, const char *site)
 {
-    JSValue result = signal_new(ctx, JS_FALSE, JS_UNDEFINED);   /* Step 1 */
     uint32_t i, n = array_len(ctx, signals);
 
-    CHECK(!JS_IsException(result), "a dependent AbortSignal could not be allocated");
+    /* Step 1. WHAT THIS RELIES ON, NAMED BECAUSE IT IS THE LOAD-BEARING AND NON-OBVIOUS HALF: step 1 runs BEFORE
+       step 2's fork, so both arms hold a reference to ONE result object and then WRITE to it — the aborted arm
+       sets `aborted` and `reason`, the other sets `dependent`. Those are own-property writes under this file's
+       private symbol, which is the thing this file's header says it chose that representation FOR: "an abort in
+       one arm of a fork is invisible to the sibling for free", because the per-flow COW delta captures an
+       ordinary property write with no new delta kind.
+       IT IS NOT A NEW DEPENDENCY. `signals` is in the IDENTICAL position and has been since this machine was
+       written: it is minted at ANY_START, it is APPENDED TO after a fork inside the page's iterator can have
+       happened, and this machine's own `visit` comment states the consequence as the point — "two arms of a
+       branch inside the page's iterator hand `any()` two different sequences". A result object shared across
+       step 2's fork rides exactly that mechanism, so if one works the other does.
+       HOW ITS ABSENCE WOULD SHOW: two arms of one `AbortSignal.any()` answering the SAME `aborted`, which is one
+       timeline's write landing in both. test_forced.c's `anyiter` row is where the two are exercised in one
+       machine — the iterator park and step 2's fork, in that order. */
+    if (JS_IsUninitialized(*result)) {
+        *result = signal_new(ctx, JS_FALSE, JS_UNDEFINED);
+        CHECK(!JS_IsException(*result), "a dependent AbortSignal could not be allocated");
+    }
     /* Step 2: an already-aborted input decides the answer OUTRIGHT — the result is born aborted with that
        signal's reason and registers no dependency at all, which is why the operators' "if internal options's
-       signal is aborted, reject and return" test answers correctly on the very first line. */
-    for (i = 0; i < n; i++) {
-        JSValue sig = JS_GetPropertyUint32(ctx, signals, i);
-        bool aborted = abort_signal_aborted(ctx, sig);
-        if (aborted)
-            signal_adopt_reason(ctx, result, abort_signal_reason(ctx, sig));
+       signal is aborted, reject and return" test answers correctly on the very first line.
+       THE CURSOR ADVANCES ONLY ONCE THE ASK HAS ANSWERED, which is what makes a resume re-ask the same element
+       rather than the next one. */
+    while (*at < n) {
+        JSValue sig = JS_GetPropertyUint32(ctx, signals, *at);
+        int aborted;
+
+        if (h) {
+            int r = abort_signal_aborted_step(ctx, h, sig, held, &aborted);
+
+            if (r) {              /* PARKED or FORKED — `*at` names the element the seam holds the flag of */
+                JS_FreeValue(ctx, sig);
+                return r;
+            }
+        } else {
+            aborted = abort_signal_aborted_at(ctx, sig, site) ? 1 : 0;
+        }
+        if (aborted) {
+            /* THE REASON REPLAYS AND DOES NOT FORK A SECOND TIME. `abort_signal_reason_at` asks the
+               NON-parking test over the SAME `aborted` flag, and `decide_key` composes a branch identity out of
+               THE VALUE ALONE, so both asks are one key; this arm has just recorded `aborted = 1` under it, so
+               the read is answered as a feasible refinement and never reaches `engine_prepare_fork`. */
+            signal_adopt_reason(ctx, *result, abort_signal_reason_at(ctx, sig, site));
+            JS_FreeValue(ctx, sig);
+            return 0;
+        }
         JS_FreeValue(ctx, sig);
-        if (aborted)
-            return result;
+        (*at)++;
     }
     {   /* Step 3 */
-        JSValue slots = signal_slots(ctx, result);
+        JSValue slots = signal_slots(ctx, *result);
         DCHECK(JS_IsObject(slots), "a signal this component just minted has no slot record");
         JS_SetPropertyStr(ctx, slots, "dependent", JS_TRUE);
         JS_FreeValue(ctx, slots);
     }
+    /* STEPS 3 AND 4 RUN NONE OF THE PAGE'S CODE AND ASK THE SOLVER NOTHING, so there is no rest point below
+       this line and `at` is spent at `n` by the time it is reached. Every read is an own slot the engine wrote
+       and every append is the engine's own list. */
     for (i = 0; i < n; i++) {                                   /* Step 4 */
         JSValue sig = JS_GetPropertyUint32(ctx, signals, i);
         if (!signal_dependent(ctx, sig)) {
-            signal_list_append(ctx, result, "sources", sig);
-            signal_list_append(ctx, sig, "deps", result);
+            signal_list_append(ctx, *result, "sources", sig);
+            signal_list_append(ctx, sig, "deps", *result);
         } else {
             /* Step 4.2: FLATTEN — a dependent input contributes its own SOURCES, never itself, so the graph
                this builds is always exactly one hop deep. */
@@ -605,24 +681,99 @@ static JSValue dependent_signal_new(JSContext *ctx, JSValueConst signals)
             uint32_t k, m = JS_IsArray(src) ? array_len(ctx, src) : 0;
             for (k = 0; k < m; k++) {
                 JSValue s = JS_GetPropertyUint32(ctx, src, k);
-                DCHECK(!abort_signal_aborted(ctx, s) && !signal_dependent(ctx, s),
-                       "§3.2 step 4.2.1: a source signal of a dependent signal was aborted or itself dependent "
-                       "— the flattening this algorithm performs is what makes that impossible");
-                signal_list_append(ctx, result, "sources", s);
-                signal_list_append(ctx, s, "deps", result);
+                /* §3.2 step 4.2.1's assert, NARROWED TO THE HALF THAT IS THIS ENGINE'S OWN FACT. It read
+                   `!abort_signal_aborted(ctx, s) && !signal_dependent(ctx, s)`, and the first operand ASKS THE
+                   SOLVER — which forks — so a `DCHECK` whose condition "MUST be side-effect-free" was minting a
+                   flow, in DEV ONLY, which is the arm-divergence §Offensive-programming forbids: release
+                   compiles the ask out entirely, so the two regimes explored different worlds from inside an
+                   assertion. It is not reachable through step 2's answers either — step 2 asks about the INPUT
+                   signals and this asks about the SOURCE signals of a dependent input, which are different
+                   objects — so it was a FIRST-TIME fork and the abort it reached named this assert's own line.
+                   The dropped half is also the half an assert may not stand on: §3.2 models a
+                   `AbortSignal.timeout()` flag as UNKNOWN, so "this source is not aborted" is not an invariant
+                   this codebase computed and can therefore not be violated. WHAT SURVIVES IS THE FLATTENING
+                   ITSELF — `dependent` is a boolean step 3 above writes and nothing else does, so it is exactly
+                   the fact this algorithm guarantees and the one a reader needs. */
+                DCHECK(!signal_dependent(ctx, s),
+                       "§3.2 step 4.2.1: a source signal of a dependent signal was ITSELF dependent — the "
+                       "flattening this algorithm performs is what makes that impossible, and `dependent` is a "
+                       "flag step 3 of this same algorithm is the only writer of");
+                signal_list_append(ctx, *result, "sources", s);
+                signal_list_append(ctx, s, "deps", *result);
                 JS_FreeValue(ctx, s);
             }
             JS_FreeValue(ctx, src);
         }
         JS_FreeValue(ctx, sig);
     }
-    return result;                                              /* Step 5 */
+    return 0;                                                   /* Step 5 */
+}
+
+/* THE PARKING ENTRY — abort.h states its contract and its three slots. */
+int abort_signal_dependent_step(JSContext *ctx, JSStepHdr *h, JSValueConst signals,
+                                JSValue *result, JSValue *held, uint32_t *at)
+{
+    DCHECK(h != NULL, "the parking form of §3.2's create-a-dependent-abort-signal was asked without a step "
+                      "header — the header is where the driver reads the outstanding ask and writes its answer, "
+                      "so a NULL one is a plain C body that has not been declared a machine and must use "
+                      "abort_signal_dependent_new");
+    DCHECK(result != NULL && held != NULL && at != NULL,
+           "§3.2's create-a-dependent-abort-signal was asked to park with one of its three slots missing — the "
+           "signal it is building, the flag the seam borrows and the element the ask is about all have to live "
+           "where the SIBLING'S SNAPSHOT CARRIES them, so a caller with nowhere to keep one of them would hand "
+           "the resuming arm a freed value or the wrong element's question");
+    /* THE SITE IS THE PARKING FORM'S OWN AND NAMES NOTHING, deliberately: the ask below cannot reach
+       engine_prepare_fork's abort at all, because the seam it asks returns the fork code instead. */
+    return dependent_signal_build(ctx, h, signals, result, held, at,
+                                  "core/dom/abort.c (the parking form asks no non-parking test)");
+}
+
+/* THE NON-PARKING ENTRY, for the one shape that has no resume point: a C caller whose list is two locals.
+   It is `_at`-shaped and the macro expands at each of ITS callers, for abort.h's reason — the ask lives in the
+   shared body above, so a site composed here would name this function for every caller at once.
+
+   NAMED RESIDUAL — WHAT IS NOT COVERED. Step 2's test asked through THIS entry still reaches
+   solver/engine.c's `engine_prepare_fork` and aborts, because this entry's caller has no step header to park on.
+   It is stated as a PROPERTY and not as a list, for the reason the sibling residual at
+   core/events/event_target.c gives: a named caller goes stale the day it is converted. THE PROPERTY IS — a
+   caller that reaches this entry while holding no `JSStepHdr`, with at least one input signal whose `aborted`
+   flag is unknown and no arm yet recorded for it. The second half is a fact about the FLOW and not about the
+   caller, which is why this cannot be answered from here and why the crash's `site` is what answers it.
+   THE DERIVATION, because a count here rots on the next conversion:
+     git grep -cE 'abort_signal_dependent_new(_at)?[[:space:]]*\(ctx' -- '*.c'
+   SPELLED AS THE CONSTRUCT AND UNABLE TO MATCH ITS OWN LINE, for the two reasons the pair's derivation above
+   states; it counts this file's own definitions out because theirs spell `JSContext *ctx`.
+   WHAT THE NEXT DIFF BUILDS: each such caller routed to `abort_signal_dependent_step` with the three slots on
+   its OWN state — and the ordered subproblem is not uniform across them, because a caller that holds no header
+   AT ALL needs one first. §11's promise-returning operators and §5.4's request constructor are two different
+   answers to that, and a diff that treats them as one would add a call where there is no header to pass.
+   HOW ITS ABSENCE WOULD SHOW: solver/engine.c's `engine_prepare_fork` abort naming a caller of this entry as its
+   ask site, with its question reading as a derivation of an `AbortSignal.timeout()` flag. That is the one
+   observation that cannot be confused with the converted path's, because the parking arm cannot reach that seam.
+   RETIREMENT: this record goes when this entry has no callers left outside this file, after which the NULL-`h`
+   arm of the build above is the thing to delete and the `if (h)` with it. */
+static JSValue dependent_signal_new_at(JSContext *ctx, JSValueConst signals, const char *site)
+{
+    JSValue result = JS_UNINITIALIZED, held = JS_UNINITIALIZED;
+    uint32_t at = 0;
+    int r = dependent_signal_build(ctx, NULL, signals, &result, &held, &at, site);
+
+    DCHECK(r == 0, "§3.2's create-a-dependent-abort-signal parked with no step header to park on — the NULL-`h` "
+                   "arm asks the non-parking test, which answers 0 or 1 and cannot return a fork code");
+    DCHECK(JS_IsUninitialized(held),
+           "the non-parking arm of §3.2's create-a-dependent-abort-signal left the seam's borrow filled — only "
+           "abort_signal_aborted_step fills that slot, and the NULL-`h` arm never calls it");
+    (void)r;
+    return result;
 }
 
 /* THE SAME ALGORITHM REACHED FROM C, for a caller whose list is two locals rather than a converted sequence —
    §11's promise-returning operators, which pair their own controller's signal with the caller's. It builds the
-   list and delegates; there is ONE implementation of the algorithm and this is not a second one. */
-JSValue abort_signal_dependent_new(JSContext *ctx, JSValueConst *signals, int n)
+   list and delegates; there is ONE implementation of the algorithm and this is not a second one.
+   IT FORWARDS THE SITE IT WAS HANDED AND NEVER COMPOSES ONE, which is abort.h's rule for an intermediate. Step
+   2's ask is the one that can reach solver/engine.c's abort from these callers, and a site composed here would
+   name THIS function for every one of them — one answer for every candidate, which is no answer. */
+JSValue abort_signal_dependent_new_at(JSContext *ctx, JSValueConst *signals, int n, const char *site)
 {
     JSValue list = JS_NewArray(ctx), result;
     int i;
@@ -630,7 +781,7 @@ JSValue abort_signal_dependent_new(JSContext *ctx, JSValueConst *signals, int n)
     CHECK(!JS_IsException(list), "the source list of a dependent AbortSignal could not be allocated");
     for (i = 0; i < n; i++)
         JS_SetPropertyUint32(ctx, list, (uint32_t)i, JS_DupValue(ctx, signals[i]));
-    result = dependent_signal_new(ctx, list);
+    result = dependent_signal_new_at(ctx, list, site);
     JS_FreeValue(ctx, list);
     return result;
 }
@@ -1288,6 +1439,12 @@ typedef struct JSAnyState {
     IterCursor cur;      /* §3.2.21.1's protocol over the argument, one value per turn */
     JSValue    signals;  /* the sequence converted so far, an Array (owned) */
     JSValue    result;   /* the dependent signal, once created (owned) */
+    /* §3.2 step 2's TWO SLOTS, which are this machine's because the driver clones THIS state at the ask — see
+       abort.h at abort_signal_dependent_step. `dep_flag` is the seam's borrowed `aborted` flag, held across the
+       park, and `dep_at` is the element the outstanding ask is about. A plain integer is byte-copied by the
+       clone, which is why only the first of the two is visited. */
+    JSValue    dep_flag;
+    uint32_t   dep_at;
 } JSAnyState;
 
 /* WHAT THIS MACHINE OWNS: the cursor's five in-flight values and its call buffer (the cursor declares its own),
@@ -1299,14 +1456,23 @@ static void js_any_visit(JSContext *ctx, void *st, JSStepVisit *v)
     iter_cursor_visit(ctx, &s->cur, v);
     v->val(ctx, &s->signals);
     v->val(ctx, &s->result);
+    v->val(ctx, &s->dep_flag);   /* §3.2 step 2's borrowed `aborted` flag, held across its fork */
 }
 
 static JSValue js_any_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSAnyState *s = st;
-    JSValue r = take_result ? s->result : JS_UNDEFINED;
+    JSValue r;
 
     (void)ctx;
+    /* THE ANSWER IS NOT MINTED UNTIL ANY_CREATE RUNS, so a taken result that is still EMPTY is a completion
+       claimed for a stage that never answered — the two throws at ANY_START and the two at ANY_ELEMENT all
+       return JS_STEP_ABRUPT, which is the arm that takes nothing. This is the slot's own emptiness sentinel and
+       not JS_UNDEFINED, because UNDEFINED is a value a finished algorithm could legally hold. */
+    DCHECK(!take_result || !JS_IsUninitialized(s->result),
+           "AbortSignal.any's result was taken before §3.2 step 1 had minted it — only the ANY_CREATE stage "
+           "answers, and every abrupt arm of this machine returns JS_STEP_ABRUPT instead");
+    r = take_result ? s->result : JS_UNDEFINED;
     if (take_result) s->result = JS_UNDEFINED;
     return r;
 }
@@ -1325,7 +1491,19 @@ static int js_any_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
         JS_FreeValue(ctx, in);
         in = JS_UNDEFINED;
         iter_cursor_init(&s->cur);
-        s->signals = s->result = JS_UNDEFINED;
+        s->signals = JS_UNDEFINED;
+        /* §3.2 STEP 1'S ANSWER AND STEP 2'S TWO SLOTS, EMPTY AS A THING THIS STAGE STATES. A zeroed step state's
+           JSValue is the INTEGER 0 rather than JS_UNDEFINED, so neither `result`'s "not minted yet" nor
+           `dep_flag`'s "nothing borrowed" may be read off the slot — and `result` is JS_UNINITIALIZED rather
+           than JS_UNDEFINED for the same reason, because UNDEFINED is what a completed algorithm could legally
+           hold and the build below mints on emptiness.
+           THE INIT IS IN A STAGE THE ASKING STAGE CANNOT RE-ENTER, which is why abort.h's `step_fork_pending`
+           exit is not needed here and the assert at the ask states the fact instead. `stage` is assigned only
+           FORWARD in this machine (START → ELEMENT → CREATE) and a clone carries it, so a fork at step 2's ask
+           resumes at ANY_CREATE and never reaches this line twice. fetch.c needs that exit because its init and
+           its ask share one stage; this machine's do not, and the stage test is the stronger guard of the two. */
+        s->result = s->dep_flag = JS_UNINITIALIZED;
+        s->dep_at = 0;
         if (s->hdr.argc < 1) {
             JS_ThrowTypeError(ctx, "AbortSignal.any requires 1 argument, but only 0 were passed");
             return JS_STEP_ABRUPT;
@@ -1358,10 +1536,47 @@ static int js_any_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
         JS_SetPropertyUint32(ctx, s->signals, array_len(ctx, s->signals), JS_DupValue(ctx, s->cur.value));
     }
 
-    /* Step 1, and the whole of it. It runs none of the page's code — every read it makes is an own slot and
-       every list it touches is the engine's — so it is one stage and the machine has nothing left to rest on. */
+    /* Step 1, THROUGH THE PARKING FORM, because step 2 CAN FORK and this machine CAN carry the sibling.
+       THIS USED TO SAY "it runs none of the page's code … so it is one stage and the machine has nothing left to
+       rest on", AND IT IS KEPT IN ITS OWN WORDS BECAUSE EVERY CLAUSE OF IT IS TRUE AND THE CONCLUSION IS NOT.
+       None of the page's code does run here; what runs is a SOLVER ASK, once per input signal, over the one flag
+       §3.2 models as unknown — and an ask that forks needs a rest point exactly as a callback does. So the
+       sentence was right about page code, right about own slots, and wrong about the only thing it was being
+       read for. A reader who re-derives `no page code, therefore no rest point` will write it again.
+       WHAT IT COST: `AbortSignal.any([AbortSignal.timeout(n), c.signal])` — the spelling a bundle writes for
+       "whichever comes first" — asked step 2's test through the non-parking form from inside this plain C
+       helper, reached solver/engine.c's `engine_prepare_fork` with nowhere for the sibling to resume, and
+       ABORTED. `js_any_def` has declared this body a step machine the whole time, so nothing had to be built:
+       the driver holds the resume point it clones at and the whole repair is asking through the seam that can
+       return the fork code. The crash's remedy clause says "declare that builtin a step machine", which is the
+       right remedy for a body that is not one and is not what this population needed.
+       THE STAGE IS UNCHANGED ACROSS THE PARK, deliberately: the sibling re-enters AT the ask and `dep_at` is
+       what tells it WHICH element the seam is holding the flag of. */
     DCHECK(s->hdr.stage == ANY_CREATE, "AbortSignal.any resumed into a stage §3.2 does not have");
-    s->result = dependent_signal_new(ctx, s->signals);
+    /* NOTHING IS DELIVERED INTO THIS STAGE, WHICH IS WHY NOTHING FREES `in` ON THIS PATH. The loop above sets it
+       to JS_UNDEFINED before it breaks, and the only way to re-enter here is step 2's fork, whose two entries
+       quickjs re-enters with JS_UNDEFINED rather than with the same delivery (quickjs.c states it at
+       `step_fork_pending`). A real value arriving here would be a reference this stage drops on the floor, so the
+       fact is asserted rather than papered over with a free that would ALSO drop it. */
+    DCHECK(JS_IsUndefined(in),
+           "AbortSignal.any's step-1 stage was entered carrying a delivery — this stage asks only the branch "
+           "seam, whose fork entries arrive with JS_UNDEFINED, so a value here is one nothing in this machine "
+           "will release");
+    /* THE SEAM'S BORROW AND THIS MACHINE'S OUTSTANDING FORK AGREE, asserted at the one point they can disagree
+       — the same one fact fetch.c's §5.6 step 4 states, and the only thing about this slot a reader can check.
+       A held slot with no fork outstanding is a reference nothing will free; an empty one with a fork
+       outstanding is the operand the resuming arm was about to be asked about. */
+    DCHECK(step_fork_pending(&s->hdr) ? !JS_IsUninitialized(s->dep_flag)
+                                      : JS_IsUninitialized(s->dep_flag),
+           "AbortSignal.any reached §3.2 step 2's ask with the seam's borrow and this machine's outstanding fork "
+           "disagreeing — abort_signal_dependent_step fills `dep_flag` at the ask, HOLDS it across JS_STEP_FORK "
+           "because the sibling resumes AT the ask, and clears it when the ask answers");
+    r = abort_signal_dependent_step(ctx, &s->hdr, s->signals, &s->result, &s->dep_flag, &s->dep_at);
+    if (r)
+        return r;   /* PARKED. Nothing is outstanding to discharge: `in` was consumed at ANY_START or above. */
+    DCHECK(!JS_IsUninitialized(s->result),
+           "§3.2's create-a-dependent-abort-signal answered without minting step 1's signal — it answers 0 only "
+           "with the algorithm complete, and step 1 is its first statement");
     return JS_STEP_DONE;
 }
 

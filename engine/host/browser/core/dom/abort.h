@@ -168,7 +168,48 @@ JSValue abort_signal_reason_at(JSContext *ctx, JSValueConst sig, const char *sit
  * over a dependent takes the SOURCE signals of the inner one, so a chain of operators is one hop deep however
  * many of them there are, and step 4.2's assert says the flattening is total.
  *
- * `signals` is BORROWED, the answer is OWNED. */
-JSValue abort_signal_dependent_new(JSContext *ctx, JSValueConst *signals, int n);
+ * `signals` is BORROWED, the answer is OWNED.
+ *
+ * AND THE ASK SITE IS THE CALLER'S, for the reason the `aborted` pair's is: step 2 of the algorithm tests each
+ * input signal's flag, so this entry can reach solver/engine.c's abort, and a site composed inside abort.c would
+ * name one shared helper for every caller at once. The macro expands HERE, at each caller. An INTERMEDIATE of
+ * its own takes the `_at` form and forwards what it was handed. */
+JSValue abort_signal_dependent_new_at(JSContext *ctx, JSValueConst *signals, int n, const char *site);
+#define abort_signal_dependent_new(ctx, signals, n) \
+    abort_signal_dependent_new_at((ctx), (signals), (n), SOLVER_SITE_HERE)
+
+/* THE SAME ALGORITHM, ASKED FROM INSIDE A STEP MACHINE — the PARKING form, and the same difference the two
+ * `aborted` entries above have. The entry above returns a `JSValue` and therefore CANNOT say "I forked", so
+ * step 2's test reached solver/engine.c's seam from inside a plain C activation with nowhere for the sibling to
+ * resume and ABORTED. The flag it is handed is routinely the one §3.2 models as unknown:
+ * `AbortSignal.any([AbortSignal.timeout(n), c.signal])` is the spelling a bundle writes for "whichever comes
+ * first", so step 2 asks an unknown on its FIRST element.
+ *
+ * `js_any_def` ALREADY DECLARES `AbortSignal.any` A STEP MACHINE, so nothing in the fork machinery had to be
+ * built: the driver holds the resume point it clones at, and the whole repair is that the ask can return the
+ * fork code. The abort's own remedy clause says "declare that builtin a step machine", which is the right
+ * remedy for a body that is not one and is not what this population needed — recorded at that crash.
+ *
+ * THREE SLOTS ON THE CALLER'S STATE, and the caller's `visit` must name the two that are VALUES:
+ *   `result` — step 1's signal, minted ONCE and held across every park, and the algorithm's ANSWER: the caller
+ *              reads it when this returns 0. A fresh mint on a fork's re-entry would leak the parent's and hand
+ *              the sibling a DIFFERENT object than the arm it is replaying was about. The caller sets it to
+ *              JS_UNINITIALIZED, which is the emptiness this entry mints on — not JS_UNDEFINED, because that is
+ *              a value a finished algorithm could legally hold.
+ *   `held`   — abort_signal_aborted_step's borrowed operand, under that entry's own contract, which this entry
+ *              only ever forwards.
+ *   `at`     — step 2's CURSOR, which is load-bearing and not an optimisation. The seam borrows the flag of the
+ *              ELEMENT IT IS ASKING ABOUT and holds it across the park, so a resume that restarted step 2 at
+ *              element 0 would be asked about element 0's flag while the seam held element `at`'s — the exact
+ *              disagreement the held-slot assert at every consumer of that seam names. It is a plain integer, so
+ *              a deep fork's byte-copy carries it and `visit` must NOT name it.
+ * All three are initialised ONCE, before the first ask. `step_fork_pending(h)` is the exit where an init and an
+ * ask share a stage; a machine whose init is in a stage its asking stage cannot re-enter has a stronger guard
+ * already and states that fact instead.
+ *
+ * Returns JS_STEP_FORK (the caller returns it unchanged), or 0 once `*result` is the dependent signal. It never
+ * throws: every read it makes is an own slot and its one allocation is a CHECK. */
+int     abort_signal_dependent_step(JSContext *ctx, JSStepHdr *h, JSValueConst signals,
+                                    JSValue *result, JSValue *held, uint32_t *at);
 
 #endif

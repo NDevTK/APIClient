@@ -6439,7 +6439,26 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
            form, the commit that retired the figure rewrote abort.c's copy into a derivation and left this one
            standing, present-tense, one file over. That is the shape rather than the incident: a count is retired
            by a routing change in a THIRD component, so every copy of it is a site the converting diff has to
-           find, and the copy in the file that does not own the fact is the copy nobody greps. */
+           find, and the copy in the file that does not own the fact is the copy nobody greps.
+
+           AND THE REMEDY'S FIRST HALF — `Declare that builtin a step machine (JS_CFUNC_STEP_DEF)` — HAS NOW BEEN
+           WRONG AT EVERY SITE THIS ABORT HAS EVER BEEN LOCALISED TO, WHICH IS A PATTERN AND NOT A RUN OF BAD
+           LUCK. Three conversions have been made off this crash — `fetch()`'s §5.6 step 4, Web Locks §3.2.1
+           step 9 and DOM §3.2's create-a-dependent-abort-signal step 2 under `AbortSignal.any()` — and in all
+           three the builtin WAS ALREADY DECLARED a step machine. Nothing had to be built in the fork machinery
+           at any of them: the driver already held the resume point it clones at, and the whole repair was that
+           the ASK could not return a fork code, so each is a routing of one call onto a seam that was already
+           there with live consumers.
+           THE REASON IS STRUCTURAL AND IS WHY IT SHOULD KEEP HOLDING. A member that TAKES a signal takes it in
+           a dictionary or a sequence, and Web IDL converts both by running the PAGE'S code — so such a member
+           had to be a machine before it could accept its own argument. The population the remedy's first half
+           is right about is therefore the rarer one: a getter, a constructor or an engine-internal helper that
+           reaches a signal it was HANDED, which is where this abort's remaining callers live.
+           SO THE CLAUSE IS KEPT AND IS READ SECOND. It states what must EXIST afterwards — a machine holding the
+           resume point — and a reader who takes it as an instruction to ADD a declaration will grep for one and
+           find it, which costs a reading; a reader who takes it as a description of the END STATE asks the right
+           question first. The check is one grep of the body's own `JSTrampStepDef`, before the remedy is read at
+           all, and it is the first thing this crash's `site` makes possible. */
 #if APICLIENT_DEV
         {
             char name[192];

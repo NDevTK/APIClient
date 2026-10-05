@@ -1530,6 +1530,39 @@ static const char *HTML =
     "var ac = new AbortController(); ac.signal.addEventListener('abort', function(e){ fetch('/api/aborted?v=' + (e.isTrusted && e.type === 'abort' && e.target === ac.signal ? 'fired' : 'wrong')); }); ac.abort();"   /* the controller's signal is the REAL state machine: abort() reads [[Signal]] as an internal slot and fires `abort`, whose listener runs as its own task on this flow */
     "var tsig = AbortSignal.timeout({ valueOf: function(){ var n = 0; for (var i = 0; i < 2000; i++) { n += i; } return n; } });"   /* [EnforceRange] unsigned long long is ToNumber on the PAGE's object: the loop inside valueOf preempts, so the timeout machine must suspend and resume at the exact stage it parked on */
     "if (tsig.aborted) { fetch('/api/deadline?v=expired'); } else { fetch('/api/deadline?v=live'); }"   /* a timeout's aborted flag is UNKNOWN, so both arms run and the fallback path's endpoint is learned too */   /* THE responsive gate: a bundle routes, hosts assets and often bases its API on this, so both arms must be reached */   /* the desktop-vs-touch gate, the same shape over a numeric member */
+    /* DOM §3.2's "create a dependent abort signal" STEP 2, which IS the whole of `AbortSignal.any(signals)`'
+       method steps — the ask that reached solver/engine.c's `engine_prepare_fork` from a plain C helper and
+       ABORTED, on exactly the flag the row above mints. THREE CLAIMS, and only the first is about the ask
+       existing at all; the other two are about the two things the parking form has to carry.
+       THE CONTROLLER IS A FRESH ONE and that is not tidiness: the two above have had `abort()` called on them,
+       so a signal of either is CONCRETELY aborted and step 2 would answer TRUE at whichever element held it and
+       return before reaching the next one — which would make every row below assert about an element step 2
+       never looked at.
+       `anyfork` IS THE ASK. `tsig.aborted` is unknown at element 0, so step 2 forks there: the TRUE arm is born
+       aborted with the timeout's reason and the FALSE arm walks on to a signal nothing has aborted and yields a
+       live dependent signal, so `anya.aborted` is CONCRETE and OPPOSITE on the two arms and both endpoints are
+       learned. One endpoint here is one arm deleted.
+       `anylate` IS THE CURSOR, and it is the one shape in this fixture that can tell a cursor from a restart.
+       The concrete signal is FIRST, so step 2's ask at element 0 answers without forking (a flag that is not
+       unknown never reaches the seam) and the fork happens at element ONE. A resume that restarted step 2 at
+       element 0 would be asked about `anyac.signal`'s flag while the seam held `tsig`'s — the two differ here
+       and nowhere else above — and the arm it replayed would answer about the wrong signal.
+       `anyiter` PARKS THE SAME MACHINE TWICE FOR TWO DIFFERENT REASONS: a page iterator with a loop in `next`
+       suspends it at Web IDL §3.2.21.1 step 3, and step 2 then forks it. That is what proves the ask's held flag
+       and the iterator cursor's own in-flight values are separate slots which each survive one clone — a held
+       flag re-initialised on the fork's re-entry leaks the operand, and one shared slot answers about the wrong
+       thing. `Symbol.iterator` is ASSIGNED rather than written as a computed key for the reason the
+       `Symbol.asyncIterator` row below gives. */
+    "var anyac = new AbortController();"
+    "var anya = AbortSignal.any([tsig, anyac.signal]);"
+    "if (anya.aborted) { fetch('/api/anyfork?v=anyhot'); } else { fetch('/api/anyfork?v=anycold'); }"
+    "var anyb = AbortSignal.any([anyac.signal, tsig]);"
+    "if (anyb.aborted) { fetch('/api/anylate?v=latehot'); } else { fetch('/api/anylate?v=latecold'); }"
+    "var anyit = {}; anyit[Symbol.iterator] = function(){ var _k = 0;"
+    "   return { next: function(){ var n = 0; for (var i = 0; i < 500; i++) { n += i; }"
+    "     return _k++ === 0 ? { done: false, value: tsig } : { done: true, value: undefined }; } }; };"
+    "var anyc = AbortSignal.any(anyit);"
+    "if (anyc.aborted) { fetch('/api/anyiter?v=iterhot'); } else { fetch('/api/anyiter?v=itercold'); }"
     /* §13.15.3 ApplyStringOrNumericBinaryOperator STEP 1.c, ASKED OF THE EXAMPLE — "If leftPrimitive is a
        String or rightPrimitive is a String" — which is what decides whether `+` concatenates or ADDS. The
        concolic derivation had one arm, so `num + 1000000` carried the example "19201000000" where the code
@@ -17271,6 +17304,28 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "learned too",
              "expired", "live");
 
+    /* DOM §3.2 STEP 2'S THREE ROWS — see their statements for which of the parking form's three slots each one
+       is the assertion for. One row per STATEMENT and not one for the member, because the three differ in WHERE
+       step 2's fork happens (element 0, element 1, and after an iterator park) and a fold would report any one
+       of them as the member working.
+       THE WORLD TOKENS ARE SCOPED THE WAY THE DEADLINE ROW ABOVE SAYS THEY MUST BE: each of the six occurs
+       EXACTLY ONCE in this file, so no arm of one of these rows can read its match out of another statement. */
+    const char *anyfork_why = NULL; int anyfork_tt = 1;
+    FORK_ROW(js, &anyfork_tt, &anyfork_why, "/api/anyfork", "v",
+             "DOM §3.2 create-a-dependent-abort-signal step 2 over an UNKNOWN flag at its FIRST element — the "
+             "ask that had no resume point from a plain C body, so both arms prove it parks",
+             "anyhot", "anycold");
+    const char *anylate_why = NULL; int anylate_tt = 1;
+    FORK_ROW(js, &anylate_tt, &anylate_why, "/api/anylate", "v",
+             "the same ask with the unknown at element ONE, which is what the step-2 cursor is load-bearing "
+             "for: a resume that restarted the loop would be asked about the other signal's flag",
+             "latehot", "latecold");
+    const char *anyiter_why = NULL; int anyiter_tt = 1;
+    FORK_ROW(js, &anyiter_tt, &anyiter_why, "/api/anyiter", "v",
+             "the same ask after the SAME machine has already parked on the page's iterator, which is what says "
+             "the held flag and the iterator cursor's values are separate slots each surviving one clone",
+             "iterhot", "itercold");
+
     /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified. Read from the
        ONE document above — there is no second line to keep in step with it. */
     const char *ss = js;
@@ -19078,6 +19133,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "bitwise-tramp", bwtramp_tt, "/api/bwtramp", SESS_EXPLORE, bwtramp_why },
         { "abort", abortfire_tt, "/api/aborted", SESS_EXPLORE, abortfire_why },
         { "deadline", deadline_tt, "/api/deadline", SESS_EXPLORE, deadline_why },
+        { "any-step2", anyfork_tt, "/api/anyfork", SESS_EXPLORE, anyfork_why },
+        { "any-step2-cursor", anylate_tt, "/api/anylate", SESS_EXPLORE, anylate_why },
+        { "any-step2-after-park", anyiter_tt, "/api/anyiter", SESS_EXPLORE, anyiter_why },
         { "idl", idlcoerce_tt, "/api/idlcoerce", SESS_EXPLORE, idlcoerce_why },
         { "dom-idl", domidl_tt, "/api/protoid", SESS_EXPLORE, domidl_why },
         { "node-algo", nodealgo_tt, "/api/nodeconst", SESS_EXPLORE, nodealgo_why },
