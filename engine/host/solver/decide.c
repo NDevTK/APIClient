@@ -2923,8 +2923,35 @@ int solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n, 
     int i, forked = 0;
 
     if (!g_running) return -1;
-    DCHECK(concolic_is(over), "the outcome seam was asked about a value that is not unknown — a native "
-                              "operation forks only where its operand's domain permits more than one completion");
+    /* THE OPERATION AND THE SITE ARE IN THIS FRAME AND WERE NOT IN THE MESSAGE, which is
+       §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE exactly: one shared seam, three callers in the
+       interpreter, and ONE reported line for all of them. A reader meeting this abort was told that "a native
+       operation" had asked wrongly and had no way to learn WHICH — the remedy ("fork only where the domain
+       permits more than one completion") names an action with no object, so the crash was rediscovered rather
+       than fixed. Both facts are PARAMETERS of this function: `op` is the operation string the caller composes
+       with its own cursor in it, and `site` is the caller's `__FILE__`/`__LINE__` pair the macro threads —
+       captured AT THE CALLER for that rule's reason, so it names the asking opcode and never this line.
+       MEASURED: a native smoke aborted here with the fixture at `=> INCOMPLETE` and essentially every probe
+       row at 0, and the three candidate callers — a step machine's own fork, `LengthOfArrayLike>N` over an
+       argument-list coercion, and `ArraySetLength>N` — could only be separated by reading the interpreter and
+       guessing. One format string ends that.
+       AND THE TWO READINGS ARE STATED BECAUSE THEY TAKE OPPOSITE WORK. Either the CALLER's entry condition is
+       wrong — a chain that enters its ask phase over an operand whose domain permits one completion, which is
+       a guard owed at that chain — or the operand was DETERMINED by a pin after the chain decided to ask, which
+       is §CONCRETIZE-ON-PIN arriving between the decision and the seam and is a fact about the chain's
+       SEQUENCE rather than its condition. A reader who cannot tell them apart cannot aim the fix.
+       `op` MAY BE NULL HERE and the format is written for it: the `op != NULL` assert is further down, so this
+       one runs first and a caller that passed nothing would otherwise take the formatter into a null read while
+       reporting a different defect. */
+    DCHECKF(concolic_is(over),
+            "the outcome seam was asked about a value that is not unknown — a native operation forks only "
+            "where its operand's domain permits more than one completion. The operation is `%s` and the ASK "
+            "is at %s, which is the opcode's own site and not this seam's. TWO READINGS, and they take "
+            "opposite work: either that caller's entry condition admits an operand with one completion, which "
+            "is a guard owed where the chain decides to ask, or a pin DETERMINED the operand between the "
+            "decision and this call, which is a fact about that chain's sequence instead",
+            op ? op : "(the caller named none, which the assert below reports)",
+            site ? site : "(no site was threaded)");
     DCHECK(n >= 2, "an outcome fork declaring fewer than two feasible completions — one completion is not a "
                    "fork, it is the answer, and a machine that reached this seam with one has handed the flow "
                    "a decision it had already made itself");
