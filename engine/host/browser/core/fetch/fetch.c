@@ -380,6 +380,21 @@ struct JSFetchState {
        a step state is BYTE-COPIED at a deep fork and only what `visit` names is re-taken, so a heap pointer
        here would be freed by both arms. JS_UNDEFINED for a body whose arm has no type. */
     JSValue   body_mime;
+    /* FETCH §5.6 "Fetch methods" STEP 4's SIGNAL TEST HELD WHERE THE SIBLING'S SNAPSHOT CARRIES IT —
+       `abort_signal_aborted_step`'s borrowed operand. `fetch(u, {signal: AbortSignal.timeout(n)})` passes a
+       signal whose `aborted` is UNKNOWN EXTERNAL INPUT, so step 4's test FORKS: one world where the call
+       rejects with the reason and one where it reaches step 12 and the flow parks on the endpoint, and the
+       second is the surface this engine exists to report. The seam borrows the flag for the length of the
+       request and a step state is BYTE-COPIED at a deep fork, so a flag in a C local would be gone in the arm
+       that resumes and one in an unvisited field would be freed by both — which is why it is a field and why
+       `js_fetch_visit` names it.
+       JS_UNINITIALIZED IS THE EMPTY VALUE, WRITTEN EXPLICITLY, AND HERE IT IS LOAD-BEARING FOR THE ANSWER AND
+       NOT ONLY FOR THE OWNERSHIP — which is one more reason than the rule stated on `captured` above. A zeroed
+       step state's JSValue is the INTEGER 0, which `JS_IsUninitialized` does not read as empty, so an
+       un-initialised slot is handed to the branch seam AS THE OPERAND: a non-object, which §7.1.2 ToBoolean
+       answers `false` for with no request and no fork, so every `fetch()` carrying a timeout signal would be
+       told concretely that it is not aborted. The slot's emptiness is a thing this machine STATES. */
+    JSValue   sig_flag;
     /* A FLAG, not a test on the slot. A zeroed step state's JSValue is the INTEGER 0 and not JS_UNDEFINED, so
        "is this slot filled yet" asked of the slot answers YES for every request. The first stage can PARK — on
        §5.4 step 6's `url` read — and a parked stage is re-entered at its first line, so the capture below is
@@ -415,6 +430,7 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->url);
     v->val(ctx, &s->input);
     v->val(ctx, &s->body_mime);
+    v->val(ctx, &s->sig_flag);   /* §5.6 step 4's borrowed `aborted` flag, held across its fork */
     /* §2.2.5's REQUEST RECORD — its nine fields, through the record's own one list (request.h). It is here
        rather than open-coded because the list belongs to the record: a tenth field is one edit in request.c and
        this machine does not have to be told. This is the line that deleted a fork refusal. */
@@ -1557,14 +1573,78 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
        reason — where `fetch(u, {signal: AbortSignal.abort()})` now rejects, which it did not before. */
     {
         JSValue sig = idl_dict_get(ctx, init, "signal");
-        bool aborted = abort_signal_is(ctx, sig) && abort_signal_aborted(ctx, sig);
-        JSValue reason = aborted ? abort_signal_reason(ctx, sig) : JS_UNDEFINED;
+        int aborted = 0;
 
-        JS_FreeValue(ctx, sig);
+        /* ONCE PER INVOCATION, NOT ONCE PER ENTRY — and `step_fork_pending` is the only test that is. A fork
+           re-enters this arm AT ITS TOP TWICE, once in the parent carrying the answer and once in the sibling
+           re-asking, so an init placed here unguarded runs on both of them and OVERWRITES the owned reference
+           the seam is HOLDING in `sig_flag` across the park, with nothing left to free it: about two leaked
+           references to the concolic flag per fork, which §Testing counts as a failure. `hdr->stage` is not
+           that test — it is FETCH_CALL on all three entries — and neither is a phase counter written below the
+           ask, which still reads its initial value on both fork entries; abort.h names this exit rather than
+           leaving each caller to re-derive it, because the seam's FIRST consumer was landed with exactly that
+           defect. THE CHOICE IS NOT BETWEEN THIS AND `captured`: that flag would also be clean here (it is
+           written at FETCH_URL, ABOVE the ask, so it reads 1 on both fork entries, which is the property a
+           phase counter lacks), and it is not used because the init belongs where a reader of the ask can see
+           it and because this stage cannot be re-entered except by a fork — §5.6 step 12 does not park this
+           machine, it returns the promise the flow parks on, which the `offered` assert below states.
+           THE GUARD IS ON THE INIT AND NEVER ON THE ASK: the sibling MUST re-ask, because the arm it takes is
+           replayed from the flow's own decision vector AT the ask, and an answer baked into the clone would be
+           a second, weaker answer to a question the vector has already settled. */
+        if (!step_fork_pending(hdr))
+            s->sig_flag = JS_UNINITIALIZED;
+        /* THE SLOT IS EMPTY EXACTLY WHEN NO FORK OVER IT IS OUTSTANDING — one fact about the seam's borrow, and
+           the only thing about this slot a reader can check. Both halves are the two defects the init above is
+           for and each is constructible: delete the init and a first entry arrives holding the INTEGER 0 of a
+           zeroed state with no fork outstanding, which the seam reads as a filled slot and answers `false`
+           from; delete the GUARD and a fork entry arrives empty, which is the leak. */
+        DCHECK(step_fork_pending(hdr) ? !JS_IsUninitialized(s->sig_flag)
+                                      : JS_IsUninitialized(s->sig_flag),
+               "§5.6 step 4's signal test reached its ask with the seam's borrow and this machine's outstanding "
+               "fork disagreeing — abort_signal_aborted_step fills this slot at the ask, HOLDS it across "
+               "JS_STEP_FORK because the sibling resumes AT the ask, and clears it when it answers, so a held "
+               "slot with no fork outstanding is a reference nothing will free and an empty one with a fork "
+               "outstanding is the operand the resuming arm was about to be asked about");
+        /* THE PARKING FORM, because this ask CAN fork and this machine CAN carry the sibling. The plain
+           `abort_signal_aborted` returns a `bool` and therefore cannot say "I forked", so it reached
+           solver/engine.c's seam from inside this C activation with nowhere for the sibling to resume and
+           ABORTED — on `AbortSignal.timeout()`, which is what a real bundle's own use of this member spells.
+           There is nothing to build here: `js_fetch_decl` already declares this body a step machine, so the
+           driver holds the resume point it clones at and the whole repair is asking through the seam that can
+           return the fork code. It is the BRANCH seam (`step_tobool_run`), keyed by the OPERAND'S OWN identity,
+           so a page's own `if (signal.aborted)` and this test are ONE constraint entry — not the outcome seam,
+           which keys by (operand, operation, completion) and is for a machine's own completions.
+           THE BRAND TEST STAYS IN FRONT OF IT and is not redundant with the seam's own non-signal arm: it is
+           what keeps an absent `signal` — the ordinary `fetch(u)` — from reaching the solver at all. */
+        if (abort_signal_is(ctx, sig)) {
+            r = abort_signal_aborted_step(ctx, hdr, sig, &s->sig_flag, &aborted);
+            if (r) {
+                /* PARKED. `sig` is released and there is nothing outstanding to discharge: this stage freed
+                   `cb_result` above, and both entries a fork produces are re-entered with JS_UNDEFINED rather
+                   than with the same delivery (quickjs.c states it at `step_fork_pending`, which is also why
+                   that free is correct on all three entries). The stage is unchanged, so the re-read of §5.6
+                   step 4's signal is the same read of the same converted member. */
+                JS_FreeValue(ctx, sig);
+                return r;
+            }
+        }
         if (aborted) {
+            /* §5.6 step 4's abort reason, and it REPLAYS rather than forking a second time — verified at
+               decide.c rather than assumed, because a second fork here would reach the same abort this routing
+               exists to remove. `abort_signal_reason` asks the NON-parking test over the SAME `aborted` flag,
+               and `decide_key` composes a branch identity out of THE VALUE ALONE, so both asks are one key;
+               `decide_arm` then asks the CONSTRAINT FIRST and consumes no vector slot for a predicate this flow
+               has already decided. This arm has just recorded `aborted = 1` under that key, so the read is
+               answered as a feasible refinement and never reaches `engine_prepare_fork`. A flag that is not
+               concolic does not reach the solver at all — `decide_branch` returns -1 for one before any key is
+               composed — so the concrete `AbortSignal.abort()` case is unchanged. */
+            JSValue reason = abort_signal_reason(ctx, sig);
+
+            JS_FreeValue(ctx, sig);
             JS_Throw(ctx, reason);
             return -1;
         }
+        JS_FreeValue(ctx, sig);
     }
     /* §5.4 step 37.4, asked of the list the fill built: the extracted type is appended only where the init's
        own headers named no `Content-Type`. */
