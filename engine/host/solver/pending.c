@@ -346,6 +346,54 @@ int pending_ready(JSValueConst reg)
     return 0;
 }
 
+/* THE OLDEST DELIVERABLE ENTRY'S ARRIVAL STAMP — pending.h states what it is for and why it is the oldest
+   DELIVERABLE one rather than the oldest one. Walks for the minimum rather than taking the first hit, because
+   a register is not ordered: `pending_push` appends and `pending_remove` compacts, and a fork copies the
+   array, so index order is push order within one flow and says nothing across the ones a reply's own
+   out-of-order answer leaves. The minimum over a set is the only reading that does not depend on that.
+   0 FOR A REGISTER THAT CAN DELIVER NOTHING, which is the same positive statement `pending_ready` makes as a
+   boolean and is why the two are read together at the ladder: a caller that asked this of an unready register
+   and compared the 0 would put the delivery arm in front of everything, which is exactly backwards. */
+uint64_t pending_ready_oldest_seq(JSValueConst reg)
+{
+    int n = pend_len(reg), i;
+    uint64_t best = 0;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(reg, i);
+        if (pend_deliverable(e)) {
+            uint64_t s = (uint64_t)pending_get_int(e, PEND_WORK_SEQ);
+            /* AND THE FIRST DELIVERABLE ENTRY IS THE OLDEST ONE — the invariant that makes this walk and
+               flow_deliver_one_reply's agree, asserted here because this is the one place both the minimum
+               and the index order are in one hand. That delivery walks from index 0 and takes the FIRST
+               entry past the same two skips `pend_deliverable` asks, so if the deliverable subsequence were
+               not in arrival order the ladder would be ORDERED BY ONE ENTRY AND DELIVER ANOTHER — a step
+               whose precedence was earned by a reply it did not take. It holds by construction rather than by
+               maintenance: pending_push APPENDS, so index order is push order and push order is stamp order;
+               pending_remove compacts and preserves the relative order of what is left; and a fork copies the
+               array whole. A path that inserted, sorted, swap-removed or re-stamped an entry would break all
+               three at once, which is what this fires on. */
+            DCHECK(best == 0,
+                   "this reply register's deliverable entries are not in arrival order — the first one the "
+                   "delivery walk would take is not the oldest, so the ladder's delivery arm earned its "
+                   "precedence from one reply's stamp and would hand the turn to a different reply");
+            /* THE PUSH ASSERTS THIS AND IT IS ASSERTED AGAIN HERE, which is not a second copy of one check:
+               the push's fires at the CONSTRUCTOR and this one fires on a record that was built elsewhere,
+               forked, copied or written onto from outside pending.c — the three paths pending.h names as the
+               ones a constructor's own assert cannot see. A 0 reaching this comparison would make the entry
+               the oldest work item in its flow unconditionally. */
+            DCHECK(s != 0,
+                   "a deliverable reply register entry carries no arrival stamp — every push stamps one and "
+                   "the fork copies it, so a zero here is a record built or rewritten outside pending.c, and "
+                   "this comparison would hand it precedence over every program row and queued callback its "
+                   "flow holds");
+            if (best == 0 || s < best) best = s;
+        }
+        JS_FreeValue(pend_ctx(), e);
+    }
+    return best;
+}
+
 /* HOW MANY DELIVERIES THIS REGISTER STILL OWES ITS OWN FLOW — see pending.h for what it is for. Deliberately
    NOT short-circuited: `pending_ready` answers a guard and this answers a DEBT, and a debt that stopped at the
    first member would be the level whose collapse this counter exists to end. */
@@ -583,11 +631,20 @@ int pending_pinned_compose(int kind, int path_forced, int path_pinned)
     return path_pinned;
 }
 
-JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, int parser_inserted)
+JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, int parser_inserted,
+                     uint64_t work_seq)
 {
     JSValue e;
 
     DCHECK(reg != NULL, "a pending entry was pushed onto no register");
+    /* THE STAMP IS THE CALLER'S AND 0 IS NOT ONE — solver/flow.c's work clock starts at 1 so that 0 names no
+       work item, and PEND_WORK_SEQ inherits that contract whole. An entry pushed without it would order
+       AHEAD OF EVERY ROW AND EVERY QUEUED CALLBACK of its flow for ever, which is the exclusion the stamp
+       exists to end, so the absence crashes at the constructor rather than being answered by a default. */
+    DCHECK(work_seq != 0,
+           "a reply register entry was pushed with no arrival stamp — 0 is the name no work item answers to, "
+           "so this entry would sit above every program row and every queued callback of its flow at every "
+           "step for the rest of the flow's life, which is the starvation the stamp was added to end");
     pend_atoms();
     e = JS_NewObjectProto(pend_ctx(), JS_NULL);
     CHECK(!JS_IsException(e), "engine: OOM allocating a pending record — a dropped request parks its flow "

@@ -398,7 +398,26 @@ int pending_pinned_compose(int kind, int path_forced, int path_pinned);
     X(SCRIPT_EL,  "scriptEl",  PEND_SHARE,  JS_UNDEFINED)                              \
     /* the zone has refused nothing about this request — see the two fields below */   \
     X(DECLINED,   "declined",  PEND_SHARE,  JS_NULL)                                   \
-    X(DECLINE_TAKEN, "declineTaken", PEND_SHARE, JS_FALSE)
+    X(DECLINE_TAKEN, "declineTaken", PEND_SHARE, JS_FALSE)                             \
+    /* WHEN THIS REPLY WAS ASKED FOR, ON THE CLOCK THE PROGRAM SEQUENCE AND THE JOB QUEUE ARE BOTH NAMED BY —
+       solver/flow.h's `g_work_seq`, which this register is the THIRD carrier to join. flow_task_precedes'
+       own banner states the argument for two carriers and states it for this one without naming it: "a fixed
+       arm order starves whenever the arm above it is fed by a set the page extends, which is both of these".
+       A reply register is a third such set — every fetch, module load, resource load and host request a page
+       makes pushes one — and the ladder's delivery arm stood above the whole arrival chain, so a flow whose
+       register is never empty ran no task and started no program of its own however old either was. On a real
+       application page the register is never empty, which is what made that exclusion permanent on exactly the
+       population this tool exists for.
+       IT IS MINTED BY THE CALLER AND IS A PARAMETER FOR THE REASON THIS HEADER ALREADY GIVES ONE: the clock
+       belongs to solver/flow.c, this file may not reach it, and "a field whose default is a fact only the
+       CALLER holds becomes a parameter there rather than a second write the push sites are each asked to
+       remember". A SECOND clock here would be two right answers to one question, which is what the stamp
+       exists to prevent: what it orders is this flow's `pending` against this flow's `dyn` and `jobs`.
+       ZERO IS A NAME NO WORK ITEM ANSWERS TO — flow.c's counter starts at 1 for exactly that, so an entry
+       built by a path that does not stamp it cannot silently outrank every row and every callback of its
+       flow. pending_push DCHECKs it rather than defaulting it (§Architecture: a consumer never defaults a
+       producer's field). */ \
+    X(WORK_SEQ,   "workSeq",   PEND_SHARE,  JS_NewInt64(pend_ctx(), (int64_t)work_seq))
 
 enum {
 #define PEND_ENUM(id, name, copy, dflt) PEND_##id,
@@ -720,7 +739,17 @@ int  pending_entry_host_owed(JSValueConst e);
    `html_script_prepare`'s own `parser_inserted` parameter is answered by the caller and for the same reason.
    ZERO IS A POSITIVE STATEMENT — no parser inserted the element this request is for — which is the truth for
    a `fetch()`, an `import()`, a subresource and a script page code injected — and never a hole. */
-JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, int parser_inserted);
+JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, int parser_inserted,
+                     uint64_t work_seq);
+
+/* THE ARRIVAL STAMP OF THE OLDEST ENTRY THIS REGISTER CAN ACTUALLY DELIVER, or 0 for a register that can
+ * deliver none — the one question the ladder's delivery arm has to ask to be IN the arrival order rather than
+ * above it. It is the oldest DELIVERABLE entry and not the oldest entry: `pending_ready` walks for a
+ * deliverable one rather than reading index 0, so a minimum over the whole register would order the arm by an
+ * entry the arm cannot take and would starve the queue for as long as that entry stayed owed. Written here
+ * beside the other walking predicates so the two cannot drift apart about what "ready" means, which is the
+ * defect this file describes at pending_owed_replies. */
+uint64_t pending_ready_oldest_seq(JSValueConst reg);
 
 /* Set a field. `v` is consumed. `pending_set_int` is the same for the numeric ones.
    IT REFUSES ONE WRITE: `PEND_HAVE_VALUE` on a SYNCHRONOUS request. See `pending_answer_sync` below — this

@@ -643,7 +643,7 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
                       "caller that does not is the pre-boot baseline tree walk performing a step HTML defines "
                       "over tree construction. Issue it from the boot flow, not from the walk");
     e = pending_push(&f->pending, FLOW_PENDING_RESOLVE, flow_path_forced(f), flow_path_pinned(f),
-                     /*parser_inserted*/0);   /* a `fetch()` or an XHR — page code composed it */
+                     /*parser_inserted*/0, flow_work_seq_next());   /* a `fetch()` or an XHR — page code composed it */
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
     pending_set(e, PEND_VALUE, JS_DupValue(ctx, value));
     /* AND WHICH DOCUMENT ASKED — the same sentence the `<script src>` park one entry down already makes, and
@@ -709,7 +709,7 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
     req.mode = script_request_mode(SCRIPT_TYPE_MODULE, flow_dyn_el(f));
     DCHECK(url != NULL && *url, "a dynamic import parked with no module URL for the host to fetch");
     e = pending_push(&f->pending, FLOW_PENDING_MODULE, flow_path_forced(f), flow_path_pinned(f),
-                     /*parser_inserted*/0);   /* a dynamic `import()` — §16.2.1.8 is reached by RUNNING code */
+                     /*parser_inserted*/0, flow_work_seq_next());   /* a dynamic `import()` — §16.2.1.8 is reached by RUNNING code */
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
     /* AND THE HALF THE LOAD'S FAILURE IS OWED FROM, which this park did not take and the caller therefore
        freed unused. A load has two outcomes and this is the only park whose failure is a REJECTION rather
@@ -785,7 +785,7 @@ void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const Fet
     /* A BROWSER ALGORITHM'S SUBRESOURCE, SO NO `script` ELEMENT AND NOTHING FOR HTML §4.12.1.1
        "Processing model" TO HAVE GIVEN A `parser document` TO. */
     e = pending_push(&f->pending, FLOW_PENDING_RESOURCE, flow_path_forced(f), flow_path_pinned(f),
-                     /*parser_inserted*/0);
+                     /*parser_inserted*/0, flow_work_seq_next());
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, deliver));
     /* AND WHICH DOCUMENT ASKED — the same sentence the parks above make, and for the same reason:
        `PEND_DOC` defaults to 0, which is a real document id, so a delivery reading an unset field gets a
@@ -853,7 +853,7 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
        script_request_mode for why §2.5.4's note does not answer the classic arm. */
     req.mode = script_request_mode(stype, el);
     e = pending_push(&f->pending, FLOW_PENDING_SCRIPT, flow_path_forced(f), flow_path_pinned(f),
-                     parser_inserted);
+                     parser_inserted, flow_work_seq_next());
     pending_set_int(e, PEND_SCRIPT_TYPE, (int)stype);
     /* AND WHICH DOCUMENT'S PROGRAM THE REPLY WILL BE. The element was inserted into a tree, and the realm this
        chokepoint was entered with is that tree's document — the reply is compiled there rather than in
@@ -1370,7 +1370,7 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
     DCHECK(op != NULL && *op, "a synchronous host request carried no text for the host to route on");
     /* A SYNCHRONOUS CROSS-AGENT READ NAMES A REQUEST ID AND NO MARKUP AT ALL. */
     e = pending_push(&f->pending, FLOW_PENDING_HOSTREQ, flow_path_forced(f), flow_path_pinned(f),
-                     /*parser_inserted*/0);
+                     /*parser_inserted*/0, flow_work_seq_next());
     pending_set(e, PEND_OP, JS_NewString(ctx, op));
     id = mint_req();   /* the ASK half of the rate above — counted at the mint, which is the only place it is */
     /* BOTH NAMES OF ONE RENDEZVOUS, EQUAL AT THE FIRST ASK AND NOT THE SAME FIELD. `PEND_REQ` is what this
@@ -5455,6 +5455,13 @@ typedef enum { DYN_PAGE_SCRIPT = 0, DYN_CANDIDATE, DYN_JAVASCRIPT_URL, DYN_CROSS
 /* Is any of this flow's pending fetches deliverable? A flow with only host-owed entries has no work — it stalls
    rather than spinning on a delivery that would resolve nothing. */
 static int flow_pending_ready(const Flow *f) { return pending_ready(f->pending); }
+/* AND THE ARRIVAL STAMP OF THE OLDEST ONE IT CAN DELIVER — the question that puts the reply register IN the
+   arrival order instead of above it. Beside the predicate above and not at the ladder, for the reason
+   solver/pending.c gives for writing the walk once: two spellings of "which register" is the shape that
+   drifts, and these two are read on the same line of flow_step. */
+static uint64_t flow_pending_ready_oldest_seq(const Flow *f) {
+    return pending_ready_oldest_seq(f->pending);
+}
 
 /* HTML §8.1.4.2'S processResponseConsumeBody STEP THAT MAKES SOURCE TEXT — the point at which a fetched BYTE
    SEQUENCE becomes a script's text, and the one this engine ran neither half of. The bytes used to go from the
@@ -8604,7 +8611,7 @@ static void engine_pending_docscript(Flow *f, int at, int parser_inserted) {
        attribute is therefore `no-cors`, which is what makes an integrity policy refuse it. */
     req.mode = script_request_mode(SCRIPT_TYPE_CLASSIC, f->dyn_el[at]);
     e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT, flow_path_forced(f), flow_path_pinned(f),
-                     parser_inserted);
+                     parser_inserted, flow_work_seq_next());
     /* WHICH ROW THIS PARK IS FOR, BY NAME — it is the row's `dyn_id` rather than its position because a
        position is a fact about the row only while the set is fixed (solver/flow.h), and this entry outlives
        both §4.12.1.1's "immediately execute the script element" interposition and §7.5.10's removal. */
@@ -10750,11 +10757,18 @@ static long g_unframed_steps;
    non-empty queue there holds no microtask, and `flow_job_pending(f) > 0` IS "a task is runnable". A DCHECK at
    each site is what makes that true by construction rather than by this paragraph.
 
-     `g_task_held_deliv`  — the REPLY-DELIVERY arm took the step. That arm stands above the whole arrival chain
-       and is not in it: a reply register entry carries no stamp, so a delivery precedes every row and every
-       queued callback of the flow whatever their ages. The chain's own header states that as its NOT COVERED
-       clause ("a flow whose reply register is never empty runs no task and starts no program of its own however
-       old either is") and could not size it; this row is its size.
+     `g_task_held_deliv`  — the REPLY-DELIVERY arm took the step. WHAT IT SIZES HAS CHANGED AND THE RETIRED
+       WORDING IS KEPT, because a reader who finds the row large will otherwise re-derive the old reading: it
+       said the arm "stands above the whole arrival chain and is not in it: a reply register entry carries no
+       stamp, so a delivery precedes every row and every queued callback of the flow whatever their ages",
+       and that this row was the size of the chain's NOT COVERED clause. The entry carries a stamp now
+       (PEND_WORK_SEQ) and the arm asks flow_task_precedes with it, so a delivery no longer precedes a
+       QUEUED CALLBACK that arrived first. IT STILL PRECEDES EVERY ROW, which is the half the arm's own
+       paragraph records as a deadlock rather than an omission.
+       SO THE ROW IS NOW THE SIZE OF THE ARM GOING IN FRONT OF A **YOUNGER** TASK, which is the arrival order
+       working, and its old reading — the exclusion — is what a near-zero now means. A reader comparing it
+       across that diff is comparing two quantities, and the discriminator is whether PEND_WORK_SEQ exists at
+       the revision the artifact was built at (`git grep -c PEND_WORK_SEQ <stamp> -- engine/host`).
      `g_task_held_seq`    — the PROGRAM-SEQUENCE arm took it (`seq_compiles && !job_precedes`) with a task
        runnable, which is the arrival comparison answering NO: the queued task is YOUNGER than the row at the
        cursor. It is the only row that says so, because flow_task_precedes' answer is a local nothing else reads.
@@ -10783,9 +10797,17 @@ static long g_unframed_steps;
    arm taken is an event and the member it was taken from may leave. A REPORT AND NEVER A BOUND (§NO BOUNDS):
    nothing branches on one, no arm is narrowed by one, and "how often this arm declined a task" is precisely
    the shape a fairness cap would be built out of.
-   RETIREMENT: this record goes when the delivery arm is IN the arrival chain — a stamp on a `pending` entry at
-   its push, which is what the chain's own next-diff clause names — because `g_task_held_deliv` is then a count
-   of an ordering that cannot happen. */
+   RETIREMENT — MET IN PART AND RE-KEYED, THE OLD WORDING KEPT BECAUSE IT IS WHAT A READER RE-DERIVES. It
+   read: this record goes when the delivery arm is IN the arrival chain — a stamp on a `pending` entry at its
+   push, which is what the chain's own next-diff clause names — because `g_task_held_deliv` is then a count of
+   an ordering that cannot happen. The stamp is built and the TASK ordering cannot happen any more, so for the
+   queued-callback half the row is exactly that: a count of nothing. The ROW ordering still can, and that is
+   what the row now sizes.
+   RETIREMENT: this record goes when the oldest RUNNABLE ROW's stamp is computed above the delivery arm, so
+   all three carriers are one arrival order and `g_task_held_deliv` is a count of an ordering that cannot
+   happen at all — MEASURED ABSENT with the command, so this condition is not born met:
+   `grep -c 'seq_compiles' engine/host/solver/engine.c` answers its occurrences all BELOW the arm's line,
+   which `grep -n 'uint64_t deliv_seq = flow_stack_empty' engine/host/solver/engine.c` prints for comparison. */
 static long g_task_held_deliv, g_task_held_seq, g_task_arm_older, g_task_arm_no_row;
 /* …AND WHY A TURN DID NOT END A UNIT OF WORK, WHICH IS THE THREE-STATE ANSWER BEHIND `g_units_done`'s
    ONE-STATE ZERO. The unit boundary in the dispatch loop is a CONJUNCTION of three clauses — no live frame, no
@@ -11770,14 +11792,58 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * member that has to spend them — so a branching frontier divides one shared pick budget among
              * every arm, and a register whose length exceeds a member's whole lifetime dispatch count defers
              * the sequence for that member's entire life. The bound holds and does not bind. */
-            if (flow_stack_empty(f) && flow_pending_ready(f)) {
+            /* WHEN THE OLDEST REPLY THIS FLOW CAN TAKE WAS ASKED FOR, AND WHETHER ANY TASK IT HOLDS IS
+               OLDER — the reply register joining the arrival order that already holds this flow's program
+               sequence and its job queue. flow_task_precedes is asked with the REPLY'S stamp rather than a
+               row's, which is the same comparison the sequence arm below makes against the same clock, so
+               there is one ordering here and not two.
+               WHY THIS ARM NEEDED IT. The arm ran on `stack empty && a reply is ready` and nothing else, and
+               a register entry carried no stamp, so a delivery preceded every row and every queued callback
+               of the flow whatever their ages — stated at `g_task_held_deliv` as the NOT COVERED clause of
+               the arrival chain, "a flow whose reply register is never empty runs no task and starts no
+               program of its own however old either is". A real application page's register is never empty:
+               it answers one reply by asking for the next. MEASURED over the 57 corpus census rows at
+               5357ffa, `deliver-one-reply` runs 99-596 steps against `run-a-task` 0-4 on every attributed
+               real-site row, while the local fixture — whose register empties — runs 40.7% of its steps in
+               the task arm with `jobsReady` 0. The product consequence is `epXhrAskOfferedLife` ZERO against
+               379 `send()` calls on one such page: the address of every request the page made was recorded by
+               a closure enqueued as a TASK, and no task ran.
+               AND IT REFUTES THE ARGUMENT RECORDED FOR THE OLD ORDER, which is rewritten at the deleted
+               bottom arm below rather than deleted (§A-FIX-THAT-RETIRES-AN-ARGUMENT). That argument was that
+               delivery-first is free of permanent exclusion because a flow's sequence is a set its own
+               programs extend and its answered set is one every delivery consumes — a draining set cannot
+               starve a growing one. The premise holds for the SEQUENCE and fails for the REGISTER: a delivery
+               runs page code, and page code pushes pending entries, so the answered set is extended by the
+               very deliveries that consume it. That is the chunk waterfall of every bundler there is.
+               IT IS THE TASK QUEUE AND DELIBERATELY NOT THE SEQUENCE, and the reason is a DEADLOCK rather
+               than a preference. A task is runnable wherever this comparison is asked — flow_task_precedes
+               answers 0 under a non-empty stack and under an outstanding microtask, and within those the task
+               arm takes it unconditionally — so deferring to an older task always makes progress. A ROW at
+               the cursor need not be runnable: a DYN_SCRIPT_SRC row is parked on its OWN reply, so an arm
+               that deferred to an older row could defer to a row waiting for a delivery that this arm had
+               just declined to make, with a different, younger reply the only ready one. `seq_compiles` is
+               the predicate that would separate those and it is computed two hundred lines BELOW this arm,
+               which is why the row half is a NAMED RESIDUAL and not an omission — stated after the arm.
+               NO SECOND SITE, which is the one thing the bottom arm's own note forbids by name: this is the
+               ONE delivery in the ladder and it keeps its position above the sequence. What changed is that
+               it now DECLINES to a strictly older task and falls through, which is an ORDER and not a bound —
+               nothing is capped, counted down or decided against, and the set of tasks older than a given
+               reply is fixed at that reply's birth and finite, so every reply is delivered after a bounded
+               amount of work that already existed when it was asked for (§NO BOUNDS, and solver/flow.c's
+               `g_work_seq` banner states the same argument for the two carriers it already ordered). */
+            uint64_t deliv_seq = flow_stack_empty(f) ? flow_pending_ready_oldest_seq(f) : 0;
+            if (deliv_seq != 0 && !flow_task_precedes(f, deliv_seq)) {
                 /* …AND WHETHER THIS ARM JUST TOOK A STEP THE FLOW'S OWN TASK QUEUE COULD HAVE HAD — see
                    `g_task_held_deliv`, whose block states why a non-empty queue at this line is a TASK and
                    what the row is the size of. RAISED BEFORE THE DELIVERY, because the settle below enqueues
                    this reply's reactions and a read taken after it would count a queue this arm had just
                    lengthened. The microtask half is ASSERTED and not assumed: the checkpoint arm's guard is
                    exactly `flow_job_microtask && flow_stack_empty` and it stands above this line, so with the
-                   stack empty here a queued job is a task. */
+                   stack empty here a queued job is a task.
+                   THE ROW IT COUNTS IS NOW A NARROWER POPULATION AND ITS LEGEND SAYS SO: a queue standing
+                   here holds no task OLDER than this delivery, because the arm's own condition excluded one.
+                   What it still sizes is the arm going in front of a YOUNGER task, which is the arrival order
+                   working rather than the exclusion it used to measure. */
                 DCHECK(!flow_job_microtask(f),
                        "the reply-delivery arm was reached with an empty execution context stack and a "
                        "microtask outstanding — the checkpoint arm's guard is exactly those two facts and it "
@@ -12039,19 +12105,37 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * in ONE queue"; that is one repair, it is narrower than this one, and its own text is where the
              * difference is recorded.
              *
-             * WHAT THIS DOES NOT REACH IS THE ARM ABOVE THE SEQUENCE, AND SAYING SO IS PART OF LANDING IT. The
-             * networking task source's delivery arm stands above this whole ladder and is not in the arrival
-             * race: a reply register entry carries no stamp, so a delivery still precedes every row and every
-             * job of the flow whatever their ages. That arm's own paragraph argues its position from a bound —
-             * the answered set grows only when this flow issues requests, and every delivery CONSUMES one — and
-             * that bound is about the SEQUENCE and says nothing about the job queue, which a delivery EXTENDS
-             * (a `load` fire, a settle's reactions). NOT COVERED: a flow whose reply register is never empty
-             * runs no task and starts no program of its own however old either is. WHAT THE NEXT DIFF BUILDS is
-             * the same stamp on a `pending` entry at the push (solver/pending.h), so all three carriers are one
-             * arrival order and the delivery arm folds into this chain instead of standing above it. HOW ITS
-             * ABSENCE SHOWS: a census whose `deliver-one-reply` row is most of a member's steps while
-             * `jobsReadyTask` climbs and `run-a-task` stays at zero — the delivery arm consuming the step
-             * before the choice below is reached. */
+             * WHAT THIS DOES NOT REACH IS THE ARM ABOVE THE SEQUENCE, AND SAYING SO IS PART OF LANDING IT.
+             * MET IN PART, AND THE RETIRED WORDING IS KEPT BECAUSE A READER WHO MEETS THE ARM WILL RE-DERIVE
+             * THE WHOLE OF IT: it said the delivery arm stands above this whole ladder and is not in
+             * the arrival race -- a reply register entry carries no stamp, so a delivery still precedes
+             * every row and every job of the flow whatever their ages -- that its position rested on a bound
+             * about the SEQUENCE which says nothing about the job queue, which a delivery EXTENDS; NOT
+             * COVERED, a flow whose reply register is never empty runs no task and starts no program of its
+             * own however old either is; and WHAT THE NEXT DIFF BUILDS, the same stamp on a `pending` entry
+             * at the push (solver/pending.h), so all three carriers are one arrival order. UNQUOTED
+             * DELIBERATELY, and it is the reason to copy rather than a style note: this is THIS TREE's own
+             * retired wording, and a double-quoted run standing after a spec citation enters that citation's
+             * quotation channel and is judged against the STANDARD, so quoting our own prose there reports
+             * as a fabricated spec quotation.
+             * THE STAMP IS BUILT AND THE CLAUSE IS NOW HALF TRUE, which is the honest state and is why the
+             * words stay: PEND_WORK_SEQ is minted from this same clock at every one of the six pushes, and
+             * the delivery arm asks flow_task_precedes with the REPLY'S stamp — so such a flow DOES run a
+             * task that arrived first, and the `runs no task` half is false. The `starts no program` half
+             * STANDS: the arm still precedes every row of the sequence whatever its age.
+             * AND THE ROW HALF IS NOT AN OMISSION, IT IS A DEADLOCK — stated at the arm and repeated here
+             * because this is where a reader looking for the missing third carrier arrives. A task is
+             * runnable wherever the comparison is asked; a DYN_SCRIPT_SRC row at the cursor is parked on its
+             * OWN reply, so an arm that yielded to an older row could yield to a row waiting on a delivery
+             * it had just declined, with a younger reply the only ready one and nothing able to move.
+             * `seq_compiles` is the predicate that separates a row the flow HOLDS from one it can RUN, and it
+             * is established two hundred lines below the arm.
+             * WHAT THE NEXT DIFF BUILDS: the oldest-runnable-row stamp computed ABOVE the delivery arm —
+             * which means hoisting the kind walk that sets `seq_compiles`, not duplicating it, since a second
+             * spelling of "can this row start" is the two-implementations seam §C-stack names. HOW ITS
+             * ABSENCE SHOWS: a census whose `taskHeldDelivLifetime` is near zero (the task half working)
+             * while `deliver-one-reply` is still most of a member's steps and `programCursors` does not
+             * advance — the arm no longer taking the step a task owned and still taking the one a row did. */
             /* WHICH OF THE TWO CARRIERS HOLDS THE OLDER WORK ITEM, asked ONCE and only where there is a row to
                compare against: `seq_compiles` is what established that the cursor names a row this step could
                start, and it is the caller's to establish because flow_task_precedes has no way to know that a
@@ -12264,9 +12348,26 @@ static int flow_step(JSContext *ctx, Flow *f) {
                does choose among task queues "in an implementation-defined manner", so that sentence alone
                never settled the order and the note was right to refuse it — but it is not the only sentence,
                and the arm above the sequence carries the reading that settles it. The freedom is a PREFERENCE
-               between queues (§8.1.7.1 Definitions' own example, "not starving other task queues"), and of
-               the two strict orders it permits only one is free of permanent exclusion, because a flow's
-               sequence is a set its own programs extend and its answered set is one every delivery consumes.
+               between queues (§8.1.7.1 Definitions' own example, "not starving other task queues").
+               AND THE ARGUMENT THAT FOLLOWED IS REFUTED BY MEASUREMENT AND IS REWRITTEN RATHER THAN DELETED,
+               because it is the argument a reader re-derives from the shape of the two sets. It said that of
+               the two strict orders only one is free of permanent exclusion, because a flow's sequence is a
+               set its own programs extend and its answered set is one every delivery consumes — a draining
+               set cannot starve a growing one, so delivery-first was safe by construction.
+               THE PREMISE IS TRUE OF THE SEQUENCE AND FALSE OF THE REGISTER, which is the whole of it. A
+               delivery CONSUMES one entry and then RUNS PAGE CODE, and page code pushes entries: a `then`
+               that fetches the next chunk, a module body that imports, a resource that pulls another. The
+               answered set is extended by the very deliveries that consume it, so it does not drain, and the
+               arm's unconditional position was a permanent exclusion of the queue beneath it rather than a
+               bounded preference. MEASURED over the 57 corpus census rows at 5357ffa: `deliver-one-reply`
+               runs 99-596 steps against `run-a-task` 0-4 on every attributed real-site row, with one page
+               answering 560 of 561 replies while its task arm took 112 steps of 759 — a register that was
+               answered continuously and never empty. The local fixture, whose register DOES drain, runs
+               40.7% of its steps in the task arm with `jobsReady` 0, which is the premise holding on the one
+               population it is true of (§A-FIXTURE-BUILT-TO-EXERCISE-EVERY-MECHANISM, landing on an ARM).
+               SO NEITHER STRICT ORDER IS FREE OF EXCLUSION AND THE ANSWER IS NEITHER OF THEM: arrival order,
+               which flow_task_precedes' banner already argues for the two carriers it ordered and which the
+               arm above now asks the register to join.
                A REGISTER IS NOT A TASK QUEUE THIS LADDER MAY REACH TWICE. One site delivers now, above the
                sequence; a second here would be the two-implementations seam §C-stack names, with the fork
                order and the microtask ordering of solver/engine.c's flow_deliver_one_reply header split
