@@ -2580,6 +2580,28 @@ console.log('totals: ' + JSON.stringify({
   sites: table.length,
   netFixture: table.filter((t) => t.outcome === 'NET/FIXTURE').length,
   measurable: measurable.length,
+  /* AND THE ROWS BEHIND THAT DENOMINATOR, ON THE SAME LINE, BECAUSE THE FOUR FIGURES UNDER IT ARE READ AS
+     FACTS ABOUT THIS CORPUS AND ARE FACTS ABOUT WHATEVER SURVIVED AN ANY-PASS QUANTIFIER. `outcome` is the
+     WORST SEEN -- `ms.some(...)`, which is the right answer for a COLUMN that must not report a site aborting
+     in two passes of three as one that runs -- and `measurable` then inherits that quantifier for a DIFFERENT
+     question, so ONE net or nav failure in ONE pass drops a site out of every figure below whatever its other
+     passes did. THE TWO HALVES ARE WILDLY UNEQUAL IN WEIGHT AND NOTHING SAID SO: the sites this keeps carry a
+     handful of rows and the sites it drops carry nearly all of them, so `cleanEveryPass` reads as a statement
+     about the corpus and is a statement about a few single-pass sites. No count anywhere could have said that,
+     because the only row total printed here is over the WHOLE table.
+     THE NUMBER IS NOT RELOCATED AND THE QUANTIFIER IS NOT CHANGED, which is the half a reader will reach for
+     and the half that would cost something. Re-keying `measurable` to a per-pass test gives these four figures
+     a DIFFERENT MEANING and leaves the old one unread -- a site that aborts in a third of its passes is not a
+     site that runs, and the column above exists to say so. What was missing is the DENOMINATOR, and a fraction
+     whose numerator is published and whose denominator is not is the whole of the defect. A reader holding both
+     counts cannot take the one for the other.
+     RETIREMENT: this pair goes when the totals object is emitted by a helper that takes a PARTITION and refuses
+     to print a count over one side without the rows behind both, so a site-level denominator cannot be
+     published bare at all. MEASURED ABSENT with the command, so this condition is not born met: `grep -c` over
+     this file answers 0 for each of `partitionWithRows`, `emitPartition` and `rowsBehind`, against `rowsMeasured`
+     answering 1 as the armed control and an invented token answering 0. */
+  rowsBehindMeasurable: measurable.reduce((a, t) => a + t.n, 0),
+  rowsBehindNetFixture: table.filter((t) => t.outcome === 'NET/FIXTURE').reduce((a, t) => a + t.n, 0),
   everAborted: measurable.filter((t) => t.abortedPasses > 0).length,
   abortedEveryPass: measurable.filter((t) => t.abortedPasses === t.n).length,
   cleanEveryPass: measurable.filter((t) => t.abortedPasses === 0).length,
