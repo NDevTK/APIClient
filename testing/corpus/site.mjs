@@ -919,6 +919,45 @@ const frontierPrograms = (() => {
                                                         && !Array.isArray(e.cold) && e.cold.live > 0).length;
   return out;
 })();
+/* WHAT EACH COUNTED RUN HELD, BECAUSE EVERY COUNTER COLUMN ON THIS ROW IS THE LAST RUN'S AND ON A REAL SITE
+   THE DEEP RUN IS OFTEN RUN 0. `epFact` and `netAsk` both index `counted[counted.length - 1]` outright, and
+   `frontierPrograms` reaches the same entry through `coldLive`'s backward walk — so a pass whose FIRST run
+   explored the document and whose later runs did almost nothing publishes the later run's numbers for all of
+   them, with no indication that anything else happened.
+   `of` AND `skipped` WERE NOT ENOUGH AND THAT WAS MY OWN HALF-MEASURE. They say a run was DROPPED; they do
+   not say WHAT IT HELD, and the difference decides whether a zero on this row is a fact about the engine or
+   an artifact of which entry the reader landed on. MEASURED on the drive that scored the §5.6 routing: two
+   passes published `endpointRazorClass {unproven: 98}` and `epFetchAskCalledLife 0` while their own run 0
+   held `{unproven: 194, runtime-only: 6}` and `epFetchAskCalledLife 25` — the pass that cleared the product's
+   hard bar reported a clean zero for it, twice.
+   IT ALSO PUTS A QUESTION MARK OVER A STANDING SENTENCE ELSEWHERE IN THIS TREE, which is why this is a row
+   rather than a note: solver/endpoint.h records `epFetchAskCalledLife` as 0 "on every attributed real-page
+   row that produced a census", and that may be a property of THIS READER rather than of the engine. The row
+   below is what lets the next reader tell those apart instead of inheriting the sentence.
+   DELIBERATELY NARROW. This is not a second copy of the census per run — it is the smallest set that answers
+   `did this run do anything`: the frontier it stood at, the two ask rungs that say whether the fetch machine
+   was entered and reached its offer, and the hard bar itself. Everything else stays single-valued at
+   `countersFrom`, because a row that carried every column per run would be the duplication testing/
+   census_rows.js argues against at its own banner, where the CURATION is this driver's and only the KIND is
+   the producer's.
+   ABSENT STAYS ABSENT, by the same rule the partition above uses: a key an artifact never stated is left out
+   rather than contributing a zero, so an older artifact yields a shorter object and never a false reading. */
+const perRun = (() => {
+  if (!counted.length) return null;
+  const rows = counted.map((e, i) => {
+    const c = e.cold;
+    const o = { at: i };
+    if (c && typeof c === 'object' && !Array.isArray(c)) {
+      for (const k of ['live', 'epFetchAskCalledLife', 'epFetchAskOfferedLife'])
+        if (typeof c[k] === 'number') o[k] = c[k];
+    }
+    if ('endpointRazorClass' in e) o.endpointRazorClass = e.endpointRazorClass;
+    return o;
+  });
+  /* ONE KEY BESIDE THE INDEX IS NOTHING TO REPORT — a row of bare `at`s carries no fact and would be a column
+     of noise on every artifact predating all four keys. */
+  return rows.some(o => Object.keys(o).length > 1) ? rows : null;
+})();
 /* THE ONE EXPRESSION THE THREE SURFACE ROWS BELOW SHARE, computed once. `siteEndpoints`, `distinctEndpoints`
    and `learnedSurfaceScope` were three spellings of one set, and a third copy is how two of them come to
    disagree about a row nobody re-derived -- which is the defect `countersScope` exists one row down to keep
@@ -1331,6 +1370,7 @@ const row = {
      population every arm below that cursor test excludes. Composed above `row` with its own backward walk;
      see that block for why it is not `counted[last]` and why the three rows are derived rather than named. */
   frontierPrograms,
+  perRun,
   /* …AND WHAT THE JOB BACKLOG ABOVE IS ACTUALLY WAITING ON — see `wfqLive`. Read `jobsReady` with
      `jobWGap` and never alone (a gap of 0 is both "no ready holder" and "the top of the queue holds a
      runnable job"), and read a `jobsReady: 0` with `memUnframed`, which separates its two silences: with
