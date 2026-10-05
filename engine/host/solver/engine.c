@@ -7939,17 +7939,83 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
        are closure cells (quickjs.h's JSTimeTravelHooks.module_eval, in its own words) and ride the delta
        through `cell_write`; `cow_capture_varref` has no flow-private skip, there being no per-cell generation
        to ask; and a module's EVALUATION STATE is per-flow, which that hook's own banner says is "the state
-       that decides whether a flow evaluates AT ALL". So a cell written by the flow that evaluated the module
-       is restored to its baseline — UNINITIALIZED, a module binding being in TDZ before evaluation — for every
-       flow that is not that flow's descendant, and `OP_get_var_ref_check` throws rather than evaluating
-       anything. The residual's cure, "each world evaluates the module once", is reached by RUNNING AN IMPORT,
-       and a drive has none to run. WHICH drives land inside an evaluating ancestry is therefore decided by
-       which flow happened to run out of work — a fact about the SCHEDULE, which is the same argument
-       engine_orphan_born was built on for a different fact.
-       WHAT THE NEXT DIFF BUILDS: a world that reads an uninitialized module binding EVALUATES that module,
-       keyed on the per-flow state JS_ModuleEvalStateSave already carries, so a flow with no import of its own
-       reaches the exports it never wrote. That is quickjs's half and not this file's, which is why it is named
-       here rather than attempted: the read is `OP_get_var_ref_check` and the state is JSModuleDef's.
+       that decides whether a flow evaluates AT ALL". So a cell written by the flow that LINKED the module
+       is restored to its baseline — UNINITIALIZED, a module binding being in TDZ before the prologue runs —
+       for every flow that is not that flow's descendant, and `OP_get_var_ref_check` throws rather than
+       evaluating anything. IT IS THE LINKING FLOW AND NOT THE EVALUATING ONE, which is a correction and not a
+       spelling: the clause below carries why, and the difference is that re-evaluating reaches the cell never
+       while re-linking cannot happen at all, the status being at baseline for every world. So "each world
+       evaluates the module once" is not a cure that was merely out of reach — it is a cure for the wrong
+       phase. WHICH drives land inside a LINKING ancestry is therefore decided by which flow happened to run
+       out of work, a fact about the SCHEDULE, which is the same argument engine_orphan_born was built on for a
+       different fact.
+       AND THAT SCHEDULE FACT IS NOT THAT THE PARENT IS ARBITRARY — IT IS THAT THE PARENT IS SELECTED AGAINST,
+       which is the stronger statement and the one a reader who sets out to measure the arbitrariness will not
+       find. This rung's own arrival condition is stated at its call site in flow_step: it is reached when the
+       clock hooks decline, which includes A FRAME STRICTLY AHEAD WITH A REPLY STILL IN THE AIR. A flow in that
+       state is one whose own program sequence is STOPPED at a row whose source has not arrived, so its world
+       is missing exactly the chunks it is waiting for — and a module graph is delivered as those chunks. The
+       population at this rung is therefore enriched for flows whose module graph is incomplete, which is the
+       worst available parent for a drive of a body that graph defines. Nothing here is random.
+       AND THE ENUMERATION THAT PLACES THIS SITE AMONG ITS PEERS, handed over as a DERIVATION because the count
+       moves on any commit that adds a fork: `grep -n 'engine_sibling_assemble(ctx,' engine/host/solver/engine.c`
+       names every site at which a live session mints a frontier member, and `grep -n 'flow_add(\|flow_add_unseeded('`
+       over the solver directory names every other door onto the frontier. Read both and the shape is one
+       sentence: there is ONE forking primitive, every live-session member goes through it, and at every call
+       site but THIS ONE the parent is the flow whose OWN work the fork is — a reply delivered to the flow that
+       asked for it, a branch arm of the flow that branched, an answer or a decline of the flow's own ask. Only
+       here is the parent structurally unrelated to the work, because what is forked is a body the FRONTIER
+       owns and the parent is whoever ran out of their own. The other doors are roots by design and state so:
+       the session's first flow, a joined document's first flow, a cold-tier rebuild and a candidate session
+       each pass WORLD_NONE and each replays its own world rather than inheriting one.
+       AND A QUEUED JOB IS NOT ONE OF THESE DOORS, which is the half that has to be said because the spec's
+       §Every-runtime-job-is-a-scheduler-flow reads as though it were. A timer task, a delivered reaction and a
+       resumed program
+       become `f->frame` ON THE RUNNING FLOW — every frame installation in this file writes `f->frame` for the
+       `f` it was handed — so a job inherits the running flow's world by construction and has no seeding site at
+       which a parent could be chosen wrongly. A reader hunting this defect across job sources is hunting a
+       population that does not exist; what a job CAN do is run a callback whose closure belongs to a world the
+       running flow is not in, which is the same uncaptured-prologue fact arriving through a shared work queue
+       rather than through a choice of parent.
+       RETIREMENT: this record goes when the forking primitive ASSERTS whose work the fork is — a statement each
+       caller passes, which the four that can make it make and which this one cannot — because the odd site is
+       then named by a check that fires instead of by an enumeration a reader has to re-run. MEASURED NOT-MET at
+       the revision this was written: no such predicate occurs in this file or in flow.h, against the primitive's
+       own name occurring 28 times as the armed control.
+       THE NEXT-DIFF CLAUSE THAT STOOD HERE IS WRONG AND IS RECORDED RATHER THAN DELETED, because it is what
+       a reader re-derives from the paragraph above it and because its METHOD is the part that would otherwise
+       be copied. It said: "a world that reads an uninitialized module binding EVALUATES that module, keyed on
+       the per-flow state JS_ModuleEvalStateSave already carries, so a flow with no import of its own reaches
+       the exports it never wrote." Every premise above it is true and the remedy does not follow, because
+       EVALUATION IS NOT WHAT WRITES THE CELL. A module's declaration instantiation is compiled into the body's
+       own `OP_push_this; OP_if_false <body>` prologue and is selected by a TRUTHY `this` — the link walk's own
+       comment in quickjs.c says so verbatim, and it is the one caller that passes `JS_TRUE`. Both evaluation
+       entries pass `JS_UNDEFINED`, which is falsy, so they take the `OP_if_false` arm into the module's own
+       code and RUN NO PROLOGUE AT ALL. A world that re-evaluated the module would therefore write none of its
+       function-declaration cells, which is most of the population: of the module-level identifiers the corpus
+       implicates, the majority are function declarations and the minority are lexicals with initializers, and
+       the clause is right only for the second kind. Re-derive it rather than taking this on trust — the three
+       readings are the prologue-selection comment, the `JS_TRUE` at the link walk, and the two eval entries'
+       arguments, all reachable with `grep -nF 'OP_push_this; OP_if_false' engine/qjs/quickjs.c` and a read of
+       each hit's neighbourhood.
+       THE METHOD THAT PRODUCED IT IS THE FINDING: the author traced the SYMPTOM (`OP_get_var_ref_check` throws
+       on an uninitialized cell) and the CAPTURE (`cow_capture_varref` has no flow-private skip) and never asked
+       WHICH INSTRUCTION WRITES THAT CELL AND WHEN. That one question decides the whole shape, and a clause
+       written without it names a remedy for a phase that does not run. So a residual about a value's isolation
+       states the WRITE it is about, not the READ that fails on it: the read is where the defect is observed and
+       the write is where it is caused, and they are routinely in different phases of different algorithms.
+       AND THE ASYMMETRY THE CORRECTED READING NAMES IS ONE PHASE ISOLATED TWO OPPOSITE WAYS, which is why no
+       re-seeding and no re-evaluation reaches it. The prologue's cell writes go through the page's own write
+       hooks and are therefore PER-FLOW, captured into whichever delta was being captured into. The module's
+       STATUS is a field of a C record and is written by the link phase with NO capture anywhere in its chain —
+       re-derived here, with the control armed, as 92 capture calls in quickjs.c against ZERO in the range that
+       holds the three link-phase status writes. So every world reads the module LINKED while only the linking
+       world ran the prologue, and a flow that is not that world's descendant finds the status saying there is
+       nothing to do and the cells saying nothing was done. THAT IS quickjs's HALF AND NOT THIS FILE'S, which is
+       why it is named here rather than attempted.
+       RETIREMENT: this record goes when a module's link-phase cell writes and its status write are isolated the
+       SAME way — both captured or both at baseline — because the asymmetry is then impossible by construction
+       rather than described here. MEASURED NOT-MET at the revision this was written, by the two counts above.
        HOW ITS ABSENCE SHOWS: an uncaught `<name> is not initialized` whose named binding resolves to a
        module-top-level declaration, reported on a frame whose receiver renders as `Concolic.` — and that
        second half is a NECESSARY and not a sufficient condition for the reading flow being a drive, which is
