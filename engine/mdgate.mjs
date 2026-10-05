@@ -370,8 +370,27 @@ if (scoped) {
     if (!baseRuns.has(h.txt) && !baseFlat.includes(h.txt))
       (byPara.get(h.n) ?? byPara.set(h.n, []).get(h.n)).push(h.txt);
   for (const [n, runs] of byPara) {
+    /* THE SECOND HALF OF THAT DISCRIMINATOR COMPARES THE WHOLE CONDITION AND NOT A PREFIX OF IT, BECAUSE A
+       PREFIX IS NOT AN IDENTITY OVER A POPULATION WHOSE MEMBERS SHARE AN OPENING BY CONVENTION. It read
+       `baseFlat.includes(c.slice(0, 60))`, and CLAUDE.md writes essentially every condition as
+       `this record goes when a <noun> in this tree <verb>s ...` — so sixty characters routinely name the
+       CLASS of condition rather than the condition, and two records about two different mechanisms collide.
+       MEASURED on the landing that found it: a new condition reading `this record goes when a liveness claim
+       about an abort in this tree is issued by a helper that ...` was excused by an existing one reading
+       `this record goes when a liveness claim about an abort in this tree carries the identity of the paths
+       that WRITE its operands ...`, identical for 61 characters and about two unrelated repairs — so the
+       paragraph's one GAINED condition was filtered away and the record was refused for having none.
+       THE DIRECTION IS WHY THIS IS A DEFECT AND NOT A TUNING CHOICE: this filter EXCUSES, so loosening it
+       produces a FALSE ACCUSATION — a record that stated its condition correctly is reported as having
+       stated none, which is the over-strict direction CLAUDE.md rates as the costly one, since the author
+       then goes and re-words correct prose to satisfy an instrument rather than fixing the instrument.
+       Comparing the whole capture is also strictly NARROWER in what it excuses, so it cannot introduce a
+       finding anywhere; and it still catches the case the filter exists for, because a condition already
+       present in UNPARSED form is present in `baseFlat` VERBATIM and a 120-character capture of it is a
+       substring of that text. Both operands are `norm`alised (`baseFlat` at its own declaration), so the
+       comparison is well-defined rather than whitespace-sensitive. */
     const gained = [...maskSpans(subject[n - 1].line).matchAll(RETIREMENT_TEXT)]
-      .map((m) => norm(m[1])).filter((c) => !baseRets.has(c) && !baseFlat.includes(c.slice(0, 60)));
+      .map((m) => norm(m[1])).filter((c) => !baseRets.has(c) && !baseFlat.includes(c));
     if (!gained.length) recordFindings.push({ n, runs });
   }
 }
