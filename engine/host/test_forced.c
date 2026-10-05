@@ -192,7 +192,19 @@ static JSValue js_url_sink(JSContext *ctx, JSValueConst this_val, int argc, JSVa
    did not stage. */
 typedef struct { const char *req; const char *at; const char *body; int stages_page_error; } TfChunk;
 static const TfChunk TF_CHUNKS[] = {
-    /* THE ONLY MODULE IN THIS DOCUMENT, AND BEFORE THIS ROW THERE WAS NONE AT ALL. Measured by command:
+    /* RETIRED HEADLINE, VERDICT FIRST: THIS BANNER SAID `THE ONLY MODULE IN THIS DOCUMENT` AND THERE ARE
+       SEVERAL — and it is rewritten rather than deleted because the ARGUMENT under it is live and is what a
+       reader re-derives. Two things made it false and only one of them is this commit. The entries it describes
+       were MOVED to `TF_SERVED` (see that table's own record of the move, which is why this banner sits over a
+       table that no longer holds its subject), `mdbad.js` and three `<script type=module>` statements landed
+       beside them, and this commit adds a two-node graph (`mdhost.js` plus `mddep.js`). Its SECOND clause —
+       `AND BEFORE THIS ROW THERE WAS NONE AT ALL` — is a fact about the commit that wrote it and stays true of
+       that commit; what rots is the superlative, which is a count of this file and therefore the one coordinate
+       here that every later module statement invalidates. The DERIVATION rather than a figure, so the next
+       reader gets today's answer: `grep -c 'type=module' engine/host/test_forced.c` for the inline statements
+       and a grep of `TF_SERVED` for the bodies this host serves as modules.
+       THE MEASUREMENT BELOW IS KEPT VERBATIM AND IS STILL EXACTLY RIGHT AT THE REVISION IT NAMES. Measured by
+       command:
        `grep -nc 'JS_EVAL_TYPE_MODULE' engine/host/test_forced.c` answered 0 and this file's own prose said it
        "holds no dynamic `import()`" — so every module algorithm in the engine was exercised by real pages and
        by nothing that runs on demand. That is the subsystem a real app's deterministic blocker is in: six of six
@@ -561,6 +573,71 @@ static const TfServed TF_SERVED[] = {
       " fetch('/api/moddriveconst?w=' + mmDeps([0])); }" },
     { "https://x.test/chunk/mdbad.js",  "application/json",
       "fetch('/api/modbadran?w=mbRAN');export default 1;" },
+    /* …AND A MODULE WITH A DEPENDENCY, WHICH IS THE ONE MODULE SHAPE NOTHING IN THIS FIXTURE HAD AND THE
+     * ONLY ONE THAT REACHES THE GRAPH. Measured by command before it was written:
+     * `grep -nE '"[^"]*\bimport[ ]+[A-Za-z{*]' engine/host/test_forced.c` answered ONE line and that line is
+     * a probe's diagnostic PROSE, so no body this fixture serves and no statement it makes carried a STATIC
+     * `import` at all — every module here has `req_module_entries_count == 0`. That is not a gap in the
+     * dynamic rows above it; it is a different subsystem, and ECMAScript numbers the three phases apart:
+     * ECMAScript §16.2.1.6.1.1 "LoadRequestedModules ( [ hostDefined ] )" is the one that talks to the
+     * host — "It populates the [[LoadedModules]] of all the Module Records in the dependency graph of
+     * module" — while ECMAScript §16.2.1.6.1.2 "Link ( )" walks what that phase filled in and reaches
+     * every child through ECMAScript §16.2.1.9 "GetImportedModule ( referrer, request )", whose own
+     * assertion holds "since LoadRequestedModules has completed successfully on referrer prior to
+     * invoking this abstract operation". A graph with ONE node
+     * satisfies all of that vacuously: the inner walk descends into nothing, the host is asked for nothing,
+     * and no cell is ever resolved across a module boundary.
+     * THE ENGINE BUILT THIS PHASE FOR A STATIC IMPORT AND SAYS SO: quickjs.c's own banner over
+     * js_module_load_requested records that quickjs conflated the load and the link into one synchronous C
+     * walk, that a host which cannot answer on the spot had nowhere to park inside it, and that it then says,
+     * in its own words and BACKTICKED HERE BECAUSE THEY ARE THIS TREE'S PROSE AND NOT A STANDARD'S (a
+     * double-quoted run is compared against whichever standard the nearest preceding citation names, and this
+     * file's vote is HTML — the DERIVATION and not a figure, since a count of this file rots on the next
+     * citation anybody adds: `grep -Foc 'HTML §' engine/host/test_forced.c` against the same command for
+     * `ECMAScript §`, which is why every §16.2.x below NAMES its standard rather than resting on that vote):
+     * `A static import therefore hit a DFAIL saying precisely that, and this is that DFAIL built`.
+     * So the whole of ECMAScript §16.2.1.6.1.1.1 "InnerModuleLoading ( state, module )" — whose note is
+     * that "HostLoadImportedModule will call FinishLoadingImportedModule, which re-enters the graph loading
+     * process through ContinueModuleLoading" — was written for a shape no gate here exercises.
+     * THE SPECIFIER IS RELATIVE ON PURPOSE AND THAT IS NOT A SECOND TEST SMUGGLED IN. A specifier with no
+     * leading dot is returned UNMODIFIED by the normalizer (js_default_module_normalize_name's first
+     * statement), so a root-absolute one would ask nothing about naming that the `import('/chunk/...')`
+     * statements above do not already ask. A dotted one is resolved against the REFERRER'S OWN MODULE NAME,
+     * which js_host_resolve_imported_module states in its own words, backticked for the reason above:
+     * `the module name is also its resolution base for nested imports`. js_module_request_host_load
+     * passes it as `referrer->module_name` — so `./mddep.js` from `/chunk/mdhost.js` is `/chunk/mddep.js`
+     * and nothing else. `mh-dep` therefore carries
+     * TWO readings this host cannot separate, its own `why` names them, and `mod-const` is the control: that
+     * row reads the DYNAMIC load of a one-node module through the same serve path and the same park kind.
+     * THE IMPORTER READS BOTH IMPORTED BINDINGS IN ITS OWN BODY AND NOT THROUGH AN EXPORTED FUNCTION, which
+     * is what keeps these rows off `mod-world`'s question. A read performed by a continuation of the
+     * importing statement happens in whatever world that continuation is; a read in the module BODY happens
+     * in the world that evaluated the module, through that module's own var_refs, which is where
+     * ECMAScript §16.2.1.7.3.1 "InitializeEnvironment ( )" put the imported cell. The named one is the arm
+     * ECMAScript §16.2.1.7.2.2 "ResolveExport ( exportName [ , resolveSet ] )" answers — "ResolveExport
+     * attempts to resolve an imported binding to the actual defining module and local binding name" — and
+     * it is a DIFFERENT cell from the namespace member `mod-default` reads, which ECMAScript §16.2.1.13
+     * "GetModuleNamespace ( module )" mints.
+     * EVERY EMITTED TOKEN IS A LITERAL, including both arms of each ternary, for
+     * §A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE-UNKNOWN's reason: a payload composed
+     * from anything this engine COMPUTED can itself be unknown, and then the request is never issued and an
+     * arm that RAN reads exactly like an arm that did not. A read that THROWS ends the body, so the token
+     * ABSENT with `mhHOST` present is a third state and is the one the real bundle's error is in.
+     * THE DEP'S BODY EMITS FIRST AND DECLARES AFTERWARDS, so its witness cannot be lost to its own TDZ, and
+     * the importer's emissions are in ladder order — entry, then the named read, then the default read — so
+     * each token present implies the one before it and the LOWEST 0 is the localisation.
+     * THE FOUR ADDRESSES ARE DISTINCT AND NONE IS ANOTHER'S PREFIX, for the `mdmod.js` body's reason:
+     * emitted_records matches `"url":"<addr>"` with its closing quote, and a row a sibling statement's
+     * record could answer is a row that cannot fail. */
+    { "https://x.test/chunk/mdhost.js", "text/javascript",
+      "import mhDef, { mhTag } from './mddep.js';"
+      "fetch('/api/mhhost?w=mhHOST');"
+      "fetch('/api/mhbind?w=' + (mhTag === 'mhTAG' ? 'mhBIND' : 'mhWRONG'));"
+      "fetch('/api/mhdefault?w=' + (mhDef && mhDef.tag === 'mhDEF' ? 'mhDEF' : 'mhNODEF'));" },
+    { "https://x.test/chunk/mddep.js",  "text/javascript",
+      "fetch('/api/mhdep?w=mhDEP');"
+      "export const mhTag = 'mhTAG';"
+      "export default { tag: 'mhDEF' };" },
 };
 
 /* …ASKED OF THE ABSOLUTE SERIALIZED ADDRESS, which is what a park carries and what the caller holds by the
@@ -5412,6 +5489,31 @@ static const char *HTML =
     "     fetch('/api/mfdnest?d=' + (typeof mfd === 'function' ? mfd('ok') : typeof mfd)); });"
     " });"
     " mfdlazy(1, 2);"
+    "</script>"
+    /* ─── THE ONE STATEMENT THAT MAKES THIS DOCUMENT'S MODULE GRAPH MORE THAN ONE NODE ──────────────
+       See the served `mdhost.js` body for why a static `import` is a different subsystem from the dynamic
+       rows thousands of lines above, and for the measurement that said this fixture had none.
+       THE ENTRY WITNESS IS THE FIRST EMISSION AND IS WHAT MAKES ANY OF THE FIVE ROWS SCORABLE. An absent
+       token is equally consistent with the graph having failed and with this statement never having run,
+       and those take opposite work — §Testing's reachability witness. `mhASK` is unconditional and ahead of
+       the `await`, so no row behind it is read as a module finding until it answers.
+       THE `catch` IS THE SECOND READING OF A SHUT LADDER AND NOT A SIXTH RUNG. `mh-ask` at 1 with `mh-dep`
+       at 0 has two causes this host would otherwise sum: the load REJECTED, or it never settled at all
+       (a park nothing answered, which is the schedule). The reject arm names which, and `e.name` is the one
+       payload here that this engine composed rather than this statement — admitted for the reason the MIME
+       row admits it, that a real TypeError's name is a string the engine wrote out of its own table, and
+       the row that reads it is NEGATIVE so a lost request reads 1 and is banded by its `reach`.
+       THE DONE TOKEN IS A CONSTANT AND IS NOT A ROW, deliberately: everything it could claim is already
+       claimed by the importer's own three emissions, which happen strictly inside the graph rather than
+       after it, and a row over it would be entailed by all three at once — §EVIDENCE-INFLATION. It is in
+       the document so a reader of the stream can see the await returned.
+       APPENDED IN FRONT OF `</body></html>` AND NOT INSERTED, for the reason the module, crypto,
+       operand-shape and closure statements above each state: this document is ONE LINE, so a `@WHY` frame's
+       COLUMN is the only coordinate a reader has into it and an insertion re-points every column after it. */
+    "<script>"
+    "(async function(){ fetch('/api/mhask?w=mhASK');"
+    " try { await import('/chunk/mdhost.js'); fetch('/api/mhdone?w=mhDONE'); }"
+    " catch (mhE) { fetch('/api/mhfail?w=' + mhE.name); } })();"
     "</script>"
     "</body></html>";
 
@@ -14408,6 +14510,99 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "`mmBAD` is the default parameter having seen a DIFFERENT value, which is neither phase. "
              "Compare with `mod-const`, read by the importing world: the two reading "
              "differently localises the defect to the WORLD rather than to the binding");
+    /* ─── THE STATIC `import`'S FIVE, WHICH ARE ABOUT THE MODULE *GRAPH* AND NOT ABOUT A MODULE ────────
+     *
+     * EVERY ROW ABOVE READS A ONE-NODE GRAPH, WHICH SATISFIES THE LOAD PHASE VACUOUSLY. ECMAScript §16.2.1.6.1.1
+     * "LoadRequestedModules ( [ hostDefined ] )" is the only phase that talks to the host and what it does is
+     * stated in its own words — "It populates the [[LoadedModules]] of all the Module Records in the dependency
+     * graph of module" — so a module with no requested modules has nothing populated, asks the host for nothing,
+     * and leaves ECMAScript §16.2.1.6.1.1.1 "InnerModuleLoading ( state, module )"'s descent, its park and
+     * its re-entry ("HostLoadImportedModule will call FinishLoadingImportedModule, which re-enters the graph
+     * loading process through ContinueModuleLoading") unreached. Likewise
+     * ECMAScript §16.2.1.6.1.2.1 "InnerModuleLinking ( module, stack, index )" and
+     * ECMAScript §16.2.1.6.1.3.1 "InnerModuleEvaluation ( module, stack, index )" recurse over the same
+     * graph — the second "is used by Evaluate to perform the actual evaluation process for module, as well
+     * as recursively on all other modules in the dependency graph" — and over one node neither recurses
+     * either.
+     * SO THESE ROWS ARE NOT A SECOND SPELLING OF `mod-entered`'S LADDER, AND THEY ARE ITS COMPARISON. That row
+     * reads a DYNAMIC load of a one-node module through this same serve path and this same park kind, so
+     * `mod-const` at 1 beside `mh-dep` at 0 localises the defect to the STATIC child-load — the only thing the
+     * two statements do differently — while both at 0 localises it to the serve path or the park and says
+     * nothing about the graph at all.
+     *
+     * THE LADDER IS ENTAILED BY PROGRAM ORDER AND BY THE SPEC'S EVALUATION ORDER, WHICH IS WHY EACH `.gate` IS
+     * A TRUE IMPLICATION RATHER THAN A LABEL. `mhASK` is the statement's own first and unconditional emission;
+     * `mhDEP` is the DEP'S body, which InnerModuleEvaluation runs BEFORE the importer's; `mhHOST` is the
+     * importer's body's own first emission; and the two reads follow it in source order. Nothing else in this
+     * fixture imports either address, so no other statement can supply a token and leave a gate open under a
+     * row that answered.
+     * `mh-default` IS GATED ON `mh-host` AND NOT ON `mh-bind`, AND THAT IS THE ONE PLACE THIS CHAIN WOULD HAVE
+     * BEEN A LABEL. `mh-bind` reads 0 in TWO states — the read THREW, which ends the body and loses the default
+     * emission too, and the read answered `mhWRONG`, which does NOT — so the second state is a 0 beside a 1 and
+     * the gate's own two-sided DCHECKF would abort on it. `mh-host` bounds both, exactly as `mod-entered`
+     * bounds `mod-const` and `mod-default` together rather than chaining them.
+     *
+     * `mh-nofail` IS THE SECOND READING OF A SHUT LADDER AND IS DELIBERATELY NOT GATED. A `mh-dep` of 0 under an
+     * open `mh-ask` has two causes that take opposite work: the graph load REJECTED, or it never settled (a park
+     * nothing answered, which is the SCHEDULE). It is NEGATIVE — satisfied by an absence — so it reads a free 1
+     * on a run that never made the statement and owes a `reach` rather than a `gate`, which is the whole of what
+     * that field is for. Its 0 and `mh-dep`'s are two facts and not one: one says the child never evaluated and
+     * the other names why. */
+    const char *mh_ask_why = NULL; int mh_ask = 1;
+    fold_row(&mh_ask, &mh_ask_why, param_value_is(js, "/api/mhask", "w", "mhASK"),
+             "NOT REACHED: there is no /api/mhask record, so the statement holding the only STATIC-import graph "
+             "in this fixture never ran its FIRST and unconditional emission. That is the SCHEDULE and not the "
+             "module graph — every row gated on this one is unaskable until it answers");
+    const char *mh_dep_why = NULL; int mh_dep = 1;
+    fold_row(&mh_dep, &mh_dep_why, param_value_is(js, "/api/mhdep", "w", "mhDEP"),
+             "the statement RAN and the STATICALLY IMPORTED dependency never evaluated: no /api/mhdep record, so "
+             "ECMAScript §16.2.1.6.1.1 \"LoadRequestedModules ( [ hostDefined ] )\" either never asked the host for "
+             "`./mddep.js` or asked for an address this host does not serve. TWO READINGS THIS ROW CANNOT "
+             "SEPARATE, named here because no fixture edit can: the child-load phase did not descend at all, or "
+             "it descended and the RELATIVE specifier resolved against something other than the referrer's own "
+             "module name — js_host_resolve_imported_module states that "
+             "`the module name is also its resolution base for nested imports`, backticked because it is this "
+             "tree's own prose and a quoted run would be compared against the nearest cited standard. "
+             "READ `mod-const` BESIDE THIS ROW: it loads a one-node module dynamically "
+             "through the same serve path and the same park kind, so its 1 excludes both of those and leaves "
+             "the static descent, while its 0 means this row is not about the graph at all. READ `mh-nofail` "
+             "TOO: a 0 there says the load REJECTED and names the reason, where a 1 says it never settled");
+    const char *mh_host_why = NULL; int mh_host = 1;
+    fold_row(&mh_host, &mh_host_why, param_value_is(js, "/api/mhhost", "w", "mhHOST"),
+             "the dependency evaluated and the IMPORTER did not: no /api/mhhost record. ECMAScript §16.2.1.6.1.3.1 "
+             "\"InnerModuleEvaluation ( module, stack, index )\" evaluates a module's dependencies before the "
+             "module itself, so a child that ran with no parent behind it is a walk that stopped between them — "
+             "which is a LINK failure rather than a load one, since ECMAScript §16.2.1.6.1.2 \"Link ( )\" runs in "
+             "between and ECMAScript §16.2.1.7.3.1 \"InitializeEnvironment ( )\" throws a SyntaxError for an "
+             "export it cannot resolve");
+    const char *mh_bind_why = NULL; int mh_bind = 1;
+    fold_row(&mh_bind, &mh_bind_why, param_value_is(js, "/api/mhbind", "w", "mhBIND"),
+             "the importer's body ran and could not read the NAMED imported binding: ECMAScript §16.2.1.7.2.2 "
+             "\"ResolveExport ( exportName [ , resolveSet ] )\" is the arm that answers it — \"ResolveExport "
+             "attempts to resolve an imported binding to the actual defining module and local binding name\" — "
+             "and ECMAScript §16.2.1.7.3.1 \"InitializeEnvironment ( )\" is what puts the resulting "
+             "cell in the importing module's environment. `mhWRONG` is that cell holding something other "
+             "than the dependency's own "
+             "value, which is a resolution that answered the wrong module or the wrong name; the token ABSENT "
+             "with `mhHOST` present is the read having THROWN, which is the real bundle's "
+             "`<name> is not initialized` on an imported binding rather than on a local one");
+    const char *mh_default_why = NULL; int mh_default = 1;
+    fold_row(&mh_default, &mh_default_why, param_value_is(js, "/api/mhdefault", "w", "mhDEF"),
+             "the importer's body ran and the STATIC DEFAULT import read back no usable value: `mhNODEF` is the "
+             "ESM-interop read a real bundle also fails. It is a DIFFERENT cell from the one `mod-default` "
+             "reads — that row reads `default` off a namespace OBJECT, which ECMAScript §16.2.1.13 "
+             "\"GetModuleNamespace ( module )\" mints, and this one reads an imported BINDING resolved at link "
+             "time — so the two reading differently localises the defect to whichever of the two mints the cell. "
+             "The token ABSENT with `mh-bind` answered is the read having THROWN");
+    const char *mh_nofail_why = NULL; int mh_nofail = 1;
+    fold_row(&mh_nofail, &mh_nofail_why, !strstr(js, "\"/api/mhfail\""),
+             "the graph load REJECTED: /api/mhfail is in this document, so `await import('/chunk/mdhost.js')` "
+             "threw and its `w` carries the error NAME. A `TypeError` is HTML §8.1.6.7.3 "
+             "HostLoadImportedModule's onSingleFetchComplete refusing a reply — which for a `text/javascript` "
+             "body means the child's address was never served rather than that its type was wrong — and a "
+             "`SyntaxError` is ECMAScript §16.2.1.7.3.1 \"InitializeEnvironment ( )\" having failed to "
+             "resolve an export, "
+             "which is a LINK failure and the one state that reaches this row with `mh-dep` answered");
     const char *sc_msg_ran_why = NULL; int sc_msg_ran = 1;
     fold_row(&sc_msg_ran, &sc_msg_ran_why, param_value_is(js, "/api/scmsg", "v", "scENTER"),
              "NOT REACHED: there is no /api/scmsg record, so §9.3.3 step 8's delivery task never ran its "
@@ -18735,6 +18930,20 @@ static int probes_eval(const char *js, Probe *out, int cap) {
           .gate = "mod-drive-ran" },
         { "mod-drive-const", mod_drive_const, "/chunk/mdmod.js", SESS_EXPLORE, mod_drive_const_why,
           .gate = "mod-drive-fn" },
+        /* THE STATIC IMPORT'S FIVE. `mh-ask` is keyed on the DOCUMENT'S own emission because the statement is
+           the document's; the other four are keyed on `/chunk/mdhost.js` for the drive rows' reason exactly —
+           their emissions are in bodies this host SERVES and in no document at all, and what the document
+           contributes is the `import()` that makes the graph exist. A key is a substring of the PROGRAM, never
+           of the answer, and `/api/mhdep` appears in no document so a row keyed on it would be selected by no
+           run while the table it sits in read as complete.
+           `mh-nofail` IS KEYED ON ITS OWN ADDRESS BECAUSE ITS EMISSION IS THE DOCUMENT'S, in the `catch` arm,
+           so unlike the four above it names a statement this file writes rather than one it serves. */
+        { "mh-ask", mh_ask, "/api/mhask", SESS_EXPLORE, mh_ask_why },
+        { "mh-dep", mh_dep, "/chunk/mdhost.js", SESS_EXPLORE, mh_dep_why, .gate = "mh-ask" },
+        { "mh-host", mh_host, "/chunk/mdhost.js", SESS_EXPLORE, mh_host_why, .gate = "mh-dep" },
+        { "mh-bind", mh_bind, "/chunk/mdhost.js", SESS_EXPLORE, mh_bind_why, .gate = "mh-host" },
+        { "mh-default", mh_default, "/chunk/mdhost.js", SESS_EXPLORE, mh_default_why, .gate = "mh-host" },
+        { "mh-nofail", mh_nofail, "/api/mhfail", SESS_EXPLORE, mh_nofail_why, .reach = "mh-ask" },
         { "sc-msg-ran", sc_msg_ran, "/api/scmsg", SESS_EXPLORE, sc_msg_ran_why },
         { "sc-msg-fork", sc_msg_fork, "/api/scfork", SESS_EXPLORE, sc_msg_fork_why, .gate = "sc-msg-ran" },
         { "bc-msg-ran", bc_msg_ran, "/api/bcmsg", SESS_EXPLORE, bc_msg_ran_why },
