@@ -68593,9 +68593,30 @@ static int js_module_linking_bindings(JSContext *ctx, JSModuleDef *m)
     return -1;
 }
 
+static void js_module_eval_capture(JSContext *ctx, JSModuleDef *m);
+
+/* THE LINK PHASE'S WRITES TO A MODULE RECORD, AND THE CAPTURE IS PART OF THE WRITE RATHER THAN A CALL BESIDE IT.
+   `JSModuleEvalState` holds `status`, `dfs_index`, `dfs_ancestor_index` and `stack_prev`, and §16.2.1.6.1.2
+   Link ( ) writes every one of them — so a link write that does not announce itself is BASELINE state every
+   sibling flow sees, while the §16.2.1.7.3.1 prologue those same writes lead to writes its cells through
+   `OP_put_var_ref`, which IS captured per flow. That is one phase isolated in two opposite directions: every
+   world reads the module LINKED and only the linking world ran the prologue, so a sibling reads a top-level
+   FUNCTION DECLARATION's cell at JS_UNINITIALIZED and throws `<name> is not initialized` on a binding the
+   module's own code needs. No amount of re-evaluating reaches it: §16.2.1.6.1.3 Evaluate ( ) enters the body
+   with `this` UNDEFINED, so `OP_push_this; OP_if_false` takes the false arm and the prologue is skipped.
+   IT IS A HELPER SO THE CAPTURE CANNOT BE THE LINE A LATER SITE FORGETS, which is the one thing a call beside
+   each write does not buy: a status write in this phase is now unspellable without its announcement, so the
+   contract `js_module_eval_capture` states about itself — "fired at every point that writes one of the
+   captured fields" — is true of this phase by CONSTRUCTION and not by an argument about its call graph. */
+static void js_module_link_set_status(JSContext *ctx, JSModuleDef *m, JSModuleStatus status)
+{
+    js_module_eval_capture(ctx, m);
+    m->status = status;
+}
+
 /* 16.2.1.6.1.2.1 InnerModuleLinking step 11: the SCC pop. `m` is the root of a strongly connected component
    exactly when its ancestor index never moved, and every module above it on `stack` linked with it. */
-static void js_module_linking_scc_pop(JSModuleDef *m, JSModuleDef **pstack_top)
+static void js_module_linking_scc_pop(JSContext *ctx, JSModuleDef *m, JSModuleDef **pstack_top)
 {
     JSModuleDef *m1;
 
@@ -68609,7 +68630,7 @@ static void js_module_linking_scc_pop(JSModuleDef *m, JSModuleDef **pstack_top)
                "16.2.1.6.1.2.1 step 11.b: the SCC stack ran out before its own root — the walk popped a "
                "component whose members are no longer the ones step 8 appended");
         *pstack_top = m1->stack_prev;
-        m1->status = JS_MODULE_STATUS_LINKED;
+        js_module_link_set_status(ctx, m1, JS_MODULE_STATUS_LINKED);
         if (m1 == m)
             break;
     }
@@ -68666,15 +68687,28 @@ enum { MODLINK_DONE = 0,      /* 16.2.1.6.1.2 step 5: the graph is linked */
 
 /* the PRE-ORDER half (steps 3-7): claim the module, number it, push it on the SCC stack. Returns the new index, or
    -1 when the module needs no visit at all — which is the recursive form's early `return index`. */
-static int js_module_linking_enter(JSModuleDef *m, JSModuleDef **pstack_top, int index)
+static int js_module_linking_enter(JSContext *ctx, JSModuleDef *m, JSModuleDef **pstack_top, int index)
 {
+    /* BEFORE THE TEST AND NOT ONLY BEFORE THE WRITE, for the reason js_evaluate_module gives at its own entry:
+       whether this flow LINKS the module at all is decided by a status a sibling may have written, so the four
+       statuses below are read in this flow's world or the decision is made in somebody else's. The early return
+       is the half that was costing the most — a sibling reading LINKING or LINKED skips the module entirely and
+       then evaluates it, so its §16.2.1.7.3.1 prologue never runs in that world and its top-level function
+       declarations stay JS_UNINITIALIZED. */
+    js_module_eval_capture(ctx, m);
     if (m->status == JS_MODULE_STATUS_LINKING ||
         m->status == JS_MODULE_STATUS_LINKED ||
         m->status == JS_MODULE_STATUS_EVALUATING_ASYNC ||
         m->status == JS_MODULE_STATUS_EVALUATED)
         return -1;
     DCHECK(m->status == JS_MODULE_STATUS_UNLINKED, "m->status == JS_MODULE_STATUS_UNLINKED");
-    m->status = JS_MODULE_STATUS_LINKING;
+    /* THE ONLY PUSH ONTO THE WALK'S SCC STACK, which is what makes the other four link-phase writes to a
+       captured field covered by THIS capture: step 11's pop, step 4's reset and the two `dfs_ancestor_index`
+       minima in js_module_link_advance all name a module that is on this walk's stack or has a frame on its
+       path, and a module gets to either one only through this line. The capture dedups first-baseline-wins per
+       flow, so the value recorded here is the pre-LINKING one and those four writes need no announcement of
+       their own — they are the same flow writing a record it has already announced. */
+    js_module_link_set_status(ctx, m, JS_MODULE_STATUS_LINKING);
     m->dfs_index = index;
     m->dfs_ancestor_index = index;
     /* push 'm' on stack */
@@ -68721,7 +68755,7 @@ static int js_module_link_init(JSContext *ctx, JSModuleLinkWalk *w, JSModuleDef 
            m->status == JS_MODULE_STATUS_EVALUATING_ASYNC || m->status == JS_MODULE_STATUS_EVALUATED,
            "16.2.1.6.1.2 step 1: Link was entered on a module that is already LINKING — a second link of a "
            "graph whose first one has not finished, which the module map's memo is what prevents");
-    nindex = js_module_linking_enter(m, &w->stack_top, w->index);
+    nindex = js_module_linking_enter(ctx, m, &w->stack_top, w->index);
     if (nindex < 0)
         return 0;                          /* 16.2.1.6.1.2.1 step 2: already linked, so there is nothing to walk */
     w->index = nindex;
@@ -68763,7 +68797,7 @@ static int js_module_link_advance(JSContext *ctx, JSModuleLinkWalk *w, JSModuleD
         DCHECK(m1 != NULL,
                "16.2.1.9: a module request reached LINKING with no loaded record — Link never loads, so "
                "this graph was linked before js_module_load_requested finished on it (or at all)");
-        nindex = js_module_linking_enter(m1, &w->stack_top, w->index);
+        nindex = js_module_linking_enter(ctx, m1, &w->stack_top, w->index);
         if (nindex < 0) {
             /* already visited: take the minimum the recursive form took on return */
             if (m1->status == JS_MODULE_STATUS_LINKING)
@@ -68788,7 +68822,7 @@ static int js_module_link_advance(JSContext *ctx, JSModuleLinkWalk *w, JSModuleD
     }
  pop:
     f = &w->frames[w->depth - 1];
-    js_module_linking_scc_pop(f->m, &w->stack_top);      /* step 11 */
+    js_module_linking_scc_pop(ctx, f->m, &w->stack_top);      /* step 11 */
     w->depth--;
     w->resume = MLW_DESCEND;
 #ifdef ENABLE_DUMPS // JS_DUMP_MODULE_RESOLVE
@@ -68830,14 +68864,35 @@ static int js_module_link_advance(JSContext *ctx, JSModuleLinkWalk *w, JSModuleD
    as already done — a graph that silently links to nothing at all.
    It does not free `frames`: the machine's `visit` declares that buffer, and the step teardown owns exactly
    what `visit` names (see JSTrampStepDef.visit). */
-static void js_module_link_walk_end(JSModuleLinkWalk *w)
+/* RESIDUAL — THE ABANDON IS THE FLOW'S RESET OF ITS OWN WRITES, SO IT IS CORRECT ONLY WHILE THOSE WRITES ARE LIVE,
+   AND THAT IS NOW A QUESTION WHERE IT USED TO BE A GIVEN. Before the link phase announced itself, a flow's
+   LINKING claims were baseline — on the heap whoever was running — so resetting them from a teardown was both
+   correct and necessary, which is what the three ways above are about. They are per-flow now, so the two LIVE
+   ways are unchanged (a walk that finished has an empty stack and this loop does nothing; a walk that THREW is
+   running, its delta applied, and every module it reaches was announced by js_module_linking_enter in this same
+   flow) and the DROPPED way is not: a released flow's delta is unapplied, so `stack_prev` reads BASELINE and the
+   chain this loop walks is not the chain the flow built, while `status` reads whatever world is on the heap.
+   WHAT IS NOT COVERED is therefore exactly that third way, and only its RELEASE arm: the reset becomes a write
+   to a status this flow does not own, so where another world's link is applied it unlinks a module that world
+   has linked. The capture below is correct in all three (it answers nothing when no flow is running, which is
+   the ordinary teardown) and does not reach the WRITE.
+   WHAT THE NEXT DIFF BUILDS is the abandon running only while this flow's own writes are on the heap. The fact
+   that decides it is not this file's: `cow.h`'s applied-state for the running flow's head is what distinguishes
+   a flow whose claims are live from one whose claims were never installed, and the engine can see neither. It
+   is NOT a status test at this line — `m1->status == LINKING` selects against the dropped case specifically, so
+   it is the fallback shape rather than the record's own precondition.
+   HOW ITS ABSENCE WOULD SHOW: the DCHECK in this loop firing during a teardown rather than during a throw — a
+   module on Link's own stack reading LINKED or UNLINKED where the walk that holds it set it LINKING — and in
+   release, a module that reads UNLINKED to a world that linked it, which that world's own
+   §16.2.1.6.1.3 Evaluate ( ) entry asserts against. */
+static void js_module_link_walk_end(JSContext *ctx, JSModuleLinkWalk *w)
 {
     while (w->stack_top != NULL) {
         JSModuleDef *m1 = w->stack_top;
         DCHECK(m1->status == JS_MODULE_STATUS_LINKING,
                "16.2.1.6.1.2 step 4.a: a module on Link's own stack is not LINKING — step 8 appends only "
                "modules it has just set to linking, so something else moved this one");
-        m1->status = JS_MODULE_STATUS_UNLINKED;
+        js_module_link_set_status(ctx, m1, JS_MODULE_STATUS_UNLINKED);
         w->stack_top = m1->stack_prev;
     }
     w->depth = 0;
@@ -69119,10 +69174,22 @@ static const char *js_module_loaded_unforkable(const void *state)
     const JSModuleLoaded *s = state;
     if (s->op.walk.depth == 0 && s->op.walk.stack_top == NULL)
         return NULL;
-    return "a half-finished 16.2.1.6.1.2 Link ( ). Its cursor names Module Records whose [[Status]] and "
-           "[[DFSAncestorIndex]] belong to the REALM, and step 2's own stack is threaded through those "
-           "records, so two arms would each run 16.2.1.7.3.1 InitializeEnvironment over the same graph — "
-           "every import binding's var_ref counted twice. The module records need a cow_capture_host_record";
+    /* THE REFUSAL STANDS AND BOTH HALVES OF ITS OLD REASON ARE RETIRED, which is recorded rather than
+       rewritten away because a reader who re-derives either will re-add it. It used to say the records'
+       [[Status]] and [[DFSAncestorIndex]] "belong to the REALM" because "no COW delta captures" them, and
+       prescribe "a cow_capture_host_record" over the module graph. The PREMISE went when JSModuleEvalState
+       started holding both of those fields, and js_module_link_set_status closed the half that was still true
+       of it — the link phase, which wrote them and announced nothing. The REMEDY was never the right one:
+       `cow_capture_host_record` is a byte copy plus one dup per JSValue at a named offset, and a module record
+       owns ATOMS and a counted array of JSVarRef* that no `val_off` can name.
+       WHAT THE REFUSAL IS ACTUALLY ABOUT survives untouched and is the var_ref double count: two arms resuming
+       ONE walk would each run 16.2.1.7.3.1 over the same graph, and that is a property of the WALK's cursor
+       being shared rather than of the records being baseline — so capturing the records does not make a
+       half-finished link forkable, and nothing here claims it does. */
+    return "a half-finished 16.2.1.6.1.2 Link ( ). Two arms resuming ONE walk would each run "
+           "16.2.1.7.3.1 InitializeEnvironment over the same graph — every import binding's var_ref counted "
+           "twice. The records' own [[Status]]/[[DFSAncestorIndex]] are per-flow (JSModuleEvalState); it is "
+           "the walk's CURSOR that is not, and splitting a cursor is what this refuses";
 }
 
 static void js_module_loaded_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -69143,8 +69210,8 @@ static void js_module_loaded_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static JSValue js_module_loaded_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSModuleLoaded *s = st;
-    (void)ctx; (void)take_result;
-    js_module_link_walk_end(&s->op.walk);
+    (void)take_result;
+    js_module_link_walk_end(ctx, &s->op.walk);
     return JS_UNDEFINED;
 }
 
@@ -70297,8 +70364,6 @@ static bool find_in_exec_module_list(ExecModuleList *exec_list, JSModuleDef *m)
    identical (an edge decrements pending_async_dependencies once either way, and a module is appended only on
    the decrement that reaches zero), and the caller sorts exec_list by async_evaluation_timestamp before using
    it. */
-static void js_module_eval_capture(JSContext *ctx, JSModuleDef *m);
-
 /* WILL THIS MODULE GET ITS OWN FULFILLED REACTION? Exactly one predicate, because two sites must agree about
    it and they did not. Stock quickjs evaluates a non-TLA module synchronously, so GatherAvailableAncestors has
    to expand it INLINE — nothing else will ever propagate to its parents. This fork evaluates every BYTECODE
@@ -70941,7 +71006,23 @@ void JS_ModuleEvalStateFree(JSRuntime *rt, void *blob)
 }
 
 /* Announce that this flow is about to change `m`'s evaluation state. Fired at every point that writes one of the
-   captured fields; the host captures the FIRST one per flow and ignores the rest. */
+   captured fields; the host captures the FIRST one per flow and ignores the rest.
+   AND THAT SENTENCE IS A CONTRACT RATHER THAN A DESCRIPTION, SO HERE IS WHAT MAKES IT TRUE — it was FALSE for
+   the whole of §16.2.1.6.1.2 Link ( ), which writes `status`, `dfs_index`, `dfs_ancestor_index` and
+   `stack_prev` and called this from nowhere. The two phases are covered two different ways and the difference
+   is worth stating, because a reader counting CALL SITES gets the wrong answer for one of them:
+     • THE EVAL PHASE by a call per site, at its entries, each stating its own reason.
+     • THE LINK PHASE by js_module_link_set_status, which is the only way that phase spells a status write — so
+       the announcement is structural there rather than remembered.
+   FIVE link-phase writes reach a field this blob holds and only THREE of them are status writes: step 11's pop,
+   the pre-order claim, step 4's reset, AND the two `dfs_ancestor_index` minima in js_module_link_advance, which
+   every enumeration of this gap has missed because they are not status writes and do not look like state. All
+   five are covered by ONE announcement, and by a property of the walk rather than by a call at each: a module
+   reaches the SCC stack or a frame on the walk's path only through js_module_linking_enter, which announces
+   before it claims, and the host's dedup is first-baseline-wins per flow. So the two minima are the same flow
+   writing a record it has already announced — not an omission, and not a site to add a call to.
+   WHAT IS STILL REMEMBERED RATHER THAN STRUCTURAL is the eval phase: its status writes do not go through a
+   helper, so a site added there can still forget. That is the next construction, not this one. */
 static void js_module_eval_capture(JSContext *ctx, JSModuleDef *m)
 {
     if (g_time_travel.module_eval)
