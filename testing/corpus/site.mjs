@@ -832,6 +832,38 @@ const frontierPrograms = (() => {
   }
   const pc = c.programCursors;
   if (pc && typeof pc === 'object' && !Array.isArray(pc)) out.programCursors = pc;
+  /* AND THE LADDER'S OWN UNIT PARTITION, WHICH THE FILTER ABOVE EXCLUDES BY CONSTRUCTION AND WHICH IS THE ROW
+     solver/cold.h BUILT FOR THE ONE QUESTION THIS BLOCK CANNOT OTHERWISE ANSWER. The partition is keyed
+     `outOfProgramsAtTheLadder…`, so it matches `startsWith('outOfPrograms')` — and its value is an OBJECT, so
+     `typeof c[k] === 'number'` drops it, every time, on every artifact that publishes it. It was named in this
+     file's prose and carried by none of it: a grep for the key answered ONE and that one line TALKS ABOUT the
+     row rather than carrying it, which is §THE-REFUTATION-IS-INSIDE-THE-TEXT-YOU-ARE-ABOUT-TO-QUOTE arriving
+     in a consumer's own self-description.
+     WHAT IT ANSWERS, in cold.h's own words: mass on an arm ABOVE the orphan rung is "this ladder's
+     precondition", mass BELOW it is "a fact about the HEAP", and mass on a frame-clearing arm is "the PICK".
+     Those three take opposite work, and no number row in this object separates them — so a reader holding
+     `outOfProgramsAtTheLadder` alone has a count whose cause is three states wide. MEASURED: it is absent from
+     all 35 archived gitpod records, which is the entire real-site population, so the question of why a second
+     analysis of one document mints a handful of members where the first minted 176 could not be asked from the
+     archive at all.
+     CARRIED THE WAY `programCursors` IS, for its reason: an object-valued row needs its own line because the
+     derived filter cannot express it, and a filter widened to admit objects would silently start carrying
+     every future object row whether or not anybody had decided it belonged here. */
+  const lu = c.outOfProgramsAtTheLadderUnits;
+  if (lu && typeof lu === 'object' && !Array.isArray(lu)) out.outOfProgramsAtTheLadderUnits = lu;
+  /* AND THE REPLAY TRIPLE, WHICH THE ENGINE PUBLISHES ON THIS SAME OBJECT AND THIS FILE HAS NEVER TAKEN.
+     solver/decide.c states what the three answer together and that either half alone misleads — `replayHits`
+     large with `resumed` at zero is siblings taking their own recorded arms in session, which is the design;
+     `replayHits` large with `resumed` above zero is the cold tier rebuilding; and `replayLeftArms >=
+     replayLeft` is an identity a reader can check off the printed numbers. It also records the defect the pair
+     exists to catch: a sibling that diverges inside a collapsed slot consumes ANOTHER branch's arm, the
+     divergence path is never reached, `replayLeft` reports no divergence, and `replayHits` SCORES THE
+     DIVERGENCE AS AGREEMENT. That is a silent wrong answer about the mechanism this whole project rests on,
+     and no record this file has ever written carries the rows that would show it.
+     `replayHits` is not a quiet row either, which is why its absence is a reader's gap and not an empty
+     population: it reads 11, 61 and 63 in archived native runs on this same object. */
+  for (const k of ['replayHits', 'replayLeft', 'replayLeftArms'])
+    if (typeof c[k] === 'number') out[k] = c[k];
   /* …AND THE THREE GLOBAL MAXIMA THE DISTRIBUTION STRUCTURALLY CANNOT CARRY, WITHOUT WHICH A CURSOR READING
      HAS TWO MEANINGS THAT TAKE OPPOSITE WORK. solver/cold.h states the split in its own words — "`program_
      cursors` is its distribution, `deepest`/`deepestLeft`/`completed` are GLOBAL MAXIMA over it" — and that
@@ -862,6 +894,29 @@ const frontierPrograms = (() => {
      without being named twice. `from` is this file's own index and not a census row, so it is added after. */
   for (const k of Object.keys(out)) taken.add(k);
   out.from = coldLive.i;
+  /* AND THE DENOMINATOR `from` HAS NEVER CARRIED, WHICH IS WHAT MADE THIS GAUGE READ AS NONDETERMINISM.
+     `coldLive` walks the counted entries BACKWARD and stops at the LAST one holding a live frontier, so this
+     whole row is the final run's frontier and every earlier run's is dropped — and `from` alone is an ORDINAL
+     WITH NO DENOMINATOR, so `from: 1` cannot be told from `from: 1 of 4` and a reader cannot see that anything
+     was dropped at all. The hazard was known at ONE site and not at this one: the endpoint block below says in
+     capitals never to read an offer count off `coldLive` because it "picks the last entry with a LIVE frontier,
+     which is a DIFFERENT MOMENT" — a warning written for a different row, in this same file, about this exact
+     walk, while the row composed ON that walk stated nothing.
+     MEASURED, AND IT IS WHY THE BACKWARD WALK IS KEPT RATHER THAN FLIPPED: over the archived corpus one real
+     document reads a live frontier of 176 on its FIRST analysis and 4 on its second, third and fourth, on ONE
+     binary, and a second reads 7923 then 5 then 523 — 35x and 1585x, in the two `(artifact, url)` groups that
+     contain a first run AND a later one. So BOTH moments are wanted and neither is the right default: a reader
+     asking what the engine explores wants run 1, and a reader asking what state it ended in wants the last.
+     Flipping the walk would answer the first question and silently drop the second, which is this defect with
+     its sign reversed. What closes it is SAYING WHICH, so the two are never confused for one.
+     `skipped` IS THE FACT NOBODY HAD NAMED: the number of counted entries BEFORE this one that held a live
+     frontier of their own. Above zero, this row is not the first frontier of this document and the earlier ones
+     are in no record — which is the difference between "the same binary minted 176 and 4" and "this reader
+     reported the last of several runs". Neither is a census row, so both are added after `taken` exactly as
+     `from` is. */
+  out.of = counted.length;
+  out.skipped = counted.slice(0, coldLive.i).filter(e => e.cold && typeof e.cold === 'object'
+                                                        && !Array.isArray(e.cold) && e.cold.live > 0).length;
   return out;
 })();
 /* THE ONE EXPRESSION THE THREE SURFACE ROWS BELOW SHARE, computed once. `siteEndpoints`, `distinctEndpoints`
