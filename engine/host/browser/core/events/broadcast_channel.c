@@ -141,8 +141,8 @@ static int js_chan_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSV
     STEP_ARM(BD_DESERIALIZE);
     {
         JSValueConst buf = step_arg(&s->hdr, 1);
-        StructuredData sd;
-        JSValue data, org, noid;
+        StructuredWithTransfer swt;
+        JSValue data, org, noid, rebuilt = JS_UNDEFINED;
         size_t blen = 0;
         int k;
 
@@ -154,15 +154,30 @@ static int js_chan_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         s->fphase = 0;
         if (!c || c->closed)
             return JS_STEP_DONE;
-        sd.buf = JS_GetArrayBuffer(ctx, &blen, buf);
-        sd.len = blen;
-        DCHECK(sd.buf != NULL, "a broadcast task held something that is not the bytes it stored");
+        /* THE WHOLE §2.7.7 RECORD, REASSEMBLED FROM THE TASK'S OWN ARGUMENTS AND BORROWED THROUGHOUT. The
+           bytes belong to the ArrayBuffer and the triples to the argument list, so nothing here goes through
+           structured_with_transfer_free -- which would be a double free of both. `holders` is JS_UNDEFINED
+           because §9.5's `postMessage(any message)` declares no `transfer` member at all, which is the
+           positive statement structured_transfer_len already reads as a length of zero rather than a hole. */
+        swt.data.buf = JS_GetArrayBuffer(ctx, &blen, buf);
+        swt.data.len = blen;
+        swt.holders = JS_UNDEFINED;
+        swt.symbols = step_arg(&s->hdr, 2);
+        DCHECK(swt.data.buf != NULL, "a broadcast task held something that is not the bytes it stored");
         /* §9.5: THE DESERIALIZE AND THE EVENT BELONG TO THE DESTINATION CHANNEL'S REALM — each destination
            gets its own copy of the message in its own realm, which is what makes a broadcast to two documents
            two independent deliveries rather than one shared object graph. */
         rctx = c->realm;
         DCHECK(rctx != NULL, "a broadcast reached a channel without the realm it was constructed in");
-        data = structured_deserialize(rctx, &sd);
+        /* §2.7.8's SECOND HALF IS WHAT MAKES `new BroadcastChannel(n).postMessage(location.hash)` DELIVER AN
+           UNKNOWN RATHER THAN BEING REFUSED. A concolic is §2.7.3's primitive arm, so the write interned its
+           triple and the record carries it; this read rebuilds it through concolic_new, keyed on the SOURCE
+           IDENTITY every constraint the sending flow narrowed is filed under. Delivering the example alone
+           would DECIDE a `e.data === 'adminpanel'` the sender forked. The [[TransferredValues]] it answers with
+           holds exactly those rebuilt triples -- §9.5 transfers nothing -- and the event carries none of them,
+           so this is the one caller that takes the array only to give it straight back. */
+        data = structured_deserialize_transfer(rctx, &swt, &rebuilt);
+        JS_FreeValue(rctx, rebuilt);
         /* §9.5: the origin is the SENDER'S, and a broadcast has no source and no ports — the bus is named, not
            addressed, so there is nothing to reply to. */
         /* §9.1 "The MessageEvent interface" declares `origin` a USVString — the serialization of the SENDER's
@@ -243,7 +258,7 @@ static JSValue js_chan_name(JSContext *ctx, JSValueConst this_val, int magic)
 static JSValue js_chan_post(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     ChanData *c = chan_of(this_val);
-    StructuredData sd;
+    StructuredWithTransfer swt;
     JSValue buf;
     uint32_t n = 0, i;
 
@@ -253,31 +268,65 @@ static JSValue js_chan_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
        because a page that closed and kept posting has a bug it should be told about. */
     if (c->closed)
         return JS_ThrowDOMException(ctx, "InvalidStateError", "the channel is closed");
-    if (structured_serialize(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, &sd) < 0)
+    /* §9.5's postMessage step 3, "let serialized be StructuredSerialize(message)" — performed through the
+       §2.7.7 entry WITH NO TRANSFER LIST, which is the SAME algorithm and not a wider one. §9.5 declares no
+       `transfer` member, so JS_UNDEFINED is passed rather than an empty Array, and §2.7.7 over an absent list
+       reduces step by step to §2.7.4's whole body (structured_clone.h states the reduction).
+       WHY NOT THE PLAIN ENTRY, WHICH IS WHAT THIS LINE USED TO BE: the RECORD. A bare StructuredData carries
+       bytes and nothing beside them, so a CONCOLIC reached from inside `message` had no field to ride and the
+       write hook refused it BY NAME — `postMessage(location.hash)` aborted the instance where a real browser
+       delivers a string. This record has `symbols`, so the triple rides as data and is rebuilt at the
+       delivery, and the arm that refuses now names only the callers whose carrier is one ArrayBuffer. */
+    if (structured_serialize_transfer(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, JS_UNDEFINED, &swt) < 0)
         return JS_EXCEPTION;
-    buf = JS_NewArrayBufferCopy(ctx, sd.buf, sd.len);
-    structured_data_free(ctx, &sd);
-    if (JS_IsException(buf)) return JS_EXCEPTION;
+    buf = JS_NewArrayBufferCopy(ctx, swt.data.buf, swt.data.len);
+    /* THE BYTES ARE SPENT HERE AND THE TRIPLES ARE NOT, so the record outlives the copy: `swt.symbols` is read
+       once per destination below and the whole record is given back at the end. structured_data_free NULLs the
+       buffer it frees, so the release at the foot of this body is not a second free of it. */
+    structured_data_free(ctx, &swt.data);
+    if (JS_IsException(buf)) { structured_with_transfer_free(ctx, &swt); return JS_EXCEPTION; }
 
-    if (!registry_len(ctx, &n)) { JS_FreeValue(ctx, buf); return JS_EXCEPTION; }
+    if (!registry_len(ctx, &n)) {
+        JS_FreeValue(ctx, buf);
+        structured_with_transfer_free(ctx, &swt);
+        return JS_EXCEPTION;
+    }
     for (i = 0; i < n; i++) {
         JSValue d = JS_GetPropertyUint32(ctx, g_registry, i);
         ChanData *dc;
-        if (JS_IsException(d)) { JS_FreeValue(ctx, buf); return JS_EXCEPTION; }
+        if (JS_IsException(d)) {
+            JS_FreeValue(ctx, buf);
+            structured_with_transfer_free(ctx, &swt);
+            return JS_EXCEPTION;
+        }
         dc = JS_GetOpaque(d, g_chan_class);
         /* §9.5's postMessage steps 6 and 7: same name, still open, and NOT the sender. The identity test is
            what makes a page that posts on its own channel not hear itself, which is the first thing every
            user of this relies on. */
         if (dc && !dc->closed && JS_VALUE_GET_PTR(d) != JS_VALUE_GET_PTR(this_val) &&
             dc->name == c->name) {
-            JSValueConst args[2];
+            /* THE TASK CARRIES THE RECORD AND NOT JUST ITS BYTES. Index 2 is the triples, and a POSITION is a
+               fact here for the reason a port's queue entry gives at its own three slots: the set is this
+               component's own and fixed at its definition, and these writes and the three reads in
+               BD_DESERIALIZE are the only spellers. The enqueue DUPS what it is handed, which is why one `buf`
+               and one `symbols` serve every destination and both are released once below. */
+            JSValueConst args[3];
             args[0] = d;
             args[1] = buf;
-            JS_EnqueueCallTask(ctx, g_deliver_fn, 2, args, TASK_SOURCE_DOM_MANIPULATION);   /* §9.5 step 7 */
+            args[2] = swt.symbols;
+            /* §9.5 STEP 9, not step 7, which is what this line used to claim. Counted against the
+               standard's own top-level list: step 2 is the closed flag, step 3 the serialize, steps 4-5
+               the origin and the storage key, step 6 the destination criteria, step 7 "remove source
+               from destinations", step 8 the creation-order sort, and step 9 the queued global task.
+               The test above IS steps 6 and 7 and its own comment says so correctly; what was off by
+               two was the ENQUEUE, which is the line the stage labels at the top of this file already
+               number 9 — one file disagreeing with itself about one algorithm, with the labels right. */
+            JS_EnqueueCallTask(ctx, g_deliver_fn, 3, args, TASK_SOURCE_DOM_MANIPULATION);
         }
         JS_FreeValue(ctx, d);
     }
     JS_FreeValue(ctx, buf);
+    structured_with_transfer_free(ctx, &swt);
     return JS_UNDEFINED;
 }
 

@@ -30,7 +30,7 @@
  * carries byte_length AND max_byte_length, and the reader hands them both back to the constructor). So the
  * ArrayBuffer transfer steps are `serialize, then JS_DetachArrayBuffer`, and the receiving steps are
  * `deserialize` — no second encoding of a buffer, and the resizable arm is right without this file knowing what
- * resizable means. A DETACHED buffer is refused by the writer, which IS §2.7.7 step 4's IsDetachedBuffer check,
+ * resizable means. A DETACHED buffer is refused by the writer, which IS §2.7.7 step 5.1's IsDetachedBuffer check,
  * re-reported as the DataCloneError the standard names. A SharedArrayBuffer is a different class, so it is not
  * transferable here at all — also a DataCloneError, which is what §2.7.7's IsSharedArrayBuffer test gives it. */
 #include <stdlib.h>
@@ -134,18 +134,46 @@ static int sc_memory_index(JSContext *ctx, void *opaque, JSValueConst obj)
         return (int)(m->n + cn);
     }
     if (JS_IsUndefined(m->leaves)) {
-        /* THE TWO PATHS THAT CARRY A TRIPLE NOW DO, AND WHAT IS LEFT HERE IS THE ONE WITH NO FIELD FOR IT.
-           A queued port or window delivery goes through structured_serialize_transfer, which seeds `concolics`
-           and writes `symbols`. This arm is reached by `structured_serialize` -- a history entry, a broadcast,
-           an ArrayBuffer's byte record -- whose out-parameter is a StructuredData and has no second array, so
-           the record would have to grow one before the triple could ride it. */
-        DFAIL("HTML §2.7: a CONCOLIC reached the serializer on a path whose RECORD has no field to carry a "
-              "triple — a history entry, a broadcast, an ArrayBuffer's byte record. A live value crosses "
-              "neither a park, a session nor an instance, so the arm is the triple written AS DATA (the source "
-              "identity, the display shape and the example) rebuilt by concolic_new where the bytes are read, "
-              "which is what StructuredWithTransfer's `symbols` already does for a queued delivery. Give THIS "
-              "record the same second array and seed `memory.concolics` with it; the SAME-TURN clone answers "
-              "it by seeding `memory` with the value itself instead");
+        /* WHAT IS LEFT HERE IS A §2.7.4 CALLER WHOSE CARRIER IS ONE ArrayBuffer WITH NO SECOND SLOT BESIDE IT.
+           That is the PROPERTY; the arm used to name three INPUTS instead -- `a history entry, a broadcast, an
+           ArrayBuffer's byte record` -- and an enumeration of inputs is verified against the PIPELINE rather
+           than against the algorithm, which this one had not been. It is kept in its own words because a
+           reader who re-derives it from this file's own §2.7.7 ArrayBuffer arm will write it again.
+           AN ArrayBuffer's BYTE RECORD CANNOT REACH THIS ARM AT ALL: ab_out serializes the BUFFER, and the
+           writer answers a buffer with JS_WriteArrayBuffer -- a tag, two leb128 lengths and dbuf_put of the
+           raw bytes -- which recurses into no JSValue, so `index_of` is asked about the buffer itself and
+           about nothing inside it. A BROADCAST no longer reaches it either, §9.5's post having taken the
+           no-transfer-list entry. And the clause MISSED §7.2.6.6 "The history entry list"'s
+           updateCurrentEntry -- whose method steps live under that surprising title, which is stated here so
+           a reader does not correct the number -- so it was wrong in both directions at once.
+           DERIVE TODAY'S SET RATHER THAN TRUSTING THIS SENTENCE: strip comments and strings, match the CALL
+           construct `structured_serialize[[:space:]]*\(`, and subtract the two corrections no command makes
+           for itself -- the DEFINITION and the DECLARATION are in that list, and a caller whose operand is a
+           LITERAL primitive cannot be handed a concolic by anything (navigate_event_fire's
+           StructuredSerializeForStorage(null); session_history's sh_serialize_primitive, which DCHECKs its
+           operand is null or undefined).
+           AND THE REMEDY THE CRASH USED TO NAME WAS THE WRONG RECORD, recorded here because a crash's remedy
+           clause is read once, by somebody who has already decided to do the work. It said to give THIS record
+           -- StructuredData -- the same second array. THAT STRUCT IS A TRANSIENT OUT-PARAMETER AND CROSSES
+           NOTHING: every caller copies its bytes into an ArrayBuffer and calls structured_data_free on the
+           next line, so a `JSValue symbols` on it would be freed one line after it was filled. It is also
+           built BY HAND off a BORROWED ArrayBuffer at every READ site (`.buf = JS_GetArrayBuffer(...)`), none
+           of which frees it, so the field would be uninitialised at each -- and a zeroed JSValue is the
+           INTEGER 0 rather than undefined, since JS_TAG_INT is 0, which is the hazard core/frame/history.c's
+           own stage entry names. RETIREMENT: this record goes when the entry's state fields carry their second
+           slot, because the clause below is then satisfied and nothing is left to re-derive. */
+        DFAIL("HTML §2.7: a CONCOLIC reached §2.7.4 StructuredSerialize ( value ) on a path whose CARRIER is one "
+              "ArrayBuffer with no second slot beside it — §7.2.5's pushState/replaceState and §7.2.6.6's "
+              "updateCurrentEntry, both of which land in a §7.4.1.1 session history entry's state field. A live "
+              "value crosses neither a park, a session nor an instance, so the arm is the triple written AS "
+              "DATA (the source identity, the display shape and the example) rebuilt by concolic_new where the "
+              "bytes are read, which is what StructuredWithTransfer's `symbols` does for a queued delivery and "
+              "what §9.5's broadcast now carries. THE RECORD TO GROW IS THE ENTRY AND NOT StructuredData: that "
+              "struct is freed on the line after its bytes are copied out, so a field on it crosses nothing. "
+              "Give the entry's classic and navigation API state fields a second slot each, route both writers "
+              "through this file's no-transfer-list entry, and read them back where "
+              "session_history_entry_nav_state and history.c's classic read deserialize today; the SAME-TURN "
+              "clone answers it by seeding `memory` with the value itself instead");
         return -1;
     }
     ln = structured_transfer_len(ctx, m->leaves);
@@ -356,8 +384,16 @@ static JSValue ab_out(JSContext *ctx, JSValueConst v)
     StructuredData d;
     JSValue h;
 
-    /* §2.7.7 step 4.1: a DETACHED buffer is a "DataCloneError" DOMException — and the writer refusing one IS
-       that check, re-reported by structured_serialize as the exception the standard names. */
+    /* §2.7.7 step 5.1: a DETACHED buffer is a "DataCloneError" DOMException — and the writer refusing one IS
+       that check, re-reported by structured_serialize as the exception the standard names.
+       BOTH SITES THAT CITED THIS SAID STEP 4, AND THAT IS ONE TOP-LEVEL STEP TOO EARLY — recorded rather than
+       quietly bumped, because the NEIGHBOUR two statements down was right and a reader who trusts the pair
+       reads the wrong one as corroborated. Counted against the standard's own list WITH DEPTH TRACKED, §2.7.7
+       has SIX top-level steps: 1 the empty `memory`, 2 the validation loop, 3 the serialize, 4 the empty
+       transferDataHolders list, 5 the transfer loop, 6 the return. So the detached checks are that loop's
+       sub-steps 5.1 and 5.2, and the DetachArrayBuffer below really is 5.4.3. A step number that is IN RANGE
+       and names the wrong step is invisible to every channel this tree has — the section resolves, the title
+       matches, no quotation is compared — and only counting the list separates them. */
     if (structured_serialize(ctx, v, &d) < 0)
         return JS_EXCEPTION;
     h = JS_NewArrayBufferCopy(ctx, d.buf, d.len);
@@ -560,10 +596,14 @@ int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst t
     out->data.len = 0;
     out->holders = JS_UNDEFINED;
     out->symbols = JS_UNDEFINED;
-    DCHECK(JS_IsArray(transfer), "StructuredSerializeWithTransfer was handed a transfer list that is not the "
-                                 "materialized sequence — IDL_SEQUENCE_OBJECT is what §3.2.21 converts one "
-                                 "into, and reading the page's object again here would run its iterator a "
-                                 "second time");
+    /* JS_UNDEFINED IS §2.7.4 StructuredSerialize ( value ) — an algorithm with nowhere for a transfer list to
+       be named, which is a DIFFERENT fact from a page that named none. The header states why the two
+       algorithms coincide for such a caller; what this condition says is that the only two things that reach
+       here are an engine-built Array and that absence, never a page's own object. */
+    DCHECK(JS_IsUndefined(transfer) || JS_IsArray(transfer),
+           "StructuredSerializeWithTransfer was handed a transfer list that is neither the materialized "
+           "sequence nor §2.7.4's absence of one — IDL_SEQUENCE_OBJECT is what §3.2.21 converts one into, and "
+           "reading the page's object again here would run its iterator a second time");
     n = structured_transfer_len(ctx, transfer);
 
     /* §2.7.7 STEP 2, BEFORE THE MESSAGE IS SERIALIZED: every entry must be transferable and must appear once.
@@ -618,8 +658,15 @@ int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst t
     /* §2.7.7 STEP 5: run each transfer step, in list order, and record the holder with its [[Type]]. Nothing is
        detached until the message itself has serialized, which is what a page retrying after a DataCloneError
        depends on. */
-    out->holders = JS_NewArray(ctx);
-    if (JS_IsException(out->holders)) { structured_data_free(ctx, &out->data); out->holders = JS_UNDEFINED; return -1; }
+    /* AND NO LIST MEANS NO `holders` AT ALL, not an empty Array: structured_transfer_len already declares
+       JS_UNDEFINED as the spelling for a record carrying no transfer, and §2.7.4 has no step 5 to run.
+       THE FAILURE PATH IS `goto fail` AND NOT A BARE RETURN, which is a repair rather than a style change:
+       the bare return that stood here did not free `concolics`, so an allocation failure at this one line
+       leaked the interning table the write above had just filled. */
+    if (!JS_IsUndefined(transfer)) {
+        out->holders = JS_NewArray(ctx);
+        if (JS_IsException(out->holders)) { out->holders = JS_UNDEFINED; goto fail; }
+    }
     for (i = 0; i < n; i++) {
         JSValue e = JS_GetPropertyUint32(ctx, transfer, i), h, rec;
         const StructuredTransferable *t = transferable_of(e);

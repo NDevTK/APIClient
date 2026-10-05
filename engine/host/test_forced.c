@@ -3755,6 +3755,24 @@ static const char *HTML =
     "window.addEventListener('message', function(e){ fetch('/api/scmsg?v=scENTER');"
     " if (e.data === 'adminpanel') { fetch('/api/scfork?w=scADMIN'); } else { fetch('/api/scfork?w=scPUBLIC'); } });"
     "window.postMessage(location.hash.slice(1), '*');"
+    /* AND THE SAME ASSERTION OVER §9.5's BUS, WHICH IS A DIFFERENT CARRIER AND THEREFORE A DIFFERENT CLAIM.
+       §9.3.3's post rides StructuredSerializeWithTransfer, so its record always had a second array to carry a
+       triple; §9.5's rode §2.7.4, whose out-parameter is BYTES AND NOTHING BESIDE THEM, and a concolic reached
+       from inside the message was refused BY NAME — so `postMessage(location.hash)` on a channel ABORTED THE
+       INSTANCE where a real browser delivers a string, and every row of this document went dark with it. The
+       two rows cannot be folded into the window ones for that reason: one record carried a triple and the
+       other could not, and a single pair would report both as whichever happened to be broken.
+       TWO CHANNELS AND NOT ONE, because §9.5's postMessage steps exclude the SENDER — a page that posts on its
+       own channel does not hear itself, which is the first thing every user of the bus relies on. So the
+       receiver is opened first and the post is made on the second.
+       THE TOKENS ARE CONSTANTS for §A-WITNESS-CARRIES-CONSTANTS-ONLY's reason, and `bcENTER` is separate from
+       the fork pair for the reason `scENTER` is: an absent fork token has two readings — the delivery task
+       never ran, or it ran and the branch was DECIDED — and those take opposite work. */
+    "var _bcrecv = new BroadcastChannel('tf-bus');"
+    "var _bcsend = new BroadcastChannel('tf-bus');"
+    "_bcrecv.addEventListener('message', function(e){ fetch('/api/bcmsg?v=bcENTER');"
+    " if (e.data === 'adminpanel') { fetch('/api/bcfork?w=bcADMIN'); } else { fetch('/api/bcfork?w=bcPUBLIC'); } });"
+    "_bcsend.postMessage(location.hash.slice(1));"
     /* ORPHAN-INVOKE — the headline capability, and the ONE statement in this document that nothing in it calls.
        It asks two things at once because they are the two halves of the mechanism and either alone would pass
        while the other was broken: that the function RUNS at all (`/api/orphan/report`), and that its PARAMETER
@@ -14405,6 +14423,26 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "boundary — a live JSValue crosses neither a park, a session nor an instance — so a single arm "
              "says either that the array was not written, or that it was dropped between the enqueue and the "
              "delivery (PQ_SYMBOLS in core/frame/window_message.c is the one slot that carries it)");
+    const char *bc_msg_ran_why = NULL; int bc_msg_ran = 1;
+    fold_row(&bc_msg_ran, &bc_msg_ran_why, param_value_is(js, "/api/bcmsg", "v", "bcENTER"),
+             "NOT REACHED: there is no /api/bcmsg record, so §9.5 postMessage step 9's delivery task never ran "
+             "its handler's FIRST and unconditional emission. Three things ahead of the serializer answer for "
+             "that and the row below cannot tell them apart, which is why it is gated on this one: the two "
+             "channels were never constructed, the registry never matched them by name, or the task was "
+             "queued and the destination's closed flag was up when it ran");
+    const char *bc_msg_fork_why = NULL; int bc_msg_fork = 1;
+    fold_row(&bc_msg_fork, &bc_msg_fork_why,
+             param_value_is(js, "/api/bcfork", "w", "bcADMIN") &&
+             param_value_is(js, "/api/bcfork", "w", "bcPUBLIC"),
+             "the handler ran and only ONE arm of `e.data === 'adminpanel'` is in this document: the posted "
+             "`location.hash` arrived as its EXAMPLE and not as the triple, so the comparison was DECIDED "
+             "where a concolic forks. §9.5's post carries the triples on its delivery task beside the bytes "
+             "(index 2 of the task's arguments, written by js_chan_post and read at BD_DESERIALIZE), so a "
+             "single arm says either that the record was serialized through the entry that has no `symbols` "
+             "field — in which case the write hook would have ABORTED rather than delivered one arm, and this "
+             "row would be unreachable along with every other — or that the array was dropped between the "
+             "enqueue and the delivery. Compare with `sc-msg-fork`: the two reading differently localises the "
+             "defect to §9.5's own carrier rather than to the serializer both posts share");
     /* ORPHAN-INVOKE, IN TWO ROWS BECAUSE IT IS TWO CLAIMS. The first is that a function nothing in the document
        calls was RUN — with no driving there is no request at all, which is what a page holding only such a
        function measured. The second is that its parameter arrived as unknown external input: `role === 'admin'`
@@ -18699,6 +18737,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
           .gate = "mod-drive-fn" },
         { "sc-msg-ran", sc_msg_ran, "/api/scmsg", SESS_EXPLORE, sc_msg_ran_why },
         { "sc-msg-fork", sc_msg_fork, "/api/scfork", SESS_EXPLORE, sc_msg_fork_why, .gate = "sc-msg-ran" },
+        { "bc-msg-ran", bc_msg_ran, "/api/bcmsg", SESS_EXPLORE, bc_msg_ran_why },
+        { "bc-msg-fork", bc_msg_fork, "/api/bcfork", SESS_EXPLORE, bc_msg_fork_why, .gate = "bc-msg-ran" },
         /* THE SEVEN ORPHAN ROWS SHARE ONE `why`, AND IT IS THE ONLY THING THAT MAKES THEIR 0 ACTIONABLE — see
            where it is composed above. Each row still names its own endpoint; what the shared clause adds is
            which of the schedule, the take and this drive the 0 belongs to, which no per-endpoint test can

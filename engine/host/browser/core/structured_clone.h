@@ -173,7 +173,23 @@ void structured_register_serializable(const StructuredSerializable *s);
  * in its own `transfer` list. `symbols` is therefore its own field, and the ONE numbering the reader resolves
  * is assembled at read: the `holders` first, the `symbols` after them. */
 typedef struct { StructuredData data; JSValue holders; JSValue symbols; } StructuredWithTransfer;
-/* `transfer` is the MATERIALIZED list — IDL_SEQUENCE_OBJECT's Array. Returns 0, or -1 with a throw live. */
+/* `transfer` is the MATERIALIZED list — IDL_SEQUENCE_OBJECT's Array. Returns 0, or -1 with a throw live.
+   JS_UNDEFINED IS §2.7.4 StructuredSerialize ( value ), AND IT IS THE SAME ALGORITHM RATHER THAN A SHORTCUT
+   THROUGH THIS ONE. §2.7.7's own steps over an absent list are: step 1's `memory` stays empty, its two loops
+   iterate nothing, and step 3 is `? StructuredSerializeInternal(value, false, memory)` — which with an empty
+   memory is §2.7.4's whole body, since §2.7.4 is `return StructuredSerializeInternal(value, false)` and
+   §2.7.3's first step is `if memory was not supplied, let memory be an empty map`. So the two coincide
+   EXACTLY for a caller with no transfer list, and `holders` is then left JS_UNDEFINED, which is the spelling
+   structured_transfer_len already declares for a record carrying no transfer.
+   IT IS NOT AN EMPTY ARRAY, and the difference is a positive statement rather than tidiness: §9.5's
+   `postMessage(any message)` has no `transfer` member AT ALL, where §9.4.4's and §2.7.10's have one that
+   defaults to `[]`. An empty Array says the page named nothing; JS_UNDEFINED says the algorithm has nowhere
+   for it to be named.
+   WHY A CALLER WITH NO TRANSFER LIST WOULD COME HERE RATHER THAN TO structured_serialize: THE RECORD. The
+   plain entry answers a bare StructuredData, which carries BYTES and nothing beside them, so a CONCOLIC
+   reached from inside the message has no field to ride and the write hook refuses it by name. This entry
+   answers `symbols`, so the triple rides as data and is rebuilt at the read. A caller whose bytes outlive the
+   turn and which can hold a second JS value therefore takes this one. */
 int  structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst transfer,
                                    StructuredWithTransfer *out);
 /* HOW LONG ONE OF THIS FILE'S OWN ARRAYS IS — a materialized transfer list, or a record's `holders`. Both are
