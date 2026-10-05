@@ -848,6 +848,14 @@ static const char *const LK_REQ_STEPS[] = { LK_REQ_STAGES(JS_STEP_STAGE_LABEL) N
 typedef struct {
     JSValue promise;
     JSValue funcs[2];   /* the released promise's capability — every refusal below settles it */
+    /* §3.2.1 STEP 9's SIGNAL TEST HELD WHERE THE SIBLING'S SNAPSHOT CARRIES IT — abort_signal_aborted_step's
+       operand, for the reason `LkGrant.sig_flag` gives at length: the page may pass any AbortSignal, an
+       `AbortSignal.timeout()` has an UNKNOWN `aborted`, the seam BORROWS the flag for the length of the request,
+       and a deep fork byte-copies this state and re-takes only what `lk_req_visit` names. JS_UNINITIALIZED is
+       the EMPTY value and is written explicitly in the prologue, because a zeroed step state's JSValue is the
+       INTEGER 0 rather than JS_UNDEFINED. `query` has no signal and never writes it, which is why it is stated
+       beside the capability both members build rather than at the one member's ask. */
+    JSValue sig_flag;
     uint8_t started;
 } LkReqState;
 
@@ -860,6 +868,10 @@ static void lk_req_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->promise);
     v->val(ctx, &s->funcs[0]);
     v->val(ctx, &s->funcs[1]);
+    /* NAMED HERE AND THEREFORE BEHIND THE `started` RETURN, which is correct rather than lucky: the prologue
+       writes this slot in the same guarded block that sets `started`, so a state that has not begun holds the
+       INTEGER 0 here and there is nothing for a visit to take or release. */
+    v->val(ctx, &s->sig_flag);
 }
 
 /* EVERY REFUSAL OF §3.2.1 AND §3.2.2, as the one operation all of them are: settle the promise the algorithm
@@ -889,12 +901,28 @@ static JSValueConst lk_prologue(JSContext *ctx, LkReqState *s, JSValueConst self
                                 JSValue *presult, int *prejected)
 {
     *prejected = 0;
-    s->promise = s->funcs[0] = s->funcs[1] = JS_UNDEFINED;
-    s->promise = JS_NewPromiseCapability(ctx, s->funcs);
-    CHECK(!JS_IsException(s->promise),
-          "a Web Locks member's promise capability could not be allocated — a call that answers with neither a "
-          "promise nor a throw is one a page can only hang on");
-    s->started = 1;
+    /* ONCE PER INVOCATION, NOT ONCE PER ENTRY. §3.2.1's step 9 is a SIGNAL TEST and it can PARK, so a fork
+       re-enters this member's one stage AT ITS TOP TWICE — once in the parent carrying the answer and once in
+       the sibling re-asking — and everything above the ask runs again. Re-minting the capability there would
+       replace a promise and two resolving functions the arm's own snapshot has already re-taken, leaking three
+       references per fork and handing the page a promise that is not the one the first pass built; re-stating
+       `sig_flag` would drop the very reference the seam is holding across the park.
+       `started` IS THE RIGHT GUARD HERE AND IT IS NOT A PHASE COUNTER BEING MISUSED. abort.h warns that a
+       machine's own phase byte is not the fork test, and the reason is that a phase is written BELOW the ask so
+       it still reads its initial value on both fork entries. This byte is written ABOVE it, and the question it
+       answers is not "is this a fork entry" but "does the capability already exist" — which is the question the
+       mint actually has, and is right however the re-entry came about. The fork question is asked separately,
+       by `step_fork_pending`, at the one place that needs it: the assert in `lk_request_step`. */
+    if (!s->started) {
+        s->promise = s->funcs[0] = s->funcs[1] = JS_UNDEFINED;
+        s->promise = JS_NewPromiseCapability(ctx, s->funcs);
+        CHECK(!JS_IsException(s->promise),
+              "a Web Locks member's promise capability could not be allocated — a call that answers with neither "
+              "a promise nor a throw is one a page can only hang on");
+        /* STATED, never read off the slot: a zeroed step state's JSValue is the INTEGER 0. */
+        s->sig_flag = JS_UNINITIALIZED;
+        s->started = 1;
+    }
     /* WEB IDL §3.7.7 "Operations": "If jsValue does not implement the interface target, throw a TypeError." That
        section makes it a REJECTION here rather than a throw, because the return type is a promise — which is
        why it is asked AFTER the capability exists. */
@@ -936,13 +964,31 @@ static int lk_request_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     int rejected;
 
     (void)out_cb; (void)out_argc;
-    /* ONE STAGE: everything below runs no page code. The argument conversion that DOES — §3.2.17's member reads
-       over the page's options object — happens in the prologue the declaration owns, which is where it rests. */
+    /* ONE STAGE, AND THE REASON IS NO LONGER THAT NOTHING BELOW RUNS THE PAGE'S CODE. This comment used to say
+       exactly that, and the engine's own `js_step_labels_check` bans that sentence FROM A LABEL for the reason
+       it is wrong here too: a stage boundary is a rest point because the ENGINE may have to park there — RAM
+       pressure paging the low-value tail to the cold tier, a cross-session resume, a flow that outranks this
+       one, and now step 9's FORK — and none of those consult the page, so the page's quiet never bought this
+       stage the right to span eleven steps. It spans them because every one of steps 2-8 and 10-12 is an O(1)
+       engine action over values already converted, which is the one ground the check admits; step 9 is the only
+       one that suspends, and it suspends INTO THIS STAGE rather than out of it, which is what makes the arm
+       idempotent above the ask the thing that has to be true. The argument conversion that does run the page's
+       code — §3.2.17's member reads over the options object — is the prologue the declaration owns, two stages
+       of its own, which is where it rests. */
     DCHECK(hdr->stage == LKR_RUN, "§3.2.1's request resumed into a stage it does not have");
     JS_FreeValue(ctx, cb_result);
-    DCHECK(!s->started, "§3.2.1's request was re-entered after it had begun — its one stage makes no request, "
-                        "so there is no suspension for it to come back from, and the ARGUMENT conversion that "
-                        "can suspend completes before this body is entered at all");
+    /* THE ONLY RE-ENTRY AFTER THIS BODY HAS BEGUN IS A FORK'S, AND THAT IS NOW A REAL INVARIANT RATHER THAN A
+       VACUOUS ONE. This assert used to read `!s->started` and say "its one stage makes no request, so there is
+       no suspension for it to come back from" — true of the machine as it stood, because step 9's signal test
+       answered a `bool` and could not park, and FALSE the moment it could. It is kept in its own words because
+       the reasoning is the reasoning a reader re-derives: a member whose one stage issues no request really does
+       have nothing to come back from, and the thing that made it wrong is a FORK, which is a re-entry no request
+       is outstanding for. `step_fork_pending` is that fact (quickjs-step.h) and it is true across BOTH entries a
+       fork produces, so the pair below still refuses every re-entry that is neither a first one nor a fork's. */
+    DCHECK(!s->started || step_fork_pending(hdr),
+           "§3.2.1's request was re-entered after it had begun and no fork of its own is outstanding — its one "
+           "stage makes no request, so the only re-entry it has is the pair step 9's signal test produces when "
+           "it forks, and the ARGUMENT conversion that can suspend completes before this body is entered at all");
     manager = lk_prologue(ctx, s, hdr->this_val, "request", presult, &rejected);
     if (rejected)
         return lk_reject(ctx, s, presult);
@@ -1021,18 +1067,38 @@ static int lk_request_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                              "`signal` may not be combined with `steal` or `ifAvailable`");
         return lk_reject(ctx, s, presult);
     }
-    /* STEP 9: "If options['signal'] exists and is aborted, then return a promise rejected with
-       options['signal']'s abort reason." The REASON and not an AbortError this file invents — a page that
-       aborted with its own value reads that value back. */
-    if (!JS_IsUndefined(signal) && abort_signal_aborted(ctx, signal)) {
-        JSValue reason = abort_signal_reason(ctx, signal);
+    /* STEP 9: "If options["signal"] exists and is aborted, then return a promise rejected with
+       options["signal"]'s abort reason." The REASON and not an AbortError this file invents — a page that
+       aborted with its own value reads that value back.
+       THE PARKING FORM, which is what the prologue's guard above was the prerequisite for. `abort_signal_aborted`
+       answers a `bool` and therefore cannot say "I forked", so an `AbortSignal.timeout()` passed here reached
+       solver/engine.c's seam with no resume point and ABORTED — and §4.4's test one stage over had already been
+       converted, so this was the same question answered two ways in one component. Nothing had to be built in
+       the fork machinery: this machine holds the resume point the driver clones at, and every statement between
+       the prologue and this line is an idempotent READ of a dictionary Web IDL §3.2.17 converted before the body
+       was entered — `idl_dict_bool`, an `idl_dict_get` that frees what it took, a `JS_ToCString` that frees its
+       string — so the two entries a fork produces re-derive them with the same answers and re-ask the same
+       question. What was NOT idempotent was the capability, which is why the guard is up there and not here:
+       THE GUARD GOES ON THE INIT AND NEVER ON THE ASK, because the sibling must re-ask and the arm it takes is
+       replayed from the flow's own decision vector at the ask. */
+    if (!JS_IsUndefined(signal)) {
+        int aborted = 0, fr;
 
-        if (JS_CallAsFlow(ctx, s->funcs[1], reason) < 0)
-            JS_FreeValue(ctx, JS_GetException(ctx));
-        JS_FreeValue(ctx, reason);
-        *presult = s->promise;
-        s->promise = JS_UNDEFINED;
-        return JS_STEP_DONE;
+        fr = abort_signal_aborted_step(ctx, hdr, signal, &s->sig_flag, &aborted);
+        /* PARKED. `signal` is BORROWED from the dictionary and released with it, so there is nothing here to let
+           go of; the stage is unchanged and the sibling re-enters AT this ask. */
+        if (fr)
+            return fr;
+        if (aborted) {
+            JSValue reason = abort_signal_reason(ctx, signal);
+
+            if (JS_CallAsFlow(ctx, s->funcs[1], reason) < 0)
+                JS_FreeValue(ctx, JS_GetException(ctx));
+            JS_FreeValue(ctx, reason);
+            *presult = s->promise;
+            s->promise = JS_UNDEFINED;
+            return JS_STEP_DONE;
+        }
     }
     /* STEP 11: "Request a lock with promise, the current agent, environment's id, manager, callback, name,
        options['mode'], options['ifAvailable'], options['steal'], and options['signal']" — §4.1, which is the
@@ -1177,8 +1243,12 @@ static int lk_query_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
 
     (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     DCHECK(hdr->stage == LKQ_RUN, "§3.2.2's query resumed into a stage it does not have");
-    DCHECK(!s->started, "§3.2.2's query was re-entered after it had begun — see §3.2.1's assert for why its one "
-                        "stage cannot be resumed into");
+    /* STATED IN ITS OWN TERMS AND NO LONGER BY DEFERRAL. It used to read "see §3.2.1's assert for why its one
+       stage cannot be resumed into", and §3.2.1's assert now admits a fork's re-entry — so a deferral would
+       have inherited a reason that has stopped holding where it was written while still holding here. §3.2.2
+       declares no `signal` and asks nothing that can fork, so `started` alone is the whole of it. */
+    DCHECK(!s->started, "§3.2.2's query was re-entered after it had begun — its one stage makes no request and "
+                        "§3.2.2 declares no member this engine can fork over, so it has no re-entry at all");
     JS_FreeValue(ctx, cb_result);
     manager = lk_prologue(ctx, s, hdr->this_val, "query", presult, &rejected);
     if (rejected)
