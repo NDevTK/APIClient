@@ -8977,6 +8977,51 @@ STAGES.push(onHost(runProgram("concolic-crossing argument audit", [join(ENGINE, 
                        "COULD NOT READ, so it found nothing about the engine there and the judged counts are a " +
                        "FLOOR; they are closed IN THE AUDIT and never by editing a component. There is no " +
                        "baseline to update: the findings ARE the disagreement."), STAGE_HOST.SOURCE));
+/* AND THE NUMERIC-GATED FAMILY AUDIT, WHICH IS THE ONE STAGE ON THIS LIST WHOSE SUBJECT IS A CONSUMER'S OWN
+   SELECTION OVER A CENSUS. The six above ask about a record's fields, a member's NAME, a spec, a comment's
+   terminator and a body's argument TYPE; none of them asks whether a row a consumer DERIVED its way to can
+   actually arrive. `engine/censusgate.mjs` asks that one question: a published row whose value is an OBJECT,
+   reaching a consumer's `typeof c[k] === "number"` clause, is dropped on every artifact that publishes it, for
+   ever — and the consumer's own derivation says it wanted the row, so the family is the claim.
+   WHAT IT IS NOT IS A SUBSET CHECK, which is why it is not red furniture. A large fraction of what the five
+   composers `testing/census_rows.js` knows publish is spelled by no consumer in this tree, so a stage accusing
+   those would be red on every run and CLAUDE.md §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN rates that as the worst
+   band to land in. THE FRACTION IS PRINTED BY THE STAGE AND IS NOT QUOTED HERE: a figure over a census
+   subsystem whose composers grow is dated status, and this comment's first draft carried one that was wrong by
+   57 rows because the probe behind it typed its consumer paths by hand and missed a whole driver. `census_rows.js` says the same thing at its own banner — a consumer's
+   CURATION is its own and a subset cannot be made a defect in general — and this stage takes that as settled.
+   IT RUNS A REFUSAL THAT HAD NO BUILD READER, which is the whole of what the push buys beyond its own question.
+   `census_rows.js` carries a named residual whose next-diff clause is "a build stage that CALLS this reader
+   rather than re-deriving its rule" and whose absence clause is that an undeclared row "rides green through
+   every build it is present for and refuses the first driver run afterwards", so the reader who meets it is
+   reliably not its author. This stage calls `censusKinds()`, which THROWS when a composer's published rows and
+   its `@kinds-of` block disagree in either direction — verified rather than asserted: deleting one name from
+   `result.c`'s declaration makes that call throw, naming the row and the block. VERIFIED THE OTHER WAY TOO:
+   `grep -cF census_rows engine/build.mjs` answered 0 before this landed, against `fieldgate` 2, `idlgen` 4,
+   `mdgate` 1, `jscommentgate` 1 and `argaudit` 2 as the armed control, so the residual's own claim held.
+   ITS EXIT CODE IS THE FINDINGS AND NOTHING ELSE, and its control is measured on every invocation rather than
+   claimed in its banner: it derives a corrupt copy of a numeric-gated family holding a published OBJECT row,
+   requires the scanner to NAME it, requires an `@census-declines` beside the same row to move it OUT of the
+   findings and into the decisions, requires a clean copy to name nothing in either band, and FAILS when any of
+   those is absent. A band nobody has seen fire is the one that can swallow a finding.
+   ARMED IN BOTH DIRECTIONS AGAINST A LANDED REPAIR, in a frozen snapshot: at `bd00517^` it names
+   `outOfProgramsAtTheLadderUnits` at `testing/corpus/site.mjs:816` and exits 1 — a row `solver/cold.h` built
+   for the one question the scalar beneath it cannot answer, matched by that file's own `startsWith` and dropped
+   by its own type clause — and at 0a80a11 it exits 0, without accusing `testing/live-run.js`, which carries the
+   same row as a literal on a list it reads through `(k in c)`.
+   A SOURCE STAGE for the six above's reason: it compiles no C, reads no artifact, and opens no engine slice. */
+STAGES.push(onHost(runProgram("census numeric-gated family audit", [join(ENGINE, "censusgate.mjs")],
+                       "a consumer DERIVES a family of census rows and its own `typeof === \"number\"` clause " +
+                       "cannot admit one of them, so that row reads ABSENT on every artifact that publishes it " +
+                       "and renders identically to an artifact too old to state it — two facts the consumer " +
+                       "cannot tell apart. CARRY the row on a line of its own, or DECLINE it at the consumer " +
+                       "with `@census-declines <row> — <reason>`; a silent drop is neither, and there is no " +
+                       "allowlist. This stage prints its FINDINGS, its DECISIONS and its BLIND SPOTS as three " +
+                       "verdicts and only the findings carry the exit code, and it FAILS if its own control did " +
+                       "not arm. It can also throw from `testing/census_rows.js`, which it CALLS rather than " +
+                       "re-implements: that throw is a composer row with no `@kind` declaration, or a " +
+                       "declaration for a row no composer publishes, and the repair is at the producer."),
+                   STAGE_HOST.SOURCE));
 report(STAGES, FINDINGS);
 
 /* A THIRD DRIVE STOOD HERE — the driver for the deleted second program, which put the RENDERER REGISTRY's
