@@ -184,6 +184,63 @@ const RETIREMENT = /RETIREMENT(?::| —)/;
 const RETIREMENT_G = /RETIREMENT(?::| —)/g;
 const RETIREMENT_TEXT = /RETIREMENT(?::| —)\s*([^*]{0,120})/g;
 
+/* A WITHDRAWAL IS A RECORD SAYING ONE OF ITS OWN EARLIER CLAIMS NO LONGER HOLDS, AND CLAUDE.md'S CONVENTION
+   PUTS THE RETIRED WORDING FIRST AND THE WITHDRAWAL LAST — which is correct for a reader going through the
+   record and wrong for the one act a coordinator performs most: quoting a record's HEAD into a brief. The head
+   then dispatches a claim the record itself has withdrawn, and the receiving lane spends a reading refuting
+   prose whose own author already had.
+   THE UNIT IS THE RECORD AND NOT THE PARAGRAPH, WHICH A PROBE SETTLED BEFORE THIS LANDED. Keyed on the
+   PARAGRAPH — a bullet line, which in this file holds dozens of independent records — a classifier accuses 23
+   of the 86 paragraphs that carry a headline, and every one of the 23 is a LIVE bullet rule with a withdrawal
+   belonging to some later sub-record in the same line. Keyed on the RECORD, over 1122 of them, it selects 15,
+   of which 5 already announce the withdrawal in the headline itself. That is the authoring form, it is this
+   file's own, and it is what this channel asks for.
+   AND IT IS SCOPED TO WHAT THE CHECKOUT INTRODUCED, like every other channel here, for the reason the
+   unreadable-touched band states: a sweep over standing prose repairs mostly correct records and then reports
+   the cluster HANDLED. The spellings are deliberately narrow — a bare `REFUTED` also appears where a record
+   reports somebody ELSE's claim being refuted, so a marker must be about the record's own words.
+   RETIREMENT: this channel goes when a withdrawal in CLAUDE.md cannot be written anywhere but a headline,
+   because the hazard is then unspellable rather than merely refused. */
+const WITHDRAWAL = [
+  /\bIS RETIRED\b/i, /\bARE RETIRED\b/i, /\bRETIRED RATHER THAN DELETED\b/i,
+  /\bREWRITTEN RATHER THAN DELETED\b/i, /\bIS WITHDRAWN\b/i, /\bARE WITHDRAWN\b/i,
+  /\bIS RE-AIMED\b/i, /\bIS RE-KEYED\b/i,
+  /\bTHIS (SENTENCE|CLAUSE|PARAGRAPH|RECORD) (USED TO|ONCE|FIRST) (SAY|SAID|READ|NAMED|ENDED)/i,
+];
+/* The HEAD announcing it is wider than the markers, because a headline may say so in its own words — RETIRED,
+   WITHDRAWN, RETRACTED, REFUTED, CORRECTED, WAS WRONG, TOO NARROW, OVER-CLAIM — and any of those puts the
+   reader on notice before they quote it, which is the whole of what this channel wants. */
+const ANNOUNCES = /\b(RETIRE|RETIRED|WITHDRAWN|WITHDRAWS|RETRACTED|REFUTED|CORRECTED|CORRECTION|WAS WRONG|WENT STALE|TOO NARROW|OVER-CLAIM|SUPERSEDED|MET)\b/i;
+const announcesWithdrawal = (txt) =>
+  ANNOUNCES.test(txt) || WITHDRAWAL.some((r) => r.test(txt));
+
+/* ONE PARAGRAPH SEGMENTED INTO RECORDS. A record's SPAN runs from its own headline to the NEXT headline-shaped
+   run in the same paragraph, so the withdrawal a later record makes is that record's and never this one's. The
+   masked line is what is split, for the reason `readParagraph` gives: a code span is a spelling being shown. */
+/* AND THE BOUNDARY TEST IS LAXER THAN `isHeadline`, WHICH IS A DEFECT THIS CHANNEL COMMITTED AGAINST ITSELF
+   AND IS KEPT HERE BECAUSE IT IS THE UNIT ERROR THE RECORD ABOVE IS ABOUT. `isHeadline` takes `upFrac` over
+   the WHOLE run, and this file's headlines routinely carry a lowercase tail after a colon or an em dash — so a
+   span ended only at a full headline RUNS PAST those and swallows a LATER record's withdrawal, which accuses
+   the wrong head. Measured: the channel's first armed control reported exactly one finding and its matched
+   marker was four records further down the same bullet. A record OPENS wherever an emphasised run's leading
+   clause is capitalised, so that is what ends the one before it. */
+const opensRecord = (txt) => isHeadline(txt) || isHeadline(norm(txt.split(/[:\u2014]/)[0] || ""));
+function recordSpans(line) {
+  const parts = maskSpans(line).split("**");
+  if (parts.length < 2 || (parts.length - 1) % 2) return [];
+  const out = [];
+  for (let k = 1; k < parts.length; k += 2) {
+    if (!isHeadline(norm(parts[k]))) continue;
+    let span = "";
+    for (let j = k + 1; j < parts.length; j++) {
+      if (j % 2 === 1 && opensRecord(norm(parts[j]))) break;
+      span += parts[j];
+    }
+    out.push({ head: norm(parts[k]), span });
+  }
+  return out;
+}
+
 /* ONE PARAGRAPH'S READING. `markers` odd means the emphasis never closes and NOTHING about this paragraph's
    pairing can be trusted; `inverted` means the pairing is swapped although the count is even. Either way the
    runs are not returned, because a guessed pairing reports prose as a record and that is the accusing
@@ -319,6 +376,20 @@ if (scoped) {
   }
 }
 
+/* ── THE WITHDRAWAL-AT-THE-HEAD CHANNEL ───────────────────────────────────────────────────────────────────*/
+const withdrawalFindings = [];
+if (scoped) {
+  const baseRuns = new Set(baseParas.flatMap((p) => p.runs));
+  for (const p of subject) {
+    for (const r of recordSpans(p.line)) {
+      if (baseRuns.has(r.head) || baseFlat.includes(r.head)) continue;   /* not this checkout's */
+      if (announcesWithdrawal(r.head)) continue;                         /* the head says so */
+      const m = WITHDRAWAL.find((w) => w.test(r.span));
+      if (m) withdrawalFindings.push({ n: p.n, head: r.head, marker: String(m) });
+    }
+  }
+}
+
 /* ── AND THE ONE LANDING THE RECORD CHANNEL CANNOT SEE, WHICH UNTIL NOW PASSED IN SILENCE ─────────────────
    A paragraph this gate cannot pair is filed as STANDING and carries no exit code, which is right: it was
    here before this checkout and a gate that reddened every build over it would be the chronic-red furniture
@@ -392,10 +463,12 @@ if (!scoped) {
       `from another repository means a revision that repository still has.`);
   process.exit(1);
 }
-if (!introducedMarkers.length && !recordFindings.length && !unreadableTouched.length) {
+if (!introducedMarkers.length && !recordFindings.length && !unreadableTouched.length &&
+    !withdrawalFindings.length) {
   log(`PASS (findings) — this checkout landed no emphasised record into ${MD_PATH} without a retirement ` +
       `condition, broke no paragraph's emphasis, and CHANGED none of the ` +
-      `${standingMarkers.length + incomparable.length} paragraph(s) this gate cannot pair. That verdict ` +
+      `${standingMarkers.length + incomparable.length} paragraph(s) this gate cannot pair, and ` +
+      `landed no record that withdraws its own claim below a headline reading live. That verdict ` +
       `covers the ${readable} paragraph(s) it can pair, and it no longer has to say "nothing about" the rest: ` +
       `an untouched unreadable paragraph carries no landing of this checkout's to be blind to.`);
   process.exit(0);
@@ -425,6 +498,17 @@ for (const { n, runs } of recordFindings) {
       `been built, which is a sweep target and never a removal licence.`);
   for (const r of runs) bad(`      + ${r.slice(0, 140)}`);
 }
+for (const { n, head, marker } of withdrawalFindings) {
+  bad(`  ${MD_PATH}:${n}  A RECORD THIS CHECKOUT LANDED WITHDRAWS ITS OWN CLAIM BELOW A HEADLINE THAT READS ` +
+      `LIVE — the span between this headline and the next one matches ${marker}, and the headline itself says ` +
+      `nothing about it. CLAUDE.md's convention is right that a retired wording is REWRITTEN RATHER THAN ` +
+      `DELETED and that it comes first; what it costs is that the one act a coordinator performs most — ` +
+      `quoting a record's HEAD into a brief — dispatches a claim this record has already withdrawn, and the ` +
+      `receiving lane spends a reading refuting prose whose author already did. Say it IN THE HEADLINE: 5 of ` +
+      `the 15 records in this file that withdraw something already do, which is the authoring form and is ` +
+      `this file's own.`);
+  bad(`      head: ${head.slice(0, 140)}`);
+}
 for (const p of unreadableTouched)
   bad(`  ${MD_PATH}:${p.n}  CHANGED A PARAGRAPH THIS GATE CANNOT PAIR (${p.state.toUpperCase()}, ` +
       `${p.markers} \`**\`) — this checkout edited it, and the record channel reads headlines off the ` +
@@ -435,6 +519,7 @@ for (const p of unreadableTouched)
       `appended after it — or move the record to a paragraph that pairs.`);
 bad(`FAILED — ${introducedMarkers.length} paragraph(s) whose emphasis this checkout broke, ` +
     `${recordFindings.length} record(s) it landed with no retirement condition, ` +
+    `${withdrawalFindings.length} that withdraw their own claim below a live-reading headline, ` +
     `${unreadableTouched.length} it changed where this gate cannot read what landed. There is no baseline to ` +
     `update and no allowlist: the findings ARE the disagreement, and every one of them is in work this ` +
     `checkout has not published yet.`);
