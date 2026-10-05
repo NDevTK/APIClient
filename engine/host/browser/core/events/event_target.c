@@ -766,7 +766,38 @@ static JSValue add_listener_with_type(JSContext *ctx, JSValueConst this_val, JSV
     JSValue arr;
     uint32_t len, i;
 
-    /* §2.7 step 2: a listener registered with an ALREADY-ABORTED signal is not registered at all. */
+    /* §2.7 step 2: a listener registered with an ALREADY-ABORTED signal is not registered at all.
+       THIS IS THE NON-PARKING FORM AND IT IS NOT A SECOND ANSWER TO THE AEL_ABORTED STAGE'S QUESTION. A `bool`
+       cannot say "I forked", so a FIRST-TIME fork on an unknown `aborted` flag reaches solver/engine.c's seam
+       from inside this plain C body with nowhere for the sibling to resume and ABORTS, naming this site. Three
+       of this helper's four callers have no resume point to offer, so the test stays here — it may not be
+       hoisted into the one caller that does, because deleting a shared helper's check removes the spec step
+       from every other caller.
+       THE MACHINE'S PATH REACHES THIS AS A REPLAY AND CANNOT FORK TWICE OVER ONE PREDICATE. The AEL_ABORTED
+       stage asks the BRANCH seam, which keys by the OPERAND'S OWN identity: step_tobool_run's
+       JS_FORK_KIND_TOBOOL is answered through JSFlowControlHooks.branch, and that hook is solver_decide — the
+       same key space signal_is_aborted's solver_decide_at writes. So by the time addEventListener reaches this
+       line the flag already has a recorded arm, which this ask CONSUMES. It is also only ever reached on the
+       not-aborted arm, because the aborted one returns from the stage.
+       WHICH CALLERS CAN STILL REACH THE ABORT, AS A NAMED RESIDUAL. NOT COVERED, AS A PROPERTY AND NOT AS A
+       LIST, because the list moves on every sibling conversion and a named member goes stale the day it is
+       built: a caller that hands this helper a signal whose `aborted` is unknown WITHOUT having already asked
+       that same flag through the branch seam. Two of the four paths cannot be one — they pass `JS_UNDEFINED`
+       LITERALLY at the call, so `abort_signal_is` short-circuits and `abort_signal_aborted` is unreachable
+       from them, which discharges step 2's "signal is non-null" guard by construction and not by luck. A path
+       that DOES hand over a real signal is covered exactly when something upstream of it has filed an arm for
+       that flag, which is a property of the CALLER and is why this cannot be answered from here.
+       WHAT THE NEXT DIFF BUILDS: every remaining non-parking ask over a signal this helper is then handed,
+       routed to abort_signal_aborted_step with a held field on its own caller's state. The population is the
+       CONSTRUCT and not the name and is DERIVED rather than quoted, because a count here would rot on the next
+       sibling conversion: `git grep -cE 'abort_signal_aborted *\(' -- engine/host` over the callers of
+       `event_target_add_listener`. HOW ITS ABSENCE SHOWS: solver/engine.c's engine_prepare_fork abort naming
+       THIS file and THIS line as its ask site — which is the one observation that cannot be confused with a
+       sibling's, because 8613cb2 made the ask site the caller's own `__FILE__ ":" __LINE__`.
+       The last such conversion is what lets the non-parking `abort_signal_aborted` be DELETED; until then both
+       forms exist, which is a transition and not a fallback — deleting the plain one today would break every
+       unconverted caller.
+       RETIREMENT: this record goes when `abort_signal_aborted` has no callers left in this file's cone. */
     if (abort_signal_is(ctx, signal) && abort_signal_aborted(ctx, signal))
         return JS_UNDEFINED;
     if (passive < 0)
@@ -958,6 +989,9 @@ void event_target_erase_all(JSContext *ctx, JSValueConst target)
     X(AEL_SIGNAL,  "DOM §2.7 Interface EventTarget, flatten more options step 4.3 (`signal`), whose Web IDL "     \
                    "§3.2.15 Interface types conversion and whose add an event listener step 2 aborted test are "  \
                    "the feasible completions of one unknown")                                                    \
+    X(AEL_ABORTED, "DOM §2.7 Interface EventTarget, add an event listener step 2 (the signal's own `aborted` "    \
+                   "flag, which an `AbortSignal.timeout()` makes unknown even though the signal itself is a "     \
+                   "real one — a DIFFERENT unknown from AEL_SIGNAL's, whose operand is the MEMBER)")             \
     X(AEL_RUN,     "DOM §2.7 Interface EventTarget, add an event listener steps 3-6 / remove an event listener "  \
                    "step 2 (the listener-list work, once every conversion has an answer)")
 enum { IDL_STEP_STAGE_BASE(AEL_STAGES) AEL_STAGES(JS_STEP_STAGE_ENUM) };
@@ -977,6 +1011,13 @@ typedef struct {
        machine builds for the arm on which the unknown IS a live signal. JS_UNDEFINED means the member is
        absent, which is the null the algorithm means. */
     JSValue signal;
+    /* STEP 2'S OPERAND, HELD WHERE THE SIBLING'S SNAPSHOT CARRIES IT — abort_signal_aborted_step's `held`.
+       A FIELD AND NOT A LOCAL: the seam BORROWS the flag for the length of the request and a deep fork
+       BYTE-COPIES this state, re-taking only what `visit` names, so a flag in a C local is gone in the arm that
+       resumes and one in an unvisited field is freed by both. ael_visit names it. JS_UNINITIALIZED is the EMPTY
+       value and AEL_ENTER STATES it, because a zeroed step state's JSValue is the INTEGER 0 rather than
+       JS_UNDEFINED — so the emptiness of this slot is never read off the slot. */
+    JSValue sig_flag;
 } AelState;
 
 static void ael_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -984,6 +1025,7 @@ static void ael_visit(JSContext *ctx, void *st, JSStepVisit *v)
     AelState *s = st;
 
     v->val(ctx, &s->signal);
+    v->val(ctx, &s->sig_flag);
 }
 
 /* ONE BOOLEAN MEMBER OF THE FLATTENING WHOSE ABSENT WORLD IS ITS FALSE WORLD, ANSWERED WHERE IT BECOMES A C
@@ -1040,6 +1082,8 @@ static int ael_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
            down through ael_visit, which names exactly what the state owns and nothing else, so a field handed
            over after it would be freed by nobody. */
         s->signal = JS_UNDEFINED;
+        /* STATED, never read off the slot: a zeroed step state's JSValue is the INTEGER 0. */
+        s->sig_flag = JS_UNINITIALIZED;
         s->capture = 0;
         s->once = 0;
         s->passive = -1;
@@ -1235,6 +1279,47 @@ static int ael_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
                    "no class: ADD_OPTS' member carries it and event_target_install is what writes it, so it is "
                    "that write, or core/platform.c's row order under it, that has come apart");
             s->signal = v;
+        }
+        STEP_GOTO(hdr->stage, AEL_ABORTED, NULL);
+    }
+
+    if (hdr->stage == AEL_ABORTED) {
+        /* DOM §2.7 Interface EventTarget, add an event listener step 2, VERBATIM: "If listener's signal is
+           non-null and is aborted, then return."
+           IT IS A STAGE OF ITS OWN BECAUSE THE TEST CAN PARK, AND THE OPERAND IS A DIFFERENT UNKNOWN FROM
+           AEL_SIGNAL'S. That stage forks over the MEMBER — `options.signal` itself unknown, three completions,
+           one of which IS this step's aborted world. This stage forks over the FLAG of a signal that is real:
+           §3.2's `AbortSignal.timeout(n)` is a genuine branded signal whose `aborted` is unknown external input,
+           because whether the deadline has passed is not a thing this engine knows. Neither stage subsumes the
+           other, and the measured abort was this one: the question `AbortSignal.timeout().aborted` reached
+           solver/engine.c's seam from inside a plain C activation with nowhere for the sibling to resume.
+           THE PARKING FORM IS WHAT THIS STAGE EXISTS FOR. `abort_signal_aborted` answers a `bool` and therefore
+           cannot say "I forked"; abort_signal_aborted_step asks the BRANCH seam and returns JS_STEP_FORK, which
+           this body hands straight back to the driver. Nothing about the fork machinery was absent — this
+           machine already holds the resume point the driver clones at, and already forks at AEL_SIGNAL over the
+           same state, so the sibling this state carries is EXERCISED rather than merely permitted.
+           IT IS SPEC ORDER AND THE PREVIOUS PLACEMENT WAS NOT. Step 2 precedes step 3, and step 3 (the null
+           callback) is at AEL_RUN — whose own label already claims "steps 3-6", so the step-2 test this stage
+           performs was reached through a helper from OUTSIDE that stage's declared extent. Neither ordering is
+           observable to the page (both arms return undefined with no side effect), and the difference is in
+           what gets ASKED: `addEventListener("x", null, {signal: timeout})` now forks the signal where before
+           step 3 returned first and the flag was never a question. §Browser-half errs toward MORE exploration.
+           REMOVE DOES NOT ENTER THIS STAGE. AEL_CAPTURE sends `removeEventListener` straight to AEL_RUN, which
+           is right: "remove an event listener" has no signal and no step 2. */
+        if (!JS_IsUndefined(s->signal)) {
+            int aborted = 0;
+
+            DCHECK(abort_signal_is(ctx, s->signal),
+                   "§2.7's step 2 was asked of a `signal` field holding something that is not an AbortSignal — "
+                   "AEL_SIGNAL writes this field with exactly two shapes, the page's own §3.2.15-branded signal "
+                   "or the one abort_signal_new mints for the arm where an unknown member IS a live signal, and "
+                   "leaves it JS_UNDEFINED for an absent member. A third shape means that stage's brand ran "
+                   "against no class");
+            rc = abort_signal_aborted_step(ctx, hdr, s->signal, &s->sig_flag, &aborted);
+            /* PARKED. Nothing of this stage is released and nothing is re-derived: the operand stays HELD on the
+               state, the stage is unchanged, and the sibling re-enters AT this ask. */
+            if (rc) return rc;
+            if (aborted) return JS_STEP_DONE;   /* step 2's "then return" — the listener is not registered */
         }
         STEP_GOTO(hdr->stage, AEL_RUN, NULL);
     }
