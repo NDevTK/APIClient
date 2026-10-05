@@ -16,7 +16,7 @@
 //                  TOGETHER and never `fin/n` alone: a `0/n` beside `partial x n` is a dwell that expired
 //                  while the engine was still exploring -- unbounded exploration behaving correctly -- and a
 //                  `0/n` beside anything else is a different fact entirely.
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { siteList } from './list.mjs';
 
@@ -41,8 +41,71 @@ const RUN_OUTCOMES = (() => {
    The pass label is taken from the filename (census-p1.jsonl -> p1) purely to name the log a signature came
    from -- the signature itself is read from the ROW, which carries its own `why`/`atE`, so an aggregate can
    never attribute one pass's abort to another pass's log. */
-const files = process.argv.slice(2);
-if (!files.length) files.push('census.jsonl');
+/* THE LIST IS READ BEFORE THE FILES ARE CHOSEN, BECAUSE THE LIST IS WHAT DECIDES WHICH FILES PAIR WITH IT.
+   It used to be read 90 lines below, after every census had already been parsed, which is why the only way to
+   select a population was to NAME it on the command line. */
+const list = siteList();
+const stacks = new Map([...list.byId].map(([id, r]) => [id, r.stack]));
+
+/* THE PASS SET IS DERIVED FROM THE LIST OR IT IS NAMED, AND `--pair` IS THE DERIVATION. A reader handed
+   `SITES=<list>.tsv node report.mjs <census files>` has been handed a PLACEHOLDER for the population, and the
+   row-to-site guard below THROWS on a census this list does not name — correctly, because a census is a
+   measurement OF a list. Those two together mean the only way to get an answer was to hand-pick a set that
+   does not throw and report whatever it carried, which is a hand-chosen scope wearing a derivation's clothes:
+   MEASURED, the easy selection is the OLD passes, and this reader was quoted as answering
+   `passesCarryingTheField: 0` over a corpus in which 110 of 119 paired passes carry it. The figure was never
+   drift — it was the placeholder.
+   SO THE TOOL'S OWN REFUSAL BECOMES THE SELECTOR: `--pair` walks every `census-*.jsonl` beside this file and
+   keeps the ones every row of which this list names. That is a scope derived from a CONSTRUCT (does this
+   census measure this list) rather than from a NAME, so it cannot be short by whichever files a reader
+   happened to type.
+   IT PRINTS BOTH SETS AND NEVER ONLY THE ONE IT KEPT, which is the whole difference between a derivation and
+   a silent filter. An excluded census is not noise: it is a measurement of a DIFFERENT list, and a reader who
+   sees it excluded can go and pair it with the right one. A selector that printed only its survivors would be
+   the certified-survivor shape — nobody re-examines a population somebody has just filtered.
+   AND NAMING FILES BESIDE IT IS REFUSED rather than merged, because the two are opposite claims about where
+   the population comes from and silently preferring either one would answer a question the reader did not
+   ask. The NAMED mode keeps its throw exactly as it was: a reader who names a file and gets it wrong must be
+   told, and that refusal is this reader working. */
+const argv = process.argv.slice(2);
+const PAIR = argv.includes('--pair');
+const named = argv.filter((a) => a !== '--pair');
+let files;
+if (PAIR) {
+  if (named.length)
+    throw new Error('report.mjs: `--pair` DERIVES the pass set from the site list and you also named ' +
+      `${named.length} file(s). Those are two different claims about which population this report is over, ` +
+      'and preferring either one silently would answer a question you did not ask. Use `--pair` alone, or ' +
+      'name every file and drop `--pair`.');
+  const all = readdirSync(ROOT).filter((f) => /^census-.*\.jsonl$/.test(f)).sort();
+  const paired = [], excluded = [];
+  for (const f of all) {
+    let rows;
+    try {
+      rows = readFileSync(join(ROOT, f), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    } catch (e) { excluded.push([f, `unreadable or not JSONL: ${e.message}`]); continue; }
+    const stray = rows.map((r) => r && r.id).filter((id) => !stacks.has(id));
+    if (stray.length)
+      excluded.push([f, `${stray.length} of ${rows.length} row(s) name a site \`${list.rel}\` does not — ` +
+        `first \`${String(stray[0]).replace(/\s+/g, ' ').slice(0, 48)}\``]);
+    else paired.push(f);
+  }
+  console.log(`# --pair DERIVED the pass set from \`${list.rel}\`: ${paired.length} of ${all.length} ` +
+    `census file(s) beside this one measure that list.`);
+  console.log(`#   the selector is the row-to-site guard below, so this population is a CONSTRUCT and not a ` +
+    `set anybody typed.`);
+  for (const [f, why] of excluded) console.log(`#   EXCLUDED ${f} — ${why}`);
+  if (!excluded.length) console.log('#   EXCLUDED none — every census beside this one measures this list.');
+  if (!paired.length)
+    throw new Error(`report.mjs: \`--pair\` found ${all.length} census file(s) beside this one and NONE of ` +
+      `them measures \`${list.rel}\`. That is a statement about the pairing and not about the engine: the ` +
+      `rows are scratch by design (\`.gitignore\` ignores them), so either this list is the wrong one for ` +
+      `the corpus on this disk, or no pass has been taken against it. Try the other lists in this directory.`);
+  files = paired;
+} else {
+  files = named;
+  if (!files.length) files.push('census.jsonl');
+}
 const passes = files.map((f) => {
   const rows = readFileSync(join(ROOT, f), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
   /* WHETHER THIS PASS'S INSTRUMENT COULD ANSWER THE @S ARRIVAL QUESTION AT ALL — which is a fact about the
@@ -133,9 +196,6 @@ const passes = files.map((f) => {
    one artifact a reader trusts to say what was measured. The list is now a parameter (`SITES`, the spelling
    run.sh already used) and a row whose id it does not contain is FATAL: that row's every other column is a
    claim about a corpus nobody selected. */
-const list = siteList();
-const stacks = new Map([...list.byId].map(([id, r]) => [id, r.stack]));
-
 const unesc = (s) => s.replace(/\\\\/g, '\\').replace(/\\"/g, '"').replace(/\\n/g, '\n');
 
 /* A SIGNATURE NAMES A DEFECT, SO A GENSYM IN IT MUST NOT SPLIT ONE INTO SEVERAL. The orphan-drive DFAIL
