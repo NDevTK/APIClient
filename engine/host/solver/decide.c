@@ -2929,8 +2929,17 @@ int solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n, 
        operation" had asked wrongly and had no way to learn WHICH — the remedy ("fork only where the domain
        permits more than one completion") names an action with no object, so the crash was rediscovered rather
        than fixed. Both facts are PARAMETERS of this function: `op` is the operation string the caller composes
-       with its own cursor in it, and `site` is the caller's `__FILE__`/`__LINE__` pair the macro threads —
-       captured AT THE CALLER for that rule's reason, so it names the asking opcode and never this line.
+       with its own cursor in it, and `site` is the ASKING OPCODE'S `__FILE__`/`__LINE__` pair, taken
+       at the ask and threaded through the hook.
+       AND THAT SENTENCE READ "the pair the macro threads" UNTIL THE MACRO WAS LOOKED AT, which is this very
+       rule's own defect committed in the commit that cited it. `solver_outcome` captures `SOLVER_SITE_HERE`
+       where the MACRO is written, and its only caller in the tree is ONE FORWARDING HOOK — so the first
+       version of this message promised the opcode's site and would have printed that hook's line for every
+       operation in the interpreter. §AN-ASSERT-THAT-NAMES-A-REMEDY says it in as many words: never captured
+       at an intermediate that would name one forwarding function for the whole tree. The retired wording is
+       recorded because it is what a reader re-derives from merely SEEING a `site` parameter: a threaded pair
+       is the caller's only if every hop forwards it, and `quickjs.h`'s `JS_FLOW_SITE_HERE` is where this one
+       now begins.
        MEASURED: a native smoke aborted here with the fixture at `=> INCOMPLETE` and essentially every probe
        row at 0, and the three candidate callers — a step machine's own fork, `LengthOfArrayLike>N` over an
        argument-list coercion, and `ArraySetLength>N` — could only be separated by reading the interpreter and

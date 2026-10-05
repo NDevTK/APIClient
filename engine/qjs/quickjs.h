@@ -1937,6 +1937,14 @@ JS_EXTERN int JS_ReclaimMemory(JSRuntime *rt, size_t wanted);
    for an example-free branch. A machine that cannot say passes this and behaves exactly as one that could not
    be asked: the fork happens, both arms run, neither is marked forced. */
 #define JS_OUTCOME_REAL_UNSTATED (-1)
+/* THE ASK SITE SPELLING, BESIDE THE CONTRACT THAT REQUIRES IT so the two cannot drift: a caller that composed
+   a site by hand would be a second spelling of one fact, which is how a shared seam comes to report one line
+   again. Its own stringify pair is declared here rather than borrowed from a translation unit, because a public
+   contract may not depend on a macro private to one `.c` file. */
+#define JS_FLOW_SITE_STR2(x) #x
+#define JS_FLOW_SITE_STR(x)  JS_FLOW_SITE_STR2(x)
+#define JS_FLOW_SITE_HERE    __FILE__ ":" JS_FLOW_SITE_STR(__LINE__)
+
 typedef struct JSFlowControlHooks {
     int  (*branch)(JSContext *ctx, JSValueConst cond);
     /* A NATIVE OPERATION WHOSE COMPLETION IS ONE OF N FEASIBLE OUTCOMES — the same decision `branch` makes,
@@ -1960,8 +1968,19 @@ typedef struct JSFlowControlHooks {
        Returns the outcome THIS flow takes (0..n-1), ORed with 0x100 when a sibling was prepared for another —
        the same protocol `branch` uses, so the fork is one mechanism and not two. -1 means there is no decision
        to make (no forking policy installed: the @S candidate re-fire runs ONE concrete path), which the caller
-       reads as outcome 0, the same way a declined `branch` falls through to the ordinary ToBool. */
-    int  (*outcome)(JSContext *ctx, JSValueConst over, const char *op, int n, int real);
+       reads as outcome 0, the same way a declined `branch` falls through to the ordinary ToBool.
+       `site` IS THE ASKING OPCODE'S OWN `__FILE__`/`__LINE__`, CAPTURED AT THE CALL AND THREADED, and it is a
+       parameter for the reason a shared seam always needs one: the policy's abort stamps the line it is
+       WRITTEN at, so one assert inside the solver reported ONE line for every operation in this interpreter —
+       an abort naming "a native operation" and giving its reader nothing to apply a remedy to. A pair captured
+       at an INTERMEDIATE is the same defect one hop later: the policy reaches this hook through a single
+       forwarding function, so a site taken there names that function for the whole tree. It is taken HERE, at
+       each ask, with `JS_FLOW_SITE_HERE`.
+       IT DOES NOT REPLACE `op`, which is the discriminator for the GENERIC step driver: every machine's
+       declared fork is asked from one line of that driver, so the site separates the driver from the
+       argument-list chains and `op` separates the machines from each other. Both are printed. */
+    int  (*outcome)(JSContext *ctx, JSValueConst over, const char *op, int n, int real,
+                    const char *site);
     void (*fork)(JSContext *ctx, JSValue *clone);       /* BASE-activation fork: build the hot sibling from a frame clone.
                                                            (The deleted `replay` hook re-ran a nested/deep flow from its
                                                            start — BANNED, not byte-identical; that fork now DFAILs until a

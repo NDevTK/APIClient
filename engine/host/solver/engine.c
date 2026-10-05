@@ -14675,13 +14675,23 @@ static int engine_branch_hook(JSContext *ctx, JSValueConst cond) {
     g_fork_snapshot_owed = 0;
     return r;
 }
-static int engine_outcome_hook(JSContext *ctx, JSValueConst over, const char *op, int n, int real) {
+/* THE SITE IS FORWARDED AND NOT STAMPED HERE, which is the whole of why the hook takes one. `solver_outcome`
+   is the macro that captures `SOLVER_SITE_HERE`, and this function is the ONLY caller of it in the tree — so
+   every outcome abort in this engine reported THIS line, for every operation in the interpreter, which is the
+   one-forwarding-function defect §AN-ASSERT-THAT-NAMES-A-REMEDY names by hand. The ask's own pair arrives as a
+   parameter (quickjs.h's `JS_FLOW_SITE_HERE`) and goes straight to `solver_outcome_at`. */
+static int engine_outcome_hook(JSContext *ctx, JSValueConst over, const char *op, int n, int real,
+                               const char *site) {
     int r;
     DCHECK(!g_fork_snapshot_owed,
            "the step driver asked for an outcome arm while another snapshot-owning ask was still open — see "
            "engine_branch_hook");
+    DCHECK(site != NULL,
+           "an outcome ask arrived with no site — quickjs.h's contract says the pair is captured AT THE ASK "
+           "with JS_FLOW_SITE_HERE, so a NULL here is a caller that threaded nothing and would put this "
+           "engine's outcome aborts back to naming one forwarding function for every operation");
     g_fork_snapshot_owed = 1;
-    r = solver_outcome(ctx, over, op, n, real);
+    r = solver_outcome_at(ctx, over, op, n, real, site);
     g_fork_snapshot_owed = 0;
     return r;
 }

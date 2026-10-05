@@ -38951,7 +38951,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                                                ordinary §7.1.2, which is what OP_if_false falls
                                                                through to when the same hook declines */
                     } else {
-                        harm = g_flow_control.outcome ? g_flow_control.outcome(ctx, fover, fop, fn, freal) : -1;
+                        harm = g_flow_control.outcome
+                                 ? g_flow_control.outcome(ctx, fover, fop, fn, freal, JS_FLOW_SITE_HERE) : -1;
                         if (harm < 0)
                             harm = 0;   /* no forking policy (the @S candidate re-fire): ONE concrete path down
                                            the machine's outcome 0, which is what that numbering means */
@@ -40465,7 +40466,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         al->fork_ask_key = step_fork_key(askop);
                         harm = g_flow_control.outcome
                              ? g_flow_control.outcome(ctx, al->coerce, askop, 2,
-                                                      JS_OUTCOME_REAL_UNSTATED) : -1;
+                                                      JS_OUTCOME_REAL_UNSTATED, JS_FLOW_SITE_HERE) : -1;
                         if (harm < 0)
                             harm = 0;   /* no forking policy (the @S candidate re-fire): ONE concrete path down
                                            outcome 0, which is what that numbering means — exactly as a declined
@@ -40865,7 +40866,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         al->fork_ask_key = step_fork_key(askop);
                         harm = g_flow_control.outcome
                              ? g_flow_control.outcome(ctx, al->val, askop, 2,
-                                                      JS_OUTCOME_REAL_UNSTATED) : -1;
+                                                      JS_OUTCOME_REAL_UNSTATED, JS_FLOW_SITE_HERE) : -1;
                         if (harm < 0)
                             harm = 0;   /* no forking policy (the @S candidate re-fire): ONE concrete path down
                                            outcome 0, which is what that numbering means — exactly as a declined
