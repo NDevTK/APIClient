@@ -458,26 +458,59 @@ void idb_transaction_set_state(JSContext *ctx, JSValueConst tx, int state)
            says how many and never who, so the next diff is a dev-only walk at this line that DUMPS the list
            (JS_DumpValue / JS_DumpGCObject, which §Architecture names for exactly this) instead of a bespoke
            probe. Its absence shows as this abort firing with a plausible count and no next step. */
-        /* TAKEN BEFORE THE ASSERT AND NOT INSIDE IT, because a DCHECKF's arguments are compiled out of a
-           release build along with its condition -- a walk spelled in the argument list would vanish with it,
-           which is correct, while a walk spelled HERE would run in release for a message nobody prints. These
-           two are only ever read by the message below. */
+/* THE WALK IS DEV-ONLY BY CONSTRUCTION, AND THE COMMENT THAT STOOD HERE NAMED THE HAZARD WHILE THE CODE
+   UNDER IT COMMITTED IT. It read "a walk spelled HERE would run in release for a message nobody prints", and
+   the line beneath it was spelled HERE, in a file carrying no `#if APICLIENT_DEV` at all — so every finishing
+   transaction in a release build walked the whole running delta and its base chain to compose two integers
+   that a release build has no DCHECKF to print. That is CLAUDE.md §AND-THE-FORM-THAT-IS-IMMUNE-TO-REVIEW
+   exactly: a site that states the rule correctly and breaks it in the same paragraph reads as ALREADY
+   AUDITED, so scrutiny stops where it was needed, and the better the prose argues the less it is one.
+   THE RETIRED ARGUMENT IS KEPT BECAUSE ITS PREMISE WAS TRUE: a DCHECKF's arguments really do vanish with its
+   condition, so a walk read only by the message belongs in the argument list. What it missed is that the walk
+   is now read by the CONDITION, where it may not be called twice without being two walks over one state --
+   and once the condition needs it, the whole computation is dev-only and the preprocessor is what says so. */
+#if APICLIENT_DEV
+        /* A LIST OF THE HOLDERS IS STILL WHAT THIS LINE OWES, which the identity below does not retire: the
+           sum says how many references are ACCOUNTED FOR and still names no holder for the remainder, so the
+           next diff is the dev-only dump the paragraph above asks for (JS_DumpValue / JS_DumpGCObject, which
+           §Architecture names for exactly this). WHAT IS NOT COVERED: a remainder of N tells a reader to look
+           in a sibling's delta, a pending task's closure or the cold tier and does not say which. HOW ITS
+           ABSENCE SHOWS: this abort firing with a closed-looking partition and a nonzero remainder, and no
+           next step from the line it fired at. */
         int cow_base = 0, cow_own = cow_entries_naming(changes, &cow_base);
 
-        DCHECKF(JS_ValueRefCount(changes) == 2,
-                "a finishing transaction's list of database changes is held by %d things where exactly TWO may "
-                "hold it — the transaction's slot record and this reader. idb_transaction_changes hands out an "
-                "OWNED reference and every caller of it frees before returning, so an extra holder took its "
-                "reference through some other door. THE FIRST DOOR IS NOW PARTITIONED RATHER THAN LISTED: "
-                "%d of them are entries of the RUNNING flow's own COW delta and %d more are in the BASE CHAIN "
-                "behind it, which is this flow's ancestry. Every capture dups its target, so one entry naming "
-                "this Array is one legitimate reference and the count is a measurement of how many times a "
-                "flow wrote it rather than a defect on its own. WHAT THE REMAINDER MEANS IS THE FINDING: this "
-                "walk does not reach a SIBLING flow's delta, so a shortfall says the rest is there, or behind "
-                "the two doors it cannot see at all — a pending request task's operation closure, or the cold "
-                "tier. The list is emptied on the next line, so what it leaks is an empty Array whose only "
-                "remaining edge is Array.prototype, and that edge makes the whole realm behind it immortal",
-                JS_ValueRefCount(changes), cow_own, cow_base);
+        /* RE-KEYED ON THE IDENTITY RATHER THAN WEAKENED, AND THE MEASUREMENT IS WHAT DECIDED IT. The condition
+           that stood here was `== 2` -- the transaction's slot record and this reader -- and it was standing on
+           a SCHEDULER FACT: the partition landed one commit earlier and read, on the first native smoke that
+           reached this line, a refcount of 6 of which 4 were entries of the RUNNING flow's own COW delta and 0
+           were in the base chain. 2 + 4 + 0 = 6, so the partition accounted for the WHOLE excess and not part
+           of it. §Offensive-programming: an invariant over a value a flow LEGITIMATELY wrote is the wrong
+           invariant and not a bad value, so the repair is to say what the right number is rather than to raise
+           the old one or delete it.
+           IT IS EXACT AND NOT A FLOOR. Every capture dups its target, so N delta entries naming this Array are
+           N references -- and that holds across a SHARED base segment too, because a CowSeg is shared by
+           reference while each of its ENTRIES holds its own dup, so walking the chain counts each dup once
+           however many flows stand on it.
+           AND IT IS TWO-SIDED, WHICH `== 2` WAS NOT IN THE DIRECTION THAT MATTERS: a refcount BELOW the
+           identity is a reference this flow's delta claims to hold and does not, which is a double free waiting
+           for the next unapply, and the old condition could only ever report it as the thing it was already
+           reporting for four legitimate writes. */
+        DCHECKF(JS_ValueRefCount(changes) == 2 + cow_own + cow_base,
+                "a finishing transaction's list of database changes is held by %d things where the holders "
+                "this line can ACCOUNT FOR are %d — the transaction's slot record, this reader, and one per "
+                "COW delta entry naming it (%d in the RUNNING flow's own delta, %d in the BASE CHAIN behind "
+                "it, which is this flow's ancestry). idb_transaction_changes hands out an OWNED reference and "
+                "every caller of it frees before returning, and every COW capture dups its target, so one "
+                "entry naming this Array is one legitimate reference and a count above two is a measurement "
+                "of how many times a flow wrote it rather than a defect on its own. A REMAINDER ABOVE THE "
+                "IDENTITY is the finding and names three doors this walk cannot see: a SIBLING flow's delta, "
+                "a pending request task's operation closure, or the cold tier. A REMAINDER BELOW IT is the "
+                "other defect entirely — a reference the delta claims and does not hold, which the next "
+                "unapply frees twice. The list is emptied on the next line, so what an unaccounted holder "
+                "leaks is an empty Array whose only remaining edge is Array.prototype, and that edge makes "
+                "the whole realm behind it immortal",
+                JS_ValueRefCount(changes), 2 + cow_own + cow_base, cow_own, cow_base);
+#endif
         JS_FreeValue(ctx, changes);
         /* AND SO IS §2.7'S LIST OF HELD REQUEST TASKS, at the same door and for the same reason. A transaction
            can be aborted "even if the transaction ... hasn't yet started", and one with no requests commits
