@@ -396,6 +396,14 @@ for (const p of passes) for (const r of p.rows) {
        average in -- so the command is right and one input was not. Drop the offending file and it exits 0
        over the other 49. State a command you have run, and say what it did. */
     units: r.unitsDone,
+      /* AND THE CLOCK BOUNDARY'S ARRIVALS, WHICH RIDE `frontierPrograms` RATHER THAN THE ROW'S TOP LEVEL (see
+       site.mjs for why, and for the fact that its own author read the top level and concluded they were
+       absent). `fire-due-timer` is an OUTCOME over a gated operation, so a 0 there is two opposite findings
+       and these are the ask that separates them. */
+    clockChain: (r.frontierPrograms || {}).stepReachedRenderingLife,
+    clockTimerAsk: (r.frontierPrograms || {}).stepReachedTimerLife,
+    clockIdleAsk: (r.frontierPrograms || {}).stepReachedIdleLife,
+    clockTimerFired: (r.stepUnitRuns || {})['fire-due-timer'],
     /* THE ORDER-OR-THREAD ROWS, CARRIED VERBATIM — see the `ORDER OR THREAD` section for what each decides.
        They are copied rather than folded here because the verdict is composed once, at the print, and a
        fold at the read would put the boundary in two places. */
@@ -918,6 +926,21 @@ if (ordRows.length) {
   for (const r of ordRows)
     for (const s of r.st)
       console.log('    ' + pad(r.id, 16) + pad(s.w, 14) + s.why);
+  /* …AND THE CLOCK, PRINTED IN THE SAME SECTION BECAUSE IT IS THE SAME QUESTION ONE BOUNDARY DOWN: the
+     ORDER decides which member runs, and the CLOCK decides whether the member that runs can make a timer
+     due. A run whose chain arrivals are large and whose fired count is ZERO is a clock that was asked and
+     declined every time — which on this corpus is the whole difference between a drive that composes
+     addresses no parse can state and one that composes none. */
+  const clk = table.map((t) => t.measurements.map((m) => [t.id, m.pass, m.clockChain, m.clockTimerAsk,
+    m.clockIdleAsk, m.clockTimerFired])).flat()
+    .filter((v) => typeof v[2] === 'number' || typeof v[5] === 'number');
+  for (const [id, pass, chain, tAsk, iAsk, fired] of clk)
+    console.log('    ' + pad(id, 16) + pad('clock', 14)
+      + 'chain ' + chain + ' -> timer-rung ' + tAsk + ' -> idle-rung ' + iAsk
+      + ' | fired ' + fired
+      + (typeof chain === 'number' && chain > 0 && fired === 0
+        ? '  <-- ASKED AND NEVER FIRED: the rung was reached and declined every descent'
+        : typeof chain !== 'number' ? '  [chain arrivals ABSENT on this pass — not carried]' : ''));
   const vis = table.map((t) => t.measurements.map((m) => [m.visMax, m.visZero, m.wfqMembers]))
     .flat().filter((v) => typeof v[0] === 'number');
   const dead = vis.filter((v) => v[0] === 0);

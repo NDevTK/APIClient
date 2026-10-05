@@ -886,6 +886,12 @@ const frontierPrograms = (() => {
      remaining two states behind an ask with no fire are then one row apart. MEASURED ABSENT with the command:
      `grep -c clockAdvanceDeclined engine/host/solver/result.c` answers 0 against `grep -c
      stepReachedTimerLife engine/host/solver/result.c` answering 2 as the armed control. */
+  /* THEY LAND INSIDE `frontierPrograms` AND NOT AT THE ROW'S TOP LEVEL, WHICH IS WORTH SAYING BECAUSE THE
+     AUTHOR OF THIS BLOCK READ THE TOP LEVEL AND CONCLUDED THEY WERE ABSENT. `out` is the object this
+     function returns as `frontierPrograms`, so these four sit beside `replayHits` for the same reason it
+     does — one walk, one instant, one object — and a reader who greps the census root for them gets `null`
+     from a row that carries them. That is §THE-VERIFICATION-CAN-FAIL-IN-THE-VERIFIER at the shape of the
+     record rather than at a path: an absent key and a key one level down render identically. */
   for (const k of ['stepReachedRenderingLife', 'stepReachedTimerLife', 'stepReachedIdleLife',
                    'unframedStepsLifetime'])
     if (typeof c[k] === 'number') out[k] = c[k];
