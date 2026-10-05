@@ -318,22 +318,40 @@ typedef struct JSTrampStepDef {
      * reader who meets only that half will write the sentence again. Derived rather than recalled:
      *     git grep -nE '\.unforkable *= *[a-z_]' -- engine/
      *     git grep -nE '^ *[0-9]+, *[a-z_]*unforkable' -- engine/
-     * and the reasons group into THREE capabilities, not one — a lexbor tokenizer plus a private DOM tree, a
-     * parsed header list, and a half-finished ECMAScript 16.2.1.6.1.2 Link ( ) walk cursor, the last of which
-     * is this file's own and holds no parser at all.
-     * THE SECOND OF THOSE READ `AN EXTRACTED BODY'S BYTES PLUS A PARSED HEADER LIST`, AND THE BODY HALF IS
-     * BUILT: core/fetch/body.h declares everything a BodyState owns through `body_state_visit` — a stream, an
-     * unknown `object`, the bytes through `v->buf` and the span record through `v->array` — so the body is no
-     * longer a reason anything refuses a fork. The grouping rule is what matters and is unchanged: the two
-     * halves retired SEPARATELY because they needed different things (the body's record only had to move onto
-     * the engine's allocator, which a `v->buf`/`v->array` copy requires, while a header list's entries are the
-     * C library's in functions dozens of context-free callers use), which is the clearest case there is for
-     * pricing by WHAT EACH WOULD TAKE rather than by how many declarers name it.
-     * THE DIRECTION IS WHY IT IS WORTH RECORDING: an undercount of declarers makes the trajectory below look
-     * nearly finished, which is the one reading that stops anybody deriving it — and a reader who prices the
-     * work from the lexbor sentence prices one capability where there are three. Group the reasons by WHAT EACH
-     * WOULD TAKE TO BUILD before pricing any of it: two machines holding one missing capability retire
-     * together, so the declarer count is an upper bound on the work and never an estimate of it.
+     * AND THOSE TWO COMMANDS ARE A DERIVATION OF DECLARER LINES AND NOT OF REASONS, WHICH ARE TWO POPULATIONS
+     * THAT DO NOT NEST — the one thing to know before pricing anything from either. A declarer LINE is a
+     * machine asking the question; a REASON is a function that answers it; and neither count bounds the other.
+     * One reason serves three declarers (the fragment parse, named by two members of core/dom/element.c and
+     * one of core/dom/range.c), one serves two, one is DELEGATED TO by another reason rather than declared at
+     * any machine (core/html/xml_fragment.c's, which core/html/fragment_parser.c's asks first), and one is not
+     * a reason at all but the FORWARDER that makes every member-level reason reachable — and THAT one is
+     * invisible to both commands above, because it is installed as `idl_def(idx)->unforkable = …` and neither
+     * pattern matches an arrow. So the printed derivation cannot see two of its own subjects. Derive the
+     * reasons as well as the declarers:
+     *     git grep -nE '^(static )?const char \*[a-z_]*unforkable' -- engine/
+     * THIS PARAGRAPH USED TO ENUMERATE THE CAPABILITIES — `THREE, not one: a lexbor tokenizer plus a private
+     * DOM tree, a parsed header list, and a half-finished 16.2.1.6.1.2 Link ( ) walk cursor` — and that is the
+     * census the rule below forbids, committed by the sentence that states the rule. It is kept in its own
+     * words because the GROUPING argument it carried is right and is the thing to re-derive: the body's record
+     * and the header list retired SEPARATELY under ONE declarer because they needed different things (the
+     * record only had to move onto the engine's allocator, which a `v->buf`/`v->array` copy requires, while a
+     * header list's entries are the C library's in functions dozens of context-free callers use), which no
+     * count of declarers could have predicted.
+     * THE STRUCTURAL FACT THAT DOES NOT ROT, AND IT IS THE ONE THAT PRICES A REASON WITHOUT A LIST: a reason
+     * naming a HOST ALLOCATION is answerable by the `tree` operation's {clone, destroy} pair if and only if the
+     * structure is CLOSED UNDER OWNERSHIP — its interior points only at things it owns. The cursor argument
+     * covers a pointer the MACHINE holds INTO the structure; nothing covers a pointer the STRUCTURE holds OUT
+     * of itself. So read each reason and ask where its interior points. A header list owns its own bytes and is
+     * answered outright. A parse handle whose interior names nodes of a separately-declared tree, or arenas, or
+     * a document, is NOT answered, and core/html/xml_fragment.c's reason prices itself against exactly that
+     * test in its own words. A thing the REALM owns rather than the machine is not a host allocation at all and
+     * wants a `cow_capture_host_record`, which is what this file's own Link ( ) reason says of itself. And a
+     * structure that IS an owner — a Document — has no same-owner copy, which `clone`'s own contract above
+     * states and which core/frame/navigable.c's reason quotes back at it.
+     * THE DIRECTION IS WHY ANY OF THIS IS WORTH RECORDING: an undercount makes the trajectory below look nearly
+     * finished, which is the one reading that stops anybody deriving it. Group by WHAT EACH WOULD TAKE TO BUILD
+     * before pricing any of it: two machines holding one missing capability retire together, so the declarer
+     * count is an upper bound on the work and never an estimate of it.
      *
      * IT IS ALSO NOT A LICENCE, AND ITS ONLY CORRECT TRAJECTORY IS TO ZERO. There were two declarers; the
      * selector walk was the other, and its reason turned out to be false — the CSS parser it held had finished

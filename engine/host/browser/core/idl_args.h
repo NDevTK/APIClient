@@ -1941,13 +1941,16 @@ typedef struct {
            git grep -nE '^ *[0-9]+, *[a-z_]*unforkable' -- engine/
        THE STRUCTURAL FACT, WHICH IS WHAT DOES NOT ROT: a declarer names a CAPABILITY and not a machine, so the
        count of declarers and the count of things to build are different numbers and the first is the larger.
-       THAT FETCH PAIR IS THE WORKED EXAMPLE OF IT AND WAS MEASURED RATHER THAN ARGUED: the fetch machine's
-       reason used to be THREE terms and is one, because §2.2.5's request record became JSValues and §5.2's
-       extracted body became a list core/fetch/body.h declares — two capabilities built one at a time, under one
-       declarer, which no count of declarers could have predicted. What is left is the header list, and it is
-       the SAME capability behind the Request constructor's only term and behind core/fetch/headers.c's §5.1
-       constructor — and THAT third one declared no reason at all until it was found by sweeping for the
-       capability rather than for the field, which is the direction this derivation is blind in: it lists the
+       THAT FETCH TRIO IS THE WORKED EXAMPLE OF IT AND WAS MEASURED RATHER THAN ARGUED, AND IT IS NOW THE
+       WORKED EXAMPLE OF THE CAPABILITY REACHING ZERO: the fetch machine's reason went from THREE terms to one
+       to none — §2.2.5's request record became JSValues, §5.2's extracted body became a list core/fetch/body.h
+       declares, and §5.4 step 33's header list became a root quickjs-step.h's `tree` operation copies and
+       destroys through headers.h's `header_list_step_ops`. THREE capabilities built one at a time under ONE
+       declarer, which no count of declarers could have predicted. The header list was the LAST and it was the
+       same capability behind the §5.4 Request constructor's only term and behind core/fetch/headers.c's §5.1
+       constructor, so all three retired in one diff; THAT third one declared no reason at all until it was
+       found by sweeping for the capability rather than for the field, which is the direction this derivation is
+       blind in: it lists the
        machines that DECLARE a reason and cannot list the machines that OWE one. So it is an upper bound on the
        work and a LOWER bound on the machines a capability touches, and a machine missing from it is not
        therefore safe — it is a fork TAKEN where its siblings refuse one.

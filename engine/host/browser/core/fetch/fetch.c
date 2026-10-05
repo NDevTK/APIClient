@@ -370,8 +370,9 @@ struct JSFetchState {
        ITS NINE FIELDS ARE JSValues AND THEY ARE DECLARED — `js_fetch_visit` names them through
        `request_record_visit`, so a deep fork RE-TAKES them and the driver's teardown discharges them. They were
        `js_strdup`'d `char *`, which is a heap pointer on a byte-copied struct, which is the rule stated on
-       `body_mime` below: freed by both arms. That is what `js_fetch_unforkable` had to refuse a fork for, and
-       the record is no longer one of its terms. BECAUSE THEY ARE DECLARED, THIS MACHINE'S `release` MUST NOT
+       `body_mime` below: freed by both arms. That is what the deleted `js_fetch_unforkable` had to refuse a
+       fork for, and the record was the first of its three terms to stop being one; the refusal itself is gone
+       now that the last of them is declared — see the block above this machine's definition. BECAUSE THEY ARE DECLARED, THIS MACHINE'S `release` MUST NOT
        FREE THEM — idl_args.c's release fold aborts on a release that moved a declared slot. */
     RequestRecord rec;
     /* §5.2's EXTRACTED BODY, AND IT IS DECLARED TOO — `js_fetch_visit` names everything it owns through
@@ -425,7 +426,14 @@ struct JSFetchState {
        cannot report. */
     uint16_t  stage_at;
     HeadersFill fill;   /* the fill's cursor: it parks per key, so it cannot be a loop here */
-    HeaderList  hdrs;   /* what the request carries, which is half of what makes the endpoint usable */
+    /* WHAT THE REQUEST CARRIES, which is half of what makes the endpoint usable — and a POINTER, which is the
+       one thing declaring it through quickjs-step.h's `tree` operation costs: that operation's clone ANSWERS a
+       new root and the operation writes it back into the slot, so an inline struct could not be named by it.
+       headers.h's header_list_step_ops is the {clone, destroy} pair, and it is why `body_mime`'s rule above —
+       "a heap pointer here would be freed by both arms" — does not reach this field: a DECLARED heap pointer
+       is copied by the arm that forks and freed by each arm's own teardown, which is the whole of what a
+       declaration is for. */
+    HeaderList *hdrs;
 };
 
 /* WHAT THIS MACHINE OWNS. Declared once and read by both consumers: the teardown releases each, and the
@@ -448,6 +456,12 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
        the line that deleted the second of this machine's three fork refusals. */
     body_state_visit(ctx, &s->body, v);
     headers_fill_visit(ctx, &s->fill, v);   /* the fill's own slots — it parks mid-conversion like any machine */
+    /* §5.4 STEP 33'S PARSED HEADER LIST, through headers.h's host-delegated {clone, destroy} pair. This is the
+       line that deleted the LAST of this machine's three fork refusals — the record's nine fields and the
+       body's four went first, each when something could name them, and this one needed the operation that
+       names what the ENGINE cannot copy at all. No cursor stands inside it, so the count is zero and the
+       array is NULL with it. */
+    v->tree(ctx, (void **)&s->hdrs, NULL, 0, &header_list_step_ops);
 }
 
 /* WHAT THE DECLARATION CANNOT NAME — the ONE foreign C allocation this machine still makes: §5.4 step 33's
@@ -458,9 +472,13 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
    `request_record_free` or a `body_state_free` left standing here would not leak or double-free quietly, it
    would abort at the one point every member's teardown converges on, naming this member. Both are discharged
    by the driver, exactly like `url` and `input`.
-   THE HEADER LIST IS THE SAME ALLOCATION EVERY HOLDER OF ONE FREES BY HAND, which is why it is the term left:
-   `HeaderList`'s entries are the C library's and every copying visit operation is the ENGINE's allocator, so
-   it is not a line to add here — see js_fetch_unforkable below for what it would take. */
+   AND THE HEADER LIST IS DISCHARGED BY THE DRIVER TOO, WHICH IS THE CLAUSE THIS PARAGRAPH NOW HAS INSTEAD OF
+   AN EXEMPTION. It read "the same allocation every holder of one frees by hand, which is why it is the term
+   left: `HeaderList`'s entries are the C library's and every copying visit operation is the ENGINE's
+   allocator, so it is not a line to add here", and the first half is still true and the conclusion is not —
+   `v->tree` delegates the copy and the destroy to the HOST, so the allocators never have to agree. It is kept
+   in its own words because a reader who re-derives the allocator mismatch will reach the same wrong conclusion
+   from it. `js_fetch_visit` names the list; this `release` must not free it; the fold below is what says so. */
 static void js_fetch_release(JSContext *ctx, void *st)
 {
     JSFetchState *s = st;
@@ -471,7 +489,11 @@ static void js_fetch_release(JSContext *ctx, void *st)
        ARGUMENT CONVERSION's population and not to this one, which solver/endpoint.h names as this census's
        own residual rather than folding in as a seventh arm. */
     if (s->captured) endpoint_fetch_edge_freed(s->stage_at, s->offered);
-    header_list_free(&s->hdrs);
+    /* AND NOT THE HEADER LIST. It is declared through `visit` now, so idl_args.c's one teardown discharges it;
+       freeing it here as well would be the second list beside the declaration that this file's own
+       `request_record_visit` line argues against, and core/idl_args.c's fingerprint bracket is what says so —
+       it folds the slots this `visit` names across this call and asserts they are unmoved. This `release`
+       survives for the census edge alone, which is NOT a reference and which no declaration can name. */
 }
 
 /* Park the request on the FLOW that issued it: the URL the trusted host must fetch, and the capability that
@@ -1376,6 +1398,12 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     BodyContent body_kind = BODY_NONE;
 
     if (hdr->stage == FETCH_URL) {
+        /* STEP 33'S LIST, BUILT BEFORE ANY STAGE THAT APPENDS TO IT — and the test is idempotent for exactly
+           the reason the flag below exists: this stage PARKS and a parked stage is re-entered at its first
+           line, so an unguarded allocation would leak one list per re-entry. A POINTER is a legitimate "is it
+           built" question where a zeroed JSValue slot is not, which is the distinction the flag's own note
+           makes: js_mallocz leaves this NULL and nothing but this line writes it. */
+        if (!s->hdrs) s->hdrs = header_list_step_new(ctx);
         /* THE ONE-TIME CAPTURE, GATED ON A FLAG AND NOT ON A SLOT. This stage can PARK — §5.4 step 6's read of
            the input Request's `url` is the page's code — and a parked stage is re-entered at its first line, so
            without the flag every `fetch(req)` would take a SECOND reference to the input and lose the first. A
@@ -1494,7 +1522,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
            Origin, the method-override family carrying CONNECT/TRACE/TRACK) are dropped rather than sent. */
         {
             JSValue hv = idl_dict_get(ctx, init, "headers");
-            r = headers_fill_run(ctx, hdr, &s->fill, hv, &s->hdrs, guard, cb_result, out_cb, out_argc);
+            r = headers_fill_run(ctx, hdr, &s->fill, hv, s->hdrs, guard, cb_result, out_cb, out_argc);
             JS_FreeValue(ctx, hv);
         }
         if (r > 0) return r;
@@ -1663,9 +1691,9 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     /* §5.4 step 37.4, asked of the list the fill built: the extracted type is appended only where the init's
        own headers named no `Content-Type`. */
     if (!JS_IsUndefined(s->body_mime)) {
-        char *have = header_list_get(&s->hdrs, "content-type");
+        char *have = header_list_get(s->hdrs, "content-type");
         const char *m = have ? NULL : JS_ToCString(ctx, s->body_mime);
-        if (m) { header_list_append(&s->hdrs, "content-type", m); JS_FreeCString(ctx, m); }
+        if (m) { header_list_append(s->hdrs, "content-type", m); JS_FreeCString(ctx, m); }
         free(have);
     }
     /* WHAT THE BODY IS, READ ONCE FOR THE WHOLE EDGE. Three of core/fetch/body.h's four arms reach here and
@@ -1714,12 +1742,12 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         int nespan = 0;
         char *body_ct = NULL;
         const char *ext_mime = NULL;   /* step 37.4's extracted type, used only where the list names none */
-        if (s->hdrs.n) {
-            eh = js_malloc(ctx, sizeof(*eh) * (size_t)s->hdrs.n);
+        if (s->hdrs->n) {
+            eh = js_malloc(ctx, sizeof(*eh) * (size_t)s->hdrs->n);
             if (!eh) return -1;
-            for (i = 0; i < s->hdrs.n; i++) {
-                eh[i].name = s->hdrs.e[i].name;
-                eh[i].value = s->hdrs.e[i].value;
+            for (i = 0; i < s->hdrs->n; i++) {
+                eh[i].name = s->hdrs->e[i].name;
+                eh[i].value = s->hdrs->e[i].value;
             }
         }
         /* BOTH ARMS THAT HAVE SOMETHING TO SAY. A BODY_SHAPE contributes its display form, which is what a
@@ -1742,7 +1770,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
            JSON text, and the one that does parse (`{}`) yields no fields. So the parse stays and only the
            REPLAYABLE-BYTES claim is refused, which is where the fabrication actually was. */
         if (body_kind == BODY_BYTES || body_kind == BODY_SHAPE) {
-            body_ct = header_list_get(&s->hdrs, "content-type");
+            body_ct = header_list_get(s->hdrs, "content-type");
             if (!body_ct && !JS_IsUndefined(s->body_mime)) ext_mime = JS_ToCString(ctx, s->body_mime);
             const BodySpan *bs = body_state_spans(&s->body, &nespan);
 
@@ -1805,7 +1833,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         {
             const char *em = JS_ToCString(ctx, s->rec.method);
             CHECK(em != NULL, "OOM borrowing §2.2.5's method for the @H surface's endpoint identity");
-            endpoint_record(ctx, em, s->url, eh, s->hdrs.n, ebp, prov, EPD_FETCH);
+            endpoint_record(ctx, em, s->url, eh, s->hdrs->n, ebp, prov, EPD_FETCH);
             JS_FreeCString(ctx, em);
         }
         if (ext_mime) JS_FreeCString(ctx, ext_mime);
@@ -1824,7 +1852,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
        body; run over a DISPLAY SHAPE it would read them out of a spelling of a hole and record sub-requests
        the page never composed — the fabrication CLAUDE.md §@H forbids, arriving one layer in. An unknown body
        genuinely names no sub-requests THIS RUN KNOWS OF, which is what passing none says. */
-    multipart_batch_learn(ctx, &s->hdrs, s->body_mime,
+    multipart_batch_learn(ctx, s->hdrs, s->body_mime,
                           body_kind == BODY_BYTES ? body_bytes : NULL,
                           body_kind == BODY_BYTES ? body_bytes_len : 0, prov);
     /* Fetch §5.6 "Fetch methods" STEP 12's "fetch given request", and steps 1 and 13's promise: the endpoint the flow parks on. */
@@ -1833,7 +1861,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
        a derived POST is not half-spelled. Nothing fires it: `safeFetchMethodRefusal` declines every non-GET
        at the call site, so what this reaches is the RECORD, which is what CLAUDE.md
        §A-REQUEST-CARRIES-THE-PROVENANCE calls the report. */
-    *presult = fetch_park(ctx, s->url, &s->rec, s->input, &s->hdrs, body_bytes, body_bytes_len);
+    *presult = fetch_park(ctx, s->url, &s->rec, s->input, s->hdrs, body_bytes, body_bytes_len);
     if (JS_IsException(*presult)) { *presult = JS_UNDEFINED; return -1; }
     return 0;
 }
@@ -1863,110 +1891,55 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     return r;
 }
 
-/* WHY THIS MACHINE'S STATE MUST NOT BE FORKED WHILE IT HOLDS A PARSED HEADER LIST — see IdlStepDecl.unforkable.
+/* WHY THIS MACHINE MAY NOW BE FORKED AT EVERY ONE OF ITS SIX STAGES — the refusal `js_fetch_unforkable` is
+ * DELETED, and this records the three terms it had and what retired each, because a reader who re-derives any
+ * of them will re-add the refusal.
  *
- * THE RULE IS THIS STRUCT'S OWN AND IT IS STATED ON `body_mime` ABOVE THE FIELD THAT BREAKS IT: "a step state
- * is BYTE-COPIED at a deep fork and only what `visit` names is re-taken, so a heap pointer here would be freed
- * by both arms". `tramp_step_state_clone` is that byte copy — `memcpy(h, o, sz)` and then the declared slots
- * taken a second time through `visit` — so every clone gets its own teardown, and a fork raised while an
- * UNDECLARED allocation is held gives two arms one set of pointers and two frees of it: a double free that is
- * not a wrong ANSWER anything reports.
+ * THE RULE THE TERMS WERE INSTANCES OF IS THIS STRUCT'S OWN AND IS STATED ON `body_mime`: a step state is
+ * BYTE-COPIED at a deep fork (`tramp_step_state_clone`'s `memcpy` and then the DECLARED slots taken a second
+ * time through `visit`), so an UNDECLARED heap pointer gives two arms one set of pointers and two frees of it —
+ * a double free that is not a wrong ANSWER anything reports. The rule is unchanged. What changed three times is
+ * what could be declared.
+ *   §2.2.5's REQUEST RECORD went first: its nine fields became JSValues, named through the record's own one
+ * list (`request_record_visit`), so a tenth field is one edit in request.c and this machine is not told.
+ *   §5.2's EXTRACTED BODY went second: `body_state_visit` names the stream, the unknown `object`, the bytes
+ * through `v->buf` and the §10.4.5.18 span record through `v->array` — and that span record had to MOVE onto the
+ * engine's allocator first, because those two operations copy with js_malloc and release with js_free.
+ *   §5.4 STEP 33'S PARSED HEADER LIST went last and could not take that route at all, which is why it was last:
+ * its array and its per-entry name and value are the C library's in `header_list_append`/`header_list_free`,
+ * functions that take no context and are called from dozens of callers that have none. So the choice was §5.1's
+ * entries becoming engine-allocated slots — a change to `HeaderList`'s storage and therefore to all 31 files
+ * that hold one — or an operation that delegates the COPY and the DESTROY to the host. It is the second:
+ * `v->tree`, whose subject had to be settled first and is NOT a tree (none of its three consumers in quickjs.c
+ * dereferences the structure; the reason its own banner gives for it existing is allocation-shaped). The cost
+ * was one heap indirection in this state and no allocator moved.
  *
- * WHAT IS LEFT IS ONE TERM: §5.4 step 33's parsed header list (`HeaderList::e`). It is freed by
- * `js_fetch_release` and holds no declared slot.
+ * WHAT IT BUYS, PRICED HONESTLY, BECAUSE A REFUSAL IS NOT A LOST REQUEST. `unforkable` answered a question
+ * asked AT THE FORK and the primary arm ran either way, so every term cost BREADTH and never the request — the
+ * address was composed, the endpoint was recorded, and the sibling world was the thing that was not explored.
+ * What returns is forks inside the EXPLICIT-HEADERS shape, which was the population the previous diff left
+ * behind: FETCH_HEADERS is one of the two stages that run the page's own code (§5.1's conversion of a
+ * `HeadersInit` — a getter, an iterator, a Proxy trap, a `toString` per key), and a request reaching §5.6 step 4
+ * with an `init.headers` of its own reaches it with the list already filled. An RPC that POSTs under its own
+ * `content-type` is exactly that shape.
  *
- * TWO OF THE THREE TERMS ARE GONE AND EACH WENT THE SAME WAY — BY BECOMING SOMETHING THE DECLARATION NAMES.
- * §2.2.5's REQUEST RECORD: its nine fields are JSValues, `request_record_visit` declares them, and
- * `js_fetch_release` no longer discharges them. §5.2's EXTRACTED BODY: `body_state_visit` declares all four
- * things a BodyState owns — §2.2.4 "Bodies"' stream, §5.2's unknown `object`, the bytes, and the
- * §10.4.5.18 span record — and `js_fetch_release` no longer calls `body_state_free`. The body conversion also
- * moved the span record off the C library's allocator, because `v->buf` and `v->array` copy with js_malloc and
- * release with js_free; that is the same requirement the header list cannot meet, and is the reason the terms
- * retired in this order rather than together.
- *
- * WHAT IS UNBLOCKED, STATED AS SHAPES BECAUSE A STAGE NAME IS NOT ONE. A fork is now ALLOWED anywhere in
- * FETCH_URL_STR, FETCH_RECORD and FETCH_BODY, and at §5.6 "Fetch methods" step 4's already-aborted signal test
- * for any request whose init carries NO `headers` member — which includes a request carrying a BODY, and that
- * is the shape this term's predecessor refused: `fetch(u, {method: "POST", body: payload, signal:
- * AbortSignal.timeout(n)})` now forks at step 4 where it used to meet a refusal. The ORDER inside FETCH_CALL is
- * what makes that true and it is worth reading before trusting it: step 4's test is the FIRST thing the stage
- * does, and §5.4 step 37.4's `Content-Type` append — the one line that can put an entry in this list for a
- * request that named no headers — runs AFTER it.
- *
- * WHAT IS STILL REFUSED IS THE EXPLICIT-HEADERS SHAPE, and it is not a formality: FETCH_HEADERS is one of the
- * two stages that run the page's own code (§5.1's conversion of a `HeadersInit` — a getter, an iterator, a
- * Proxy trap, a `toString` per key), so a concolic branch inside a page's own header value forks with this
- * machine holding the entries the fill has appended so far; and a request that reaches §5.6 step 4 with an
- * `init.headers` of its own reaches it with `hdrs.e` already set. An RPC that POSTs under its own
- * `content-type` is therefore exactly the population left behind, which is the honest half of this diff.
- *
- * WHAT THE NEXT DIFF BUILDS, AND IT IS NOT A LINE IN THIS FILE. Every visit operation that COPIES — `v->buf`,
- * `v->array`, `v->props`, `v->slots`, `v->strbuf` — allocates with the ENGINE's allocator, and `HeaderList`'s
- * array and its name/value strings are the C library's, in `header_list_append`/`header_list_free`, which take
- * no context and are called from dozens of files that have none (a class finalizer, main.c, the WPT runner).
- * So the choice is a DESIGN one and it is between exactly two things. (a) The entries become slots the
- * declaration can name — the treatment §2.2.5's record had — which is a change to `HeaderList`'s own storage
- * and therefore to every holder of one. (b) `v->tree`, which is the one visit operation that delegates the COPY
- * and the DESTROY to the HOST (`JSStepTreeOps`), and which needs no allocator change at all: a `HeaderList *`
- * root with `header_list_free` as its destroy and a deep copy as its clone. Its contract is written for a
- * flow-private DOM tree and nothing in its three consumers is DOM-specific, so (b) is a question about whether
- * that operation's subject is "a tree" or "an allocation only the host can copy" — which is not a question a
- * machine should answer for itself inside its own refusal.
- *
- * AND WHICHEVER IT IS, IT RETIRES MORE THAN THIS TERM — THREE MACHINES AND NOT TWO.
- * `core/fetch/request.c`'s `js_request_ctor_unforkable` has this list as its ONLY term, and
- * `core/fetch/headers.c`'s §5.1 constructor holds one in `js_headers_ctor_release` and now declares
- * `js_headers_ctor_unforkable` for it. THAT THIRD ONE WAS SILENT UNTIL THE DIFF THAT WROTE THIS SENTENCE: it
- * held the list, freed it in its `release`, and declared nothing, so the fork was TAKEN and both arms freed one
- * array. The refusal is the capability's existing declaration made at the machine that was missing it rather
- * than a fourth thing to build, and the reach it costs is `new Headers([["a","1"],["b",v]])` where reading `v`
- * forks — which was a double free and is now a named gap. IdlStepDecl.unforkable's own contract states the rule
- * this is an instance of: a declarer names a CAPABILITY and not a machine, so group by the capability before
- * pricing any of it, and the declarer count is an upper bound on the WORK and a lower bound on the REACH.
- *
- * `body.stream` IS NOT TESTED AND NEVER WAS, which is worth keeping now that the body is gone from the
- * predicate: a zeroed step state's JSValue is the INTEGER 0 rather than JS_UNDEFINED (see `captured` above), so
+ * `body.stream` IS NOT TESTED AND NEVER WAS, which is worth keeping because the reason is a trap and not a
+ * detail: a zeroed step state's JSValue is the INTEGER 0 rather than JS_UNDEFINED (see `captured` above), so
  * `!JS_IsUndefined(stream)` is true for every fresh state and would have refused every fork this machine ever
- * raised. HOW THIS REFUSAL'S ABSENCE WOULD SHOW: this abort, on any page whose `fetch()` passes an
- * `init.headers` AND whose §5.6 step 4 signal or header value forks. */
-static const char *js_fetch_unforkable(const void *st)
-{
-    const JSFetchState *s = st;
-
-    DCHECK(s != NULL, "the fetch machine was asked whether it may be forked with no state to ask about");
-    /* THE BODY'S OWN PAIRING, STILL ASSERTED THOUGH NEITHER HALF IS A TERM ANY MORE — and it is a stronger
-       statement here than it was, not a leftover. It used to say "`has` is what refuses an unknown body's
-       fork"; `body_state_visit` names `unknown` now, so what this guards is the §5.2 arm exclusivity
-       body_state_content tells apart rather than this predicate's own reach: an unknown body with `has` unset
-       is a fill that set one half of one fact. It is asserted and not re-tested because a term over a fact
-       another term already decides can never independently fire. */
-    DCHECK(!concolic_is(s->body.unknown) || s->body.has,
-           "a fetch state holds an UNKNOWN request body with `has` unset — §5.2 BodyInit unions' string arm "
-           "produces a body, so the two disagreeing is a field written past the one fill that sets both");
-    if (!s->hdrs.e)
-        return NULL;
-    return "Fetch §5.6 Fetch methods' fetch(input, init) was forked while holding §5.4 step 33's PARSED HEADER "
-           "LIST — C memory its `visit` cannot name. A step state is BYTE-COPIED at a deep fork and only what "
-           "`visit` names is re-taken, and this list's array and its name/value strings are freed by this "
-           "machine's `release` instead, so both arms would hold one set of pointers and free it twice. "
-           "§2.2.5's REQUEST RECORD AND §5.2's EXTRACTED BODY ARE NO LONGER TERMS: the record's nine fields "
-           "are JSValues and the body is declared by `body_state_visit`, so a fork inside §5.4 steps 10-27, "
-           "inside §5.2's extraction, or at §5.6 step 4 for a request carrying a body and no `headers`, is "
-           "ALLOWED. This list is the last one, and it is the SAME allocation core/fetch/request.c's §5.4 "
-           "constructor refuses a fork for and core/fetch/headers.c's §5.1 constructor refuses it for too — so "
-           "it is one capability behind THREE machines. Every copying visit operation allocates "
-           "with the ENGINE's allocator and `header_list_append` uses the C library's, so building it is "
-           "either §5.1's entries as declared slots or `v->tree`'s host-delegated clone, and it is not a line "
-           "in this file";
-}
-
+ * raised. A POINTER does not have that problem, which is why the three allocation tests this diff added are
+ * written against pointers and not against slots.
+ *
+ * HOW THE ROUTING'S ABSENCE WOULD SHOW, there being no abort left to watch for: core/idl_args.c's fingerprint
+ * bracket folds the slots this `visit` names across this member's `release` and asserts they are unmoved, and
+ * `js_step_visit_fp_tree` folds this root — so a `header_list_free` re-added to `js_fetch_release` would move
+ * the fold and fire that DCHECK naming this member and this algorithm. */
 static const IdlStepDecl js_fetch_decl = {
     js_fetch_step, sizeof(JSFetchState), js_fetch_visit, js_fetch_release,
     "Fetch §5.6 Fetch methods' fetch(input, init), performing §5.4 new Request(input, init) inline",
     js_fetch_steps,
     /* `catches_abrupt` = 0: this member PROPAGATES — a throwing header value or body `toString` is the page's
        to see at the call it wrote, and the epilogue re-raises it. */
-    0, js_fetch_unforkable
+    0
 };
 
 

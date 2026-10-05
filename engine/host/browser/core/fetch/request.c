@@ -422,7 +422,9 @@ static const char *const REQ_CTOR_STEPS[] = { REQ_CTOR_STAGES(JS_STEP_STAGE_LABE
 
 typedef struct {
     HeadersFill fill;
-    HeaderList  list;
+    /* A POINTER, because quickjs-step.h's `tree` operation ANSWERS a new root and writes it into the slot — an
+       inline struct could not be declared through it. headers.h's header_list_step_ops is the pair. */
+    HeaderList *list;
     JSValue     result;
 } JSRequestCtorState;
 
@@ -431,15 +433,14 @@ static void js_request_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSRequestCtorState *s = st;
     headers_fill_visit(ctx, &s->fill, v);
     v->val(ctx, &s->result);
+    /* STEP 33'S LIST. This is the line that deleted this machine's ONE fork refusal and its `release` with it:
+       the operation's clone gives the sibling its own list and its destroy frees it, so a teardown beside the
+       declaration has nothing left to do. No cursor stands inside it — the fill takes the list as an argument
+       rather than holding it — so the count is zero and the array is NULL with it. */
+    v->tree(ctx, (void **)&s->list, NULL, 0, &header_list_step_ops);
 }
 
 /* The header list alone — see js_headers_ctor_release. The rest is js_request_ctor_visit's declaration. */
-static void js_request_ctor_release(JSContext *ctx, void *st)
-{
-    (void)ctx;
-    header_list_free(&((JSRequestCtorState *)st)->list);
-}
-
 /* `dictionary RequestInit`, IN ONE PLACE, because it has TWO readers and they must not drift: the declaration
    below hands it to the argument machine, and req_init_is_empty walks the same names to answer §5.4 step 13's
    "If init is not empty". A second hand-written list of member names is how that question starts answering for
@@ -1036,6 +1037,11 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             JS_ThrowTypeError(ctx, "constructor Request requires 'new'");
             return -1;
         }
+        /* STEP 12'S LIST, BUILT BEFORE THE STEP THAT COPIES INTO IT. Idempotent because this stage PARKS on the
+           page's code (step 6's read of the input Request's `url`, every member of the converted RequestInit)
+           and a parked stage is re-entered at its first line, so an unguarded allocation would leak one list
+           per re-entry. A POINTER is a legitimate "is it built" question where a zeroed JSValue slot is not. */
+        if (!s->list) s->list = header_list_step_new(ctx);
         {
             JSValue rproto = JS_GetClassProto(ctx, g_request_class);
             DCHECK(!JS_IsNull(rproto), "a Request was minted in a realm that never ran its install");
@@ -1162,7 +1168,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
                                 "Request one at step 31, so a source without one was built by a path that "
                                 "skipped it");
             for (i = 0; i < src->n; i++)
-                if (header_list_append_guarded(ctx, &s->list, guard, src->e[i].name, src->e[i].value) < 0)
+                if (header_list_append_guarded(ctx, s->list, guard, src->e[i].name, src->e[i].value) < 0)
                     return -1;
         }
         headers_fill_init(&s->fill);
@@ -1191,13 +1197,13 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             return -1;
         }
         hv = idl_dict_get(ctx, init, "headers");
-        r = headers_fill_run(ctx, hdr, &s->fill, hv, &s->list, guard, cb_result, out_cb, out_argc);
+        r = headers_fill_run(ctx, hdr, &s->fill, hv, s->list, guard, cb_result, out_cb, out_argc);
         JS_FreeValue(ctx, hv);
         if (r > 0) return r;
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
         JS_FreeValue(ctx, d->headers);
-        d->headers = headers_new(ctx, &s->list, guard);
+        d->headers = headers_new(ctx, s->list, guard);
         if (JS_IsException(d->headers)) return -1;
         hdr->stage = REQ_CTOR_BODY;
     }
@@ -1323,71 +1329,48 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
     return 0;
 }
 
-/* WHY THIS MACHINE'S STATE MUST NOT BE FORKED ONCE IT HOLDS A HEADER LIST — see IdlStepDecl.unforkable, and
- * core/fetch/fetch.c's js_fetch_unforkable, whose PARSED HEADER LIST term is the same defect in the other half
- * of §5.4 and states the rule at length. In one sentence: `tramp_step_state_clone` BYTE-COPIES the state and
- * re-takes only what `visit` names, `js_request_ctor_visit` names the fill and the result, and
- * `js_request_ctor_release` frees `s->list` — a `HeaderList` whose `e` is a foreign C allocation no visit can
- * reach. Two arms, one pointer, two frees.
+/* WHY THIS MACHINE MAY NOW BE FORKED WHILE IT HOLDS STEP 33'S HEADER LIST — the refusal
+ * `js_request_ctor_unforkable` is DELETED, the list is declared through `visit`, and this records what retired
+ * it because a reader who re-derives the constraint will re-add the refusal.
  *
- * IT IS THE HEADER LIST ALONE HERE, and that is the difference from the `fetch()` machine rather than an
- * omission: this constructor's record lives on the OBJECT it is building (`s->result`'s opaque), which is a
- * declared slot the visit names and a refcounted object both arms share rather than a struct either of them
- * copies. Only step 33's list is the machine's own C memory.
- * THAT DIFFERENCE IS GONE NOW AND THE SENTENCE IS STILL TRUE, which is worth saying because a reader comparing
- * the two blocks would otherwise look for a record term or a body term over there and find the blocks reading
- * as though they described different problems. The `fetch()` machine had THREE terms and has ONE. Its §2.2.5
- * record is a struct it copies BY VALUE, and the fix was to make its nine fields JSValues its own `visit`
- * names; its §5.2 extracted body is another, and the fix was core/fetch/body.h's `body_state_visit`, which
- * declares the stream, the unknown `object`, the bytes and the §10.4.5.18 span record. Neither was ever this
- * machine's problem for the reason stated above, and the two blocks now name exactly ONE term and it is the
- * SAME term — which is the position IdlStepDecl.unforkable's own contract describes: a declarer names a
- * capability, and this capability now has these two machines behind it and NO OTHER REASON IN FRONT OF IT.
+ * ITS ONE TERM WAS A CONSTRAINT ON THE LIST'S STORAGE AND NEVER ON §5.4. §2.2.5's request record stopped being
+ * a term when its nine fields became JSValues `request_record_visit` names; §5.2's extracted body stopped being
+ * one when `body_state_visit` named its stream, its unknown `object`, its bytes and its §10.4.5.18 span record.
+ * What was left was the header list, whose array and whose per-entry name and value are the C library's in
+ * `header_list_append`/`header_list_free` — functions that take no context and are called from dozens of callers
+ * that have none — while every JSStepVisit operation that copies FOR ITSELF uses the ENGINE's allocator.
  *
- * AND A THIRD MACHINE HOLDS THE SAME ALLOCATION, WHICH IS PART OF WHAT THIS CAPABILITY COSTS AND NOT A FOURTH
- * THING: core/fetch/headers.c's §5.1 `new Headers(init)` carries a `HeaderList` in its own state, frees it in
- * `js_headers_ctor_release`, and declares `js_headers_ctor_unforkable` for it. The three retire together.
- * THAT ONE DECLARED NOTHING UNTIL THE DIFF THAT WROTE THIS SENTENCE, and the difference is the one
- * §Offensive-programming cares about: its ONE stage past the guard is the fill, which runs the page's code per
- * key, so `new Headers([["a","1"],["b",v]])` whose second read forks after the first pair has been appended
- * gave two arms one array and two frees of it with nothing to say so. It needs TWO pairs and not one — both
- * fill arms APPEND and then loop back to a parking phase, so a one-key init runs its getter before any append —
- * which is why the hole was narrow enough to go unnoticed beside two siblings that were loud.
+ * `v->tree` IS THE OPERATION THAT RECONCILES THEM, by delegating BOTH the copy and the destroy to the host, and
+ * the question that had to be settled first was whether its subject is a TREE. It is not: none of its three
+ * consumers in quickjs.c dereferences the structure, and the reason its banner gives for the operation existing
+ * is allocation-shaped rather than DOM-shaped. quickjs-step.h carries that and carries why the field is still
+ * spelled `tree`. The cost was one thing: the list is a HEAP ROOT and not an inline struct, because the clone
+ * ANSWERS a pointer the operation writes back. No allocator moved; no file outside core/fetch/ was touched.
  *
- * REACHABLE ON THE ORDINARY SHAPE: the list exists from step 33's header fill onward, and that fill is where
- * this constructor runs the page's code — a `HeadersInit` getter, iterator or Proxy trap, and then §5.2's body
- * extraction after it — so any concolic branch inside a page's own header value forks with this machine on the
- * frame chain.
+ * WHAT IT BUYS AND WHAT IT DOES NOT. A refusal answered "unforkable" and the PRIMARY ARM STILL RAN, so what
+ * this returns is BREADTH rather than any request that was being lost: `new Request(u, {headers: h})` whose
+ * conversion of `h` branches on unknown external input now explores both arms. The list exists from step 12's
+ * copy onward and step 33's fill is where this constructor runs the page's code, so that is the ordinary shape
+ * and not a corner.
  *
- * WHAT THE NEXT DIFF BUILDS, AND THE CONSTRAINT ON IT IS MEASURED RATHER THAN GUESSED. Every visit operation
- * that COPIES — `v->buf`, `v->array`, `v->props`, `v->slots`, `v->strbuf` — allocates with the ENGINE's
- * allocator and releases with it, and `HeaderList`'s array and its name/value strings are the C library's, in
- * `header_list_append` and `header_list_free`, which take no context and are called from dozens of files that
- * have none. So it is one of exactly two things and both are a change OUTSIDE this file: §5.1's entries as
- * slots the visit can name, which is a change to `HeaderList`'s storage and therefore to every holder of one;
- * or `v->tree`, the one operation that delegates the COPY and the DESTROY to the host and so needs no allocator
- * change at all. Either way `js_request_ctor_release` then stops discharging what the declaration names
- * (core/idl_args.c's release fold asserts that pairing). HOW ITS ABSENCE SHOWS: this abort, on `new Request(u,
- * {headers: h})` where h's conversion runs code that forks. */
-static const char *js_request_ctor_unforkable(const void *st)
-{
-    const JSRequestCtorState *s = st;
-
-    DCHECK(s != NULL, "the Request constructor was asked whether it may be forked with no state to ask about");
-    if (!s->list.e)
-        return NULL;
-    return "Fetch §5.4 new Request(input, init) was forked while holding step 33's header list. A step state "
-           "is BYTE-COPIED at a deep fork and only what `visit` names is re-taken, and this list's entries are "
-           "freed by the machine's `release` instead — so both arms would hold one allocation and free it "
-           "twice. Build §5.1's header list out of slots the visit can name, and delete this refusal with it";
-}
-
+ * AND THE THIRD MACHINE'S HOLE WAS A DOUBLE FREE RATHER THAN A REFUSAL: core/fetch/headers.c's §5.1 constructor
+ * held the same list, freed it in its own `release`, and declared nothing, so the fork was TAKEN. All three
+ * retired in one diff because all three needed exactly this and nothing else.
+ *
+ * HOW THE ROUTING'S ABSENCE WOULD SHOW, there being no abort left to watch: core/idl_args.c's fingerprint
+ * bracket folds the slots a member's `visit` names across its `release` and asserts they are unmoved, and
+ * `js_step_visit_fp_tree` folds this root — so a `release` re-added here that freed the list would move the
+ * fold and fire that DCHECK naming this member. That is why this machine has no `release` rather than an
+ * emptied one. */
 static const IdlStepDecl js_request_ctor_decl = {
-    js_request_ctor_step, sizeof(JSRequestCtorState), js_request_ctor_visit, js_request_ctor_release,
+    /* NO `release`. Step 33's list is declared through `visit`, so idl_args.c's one teardown discharges it;
+       the slot held `js_request_ctor_release`, which freed exactly the list the declaration now names, and the
+       two cannot both stand — core/idl_args.c's fingerprint bracket is what would say so. */
+    js_request_ctor_step, sizeof(JSRequestCtorState), js_request_ctor_visit, NULL,
     "Fetch §5.4 new Request(input, init)", REQ_CTOR_STEPS,
     /* `catches_abrupt` = 0: this constructor PROPAGATES — a throwing header value or body `toString` is the
        page's to see at the `new Request` it wrote, and the epilogue re-raises it. */
-    0, js_request_ctor_unforkable
+    0
 };
 
 static const JSCFunctionListEntry js_request_proto_funcs[] = {

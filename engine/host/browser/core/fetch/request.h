@@ -57,7 +57,11 @@ char *request_method_check(JSContext *ctx, const char *m);
  * declared slots taken a second time through `visit`), so a heap pointer on a record a machine carries BY
  * VALUE is held by two arms and freed twice, while a JSValue the machine's `visit` names is RE-TAKEN. That is
  * the whole of why core/fetch/fetch.c's `js_fetch_unforkable` had to REFUSE a fork while this record was
- * filled, and refusing a fork is a flow dropped. There is exactly one list of what a state owns — the
+ * filled, and refusing a fork is a flow dropped. THAT REFUSAL IS DELETED and the function name greps to
+ * nothing — this record's nine fields were the FIRST of its three terms to be declared, and the last (§5.4
+ * step 33's header list) is declared through quickjs-step.h's `tree` operation; the block above
+ * `js_fetch_decl` carries all three. The ownership fact this paragraph is about is unchanged, which is why it
+ * is rewritten rather than dropped: it is why these nine are JSValues. There is exactly one list of what a state owns — the
  * declaration — and `request_record_visit` puts these nine on it.
  * AND IT IS WHAT §5.4 STEP 25 NEEDS: "Set request's method to method" over a method that is UNKNOWN EXTERNAL
  * INPUT has nowhere to go in a `char *`, because the ToString boundary owes C real bytes. A JSValue field is

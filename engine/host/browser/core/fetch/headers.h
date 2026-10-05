@@ -45,6 +45,21 @@ bool  header_forbidden_request(const char *lower_name, const char *value);
 void  header_list_free(HeaderList *l);
 /* §5.1 append: lowercase the name, keep the pair. Both strings are COPIED. */
 void  header_list_append(HeaderList *l, const char *name, const char *value);
+/* A HEADER LIST A STEP MACHINE OWNS, AND THE PAIR THAT COPIES AND DESTROYS IT — quickjs-step.h's `tree`
+   operation, which delegates BOTH halves of a deep fork's copy to the host and is therefore the one visit
+   operation this list can be declared through. Every operation that copies for itself (`v->buf`, `v->array`,
+   `v->props`, `v->slots`) uses the ENGINE's allocator and this list's array and strings are the C library's,
+   in functions that take no context and are called from dozens of callers that have none; delegating the copy
+   is what makes those two facts stop being in tension, and it changes NO allocator.
+   IT IS A HEAP ROOT AND NOT THE INLINE STRUCT, which is the one thing a holder has to change: `clone` ANSWERS
+   a new pointer that the operation writes back into the slot, so the slot has to be a pointer. The three §5
+   machines that hold one across a parking stage therefore hold a `HeaderList *`, and `n`/`cap` travel inside
+   the structure rather than beside it in the state block.
+   THE CLONE IS FATAL ON ALLOCATION FAILURE, which that operation requires and no other copying operation does
+   — and this list meets it BY CONSTRUCTION rather than by a new policy, because `header_list_append`,
+   `header_lower` and `header_dup` are already `CHECK` and not a NULL return. */
+HeaderList *header_list_step_new(JSContext *ctx);
+extern const JSStepTreeOps header_list_step_ops;
 /* §5.1's "append a header (name, value) to a Headers object" over a LIST AND A GUARD — everything that
    algorithm reads — for a caller that carries a header list forward and has no Headers object yet. Fetch §5.4
    new Request(input, init) step 34 is the one: a Request input contributes a copy of its header list, and a
