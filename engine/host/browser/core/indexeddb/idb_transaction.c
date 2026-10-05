@@ -431,25 +431,40 @@ void idb_transaction_set_state(JSContext *ctx, JSValueConst tx, int state)
            page stored — and a finished transaction the page still has a reference to would hold all of them. */
         JSValue changes = idb_transaction_changes(ctx, tx);
         uint32_t i, n;
-
         /* AND NOBODY ELSE MAY STILL BE HOLDING IT — the one moment that question is decidable, which is why
            the assert is here and not at the accessor. idb_transaction_changes hands out an OWNED reference,
-           and both of its other callers run strictly BEFORE this door (§5.5's revert and §5.8's
-           was-this-store-created each assert that the state is not yet finished), so at this line the list is
-           held by exactly two things: the transaction's slot record, and this local. A third holder is a
-           caller that took a reference and dropped it, and the consequence is out of all proportion to the
-           mistake: the list is emptied on the next line, so what leaks is an EMPTY Array — which holds
-           Array.prototype, which holds the realm's function objects, each of which holds the REALM. One
-           dropped reference kept a whole browser alive (2612 Functions, 408 shapes, a JSContext at refcount
-           3108) and the runtime's leak walk could name nothing but three anonymous Arrays, three sessions
-           apart, before gdb found the allocation. This is the line that names it at the transaction instead. */
-        DCHECK(JS_ValueRefCount(changes) == 2,
-               "a finishing transaction's list of database changes is held by something other than the "
-               "transaction and this reader — idb_transaction_changes hands out an OWNED reference and every "
-               "borrower has given it back by this point, so the extra holder is a caller that dropped one; "
-               "the list is emptied on the next line, so what it leaks is an empty Array whose only remaining "
-               "edge is Array.prototype, and that edge makes the whole realm behind it immortal");
-        JS_SetPropertyStr(ctx, changes, "length", JS_NewInt32(ctx, 0));
+           and EVERY caller of it frees before returning, so at this line the list is held by exactly two
+           things: the transaction's slot record, and this local. The consequence of a third is out of all
+           proportion to the mistake: the list is emptied on the next line, so what leaks is an EMPTY Array —
+           which holds Array.prototype, which holds the realm's function objects, each of which holds the
+           REALM. One dropped reference kept a whole browser alive (2612 Functions, 408 shapes, a JSContext at
+           refcount 3108) and the runtime's leak walk could name nothing but three anonymous Arrays, three
+           sessions apart, before gdb found the allocation. This is the line that names it at the transaction
+           instead.
+           THE CALLER SET IS A DERIVATION AND NOT A NUMBER, and the sentence it replaces is why: it read "both
+           of its other callers run strictly BEFORE this door (§5.5's revert and §5.8's was-this-store-created
+           each assert that the state is not yet finished)", and the population had grown to five while that
+           stood — with `idb_transaction_change_count` among them asserting nothing about state at all, so the
+           clause was wrong about the count AND about what the members have in common. `git grep -n
+           idb_transaction_changes -- engine/host` is the command; what the reader needs from it is that each
+           hit frees, which is a property of each site and not of how many there are.
+           THE COUNT IS IN THE MESSAGE BECAUSE 3 AND 3108 TAKE DIFFERENT WORK. A static message cannot separate
+           ONE dropped reference from a holder that is itself held by a chain, and those are a two-line repair
+           and an ownership investigation respectively — the §a-bare-count-over-a-population shape arriving in
+           a crash, where the reader standing at the abort is the only one who can see the number. WHAT IT DOES
+           NOT NAME IS THE HOLDER, and that is the honest state rather than a gap in the message: a refcount
+           says how many and never who, so the next diff is a dev-only walk at this line that DUMPS the list
+           (JS_DumpValue / JS_DumpGCObject, which §Architecture names for exactly this) instead of a bespoke
+           probe. Its absence shows as this abort firing with a plausible count and no next step. */
+        DCHECKF(JS_ValueRefCount(changes) == 2,
+                "a finishing transaction's list of database changes is held by %d things where exactly TWO may "
+                "hold it — the transaction's slot record and this reader. idb_transaction_changes hands out an "
+                "OWNED reference and every caller of it frees before returning, so an extra holder took its "
+                "reference through some other door: the per-flow COW delta, a pending request task's operation "
+                "closure, or the cold tier. The list is emptied on the next line, so what it leaks is an empty "
+                "Array whose only remaining edge is Array.prototype, and that edge makes the whole realm "
+                "behind it immortal — a count near 2 is one dropped reference and a large one is a chain",
+                JS_ValueRefCount(changes));
         JS_FreeValue(ctx, changes);
         /* AND SO IS §2.7'S LIST OF HELD REQUEST TASKS, at the same door and for the same reason. A transaction
            can be aborted "even if the transaction ... hasn't yet started", and one with no requests commits
