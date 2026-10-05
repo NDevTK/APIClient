@@ -3569,6 +3569,28 @@ static const char *HTML =
     "(async function(){ function h(f){ return f ? 'acADMIN' : 'acPUBLIC'; } fetch('/api/asynccall?w=' + h(cfg.admin)); })();"   /* ASYNC body calls a HELPER whose concolic branch forks DEEP (chain base->async->helper): the async frame is a CALLER, not the deepest — exercises clone_deep_flow's async-as-caller buffer sourcing (tramp_buf_base/tramp_live_sf) -> both acADMIN and acPUBLIC */
     "(async function(){ throw 'asyncThrew'; })().catch(function(e){ fetch('/api/caught?e=' + e); });"   /* async THROW -> rejected promise -> .catch reaction fires */
     "(async function(){ var s=0; for(var i=0;i<2000;i++){ s=s+1; } fetch('/api/asyncloop?s='+s); })();"   /* async body with a LOOP -> preempt may fire inside the async tramp frame */
+    /* A TOP-LEVEL `const` READ FROM ITS OWN DEFAULT PARAMETER, IN A CONTINUATION — THE SHAPE EVERY
+       ROLLDOWN/VITE BUNDLE SHIPS AND THE ONE THIS DOCUMENT HAD NO STATEMENT FOR. Measured on the real
+       `app.gitpod.io` bundle at 042c336: `textarea-CVjkglOL.js` declares
+       `const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=[...])))=>i.map(i=>d[i])` and the drive's page
+       errors carried `__vite__mapDeps is not initialized`, with the stack naming the arrow's caller inside an
+       `async` function — so the read happened in a RESUMED CONTINUATION rather than in the program that
+       evaluated the binding. That function is what resolves a dynamic import's dependency list, so when it
+       throws, every lazily-imported route of that app fails to load, which is where a real app's
+       runtime-composed addresses live.
+       ECMAScript puts the default on the CALL and not on the closure: §10.2.11 FunctionDeclarationInstantiation
+       evaluates a formal parameter's initializer as part of the call, by which time §14.3.1 Let and Const
+       Declarations has initialised the outer binding — so `m === mdSelf` is TRUE in a browser and a thrown
+       `is not initialized` is this engine reading a cell its own timeline initialised as though it had not.
+       THE WITNESS CARRIES CONSTANTS ONLY, which is why the token is a literal and not the value read: a
+       payload composed from anything this engine COMPUTED can itself be unknown, and then the request is never
+       made and the arm reads exactly like an arm that did not run. `mdOK` against `mdWRONG` says which arm the
+       comparison took; the ABSENCE of both says the read threw. */
+    "const mdSelf = (i, m = mdSelf) => (m === mdSelf ? 'mdOK' : 'mdWRONG'); (async function(){ await 0; fetch('/api/selfdefault?w=' + mdSelf([0])); })();"
+    /* …AND THE SAME READ ON A FORKED PATH, because the real stack named a concolic frame as the arrow's
+       caller. Both arms must read `mdfOK`: the binding is the PROGRAM's and neither world wrote it, so a world
+       that reads it uninitialised is reading its own timeline wrongly rather than another world's state. */
+    "const mdFork = (i, m = mdFork) => (m === mdFork ? 'mdfOK' : 'mdfWRONG'); (async function(){ await 0; fetch('/api/mdforkpath?w=' + (cfg.admin ? 'A' : 'P') + mdFork([0])); })();"
     /* ORPHAN-INVOKE — the headline capability, and the ONE statement in this document that nothing in it calls.
        It asks two things at once because they are the two halves of the mechanism and either alone would pass
        while the other was broken: that the function RUNS at all (`/api/orphan/report`), and that its PARAMETER

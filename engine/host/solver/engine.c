@@ -8064,9 +8064,37 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
        world ran the prologue, and a flow that is not that world's descendant finds the status saying there is
        nothing to do and the cells saying nothing was done. THAT IS quickjs's HALF AND NOT THIS FILE'S, which is
        why it is named here rather than attempted.
-       RETIREMENT: this record goes when a module's link-phase cell writes and its status write are isolated the
-       SAME way — both captured or both at baseline — because the asymmetry is then impossible by construction
-       rather than described here. MEASURED NOT-MET at the revision this was written, by the two counts above.
+       RETIREMENT — MET BY A CONSTRUCTION, AND THE SYMPTOM REPRODUCES ANYWAY, WHICH IS THE PART WORTH MORE
+       THAN THE RETIREMENT. The condition read: this goes when a module's link-phase cell writes and its status
+       write are isolated the SAME way — both captured or both at baseline — and it is met. `js_module_set_status`
+       is the only ASSIGNMENT to a module's status in the engine and its body is `js_module_eval_capture(ctx, m);
+       m->status = status;`, so the announcement is part of the write and no site can forget it. MEASURED WITH
+       THE COMMAND rather than relayed, because the figure this record first carried was a count of a SPELLING
+       that admits comparisons: `grep -cE '\bm1?->status *= *[^=]' engine/qjs/quickjs.c` answers TWO — the
+       helper's own line, and `JS_ModuleEvalStateRestore`'s `m->status = b->status`, which that site's comment
+       deliberately exempts because a restore is the delta being UNAPPLIED and announcing it would offer the
+       value being restored as this flow's first baseline. The same pattern written as `status *=` answers 35,
+       every extra hit a `==`, which is why the count is stated with the regex beside it.
+       AND THE ERROR THIS RECORD'S OWN ABSENCE CLAUSE PREDICTS IS STILL OBSERVED WITH THAT CAPTURE IN PLACE, SO
+       THE ASYMMETRY WAS NOT THE WHOLE CAUSE. Measured on `app.gitpod.io` at the revision that landed the
+       seed-order fix: a drive's page errors carried `__vite__mapDeps is not initialized` on a frame rendering
+       as `Concolic.`, which is this record's HOW-ITS-ABSENCE-SHOWS clause exactly, and the bundle's own
+       declaration is `const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=[…])))=>i.map(i=>d[i])` — a
+       top-level LEXICAL WITH AN INITIALIZER, read from its own DEFAULT PARAMETER, inside an `async` function's
+       resumed continuation. That is the MINORITY kind this record already separates from the function
+       declarations, and §10.2.11 FunctionDeclarationInstantiation evaluates a formal parameter's initializer as
+       part of the CALL, by which time §14.3.1 Let and Const Declarations has initialised the outer binding — so
+       a browser reads the binding and this engine read a cell its own timeline had written as though it had not.
+       WHAT IS NOW KNOWN AND WAS NOT: the status capture does not reach it, so the remaining cause is downstream
+       of both phases being isolated alike. WHAT THE NEXT DIFF BUILDS: nothing here, because the population is a
+       FIXTURE statement rather than a page — `test_forced.c` carries `mdSelf` and `mdFork`, one plain and one
+       over a forked gate, each reading a top-level `const` from its own default parameter inside a continuation
+       and emitting a CONSTANT token, so the next build says whether the defect reproduces with no network, no
+       bundle and no schedule luck in it. HOW ITS ABSENCE WOULD SHOW: those statements' tokens absent from the
+       learned addresses while their enclosing continuation ran, or present reading `mdWRONG`/`mdfWRONG`.
+       AND THE METHOD NOTE ABOVE IS WHAT CAUGHT THIS: a residual about a value's isolation states the WRITE it
+       is about, and for a lexical with an initializer that write is the module BODY's, not the prologue's — so
+       the two kinds this record separates need two different cures, and only the first one's was built.
        HOW ITS ABSENCE SHOWS: an uncaught `<name> is not initialized` whose named binding resolves to a
        module-top-level declaration, reported on a frame whose receiver renders as `Concolic.` — and that
        second half is a NECESSARY and not a sufficient condition for the reading flow being a drive, which is
