@@ -2972,15 +2972,48 @@ function navigationCarriesSession(absUrl, principalOrigin) {
    caller that omits it composes `undefined` — which `_docReachOf` refuses with a fatal CHECK rather than
    taking a permissive arm. What the document this load PRODUCES will be reached under is the JOIN of the two
    (`safeFetchReachJoin`), composed by whoever states that document's analyze record. */
-async function navigationLoad(u, base, principalUrl, principalOrigin, provenance, fromReach, canDecline,
+/* WHAT A CALLER OF A §7.4 LOAD DOES WITH A REFUSAL — A DECLARED WORD, BECAUSE THE BOOLEAN THAT STOOD HERE WAS
+   ONE BIT ANSWERING TWO QUESTIONS AND THERE IS A CALLER AT WHICH THEY DISAGREE. It was `canDecline`, and this
+   file spelled its meaning two different ways in two different sentences: `navigationLoad`'s own contract said
+   it "IS WHETHER THIS CALLER HOLDS A RENDEZVOUS" and `fetchedDocument`'s DCHECK said "whether ITS consumer can
+   carry a refusal". Those are one question for as long as the only caller with an arm for a refusal is the one
+   parked on a rendezvous, and they COME APART at the ROUTE SEED: it holds NO rendezvous, and its arm for a
+   refused load has been landed and running since before the decline existed — `admitSeatLand` drops the seat,
+   spends nothing further and prints the reason, which is exactly what it already did for every other refusal
+   of a seed's load. So `true` there would be a false statement about a rendezvous and `false` is an abort at a
+   caller that HAS an arm. That is CLAUDE.md §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS, and the decline arm below
+   CITES that rule for the split it made between its own two kinds — one caller short of the one it was
+   committing.
+   THE THREE WORDS, AND THE CRASH IS KEYED ON THE THIRD:
+     `rendezvous` — the engine is PARKED on a request id. The refusal is routed to it (engineDeliverDocument →
+                    HostDecline → engine_host_decline) and the navigable keeps the pre-operation document HTML
+                    §7.3.1.3 "Child navigables"' create-a-new-child-navigable created it holding.
+     `report`     — nothing is provisioned and nothing is parked. The caller drops its WORK ITEM and reports
+                    the chokepoint's own reason verbatim. A seed is this shape by construction: an instance
+                    asked to root itself at an address this zone will not fetch holds no document at all, so
+                    there is no navigable to leave at a pre-operation state and nothing to fabricate.
+     `none`       — this caller has NO arm that can state a load that was NEVER ATTEMPTED, so anything handed
+                    to it becomes a claim that is false. The abort below is the correct answer for it and names
+                    what each such caller would otherwise fabricate. It is keyed on THAT and not on the
+                    rendezvous, because the two notices fabricate a DOCUMENT and the ambient seed fabricates a
+                    REASON — one fact, one word, three callers.
+   THE TEST IS WRITTEN IN THE POSITIVE (`!== "rendezvous" && !== "report"`) SO AN UNSTATED WORD REFUSES BY
+   CONSTRUCTION, which is a thing the boolean could not do. `canDecline` was tested as `!canDecline`, so
+   `undefined` refused correctly and ANY non-empty string — a typo, a stale literal, a field read at the wrong
+   offset — was TRUTHY AND PERMITTED, which is the defaulted-read defect standing where a refusal belongs. */
+const DOC_REFUSAL_ARMS = Object.freeze(["rendezvous", "report", "none"]);
+async function navigationLoad(u, base, principalUrl, principalOrigin, provenance, fromReach, refusalArm,
                               actor) {
-  /* `canDecline` IS WHETHER THIS CALLER HOLDS A RENDEZVOUS, and it is a REQUIRED positive statement rather
-     than a defaulted one: a caller that forgets it takes the REFUSING arm, which is the arm that crashes, so
-     forgetting is not a way to be exempted. See the decline arm below for why the two kinds differ. */
-  DCHECK(typeof canDecline === "boolean",
-         "a \u00a77.4 navigation was loaded without saying whether its caller can carry a REFUSAL — only a " +
-         "caller parked on a rendezvous can be told one, and a caller that does not state which it is " +
-         "would have this function pick for it");
+  /* `refusalArm` IS WHAT THIS CALLER DOES WITH A REFUSAL — see DOC_REFUSAL_ARMS for the three words and for
+     why this is not the boolean it was. It is a REQUIRED positive statement rather than a defaulted one: an
+     unstated word takes the REFUSING arm below exactly as `none` does, so forgetting is not a way to be
+     exempted. */
+  DCHECK(DOC_REFUSAL_ARMS.indexOf(refusalArm) >= 0,
+         "a §7.4 navigation was loaded stating the refusal arm " + JSON.stringify(refusalArm) + ", which " +
+         "is none of the three this zone declares (" + DOC_REFUSAL_ARMS.join("/") + ") — the word says what " +
+         "this caller DOES with a refusal, and a caller that does not state it would have this function pick " +
+         "for it: a rendezvous it does not hold, a report it cannot write, or an empty document for an " +
+         "address nothing ever fetched");
   /* AND `actor` IS WHOSE ACT THIS NAVIGATION IS, WHICH THIS FUNCTION USED TO ANSWER WITH A LITERAL FOR THREE
      CALLERS THAT ARE NOT ALL THE SAME KIND. It is CLAUDE.md \u00a7AND-AN-EXEMPTION-SCOPED-BY-WHO-ACTED
      verbatim: a fact about who acted is a VALUE stated by the site that knows, carried down every frame and
@@ -3220,40 +3253,54 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
              "safeFetch graded a §7.4 navigation's refusal `" + r.refusal.kind + "`, which is neither word it " +
              "states — and the arm an unknown grade falls to here reports the load as a page whose server " +
              "could not be reached");
-      /* THE DECLINE IS CARRIED NOW, AND IT IS CARRIED TO ONE CALLER AND CRASHED AT THE OTHER — which is the
-         §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS split and not a softening of the abort that stood here. This
-         function serves TWO kinds of caller and only one of them has anything to decline WITH: a child
-         navigable's load is a HOSTREQ, so there is a rendezvous id the engine is parked on and a refusal has
-         somewhere to go; a SEED is this instance's reason for existing, asked for before any flow, with no
-         rendezvous and no navigable to leave at a pre-operation document. Removing the crash for both would
-         have left the seed silently taking whichever arm fell out, which is what the abort existed to stop.
-         WHAT THE ABORT SAID AND WHY IT IS KEPT FOR THE SEED, in its own words, because a reader who meets it
-         there needs the argument and not a pointer: "Its `unavailable` vocabulary is status/empty/network and
-         every one of the three says a load was ATTEMPTED and failed, so answering with any of them hands the
-         engine a navigable showing an error page for an address nothing ever fetched — an opaque-origin
-         document where HTML §7.3.1.3 \"Child navigables\" leaves the creator-inherited `about:blank` it created
-         the navigable holding." That is exactly as true of a seed, and a seed has no third answer yet. */
+      /* THE DECLINE IS CARRIED TO THE TWO ARMS THAT CAN STATE IT AND CRASHED AT THE ONE THAT CANNOT — and
+         A ROUTE SEED IS NOT ON THE CRASHING LIST, WHICH IS THIS COMMENT'S OWN CLAIM WITHDRAWN. The verdict
+         first, because the retired wording below is what a reader of this file reaches for.
+         ITS RETIRED WORDING IS KEPT BENEATH THE VERDICT BECAUSE A READER WHO RE-DERIVES IT FROM THE
+         RENDEZVOUS WILL WRITE IT AGAIN. It read: "This function serves TWO kinds of caller and only one of
+         them has anything to decline WITH: a child navigable's load is a HOSTREQ, so there is a rendezvous id
+         the engine is parked on and a refusal has somewhere to go; a SEED is this instance's reason for
+         existing, asked for before any flow, with no rendezvous and no navigable to leave at a pre-operation
+         document." And the abort below it said the SEED's remedy was "what the POOL does with a seat whose
+         seed was refused — admitSeatLand's question and not this function's."
+         THE CLAUSE NAMED THE RIGHT OWNER AND THE WRONG WORK, which is the one shape CLAUDE.md
+         §AND-THE-`WHAT-THE-NEXT-DIFF-BUILDS`-CLAUSE rates as EXECUTED rather than caught: `admitSeatLand`
+         ALREADY HELD the arm, and had since before the decline existed. A route seed's load that is
+         unavailable, that lands cross-origin, or that carries no bytes drops the seat and prints why; a
+         DECLINE is a FOURTH member of exactly that population and the cheapest one, because no request was
+         made at all. Nothing had to be DECIDED. What was missing was that the word could not REACH the
+         caller, and that the arm read `unavailable` and `bytes` and never `declined` — so flipping the
+         boolean alone would have traded this abort for a TypeError on `null.length`.
+         AND THE ENUMERATION WAS SHORT BY ONE, DERIVED RATHER THAN RECALLED. It said THREE callers reach this
+         arm; FOUR do, and `git grep -n 'navigationLoad(' extension/bridge.js` beside
+         `git grep -n 'fetchedDocument(' extension/bridge.js` is the whole derivation — three direct callers
+         of the loader (this function's own forward, the route seed, the AMBIENT seed) and three consumers of
+         the forward. The missing one was the AMBIENT seed, and it is the one the old clause's "(1) A SEED"
+         silently conflated with the route seed while prescribing the route seed's remedy for both. They are
+         not one population: one is a pool seat landed on a round, the other is an awaited dispatch with a
+         page-source record of its own. */
       if (r.refusal.kind === "decline") {
-        if (!canDecline)
-          DFAIL("a §7.4 navigation was DECLINED by the chokepoint (" + r.refusal.reason + ") for a caller that " +
-                "cannot carry a refusal. Its `unavailable` vocabulary is status/empty/network and every one of " +
-                "the three says a load was ATTEMPTED and failed, so answering with any of them hands the engine " +
-                "a navigable showing an error page for an address nothing ever fetched. A child navigable's " +
-                "load is a HOSTREQ and declines through the rendezvous the engine is parked on " +
-                "(engineDeliverDocument → HostDecline → engine_host_decline); this caller has no rendezvous, so " +
-                "the refusal has nowhere to go. THREE CALLERS REACH THIS ARM AND THEY ARE NOT ONE " +
-                "POPULATION, so the thing to build differs and the crash says which you are standing in. " +
-                "(1) A SEED: an instance asked to root itself at an address this zone will not fetch holds " +
-                "no document at all, so what has to be decided is what the POOL does with a seat whose " +
-                "seed was refused — admitSeatLand's question and not this function's. (2) A " +
-                "`navigable.create` NOTICE and (3) a `navigable.swap` notice: both are peer-provisioning " +
-                "records with no request id, and both of their own arms for a bytes-less load fabricate an " +
-                "EMPTY DOCUMENT — so what has to be built is a refusal the NOTICE channel can carry, " +
-                "or the creating engine's own park reached some other way. Until one of those exists this " +
-                "abort is the correct answer and is the pre-decline behaviour, preserved deliberately at " +
-                "exactly the callers that cannot carry a refusal: a3a93fd widened `canDecline` to all three " +
-                "with a literal, which turned a refused child navigable into a silently empty one, and " +
-                "fetchedDocument takes the word from its consumer now");
+        if (refusalArm !== "rendezvous" && refusalArm !== "report")
+          DFAIL("a §7.4 navigation was DECLINED by the chokepoint (" + r.refusal.reason + ") for a caller " +
+                "whose refusal arm is `" + String(refusalArm) + "` — it has NO arm that can state a load " +
+                "that was NEVER ATTEMPTED, so anything it is handed becomes a claim that is false. Its " +
+                "`unavailable` vocabulary is status/empty/network and every one of the three says a load was " +
+                "ATTEMPTED and failed, so answering with any of them hands the engine a navigable showing an " +
+                "error page for an address nothing ever fetched, where §7.3.1.3 \"Child navigables\" leaves " +
+                "the creator-inherited `about:blank` the navigable was created holding. THREE CALLERS STATE " +
+                "`none` AND THEY FABRICATE DIFFERENT THINGS, so the thing to build differs and this names " +
+                "which you are standing in. (1) A `navigable.create` NOTICE and (2) a `navigable.swap` " +
+                "notice: peer-provisioning records with no request id, whose own body lines turn a null " +
+                "body into an EMPTY Uint8Array — so what has to be built is a refusal the NOTICE channel " +
+                "can carry, or the creating engine's own park reached some other way. (3) The AMBIENT SEED: " +
+                "it CAN report an unavailability (`onNavigationOutcome`) and it CANNOT report a decline, " +
+                "because offscreen-brain.js's `_PAGE_SOURCE_KINDS` is `status`/`empty`/`network` and every " +
+                "one of those says a load was attempted — so what has to be built is a FOURTH page-source " +
+                "kind, through that list, its sibling asserts and the popup that renders it. A ROUTE SEED " +
+                "USED TO BE ON THIS LIST AND IS NOT: it states `report`, and `admitSeatLand`'s seat-drop arm " +
+                "is what answers it. a3a93fd widened the old boolean to all three forward consumers with a " +
+                "literal, which turned a refused child navigable into a silently empty one; fetchedDocument " +
+                "takes the word from its consumer now");
         /* THE THIRD OUTCOME, AND THE PAIRING ABOVE IS RESTATED RATHER THAN BROKEN: `bytes` is null here as it
            is for a load that failed, and `unavailable` is ALSO null, because this zone has nothing to say
            about a response that does not exist. `declined` is the reason, and it is the ONLY field that
@@ -4261,46 +4308,59 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      exists rather than being defaulted: an address alone cannot distinguish a frame a person's own session
      would have loaded from one that exists because a gate was forced, and this zone was fetching both, with
      cookies, for as long as the record said nothing. */
-  /* AND `canDecline` IS THIS CALLER'S AND NOT THIS FUNCTION'S, WHICH IS THE REGRESSION THIS PARAMETER REPAIRS
-     AND IT WAS MINE. `navigationLoad`'s own `canDecline` asks WHETHER THIS CALLER HOLDS A RENDEZVOUS, and this
-     function serves THREE consumers of which exactly ONE does: `document.fetch` is answered through
+  /* AND `refusalArm` IS THIS CALLER'S AND NOT THIS FUNCTION'S, WHICH IS THE REGRESSION THIS PARAMETER REPAIRS
+     AND IT WAS MINE. `navigationLoad`'s `refusalArm` says WHAT A CALLER DOES WITH A REFUSAL, and this function
+     serves THREE consumers of which exactly ONE is parked on a rendezvous: `document.fetch` is answered through
      `engineDeliverDocument`, which routes a refusal to the id the engine is parked on, while `navigable.create`
-     and `navigable.swap` are NOTICES with no id to refuse. Passing a literal `true` for all three was the same
+     and `navigable.swap` are NOTICES with no id to refuse. Passing one literal for all three was the same
      shared-literal shape as the `actor` word one parameter over, in the same function family, and it widened a
      capability to two consumers that had none.
      WHAT IT COST IS A SILENT EMPTY DOCUMENT WHERE A LOUD ABORT USED TO BE. Before the decline existed every
      refused navigation hit a `DFAIL`, so a declined create could not happen; after it, the create arm's
      `loaded.bytes === null ? new Uint8Array(0) : loaded.bytes` and the swap arm's identical line turned a load
      NOTHING ATTEMPTED into a child provisioned as an EMPTY DOCUMENT. That is CLAUDE.md
-     \u00a7A-FIELD-A-CONSUMER-DEFAULTS exactly, and the direction is the worst one: an empty document is a
+     §A-FIELD-A-CONSUMER-DEFAULTS exactly, and the direction is the worst one: an empty document is a
      PLAUSIBLE DATUM, so a frame the chokepoint refused reads as a frame the server served nothing for, and
      every flow forked inside it explores a document no visitor is ever shown.
-     IT IS A PRECONDITION AND NOT A GUARD, by \u00a7C-stack's own test: delete the decline and this question
-     still has to be asked, because `navigationLoad` has always had two kinds of caller and only ever asked one
-     of them. A false here reaches that function's standing `DFAIL`, which is the pre-decline behaviour restored
-     at the two sites that cannot carry a refusal and nowhere else.
-     FOUND BY A LANE READING THE TREE, not by a run \u2014 and then confirmed here by reading the two
+     IT IS A PRECONDITION AND NOT A GUARD, by §C-stack's own test: delete the decline and this question
+     still has to be asked, because `navigationLoad` has always had callers with different arms and only ever
+     asked one of them. `none` here reaches that function's standing `DFAIL`, which is the pre-decline behaviour
+     restored at the two sites that can state nothing and nowhere else.
+     AND THE WORD IS THE LOADER'S OWN VOCABULARY RATHER THAN A SECOND BOOLEAN, so a consumer that acquires an
+     arm says which one it has instead of flipping a bit whose meaning this file spelled two ways. The three
+     words and the argument for them are at DOC_REFUSAL_ARMS; this parameter only relays.
+     FOUND BY A LANE READING THE TREE, not by a run — and then confirmed here by reading the two
      fabrication lines. No drive has ever reached them: no corpus row documents an iframe and no control fixture
      contains one, which is the subject this entry still has no witness for. */
-  const fetchedDocument = async (u, provenance, canDecline) => {
-    DCHECK(typeof canDecline === "boolean",
-           "a \u00a77.4 document load was asked for without saying whether ITS consumer can carry a refusal " +
-           "—" +
-           " this function serves a request that holds a rendezvous and two notices that hold none, and a " +
-           "literal here is how a refusal reached a consumer whose only arm for it fabricates an empty " +
-           "document");
+  /* AND THIS FORWARD'S LIST IS NARROWER THAN THE LOADER'S, WHICH IS THE WHOLE POINT OF ASSERTING IT HERE AS
+     WELL. `DOC_REFUSAL_ARMS` has three words and this function has three consumers, and not one of them
+     `report`s: `document.fetch` parks on a rendezvous and the two notices provision a document. A `report`
+     arriving here would be HONOURED by the loader — it would hand back a declined record — and then
+     FABRICATED by whichever notice asked for it, which is exactly the silent empty document this parameter
+     exists to prevent, reached THROUGH the parameter. So the two words this forward can serve are enumerated
+     rather than deferred to the shared vocabulary, and a consumer that one day drops a WORK ITEM widens this
+     list deliberately instead of inheriting a capability it has no arm for. */
+  const fetchedDocument = async (u, provenance, refusalArm) => {
+    DCHECK(refusalArm === "rendezvous" || refusalArm === "none",
+           "a §7.4 document load was asked for stating the refusal arm " + JSON.stringify(refusalArm) +
+           ", and this forward serves only `rendezvous` and `none` — a request that parks on a rendezvous " +
+           "and two notices that can state nothing. `report` is a word for a caller that drops a WORK ITEM, " +
+           "which none of these three does, so honouring one here would hand a declined record to a consumer " +
+           "whose only arm for it fabricates an empty document — which is the literal this parameter " +
+           "replaced");
     const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance, msg.provenance,
-                                   canDecline, /*actor*/"page");
+                                   refusalArm, /*actor*/"page");
     /* …AND THE REFUSAL CROSSES WITH THEM, which is the one field this function used to drop. `unavailable` is
        still not carried and the comment above still holds for it — a child navigable's page does not appear in
        the popup's page-source row, so its REASON has no reader there. `declined` is a different fact with a
        different reader: engineDeliverDocument routes it to the rendezvous instead of answering it, so the
        navigable keeps the `about:blank` it was created holding rather than being handed an error page. */
-    DCHECK(canDecline || r.declined === null,
-           "a \u00a77.4 document load came back DECLINED for a consumer that cannot carry a refusal " +
-           "—" + " `navigationLoad` is supposed to have aborted instead, so either its " +
-           "`canDecline` arm or this forward has come apart. The two arms are not interchangeable: a notice " +
-           "has no rendezvous, and the only thing this consumer could do with a refusal is turn it into bytes");
+    DCHECK(refusalArm === "rendezvous" || r.declined === null,
+           "a §7.4 document load came back DECLINED for a consumer whose refusal arm is `" +
+           String(refusalArm) + "`" +
+           " —" + " `navigationLoad` is supposed to have aborted instead, so either its " +
+           "refusal-arm test or this forward has come apart. The arms are not interchangeable: a notice " +
+           "has no rendezvous, and the only thing such a consumer could do with a refusal is turn it into bytes");
     DCHECK(r.declined === null || typeof r.declined === "string",
            "a §7.4 navigation's result does not STATE whether it was declined — `r.declined` is `" +
            String(r.declined) + "`. The field used to be read as `r.declined || null`, and that default is the " +
@@ -5467,10 +5527,12 @@ async function hostNotice(eng, line) {
        makes a crash at the decision rather than a load. The engine states it; `navigationLoad` decides on it;
        this arm neither re-derives it nor acts on it, which is why it is passed through rather than tested
        here — one decision, at the one document-load path, for every caller of it. */
-    /* `false` \u2014 A NOTICE HOLDS NO RENDEZVOUS. \u00a77.3.1.3's create arrives as a notice, so there is no
-       request id a refusal could be addressed to and the only arm below for a bytes-less load fabricates an
-       EMPTY DOCUMENT. `navigationLoad` aborts instead, naming what to build. */
-    const loaded = await eng.fetchedDocument(f[3], f[15], /*canDecline*/false);
+    /* `none` \u2014 A NOTICE CAN STATE NOTHING. \u00a77.3.1.3's create arrives as a notice, so there is no
+       request id a refusal could be addressed to, and the only arm below for a bytes-less load fabricates an
+       EMPTY DOCUMENT \u2014 which is what the word names rather than the absent rendezvous, because the
+       rendezvous is not what decides this (a route seed holds none and states `report`).
+       `navigationLoad` aborts instead, naming what to build. */
+    const loaded = await eng.fetchedDocument(f[3], f[15], /*refusalArm*/"none");
     /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED — derived HERE and not read off the
        notice, even though the notice carries one at f[4]. SECURITY.md draws that line at this exact record:
        "identity may be minted by the untrusted side because it is only a name, but ROUTING and the ORIGIN
@@ -5779,9 +5841,9 @@ async function hostNotice(eng, line) {
        ONE WAS, because it is the SAME NAVIGATION: the provenance on this record is the load job's own
        (core/frame/browsing_context_group.c takes it from there), so a swap cannot become a way for an address
        this zone declined at `document.fetch` to be fetched anyway one notice later. */
-    /* `false` FOR THE CREATE ARM'S REASON EXACTLY \u2014 \u00a77.1.3.2's swap is a notice too, and its own
-       `pageHtml` line turns a null body into an empty Uint8Array. */
-    const swapped = await eng.fetchedDocument(f[2], f[4], /*canDecline*/false);
+    /* `none` FOR THE CREATE ARM'S REASON EXACTLY \u2014 \u00a77.1.3.2's swap is a notice too, and its own
+       `pageHtml` line turns a null body into an empty Uint8Array, which is the fabrication the word names. */
+    const swapped = await eng.fetchedDocument(f[2], f[4], /*refusalArm*/"none");
     DCHECK(swapped && (swapped.bytes === null || swapped.bytes instanceof Uint8Array),
            "the swapped-to document load answered neither bytes nor the null that means it did not load");
     DCHECK(swapped.headers && typeof swapped.headers === "object",
@@ -6259,11 +6321,11 @@ async function engineServiceHostRequests(eng) {
        is. The navigable that asked stays parked on its load, which is what a navigation in flight is; every
        other flow in the document keeps running. */
     did += engineIssue(eng, "doc\n" + id,
-      /* `true` \u2014 THE ONE CONSUMER THAT HOLDS A RENDEZVOUS. `engineDeliverDocument` reads `r.declined`
-         and routes it to `hostDecline` against the id the engine is parked on, so a refusal has somewhere to
-         go and the navigable keeps the `about:blank` \u00a77.3.1.3 created it holding. */
+      /* `rendezvous` \u2014 THE ONE CONSUMER OF THIS FORWARD THAT HOLDS ONE. `engineDeliverDocument` reads
+         `r.declined` and routes it to `hostDecline` against the id the engine is parked on, so a refusal has
+         somewhere to go and the navigable keeps the `about:blank` \u00a77.3.1.3 created it holding. */
       () => eng.fetchedDocument(fetchArgs.slice(fetchTab + 1), fetchArgs.slice(0, fetchTab),
-                                /*canDecline*/true),
+                                /*refusalArm*/"rendezvous"),
       (r) => engineDeliverDocument(eng, id, r));
     continue;
   }
@@ -7279,17 +7341,43 @@ async function admitSeatLand(seat) {
        cluster answer is that both kinds mint a group id no other arrival can key to (`seed:` from a
        counter, `cold:` from the frontier key), which the DCHECK below states as an invariant. */
     const loaded = seat.landed;
-    /* AND THE SAME THREE REFUSALS A SEEDED DOCUMENT ALWAYS OWES ITS READER, in the same order and for the
-       same reasons stated at the live seed: the chokepoint's own `unavailable`; a response that landed on
-       ANOTHER ORIGIN (which is a Document of origin B about to be seated in a cluster keyed on origin A,
-       and is also evidence that this server answers this request differently from the one the person's own
-       navigation made); and an EMPTY body, which is a perfectly ordinary Document under §7.4.5 and cannot
-       be the bundle this run exists to explore. Each costs the one fetch and nothing more. */
+    /* AND THE SAME THREE REFUSALS A SEEDED DOCUMENT ALWAYS OWES ITS READER, PLUS THE DECLINE, which is a
+       FOURTH member of exactly this population and never a new decision — this arm is why `navigationLoad` is
+       told `report` for this caller. The three, in the same order and for the same reasons stated at the live
+       seed: the chokepoint's own `unavailable`; a response that landed on ANOTHER ORIGIN (which is a Document
+       of origin B about to be seated in a cluster keyed on origin A, and is also evidence that this server
+       answers this request differently from the one the person's own navigation made); and an EMPTY body,
+       which is a perfectly ordinary Document under §7.4.5 and cannot be the bundle this run exists to
+       explore. Each costs the one fetch and nothing more. A DECLINE costs LESS — no request went out at all —
+       and the pool's answer is the same one, because it is the same state: the seat is already out of `_pool`,
+       `_seeds` was spliced unconditionally when the order picked this address, nothing is provisioned, and
+       the entry is never LOST by leaving, since the declaring document's residue replays its router and
+       declares the route again.
+       IT IS TESTED FIRST AND THE ORDER IS LOAD-BEARING RATHER THAN TIDY. A decline carries `unavailable: null`
+       AND `bytes: null`, so for a same-origin declared route the first three disjuncts are all FALSE — the
+       notice refuses a cross-origin declaration and a refused reply's `urlList` holds the requested href —
+       and `loaded.bytes.length` would then read `length` off `null`. An `unavailable` load short-circuits on
+       its own first disjunct and never reaches that term, which is the whole reason this was not already a
+       live TypeError: the term was unreachable until the decline could arrive.
+       AND THE REASON IS PRINTED VERBATIM RATHER THAN CLASSIFIED, because the two shapes that reach here do
+       not have one remedy. `blocked-signal:<signal>=<value>` names a row of the person's own egress control —
+       it can arrive at all because the notice's `_seedRefusal` pre-screen asks the IDENTICAL vector ROUNDS
+       EARLIER and an origin may be narrowed in between — while `blocked-destructive:<token>` is PERMANENT, no
+       widening reopening that list by safe-fetch.js's own statement. A message promising a control row for
+       both would be wrong about one of them, and `blocked-<rule>:<ground>` is attributable by construction. */
+    DCHECK(loaded.declined === null || typeof loaded.declined === "string",
+           "a declared route's load does not STATE whether it was declined — `loaded.declined` is `" +
+           String(loaded.declined) + "`. Every arm of `navigationLoad` states it, and a `||`-shaped read here " +
+           "would make a route the chokepoint REFUSED indistinguishable from one it fetched: the three " +
+           "disjuncts beside it are all false for a declined same-origin route, so the seat would fall " +
+           "through to `loaded.bytes.length` and die reading `length` off null");
     const _landed = originOf(loaded.url);
-    if (loaded.unavailable !== null || _landed === "" || _landed !== originOf(seed.principalUrl) ||
-        loaded.bytes.length === 0) {
+    if (loaded.declined !== null || loaded.unavailable !== null || _landed === "" ||
+        _landed !== originOf(seed.principalUrl) || loaded.bytes.length === 0) {
       console.warn("[bridge] a declared route could not be seeded: " + seed.url + " — " +
-                   (loaded.unavailable !== null ? JSON.stringify(loaded.unavailable)
+                   (loaded.declined !== null ? "the chokepoint DECLINED it on `" + loaded.declined + "`, so no " +
+                      "request was made; the rule that refused it is named in that token"
+                    : loaded.unavailable !== null ? JSON.stringify(loaded.unavailable)
                     : _landed !== originOf(seed.principalUrl) ? "landed cross-origin at " + (_landed || "an unparseable URL")
                     : "the response carried no bytes"));
       return null;
@@ -7861,7 +7949,20 @@ const _hostOps = {
         admitLoadSeat({ kind: "seed", seed: seed },
                       () => navigationLoad(seed.url, seed.principalUrl, seed.principalUrl,
                                            seed.principalOrigin, seed.provenance, seed.reach,
-                                           /*canDecline*/false,
+                                           /* `report` — A ROUTE SEED HOLDS NO RENDEZVOUS AND HAS AN ARM,
+                                              which is the pair that made the boolean this replaces answer
+                                              two questions. `admitSeatLand` below drops this seat and prints
+                                              the chokepoint's own reason, exactly as it already did for a
+                                              load that was unavailable, landed cross-origin or carried no
+                                              bytes — nothing is provisioned, so there is nothing to
+                                              fabricate. The decline this admits is REACHED: the notice's
+                                              `_seedRefusal` pre-screen asks `safeFetchFiringRefusal` and the
+                                              DESTRUCTIVE DENY LIST is not that function, so an application
+                                              that routes to `/logout`, `/settings/reset` or
+                                              `/account/delete` declares a page of itself that the
+                                              pre-screen passes and the chokepoint then refuses
+                                              `blocked-destructive:<token>`. */
+                                           /*refusalArm*/"report",
                                            /* `page` — HTML \u00a77.4.4's URL and history update
                                               steps RAN IN THE ANALYSED DOCUMENT and it announced the route
                                               (solver/route_seed.h), so the address is one the page's own
@@ -8720,7 +8821,26 @@ self.astDispatch = async function astDispatch(msg) {
        itself before it moved to the chokepoint. The native zone was right and this line was wrong, and
        the two zones now state one word for one act. */
     const loaded = await navigationLoad(msg.seedUrl, msg.sourceUrl, msg.sourceUrl, msg.origin,
-                                        PROVENANCE_OBSERVED, PROVENANCE_OBSERVED, /*canDecline*/false,
+                                        /* `none` — AND IT IS THE ONE SEED THAT CANNOT REPORT A DECLINE,
+                                           which is why the two seeds no longer answer with one literal. This
+                                           one CAN report an unavailability: `onNavigationOutcome` carries a
+                                           page-source record a person reads. It cannot report a DECLINE,
+                                           because `_PAGE_SOURCE_KINDS` is `status`/`empty`/`network` and
+                                           every one of those says a load was ATTEMPTED and failed — the
+                                           same sentence the loader's abort makes about the engine, one zone
+                                           further out. WHAT IS NOT COVERED: a declined ambient seed. WHAT
+                                           THE NEXT DIFF BUILDS: a fourth page-source kind through
+                                           offscreen-brain.js's `_PAGE_SOURCE_KINDS`, its sibling
+                                           pairing asserts and the popup that renders it, after which this
+                                           word becomes `report`. HOW ITS ABSENCE SHOWS: a run whose log
+                                           carries this loader's `none` abort with an ambient seed's own
+                                           address in it. MEASURED UNREACHABLE TODAY rather than argued:
+                                           both destructive gates are scoped `credentialed && provenance !==
+                                           "observed"` and this seed states `observed`, the firing policy
+                                           fires for the observed/observed arm at every address, and no
+                                           other `decline` producer applies to a GET navigation with no
+                                           stream body. */
+                                        PROVENANCE_OBSERVED, PROVENANCE_OBSERVED, /*refusalArm*/"none",
                                         /*actor*/"tool");
     /* THE SEED'S OWN RULE, ON TOP OF THE LOADER'S, AND IT IS THE SEED'S BECAUSE IT IS ABOUT A BUNDLE. §7.4.5
        gives an OK response with a zero-length body a perfectly ordinary empty Document, and a child navigable
