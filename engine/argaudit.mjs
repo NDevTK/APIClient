@@ -66,10 +66,27 @@
  *   - IT KNOWS NOTHING ABOUT REACHABILITY. A body whose argument no page can supply — an engine-internal door
  *     such as core/timing/timer.c's substep 9.11 re-arm, whose `previousId` this engine writes itself — is a
  *     finding here and is not a defect. Reachability is a fact about the caller, and text has no caller.
- *   - `JS_ToBool` IS COUNTED AND NEVER JUDGED. idl_args.h states it: ToBoolean "runs nothing", so it does not
- *     reach ToPrimitive and cannot abort. That an unknown is silently TRUE there is a different defect (a
- *     branch decided rather than forked) belonging to a different audit; calling it this one's would be the
- *     bucket collapse that makes a number unreadable.
+ *   - `JS_ToBool` NO LONGER READS "COUNTED AND NEVER JUDGED", AND THE RETIRED WORDING IS KEPT BECAUSE A READER
+ *     WHO RE-DERIVES IT FROM §7.1.2 WILL WRITE IT AGAIN. It said: ToBoolean "runs nothing", so it does not reach
+ *     ToPrimitive and cannot abort; that an unknown is silently TRUE there is a different defect (a branch
+ *     decided rather than forked) belonging to a different audit, and calling it this one's would be the bucket
+ *     collapse that makes a number unreadable. Every clause of that is true ABOUT THE FUNCTION and the
+ *     conclusion drawn from it was wrong: "belongs to a different audit" is not the same claim as "cannot be
+ *     judged here", and it read as the second. The axis this one already owns — WHAT THE DECLARATION DID WITH
+ *     UNKNOWN INPUT BEFORE THE BODY RAN — answers it outright, because §3.2.3's conversion is where a boolean
+ *     position's unknown is dealt with and `idl_concolic_rule` is the one function that says so. The count was
+ *     the whole defect: a bare `TOBOOL: N` states a population and says nothing about its protection, so it
+ *     read as N silent decisions and was dispatched as N items of work. See the TOBOOL bands below.
+ *   - AND THE REASON IT COULD NOT BE JUDGED BY THE COERCION AXIS'S OWN TEST IS THAT `CROSSES` IS THE WRONG
+ *     DISCRIMINATOR FOR THIS ONE, WHICH IS WHY THE BANDS BELOW DERIVE A SECOND SET RATHER THAN REUSING IT. The
+ *     numeric and string axes ask whether an unknown reaches the body AS ITSELF, so CROSSES is exactly their
+ *     question. A boolean position does not cross — it FORKS — and `IDL_CONCOLIC_FORKS` is not one answer but
+ *     two, which no reading of idl_args.h alone can separate: at `IDL_BOOLEAN` the conversion asks
+ *     `step_tobool_run` and places `JS_NewBool(ctx, res)`, so the body holds a REAL boolean and its own
+ *     `JS_ToBool` can never see an unknown; at a union with a boolean arm the ARM is forked and the VALUE is
+ *     placed AS ITSELF (idl_args.c's `concolic_is(a) ? JS_DupValue(…) : JS_NewBool(…)`, deliberately, so the
+ *     taint reaches the member's readers), so the body DOES receive one and must guard. Banding those together
+ *     under one rule would be the bucket collapse the retired note feared, arriving through the cure.
  *   - A GUARD IS RECOGNISED BY `concolic_is(argv[K])` APPEARING EARLIER IN THE SAME BODY. It does not verify
  *     that the guard's own arm is correct, only that the question was asked. A guard that asks and then answers
  *     wrong reads here as clean.
@@ -274,11 +291,89 @@ function conditionTerms(cond, pos, ADMITS) {
            asked, refusesAsked, unmodelled, any: terms.length };
 }
 
+/* WHICH DECLARED TYPES' CONVERSION PLACES A REAL BOOLEAN IN THE SLOT — the TOBOOL axis's whole discriminator,
+ * and it is NOT `idl_concolic_rule`. The rule answers IDL_CONCOLIC_FORKS for every boolean-ish position, and
+ * that one answer covers two conversions whose output differs in exactly the way this axis is about:
+ *   - §3.2.3 boolean asks `step_tobool_run` at the BRANCH seam and places `JS_NewBool(ctx, res)`. Both worlds
+ *     run, each holding one truth value, so the body is handed a REAL boolean and its own `JS_ToBool(argv[K])`
+ *     is a coercion of a value the conversion already decided — `if (cfg.on)` and a member taking `cfg.on` are
+ *     ONE gate with one constraint entry, which is why a second ask in the body would fork a value that has
+ *     already been decided. core/dom/dom_token_list.c says exactly that at its own site.
+ *   - A UNION WITH A BOOLEAN ARM forks the ARM and crosses the VALUE: idl_args.c writes
+ *     `concolic_is(a) ? JS_DupValue(ctx, a) : JS_NewBool(ctx, JS_ToBool(ctx, a))` and says why in its own
+ *     words — the member IS V, so coercing there would pin the flag for every unknown while destroying the
+ *     taint that says it is one. The body therefore DOES receive an unknown and owes it a fork or a crash.
+ * SO THIS IS READ OFF THE PLACEMENT AND NEVER OFF THE RULE: the argument arm that calls `step_tobool_run` and
+ * then assigns `*slot = JS_NewBool(` is the one that hands a body a real boolean, and the types its own guard
+ * names are the answer. The dictionary walk's `step_tobool_run` assigns `w->mv` instead, so keying on the slot
+ * assignment selects the argument path without naming either.
+ * IT THROWS RATHER THAN FALLING BACK, for preCrossingRewrite's reason: with the placement unfound every TOBOOL
+ * site would band as protected, which is the direction that reports a clean bill for a population nothing read. */
+function toBoolPlacesRealBool(idlArgsCPath) {
+  const src = strip(readFileSync(idlArgsCPath, "utf8"));
+  const types = new Set();
+  for (const m of src.matchAll(/\bstep_tobool_run\s*\(/g)) {
+    /* The ARGUMENT arm is the one whose result is placed in the argument slot. */
+    if (!/\*slot\s*=\s*JS_NewBool\s*\(/.test(src.slice(m.index, m.index + 600))) continue;
+    const g = src.lastIndexOf("if (t ==", m.index);
+    if (g < 0) continue;
+    const { text } = callText(src, src.indexOf("(", g));
+    for (const t of text.matchAll(/t\s*==\s*(IDL_[A-Z0-9_]+)/g)) types.add(t[1]);
+  }
+  if (!types.size) throw new Error("idl_args.c's argument conversion no longer places a boolean it asked "
+    + "step_tobool_run for into an argument slot — that placement IS the statement that a boolean position's "
+    + "body receives a real truth value rather than the unknown itself, so without it this audit cannot say "
+    + "which JS_ToBool over an argument can still meet unknown external input");
+  return types;
+}
+
+/* THE ARM A CONCOLIC CANNOT ENTER — the second guard shape, and the one the positional `concolic_is` test is
+ * structurally unable to see. A body can protect a `JS_ToBool` by DISCRIMINATING ON THE TYPE FIRST
+ * (`if (JS_IsBool(argv[0])) { … JS_ToBool(ctx, argv[0]) … } else if (concolic_is(argv[0])) DFAIL(…)`), and
+ * there the honest crash is textually BELOW the coercion while the coercion is unreachable with an unknown —
+ * so the earlier-in-body rule, which is right for the coercion axis and for its own stated reason, answers
+ * "unguarded" for a site that is guarded by control flow. It is priced with conditionTerms and concolicAdmits,
+ * the same two functions the assert axis uses, because a second copy of what a type test is worth over an
+ * unknown is the copy that drifts.
+ * WHAT IT READS IS BRACED ENCLOSURE AND NOTHING ELSE, and a site it cannot bracket stays in the band it was
+ * already in rather than being promoted to protected: an `if` with no brace, a `switch` arm, a `goto` and a
+ * negated guard that returns early are all outside it, so this answers only the one shape it can prove.
+ * ITS ABSENCE WOULD SHOW as a TOBOOL-DECIDES row whose `JS_ToBool` a reader finds already inside a type test —
+ * which is the shape this exists to stop reporting, and the one it was built from. */
+function armRefusesConcolic(src, from, off, pos, ADMITS) {
+  const stack = [];
+  let i = from;
+  while (i < off) {
+    const ch = src[i];
+    if (ch === "{") { stack.push(null); i++; continue; }
+    if (ch === "}") { stack.pop(); i++; continue; }
+    if (src.startsWith("if", i) && !/[A-Za-z0-9_]/.test(src[i - 1] || " ")
+        && !/[A-Za-z0-9_]/.test(src[i + 2] || " ")) {
+      const open = src.indexOf("(", i);
+      if (open < 0) break;
+      const { text, end } = callText(src, open);
+      /* Only the BRACED arm is read — the next non-space character must open a block, or this `if` governs a
+         single statement whose extent text cannot bound. */
+      const brace = src.slice(end + 1).match(/^\s*\{/);
+      if (brace) { stack.push(text); i = end + 1 + brace[0].length; continue; }
+      i = end + 1;
+      continue;
+    }
+    i++;
+  }
+  for (const cond of stack) {
+    if (!cond) continue;
+    const t = conditionTerms(cond, pos, ADMITS);
+    if (!t.unmodelled && t.any && t.refuses && !t.admits) return cond.trim();
+  }
+  return null;
+}
+
 /* THE JOIN, IN ONE PLACE FOR BOTH AXES: what the conversion asks of a concolic at a position DECLARED `t`,
    which is the rule for `t` after the pre-crossing rewrite and not for `t` as written. */
 const crossesAfterRewrite = (C, R, t) => C.crosses.has(R.get(t) || t);
 
-function auditFile(path, C, R, ADMITS, findings) {
+function auditFile(path, C, R, ADMITS, B, findings) {
   const raw = readFileSync(path, "utf8");
   const src = strip(raw);
   const rel = relative(ROOT, path);
@@ -383,7 +478,85 @@ function auditFile(path, C, R, ADMITS, findings) {
     const at = `${rel}:${line}`;
     const site = `${fn || "<file scope>"} → ${fname}(argv[${idx ? idx[1].trim() : "?"}])`;
 
-    if (kind === "bool") { findings.push({ kind: "TOBOOL", at, site, why: "ToBoolean runs nothing — counted, never judged" }); continue; }
+    /* THE TOBOOL AXIS, JUDGED BY THE SAME JOIN AND BANDED BY WHAT THE CONVERSION PLACED. It used to return
+       here with a bare count, and the count was the defect: `TOBOOL: N` states a POPULATION and says nothing
+       about its protection, so it read as N silent true arms and was dispatched as N items of work. The
+       question a boolean position owes is not the coercion axis's — nothing aborts, because ToBoolean runs
+       none of the page's code — it is whether an unknown reaches this line AT ALL, and §3.2.3's conversion is
+       where that was already decided. */
+    if (kind === "bool") {
+      if (!idx || !/^\d+$/.test(idx[1].trim())) {
+        findings.push({ kind: "TOBOOL-UNDECIDABLE", at, site,
+          why: "the index is not a literal, so which declared type this position carries cannot be read from "
+            + "text — and for this axis that is the whole question, since a boolean position's unknown was "
+            + "dealt with by the conversion and not here" });
+        continue;
+      }
+      const pos = Number(idx[1].trim());
+      const d = fn ? decl.get(fn) : null;
+      if (!d) {
+        findings.push({ kind: "TOBOOL-UNDECIDABLE", at, site,
+          why: fn && /JSValueConst\s*\*\s*argv/.test(fns.get(fn).params)
+            ? "this function takes an argv vector but no declaration in this file names it as a body — a helper "
+              + "reached from one, or a member whose types come from a mixin's own accessor rather than from an "
+              + "idl_method_id* call here; what the conversion placed in this slot is not in hand"
+            : "no idl_method_id* declaration in this file names this function as a body" });
+        continue;
+      }
+      const types = d.get(pos) || d.get("tail");
+      if (!types) {
+        findings.push({ kind: "TOBOOL-UNDECIDABLE", at, site,
+          why: `position ${pos} is past every declaration's type list` });
+        continue;
+      }
+      const unknownT = [...types].filter((x) => !C.all.has(x));
+      if (unknownT.length) {
+        findings.push({ kind: "TOBOOL-UNDECIDABLE", at, site,
+          why: `declared type ${unknownT.join("/")} is not a member of IdlArgType` });
+        continue;
+      }
+      const placed = [...types].filter((x) => B.has(x));
+      const kept = [...types].filter((x) => !B.has(x));
+      if (!kept.length) {
+        findings.push({ kind: "TOBOOL-CONVERTED", at, site,
+          why: `declared ${[...types].join("/")} — the conversion asked step_tobool_run at the BRANCH seam and `
+            + "placed a real truth value per world, so this body never receives unknown input at this position "
+            + "and a second ask here would fork a value the conversion already decided" });
+        continue;
+      }
+      if (placed.length) {
+        findings.push({ kind: "TOBOOL-MAGIC-SPLIT", at, site,
+          why: `declared ${placed.join("/")} under one declaration and ${kept.join("/")} under another — `
+            + "`magic` picks among them and text cannot follow a magic, so WHICH declaration governs this call "
+            + "decides whether an unknown can reach it. Read the arm this call sits in and the type list of the "
+            + "declaration that names its magic; never scored, because the two answers are opposite" });
+        continue;
+      }
+      const guardedB = new RegExp(`concolic_is\\s*\\(\\s*argv\\s*\\[\\s*${pos}\\s*\\]`)
+        .test(src.slice(fns.get(fn).from, m.index));
+      if (guardedB) {
+        findings.push({ kind: "TOBOOL-GUARDED", at, site,
+          why: `declared ${[...types].join("/")} — the conversion placed the value AS ITSELF, so an unknown `
+            + "does reach this body; an earlier concolic_is over this slot already asks the question. Whether "
+            + "its arm is right is not read here" });
+        continue;
+      }
+      const arm = armRefusesConcolic(src, fns.get(fn).from, m.index, pos, ADMITS);
+      if (arm) {
+        findings.push({ kind: "TOBOOL-TYPE-GATED", at, site,
+          why: `declared ${[...types].join("/")} — the conversion placed the value AS ITSELF, and this call `
+            + `sits inside \`if (${arm})\`, whose every priced term over this slot is FALSE for an unknown, so `
+            + "the coercion is unreachable with one. What the body does on the OTHER arm is the question this "
+            + "cannot read" });
+        continue;
+      }
+      findings.push({ kind: "TOBOOL-DECIDES", at, site,
+        why: `declared ${[...types].join("/")} — the conversion forked the union's ARM and placed the VALUE as `
+          + "itself, so unknown external input reaches this line, and ECMAScript §7.1.2 ToBoolean's last step "
+          + "answers TRUE for the Object a concolic wears. The branch is DECIDED rather than forked: no abort, "
+          + "no fork, no record, and the other world is deleted with nothing to say so" });
+      continue;
+    }
     if (!idx || !/^\d+$/.test(idx[1].trim())) {
       findings.push({ kind: "UNDECIDABLE", at, site,
         why: "the index is not a literal, so which declared type this position carries cannot be read from text" });
@@ -443,17 +616,20 @@ files.sort();
 const C = contract(join(CORE, "idl_args.h"));
 const ADMITS = concolicAdmits(join(ROOT, "engine/host/solver/concolic.c"));
 const R = preCrossingRewrite(join(CORE, "idl_args.c"));
+const B = toBoolPlacesRealBool(join(CORE, "idl_args.c"));
 const findings = [];
-for (const f of files) auditFile(f, C, R, ADMITS, findings);
+for (const f of files) auditFile(f, C, R, ADMITS, B, findings);
 
 console.log(`concolic-crossing argument audit — ${files.length} .c file(s)`);
 console.log(`idl_concolic_rule places ${C.crosses.size} of ${C.all.size} declared types at CROSSES; `
   + `the ${C.notCrossing.size} that do not are ${[...C.notCrossing].join(", ")}\n`);
 
-const ORDER = ["VIOLATION", "VIOLATION-STRING", "ASSERT-NO-UNKNOWN", "ASSERT-MIXED", "ASSERT-REFUSES-KNOWINGLY", "UNDECIDABLE",
-               "ASSERT-UNDECIDABLE", "GUARDED", "ASSERT-GUARDED", "SAFE-TYPE", "ASSERT-SAFE-TYPE",
-               "ASSERT-ADMITS", "TOBOOL"];
-const JUDGED = new Set(["VIOLATION", "VIOLATION-STRING", "ASSERT-NO-UNKNOWN", "ASSERT-MIXED", "UNDECIDABLE"]);
+const ORDER = ["VIOLATION", "VIOLATION-STRING", "TOBOOL-DECIDES", "ASSERT-NO-UNKNOWN", "ASSERT-MIXED",
+               "TOBOOL-MAGIC-SPLIT", "ASSERT-REFUSES-KNOWINGLY", "UNDECIDABLE", "ASSERT-UNDECIDABLE",
+               "TOBOOL-UNDECIDABLE", "GUARDED", "ASSERT-GUARDED", "TOBOOL-GUARDED", "TOBOOL-TYPE-GATED",
+               "SAFE-TYPE", "ASSERT-SAFE-TYPE", "ASSERT-ADMITS", "TOBOOL-CONVERTED"];
+const JUDGED = new Set(["VIOLATION", "VIOLATION-STRING", "ASSERT-NO-UNKNOWN", "ASSERT-MIXED", "UNDECIDABLE",
+                        "TOBOOL-DECIDES", "TOBOOL-MAGIC-SPLIT"]);
 for (const kind of ORDER) {
   const rows = findings.filter((f) => f.kind === kind);
   if (!rows.length) continue;

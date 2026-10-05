@@ -8924,6 +8924,59 @@ STAGES.push(onHost(runProgram("JS comment-boundary gate", [join(ENGINE, "jscomme
                        "carry the exit code; it also FAILS if its own control did not arm, because a green " +
                        "line from an unarmed control is a statement about the probe. There is no baseline to " +
                        "update and no allowlist."), STAGE_HOST.SOURCE));
+/* AND THE CONCOLIC-CROSSING ARGUMENT AUDIT, WHICH IS THE ONE STAGE ON THIS LIST WHOSE SUBJECT IS WHAT A BODY
+   DOES WITH ITS OWN DECLARED ARGUMENT. The four audits above ask about a record's fields, a member's NAME, this
+   project's spec and a comment's terminator; none of them reads a TYPE. `engine/argaudit.mjs` joins the two
+   artifacts that were never joined — the declaration a member states beside its body, and `idl_concolic_rule`,
+   the one function saying what each declared type does with unknown external input — and asks whether a body
+   re-converts what its own declaration already converted.
+   WHICH AXES IT OWNS, STATED HERE BECAUSE A STAGE LINE IS WHERE A READER DECIDES WHETHER TO BELIEVE A ZERO:
+     - A COERCION over an argument whose declared type CROSSES (`JS_ToFloat64`, `JS_ToString`, `JS_ValueToAtom`
+       and their family). An unknown reaches such a body as itself, and the coercion sends the Object a concolic
+       wears to ECMAScript §7.1.1 ToPrimitive from a plain C activation with no flow base — which aborts, on one
+       line shared by every caller in the tree, naming neither the member nor the argument.
+     - AN ASSERT whose condition is FALSE for exactly that input (`DCHECK(JS_IsString(argv[0]))` over a
+       DOMString position), which is the mirror defect: wrong because it FORGOT a term, so a grep for `concolic`
+       finds every site that remembered and none that did not.
+     - A `JS_ToBool` over an argument, which this audit COUNTED AND NEVER JUDGED until its bands were built, and
+       the count was the whole defect rather than a missing axis. A bare `TOBOOL: N` states a POPULATION and says
+       nothing about its protection, so it read as N silently-decided branches and was dispatched as N items of
+       work — when the question a boolean position owes is not the coercion axis's at all (ToBoolean runs none of
+       the page's code and cannot abort) but whether an unknown reaches that line AT ALL, which §3.2.3's
+       conversion already decided before the body ran.
+   WHICH IT DOES NOT OWN, and each of these is a different audit on this list or none of them: whether the
+   DECLARATION says what the spec's IDL says (`argtypegate.mjs` — this one takes the declaration as GIVEN, so a
+   declaration that is wrong about the spec reads clean here), whether the member EXISTS at all (`idlgen.mjs`),
+   and whether the body's argument is REACHABLE by a page (an engine-internal door is a finding here and is not
+   a defect, because reachability is a fact about the caller and text has no caller).
+   ITS EXIT CODE IS 0 ON EVERY RUN, DELIBERATELY, AND THAT IS A COST THIS LINE STATES RATHER THAN HIDES. Its own
+   header gives citegen.mjs's reason: it reads SOURCE TEXT, so its recall is bounded by what text can say, and a
+   checker that fails a lane for a finding the lane did not introduce gets muted exactly as fast as one that
+   cries wolf. The consequence is the inverse of CLAUDE.md §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN: a line that is
+   always GREEN is furniture too, and nobody reads a body under a passing verdict either. What this push buys is
+   therefore not a gate but a READER — the findings are in the build's own output every run, beside the stages
+   whose exit codes do decide, instead of living in a command somebody has to remember to type. A PRE-EXISTING
+   population is exactly why the code cannot join: CLAUDE.md measured on this build's own record-field stage that
+   a verdict summing one is red on every run, so the change that is the signal never comes.
+   A SOURCE STAGE for the five above's reason: it compiles no C, reads no artifact, and opens no engine slice, so
+   it has no denomination to state and its findings are about the REVISION on every host. */
+STAGES.push(onHost(runProgram("concolic-crossing argument audit", [join(ENGINE, "argaudit.mjs")],
+                       "this stage EXITS 0 WHATEVER IT FINDS and its bands are NEVER SUMMED. A VIOLATION or " +
+                       "VIOLATION-STRING is a body coercing an argument its own declaration already converted " +
+                       "— closed at the ROOT by `idl_number_of` for a number, or by `concolic_is` plus the " +
+                       "answer that holds over the WHOLE domain for a collection index, and never by an early " +
+                       "return, which is the flow being dropped with a different spelling. A TOBOOL-DECIDES is " +
+                       "a branch the engine takes with no abort, no fork and no record: the conversion forked " +
+                       "a union's ARM and placed the VALUE as itself, so §7.1.2's last step answered TRUE for " +
+                       "the Object a concolic wears and the other world is gone with nothing to say so — " +
+                       "closed by a `step_fork_run` over the boolean's own value where the body has a resume " +
+                       "point, and by a `DFAIL` naming that mechanism where it does not. A TOBOOL-CONVERTED is " +
+                       "SAFE and must be LEFT ALONE: §3.2.3's conversion asked `step_tobool_run` at the BRANCH " +
+                       "seam and placed one truth value per world, so a second ask in the body would fork a " +
+                       "value already decided. A MAGIC-SPLIT and every UNDECIDABLE band are things this run " +
+                       "COULD NOT READ, so it found nothing about the engine there and the judged counts are a " +
+                       "FLOOR; they are closed IN THE AUDIT and never by editing a component. There is no " +
+                       "baseline to update: the findings ARE the disagreement."), STAGE_HOST.SOURCE));
 report(STAGES, FINDINGS);
 
 /* A THIRD DRIVE STOOD HERE — the driver for the deleted second program, which put the RENDERER REGISTRY's
