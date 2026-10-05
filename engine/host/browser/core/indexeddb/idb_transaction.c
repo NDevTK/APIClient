@@ -502,7 +502,7 @@ void idb_transaction_set_state(JSContext *ctx, JSValueConst tx, int state)
            child with the EDGE ORDINAL each reported it through (three of them; the rest counted and their
            absence stated). It is `static` too, and its currency is MARK EDGES rather than REFERENCES — which is
            a FEATURE here and not a mismatch, since a delta entry is a JSValue in host malloc and
-           JSTimeTravelHooks declares eleven write hooks and no mark hook, so neither a COW entry nor a C local
+           JSTimeTravelHooks declares eleven capture hooks and no mark hook, so neither a COW entry nor a C local
            is reachable by mark_children. A holder it CAN name is an object or a closure, which is the second
            door; one it cannot is host-side, which is the first. It may never be asked for a COUNT to difference
            against the refcount — that differences two denominators.
