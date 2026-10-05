@@ -1486,6 +1486,40 @@ const row = {
      writes from here on. */
   wfqArrivals: wfqRow('arrivals'),
   wfqDepartures: wfqRow('departures'),
+  /* WHETHER A REACH SHORTFALL IS THE ORDER'S OR THE THREAD'S, WHICH IS THE ONE QUESTION THIS FILE DRIVES REAL
+     DOCUMENTS TO ANSWER AND HAS NEVER CARRIED A ROW FOR. solver/flow.c's `never_picked` block states the three
+     states a starved tail hides and says they take DIFFERENT work: `picksLifetime / (members - neverPicked)`
+     near 1 is the frontier growing faster than one thread serves it and NO weight change reaches it;
+     that ratio large with `picksMax` near it is a reachable cohort swept while the tail waits, which a term
+     must answer for; `picksMax` near `picksLifetime` is one monopolizer the aging failed to sink. A report
+     that cannot separate them is one a search cannot be directed by, and until this row the corpus could not.
+     `starvedPicksIdle` IS THE ROW THAT ASKS "IS THE ORDER WRONG" AND THE OTHERS ARE NOT. flow.c says so in as
+     many words: it is the only instrument here that asks whether a pick ever PASSED OVER a member. The
+     gauges below say a tied tail EXISTS at some instant; this says a dispatch CHOSE against it, and a zero
+     here with `neverPicked` in the thousands is an order with nothing to answer for.
+     THE DENOMINATOR IS CARRIED BESIDE THE GAUGE, DELIBERATELY. `neverPicked` is a fraction of a GAUGE and
+     `picksLifetime` is a COUNTER, so the quotient is a holding ratio that cannot be differenced into a rate
+     (flow.c measured it stable at 14.5/15.5/14.68 across three runs read at the same dispatch count, so its
+     variance is entirely WHEN the sample was taken). Quoting the fraction without the counter is what
+     produced the throughput-read-as-ordering report flow.c records, twice.
+     `visMax` IS THE ONE THAT SEPARATES "SERVED FAIRLY" FROM "FINISHING NOTHING": zero on a frontier of
+     thousands says not one member reached the end of a program, so not one queued job can have run whatever
+     the switch and fork counts say. `visZero` is how many stand there, which `visMin` cannot say.
+     RETIREMENT: this record goes when report.mjs composes the three-state verdict from these rows, so a
+     reader is handed the state rather than the quotient -- MEASURED ABSENT with the command, so it is not
+     born met: `grep -c starvedPicksIdle testing/corpus/report.mjs` answers 0 against `grep -c wfqMembers
+     testing/corpus/report.mjs` as the armed control. */
+  picksLifetime: wfqRow('picksLifetime'),
+  starvedPicks: wfqRow('starvedPicks'),
+  starvedPicksIdle: wfqRow('starvedPicksIdle'),
+  neverPicked: wfqRow('neverPicked'),
+  neverPickedGap: wfqRow('neverPickedGap'),
+  neverPickedAtTop: wfqRow('neverPickedAtTop'),
+  picksLive: wfqRow('picksLive'),
+  picksMax: wfqRow('picksMax'),
+  visMin: wfqRow('visMin'),
+  visMax: wfqRow('visMax'),
+  visZero: wfqRow('visZero'),
   /* WHICH ENTRY EACH HALF CAME FROM, so the gauge and the counters can never be silently reconciled. */
   wfqFrom: wfqLive ? wfqLive.i : null,
   countersFrom: counted.length ? counted.length - 1 : null,
