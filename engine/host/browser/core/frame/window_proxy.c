@@ -44,6 +44,7 @@
 #include "solver/world.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
+#include "solver/quantum.h"   /* the slice precondition the navigation asserts rather than branches on */
 #include "core/idl_args.h"
 #include "core/realm.h"
 /* §6.6.6's two Window members: §7.2.1.3.1 puts `focus` and `blur` on the cross-origin list, so §7.2.3's own
@@ -747,6 +748,54 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
     /* THE OLD WINDOW'S REFERENCE IS THIS SLOT'S, and the delta already dupped its own copy when the capture
        above ran — so releasing it here leaves the parked arm's copy intact and the live slot free to move.
        IT IS PUBLISHED BEFORE IT IS RELEASED (wp_set): the release is what runs the OLD global's finalizers. */
+    /* AND THE OUTGOING NAME STOPS RESOLVING AT THIS LINE, SO WHATEVER STILL NAMES IT IS ASSERTED HERE RATHER
+       THAN WHERE IT IS NEXT READ. `doc_realm` answers a document name by asking the NAVIGABLE for its active
+       document's realm (window_proxy_realm_of_document), and the write below moves that answer — so from this
+       instant the OUTGOING document's name resolves to nothing in this timeline, while the Document, its realm
+       and every program row queued for it are all still perfectly alive. That is a NAMING failure and not a
+       lifetime one, which is why core/frame/navigable.c's realm-teardown assert does not catch it: no realm is
+       being torn down.
+       MEASURED, and it is why this assert is here instead of a comment. On app.gitpod.io a program row of the
+       outgoing document reached solver/engine.c's `doc_realm` from the docscript park and took the
+       WP_DOC_NO_NAVIGABLE arm — `@WHY … engine.c:3275 … asked at engine.c:8618` on a dev build — while the
+       SAME path on a release artifact, where that abort is compiled out, carried the row's BORROWED element
+       pointer on into §2.5.6's nonce read and killed the renderer with `RuntimeError: memory access out of
+       bounds` and nothing on it, 3 of 3 drives of two artifacts. The two are one defect seen at two regimes.
+       IT ASSERTS AND DOES NOT DROP, DELIBERATELY. HTML §7.4.4 "Aborting a document load" aborts a navigated-away
+       Document's fetch controllers, so DROPPING those rows is what a browser does and solver/flow.h already has
+       the primitive for it (`flow_programs_remove_for_document`, §7.5.10 step 5's removal, per flow). What is
+       NOT established is that every caller of this function is a real navigation: the initial about:blank
+       handover reaches here too, and a drop performed on that one would discard the rows of the document being
+       navigated TO. A wrong drop deletes work silently, which is worse than an abort that names the population,
+       so this diff moves the DETECTION to the origin and the next one drops — once this assert has said which
+       transition the rows belong to.
+       IT IS THE RUNNING FLOW'S ROWS because the question is per timeline: at the instant this flow navigates, a
+       sibling arm has not, and its rows for the outgoing document are rows of a document that is still its
+       navigable's active one. solver/flow.h states that argument for the per-flow count this asks. */
+    /* THE PRECONDITION IS ASSERTED AND NOT BRANCHED ON, because solver/quantum.h says in as many words that
+       `quantum_slice_open` is NEVER control flow: "a caller that BRANCHES on this is choosing between a
+       scheduled path and an unscheduled one, which is the fallback §C-stack bans". A navigation is state a page
+       OBSERVES, so it happens inside a slice or the thing that performed it is the defect — and this draft was
+       first written with `flow_running() == NULL ||` as an exemption, which is the spelling CLAUDE.md records as
+       having made an assert FALSE EXACTLY WHEN THE ENGINE WAS WORKING: the scheduler deliberately leaves that
+       stamp up across the host boundary, so a NULL test there is not the question. It is kept in these words
+       because the exemption is the reading a reader re-derives from `flow_programs_unstarted_for_document`
+       needing a `Flow *`. If THIS assert is what fires, that is a larger finding than the rows: it says a
+       navigation reached this line at host time, and `engine_unload_document`'s residual names that population
+       for a different lookup. */
+    DCHECK(quantum_slice_open(),
+           "a navigable was NAVIGATED at host time — §7.4.2.2 replaces a navigable's active document, which is "
+           "state a page observes, so it runs inside a flow's slice and under that flow's own delta. A caller "
+           "standing outside one has no timeline to ask about, so neither the document it is leaving nor the "
+           "rows queued for it belong to anybody");
+    DCHECK(p->doc == doc ||
+           flow_programs_unstarted_for_document(flow_running(), p->doc) == 0,
+           "a navigable was navigated while this timeline still held UNSTARTED PROGRAM ROWS for the document "
+           "it is navigating away from — a row names its document by HANDLE and the write below moves the one "
+           "answer that handle has, so every one of those rows is about to become uncompilable AND to be "
+           "carrying a borrowed element pointer into a tree this navigable no longer presents. HTML §7.4.4 "
+           "aborts a navigated-away Document's fetches, so these rows are what §7.5.10 step 5's removal takes "
+           "off the queue without running; they are not work to preserve");
     p->realm  = realm;
     wp_set(ctx, p, &p->window, JS_GetGlobalObject(realm));
     p->doc    = doc;
