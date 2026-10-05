@@ -5819,16 +5819,48 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue
        PREDICATE (`concolic_branch_decided`), so §Solver-half's `never its neighbour` leaves `x === "guest"`
        after a pinned `x === "admin"` unrefined, and decide.c raises a fork-over-pinned EVENT for exactly that
        population — which a pin would empty if it pruned.
-       WHAT THE NEXT DIFF BUILDS: a pinned read that is concrete for control flow AND for the builtins and
-       still answers its own provenance, which is neither this primitive (no `src`) nor a concolic (it would
-       fork). The shape this engine already holds for that is `concolic_pin_bytes` beside the DOM taint shadow
-       — bytes travelling plain with the provenance recoverable next to them. Its consumer is
-       `address_class_of` in `endpoint.h`, which cannot ask yet, so the engine half is not landed ahead of it.
-       HOW ITS ABSENCE WOULD SHOW: an emitted surface whose address class reads concrete for addresses on paths
-       the witness class EPW_MAY_REST_ON marks — that class and the bar disagreeing over one run, which is what
-       it was built to expose and is a statement about neither any one address nor today's population.
-       RETIREMENT: this goes when a pinned read in this tree hands back bytes whose provenance a later consumer
-       can still ask for, because this arm is then no longer where the taint ends. */
+       AND THE NEXT-DIFF CLAUSE THAT STOOD HERE IS REFUTED, IN THE DIRECTION THAT WOULD HAVE MADE THE BAR
+       OVER-CLAIM — KEPT IN ITS OWN WORDS BECAUSE A READER STANDING AT THIS ARM RE-DERIVES IT. It read: "a
+       pinned read that is concrete for control flow AND for the builtins and still answers its own provenance,
+       which is neither this primitive (no `src`) nor a concolic (it would fork). The shape this engine already
+       holds for that is `concolic_pin_bytes` beside the DOM taint shadow — bytes travelling plain with the
+       provenance recoverable next to them. Its consumer is `address_class_of` in `endpoint.h`, which cannot ask
+       yet, so the engine half is not landed ahead of it." Its MECHANISM half is sound and `concolic_pin_bytes`
+       is real (declared in concolic.h, read by selector_match.c). Its CONSUMER half is the error: giving
+       `address_class_of` the provenance would move these addresses INTO §What-the-tool-produces' bar, and they
+       do not belong there.
+       DERIVED TWO WAYS, NEITHER OF WHICH NEEDS A RUN. (1) `endpoint.h`'s ENDPOINT_WITNESS_CLASSES banner
+       re-aimed its own purpose clause for exactly this reason and says so: "a pin's bytes are a literal the
+       page's own predicate spelled, so that population is NOT past a parse and this class was never a bound on
+       the bar's slack". The owner's bar is AN ADDRESS, A KEY OR A VALUE NO PARSE OF THE SERVED BYTES CAN STATE;
+       a parse that reads `x === "admin"` and the concatenation beside it can state `/x/admin`. (2) The token
+       exists only for a NON-CONCOLIC other operand — `concolic_cmp_hook` mints it under `if
+       (!concolic_is(other)) tok = literal_tok(ctx, other, &kind);` and nowhere else — and §Every-value-is-
+       CONCOLIC makes every value a run learned concolic, so the operand whose bytes a pin carries is one this
+       engine already held concretely. Two independent reads, one answer: `concrete` is the RIGHT class for a
+       pin-derived address, and the bar is not what is wrong.
+       SO THE WORK IS THE OTHER OF THE TWO DIFFS THAT BANNER POSES, which it states as "the SOLVER must keep
+       more values unknown" — and `may-rest-on` reading high beside a bar of zero is that banner's instrument
+       answering, not a disagreement to repair. It is NOT unioned into the bar, for the reason it gives: a MAY
+       folded into a FLOOR is an OVER-claim.
+       NAMED RESIDUAL — THE ONE POPULATION THAT WOULD STILL CLEAR THE BAR, AND IT IS NARROW. WHAT IS NOT
+       COVERED: a pin whose non-concolic operand is one of the values this engine holds concrete BY DESIGN
+       rather than because the page spelled it — §the-symbolic/trust-boundary makes the PRINCIPAL
+       (`location.origin`/`host`/`protocol`) concrete for URL building, so `if (x === location.origin)` pins `x`
+       to bytes that are a fact about where the bundle was SERVED FROM and are in no parse of the bundle itself.
+       Those bytes are not a literal the page spelled, so the derivation above does not reach them and the
+       re-aimed purpose clause does not either. WHAT THE NEXT DIFF BUILDS: a mark at `literal_tok` distinguishing
+       an operand this engine models as concrete from one the page's own source spelled, carried through
+       `concolic_pin`'s existing `kind` pair rather than as a second value class — §Every-value-is-CONCOLIC
+       forbids the third class and this needs none, because the question is about the OPERAND at one call and not
+       about a value that travels. HOW ITS ABSENCE WOULD SHOW: an emitted record whose address rests on a pin
+       and whose bytes do not occur anywhere in any script the run fetched — observable by grepping the emitted
+       addresses against the fetched bodies, and a statement about neither any one address nor today's
+       population. ITS POPULATION IS UNMEASURED and is not asserted to be non-empty: what is established is that
+       the derivation above does not cover it.
+       RETIREMENT: this goes when a pin in this tree records whether the operand that supplied its bytes was one
+       the page spelled or one this engine models, because the two readings above then separate by construction
+       rather than by this paragraph. */
     f[0] = src;
     /* A SOURCE READ IS ITS OWN ROOT — stated here, once, rather than as a second argument every one of the
        seventeen components that owns a source would have to spell the same way twice. */
