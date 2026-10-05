@@ -1000,6 +1000,44 @@ if (aFatal.length)
         (p.rows.filter((r) => r.absentFatal).map((r) => r.id + ' — ' + r.absentFatal)[0] || '(no message)'))
       .join('\n'));
 
+/* THE CRASH-WITHOUT-REASON FLAG, WHICH site.mjs HAS WRITTEN SINCE IT WAS BUILT AND NOTHING HAS EVER READ.
+   Measured before adding this: `grep -rn 'crashWithoutReason' --include=*.mjs --include=*.js testing/ engine/
+   extension/` answers exactly TWO lines, both in site.mjs -- the write at its composer and the paragraph
+   explaining what it is for. That is the write-with-no-reader half of CLAUDE.md's defaulted-field defect, in
+   the instrument that file's own banner says has been "the consumer that never asked for the field written to
+   answer its own ambiguity" seven times, and this is the eighth made good rather than a ninth.
+   IT IS NOT A COLUMN, AND THAT IS THE WHOLE OF WHY IT IS HERE INSTEAD. A column is a property OF A SITE that a
+   reader compares across sites; this flag is a statement about THIS INSTRUMENT -- site.mjs's own words are
+   that a crashed run with no reason "means one of the two producers is not being read" -- so a `true` is not
+   a page that crashed mysteriously, it is a channel of this file that has stopped answering. Printed as a
+   column it would read as a site's misfortune and be compared against sites that have none; printed as a
+   shout it says the one thing it means. Its history is exactly that failure: site.mjs records that the flag
+   read a boolean bridge.js had DELETED, so it "could never raise", and separately that `@E` was left out of
+   its reason set, so every run killed by a CHECK -- the loudest thing the engine can say -- read as a crash
+   nobody could explain. A flag with that history and no reader is a flag whose next silent breakage nothing
+   would catch.
+   AND THE THREE STATES ARE BANDED LIKE EVERY SIBLING ABOVE, for the same reason: a row that PREDATES the
+   field carries no such key, and `false` on such a row is this file unable to ask rather than a run whose
+   reason was found. Summing those two is the absent-versus-zero pair CLAUDE.md refuses, and it would read in
+   the flattering direction -- as a corpus in which every crash is explained. */
+const cwrAll = passes.flatMap((p) => p.rows);
+const cwrPredates = cwrAll.filter((r) => !('crashWithoutReason' in r));
+const cwrRaised = cwrAll.filter((r) => r.crashWithoutReason === true);
+if (cwrPredates.length)
+  console.log('\n*** THE CRASH-WITHOUT-REASON CHECK IS OVER ' + (cwrAll.length - cwrPredates.length) +
+    ' OF ' + cwrAll.length + ' ROW(S) — ' + cwrPredates.length + ' carry no `crashWithoutReason` key at ' +
+    'all, so their silence is this instrument being unable to ask and NOT a crash whose reason some ' +
+    'producer gave. ***');
+if (cwrRaised.length)
+  console.log('\n*** ' + cwrRaised.length + ' ROW(S) CRASHED WITH NO REASON FROM ANY PRODUCER, WHICH IS A ' +
+    'CLAIM ABOUT THIS INSTRUMENT AND NOT ABOUT THOSE PAGES — site.mjs: a crashed run with no reason "means ' +
+    'one of the two producers is not being read". The row has a crashed run and NOTHING in its page errors, ' +
+    'its `@WHY` lines or its `@E` lines, so a channel this file reads has stopped answering rather than a ' +
+    'page having failed inexplicably. Open the row\'s own `logFile` before reading any counter off it. ***\n' +
+    cwrRaised.map((r) => '    ' + (r.pass || '?') + '/' + r.id + '  logFile=' + (r.logFile || '(unnamed)') +
+      '  atE=' + ((r.atE && r.atE.length) ? r.atE.length : 0) + ' @E line(s) held on the row itself')
+      .join('\n'));
+
 /* WHETHER A REACH SHORTFALL IS THE ORDER'S OR THE THREAD'S, COMPOSED RATHER THAN LEFT AS A QUOTIENT. This is
    the retirement condition site.mjs stated when it began carrying these rows, and it is MET here. The rows
    alone are not the answer: solver/flow.c's `never_picked` block names THREE states behind one starved tail,
