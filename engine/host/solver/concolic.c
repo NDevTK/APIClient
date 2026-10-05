@@ -3047,6 +3047,23 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
         free(shape); free(ident);
         return r;
     }
+    /* THE ARM ABOVE IS COMPLETE, TIED WHERE BOTH SPELLINGS OF ONE QUESTION ARE IN HAND. `pin_of` tests
+       `c && c->val` and `concolic_src_pinned` tests `e && e->val` over the same chain, and the latter's banner
+       says it is spelled separately so a caller outside this file cannot reach a different answer than the mint
+       does — which nothing checked. Two right answers to one question is the shape that drifts, and the drift
+       is silent in BOTH directions: a pinned source reaching the ordinary mint composes an address carrying no
+       determination, and an unpinned one answered by the arm hands back bytes this flow never proved. Nothing
+       in THIS function can make it fail, which is the standing `concolic_example`'s own two DCHECKs have and
+       for the reason stated there — the operands come from a different function.
+       THE CANDIDATE ARM RETURNED ALREADY, so this needs no substitution disjunct and adding one would be an
+       arm that cannot fire; `concolic_new`'s copy needs one because its candidate path falls through.
+       RETIREMENT: this goes when the two tests are ONE spelling — `pin_of` routed through the predicate rather
+       than repeating its two-part test — because the divergence is then unspellable rather than merely loud. */
+    DCHECK(!concolic_src_pinned(shape),
+           "a source this flow had PINNED reached the ordinary member mint — `pin_of` answered NO PIN for a "
+           "path `concolic_src_pinned` says is pinned, so the two spellings of one question over one chain "
+           "have diverged. Every later read of this member composes a value this flow has already proved "
+           "otherwise, and decide.c's fork-over-pinned row counts a fork the mint was to have decided");
     /* src = the field path (a precise @S injection point), root = the parent's, unchanged. A field of an
        unknown object is a datum the attacker controls SEPARATELY — which is why this mints a new injection
        identity at all — but it is not a datum that arrives by a different route: whatever carried the object's
@@ -5774,6 +5791,44 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue
             return pv;
         }
     }
+    /* THE SAME TIE `concolic_exotic_get`'s PIN ARM ASSERTS — see that site for why two spellings of one
+       question over one chain are checked where both are in hand. The disjunct is what differs: a candidate
+       re-fire skips the arm DELIBERATELY, so a pinned source legitimately reaches the mint below and
+       `concolic_derived` hands back the attacker's bytes instead of this flow's own proof. */
+    DCHECK(cand_matches(src) || !src || !concolic_src_pinned(src),
+           "a source this flow had PINNED reached the ordinary source mint on a path no candidate is "
+           "substituting — `pin_of` answered NO PIN for a path `concolic_src_pinned` says is pinned, so the "
+           "two tests over one chain have diverged and this read is about to mint an unknown for a value the "
+           "flow has already determined");
+    /* NAMED RESIDUAL — THE BAR DOES NOT SEE AN ADDRESS COMPOSED FROM A POST-PIN RE-READ, AND DELETING THIS ARM
+       IS NOT THE FIX. `endpoint.h`'s ENDPOINT_WITNESS_CLASSES banner poses the two opposite diffs (the solver
+       keeping more values unknown, or the pin owing the address a provenance it can still carry) and a reader
+       standing HERE takes the first, because this arm is visibly where the taint ends. It is recorded at the
+       arm because that is where the wrong diff gets re-derived.
+       WHAT IS NOT COVERED: this arm answers a bare primitive, so `concolic_is` is false for every address
+       composed from it and §What-the-tool-produces' bar reads such an address as one a parse could state. A
+       source read AGAIN inside the gate that pinned it composes a plain String; the same source read ONCE and
+       held in a page variable stays concolic and the bar sees it. One fact, two answers, chosen by whether the
+       page re-read.
+       WHY THE DELETION IS WRONG, so the next reader does not re-derive it: the primitive concretizes every
+       later OPERATION and not only every later branch. `concolic_call` mints its result with no example and
+       never calls `pin_src_names_self`, so a call over a concolic receiver answers CONCOLIC_EX_NONE — a pinned
+       `.slice(1)` would go from real bytes to an example-free shape, which is §@H's wrong report, and that
+       site's own RegExp residual bounds its population to the UNPINNED one on the ground that a pinned
+       receiver never reaches it. The branches do not survive it either: decide.c's refinement is keyed by the
+       PREDICATE (`concolic_branch_decided`), so §Solver-half's `never its neighbour` leaves `x === "guest"`
+       after a pinned `x === "admin"` unrefined, and decide.c raises a fork-over-pinned EVENT for exactly that
+       population — which a pin would empty if it pruned.
+       WHAT THE NEXT DIFF BUILDS: a pinned read that is concrete for control flow AND for the builtins and
+       still answers its own provenance, which is neither this primitive (no `src`) nor a concolic (it would
+       fork). The shape this engine already holds for that is `concolic_pin_bytes` beside the DOM taint shadow
+       — bytes travelling plain with the provenance recoverable next to them. Its consumer is
+       `address_class_of` in `endpoint.h`, which cannot ask yet, so the engine half is not landed ahead of it.
+       HOW ITS ABSENCE WOULD SHOW: an emitted surface whose address class reads concrete for addresses on paths
+       the witness class EPW_MAY_REST_ON marks — that class and the bar disagreeing over one run, which is what
+       it was built to expose and is a statement about neither any one address nor today's population.
+       RETIREMENT: this goes when a pinned read in this tree hands back bytes whose provenance a later consumer
+       can still ask for, because this arm is then no longer where the taint ends. */
     f[0] = src;
     /* A SOURCE READ IS ITS OWN ROOT — stated here, once, rather than as a second argument every one of the
        seventeen components that owns a source would have to spell the same way twice. */
@@ -5785,6 +5840,23 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue
            holds a value long after the mint — the CSS cascade's, reading a value out of the DOM taint shadow —
            can ask the same question this line already answered. */
         pin_src_names_self(r);
+#if APICLIENT_DEV
+        /* …AND THAT THE WRITE HAPPENED, which three sites argue and none checked. `src_self` is written at ONE
+           line and read at two, and `example_state_of`'s DETERMINED arm stands entirely on it: a source mint
+           that did not set it answers CONCOLIC_EX_NONE for a value this flow later PINS, so the report degrades
+           to a shape at exactly the position the run determined a literal — the §@H wrong report that accessor
+           was built to end, re-entered through a mint instead of through a read. The writer returns void and
+           both of its guards are legitimate states, so it cannot tell GUARDED from NEVER CALLED; the mint is
+           where the case the guards do not cover is in hand. */
+        {
+            const Concolic *rc = concolic_is(r) ? JS_GetOpaque(r, g_concolic_class) : NULL;
+            DCHECK(!rc || !rc->src || rc->src_self,
+                   "a SOURCE read was minted carrying its own provenance and no claim that the provenance "
+                   "NAMES it — `src_self` is what concolic_example's DETERMINED arm tests, so this value will "
+                   "answer NONE for a pin taken over its own source and every address composed from it will "
+                   "report a shape where this flow proved a literal");
+        }
+#endif
         return r;
     }
 }
