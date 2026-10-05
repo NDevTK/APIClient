@@ -204,11 +204,23 @@ static void bt_require_in_sequence(lxb_dom_element_t *box, lxb_dom_node_t *child
    to nothing, and core/layout/block_flow.c has such callers.
    WHAT IT MAKES IMPOSSIBLE IS ONE OF THE ANSWERS THE DECISION AT THE TOP OF THIS FILE REFUSES, and it is the
    attractive one: MINTING a synthetic `lxb_dom_node_t` for css-lists-3 §3.1's marker box keeps every signature
-   and every call site exactly as they are, so nothing else in this tree would notice. This does. A minted node
-   is not in any box's sequence — its ascent reaches no box at all, or reaches one through a `->parent` the
-   minting assigned — so the equality the whole sequence is stated over is the thing it cannot satisfy without
-   being linked into the document, at which point it is the OTHER refused answer and the page's own
-   `childNodes` can see it. */
+   and every call site exactly as they are, so nothing else in this tree would notice. This does, for a node
+   whose ascent reaches no box at all.
+   THE CLAUSE THAT FOLLOWED NAMED THIS EQUALITY AS WHAT SUCH A NODE `cannot satisfy without being linked into
+   the document`, AND IT IS KEPT IN ITS OWN WORDS BECAUSE A READER WHO RE-DERIVES THE REFUSAL FROM THIS
+   EQUALITY WILL WRITE IT AGAIN. A node whose `->parent` ALONE is assigned to `box` satisfies it, since
+   `box_tree_parent` ascends `->parent` and answers `box`; and it is invisible to the page, which reads a
+   child by `first_child`, `next` and `prev` and never by `parent` downward. WHAT REFUSES IT IS THE ASCENT AND
+   NOT THIS EQUALITY, and both horns are closed: `bt_continue_after` steps `->next` and then `->parent`, so a
+   node that is NOT in the sibling chain makes the forward step answer the END of the sequence and the
+   sequence then holds the marker and drops every source-document child, while a node that IS in that chain is
+   in the one chain `firstChild`, `childNodes`, `nextSibling` and `previousSibling` all read. A SEQUENCE
+   POSITION CARRIED BY LEXBOR'S OWN POINTERS IS A POSITION THE PAGE CAN SEE, which is the general reason the
+   member type cannot be a node and is not a fact about how one would be allocated.
+   RETIREMENT: this record goes when this sequence's member type carries a position lexbor's `first_child`,
+   `next` and `prev` chain does not — MEASURED ABSENT where it was written, `grep -c 'lxb_dom_node_t
+   \*box_tree_first_child' core/layout/box_tree.h` answering 1 against the same grep without the type
+   answering 6 as the armed control. */
 static void bt_require_answer_is_in_sequence(lxb_dom_element_t *box, lxb_dom_node_t *answer)
 {
 #if APICLIENT_DEV
@@ -218,8 +230,11 @@ static void bt_require_answer_is_in_sequence(lxb_dom_element_t *box, lxb_dom_nod
     DFAILF("%s, answered as the first child of %s: css-display-3 §2.5 \"Box Generation: the none and contents "
            "keywords\"' spliced child sequence ANSWERED a node that is not in it. Every node this sequence can "
            "yield stands under `box` through nothing but elements §2.5 replaced by their contents, so "
-           "`box_tree_parent` of it IS `box` — the one equality the sequence is stated over, and the one a "
-           "MINTED node cannot satisfy. A marker box is not minted as a node: this sequence's member type is "
+           "`box_tree_parent` of it IS `box` — the one equality the sequence is stated over, and the one a node "
+           "minted OFF the tree cannot satisfy. A mint that assigns `->parent` ALONE satisfies it and is "
+           "refused by the ASCENT instead, `bt_continue_after` stepping `->next` before `->parent`, so a node "
+           "outside the sibling chain ends the sequence. A marker box is not minted as a node at all: this "
+           "sequence's member type is "
            "(ORIGINATING NODE, `lxb_css_selector_pseudo_element_id_t`) and the decision is at the top of this "
            "file",
            box_subject_node(answer, nbuf, sizeof nbuf), box_subject(box, bbuf, sizeof bbuf));
@@ -243,8 +258,9 @@ static void bt_require_answer_is_in_sequence(lxb_dom_element_t *box, lxb_dom_nod
    member's node half IS its originating element, so under the decided type `box_tree_parent` of it is that
    element — the equality HOLDS, by a second arm the entry does not have yet, and the thing the decision
    constrains is therefore `box_tree_parent` rather than the refusal. The refusal that DOES do work is the one
-   over an ANSWER (`bt_require_answer_is_in_sequence`), which refuses the minted node the old clause read as
-   already impossible.
+   over an ANSWER (`bt_require_answer_is_in_sequence`), which refuses the OFF-TREE minted node the old clause
+   read as already impossible — and only that one, a mint that assigns `->parent` alone being refused by the
+   ASCENT instead, for which read that function's own banner.
    IT IS A CRASH AND NOT A RESIDUAL BECAUSE THE ANSWER IS WRONG NOW RATHER THAN NARROWER. Without it
    `box_tree_first_child` of a list item returns that element's first SOURCE-DOCUMENT child, which is a real
    node standing one position too early: the sequence is one member short AT ITS HEAD for every list item in
@@ -355,10 +371,13 @@ static void bt_require_marker_box_is_spellable(lxb_dom_element_t *box)
            "into the document tree\") and css-display-3 §2.5's own Note states the invariant it would break "
            "(\"any semantics based on the document tree, such as selector-matching, event handling, and property "
            "inheritance, are not affected\"); a SYNTHETIC "
-           "off-tree node is refused by this entry's own signature, which returns a pointer NO caller frees, so "
-           "ONE IS LEAKED PER CALL, at every one of this directory's walks over that container, and it is "
-           "malloc'd C rather than a GC object so "
-           "`JS_FreeRuntime`'s `gc_obj_list` walk cannot report; a TAGGED pointer encodes a second fact in a "
+           "off-tree node is refused by THE ASCENT rather than by its lifetime, and both horns are closed — a "
+           "node that is not in `box`'s `first_child`/`next` chain makes `bt_continue_after` answer the END of "
+           "the sequence, so the sequence would hold the marker and DROP every source-document child, while a "
+           "node that is in that chain is in the one chain the page's own `firstChild`, `childNodes`, "
+           "`nextSibling` and `previousSibling` all read; per call it additionally LEAKS, this entry returning "
+           "a pointer no caller frees and the node being malloc'd C rather than a GC object, so "
+           "`JS_FreeRuntime`'s `gc_obj_list` walk cannot report it; a TAGGED pointer encodes a second fact in a "
            "value the node type admits as valid; and a SECOND ACCESSOR beside this sequence leaves the sequence "
            "itself one member short at its head, which is the state this refusal stands at. "
            "ANSWERING INSTEAD WOULD RETURN A REAL NODE AT THE WRONG POSITION",
@@ -436,13 +455,34 @@ lxb_dom_node_t *box_tree_prev_sibling(lxb_dom_element_t *box, lxb_dom_node_t *ch
     /* THE ROUND TRIP, ASSERTED AND NOT ARGUED — see box_tree.h. The two directions descend into a spliced
        element at OPPOSITE ends, so they are the pair that can be taught about a tree separately, and this
        equality is what makes a disagreement a crash rather than a sequence that reads one way forward and
-       another way back. A NULL answer is exempt because it names the start of the sequence, which the forward
-       step has no node to be asked about. */
+       another way back. A NULL ANSWER IS EXEMPT FROM THIS EQUALITY AND IS COVERED BY THE NEXT ONE, and the
+       clause that stood here stopped at the first half — `A NULL answer is exempt because it names the start
+       of the sequence` — which is true of the EQUALITY and reads as true of the POSITION, so the head of the
+       sequence went unchecked for every box that generates no marker. */
     DCHECK(prev == NULL || box_tree_next_sibling(box, prev) == child,
            "css-display-3 §2.5's spliced child sequence disagreed with itself: the node BEFORE this one is not "
            "a node this one FOLLOWS. The backward step descends into an element §2.5 replaced by its contents "
            "at its LAST child and the forward step at its FIRST, so the two answers are one sequence only "
            "while both read the same splice — and a walk delimited with one direction and stepped with the "
            "other would then run over a range that is a range in no box's content");
+    /* THE HEAD, WHICH THE EQUALITY ABOVE IS STRUCTURALLY BLIND TO RATHER THAN MERELY SILENT ABOUT: its
+       exemption IS the answer NULL, so a backward step that WRONGLY answers NULL is the one answer no forward
+       step is ever compared against — and NULL is exactly what an ascent out of a splice only the FORWARD
+       direction has been taught about produces, which is the asymmetry the equality above exists for, arriving
+       at the one position it cannot reach. THE TWO SIDES ARE COMPUTED BY DIFFERENT CODE and can therefore
+       disagree: `bt_continue_before` plus `bt_resolve_back` ascend out of a spliced element's FIRST child
+       where `box`'s own `first_child` plus `bt_resolve` descend INTO it. A box that GENERATES a marker never
+       reaches this line — the refusal above has already aborted in dev, and both are compiled out in release
+       — which is why this asks `box_tree_first_child` rather than re-deriving a head of its own; and it is
+       what that refusal becomes once this sequence can yield the marker, since the only member of a
+       marker-generating box with no predecessor is then the marker itself. */
+    DCHECK(prev != NULL || box_tree_first_child(box) == child,
+           "css-display-3 §2.5 \"Box Generation: the none and contents keywords\"' spliced child sequence "
+           "answered NO PREDECESSOR for a node that is not its FIRST member: the backward step says this box's "
+           "content begins at this node and the forward step begins it at another. The backward step reaches "
+           "the head by an ascent out of a spliced element's FIRST child and the forward step by a descent "
+           "INTO it, so a splice only one of them has been taught about reads as the START of the sequence "
+           "rather than as the disagreement it is — which is the one position the round trip above cannot "
+           "see, its own exemption being this answer");
     return prev;
 }

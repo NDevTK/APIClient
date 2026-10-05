@@ -199,7 +199,12 @@ lxb_dom_node_t *box_tree_next_sibling(lxb_dom_element_t *box, lxb_dom_node_t *ch
    `box_tree_next_sibling(box, box_tree_prev_sibling(box, c))` is `c` for every member that has a predecessor,
    and that round trip is ASSERTED at the site. Two directions of one sequence are exactly the pair that can be
    taught about a tree separately and come apart on it — one descending into a spliced element's FIRST child
-   and the other out of its LAST — and an equality is what makes that impossible rather than merely unintended. */
+   and the other out of its LAST — and an equality is what makes that impossible rather than merely unintended.
+   AND FOR THE MEMBER THAT HAS NO PREDECESSOR THE INVERSE IS `box_tree_first_child(box)`, ASSERTED BESIDE IT,
+   because the round trip's own exemption is the answer NULL: that makes the HEAD the one position the round
+   trip cannot cover, and NULL is precisely what an ascent out of a splice only the FORWARD direction has been
+   taught about produces. The two equalities are therefore one invariant with no exempt position in it, which
+   is what a `prev == NULL` accepted on its own word was not. */
 lxb_dom_node_t *box_tree_prev_sibling(lxb_dom_element_t *box, lxb_dom_node_t *child);
 
 /* THE BOX `n`'s BOXES ARE CHILDREN OF — the nearest ancestor ELEMENT that generates a box, which is `n`'s DOM
