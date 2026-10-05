@@ -440,11 +440,44 @@ function assertResultDocument(r) {
              "table keyed on solver/step_unit.h's arms, and a NaN reaching a reader makes every comparison " +
              "against it false, which is the same silent failure asserted for the WFQ census one block up");
       if (!hist) continue;
-      for (const a of Object.keys(v))
-        DCHECK(typeof v[a] === "number" && Number.isFinite(v[a]),
-               "the engine's " + k + " census carries a non-finite `" + f + "." + a + "` — a histogram row is " +
-               "a count of members or of steps, and a NaN in one makes every sum taken over the table false " +
-               "while each other row still looks like a measurement");
+      /* A HISTOGRAM ARM IS A FINITE NUMBER OR A POSITIONAL TUPLE OF THEM, AND THE SECOND SHAPE IS THE
+         PRODUCER'S OWN AND WAS NOT ADMITTED HERE. The paragraph above says "a histogram's own values are
+         asserted finite one level down, so a NaN inside one is caught exactly as a NaN beside one is", and
+         that is true of a NUMBER-valued table and false of a TUPLE-valued one: solver/result.c's
+         `childRealmRefSites` composes each arm as `[min, max, total]` — documented at the composer as "a
+         positional triple … the set is fixed at its definition and is this file's own, so nothing can
+         renumber it" — so `typeof v[a] === "number"` is false for every arm of it and this DCHECK refused the
+         census the moment that table held a row.
+         IT IS A DEAD PATH THAT CAME ALIVE, WHICH IS WHY NO RUN HAD EVER MET IT: the same paragraph records
+         `{}` as that row's positive statement THIS RUN HOLDS NO LIVE CHILD REALM, and an empty object makes
+         this inner loop run zero times — so the consumer disagreed with the producer for as long as the
+         producer had nothing to say, and the first run that held a child realm aborted the trusted zone at
+         its census. MEASURED on two dev drives of app.gitpod.io at 042c336, whose ordering fix is what first
+         kept a child realm referenced: both read `@WHY … non-finite \`childRealmRefSites.JS_NewCFunction3\``
+         with `crashesFlag: 1`, while the run itself had already learned 198 addresses — so what the abort
+         destroyed was the CENSUS of a run that had worked.
+         THE RULE IS A SHAPE AND NOT A NAME LIST, which is the one thing the paragraph above forbids by name
+         after its own hand enumeration of macro-keyed tables rotted twice in this predicate. An arm is a
+         number, or it is a tuple every element of which is a number; a NaN anywhere inside either is still
+         caught, which is the whole property this check exists for.
+         RETIREMENT: this record goes when the arm shape is taken from the producer's own declaration rather
+         than from a shape test here — `navigable.h`'s `NavigableRealmRefSite` states the triple's three
+         members by name, and a census that NAMED them would need no tuple arm at all. */
+      for (const a of Object.keys(v)) {
+        const arm = v[a];
+        const tuple = Array.isArray(arm);
+        DCHECK(tuple || (typeof arm === "number" && Number.isFinite(arm)),
+               "the engine's " + k + " census carries a `" + f + "." + a + "` that is neither a finite " +
+               "number nor a positional tuple of them — a histogram arm is a count of members or of steps, " +
+               "or the fixed triple a per-site table composes, and a NaN in one makes every sum taken over " +
+               "the table false while each other row still looks like a measurement");
+        if (!tuple) continue;
+        for (let i = 0; i < arm.length; i++)
+          DCHECK(typeof arm[i] === "number" && Number.isFinite(arm[i]),
+                 "the engine's " + k + " census carries a non-finite element " + i + " of the tuple at `" +
+                 f + "." + a + "` — the triple is positional and every member of it is a count, so a NaN " +
+                 "inside one is the same silent failure as a NaN beside it");
+      }
     }
   }
   for (const k of ["_cold", "_heap", "_swap", "_absent"])
