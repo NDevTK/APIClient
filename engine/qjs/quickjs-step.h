@@ -836,7 +836,17 @@ JS_EXTERN JSValueConst JS_StepClosureData(const JSStepHdr *h, int i);
    makes a C body safe to leave un-parkable; being O(1) is, and almost nothing that walks a page is.
    Return it with no request pending; the machine is re-entered with JS_UNDEFINED, and when nobody is waiting it
    is re-entered immediately, which costs one predicted call per iteration. That is cheap enough to ask at every
-   step of a walk, which is where it belongs. */
+   step of a walk, which is where it belongs.
+   A FORK IS NOT A REQUEST AND MAY BE OUTSTANDING ACROSS THIS, which this paragraph was silent about while being
+   read as the answer. The clause above is about the KEYED family and the call, whose answer the re-entry carries
+   and which a yield therefore steals; a fork's answer rides `fork_arm` on the header, and the driver's arm for
+   this code touches no field of the fork bookkeeping at all, so the yield re-enters at the top of the SAME stage
+   with a filler — the identical shape a fork delivery produces, which is why `step_fork_pending` is true across
+   both and why a guarded init built on it is correct here too. What is forbidden is LEAVING THE STAGE with one
+   outstanding, which step_request_check now refuses at this code and at every other that asks to be re-entered.
+   Silence in a contract is not a permission and is not a prohibition: a reader asking whether this admits a
+   pending fork was reading a sentence about something else, which is the one failure a declaration this short
+   has. */
 #define JS_STEP_YIELD   22
 /* "MY COMPLETION IS ONE OF N FEASIBLE OUTCOMES — FORK HERE." Returned by step_fork_run; the driver decides the
    arm and snapshots the flow for the others. Never returned by a machine directly — see step_fork_run. */

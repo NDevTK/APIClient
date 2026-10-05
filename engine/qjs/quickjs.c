@@ -26113,7 +26113,11 @@ static uint32_t step_fork_key(const char *op)
  * algorithm nor the operand, precisely so that two members reached over ONE unknown agree — which makes it
  * BYTE-IDENTICAL between two chains ONE algorithm draws over TWO operands at the same position.
  *
- * IT REFUSES A FORK THAT OUTLIVES ITS STAGE, WHICH IS THE SAME REFUSAL step_keyed_inflight MAKES. Two asks
+ * IT REFUSES A FORK THAT OUTLIVES ITS STAGE, AND IT IS step_keyed_answered's HALF OF THAT REFUSAL AND NOT
+ * step_keyed_inflight's — this sentence named the wrong one of the pair, and the fork bookkeeping was built from
+ * it, so the ISSUE side went unwritten while its own first line correctly named the ANSWER side. step_fork_inflight
+ * is the other half now, and the two are a partition: this one cannot see an ask the ASK phase makes, because
+ * that never reaches the branch below. Two asks
  * legitimately stand inside one stage in sequence — a chain asks per position, and permission_store.c's §5.1
  * asks twice off one phase byte — because only one of them is ever OUTSTANDING at a time. What is refused is
  * the re-entry that reaches a DIFFERENT sub-sequence's ask than the one that parked, and a sub-sequence that
@@ -26140,6 +26144,52 @@ static void step_fork_answered_stage(const JSStepHdr *h)
 #endif
 }
 
+/* AND A FORK MAY NOT BE ASKED AT A STAGE WHILE ONE ASKED AT ANOTHER IS STILL OUTSTANDING — the EAGER half of
+ * the contract above, and the half the fork bookkeeping was built without.
+ *
+ * THE KEYED FAMILY HAS BOTH HALVES AND THE FORK COPIED ONE. step_keyed_inflight refuses the ISSUE and
+ * step_keyed_answered refuses the ANSWER, and they are a PARTITION rather than a duplication: the issue side
+ * sees a request that overlaps another WITHIN ONE `def->step()` call, where no answer is ever collected and the
+ * answer side therefore never runs. step_fork_answered_stage is step_keyed_answered's assertion and says so in
+ * its own first line; nothing was step_keyed_inflight's, so the fork's issue side was unwatched.
+ *
+ * WHAT IT CATCHES IS THE SIBLING WALKING AWAY FROM ITS OWN QUESTION, which is the one shape the answer side is
+ * structurally unable to see. A clone is taken AT the ask carrying FORK_PH_ASK on purpose, so it re-enters at
+ * the top of that stage with the key still set and re-asks — that is what replays its arm out of the flow's
+ * decision vector. A sibling that instead leaves the stage and asks a DIFFERENT fork reaches this function in
+ * the ASK phase, so step_fork_answered_stage is never called at all, and the ask below simply OVERWRITES the
+ * key and the stage with the new question's. The sibling then explores an arm of a question it was not forked
+ * for while the arm it WAS forked for is taken by nobody: a work item dropped with every assert on the path
+ * satisfied, which is what §NO BOUNDS calls a cap.
+ *
+ * IT REFUSES AN ASK ACROSS A STAGE, NOT AN ASK. Two forks legitimately stand inside one stage in sequence — an
+ * elimination chain asks per position, and permission_store.c's §5.1 asks twice off one phase byte — because
+ * only one of them is ever OUTSTANDING at a time, which is the state a zero key already reads as. */
+static void step_fork_inflight(const JSStepHdr *h)
+{
+#if APICLIENT_DEV
+    if (step_fork_pending(h)) {
+        /* SIZED OVER THE FORMAT'S OWN MINIMUM PLUS THE THREE `%s`, never carved out of a round number: the
+           compiler can see the literal and says so (-Wformat-truncation), and what a truncation drops is the
+           TAIL, which is where this names what to do about it. */
+        char why[1024];
+
+        snprintf(why, sizeof why,
+                 "%s asked a fork at stage %u (%s) while the one it asked at stage %u (%s) is still "
+                 "outstanding — a fork's answer is replayed at the call site that asked it, so an ask from "
+                 "another stage overwrites both halves of the outstanding question and the arm the flow's "
+                 "decision vector recorded for it is taken by nobody. A SIBLING is the usual holder: it carries "
+                 "FORK_PH_ASK on purpose so that it re-enters AT its ask and re-asks, and one that leaves that "
+                 "stage first explores a question it was never forked for. Let the outstanding ask END before "
+                 "leaving its stage, and give a sub-sequence that can still be in flight while another has "
+                 "answered a STAGE of its own",
+                 h->def->algorithm, (unsigned)h->stage, step_stage_label(h, h->stage),
+                 (unsigned)h->fork_stage, step_stage_label(h, h->fork_stage));
+        DCHECK(h->fork_stage == h->stage, why);
+    }
+#endif
+}
+
 /* THE FORK'S ONE BODY, under both of the questions that use it — see JSStepHdr.fork_kind. `kind` is the only
    thing that differs between an outcome fork and a ToBoolean, and it differs at exactly one line: which seam
    the DRIVER asks. Everything else — the two phases, the borrowed operands, the ask key, the range check on
@@ -26162,6 +26212,10 @@ static int step_fork_ask(JSContext *ctx, JSStepHdr *h, JSValueConst over, const 
                "a step machine's fork named neither of the two questions a fork can be — JS_FORK_KIND_NONE is "
                "the driver's reset value and names nothing, so an ask carrying it is one that never said which "
                "seam must answer it, and the driver would route a predicate to the wrong key space");
+        /* THE STAGE AXIS OF THE SAME OVERLAP THE LINE ABOVE ASKS ABOUT ON THE OPERAND AXIS — `fork_op == NULL`
+           sees a request whose operands never left, and this sees one whose SITE did. Asked before the writes
+           below, because they are what destroys the evidence. */
+        step_fork_inflight(h);
         h->fork_over = over;   /* BORROWED for the length of the request; the driver reads and resets it */
         h->fork_op = op;
         h->fork_n = n;
@@ -29413,6 +29467,43 @@ static void step_request_check(JSContext *ctx, const JSStepHdr *h, int st, bool 
            "performs before the internal method is reached and the omission is silent, because the answer it "
            "gets back is a perfectly ordinary key list. Ask through step_ownkeys_run at the stage that collects "
            "its answer");
+    /* AND A MACHINE THAT IS STILL ASKING FOR SOMETHING STANDS AT ITS OUTSTANDING FORK'S OWN STAGE — the other
+       half of step_fork_inflight's partition, and the half that answers whether JS_STEP_YIELD is admissible
+       while one is pending. IT IS, and the condition is this one: the YIELD arm reads nothing off the machine,
+       sets the delivery to JS_UNDEFINED and jumps to do_step_step, and do_step_park moves that delivery and the
+       live completion into `park_in`/`park_exc` — so not one of fork_over, fork_op, fork_n, fork_real,
+       fork_arm, fork_phase, fork_kind, fork_ask_key or fork_stage is read or written anywhere on the path, and
+       the machine is re-entered at the TOP OF THE SAME STAGE with a filler. That is the identical re-entry shape
+       a fork delivery already produces, which is why step_fork_pending is true across both and why the guarded
+       init built on it is correct for a yield re-entry too.
+       WHAT IS NOT ADMISSIBLE IS LEAVING THE STAGE, and that is what this asks. step_fork_answered_stage refuses
+       the same departure at the CONSUME, which is blind to the two shapes that never reach one: a machine that
+       departs and never asks again, and one that departs and comes back before the ask. Both are reachable from
+       the shape this engine's walks are built out of — a yield latch above the ask plus a conditional stage
+       transition — and both are silent, because every arm on the path is real and in range.
+       SCOPED TO `st > 0`, WHICH IS A CLAIM AND NOT A HEDGE: the loss is another call site TAKING the arm, so it
+       needs a later re-entry to land in. A machine that is DONE or ABRUPT has no later site and takes no arm
+       anywhere — its sibling still holds the arm it was forked for — so firing there would accuse a machine of
+       a completion the standard gave it. */
+    if (st > 0 && step_fork_pending(h) && h->fork_stage != h->stage) {
+        const char *at = step_stage_label(h, h->stage);
+        /* SIZED OVER THE FORMAT'S MINIMUM PLUS THE `%s`/`%d` — see step_fork_inflight's. */
+        char why[1152];
+
+        snprintf(why, sizeof why,
+                 "%s returned step code %d at stage %u (%s) while the fork it asked at stage %u (%s) is still "
+                 "outstanding — the machine LEFT the stage that parked on the ask and is asking to be re-entered "
+                 "anyway, so whichever site that re-entry reaches will consume this question's arm: a real "
+                 "completion, in range, recorded by the flow's decision vector under the OTHER stage's question "
+                 "and read there as the answer to its own. A YIELD is admissible while a fork is outstanding and "
+                 "a DEPARTURE is not: the yield re-enters at the top of the SAME stage with a filler, which is "
+                 "the shape step_fork_pending already groups with a fork delivery. Let the outstanding ask END "
+                 "before leaving its stage, and give a sub-sequence that can still be in flight while another "
+                 "has answered a STAGE of its own",
+                 h->def->algorithm, st, (unsigned)h->stage, at,
+                 (unsigned)h->fork_stage, step_stage_label(h, h->fork_stage));
+        DFAIL(why);
+    }
     if (abrupt_in && st > 0 && JS_HasException(ctx)) {
         /* The stage may still be past the end (that is step_stage_check's diagnosis, and this message should not
            read as if it were the same fault), but the LIST is always there — js_step_def_check saw to that. */
