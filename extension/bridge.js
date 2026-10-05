@@ -6413,9 +6413,23 @@ const _LEVEL1_SHAPE_KEY = { nopool: "rNoPool", idle: "rIdle", waited: "rWaited",
    left in the hot set is re-picked next round (it is the top), so `ops.step` would be issued CONCURRENTLY with
    that engine's own in-flight `serviceFetch` on one renderer port, with `engineRecordFacts` running from two
    async chains and one of them mutating `eng._inflight` while the other reads it.
-   RETIREMENT: this record goes when the pool publishes the SEAT KIND of each member, because the question
-   these rows exist to refine stops being "which bench" and becomes "why is this pool seven engines of one
-   document", which no row in this file can answer today.
+   RETIREMENT -- THAT CONDITION WAS BORN MET AND IS RE-KEYED, AND THE RETIRED WORDING IS KEPT BECAUSE A READER
+   WHO RE-DERIVES IT FROM `_level1Record`'S OWN ROWS WILL WRITE IT AGAIN. It read: "this record goes when the
+   pool publishes the SEAT KIND of each member, because the question these rows exist to refine stops being
+   'which bench' and becomes 'why is this pool seven engines of one document', which no row in this file can
+   answer today". The last clause is FALSE and was false when it was written: `rendererPoolProbe` has published
+   `reservations` all along -- `rooted` (an ambient dispatch rooting a cluster), `seeded` (an address an
+   application declared), `navigated` (a top replaced in a cluster that had one), `rehydrated` (a cold residue),
+   `joinedBooting`/`joinedRooted` (a document attaching to an agent that already has an instance) -- which IS
+   the seat-kind partition, as lifetime counters, one command from a live drive. What is true is narrower and is
+   about a READER rather than about this file: `testing/corpus/site.mjs` composes the census out of
+   `self._level1` and asks `rendererPoolProbe` for none of it, so the archived corpus cannot answer it and a
+   lane reading censuses concludes the row does not exist. That is CLAUDE.md §A-RETIREMENT-CONDITION-IS-
+   GRAMMATICALLY-FUTURE-TENSE caught by its own prescription -- grep the mechanism a condition names AT THE
+   MOMENT YOU WRITE IT -- and the grep that found it was `grep -n _reserveStats extension/bridge.js` against an
+   invented sibling reading zero.
+   RETIREMENT: this record goes when the corpus census carries that `reservations` block beside `hostRound`, so
+   "seven engines of one document" is a row somebody reads rather than a question a lane has to drive for.
    IT IS ITS OWN OBJECT AND NOT TWO MORE ARMS OF `_level1Shapes`, because those sum to `round` by construction
    and are asserted to; these sum to ONE of them. A partition of an arm is not an arm.
    NOTHING HERE DECIDES ANYTHING, AND THE ARM ABOVE STILL DOES NOT READ A STEP CODE TO CHOOSE A BEHAVIOUR —
