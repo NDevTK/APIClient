@@ -864,6 +864,31 @@ const frontierPrograms = (() => {
      population: it reads 11, 61 and 63 in archived native runs on this same object. */
   for (const k of ['replayHits', 'replayLeft', 'replayLeftArms'])
     if (typeof c[k] === 'number') out[k] = c[k];
+  /* AND THE CLOCK BOUNDARY'S THREE ARRIVAL COUNTS, WHICH THIS FILE HAS NEVER TAKEN AND WITHOUT WHICH
+     `fire-due-timer: 0` IS TWO OPPOSITE FINDINGS. solver/result.c says it in its own words: the three clock
+     arms of `stepUnitRuns` are raised only when their hook TAKES the step, so a zero in one is "the rung was
+     reached and the clock legitimately had nothing due" OR "no descent ever got far enough to ask it" — the
+     first a fact about the page's own timers, the second a fact about the arms ABOVE this boundary, and they
+     take opposite work. These three are the ASK, raised ahead of the gate, and they are SUFFIX SUMS rather
+     than a partition: the first counts every descent that reached the chain, the next those the rendering
+     rung did not take, the next those the timer rung did not take either. `unframedStepsLifetime` is the row
+     all three are contained in and is the only thing that licenses reading them against the step total.
+     WHAT IT COSTS, MEASURED ON THIS CORPUS at 20748ad — and it is the whole of a real app's reach. Two
+     back-to-back drives of app.gitpod.io on ONE release artifact, same dwell, same list, differ as follows:
+     `deliver-one-reply` 904 against 909 and `link-connected-time` 97 against 97 and
+     `evaluate-a-module-program` 4 against 4, so the SAME document was loaded and the SAME replies were
+     delivered — while `fire-due-timer` reads 0 against 14154, `run-a-task` 406 against 14634, `unitsDone` 513
+     against 30179, `orphanScripts` 1 against 48, and the product's own razor (`endpointRazorClass`'
+     `runtime-only`) 0 against 5. The low run's clock never advanced and nothing downstream of a timer ran.
+     Which of the two states that is cannot be asked from the archive, because these rows were not carried.
+     RETIREMENT: this record goes when the licence the clock asks for is counted at its own REFUSAL — the
+     `!event_loop_may_advance()` arms in core/timing/timer.c and core/rendering/rendering.c — because the
+     remaining two states behind an ask with no fire are then one row apart. MEASURED ABSENT with the command:
+     `grep -c clockAdvanceDeclined engine/host/solver/result.c` answers 0 against `grep -c
+     stepReachedTimerLife engine/host/solver/result.c` answering 2 as the armed control. */
+  for (const k of ['stepReachedRenderingLife', 'stepReachedTimerLife', 'stepReachedIdleLife',
+                   'unframedStepsLifetime'])
+    if (typeof c[k] === 'number') out[k] = c[k];
   /* …AND THE THREE GLOBAL MAXIMA THE DISTRIBUTION STRUCTURALLY CANNOT CARRY, WITHOUT WHICH A CURSOR READING
      HAS TWO MEANINGS THAT TAKE OPPOSITE WORK. solver/cold.h states the split in its own words — "`program_
      cursors` is its distribution, `deepest`/`deepestLeft`/`completed` are GLOBAL MAXIMA over it" — and that
