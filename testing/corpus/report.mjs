@@ -2315,8 +2315,15 @@ const naOne = (m) => {
     doors[d.key] = !rows.length ? { tok: 'no-rows' }
       : !nums.length ? { tok: 'edge-absent' }
       : nums.length !== rows.length ? { tok: 'rows-partial' }
-      : { named: g('Named'), prop: g('NamedProp'), called: g('Called'),
-          began: g('Began'), offered: g('Offered') };
+      /* AND THE TWO RUNGS THIS CELL USED TO COLLECT INTO `rows` AND THEN NOT READ, which is a narrowing of
+         THIS FILE and not of the producer: `startsWith(d.pre + 'Ask')` already pulled them into the
+         partial-rows test, so an artifact carrying them was judged on them and a reader was never shown
+         them. Neither enters `naVerdict`, deliberately, for the monotonicity reason stated at the property
+         spelling below — a rung whose zero can sit under a nonzero one makes `the lowest 0 is the
+         localisation` false of the whole ladder. They are PRINTED because each carries a split the producer
+         declares load-bearing and no other column here can state. */
+      : { named: g('Named'), prop: g('NamedProp'), typeof_: g('NamedTypeof'), called: g('Called'),
+          began: g('Began'), placed: g('Placed'), offered: g('Offered') };
   }
   return { doors };
 };
@@ -2404,22 +2411,46 @@ const naCell = (x) => {
     const broke = (typeof c.called === 'number' && typeof c.began === 'number' && c.began > c.called)
       ? '!began>called ' : '';
     return d.key + '=' + naVerdict(c) + '(' + broke +
-      'res ' + num(c.named) + '/' + num(c.prop) + ' \u2016 call ' + num(c.called) +
-      '\u2265' + num(c.began) + ' off ' + num(c.offered) + ')';
+      'res ' + num(c.named) + '/' + num(c.prop) + '/' + num(c.typeof_) + ' \u2016 call ' + num(c.called) +
+      '\u2265' + num(c.began) + ' plc ' + num(c.placed) + ' off ' + num(c.offered) + ')';
   }).join(' ');
 };
 if (naShown.length) {
   console.log('\nTHE TWO DATA DOORS\' ASK LADDER OVER ' + naCarried.length + '/' + passes.length +
     ' PASS(ES) — WHICH READING A ZERO `fetch` OR `xhr` DOOR ROW IS.\n' +
-    '  THE CELL IS  res <named>/<prop> \u2016 call <called>\u2265<began> off <offered>  AND THE \u2016 IS A UNIT\n' +
+    '  THE CELL IS  res <named>/<prop>/<typeof> \u2016 call <called>\u2265<began> plc <placed> off <offered>\n' +
+    '  AND THE \u2016 IS A UNIT\n' +
     '  BOUNDARY. Left of it the engine counts COMPILER RESOLUTIONS of the entry name — a program is recompiled\n' +
     '  by every flow that replays it, so those are read as a BIT (zero against nonzero) and NEVER as a\n' +
     '  magnitude, and `prop` is the SAME rung as `named` (`globalThis.fetch` resolves the same entry name),\n' +
     '  printed apart because which spelling a bundle uses is a fact about the bundle. Right of it are stages\n' +
     '  of ONE CALL.\n' +
+    '  `typeof` AND `plc` ENTER NO VERDICT AND ARE THE TWO RUNGS THIS CELL USED TO DROP. solver/endpoint.c\n' +
+    '  calls `named_typeof` the discriminator that keeps the finding honest: quickjs patches an ordinary\n' +
+    '  read into the non-throwing form only for `typeof`, so a bundle that merely PROBES for an entry and\n' +
+    '  uses something else raises that row and NEITHER of the two beside it \u2014 which means a probe-only\n' +
+    '  page reads `never-named` on this ladder and `typeof` is the only column that says otherwise. It is NOT\n' +
+    '  every guard shape: a `window.X` and an `in` test are property reads and reach none of the three.\n' +
+    '  `plc` IS THE XHR EDGE\u0027S OWN MIDDLE STAGE and is why that edge has SIX rows where fetch has five\n' +
+    '  \u2014 solver/endpoint.h: core/fetch OFFERS inside the machine that CONSTRUCTS, while XMLHttpRequest\n' +
+    '  splits that across send() and the lifecycle machine it mints at XHR \u00a73.5.6 step 12/13, so `plc` is\n' +
+    '  row that separates A REQUEST THAT WAS BUILT from AN ADDRESS THAT REACHED THE SURFACE. A cell reading\n' +
+    '  `call N\u2265N plc N off 0` is a page whose every request was constructed and whose every address was\n' +
+    '  lost at the task hop, and WITHOUT `plc` that is the same text as a page whose sends all died inside\n' +
+    '  send(). NO CONTAINMENT IS CLAIMED FOR EITHER, which is why neither carries a `\u2265`:\n' +
+    '  `placed <= began` is FALSE at this edge (a step state is BYTE-COPIED at a deep fork and the copy\n' +
+    '  inherits the capture flag) and `typeof` is on no ladder at all.\n' +
+    '  AND A ZERO `xhr` DOOR OVER THIS CORPUS IS A DECISION AND NOT A GAP, WHICH THE PARTITION ON THE TOTALS\n' +
+    '  LINE BELOW IS WHAT MAKES CHECKABLE. The one apps.tsv row MEASURED to reach this door --\n' +
+    '  app.slack.com, at called/began/placed 379 and offered ZERO, localised to the task hop in\n' +
+    '  solver/endpoint.h\u0027s own words -- has NEVER produced a census row, so this corpus zero is not evidence\n' +
+    '  about the XHR door at all: it is evidence that the pages this corpus can measure construct none.\n' +
+    '  THE REASON IS ABOUT XHR AND REACHES NEITHER `fetch` NOR THE XHR DOOR IN GENERAL. A reader dispatching\n' +
+    '  at `xhrReachedTheDoor: 0` is dispatching at the wrong page; the edge\u0027s own paragraph carries the\n' +
+    '  retirement condition for the real loss.\n' +
     '  NO CONTAINMENT HOLDS ACROSS THE \u2016 IN EITHER DIRECTION — solver/endpoint.c: `called > named` is\n' +
     '  ORDINARY (`window.fetch(u)` is a property read and a shadowed parameter is a local slot) and so is\n' +
-    '  `named > called`. SO `named - called` IS NOT A QUANTITY: a cell reading `res 92 \u2016 call 11` is not\n' +
+    '  `named > called`. SO `named - called` IS NOT A QUANTITY: a cell reading `res 92/4/0 \u2016 call 11` is not\n' +
     '  81 of anything, and this cell was read that way into three task records before the bar was printed.\n' +
     '  `\u2265` IS THE ONE ASSERTED RELATION (a `DCHECKF` at both edges, compiled out in release, so a\n' +
     '  `!began>called` prefix is this cell reading it back). `off` carries no `\u2265` deliberately: at the\n' +
@@ -2431,12 +2462,81 @@ if (naShown.length) {
   console.log('  ' + pad('site', naIdW) + 'PER PASS IN ORDER');
   for (const r of naShown) console.log('  ' + pad(r.id, naIdW) + r.per.map(naCell).join(' | '));
 }
+/* WHY THE `xhr` DOOR READING ZERO OVER THIS CORPUS IS A DECISION, AND EXACTLY WHAT THE REASON COVERS. It is
+   recorded because this row had neither a gap nor a paragraph and a coordinator reading the totals line below
+   nearly dispatched a lane at it; CLAUDE.md §AND-THE-MIRROR-OF-IT-IS-A-ROW-THAT-IS-DELIBERATE is the rule and
+   the one sentence of this that reaches the OUTPUT is in the banner above, because a source comment is read by
+   somebody editing this file and the zero is read by somebody holding a work queue.
+   WHAT THE READING IS NOT. `called 0` beside a nonzero `res` is NOT `named > 0 && called == 0`'s interesting
+   state here, and the four readings a zero door could be -- never named; named in dead code a browser also
+   never runs; named in live code a browser runs and this engine does not reach; named, reached and refused --
+   are separated by OPENING THE BYTES rather than by any column. Derived with the tree's own instruments,
+   never by eye, over `engine/.work/sitecorpus/mirror` (the fetched corpus is untracked by design, so what is
+   handed over is the DERIVATION): a fixed-string walk keyed on the IDENTIFIER and never on a receiver, then
+   `engine/js_guard_shape.mjs`'s `guardShapeReader()` -- 73 armed controls, plus 53 for the member reader --
+   asked for a verdict at every occurrence's own string offset.
+   IT RECONCILES TO THE DIGIT, RUNG BY RUNG, WHICH IS WHAT MAKES THIS A MEASUREMENT RATHER THAN AN ARGUMENT.
+   The dominant site's bundle holds ELEVEN textual occurrences across TWO files, and every one is accounted
+   for: SEVEN are free-identifier reads, of which SIX are ordinary (`res <named>`) and ONE is a `typeof` probe
+   (`res <typeof>`); ONE is a `self.`-spelled global property (`res <prop>`); TWO are members of a MODULE
+   NAMESPACE, which no rung sees because the receiver is not the global object and which the guard reader
+   gives no verdict to by design; and ONE is inside a TextMate grammar's regex STRING and is not a use at all.
+   So the cell's left-hand numbers are not a site count and they are not a floor either -- they are the whole
+   free-identifier population of that bundle, which is why the BIT discipline above costs nothing here.
+   AND NOT ONE OF THE CONSTRUCTIONS IS ON A DOCUMENT-LOAD PATH, which is the answer to `would a real browser
+   construct one`. Two are a media player's (an EME licence request, and its loader's `new self.X`), reached
+   only by playing HLS; TWO are the XHR arm of a `typeof fetch === 'function' ? fetch.bind() : <XHR>` polyfill,
+   so they are dead in any engine that HAS `fetch` and this one does; ONE is inside a `try` whose handler the
+   reader reports as `caught`; and the module-namespace pair sits behind a presence test after a
+   fetch-keepalive path. A browser on that logged-out document constructs none either, so the engine AGREES
+   with it and the right next diff for this row is NOTHING.
+   WHAT THIS DOES NOT COVER, STATED BECAUSE A REASON ABOUT XHR DOES NOT REACH ITS NEIGHBOUR. It says nothing
+   about `fetch`, whose own zero on the same pages is a different question with a different bundle population.
+   It says nothing about the XHR door in general -- solver/endpoint.h measures that door REACHED 379 times on
+   a page this corpus has never measured, and its loss is one task hop further on. And it says nothing about a
+   site appended to apps.tsv later: the derivation is per bundle, so a new row owes it again.
+   NAMED RESIDUAL -- CORRECT AND NARROWER, AND IT IS THIS FILE'S VERDICT WORD RATHER THAN THE PRODUCER'S ROWS.
+   WHAT IS NOT COVERED: a page that names a door ONLY as a member of a NON-GLOBAL receiver raises no rung at
+   all, so it reads `never-named` -- and the banner above calls `never-named` a statement about a PAGE, which
+   for that population it is not. The producer's exclusion is DELIBERATE and read rather than assumed:
+   solver/concolic.c's `compile_global_member_dispatch` returns early unless the base is one of four source
+   spellings of the global, saying in its own words that a wrapper's member and a bundler re-export shim
+   `would raise a denominator neither census owes`; and quickjs reports `<free identifier>.<member>` ONE field
+   deep, so the tail of a two-deep chain reaches no hook whatever the receiver is. Both are right where they
+   are, which is why the narrowing is here.
+   WHAT THE NEXT DIFF BUILDS: a verdict this file can distinguish -- `no rung rose` apart from `this page
+   spells the entry somewhere no rung can see` -- which needs ONE row this ladder does not yet get, a count of
+   the entry name reported at a receiver the dispatch declined, raised beside the three it already reports and
+   consumed here as its own token. Until that row exists the distinction is not computable from a census,
+   because the only other operand is the page's bytes and those are not this instrument's to read.
+   HOW ITS ABSENCE WOULD SHOW: a site whose cell reads `never-named` for a door while a fixed-string walk of
+   that site's own mirrored bundle, keyed on the entry IDENTIFIER and never on a receiver, answers nonzero.
+   Observed by running that walk over `engine/.work/sitecorpus/mirror/<id>` beside the site's row -- the
+   corpus is untracked, so this is an observation a reader takes and never a column this file can print.
+   RETIREMENT: this record goes when a `never-named` cell in this ladder cannot be printed for a door whose
+   entry name the producer reported at a declined receiver. */
 /* AND THE CORPUS FIGURE, WITH EVERY SHARE'S DENOMINATOR ON THE SAME LINE. A count over a corpus that does not
    say how many passes it is over, and over how many sites could be asked at all, belongs to a population a
    reader cannot name — and the two doors are counted SEPARATELY for the reason above. */
 console.log('data-door totals: ' + JSON.stringify(Object.assign({
   passes: passes.length, passesCarryingTheField: naCarried.length,
   sitesStatingALadder: naRows.filter((r) => r.stated > 0).length,
+  /* AND THE ONE DENOMINATOR THE THREE ABOVE CANNOT STATE: HOW MANY LADDER READINGS EACH SITE CONTRIBUTED.
+     `sitesStatingALadder` counts SITES and every door share below is a count of SITES, so a reader takes
+     `xhrReachedTheDoor: 0` of 7 for a statement about seven pages — and it is not one, because a site's
+     verdict is a MAXIMUM over its own passes and the passes are not distributed evenly across sites. A
+     corpus whose readings are nine tenths one page states a door's verdict for that page and carries six
+     other pages at one reading each; CLAUDE.md §a-coverage-figure-states-what-it-is-a-fraction-of is the
+     rule and this is its operand. It is a PARTITION and never a share, so `ladderRows` is printed beside it
+     and the per-site counts SUM to it — an identity a reader checks on this line without running anything,
+     which is the whole reason the breakdown is here rather than in a second command.
+     IT IS NOT THE SAME QUANTITY AS `passesCarryingTheField`, and the two are printed together so neither
+     can be read as the other: that one counts PASSES whose rows carry `netDoorAsk` at all, and this counts
+     (site, pass) readings that actually stated a ladder. A pass can carry the field and state no ladder for
+     a site it did not measure. */
+  ladderRows: naRows.reduce((a, r) => a + r.stated, 0),
+  ladderRowsPerSite: Object.fromEntries(naRows.filter((r) => r.stated > 0)
+    .sort((a, b) => b.stated - a.stated).map((r) => [r.id, r.stated])),
 }, ...NET_DOORS.map((d) => ({
   [d.key + 'ReachedTheDoor']: naRows.filter((r) => r.best[d.key] && r.best[d.key].verdict === 'reached-the-door').length,
   [d.key + 'NeverNamed']: naRows.filter((r) => r.best[d.key] && r.best[d.key].verdict === 'never-named').length,
