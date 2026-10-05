@@ -650,7 +650,21 @@ static void *cow_state_save(JSContext *ctx, const CowEntry *e) {
        allocation's sale re-enters this file through the page's write hook. */
     DCHECK(cow_hooks_off(), "a COW state blob was saved with the page's write hooks still armed");
     switch (e->state_kind) {
-    case COW_STATE_MODULE: return JS_ModuleEvalStateSave(ctx, e->target);
+    case COW_STATE_MODULE: {
+        /* THE SAME `CHECK` FIVE ARMS BELOW ALREADY MAKE, AND IT WAS MISSING HERE AND IN THE ASYNC ARM FOR ONE
+           REASON: both of those kinds CHECK their blob at the CAPTURE instead, where the save is called
+           directly rather than through this switch. So the baseline could not be NULL and the FLOW SIDE could,
+           because `cow_save_cur` reads it back through here — and a NULL landing in `a_cur` is not a crash but
+           a LOST REPLAY: JS_ModuleEvalStateRestore's own first line is `if (!b) return;`, so the apply
+           re-installs NOTHING and the flow resumes holding whatever evaluation state the sibling that ran in
+           between left behind, which is exactly the cross-flow leakage cow_capture_module_eval exists to end.
+           It is a CHECK and not a DCHECK by §Offensive-programming's own criterion, which names allocation by
+           name: a dropped capture corrupts the frontier rather than degrading it. */
+        void *blob = JS_ModuleEvalStateSave(ctx, e->target);
+        CHECK(blob, "cow: OOM saving a module's evaluation state — a lost flow side is replayed as nothing, so "
+                    "the flow resumes on a sibling's evaluation and reads exports it never wrote");
+        return blob;
+    }
     case COW_STATE_HOST: {
         void *blob = reclaim_malloc(e->a_len);
         CHECK(blob, "cow: OOM saving a component's own state — a lost latch leaks one flow's read into another");
@@ -694,7 +708,16 @@ static void *cow_state_save(JSContext *ctx, const CowEntry *e) {
     }
     default:
         DCHECK(e->state_kind == COW_STATE_ASYNC, "a COW state entry names a target kind with no save");
-        return JS_AsyncStateSave(ctx, e->obj);
+        {
+            /* The MODULE arm's reason exactly, and the two were the same miss: this kind CHECKs its blob at
+               the capture, so the arm that reads the FLOW side back had nothing standing under it, and
+               JS_AsyncStateRestore tolerates a NULL — so a lost settlement is replayed as a no-op and the arm
+               resumes on whichever sibling settled the promise last. */
+            void *blob = JS_AsyncStateSave(ctx, e->obj);
+            CHECK(blob, "cow: OOM saving a shared async object's settlement — a lost flow side is replayed as "
+                        "nothing, so the arm resumes on a sibling's settlement");
+            return blob;
+        }
     }
 }
 static void cow_state_restore(JSContext *ctx, const CowEntry *e, void *blob) {
@@ -944,7 +967,28 @@ void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
    evaluates at all, so leaving them baseline let the FIRST flow's evaluation stand for every sibling while the
    bindings it wrote stayed private to it. The sibling then read exports nothing had written in its world. There
    is no flow-private skip here: a module record is reachable from the realm's module map the moment it loads, so
-   it is shared state whoever created it. */
+   it is shared state whoever created it.
+   RESIDUAL — THE LINK PHASE WRITES THESE SAME FIELDS AND DOES NOT CALL THIS HOOK, AND THE OVER-CLAIM IS WHAT
+   MAKES THAT INVISIBLE: "the state that decides whether a flow evaluates at all" is the state that decides
+   whether a flow LINKS at all, and §16.2.1.6.1.2 Link ( ) writes `status`, `dfs_index`, `dfs_ancestor_index`
+   and `stack_prev` at THREE sites — the pre-order claim (UNLINKED->LINKING), the SCC pop (LINKING->LINKED) and
+   step 4's reset (LINKING->UNLINKED) — none of which announces itself, while `JSModuleEvalState` already holds
+   every one of those four fields. So the eval phase is per-flow and the link phase is baseline, which is one
+   phase isolated two ways: every world reads the module LINKED while only the linking world ran the §16.2.1.7.3.1
+   prologue that initialises its top-level FUNCTION DECLARATIONS, and those are cells born JS_UNINITIALIZED.
+   WHAT IS NOT COVERED is therefore a property of the engine's call graph and not a population: a write to a
+   field this blob holds, from a function this hook is not called by.
+   WHAT THE NEXT DIFF BUILDS is `js_module_eval_capture(ctx, m)` at those three sites — threading a `JSContext *`
+   into all three, none of which takes one today, and lifting that function's forward declaration above them.
+   IT IS NOT a `cow_capture_host_record` over the module graph, which is what the engine's own `unforkable`
+   refusal prescribes: that primitive is a byte copy plus one dup per JSValue at a named offset, and a module
+   record owns ATOMS and a counted array of JSVarRef* that no `val_off` can name — the identical reason cow.h
+   gives for the for-in record not taking the byte arm. The refusal's premise ("no COW delta captures" those
+   fields) is the claim this entry kind retired; its conclusion still holds for the var_ref double-count.
+   HOW ITS ABSENCE WOULD SHOW: a flow reaching module evaluation on a record whose status is BELOW linked, which
+   the engine asserts at its own §16.2.1.6.1.3.1 entry, and `cowStateAsks.module` rising only on reaches made
+   after a graph is already linked. RETIREMENT: this goes when a write to a field JSModuleEvalState holds cannot
+   compile without a capture in front of it. */
 /* The setter/ownership pair for a coroutine-state entry, chosen by its kind. */
 static void cow_gd_install(const CowEntry *e, void *gd) {
     if (e->is_gendata == 2) JS_SetObjAsyncData(e->obj, gd);
@@ -1088,6 +1132,17 @@ void cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *base_dat
 
 void cow_capture_module_eval(JSContext *ctx, void *mod) {
     CowDelta *d;
+    /* A SILENT `if (bad) return` PAST THIS HOOK IS THE LEAK IT EXISTS TO PREVENT, which is why this is an
+       assert and not a skip: every one of the engine's six call sites holds a module record it took from the
+       graph, so a NULL is this codebase's own logic wrong, and the write that follows the call then lands
+       outside the running flow's delta and is seen by every sibling. The invariant is already asserted on the
+       engine side — two linking sites DCHECK a module request's record against §16.2.1.9 — and was tolerated
+       here. The return stays for release, where a lost capture is better than a dereference.
+       RETIREMENT: this goes when the hook takes a type the engine cannot spell a NULL into. */
+    DCHECK(mod != NULL,
+           "cow: the module-evaluation capture was handed NO module record. Its caller is about to write a "
+           "field this entry would have captured, and that write will be baseline state every sibling flow "
+           "sees — the module read EVALUATED in a world that never evaluated it");
     if (!mod) return;
     d = cow_state_ask(COW_STATE_MODULE);
     if (!d) return;
@@ -1659,7 +1714,25 @@ static void cow_apply_entries(JSContext *ctx, CowEntry *ents, int n, const char 
     for (int i = 0; i < n; i++) {   /* forward: replay the writes over the chain below */
         CowEntry *e = &ents[i];
         if (e->is_gendata) { cow_gd_install(e, e->g1); continue; }   /* install this flow's own clone */
-        if (e->is_state) { cow_state_restore(ctx, e, e->a_cur); continue; }   /* re-install what this flow produced */
+        if (e->is_state) {
+            /* THE BANNER BELOW SAYS THIS SENTENCE IS "SAID ONCE FOR THE WHOLE UNIT" AND IT WAS NOT: its
+               `DCHECKF` reads `cur_state`, which is the PROPERTY and CELL entry's recorded-ness, and a state
+               entry records its flow side in `a_cur` and never touches `cur_state` at all — so every state
+               entry `continue`s past the check five lines above the claim. The HOST arm of cow_state_restore
+               held the invariant for one kind by accident of what would crash, which is the very asymmetry
+               that banner set out to end; this is it stated for the kind whose violation is a VALUE. The two
+               sides can disagree: apply a state entry whose flow side no unapply has read back and this
+               fires, which is the same reachability argument the banner makes and not a second one. */
+            DCHECKF(e->a_cur != NULL,
+                    "a COW apply met a STATE entry whose flow-side blob was never saved — entry %d of %d, kind "
+                    "`%s`, applied by %s. MODULE and ASYNC restore a NULL blob as a NO-OP, so this flow resumes "
+                    "on whatever a sibling left in that module's evaluation state or that promise's settlement. "
+                    "Either this unit was applied without having been unapplied, or an entry was appended to a "
+                    "head that was not on the heap — the two are told apart by which caller is named",
+                    i, n, cow_state_kind_name(e->state_kind), who);
+            cow_state_restore(ctx, e, e->a_cur);   /* re-install what this flow produced */
+            continue;
+        }
         if (e->is_map) {   /* replay the flow's record mutation: ADD/OVERWRITE->set new value, DELETE->delete */
             if (!cow_map_live(e)) continue;   /* the key is gone; see the unapply arm */
             if (e->map_op == COW_MAP_DELETE) JS_MapDeleteRecord(ctx, e->obj, cow_map_key(e));

@@ -203,8 +203,13 @@ void      cow_capture_async_state(JSContext *ctx, JSValueConst obj);
 
 /* Install as JSTimeTravelHooks.module_eval: capture a MODULE record's evaluation state (status + capability +
    cycle fields) before this flow changes it. Its BINDINGS are closure cells cell_write already captures; this is
-   the state that decides whether a flow evaluates the module at all, so without it the first flow to import a
-   chunk left it EVALUATED for every sibling and the siblings read its exports as TDZ. */
+   the state that decides whether a flow EVALUATES the module, so without it the first flow to import a chunk
+   left it EVALUATED for every sibling and the siblings read its exports as TDZ.
+   IT IS NOT THE WHOLE OF `status`, AND READING IT AS "whether a flow evaluates the module AT ALL" IS WHAT SENT
+   TWO READERS AT THE WRONG PRIMITIVE: §16.2.1.6.1.2 Link ( ) writes the same four fields at three sites that do
+   not call this hook, so the link phase is baseline where the eval phase is per-flow. The capture is CORRECT and
+   NARROWER; the named residual at its definition in cow.c states the three sites, what the next diff builds, and
+   why that diff is not a cow_capture_host_record over the module graph. */
 void      cow_capture_module_eval(JSContext *ctx, void *mod);
 
 /* Capture a BROWSER COMPONENT's own mutable C record (`n` bytes at `p`) before this flow changes it. A component
