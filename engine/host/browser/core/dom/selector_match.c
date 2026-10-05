@@ -593,6 +593,24 @@ bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *li
 {
     SelHit h = { false, 0 };
 
+    /* THE CALLER'S RECORD IS WRITTEN HERE, BEFORE ANY RETURN CAN BE TAKEN, AND NOT ONLY AT THE TAIL.
+       The non-element arm below returns a definite `false` -- a text or comment node matches no selector and
+       asks nothing -- and it returned it with `out_undet` UNWRITTEN, so the one caller that keeps a record read
+       an UNINITIALISED stack struct on its very next line. DOM §1.3 step 3's walk visits every node of the
+       subtree, so that is MOST of them rather than an edge case.
+       ONE READ, TWO ABORTS, NEITHER AT THE SITE THAT PRODUCED IT, which is why this is recorded here and not
+       where it fired: `undetermined` and `forkable` read true from whatever the slot held, so the walk filed a
+       fork; `selector_undet_key` composed the key from `attr`/`operand`, which printed the previous frame's
+       bytes; and `over` was a JSValue the outcome seam then refused as not unknown. A constraint key is what a
+       parked flow's recorded answers are filed under, so the quiet arm of this was a key naming stale memory.
+       IT IS DISCHARGED BEFORE THE FIRST BRANCH RATHER THAN AT EACH CALLER, because the contract is this
+       function's: a caller-side initialiser is one guard per call site and the next call site forgets it,
+       while a new early return added anywhere below this line inherits a written record. */
+    if (out_undet != NULL) {
+        memset(out_undet, 0, sizeof *out_undet);
+        out_undet->over = JS_UNDEFINED;   /* a tag of 0 is a tag and not `undefined` -- g_undet's own reason */
+    }
+
     DCHECK(g_arena != NULL, "a selector was matched before selector_match_init ran");
     DCHECK(g_arena->host == &HOST_CB,
            "the agent's selector-matching arena has no host-language answer table — a `:defined` in the "
