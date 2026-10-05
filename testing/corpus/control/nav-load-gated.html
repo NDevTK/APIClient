@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>control — the child document nav-load.html's FORCED rung names and must never reach</title>
+<!--
+  SERVED, AND IT MUST NEVER BE REQUESTED BY ANY CLIENT. That is `/f/bare.js`'s rule in this directory: a 404
+  cannot tell "never requested" from "requested and missing", and the rung that names this file reads an
+  ABSENCE at both ends — real Chrome never creates the frame, because `window.__FLAGS` is absent and it takes
+  the other arm; the engine creates it on a FORCED arm, and `safe-fetch.js`'s navigation arm requires
+  `provenance=derived`, so the load is refused.
+
+  ITS ONE `fetch` IS A POSITIVE FALSIFIER AND THAT IS THE WHOLE REASON IT IS HERE. A bound scored on two
+  absences is weak; `/api/navload-gated-ran` is a line NOTHING in this system can produce today, so if it ever
+  appears in the access log the bound is gone and the log says so without anybody having to notice a missing
+  row. It is INLINE and needs no orphan drive and no reply, so it fires the instant this document is parsed by
+  anything at all — which is what makes its absence a statement about the POLICY rather than about reach.
+
+  THE ADDRESS IS A CONSTANT, for §A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE-UNKNOWN, and
+  it is DISTINCT from every address nav-load-child.html uses so that one grep separates "the forced child ran"
+  from "the derived child ran". The two children are the two arms of one question and must not share a line.
+-->
+<h1>gated child — the policy must refuse this document's load</h1>
+<script>fetch('/api/navload-gated-ran');</script>

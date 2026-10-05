@@ -92,6 +92,8 @@
 //     node site.mjs control-method http://127.0.0.1:8908/ <pass>
 //     node site.mjs control-gated http://127.0.0.1:8909/ <pass>
 //     node site.mjs control-preload http://127.0.0.1:8910/ <pass>
+//     node site.mjs control-navdecline http://127.0.0.1:8911/ <pass>
+//     node site.mjs control-navload http://127.0.0.1:8912/ <pass>
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -169,6 +171,21 @@ const DOCS = [
      NOTICE with no id, where `bridge.js` correctly aborts instead. Both are right and only one is a
      decline, so a cross-origin iframe would measure the abort and never the park. */
   ['nav-decline.html', 'control-navdecline'],
+  /* THE ONE DOCUMENT HERE WHOSE CHILD NAVIGABLE THE POLICY *LOADS*, APPENDED FOR THE REASON STATED AT THE
+     TOP OF THIS TABLE. `safe-fetch.js`'s last default arm makes a child navigable the page's own markup
+     named FIRE, and nothing in this tree could score the CONSEQUENCE of that — whether the child's document
+     then executes and puts rows on the emitted surface. nav-decline.html cannot ask it: both of its rungs
+     are `derived`, so at the table as it now stands both of them fire and the decline it is named for is no
+     longer what it measures (its own head records that). This row holds the three questions that one cannot
+     — does the child's document RUN, does it clear the product's hard bar, and does the FORCED bound hold.
+     ITS REGRESSION MODE IS A SILENT ZERO AND NOT AN ABORT, which is why it is its own origin: a child
+     navigable that stops loading, or a forced one that starts, moves THIS origin's own log rather than
+     another channel's published baseline.
+     AND ITS PRIMARY ORACLE IS THE `REQ` LOG BELOW rather than a census column, because the claim is a
+     DIFFERENCE between three clients — real Chrome, the ambient seed, and the engine's own §7.4 navigation —
+     and the addresses nav-load-child.html composes are written so that one grep separates them. The census
+     row is the only reader of the hard-bar rung and is named in that document's floors. */
+  ['nav-load.html', 'control-navload'],
 ];
 
 /* THE ONE NON-SCRIPT SUBRESOURCE ANY ROW FETCHES, and it is answered by every origin for the same reason the
@@ -178,6 +195,26 @@ const DOCS = [
    gates on are present and `false`, and one it gates on is absent — see loaded-config.html, which names what
    each one is for and why answering either of them concretely loses an endpoint. */
 const CONFIG = '{"region":"us-east-1","tier":"gold","admin":false,"nested":{"beta":false}}';
+
+/* THE CHILD DOCUMENTS THE `nav-*` ROWS NAME, EACH SERVED BY EVERY ORIGIN AND EACH EXPECTED TO BE REQUESTED BY
+   A DIFFERENT SET OF CLIENTS. Every one is SERVED rather than 404'd for `/f/bare.js`'s reason exactly: a 404
+   cannot tell "never requested" from "requested and missing", and all three of these rungs read an ABSENCE
+   somewhere.
+     /nav/child.html        nav-decline.html's child. Real Chrome asks for it at `dest=iframe`; that half is
+                            measured and is what proves the markup, both of its rungs and this route. Its own
+                            head carries why `dest=empty` cannot separate the engine's navigation from the
+                            ambient seed of the same address.
+     /nav/load-child.html   nav-load.html's DERIVED child, which the default table now LOADS. It is the one
+                            child written to say WHO requested it: its three call sites partition real Chrome,
+                            the ambient seed and the engine's own §7.4 navigation, and that document states
+                            which address each client can produce.
+     /nav/load-gated.html   nav-load.html's FORCED child, which must never be requested by anything. Its one
+                            inline `fetch` is a POSITIVE falsifier for that bound — `/api/navload-gated-ran` is
+                            a line nothing in this system can produce today, so the log says so if it breaks
+                            rather than a reader having to notice a missing row.
+   THE PATHS ARE UNDER `/nav/` so the `.js`-and-root rule at the bottom cannot serve them by accident, which is
+   the reason the single-path form of this route gave and which an allowlist keeps. */
+const NAV_CHILDREN = ['/nav/child.html', '/nav/load-child.html', '/nav/load-gated.html'];
 
 /* THE ONE IMAGE ANY ROW FETCHES, and it is a CONSTANT for the reason preload-image.html states about every
    byte of its witnesses: a payload composed from anything the engine computed can itself become unknown, and
@@ -264,9 +301,19 @@ DOCS.forEach(([doc, name], i) => {
        from the seed of a document Chrome loaded, and `nav-decline.html` names the sound oracle instead. It is a PATH UNDER `/nav/` rather than `/nav-child.html` so that the `.js`-and-root rule below
        cannot serve it by accident: this route is the only thing that answers it, and a reader grepping for who
        serves it finds one line. */
-    if (p === '/nav/child.html') {
+    /* AND THE SAME ROUTE NOW ANSWERS FOR EVERY CHILD DOCUMENT, OVER AN EXPLICIT LIST AND NOT A DERIVATION.
+       `/nav/child.html` behaves BYTE-IDENTICALLY to the single `if` this replaces — same file, same
+       content-type — so nav-decline.html's row is untouched; what is added is nav-load.html's two children.
+       IT IS AN ALLOWLIST AND NOT `nav-$1.html`, WHICH IS THE DERIVATION A READER REACHES FOR AND IS WRONG:
+       mapping `/nav/<x>.html` onto `nav-<x>.html` would make `/nav/load.html` serve `nav-load.html`, putting a
+       DOCS document at a second path — and this table's own rule is that `/` is the only path that serves one,
+       because a document reachable at a second origin's path goes back into that row's union. A list cannot
+       reach a DOCS entry; a pattern can.
+       A READER GREPPING FOR WHO SERVES A CHILD STILL FINDS ONE LINE, which is the property the single `if`
+       had: the name is in the list and the list is here. */
+    if (NAV_CHILDREN.indexOf(p) >= 0) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      return res.end(readFileSync(join(D, 'nav-child.html')));
+      return res.end(readFileSync(join(D, 'nav-' + p.slice('/nav/'.length))));
     }
     if (p === '/route.rsc') {
       res.writeHead(200, { 'content-type': 'text/x-component' });

@@ -2,6 +2,41 @@
 <meta charset="utf-8">
 <title>control — a SAME-ORIGIN child navigable the egress policy refuses</title>
 <!--
+  ─── RETIREMENT NOTE, LANDED BY A LATER LANE: THIS DOCUMENT'S TWO RUNGS NO LONGER MEASURE A DECLINE, AND THE
+      PROSE BELOW IS KEPT RATHER THAN REWRITTEN BECAUSE EVERY WORD OF ITS REASONING IS STILL SOUND AND A
+      READER WHO RE-DERIVES IT FROM THE `value` BUCKET WILL WRITE IT AGAIN. ───────────────────────────────
+
+  WHAT MOVED IS THE ARM TABLE AND NOT THE ARGUMENT. The paragraph headed "WHY IT IS REFUSED AT ALL" is exactly
+  right about the state it was written in: a navigation's destination was read into the `value` bucket, the only
+  arm admitting that for a page's own act additionally required `witness=unpinned`, and a navigation states
+  `unstated` — so EVERY derived child navigable was refused. `safe-fetch.js` now carries a FIFTH default arm,
+  `destination=navigation AND actor=page AND provenance=derived`, which the project owner decided in the
+  affirmative. BOTH RUNGS BELOW ARE `derived` — rung 1 because the parser inserts it with no running flow at
+  all, rung 2 because its path forces nothing — so BOTH OF THEM NOW FIRE, and the decline this document is
+  named for is no longer what it measures. Asked of the chokepoint rather than inferred:
+  `node testing/egress_arm_probe.mjs` prints that arm and scores both halves of the decision.
+
+  SO THE READING OF THIS ROW HAS INVERTED AND ITS ORACLE PARAGRAPHS NOW POINT THE OTHER WAY. The sound oracle
+  named below — `blocked-signal:destination=navigation` in the drive transcript — was a thing whose PRESENCE
+  would have proved the engine reached step 14. It is now a thing whose presence would be a REGRESSION: a
+  derived child navigable that is still refused means the arm stopped firing. Its ABSENCE, which this document
+  recorded as its own finding ("the engine does NOT reach a child-navigable load here"), is now the expected
+  state and is no longer a reading about reach.
+
+  WHAT THIS ROW IS STILL THE ONLY SUBJECT FOR, AND WHY IT IS NOT DELETED. The DECLINE ROUTE is unchanged and
+  is still exercised by nothing else: `qjs_host_decline` / `engine_host_decline` / `flow_decline_fork`'s HOSTREQ
+  arm route a refused §7.4.5 load to the rendezvous the engine is parked on, so the navigable keeps its initial
+  `about:blank` rather than being handed an error page. That route is now reached only on a FORCED path, which
+  is the arm's third conjunct and is the bound of the owner's decision — and `nav-load.html` is where that bound
+  has a rung, beside the two questions this document cannot ask (whether the child's document EXECUTES, and
+  whether it clears the product's hard bar). Two origins, one question each, for serve.mjs's stated reason.
+
+  NOTHING IN THIS FILE'S BYTES BELOW THIS NOTE WAS CHANGED, WHICH IS DELIBERATE AND IS A DENOMINATOR FACT. A
+  comment is not a statement and this row's census columns cannot see one, so every floor this document has
+  ever published still means what it meant; a rung added or an address changed here would have moved a
+  published baseline, which CLAUDE.md §AND-THE-QUALIFICATION-THAT-RULE-NEEDS measures the cost of.
+-->
+<!--
   THE ONE DOCUMENT IN THIS DIRECTORY WITH A CHILD NAVIGABLE, AND IT EXISTS BECAUSE AN ENGINE ENTRY LANDED
   WITH NO SUBJECT. `qjs_host_decline` / `engine_host_decline` / `flow_decline_fork`'s HOSTREQ arm route a
   §7.4.5 document load the chokepoint REFUSES to the rendezvous the engine is parked on, so the navigable

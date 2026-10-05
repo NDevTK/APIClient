@@ -1,0 +1,203 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>control — a child navigable the egress policy LOADS, and the forced one it still refuses</title>
+<!--
+  INSTRUMENT CONTROL, CHILD-NAVIGABLE HALF, AND IT EXISTS BECAUSE AN OWNER DECISION LANDED WITH NO SCORABLE
+  SUBJECT. `safe-fetch.js`'s last default arm — `destination=navigation AND actor=page AND provenance=derived`
+  — makes a child navigable whose address the page's own markup named or its own code computed FIRE at the
+  unwidened table. `node testing/egress_arm_probe.mjs` prints that arm and scores both halves of it. What no
+  document in this tree could show is the CONSEQUENCE: that the child's document then reaches the frontier and
+  puts rows on the emitted surface. CLAUDE.md §THE-SAME-HOLE-SWALLOWS-A-PREDICTION is exactly that gap — an
+  absent refusal is confirmed identically by a correct fix and by a path nobody took.
+
+  IT IS NOT nav-decline.html AND IT DOES NOT REPLACE IT, WHICH IS A MEASURED SPLIT RATHER THAN A TIDY ONE.
+  That document's two rungs are both `provenance=derived`, so at the table as it now stands BOTH OF THEM FIRE
+  and the decline it is named for is no longer what it measures — see the retirement note at its own head.
+  What it still holds that this does not is the ROUTE: `qjs_host_decline`/`flow_decline_fork`'s HOSTREQ arm,
+  the park that keeps the initial `about:blank` when a navigation IS refused. This document holds the other
+  three questions, none of which that one can ask: whether the child's document EXECUTES, whether it clears
+  the product's own hard bar, and whether the FORCED bound holds. One origin each, for serve.mjs's reason.
+
+  WHY A NEW ORIGIN AND NOT A RUNG ADDED TO AN EXISTING DOCUMENT. CLAUDE.md
+  §AND-THE-QUALIFICATION-THAT-RULE-NEEDS measured a control fixture's statement count moving 228 -> 246 in one
+  session while every lane quoting a reach figure against it was quoting a moving denominator. A NEW document
+  changes nobody's: it is APPENDED to serve.mjs's `DOCS` (never inserted, for the reason stated at that table),
+  so every port already written down keeps its document, and no published row's floors move. The only existing
+  file this lane changed otherwise is nav-decline.html, and only its COMMENT — prose is not a statement and its
+  census columns cannot see it.
+
+  ─── THE THREE RUNGS, ONE QUESTION EACH, AND WHAT EACH IS FOR ──────────────────────────────────────────────
+
+  RUNG 1 — DOES A DERIVED CHILD NAVIGABLE LOAD AT ALL, AND DOES ITS DOCUMENT RUN. The `<iframe src>` below.
+  §4.8.5 "process the iframe attributes" runs at INSERTION, so the load is enqueued while the parse is still
+  running and there is NO RUNNING FLOW — which navigable.c says in its own words is why
+  `engine_provenance_of_running_path` answers `derived` here, in the under-claiming direction, rather than
+  because any path analysis said so. So this rung's provenance is `derived` BY CONSTRUCTION and not by luck.
+  Asked of the chokepoint with both controls armed, its vector
+  `destination=navigation actor=page provenance=derived witness=unstated` FIRES.
+
+  RUNG 2 — DOES THE CHILD'S DOCUMENT CLEAR THE PRODUCT'S OWN HARD BAR. Inside the child, and stated there.
+
+  RUNG 3 — THE BOUND: A CHILD NAVIGABLE ON A FORCED PATH MUST STILL BE REFUSED. The script below. A bound
+  nothing exercises is not a bound, and a fixture holding only RUNG 1 cannot tell an arm that WORKS from an arm
+  that fires for everything.
+
+  ─── THE ORACLE, WHICH IS THE PART nav-decline.html COULD NOT SOLVE AND IS WHY THIS DOCUMENT'S CHILD IS
+      WRITTEN THE WAY IT IS ────────────────────────────────────────────────────────────────────────────────
+
+  TWO CONFOUNDS STAND BETWEEN A REQUEST IN THE ACCESS LOG AND THE CLAIM BEING SCORED, and nav-decline.html
+  names the first at length: `sec-fetch-dest` separates a BROWSER subresource load (`iframe`, `image`) from
+  every request the engine makes (`empty`), and it cannot separate the engine's own §7.4 navigation from the
+  AMBIENT SEED of the same document — Chrome loads each child, the content script in each child frame ships
+  its document, and the zone fetches it as a seed, which fires through the `provenance=observed AND
+  doc-reach=observed` arm. Both arrive `dest=empty` for the same address. The second confound is the same thing
+  one level in: a seeded child is ANALYSED, so any observable inside it is produced by the seed whether or not
+  the navigation ever fired.
+
+  SO THE CHILD'S WITNESSES ARE WRITTEN TO PARTITION THREE CLIENTS RATHER THAN TO PROVE ONE, and the
+  discriminators are two properties no header carries: WHETHER THE DOCUMENT IS A FRAME (`window.parent !==
+  window`, which a seeded top-level document answers the other way) and WHETHER THE CODE WAS FORCED (an
+  orphan drive of a function nobody calls, which Chrome never performs). The four addresses and who can
+  produce each — every payload a CONSTANT, for §A-WITNESS-CARRIES-CONSTANTS-ONLY:
+
+                                        real Chrome   engine, as a SEED   engine, as a CHILD NAVIGABLE
+      /api/navload-child-framed             yes              no                      yes
+      /api/navload-child-top                no               yes                     no
+      /api/navload-orphan-framed            no               no                      YES  <- the claim
+      /api/navload-orphan-top               no               yes                     no
+
+  `/api/navload-orphan-framed` is produced by NOTHING ELSE IN THIS SYSTEM, so its presence is the witness arm
+  4 needs and its absence is readable rather than ambiguous — `-child-framed` present with it absent says the
+  route and the markup are right and the engine did not execute the child; `-orphan-top` present says the SEED
+  analysed it and the navigation did not. `-child-framed` is also the ARMED POSITIVE CONTROL on this server
+  route, and it needs no orphan luck, which matters because index.html records the orphan drive as the rung
+  that loses races: engine.c seeds one only from the branch a flow reaches when it has run out of every other
+  kind of work, and takes ONE per call.
+
+  AND THE SERVER'S ACCESS LOG IS THE RIGHT CHANNEL AND IS NOT RETAINED, WHICH IS STATED HERE BECAUSE A FIGURE
+  READ OFF IT IS UNREPRODUCIBLE AND NOTHING ELSE SAYS SO. serve.mjs calls that log "THE ONLY ORACLE IN THIS
+  DIRECTORY THAT IS NOT THE ENGINE REPORTING ON ITSELF" and it is right; it is `console.log` to the stdout of
+  whatever shell the lane started the server in, and `run.sh` captures the HARNESS transcript and not the
+  server's. MEASURED over the 148 files of testing/corpus/logs at this lane's revision: lines matching the
+  construct `(^|\] )REQ [a-z]` number ZERO, against `ast-worker` as a positive control answering in 74 files.
+  So a lane scoring this document REDIRECTS serve.mjs's stdout to a file it names, and quotes that path beside
+  any count — CLAUDE.md §AND-A-SCRATCH-DIRECTORY-HOLDS-RUNS-OF-SEVERAL-SUBJECTS, where the subject is the
+  oracle rather than the run.
+
+  THE SECOND ORACLE IS THE CENSUS ROW AND IT ANSWERS A DIFFERENT QUESTION — not "did the request go out" but
+  "did the child's document reach the EMITTED SURFACE", which is what the owner decision is actually about.
+  It is also the only reader of RUNG 2. Both are named in the floors below.
+
+  THE THIRD IS THE ZONE'S OWN REFUSAL RECORD, `blocked-signal:destination=navigation` in the drive transcript,
+  and it is the engine reporting on itself — weaker than an outside oracle, and the only POSITIVE witness RUNG
+  3 has. Its ABSENCE was nav-decline.html's whole reading and is now RUNG 1's prediction, which is why RUNG 3
+  needs it present: one channel carries a positive witness for each rung, so neither is scored on an absence
+  alone.
+
+  ─── WHAT THIS DOCUMENT MUST PRODUCE. FLOORS, never equalities, named so a miss is attributable to one rung
+      rather than to "the count moved" ─────────────────────────────────────────────────────────────────────
+
+  IN THE SERVER'S ACCESS LOG, tagged `control-navload` (and `dest=` is what separates Chrome from the engine):
+      GET /nav/load-child.html        >= 2    Chrome at `dest=iframe`, and the engine at `dest=empty`
+      GET /api/navload-child-framed   >= 1    the ARMED CONTROL: the route, the markup and the child's code
+      GET /api/navload-orphan-framed  >= 1    RUNG 1's CLAIM — nothing else in this system makes this request
+      GET /api/navload-forced-reached >= 1    RUNG 3's reachability witness: the forced arm RAN
+      GET /nav/load-gated.html         == 0   RUNG 3's bound, and `/api/navload-gated-ran == 0` is its
+                                              POSITIVE falsifier — a line that can appear ONLY if the bound
+                                              broke, which is why the gated child is SERVED rather than 404'd
+      GET /api/navload-orphan-top      == 0   the seed did not stand in for the navigation
+  IN THE CENSUS ROW:
+      /api/us-east-1/child-value      RUNG 2's concrete EXAMPLE, composed inside the child
+      /api/{…region}/child-value      the same call site's SHAPE, carrying the reply's own provenance
+      endpointRazorClass: a NONZERO `unknown` arm — RUNG 2's actual claim, since `endpoint_razor_class_of`
+          keys the product's bar on `EPA_UNKNOWN` and `address_class_of` reaches it only for an address that
+          is CONCOLIC and NOT `CONCOLIC_EX_DETERMINED`. Every other address here is a literal and therefore
+          `EPA_CONCRETE`, which is correct and deliberate: a reachability witness is not a razor rung.
+  IN THE DRIVE TRANSCRIPT:
+      blocked-signal:destination=navigation  >= 1   RUNG 3
+      and NO `@WHY` naming `js_nav_load_step` — see the prediction note below.
+
+  ─── WHAT A READER MUST NOT CONCLUDE FROM A ZERO HERE, BECAUSE TWO OF THESE RUNGS COMPOSE PROVEN MECHANISMS
+      IN A POSITION NOTHING HAS EXERCISED ──────────────────────────────────────────────────────────────────
+
+  RUNG 1's claim rests on the ORPHAN DRIVE happening for a function in a CHILD DOCUMENT'S REALM, which no run
+  in this tree has shown. If `-child-framed` is present and BOTH orphan lines are absent, the finding is that
+  the orphan drive does not reach a child realm — a REACH finding about engine.c's seeding, not a policy
+  finding, and not a refutation of the arm.
+
+  RUNG 3's claim composes two separately-proven rungs — nav-decline.js's script-created iframe and index.html's
+  absent-state gate — and if it reads zero the FIRST question is which half. `/api/navload-forced-reached` is
+  there to answer it: present means the gate forked and the forced arm ran, so a missing
+  `blocked-signal:destination=navigation` is about the navigation; absent means the gate never forked and the
+  rung measured nothing.
+
+  AND IF BOTH `-framed` AND `-top` APPEAR FROM ONE CLIENT, `window.parent !== window` FORKED and every row of
+  the table above is void. `window_proxy_parent_navigable` returns a real WindowProxy rather than a concolic,
+  so the comparison should be decided concretely — this is the stated falsifier for that, and it is one grep of
+  the log rather than an argument.
+
+  GROUND TRUTH IN REAL CHROME WAS TAKEN BEFORE ANY OF THIS WAS CLAIMED, and THE COMMAND IS HANDED OVER RATHER
+  THAN THE FIGURE, because a figure read off an uncommitted instrument is the measurement CLAUDE.md
+  §A-MEASUREMENT-CAN-OUTLIVE-ITS-INSTRUMENT rates worse than a stale number — true, sound, and unreproducible:
+
+      cd testing/corpus/control && PORT=18899 node serve.mjs > /somewhere/serve.log 2>&1 &
+      node nav-load-groundtruth.mjs                     # 0 = every row as expected, 1 = a row disagreed,
+                                                        # 2 = NOT A READING (no server, or the wrong origin)
+      grep 'REQ control-navload ' /somewhere/serve.log   # ... and the `dest=` column
+
+  WHAT IT ANSWERED, headless, no extension, against this directory's own server: 10 of 10 addresses as expected
+  with 4 of 4 PRESENT rows actually speaking. Chrome requests `/nav/load-child.html` AT `dest=iframe` — which
+  is the value that separates it from the engine's own `dest=empty` — then `/api/navload-child-framed`
+  (so the frame discriminator answers FRAMED for a real frame, and `-child-top` is absent, so it is not
+  inverted), `/cfg.json`, and `/api/us-east-1/child-value` (so RUNG 2's reply chain completes in a real browser
+  and composes exactly the address this document's floors name). It requests NEITHER orphan line, NEITHER
+  `/api/navload-forced-reached` NOR `/nav/load-gated.html` NOR `/api/navload-gated-ran`. Its only page error is
+  a `/favicon.ico` 404, which is Chrome being Chrome.
+
+  THAT IS WHAT MAKES THE ENGINE-ONLY ROWS A DIFFERENCE AND THEREFORE ARMED; without it a cell reading zero on
+  both sides would be an unarmed control. And the driver REFUSES TO PUBLISH A CLEAN BILL when no PRESENT row
+  spoke, which is not decoration: pointed at another row's origin it reports `6/10 addresses as expected`
+  — six ABSENCES, every one satisfied by a browser that loaded none of this — and exits 2 rather than letting
+  that read as a mostly-clean table.
+-->
+<h1>a child navigable the policy loads</h1>
+<p>One same-origin child navigable named by the parser, and one named by script on a FORCED arm. The first is
+   <code>provenance=derived</code> and fires at the default egress table; the second is
+   <code>provenance=forced</code> and is refused by that arm's third conjunct, so its navigable keeps the
+   <code>about:blank</code> §7.3.1.3 created it with.</p>
+
+<!-- RUNG 1 — THE PARSER NAMES IT, which is what makes this `derived` with no running flow at all. The address
+     is a CONSTANT: a composed one would make this rung ALSO a test of the witness mark, which is a second
+     question and one the chokepoint answers `unstated` for every navigation. One question per rung. -->
+<iframe id="markup" src="/nav/load-child.html" width="200" height="60"></iframe>
+
+<script>
+  /* RUNG 3 — THE BOUND. `window.__FLAGS` is server-injected absent state, so §Attacker-sources requires the
+     read to stay SYMBOLIC and the gate to FORK to the logged-in arm; the arm this run's own example
+     contradicts is marked by `flow_mark_forced_arm`, so everything built past it declares itself FORCED.
+     Real Chrome takes the other arm and does neither of the two things below — which is what makes both of
+     them engine-only and is what ground truth above confirms.
+
+     THE GATE IS A TRUTHINESS TEST AND NOT AN EQUALITY, AND THAT IS LOAD-BEARING RATHER THAN INCIDENTAL.
+     `flow_mark_pinned_value` is reached only under decide.c's `eq_holds` — `(op == OPCMP_EQ && arm == 1) ||
+     (op == OPCMP_NE && arm == 0)` — so a truthiness fork leaves `path_pinned` clear and the witness mark
+     `unpinned`. That is exactly what lets the fetch below go over the wire: asked of the chokepoint,
+     `destination=value actor=page provenance=forced witness=unpinned` FIRES, while the same vector at
+     `witness=pinned` is REFUSED at `destination=value`. Written as `__FLAGS.role === "admin"` this rung would
+     lose its own reachability witness and its zero would be unreadable. */
+  if (window.__FLAGS && window.__FLAGS.admin) {
+    /* RUNG 3's REACHABILITY WITNESS, and it is a `fetch` rather than anything cleverer because it needs no
+       orphan drive and no frame: it fires the instant the forced arm runs. A CONSTANT address. */
+    fetch('/api/navload-forced-reached');
+    /* …AND THE FORCED CHILD NAVIGABLE ITSELF. The element is created and inserted with no `src`, so §4.8.5
+       processes its attributes and finds nothing to fetch; the ASSIGNMENT is an attribute change, which runs
+       "process the iframe attributes" a second time and is the route a bundle actually uses — the same path
+       through core/html/html_iframe.c that nav-decline.js's rung takes, reached here from a forced arm. */
+    var gated = document.createElement('iframe');
+    gated.id = 'gated';
+    gated.width = '200';
+    gated.height = '60';
+    document.body.appendChild(gated);
+    gated.src = '/nav/load-gated.html';
+  }
+</script>

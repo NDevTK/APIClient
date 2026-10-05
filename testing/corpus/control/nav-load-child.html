@@ -1,0 +1,73 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>control — the child document a LOADED navigable installs</title>
+<!--
+  THE CHILD nav-load.html's RUNG 1 NAMES, AND THE THREE CALL SITES IN IT ARE THREE DIFFERENT QUESTIONS.
+  nav-load.html carries the whole oracle argument and the table of which client can produce which address;
+  this file states what each site is FOR so a reader standing here does not have to go and find it.
+
+  IT IS NOT nav-child.html, WHICH IS nav-decline.html's CHILD AND MUST STAY AS IT IS. That one is a single
+  constant `fetch` and is written to be EXPECTED NOT TO BE REQUESTED by the engine; this one is written to be
+  requested and to say WHO requested it. Two children, two documents, for serve.mjs's one-question-per-row
+  reason.
+
+  WHY ONE INLINE BLOCK AND NOT A SUBRESOURCE. index.html already owns the inline-versus-sourced question and
+  proves both halves with `/api/inline-top` and `/api/external-top`, so a `<script src>` here would be a second
+  copy of a rung that is already a control, and it would add a `.js` fetch to a document whose log lines are
+  the whole oracle. The address constants are what carry this document's questions, not where the code sits.
+-->
+<h1>child</h1>
+<script>
+  /* ── SITE 1 — THE ARMED POSITIVE CONTROL, AND THE FRAME DISCRIMINATOR ──────────────────────────────────
+     Its only job is to prove the route, the markup and this document's own code, and it is READ as the
+     control that makes every zero below a reading rather than a silence. It costs no orphan drive and no
+     reply, so it fires for any client that parses this file at all.
+     `window.parent !== window` IS THE DISCRIMINATOR NO HEADER CARRIES. A document installed in a child
+     navigable answers FRAMED; the SAME BYTES analysed as a top-level document — which is what the ambient
+     seed makes of them, since the content script in a frame Chrome loaded ships that frame's document to the
+     zone — answer TOP. `window_proxy_parent_navigable` returns a real WindowProxy rather than a concolic, so
+     this is a concrete object comparison and should not fork; if BOTH addresses appear from one client it DID
+     fork and every row of nav-load.html's table is void, which is that claim's stated falsifier.
+     BOTH ARMS ARE STRING LITERALS, for §A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE-
+     UNKNOWN: a payload composed from anything this engine computed can itself become unknown, after which the
+     request is never made and its absence reads as the path not being taken. */
+  fetch(window.parent !== window ? '/api/navload-child-framed'
+                                 : '/api/navload-child-top');
+
+  /* ── SITE 2 — RUNG 1's CLAIM. THE ONE ADDRESS NOTHING ELSE IN THIS SYSTEM CAN PRODUCE ─────────────────
+     Nothing calls this function, so reaching it requires an ORPHAN DRIVE — §Orphan-driving's "one drive per
+     function the bundle shipped and never called", which real Chrome never performs. Composed with the frame
+     discriminator above, the four states separate completely: `-orphan-framed` says the engine EXECUTED this
+     document AS A CHILD NAVIGABLE, which is the consequence of the owner's arm and the thing no document in
+     this tree could show; `-orphan-top` says the ambient SEED analysed it and the navigation did not.
+     ITS ADDRESSES ARE LITERALS AND IT THEREFORE DOES NOT CLEAR THE PRODUCT'S HARD BAR, which is deliberate
+     and is the point of keeping it apart from SITE 3: `address_class_of` answers `EPA_CONCRETE` for a
+     non-concolic URL, and endpoint.h's own named residual records that an address built out of an ORPHAN
+     ARGUMENT answers `unknown` while nothing was learned, "because the hole is ours". A reachability witness
+     is not a razor rung, and conflating them would make this document claim the bar on its own instrument. */
+  function neverCalledInChild() {
+    fetch(window.parent !== window ? '/api/navload-orphan-framed'
+                                   : '/api/navload-orphan-top');
+  }
+
+  /* ── SITE 3 — RUNG 2. THE PRODUCT'S OWN HARD BAR, INSIDE A FRAME ──────────────────────────────────────
+     §What-the-tool-produces' bar is "an address, a key or a value NO PARSE of the served bytes can state,
+     because it exists only at run time", and `endpoint_razor_class_of` keys it on `EPA_UNKNOWN`, which
+     `address_class_of` reaches only for a URL that is CONCOLIC and NOT `CONCOLIC_EX_DETERMINED`. A record the
+     bundle FETCHED is exactly that: §solver's trust boundary says a config fetch is always loaded so its
+     fields become concrete examples while staying opaque-for-control-flow, so `c.region` carries the bytes the
+     server really sent AND a source identity nothing pinned. The composed address therefore stands in no
+     served byte of this document and no served byte of the reply — the SHAPE is in neither and the VALUE is
+     only in the reply — so this row clears the bar where every literal above is `EPA_CONCRETE`.
+     THE MECHANISM IS cfg.js's, VERBATIM, AND THAT IS WHY IT IS TRUSTWORTHY HERE: it is an existing proven
+     control (`/api/us-east-1/cfg-value` plus `/api/{…region}/cfg-value` are two of loaded-config.html's own
+     floors), so what this rung adds is the POSITION — the same mechanism inside a child navigable, where
+     nothing has ever exercised it — rather than a new claim about replies.
+     AND endpoint.h's RESIDUAL ASKS FOR EXACTLY THIS DOCUMENT: its "HOW ITS ABSENCE WOULD SHOW" says to
+     compare a real-site capture against a `127.0.0.1` fixture because "the fixtures are the controlled half
+     and their holes are the page's own". This hole is the page's — the server supplied it, the page read it,
+     the page composed it — which is the population the bar exists for. */
+  fetch('/cfg.json').then(function (r) { return r.json(); }).then(function (c) {
+    fetch('/api/' + c.region + '/child-value');
+  });
+</script>
