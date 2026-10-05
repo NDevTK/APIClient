@@ -2248,9 +2248,27 @@ void engine_step_unit_runs(EngineStepUnitRuns *out);
  * READ THEM AGAINST `jobsReadyTask` AND `run-a-task` AND NOT ALONE. `jobsReadyTask` is a GAUGE of what waits
  * and these are LIFETIME counts of what was taken instead; `run-a-task` on the @COLD line is the arm's own
  * step count and the last two of these partition it. The four sizes:
- *   a large `taskHeldDelivLifetime` says the networking delivery arm — which is NOT in the arrival order, by
- *     its own header's NOT COVERED clause — is what stands in front of the queue, and the diff is the stamp
- *     that folds it into that order.
+ *   `taskHeldDelivLifetime` SIZES A DIFFERENT THING EITHER SIDE OF THE STAMP, AND THE RETIRED WORDING IS
+ *     KEPT BECAUSE A READER WHO FINDS THE ROW LARGE RE-DERIVES IT FROM THE ARM'S POSITION IN THE LADDER. It
+ *     read: a large one says the networking delivery arm — which is NOT in the arrival order, by its own
+ *     header's NOT COVERED clause — is what stands in front of the queue, and the diff is the stamp that
+ *     folds it into that order. THE STAMP IS BUILT: a `pending` entry carries PEND_WORK_SEQ and the arm asks
+ *     flow_task_precedes with it, so a delivery no longer precedes a QUEUED CALLBACK that arrived first and
+ *     the row is now the size of the arm going in front of a YOUNGER task, which is that order WORKING. It
+ *     still precedes every ROW, which is the half left open and is the residual stated at the arm.
+ *     SO TWO CENSUSES ARE COMPARABLE ON THIS ROW ONLY IF THEIR ARTIFACTS AGREE ABOUT THE STAMP, and no row
+ *     emitted anywhere says which of the two quantities a reader is holding — a census written before the
+ *     next install reads the old one and the first after it reads the new one, in one column, silently. The
+ *     discriminator is therefore outside the census and is the artifact's own stamped revision:
+ *     git grep -c PEND_WORK_SEQ <that revision> -- engine/host, asked at BOTH passes before differencing.
+ *     SOLVER/ENGINE.C STATES THE MECHANISM AT `g_task_held_deliv` AND IS THE COPY TO READ: it is the RAISE
+ *     site, this is the declaration, and a declaration states an intention where a raise states what the
+ *     counter got. This copy is the one that went stale when the stamp landed.
+ *     RETIREMENT: this record goes when the census emits whether the arrival stamp was COMPILED IN beside
+ *     the row, so the two quantities are told apart FROM the document and no out-of-band revision question
+ *     is owed — MEASURED ABSENT with the command, so this condition is not born met:
+ *     `grep -c taskArrivalStamped engine/host/solver/result.c` answers 0 against `grep -c
+ *     taskHeldDelivLifetime engine/host/solver/result.c` answering 2 as the armed control.
  *   a large `taskHeldSeqLifetime` says the arrival comparison is answering NO: the document's remaining rows
  *     are OLDER than what its own code queued, so the sequence goes first. The diff is at that comparison.
  *   `taskArmOlderLifetime` above zero REFUTES both for the steps it counts — the comparison does hand the
