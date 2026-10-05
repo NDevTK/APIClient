@@ -396,6 +396,15 @@ for (const p of passes) for (const r of p.rows) {
        average in -- so the command is right and one input was not. Drop the offending file and it exits 0
        over the other 49. State a command you have run, and say what it did. */
     units: r.unitsDone,
+    /* THE ORDER-OR-THREAD ROWS, CARRIED VERBATIM — see the `ORDER OR THREAD` section for what each decides.
+       They are copied rather than folded here because the verdict is composed once, at the print, and a
+       fold at the read would put the boundary in two places. */
+    picksLifetime: r.picksLifetime, starvedPicks: r.starvedPicks, starvedPicksIdle: r.starvedPicksIdle,
+    neverPicked: r.neverPicked, neverPickedGap: r.neverPickedGap, neverPickedAtTop: r.neverPickedAtTop,
+    picksLive: r.picksLive, picksMax: r.picksMax,
+    visMin: r.visMin, visMax: r.visMax, visZero: r.visZero, wfqMembers: r.wfqMembers,
+    plateauAsked: r.plateauAsked, plateauHeld: r.plateauHeld,
+    plateauRuns: r.plateauRuns, plateauHeldIdle: r.plateauHeldIdle,
     fpu: (typeof r.flows === 'number' && typeof r.unitsDone === 'number' && r.unitsDone > 0)
       ? Math.round(100 * r.flows / r.unitsDone) / 100 : null,
     /* AND WHETHER ANYTHING EVER LEFT, READ OFF THE ENGINE'S OWN ROW RATHER THAN DERIVED FROM TWO OTHERS.
@@ -842,6 +851,81 @@ if (aFatal.length)
       .map((p) => '    ' + p.label + ': ' +
         (p.rows.filter((r) => r.absentFatal).map((r) => r.id + ' — ' + r.absentFatal)[0] || '(no message)'))
       .join('\n'));
+
+/* WHETHER A REACH SHORTFALL IS THE ORDER'S OR THE THREAD'S, COMPOSED RATHER THAN LEFT AS A QUOTIENT. This is
+   the retirement condition site.mjs stated when it began carrying these rows, and it is MET here. The rows
+   alone are not the answer: solver/flow.c's `never_picked` block names THREE states behind one starved tail,
+   says two of them take DIFFERENT weight changes and the third takes NONE AT ALL, and records the same
+   figures having produced the throughput-read-as-ordering report TWICE. A reader handed `neverPicked` and
+   `picksLifetime` has to compose the verdict, and composing it is exactly where it went wrong before.
+   THE DECISIVE ROW IS `starvedPicksIdle` AND THE GAUGES ARE NOT. flow.c: it is the only instrument here that
+   asks whether a pick ever PASSED OVER a member, which is what "is the order wrong" actually asks. The
+   gauges say a tied tail EXISTS at some instant; this says a dispatch CHOSE against it. `neverPickedGap` is
+   the second decisive one and points the OTHER WAY from how it reads — a gap of zero means the best
+   never-picked member stands AT the top, so nothing is ranked ahead of it and the order is ready to serve it
+   the moment a dispatch exists. flow.c's words: an order with nothing to answer for.
+   THE BOUNDARIES BELOW ARE PRESENTATION AND NOT BOUNDS (§NO BOUNDS is about work, not about a label). Every
+   quantity the verdict is derived from is PRINTED beside it, so a reader who disagrees with where the line
+   falls can read the numbers and overrule the word — which is the only form in which a composed verdict is
+   better than the quotient it replaces. */
+const THR_SWEEP = 2.0;   /* T/P at or below this is one dispatch per member reached: nothing swept twice */
+const THR_HOG = 0.5;     /* picksMax at or above this share of T is one member holding most of the thread */
+const ordState = (m) => {
+  const T = m.picksLifetime, M = m.wfqMembers, np = m.neverPicked, pm = m.picksMax;
+  const si = m.starvedPicksIdle, gap = m.neverPickedGap;
+  if ([T, M, np, pm].some((x) => typeof x !== 'number')) return { w: '-', why: 'rows absent on this pass' };
+  const P = M - np;
+  if (typeof si === 'number' && si > 0)
+    return { w: 'ORDER', why: 'a pick PASSED OVER a member ' + si + ' time(s) of ' + T };
+  /* …AND THE TIE, WHICH THE ROW ABOVE IS STRUCTURALLY BLIND TO. `starvedPicks` is raised only where the pick
+     DISPLACES, so starvation AT EQUALITY reads zero there: a never-run member at EXACTLY the incumbent's
+     weight loses every tie to incumbency and no pick ever ranks a served member strictly above it. This is
+     the complement solver/flow.c raises for that reason, and the IDLE subset is the decisive one — a
+     retention MID-PROGRAM is §Attention's value yield working as specified, and a retention BETWEEN UNITS
+     against a level never-run member is the same event with nothing left to justify it. */
+  const phi = m.plateauHeldIdle, ph = m.plateauHeld, pa = m.plateauAsked;
+  if (typeof phi === 'number' && phi > 0)
+    return { w: 'ORDER(tie)', why: 'the incumbent KEPT the thread BETWEEN UNITS against a level never-run '
+      + 'member ' + phi + ' time(s) — of ' + ph + ' retention(s) over ' + pa + ' scan(s) that could ask' };
+  if (typeof ph === 'number' && ph > 0)
+    return { w: 'PLATEAU', why: ph + ' retention(s) of ' + pa + ' askable scan(s), none of them between '
+      + 'units — a value yield doing what it is specified to do, so no ordering claim' };
+  if (typeof pm === 'number' && T > 0 && pm >= THR_HOG * T)
+    return { w: 'MONOPOLIZER', why: 'picksMax ' + pm + ' of ' + T + ' dispatches on ONE member' };
+  if (P <= 0) return { w: 'UNREACHED', why: 'no member was ever picked: ' + T + ' dispatch(es)' };
+  const tp = T / P;
+  if (tp <= THR_SWEEP)
+    return { w: 'THROUGHPUT', why: 'T/P ' + tp.toFixed(2) + ' (' + T + '/' + P + ') — the frontier grows '
+      + 'faster than one thread serves it, and NO weight change reaches that' };
+  return { w: 'COHORT', why: 'T/P ' + tp.toFixed(2) + ' (' + T + '/' + P + ') with picksMax ' + pm
+    + ' — a reachable cohort swept while the tail waits, which a TERM must answer for'
+    /* …AND WHICH TERM IS THE QUESTION THE PLATEAU ROWS ANSWER, SO THEIR ABSENCE IS STATED RATHER THAN
+       SWALLOWED. A COHORT reached by the RATIO alone is a verdict that a term is owed and is SILENT about
+       whether the event is a DISPLACEMENT or a TIE — which are the two sides of this one state and take two
+       different terms. A pass whose artifact predates `plateauHeld` cannot be asked, and an unasked question
+       renders identically to an answered one unless the row says so. */
+    + (typeof ph === 'number' ? ''
+      : ' [plateau rows ABSENT on this pass, so DISPLACEMENT vs TIE was not asked — re-run to split it]') };
+};
+const ordRows = table.map((t) => ({ id: t.id, st: t.measurements.map(ordState) }))
+  .filter((r) => r.st.some((s) => s.w !== '-'));
+if (ordRows.length) {
+  console.log('\n*** ORDER OR THREAD — the three states solver/flow.c says take DIFFERENT work, composed per '
+    + 'pass. The decisive rows are `starvedPicksIdle` for a PASS-OVER and `plateauHeldIdle` for a TIE, and '
+    + 'the first is blind to the second by construction (it is raised only where the pick DISPLACES). Every '
+    + 'ratio is printed so the word can be overruled. A THROUGHPUT verdict means no weight change reaches '
+    + 'it; an ORDER or ORDER(tie) one means a term does. ***');
+  for (const r of ordRows)
+    for (const s of r.st)
+      console.log('    ' + pad(r.id, 16) + pad(s.w, 14) + s.why);
+  const vis = table.map((t) => t.measurements.map((m) => [m.visMax, m.visZero, m.wfqMembers]))
+    .flat().filter((v) => typeof v[0] === 'number');
+  const dead = vis.filter((v) => v[0] === 0);
+  if (dead.length)
+    console.log('    AND ' + dead.length + ' of ' + vis.length + ' pass(es) read `visMax 0` — NOT ONE MEMBER '
+      + 'REACHED THE END OF A PROGRAM, so not one queued job can have run whatever the switch and fork '
+      + 'counts say. That is the row that separates "served fairly" from "finishing nothing".');
+}
 
 /* AND THE SHOUT FOR THE NAMES, WHICH IS NOT DECORATION ON THE `miss>owed` ONE ABOVE. Those two report on
    DIFFERENT FIELDS that entered site.mjs at different commits, so a pass can carry the pair and not the

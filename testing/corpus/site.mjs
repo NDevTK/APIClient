@@ -1505,10 +1505,14 @@ const row = {
      `visMax` IS THE ONE THAT SEPARATES "SERVED FAIRLY" FROM "FINISHING NOTHING": zero on a frontier of
      thousands says not one member reached the end of a program, so not one queued job can have run whatever
      the switch and fork counts say. `visZero` is how many stand there, which `visMin` cannot say.
-     RETIREMENT: this record goes when report.mjs composes the three-state verdict from these rows, so a
-     reader is handed the state rather than the quotient -- MEASURED ABSENT with the command, so it is not
-     born met: `grep -c starvedPicksIdle testing/corpus/report.mjs` answers 0 against `grep -c wfqMembers
-     testing/corpus/report.mjs` as the armed control. */
+     RETIREMENT -- MET IN THE SAME COMMIT, AND MARKED RATHER THAN DELETED because what a reader re-derives
+     is the GAP and not the record of it. The condition read: this goes when report.mjs composes the
+     three-state verdict from these rows, so a reader is handed the state rather than the quotient. It does:
+     `ordState` there is the composition, keyed on `starvedPicksIdle` and `neverPickedGap` as the decisive
+     rows with every ratio PRINTED beside the word so a reader can overrule it. What is NOT closed is that
+     the two boundaries in it are presentation choices this file cannot derive, which is why the numbers ride
+     with the verdict. RETIREMENT: this record goes when a reader of these rows is refused a verdict with no
+     ratio beside it, so the word cannot travel without the numbers that produced it. */
   picksLifetime: wfqRow('picksLifetime'),
   starvedPicks: wfqRow('starvedPicks'),
   starvedPicksIdle: wfqRow('starvedPicksIdle'),
@@ -1520,6 +1524,28 @@ const row = {
   visMin: wfqRow('visMin'),
   visMax: wfqRow('visMax'),
   visZero: wfqRow('visZero'),
+  /* AND THE ROW `starvedPicksIdle` IS STRUCTURALLY BLIND TO, WHICH IS THE ONE THAT DECIDES A REAL APP.
+     `starvedPicks` is raised where the pick DISPLACES — `best != seed` — so it counts a pass-over and
+     cannot see starvation AT EQUALITY: a never-run member standing at EXACTLY the incumbent's weight loses
+     every tie to incumbency, no pick ever ranks a served member strictly above it, and the counter reads
+     ZERO while that member never runs. solver/flow.c raises the complement for exactly this and calls it
+     plateau DEPTH: how often the incumbent KEPT the thread while a never-run member stood level with it.
+     `plateauHeldIdle` IS THE DECISIVE ONE AND `plateauHeld` ALONE IS NOT. A retention of a member MID-
+     PROGRAM is §Attention's value yield doing what it is specified to do ("a top-ranked flow runs on at
+     ~zero switch cost"); a retention of a member BETWEEN UNITS (`frame == NULL`) against a level never-run
+     member is the same event with no justification left. flow.c's own note says the idle clause there is an
+     UPPER BOUND, since it reads the frame field rather than the full unit boundary — a queue walk with
+     refcount traffic on a hot path is the instrument that costs enough to shorten the run it measures.
+     WHAT COST, MEASURED ON THIS CORPUS at 20748ad: a gitpod row read `starvedPicksIdle 0` and
+     `neverPickedGap 0` — flow.c's words for an order with nothing to answer for — beside `picksMax 103` of
+     `picksLifetime 342` over FOUR members ever picked, with `neverPickedAtTop 23`. The two rows that read
+     clean were both about displacement and the whole event was a tie.
+     RETIREMENT: this record goes when result.c asserts that a frontier carrying a level never-run member
+     raises one of the two families per dispatch scan, so a tie cannot be counted by neither. */
+  plateauAsked: wfqRow('plateauAsked'),
+  plateauHeld: wfqRow('plateauHeld'),
+  plateauRuns: wfqRow('plateauRuns'),
+  plateauHeldIdle: wfqRow('plateauHeldIdle'),
   /* WHICH ENTRY EACH HALF CAME FROM, so the gauge and the counters can never be silently reconciled. */
   wfqFrom: wfqLive ? wfqLive.i : null,
   countersFrom: counted.length ? counted.length - 1 : null,
