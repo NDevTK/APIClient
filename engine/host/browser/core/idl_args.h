@@ -1932,8 +1932,8 @@ typedef struct {
        IT WENT WRONG IN THE DIRECTION NOTHING REPORTS. It read `which is every one of them but the FRAGMENT
        PARSE`, and that was an ENUMERATION OF AN ABSENCE: it asserts of every other member that it declares no
        reason, so a reader is told the trajectory below is one machine from zero. Measured against the tree it
-       was false by two — the §5.6 fetch machine and the §5.4 Request constructor both declare one, each for the
-       PARSED HEADER LIST and neither for any parser — and the error is the
+       was false by three — the §5.6 fetch machine, the §5.4 Request constructor and §5.1's Headers constructor
+       all declare one, each for the PARSED HEADER LIST and none for any parser — and the error is the
        UNDER-CLAIM §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT names, found by nobody acting on it, because
        acting on it means not looking. Derive the set instead, with both forms, since this field is initialised
        positionally at some definitions and designated at others:
@@ -1946,8 +1946,11 @@ typedef struct {
        extracted body became a list core/fetch/body.h declares — two capabilities built one at a time, under one
        declarer, which no count of declarers could have predicted. What is left is the header list, and it is
        the SAME capability behind the Request constructor's only term and behind core/fetch/headers.c's §5.1
-       constructor, which holds one in its `release` and declares NO reason at all — so the derivation above is
-       a lower bound on the machines a capability touches as well as an upper bound on the work.
+       constructor — and THAT third one declared no reason at all until it was found by sweeping for the
+       capability rather than for the field, which is the direction this derivation is blind in: it lists the
+       machines that DECLARE a reason and cannot list the machines that OWE one. So it is an upper bound on the
+       work and a LOWER bound on the machines a capability touches, and a machine missing from it is not
+       therefore safe — it is a fork TAKEN where its siblings refuse one.
        Two machines holding one missing capability retire together and neither names it twice — core/frame/
        navigable.c's load says so of itself and points at the fragment parse's own list — so read each reason
        for WHAT IT WOULD TAKE and group by that before pricing any of it. The field goes when every one of those

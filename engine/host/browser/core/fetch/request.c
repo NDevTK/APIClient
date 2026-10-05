@@ -1344,13 +1344,15 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
  * SAME term — which is the position IdlStepDecl.unforkable's own contract describes: a declarer names a
  * capability, and this capability now has these two machines behind it and NO OTHER REASON IN FRONT OF IT.
  *
- * AND A THIRD MACHINE HOLDS THE SAME ALLOCATION AND DECLARES NOTHING, WHICH IS NOT A SMALLER VERSION OF THIS
- * REFUSAL BUT THE ABSENCE OF ONE. core/fetch/headers.c's §5.1 `new Headers(init)` carries a `HeaderList` in its
- * own state and frees it in `js_headers_ctor_release`, with no `unforkable` on its declaration — and its ONE
- * stage past the guard is the fill, which runs the page's code per key. So `new Headers({get a(){ … }})` whose
- * getter forks after the first pair has been appended gives two arms one array and two frees of it, with
- * nothing to say so. Read that as part of what this capability costs, not as a fourth thing: the three retire
- * together and the third is the one that is currently silent rather than loud.
+ * AND A THIRD MACHINE HOLDS THE SAME ALLOCATION, WHICH IS PART OF WHAT THIS CAPABILITY COSTS AND NOT A FOURTH
+ * THING: core/fetch/headers.c's §5.1 `new Headers(init)` carries a `HeaderList` in its own state, frees it in
+ * `js_headers_ctor_release`, and declares `js_headers_ctor_unforkable` for it. The three retire together.
+ * THAT ONE DECLARED NOTHING UNTIL THE DIFF THAT WROTE THIS SENTENCE, and the difference is the one
+ * §Offensive-programming cares about: its ONE stage past the guard is the fill, which runs the page's code per
+ * key, so `new Headers([["a","1"],["b",v]])` whose second read forks after the first pair has been appended
+ * gave two arms one array and two frees of it with nothing to say so. It needs TWO pairs and not one — both
+ * fill arms APPEND and then loop back to a parking phase, so a one-key init runs its getter before any append —
+ * which is why the hole was narrow enough to go unnoticed beside two siblings that were loud.
  *
  * REACHABLE ON THE ORDINARY SHAPE: the list exists from step 33's header fill onward, and that fill is where
  * this constructor runs the page's code — a `HeadersInit` getter, iterator or Proxy trap, and then §5.2's body

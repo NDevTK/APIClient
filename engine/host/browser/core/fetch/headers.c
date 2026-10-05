@@ -1324,9 +1324,68 @@ static int js_headers_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
     return JS_IsException(*presult) ? -1 : 0;
 }
 
+/* WHY THIS MACHINE'S STATE MUST NOT BE FORKED ONCE IT HOLDS STEP 2'S HEADER LIST — see IdlStepDecl.unforkable,
+ * and core/fetch/fetch.c's js_fetch_unforkable, which states the rule and the remedy at length for the SAME
+ * allocation. In one sentence: `tramp_step_state_clone` BYTE-COPIES the state and re-takes only what `visit`
+ * names, `js_headers_ctor_visit` names the fill and the result, and `js_headers_ctor_release` frees `s->list` —
+ * a `HeaderList` whose `e` is a foreign C allocation no visit operation can reach. Two arms, one pointer, two
+ * frees.
+ *
+ * IT IS THE THIRD DECLARER OF ONE CAPABILITY AND IT WAS THE ONE THAT WAS SILENT. core/fetch/fetch.c's §5.6
+ * machine and core/fetch/request.c's §5.4 constructor each hold this same list and each REFUSED the fork; this
+ * one held it and declared nothing, so the fork was taken and the double free happened. That is strictly worse
+ * than the refusal, for §Offensive-programming's reason: a dropped flow is a loud named gap and a double free is
+ * memory corruption nothing reports. The refusal is therefore not new scaffolding — it is the capability's
+ * existing declaration, made at the machine that was missing it, and all three retire together.
+ *
+ * REACHABLE ON THE ORDINARY SHAPE, AND THE SHAPE NEEDS TWO PAIRS RATHER THAN ONE, which is worth stating
+ * because a one-key init cannot produce it: BOTH arms of §5.1's fill APPEND and then loop back to a phase that
+ * parks on the page's code for the next pair, so the list is non-empty exactly from the second key onward.
+ * `new Headers([["a", "1"], ["b", v]])` where reading or stringifying `v` branches on unknown external input
+ * forks with one appended pair already in this state; `new Headers({a: getter})` does not, because the getter
+ * runs before any append.
+ *
+ * WHAT THE NEXT DIFF BUILDS IS NOT A LINE IN THIS FILE AND IS NOT THIS MACHINE'S TO CHOOSE. Every JSStepVisit
+ * operation that COPIES — `v->buf`, `v->array`, `v->props`, `v->slots`, `v->strbuf` — allocates with the
+ * ENGINE's allocator and releases with it, while `header_list_append` and `header_list_free` use the C
+ * library's, take no context, and are called from dozens of files that have none. So it is §5.1's entries as
+ * slots a visit can name — a change to `HeaderList`'s own storage, and therefore to every holder of one — or
+ * `v->tree`, the one operation that delegates the COPY and the DESTROY to the HOST and so needs no allocator
+ * change at all. core/fetch/fetch.c's banner states both and states why a machine does not settle that question
+ * inside its own refusal.
+ *
+ * HOW ITS ABSENCE SHOWED, in the past tense because this is the diff that ends it: no abort at all — the fork
+ * was allowed, two arms carried one `HeaderList::e`, and the second teardown freed it again. */
+static const char *js_headers_ctor_unforkable(const void *st)
+{
+    const JSHeadersCtorState *s = st;
+
+    DCHECK(s != NULL, "the Headers constructor was asked whether it may be forked with no state to ask about");
+    /* THE LIST'S POINTER IS THE QUESTION AND ITS COUNT IS NOT, which is the one thing to get right here: a
+       `js_mallocz`'d step state starts with `n` at zero AND `e` at NULL, so the two agree on an untouched
+       state — but `header_list_append` is the only thing that sets either, and it sets the pointer. Asking `n`
+       would be asking a number this machine never reads, where the pointer is the thing both `release` calls
+       would free. */
+    if (!s->list.e)
+        return NULL;
+    return "Fetch §5.1 new Headers(init) was forked while holding step 2's filled header list. A step state "
+           "is BYTE-COPIED at a deep fork and only what `visit` names is re-taken, and this list's array and "
+           "its name/value strings are freed by this machine's `release` instead — so both arms would hold one "
+           "set of pointers and free it twice. THIS IS ONE CAPABILITY BEHIND THREE MACHINES: core/fetch/"
+           "fetch.c's §5.6 fetch() and core/fetch/request.c's §5.4 constructor hold the same list and refuse "
+           "the same fork, and §2.2.5's request record and §5.2's extracted body were terms of fetch()'s "
+           "refusal until each became something a `visit` names. Build §5.1's entries as declared slots, or "
+           "reach them through `v->tree`'s host-delegated clone, and delete all three refusals with it";
+}
+
 static const IdlStepDecl js_headers_ctor_decl = {
     js_headers_ctor_step, sizeof(JSHeadersCtorState), js_headers_ctor_visit, js_headers_ctor_release,
-    "Fetch §5.1 new Headers(init)", HDR_CTOR_STEPS
+    "Fetch §5.1 new Headers(init)", HDR_CTOR_STEPS,
+    /* `catches_abrupt` = 0: this constructor PROPAGATES — a throwing header key or value is the page's to see
+       at the `new Headers` it wrote, and the epilogue re-raises it. It is spelled rather than left to the
+       zero-fill now that a field AFTER it is declared, because a positional initializer that stops short is
+       two facts stated by one omission. */
+    0, js_headers_ctor_unforkable
 };
 
 /* ---- install --------------------------------------------------------------------------------------------- */

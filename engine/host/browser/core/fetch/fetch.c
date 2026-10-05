@@ -1913,11 +1913,16 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
  * that operation's subject is "a tree" or "an allocation only the host can copy" — which is not a question a
  * machine should answer for itself inside its own refusal.
  *
- * AND WHICHEVER IT IS, IT RETIRES MORE THAN THIS TERM. `core/fetch/request.c`'s `js_request_ctor_unforkable`
- * has this list as its ONLY term, and `core/fetch/headers.c`'s §5.1 constructor holds one in
- * `js_headers_ctor_release` and declares NO refusal at all — so that third machine is not guarded today, it is
- * silently exposed. IdlStepDecl.unforkable's own contract states the rule this is an instance of: a declarer
- * names a CAPABILITY and not a machine, so group by the capability before pricing any of it.
+ * AND WHICHEVER IT IS, IT RETIRES MORE THAN THIS TERM — THREE MACHINES AND NOT TWO.
+ * `core/fetch/request.c`'s `js_request_ctor_unforkable` has this list as its ONLY term, and
+ * `core/fetch/headers.c`'s §5.1 constructor holds one in `js_headers_ctor_release` and now declares
+ * `js_headers_ctor_unforkable` for it. THAT THIRD ONE WAS SILENT UNTIL THE DIFF THAT WROTE THIS SENTENCE: it
+ * held the list, freed it in its `release`, and declared nothing, so the fork was TAKEN and both arms freed one
+ * array. The refusal is the capability's existing declaration made at the machine that was missing it rather
+ * than a fourth thing to build, and the reach it costs is `new Headers([["a","1"],["b",v]])` where reading `v`
+ * forks — which was a double free and is now a named gap. IdlStepDecl.unforkable's own contract states the rule
+ * this is an instance of: a declarer names a CAPABILITY and not a machine, so group by the capability before
+ * pricing any of it, and the declarer count is an upper bound on the WORK and a lower bound on the REACH.
  *
  * `body.stream` IS NOT TESTED AND NEVER WAS, which is worth keeping now that the body is gone from the
  * predicate: a zeroed step state's JSValue is the INTEGER 0 rather than JS_UNDEFINED (see `captured` above), so
@@ -1948,8 +1953,8 @@ static const char *js_fetch_unforkable(const void *st)
            "are JSValues and the body is declared by `body_state_visit`, so a fork inside §5.4 steps 10-27, "
            "inside §5.2's extraction, or at §5.6 step 4 for a request carrying a body and no `headers`, is "
            "ALLOWED. This list is the last one, and it is the SAME allocation core/fetch/request.c's §5.4 "
-           "constructor refuses a fork for and core/fetch/headers.c's §5.1 constructor holds with no refusal "
-           "at all — so it is one capability behind three machines. Every copying visit operation allocates "
+           "constructor refuses a fork for and core/fetch/headers.c's §5.1 constructor refuses it for too — so "
+           "it is one capability behind THREE machines. Every copying visit operation allocates "
            "with the ENGINE's allocator and `header_list_append` uses the C library's, so building it is "
            "either §5.1's entries as declared slots or `v->tree`'s host-delegated clone, and it is not a line "
            "in this file";
