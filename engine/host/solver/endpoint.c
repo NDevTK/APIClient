@@ -102,6 +102,26 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
                     union over two: a sighting that could ASK outranks one that could not, and a path that HAD
                     chosen a witness cannot be taken back by a later path that had not. */
                  int witness_class;
+                 /* WHICH SOURCES THE ADDRESS VALUE'S BYTES ENTERED THROUGH, as solver/concolic.h's
+                    `concolic_root_c` spells them — the DELIVERY PROVENANCE of the address, which is the one
+                    operand of CLAUDE.md §What-the-tool-produces' hard bar that `addr_class` reads and no
+                    consumer can see. It is a DIAGNOSTIC and never an operand of that bar: this file composes
+                    no verdict out of it, because whose unknown a root names is a question concolic.h's `src`
+                    cannot answer today (see `address_class_of`'s residual, whose next diff is the mint
+                    stating it) and a classification keyed on the SPELLING of this string would be the count
+                    of a spelling §RUN-DON'T-MATCH forbids.
+                    IT IS THE ROOT OF THE SIGHTING WHOSE CLASS THIS RECORD CARRIES, which is one rule and not
+                    a merge of its own. `addr_class` is a MAX over sightings, so a root taken from the FIRST
+                    sighting would pair a class one sighting proved with a provenance another one held — two
+                    moments in one row, which is §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE at the grain
+                    of a record. It is therefore written at the mint and REPLACED on exactly the line that
+                    raises the class, so the pair is always one sighting's and a reader may read them together.
+                    NULL IS A POSITIVE STATEMENT AND IS TWO OF THEM, WHICH IS WHY THE EMIT SPELLS IT IN TWO
+                    JSON TYPES RATHER THAN ONE. `concolic_root_c` answers NULL both for a value that is not
+                    this engine's concolic at all and for one whose bytes entered through nothing this engine
+                    minted as a source; the first is `addr_class == EPA_CONCRETE` and the second is not, so the
+                    discriminator is the class on the same row and never the absence of this string. */
+                 char *addr_root;
                  /* THE BODY THIS ENGINE HAD NO FIELD READER FOR — see endpoint.h. Set only where
                     `body_params` named NOTHING, so it is never a second spelling of fields already on
                     `params`, and never overwritten once set: a request body is ONE example, not a set.
@@ -744,8 +764,18 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    ordinary shapes: `fetch(cfg.url)` emits `{__CFG.url}` with no page literal in it and is entirely the
    page's, while `origin + "/" + <an orphan argument>` is a page-composed string around an engine mint. Whose
    unknown it is, is a fact about the ROOT; where the literals fall is a fact about the page's syntax.
-   HOW ITS ABSENCE WOULD SHOW: a run whose razor reads `runtime-only` for rows whose emitted `url` is wholly a
-   brace naming a source no document and no server supplied. The DERIVATION rather than a figure, because the
+   HOW ITS ABSENCE WOULD SHOW: a run whose razor reads `runtime-only` for rows whose `addressRoot` names a
+   source no document and no server supplied — the emitted ROW carries the root now (see the emit), which is
+   the axis the paragraph above argues the question is on, and that is where this observation is made.
+   THE CLAUSE BELOW READS THE `url`'S BRACES INSTEAD AND IS KEPT RATHER THAN REPLACED, for two reasons. It is
+   the ONLY route available against an artifact older than that key, which is the ordinary case for every
+   capture already on disk. And it reads the COMPOSED IDENTITY rather than the ROOT, which the paragraph above
+   names as wrong in BOTH directions — `fetch(cfg.url)` emits `{__CFG.url}` with no page literal in it and is
+   entirely the page's, while `origin + "/" + <an orphan argument>` is a page-composed string around an engine
+   mint — so a reader who takes it for the discriminator rather than for the pre-key proxy is reading the axis
+   this residual refutes. It said `wholly a brace naming a source no document and no server supplied`, which is
+   a COMPOSITION test wearing a provenance test's words, and that is the sentence to distrust rather than the
+   command: the DERIVATION rather than a figure, because the
    censuses are untracked and a count here would be a claim competing with a command — from `testing/corpus`,
    read the terminal `endpointRazorClass` of a census beside the hole-bearing addresses that census emitted
    (`grep -o '"[A-Z]* [^"]*{[^"]*"' <census> | sort -u`), and compare a real-site capture against a
@@ -2202,6 +2232,17 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        below this line is entitled to re-ask, because by then this call has suspended nowhere but the flow
        standing is no longer this read's to assume. */
     int wcls = witness_class_now();
+    /* …AND WHICH SOURCES THE ADDRESS'S BYTES ENTERED THROUGH, COPIED HERE for the two reasons the two reads
+       above give and one of its own: the slice `concolic_root_c` hands back points into the VALUE's own record,
+       which is borrowed for the length of this call, and the record below outlives it. A value that is not a
+       concolic answers NULL and so does one whose bytes entered through nothing this engine minted as a source
+       — see the struct for why those two are told apart by `addr_class` and not by this pointer. */
+    char *aroot = NULL;
+    { const char *r = concolic_root_c(url);
+      if (r) { aroot = strdup(r);
+               CHECK(aroot, "endpoint: OOM copying an address's delivery root — the record would carry a "
+                            "class derived from a provenance it cannot name, and this surface's own reader "
+                            "would report the address as one this engine attributed to nothing"); } }
     char *disp = url_display(ctx, url);
     char *ex = url_example(ctx, url);
     char *shape_path = url_path_of(disp);
@@ -2284,7 +2325,17 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                address entered at a source, which is a hole certified by a reading — the identical defect the
                witness merge one line down records for `unasked`. Both steps are the union's own sentence: a
                sighting that proved MORE is not taken back by one that proved less. */
-            if (acls > g_eps[i].addr_class) g_eps[i].addr_class = acls;
+            /* …AND THE DELIVERY ROOT MOVES WITH THE CLASS, ON THIS LINE AND NOWHERE ELSE, so the two are
+               always ONE sighting's. A root merged on its own rule — kept from the first sighting, or raised
+               whenever a later one had any — would pair a class this sighting proved with a provenance another
+               one held, and a reader reading the pair would be reading two moments (see the struct). The
+               class is the MAX, so this is the sighting whose class the record carries by construction. */
+            if (acls > g_eps[i].addr_class) {
+                g_eps[i].addr_class = acls;
+                free(g_eps[i].addr_root);
+                g_eps[i].addr_root = aroot;   /* ownership transferred; the `done:` arm frees what is left */
+                aroot = NULL;
+            }
             /* …AND THE SAME MERGE OVER THE WITNESS, WRITTEN AS A `MAX` BECAUSE THE LIST IS ORDERED BY HOW
                MUCH IS CLAIMED. The arm above is a union over two members and can be spelled as one `if`
                against the raising value; this one has three, and the two directions are different facts:
@@ -2329,6 +2380,12 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        element: a first sighting's class IS the record's class, and every later one can only raise it to
        `EPA_UNKNOWN`. */
     e->addr_class = acls;
+    /* …AND THE PROVENANCE THAT CLASS WAS DERIVED FROM, written on the line below it because the two are one
+       sighting's fact (see the struct) and transferred rather than copied: a first sighting's root IS the
+       record's root, exactly as its class is, and the `done:` arm frees this local only where no record took
+       it. NULL here is the value's own answer and never an allocation this line declined to make — the CHECK
+       at the read above is what makes that true. */
+    e->addr_root = aroot; aroot = NULL;
     /* …AND WHAT THE PATH THAT COMPOSED IT HAD CHOSEN, written UNCONDITIONALLY for `addr_class`' reason one
        line up: it is the MAX's identity element only because `EPW_UNASKED` happens to be zero, and depending
        on that would make this record's correctness a property of the member ORDER in a list whose order a
@@ -2366,6 +2423,10 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     flow_credit_emit(1.0);   /* a NEW endpoint: this flow just emitted value-of-information -> WFQ reward */
 done:
     free(path);
+    /* THE ROOT THIS CALL COPIED AND NO RECORD TOOK — a merge that did not raise the class, and nothing else.
+       Both arms that keep it NULL the local on the same line, so this frees exactly the sightings whose
+       provenance the surface already held a better-placed copy of. */
+    free(aroot);
     kv_free(&kvb);
 }
 
@@ -3693,6 +3754,61 @@ char *endpoint_json_array(void) {
            WRITTEN UNCONDITIONALLY ON EVERY ROW IN EVERY BUILD, for the four columns above it. */
         json_buf_raw(&b, ","); json_buf_key(&b, "witnessClass");
         json_buf_str(&b, endpoint_witness_class_token(e->witness_class));
+        /* …AND THE OPERAND THE ADDRESS CLASS WAS DERIVED FROM, WHICH IS THE ONE FACT THE FOUR COLUMNS ABOVE
+           ARE COMPOSED OUT OF AND NONE OF THEM PUBLISHES. `addressClass` is read off the address VALUE's own
+           concolic provenance and nothing else, so a reader who meets `unknown` beside `runtime-only` can see
+           that the run held an unknown and cannot see WHICH SOURCE's bytes it was — and `address_class_of`'s
+           residual is entirely about the population where those two answers part: a hole `engine_orphan_call`
+           minted so that a drive could happen at all answers `unknown` here and clears the bar, and nothing
+           was learned, because the hole is OURS. This is that residual's observation moved onto the row.
+           IT READS THE ROOT AND NOT THE ADDRESS'S DISPLAY SHAPE, WHICH IS THE WHOLE OF WHY IT IS A NEW
+           COLUMN. `url` already carries a composed IDENTITY — solver/concolic.h spends its `root` banner on
+           the report that identity produced when it was asked a delivery question (`{location.hash}.slice()`
+           matched no declared source, and the envelope said "there is no navigation that reproduces it") —
+           and the residual's own last paragraph says the same thing one grain out: "Whose unknown it is, is a
+           fact about the ROOT; where the literals fall is a fact about the page's syntax." A reader counting
+           hole-bearing `url` spellings is reading the axis that file refutes.
+           THREE JSON TYPES AND EACH IS A POSITIVE STATEMENT, because `concolic_root_c`'s NULL is two facts and
+           a reader may not have them folded. `null` — the record's class says no sighting held a concolic
+           address at all, so there was no provenance to ask. `false` — a sighting did, and its bytes entered
+           through nothing this engine minted as a source (concolic.h: "a positive statement, never a hole to
+           fill"). A STRING — the sources it entered through, as that file spells them, which may name a SET.
+           THE TYPES ARE THE DISCRIMINATOR AND A TOKEN WOULD NOT BE: a root may be composed out of a name the
+           PAGE chose (solver/absent.c mints an injected global's source from the property the page read), so
+           any in-band word this file reserved would be a word a document could spell, and the collision would
+           report an attributed address as one this engine attributed to nothing.
+           IT COMPOSES NO VERDICT, HERE OR IN ANY CONSUMER, and that is a decision rather than a gap: see the
+           struct for why a classification keyed on this string's spelling is the one §RUN-DON'T-MATCH forbids,
+           and `address_class_of`'s residual for what has to be built before the bar may read it.
+           WRITTEN UNCONDITIONALLY ON EVERY ROW IN EVERY BUILD, for the four columns above it, so the
+           `(unstated)` bucket a consumer keeps stays a fact about the BUILD and never about an address.
+           NAMED RESIDUAL — THIS COLUMN IS A FLOOR ON THE SOURCES AN ADDRESS'S BYTES ENTERED THROUGH AND NEVER
+           THE SET, AND THE CLAUSE IS ABOUT THIS TREE'S MERGE RULE RATHER THAN ABOUT ANY STANDARD, so it is as
+           unreliable as the remedy clause below it and is checked by reading the merge rather than trusted.
+           WHAT IS NOT COVERED: the root is the root of the sighting whose CLASS this record carries, which is
+           what keeps the pair one sighting's — so where TWO sightings of one address held the SAME class and
+           DIFFERENT roots, the second root is not recorded anywhere. The record then names one component where
+           the bytes of some observed path entered through another, which is the `root` banner's own case for a
+           SET one grain out: "bytes that arrived through two components entered through two".
+           WHAT THE NEXT DIFF BUILDS: the union, spelled in solver/concolic.c and never here, because
+           `CONCOLIC_JOINT_SEP` is declared in that file and `derived_root_join` is its one speller — a union
+           composed at this site would hold the second copy of a separator that file states once, which is the
+           drifting restatement §AN-AUDITOR-DERIVES-THE-RULE forbids and which would drift in the silent
+           direction (a root that stopped splitting reads as a single-source address). MEASURED ABSENT with the
+           command, so this clause does not name a mechanism the tree already has: over solver/concolic.h,
+           `concolic_root_member`, `concolic_root_walk`, `concolic_root_union`, `concolic_root_join`,
+           `concolic_root_any` and `concolic_root_all` each answer NOTHING, against `concolic_root_c` answering
+           as the armed control.
+           HOW ITS ABSENCE WOULD SHOW: this column MOVING between two runs of ONE artifact over ONE document,
+           read per row out of the emitted records — which sighting raises a record's class first is decided by
+           the interleaving, so a floor is free to name a different source each time while a SET could not.
+           Observed where the records are, beside the `endpointAddressRoot` partition the trusted zone composes
+           from them; a column that is stable across such a pair is evidence about that document's sightings and
+           not about this rule, which is why the pair is the observation and one run is not. */
+        json_buf_raw(&b, ","); json_buf_key(&b, "addressRoot");
+        if (e->addr_class == EPA_CONCRETE)   json_buf_raw(&b, "null");
+        else if (!e->addr_root)              json_buf_raw(&b, "false");
+        else                                 json_buf_str(&b, e->addr_root);
         json_buf_raw(&b, ","); json_buf_key(&b, "params"); json_buf_raw(&b, "[");
         for (int j = 0; j < e->np; j++) {
             if (j) json_buf_raw(&b, ",");
@@ -3893,6 +4009,7 @@ void endpoint_free(void) {
            what goes stale the next time this struct grows. */
         free(g_eps[i].body_mime); free(g_eps[i].body_b64); free(g_eps[i].body_shape);
         free(g_eps[i].body_example_b64);
+        free(g_eps[i].addr_root);
         for (int j = 0; j < g_eps[i].np; j++) {
             free(g_eps[i].params[j].name);
             for (int k = 0; k < g_eps[i].params[j].nvals; k++) free(g_eps[i].params[j].vals[k]);

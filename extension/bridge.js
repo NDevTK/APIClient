@@ -650,6 +650,47 @@ function endpointFactHistogram(rows, key) {
   }
   return Object.assign({}, h);
 }
+/* THE SAME PARTITION OVER THE ONE EMITTED COLUMN THE READER ABOVE CANNOT TAKE, AND IT IS A SECOND READER
+   RATHER THAN A WIDENING OF THAT ONE FOR TWO INDEPENDENT REASONS.
+   (1) THE COLUMN'S DOMAIN IS THREE JSON TYPES AND NOT A TOKEN. solver/endpoint.c emits `addressRoot` as
+   `null` where the record's class says no sighting held a concolic address, `false` where one did and its
+   bytes entered through nothing the engine minted as a source, and a STRING naming the sources otherwise —
+   three POSITIVE statements, spelled as types because `concolic_root_c`'s own NULL is two facts and because a
+   reserved in-band word would be a word a DOCUMENT could spell (solver/absent.c mints an injected global's
+   source name out of the property the page read). The reader above asserts a non-empty string, which is
+   exactly right for the four columns it serves and refuses two of these three by construction.
+   (2) THE STRING IS PAGE-INFLUENCED, SO IT MAY NOT BE A HISTOGRAM KEY HERE. The reader above says why its
+   keys are safe — "the keys are strings the ENGINE chose, so a door spelled `constructor` or `__proto__`
+   would read a function off `Object.prototype`" — and a root composed out of a page's own property name is
+   the case that argument does not cover: `Object.assign({}, h)` copies with [[Set]], so a key spelled
+   `__proto__` would set a prototype rather than a count. The NAMES stay on the emitted ROW, which is where
+   `address_class_of`'s residual makes its observation; what this zone counts is the four-way STATE, whose
+   every key is one of the four parenthesised words below and none of which any document can choose.
+   IT IS A DIAGNOSTIC AND NOT AN OPERAND OF THE BAR, for the reason the engine gives at the emit: whose
+   unknown a root names is not decidable from the string, so no consumer composes a verdict out of this and
+   the one that would is named at that residual rather than invented here. */
+const ENDPOINT_ROOT_NAMED = "(named)";
+const ENDPOINT_ROOT_UNATTRIBUTED = "(unattributed)";
+const ENDPOINT_ROOT_NO_CONCOLIC = "(no-concolic)";
+function endpointAddressRootHistogram(rows) {
+  const h = Object.create(null);
+  for (let i = 0; i < rows.length; i++) {
+    let v;
+    if (!("addressRoot" in rows[i])) v = ENDPOINT_FACT_UNSTATED;
+    else if (rows[i].addressRoot === null) v = ENDPOINT_ROOT_NO_CONCOLIC;
+    else if (rows[i].addressRoot === false) v = ENDPOINT_ROOT_UNATTRIBUTED;
+    else {
+      DCHECK(typeof rows[i].addressRoot === "string" && rows[i].addressRoot !== "",
+             "an @H row carries `addressRoot: " + JSON.stringify(rows[i].addressRoot) + "` — solver/endpoint.c "
+             + "writes this key in one of exactly three JSON types (`null`, `false`, or the delivery root as a "
+             + "non-empty string), so a fourth is that emission and this reader having parted, and the row "
+             + "would partition under a state nothing can be read as");
+      v = ENDPOINT_ROOT_NAMED;
+    }
+    h[v] = (h[v] === undefined ? 0 : h[v]) + 1;
+  }
+  return Object.assign({}, h);
+}
 function linesToAnalysis(lines, msg, outcome, eng) {
   DCHECK(RUN_OUTCOMES.indexOf(outcome) >= 0,
          "a run outcome this seam does not speak: `" + outcome + "` — every consumer of an analysis branches " +
@@ -1075,6 +1116,22 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            RENDERED AND ASSERTED GENERICALLY for the three rows above's reason, so a class added to
            `ENDPOINT_WITNESS_CLASSES` reaches this reader unedited. */
         endpointWitnessClass: endpointFactHistogram(result.fetchCallSites, "witnessClass"),
+        /* …AND THE OPERAND THE ADDRESS CLASS IS DERIVED FROM, WHICH NONE OF THE FOUR ROWS ABOVE PUBLISHES AND
+           WHICH IS THE ONE THE HARD BAR'S OWN OPEN QUESTION IS ABOUT. `endpointAddressClass` is read off the
+           address VALUE's concolic provenance, so a person meeting `unknown` beside `runtime-only` knows the
+           run held an unknown and cannot know WHOSE: solver/endpoint.c's `address_class_of` carries the
+           residual, and its one population is a hole `engine_orphan_call` minted so a drive of a never-called
+           function could happen at all — which answers `unknown`, clears the bar, and teaches nothing, because
+           the hole is the instrument's. This row is the count a reader needs to size that population.
+           IT IS NOT A FIFTH OBSERVATION AND IT IS NOT AN OPERAND (CLAUDE.md §EVIDENCE-INFLATION, said here
+           because here is where the numbers are). The four above are TWO observations; this is a THIRD, about
+           the same array, and it may not be unioned into or subtracted from any of them — `(named)` is not a
+           claim that the bytes are the page's and `(unattributed)` is not a claim that they are ours. What
+           decides that is a fact the mint does not yet state, which is what that residual is for.
+           THE NAMES ARE DELIBERATELY NOT HERE. They are on the emitted ROW, where the residual's own
+           observation is made; the reader above says why a page-influenced string may not be a key in this
+           zone, and the four buckets are words no document can spell. */
+        endpointAddressRoot: endpointAddressRootHistogram(result.fetchCallSites),
         park: result._park.length, resumed: resumed,
         coldLookup: cold.lookup, coldOther: cold.other, bundleId: cold.bundle,
         url: (msg && msg.sourceUrl) || "" }
@@ -1136,13 +1193,20 @@ function linesToAnalysis(lines, msg, outcome, eng) {
        disagree: one instance emits one document shape, so a run stating a door for some rows and not others
        is that emit having become conditional — and a half-unstated histogram says "this artifact predates the
        key" about part of one array, which is true of no build. */
-    /* FIVE NOW RATHER THAN FOUR, and the list is the only place that number is written: both claims below are
-       about a histogram over ONE array, so the set they are asked of is whatever this literal holds and a row
-       added to the composer above without a line here is a partition nothing checks. */
+    /* THE LIST IS THE ONLY PLACE ITS OWN LENGTH IS WRITTEN, AND THE NUMBER IS GONE RATHER THAN RAISED: both
+       claims below are about a histogram over ONE array, so the set they are asked of is whatever this literal
+       holds and a row added to the composer above without a line here is a partition nothing checks. It said
+       FIVE NOW RATHER THAN FOUR for as long as there were five, and a count in a comment beside the list it
+       counts is the one that goes stale the next time this literal grows (CLAUDE.md
+       §AND-WHERE-A-SENTENCE-CARRIES-BOTH-A-COUNT-AND-THE-LIST-IT-COUNTS).
+       `endpointAddressRoot` IS IN IT AND IS BUILT BY A DIFFERENT READER, which neither claim depends on: both
+       are about a map whose counts sum over the rows of ONE array, and the reader that produced it is the
+       composer's business rather than this check's. */
     for (const _p of [["endpointDoors", m.endpointDoors], ["endpointMintedAt", m.endpointMintedAt],
                       ["endpointAddressClass", m.endpointAddressClass],
                       ["endpointRazorClass", m.endpointRazorClass],
-                      ["endpointWitnessClass", m.endpointWitnessClass]]) {
+                      ["endpointWitnessClass", m.endpointWitnessClass],
+                      ["endpointAddressRoot", m.endpointAddressRoot]]) {
       let _n = 0;
       for (const k of Object.keys(_p[1])) _n += _p[1][k];
       DCHECK(_n === m.endpoints,
