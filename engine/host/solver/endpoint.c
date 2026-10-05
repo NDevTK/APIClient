@@ -754,6 +754,14 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    same `grep -o` over EVERY census and read its hole-bearing rows beside the `"url"` the census names, because
    which captures are real sites moves as captures are taken and a reader who inherits a hand-named pair
    inherits whichever two were in front of its author.
+   AND THAT COMMAND HAS A TRAP ITS OWN AUTHOR FELL INTO, WHICH IS WHY IT IS RECORDED BESIDE IT RATHER THAN
+   LEFT FOR THE NEXT READER: a capture older than these rows carries NO `endpointAddressClass` and NO
+   `endpointRazorClass` at all, so a reader who takes an absent histogram for a row of zeroes scores it as a
+   capture whose razor claimed nothing — the §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES pairing, arriving in the
+   derivation this residual hands over. Band such a capture as NOT SCORABLE ON THIS AXIS and never average it
+   in; what it can still answer is the grep alone, which is a statement about its hole-bearing addresses and
+   not about what the bar did with them. The arithmetic that says a capture IS scorable is free and is in the
+   document: both histograms SUM to its own `endpoints`.
    RETIREMENT: this record goes when solver/concolic.h publishes a predicate answering a property over a
    value's whole ROOT SET, because the classifier is then spellable from here and the scope argument above has
    nothing left to decide. MEASURED ABSENT with the command, so this condition is not born met: over that
