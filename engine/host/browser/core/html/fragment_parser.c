@@ -187,7 +187,23 @@ const char *fragment_parse_unforkable(const void *st)
                "Then fragment_parse_visit declares `frag` with `node` as its cursor, sanitizer_walk_visit "
                "hands up its own seven cursors and its level stack's two-per-level, its `attr` cursor gets the "
                "answer a node->node map does not carry (an attribute is not a node: it is the copy of "
-               "`cur`'s attribute at the same position), and this clause deletes";
+               "`cur`'s attribute at the same position), and this clause deletes. "
+               "AND NEITHER OF THE TWO IS A COPY PROBLEM, WHICH IS THE PRICE AND IS WHY A GENERALISED "
+               "`{clone, destroy}` PAIR OVER A HOST ALLOCATION DOES NOT REACH EITHER. Such a pair answers WHO "
+               "COPIES THESE BYTES, and both of these are questions about WHOSE A THING IS: a shadow root "
+               "inside a private tree has two candidate owners and the delta cannot be one of them, because a "
+               "step machine's tree is cloned BEFORE the fork freezes the head and the claim would land in a "
+               "base segment BOTH arms reference; and a resource-selection job NAMES THE ORIGINAL's wrapper, "
+               "so what is missing is a fork's answer for a pending job over a copied node and not a copy of "
+               "anything. Both therefore stay (c) — outside both mechanisms — for as long as those two "
+               "ownership questions are open, and both already crash BY NAME in dom_private_copy_one rather "
+               "than being skipped, which is the forcing function standing where the copy is. "
+               "THE THIRD THING IS NOT THIS FILE'S AND IS ONE PIECE OF WORK WITH THE DECLARATION: "
+               "core/html/sanitizer.c's sanitizer_walk_visit says in its own words that its DOM pointers are "
+               "undeclared ONLY while this tree is SHARED between the arms, and that a copy of the tree that "
+               "landed without them WOULD BE SILENT. So the declaration above and that component's cursors "
+               "land together or not at all, and §8.6.4's filter runs over an §14.4 tree too, which is why "
+               "`is_xml` is not a narrowing of this refusal either";
     return s->parser
          ? "a fragment parse cannot be forked mid-parse — the TREE-BUILDER half is built "
            "(core/html/tree_construction.c: html_tree_construction_copy deep-copies the partial subtree into "
@@ -209,7 +225,16 @@ const char *fragment_parse_unforkable(const void *st)
            "resumes the snapshot, and the file that would have to export them cannot be edited (lexbor is a "
            "pinned pristine clone engine/build.mjs re-clones). Cloning buys the FORK and not the cold tier; "
            "the tier needs HTML §13.2.5's tokenizer as an engine component whose state is a spec-named enum, "
-           "feeding this tree builder through lxb_html_tree_construction_dispatcher"
+           "feeding this tree builder through lxb_html_tree_construction_dispatcher. "
+           "AND A GENERALISED `{clone, destroy}` PAIR CANNOT BE THE ANSWER HERE EITHER, FOR A REASON THAT IS "
+           "NOT ABOUT THE FORK AT ALL: such a pair is written by whoever OWNS the allocation, and nobody here "
+           "owns this one — lexbor is a pinned pristine clone engine/build.mjs re-clones, so there is no file "
+           "a pair could be added to, and 172 of its 182 tokenizer state functions are static behind 12 entry "
+           "points, so even a pair written from outside could not name the state it would be copying. That is "
+           "the one refusal in this machine whose answer is NOT to carry the inherited C across a fork but to "
+           "REPLACE it: §13.2.5 as an engine component, after which `state` is a spec-named enum, the fork is "
+           "an ordinary copy and the cold tier works for the same reason. Priced as (c) and deliberately so — "
+           "it is a capability to BUILD and not an allocation to carry"
          : NULL;
 }
 

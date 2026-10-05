@@ -2197,6 +2197,19 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            "§7.4 step 14's load resumed at its creation stage with no creation — the fetch stage transfers "
            "here only after nav_create_begin has produced one, so a null here is a stage reached by something "
            "that is not this machine's own transfer");
+    /* AND THE HOST REGISTER LEFT WITH THE STAGE IT BELONGED TO. The fetch stage's own exit says in prose that
+       "the host register has been taken and cleared", and the rest point below is a rest point BECAUSE of it;
+       nothing asserted it, and the two facts are written by different code — `stage` by the transfer, `req` by
+       the take above it — so they can disagree. What a disagreement costs is not a wrong value: an
+       unanswered synchronous request is what makes a flow BLOCKED (solver/pending.h's pending_blocked), the
+       mark comes off only when that id is answered, and a load that reached this stage still naming one is a
+       flow waiting on a rendezvous no arm of this machine will ever read again — removed from the frontier
+       with nothing anywhere to say so, which §scheduler's razor calls a CAP. */
+    DCHECK(s->req == 0,
+           "§7.4 step 14's load reached its creation stage still holding a host register — the fetch stage takes "
+           "and clears that id before it transfers, and a flow that carries one past the transfer is parked on "
+           "a rendezvous nothing is going to read: it reads as BLOCKED to every pick and no answer can clear "
+           "it, because the machine that asked has moved to a stage that never asks again");
     if (!nav_create_ended(s->create)) {
         nav_create_step(s->create);
         return JS_STEP_YIELD;
@@ -2246,9 +2259,20 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
    navigable rather than in this state. The declaration is still REQUIRED and is not a formality — a machine
    with no visit cannot be FORKED, so a concolic branch reached from inside the load would abort the fork
    instead of exploring both arms, and check_step_visits is what says so before anything is compiled.
-   THE CREATION RECORD IS NOT NAMED HERE AND CANNOT BE. JSStepVisit has no operation for a half-built Document
-   — the same hole core/dom/element.c's fragment parse names — so what answers the fork is `unforkable` below
-   and what answers the TEARDOWN is `fini`, which are different consumers and different questions. */
+   THE CREATION RECORD IS NOT NAMED HERE AND CANNOT BE, and the reason is NOT that a private DOM tree has no
+   operation — `v->tree` is one, and core/html/fragment_parser.c's §14.4 half declares its own tree through it.
+   It is that a HALF-BUILT DOCUMENT IS NOT A TREE THAT OPERATION CAN NAME: quickjs-step.h declares its clone as
+   "deep-copy the tree at `root` into a tree WITH THE SAME OWNER", and a Document IS the owner — so there is no
+   same-owner copy of one to make, which solver/dom_cow.c's own dom_private_copy_one states back as
+   `c->owner_document == src->owner_document`. THIS SENTENCE USED TO READ "the same hole
+   core/dom/element.c's fragment parse names" AND BOTH HALVES WERE WRONG: that argument lives in
+   core/html/fragment_parser.c (element.c is one of its three CONSUMERS, which is a `.unforkable =` line and
+   not an argument), and the hole is not the same one — that machine's tree IS declared now and what holds its
+   fork is two per-node cases its own FRAG_FEED boundary creates. It is kept here as a correction rather than
+   deleted, because a reader who re-derives "no operation names a tree" from this machine's empty visit is the
+   reader who will go and build `v->tree` a second time.
+   SO WHAT ANSWERS THE FORK IS `unforkable` below and what answers the TEARDOWN is `fini`, which are different
+   consumers and different questions. */
 static void js_nav_load_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     (void)ctx; (void)st; (void)v;
@@ -2272,14 +2296,18 @@ static JSValue js_nav_load_fini(JSContext *ctx, void *st, bool take_result)
     return JS_UNDEFINED;
 }
 
-/* WHY THIS MACHINE MUST NOT BE FORKED WHILE IT IS CREATING A DOCUMENT — core/dom/element.c's fragment parse
-   states the whole argument at fragment_parse_unforkable and this is the same object: between two items of §7.5.2's
-   fill, the machine holds an lxb_html_parser_t standing at a position with an open-element stack and an
-   insertion mode behind it, and lexbor exposes no copy of one; it also holds the half-built Document itself,
-   which JSStepVisit has no operation for, so a sibling arm would share ONE tree with the original and both
-   teardowns would destroy it. IT IS A PROPERTY OF THE ENGINE AND NOT OF THE PAGE: no page code runs across a
-   fill, but RAM pressure, a cold-tier eviction and a cross-session resume never ask what the page is doing,
-   and a fork can arrive from anywhere the scheduler puts one. */
+/* WHY THIS MACHINE MUST NOT BE FORKED WHILE IT IS CREATING A DOCUMENT — core/html/fragment_parser.c's
+   fragment parse states the TOKENIZER half of the argument at fragment_parse_unforkable and that half is the
+   same object: between two items of §7.5.2's fill, the machine holds an lxb_html_parser_t standing at a
+   position with an open-element stack and an insertion mode behind it, and lexbor exposes no copy of one.
+   THE OTHER HALF IS NOT THAT MACHINE'S AND MUST NOT BE READ AS IT. This one also holds the half-built
+   DOCUMENT, and a Document is not a detached subtree: `v->tree` copies a tree into a tree with the SAME owner,
+   and a Document is the owner, so no operation names one. That machine's tree is a DETACHED FRAGMENT, which
+   `v->tree` does name — what holds ITS fork is two per-node cases its own FRAG_FEED boundary creates, neither
+   of which this machine can reach, because §7.5.2's fill runs no parse-boundary walk.
+   IT IS A PROPERTY OF THE ENGINE AND NOT OF THE PAGE: no page code runs across a fill, but RAM pressure, a
+   cold-tier eviction and a cross-session resume never ask what the page is doing, and a fork can arrive from
+   anywhere the scheduler puts one. */
 static const char *js_nav_load_unforkable(const void *st)
 {
     const NavLoadState *s = st;
@@ -2287,14 +2315,56 @@ static const char *js_nav_load_unforkable(const void *st)
          ? "§7.4 step 14's document load cannot be forked while it is creating its Document — between two "
            "items of §7.5.2/§7.5.3/§7.5.4's fill this machine owns the decoded entity, an open §7.5 load "
            "holding a parser standing at a position, and the half-built Document those bytes are going into. "
-           "js_nav_load_visit declares none of them, because JSStepVisit has no operation for a PRIVATE DOM "
-           "TREE and none for a lexbor parser, so the sibling arm would share one Document with the original: "
-           "two arms filling one tree and two teardowns destroying it. WHAT TO BUILD IS core/dom/element.c's "
-           "fragment_parse_unforkable list, unchanged and already ordered — the `v->tree` operation whose clone deep-"
-           "copies a subtree through a node->node map (core/html/tree_construction.c's copy_subtree), and "
-           "then HTML §13.2.5's tokenizer as an engine component whose state is a spec-named enum rather than "
-           "a raw code pointer into lexbor's 182 static state functions. Both halves serve that machine and "
-           "this one, which is why neither is named twice"
+           "js_nav_load_visit declares none of them, so the sibling arm would share one Document with the "
+           "original: two arms filling one tree and two teardowns destroying it. "
+           "THIS MESSAGE USED TO SAY THE REASON WAS "
+           "`JSStepVisit has no operation for a PRIVATE DOM TREE`, AND IT NAMED `v->tree` THREE LINES LATER "
+           "AS WHAT TO BUILD — an absence asserted after it "
+           "was filled, which is the one failure mode a @WHY has: accurate about the spec and wrong about "
+           "this tree, so the next reader is sent to write what is already there. The operation EXISTS "
+           "(quickjs-step.h's `tree`, with solver/dom_cow.c's dom_private_tree_clone behind it) and "
+           "core/html/fragment_parser.c's §14.4 half declares its own tree through it. "
+           "WHAT IS ABSENT IS AN OPERATION THAT CAN NAME A DOCUMENT. That clone is declared as "
+           "`deep-copy the tree at root into a tree with the SAME OWNER` and dom_private_copy_one asserts "
+           "exactly that "
+           "(`c->owner_document == src->owner_document`); a Document IS the owner, so it has no same-owner "
+           "copy, and lexbor's own clone of a Document node answers a bare lxb_dom_document_t that shares the "
+           "original's `doctype` POINTER — two owners of one node, which is the corruption this abort exists "
+           "to prevent. "
+           "WHAT TO BUILD, IN THIS ORDER. (1) THE DOCUMENT'S OWN COPY, which is this machine's and not that "
+           "one's: a second §7.5.1 Document in this agent holding the copy of the partial tree, its "
+           "compat mode, its own DocumentType node rather than a shared pointer, and the five facts "
+           "nav_create_finish takes back out of the creation record — after which the subtree under it is a "
+           "same-owner copy `v->tree` could make, and only then is a node->node map worth having. (2) HTML "
+           "§13.2.5's tokenizer as an engine component whose state is a spec-named enum rather than a raw code "
+           "pointer into lexbor's 182 static state functions — that half IS shared with "
+           "fragment_parse_unforkable and is named once, there. "
+           "WHAT IS NOT WHAT TO BUILD: `copy_subtree`. This message named it, and that was wrong twice over "
+           "— it is static to core/html/tree_construction.c, and it is the WRONG WALK, which both that file "
+           "and dom_private_tree_clone say in their own words: it is handed the two temporary DOCUMENT nodes "
+           "and starts at `src_top->first_child`, so a DETACHED root has no entry point into it, and it does "
+           "not descend into a shadow root. A reader who took the retired clause on trust would have exported "
+           "a walk that cannot be the clone for either machine. "
+           "AND THIS STATE IS THREE CAPABILITIES AND NOT ONE, WHICH IS WHAT THE DECLARER COUNT HIDES AND IS "
+           "HOW IT SHOULD BE PRICED — two of the three are shared with other machines and retire with them, "
+           "and only one is this machine's own. "
+           "EVERY char* ON NavCreateWork IS PLAIN BYTES, the decoded entity included, so a `{clone, destroy}` "
+           "pair over a host allocation carries all of it today and `v->buf` would carry it without one; the "
+           "two Origin records are deliberately NOT copied (an origin belongs to the agent, and a copy would "
+           "mint a second record and make this document cross-origin to the one that navigated it), so they "
+           "need no mechanism at all. "
+           "THE §7.5 LOAD'S PARSER IS THE SAME CAPABILITY fragment_parse_unforkable's second clause names, "
+           "and the answer there is the one that applies here: NOT a copy of lexbor's tokenizer — nobody here "
+           "owns the file a pair would be written in — but §13.2.5 as an engine component. It retires for both "
+           "machines at once and is named once, there. "
+           "THE DOCUMENT IS THIS MACHINE'S OWN AND IS THE ONE NEITHER MECHANISM REACHES. A `{clone, destroy}` "
+           "pair is written by whoever owns the allocation and this one IS owned here, so the pair is "
+           "writable — and it would be the wrong thing, because a Document is not an allocation whose bytes "
+           "are the state: its arenas, its interned tag and attribute ids and its DocumentType are what every "
+           "node under it NAMES, and lexbor's own clone of one answers a bare lxb_dom_document_t sharing the "
+           "original's `doctype` pointer. What has to be built is the §7.5.1 creation performed a second time "
+           "against the copy rather than a copy of its result, after which the subtree under it is a "
+           "same-owner tree `v->tree` already names and no new operation is needed for the tree at all"
          : NULL;
 }
 
