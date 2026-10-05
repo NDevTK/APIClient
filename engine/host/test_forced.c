@@ -3663,6 +3663,24 @@ static const char *HTML =
        measured before the gate existed. `SyntaxError` would be a third — a compile of bytes that did not parse —
        and is why the control's body parses. */
     "(async function(){ fetch('/api/modtypeask?w=mtASK'); try { var bad = await import('/chunk/mdbad.js'); fetch('/api/modtype?w=' + (bad ? 'mtLOADED' : 'mtEMPTY')); } catch (e) { fetch('/api/modtype?w=' + e.name); } })();"
+    /* A CONCOLIC ACROSS A TURN BOUNDARY, WHICH IS THE ONE DELIVERY §9.3.3 MAKES AND THIS FIXTURE HAD NO
+       STATEMENT FOR. `postMessage` serializes NOW (step 7) and delivers in a LATER TASK (step 8), so the value
+       does not cross as a live JSValue at all — §Security says one crosses neither a park, a session nor an
+       instance — and what the receiving handler is handed is whatever the record carried. THAT MAKES IT THE
+       CHEAPEST TEST THERE IS OF WHETHER AN ATTACKER SOURCE SURVIVES A QUEUE: §Attacker-sources rates
+       `message.data` one of the platform's richest, and a page posting `location.hash` is the canonical shape.
+       THE TWO TOKENS ARE THE WHOLE ASSERTION AND THEY ARE CONSTANTS. If the delivered value is still the
+       triple, the `===` is a branch over an unknown and §Solver-half forks it, so BOTH `scADMIN` and
+       `scPUBLIC` are in the document. If the record carried the EXAMPLE alone, the comparison is DECIDED and
+       exactly one of them is — which is a wrong answer and not a lossy one, because the admin arm is the
+       surface this tool exists to reach. Neither token is composed from anything this engine computed, for
+       §A-WITNESS-CARRIES-CONSTANTS-ONLY's reason: a payload built from a concolic can itself be unknown, and
+       then the request is never made and a reached arm reads exactly like an arm that did not run.
+       `scENTER` IS SEPARATE AND IS THE REACHABILITY HALF, because an absent fork token has two readings — the
+       delivery never ran, or it ran and the branch was decided — and those take opposite work. */
+    "window.addEventListener('message', function(e){ fetch('/api/scmsg?v=scENTER');"
+    " if (e.data === 'adminpanel') { fetch('/api/scfork?w=scADMIN'); } else { fetch('/api/scfork?w=scPUBLIC'); } });"
+    "window.postMessage(location.hash.slice(1), '*');"
     /* ORPHAN-INVOKE — the headline capability, and the ONE statement in this document that nothing in it calls.
        It asks two things at once because they are the two halves of the mechanism and either alone would pass
        while the other was broken: that the function RUNS at all (`/api/orphan/report`), and that its PARAMETER
@@ -14168,6 +14186,28 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the `application/json`-served module's BODY RAN — /api/modbadran is in the document, so this "
              "engine compiled and evaluated a reply a browser refuses before any source text exists. That is "
              "the half a status or a parse error cannot report, and it is why this row is a conjunction");
+    /* §9.3.3's CROSS-DOCUMENT MESSAGE, IN TWO ROWS BECAUSE A MISSING FORK TOKEN HAS TWO READINGS. The first
+       is that the DELIVERY ran at all: step 7 serializes in the posting turn and step 8 delivers in a LATER
+       task, so an absent handler emission is the SCHEDULE and says nothing whatever about what the record
+       carried. The second is the claim: the delivered `e.data` is still the TRIPLE, so the `===` over it is a
+       branch an unknown cannot decide and §Solver-half forks it, putting BOTH constant tokens in the
+       document. Exactly one of them is the record having carried the EXAMPLE alone — a wrong answer rather
+       than a lossy one, because the arm it deletes is the gated surface this tool exists to reach. */
+    const char *sc_msg_ran_why = NULL; int sc_msg_ran = 1;
+    fold_row(&sc_msg_ran, &sc_msg_ran_why, param_value_is(js, "/api/scmsg", "v", "scENTER"),
+             "NOT REACHED: there is no /api/scmsg record, so §9.3.3 step 8's delivery task never ran its "
+             "handler's FIRST and unconditional emission. That is the SCHEDULE and not the serializer — the "
+             "row gated on this one is unaskable until it answers");
+    const char *sc_msg_fork_why = NULL; int sc_msg_fork = 1;
+    fold_row(&sc_msg_fork, &sc_msg_fork_why,
+             param_value_is(js, "/api/scfork", "w", "scADMIN") &&
+             param_value_is(js, "/api/scfork", "w", "scPUBLIC"),
+             "the handler ran and only ONE arm of `e.data === 'adminpanel'` is in this document: the posted "
+             "`location.hash` arrived as its EXAMPLE and not as the triple, so the comparison was DECIDED "
+             "where a concolic forks. The record's `symbols` is what carries the triple across the turn "
+             "boundary — a live JSValue crosses neither a park, a session nor an instance — so a single arm "
+             "says either that the array was not written, or that it was dropped between the enqueue and the "
+             "delivery (PQ_SYMBOLS in core/frame/window_message.c is the one slot that carries it)");
     /* ORPHAN-INVOKE, IN TWO ROWS BECAUSE IT IS TWO CLAIMS. The first is that a function nothing in the document
        calls was RUN — with no driving there is no request at all, which is what a page holding only such a
        function measured. The second is that its parameter arrived as unknown external input: `role === 'admin'`
@@ -18423,6 +18463,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "mod-default", mod_default, "/api/moddefault", SESS_EXPLORE, mod_default_why, .gate = "mod-entered" },
         { "mod-typeask", mod_typeask, "/api/modtypeask", SESS_EXPLORE, mod_typeask_why },
         { "mod-type", mod_type, "/api/modtype", SESS_EXPLORE, mod_type_why, .gate = "mod-typeask" },
+        { "sc-msg-ran", sc_msg_ran, "/api/scmsg", SESS_EXPLORE, sc_msg_ran_why },
+        { "sc-msg-fork", sc_msg_fork, "/api/scfork", SESS_EXPLORE, sc_msg_fork_why, .gate = "sc-msg-ran" },
         /* THE SEVEN ORPHAN ROWS SHARE ONE `why`, AND IT IS THE ONLY THING THAT MAKES THEIR 0 ACTIONABLE — see
            where it is composed above. Each row still names its own endpoint; what the shared clause adds is
            which of the schedule, the take and this drive the 0 belongs to, which no per-endpoint test can

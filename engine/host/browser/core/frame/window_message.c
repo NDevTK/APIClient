@@ -93,7 +93,11 @@ static int     g_deliver_stepid = -1;   /* §9.3.3's queued delivery task, as a 
    §scheduler's reason — an operation that becomes a work item takes its inputs with it — because by the time
    the task runs there is no other way to know: the callee is one function object per agent, so its realm names
    whichever document minted it and never the sender. */
-enum { PQ_DATA = 0, PQ_HOLDERS, PQ_TARGET_ORIGIN, PQ_SOURCE, PQ_SENDER_ORIGIN, PQ_ROUTED, PQ_N };
+/* PQ_SYMBOLS is the record's second array and NOT a second kind of holder -- structured_clone.h states why
+   the two are separate fields, and the short of it is that the routing refusal below names a MessagePort and
+   an ArrayBuffer as what to build, which is the wrong diagnosis for a concolic. It is APPENDED, because this
+   enum is the only speller of these positions and PQ_N is derived from it. */
+enum { PQ_DATA = 0, PQ_HOLDERS, PQ_TARGET_ORIGIN, PQ_SOURCE, PQ_SENDER_ORIGIN, PQ_ROUTED, PQ_SYMBOLS, PQ_N };
 
 /* READ, NEVER DEFAULTED. A `JS_ToBool` over whatever came back would turn "the producer stopped writing this"
    into the perfectly plausible answer `false`, and the census would then quietly describe none of the routed
@@ -260,12 +264,14 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
                "principal of a document outside it");
         buf = JS_GetPropertyUint32(ctx, entry, PQ_DATA);
         swt.holders = JS_GetPropertyUint32(ctx, entry, PQ_HOLDERS);
+        swt.symbols = JS_GetPropertyUint32(ctx, entry, PQ_SYMBOLS);
         swt.data.buf = JS_GetArrayBuffer(ctx, &blen, buf);
         swt.data.len = blen;
         DCHECK(swt.data.buf != NULL, "a queued window message held something that is not the bytes it stored");
         data = structured_deserialize_transfer(tctx, &swt, &ports);
         JS_FreeValue(ctx, buf);
         JS_FreeValue(ctx, swt.holders);
+        JS_FreeValue(ctx, swt.symbols);
 
         /* §9.3.3 STEP 8.5's `messageClone`, AS AN ATTACKER SOURCE — the reason this file's header calls
            `message` one of the platform's richest.
@@ -402,8 +408,26 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
     char *op, *b64;
     JSValue holders = JS_GetPropertyUint32(ctx, entry, PQ_HOLDERS);
     uint32_t nheld = structured_transfer_len(ctx, holders);
+    JSValue syms = JS_GetPropertyUint32(ctx, entry, PQ_SYMBOLS);
+    uint32_t nsym = structured_transfer_len(ctx, syms);
 
     JS_FreeValue(ctx, holders);
+    JS_FreeValue(ctx, syms);
+    /* A TRIPLE DOES NOT CROSS AN INSTANCE EITHER, AND IT IS ITS OWN REFUSAL RATHER THAN THE HOLDER'S. The
+       assert below names a MessagePort handle and an ArrayBuffer's bytes as what to build, which would be a
+       plausible and WRONG diagnosis for a concolic -- the engine would send a reader hunting a transferable
+       that is not in the message. What is missing here is named instead: the triple is already written AS DATA
+       in this record's `symbols`, so what a routed record needs is a FIELD on the wire format to carry it and
+       a read of that field where the arriving entry is built. Until then the bytes would arrive with the
+       example alone and the receiving flow would DECIDE a branch the sender forked, which is a wrong answer
+       rather than a lossy one -- §Solver's own test. */
+    DCHECK(nsym == 0,
+           "postMessage sent a CONCOLIC to ANOTHER INSTANCE — the triple is written as data in this record's "
+           "`symbols` and the routed wire format has no field to carry it, so the delivered value would stand "
+           "for its example alone and a branch on it would be DECIDED where this flow forked. Build the "
+           "cross-instance arm: one more field on the routed record, read where the arriving entry sets "
+           "PQ_SYMBOLS");
+    (void)nsym;   /* the count is the assert's, and the assert is compiled out of a release build */
     /* A TRANSFER DOES NOT CROSS AN INSTANCE YET, AND A DROPPED ONE IS WORSE THAN A THROW. §2.7.7 has already
        DETACHED every object in the transfer list by the time this runs — the page no longer has its port or its
        buffer — so sending the bytes without the holders delivers a message whose `ports` is empty and destroys
@@ -502,6 +526,12 @@ void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const
        dropping one, so a routed record carrying holders cannot exist. The empty list is that fact, not a
        default — when the cross-instance holder is built, it is read here. */
     JS_SetPropertyUint32(ctx, entry, PQ_HOLDERS, JS_UNDEFINED);
+    /* AND NO SYMBOLS, for the same reason and with the same shape: window_message_send_remote aborts on a
+       record carrying triples rather than sending the bytes without them, so a routed record carrying symbols
+       cannot exist. The empty list is that fact and not a default -- a routed message's own `data` is already
+       unknown input by §9.3.3 step 8.2's principal test below, which is a DIFFERENT fact from a triple the
+       SENDING page's own code had narrowed. */
+    JS_SetPropertyUint32(ctx, entry, PQ_SYMBOLS, JS_UNDEFINED);
     JS_SetPropertyUint32(ctx, entry, PQ_TARGET_ORIGIN,
                          (target_origin && strcmp(target_origin, "*")) ? JS_NewString(ctx, target_origin)
                                                                        : JS_NULL);
@@ -782,6 +812,10 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     }
     JS_SetPropertyUint32(ctx, entry, PQ_DATA, buf);
     JS_SetPropertyUint32(ctx, entry, PQ_HOLDERS, JS_DupValue(ctx, swt.holders));
+    /* THE TRIPLES THE BODY REACHED, carried so the delivery can rebuild them: a page posting `location.hash`
+       sends a value that STANDS FOR unknown external input, and dropping this array would deliver the example
+       alone -- after which the receiver's branch on it would be DECIDED where the sender forked. */
+    JS_SetPropertyUint32(ctx, entry, PQ_SYMBOLS, JS_DupValue(ctx, swt.symbols));
     JS_SetPropertyUint32(ctx, entry, PQ_TARGET_ORIGIN, want);
     /* §9.3.3 step 8.3's source, read HERE where the caller's realm is the one running. */
     JS_SetPropertyUint32(ctx, entry, PQ_SOURCE, JS_DupValue(ctx, win_proxy(ctx)));

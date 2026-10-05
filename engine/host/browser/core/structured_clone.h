@@ -163,7 +163,16 @@ void structured_register_serializable(const StructuredSerializable *s);
  * A transferable NOT in the transfer list is still refused, and that is the same rule rather than an exception:
  * `memory` does not hold it, so it reaches the writer as what it is — a platform object, which §2.7 does not
  * serialize. */
-typedef struct { StructuredData data; JSValue holders; } StructuredWithTransfer;
+/* A SECOND ARRAY AND NOT A SECOND KIND OF HOLDER, AND THE REASON IS A WRONG DIAGNOSIS RATHER THAN TIDINESS.
+ * `holders` answers WHAT THE PAGE TRANSFERRED: §2.7.7's step 2 validates the page's list against
+ * `transferable_of`, and the routing edge refuses a non-empty one with a message naming a MessagePort handle
+ * and an ArrayBuffer's bytes as what to build. A CONCOLIC is neither -- §Solver makes it a primitive that
+ * STANDS FOR unknown external input -- so riding `holders` would have made a page posting `location.hash`
+ * abort under a sentence about transferables, which is the plausible-diagnosis failure this engine rates
+ * worse than silence. It would also have made a concolic answer `transferable_of` and so let a page name one
+ * in its own `transfer` list. `symbols` is therefore its own field, and the ONE numbering the reader resolves
+ * is assembled at read: the `holders` first, the `symbols` after them. */
+typedef struct { StructuredData data; JSValue holders; JSValue symbols; } StructuredWithTransfer;
 /* `transfer` is the MATERIALIZED list — IDL_SEQUENCE_OBJECT's Array. Returns 0, or -1 with a throw live. */
 int  structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst transfer,
                                    StructuredWithTransfer *out);

@@ -77,6 +77,11 @@ typedef struct {
     uint32_t     n;          /* its length — the first n indices of the ONE numbering the reader resolves */
     JSValue      leaves;     /* the values that are their own copy, in the order reached; JS_UNDEFINED on the
                                 path whose bytes outlive the turn */
+    JSValue      concolics;  /* the CONCOLICS reached, in the order reached, for a record that HAS a second
+                                array to carry their triples as data. Live here only so that one reached twice
+                                interns ONCE -- nothing in the written record points into it, and
+                                structured_serialize_transfer frees it. JS_UNDEFINED on a path whose record has
+                                no such field, where the write hook still refuses. */
 } SCWriteMemory;
 
 typedef struct {
@@ -106,14 +111,41 @@ static int sc_memory_index(JSContext *ctx, void *opaque, JSValueConst obj)
         if (same) return (int)i;
     }
     if (!concolic_is(obj)) return -1;
+    /* THE CROSS-TURN ARM: THE TRIPLE RIDES AS DATA, AND IT IS INTERNED BY POINTER HERE FOR THE SAME REASON THE
+       LEAVES ARE. A concolic reached twice from one message body is ONE symbol -- sc_memory_value's own comment
+       says a concolic reached twice is one symbol or the constraints narrowed on it name nothing -- so the
+       identity comparison is the same one, and only the WRITING OUT differs: there is no later turn in which
+       this pointer means anything, so structured_serialize_transfer reads the triple off each entry here and
+       the record's `symbols` carries it. */
+    if (JS_IsUndefined(m->leaves) && !JS_IsUndefined(m->concolics)) {
+        uint32_t cn = structured_transfer_len(ctx, m->concolics);
+
+        for (i = 0; i < cn; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, m->concolics, i);
+            bool csame = JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(obj);
+
+            JS_FreeValue(ctx, e);
+            if (csame) return (int)(m->n + i);
+        }
+        /* A DEFINE and not an assignment, for the reason the leaves' own interning gives below: [[Set]]
+           consults the prototype chain and an index accessor a page put on Array.prototype would swallow the
+           entry, after which the triple written for this index would be some other value's. */
+        JS_DefinePropertyValueUint32(ctx, m->concolics, cn, JS_DupValue(ctx, obj), JS_PROP_C_W_E);
+        return (int)(m->n + cn);
+    }
     if (JS_IsUndefined(m->leaves)) {
-        DFAIL("HTML §2.7: a CONCOLIC reached the serializer on the path that hands BYTES to a LATER turn — a "
-              "queued port or window delivery, a history entry, a broadcast. A live value crosses neither a "
-              "park, a session nor an instance, so this arm is the triple written AS DATA (the source identity, "
-              "the display shape and the example) rebuilt by concolic_new where the bytes are read, riding the "
-              "same record the holders ride and refused at the routing edge the way a holder already is. The "
-              "SAME-TURN clone answers it by seeding `memory` with the value itself. Until this exists, a page "
-              "posting `location.hash` is refused where a real browser delivers a string");
+        /* THE TWO PATHS THAT CARRY A TRIPLE NOW DO, AND WHAT IS LEFT HERE IS THE ONE WITH NO FIELD FOR IT.
+           A queued port or window delivery goes through structured_serialize_transfer, which seeds `concolics`
+           and writes `symbols`. This arm is reached by `structured_serialize` -- a history entry, a broadcast,
+           an ArrayBuffer's byte record -- whose out-parameter is a StructuredData and has no second array, so
+           the record would have to grow one before the triple could ride it. */
+        DFAIL("HTML §2.7: a CONCOLIC reached the serializer on a path whose RECORD has no field to carry a "
+              "triple — a history entry, a broadcast, an ArrayBuffer's byte record. A live value crosses "
+              "neither a park, a session nor an instance, so the arm is the triple written AS DATA (the source "
+              "identity, the display shape and the example) rebuilt by concolic_new where the bytes are read, "
+              "which is what StructuredWithTransfer's `symbols` already does for a queued delivery. Give THIS "
+              "record the same second array and seed `memory.concolics` with it; the SAME-TURN clone answers "
+              "it by seeding `memory` with the value itself instead");
         return -1;
     }
     ln = structured_transfer_len(ctx, m->leaves);
@@ -227,7 +259,7 @@ int structured_serialize(JSContext *ctx, JSValueConst v, StructuredData *out)
     /* NO TRANSFER LIST AND NO LEAVES. These bytes are the half of §2.7 that is handed to a LATER turn — a
        history entry, a broadcast, the byte record an ArrayBuffer's transfer steps build — so nothing live may
        be named from them, and the map above is what states that rather than a silence. */
-    SCWriteMemory memory = { JS_UNDEFINED, 0, JS_UNDEFINED };
+    SCWriteMemory memory = { JS_UNDEFINED, 0, JS_UNDEFINED, JS_UNDEFINED };
 
     return sc_serialize(ctx, v, out, &memory);
 }
@@ -271,7 +303,7 @@ JSValue structured_deserialize(JSContext *ctx, const StructuredData *in)
    Indexed Database's §5.11/§6.2, whose store holds the copy as a live value. */
 JSValue structured_clone(JSContext *ctx, JSValueConst v)
 {
-    SCWriteMemory memory = { JS_UNDEFINED, 0, JS_UNDEFINED };
+    SCWriteMemory memory = { JS_UNDEFINED, 0, JS_UNDEFINED, JS_UNDEFINED };
     SCReadMemory back = { JS_UNDEFINED, 0, JS_UNDEFINED };
     JSTransferReadHook hook;
     StructuredData d;
@@ -301,6 +333,14 @@ JSValue structured_clone(JSContext *ctx, JSValueConst v)
  * there could only ever have been one. */
 
 enum { TH_TYPE = 0, TH_DATA, TH_N };
+/* A SYMBOL RECORD IS THE TRIPLE AND NOTHING ELSE, and it carries no [[Type]] because there is only ever one
+   kind of it: a holder's type exists to choose §2.7.8's receiving steps between several interfaces, and a
+   concolic has one reconstitution. The DOMAIN is absent from this record ON PURPOSE and is not lost with it --
+   §Re-execution keys a flow's narrowing by the PREDICATE's own identity and the source's, never on the value,
+   so a rebuild carrying the same `src` is correlated with every constraint the flow recorded. That is why the
+   rebuild below is not the "SECOND symbol" the write hook's own banner refuses: the banner is about the
+   SAME-TURN clone, where the live value is available and returning it is strictly better. */
+enum { SY_SHAPE = 0, SY_SRC, SY_EXAMPLE, SY_N };
 
 /* THE JS-SPEC ARM, FIRST, because §2.7.7 asks it first: an [[ArrayBufferData]] slot decides the ArrayBuffer
    branch and everything else is "a platform object that is a transferable object". SharedArrayBuffer is a
@@ -513,11 +553,13 @@ uint32_t structured_transfer_len(JSContext *ctx, JSValueConst arr)
 int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst transfer,
                                   StructuredWithTransfer *out)
 {
-    uint32_t n, i, j;
+    uint32_t n, i, j, cn;
+    JSValue concolics = JS_UNDEFINED;
 
     out->data.buf = NULL;
     out->data.len = 0;
     out->holders = JS_UNDEFINED;
+    out->symbols = JS_UNDEFINED;
     DCHECK(JS_IsArray(transfer), "StructuredSerializeWithTransfer was handed a transfer list that is not the "
                                  "materialized sequence — IDL_SEQUENCE_OBJECT is what §3.2.21 converts one "
                                  "into, and reading the page's object again here would run its iterator a "
@@ -555,11 +597,22 @@ int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst t
     {
         /* NO LEAVES, for the reason the map's own comment gives: this record is DELIVERED in a later task, and
            a routed one is delivered in another instance — window_message_send_remote already aborts rather
-           than dropping a holder, and a live leaf is the same fact one step earlier. */
-        SCWriteMemory memory = { transfer, n, JS_UNDEFINED };
+           than dropping a holder, and a live leaf is the same fact one step earlier.
+           CONCOLICS, THOUGH: this record HAS a second array to carry a triple as data, so the write hook
+           interns them here and the loop after step 5 writes them out. The live array is an interning table
+           and is freed below whatever happens -- nothing in `symbols` points into it. */
+        SCWriteMemory memory = { transfer, n, JS_UNDEFINED, JS_UNDEFINED };
+        int rc;
 
-        if (sc_serialize(ctx, v, &out->data, &memory) < 0)
+        memory.concolics = JS_NewArray(ctx);
+        CHECK(!JS_IsException(memory.concolics),
+              "StructuredSerializeWithTransfer: the concolic interning table could not be allocated");
+        rc = sc_serialize(ctx, v, &out->data, &memory);
+        if (rc < 0) {
+            JS_FreeValue(ctx, memory.concolics);
             return -1;
+        }
+        concolics = memory.concolics;
     }
 
     /* §2.7.7 STEP 5: run each transfer step, in list order, and record the holder with its [[Type]]. Nothing is
@@ -582,22 +635,65 @@ int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst t
         JS_SetPropertyUint32(ctx, rec, TH_DATA, h);
         JS_SetPropertyUint32(ctx, out->holders, i, rec);
     }
+    /* THE TRIPLES, WRITTEN OUT IN THE ORDER THE WRITE HOOK INTERNED THEM, which is the order its indices
+       named: entry k of this array is stream index `n + k`, and the reader assembles the one numbering by
+       filling `values` with the holders first and these after them. */
+    cn = structured_transfer_len(ctx, concolics);
+    out->symbols = JS_NewArray(ctx);
+    if (JS_IsException(out->symbols)) { out->symbols = JS_UNDEFINED; goto fail; }
+    for (i = 0; i < cn; i++) {
+        JSValue cv = JS_GetPropertyUint32(ctx, concolics, i), rec;
+        const char *shape = concolic_shape_c(cv);
+        const char *csrc = concolic_src_c(cv);
+
+        /* THE SOURCE IDENTITY IS THE ONE FIELD THE REBUILD CANNOT DO WITHOUT, because it is what correlates
+           the arriving value with every constraint this flow narrowed it under. A triple written without one
+           would deliver a symbol about which the flow's own record says nothing — which is the SECOND
+           symbol the write hook's banner refuses, arriving through the data form instead of through a copy. */
+        DCHECK(csrc != NULL, "a value the write hook interned as concolic carries no source identity at the "
+                             "moment its triple is written — concolic_is answered true for it, so the two "
+                             "predicates disagree about what a concolic is");
+        /* AND THE SHAPE IS ASSERTED HERE RATHER THAN WHERE IT IS SPENT, because concolic_new's own first act is
+           to refuse a shape that names no hole (`strchr(shape, '{')`), and that abort would fire in the SOLVER
+           on a record this file wrote — an unrelated component failing on input it should never have been
+           shown, which is a plausible and wrong diagnosis. A triple whose shape names no hole cannot be
+           rebuilt: concolic_hole_key is the only route from a shape to a domain and it reads the brace, so the
+           arriving value would carry provenance and NO domain, which §@H calls a wrong report rather than a
+           partial one. The write is where that is caused and so it is where it is checked. */
+        DCHECK(shape != NULL && strchr(shape, '{') != NULL,
+               "a concolic reached the cross-turn serializer with a display shape that names no hole, so its "
+               "triple cannot be rebuilt as a value carrying a domain. The shape is minted at the source — "
+               "concolic_source_wrap asserts the braced pair — so a value that got here without one was "
+               "composed by an operator hook that dropped it");
+        rec = JS_NewArray(ctx);
+        if (JS_IsException(rec)) { JS_FreeValue(ctx, cv); goto fail; }
+        JS_SetPropertyUint32(ctx, rec, SY_SHAPE, JS_NewString(ctx, shape));
+        JS_SetPropertyUint32(ctx, rec, SY_SRC, JS_NewString(ctx, csrc));
+        JS_SetPropertyUint32(ctx, rec, SY_EXAMPLE, concolic_example(ctx, cv));
+        JS_FreeValue(ctx, cv);
+        JS_SetPropertyUint32(ctx, out->symbols, i, rec);
+    }
+    JS_FreeValue(ctx, concolics);
     return 0;
  fail:
     structured_data_free(ctx, &out->data);
     JS_FreeValue(ctx, out->holders);
+    JS_FreeValue(ctx, out->symbols);
+    JS_FreeValue(ctx, concolics);
     out->holders = JS_UNDEFINED;
+    out->symbols = JS_UNDEFINED;
     return -1;
 }
 
 JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTransfer *in, JSValue *pvalues)
 {
     JSValue values = JS_NewArray(ctx);
-    uint32_t n, i;
+    uint32_t n, i, ns;
 
     *pvalues = JS_UNDEFINED;
     if (JS_IsException(values)) return JS_EXCEPTION;
     n = structured_transfer_len(ctx, in->holders);
+    ns = structured_transfer_len(ctx, in->symbols);
     /* §2.7.8 STEP 2: the transfer-receiving steps run BEFORE the message is deserialized, because `memory` is
        seeded with their results — so this loop is not merely ordered ahead of the body, it is what the body's
        transfer references are resolved against. */
@@ -633,16 +729,51 @@ JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTran
         if (JS_IsException(nv)) { JS_FreeValue(ctx, values); return JS_EXCEPTION; }
         JS_SetPropertyUint32(ctx, values, i, nv);
     }
+    /* §2.7.8's MAP, SECOND HALF: the triples, rebuilt in the order they were written, at the indices the
+       write hook named. They are appended to the SAME array the holders filled because the writer used ONE
+       numbering -- a holder is index i and a symbol is index n + k -- so a reference the body carries resolves
+       without the reader having to know which kind it was.
+       THE REBUILD IS WHERE THE SYMBOL RE-ENTERS THIS HEAP, and it is keyed on the source identity the record
+       carries, which is what every constraint the sending flow narrowed is filed under. */
+    for (i = 0; i < ns; i++) {
+        JSValue rec = JS_GetPropertyUint32(ctx, in->symbols, i), sh, sr, ex, nv;
+        const char *shape, *csrc;
+
+        DCHECK(!JS_IsException(rec), "reading an engine-built symbol record threw");
+        sh = JS_GetPropertyUint32(ctx, rec, SY_SHAPE);
+        sr = JS_GetPropertyUint32(ctx, rec, SY_SRC);
+        ex = JS_GetPropertyUint32(ctx, rec, SY_EXAMPLE);
+        JS_FreeValue(ctx, rec);
+        shape = JS_ToCString(ctx, sh);
+        csrc = JS_ToCString(ctx, sr);
+        /* BOTH HALVES ARE REQUIRED AND NEITHER IS DEFAULTED: the writer asserts it wrote them, so an absence
+           here is the two halves of this format disagreeing rather than a hole to fill. */
+        DCHECK(shape != NULL, "a symbol record carried no display shape — the writer DCHECKs a braced one, "
+                              "so the two halves of this record's format disagree");
+        DCHECK(csrc != NULL, "a symbol record carried no source identity — the writer DCHECKs that it has "
+                             "one, so the two halves of this record's format disagree");
+        /* concolic_new TAKES the example, so the read of it above is the hand-over and not a borrow. */
+        nv = concolic_new(ctx, shape, csrc, ex);
+        DCHECK(concolic_is(nv), "a rebuilt triple is not concolic — the arriving value would stand for the "
+                                "example alone, so a branch on it would be DECIDED where the sender forked");
+        JS_FreeCString(ctx, shape);
+        JS_FreeCString(ctx, csrc);
+        JS_FreeValue(ctx, sh);
+        JS_FreeValue(ctx, sr);
+        JS_SetPropertyUint32(ctx, values, n + i, nv);
+    }
     *pvalues = values;
     /* §2.7.8's LAST STEP, under the `memory` the loop above filled: a reference the writer left for a holder
        resolves to the value that holder produced, so the message body carries the MOVED object and not a copy
        of it — and reached twice, the one object. */
     {
-        SCReadMemory back = { values, n, JS_UNDEFINED };
+        /* THE COUNT IS THE WHOLE NUMBERING AND NOT THE HOLDERS' HALF OF IT: a reference past it is refused
+           outright by the reader, so a count of `n` would make every symbol reference a forged one. */
+        SCReadMemory back = { values, n + ns, JS_UNDEFINED };
         JSTransferReadHook hook;
 
         hook.value_at = sc_memory_value;
-        hook.count = n;
+        hook.count = n + ns;
         hook.opaque = &back;
         return sc_deserialize(ctx, &in->data, &hook);
     }
@@ -652,7 +783,9 @@ void structured_with_transfer_free(JSContext *ctx, StructuredWithTransfer *d)
 {
     structured_data_free(ctx, &d->data);
     JS_FreeValue(ctx, d->holders);
+    JS_FreeValue(ctx, d->symbols);
     d->holders = JS_UNDEFINED;
+    d->symbols = JS_UNDEFINED;
 }
 
 /* §2.7.10's `structuredClone(value, optional StructuredSerializeOptions options = {})` — three steps, and it is

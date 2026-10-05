@@ -371,6 +371,7 @@ static int js_port_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSV
            else can reach them. The bytes are BORROWED for the deserialize — the buffer owns them. */
         buf = JS_GetPropertyUint32(ctx, entry, 0);
         swt.holders = JS_GetPropertyUint32(ctx, entry, 1);
+        swt.symbols = JS_GetPropertyUint32(ctx, entry, 2);
         JS_FreeValue(ctx, entry);
         swt.data.buf = JS_GetArrayBuffer(ctx, &blen, buf);
         swt.data.len = blen;
@@ -382,6 +383,7 @@ static int js_port_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         data = structured_deserialize_transfer(rctx, &swt, &ports);
         JS_FreeValue(ctx, buf);
         JS_FreeValue(ctx, swt.holders);
+        JS_FreeValue(ctx, swt.symbols);
         /* §9.4.4 fires the event with NO `origin` — the port message queue's steps name `data` and `ports` and
            nothing else, so §9.1's member keeps the empty string its IDL gives it. It is spelled as a VALUE
            because that is what the mint takes, and it is minted ONCE for both arms below: the empty origin is
@@ -637,6 +639,11 @@ static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
         }
         JS_SetPropertyUint32(ctx, entry, 0, buf);
         JS_SetPropertyUint32(ctx, entry, 1, JS_DupValue(ctx, swt.holders));
+        /* INDEX 2 IS THE TRIPLES, and a position is a fact here because this set is this component's own and
+           fixed at its definition: these three writes and the three reads in PD_TAKE are the only spellers.
+           Carrying it is what keeps a concolic posted through a port a concolic -- dropping it would deliver
+           the example alone, and the receiver would DECIDE a branch the sender forked. */
+        JS_SetPropertyUint32(ctx, entry, 2, JS_DupValue(ctx, swt.symbols));
         structured_with_transfer_free(ctx, &swt);
         if (!port_queue_len(ctx, t, &qn)) { JS_FreeValue(ctx, entry); JS_FreeValue(ctx, target); return JS_EXCEPTION; }
         JS_SetPropertyUint32(ctx, t->queue, qn, entry);
