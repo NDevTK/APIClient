@@ -6383,6 +6383,56 @@ const _level1Shapes = { rNoPool: 0, rIdle: 0, rWaited: 0, rReleased: 0, rFinishe
                         rUnknown: 0, rThrew: 0 };
 const _LEVEL1_SHAPE_KEY = { nopool: "rNoPool", idle: "rIdle", waited: "rWaited",
                             released: "rReleased", finished: "rFinished", serviced: "rServiced" };
+/* AND THE ONE ARM THAT IS TWO POPULATIONS, SPLIT BY THE ENGINE'S OWN WORD FOR WHICH IT IS. `rServiced` counts
+   every round that ended in a service round, and the yield arm is reached for TWO step codes whose benches mean
+   OPPOSITE things about this loop. ENGINE_STEP_STALLED is the engine stating that its frontier holds nothing
+   runnable, so taking it out of the hot set is what §scheduler prescribes in as many words — "a fetching engine
+   is skipped so one doc's wait never stalls another's" — and the round is then entitled to wait on bytes.
+   ENGINE_STEP_YIELD is the engine stating that it has a runnable frontier and hit a slice boundary, and the
+   bench it gets is IDENTICAL, which is the thing nothing in this tree could measure: §ONE-WFQ-policy says
+   level 1 "runs the top until its best flow no longer outranks the runner-up", and an engine that leaves the
+   rankable set after one step cannot be run on however far above the runner-up it is.
+   SO THE TWO READINGS OF ONE NUMBER ARE A CORRECT MECHANISM AND A CANDIDATE DEFECT, AND THEY TAKE OPPOSITE
+   WORK. A high `rServiced/round` is the statement that nearly every round benched an engine, and it is
+   consistent with a pool whose every member is legitimately waiting on a body AND with a pool being
+   round-robined past an order that had already picked a winner. That is the three-states-behind-one-answer
+   shape CLAUDE.md §a-bare-count-over-a-population-you-have-not-partitioned refuses, and the discriminator was
+   in a local variable at the moment the shape was assigned and thrown away. The derivation, rather than a
+   figure that rots on the next drive: `SITES=apps.tsv node report.mjs <census files>` from `testing/corpus`
+   prints `<rounds ending in a fetch service>serv/pool<n>` per pass in its ENGINE SPAN block.
+   AND THE BENCH IS NOT WHAT COSTS THE SECONDS, WHICH IS RECORDED HERE SO THE NEXT READER OF THESE TWO ROWS
+   DOES NOT SPEND A DIFF ON IT. The obvious next move — keep a YIELDing engine rankable while its payment is in
+   flight — was refuted by arithmetic over the same corpus before these rows were landed, and the refutation
+   needs no new instrument. At pool 1 this loop has nothing else to step, so it WAITS on exactly this bench's
+   own latency and `betweenSlicesUs / slices` measures it directly: 8ms, 12ms, 14ms and 63ms over the four
+   pool-1 gitpod rows. The SAME CODE runs at pool >= 2, where that figure is 2.1 to 8.5 SECONDS, and it does
+   not scale with pool (pool 2 reads ~5s and pool 9 reads ~5s). So removing the yield bench can return at most
+   the bench's own latency, which is under one percent of the gap it would be offered to explain, and the
+   remainder is the OTHER pool members' own slices — which is a question about why there are seven instances of
+   one document, not about this arm. It also carries a correctness objection in its own right: a YIELDing engine
+   left in the hot set is re-picked next round (it is the top), so `ops.step` would be issued CONCURRENTLY with
+   that engine's own in-flight `serviceFetch` on one renderer port, with `engineRecordFacts` running from two
+   async chains and one of them mutating `eng._inflight` while the other reads it.
+   RETIREMENT: this record goes when the pool publishes the SEAT KIND of each member, because the question
+   these rows exist to refine stops being "which bench" and becomes "why is this pool seven engines of one
+   document", which no row in this file can answer today.
+   IT IS ITS OWN OBJECT AND NOT TWO MORE ARMS OF `_level1Shapes`, because those sum to `round` by construction
+   and are asserted to; these sum to ONE of them. A partition of an arm is not an arm.
+   NOTHING HERE DECIDES ANYTHING, AND THE ARM ABOVE STILL DOES NOT READ A STEP CODE TO CHOOSE A BEHAVIOUR —
+   see the paragraph at `rd.shape = "serviced"`, which argues that the two codes differ in what they say about
+   RANK and that rank is answered by `engine_top_weight` rather than by a second question asked here. That
+   argument is untouched: the code is COUNTED and never branched on, so there is still exactly one answer to
+   the question of what a service round does. */
+const _level1Serviced = { rServicedYield: 0, rServicedStalled: 0,
+                          /* AND A CODE THIS PARTITION HAS NO ARM FOR, WHICH IS AN ARM AND NOT A DEFAULT, for
+                             exactly `rUnknown`'s reason one object up: the DCHECK that names the edit is
+                             COMPILED OUT in release, so without this a widened step enumeration would be
+                             counted as a YIELD — a fabricated reading of the one row that exists to separate
+                             a correct bench from a defective one — or would key a name that is not here and
+                             store NaN. The sum assert covers all three, so the arm is what keeps the
+                             partition exact in the build that cannot assert. */
+                          rServicedUnknown: 0 };
+const _LEVEL1_STEP_KEY = { 2: "rServicedYield", 3: "rServicedStalled" };
 function _level1Record(pool, rd) {
   /* THE SHAPE IS COUNTED BEFORE THE ROW IS COMPOSED, so `round` and the arms are read at one instant and the
      identity below is over one set of numbers rather than over two. An empty shape is a round that left the
@@ -6392,6 +6442,22 @@ function _level1Record(pool, rd) {
          "sum to `round` by construction, so an unknown shape is a new exit added to the loop without a row, " +
          "and the dev build refuses it here rather than letting release carry it as `rUnknown` unread");
   _level1Shapes[rd.shape === "" ? "rThrew" : (_LEVEL1_SHAPE_KEY[rd.shape] || "rUnknown")]++;
+  /* COUNTED AT THE SAME INSTANT AS THE ARM IT REFINES, for the reason stated over the line above: `round` and
+     every distribution riding this record are read once, so the partition below cannot be taken across a
+     mutation of the arm it is asserted against. */
+  DCHECK((rd.shape === "serviced") === (rd.stepCode !== null),
+         "the Level-1 round recorded a service round with no step code, or a step code with no service round — " +
+         "the engine's own {YIELD, STALLED} answer is assigned on the same two lines as the shape, so a " +
+         "disagreement is a third exit having learned to service without saying which bench it took, and the " +
+         "partition below would silently stop summing to the arm it refines");
+  if (rd.stepCode !== null) {
+    DCHECK(_LEVEL1_STEP_KEY[rd.stepCode] !== undefined,
+           "the Level-1 round serviced an engine that answered step code `" + rd.stepCode + "` — the yield arm " +
+           "is reached for ENGINE_STEP_YIELD (2) and ENGINE_STEP_STALLED (3) and for nothing else (the round " +
+           "enumerates the codes and DONE takes the terminal arm), so a third value here is that enumeration " +
+           "having been widened without this partition gaining the arm, which release would carry as a NaN");
+    _level1Serviced[_LEVEL1_STEP_KEY[rd.stepCode] || "rServicedUnknown"]++;
+  }
   const r = { round: ++_level1Round, pool: pool.length, booting: _bootingCount(),
               /* AND THE SEATS WHOSE DOCUMENT IS STILL ON THE NETWORK, WHICH IS A SECOND REASON ADMISSION WAS
                  NOT ASKED AND THEREFORE A SECOND ROW. Folded into `booting` it would say a reservation was
@@ -6452,6 +6518,7 @@ function _level1Record(pool, rd) {
      anything this round walked — it is what every round before it did, and its whole value is that it survives
      being read at an instant the loop chose. */
   for (const k of Object.keys(_level1Shapes)) r[k] = _level1Shapes[k];
+  for (const k of Object.keys(_level1Serviced)) r[k] = _level1Serviced[k];
   /* THE ARMS SUM TO `round` AND THAT IS ASSERTED RATHER THAN DOCUMENTED, which is the one property that makes
      them readable as a partition instead of as seven numbers that happen to sit together. A reader who sees
      `rServiced` at 3 against `round` at 34 is entitled to conclude the other 31 rounds were NOT service rounds
@@ -6462,6 +6529,17 @@ function _level1Record(pool, rd) {
          Object.keys(_level1Shapes).reduce((n, k) => n + _level1Shapes[k], 0) + " against " + r.round +
          " round(s) — this function is the ONLY incrementer and every exit of the round body assigns a shape, " +
          "so a sum that disagrees is an exit that assigns none being counted as a throw, or a second caller");
+  /* AND THE ONE ARM'S PARTITION SUMS TO THAT ARM, which is the whole of what makes the two rows readable as a
+     split of `rServiced` rather than as two numbers that happen to sit beside it. One assignment site, one
+     incrementer, one instant — so a disagreement is a service round counted into the arm by something other
+     than the line that states its code, and a reader differencing the pair against `rServiced` would be
+     attributing the remainder to a bench nobody took. */
+  DCHECK(r.rServicedYield + r.rServicedStalled + r.rServicedUnknown === r.rServiced,
+         "the Level-1 census splits " + r.rServiced + " service round(s) into " + r.rServicedYield +
+         " yield, " + r.rServicedStalled + " stalled and " + r.rServicedUnknown + " unknown — these are one " +
+         "arm's own partition, counted from the " +
+         "same `finally` as the arm, so a sum that disagrees is a round that serviced an engine without " +
+         "relaying the engine's statement of which bench it was given");
   DCHECK(r.booting + r.loading <= r.pool,
          "the Level-1 census reports " + r.booting + " booting record(s) and " + r.loading + " loading seat(s) " +
          "in a pool of " + r.pool + " — all three are read at the same instant, at the end of the round, and " +
@@ -6548,7 +6626,11 @@ async function hostSchedule(pool, ops) {
        ABSENT rather than zero, which is what `_hostDead` beside it is read against). One write site is the
        whole of "one census, one place": there is no arrangement of this loop in which the order is taken and
        nothing records it, which is precisely how a Level-1 rank frozen at a constant survived. */
-    const rd = { hot: null, cand: null, candAsk: 0, shape: "" };
+    /* `stepCode` IS NULL FOR EVERY ROUND THAT DID NOT SERVICE, AND THAT IS A POSITIVE STATEMENT RATHER THAN A
+       HOLE: the only arm that assigns it is the one that assigns `shape = "serviced"`, on the same two lines, so
+       the two are a biconditional and `_level1Record` asserts it. A round that leaves by a THROW anywhere ahead
+       of that arm arrives with both absent, which is `rThrew` and is already a reading. */
+    const rd = { hot: null, cand: null, candAsk: 0, shape: "", stepCode: null };
     try {
     if (ops.admit) rd.cand = await ops.admit();   // gate creation to cap: seat waiting docs into freed slots
     /* ADMISSION ANSWERS WITH THE ORDER IT TOOK, OR WITH THE POSITIVE `null` THAT SAYS IT TOOK NONE. `undefined`
@@ -6751,6 +6833,10 @@ async function hostSchedule(pool, ops) {
          NON-BLOCKING, the way the unreachable branch was: the engine drops out of the hot set while its round
          runs, so a slow reply on this document never stalls another's. */
       rd.shape = "serviced";
+      /* THE ENGINE'S OWN WORD FOR WHICH OF THE TWO THIS ROUND WAS, RELAYED AND NEVER RE-DERIVED. The bench on
+         the next line is the same for both codes and means opposite things for each, so this is the ONE fact
+         that makes `rServiced` readable — see `_level1Serviced`. It is recorded and not branched on. */
+      rd.stepCode = st;
       target.state = "fetching";
       /* ONE FIELD FOR ONE QUESTION, WHICH IS "WHEN DOES THIS ENGINE BECOME RANKABLE AGAIN". It was `_fetchP`,
          and a boot is not a fetch — naming the reservation's provisioning promise after the reply round would
