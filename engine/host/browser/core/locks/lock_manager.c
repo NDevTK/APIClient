@@ -332,9 +332,26 @@ static int lk_grant_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
                    can return the fork code. */
                 r = abort_signal_aborted_step(ctx, &s->hdr, signal, &s->sig_flag, &aborted);
                 if (r) {
-                    /* PARKED. `signal` is released and `cb_result` is NOT: the driver re-enters this body with
-                       the same cb_result, and the stage is unchanged, so the re-read of §3.2.1's signal below
-                       is the same read with the same answer. */
+                    /* PARKED. `signal` is released and `cb_result` is NOT, and WHY it need not be is the half
+                       this comment used to get wrong. It said "the driver re-enters this body with the same
+                       cb_result", and `step_fork_pending`'s banner in quickjs.c says the opposite and is the
+                       authority: a fork produces TWO entries and BOTH carry the driver's filler — the parent's
+                       delivery is re-entered with JS_UNDEFINED and the sibling with its `park_in`, also
+                       JS_UNDEFINED. So the value a body held at the ask does NOT come back, and the rule the
+                       banner states is that a machine keeps its operand on its own state and RELEASES
+                       `cb_result`, which is the shape with no question left to get wrong.
+                       THE RETIRED WORDING IS KEPT BECAUSE IT WAS COPIED: this block is the worked precedent for
+                       the parking form, and a lane reading it to convert §5.6's fetch test reported that taking
+                       the sentence literally would have had it treat the unconditional free at the arm below as
+                       a double-free across the fork. A false reason propped under correct code is worse at a
+                       precedent than anywhere else, because what gets copied is the reason.
+                       THE CODE IS CORRECT AND THE REASON IS THIS: `cb_result` is JS_UNDEFINED HERE BY
+                       CONSTRUCTION. This machine has ONE stage and its only request is the page's callback, so
+                       the answer to that request arrives with `phase` nonzero and never enters this block at
+                       all; the three entries that do reach it — the first, the parent's fork delivery and the
+                       sibling's — carry nothing. Freeing it would be a no-op and not freeing it leaks nothing.
+                       A SITE WHERE A REAL OPERAND COULD STAND IN `cb_result` AT ITS ASK MUST RELEASE IT, and
+                       that is the rule to copy out of here rather than this block's own omission. */
                     JS_FreeValue(ctx, signal);
                     return r;
                 }
