@@ -68595,20 +68595,44 @@ static int js_module_linking_bindings(JSContext *ctx, JSModuleDef *m)
 
 static void js_module_eval_capture(JSContext *ctx, JSModuleDef *m);
 
-/* THE LINK PHASE'S WRITES TO A MODULE RECORD, AND THE CAPTURE IS PART OF THE WRITE RATHER THAN A CALL BESIDE IT.
-   `JSModuleEvalState` holds `status`, `dfs_index`, `dfs_ancestor_index` and `stack_prev`, and §16.2.1.6.1.2
-   Link ( ) writes every one of them — so a link write that does not announce itself is BASELINE state every
-   sibling flow sees, while the §16.2.1.7.3.1 prologue those same writes lead to writes its cells through
-   `OP_put_var_ref`, which IS captured per flow. That is one phase isolated in two opposite directions: every
-   world reads the module LINKED and only the linking world ran the prologue, so a sibling reads a top-level
-   FUNCTION DECLARATION's cell at JS_UNINITIALIZED and throws `<name> is not initialized` on a binding the
-   module's own code needs. No amount of re-evaluating reaches it: §16.2.1.6.1.3 Evaluate ( ) enters the body
-   with `this` UNDEFINED, so `OP_push_this; OP_if_false` takes the false arm and the prologue is skipped.
+/* EVERY WRITE OF A MODULE'S STATUS, IN EITHER PHASE, AND THE CAPTURE IS PART OF THE WRITE RATHER THAN A CALL
+   BESIDE IT. `JSModuleEvalState` holds `status` among its fields, and §16.2.1.6.1.2 Link ( ) and
+   §16.2.1.6.1.3 Evaluate ( ) both write it — so a status write that does not announce itself is BASELINE
+   state every sibling flow sees, while the §16.2.1.7.3.1 prologue those writes lead to writes its cells
+   through `OP_put_var_ref`, which IS captured per flow. That is one phase isolated in two opposite
+   directions: every world reads the module LINKED and only the linking world ran the prologue, so a sibling
+   reads a top-level FUNCTION DECLARATION's cell at JS_UNINITIALIZED and throws `<name> is not initialized` on
+   a binding the module's own code needs. No amount of re-evaluating reaches it: §16.2.1.6.1.3 Evaluate ( )
+   enters the body with `this` UNDEFINED, so `OP_push_this; OP_if_false` takes the false arm and the prologue
+   is skipped. That is the defect this helper was built for, in the LINK phase, and the reasoning is kept
+   because it is what a reader re-derives.
    IT IS A HELPER SO THE CAPTURE CANNOT BE THE LINE A LATER SITE FORGETS, which is the one thing a call beside
-   each write does not buy: a status write in this phase is now unspellable without its announcement, so the
-   contract `js_module_eval_capture` states about itself — "fired at every point that writes one of the
-   captured fields" — is true of this phase by CONSTRUCTION and not by an argument about its call graph. */
-static void js_module_link_set_status(JSContext *ctx, JSModuleDef *m, JSModuleStatus status)
+   each write does not buy: a status write is unspellable without its announcement, so the contract
+   `js_module_eval_capture` states about itself — fired at every point that writes one of the captured fields
+   — is true by CONSTRUCTION and not by an argument about a call graph.
+   AND IT IS ONE HELPER AND NOT TWO, WHICH IS A CORRECTION TO ITS OWN EARLIER NAME. It was
+   `js_module_link_set_status` and the eval phase wrote `m->status` bare at six sites, so the two phases were
+   covered two different ways — one structurally, one by a call per site that a later site could forget. The
+   obvious repair is a second helper for the eval phase, and that is two identical bodies under two names,
+   which is the two-right-answers-to-one-question shape: the phase-specific NAME is what would drift, because
+   nothing makes a new site pick the one its phase is spelled with. So the phase lives in this comment and the
+   SPELLING is shared, and the superseded name is gone rather than kept beside it.
+   THE EVAL PHASE'S OLD COVERAGE RESTED ON AN ARGUMENT ABOUT THE WALK, NOT ON ITS CALLS, which is the part
+   worth keeping because it was SOUND and is the kind of soundness this helper exists to stop relying on.
+   Three of those six writes are to `m1` — a module OTHER than the one the enclosing entry captured — inside
+   §16.2.1.6.1.3.1's SCC pop and its abrupt-completion unwind, and they were covered because a module reaches
+   that stack only through `js_module_eval_enter`, which announces before it claims, and the host's dedup is
+   first-baseline-wins per flow. Correct, and a property of the call graph: a fourth site writing an `m1` it
+   had not entered would have been BASELINE with nothing to say so.
+   WHAT IS DELIBERATELY NOT ROUTED is `JS_ModuleEvalStateRestore`, and the reason is stated at that site: a
+   restore is the delta being UNAPPLIED, so announcing it would offer the value being restored as this flow's
+   first baseline. A sweep over `->status =` that routes it has inverted the mechanism, which is why the note
+   is there and not here.
+   RETIREMENT: this record goes when the build REFUSES a bare module-status write outside this helper and the
+   restore, so the shared spelling is enforced rather than conventional — MEASURED ABSENT with the command, so
+   this condition is not born met: `grep -c moduleStatusWrite engine/build.mjs` answers 0 against
+   `grep -c abiCheck engine/build.mjs` answering 4 as the armed control. */
+static void js_module_set_status(JSContext *ctx, JSModuleDef *m, JSModuleStatus status)
 {
     js_module_eval_capture(ctx, m);
     m->status = status;
@@ -68630,7 +68654,7 @@ static void js_module_linking_scc_pop(JSContext *ctx, JSModuleDef *m, JSModuleDe
                "16.2.1.6.1.2.1 step 11.b: the SCC stack ran out before its own root — the walk popped a "
                "component whose members are no longer the ones step 8 appended");
         *pstack_top = m1->stack_prev;
-        js_module_link_set_status(ctx, m1, JS_MODULE_STATUS_LINKED);
+        js_module_set_status(ctx, m1, JS_MODULE_STATUS_LINKED);
         if (m1 == m)
             break;
     }
@@ -68708,7 +68732,7 @@ static int js_module_linking_enter(JSContext *ctx, JSModuleDef *m, JSModuleDef *
        path, and a module gets to either one only through this line. The capture dedups first-baseline-wins per
        flow, so the value recorded here is the pre-LINKING one and those four writes need no announcement of
        their own — they are the same flow writing a record it has already announced. */
-    js_module_link_set_status(ctx, m, JS_MODULE_STATUS_LINKING);
+    js_module_set_status(ctx, m, JS_MODULE_STATUS_LINKING);
     m->dfs_index = index;
     m->dfs_ancestor_index = index;
     /* push 'm' on stack */
@@ -68892,7 +68916,7 @@ static void js_module_link_walk_end(JSContext *ctx, JSModuleLinkWalk *w)
         DCHECK(m1->status == JS_MODULE_STATUS_LINKING,
                "16.2.1.6.1.2 step 4.a: a module on Link's own stack is not LINKING — step 8 appends only "
                "modules it has just set to linking, so something else moved this one");
-        js_module_link_set_status(ctx, m1, JS_MODULE_STATUS_UNLINKED);
+        js_module_set_status(ctx, m1, JS_MODULE_STATUS_UNLINKED);
         w->stack_top = m1->stack_prev;
     }
     w->depth = 0;
@@ -69178,7 +69202,8 @@ static const char *js_module_loaded_unforkable(const void *state)
        rewritten away because a reader who re-derives either will re-add it. It used to say the records'
        [[Status]] and [[DFSAncestorIndex]] "belong to the REALM" because "no COW delta captures" them, and
        prescribe "a cow_capture_host_record" over the module graph. The PREMISE went when JSModuleEvalState
-       started holding both of those fields, and js_module_link_set_status closed the half that was still true
+       started holding both of those fields, and js_module_set_status — landed under the narrower name
+       `js_module_link_set_status`, before the eval phase shared it — closed the half that was still true
        of it — the link phase, which wrote them and announced nothing. The REMEDY was never the right one:
        `cow_capture_host_record` is a byte copy plus one dup per JSValue at a named offset, and a module record
        owns ATOMS and a counted array of JSVarRef* that no `val_off` can name.
@@ -70325,7 +70350,7 @@ static JSValue js_import_opts_fini(JSContext *ctx, void *st, bool take_result)
 
 static void js_set_module_evaluated(JSContext *ctx, JSModuleDef *m)
 {
-    m->status = JS_MODULE_STATUS_EVALUATED;
+    js_module_set_status(ctx, m, JS_MODULE_STATUS_EVALUATED);
     if (!JS_IsUndefined(m->promise)) {
         JSValue ret_val;
         DCHECK(m->cycle_root == m, "m->cycle_root == m");
@@ -70478,7 +70503,7 @@ static JSValue js_async_module_execution_rejected(JSContext *ctx, JSValueConst t
 
         m->eval_has_exception = true;
         m->eval_exception = js_dup(error);
-        m->status = JS_MODULE_STATUS_EVALUATED;
+        js_module_set_status(ctx, m, JS_MODULE_STATUS_EVALUATED);
 
         /* step 9, before any parent is reached — the leaf-to-root settlement order */
         if (!JS_IsUndefined(m->promise)) {
@@ -70710,10 +70735,14 @@ static int js_module_eval_finish(JSContext *ctx, JSModuleDef *m, JSModuleDef **p
             /* pop m1 from stack */
             m1 = *pstack_top;
             *pstack_top = m1->stack_prev;
+            /* `m1` AND NOT `m`: the pop walks the whole strongly connected component, so these two writes
+               are to modules this frame never entered. They were covered because a module reaches this stack
+               only through js_module_eval_enter, which announces first — an argument about the walk, which the
+               shared helper now makes unnecessary. */
             if (!m1->async_evaluation) {
-                m1->status = JS_MODULE_STATUS_EVALUATED;
+                js_module_set_status(ctx, m1, JS_MODULE_STATUS_EVALUATED);
             } else {
-                m1->status = JS_MODULE_STATUS_EVALUATING_ASYNC;
+                js_module_set_status(ctx, m1, JS_MODULE_STATUS_EVALUATING_ASYNC);
             }
             /* spec bug: cycle_root must be assigned before the test */
             m1->cycle_root = m;
@@ -70788,8 +70817,12 @@ static int js_module_eval_enter(JSContext *ctx, JSModuleDef *m, int index, JSMod
     }
     if (m->status == JS_MODULE_STATUS_EVALUATING)
         return index;
-    DCHECK(m->status == JS_MODULE_STATUS_LINKED, "m->status == JS_MODULE_STATUS_LINKED");
-    m->status = JS_MODULE_STATUS_EVALUATING;
+    DCHECK(m->status == JS_MODULE_STATUS_LINKED,
+           "§16.2.1.6.1.3.1 InnerModuleEvaluation ( module, stack, index ) step 4 asserts the status is "
+           "LINKED here and it is not — the three statuses steps 2 and 3 name all return, so this is a "
+           "record whose link phase did not finish in THIS flow's world, which is what capturing the "
+           "status at every write exists to make impossible");
+    js_module_set_status(ctx, m, JS_MODULE_STATUS_EVALUATING);
     m->dfs_index = index;
     m->dfs_ancestor_index = index;
     m->pending_async_dependencies = 0;
@@ -70946,6 +70979,12 @@ void JS_ModuleEvalStateRestore(JSContext *ctx, void *mod, void *blob)
     JS_FreeValue(ctx, m->resolving_funcs[0]);
     JS_FreeValue(ctx, m->resolving_funcs[1]);
     JS_FreeValue(ctx, m->eval_exception);
+    /* NOT `js_module_set_status`, AND THIS IS THE ONE SITE WHERE THAT IS THE DEFECT RATHER THAN THE FIX. A
+       restore is the delta being UNAPPLIED, so announcing it would offer the value being restored as this
+       flow's FIRST baseline — and the host's dedup is first-baseline-wins, so the announcement would pin the
+       undo as the thing to undo to. A sweep over this write's spelling that routed it would invert the
+       mechanism silently, every status write still going through one helper and every restore recording the
+       wrong baseline. */
     m->status = b->status;
     m->eval_started = b->eval_started;
     m->dfs_index = b->dfs_index;
@@ -71009,11 +71048,19 @@ void JS_ModuleEvalStateFree(JSRuntime *rt, void *blob)
    captured fields; the host captures the FIRST one per flow and ignores the rest.
    AND THAT SENTENCE IS A CONTRACT RATHER THAN A DESCRIPTION, SO HERE IS WHAT MAKES IT TRUE — it was FALSE for
    the whole of §16.2.1.6.1.2 Link ( ), which writes `status`, `dfs_index`, `dfs_ancestor_index` and
-   `stack_prev` and called this from nowhere. The two phases are covered two different ways and the difference
-   is worth stating, because a reader counting CALL SITES gets the wrong answer for one of them:
-     • THE EVAL PHASE by a call per site, at its entries, each stating its own reason.
-     • THE LINK PHASE by js_module_link_set_status, which is the only way that phase spells a status write — so
-       the announcement is structural there rather than remembered.
+   `stack_prev` and called this from nowhere. EVERY STATUS WRITE IN EITHER PHASE NOW GOES THROUGH
+   `js_module_set_status`, which announces before it writes, so the contract is structural for the one field
+   both phases share and a reader does not have to count call sites to believe it.
+   THE RETIRED WORDING IS KEPT BECAUSE IT IS WHAT A READER RE-DERIVES FROM COUNTING THOSE CALLS. It read: the
+   two phases are covered two different ways and the difference is worth stating, because a reader counting
+   CALL SITES gets the wrong answer for one of them — the EVAL phase by a call per site at its entries, each
+   stating its own reason, and the LINK phase by js_module_link_set_status, which is the only way that phase
+   spells a status write, so the announcement is structural there rather than remembered. That was exact, and
+   the asymmetry it describes is the thing that went: the eval phase's six bare writes are routed and the
+   link-specific NAME is gone, because two identical bodies under two names is the spelling that drifts.
+   WHAT A CALL COUNT STILL CANNOT TELL YOU is the other three fields, and that is the paragraph below: they
+   are covered by a property of the WALK rather than by a write-site helper, because they are not status
+   writes and no shared setter spells them.
    FIVE link-phase writes reach a field this blob holds and only THREE of them are status writes: step 11's pop,
    the pre-order claim, step 4's reset, AND the two `dfs_ancestor_index` minima in js_module_link_advance, which
    every enumeration of this gap has missed because they are not status writes and do not look like state. All
@@ -71082,7 +71129,8 @@ static JSValue js_evaluate_module(JSContext *ctx, JSModuleDef *m)
         while (stack_top != NULL) {
             m1 = stack_top;
             DCHECK(m1->status == JS_MODULE_STATUS_EVALUATING, "m1->status == JS_MODULE_STATUS_EVALUATING");
-            m1->status = JS_MODULE_STATUS_EVALUATED;
+            /* `m1` AND NOT `m`, exactly as the SCC pop above — see the note there. */
+            js_module_set_status(ctx, m1, JS_MODULE_STATUS_EVALUATED);
             m1->eval_has_exception = true;
             m1->eval_exception = js_dup(result);
             m1->cycle_root = m; /* spec bug: should be present */

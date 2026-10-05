@@ -989,11 +989,17 @@ void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
    SITE WAS THE WRONG REMEDY: `js_module_linking_enter` is the ONLY push onto the walk's SCC stack, so a module
    reaches that stack or a frame on the walk's path only through it, and the host's dedup is first-baseline-wins
    per flow — so ONE announcement before that claim covers all five, and the other four are the same flow writing
-   a record it has already announced. What landed is `js_module_link_set_status`, the only way that phase spells a
-   status write, so the announcement is STRUCTURAL there rather than remembered. The engine states all of this at
+   a record it has already announced. What landed is `js_module_set_status`, the only way EITHER phase spells a
+   status write, so the announcement is STRUCTURAL rather than remembered. The engine states all of this at
    `js_module_eval_capture`'s own site, which is where a reader counting call sites must go.
-   WHAT IS STILL OUTSTANDING IS THE EVAL PHASE, and it is a different kind of gap: its status writes do not go
-   through a helper, so a site added there can still forget. The spec fact that made the link half urgent is
+   THE EVAL PHASE IS NOW MET TOO, AND IT TOOK THE SHARED HELPER RATHER THAN A SECOND ONE. Its gap was a
+   different kind: six bare `m->status` writes, so a site added there could forget, and THREE of them write an
+   `m1` the enclosing frame never entered — covered, soundly, by the walk property that a module reaches that
+   stack only through the announcing entry, which is an argument about the call graph and not a construction.
+   The obvious repair was `js_module_eval_set_status`, which this record's own retired condition asked for by
+   name, and it is TWO IDENTICAL BODIES UNDER TWO NAMES: the phase-specific name is what drifts, because
+   nothing makes a new site pick the one its phase is spelled with. So the link-specific name is GONE and the
+   phase argument lives in the helper's comment. The spec fact that made the link half urgent is
    unchanged and is what a reader should carry — the eval phase is per-flow and the link phase WAS baseline, one
    phase isolated two ways: every world read the module LINKED while only the linking world ran the
    §16.2.1.7.3.1 prologue that initialises its top-level FUNCTION DECLARATIONS, and those are cells born
@@ -1008,13 +1014,18 @@ void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
    record owns ATOMS and a counted array of JSVarRef* that no `val_off` can name — the identical reason cow.h
    gives for the for-in record not taking the byte arm. The refusal's premise ("no COW delta captures" those
    fields) is the claim this entry kind retired; its conclusion still holds for the var_ref double-count.
-   HOW ITS ABSENCE WOULD SHOW, for the half that is still open: a flow reaching module evaluation on a record
-   whose status is BELOW linked, which the engine asserts at its own §16.2.1.6.1.3.1 entry, and `cowStateAsks
-   .module` rising only on reaches made after a graph is already linked. RETIREMENT: this goes when the EVAL
-   phase spells its status writes through one helper the way `js_module_link_set_status` spells the link phase's,
-   so a site added there cannot forget — MEASURED ABSENT with the command, so this condition is not born met:
-   `grep -c 'js_module_eval_set_status' engine/qjs/quickjs.c` answers 0 against `js_module_link_set_status`
-   answering 6 as the armed control. */
+   HOW ITS ABSENCE WOULD SHOW, kept because it is the observation for the WHOLE mechanism and not for either
+   half: a flow reaching module evaluation on a record whose status is BELOW linked, which the engine asserts
+   at its own §16.2.1.6.1.3.1 entry, and `cowStateAsks.module` rising only on reaches made after a graph is
+   already linked.
+   WHAT IS STILL CONVENTIONAL rather than enforced is that a FUTURE site spells its write through the helper
+   at all: nothing refuses a bare `m->status =`, and exactly two in the engine are sanctioned — the helper
+   itself and `JS_ModuleEvalStateRestore`, whose own note says why routing IT would invert the mechanism,
+   since a restore announcing itself offers the value being restored as this flow's first baseline.
+   RETIREMENT: this goes when the build REFUSES a bare module-status write outside those two, so the shared
+   spelling is enforced rather than conventional — MEASURED ABSENT with the command, so this condition is not
+   born met: `grep -c moduleStatusWrite engine/build.mjs` answers 0 against `grep -c abiCheck engine/build.mjs`
+   answering 4 as the armed control. */
 /* The setter/ownership pair for a coroutine-state entry, chosen by its kind. */
 static void cow_gd_install(const CowEntry *e, void *gd) {
     if (e->is_gendata == 2) JS_SetObjAsyncData(e->obj, gd);
