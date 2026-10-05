@@ -45,6 +45,8 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/agent_state.h"
+/* cow_entries_naming -- the PARTITION the finishing-transaction refcount assert reports; see its site. */
+#include "solver/cow.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/realm.h"
@@ -456,15 +458,26 @@ void idb_transaction_set_state(JSContext *ctx, JSValueConst tx, int state)
            says how many and never who, so the next diff is a dev-only walk at this line that DUMPS the list
            (JS_DumpValue / JS_DumpGCObject, which §Architecture names for exactly this) instead of a bespoke
            probe. Its absence shows as this abort firing with a plausible count and no next step. */
+        /* TAKEN BEFORE THE ASSERT AND NOT INSIDE IT, because a DCHECKF's arguments are compiled out of a
+           release build along with its condition -- a walk spelled in the argument list would vanish with it,
+           which is correct, while a walk spelled HERE would run in release for a message nobody prints. These
+           two are only ever read by the message below. */
+        int cow_base = 0, cow_own = cow_entries_naming(changes, &cow_base);
+
         DCHECKF(JS_ValueRefCount(changes) == 2,
                 "a finishing transaction's list of database changes is held by %d things where exactly TWO may "
                 "hold it — the transaction's slot record and this reader. idb_transaction_changes hands out an "
                 "OWNED reference and every caller of it frees before returning, so an extra holder took its "
-                "reference through some other door: the per-flow COW delta, a pending request task's operation "
-                "closure, or the cold tier. The list is emptied on the next line, so what it leaks is an empty "
-                "Array whose only remaining edge is Array.prototype, and that edge makes the whole realm "
-                "behind it immortal — a count near 2 is one dropped reference and a large one is a chain",
-                JS_ValueRefCount(changes));
+                "reference through some other door. THE FIRST DOOR IS NOW PARTITIONED RATHER THAN LISTED: "
+                "%d of them are entries of the RUNNING flow's own COW delta and %d more are in the BASE CHAIN "
+                "behind it, which is this flow's ancestry. Every capture dups its target, so one entry naming "
+                "this Array is one legitimate reference and the count is a measurement of how many times a "
+                "flow wrote it rather than a defect on its own. WHAT THE REMAINDER MEANS IS THE FINDING: this "
+                "walk does not reach a SIBLING flow's delta, so a shortfall says the rest is there, or behind "
+                "the two doors it cannot see at all — a pending request task's operation closure, or the cold "
+                "tier. The list is emptied on the next line, so what it leaks is an empty Array whose only "
+                "remaining edge is Array.prototype, and that edge makes the whole realm behind it immortal",
+                JS_ValueRefCount(changes), cow_own, cow_base);
         JS_FreeValue(ctx, changes);
         /* AND SO IS §2.7'S LIST OF HELD REQUEST TASKS, at the same door and for the same reason. A transaction
            can be aborted "even if the transaction ... hasn't yet started", and one with no requests commits

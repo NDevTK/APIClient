@@ -74,6 +74,12 @@ void      cow_set_current(CowDelta *d);
    engine_sched_step, around the return to the host. Not a question anybody else may ask: "which flow is
    running" is flow_running()'s to answer, and a second reader of this would be that question re-spelled. */
 CowDelta *cow_current(void);
+/* THE PARTITION OF A REFCOUNT SURPRISE: how many entries of the RUNNING delta name `v`, with the BASE CHAIN's
+   share through `out_base`. It is for an assert's own message -- a bare count over an unsplit population is
+   not a localisation -- and its scope is the running flow's delta and its ancestry only, never every flow's.
+   A shortfall against the refcount is therefore a POSITIVE statement that the rest is elsewhere: a sibling
+   flow's delta, a pending task's closure, or the cold tier. See cow.c for why `obj` is the field. */
+int cow_entries_naming(JSValueConst v, int *out_base);
 
 /* Install as JSTimeTravelHooks.prop_write: called before a write to a baseline object; appends to the current
    delta.

@@ -507,6 +507,38 @@ void cow_set_current(CowDelta *d) {
    asking which flow is running, and flow_running() is the authority for that. */
 CowDelta *cow_current(void) { return g_current; }
 
+/* HOW MANY ENTRIES OF THE RUNNING DELTA NAME THIS VALUE — the PARTITION a refcount assert needs and cannot
+   compose for itself. A `JS_ValueRefCount(v) == N` that fails states a COUNT over a population nobody has
+   split, and this engine has exactly three doors a surprise holder can come through: a per-flow COW delta, a
+   pending task's closure, and the cold tier. A caller that can say "9 holders, 7 of them delta entries" has
+   localised it; one that can only say 9 has a number.
+   ITS SCOPE IS STATED RATHER THAN IMPLIED, because an undercount here is itself the finding. It walks the
+   RUNNING delta's own entries and the BASE CHAIN behind them -- which is this flow's ancestry, since a fork
+   shares its parent's segments -- and it does NOT walk other flows' deltas, for which this file holds no
+   registry. So a shortfall against the refcount is not noise: it says the remaining holders are in a SIBLING
+   flow's delta or behind one of the other two doors, and those take different work.
+   `obj` IS THE FIELD, because that is what cow_key reads for a slot entry and what every capture dups: the
+   eight sites that build an entry write `e->obj = JS_DupValue(ctx, obj)`, so one reference per entry naming it
+   is exactly what a delta holds. A non-slot entry leaves `obj` undefined, whose pointer cannot equal a live
+   object's, so those fall out without a kind test. */
+int cow_entries_naming(JSValueConst v, int *out_base)
+{
+    const CowDelta *d = cow_current();
+    const CowSeg *s;
+    void *p = JS_VALUE_GET_PTR(v);
+    int own = 0, base = 0, i;
+
+    if (out_base) *out_base = 0;
+    if (!d) return 0;
+    for (i = 0; i < d->n; i++)
+        if (JS_VALUE_GET_PTR(d->e[i].obj) == p) own++;
+    for (s = d->base; s; s = s->base)
+        for (i = 0; i < s->n; i++)
+            if (JS_VALUE_GET_PTR(s->e[i].obj) == p) base++;
+    if (out_base) *out_base = base;
+    return own;
+}
+
 /* WHAT EACH STATE UNIT WAS ASKED FOR AND WHAT IT RECORDED — see cow.h for why this is a PAIR and not one
    number. Both are LIFETIME COUNTS over this instance, raised and lowered by nothing, so a reader may difference
    two samples of either; neither is a gauge and the two must not be divided (a walk asks per key and records
