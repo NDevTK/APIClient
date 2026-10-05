@@ -649,7 +649,10 @@ for (const p of passes) for (const r of p.rows) {
        and the preempt hook's own rescan is called FROM THE INTERPRETER and is charged to `sliceUs`, so a small
        `schedUs` says nothing about it. Left RAW for `span`'s reason — site.mjs publishes the verdict
        (`scanCostSumsWrong`) and a second copy of that arithmetic here is the one
-       §AN-AUDITOR-DERIVES-THE-RULE forbids. All lifetime, all off the entry `countersFrom` names. */
+       §AN-AUDITOR-DERIVES-THE-RULE forbids. All lifetime, and all off the entry `wfqFrom` names rather than
+       `countersFrom`: these rows are published in the @WFQ block beside `preemptAsks` and the rival-miss
+       partition, which is what makes the two identities hold at ONE instant and what makes a join to a `_cold`
+       row a join of two walks at two moments. */
     scost: r.scanCost, scostWrong: r.scanCostSumsWrong,
     /* AND THE FORK PAIR, LEFT AS WHATEVER site.mjs WROTE. It is the population size for a refusal that is NOT
        YET BUILT, so what this file does with it is print the FRACTION and never a verdict: the numerator alone

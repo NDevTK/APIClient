@@ -1225,12 +1225,27 @@ const TURN_PHASE_ROWS = [...TURN_PHASE_SUM, 'sliceOverruns', 'sliceOverrunAsks',
    large `both` and a large `cur` beside a zero `both` recommend the same work at completely different prices,
    and no arithmetic over two rows can separate them" — where both invalidators moved in one interval, removing
    one buys NOTHING.
-   ALL TWELVE ARE LIFETIME COUNTS, raised in EVERY build (engine.h states why the partition is not compiled out
+   ALL TWELVE ARE LIFETIME COUNTS, raised in EVERY build — engine.h states why the partition is not compiled out
    in release: three zeros beside a nonzero total would read as a hook that never missed rather than as a build
-   that never classified), and all are taken off the SAME entry so both identities below hold at one instant.
+   that never classified.
+   AND THEY COME OFF THE @WFQ CENSUS AND NOT `_cold`, WHICH THIS BLOCK GOT WRONG ONCE AND IS RECORDED HERE
+   BECAUSE THE PROBE THAT LICENSED IT PASSED. I confirmed all twelve keys occur in the shipped `qjs.wasm` with an
+   invented control at zero and `stepUnitRuns` as a positive control, and read that as licence to take them off
+   `counted[last].cold` like the rows above — a grep over an artifact answers WHETHER A KEY EXISTS and is
+   structurally silent about WHICH DOCUMENT CARRIES IT, which is §THE-VERIFICATION-CAN-FAIL-IN-THE-VERIFIER with
+   the QUESTION wrong rather than the claim. A drive then read `(field-absent)` twelve times, and that is the
+   only reason it was visible at all: a `|| 0` there would have published twelve zeros and read as an engine
+   whose hook never rescanned — the defaulted-field defect this file's own absent token exists to refuse,
+   landing on the rows whose zero is the most flattering reading available.
+   SO THEY TAKE `wfqRow` AND ITS BACKWARD WALK, and the index they came from is `wfqFrom` and NEVER
+   `countersFrom`: solver/result.c publishes them in the @WFQ block beside `preemptAsks` and the rival-miss
+   partition, which is also what makes both identities below hold at ONE instant. A reader joining a scan row to
+   a `_cold` row is joining two walks at two moments, and both indices are on the row so that is checkable
+   rather than assumed.
    `SCAN_COST_MISS`'s FIRST member is the TOTAL and the rest are its parts, in the producer's own assertion
-   order, so the check derives the arithmetic from the list. ABSENT STAYS ABSENT: a `0` in `scanRivalRuns` is the
-   POSITIVE statement that the hook's cache absorbed every consultation. */
+   order, so the check derives the arithmetic from the list. ABSENT STAYS ABSENT, and here that is `wfqRow`'s
+   `null` rather than this file's absent token: a `0` in `scanRivalRuns` is the POSITIVE statement that the
+   hook's cache absorbed every consultation. */
 const SCAN_COST_MISS = ['scanRivalRuns', 'rivalMissGen', 'rivalMissCur', 'rivalMissBoth'];
 const SCAN_COST_ROWS = [
   'scanNextRuns', 'scanNextWeights',
@@ -2137,14 +2152,9 @@ const row = {
      why the census walk is counted apart. DERIVED FROM THE ONE LIST so these keys and the two checks below
      cannot disagree. ABSENT STAYS ABSENT for `turnPhase`'s reason exactly. */
   scanCost: (() => {
-    if (!counted.length) return null;
-    const c = counted[counted.length - 1].cold;
-    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    if (!wfqLive) return null;
     const out = {};
-    for (const k of SCAN_COST_ROWS) {
-      taken.add(k);
-      out[k] = typeof c[k] === 'number' ? c[k] : EP_FACT_ABSENT;
-    }
+    for (const k of SCAN_COST_ROWS) out[k] = wfqRow(k);
     return out;
   })(),
   /* AND THE PARTITION AND THE CONTAINMENT ASKED HERE, for `turnPhaseSumsWrong`'s reason exactly: solver/
@@ -2154,9 +2164,8 @@ const row = {
      ONE FIELD AND NOT TWO, because they are one question: is the miss rate a fraction and is its partition a
      partition. A STRING AND NOT A COLOUR, so a failure names both sides and does not stop the row. */
   scanCostSumsWrong: (() => {
-    if (!counted.length) return null;
-    const c = counted[counted.length - 1].cold;
-    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    if (!wfqLive) return null;
+    const c = wfqLive.w;
     for (const k of SCAN_COST_MISS) if (typeof c[k] !== 'number') return null;
     const [tot, ...arms] = SCAN_COST_MISS;
     const sum = arms.reduce((a, k) => a + c[k], 0);
