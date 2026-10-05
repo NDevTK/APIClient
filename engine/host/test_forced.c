@@ -14049,6 +14049,56 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the TrampFrame chain at some other iteration, so the loop resumed short of its end or ran an "
              "iteration twice. Asked as `_only` because the sum is a value the code DETERMINED: a SECOND "
              "entry means the flow forked where this statement cannot");
+    /* ─── THE DYNAMIC `import()` ROWS, AND THEY EXIST BECAUSE THE WITNESSES ALONE WERE NOT SCORABLE ───
+     *
+     * THE STATEMENTS WERE WRITTEN WITH `fetch()` WITNESSES AND NO ROWS, which made them readable only by a
+     * human grepping tokens out of the log — so three predictions came back UNSCORED that a row would have
+     * scored on the spot. `engine/smokerows.mjs` and `engine/build.mjs`'s `answered/asked` line read THIS
+     * table and nothing else; a witness in a channel no committed reader reads is a witness scored by hand,
+     * which is the §a-coverage-figure defect arriving in the fixture's own authoring rather than in a count.
+     *
+     * THE ENTRY ROWS ARE UNGATED AND THE READING ROWS ARE GATED ON THEM, which is `orphan-gate`'s argument
+     * exactly: `/api/modentered` is the statement's FIRST and UNCONDITIONAL emission and `/api/modconst` is
+     * behind an `await import(...)` inside it, so `mod-entered == 0` ENTAILS the other two under every
+     * reading — the statement did not run, and counting its zeros as three findings is the evidence inflation
+     * the gate field exists to declare away. An abort between them emits neither, which is what every row in
+     * this table already relies on.
+     *
+     * THE MIME ROW IS A CONJUNCTION BECAUSE THE GATE IT MEASURES HAS TWO OBSERVABLE HALVES, and either alone
+     * passes for the wrong reason: `w=TypeError` without the second half is also what a compile of
+     * unparseable bytes gives, and `/api/modbadran` ABSENT without the first is also what a statement that
+     * never ran gives. HTML §8.1.4.2's fetch a single module script leaves `moduleScript` null for a reply
+     * that is not a JavaScript MIME type, so §8.1.6.7.3 HostLoadImportedModule's onSingleFetchComplete
+     * rejects the LOAD — and a rejected load cannot have run the body, which is what makes the two halves one
+     * claim rather than two. */
+    const char *mod_entered_why = NULL; int mod_entered = 1;
+    fold_row(&mod_entered, &mod_entered_why, param_value_is(js, "/api/modentered", "w", "mmENTER"),
+             "NOT REACHED: there is no /api/modentered record, so the statement holding the dynamic "
+             "`import()` never ran its FIRST and unconditional emission. That is the SCHEDULE and not the "
+             "module subsystem — the two rows gated on this one are unaskable until it answers");
+    const char *mod_const_why = NULL; int mod_const = 1;
+    fold_row(&mod_const, &mod_const_why, param_value_is(js, "/api/modconst", "w", "mmOK"),
+             "the module's top-level `const` read UNINITIALISED at the arrow's call — `mmBAD` is the real "
+             "bundle's `<name> is not initialized` reproduced here, which means the §16.2.1.6.1.3 Evaluate ( ) "
+             "body that writes that cell ran in a world this read is not in (solver/cow.c's module_eval)");
+    const char *mod_default_why = NULL; int mod_default = 1;
+    fold_row(&mod_default, &mod_default_why, param_value_is(js, "/api/moddefault", "w", "mmDEF"),
+             "the module's namespace carries no usable `default` — `mmNODEF` is the ESM-interop read the real "
+             "bundle also fails, which is a namespace whose exports were linked in one world and read in "
+             "another rather than a defect in the export itself");
+    const char *mod_typeask_why = NULL; int mod_typeask = 1;
+    fold_row(&mod_typeask, &mod_typeask_why, param_value_is(js, "/api/modtypeask", "w", "mtASK"),
+             "NOT REACHED: there is no /api/modtypeask record, so the statement that imports the "
+             "`application/json`-served module never ran and the MIME gate was never asked");
+    const char *mod_type_why = NULL; int mod_type = 1;
+    fold_row(&mod_type, &mod_type_why, param_value_is(js, "/api/modtype", "w", "TypeError"),
+             "the import of an `application/json`-served module did not reject with a TypeError. "
+             "`SyntaxError` is a COMPILE of the bytes, which is HTML §8.1.4.2's gate not being asked; "
+             "`mtLOADED` is the module having loaded and evaluated, which is that gate inverted");
+    fold_row(&mod_type, &mod_type_why, !strstr(js, "\"/api/modbadran\""),
+             "the `application/json`-served module's BODY RAN — /api/modbadran is in the document, so this "
+             "engine compiled and evaluated a reply a browser refuses before any source text exists. That is "
+             "the half a status or a parse error cannot report, and it is why this row is a conjunction");
     /* ORPHAN-INVOKE, IN TWO ROWS BECAUSE IT IS TWO CLAIMS. The first is that a function nothing in the document
        calls was RUN — with no driving there is no request at all, which is what a page holding only such a
        function measured. The second is that its parameter arrived as unknown external input: `role === 'admin'`
@@ -18290,6 +18340,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "asynccall", asynccall_tt, "/api/asynccall", SESS_EXPLORE, asynccall_why },
         { "throw", async_throw, "/api/caught", SESS_EXPLORE, async_throw_why },
         { "preempt", async_preempt, "/api/asyncloop", SESS_EXPLORE, async_preempt_why },
+        /* THE FIVE `import()` ROWS. The two entry rows are ungated — their 0 is a finding about the SCHEDULE —
+           and the three readings are gated on them, for `orphan-gate`'s reason: an unconditional first emission
+           that did not happen entails everything behind the `await` in the same statement. */
+        { "mod-entered", mod_entered, "/api/modentered", SESS_EXPLORE, mod_entered_why },
+        { "mod-const", mod_const, "/api/modconst", SESS_EXPLORE, mod_const_why, .gate = "mod-entered" },
+        { "mod-default", mod_default, "/api/moddefault", SESS_EXPLORE, mod_default_why, .gate = "mod-entered" },
+        { "mod-typeask", mod_typeask, "/api/modtypeask", SESS_EXPLORE, mod_typeask_why },
+        { "mod-type", mod_type, "/api/modtype", SESS_EXPLORE, mod_type_why, .gate = "mod-typeask" },
         /* THE SEVEN ORPHAN ROWS SHARE ONE `why`, AND IT IS THE ONLY THING THAT MAKES THEIR 0 ACTIONABLE — see
            where it is composed above. Each row still names its own endpoint; what the shared clause adds is
            which of the schedule, the take and this drive the 0 belongs to, which no per-endpoint test can
