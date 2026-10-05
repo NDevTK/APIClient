@@ -83,6 +83,19 @@ static bool includes_mixin(const lxb_dom_node_t *n)
  * no slot for those steps to write, so its `nonce` content attribute is an ordinary attribute and not a nonce. */
 static JSValue nonce_get_slot(JSContext *ctx, lxb_dom_element_t *el)
 {
+    /* THE OPERAND IS AN ELEMENT OF A LIVE TREE, ASSERTED BEFORE ANYTHING READS THROUGH IT. Every caller of this
+       function obtains `el` from a brand check or an interface cast, so the node type is a fact this codebase
+       computed and is assertable — and it is the one fact that, when false, makes every read below walk a
+       structure that is not an attribute list. MEASURED, which is why it is here rather than argued: on
+       app.gitpod.io this function reached `JS_NewStringLen` with an out-of-bounds length through
+       script_csp_meta at nav_create_finish, 4 of 9 drives of two different release artifacts, killing the
+       renderer and the run with `RuntimeError: memory access out of bounds` and no name on it. A dev build
+       says here which of the two operands is wrong instead. */
+    DCHECK(el == NULL || lxb_dom_interface_node(el)->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "§2.5.6's [[CryptographicNonce]] was asked of a node that is not an ELEMENT — every caller reaches "
+           "this through a brand check or an interface cast, so a node of another type here means the pointer "
+           "names freed or foreign memory and the attribute walk below is about to read a structure that is "
+           "not an attribute list");
     int i = attr_shadow_find(el, ATTR_SLOT_PROPERTY, NULL, NONCE_SLOT);
     lxb_dom_attr_t *a;
     JSValue taint;
@@ -96,6 +109,17 @@ static JSValue nonce_get_slot(JSContext *ctx, lxb_dom_element_t *el)
        null-namespace `nonce` attribute and nothing written into the slot is an element nothing has specified
        otherwise for. */
     if (a == NULL) return JS_NewStringLen(ctx, "", 0);
+    /* AND THE ATTRIBUTE BELONGS TO THE ELEMENT IT WAS FOUND ON, which is not a tautology about the lookup: it
+       is the one invariant that distinguishes a sound walk from one that ran over a corrupt or freed tree.
+       `dom_attr_get_ns` iterates `el`'s OWN list (`lxb_dom_element_first_attribute` then `next_attribute`) and
+       lexbor's append writes `owner`, so an attribute reached from `el` whose owner is not `el` means the list
+       links no longer describe this element — and the very next line reads a length out of that attribute's
+       string and hands it to JS_NewStringLen, which is where the out-of-bounds access lands. */
+    DCHECK(a->owner == el,
+           "an attribute found on this element's own list names a DIFFERENT element as its owner — the lookup "
+           "walks `el`'s links and lexbor writes the owner at the append, so the two can only disagree if the "
+           "list no longer describes this element, and the read below takes a pointer and a length out of that "
+           "attribute");
     taint = dom_cow_attr_taint_ns(el, NULL, "nonce");   /* BORROWED */
     if (!JS_IsUndefined(taint)) return JS_DupValue(ctx, taint);
     v = lxb_dom_attr_value(a, &vl);

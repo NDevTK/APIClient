@@ -154,6 +154,18 @@ static ScriptCspMeta script_csp_meta(JSContext *ctx, lxb_dom_element_t *el)
 
     h.nonce_slot = JS_UNDEFINED;
     h.nonce = NULL;
+    /* THE ELEMENT ARRIVES OVER A SEAM, SO ITS TYPE IS ASSERTED WHERE IT ARRIVES AND NOT ONLY WHERE IT IS READ.
+       This record is composed for a queued script row, and the three parks named below reach it from three
+       different places; what every one of them hands over is supposed to be an ELEMENT of a live tree. A
+       dangling or foreign pointer here is not caught by `if (el)` — it is non-NULL — and it reaches
+       core/html/nonce_attribute.c's slot read, where it was MEASURED killing the renderer with an
+       out-of-bounds length on 4 of 9 app.gitpod.io drives of two release artifacts. The assert at that site
+       says WHICH operand is wrong; this one says the seam handed over something that is not an element at
+       all, which is a different repair in a different file. */
+    DCHECK(el == NULL || lxb_dom_interface_node(el)->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "§4.12.1.1's script metadata was composed for a node that is not an ELEMENT — every park that "
+           "reaches this line holds an element of a live tree, so another node type means the pointer this "
+           "seam carried names freed or foreign memory and the nonce read below walks it");
     if (el) {
         h.nonce_slot = nonce_attribute_current(ctx, el);
         /* AN UNKNOWN NONCE IS AN UNDECIDED PREDICATE AND HAS NO ANSWER HERE — core/html/html_link.c states the
