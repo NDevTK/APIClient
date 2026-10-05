@@ -1359,7 +1359,8 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
             JS_FreeValue(ctx, s->iocb[0]);
             s->iocb[0] = m;
             if (s->async == 2) { obs_goto(s, S_ITER_WRAP); continue; }
-            goto iter_registered;
+            obs_goto(s, S_ITER_REG);
+            continue;
         }
 
         case S_ITER_WRAP: {
@@ -1377,11 +1378,35 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
                 continue;
             }
             s->async = 1;
+            obs_goto(s, S_ITER_REG);
+            continue;
         }
-        /* fall through */
-        iter_registered:
-            /* §2.2.1: an abort algorithm that closes the iterator, registered only once the record exists. */
-            if (sub_signal_aborted(ctx, s)) { obs_goto(s, S_DONE); continue; }
+
+        case S_ITER_REG: {
+            /* §2.2.1 convert step 6.6 and step 8.5 — "If subscriber’s subscription controller’s signal is
+               aborted, then return" — then step 6.7 / step 8.6, the abort algorithm that closes the iterator,
+               registered only once the Iterator Record exists.
+               THE ASK IS AT THE TOP OF THIS STAGE AND THAT IS WHY THE STAGE EXISTS. It used to be a label
+               reached TWO ways — a `goto` from S_ITER_NEXTFN and fall-through from S_ITER_WRAP — so the stage a
+               fork would have been asked at was one of THOSE, and a fork re-enters the arm it asked from at the
+               TOP of that arm. From S_ITER_NEXTFN that re-issues ECMAScript §7.4.2 GetIteratorDirect step 1's
+               Get(obj, "next"): step_getprop_run branches on GET_PH_START and the phase is reset once the read
+               completes, so the page's `next` GETTER RUNS A SECOND TIME, which is the hang quickjs.c's own
+               request check was built from — "the page's getter threw again, forever". From S_ITER_WRAP it
+               re-runs §27.1.5.1 CreateAsyncFromSyncIterator over slots that call CONSUMES.
+               SO THIS IS THE HOISTED FORM AND NOT A GUARDED INIT. A guard on the init is right where the thing
+               above the ask is an INITIALISATION; here it is two SPEC STEPS WITH OBSERVABLE EFFECTS — a read of
+               the page's property and a construction that consumes its operands — and a step that must run
+               exactly once is as wrong suppressed as repeated. Nothing stands above the ask now, so the two
+               entries a fork produces re-take nothing and the sibling re-asks the identical question, which is
+               what replays its arm out of the flow's own decision vector.
+               `aborted` IS A C LOCAL AND THE OPERAND IS NOT: the flag the seam borrows across the park lives in
+               `sig_flag`, which js_obs_visit names, and is stated empty once in the S_ENTRY block. */
+            int aborted = 0;
+
+            r = sub_signal_aborted_step(ctx, s, &aborted);
+            if (r) return r;
+            if (aborted) { obs_goto(s, S_DONE); continue; }
             {
                 JSValue algo = JS_NewStepClosure(ctx, g_op_stepid[OP_ITER_CLOSE], 0, 1,
                                                  (JSValueConst *)&s->io);
@@ -1390,6 +1415,7 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
             }
             obs_goto(s, S_ITER_STEP);
             continue;
+        }
 
         case S_ITER_STEP:
             /* THE UNBOUNDED WALK'S YIELD. An iterable of the page's size is exactly the shape §scheduler

@@ -176,6 +176,14 @@ enum {
     X(S_ITER_NEXTFN, "ECMAScript §7.4.2 GetIteratorDirect ( obj ) step 1 (Get(obj, \"next\"))") \
     X(S_ITER_WRAP, "ECMAScript §7.4.4 GetIterator ( obj, kind ) step 1.b.iv: §27.1.5.1 " \
                    "CreateAsyncFromSyncIterator over a source with no %Symbol.asyncIterator%") \
+    X(S_ITER_REG, "Observable §2.2.1 convert-to-an-Observable step 6.6 and step 8.5, then step 6.7 / step 8.6 " \
+                  "(the SECOND \"If subscriber’s subscription controller’s signal is aborted, then return\", the " \
+                  "one after GetIterator, and the abort algorithm that closes the iterator — registered only " \
+                  "once the Iterator Record exists). IT IS A STAGE BECAUSE THE ASK IS AT ITS TOP: the test " \
+                  "forks on an unknown flag, and a fork re-enters the arm it asked from at the TOP of its " \
+                  "stage, so reached by a `goto` from S_ITER_NEXTFN it would re-issue Get(iterator, \"next\") " \
+                  "and run the page's getter a second time, and reached by falling through S_ITER_WRAP it " \
+                  "would re-run CreateAsyncFromSyncIterator over operands that call CONSUMES") \
     X(S_ITER_STEP, "ECMAScript §7.4.6 IteratorNext ( iteratorRecord [ , value ] ) (calling the iterator's " \
                    "`next` — and the yield point of an unbounded iteration)") \
     X(S_ITER_DONE, "ECMAScript §7.4.7 IteratorComplete ( iteratorResult ) (Get(iteratorResult, \"done\"))") \
