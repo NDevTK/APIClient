@@ -112980,6 +112980,14 @@ int JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque)
        be made at the line that takes; see orphan_script_take_record. JS_ATOM_NULL is a legitimate script key,
        so `n` and not this value is what says a take happened. */
     JSAtom took_script = JS_ATOM_NULL;
+    /* THE BEST CANDIDATE IN EACH SET, WHICH IS WHAT ONE WALK HOLDS WHERE FOUR HELD NOTHING. Index 1 is the
+       PREFERRED set (a body that spells a door's entry) and index 0 is every candidate; a preferred candidate
+       is in both, which is why the fallback arm is reachable only when the preferred one is empty rather than
+       by a second filter. `best_q` is that set's lowest per-script take count so far and the comparison is
+       STRICT, which is what keeps a tie on the earliest candidate in heap order. */
+    JSObject *best_p[2] = { NULL, NULL };
+    JSFunctionBytecode *best_b[2] = { NULL, NULL };
+    uint32_t best_q[2] = { 0, 0 };
 #if APICLIENT_DEV
     size_t mc0 = rt->malloc_state.malloc_count;
 #endif
@@ -113004,89 +113012,114 @@ int JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque)
        identifier, and a door declared it — so no text is matched here, no heuristic ranks anything, and a
        minified bundle's meaningless names are never read. A body that spells a door's entry is a body whose
        drive CAN reach that door; a body that spells none cannot, through that door, however it is named. */
-    for (int prefer = 1; prefer >= 0 && !n; prefer--) {
-        int saw = 0;        /* a candidate this pass could have taken — see the conservation DCHECK below */
-        int quota_seen = 0; /* …and whether any candidate passed THIS pass's own filter, which bounds the scan */
-        uint32_t quota = 0; /* the fewest takes any script this pass can draw from has had */
+    /* THE SCAN THAT MAKES THE SECOND HALF OF THIS ORDER — FAIRNESS OVER SCRIPTS, for the reason
+       `orphan_script_takes`'s own field states. It reads the SMALLEST per-script take count among the
+       candidates each pass can take and takes the EARLIEST candidate standing at it, so a page's drives are
+       spread across its chunks instead of going to whichever one the heap allocated first. Ties keep HEAP
+       ORDER, which is the order the take had before this existed.
+       ONE WALK AND NOT FOUR, WHICH IS A CORRECTION TO THIS FUNCTION'S OWN EARLIER SHAPE — AND THE RETIRED
+       ARGUMENT IS REWRITTEN RATHER THAN DELETED BECAUSE IT IS THE ONE A READER RE-DERIVES. It read: TWO WALKS
+       AND NOT ONE, DELIBERATELY — a single walk could remember the best candidate and visit it at the end, and
+       that would move the `visit` OUTSIDE the list iteration, which is the one thing the assert at the bottom
+       of this function exists to make impossible to get wrong, and an assert whose hazard has been engineered
+       away is a non-check with a reassuring transcript. Every clause of that is true ABOUT THE ASSERT and it
+       inverts §Fix-the-ROOT: making an impossible state impossible is what this project prefers to asserting
+       against a reachable one. The assert does not go away here — it moves to the end of the walk, where the
+       hazard it names is still real, and its message says which half is now structural.
+       WHAT THE SECOND WALK COST, MEASURED RATHER THAN ARGUED, AND WHY IT IS THIS SEAM'S DOMINANT NUMBER. The
+       retired clause priced it as "one more pass over the heap per take and nothing else". Per TAKE this
+       function performed up to FOUR enumerations of `rt->gc_obj_list` — a quota scan and a take walk, twice,
+       once per preference pass — and the host asks for a take at `seed-one-orphan-flow`, which over two drives
+       of one release artifact on app.gitpod.io was 56 of 90 and 175 of 218 of EVERY cooperative-slice overrun
+       in the run, with 55 and 173 of those offering the preempt hook NO ASK AT ALL. A C activation with no step
+       boundary in it is §C-stack's all-seamless arm. The same two drives also say the generation memo at this
+       walk's caller cannot be the answer: `orphanAskMemo` read ZERO of 87 and ZERO of 228 asks while
+       `orphanAskTook` read 86 and 227, so essentially every ask is a PRODUCTIVE walk and no cache can skip a
+       walk that succeeds.
+       THE SETS ARE UNCHANGED, WHICH IS WHAT MAKES THIS AN ORDER AND NOT A BOUND. The fallback set is every
+       candidate and the preferred set is the cut of those that spell a door's entry, exactly as the two passes
+       had them; the minimum is still the smallest per-script take count WITHIN each set, and a tie is still
+       kept by the earliest candidate in heap order because the comparison is strict. So every body this walk
+       would ever have handed over it still hands over, nothing is decided not to happen, and all that moves is
+       how many times the list is read to decide it.
+       THE EARLY EXIT IS THE OLD SCAN'S AND IS KEPT, on the PREFERRED set only: a preferred candidate whose
+       script has no takes at all stands at the lowest value the quota can reach and is the earliest such in
+       heap order, so nothing later in the list can displace it and the rest of the walk cannot change which
+       body is handed over. The fallback set has no such exit here because reaching it means the preferred set
+       is empty, which is the rare case and the one the old fallback pass walked twice anyway. */
+    list_for_each(el, &rt->gc_obj_list) {
+        JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
+        JSObject *p;
+        JSFunctionBytecode *b;
+        uint32_t t;
 
-        /* THE SCAN THAT MAKES THE SECOND HALF OF THIS ORDER — FAIRNESS OVER SCRIPTS, for the reason
-           `orphan_script_takes`'s own field states. It reads the SMALLEST per-script take count among the
-           candidates this pass can take, and the walk below then takes the first candidate standing at it, so
-           a page's drives are spread across its chunks instead of going to whichever one the heap allocated
-           first. Ties keep HEAP ORDER, which is the order the take had before this existed.
-           TWO WALKS AND NOT ONE, DELIBERATELY. A single walk could remember the best candidate and visit it at
-           the end, and that would move the `visit` OUTSIDE the list iteration — which is the one thing the
-           assert at the bottom of this function exists to make impossible to get wrong, and an assert whose
-           hazard has been engineered away is a non-check with a reassuring transcript. So the minimum is read
-           first and the take is still made from inside the walk, at the line that marks the body. The second
-           walk costs one more pass over the heap per take and nothing else; it ends early at a script with no
-           takes at all, because no script can be under that.
-           IT IS AN ORDER AND NOT A BOUND: every body this walk would ever have handed over it still hands over,
-           and all that moves is WHEN. */
-        list_for_each(el, &rt->gc_obj_list) {
-            JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
-            JSObject *p;
-            JSFunctionBytecode *b;
-            uint32_t t;
-
-            if (!orphan_candidate(gp, &p, &b)) continue;
-            saw = 1;
-            if (prefer && !b->spells_net_entry) continue;
-            t = orphan_script_takes_of(rt, b->filename);
-            if (!quota_seen || t < quota) { quota = t; quota_seen = 1; }
-            if (!quota) break;
+        if (!orphan_candidate(gp, &p, &b)) continue;
+        t = orphan_script_takes_of(rt, b->filename);
+        if (!best_p[0] || t < best_q[0]) { best_p[0] = p; best_b[0] = b; best_q[0] = t; }
+        if (b->spells_net_entry && (!best_p[1] || t < best_q[1])) {
+            best_p[1] = p; best_b[1] = b; best_q[1] = t;
         }
-
-        if (quota_seen) list_for_each(el, &rt->gc_obj_list) {
-            JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
-            JSObject *p;
-            JSFunctionBytecode *b;
-
-            if (!orphan_candidate(gp, &p, &b)) continue;
-            if (prefer && !b->spells_net_entry) continue;
-            if (orphan_script_takes_of(rt, b->filename) != quota) continue;
-            if (prefer) rt->orphan_preferred_takes++;
-            b->entered = 1;   /* TAKEN: this body is now scheduled, so a second closure of it is not a second orphan */
-            took_script = b->filename;
-            visit(ctx, JS_MKPTR(JS_TAG_OBJECT, p), b->arg_count, opaque);
-            n = 1;
-            break;   /* ONE per call — see above; the caller's next step walks again for the next one */
-        }
-        /* THE TWO WALKS SEE ONE POPULATION, AND THAT IS WHAT MAKES THE SCAN AN ORDER. They ask the identical
-           three questions — the candidate test, the pass's filter, the script's take count — so a quota the
-           first walk found is a quota the second walk can match, and a pass that saw a candidate takes one.
-           Nothing between them can move: the scan marks nothing, the table is written only after this function
-           returns, and no GC object is created in either (the assert below is that statement made enforceable).
-           Without this the scan and the take could silently disagree and the pass would hand over nothing while
-           believing it had a candidate, which is a body lost for the life of the instance. */
-        DCHECK(!quota_seen || n,
-               "JS_OrphanTakeOne's per-script scan found a candidate at a quota and its take walk matched "
-               "none — the two walks ask the same three questions over the same list with nothing between "
-               "them, so a quota that is findable and not matchable means one of the three answered "
-               "differently on the second reading and this body will never be handed over");
-        /* THE CONSERVATION THE TWO PASSES OWE, AND THE ONE WAY THIS REFACTOR GOES WRONG. A second pass is only
-           an ORDER if its population is the WHOLE population; a predicate that accidentally excludes a body from
-           both passes turns a reordering into a silent cap on the candidate set, and nothing downstream could
-           say so — a body never handed over is indistinguishable from a bundle that does not ship it, which is
-           exactly the three-state zero `orphansDriven` already has to warn its readers about. So the FALLBACK
-           pass asserts what it cannot be allowed to do: having seen a candidate, it took one. */
-        DCHECK(prefer || !saw || n,
-               "JS_OrphanTakeOne's fallback pass saw an untaken non-program body and handed over nothing — the "
-               "two passes are supposed to differ only in PREFERENCE, so a candidate visible to the second one "
-               "and taken by neither is a body this walk will never hand over and an orphan lost for the life "
-               "of the instance");
+        if (best_p[1] && !best_q[1]) break;
     }
 #if APICLIENT_DEV
+    /* THE ONE HAZARD THE WALK ITSELF STILL HAS, ASSERTED AT THE END OF THE WALK AND NOT AT THE END OF THE
+       FUNCTION. A GC object created while this list is being iterated is inserted into the very list the
+       iteration is walking, so the walk either visits it or runs off a freed link — and the two questions the
+       walk asks (the candidate test and the script's take count) allocate nothing, which is what this states.
+       THE VISITOR'S HALF OF THIS CONTRACT IS RETIRED BY CONSTRUCTION AND THE RETIRED WORDING IS KEPT, because a
+       reader who re-derives it from the hazard above will re-impose it. It read: "A visitor RECORDS (a dup
+       costs no allocation) and acts after the take returns". The take now happens AFTER this walk has ended, so
+       a visitor that allocates cannot reach a live iteration of this list at all; what it must still not do is
+       anything that frees the object it was handed, which it holds a reference to for the length of the call. */
     DCHECK(rt->malloc_state.malloc_count == mc0,
-           "an orphan visitor allocated inside the runtime while the object list was being walked — a GC "
-           "object created here is inserted into the very list this walk is iterating, so the walk either "
-           "visits it or runs off a freed link. A visitor RECORDS (a dup costs no allocation) and acts after "
-           "the take returns");
+           "the orphan walk allocated inside the runtime while the object list was being walked — a GC object "
+           "created here is inserted into the very list this walk is iterating, so the walk either visits it "
+           "or runs off a freed link. Neither of the two questions this walk asks may allocate: the candidate "
+           "test reads fields and the per-script take count reads a table it never grows");
 #endif
+    /* THE TAKE, OUTSIDE THE WALK, PREFERRED SET FIRST. `n` stops the second arm, so exactly one body is handed
+       over per call and the caller's next step walks again for the next one. */
+    for (int prefer = 1; prefer >= 0 && !n; prefer--) {
+        if (!best_p[prefer]) continue;
+        if (prefer) rt->orphan_preferred_takes++;
+        best_b[prefer]->entered = 1;   /* TAKEN: this body is now scheduled, so a second closure of it is not a second orphan */
+        took_script = best_b[prefer]->filename;
+        visit(ctx, JS_MKPTR(JS_TAG_OBJECT, best_p[prefer]), best_b[prefer]->arg_count, opaque);
+        n = 1;
+    }
+    /* THE CONSERVATION THE PREFERENCE OWES, AND THE ONE WAY THIS ORDER GOES WRONG. A preference is only an
+       ORDER if its population is the WHOLE population; a predicate that accidentally excludes a body from both
+       sets turns a reordering into a silent cap on the candidate set, and nothing downstream could say so — a
+       body never handed over is indistinguishable from a bundle that does not ship it, which is exactly the
+       three-state zero `orphansDriven` already has to warn its readers about.
+       WHAT IS ASSERTED IS THE SUBSET AND NOT THE TAKE, WHICH IS A CORRECTION TO THE TWO ASSERTS THIS REPLACES
+       AND THE REASON THEY ARE NAMED HERE IS THAT A READER WILL OTHERWISE RE-ADD ONE. They were
+       `!quota_seen || n` (the quota scan and the take walk agreed about one list) and `prefer || !saw || n`
+       (the fallback pass took what it saw). The first is gone BY CONSTRUCTION: there is one reading of the list
+       now, so two readings cannot disagree. The second is gone the same way and that is exactly why it may not
+       be rewritten over this shape — `saw` would be `best_p[0] != NULL`, every candidate sets `best_p[0]`
+       unconditionally, and the take arm three lines above reads that same pointer, so `!saw || n` is a
+       comparison of the code with itself and is the non-check §Offensive-programming calls an assert whose two
+       sides cannot disagree.
+       SO THE INVARIANT MOVES TO THE ONE PROPERTY THAT IS STILL INDEPENDENTLY MAINTAINED: the preferred set is a
+       SUBSET of the fallback set, so a preferred best implies a fallback best and cannot stand BELOW it. That
+       is two values built by two separate conditions in the walk, and it is precisely what a future edit
+       breaks — a filter added to the fallback arm, or a preferred arm reading a different take count — which is
+       the silent cap the paragraph above is about. */
+    DCHECK(!best_p[1] || best_p[0],
+           "JS_OrphanTakeOne found a candidate that spells a door's entry and no candidate at all — the "
+           "preferred set is the cut of the fallback set that spells one, so a member of it that is not a "
+           "member of the whole is a body the fallback arm can no longer reach and an orphan this walk will "
+           "lose whenever the preferred arm declines");
+    DCHECK(!best_p[1] || best_q[1] >= best_q[0],
+           "JS_OrphanTakeOne's preferred minimum stands BELOW its overall minimum — the preferred set is a "
+           "subset, so its smallest per-script take count cannot be smaller than the smallest over every "
+           "candidate, and a preferred arm reading a take count the fallback arm does not read is how the "
+           "quota stops being one budget over both");
     /* THE CHARGE, AFTER THE WALK AND AFTER THE ASSERT THAT FORBIDS ALLOCATING DURING IT. It is not conditional
-       on which pass took the body: the quota is ONE budget over both, so a script whose door-spelling bodies
-       the preferred pass has been drawing from is correctly treated as having had its turn when the fallback
-       pass comes to choose. */
+       on which SET the body came from: the quota is ONE budget over both, so a script whose door-spelling
+       bodies the preferred set has been drawing from is correctly treated as having had its turn when the
+       fallback set is the one taken from. */
     if (n) orphan_script_take_record(rt, took_script);
     return n;
 }
