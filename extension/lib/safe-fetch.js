@@ -602,19 +602,36 @@ function _isDocumentSubresource(d) {
 // instead of this paragraph being quietly false. It is asked LAST of the three regardless, because the two
 // above are the ones whose order IS load-bearing and the reason for theirs is written at the row.
 //
-// NO ARM NAMES `navigation`, WHICH IS THE WHOLE OF THE VERDICT TODAY AND IS NOT A REFUSAL THIS FILE DREW.
-// A value no arm names is refused — the row above already relies on that property in the other
-// direction — so an unconfigured origin refuses a navigation exactly as it did before, and names the
-// destination when it does. Whether a child navigable the page's own markup names SHOULD fire is the
-// project owner's decision and is open; what this diff does is make that decision ONE ARM rather than a
-// question about what an unrelated plumbing fix would do.
+// NO ARM NAMED `navigation` AND THAT WAS THE WHOLE OF THE VERDICT, AND IT IS REWRITTEN RATHER THAN DELETED
+// BECAUSE THE ARGUMENT IS SOUND AND A READER WILL RE-DERIVE IT FROM THE VALUE SPACE. It read: a value no arm
+// names is refused — the row above already relies on that property in the other direction — so an
+// unconfigured origin refuses a navigation exactly as it did before, and names the destination when it does;
+// whether a child navigable the page's own markup names SHOULD fire is the project owner's decision and is
+// open. THAT DECISION IS MADE, IN THE AFFIRMATIVE, and the arm at the end of `_DEFAULT_ARMS` is where it is
+// written: `destination=navigation` AND `actor=page` AND `provenance=derived`. What this predicate did was
+// make it ONE ARM rather than a question about what an unrelated plumbing fix would do, and that is exactly
+// what it bought.
+// AND THE HAZARD IT WAS WRITTEN AGAINST IS STILL CLOSED, WHICH IS THE FIRST THING A READER OF THE PARAGRAPHS
+// ABOVE WILL CHECK AND IS NOW TRUE FOR A SECOND REASON. The fear was that landing the witness mark for a
+// navigation — a correct, owed plumbing diff — would silently start firing every derived child
+// navigable with nobody having decided it. No arm a navigation can take reads the `witness` row at all: the
+// one that admits it names destination, actor and provenance, and the `provenance`/`doc-reach` arm names
+// neither. So the mark travelling changes NO firing outcome for any navigation at any setting; it changes
+// only the per-origin row a person sees, which they permit separately.
 // AND THE ARM THAT ALREADY FIRES A NAVIGATION IS UNTOUCHED, which is said here so nobody reads this as a
 // narrowing: the `observed` arm reads `provenance` and `doc-reach` and no destination, so the ambient seed
 // — which states both — still fires, and every document this tool opens still opens.
 // HOW ITS ABSENCE WOULD SHOW: a drive log whose navigation refusals read `blocked-signal:destination=value`
 // — the chokepoint naming a pinning question as its reason for refusing a document load.
-// RETIREMENT: this record goes when an arm names `navigation`, because the owner's decision is then IN the
-// table and the hazard this closes has a deliberate answer in front of it rather than an absent field.
+// RETIREMENT — MET BY A CONSTRUCTION, AND RE-KEYED RATHER THAN DELETED FOR THE REASON THE FIRST
+// PARAGRAPH GIVES. The condition read: this record goes when an arm names `navigation`, because the owner's
+// decision is then IN the table and the hazard this closes has a deliberate answer in front of it rather
+// than an absent field. An arm names it. What a reader re-derives from `_DESTINATION_TYPES` is the retired
+// argument and not the arm, so the wording stays.
+// RETIREMENT: this record goes when the DESTINATION VALUE a request computes is asserted against the arms
+// that can admit it — so a value this cascade produces and no arm can ever name is a host-startup
+// failure rather than a refusal a reader has to recognise — because the property this predicate relies
+// on is then checked rather than argued, at the one place both halves are in hand.
 function _isNavigation(d) {
   return d === "document" || d === "embed" || d === "frame" || d === "iframe" || d === "object";
 }
@@ -902,16 +919,29 @@ function safeFetchReachJoin(outer, own) {
    change an outcome tells its reader there is nothing here to look at, so nobody looks, and the lever stays
    unbuilt with no later moment at which the claim is contradicted. The fact is COMPUTABLE today —
    `engine_pinned_of_running_path()` stands beside the provenance function the three notices already call.
-   WHAT IT IS NOT IS A DIFF ANYBODY MAY LAND ON THIS ARGUMENT ALONE, WHICH IS THE OTHER HALF AND IS WHY THIS
-   STAYS A RESIDUAL. The arm's own enumeration names the navigation as NOT admitted, by name, and prices its
-   population as "exactly the analysed document's own data requests — through either door — on a path that
-   pinned nothing, and nothing else". Writing the true mark would reach past that stated population, and the
-   owner's sentence the arm cites is about a DATA FETCH rather than about a document. So what is owed is a
-   DECISION about whether a child navigable the page's own markup names is the page loading itself for the
-   purposes of that arm — which CLAUDE.md §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS answers YES for a
-   SUBRESOURCE and is silent about for a NAVIGATION — and the mark travelling is the diff that follows it,
-   never the one that presumes it. The direction is still the safe one; what changed is that the work is a
-   firing question and not a sentence. */
+   WHAT IT IS NOT IS A DIFF ANYBODY MAY LAND ON THIS ARGUMENT ALONE, AND THE DECISION IT WAS WAITING ON IS
+   MADE — WHICH MOVES THE PRICE BACK TO A SENTENCE, BY A ROUTE THAT IS NOT THE ONE THIS PARAGRAPH RETIRED
+   TWO CLAUSES UP. It read: the arm's own enumeration names the navigation as NOT admitted, by name, so
+   writing the true mark would reach past that stated population, and what is owed is a DECISION about
+   whether a child navigable the page's own markup names is the page loading itself for the purposes of
+   that arm — which CLAUDE.md §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS answers YES for a SUBRESOURCE
+   and is silent about for a NAVIGATION. Every clause of that was true and the silence is gone: the project
+   owner answered YES for a NAVIGATION too, and `_DEFAULT_ARMS`' last arm is where it is written.
+   AND IT IS A DIFFERENT ARM, WHICH IS THE WHOLE OF WHY THE WITNESS MARK IS NO LONGER A FIRING QUESTION. The
+   decision did NOT widen the owner's data arm to admit a document; it added an arm keyed on
+   `destination=navigation` AND `actor=page` AND `provenance=derived`, which names no witness row — so
+   the child navigable this residual is about is admitted by facts that already travel, and the mark landing
+   changes no outcome for it at any setting. The earlier clause that priced this as a sentence was REFUTED
+   (`document` IS in the `value` bucket, so the data arm really was one field away); this one reaches the
+   same price by the opposite route, and the distinction matters because a reader who re-derives the old
+   reason will re-derive the old refutation with it.
+   SO WHAT IS LEFT IS SPECIFICITY AND IT IS STILL WORTH BUILDING: a person auditing an origin sees
+   `witness=unstated` on the DOCUMENT rows of a run whose `fetch()` and XHR rows at the same host carry a
+   real mark, and `unstated` is a row they permit SEPARATELY from `unpinned` — so the two seams that
+   cannot state the fact are the two whose permission cannot be expressed in the same terms as everything
+   else at that origin. The direction is still the safe one; what changed is that the work is a sentence
+   again, and this time because no arm reads the row rather than because `document` was thought to be
+   outside the bucket. */
 var _PINNED_MARKS = ["pinned", "unpinned", "unstated"];
 function _pinnedOf(opts) {
   CHECK(_PINNED_MARKS.indexOf(opts.pinned) >= 0,
@@ -1634,6 +1664,15 @@ function _signalVector(facts) {
    IT IS ONE LINE TO OVERTURN AND THE LINE IS DATA. If the intended reading is the literal one, delete the
    `provenance`/`observed` entry: the arms are a list, the surface renders them, and the refusal that follows
    names the signal. What must NOT happen is the reading being changed in prose while this list stays.
+   AND `PROGRAM LOADS ONLY` IS THE QUOTATION AND NO LONGER THE TABLE, WHICH IS SAID HERE SO THE BANNER AND
+   THE LIST CANNOT BE READ AS DISAGREEING. The project owner has since widened the unconfigured default
+   TWICE on the same discriminator — WHOSE ACT THE REQUEST IS — first to the rest of what a document
+   loads in order to be itself, then to a child navigable the page's own markup named or its own code
+   computed. Each widening is ONE ARM below, each cites the CLAUDE.md paragraph that carries the decision,
+   and the quotation above is kept verbatim because it is what the arms were drawn FROM and because a reader
+   who re-derives the literal reading will re-derive it in those words. What is unchanged is the other half
+   of that sentence: no data fetch this tool composed, no probe and no discovery, until the origin is
+   deliberately widened.
    THESE ARE PERMISSIONS AND NOT REFUSALS, so no value of the table below can be narrowed by them and
    §NOTHING-IS-REFUSED-AT-EVERY-SETTING is untouched: an arm here only ever makes something fire. */
 var _DEFAULT_ARMS = [
@@ -1876,7 +1915,136 @@ var _DEFAULT_ARMS = [
            { signal: "witness", value: "unpinned" },
            { signal: "actor", value: "page" }],
     why: "the analysed page's own code made this request and composed its address out of nothing this " +
-         "engine pinned — so what fires is the app asking for its own state, not a probe this tool built" }
+         "engine pinned — so what fires is the app asking for its own state, not a probe this tool built" },
+  /* AND A CHILD NAVIGABLE THE PAGE'S OWN MARKUP NAMED OR ITS OWN CODE COMPUTED, WHICH IS A DECISION THE
+     PROJECT OWNER MADE AND NOT ONE THIS FILE INFERRED, so it is cited rather than argued. CLAUDE.md
+     §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS's discriminator is WHOSE ACT THE REQUEST IS and not what the
+     reply becomes — "a subresource the page's own markup names, or its own running code computes, is THE
+     PAGE LOADING ITSELF and is fetched exactly as a browser fetches it" — and a nested document the page's
+     own `<iframe src>` names is that same fact ONE LEVEL UP: the person's own browser loaded it when they
+     visited the page. The DECISION OWED that `_pinnedOf`'s residual and `_isNavigation`'s banner both named
+     is answered in the AFFIRMATIVE and this arm is where it is answered.
+     WHAT REFUSING IT COST IS THE SHAPE §NO-STUBS CALLS THE WORST ONE: no crash, a completed run, and EVERY
+     FRAMED DOCUMENT IN EVERY APP never analysed — a feature-detected absence degrading to silence, one
+     level of nesting up from the 467 refusals over 85 lazy chunks the `program` arm above carries as its
+     own measurement. The refusal is a PARK, so it is not even a failure path a reader could find.
+     IT IS NOT DESTINATION-KEYED AND MUST NOT BECOME SO, WHICH IS THE ASYMMETRY WITH THE TWO ARMS ABOVE AND
+     IS THE ONE THING THE NEXT READER WILL TRY TO TIDY. Those two are destination-keyed ALONE and their own
+     banners argue at length that a FORCED SEGMENT in a program's address does not carry it across the line.
+     THAT ARGUMENT DOES NOT TRANSFER HERE, and the reason is not caution: a chunk whose path a forced
+     equality pinned is still the app's own code, SERVED BYTE-IDENTICALLY TO EVERY VISITOR, revealing
+     nothing whatever about this person — while a navigation to a route that exists only past a forced gate
+     is a DOCUMENT ONLY THIS ENGINE EVER ASKED FOR, and a credentialed reply to it is the plausible
+     fabrication CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE is entirely about. The bytes of a program are
+     the same for everyone; the bytes of a document are not. So the forced path stays REFUSED and the
+     per-origin widening is where it belongs.
+     THE METHOD HALF IS ANSWERED HERE RATHER THAN LEFT TO BE RE-DERIVED. `init` below hardcodes
+     `method: "GET"` and `_refuseUnreadOptions` refuses a caller that states one, and RFC 9110 §9.2.1 "Safe
+     Methods" puts GET in its safe set — "the GET, HEAD, OPTIONS, and TRACE methods are defined to be safe".
+     AND THAT IS A SIGNAL ABOUT INTENT AND NEVER A GUARANTEE ABOUT CONSEQUENCE, which §9.2.1 says in its own
+     words: the definition "does not prevent an implementation from including behavior that is potentially
+     harmful, that is not entirely read-only, or that causes side effects while invoking a safe method".
+     That is exactly why the DESTRUCTIVE DENY LIST still stands BEHIND this arm rather than being satisfied
+     by it — and this arm REACHES it rather than bypassing it: the list is scoped `credentialed && provenance
+     !== "observed"`, which a same-origin `derived` child navigable satisfies, so a population that was
+     refused upstream of that gate now passes THROUGH it. The deny list's reach grows with this diff; it
+     does not shrink.
+     THERE IS NO `observed` TWIN AND WRITING ONE WOULD BE INERT, WHICH IS THE TRAP CLAUDE.md
+     §AND-A-CONJUNCTION-WITH-`provenance=observed`-WOULD-BE-INERT NAMES AND THE `_signalRegistryCheck`
+     ABOVE CANNOT CATCH — it refuses an unknown NAME and an undeclared VALUE, and `observed` is a declared
+     value of a declared signal, so an arm naming it would sit in this list reading as a permission and
+     match nothing for ever. The derivation, because it is a claim about another file:
+       git grep -n 'engine_prov_of_running_path' engine/host/solver/engine.c
+     answers `return f != NULL && flow_path_forced(f) ? PROV_FORCED : PROV_DERIVED;` — TWO of the three
+     words, never `PROV_OBSERVED` — and every `actor: page` navigation this tree has takes its word from
+     there (`core/frame/navigable.c`'s three notices through `bridge.js`'s `fetchedDocument`, and
+     `solver/route_seed.c`, whose own comment says "a real load of this document makes no pushState, so
+     `observed` is unreachable here"). The one act that DOES state `observed` for a navigation is the
+     AMBIENT SEED, and it states `actor: tool` — so the conjunction below could not admit it either, and it
+     does not need to: the `provenance`/`doc-reach` arm above already fires it, which is why this tool can
+     analyse anything at all.
+     AND THERE IS NO `witness` CONJUNCT, FOR TWO INDEPENDENT REASONS AND EITHER WOULD BE ENOUGH. It would be
+     INERT TODAY: `bridge.js`'s navigation relay types `pinned: "unstated"` because the provenance arrives on
+     a NOTICE and a notice is not a park, so an arm naming `unpinned` matches nothing for ever — the same
+     trap one field over. And it would be REDUNDANT THE DAY THE MARK TRAVELS: `_firingRefusal` ASSERTS
+     `facts.provenance === "forced" || facts.pinned !== "pinned"`, because solver/flow.h declares
+     `path_pinned` strictly inside `path_forced` — so `provenance: derived` ALREADY excludes a pinned
+     address, by an invariant this file checks rather than one it hopes for.
+     THE CONSEQUENCE IS THAT THE HAZARD `_isNavigation` WAS WRITTEN AGAINST STAYS CLOSED, which is said here
+     because it is the first thing a reader of that banner will worry about. No arm a navigation can take
+     reads the `witness` row at all, so landing the plumbing CLAUDE.md §A-REAL-NAVIGABLE calls owed changes
+     NO firing outcome for any navigation at any setting — it changes only the per-origin ROW a person sees,
+     which they permit separately. The decision is in the table and no unrelated field can move it.
+     AND THERE IS NO `doc-reach` CONJUNCT, WHICH IS A DECISION AND NOT AN OMISSION. At the default table a
+     document's reach grade can only be `observed` (the ambient seed) or `derived` (this arm), because the
+     only other word is `forced` and this arm refuses it — so a `forced`-reach document exists only at an
+     origin a person DELIBERATELY WIDENED, and refusing its child navigables would be re-litigating their
+     decision one level down. It is also what makes frames NEST: a direct child of the seed reads
+     `doc-reach=observed` and a grandchild reads `derived`, so any single conjunct would refuse one of the
+     two. The arm above needed its `doc-reach` row because it names no destination and would otherwise
+     re-grade a second population; this one names `navigation` and admits navigations and nothing else.
+     AND THERE IS NO SAME-ORIGIN CONJUNCT, WHICH IS CORRECT AND NOT FOR THE REASON A READER WILL REACH FOR —
+     RECORDED BECAUSE THE WRONG REASON IS A GATE THAT IS STRUCTURALLY SILENT ABOUT THIS ARM'S OWN
+     CROSS-ORIGIN POPULATION. The tempting account is that this file's SOP/CORS check enforces it anyway, so
+     an arm needs no conjunct and adding one would be a second copy. The CONCLUSION holds and that account
+     is NOT what carries it: the credentialed SOP/CORS gate below runs AFTER THE WIRE and only
+     `if (credentialed)`, and the cross-origin navigations this arm admits are UNCREDENTIALED, so that gate
+     never runs for them at all. What actually carries it is one line at the CALLER — `bridge.js`'s
+     `navigationCarriesSession` is `_isRealOrigin(principalOrigin) && originOf(absUrl) === principalOrigin`,
+     a SAME-ORIGIN TEST computed per call, so a cross-origin child navigable asks for no cookies in the
+     first place. A reader who took the other account would be resting a policy on a gate that cannot see
+     the population, which is CLAUDE.md §A-CONTROL-ARMS-ONLY-ON-A-SITE one level out.
+     SO WHAT FIRES CROSS-ORIGIN HERE IS AN UNCREDENTIALED GET, WHICH IS STRICTLY NARROWER THAN A BROWSER —
+     a real browser DOES send cookies to a cross-origin `<iframe src>` — and it is exactly what the two
+     destination-keyed arms above already do for a CDN chunk or a third-party font. It still passes the
+     scheme allowlist, the userinfo refusal, the private-network gate on the initial AND post-redirect URL,
+     and this file's own post-redirect re-ask of this very walk.
+     WHAT IT RE-GRADES IS ENUMERATED RATHER THAN LEFT TO BE FOUND, because a permission whose reach the
+     person cannot state is not a control — the same obligation the two arms above discharge. §2.2.5's
+     NAVIGATION set is five destinations (`document`, `embed`, `frame`, `iframe`, `object`) and every one of
+     them now fires at every origin for an `actor: page` request on a path that forced nothing; of those
+     this engine can STATE exactly ONE today, `document`, which is what HTML §7.4.5 "Populating a session
+     history entry" gives the navigate algorithm's own fetch and what `bridge.js`'s navigation relay types.
+     The other four are destinations no caller in this tree composes, so this arm's reach is one value wider
+     than its population and the four are named rather than discovered.
+     AND `provenance` IS UNTOUCHED BY IT, which is the arm above's sentence and is owed here too:
+     §A-REQUEST-CARRIES-THE-PROVENANCE is explicit that a permission changes which ACT may be spent and
+     never what a reply is WORTH, so a `derived` document's reply is still carried as derived, is still
+     never merged into the observed pool, and every consumer downstream still sees that word. An arm makes
+     something FIRE; it re-grades nothing.
+     RETIREMENT: this record goes when `_signalRegistryCheck` REFUSES a default arm that names a value no
+     caller in this tree can state — an arm-reachability check over the vectors the trusted zones type —
+     because the two INERT-conjunct arguments above are then enforced by the host's own startup instead of
+     by this paragraph, and an arm that permits nothing for ever is a build failure rather than a sentence
+     somebody has to read.
+     MEASURED ABSENT WITH THE COMMAND, SO THIS CONDITION IS NOT BORN MET — AND THE FIRST SPELLING OF THAT
+     MEASUREMENT WAS WRONG IN A WAY THAT IS GUARANTEED RATHER THAN UNLUCKY, WHICH IS WHY THE COMMAND BELOW
+     MATCHES A CONSTRUCT AND NOT A NAME. CLAUDE.md §AND-THE-THIRD-BAD-CONDITION requires the mechanism a
+     retirement condition names to be GREPPED at the moment the condition is written, so that a condition
+     cannot be born met; CLAUDE.md §AND-A-COUNT-OVER-SOURCE-TEXT says a count of a NAME counts every
+     MENTION, prose included. Those two collide HERE BY CONSTRUCTION and not by accident: a condition must
+     NAME its mechanism in order to be a condition at all, so the prose that discharges the first rule is
+     itself the hit that defeats the second — `grep -c armReachable` over this file answered 0 before this
+     paragraph existed and answers 1 afterwards, and the 1 is this sentence. A reader who takes that for a
+     presence concludes the check is built and retires a live record; a reader who takes it for an absence
+     is right by luck.
+     SO THE COMMAND MATCHES THE DECLARATION, WHICH PROSE DOES NOT WRITE, AND IT IS READ AT A REVISION WHERE
+     THIS PARAGRAPH DOES NOT EXIST — because matching the construct closes the SUBJECT and leaves the
+     CONTROL open, which the first repair of this clause demonstrated on itself: naming the control inside
+     the printed command moved that control from 1 to 2, one level in from the defect the sentence above
+     records. The only reading neither half can contaminate is one taken where the condition is not written.
+       git show origin/main:extension/lib/safe-fetch.js > /tmp/sf-main.js
+       grep -cE 'function (armReachable|_armReachability|safeFetchArmReachable)' /tmp/sf-main.js   # 0
+       grep -cE 'function _signalRegistryCheck' /tmp/sf-main.js                                   # 1, armed
+     SO THE GENERAL RULE A CONDITION OWES ITSELF IS THAT ITS GREP NAMES A CONSTRUCT AND ITS REVISION IS NOT
+     THE ONE IT IS LANDING IN — and the tell is free and needs no second command: your condition's own text
+     contains the string your condition greps for. */
+  { when: [{ signal: "destination", value: "navigation" },
+           { signal: "actor", value: "page" },
+           { signal: "provenance", value: "derived" }],
+    why: "the analysed page's own markup named this nested document or its own code computed the address — " +
+         "so the person's own browser loaded it when they visited the page, and what fires is the page " +
+         "loading itself one level down rather than a route only this engine ever asked for" }
 ];
 var _EXPLORED = Object.create(null);
 /* HAS A HOST SPOKEN YET. Two questions, two fields — never one value answering both, because the

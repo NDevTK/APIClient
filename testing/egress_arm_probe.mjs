@@ -17,6 +17,26 @@
 // is what says whether the rows below still describe this tree. A row whose call site has moved is a row
 // about nothing, which is why each one carries the site in its label.
 //
+// AND FOUR OF ITS ROWS NOW CARRY AN EXPECTATION, WHICH MAKES ONE SENTENCE IN ITS OWN BUILD STAGE FALSE
+// AND IS SAID HERE BECAUSE THAT STAGE IS WHERE A RED IS READ. `engine/build.mjs` runs this file as a SOURCE
+// stage whose hint says "Nothing here stores an expected arm list: a widened policy passes, and this red
+// means the PROBE lost its grip on the walk". That was exactly true while every row merely DESCRIBED the
+// table. It is not true of the four rows scoring the project owner's navigation decision: two of them
+// (`provenance=forced` and `actor=tool` must REFUSE) are the BOUND of that decision, so a future owner
+// decision to widen either one turns this stage red and the stage's own hint then gives the WRONG
+// instruction — fix the probe, where the right one is update the row.
+// THE DISTINCTION IS IN THIS FILE'S EXIT CODE AND NOT YET IN THE STAGE: a control that lost its grip exits
+// 2 and prints that nothing below is a reading, a scored row disagreeing exits 1 and names the row and both
+// readings of it. `engine/build.mjs` treats any non-zero alike, which is a stage this lane may not edit and
+// is recorded as owed rather than guessed at — CLAUDE.md's §A-REAL-NAVIGABLE paragraph carries it as a
+// retirement condition with the grep that shows it absent.
+// AND A SCORED ROW IS NOT THE CHANGE DETECTOR §Testing FORBIDS, WHICH IS THE OTHER HALF OF WHY THERE ARE
+// FOUR AND NOT NINE. An arm only ever WIDENS, so the two rows that must FIRE can go red only if somebody
+// NARROWS the default — which is a decision being silently reverted and not a better design being blocked.
+// The two that must REFUSE can genuinely block a widening, and that is the point of a BOUND: a bound nothing
+// checks is not a bound, and the cost of moving one is a one-line edit made by a reader this file's own
+// failure message has already told which of the two things happened. Every other row carries no `want`.
+//
 // IT REFUSES TO PUBLISH A CLEAN BILL UNLESS ITS CONTROL SPOKE. CLAUDE.md §AND-THE-WAY-YOU-ESTABLISH-WHICH-
 // HALF-A-FAILURE-LANDS-IN: probing a policy for a hole rests on demonstrating that the probe can make the
 // policy REFUSE at all, or a FIRES everywhere reads identically to a probe that never reached the walk.
@@ -60,26 +80,51 @@ function zone() {
    trusted-zone source at the site named, which is why a transcription is the honest form: there is no
    derivation to read it off, and a reader checks it with one grep rather than trusting this file. */
 const SITES = [
+  /* THE OWNER'S NAVIGATION DECISION, AND THESE FOUR ROWS ARE WHAT SCORE IT. A `want` is the difference
+     between a row that DESCRIBES the table and a row that would FAIL if the table drifted, and it is spent
+     only where the expectation is an INVARIANT OF THE DECISION rather than a snapshot of the arm list —
+     a `want` on every row would be the change detector CLAUDE.md §Testing forbids, which is why most of
+     the rows below carry none. Each of these four is one half of the owner's sentence: a child navigable the
+     page's own markup named or its own code computed FIRES, and a navigation on a FORCED path does not. */
   { label: 'bridge.js navigationLoad (a child navigable)',
+    want: 'FIRES',
     grep: "git grep -n 'destination: \"document\"' extension/bridge.js",
     facts: { destination: 'document', actor: 'page', pinned: 'unstated',
              provenance: 'derived', docReach: 'observed', credentialed: true, headers: null } },
-  /* THE SAME CALL SITE WITH THE WITNESS MARK STATED, AND THE WHOLE VALUE OF THESE TWO ROWS IS THAT THEY NOW
-     AGREE WITH THE ONE ABOVE. They are not transcriptions of anything — the mark does not travel for a
-     navigation — they are the HYPOTHETICAL the plumbing CLAUDE.md §A-REAL-NAVIGABLE calls owed would
-     create. Before the destination row named navigations they read FIRES, so a correct plumbing diff would
-     have begun firing every derived child navigable at every origin with nobody having decided it; the row
-     that refuses them is now the DESTINATION, which no plumbing can move. A day on which either of these
-     reads FIRES again is a day an arm started naming `navigation`, which is the project owner's decision and
-     would be deliberate — or a day the destination row stopped saying what a navigation is. */
-  { label: '…the same, if it STATED its witness mark (must still REFUSE)',
+  /* THE SAME CALL SITE WITH THE WITNESS MARK STATED, AND THE WHOLE VALUE OF THIS ROW IS STILL THAT IT AGREES
+     WITH THE ONE ABOVE — THE AGREEMENT NOW MEANS THE OPPOSITE THING AND IS WORTH MORE. It is not a
+     transcription: the mark does not travel for a navigation, so this is the HYPOTHETICAL the plumbing
+     CLAUDE.md §A-REAL-NAVIGABLE calls owed would create. It used to read REFUSED together with the row
+     above, which is what proved no plumbing diff could flip a navigation on. It now reads FIRES together
+     with the row above, which proves the same property from the other side: the arm that admits a child
+     navigable names `destination`, `actor` and `provenance` and NO witness row, so landing the mark changes
+     no firing outcome at any setting. A day on which these two DISAGREE is a day some arm started reading
+     the witness for a navigation, and the decision stopped being immune to an unrelated field. */
+  { label: '…the same, if it STATED its witness mark (must AGREE with the row above)',
+    want: 'FIRES',
     grep: 'solver/engine.c engine_pinned_of_running_path — the fact exists and does not travel',
     facts: { destination: 'document', actor: 'page', pinned: 'unpinned',
              provenance: 'derived', docReach: 'observed', credentialed: true, headers: null } },
-  { label: '…the same, on a FORCED path, witness stated (must still REFUSE)',
+  /* AND THE BOUND OF THE DECISION, WHICH IS THE ONE ROW THAT MUST NOT MOVE. A route that exists only past a
+     forced gate is a document ONLY THIS ENGINE EVER ASKED FOR, so it is the deliberate per-origin widening
+     and not the default — the asymmetry with the two destination-keyed arms is argued at the arm itself.
+     The witness is stated here too, so this row also shows that the refusal is the PROVENANCE and not the
+     mark: both navigation rows above fire with the mark stated and this one refuses with it stated. */
+  { label: '…the same, on a FORCED path (must still REFUSE — the bound)',
+    want: 'REFUSED',
     grep: 'as above; the provenance word is engine_provenance_of_running_path\'s',
     facts: { destination: 'document', actor: 'page', pinned: 'unpinned',
              provenance: 'forced', docReach: 'observed', credentialed: true, headers: null } },
+  /* AND THE `actor` CONJUNCT'S OWN WORK, WHICH NO OTHER ROW HERE DEMONSTRATES. A derived navigation THIS
+     TOOL composed — a discovery sweep following a route it computed itself — is identical to the
+     child navigable above on destination, provenance, doc-reach and witness, and differs only in whose act
+     it is. If this ever reads FIRES, the arm has stopped asking the question the owner's discriminator is
+     made of and the default has quietly widened to every address this tool can build. */
+  { label: '…the same at actor=tool (must REFUSE — the `actor` conjunct)',
+    want: 'REFUSED',
+    grep: 'no caller states this pair today; it is the arm\'s own discriminator, exercised',
+    facts: { destination: 'document', actor: 'tool', pinned: 'unstated',
+             provenance: 'derived', docReach: 'observed', credentialed: true, headers: null } },
   /* THE AMBIENT SEED AT BOTH ACTOR WORDS, WHICH IS THE PAIR THAT MAKES ONE REPAIR AUDITABLE. The loader used
      to answer `page` for all three of its callers out of one literal, and the seed is the one that is this
      TOOL's act — safe-fetch.js's `_actorOf` says so in its own words. The two rows are kept together because
@@ -161,13 +206,34 @@ function main() {
     return;
   }
 
+  /* A ROW'S `want` IS ENFORCED AND NOT PRINTED BESIDE IT, WHICH IS CLAUDE.md
+     §A-DESTRUCTIVE-STEP-IS-GATED-BY-THE-CHECK'S-EXIT-STATUS READ AT A VERIFICATION: an expectation
+     nothing branches on is a NON-check that produces a reassuring transcript, and the transcript is the
+     hazard — a later reader sees the wanted verdict sitting right there and concludes somebody compared
+     them. `scored` is counted and printed so that a run which enforced NOTHING cannot read like one that
+     enforced everything, which is the same reason the controls are counted above. */
+  let wrong = 0, scored = 0;
   for (const s of SITES) {
     const got = ask(Z, s.facts);
-    console.log(s.label);
+    const judged = s.want !== undefined;
+    const ok = !judged || got.verdict === s.want;
+    if (judged) scored++;
+    if (!ok) wrong++;
+    console.log((judged ? (ok ? '  ok   ' : '  FAIL ') : '       ') + s.label);
     console.log('    destination=' + got.vector.destination + '  witness=' + got.vector.witness +
                 '  provenance=' + got.vector.provenance + '  actor=' + got.vector.actor +
-                '  =>  ' + got.verdict + (got.at ? ' at ' + got.at : ''));
+                '  =>  ' + got.verdict + (got.at ? ' at ' + got.at : '') +
+                (ok ? '' : '   (wanted ' + s.want + ')'));
     console.log('    check the transcription: ' + s.grep);
+  }
+  console.log('');
+  console.log(scored + ' of ' + SITES.length + ' rows carried an expectation and were SCORED; the rest are');
+  console.log('DESCRIPTIVE, which is deliberate — a `want` on every row would be a change detector.');
+  if (wrong) {
+    console.log('');
+    console.log(wrong + ' SCORED ROW(S) DISAGREED WITH THE POLICY. Either the arm list moved without the');
+    console.log('decision moving, or the decision moved and these rows are what says so.');
+    process.exitCode = 1;
   }
   console.log('');
   console.log('EVERY ROW ABOVE IS ABOUT THE DEFAULT (UNWIDENED) TABLE. A per-origin grant only ever WIDENS,');
