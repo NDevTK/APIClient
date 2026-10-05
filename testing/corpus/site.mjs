@@ -1157,12 +1157,45 @@ const DELIVER_GUARD_ROWS = ['pend', 'pendReady', 'stackEmpty', 'canDeliver'];
    producer's reading is a PAIR: "`loopUs` small says the engine was barely GIVEN the thread and the next
    question is the DRIVER; `loopUs` large with `stepUs` small says it had the thread and spent it outside a turn,
    and the next question is this scheduler". All five are LIFETIME counts by the producer's own `@kind`.
-   THE OVERRUN ROWS ARE DELIBERATELY NOT HERE AND BECOME THE QUESTION ONLY IF THIS FORK SAYS SCHEDULER.
-   `sliceOverruns`, `sliceOverrunAsks` and `sliceOverrunSeamless` answer WHICH ARM overran and whether those
-   turns offered a suspend point at all — a different question, downstream of this one, and the producer says
-   their own reading is also a pair. Carrying them now would make this row a second copy of
-   testing/live-run.js's census rather than this driver's curated set. */
+   THAT FORK HAS A THIRD ARM, AND THIS BANNER USED TO WITHHOLD EXACTLY THE ROWS THAT READ IT. It said: "THE
+   OVERRUN ROWS ARE DELIBERATELY NOT HERE AND BECOME THE QUESTION ONLY IF THIS FORK SAYS SCHEDULER …  Carrying
+   them now would make this row a second copy of testing/live-run.js's census rather than this driver's curated
+   set." Both halves of that are sound about the fork's TWO NAMED ARMS and they are kept in their own words,
+   because a reader who re-derives the condition from the producer's pair will withhold the rows again. The arm
+   neither of them covers is `loopUs` LARGE with `stepUs` LARGE TOO — the loop given the thread and spending it
+   INSIDE turns — and in that arm the fork is silent and these rows are the only thing that speaks.
+   MEASURED OVER THREE DRIVES OF ONE RELEASE ARTIFACT ON ONE REAL APP, 90 s each, THE THIRD ARM IS THE ARM THIS
+   CORPUS'S REAL SITES TAKE: `loopUs` is 85.87/85.73/85.53 s of an `instanceUs` of 88.39/88.34/88.64 s, and
+   `stepUs` is 99.997/99.997/99.995 PER CENT of `loopUs`. So the loop was GIVEN the thread and spent essentially
+   all of it inside turns, and the question the fork hands off is neither the DRIVER nor the pick — it is WHICH
+   TURNS. The derivation is the artifact and not those figures: `wallSpan` carries all five rows on every pass,
+   so a reader runs `report.mjs` over this corpus and reads the share column rather than trusting this sentence.
+   AND `stepUs/steps` CANNOT ANSWER IT, BY THE PRODUCER'S OWN SENTENCE — it is "A MEAN NO TURN IS NEAR". The
+   same three drives give 7613, 48405 and 14836 MICROSECONDS per step, a 6.4x spread on one binary, one site and
+   one dwell, so that quotient is a fact about which mode the drive landed in and not about a turn. What the
+   producer names in its place is the list below. */
 const WALL_SPAN_ROWS = ['instanceUs', 'loopUs', 'betweenSlicesUs', 'slices', 'stepUs'];
+/* THE THIRD ARM'S ROWS, IN THE PRODUCER'S OWN ORDER AND AS ONE LIST — so the row's keys and the checks below
+   cannot disagree about which terms they are about, which is the same reason `REPLY_DOOR_SUM` is one list.
+   `TURN_PHASE_SUM`'s FIRST member is the TOTAL and the next two are its parts, in solver/result.c's own
+   assertion order, so the check derives the arithmetic from the list rather than restating it.
+   WHAT EACH ONE BUYS, AND IT IS A DIFFERENT COMPONENT EACH TIME. `sliceUs` and `schedUs` PARTITION `stepUs` and
+   separate "the step itself is the cost" from "the pick and the delta cost more than the work they order" —
+   "different components, different diffs" in the producer's words, with the identity asserted at
+   engine_frontier_census; `schedUs` is "EVERYTHING IN THE TURN THAT IS NOT THE STEP", telescoping the previous
+   iteration's tail, so it is the scheduler's own share and not a residue a reader subtracts. `sliceOverruns`
+   against `steps` is the slice-bound FRACTION the mean above cannot give. And `sliceOverrunAsks` with
+   `sliceOverrunSeamless` are the pair that says whether those turns offered a suspend point AT ALL:
+   "All-seamless says the thread was inside C that declares no step boundary and the answer is a step-machine
+   conversion; a large sum says the points were there and the stretch ran anyway, which is a question about the
+   page and not about this engine."
+   `stepUs` IS IN BOTH LISTS DELIBERATELY: it is the fork's fourth term above and this partition's total here,
+   and one row serving two readings cannot drift the way two rows can. ALL OF THEM ARE LIFETIME COUNTS by the
+   producer's own `@kind` line and all are taken off the SAME entry, so every identity below holds at one
+   instant. ABSENT STAYS ABSENT in both lists: a `0` in `sliceOverruns` is the POSITIVE statement that not one
+   turn overran its slice, and an artifact predating the row has said nothing whatever. */
+const TURN_PHASE_SUM = ['stepUs', 'sliceUs', 'schedUs'];
+const TURN_PHASE_ROWS = [...TURN_PHASE_SUM, 'sliceOverruns', 'sliceOverrunAsks', 'sliceOverrunSeamless'];
 const REPLY_DOOR_ROWS = [...REPLY_DOOR_SUM, 'rowsAwaitingBytes'];
 const NET_ASK_ROWS = [
   'epFetchAskNamedLife', 'epFetchAskNamedTypeofLife', 'epFetchAskNamedPropLife',
@@ -1971,6 +2004,89 @@ const row = {
     return parts === c.instanceUs ? ''
       : 'instanceUs ' + c.instanceUs + ' against loopUs ' + c.loopUs + ' + betweenSlicesUs ' +
         c.betweenSlicesUs + ' = ' + parts;
+  })(),
+  /* …AND WHICH TURNS, WHICH IS THE QUESTION THE FORK ABOVE HANDS OFF AND WHICH THIS ROW HAS NEVER CARRIED.
+     See `TURN_PHASE_ROWS` for the fork's third arm, for why this corpus's real sites take it, for why
+     `stepUs/steps` is the one quantity that cannot read it, and for which component each of the six names.
+     DERIVED FROM THE ONE LIST so these keys and the two checks below cannot disagree. ABSENT STAYS ABSENT for
+     `wallSpan`'s reason exactly. */
+  turnPhase: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    const out = {};
+    for (const k of TURN_PHASE_ROWS) {
+      taken.add(k);
+      out[k] = typeof c[k] === 'number' ? c[k] : EP_FACT_ABSENT;
+    }
+    return out;
+  })(),
+  /* AND THE PARTITION AND THE TWO CONTAINMENTS ASKED HERE, for `wallSpanSumsWrong`'s reason exactly: the
+     producer asserts `stepUs == sliceUs + schedUs` at engine_frontier_census and the overrun containments at
+     engine_step_unit_runs, with `DCHECK`s that `-DAPICLIENT_DEV=0` compiles out — and this driver measures
+     whatever artifact is installed, release included. So on a release census those assertions are not
+     weakened, they are ABSENT, and this is their release-mode reader rather than a second copy of a live check.
+     ONE FIELD AND NOT THREE, because they are one question — is this partition readable — and separate fields
+     would let a reader take a clean sum for a clean row.
+     A STRING AND NOT A COLOUR, AND IT DOES NOT STOP THE ROW: `null` is nothing to ask, `''` is an observed
+     clean answer, and a non-empty string names both sides and their values. */
+  turnPhaseSumsWrong: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    for (const k of TURN_PHASE_SUM) if (typeof c[k] !== 'number') return null;
+    const [tot, ...parts] = TURN_PHASE_SUM;
+    const sum = parts.reduce((a, k) => a + c[k], 0);
+    if (sum !== c[tot])
+      return tot + ' ' + c[tot] + ' against ' + parts.map((k) => k + ' ' + c[k]).join(' + ') + ' = ' + sum;
+    /* `sliceOverruns <= steps` is a count of turns against the turns there were; `sliceOverrunSeamless <=
+       sliceOverruns` is the pair's own bound. A missing operand SKIPS its link rather than failing the field,
+       because an artifact predating one row still answers for the sum. */
+    for (const [a, b] of [['sliceOverruns', 'steps'], ['sliceOverrunSeamless', 'sliceOverruns']]) {
+      if (typeof c[a] !== 'number' || typeof c[b] !== 'number') continue;
+      if (c[a] > c[b]) return a + ' ' + c[a] + ' exceeds ' + b + ' ' + c[b];
+    }
+    return '';
+  })(),
+  /* …AND WHICH ARM EACH OVERRUNNING TURN WAS IN, which is the row that names a COMPONENT where the fraction
+     above names only a symptom. solver/result.c: "the same list as `stepUnitRuns`, restricted to the turns
+     `sliceOverruns` counts, so the PAIR is the reading: an arm with many runs and no overruns is cheap however
+     often it is taken, and an arm whose two counts are EQUAL is a step that cannot rest." This row has carried
+     `stepUnitRuns` since it was the sixth consumer that never asked; the RESTRICTION has never been read, so a
+     corpus that can say which arm TOOK a step has never been able to say which arm SPENT one.
+     LIFETIME AND OFF THE SAME ENTRY as `stepUnitRuns`, so the pair is one moment. ABSENT STAYS ABSENT: a `{}`
+     would read as an engine whose turns never overran, which is `sliceOverruns: 0` and a different fact. */
+  stepUnitOverruns: (() => {
+    taken.add('stepUnitOverruns');
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    const h = c.stepUnitOverruns;
+    return (h && typeof h === 'object' && !Array.isArray(h)) ? h : null;
+  })(),
+  /* AND ITS OWN ASSERTED TOTAL BESIDE IT, because an enumeration carried without the total it sums to is the
+     defect CLAUDE.md §AND-A-CONSERVATION-IDENTITY names: an arm read from one place and summed against
+     another's figure. These arms PARTITION `sliceOverruns` by where the overrunning turn ended, so they sum to
+     it exactly, and both come off this one entry. The second containment is free and is the reading the
+     producer asks for — no arm may exceed its own `stepUnitRuns` arm, since every overrun was also a run — and
+     it is what makes "an arm whose two counts are EQUAL is a step that cannot rest" checkable rather than a
+     sentence. A STRING AND NOT A COLOUR, for `turnPhaseSumsWrong`'s reason. */
+  stepUnitOverrunArmsWrong: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    const h = c.stepUnitOverruns, runs = c.stepUnitRuns;
+    if (!h || typeof h !== 'object' || Array.isArray(h)) return null;
+    if (typeof c.sliceOverruns !== 'number') return null;
+    const arms = Object.keys(h).filter((k) => typeof h[k] === 'number');
+    const sum = arms.reduce((a, k) => a + h[k], 0);
+    if (sum !== c.sliceOverruns)
+      return 'stepUnitOverruns arms sum to ' + sum + ' against sliceOverruns ' + c.sliceOverruns;
+    if (runs && typeof runs === 'object' && !Array.isArray(runs))
+      for (const k of arms)
+        if (typeof runs[k] === 'number' && h[k] > runs[k])
+          return 'arm ' + k + ' overran ' + h[k] + ' time(s) of ' + runs[k] + ' run(s)';
+    return '';
   })(),
   /* AND THE CONTAINMENT CHAIN ASKED HERE, FOR `replyDoorSumsWrong`'s REASON EXACTLY. solver/result.c asserts
      `canDeliver <= stackEmpty <= live` with a `DCHECK` that `-DAPICLIENT_DEV=0` compiles out, and this driver

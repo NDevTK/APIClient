@@ -627,6 +627,24 @@ for (const p of passes) for (const r of p.rows) {
        only the first two may be differenced across samples — which is why nothing below does that to the
        third. */
     span: r.wallSpan, rdoor: r.replyDoor, dguard: r.deliverGuard,
+    /* AND WHICH TURNS SPENT THAT SPAN, which `span` hands off and cannot give — see site.mjs's
+       `TURN_PHASE_ROWS` for the fork's third arm and for why `stepUs/steps` cannot read it. `tphase` is
+       `stepUs`'s own partition into the step phase and everything in the turn that is NOT the step, plus the
+       slice-bound fraction's numerator and the pair that says whether those turns offered a suspend point at
+       all; `suo` is the arm each overrunning turn ended in, which is the only row here that names a COMPONENT.
+       LEFT RAW for `span`'s reason: site.mjs already publishes both verdicts (`turnPhaseSumsWrong`,
+       `stepUnitOverrunArmsWrong`) and a second copy of that arithmetic here is the one
+       §AN-AUDITOR-DERIVES-THE-RULE forbids. What this file adds is the per-pass DISTRIBUTION, which is the
+       cross-run fact no single census can state. All lifetime, all off the entry `countersFrom` names. */
+    tphase: r.turnPhase, tphaseWrong: r.turnPhaseSumsWrong,
+    suo: r.stepUnitOverruns, suoWrong: r.stepUnitOverrunArmsWrong,
+    /* AND THE TWO DENOMINATORS THE FOUR SHARES ABOVE ARE OVER, which this file read off `r` directly in the
+       `tlad` block and so could not reach from a measurement. `steps` is `sliceOverruns`' denominator and
+       `stepUnitRuns` is `stepUnitOverruns`' — per arm, which is the whole of the producer's pair reading — and
+       without them the overrun fraction and the arm's own rate are READERS WITH NO WRITER: they would resolve
+       to `undefined`, print `-`, and void two of the four quantities on the cell while the cell still rendered.
+       Both are LIFETIME and both come off the entry `countersFrom` names, the same one `tphase` does. */
+    steps: r.steps, sur: r.stepUnitRuns,
     /* AND THE FORK PAIR, LEFT AS WHATEVER site.mjs WROTE. It is the population size for a refusal that is NOT
        YET BUILT, so what this file does with it is print the FRACTION and never a verdict: the numerator alone
        is meaningless (§Solver-half's pin MINT arms make most such branches unreachable at a hook) and the pair
@@ -1503,6 +1521,113 @@ if (spShown.length) {
                        : '  — more than one value, so it is not the constant this block was written about'));
   console.log('  the share is read WITHIN one row (loopUs/instanceUs); `deliverGuard` is a GAUGE and is never');
   console.log('  differenced across passes; the MODE is read off the door column above and not inferred here');
+}
+
+/* WHICH TURNS SPENT THE SPAN THE BLOCK ABOVE MEASURES — the reading that block hands off and the one this
+   corpus has never been able to take. The fork solver/result.c states has two named arms (`loopUs` small says
+   the DRIVER; `loopUs` large with `stepUs` small says this scheduler) and a THIRD it is silent about: `loopUs`
+   large with `stepUs` large too, the loop GIVEN the thread and spending it inside TURNS. MEASURED over three
+   drives of one release artifact on one real app, that third arm is the arm this corpus's real sites take, and
+   the share column above is where a reader checks it rather than this sentence.
+   `stepUs/steps` IS NOT PRINTED HERE AND IS NOT THE QUESTION, because the producer calls it "A MEAN NO TURN IS
+   NEAR" and the same three drives give 7613, 48405 and 14836 microseconds per step — a 6.4x spread on one
+   binary, one site and one dwell, so the quotient reads which MODE a drive landed in and says nothing about a
+   turn. What is printed instead is the PARTITION and the FRACTION the producer names in its place.
+   THREE QUANTITIES, THREE COMPONENTS, AND THEY ARE NEVER SUMMED ACROSS EACH OTHER. The `sched` share is
+   `schedUs/stepUs` — everything in the turn that is not the step, which telescopes the previous iteration's
+   tail, so a large one is the pick and the delta costing more than the work they order and the diff is in this
+   scheduler. The `over` fraction is `sliceOverruns/steps` — the slice-bound share, which a mean cannot give.
+   And `seam` is `sliceOverrunSeamless/sliceOverruns`: all-seamless says the thread was inside C declaring no
+   step boundary and the answer is a step-machine conversion, while a large `asks` beside a small `seam` says
+   the suspend points were THERE and the stretch ran anyway, which is a question about the page. The producer
+   says in as many words that the sum alone "can be carried by a single chatty turn, so the pair is the
+   reading", which is why `asks` is printed beside the fraction and not folded into it.
+   EVERY SHARE IS READ WITHIN ONE PASS and nothing is differenced across two — these are lifetime counts and may
+   be differenced BY THEIR OWN KIND, but two passes are two runs and that is a different comparison. A `null`
+   is printed as `-` and never as a zero wherever an operand is absent OR a denominator is zero: a share of a
+   partition that did not happen is not a small share, and a seamless fraction of no overruns is not zero
+   seamless turns — it is the POSITIVE statement that no turn overran, which the `over` cell already carries.
+   THE ARM IS NAMED AND NEVER RANKED HERE. `suo` is a histogram and its top arm is what names the component; it
+   is printed as the single largest arm with its own `stepUnitRuns` denominator beside it, because the producer's
+   reading is the PAIR — "an arm with many runs and no overruns is cheap however often it is taken, and an arm
+   whose two counts are EQUAL is a step that cannot rest" — and an arm without its run count cannot be read
+   either way.
+   ABSENT IS NOT ZERO AT EITHER GRAIN. `no-field` is a pass predating these rows, `no-counters` is a pass no
+   census of which carried a cold document, and a verdict string from site.mjs is printed VERBATIM because a
+   partition that does not close makes every share on the cell unreadable and that is the finding. */
+const tpOne = (m) => {
+  const p = (m.tphase && typeof m.tphase === 'object') ? m.tphase : null;
+  const h = (m.suo && typeof m.suo === 'object' && !Array.isArray(m.suo)) ? m.suo : null;
+  const runs = (m.sur && typeof m.sur === 'object' && !Array.isArray(m.sur)) ? m.sur : null;
+  /* THREE STATES READ OFF THE VALUE AND NEVER OFF THE KEY, and this block got it wrong once in the way the
+     `tlad` block below already records: the mapping assigns `tphase` UNCONDITIONALLY, so an `'tphase' in m`
+     test can never be false and the `predates` arm it guarded was DEAD — every pass older than these rows
+     printed as `no-counters`, which is a fact about the RUN, when the truth was a fact about the DRIVER.
+     The warning was in THIS FILE, specific, about this exact construct, and it did not fire, which is why it
+     is recorded here rather than quietly fixed. `undefined` is site.mjs not having written the field at all;
+     `null` is site.mjs having written it with no cold document to read; a string is a stated absence. */
+  if (!p && !h)
+    return { tok: m.tphase === undefined ? 'predates-the-rows'
+             : (m.tphase === null ? 'no-counters' : String(m.tphase)) };
+  const n = (o, k) => (o && typeof o[k] === 'number' ? o[k] : null);
+  const stepUs = n(p, 'stepUs'), sched = n(p, 'schedUs'), slice = n(p, 'sliceUs');
+  const over = n(p, 'sliceOverruns'), asks = n(p, 'sliceOverrunAsks'), seam = n(p, 'sliceOverrunSeamless');
+  const steps = typeof m.steps === 'number' ? m.steps : null;
+  /* THE SINGLE LARGEST ARM AND ITS OWN RUN COUNT, picked by value with the key as a stable tiebreak so two
+     passes of one shape name the same arm. A histogram of all zeros names NO arm rather than its first key. */
+  let top = null;
+  if (h) for (const k of Object.keys(h).sort())
+    if (typeof h[k] === 'number' && h[k] > 0 && (top === null || h[k] > h[top])) top = k;
+  return { p, h,
+           schedShare: (sched === null || !stepUs) ? null : (100 * sched / stepUs),
+           sliceShare: (slice === null || !stepUs) ? null : (100 * slice / stepUs),
+           overShare: (over === null || !steps) ? null : (100 * over / steps),
+           seamShare: (seam === null || !over) ? null : (100 * seam / over),
+           over, asks, steps,
+           topArm: top, topOver: top === null ? null : h[top],
+           topRuns: (top !== null && runs && typeof runs[top] === 'number') ? runs[top] : null,
+           wrong: [m.tphaseWrong, m.suoWrong].filter((x) => typeof x === 'string' && x !== '').join('; ') };
+};
+const tpRows = table.map((t) => {
+  const per = t.measurements.map(tpOne);
+  const stated = per.filter((x) => x.p || x.h);
+  return { id: t.id, per, stated, tok: stated.length ? null : (per.length ? per[0].tok : 'no-pass') };
+});
+const tpShown = tpRows.filter((r) => r.stated.length);
+/* THE HEADER AND THE SILENT LIST PRINT WHETHER OR NOT ANY PASS STATED THE ROWS, which is the one way this
+   block differs from the span block above and is not a style choice. These six rows are NEW, so every census
+   file already on disk predates them and `tpShown` is empty for all of them — and a section that renders
+   NOTHING in that state is indistinguishable from a section that does not exist, which is the
+   §A-DIAGNOSTIC-GATED-ON-A-FINDING defect arriving in a reader: the run that explains nothing is the run whose
+   explanation is wanted, and gating the explanation on there being something to explain silences it exactly
+   then. It is also the only thing that ARMS this reader before a drive: a section that has only ever printed
+   when stated has never shown its absent arm speaking. */
+if (tpRows.length) {
+  const tpIdW = Math.max('site'.length, ...tpRows.map((r) => r.id.length)) + 2;
+  const pc = (x) => (x === null ? '-' : x.toFixed(1) + '%');
+  const cell = (x) => (x.wrong ? '[' + x.wrong + '] ' : '') +
+    pc(x.schedShare) + 'sched ' +
+    (x.over === null ? '-' : x.over) + '/' + (x.steps === null ? '-' : x.steps) + 'over' +
+    '(' + pc(x.overShare) + ') ' +
+    pc(x.seamShare) + 'seam/' + (x.asks === null ? '-' : x.asks) + 'asks ' +
+    (x.topArm === null ? '-' : x.topArm + ' ' + x.topOver + '/' +
+      (x.topRuns === null ? '-' : x.topRuns));
+  console.log('');
+  console.log('WHICH TURNS SPENT THE SPAN (site, then PER PASS IN ORDER):');
+  /* EVERY QUANTITY THE CELL PRINTS IS NAMED HERE, for the span block's reason: a reader takes a legend as the
+     key to a row, so a cell carrying more than its legend names is read as whichever field the legend lists. */
+  console.log('  <schedUs as a share of stepUs>sched  <sliceOverruns>/<steps>over(<fraction>)  ' +
+              '<seamless share of those overruns>seam/<suspend points they offered>asks  ' +
+              '<largest overrunning arm> <its overruns>/<its runs>');
+  for (const r of tpShown)
+    console.log('  ' + pad(r.id, tpIdW) + r.stated.map(cell).join(' | '));
+  console.log('  a `-` is an absent operand or a zero denominator and NEVER a zero share; a bracketed string is');
+  console.log('  site.mjs\'s own partition verdict, which makes every share on that cell unreadable');
+  const silent = tpRows.filter((r) => !r.stated.length);
+  if (silent.length)
+    console.log('  NOT STATED: ' + silent.map((r) => r.id + '(' + r.tok + ')').join(' ') +
+      '  — `predates-the-rows` is a fact about the DRIVER that wrote the census and `no-counters` one about' +
+      ' the RUN; neither is a fact about the engine');
 }
 
 /* WHICH ARM OF `flow_step` TOOK THE STEP OF A MEMBER THAT WAS HOLDING A RUNNABLE TASK — the row the job split
