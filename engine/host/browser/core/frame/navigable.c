@@ -2261,10 +2261,13 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
    instead of exploring both arms, and check_step_visits is what says so before anything is compiled.
    THE CREATION RECORD IS NOT NAMED HERE AND CANNOT BE, and the reason is NOT that a private DOM tree has no
    operation — `v->tree` is one, and core/html/fragment_parser.c's §14.4 half declares its own tree through it.
-   It is that a HALF-BUILT DOCUMENT IS NOT A TREE THAT OPERATION CAN NAME: quickjs-step.h declares its clone as
-   "deep-copy the tree at `root` into a tree WITH THE SAME OWNER", and a Document IS the owner — so there is no
-   same-owner copy of one to make, which solver/dom_cow.c's own dom_private_copy_one states back as
-   `c->owner_document == src->owner_document`. THIS SENTENCE USED TO READ "the same hole
+   It is that a HALF-BUILT DOCUMENT IS NOT A STRUCTURE THAT OPERATION CAN NAME: its clone copies a structure
+   into one WITH THE SAME OWNER, and a Document IS the owner — so there is no same-owner copy of one to make,
+   which solver/dom_cow.c's own dom_private_copy_one states back as
+   `c->owner_document == src->owner_document`. The property is stated and the declaration is NOT QUOTED: that
+   banner is moving (its own residual names a rename as the next diff, and it has already been generalised from
+   a DOM tree to a host allocation once), and a quotation of a sentence the file no longer holds reads as a
+   fabrication to the one channel that checks quotations. THIS SENTENCE USED TO READ "the same hole
    core/dom/element.c's fragment parse names" AND BOTH HALVES WERE WRONG: that argument lives in
    core/html/fragment_parser.c (element.c is one of its three CONSUMERS, which is a `.unforkable =` line and
    not an argument), and the hole is not the same one — that machine's tree IS declared now and what holds its
@@ -2324,10 +2327,12 @@ static const char *js_nav_load_unforkable(const void *st)
            "this tree, so the next reader is sent to write what is already there. The operation EXISTS "
            "(quickjs-step.h's `tree`, with solver/dom_cow.c's dom_private_tree_clone behind it) and "
            "core/html/fragment_parser.c's §14.4 half declares its own tree through it. "
-           "WHAT IS ABSENT IS AN OPERATION THAT CAN NAME A DOCUMENT. That clone is declared as "
-           "`deep-copy the tree at root into a tree with the SAME OWNER` and dom_private_copy_one asserts "
-           "exactly that "
-           "(`c->owner_document == src->owner_document`); a Document IS the owner, so it has no same-owner "
+           "WHAT IS ABSENT IS AN OPERATION THAT CAN NAME A DOCUMENT. That clone copies a structure into one "
+           "WITH THE SAME OWNER — stated as the property and not quoted, because the wording at the "
+           "declaration is moving (its own residual names a rename as the next diff) and a quotation of a "
+           "sentence a file no longer holds reads as a fabrication. dom_private_copy_one asserts the same "
+           "property as "
+           "`c->owner_document == src->owner_document`; a Document IS the owner, so it has no same-owner "
            "copy, and lexbor's own clone of a Document node answers a bare lxb_dom_document_t that shares the "
            "original's `doctype` POINTER — two owners of one node, which is the corruption this abort exists "
            "to prevent. "
