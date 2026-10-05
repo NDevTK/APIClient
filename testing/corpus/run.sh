@@ -73,8 +73,12 @@ set -u
 # site.mjs, report.mjs, list.mjs and fetch.mjs are safe against a mid-edit in a way a bash script is not.
 # A LANE CANNOT DEFEND AGAINST IT EXCEPT BY COPYING THIS FILE, and a copy used to be impossible because
 # this line derived the corpus path from the SCRIPT'S OWN LOCATION — so a copy looked for site.mjs beside
-# itself and found nothing. The override is therefore not a convenience: it is the whole of what makes a
-# private copy work, which is the only protection available. `LANE` already carries harness.js and
+# itself and found nothing. The override is therefore not a convenience: it is a NECESSARY part of what makes
+# a private copy work, and it is NOT THE WHOLE OF IT — this line used to claim it was, and a lane found the
+# claim false by acting on it: site.mjs is ESM, ESM ignores `NODE_PATH`, so a private CORP resolves none of the
+# driver's imports however this variable is set. The resolution check further down is the other part, and it
+# refuses at the origin with the remedy named. The retired wording is kept because a reader who re-derives the
+# override's purpose will re-derive the over-claim with it. `LANE` already carries harness.js and
 # extension/ for exactly this reason; this closes the last shared input.
 #     cp testing/corpus/run.sh $LANE/run.sh && CORP=/home/user/APIClient/testing/corpus $LANE/run.sh …
 CORP="${CORP:-$(cd "$(dirname "$0")" && pwd)}"
@@ -112,7 +116,43 @@ fi
 # §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE. It is deleted rather than narrowed, because a validation whose
 # whole population one line above it has already refused has no narrower form.
 PORT=${HARNESS_PORT:-9451}
-export NODE_PATH=${NODE_PATH:-/home/user/APIClient/node_modules}
+# `NODE_PATH` IS A NO-OP FOR THIS DRIVER AND THE LINE THAT SET IT CLAIMED OTHERWISE. site.mjs is ESM — five
+# `import` statements — and ESM RESOLUTION IGNORES `NODE_PATH` ENTIRELY, resolving from the importing FILE's
+# own directory upward. MEASURED with an armed control in a directory holding no node_modules: a `.mjs`
+# importing `puppeteer` with NODE_PATH set THROWS `ERR_MODULE_NOT_FOUND`, and a `.cjs` doing the same prints
+# its success — so the export below was protecting CJS and nothing this script runs is CJS.
+# WHAT THAT COST IS A LANE, NOT A LINE. This file's header above calls the CORP override "the whole of what
+# makes a private copy work", and a private CORP under /tmp dies at the first import — then the driver call
+# below pipes stderr through `grep '^ROW '`, so the cause is SWALLOWED and the row reads `driver produced no
+# row`, which is the generic shape for ten different failures. A lane hit exactly that, diagnosed it itself,
+# and worked around it with symlinks; the fix belongs here. That pairing — a contract naming a capability it
+# does not deliver, plus an error path that destroys the evidence — is CLAUDE.md §A-CONTRACT-THAT-NAMES-A-
+# HAZARD-AND-OFFERS-NO-EXIT and §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES in one place.
+# SO THE RESOLUTION IS CHECKED RATHER THAN HOPED FOR, AT THE ORIGIN, BEFORE ANY BROWSER IS STARTED. The check
+# is the driver's OWN resolution question asked the driver's OWN way — a bare ESM import evaluated with CORP as
+# the working directory, which is the only thing that answers for ESM — and it REFUSES with the remedy named
+# rather than letting the failure arrive 360 seconds later wearing a different name.
+# IT WRITES NO FILE, AND THAT IS A CORRECTNESS CHOICE AND NOT TIDINESS. The first form of this check wrote a
+# one-line `.mjs` probe and ran it, which leaves an untracked file in a SHARED tree if the script is killed
+# between the write and the remove — and putting it in the gitignored logs/ directory instead would have asked
+# the question ONE DIRECTORY DEEPER than site.mjs, adding `logs/node_modules` as a resolution root site.mjs
+# does not have. That bias is one-directional and it points the wrong way for a refusal gate: it can only turn
+# a real failure into a PASS. `--input-type=module -e` resolves bare specifiers against the CWD, so `cd $CORP`
+# asks from exactly site.mjs's own directory with no extra root and no file.
+# MEASURED with an armed control, reading the EXIT STATUS directly rather than through a pipe (a pipeline hands
+# you its last stage's status, which is how this check would silently always pass): in a scratch directory with
+# no reachable node_modules and NODE_PATH SET it exits 1, and in this corpus it exits 0.
+if ! ( cd "$CORP" && node --input-type=module -e "import 'puppeteer'" ) >/dev/null 2>&1; then
+  echo "CORP=$CORP cannot resolve the driver's own imports: site.mjs is ESM and ESM IGNORES NODE_PATH, so a"
+  echo "private CORP needs node_modules reachable from it by ORDINARY ESM RESOLUTION. Remedy, either one:"
+  echo "    ln -s /home/user/APIClient/node_modules \$(dirname $CORP)/node_modules"
+  echo "  or keep CORP at /home/user/APIClient/testing/corpus and give LANE the private harness+extension,"
+  echo "  which is what LANE is for and is the shape this script's header describes."
+  echo "REFUSED HERE rather than at the first drive: the driver call below pipes stderr through a grep for"
+  echo "ROW, so this failure would otherwise arrive as the generic 'driver produced no row' after a browser"
+  echo "start and a 360s timeout, for every site in the list."
+  exit 2
+fi
 export HARNESS_PROFILE=$LANE/prof HARNESS_LOCK=$LANE/harness.lock HARNESS_PORT=$PORT
 export HARNESS_EXT_DIR=$LANE/extension CDP=$PORT DWELL=${DWELL:-60000}
 OUT=$CORP/census-$LABEL.jsonl
@@ -204,8 +244,19 @@ for _row in "${SITE_ROWS[@]}"; do
   # site that the next pass overwrites. Without it every pass's rows are read against the LAST pass's console
   # and a site that ran cleanly in one pass inherits another pass's abort. report.mjs reads the name off the
   # row, so passing it here is what makes a multi-pass census one measurement per (site, pass).
-  R=$(cd "$CORP" && timeout 360 node site.mjs "$id" "$url" "$LABEL" 2>&1 | grep '^ROW ' | head -1)
-  [ -z "$R" ] && R="ROW {\"id\":\"$id\",\"url\":\"$url\",\"fatal\":\"driver produced no row\"}"
+  # THE DRIVER'S OWN OUTPUT IS KEPT, BECAUSE `driver produced no row` IS ONE SENTENCE FOR TEN FAILURES. The
+  # grep below selects the ROW and the tee keeps everything, so a run that produced no row can be diagnosed
+  # from what it DID say instead of from the absence. That is the §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES pairing
+  # a lane paid for: an unresolvable import, a browser that never started, a 360s timeout and a mid-drive
+  # abort all rendered as the same string, and the one that had actually happened was readable nowhere.
+  DRV=$CORP/logs/$LABEL-$id.driver
+  R=$(cd "$CORP" && timeout 360 node site.mjs "$id" "$url" "$LABEL" 2>&1 | tee "$DRV" | grep '^ROW ' | head -1)
+  if [ -z "$R" ]; then
+    # THE LAST LINE IS CARRIED INTO THE ROW, which is what makes the fatal actionable without opening the file
+    # — and the file is named in it either way, because a last line is a sample and not the account.
+    LAST=$(tail -3 "$DRV" 2>/dev/null | tr '\n\t"\\' '    ' | tail -c 400)
+    R="ROW {\"id\":\"$id\",\"url\":\"$url\",\"fatal\":\"driver produced no row -- its own output is at $DRV and its last lines were: $LAST\"}"
+  fi
   echo "${R#ROW }" >> "$OUT"
 done
 
