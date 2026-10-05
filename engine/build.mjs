@@ -6688,7 +6688,27 @@ function trackedPaths() {
                     "source enumeration below can be checked against it. git is already this script's " +
                     "dependency for the revision and the cone, so this is an environment fault: " +
                     String(r.stderr || "").trim());
-  _trackedMemo = new Set(r.stdout.split(" ").filter(Boolean));
+  /* `\0` IS WRITTEN AS THE TWO-CHARACTER ESCAPE AND NEVER AS A LITERAL NUL BYTE, WHICH IS NOT STYLE: THE
+     FIRST FORM OF THIS LINE CARRIED A REAL NUL AND IT MADE THIS FILE UNGREPPABLE. The two forms are
+     behaviour-identical — verified by running both, not assumed — so nothing failed, no stage went red and
+     the frozen build at the commit that introduced it passed 4 of 4. What a NUL changes is that `grep`
+     classifies the file as BINARY: `grep -n <anything> engine/build.mjs` prints `binary file matches`, NO
+     LINES AND NO NUMBERS, and EXITS 0, so a `<grep> && <act>` proceeds and the message reads like a tooling
+     complaint rather than a hit somebody needs to read. `grep -c` and `grep -l` stay correct, which is what
+     makes it quiet; `git diff` is unaffected because the byte sits past git's 8000-byte text heuristic
+     window, so no review step in this tree can see it.
+     IT LANDS ON THE ONE IDIOM CLAUDE.md PRESCRIBES MOST — "grep the entry a crash names", "read the
+     accessor", "grep the tool for its own account of that mechanism" — so the file that silently stops
+     answering those instructions is the build. Measured: the author of the NUL met `binary file matches` on
+     this very file one command after writing it, attributed it to something pre-existing, worked around it
+     with `-a`, and carried on; the symptom was in front of them and the rationalisation was cheaper than the
+     question.
+     THE GENERAL RULE IS THE ONE §AND-THE-SIBLING-OF-THAT-DEFECT ALREADY STATES FOR THE SECTION SIGN, WITH
+     THE ROLES SWAPPED: there a blunt transform corrupted PROSE invisibly, here a hand-typed control
+     character corrupted a file's GREPPABILITY invisibly, and the authoring rule is identical — a non-ASCII
+     or control byte is written as an ESCAPE and never typed into the line. The tell is free and needs no
+     command: you are about to put a byte in a string that your terminal cannot show you. */
+  _trackedMemo = new Set(r.stdout.split("\0").filter(Boolean));
   return _trackedMemo;
 }
 function refuseStraySources(roots) {
