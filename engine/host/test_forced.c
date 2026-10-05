@@ -508,10 +508,57 @@ static const TfServed TF_SERVED[] = {
      * would ALSO fail before the fix, by throwing, so it could not tell the two engines apart; this one can,
      * and `e.name` separates them a second way (`TypeError` for the rejected load, `SyntaxError` for a compile
      * of the bytes). A control that cannot fail is not one, and a control both engines fail is not one either. */
+    /* …AND THE ONE BODY IN THIS WHOLE FIXTURE THAT IS A MODULE'S AND THAT NOTHING CALLS, WHICH IS A STATEMENT
+     * ABOUT THE ORPHAN DRIVE AND NOT ABOUT THE IMPORT. The document statements below import this module and
+     * read its exports by NAME; `mmDrive` is exported, never referenced, and therefore reachable only through
+     * solver/engine.c's orphan surface — so its three emissions are a statement made by the DRIVE, which is
+     * what makes it the one thing in this file that can ask whether a drive may read a module-level binding at
+     * all. engine_orphan_call's own NAMED RESIDUAL says it may not, and names its population as flows with NO
+     * IMPORT OF THEIR OWN: a drive is `engine_sibling_assemble`'d from whichever flow ran out of work, so
+     * nothing in its timeline reaches §16.2.1.6.1.2 "Link ( )" and nothing writes the cells it reads.
+     * THE DRIVE ENTERS THIS BODY WITHOUT READING ANY MODULE BINDING, which is the whole reason the first
+     * emission is a reachability witness and not a second copy of the claim. The take hands a FUNCTION OBJECT
+     * over (JS_OrphanTakeOne reads the body off `p->u.func.function_bytecode`) and engine_orphan_call calls
+     * that object directly, so entering `mmDrive` needs no read of `mmDrive`'s own cell — which a drive would
+     * fail at exactly as it fails at the two reads below.
+     * THREE EMISSIONS BECAUSE §16.2.1.7.3.1 "InitializeEnvironment ( )" WRITES ONE OF THESE TWO BINDINGS AND
+     * NOT THE OTHER, and the two halves need two different cures. Its lexical loop is
+     * `CreateImmutableBinding` for a constant declaration and `CreateMutableBinding` otherwise, and it
+     * performs `InitializeBinding` ONLY for a FunctionDeclaration / GeneratorDeclaration /
+     * AsyncFunctionDeclaration / AsyncGeneratorDeclaration — so `mmProbe`'s cell is written by the LINK
+     * phase's prologue and `mmDeps`'s is written by the module BODY, which §16.2.1.7.3.2
+     * "ExecuteModule ( [ capability ] )" runs under §16.2.1.6.1.3 "Evaluate ( )". A drive that had been given
+     * Link alone would read `mdrFN` and lose the third emission; one given neither loses both; one given both
+     * emits all three. A single row could not tell those apart, and they are three different next diffs.
+     * BOTH READS ARE CALLS AND NEITHER IS A STRINGIFICATION, deliberately: an uninitialised cell read through
+     * `OP_get_var_ref_check` throws, and a cell read through the unchecked opcode would hand the string
+     * concatenation quickjs's own uninitialised marker and emit a token out of a value no program holds. A
+     * CALL ends in a lost request under both spellings, which is the observable these rows are written for.
+     * (The checked opcode is what both of these get: `js_define_var`'s FUNCTION_DECL and CONST arms both reach
+     * `add_global_var` with `is_lexical = true` at program level, and `OP_scope_get_var` over a lexical
+     * closure var emits `OP_get_var_ref_check`.)
+     * EVERY TOKEN IS A LITERAL, for §A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE-UNKNOWN's
+     * reason — and `typeof mmProbe` is folded to one of two literals rather than emitted, so `the prologue ran`
+     * and `the cell held something that is not a function` are two tokens and not one absence. BACKTICKED AND
+     * NOT QUOTED, because a double-quoted run is compared against whichever standard the nearest preceding
+     * citation names and these are THIS TREE'S OWN PROSE — measured rather than feared: the first landing of
+     * this comment put the second run in quotation marks and `node engine/citegen.mjs engine/host/test_forced.c`
+     * reported it as diverging from ECMAScript §16.2.1.6.1.3 "Evaluate ( )" after one of nine words — the
+     * title is written beside the number HERE TOO, because a number-only citation is outside every check this
+     * tool makes BY CONSTRUCTION and the first landing of this sentence put this one in that blind spot, which
+     * is the same authoring rule the four citations above it already obey. It is a false
+     * accusation produced by punctuation. engine_orphan_call's residual records the same incident from the
+     * other end.
+     * THE ADDRESSES ARE THREE AND NONE IS A PREFIX OF ANOTHER, because `emitted_records` matches
+     * `"url":"<addr>"` and a row that could be answered by a sibling statement's record is a row that cannot
+     * fail. */
     { "https://x.test/chunk/mdmod.js", "text/javascript",
       "const mmDeps = (i, m = mmDeps) => (m === mmDeps ? 'mmOK' : 'mmBAD');"
       "export default { tag: 'mmDEF' };"
-      "export function mmProbe(){ return mmDeps([0]); }" },
+      "export function mmProbe(){ return mmDeps([0]); }"
+      "export function mmDrive(){ fetch('/api/moddriveran?w=mdrENTER');"
+      " fetch('/api/moddrivefn?w=' + (typeof mmProbe === 'function' ? 'mdrFN' : 'mdrNOFN'));"
+      " fetch('/api/moddriveconst?w=' + mmDeps([0])); }" },
     { "https://x.test/chunk/mdbad.js",  "application/json",
       "fetch('/api/modbadran?w=mbRAN');export default 1;" },
 };
@@ -14273,6 +14320,76 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "value; the token ABSENT WITH ITS REACH LETTER PRESENT is the read having THROWN, which is the "
              "real bundle's `is not initialized` reproduced with no network and no bundle in it. A module is "
              "linked once and its status is a C record field, while the cells its body writes are per-flow");
+    /* ─── AND THE SAME TWO BINDINGS READ BY A FLOW THAT NEVER IMPORTED THE MODULE, WHICH IS THE POPULATION
+     * EVERY ROW ABOVE IS OUTSIDE OF ───
+     *
+     * `mod-const` and `mod-world` are read by CONTINUATIONS OF THE IMPORTING STATEMENT, so their flows are the
+     * linking world or its descendants whatever else is true of them. engine_orphan_call's NAMED RESIDUAL names
+     * a different population and NO ROW ABOVE IS IN IT — said that way rather than as an absence, because a
+     * sentence recording that nothing reaches a population is self-invalidating in the commit that reaches it
+     * (CLAUDE.md §THE-TELL-IS-FREE-AND-NEEDS-NO-TREE): a DRIVE has no import of its own, being
+     * `engine_sibling_assemble`'d from whichever flow ran out of work, so §16.2.1.6.1.2 "Link ( )" is owed in
+     * its world and nothing performs it. `mmDrive` is that statement — a module-level export nothing calls, so
+     * the orphan surface is its only caller — and see the served body for why its three emissions are three
+     * rows and not one.
+     *
+     * THE LADDER IS ENTAILED BY PROGRAM ORDER AND THE RUNGS ARE NOT INTERCHANGEABLE. `mdrENTER` is the body's
+     * FIRST emission and reads no module binding at all; the `mmProbe` read is second; the `mmDeps` read is
+     * third. A read that throws ends the body, so each token present implies the one before it, which is what
+     * makes the LOWEST 0 the localisation and what `.gate` asserts of each pair.
+     * AND THE ONE STATE IN WHICH THE SECOND PAIR WOULD ABORT RATHER THAN READ 0 IS NAMED HERE RATHER THAN
+     * DISCOVERED, because a gate is a two-sided DCHECKF and a declaration whose counterexample its author can
+     * name is a declaration that owes it. `mod-drive-const == 1` beside `mod-drive-fn == 0` needs `mdrNOFN`:
+     * the `mmProbe` cell INITIALISED to something that is not a function while `mmDeps` reads back correctly.
+     * Nothing writes that cell after the prologue — the module body assigns it never, and an UNinitialised cell
+     * throws rather than answering — so the state is a should-never-happen and the abort is the right outcome
+     * for it, which is why the gate is declared on the read ABOVE rather than weakened to `mod-drive-ran`.
+     *
+     * `mod-drive-ran` IS UNGATED AND THAT IS A STATEMENT ABOUT THIS TABLE RATHER THAN A CHOICE. Its 0 is
+     * entailed by "no world linked this module", and no row states that: MORE THAN ONE document statement
+     * imports `/chunk/mdmod.js` (the derivation is a grep of that address over this file, which answers the
+     * served body and every importer), so `mod-entered == 0` leaves the other importer able to link it and the
+     * gate's two-sided DCHECKF would ABORT on a 1 here beside a 0 there. A gate is an entailment or it is a
+     * label, and this one would be false in exactly the run that makes it matter. Its own `why` carries the
+     * three readings instead.
+     * RETIREMENT: this clause goes when ONE row of this table reads "some world linked this module", because
+     * the gate is then a true entailment and the argument for leaving the row ungated is gone with it.
+     *
+     * ALL THREE ARE POSITIVE ROWS, SO NONE OWES A `reach`. A row whose claim is a token being PRESENT reads 0
+     * when its statement did not run, which is the correct polarity and is its own finding; `reach` exists for
+     * a row that reads 1 then, and the band's own assert refuses a positive row declared with one. */
+    const char *mod_drive_ran_why = NULL; int mod_drive_ran = 1;
+    fold_row(&mod_drive_ran, &mod_drive_ran_why,
+             param_value_is(js, "/api/moddriveran", "w", "mdrENTER"),
+             "NOT REACHED: there is no /api/moddriveran record, so no drive of `mmDrive` ever entered its "
+             "body. This emission reads NO module binding and the take hands over a function OBJECT, so "
+             "entering the body cannot have failed for the reason the two rows gated on this one are about. "
+             "The three readings are: no flow of this run ran out of work (the SCHEDULE, which the `orphan` "
+             "rows' shared `why` splits with engine_orphan_census), no world linked `/chunk/mdmod.js` so the "
+             "prologue minted no function object for the walk to find (read `mod-entered` and "
+             "`mod-world-reach` beside this row), or the walk ran and took some other body");
+    const char *mod_drive_fn_why = NULL; int mod_drive_fn = 1;
+    fold_row(&mod_drive_fn, &mod_drive_fn_why,
+             param_value_is(js, "/api/moddrivefn", "w", "mdrFN"),
+             "the drive entered the body and could not read a module-level FUNCTION DECLARATION: §16.2.1.7.3.1 "
+             "\"InitializeEnvironment ( )\" is the only step that writes `mmProbe`'s cell and it runs in the "
+             "LINK phase, so this is a world in which §16.2.1.6.1.2 \"Link ( )\" never happened. `mdrNOFN` "
+             "would be the cell holding something that is not a function, which is a different defect; the "
+             "token ABSENT with `mdrENTER` present is the read having THROWN, which is what "
+             "engine_orphan_call's residual predicts for a drive");
+    const char *mod_drive_const_why = NULL; int mod_drive_const = 1;
+    fold_row(&mod_drive_const, &mod_drive_const_why,
+             param_value_is(js, "/api/moddriveconst", "w", "mmOK"),
+             "the drive read a module-level FUNCTION DECLARATION and could not read a module-level `const`: "
+             "§16.2.1.7.3.1 \"InitializeEnvironment ( )\" creates `mmDeps`'s binding and initializes it "
+             "NEVER — a constant declaration gets `CreateImmutableBinding` and no `InitializeBinding` — so the "
+             "value is written by the module BODY under §16.2.1.7.3.2 \"ExecuteModule ( [ capability ] )\", "
+             "which §16.2.1.6.1.3 \"Evaluate ( )\" runs. This row at 0 beside `mod-drive-fn` at 1 is the ONE "
+             "state that says a drive was given Link and not Evaluate, and it becomes reachable exactly when "
+             "something issues one without the other — which is a property of the cure and not a date. "
+             "`mmBAD` is the default parameter having seen a DIFFERENT value, which is neither phase. "
+             "Compare with `mod-const`, read by the importing world: the two reading "
+             "differently localises the defect to the WORLD rather than to the binding");
     const char *sc_msg_ran_why = NULL; int sc_msg_ran = 1;
     fold_row(&sc_msg_ran, &sc_msg_ran_why, param_value_is(js, "/api/scmsg", "v", "scENTER"),
              "NOT REACHED: there is no /api/scmsg record, so §9.3.3 step 8's delivery task never ran its "
@@ -18568,6 +18685,18 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "mod-type", mod_type, "/api/modtype", SESS_EXPLORE, mod_type_why, .gate = "mod-typeask" },
         { "mod-world-reach", mod_world_reach, "/api/modworldreach", SESS_EXPLORE, mod_world_reach_why },
         { "mod-world", mod_world, "/api/modworld", SESS_EXPLORE, mod_world_why, .gate = "mod-world-reach" },
+        /* THE DRIVE'S THREE, AND THE KEY IS `/chunk/mdmod.js` FOR `reply-program`'S REASON EXACTLY:
+           `/api/moddriveran` is in a body this host SERVES and in no document at all, and what the document
+           contributes is the `import()` that links the module and so mints the function object the orphan walk
+           can find. A key is a substring of the PROGRAM, never of the answer.
+           THE SAME KEY AS NO ROW ABOVE, DELIBERATELY. `mod-entered` and `mod-world-reach` are keyed on their
+           own emissions because those statements are the document's; these three are keyed on the chunk because
+           the statement is the module's, and the two importing statements are merely what makes it exist. */
+        { "mod-drive-ran", mod_drive_ran, "/chunk/mdmod.js", SESS_EXPLORE, mod_drive_ran_why },
+        { "mod-drive-fn", mod_drive_fn, "/chunk/mdmod.js", SESS_EXPLORE, mod_drive_fn_why,
+          .gate = "mod-drive-ran" },
+        { "mod-drive-const", mod_drive_const, "/chunk/mdmod.js", SESS_EXPLORE, mod_drive_const_why,
+          .gate = "mod-drive-fn" },
         { "sc-msg-ran", sc_msg_ran, "/api/scmsg", SESS_EXPLORE, sc_msg_ran_why },
         { "sc-msg-fork", sc_msg_fork, "/api/scfork", SESS_EXPLORE, sc_msg_fork_why, .gate = "sc-msg-ran" },
         /* THE SEVEN ORPHAN ROWS SHARE ONE `why`, AND IT IS THE ONLY THING THAT MAKES THEIR 0 ACTIONABLE — see
