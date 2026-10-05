@@ -8080,12 +8080,32 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
        would give each world its own cells and merge nothing, and re-running `js_create_module_function` per
        world would re-dup every export's `var_ref`. Read JS_ModuleEvalStateSave's field list before proposing
        either.
-       RETIREMENT: this record goes when a drive issues §16.2.1.6.1.2 Link ( ) for the module its body belongs
-       to IN ITS OWN WORLD before building the call, which needs the module back-pointer §16.2.1.7.3.1
-       InitializeEnvironment ( )'s "Set the ScriptOrModule of moduleContext to module" names and that
-       JSFunctionBytecode does not carry — MEASURED ABSENT with the command, so this condition is not born met:
-       over the struct's own line range `grep -c JSModuleDef` answers 0 against `grep -c 'JSContext \*realm'`
-       answering 1 as the armed control.
+       RETIREMENT — RE-KEYED BY ONE PHASE, AND THE OLD WORDING IS KEPT IN ITS OWN WORDS BECAUSE A READER WHO
+       RE-DERIVES IT FROM `Link` WILL WRITE `Link` AGAIN. It read: this record goes when a drive issues
+       §16.2.1.6.1.2 Link ( ) for the module its body belongs to IN ITS OWN WORLD before building the call,
+       which needs the module back-pointer §16.2.1.7.3.1 InitializeEnvironment ( )'s "Set the ScriptOrModule of
+       moduleContext to module" names and that JSFunctionBytecode does not carry — MEASURED ABSENT with the
+       command, so this condition is not born met: over the struct's own line range `grep -c JSModuleDef` answers
+       0 against `grep -c 'JSContext \*realm'` answering 1 as the armed control. Every clause of that is correct
+       and the back-pointer half is untouched; what it got wrong is WHICH PHASE makes the body answerable.
+       LINK IS ONE PHASE SHORT OF THE POPULATION THIS RECORD IS ABOUT, AND THE SPEC'S OWN ASYMMETRY IS WHY — so a
+       drive built to satisfy the retired condition would ENTER the body and still read `undefined` for half of
+       what the module declares, which is the direction that reads as a reach gap rather than as a phase gap.
+       §16.2.1.7.3.1 walks the lexically-scoped declarations and performs `CreateImmutableBinding` where
+       `IsConstantDeclaration` is true and `CreateMutableBinding` otherwise, and then performs `InitializeBinding`
+       for EXACTLY the function, generator, async-function and async-generator declarations: a `const` gets a
+       binding and NO VALUE. What values it is `Evaluation of module.[[ECMAScriptCode]]` in §16.2.1.7.3.2
+       "ExecuteModule ( [ capability ] )", which §16.2.1.6.1.3 "Evaluate ( )" runs and which Link does not
+       reach — so after Link alone a module-level FUNCTION export is CALLABLE and a module-level `const` is in
+       TDZ. That is a difference no reach count can express, and `mod-drive-fn == 1` beside `mod-drive-const == 0`
+       over `/chunk/mdmod.js` in test_forced.c is the one reading that states it. Derived from this tree's own
+       committed corpus rather than from recall: `engine/specindex/text/ecmascript.json`, stamped `Draft ECMA-262
+       / September 2, 2026`, whose §16.2.1.7.3.1 text carries `createimmutablebinding` and `createmutablebinding`
+       for the lexical walk and `initializebinding` only inside the function-declaration arm.
+       RETIREMENT: this record goes when a drive issues §16.2.1.6.1.3 Evaluate ( ) — not Link alone — for the
+       module its body belongs to IN ITS OWN WORLD before building the call. Link stays the first half and is
+       still NECESSARY, and the back-pointer it needs is still absent by the measurement above; what the retired
+       condition was missing is that Link is not SUFFICIENT.
        WHICH drives land inside a LINKING ancestry is therefore decided by which flow happened to run out of
        work, a fact about the SCHEDULE, which is the same argument engine_orphan_born was built on for a
        different fact.
