@@ -14104,6 +14104,38 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "fork not happening, which is a different defect from the binding read and is why this row is "
              "separate from md-fork-bind");
     const char *md_fork_bind_why = NULL; int md_fork_bind = 1;
+    /* THE PRESENCE CLAUSE IS FOLDED FIRST, AND THAT IS WHAT MAKES THIS A ROW RATHER THAN A FALSE CLEAN BILL:
+       A BARE NEGATIVE IS SATISFIED BY THE STATEMENT NOT RUNNING. `!strstr(js, "mdfWRONG")` reads 1 on a table
+       composed before anything has happened, so this row published a 1 meaning "no arm read the `const`
+       uninitialised" about a statement no arm had reached. It was caught by its own declared gate's two-sided
+       assert -- `md-fork-ran` at 0 beside this row at 1 -- at `work_at` 1, which is the earliest instant any
+       table is composed, and THE ASSERT WAS RIGHT WHILE THE ROW WAS WRONG. The direction is the one that
+       costs: an absent token is evidence of nothing, and reading it as a bound world is an under-claim
+       nobody discovers by acting on it, because acting on it means not looking here again.
+       THE SPELLING IS `has_uid_param`'s AND NOT A SECOND ANSWER TO ONE QUESTION. That row states the reason
+       verbatim -- the two failures take opposite actions, no record at all being the SCHEDULE and a record
+       carrying the wrong value being the mechanism -- so the existence clause is split off and folded into
+       the SAME variable ahead of the claim. It is the clause `fork_row_impl` folds for every FORK_ROW, which
+       is why `mapfork_tt`'s bare negative is sound where this one standing alone was not: a FORK_ROW has
+       already written 0 and a NOT REACHED why by the time the negative is asked.
+       AND IT MAKES THE DECLARED GATE TRUE BY CONSTRUCTION rather than by coincidence: this row can no longer
+       read 1 while `md-fork-ran` reads 0, which is precisely what `.gate` asserts of it.
+       NAMED RESIDUAL -- WHAT IS NOT COVERED: nothing in this table REFUSES the next bare negative. The three
+       variables whose every fold is a negation were derived rather than remembered, with `md_fork_bind`
+       itself as the armed control, and of the other two one is sound by FORK_ROW and one (`nwiso_iso`) is a
+       DECISION whose own banner declines the fold and names `/api/nwiso/reach` as the witness that separates
+       its weak green -- so the population today is empty and the authoring hazard is not.
+       WHAT THE NEXT DIFF BUILDS: a reach token DECLARED on the Probe row and folded by `probes_eval` itself,
+       so a row cannot be written without one. It is NOT `key`: `key` is matched against `g_doc` at the
+       selection `if (!strstr(g_doc, probes[pi].key)) continue;`, which is the fixture's own SOURCE and
+       therefore a document selector rather than a witness that any statement ran.
+       HOW ITS ABSENCE WOULD SHOW: a row reading 1 in a table whose `work_at` is 1, or a row reading 1 while
+       no record its claim is about is in the document -- observable by reading any @H table's standing
+       against the rows it publishes, and not by which row happens to exhibit it. */
+    fold_row(&md_fork_bind, &md_fork_bind_why, !!strstr(js, "\"/api/mdforkpath\""),
+             "NOT REACHED: there is no /api/mdforkpath record, so no arm reached the binding read at all and "
+             "the absence of `mdfWRONG` is an artifact of the statement not running rather than a world that "
+             "bound correctly. That is the SCHEDULE and says nothing about the binding");
     fold_row(&md_fork_bind, &md_fork_bind_why, !strstr(js, "mdfWRONG"),
              "an arm of the forked path read the `const` UNINITIALISED — `mdfWRONG` is in the document. The "
              "binding is the PROGRAM's and neither world wrote it, so a world that reads it uninitialised is "
