@@ -1465,7 +1465,16 @@ const tlRows = table.map((t) => {
            tok: stated.length ? null : (toks.length ? toks.join('+') : 'no-pass') };
 });
 const tlShown = tlRows.filter((r) => r.stated.length);
-if (tlShown.length) {
+/* THE PASSES THAT COULD NOT BE ASKED, COMPUTED HERE BECAUSE THE GATE BELOW HAS TO BE ABLE TO SEE THEM — the
+   mute line used to sit INSIDE `if (tlShown.length)`, so on a census where EVERY row is mute the whole
+   section printed nothing: not the header, not the legend, and not the line whose entire purpose is to name
+   those rows. That is the absence of a question rendering as a clean bill (CLAUDE.md
+   §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN's banding argument, one level in), and it fired on exactly the
+   population the line was written for. MEASURED: six passes over two real app pages, every one an engine
+   abort before any census observed a standing frontier, and `report.mjs` emitted NO ladder section at all —
+   so a reader could not tell this report.mjs from one that does not carry the rows. */
+const tlMute = tlRows.filter((r) => !r.stated.length && r.tok);
+if (tlShown.length || tlMute.length) {
   const tlIdW = Math.max('site'.length, ...tlShown.map((r) => r.id.length)) + 2;
   const num = (x) => (typeof x === 'number' ? String(x) : '-');
   const cell = (x) => num(x.t.deliv) + 'dl/' + num(x.t.seq) + 'sq  ' +
@@ -1475,7 +1484,9 @@ if (tlShown.length) {
   console.log('WHICH LADDER ARM TOOK THE STEP OF A TASK HOLDER (site, then PER PASS IN ORDER):');
   /* EVERY QUANTITY THE CELL PRINTS IS NAMED HERE, for the span legend's reason: a reader takes a legend as
      the key to a row, so a cell carrying more than the legend names is read as whichever fields the legend
-     happens to list. */
+     happens to list. AND IT IS PRINTED ONLY WHERE A CELL WAS, because a legend for cells nobody emitted is
+     the shape it exists to prevent — a reader takes it as the key to a row and there is no row. */
+  if (tlShown.length) {
   console.log('  <taskHeldDelivLifetime>dl/<taskHeldSeqLifetime>sq  ' +
               '<taskArmOlderLifetime>+<taskArmNoRowLifetime>{=|<=}<run-a-task> (<older> as % of run-a-task)');
   console.log('  `=` is ONE census entry (wfqFrom === countersFrom) and `<=` is TWO, so only `=` cells carry');
@@ -1486,12 +1497,12 @@ if (tlShown.length) {
   console.log('  `git grep -c PEND_WORK_SEQ <each pass\'s stamp> -- engine/host` answers the same at both.');
   console.log('  sq large -> the arrival comparison is answering NO; older>0 refutes both for the steps it');
   console.log('  counts; noRow is the arm reached with no row to compare at all. All five are LIFETIME counts.');
+  }
   for (const r of tlShown)
     console.log('  ' + pad(r.id, tlIdW) + r.stated.map(cell).join(' | '));
-  /* THE PASSES THAT COULD NOT BE ASKED, NAMED RATHER THAN OMITTED — a site absent from the column above is
-     either a build predating the rows or a run that never observed a standing frontier, and those are
-     different findings. */
-  const tlMute = tlRows.filter((r) => !r.stated.length && r.tok);
+  /* …AND NAMED RATHER THAN OMITTED — a site absent from the column above is either a build predating the
+     four rows or a run that never observed a standing frontier, and those are different findings. The
+     computation is hoisted above the gate; see the comment there for what nesting it here cost. */
   if (tlMute.length)
     console.log('  not asked: ' + tlMute.map((r) => r.id + '(' + r.tok + ')').join(' '));
 }
