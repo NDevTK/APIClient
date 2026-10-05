@@ -1084,6 +1084,38 @@ static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueCon
            "of realms ever recorded. Reaching this means the list gained a member through a path that is not "
            "this one, so `made` under-counts and the run's reclamation reading (test_forced.c's "
            "`realm-reclaim` row, `_heap.childRealmsMade`) is measured against a total that is not the total");
+    /* §7.4.6.2's UPDATE THE DOCUMENT, and §7.5.1's OPENER POLICY ROW for the Document this navigation creates
+       — "opener policy … navigationParams's cross-origin opener policy", which is §7.4.5's responseCOOP. It
+       moves with the rest of the binding because a navigation is what replaces a navigable's active document,
+       and it is HERE rather than at the load job's frame because the frame that determined it has already
+       parked and come back: the record is what carried those five facts across the suspension.
+       IT RUNS BEFORE THE SCRIPTS ARE SEEDED, AND THAT ORDER IS THE WHOLE OF A MEASURED RENDERER KILL. It used
+       to run AFTER — seventeen lines later, past the reference handoff — and the seed's own comment stated the
+       requirement that ordering does not meet: "a program names its document and the document's realm has to be
+       the one this agent is holding by then". RECORDING the realm in this agent's list is not what makes the
+       document's NAME resolve to it. THIS LINE IS: solver/engine.c's `doc_realm` answers a `uint32_t doc` by
+       asking the NAVIGABLE for its active document's realm (window_proxy_realm_of_document), so until the
+       navigable presents `w->doc` there is no answer for it — and `navigable_seed_scripts` queues rows naming
+       `w->doc` AND PARKS ON THEM, with engine_pending_docscript reading `doc_realm(f->dyn_doc[at])` inside the
+       same call.
+       MEASURED on app.gitpod.io, and it is the top product blocker: `@WHY {"at":"engine/host/solver/engine.c:
+       3275", … "asked at engine/host/solver/engine.c:8618"}` — doc_realm's WP_DOC_NO_NAVIGABLE arm — on 4 of 4
+       dev drives that answered a document, and on a RELEASE artifact, where that DFAILF is compiled out, the
+       same path carried the row's BORROWED `dyn_el` pointer into §2.5.6's nonce read and killed the renderer
+       with `RuntimeError: memory access out of bounds` and `why: []`, 3 of 3 drives of two artifacts. A run that
+       took it learned nothing and said nothing. The crash correlates EXACTLY with `docsAnswered >= 1`: the one
+       dev pass that answered no document was clean.
+       AND IT IS THE STANDARD'S OWN ORDER, which is why this is a repair and not a rearrangement. §7.4.6.2
+       "update the document for history step application" replaces the navigable's active document, and §7.5.2
+       "Loading HTML documents" creates the parser — and therefore reaches §4.12.1.1 for the markup's scripts —
+       for a Document that is ALREADY the active one. Seeding first was the inversion.
+       BOTH CONSTRAINTS THE SEED'S COMMENT NAMES STILL HOLD, and they are why this moved UP rather than the seed
+       moving DOWN: the realm is recorded above, and this line is now before the `JS_FreeContext` handoff rather
+       than after it — so `cctx` is held by the builder's own reference here instead of only by the Window graph
+       the DCHECK below reasons about. The seed keeps its own position relative to that handoff. */
+    if (w->navigates)
+        window_proxy_navigate(ctx, nav_proxy, cctx, w->doc, w->url, w->top_level_url,
+                              w->top_level_origin, w->origin, w->opener_policy);
     /* AND THE DOCUMENT RUNS ITS OWN SCRIPTS — see navigable_seed_scripts. AFTER the realm is recorded, because
        a program names its document and the document's realm has to be the one this agent is holding by then;
        BEFORE the reference handoff below, so nothing here reads a realm whose only reference has just gone.
@@ -1100,14 +1132,6 @@ static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueCon
            "are what keep a realm alive, and a realm with none of them is not a realm this agent can hand to a "
            "navigable");
     JS_FreeContext(cctx);
-    /* §7.4.6.2's UPDATE THE DOCUMENT, and §7.5.1's OPENER POLICY ROW for the Document this navigation creates
-       — "opener policy … navigationParams's cross-origin opener policy", which is §7.4.5's responseCOOP. It
-       moves with the rest of the binding because a navigation is what replaces a navigable's active document,
-       and it is HERE rather than at the load job's frame because the frame that determined it has already
-       parked and come back: the record is what carried those five facts across the suspension. */
-    if (w->navigates)
-        window_proxy_navigate(ctx, nav_proxy, cctx, w->doc, w->url, w->top_level_url,
-                              w->top_level_origin, w->origin, w->opener_policy);
     nav_create_free(w);
     return cctx;
 }
