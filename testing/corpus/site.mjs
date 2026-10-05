@@ -880,7 +880,25 @@ const frontierPrograms = (() => {
      delivered — while `fire-due-timer` reads 0 against 14154, `run-a-task` 406 against 14634, `unitsDone` 513
      against 30179, `orphanScripts` 1 against 48, and the product's own razor (`endpointRazorClass`'
      `runtime-only`) 0 against 5. The low run's clock never advanced and nothing downstream of a timer ran.
-     Which of the two states that is cannot be asked from the archive, because these rows were not carried.
+     WHICH OF THE TWO STATES THAT IS HAS NOW BEEN MEASURED AND IT IS NEITHER — THE CLOCK IS DOWNSTREAM, AND
+     THIS PARAGRAPH'S OWN FRAMING IS THE THING THE ROWS IT ADDED REFUTED. It is kept in its own words because
+     a reader who re-derives it from `fire-due-timer: 0` will reach it again. Two drives of the same document
+     on one release artifact, with the licence pair of 945ef02 beside the suffix sums:
+       chain 4854 -> timer-rung 4845 -> idle-rung 142, licence asked 4713 refused 1, FIRED 4703, rendering 9
+       chain  111 -> timer-rung  102 -> idle-rung 102, licence asked   10 refused 1, FIRED    0, rendering 9
+       chain 2234 -> timer-rung 2225 -> idle-rung 152, licence asked 2083 refused 1, FIRED 2073, rendering 9
+     THE REFUSAL COUNT IS EXACTLY ONE IN ALL THREE, at 4713, 10 and 2083 asks — so it is a single early event
+     and not a recurring mechanism, and the licence is INNOCENT on this document whichever mode the run is in.
+     The low run's timer rung declined 102 descents and reached the licence for only TEN of them, granting
+     NINE, so it never wanted the clock moved in the first place. What differs is
+     `chain` itself, by 44x: the clock boundary sits inside `if (!f->frame)`, so a run whose members are FRAMED
+     mid-program barely reaches it, and `unitsDone` reads 1502 against 10961. That is solver/flow.c's
+     THROUGHPUT state, which that file says NO WEIGHT CHANGE REACHES — the clock fires nothing because the
+     chain is not reached, and the chain is not reached because units are not finishing.
+     AND `fire-due-timer: 0` DOES NOT IMPLY A ZERO RAZOR, which this paragraph's table invites: the low drive
+     above read `runtime-only 4` with its timer count at zero. The product's razor reproduces at 4-6 across
+     six release drives of this document and read 0 on one of seven, so the razor's own variance is a separate
+     question from the clock's and the two must not be read as one column.
      RETIREMENT: this record goes when the licence the clock asks for is counted at its own REFUSAL — the
      `!event_loop_may_advance()` arms in core/timing/timer.c and core/rendering/rendering.c — because the
      remaining two states behind an ask with no fire are then one row apart. MEASURED ABSENT with the command:
