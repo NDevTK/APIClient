@@ -18,15 +18,28 @@
  * solver exists to prevent. They ask solver_decide, the same seam an OP_if asks, so the ARM is right wherever
  * the question is asked from.
  *
- * THE ARM IS NOT THE WHOLE FORK, AND THIS FILE'S MEMBERS CANNOT YET SUPPLY THE REST. A fork also needs a place
- * for the SIBLING to come back, and every one of these asks is made from inside a plain C activation the page
- * called into: there is no machine state for the other arm to be snapshotted at, and re-running the flow's
- * scheduler step does not re-reach a getter's body. So the seam CRASHES at the fork naming the predicate
- * (solver/engine.h engine_prepare_fork), and what that names is the declaration to build — the members that
- * test the flag become step machines (JS_CFUNC_STEP_DEF) and ask through the machine's own step_fork_run, so
- * the driver snapshots at the ask. Until then a page that branches on an `AbortSignal.timeout()` flag this
- * flow has not already decided aborts HERE rather than stranding a prepared sibling for some later fork
- * elsewhere in the agent to trip over, which is what it did before and why it was never traced to this file.
+ * THE ARM IS NOT THE WHOLE FORK, AND WHICH OF THIS FILE'S MEMBERS CAN SUPPLY THE REST IS NOW A PER-MEMBER
+ * ANSWER. A fork also needs a place for the SIBLING to come back, and an ask made from inside a plain C
+ * activation the page called into has none: there is no machine state for the other arm to be snapshotted at,
+ * and re-running the flow's scheduler step does not re-reach a getter's body. So the seam CRASHES at the fork
+ * naming the predicate AND the ask site (solver/engine.h engine_prepare_fork), and what that names is the
+ * declaration to build — the member that tests the flag becomes a step machine and asks through the PARKING
+ * form, so the driver snapshots at the ask.
+ *   THE TWO MEMBERS THAT TEST IT THEMSELVES ARE CONVERTED: `throwIfAborted()` and the `reason` getter are one
+ * machine with two magics (sig_ask_step), and they ask abort.h's `abort_signal_aborted_step`.
+ *   THIS USED TO SAY THEY ASK "the machine's own step_fork_run", AND IT IS KEPT IN ITS OWN WORDS BECAUSE A
+ * READER WHO RE-DERIVES THE REMEDY FROM "a machine forks at its own seam" WILL NAME THAT ONE AGAIN. The seam is
+ * `step_tobool_run`, which keys by the OPERAND'S OWN identity — the same constraint entry a page's
+ * `if (signal.aborted)` records, so the two cannot fork twice over one predicate — where the outcome seam keys
+ * by (operand, operation, completion) and would both re-fork a predicate this flow may already have fixed and
+ * file a domain-less shape for a parameter the page had gated. abort.h states that correction at the parking
+ * form and the crash's own remedy clause carries it.
+ *   WHAT IS STILL PLAIN C AND STILL CRASHES: every ask reached through `signal_is_aborted`'s non-parking form,
+ * which is §3.2 signal abort's own step 1 test (signal_abort_state) and the two exported helpers this file
+ * hands the rest of the engine. A page that branches on an `AbortSignal.timeout()` flag through one of those,
+ * on a decision this flow has not already taken, aborts HERE rather than stranding a prepared sibling for some
+ * later fork elsewhere in the agent to trip over, which is what it did before and why it was never traced to
+ * this file.
  * THAT IS THE FORKING SESSION'S HALF, AND IT IS ONLY HALF. A session may declare that it explores nothing at
  * all — a conformance run measuring this half against a spec oracle, and §@S's candidate re-fire, which is ONE
  * concrete path — and there is then no sibling to place and no crash to reach, only a question that must still
@@ -48,8 +61,16 @@
  *   - AbortController.abort() is NOT, and the reason is a spec correction rather than a concession: DOM §3.1 uses
  *     `this's signal`, a SPEC-INTERNAL SLOT, not Get(this, "signal"). Reading the public property (which is what
  *     this file did) both ran a page getter from C and let a page that overrides `signal` redirect abort().
- *   - throwIfAborted() and the `aborted`/`reason` getters touch OWN SLOTS ONLY, read with JS_GetOwnSlot, which
- *     is by definition not a lookup and cannot reach an accessor or a proxy trap. */
+ *   - the `aborted` getter is NOT, and it is the only one of the three that was ever provably not: it touches
+ *     OWN SLOTS ONLY, read with JS_GetOwnSlot, which is by definition not a lookup and cannot reach an accessor
+ *     or a proxy trap — AND it hands the flag over UNREAD, so it asks the decide seam nothing and the fork a
+ *     page's own `if (signal.aborted)` raises happens at the interpreter's branch hook, which holds a frame.
+ *   - throwIfAborted() and the `reason` getter ARE machines, and the sentence above is why this took so long to
+ *     see: they stood in that same clause, and the own-slots argument is TRUE of them and answers the wrong
+ *     question. IT IS ABOUT REACHING THE PAGE'S CODE. A fork needs a RESUME POINT whether or not page code runs,
+ *     and both of these ask the abortedness question, so each one forked from inside a C activation with nowhere
+ *     for the sibling to come back to. THE TEST THIS PARAGRAPH OPENS WITH IS THEREFORE ONE OF TWO: a member is a
+ *     machine if it can reach the page's code OR if it asks a question that can fork. See sig_ask_step. */
 #include <string.h>
 
 #include "check.h"
@@ -153,8 +174,14 @@ static JSValue signal_slots(JSContext *ctx, JSValueConst sig)
    ordinary boolean and the real ToBool is the answer. A bare `if` here would pick one arm of an unknown and
    delete the other's code.
    IT IS NOT "the only way a C builtin may ask", WHICH IS WHAT THIS SAID AND IS NOT TRUE OF THE FORK. See the
-   file header: the arm comes back right, and the SIBLING has nowhere to resume until these members are
-   declared step machines, so a first-time fork on a concolic flag crashes at the seam naming the predicate.
+   file header: the arm comes back right, and the SIBLING has nowhere to resume from a PLAIN C body, so a
+   first-time fork on a concolic flag crashes at the seam naming the predicate and the ask site.
+   AND THAT IS NOW A STATEMENT ABOUT THIS FORM AND NOT ABOUT THIS FILE'S MEMBERS. §3.2's two members that test
+   the flag themselves are step machines and ask abort.h's PARKING form instead (sig_ask_step); what still
+   reaches the seam from a C activation is every caller of THIS form, which is what the ask-site parameter below
+   exists to name. The clause said "until these members are declared step machines" and is kept in its own words
+   because a reader who meets this crash will re-derive exactly that remedy — it is the right remedy, and the
+   members it was written about have had it applied.
    THE ARM IS READ THROUGH SOLVER_ARM, and that is not decoration. The result carries SOLVER_FORKED_BIT when a
    sibling was prepared, so a first-time fork onto the true arm returns 257; this compared the raw value against
    1, took the FALSE arm, and left the flow disagreeing with its own decision vector for the rest of the run.
@@ -228,10 +255,31 @@ static int signal_aborted_nonforking(JSContext *ctx, JSValueConst flag)
    This helper is the ONLY route in this engine by which a plain C body reaches solver_decide — `solver_decide`
    has exactly two callers in the tree and the other is the interpreter's own branch hook, which holds a frame
    and therefore never reaches the abort. So when that abort fires, the component is this one BY CONSTRUCTION
-   and the only open question is WHICH ask, and there are 26 of them: five calls below, two of which are
-   exported and called from 24 further sites across nine files. A site composed with SOLVER_SITE_HERE *here*
-   would name this function for every one of them, which is the forwarding-function answer
-   §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE forbids — the same answer for 26 candidates is no answer. */
+   and the only open question is WHICH ask. A site composed with SOLVER_SITE_HERE *here* would name this function
+   for every one of them, which is the forwarding-function answer §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE
+   forbids — one answer for every candidate is no answer.
+   THE POPULATION IS HANDED OVER AS THE DERIVATION AND NOT AS A NUMBER, because a count here moves on every
+   commit that routes one of these and the only reader of it is somebody about to change that count. It read
+   "26 of them: five calls below, two of which are exported and called from 24 further sites across nine files",
+   and that sentence disagreed with its own list — no reading of its own two figures gives 26. The commands,
+   which answer today:
+     DIRECT          grep -cE 'signal_is_aborted\(ctx' engine/host/browser/core/dom/abort.c
+     VIA THE PAIR    git grep -cE 'abort_signal_(aborted|reason)(_at)?[[:space:]]*\(ctx' -- '*.c'
+   THE SECOND IS NOT "EXTERNAL SITES", WHICH IS WHAT IT WAS FIRST LABELLED AND IS WHY THE LABEL IS CORRECTED
+   HERE RATHER THAN THE NUMBER: this file is itself one of the files that answers it, because §3.2's dependent-
+   signal machinery asks through the exported macros like any other caller. A reader who takes the second figure
+   as "everywhere but here" has dropped this component's own asks out of the population, which is the direction
+   that makes the work look smaller — the same direction the sentence above was already wrong in.
+   The two overlap BY CONSTRUCTION and are not summed: two of the DIRECT calls ARE the exported pair's bodies,
+   so the second command counts the callers OF those two.
+   BOTH ARE SPELLED AS THE CONSTRUCT AND NEITHER MATCHES ITS OWN TEXT, and both halves of that are deliberate.
+   The CONSTRUCT, because this file's prose names all three of these helpers while arguing about them, so a count
+   of the NAME scores how much documentation a component wrote rather than how many sites ask. And `\(ctx`
+   rather than `(`, because that is what makes the regex unable to match the line it is printed on — the escape
+   is in the text and not in what the text matches — and it drops the DEFINITIONS too, whose first parameter is
+   spelled `JSContext *ctx`. The first was `grep -c 'signal_is_aborted('`, which counted this very line.
+   THEY COUNT LINES AND NOT OCCURRENCES, which for C agrees: one call per statement and one statement per line.
+   `grep -o … | wc -l` is the occurrence form where that stops being true. */
 static int signal_is_aborted(JSContext *ctx, JSValueConst slots, const char *site)
 {
     JSValue flag = JS_GetPropertyStr(ctx, slots, "aborted");
@@ -284,37 +332,130 @@ static JSValue js_sig_get_aborted(JSContext *ctx, JSValueConst this_val, int arg
     return v;
 }
 
-/* §3.2: `reason` is the abort reason when aborted and undefined otherwise — so it branches on the flag, and
-   branches on it the same way everything else does. */
-static JSValue js_sig_get_reason(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+/* §3.2's TWO MEMBERS THAT TEST THE FLAG — ONE MACHINE, TWO MAGICS, AND WHAT MAKES IT A MACHINE IS NOT THE
+ * PAGE'S CODE.
+ *
+ * DOM §3.2 "Interface AbortSignal" states them a line apart, and they are one question with two completions:
+ *   "The throwIfAborted() method steps are to throw this's abort reason, if this is aborted."
+ *   "The reason getter steps are to return this's abort reason."
+ * Throw it, or hand it back — which is why they share a declaration and a state rather than carrying two copies
+ * of the receiver check and two copies of the ask.
+ *
+ * THE SECOND SENTENCE CARRIES NO TEST AND THIS ENGINE STILL NEEDS ONE, WHICH IS A MODELLING FACT AND NOT A
+ * DIVERGENCE. §3.2 keeps ONE slot — "An AbortSignal object has an associated abort reason (a JavaScript value),
+ * which is initially undefined" — and DERIVES the state from it: "An AbortSignal object is aborted when its
+ * abort reason is not undefined." This file carries the two separately BECAUSE the abortedness is the unknown,
+ * and the timeout signal is what forces that: js_timeout_step mints it with a concolic `aborted` and a REAL
+ * TimeoutError already sitting in `reason`, so `signal.reason` read straight off the slot would report a timeout
+ * that has not happened. The gate is what reconstructs §3.2's single-slot answer out of this engine's two, and
+ * it is the whole reason `reason` branches at all.
+ *
+ * WHY A MACHINE, WHEN NEITHER OF THEM CAN REACH THE PAGE'S CODE. The file header's test for a machine is whether
+ * a member can reach the page, and that test answers only ONE of the two things a fork needs: whether this body
+ * hosts a loop of the page's. It is SILENT about whether this body can hold a SIBLING, and a fork needs a resume
+ * point whether or not any page code runs. Both of these ask the abortedness question, so an
+ * `AbortSignal.timeout()` a page reached through either of them forked with nowhere for the other arm to come
+ * back to and crashed at solver/engine.c's seam — measured on app.gitpod.io through `AbortSignal.timeout().aborted`.
+ * `aborted` IS NOT HERE AND THAT IS NOT AN OMISSION: js_sig_get_aborted hands the flag over UNREAD, so the fork
+ * it leads to happens at the interpreter's own branch hook, which holds a frame and already has the resume point.
+ *
+ * IT ASKS THE PARKING FORM, WHICH IS THE WHOLE REPAIR. abort.h's `abort_signal_aborted_step` returns the fork
+ * code this body returns unchanged, and the driver clones the state at the ask; nothing new had to be built. */
+enum { SIG_ASK_THROW = 0, SIG_ASK_REASON };
+
+#define SIG_ASK_STAGES(X) \
+    X(SIG_ASK, "DOM §3.2 Interface AbortSignal's throwIfAborted() method steps and its reason getter steps " \
+               "(the one branch both are: is this signal aborted)")
+enum { IDL_STEP_STAGE_BASE(SIG_ASK_STAGES) SIG_ASK_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const SIG_ASK_STEPS[] = { SIG_ASK_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    /* HAS `flag` BEEN STATED — a flag, and not a test on the slot itself, because a step state arrives ZEROED
+       and a zeroed JSValue is the INTEGER 0 rather than JS_UNINITIALIZED. Handing that integer to the parking
+       form takes its already-held arm and coerces a number nobody asked about, which answers FALSE for every
+       signal in the engine and answers it in silence. abort.h's contract says the emptiness of the slot is a
+       thing the caller STATES; this byte is how this caller can tell whether it has stated it yet. */
+    uint8_t started;
+    /* abort_signal_aborted_step's BORROWED OPERAND, held where the sibling's snapshot carries it: a deep fork
+       byte-copies this state and re-takes only what `visit` names, so a flag kept in a C local is gone in the
+       arm that resumes and one in a field the visit does not name is freed by both. */
+    JSValue flag;
+} SigAskState;
+
+static void sig_ask_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    JSValue slots = signal_slots(ctx, this_val), v;
-    (void)argc; (void)argv;
-    if (!JS_IsObject(slots)) {
-        JS_FreeValue(ctx, slots);
-        return JS_ThrowTypeError(ctx, "reason called on something that is not an AbortSignal");
-    }
-    v = signal_is_aborted(ctx, slots, SOLVER_SITE_HERE) ? JS_GetPropertyStr(ctx, slots, "reason") : JS_UNDEFINED;
-    JS_FreeValue(ctx, slots);
-    return v;
+    SigAskState *s = st;
+
+    /* GUARDED, for the reason `started` exists at all: before the first entry has STATED the slot it holds the
+       integer 0, which is not a value anything may take a second reference to. */
+    if (s->started) v->val(ctx, &s->flag);
 }
 
-static JSValue js_sig_throw_if_aborted(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+static int sig_ask_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                        JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    JSValue slots = signal_slots(ctx, this_val);
-    (void)argc; (void)argv;
+    SigAskState *s = st;
+    int magic = idl_step_magic(hdr);
+    JSValue slots;
+    int aborted = 0, r;
+
+    (void)argc; (void)argv; (void)out_cb; (void)out_argc;
+    DCHECK(hdr->stage == SIG_ASK, "an AbortSignal flag test resumed into a stage §3.2 does not have");
+    DCHECK(magic == SIG_ASK_THROW || magic == SIG_ASK_REASON,
+           "§3.2's flag test ran under a magic neither of its two members was declared with");
+    if (!s->started) {
+        s->flag = JS_UNINITIALIZED;   /* STATED, never read off the slot — see the field */
+        s->started = 1;
+    }
+    /* WEB IDL §3.7.6's AND §3.7.7's IMPLEMENTATION CHECK, RE-ASKED ON EVERY RE-ENTRY. That costs nothing and is
+       what makes a resume identical to a first entry: it is an own-slot read of a private Symbol, so it runs no
+       code of the page's and cannot answer differently for the same object between two scheduler turns. */
+    slots = signal_slots(ctx, hdr->this_val);
     if (!JS_IsObject(slots)) {
         JS_FreeValue(ctx, slots);
-        return JS_ThrowTypeError(ctx, "throwIfAborted called on something that is not an AbortSignal");
+        JS_FreeValue(ctx, cb_result);
+        JS_ThrowTypeError(ctx, "%s called on something that is not an AbortSignal",
+                          magic == SIG_ASK_REASON ? "reason" : "throwIfAborted");
+        return JS_STEP_ABRUPT;
     }
-    if (signal_is_aborted(ctx, slots, SOLVER_SITE_HERE)) {
-        JSValue reason = JS_GetPropertyStr(ctx, slots, "reason");
+    r = abort_signal_aborted_step(ctx, hdr, hdr->this_val, &s->flag, &aborted);
+    if (r) {
+        /* PARKED. The fork code goes back UNCHANGED and the operand stays held, because the sibling resumes AT
+           it; `cb_result` is NOT freed, because the driver re-enters this body with the same one and the stage
+           is unchanged, so the receiver read above is the same read with the same answer. */
         JS_FreeValue(ctx, slots);
-        return JS_Throw(ctx, reason);
+        return r;
     }
-    JS_FreeValue(ctx, slots);
-    return JS_UNDEFINED;
+    JS_FreeValue(ctx, cb_result);
+    if (!aborted) {
+        /* §3.2: throwIfAborted "does nothing"; `reason` is undefined, which is what the single-slot model reads
+           for a signal whose abort reason was never set. */
+        JS_FreeValue(ctx, slots);
+        *presult = JS_UNDEFINED;
+        return JS_STEP_DONE;
+    }
+    {
+        JSValue reason = JS_GetPropertyStr(ctx, slots, "reason");
+
+        JS_FreeValue(ctx, slots);
+        if (magic == SIG_ASK_REASON) {
+            *presult = reason;
+            return JS_STEP_DONE;
+        }
+        JS_Throw(ctx, reason);
+        return JS_STEP_ABRUPT;
+    }
 }
+
+/* `unforkable` IS ABSENT, AND THAT ABSENCE IS THE DECLARATION core/idl_args.h ASKS FOR. The state is one byte
+   and one JSValue the `visit` names, so a deep fork's byte copy plus that one re-take is the whole of it: there
+   is no heap pointer and no value the declaration cannot reach, which is that header's own condition for a
+   machine that may ALWAYS be forked. It is also the one thing this conversion exists for — a machine that
+   refused the fork would MOVE the crash rather than close it. */
+static const IdlStepDecl SIG_ASK_DECL = { sig_ask_step, sizeof(SigAskState), sig_ask_visit, NULL,
+                                          "DOM §3.2 AbortSignal.throwIfAborted() / AbortSignal.reason",
+                                          SIG_ASK_STEPS };
+static int g_sig_throw_stepid = -1, g_sig_reason_stepid = -1;
 
 /* Create a signal. `aborted` and `reason` are CONSUMED. */
 static JSValue signal_new(JSContext *ctx, JSValue aborted, JSValue reason)
@@ -1258,6 +1399,20 @@ static void abort_build_agent(JSContext *ctx)
         agent_state_id("abort", &g_any_stepid,
                        "§3.2's `AbortSignal.any()` machine — `sequence<AbortSignal>` is Web IDL "
                        "§3.2.21.1's iterator protocol, which is the page's code at every step of it");
+        /* §3.2's TWO FLAG-TESTING MEMBERS — ONE DECLARATION AND TWO MAGICS, because they are one branch with two
+           completions (sig_ask_step). DECLARED THROUGH THE IDL POOL rather than with JS_RegisterStepDef beside
+           the three above, and the reason is the ATTRIBUTE: core/idl_args.h's idl_install_accessor_step is this
+           engine's one form for a machine behind an accessor, and it mints from the pool — which is also what
+           states §3.7.6 Attributes' accessor name and §3.7.7 Operations' length instead of this file spelling
+           either. The pool is sealed after agent init, so a declaration made here is made once per AGENT and
+           idl_declared_before_seal is what catches a per-realm one. */
+        g_sig_throw_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &SIG_ASK_DECL, SIG_ASK_THROW);
+        agent_state_id("abort", &g_sig_throw_stepid,
+                       "§3.2's `throwIfAborted()` machine — it asks whether the signal is aborted, so the fork "
+                       "that ask raises needs a state for the sibling to resume at");
+        g_sig_reason_stepid = idl_getter_id_step(ctx, &SIG_ASK_DECL, SIG_ASK_REASON);
+        agent_state_id("abort", &g_sig_reason_stepid,
+                       "§3.2's `reason` getter machine — the same ask and the other completion");
     }
     if (g_sig_class) return;
     JS_NewClassID(JS_GetRuntime(ctx), &g_sig_class);
@@ -1328,18 +1483,26 @@ void abort_install_protos(JSContext *ctx)
     idl_interface_tag(ctx, sig_p, "AbortSignal");
     event_target_install_handlers(ctx, sig_p, EH_SIGNAL);
     {
-        JSAtom a = JS_NewAtom(ctx, "aborted"), r = JS_NewAtom(ctx, "reason");
+        JSAtom a = JS_NewAtom(ctx, "aborted");
         JS_DefinePropertyGetSet(ctx, sig_p, a,
                                 JS_NewCFunction(ctx, js_sig_get_aborted, "get aborted", 0), JS_UNDEFINED,
                                 JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
-        JS_DefinePropertyGetSet(ctx, sig_p, r,
-                                JS_NewCFunction(ctx, js_sig_get_reason, "get reason", 0), JS_UNDEFINED,
-                                JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
         JS_FreeAtom(ctx, a);
-        JS_FreeAtom(ctx, r);
     }
-    JS_SetPropertyStr(ctx, sig_p, "throwIfAborted",
-                      JS_NewCFunction(ctx, js_sig_throw_if_aborted, "throwIfAborted", 0));
+    /* §3.2's `reason` AND `throwIfAborted()` ARE MACHINES, SO THEY GO THROUGH THE INSTALLERS — see sig_ask_step
+       for why the fork needs them to be. `reason` is an ACCESSOR whose getter is one, which is exactly what
+       core/idl_args.h's idl_install_accessor_step is for, and the mint behind it composes §3.7.6 Attributes'
+       "get reason" instead of this site hand-spelling it — which is what the raw define `aborted` still uses is
+       deciding for itself, along with §3.7.6's [[Enumerable]]/[[Configurable]] pair.
+       THE CONSTRUCT IS NOT SPELLED IN THIS COMMENT ON PURPOSE. core/idl_args.h's raw-site residual derives its
+       population by grepping for that function's NAME over this tree's `.c` files, so a comment arguing ABOUT it
+       is counted as one of the sites it is arguing about — and this file has already been the one that made that
+       census wrong once. */
+    DCHECK(g_sig_reason_stepid >= 0 && g_sig_throw_stepid >= 0,
+           "§3.2's two flag-testing members were installed on a realm's prototype before abort_build_agent "
+           "declared them");
+    idl_install_accessor_step(ctx, sig_p, "reason", g_sig_reason_stepid, -1);
+    idl_install_method(ctx, sig_p, "throwIfAborted", g_sig_throw_stepid);
 
     /* DOM §3.2's Web IDL §3.7.1 "Interface object", WITH ITS THREE STATICS. They are members OF this object, so they are minted
        with it and not after: an `AbortSignal` whose `abort`, `timeout` and `any` are missing is one a page can

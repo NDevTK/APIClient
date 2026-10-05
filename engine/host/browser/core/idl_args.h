@@ -3027,19 +3027,28 @@ bool idl_global_names_are_window(unsigned global_names);
  * a step id is what a declaration hands you and never something a body has to already be.
  *
  * NAMED RESIDUAL — THE RAW SITES THEMSELVES. WHAT IS NOT COVERED: HTMLTemplateElement's `content`, and
- * AbortSignal's `aborted` and `reason` and AbortController's `signal`, are defined by JS_DefinePropertyGetSet
- * rather than by an installer, so they get §3.7.6's descriptor and its name from their own call site and
- * nothing checks that they agree with the installers.
- *   ALL FOUR ARE READONLY, so the plain-C-SETTER premise this residual was originally written on does not
+ * AbortSignal's `aborted` and AbortController's `signal`, are defined by JS_DefinePropertyGetSet rather than by
+ * an installer, so they get §3.7.6's descriptor and its name from their own call site and nothing checks that
+ * they agree with the installers.
+ *   ALL THREE ARE READONLY, so the plain-C-SETTER premise this residual was originally written on does not
  * describe a single one of the surviving sites — they have no setter to install. What actually separates them
  * is the GETTER'S C SHAPE against `IdlGetter`, which is `(ctx, this_val, magic)`. `js_template_content` and
  * `js_ctrl_get_signal` ALREADY HAVE EXACTLY THAT SHAPE and are minted JS_CFUNC_getter_magic, so those two can
  * install through `idl_install_accessor(..., getter, 0, -1)` — the readonly form, since a negative setter id
- * mints no setter — with no new mechanism whatever. `js_sig_get_aborted` and `js_sig_get_reason` are
- * JS_CFUNC_generic `(ctx, this_val, argc, argv)` and need that one-line shape change first.
+ * mints no setter — with no new mechanism whatever. `js_sig_get_aborted` is JS_CFUNC_generic
+ * `(ctx, this_val, argc, argv)` and needs that one-line shape change first.
  *   WHAT THE NEXT DIFF BUILDS: nothing in this file. It converts `content` and `signal` to
- * `idl_install_accessor` as they stand, then changes `aborted`/`reason` to the `IdlGetter` shape and does the
- * same, after which this declaration has no callers left and goes.
+ * `idl_install_accessor` as they stand, then changes `aborted` to the `IdlGetter` shape and does the same,
+ * after which this declaration has no callers left and goes.
+ *   `reason` WAS IN THAT LIST AND LEFT IT THROUGH A DESTINATION THIS CLAUSE DID NOT HAVE, which is recorded
+ * rather than quietly dropped because the reasoning that put it here was sound and will be re-derived. The
+ * clause sorted the four sites by whether their getter already had the `IdlGetter` SHAPE, and that is the right
+ * question for a plain-C getter and the wrong one for `reason`: core/dom/abort.c's `reason` getter asks whether
+ * the signal is aborted, so it can FORK, and a plain-C body has nowhere for the sibling to resume — it is a
+ * MACHINE for a reason that has nothing to do with this header's descriptor argument, and it installs through
+ * `idl_install_accessor_step` (whose own declaration below calls the plain-C form "what remains to be
+ * converted"). So a raw site may leave this list by acquiring `IdlGetter`'s shape OR by becoming a machine, and
+ * the second is not a smaller version of the first.
  *   HOW ITS ABSENCE SHOWS: a member added at a raw site keeps
  * §3.7.6's [[Enumerable]]/[[Configurable]] pair and its name under whoever wrote that line, so it can
  * differ from every installed member without any gate saying so — which is how `content` came to answer
@@ -3049,8 +3058,11 @@ bool idl_global_names_are_window(unsigned global_names);
  * stood, and they are the ones that hand-spell "get aborted"/"get reason"/"get signal" as string literals
  * instead of reaching this composer — so the very defect the clause describes was being committed by sites
  * the clause did not list. Re-derive the list before working from it; it is
- * `grep -rn JS_DefinePropertyGetSet engine/host --include=*.c` minus idl_args.c's own, and that command is
- * the durable half of this paragraph.
+ * `grep -rnE 'JS_DefinePropertyGetSet[[:space:]]*\(' engine/host --include=*.c` minus idl_args.c's own, and
+ * that command is the durable half of this paragraph. IT MATCHES THE CONSTRUCT AND NOT THE NAME, which is one
+ * character of regex and is owed here specifically: the surviving sites are in files that ARGUE about this
+ * composer in their own comments, so a count of the name scores how faithfully a component documented itself
+ * and reports a site for every paragraph written about one.
  * AND THE DESCRIPTOR IS NO LONGER THE ONLY THING A RAW SITE DECIDES FOR ITSELF. The installers mint every
  * plain-C attribute getter at one point, and that mint is what gives an attribute installed on the realm's
  * [Global] object §3.7.6's opening steps — the receiver resolution, §3.5's "getter" security check and the
@@ -3058,7 +3070,7 @@ bool idl_global_names_are_window(unsigned global_names);
  * whole family was installed on the global without them: `Object.getOwnPropertyDescriptor(window, "onload")
  * .get.call(crossOriginWindowProxy)` answered out of the reading realm where `onload` is absent from HTML
  * §7.2.1.3.1 CrossOriginProperties and a browser throws "SecurityError". That family now installs through
- * `idl_install_accessor_step`, which states §3.5's kind at the mint; the four remaining raw sites still do
+ * `idl_install_accessor_step`, which states §3.5's kind at the mint; the three remaining raw sites still do
  * not, and none of them is on a [Global] object, which is why this is the weaker half of their absence. */
 #define IDL_ACCESSOR_NAME_MAX 96
 typedef enum { IDL_ACCESSOR_GET, IDL_ACCESSOR_SET } IdlAccessorKind;
