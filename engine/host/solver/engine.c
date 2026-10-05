@@ -7950,11 +7950,26 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
        keyed on the per-flow state JS_ModuleEvalStateSave already carries, so a flow with no import of its own
        reaches the exports it never wrote. That is quickjs's half and not this file's, which is why it is named
        here rather than attempted: the read is `OP_get_var_ref_check` and the state is JSModuleDef's.
-       HOW ITS ABSENCE SHOWS: a drive reports an uncaught `<name> is not initialized` whose frame carries a
-       `Concolic.` receiver — the receiver being this site's mint, so the frame says the reading flow is a
-       drive — and the named binding resolves to a module-top-level declaration in the same script. A reader
-       holding such an error can state that the drive died at its first touch of a value the page had built,
-       and cannot state it from any count the run publishes. */
+       HOW ITS ABSENCE SHOWS: an uncaught `<name> is not initialized` whose named binding resolves to a
+       module-top-level declaration, reported on a frame whose receiver renders as `Concolic.` — and that
+       second half is a NECESSARY and not a sufficient condition for the reading flow being a drive, which is
+       the correction this clause carries rather than the claim it first made. It said "the receiver being
+       this site's mint, so the frame says the reading flow is a drive", and `js_callsite_data_line` renders
+       `"%s."` from `js_callsite_type_name` — the RECEIVER'S TYPE NAME, as its own comment states ("a method
+       call is `Foo.bar` ... the second is the receiver's type") — so the prefix is the CLASS of whatever the
+       receiver was and nothing in the frame carries a source identity. EVERY concolic receiver renders it: a
+       member read off server-injected state, a call result, `{location.hash}`'s own members. The wrong half
+       is kept because it is the half a reader re-derives from this site minting the receiver, and because it
+       is the half that would make a reachability witness out of a frame that cannot carry one. What the
+       observation does establish is that the receiver was an unknown THIS engine minted rather than a value
+       the page held, which is true of every drive and of no ordinary page call; telling a drive's frame from
+       another unknown's needs the argument identity, which the frame does not print. A reader holding such an
+       error can state that some exploring flow died at its first touch of a value the page had built, and
+       cannot state which kind of flow from the frame, nor state the population from any count the run
+       publishes.
+       RETIREMENT: this record goes when a frame in this tree carries the SOURCE IDENTITY of a concolic
+       receiver beside its class, because the drive-versus-other-unknown question is then read off the frame
+       instead of being undecidable in it. */
 
     /* take_result FALSE — A DRIVE IS FOR WHAT THE BODY REACHES, NOT FOR WHAT IT RETURNS, and here the two
        answers are not merely uninteresting-versus-interesting. `cv` is read by arms of flow_step that
