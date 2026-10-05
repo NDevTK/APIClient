@@ -29166,14 +29166,33 @@ static void box_paint_inline_box_selftest(JSContext *ctx, lxb_html_document_t *d
  * the second beginning at or after it, which is CSSOM VIEW §6 "Extensions to the Element Interface"'
  * `getClientRects()` step 3's "one for each box fragment" and is what a single union rectangle cannot
  * produce.
- * AND THAT CLAUSE IS SECOND RATHER THAN FIRST, WHICH IS AN ORDERING THE CLAUSE ITSELF DOES NOT STATE AND IS
- * WHY THE FRAGMENT COUNT LANDED ALONE. Declaring a background on that box moves `text_red`, `box_red`,
- * `text.n` and `box.n` — four derivations in this row that NO RUN HAS EVER PRODUCED, since `@INLINEBREAK`
- * occurs in no artifact (measured with `@INLINEBOX` as the armed control and an invented marker as the
- * negative one). A diff that changes an unobserved derivation destroys the one thing a first build could
- * settle: whether a disagreement is this row's arithmetic or the diff that edited it. The fragment count
- * touches no number here, so it makes the background diff CHECKABLE — after one build the two rectangles are
- * read against a count that was measured rather than against one this file derived.
+ * AND THAT CLAUSE IS SECOND RATHER THAN FIRST — THE ORDERING IT ARGUED FOR IS NOW DISCHARGED AND THE
+ * BACKGROUND DIFF IS UNBLOCKED, WHICH IS A VERDICT STATED AHEAD OF THE RETIRED WORDING BECAUSE THE READING
+ * POSITION MUST NOT CARRY A CLAIM THIS RECORD DENIES. It read — unquoted, because a run of this tree's prose
+ * is not a spec quotation and double quotes around one put it in the citation auditor's quotation channel to be
+ * compared against whichever standard the nearest anchor names: Declaring a background on that box moves
+ * `text_red`, `box_red`, `text.n` and `box.n` — four derivations in this row that NO RUN HAS EVER PRODUCED,
+ * since `@INLINEBREAK` occurs in no artifact (measured with `@INLINEBOX` as the armed control and an invented
+ * marker as the negative one). It is kept in its own words because a reader who re-derives the ordering from
+ * those four derivations will write it again. The row HAS FIRED and the paragraph below carries the derivation.
+ * ITS REASONING IS UNTOUCHED AND THE ORDER THAT HAPPENED IS THE ORDER IT ASKED FOR: a diff that changes an
+ * unobserved derivation destroys the one thing a first build could settle — whether a disagreement is this
+ * row's arithmetic or the diff that edited it — and the fragment count touched no number here, so the
+ * background diff is now read against four counts that were MEASURED rather than against four this file
+ * derived, which is exactly what the clause said it was buying.
+ * AND THE PROBE IT CITED CANNOT ANSWER THE QUESTION IT WAS ASKED, WHICH OUTLIVES THE STALENESS: THE ROW'S
+ * FORMAT STRING IS A CONSTANT OF THIS FILE, SO BOTH BUILT ARTIFACTS CARRY `@INLINEBREAK` BY COMPILATION
+ * WHETHER OR NOT IT HAS EVER PRINTED — `grep -caF '@INLINEBREAK base=' engine/host/out/qjs.wasm` answers 1,
+ * and `qjs-native-none` answers 1, against an invented marker answering 0 in each. That is CLAUDE.md's
+ * §AND-A-THIRD-AXIS-DECIDES-WHETHER-A-ZERO-MEANS-ANYTHING-AT-ALL: one string, two artifact kinds, opposite
+ * meanings — PRESENT IN THE BINARY means the row COMPILED and PRESENT IN A LOG means it FIRED — and the
+ * clause wanted the LOG one. WHETHER IT WAS FALSE AT BIRTH IS NOT ESTABLISHABLE FROM THIS CHECKOUT, which is
+ * a reportable result and not a failure to look: `git rev-parse --is-shallow-repository` answers true, so the
+ * archaeology CLAUDE.md prescribes is unavailable, and a BUILD leaves no commit for any git check to see
+ * either. This is therefore the shape §A-CROSS-BOUNDARY-DIFF names as the residual most likely to outlive its
+ * reason — one whose claim is falsified by an ARTIFACT while its source stays byte-identical at both
+ * revisions — and the cure it prescribes is the one applied here: name the OBSERVATION that retires it rather
+ * than the reason it exists.
  * HOW ITS ABSENCE WOULD SHOW: no row this host prints states WHERE either fragment of a broken inline box
  * reaches, so nothing here would report a painter that laid a broken box's background once over the UNION of
  * its two halves — which covers the block-level box between them and is a rectangle neither fragment is. The
@@ -29181,18 +29200,53 @@ static void box_paint_inline_box_selftest(JSContext *ctx, lxb_html_document_t *d
  * assertion in this row still passes.
  * RETIREMENT: this record goes when a count in this row is asserted over the broken box's own marks.
  *
- * NOT RUN. No number below has been observed; the first build is what turns them into measurements, and the
- * derivations above are what a reader checks them against. WHAT WAS NOT ESTABLISHED, stated as a reading
- * rather than as a result: whether CSS 2.2 §9.4.1 "Block formatting contexts"' placement of the three boxes
- * is reached at all before CSS 2.1 §E.2 "Painting order"'s step 7.2.1 is. The roads were READ and each of
- * them is built for this shape — `block_flow_anonymous_boxes` asks `bf_content_kind` and runs §9.4.1's
- * stack over `block_flow_next_block_box`'s content order, and core/layout/used_value.c's §10.1 SECOND case
- * steps OVER an
- * `inline` ancestor by name, with that section's own `em1`/`strong1` example quoted at the step — so the `em`
- * here resolves against the `p` and not against the `span`. None of that was RUN. If an abort in layout is
- * met first, the mechanism above is unchanged and only WHERE IT FIRST SHOWS has moved: the arming check is
- * the first thing this row does, so such an abort lands there, names its own section, and the row is absent
- * rather than wrong. */
+ * RUN, AND THE RETIRED PARAGRAPH SAYING IT WAS NOT IS KEPT BELOW THIS VERDICT BECAUSE A READER WHO SEES FOUR
+ * DERIVED COUNTS AND NO STORED PRIOR WILL RE-DERIVE IT. THE DERIVATION IS A COMMAND AND NOT A FIGURE, since
+ * every field here moves the day a diff edits this row and a count in prose would then be the one coordinate
+ * nothing can contradict: `grep -rhE '^@INLINEBREAK base=' engine/host/out | sort | uniq -c`, with
+ * `^@INLINEBOX` as the armed control and an invented marker as the negative one, and run with `-rl` INSTEAD OF
+ * `-rh` where the question is which run a value came from, since `-h` discards the provenance deliberately. It
+ * is keyed on the FIRED SHAPE — the row's leading `@INLINEBREAK base=` — and never on the bare marker, for the
+ * artifact reason stated one paragraph up. THE ROOT IS NAMED AND THE FIGURE IS THEREFORE A FLOOR: that path is
+ * where a build writes its own run logs, and a FROZEN run writes its logs beside its snapshot instead, so a
+ * count over this one root is a lower bound and says so rather than reading as a total.
+ * WHAT DOES NOT ROT IS THE STRUCTURE OF THE ANSWER AND IT IS TWO THINGS. First, the row's spread is ZERO on
+ * every field except `base`, which takes exactly TWO values because this host selects among documents and the
+ * base paint's mark count is a property of WHICH ONE — so a field here that differs between two runs of one
+ * revision is a finding about this row and not about the interleaving, which is a strictly stronger reading
+ * than any of the figures. Second, A PRINTED ROW IS ITSELF THE MEASUREMENT OF THE ARMING CHECK, because
+ * `tf_bb_arm`'s three assertions are ALWAYS-FATAL `CHECKF`s standing in front of EACH OF THE TWO PAINTS THAT
+ * BUILD THIS ROW'S MARKUP — the base paint adds nothing and has nothing to arm — and therefore in front of the
+ * `printf` in BOTH assert regimes: the row cannot appear unless CSS 2.2 §9.2.1.1 "Anonymous
+ * block boxes" answered TWO anonymous block boxes for this container, core/layout/line_box.h answered TWO
+ * fragments for the box the section broke, and those fragments were measured from the `p`. That is what makes
+ * this row — rather than any count in it — the standing statement that §9.2.1.1's splitting shape is exercised
+ * at all, and it is why a second fixture for the same shape would be a second answer to one question.
+ * WHAT THE RETIRED PARAGRAPH SAID, AND WHICH HALF OF IT STANDS — set off below and UNQUOTED for the reason
+ * stated one paragraph up, since a run of this tree's prose is not a spec quotation and the spec citations
+ * inside it carry their own titles already:
+ *     NOT RUN. No number below has been observed; the first build is what turns them into measurements, and
+ *     the derivations above are what a reader checks them against. WHAT WAS NOT ESTABLISHED, stated as a
+ *     reading rather than as a result: whether CSS 2.2 §9.4.1 "Block formatting contexts"' placement of the
+ *     three boxes is reached at all before CSS 2.1 §E.2 "Painting order"'s step 7.2.1 is. The roads were READ
+ *     and each of them is built for this shape — `block_flow_anonymous_boxes` asks `bf_content_kind` and runs
+ *     §9.4.1's stack over `block_flow_next_block_box`'s content order, and core/layout/used_value.c's §10.1
+ *     SECOND case steps OVER an `inline` ancestor by name, with that section's own `em1`/`strong1` example
+ *     quoted at the step — so the `em` here resolves against the `p` and not against the `span`. None of that
+ *     was RUN. If an abort in layout is met first, the mechanism above is unchanged and only WHERE IT FIRST
+ *     SHOWS has moved: the arming check is the first thing this row does, so such an abort lands there, names
+ *     its own section, and the row is absent rather than wrong.
+ * THE LAYOUT-ABORT BRANCH DID NOT HAPPEN — the row is PRESENT rather than absent, and its `ok` field is the
+ * CSS 2.1 §E.2 "Painting order" walk reporting that it completed for all three paints. WHAT IS STILL NOT ESTABLISHED
+ * IS NARROWER THAN THAT PARAGRAPH MADE IT AND IS THE RESIDUAL'S OWN SUBJECT: no count here is over a
+ * RECTANGLE, so a §9.4.1 placement that reached step 7.2.1 with the three boxes in the wrong geometry is a
+ * state every assertion in this row still passes.
+ * RETIREMENT: this record goes when the build's own verdict names which `@`-rows the run it took actually
+ * PRINTED, because a banner then cannot carry a claim about whether its own row has ever fired and the
+ * observed-ness of a row stops being a fact a reader must reconstruct from logs. MEASURED ABSENT with the
+ * command, so the condition is not born met: `grep -cF` over `engine/build.mjs` answers 0 for each of
+ * `rowsObserved`, `observedRows` and `printedRows`, against `report(` answering 32 and `@WHY` answering 19 as
+ * the armed controls. */
 #define TF_BB_BROKEN "display:inline;color:#00ffff"   /* the inline box §9.2.1.1 breaks — cyan characters */
 #define TF_BB_BLOCK  "display:block;color:#ffff00"    /* the in-flow block-level box that breaks it — yellow */
 #define TF_BB_TAIL   "display:inline;background-color:#ff0000"  /* the second run's own inline box — red fill */
