@@ -4118,6 +4118,12 @@ char *result_json(JSContext *ctx) {
            for a third. A host that begins non-forking and composes this document owes the regime beside the
            pair, exactly as the stdout census now carries it. */
         long orphansDriven = 0, orphansAsked = 0;
+        /* AND WHICH EXIT EACH OF THOSE ASKS TOOK, read into a local at the same instant as the pair above for
+           `place`'s reason exactly: the four terms of one equality may not come from two moments. The three
+           have existed, correct and asserted, in statics nothing emitted — so `orphansAsked` large with
+           `orphansDriven` small has had no row anywhere that could say whether the walks happened at all. See
+           solver/engine.h's `EngineOrphanExits` for the two opposite repairs it decides between. */
+        EngineOrphanExits orphanExits;
         /* AND WHAT BECAME OF THE TASKS THOSE DELIVERIES QUEUED. `_routedDelivered` alone is the shape §@S
            forbids in a search and forbids here for the same reason: a page whose listener ran fewer times than
            the engine delivered has ONE number covering "the spec declined it" (§9.3.3 step 8.1), "there was no
@@ -4141,6 +4147,18 @@ char *result_json(JSContext *ctx) {
         solve_arrival_census(&sinkReached, &sinkTainted, &sinkSuppressed);
         engine_routed_census(&routedDelivered, &routedRefused, &routedZeroDelivery);
         engine_orphan_census(&orphansDriven, &orphansAsked);
+        orphanExits = engine_orphan_exits();
+        /* THE PARTITION, ASSERTED HERE BECAUSE HERE IS WHERE ALL FOUR TERMS ARE IN ONE HAND. solver/engine.c
+           asserts the same equality at engine_step_unit_runs; this is the one point in THIS composer where the
+           total and its three parts have been read together, and a document that published three parts not
+           summing to the total it prints beside them would be the enumeration-without-its-total defect
+           §AND-AN-ENUMERATION-EMITTED-IN-THIS-TREE names. The four share one lifetime by construction (all are
+           released at engine_session_close), which is why this is an EQUALITY and not a floor. */
+        DCHECK(orphanExits.memo + orphanExits.empty + orphanExits.took == orphansAsked,
+               "the orphan surface's exits do not account for every ask this document is about to publish — "
+               "the total is raised at engine_orphan_seed's entry past the forking gate and each part at "
+               "exactly one of its exits, so a difference is an exit that records nothing and the residue a "
+               "reader computes from these rows has silently stopped being the memo and the empty walk");
         engine_routed_task_census(routedEnds);
         out = composef("{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
                              /* THE ONES THIS ENGINE NAMED AND THEN TOOK BACK — beside `pageErrors` because
@@ -4249,7 +4267,19 @@ char *result_json(JSContext *ctx) {
                                 host that brings up two agents in one process; both are one grep
                                 (`git grep -n 'solve_init\|concolic_init' -- engine/host`), and either would
                                 show here as a row FALLING between two `qjs_result` calls of one instance. */
-                             "\"_orphansDriven\":%ld,\"_orphansAsked\":%ld,\"_wfq\":%s,"
+                             "\"_orphansDriven\":%ld,\"_orphansAsked\":%ld,"
+                             /* …AND WHICH EXIT EACH OF THOSE ASKS TOOK, which the pair cannot say and which
+                                decides between two opposite repairs: `_orphanAskMemo` high says the generation
+                                cache absorbs and the walks that happen are few, so the cost is PER WALK; low
+                                says the orphan generation moves as fast as flows run out of work and nearly
+                                every ask enumerates `rt->gc_obj_list`, so the cost is PER ASK and the repair is
+                                the cache or the rung's placement. `_orphanAskEmpty` is a walk that ran and
+                                found nothing, which engine_orphan_seed's residual states is a fact about the
+                                HEAP and not about the bundle. They sum to `_orphansAsked` and that is asserted
+                                above, where all four were read together. See solver/engine.h's
+                                `EngineOrphanExits`. */
+                             "\"_orphanAskMemo\":%ld,\"_orphanAskEmpty\":%ld,\"_orphanAskTook\":%ld,"
+                             "\"_wfq\":%s,"
                              /* THE THREE SUBSYSTEM CENSUSES, EACH ONE NESTED OBJECT, for the reason `_wfq`
                                 is one: spreading them into siblings would put a cumulative switch count
                                 beside a momentary byte figure and call both "so far". Three objects and not
@@ -4380,7 +4410,9 @@ char *result_json(JSContext *ctx) {
                      routedEnds[ROUTED_TASK_FIRED], routedEnds[ROUTED_TASK_TARGET_ORIGIN],
                      routedEnds[ROUTED_TASK_TARGET_GONE], routedEnds[ROUTED_TASK_THREW],
                      srcReads, sinkReached, sinkTainted, sinkSuppressed,
-                     orphansDriven, orphansAsked, wfq, cold, heap, swap, forkAt, absent,
+                     orphansDriven, orphansAsked,
+                     orphanExits.memo, orphanExits.empty, orphanExits.took,
+                     wfq, cold, heap, swap, forkAt, absent,
                      place.asks, place.served, place.walks, place.placements, place.passes,
                      place.origin_asks, place.origin_served, place.origin_derived,
                      place.box_asks, place.box_served, place.box_derived,

@@ -2757,6 +2757,44 @@ void engine_routed_census(long *delivered, long *refused, long *zero_delivery);
  * headline surface of this tool did anything at all could not be read off a run. Both cross in the result
  * document now, beside the @S arrival census they are the orphan-side twin of. */
 void engine_orphan_census(long *driven, long *asked);
+/* …AND WHICH EXIT EACH OF THOSE ASKS TOOK, WHICH IS A PARTITION THE ENGINE ALREADY ASSERTS AND HAS NEVER
+ * PUBLISHED. `asked` above is raised at engine_orphan_seed's entry past the forking gate and exactly one of
+ * these three is raised at each of its exits; engine_step_unit_runs asserts the equality. So the residue a
+ * reader needs has existed, correct and checked, in three statics nothing emits — the write-with-no-reader
+ * defect on the partition that decides which of two opposite repairs the orphan surface owes.
+ * WHAT IT SEPARATES, AND THE TWO READINGS TAKE OPPOSITE WORK, which is the whole reason it is three rows and
+ * not one. `took` is a walk that handed a body over. `empty` is a walk that ran and found nothing — a fact
+ * about the HEAP, which engine_orphan_seed's residual states is NOT the same finding as "the bundle ships no
+ * uncalled code", because the walk can only see a body with a LIVE FUNCTION OBJECT OF ITS OWN. And `memo` is
+ * an ask the generation cache answered WITHOUT WALKING AT ALL — so `memo` high says the cache absorbs and the
+ * walks that do happen are few, while `memo` low says the orphan generation moves as fast as flows run out of
+ * work and essentially every ask is a full enumeration of `rt->gc_obj_list`. The first makes the cost PER WALK
+ * and the repair is inside the walk; the second makes it PER ASK and the repair is the cache or the rung's
+ * placement. No count of asks, drives or step arms can tell those apart.
+ * MEASURED, WHICH IS WHY THIS IS A ROW: over three drives of one release artifact on one real app,
+ * `seed-one-orphan-flow` overran the cooperative slice in 36 of 55, 100 of 121 and 122 of 140 of its own runs
+ * — 51%, 72% and 76% of ALL overrunning turns in the run — while `deliver-one-reply` overran 2.9%, 3.9% and
+ * 3.0% of its own and `resume-program` 0%, 5% and 2.4%. One arm carries three quarters of the overruns, its
+ * walk is an enumeration of the whole GC object list with no step boundary in it, and nothing published says
+ * how often that walk is actually performed.
+ * ONE STRUCT AND ONE CALL, for engine_rival_miss's reason exactly: a partition read through three accessors is
+ * three moments, and §Testing's rule is that a conservation identity holds WITHIN ONE SAMPLE and nowhere else.
+ * PER SESSION, not per instance — solver/engine.c releases all four with the agent, which is why the equality
+ * is an EQUALITY and not a floor, and which a reader comparing them against a per-instance row must know.
+ * THEY DECIDE NOTHING AND BOUND NOTHING (§NO BOUNDS): no arm of any verdict branches on them, and "how often
+ * did the orphan walk find nothing" is precisely what a stop-looking heuristic would be built from.
+ * HOW THEIR ABSENCE SHOWS, as an observation and not an instance: a reader holding a large `orphansAsked`, a
+ * small `orphansDriven` and an orphan arm carrying most of the slice overruns states whether the cost is the
+ * walk or the asking — with no row in the artifact that could contradict them either way.
+ * RETIREMENT: these go when the walk no longer enumerates the heap — when a body's orphan state is reachable
+ * without a pass over `rt->gc_obj_list` — because `memo` then prices a cache over a cheap question and the
+ * partition has nothing left to decide between. */
+typedef struct {
+    long memo;    /* the generation cache answered and NO walk was performed */
+    long empty;   /* the walk ran and the heap held no takeable body */
+    long took;    /* the walk handed a body over */
+} EngineOrphanExits;
+EngineOrphanExits engine_orphan_exits(void);
 /* …AND HOW MANY OF THOSE DRIVES CAME FROM THE WALK'S PREFERRED PASS — see the definition for why the pair is a
    row rather than an inference, and quickjs.h's JS_OrphanPreferredTakes for what the preference is. */
 long engine_orphan_preferred(void);

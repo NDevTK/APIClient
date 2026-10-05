@@ -7744,6 +7744,15 @@ static int      g_orphan_gen_valid;
    whose ask count exceeds the sum of its `seed-one-orphan-flow` and `hand-a-parked-drive-its-function` rows
    can state the residue and cannot state which of the two mechanisms produced it. */
 static long g_orphan_asks_memo, g_orphan_asks_empty, g_orphan_asks_took;
+/* …AND WHICH EXIT EACH ASK TOOK — see solver/engine.h for the two opposite repairs this partition decides
+   between and why it is one struct. Returned WHOLE rather than through three out-params for engine_rival_miss's
+   reason: a partition read through three calls is three moments. */
+EngineOrphanExits engine_orphan_exits(void) {
+    EngineOrphanExits e;
+
+    e.memo = g_orphan_asks_memo; e.empty = g_orphan_asks_empty; e.took = g_orphan_asks_took;
+    return e;
+}
 /* THE ROUND TRIP'S TWO NUMBERS. How many waits a take has SATISFIED, and how many waiting flows FINISHED
    without ever being handed a body. The third, how many were rebuilt, is the cold tier's own
    (cold_resumed().orphans) and is not restated here.
