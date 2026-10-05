@@ -578,7 +578,15 @@ static const TfServed TF_SERVED[] = {
      * `grep -nE '"[^"]*\bimport[ ]+[A-Za-z{*]' engine/host/test_forced.c` answered ONE line and that line is
      * a probe's diagnostic PROSE, so no body this fixture serves and no statement it makes carried a STATIC
      * `import` at all — every module here has `req_module_entries_count == 0`. That is not a gap in the
-     * dynamic rows above it; it is a different subsystem, and ECMAScript numbers the three phases apart:
+     * dynamic rows above it; it is a different subsystem, and ECMAScript numbers the three phases apart.
+     * EVERY NUMBER BELOW IS A *CYCLIC* OR *SOURCE TEXT* MODULE RECORD'S AND THE TITLE CANNOT SAY SO, which is
+     * why the number is load-bearing here rather than decoration: a SYNTHETIC Module Record implements the same
+     * abstract methods under ECMAScript §16.2.1.8.4, so `LoadRequestedModules ( [ hostDefined ] )`,
+     * `Link ( )`, `Evaluate ( )` and `ResolveExport ( exportName [ , resolveSet ] )` each title TWO sections of
+     * this standard and a title match alone resolves to either. The derivation, since a corpus row is what
+     * settles it: ask engine/specindex/ecmascript.json for every section whose title equals the one you mean
+     * and read how many come back. A served `.js` reply is a source text module, so the §16.2.1.6 / §16.2.1.7
+     * numbers are the ones these rows are about and §16.2.1.8.4's are not.
      * ECMAScript §16.2.1.6.1.1 "LoadRequestedModules ( [ hostDefined ] )" is the one that talks to the
      * host — "It populates the [[LoadedModules]] of all the Module Records in the dependency graph of
      * module" — while ECMAScript §16.2.1.6.1.2 "Link ( )" walks what that phase filled in and reaches
