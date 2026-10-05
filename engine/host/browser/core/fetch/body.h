@@ -5,6 +5,10 @@
 #include <stddef.h>
 
 #include "quickjs.h"
+/* JSStepVisit — a BodyState is held BY VALUE by step machines (Fetch §5.6's fetch(), §5.4's Request
+   constructor), and a step state is byte-copied at a deep fork, so the body is one of the things such a
+   machine must DECLARE rather than free by hand. See body_state_visit. */
+#include "quickjs-step.h"
 
 /* §5.3's BODY, as the state an including interface holds. `has` is not `len != 0`: the spec distinguishes a
    NULL body from an empty one — `new Response()` has the first and `new Response("")` the second — and `.body`
@@ -72,9 +76,14 @@ typedef struct {
     char  *example;    /* the unknown's own example as text, or NULL where it has none */
 } BodySpan;
 
+/* `spancap` IS THE SPAN ARRAY'S STORAGE, BESIDE THE `nspan` THAT IS ITS CONTENT, and the pair exists because
+   a step machine DECLARES this record (body_state_visit): quickjs-step.h's `v->array` is handed the live
+   length and the whole capacity as two separate numbers, because the deep-fork clone copies the STORAGE and
+   then takes references into the live ELEMENTS. One number for both was a convention with nothing to compare,
+   so `nspan <= spancap` is asserted at the two walks that read it. */
 typedef struct {
     char *bytes; size_t len; int used; int has; int source_null; JSValue stream; JSValue unknown;
-    BodySpan *span; int nspan;
+    BodySpan *span; int nspan; int spancap;
 } BodyState;
 
 /* WHAT A BODY IS, FOR A CONSUMER THAT NEEDS BYTES — ONE question with FOUR answers, because they are four
@@ -173,6 +182,23 @@ void body_install(JSContext *ctx, JSValueConst proto, int handle);
 /* Trace and release the stream a BodyState may hold — the including interface owns the state, so its gc_mark
    and its finalizer are where this belongs. */
 void body_state_mark(JSRuntime *rt, BodyState *b, JS_MarkFunc *mark_func);
+
+/* THE SAME LIST, FOR A HOLDER THAT IS A STEP STATE RATHER THAN A CLASS OPAQUE — the declaration of everything
+ * a BodyState owns, handed to the one list quickjs-step.h's `visit` contract is about.
+ *
+ * A step state is BYTE-COPIED at a deep fork (`tramp_step_state_clone`: memcpy, then the declared slots taken
+ * a second time through `visit`), so a machine carrying a BodyState BY VALUE with no declaration for it gave
+ * two arms one set of pointers — the extracted bytes, the stream, §5.2's unknown `object`, and the
+ * §10.4.5.18 span record — and two frees of them. That is the whole of what core/fetch/fetch.c's fork refusal
+ * had to exist for, and refusing a fork is a flow dropped: §5.6 "Fetch methods" step 4's signal test runs
+ * AFTER §5.2's body extraction, so every `fetch(u, {body: b, signal: s})` reached it with that refusal live.
+ *
+ * A MACHINE THAT CALLS THIS MUST NOT ALSO CALL body_state_free. core/idl_args.c folds every declared slot's
+ * identity on each side of a member's `release` and aborts naming the member when one moved, because a second
+ * list beside the declaration leaks whatever the next field misses and double-frees whatever this one did not
+ * null. body_state_free stays what it was: the FINALIZER's half, for an including interface whose record is a
+ * class opaque the collector cannot see through. */
+void body_state_visit(JSContext *ctx, BodyState *b, JSStepVisit *v);
 
 /* GIVE BACK THE MIXIN'S OWN AGENT-LIFETIME STATE. This file is on neither of core/platform.c's columns, so it
    is released by the row its declarations name — see body.c for which and why. */

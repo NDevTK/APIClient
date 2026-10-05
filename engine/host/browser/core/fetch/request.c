@@ -1334,21 +1334,39 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
  * omission: this constructor's record lives on the OBJECT it is building (`s->result`'s opaque), which is a
  * declared slot the visit names and a refcounted object both arms share rather than a struct either of them
  * copies. Only step 33's list is the machine's own C memory.
- * THAT DIFFERENCE IS NOW SMALLER THAN IT WAS AND THE SENTENCE IS STILL TRUE, which is worth saying because a
- * reader comparing the two blocks would otherwise look for a record term over there: the `fetch()` machine's
- * §2.2.5 record is a struct it copies BY VALUE, and the fix was to make its nine fields JSValues its own
- * `visit` names, so that term is gone from its refusal too. The record was never this machine's problem for the
- * reason stated above, and the remaining term is the same one on both sides.
+ * THAT DIFFERENCE IS GONE NOW AND THE SENTENCE IS STILL TRUE, which is worth saying because a reader comparing
+ * the two blocks would otherwise look for a record term or a body term over there and find the blocks reading
+ * as though they described different problems. The `fetch()` machine had THREE terms and has ONE. Its §2.2.5
+ * record is a struct it copies BY VALUE, and the fix was to make its nine fields JSValues its own `visit`
+ * names; its §5.2 extracted body is another, and the fix was core/fetch/body.h's `body_state_visit`, which
+ * declares the stream, the unknown `object`, the bytes and the §10.4.5.18 span record. Neither was ever this
+ * machine's problem for the reason stated above, and the two blocks now name exactly ONE term and it is the
+ * SAME term — which is the position IdlStepDecl.unforkable's own contract describes: a declarer names a
+ * capability, and this capability now has these two machines behind it and NO OTHER REASON IN FRONT OF IT.
+ *
+ * AND A THIRD MACHINE HOLDS THE SAME ALLOCATION AND DECLARES NOTHING, WHICH IS NOT A SMALLER VERSION OF THIS
+ * REFUSAL BUT THE ABSENCE OF ONE. core/fetch/headers.c's §5.1 `new Headers(init)` carries a `HeaderList` in its
+ * own state and frees it in `js_headers_ctor_release`, with no `unforkable` on its declaration — and its ONE
+ * stage past the guard is the fill, which runs the page's code per key. So `new Headers({get a(){ … }})` whose
+ * getter forks after the first pair has been appended gives two arms one array and two frees of it, with
+ * nothing to say so. Read that as part of what this capability costs, not as a fourth thing: the three retire
+ * together and the third is the one that is currently silent rather than loud.
  *
  * REACHABLE ON THE ORDINARY SHAPE: the list exists from step 33's header fill onward, and that fill is where
  * this constructor runs the page's code — a `HeadersInit` getter, iterator or Proxy trap, and then §5.2's body
  * extraction after it — so any concolic branch inside a page's own header value forks with this machine on the
  * frame chain.
  *
- * WHAT THE NEXT DIFF BUILDS: §5.1's header list as slots the visit can name, so a fork re-takes them, with
- * `js_request_ctor_release` no longer discharging what the declaration names (core/idl_args.c's release fold
- * asserts that pairing). HOW ITS ABSENCE SHOWS: this abort, on `new Request(u, {headers: h})` where h's
- * conversion runs code that forks. */
+ * WHAT THE NEXT DIFF BUILDS, AND THE CONSTRAINT ON IT IS MEASURED RATHER THAN GUESSED. Every visit operation
+ * that COPIES — `v->buf`, `v->array`, `v->props`, `v->slots`, `v->strbuf` — allocates with the ENGINE's
+ * allocator and releases with it, and `HeaderList`'s array and its name/value strings are the C library's, in
+ * `header_list_append` and `header_list_free`, which take no context and are called from dozens of files that
+ * have none. So it is one of exactly two things and both are a change OUTSIDE this file: §5.1's entries as
+ * slots the visit can name, which is a change to `HeaderList`'s storage and therefore to every holder of one;
+ * or `v->tree`, the one operation that delegates the COPY and the DESTROY to the host and so needs no allocator
+ * change at all. Either way `js_request_ctor_release` then stops discharging what the declaration names
+ * (core/idl_args.c's release fold asserts that pairing). HOW ITS ABSENCE SHOWS: this abort, on `new Request(u,
+ * {headers: h})` where h's conversion runs code that forks. */
 static const char *js_request_ctor_unforkable(const void *st)
 {
     const JSRequestCtorState *s = st;

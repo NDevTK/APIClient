@@ -3176,10 +3176,15 @@ char *endpoint_fetch_edge_rows(void) {
        at every stage from which an offer is reachable", AND THAT ARGUMENT IS RETIRED RATHER THAN RESTATED: the
        §2.2.5 request record's nine fields are JSValues core/fetch's `visit` names, so the record is no longer
        one of that guard's terms and a fork inside §5.4 steps 10-27 is allowed. It is kept in its own words
-       because a reader who re-derives the containment from that guard will write it again, and because the
-       guard's REMAINING terms — the extracted body and the parsed header list — still cover FETCH_CALL for any
-       request carrying either, so the retired reason is still TRUE of most of the population and would read as
-       sound.
+       because a reader who re-derives the containment from that guard will write it again.
+       AND IT IS NOW TRUE OF LESS OF THE POPULATION THAN WHEN THAT RETIREMENT WAS WRITTEN, WHICH STRENGTHENS
+       THE ARGUMENT BELOW RATHER THAN WEAKENING IT. That clause went on to say the guard's REMAINING TERMS —
+       the extracted body and the parsed header list — still covered FETCH_CALL for any request carrying
+       EITHER, so the retired reason read as sound for most of the population. §5.2's extracted body is now a
+       list core/fetch/body.h declares, so the ONE term left is the header list and the only shape still
+       covered is a request whose init carries `headers`: a `fetch(u, {method:"POST", body: b})` reaches
+       FETCH_CALL with no refusal in front of it at all. So the population this containment rests on the guard
+       for has shrunk twice, and the real reason has to carry it alone.
        WHAT ACTUALLY HOLDS IT IS THE OFFER'S POSITION: `s->offered = 1` is set at §5.6 step 12 and everything
        after it in that stage is straight-line C that runs no page code (`endpoint_record`, the batch parse, the
        park), and the stage then RETURNS its promise rather than parking — which core/fetch asserts at that

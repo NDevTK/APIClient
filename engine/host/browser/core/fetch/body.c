@@ -45,27 +45,128 @@ typedef struct {
 static BodyIface g_body_iface[BODY_IFACE_MAX];
 static int g_body_iface_n;
 
-void body_state_mark(JSRuntime *rt, BodyState *b, JS_MarkFunc *mark_func)
+/* WHAT A BodyState OWNS, ONCE — the list, and the KIND of each entry.
+ *
+ * Three consumers walk it: the step-machine DECLARATION (body_state_visit), the class-opaque FINALIZER
+ * (body_state_free), and the collector's TRACE (body_state_mark). They were three hand-written lists and the
+ * drift is recorded in this file's own history — two sites freed the bytes by hand and neither freed the
+ * stream, which held a whole runtime graph on one Response, and the mark grew `unknown` after the free did.
+ * A fourth field is one edit here and cannot reach one consumer without reaching all three.
+ *
+ * THE THREE ARMS ARE THREE KINDS BECAUSE THE OWNED THINGS ARE, and quickjs-step.h's visit operations are not
+ * interchangeable. §2.2.4 "Bodies"' stream and §5.2 "BodyInit unions"' unknown `object` are VALUES. The
+ * extracted bytes are ONE ALLOCATION WITH A SIZE, which is what `v->buf` copies whole. The §10.4.5.18 span
+ * record is an ARRAY OF SUB-OBJECTS each owning two strings, which is what `v->array` is for — and it is an
+ * operation rather than a loop a machine writes because its two consumers need OPPOSITE ORDER: the clone must
+ * copy the storage before taking references into it and the teardown must release them before freeing it.
+ *
+ * ALL OF IT IS ON THE ENGINE'S ALLOCATOR AND THAT IS A REQUIREMENT OF THE DECLARATION RATHER THAN A TASTE:
+ * `v->buf` and `v->array` copy with js_malloc and release with js_free, so a block grown with the C library's
+ * realloc would be handed to the wrong allocator by the fork's own copy of it. The bytes already were; the
+ * span record was not, and moving it is the whole of this file's part in deleting a fork refusal. */
+#define BODY_STATE_OWNED(VAL, BUF, ARR)                                       \
+    VAL(stream)                                                               \
+    VAL(unknown)                                                              \
+    BUF(bytes, b->bytes ? b->len + 1 : 0)                                     \
+    ARR(span, sizeof *b->span, b->nspan, b->spancap, body_span_elem_visit)
+
+/* …AND WHAT ONE SPAN OWNS, for the same reason: the element visit and the finalizer's loop walk this one list.
+   Both are `char *` and neither carries a length, which is why the visit reads one off the string. */
+#define BODY_SPAN_OWNED(STR) STR(shape) STR(example)
+
+/* ONE SPAN'S OWN TWO STRINGS, declared to whichever consumer `v->array` is driving.
+   THE LENGTH IS READ OFF THE STRING ITSELF, because `v->buf` copies a block of a STATED size and a span's
+   strings carry no length field. It is read before the operation runs, so the clone's walk reads the
+   ORIGINAL's length and every later walk reads the copy's — one number either way, since a block this walk
+   copies is copied whole.
+   `example` IS LEGITIMATELY NULL — body.h states that an unknown carrying no example still records a span —
+   and 0 is the size a null slot is declared with: the clone returns early on it, the teardown frees nothing,
+   and the fingerprint reads a null pointer beside a zero. `shape` is never NULL and is declared the same way
+   rather than through an unguarded strlen, because the two differ in a fact body.h asserts and not in how
+   they are owned. */
+static void body_span_elem_visit(JSContext *ctx, void *elem, JSStepVisit *v)
 {
-    JS_MarkValue(rt, b->stream, mark_func);
-    /* AND THE UNKNOWN, which is the second JSValue this state owns. A field added to the struct creates an
-       obligation at every mark, free and copy site at once; the three are written together for that reason. */
-    JS_MarkValue(rt, b->unknown, mark_func);
+    BodySpan *s = elem;
+
+#define X(f) v->buf(ctx, (void **)&s->f, s->f ? strlen(s->f) + 1 : 0);
+    BODY_SPAN_OWNED(X)
+#undef X
 }
 
 /* RELEASE THE SPAN RECORD. It owns two strings per entry and the array; a state is refilled as well as freed,
-   so both sites call this rather than spelling the loop twice. */
-static void body_spans_free(BodyState *b)
+   so both sites call this rather than spelling the loop twice.
+   IT TAKES A RUNTIME, which is the one signature that serves both callers: body_state_free has one and no
+   context, and body_state_set has a context to get one from. js_free_rt and js_free are the same allocator. */
+static void body_spans_free(JSRuntime *rt, BodyState *b)
 {
     int i;
 
     for (i = 0; i < b->nspan; i++) {
-        free(b->span[i].shape);
-        free(b->span[i].example);
+#define X(f) js_free_rt(rt, b->span[i].f);
+        BODY_SPAN_OWNED(X)
+#undef X
     }
-    free(b->span);
+    js_free_rt(rt, b->span);
     b->span = NULL;
     b->nspan = 0;
+    b->spancap = 0;
+}
+
+void body_state_mark(JSRuntime *rt, BodyState *b, JS_MarkFunc *mark_func)
+{
+    /* THE VALUE ARMS ONLY, AND THE OTHER TWO ARMS ARE EMPTY ON PURPOSE. A buffer and the span record hold no
+       reference the collector can reach — the span's two strings are bytes — so the list expands to exactly
+       the two JS_MarkValue calls this used to spell by hand, and a THIRD value added to the struct cannot
+       reach the free without reaching here. */
+#define V(f)                       JS_MarkValue(rt, b->f, mark_func);
+#define B(f, n)
+#define A(f, sz, n, cap, each)
+    BODY_STATE_OWNED(V, B, A)
+#undef V
+#undef B
+#undef A
+}
+
+/* THE DECLARATION — what a STEP MACHINE carrying a BodyState by value owns, handed to the one list
+ * quickjs-step.h's `visit` contract is about. A machine embedding a BodyState calls this from its own `visit`
+ * and then MUST NOT call body_state_free: core/idl_args.c folds every declared slot's identity on each side of
+ * a member's `release` and aborts when one moved, because a second list beside the declaration leaks whatever
+ * the next field misses and double-frees whatever this one did not null.
+ *
+ * IT IS THE COUNTERPART OF body_state_mark AND THE ASYMMETRY WAS THE DEFECT. A class-opaque holder marks and
+ * finalizes; a step state is BYTE-COPIED at a deep fork and re-takes only what a visit names, so a state
+ * holding a body with no visit for it gave two arms one set of pointers and two frees of them — which is what
+ * core/fetch/fetch.c's fork refusal had to exist for. There is no `has`/`bytes` test here and there must not
+ * be: a declaration states what a slot owns, and every one of these operations is already a no-op on an empty
+ * slot (a null buffer, a null array, and a JSValue that is the integer 0 a js_mallocz'd record starts with). */
+void body_state_visit(JSContext *ctx, BodyState *b, JSStepVisit *v)
+{
+    DCHECK(b != NULL, "a §5.3 body was declared to a step machine's visit through a null pointer");
+    DCHECK(v != NULL, "a §5.3 body was handed no visitor to declare itself to");
+    /* THE SPAN RECORD'S POINTER, ITS LENGTH AND ITS CAPACITY ARE ONE FACT, and this walk is the consumer that
+       cannot survive them disagreeing: `v->array` copies `cap` elements of storage and then takes references
+       into the first `n` of them, so a length past the capacity reads and then releases past the allocation.
+       body_state_spans asserts the pointer/length half for a reader that ITERATES the record; this is here
+       because the declaration is reached on paths no reader is on — a deep fork and a teardown — and because
+       the capacity is a number only this consumer is handed. */
+    DCHECK(b->nspan <= b->spancap,
+           "a §5.3 body's span record states more entries than its storage holds, at the walk that hands both "
+           "numbers to `v->array` as the live length and the whole capacity");
+    /* AND THE POINTER/COUNT PAIRING IS *NOT* ASSERTED HERE, WHICH IS A DECISION AND NOT AN OMISSION.
+       body_state_spans asserts it, because a READER that iterates the record is reading this codebase's own
+       logic. This walk is not: `js_step_visit_dup_array` answers NULL on an allocation failure and leaves the
+       byte-copied `nspan` and `spancap` standing, so a clone that ran out of memory arrives holding a count
+       with no array — and an assert on the pair here would fire on OOM rather than on a defect, which is a
+       `DCHECK` standing on something this codebase did not compute. The count above is the one both consumers
+       actually read and the one only a growth bug can falsify: the clone and the teardown return early on a
+       null array, and `nspan <= spancap` is untouched by either. */
+#define V(f)                       v->val(ctx, &b->f);
+#define B(f, n)                    v->buf(ctx, (void **)&b->f, (n));
+#define A(f, sz, n, cap, each)     v->array(ctx, (void **)&b->f, (sz), (n), (cap), (each));
+    BODY_STATE_OWNED(V, B, A)
+#undef V
+#undef B
+#undef A
 }
 
 /* THE UNKNOWN'S OWN EXAMPLE AS TEXT, OR NOTHING. The three primitive kinds are named POSITIVELY rather than
@@ -82,7 +183,10 @@ static char *body_span_example_text(JSContext *ctx, JSValueConst unknown)
         const char *s = JS_ToCString(ctx, ex);
 
         CHECK(s != NULL, "body: OOM rendering the example of an unknown byte of a request body");
-        r = strdup(s);
+        /* js_strdup, because a span is declared to a step machine's `visit` (body_state_visit) and the clone
+           and the teardown that declaration drives are js_malloc and js_free — a libc `strdup` here would be
+           handed to the wrong allocator by the fork's own copy of the record. */
+        r = js_strdup(ctx, s);
         CHECK(r != NULL, "body: OOM copying the example of an unknown byte of a request body");
         JS_FreeCString(ctx, s);
     }
@@ -166,21 +270,33 @@ static void body_spans_capture(JSContext *ctx, BodyState *b, JSValueConst view)
         if (b->nspan > 0 && b->span[b->nspan - 1].off + b->span[b->nspan - 1].len == off &&
             !strcmp(b->span[b->nspan - 1].shape, shape)) {
             b->span[b->nspan - 1].len += bpe;
-            free(b->span[b->nspan - 1].example);
+            js_free(ctx, b->span[b->nspan - 1].example);
             b->span[b->nspan - 1].example = NULL;
         } else {
             BodySpan *s;
 
-            /* A LOST SPAN IS A SILENT DE-TAINT, which is why this is fatal rather than a return: dropping the
-               record leaves an example byte in the body with nothing to say it is an example, and the surface
-               publishes it as a byte the request sends. quickjs.c's js_ab_span_push refuses the same way for
-               the same reason. */
-            b->span = realloc(b->span, (size_t)(b->nspan + 1) * sizeof(*b->span));
-            CHECK(b->span != NULL, "body: OOM recording which bytes of a request body are unknown input");
+            if (b->nspan == b->spancap) {
+                /* A CAPACITY, NOT AN EXACT FIT, AND THE FIELD IS WHAT MAKES THE DECLARATION CHECKABLE.
+                   `v->array` is handed the live length and the whole capacity as two numbers, and this walk
+                   used to realloc to exactly `nspan + 1` so the two were equal BY CONVENTION — a convention
+                   with no field to compare, so a later growth strategy here would have made the fork's copy
+                   short with nothing able to say so. body_state_visit asserts `nspan <= spancap` instead.
+                   js_realloc for the allocator reason stated on BODY_STATE_OWNED. */
+                int want = b->spancap ? b->spancap * 2 : 4;
+                BodySpan *grown = js_realloc(ctx, b->span, (size_t)want * sizeof *b->span);
+
+                /* A LOST SPAN IS A SILENT DE-TAINT, which is why this is fatal rather than a return: dropping
+                   the record leaves an example byte in the body with nothing to say it is an example, and the
+                   surface publishes it as a byte the request sends. quickjs.c's js_ab_span_push refuses the
+                   same way for the same reason. */
+                CHECK(grown != NULL, "body: OOM recording which bytes of a request body are unknown input");
+                b->span = grown;
+                b->spancap = want;
+            }
             s = &b->span[b->nspan++];
             s->off = off;
             s->len = bpe;
-            s->shape = strdup(shape);
+            s->shape = js_strdup(ctx, shape);
             CHECK(s->shape != NULL, "body: OOM copying the provenance of an unknown byte of a request body");
             s->example = body_span_example_text(ctx, el);
         }
@@ -197,6 +313,10 @@ const BodySpan *body_state_spans(const BodyState *b, int *n)
     DCHECK((b->span == NULL) == (b->nspan == 0),
            "a body's span record holds a pointer and no count or a count and no pointer — the pair is one "
            "fact and a consumer reading either half alone walks a garbage array or reports no unknown bytes");
+    DCHECK(b->nspan <= b->spancap,
+           "a body's span record states more entries than its storage holds — the capacity is what the "
+           "declaration copies and the count is what it then takes references into, so a count past it is a "
+           "walk off the end of the allocation at every fork and every teardown");
     *n = b->nspan;
     return b->span;
 }
@@ -212,7 +332,7 @@ void body_state_free(JSRuntime *rt, BodyState *b)
     b->len = 0;
     b->has = 0;
     b->source_null = 0;
-    body_spans_free(b);
+    body_spans_free(rt, b);
 }
 
 int body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
@@ -243,7 +363,7 @@ int body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
        surviving a refill would point into a body it was never about — the stale-shadow failure §10.4.5.18's
        witness exists to prevent, arriving one level up where there is no witness to catch it. The capture runs
        AFTER this fill for exactly that reason. */
-    body_spans_free(b);
+    body_spans_free(JS_GetRuntime(ctx), b);
     if (!bytes) return 0;
     /* +1 and a NUL past the end, so the bytes can still be handed to a C string consumer; `len` is what every
        read here uses, and it is what an interior NUL no longer truncates. */

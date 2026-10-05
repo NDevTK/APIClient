@@ -284,9 +284,17 @@ typedef struct JSTrampStepDef {
      * reader who meets only that half will write the sentence again. Derived rather than recalled:
      *     git grep -nE '\.unforkable *= *[a-z_]' -- engine/
      *     git grep -nE '^ *[0-9]+, *[a-z_]*unforkable' -- engine/
-     * and the reasons group into THREE capabilities, not one — a lexbor tokenizer plus a private DOM tree, an
-     * extracted body's bytes plus a parsed header list, and a half-finished ECMAScript 16.2.1.6.1.2 Link ( )
-     * walk cursor, the last of which is this file's own and holds no parser at all.
+     * and the reasons group into THREE capabilities, not one — a lexbor tokenizer plus a private DOM tree, a
+     * parsed header list, and a half-finished ECMAScript 16.2.1.6.1.2 Link ( ) walk cursor, the last of which
+     * is this file's own and holds no parser at all.
+     * THE SECOND OF THOSE READ `AN EXTRACTED BODY'S BYTES PLUS A PARSED HEADER LIST`, AND THE BODY HALF IS
+     * BUILT: core/fetch/body.h declares everything a BodyState owns through `body_state_visit` — a stream, an
+     * unknown `object`, the bytes through `v->buf` and the span record through `v->array` — so the body is no
+     * longer a reason anything refuses a fork. The grouping rule is what matters and is unchanged: the two
+     * halves retired SEPARATELY because they needed different things (the body's record only had to move onto
+     * the engine's allocator, which a `v->buf`/`v->array` copy requires, while a header list's entries are the
+     * C library's in functions dozens of context-free callers use), which is the clearest case there is for
+     * pricing by WHAT EACH WOULD TAKE rather than by how many declarers name it.
      * THE DIRECTION IS WHY IT IS WORTH RECORDING: an undercount of declarers makes the trajectory below look
      * nearly finished, which is the one reading that stops anybody deriving it — and a reader who prices the
      * work from the lexbor sentence prices one capability where there are three. Group the reasons by WHAT EACH

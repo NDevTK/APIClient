@@ -1932,8 +1932,8 @@ typedef struct {
        IT WENT WRONG IN THE DIRECTION NOTHING REPORTS. It read `which is every one of them but the FRAGMENT
        PARSE`, and that was an ENUMERATION OF AN ABSENCE: it asserts of every other member that it declares no
        reason, so a reader is told the trajectory below is one machine from zero. Measured against the tree it
-       was false by two — the §5.6 fetch machine and the §5.4 Request constructor both declare one, for the
-       extracted body's bytes and the parsed header list rather than for any parser — and the error is the
+       was false by two — the §5.6 fetch machine and the §5.4 Request constructor both declare one, each for the
+       PARSED HEADER LIST and neither for any parser — and the error is the
        UNDER-CLAIM §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT names, found by nobody acting on it, because
        acting on it means not looking. Derive the set instead, with both forms, since this field is initialised
        positionally at some definitions and designated at others:
@@ -1941,6 +1941,13 @@ typedef struct {
            git grep -nE '^ *[0-9]+, *[a-z_]*unforkable' -- engine/
        THE STRUCTURAL FACT, WHICH IS WHAT DOES NOT ROT: a declarer names a CAPABILITY and not a machine, so the
        count of declarers and the count of things to build are different numbers and the first is the larger.
+       THAT FETCH PAIR IS THE WORKED EXAMPLE OF IT AND WAS MEASURED RATHER THAN ARGUED: the fetch machine's
+       reason used to be THREE terms and is one, because §2.2.5's request record became JSValues and §5.2's
+       extracted body became a list core/fetch/body.h declares — two capabilities built one at a time, under one
+       declarer, which no count of declarers could have predicted. What is left is the header list, and it is
+       the SAME capability behind the Request constructor's only term and behind core/fetch/headers.c's §5.1
+       constructor, which holds one in its `release` and declares NO reason at all — so the derivation above is
+       a lower bound on the machines a capability touches as well as an upper bound on the work.
        Two machines holding one missing capability retire together and neither names it twice — core/frame/
        navigable.c's load says so of itself and points at the fragment parse's own list — so read each reason
        for WHAT IT WOULD TAKE and group by that before pricing any of it. The field goes when every one of those
