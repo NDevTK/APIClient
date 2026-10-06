@@ -13229,14 +13229,34 @@ static int flow_step(JSContext *ctx, Flow *f) {
                whichever flow starts it — a coverage fact about the document, not about the flow holding the
                thread (see g_deepest). */
             if (f->script_i > g_deepest) g_deepest = f->script_i;
-            /* …AND HOW MANY STARTS THAT IS, WHICH A MAXIMUM CANNOT SAY — see g_prog_starts. THE ARM IS READ
-               FROM THE ROW AT THE CURSOR AND NEVER FROM THE FLOW: a candidate SESSION (`Flow.cand_src`, the
-               label `finished_cands` partitions on) re-runs this document from the baseline and therefore
-               compiles the page's OWN programs too, so a per-flow label would count every page script an @S
-               re-fire started as a candidate program. Those are different populations, and this is the one
-               `progQueuedCand` is the ask for. */
-            g_prog_starts++;
-            if (flow_dyn_kind(f) == DYN_CANDIDATE) g_prog_starts_cand++; else g_prog_starts_other++;
+            /* THE START COUNT IS NOT RAISED HERE ANY MORE, AND THE RETIRED REASON IS KEPT BECAUSE IT WAS
+               EXACT FOR AS LONG AS A COMPILE WAS ATOMIC. `g_prog_starts++` stood on this line under
+               "…AND HOW MANY STARTS THAT IS, WHICH A MAXIMUM CANNOT SAY", and a compile was atomic until a
+               module parse gained a suspend seam — after which this line is reached once per compile STINT,
+               which the paragraph above it already says in its own words: "A COMPILE THAT HANDED THE THREAD
+               BACK IS AT THIS INDEX AND HAS STARTED NOTHING". So the counter measured stints, and
+               `engine_any_program_started` crossed zero while a parse was still suspended and not one opcode
+               had run.
+               THE COST IS NOT THE COUNT, IT IS THE PER-ADDRESS STAMP THAT READS THAT BIT.
+               core/…/endpoint.c writes `e->pre_program = !engine_any_program_started()` on every address it
+               mints, so an address composed while the FIRST program's parse was suspended was stamped
+               POST-program — forced execution credited with a surface no line of the document had yet
+               produced, which is the flattering direction and is what CLAUDE.md
+               §What-the-tool-produces calls the product's own razor.
+               MEASURED on one real-app run at 309543d, read off that run's own frontier census:
+               `module-compile-handed-the-thread-back` 1006 runs with `classicCompileResumed` 0, against a
+               document whose doors are 1 `document-script` and 98 `module-import` — so essentially every
+               raise after the first was a resume stint.
+               WHAT SURVIVES IS THE ARM ARGUMENT AND IT MOVED WITH THE RAISE rather than staying here: the
+               arm is read FROM THE ROW AT THE CURSOR AND NEVER FROM THE FLOW, because a candidate SESSION
+               (`Flow.cand_src`, the label `finished_cands` partitions on) re-runs this document from the
+               baseline and therefore compiles the page's OWN programs too, so a per-flow label would count
+               every page script an @S re-fire started as a candidate program. Those are different
+               populations, and this is the one `progQueuedCand` is the ask for.
+               `g_deepest` ABOVE STAYS WHERE IT IS, and that is a statement about what it counts rather than
+               an inconsistency this diff left behind: its own headline is the deepest program this document
+               has ever REACHED, a row whose parse is parked HAS been reached, and a maximum re-assigned the
+               value it already holds is idempotent across stints where a count is not. */
             /* IN THE REALM OF THE DOCUMENT THE PROGRAM BELONGS TO — asked of the program, never of the
                session. A program compiled here is closed over the compiling realm's global (JS_FlowNew), so
                the realm is not a detail of where it happens to run: `globalThis[member]` compiled in the root
@@ -13553,6 +13573,25 @@ static int flow_step(JSContext *ctx, Flow *f) {
                            "write is not riding the running flow's COW delta");
                     JS_FreeValue(prog_ctx, old);
                 }
+            }
+            /* HOW MANY PROGRAMS STARTED, COUNTED WHERE `started` IS DECIDED AND AT NO OTHER LINE. Both arms
+               above answer it — a module from `mr > 0`, a classic from `f->frame != NULL` — and this is the
+               first line at which either answer is in hand, which is the whole reason the raise is here
+               rather than at the compile two hundred lines up (see the retired paragraph there). The three
+               move together because they are ONE partition, and engine_frontier_census asserts that identity
+               where all three are in one hand.
+               A FAILED COMPILE IS NOT A START EITHER, AND THAT IS CLOSED IN THE SAME MOTION rather than as a
+               second diff: `started` is false for a SyntaxError and for the OOM floor, and both of those used
+               to be counted as programs that started. §4.12.1.1's own "if el's result is null, then fire an
+               event named error at el, and return" is the standard saying so. */
+            DCHECK(f->compile == NULL,
+                   "a program's start is being counted while this flow still holds a suspended parse — both "
+                   "compile arms above assert the carrier is NULL once they have an answer and both park arms "
+                   "RETURN, so reaching this line with one live means a park arm now falls through to the "
+                   "start count and the count has gone back to measuring compile STINTS rather than programs");
+            if (started) {
+                g_prog_starts++;
+                if (flow_dyn_kind(f) == DYN_CANDIDATE) g_prog_starts_cand++; else g_prog_starts_other++;
             }
             if (!started) {
                 /* WHAT ACTUALLY FAILED, read before anything is decided from it. A compile can fail two ways
