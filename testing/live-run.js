@@ -1767,8 +1767,26 @@ function census(r) {
      and are not a statement about the instant at all, so nulling them because the frontier is momentarily
      empty discards the run's own totals and reads as an artifact too old to state them. The kinds are the
      PRODUCER's, read through census_rows.js, so this is not a second hand-kept list of which rows are which. */
+  /* AND THE THIRD STATE THE BANNER ABOVE DECLARES IS THE ONE THIS LOOP USED TO DEREFERENCE. It names three —
+     no `wfq` is a BROKEN CONTRACT, `{members: 0}` is an EMPTY FRONTIER, a full object is a READING — and the
+     loop distinguished the last two and THREW on the first, because `live` is the only thing that was ever
+     guarding `w`: exempting the LIFETIME rows from that gate was correct for their kind and removed the guard
+     along with it, so `(live || WFQ_LIFETIME.has(k))` is true for a lifetime row with `w === null` and the
+     `&&` then reads a property of null. It is latent until the engine answers with no census at all.
+     WHAT IT COST IS NOT A STACK TRACE, IT IS THE RUN. The driver's whole job is to report what the shipped
+     path wrote, and a broken contract is the most important thing it can find — so throwing there converts
+     this run's one finding into a TypeError naming a null property, which is an UNRELATED failure on input
+     the thrower should never have been shown, and it takes every row the census DID carry down with it.
+     So the broken contract is REPORTED and the rows read null, which is what the banner already says they
+     mean; and `wfqContract` is a POSITIVE statement rather than a hole, because all-null for "no census" and
+     all-null for "an empty frontier" are two findings and this is the only field that separates them. */
+  o.wfqContract = (w === null)
+    ? "broken(no `wfq` in the result at all — extension/bridge.js asserts this cannot happen, so a run " +
+      "reading it has found that, and every row below is null for THAT reason and not for an empty frontier)"
+    : (live ? "reading(a frontier observed standing)" : "empty(members 0 — a finalize census; the GAUGES are " +
+       "null because that instant is not the run, and the LIFETIME counts are the run's own totals)");
   for (const k of WFQ_ROWS)
-    if (k !== "members") o[k] = (live || WFQ_LIFETIME.has(k)) && typeof w[k] === "number" ? w[k] : null;
+    if (k !== "members") o[k] = w && (live || WFQ_LIFETIME.has(k)) && typeof w[k] === "number" ? w[k] : null;
   /* THE THREE SHARES OF THE INSTANCE'S SPAN, COMPUTED HERE FOR `epBeyondMarkup`'s REASON — a derivation a
      reader must perform is one nobody performs, and these are the three a reader of the four time rows above
      will otherwise do by hand against the WRONG denominator. Each carries its derivation in an `…Of` field so
