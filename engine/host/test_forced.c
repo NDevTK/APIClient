@@ -3033,6 +3033,36 @@ static const char *HTML =
     "clt.classList.value = location.hash.slice(1);"
     "if (clt.getAttribute('class') === 'admin') fetch('/api/cltaint?v=fork');"
     "else fetch('/api/cltaint?v=other');"
+
+    /* …AND THE SAME SOURCE THROUGH THE MUTATION FAMILY, WHICH IS A DIFFERENT COMPOSITION AND SO A DIFFERENT
+       ROW. §7.1's update steps write "the result of running the ordered set serializer for set's token set"
+       — quoted from the fetched standard — so the value is composed of SEVERAL tokens of which only some are
+       an argument's shape, and the (element, name) shadow holds ONE JSValue for the whole attribute. The
+       setter above has one argument and nothing to compose; `add` composes its arguments through the engine's
+       own concatenation (solver/concolic.h's add hook), which is what mints one identity over a SET.
+       TWO ELEMENTS AND TWO ROWS, because the two halves run different code in the same function and a single
+       marker would report both as one silence. `cla` carries NO `class` attribute, so the serialized value is
+       the argument's shape ALONE and the composition has nothing to concatenate — the taint is the source
+       itself. `clb` carries one concrete token first, so the value is a concrete run FOLLOWED BY the shape and
+       the composition really runs: a leading string paired with the source, which is the one call shape that
+       hands the hook a concrete left operand.
+       `=== 'base admin'` AND NOT `=== 'admin'` FOR THE REASON THE ROW ABOVE GIVES ABOUT `.slice(1)`: the value
+       `clb` holds begins with the concrete token the statement before it wrote, so an equality that ignored
+       that prefix is one the engine would prune CORRECTLY and the row would fail for the spec rather than for
+       a defect.
+       BOTH READS ARE BRANCHED AND BOTH ARMS EMIT, §Testing's reason: an absent abort is confirmed identically
+       by a correct fix and by a path nobody took, and nothing aborts here under either reading. So `?v=lone`
+       and `?v=pair` are learned only if `getAttribute` handed back a value carrying its domain, while
+       `?v=flat` and `?v=bare` are learned under either reading and are each their own row's ARMED CONTROL. */
+    "var cla = document.createElement('u');"
+    "cla.classList.add(location.hash.slice(1));"
+    "if (cla.getAttribute('class') === 'admin') fetch('/api/claddtaint?v=lone');"
+    "else fetch('/api/claddtaint?v=flat');"
+    "var clb = document.createElement('u');"
+    "clb.setAttribute('class', 'base');"
+    "clb.classList.add(location.hash.slice(1));"
+    "if (clb.getAttribute('class') === 'base admin') fetch('/api/claddtaint?v=pair');"
+    "else fetch('/api/claddtaint?v=bare');"
     "var m1 = cl.matches('div.x'); var m2 = cl.matches('span');"
     "var inner = document.createElement('b'); cl.appendChild(inner);"
     "var c1 = inner.closest('div'); var c2 = inner.closest('nav');"
@@ -16417,6 +16447,45 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the residual at core/dom/dom_token_list.c's update steps says why. HOW THIS COSTS A FINDING: a "
              "sink fed from the attribute afterwards reports concrete bytes with no source, so no @S search "
              "starts for a breakout that is real");
+    /* …AND THE MUTATION FAMILY'S OWN COMPOSITION, IN TWO ROWS, because the two halves run different code in
+       one function and a single marker would report both as one silence. `tokenlist-add-taint' is the
+       one-token write, where the serialized value IS the argument's shape and the composition has nothing to
+       concatenate; `tokenlist-add-taint-joint' is a concrete run FOLLOWED BY the shape, which is the call
+       shape that actually reaches the engine's own concatenation. NEITHER GATES THE OTHER and that is a
+       refusal rather than an omission: a gate declares that its row's 0 ENTAILS this one's, and the one-token
+       path can fail while the composed path works (they share only the frame that calls them), so declaring
+       one would assert an implication this fixture cannot establish — which the table's own declaration check
+       is right to abort on. Each row's own control rung carries the not-reached reading instead. */
+    int cladd_tt = 1;
+    const char *cladd_why = NULL;
+    fold_row(&cladd_tt, &cladd_why, !!strstr(js, "claddtaint?v=flat"),
+             "NOT REACHED: the one-token `classList.add(<an unknown>)` statement emitted neither arm, so this "
+             "row says nothing about the mutation family's provenance. An unknown reaching `add` is converted "
+             "by token_bytes to its SHAPE rather than through a raw coercion, so this is not the C-boundary "
+             "abort -- it is the statement not having run");
+    fold_row(&cladd_tt, &cladd_why, !!strstr(js, "claddtaint?v=lone"),
+             "`el.classList.add(<an unknown>)` ran on an element with no `class` attribute and the attribute "
+             "read back CONCRETE: the comparison was DECIDED where this flow should have forked, so §7.1's "
+             "update steps wrote the argument's shape and no source beside it. The serialized value here is "
+             "that ONE argument's bytes, so there is nothing to compose -- the provenance is the source "
+             "itself, which makes this the rung that separates `the taint does not reach the write at all' "
+             "from `the composition is wrong'. HOW THIS COSTS A FINDING: a sink fed from the attribute "
+             "afterwards reports concrete bytes with no source, so no @S search starts for a breakout that "
+             "is real");
+    int claddj_tt = 1;
+    const char *claddj_why = NULL;
+    fold_row(&claddj_tt, &claddj_why, !!strstr(js, "claddtaint?v=bare"),
+             "NOT REACHED: the `setAttribute` + `classList.add(<an unknown>)` pair emitted neither arm, so "
+             "this row says nothing about the composition. The statements above it are what did not run");
+    fold_row(&claddj_tt, &claddj_why, !!strstr(js, "claddtaint?v=pair"),
+             "`el.classList.add(<an unknown>)` over an element ALREADY CARRYING a concrete token read back "
+             "CONCRETE where the one-token rung above it forked, so the write reached §7.1's update steps and "
+             "the COMPOSITION is what did not: the serialized value is a concrete run followed by the "
+             "argument's shape, and the provenance of it is that run concatenated with the source through "
+             "the interpreter's own `+` (solver/concolic.h's add hook, installed as JSConcolicHooks.add). A "
+             "value whose SHAPE is the attribute's bytes and whose IDENTITY names the source is what a sink "
+             "reading the whole attribute needs; a concrete read here means it was not minted, or was minted "
+             "and refused for a run whose round trip is not faithful");
     /* §5.1's open through to `success`, §2.7 + §2.8's request inside it, and §2.5's LIST key path over the
        store the same upgrade creates — the marker's own sentence-by-sentence account is beside the statement
        that builds it.
@@ -19515,6 +19584,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            the one whose absence means the statement did not run. */
         { "tokenlist-value-creates", clsetempty_tt, "/api/clsetempty", SESS_EXPLORE, clsetempty_why },
         { "tokenlist-value-taint", cltaint_tt, "cltaint?v=other", SESS_EXPLORE, cltaint_why },
+        { "tokenlist-add-taint", cladd_tt, "claddtaint?v=flat", SESS_EXPLORE, cladd_why },
+        { "tokenlist-add-taint-joint", claddj_tt, "claddtaint?v=bare", SESS_EXPLORE, claddj_why },
         { "idb-open", idbopen_tt, "/api/idbopen", SESS_EXPLORE, idbopen_why },
         { "idb-record", idbrec_tt, "/api/idbrec", SESS_EXPLORE },
         { "idb-record-taint", idbtaint_tt, "/api/idbrec", SESS_EXPLORE },

@@ -251,14 +251,16 @@ static uint32_t tl_size(JSContext *ctx, JSValueConst this_val)
  * `setAttribute` against `setAttributeNS`: "the two can each find an attribute the other cannot, so they are
  * two functions and not one with a flag".
  *
- * NAMED RESIDUAL — THIS WRITE carries no taint, and the `value` setter's now does. NOT COVERED: the
- * provenance of an unknown token reaching a MUTATION. `setAttribute` (element.c), `input.value =`, a `dataset`
- * write and now §7.1's `value` setter all hand dom_cow_set_attribute the source beside the shape's bytes, so
- * `el.setAttribute('class', x)` and `el.classList.value = x` keep x's identity in the (element, name) shadow
- * map and `el.classList.add(x)` does not. WHY THIS HALF IS NOT THE SAME DIFF: the serialized attribute a
- * mutation writes is composed of SEVERAL tokens of which only some are unknown, so ONE of the arguments'
- * values is not the attribute's provenance — which is why `JS_UNDEFINED` here is a decision and not an
- * omission, and why half of it would be worse than none.
+ * THE TAINT IS THE CALLER'S AND NOT THIS FUNCTION'S, AND THAT IS THE WHOLE OF WHY IT IS A PARAMETER. Step 2
+ * writes "the result of running the ordered set serializer for set's token set" — ONE value composed of
+ * SEVERAL tokens — so what the attribute's provenance is, is a fact about the tokens the MUTATION decided,
+ * which only the mutation holds. A taint resolved here would be resolved from the serialized bytes, which is
+ * the one place the argument identities are already gone.
+ *
+ * `JS_UNDEFINED` IS THE POSITIVE STATEMENT THAT AN EARLIER TAINT NO LONGER DESCRIBES THIS ATTRIBUTE, which
+ * dom_cow.h states for every concrete write: a mutation re-serialises the WHOLE set, so bytes an earlier
+ * source supplied are not what the attribute holds afterwards. A mutation whose tokens are all concrete
+ * therefore passes it, and that is a claim rather than an omission.
  *
  * AND THE NEXT-DIFF CLAUSE THAT STOOD HERE WAS WRONG, RECORDED RATHER THAN QUIETLY REPLACED BECAUSE
  * CLAUDE.md §AND-THE-"WHAT-THE-NEXT-DIFF-BUILDS"-CLAUSE SAYS A REMEDY CLAUSE IS READ ONCE, BY SOMEBODY WHO
@@ -270,40 +272,37 @@ static uint32_t tl_size(JSContext *ctx, JSValueConst this_val)
  * name) with no token in it — for one member family's benefit, and a second key in it is a second thing
  * every read and every unapply must agree about. And it answers the wrong question: a SINK reads the WHOLE
  * attribute (`el.className`, `getAttribute("class")`), so what it needs is one value NAMING ITS SOURCES,
- * not a map a sink would have to re-join.
+ * not a map a sink would have to re-join. AND THE THIRD GROUND IS THE ONE THAT MAKES IT A CATEGORY ERROR
+ * RATHER THAN A WRONG SHAPE, and it is recorded because a reader re-deriving the per-token map from "one
+ * JSValue cannot describe several tokens" is re-deriving A TAINT TRACKER: a hand-maintained map of which
+ * source contributed which bytes, updated at each operation, is what CLAUDE.md §Every-value-is-CONCOLIC names
+ * as the cardinal misread of this engine — "A separate tagged-value class whose result-note a `Combine`-style
+ * hook derives at each op IS the recorded transform-expression §Re-execution forbids", which cannot see
+ * interprocedural or shared-mutable state and is a WORSE tracker standing beside the sound re-execution
+ * search. The shadow map therefore keeps exactly the ONE JSValue it had, and tl_mutation_taint is what makes
+ * that value name every source that reached the attribute.
  *
- * WHAT THE NEXT DIFF BUILDS, derived from the engine's OWN primitive rather than from the shape of the
- * problem: the attribute's value COMPOSED THROUGH `concolic_add_hook` (solver/concolic.h), which is
- * 22.1.3.5's string concatenation and is what mints a JOINT concolic — "ONE concolic, ONE identity, a
- * domain over the SET", `concolic_source_wrap_joint`'s own words, and solver/concolic.c records that
- * derivations mint them now and that a joint's members are WALKED rather than strcmp'd. So the shadow map
- * keeps exactly the ONE JSValue it already has, and that value names every source that reached the
- * attribute. THE THREE FACTS THAT MAKE IT BUILDABLE, each read at the hook rather than assumed: it is
- * PUBLIC in concolic.h; it CONSUMES both operands and writes its result to `sp[-2]` returning 1; and it
- * returns 0 having consumed NOTHING when neither operand is concolic. The last one is why the composition
- * accumulates CONCRETE runs as bytes and flushes them as one JSValue only when an unknown piece arrives:
- * every hook call then has at least one concolic operand, so the hook never declines and the
- * static-and-unexported `JS_ConcatString` is never needed. The pieces are the ones this function already
- * emits in order — a kept token, §7.1 replace step 4's substitution, an appended token — so the
- * composition records (offset, length, argument index) per emitted piece and walks that afterwards,
- * skipping the byte range of a concolic piece because the hook contributes that piece's own shape.
- * WHAT IT DOES NOT RECOVER, which is the bound rather than a gap in the plan: a token KEPT from the
- * existing attribute whose bytes an earlier unknown write put there is concrete bytes by then, and the
- * attribute's old taint is one value that cannot be decomposed back onto the tokens it spans. That loses
- * nothing TODAY, because this write already passes `JS_UNDEFINED` and so already clears it.
- * HOW ITS ABSENCE SHOWS: an element
- * whose `class` was set by `classList.add(<an unknown>)`, read back through a sink fed from `el.className`,
- * reports concrete bytes with no source, so no @S search starts for a breakout that is real — while the same
- * element written through `classList.value = <the same unknown>` now reports the source.
- * `JS_UNDEFINED` IS ALSO THE POSITIVE STATEMENT THAT AN EARLIER TAINT NO LONGER DESCRIBES THIS ATTRIBUTE,
- * which dom_cow.h states for every concrete write: a mutation re-serialises the whole set, so bytes an earlier
- * source supplied are not what the attribute holds afterwards. */
-static void list_update_steps(lxb_dom_element_t *el, const char *attr, const char *val, size_t len)
+ * AND `taint` IS dom_cow.h'S OWN FIELD NAME AND NOT WHAT THE WORD USUALLY MEANS — kept because a second
+ * spelling of one field is the drift this file refuses everywhere else, and qualified here because the word
+ * is what invites the tracker above. TWO TELLS, both checkable rather than rhetorical. It is NON-MONOTONE:
+ * JS_UNDEFINED CLEARS an earlier entry (solver/attr_shadow.c's own first branch), because a mutation
+ * re-serialises the WHOLE set and the old source does not describe those bytes any more — a tracker is
+ * conservative and monotone, and this is a statement about CURRENT state. And NOTHING RECORDS WHAT TRANSFORM
+ * WAS APPLIED, nor needs to, because forced execution RE-RUNS the filter and provenance rides the value's own
+ * source identity. What the map holds is the CONCOLIC VALUE ITSELF, surviving a C tree that can only hold
+ * bytes — CLAUDE.md §Attacker-sources sanctions exactly that and gives the reason in its own words, "A source
+ * stashed in a DOM attribute keeps taint via an `(element,name)→opaque` shadow map (Lexbor would ToString it
+ * away)". `concolic_add_hook` is the right primitive for the same reason and not by analogy: concolic.h
+ * installs it as `JSConcolicHooks.add` through `JS_SetConcolicHooks`, so it IS the interpreter's own `+` and a
+ * component calling it performs the concatenation the page's own `+` performs. That is re-execution; a
+ * propagation hook deriving a result-note per op would not be. */
+static void list_update_steps(lxb_dom_element_t *el, const char *attr, const char *val, size_t len,
+                              JSValueConst taint)
 {
     size_t have = 0;
     if (len == 0 && !lxb_dom_element_get_attribute(el, (const lxb_char_t *)attr, strlen(attr), &have))
         return;                       /* update steps, step 1 */
-    dom_cow_set_attribute(el, attr, val, len, JS_UNDEFINED);
+    dom_cow_set_attribute(el, attr, val, len, taint);
 }
 
 /* THE BYTES OF ONE TOKEN ARGUMENT, WHICH MAY BE UNKNOWN EXTERNAL INPUT — the same question `value =` and
@@ -322,9 +321,15 @@ static void list_update_steps(lxb_dom_element_t *el, const char *attr, const cha
    other left a stale taint on a fresh value". A caller that computed the bytes here and asked `concolic_is`
    again for itself would be two answers to one question, which is the shape that drifts.
    `taint` MAY BE NULL AND THAT IS A POSITIVE STATEMENT ABOUT THE CALLER: it writes no attribute. `contains`
-   and `supports` ANSWER a question and write nothing, and the mutation family composes one attribute out of
+   and `supports` ANSWER a question and write nothing, so NULL there is deliberate rather than forgetful.
+   THE MUTATION FAMILY PASSES A POINTER, AND THIS PARAGRAPH SAID IT COULD NOT — kept in its own words because
+   a reader who re-derives it will write it again. It read: "the mutation family composes one attribute out of
    several tokens, for which one JSValue is the wrong shape — the named residual at the update steps above is
-   exactly that, so a mutation passing NULL here is deliberate rather than forgetful. */
+   exactly that, so a mutation passing NULL here is deliberate rather than forgetful." Both halves of that are
+   TRUE and the conclusion does not follow: one JSValue is indeed the wrong shape for one token OF several,
+   and what the shadow map holds is the shape of the WHOLE attribute — which is what
+   `concolic_add_hook` mints out of several operands, so the per-token answer the mutation needs HERE is
+   exactly this one and the composition is tl_mutation_taint's. */
 static const char *token_bytes(JSContext *ctx, JSValueConst v, size_t *len, JSValueConst *taint)
 {
     const char *s;
@@ -403,8 +408,10 @@ static JSValue js_tl_set_value(JSContext *ctx, JSValueConst this_val, JSValueCon
        arrives with its real length there, which a strlen here did not: `class` may legitimately carry a NUL.
        AND IT CARRIES THE SOURCE, which is the whole of this attribute's provenance for this one caller: §7.1
        says the setter steps "set an attribute value for this's element using this's attribute name and THE
-       GIVEN VALUE", so every byte written is that one DOMString's and the shadow map's one JSValue per
-       attribute is the right shape here. The mutation family's is not, and the update steps say why.
+       GIVEN VALUE", so every byte written is that one DOMString's and the ONE argument IS the shadow map's one
+       JSValue with nothing to compose. The mutation family reaches the same shape by composing its arguments
+       through `concolic_add_hook` (tl_mutation_taint), which is why there is one taint per attribute at both
+       call sites and only one of them has a composition in front of it.
        §4.9's PLAIN SET AND NOT THE UPDATE STEPS, which is why this no longer routes through
        list_update_steps: the setter has no early return, so `classList.value = ""` on an element with no
        `class` attribute CREATES one, where the update steps' step 1 would have returned. */
@@ -615,8 +622,15 @@ static JSValue js_tl_supports(JSContext *ctx, JSValueConst this_val, int argc, J
 }
 
 /* ONE TOKEN ARGUMENT, held as the bytes the walk compares against. A list of these is what makes `add` and
-   `remove` variadic without a second mutation body. */
-typedef struct { const char *s; size_t len; } TlToken;
+   `remove` variadic without a second mutation body.
+   `taint` IS THE SAME FIELD token_bytes RESOLVES, CARRIED RATHER THAN RE-ASKED — solver/dom_cow.h's "VALUE AND
+   TAINT ARE ONE WRITE" read over a list: the branch that decided these bytes is the branch that knows whether
+   they are a source's shape, so a second `concolic_is` at the composition would be two answers to one
+   question. JS_UNDEFINED is "these bytes are concrete", which is what makes `!JS_IsUndefined(taint)` the
+   whole test and no second predicate necessary. IT HOLDS THE CONCOLIC VALUE ITSELF AND NEVER A LABEL BESIDE
+   ONE — the update steps' banner says why the word `taint` is kept and why it is not what the word usually
+   means. */
+typedef struct { const char *s; size_t len; JSValueConst taint; } TlToken;
 
 /* Is `tok` one of the tokens THIS CALL named? §7.1 remove's step 2 is "for each token of tokens: remove token
    from this's token set", so the walk asks the whole argument list rather than one position. */
@@ -626,6 +640,226 @@ static bool tl_named(const TlToken *a, int na, const char *tok, size_t tlen)
     for (i = 0; i < na; i++)
         if (a[i].len == tlen && memcmp(a[i].s, tok, tlen) == 0) return true;
     return false;
+}
+
+/* ---- the attribute's provenance ---------------------------------------------------------------------------- */
+/* ONE BYTE RANGE OF THE SERIALIZED VALUE THAT IS AN ARGUMENT'S SHAPE. The update steps write ONE value and the
+   taint shadow holds ONE JSValue per attribute, so the mutation's provenance is that value NAMING EVERY SOURCE
+   that reached it — which is what a concatenation through `concolic_add_hook` mints ("ONE concolic, ONE
+   identity, a domain over the SET"). The decomposition is recorded first and consumed afterwards because the
+   two passes answer different questions: whether the composition CAN be faithful, and then what it is. */
+typedef struct { size_t off, len; JSValueConst src; } TlPiece;
+
+/* Can the §1.2 "Ordered sets" walk over the serialized value find this argument's bytes AS ONE TOKEN? It is
+   the precondition the matching below rests on and it is established by §7.1 add/remove's step 1 (toggle's and
+   replace's steps 1-2), which have already thrown for an empty token and for one holding ASCII whitespace. */
+static bool tl_tok_walkable(const char *s, size_t n)
+{
+    size_t i;
+    if (n == 0) return false;
+    for (i = 0; i < n; i++) if (is_ws(s[i])) return false;
+    return true;
+}
+
+/* DOES A CONCRETE RUN SURVIVE THE ROUND TRIP THE COMPOSITION PUTS IT THROUGH? This is the whole of what keeps
+   the composed value from reporting bytes the attribute does not hold, and it is a GUARD and not an assert
+   because what it tests is PAGE BYTES: core/dom/element.c's `js_el_get_attribute` answers the taint shadow
+   FIRST and hands the taint out AS THE VALUE, so a taint whose shape is not the attribute's bytes is a
+   fabricated observation of the kind §RUN-DON'T-MATCH forbids — and a DCHECK over it would hand any
+   page an abort switch, which §WHOSE-BYTES-STATE-THE-VALUE forbids.
+   IT IS THE ROUND TRIP AND NOT A UTF-8 PREDICATE, which is the difference between one question and an
+   enumeration of the ways an answer can be wrong. concolic_add_hook spells a concrete operand's shape with
+   JS_ToCString and strlen, and the engine's own string constructor maps an invalid byte to one U+FFFD
+   (js_new_string_len_or_null's own account of its scan) while strlen stops at an interior NUL — both of which
+   a `class` attribute may legitimately hold, since §7.1 forbids only whitespace in a token. Asking the round
+   trip asks all of that at once and cannot go stale against either spelling.
+   AND IT RUNS BEFORE ANY HOOK CALL, which is why it is its own pass: minting a derivation and discarding it
+   would spend whatever a mint costs on a composition this function has already decided not to make. */
+static bool tl_run_faithful(JSContext *ctx, const char *s, size_t n)
+{
+    JSValue v = JS_NewStringLen(ctx, s, n);
+    const char *back;
+    size_t blen = 0;
+    bool ok;
+
+    if (!JS_IsString(v)) {
+        /* the only refusal here is a length no JS string can hold, and it leaves a throw standing that belongs
+           to no statement the page wrote — see concolic.c's own drain for the same pair. */
+        JS_FreeValue(ctx, v);
+        if (JS_HasException(ctx)) JS_FreeValue(ctx, JS_GetException(ctx));
+        return false;
+    }
+    back = JS_ToCStringLen(ctx, &blen, v);
+    ok = back != NULL && blen == n && strlen(back) == n && memcmp(back, s, n) == 0;
+    if (back) JS_FreeCString(ctx, back);
+    JS_FreeValue(ctx, v);
+    return ok;
+}
+
+/* THE SHAPE THE COMPOSED TAINT CARRIES, ASKED OF THE VALUE AND NOT OF THE PLAN — a function because a DCHECK's
+   condition may have no effects and reading the shape three times in one expression is the same question
+   asked three ways. */
+static bool tl_shape_is(JSValueConst taint, const char *out, size_t out_len)
+{
+    const char *sh = concolic_shape_c(taint);
+
+    /* concolic_name_cstr's OWN fallback, so the two cannot disagree about what a shapeless concolic spells:
+       token_bytes put THESE bytes in `out`, so the assertion is about the attribute's provenance rather than
+       about whether a shape pointer happened to be present. */
+    if (!sh) sh = "{}";
+    return strlen(sh) == out_len && memcmp(sh, out, out_len) == 0;
+}
+
+/* ONE CONCATENATION, THROUGH THE ENGINE'S OWN `+`. `acc` JS_UNDEFINED means NOTHING ACCUMULATED YET and is
+   unambiguous: every piece is a String or a concolic and neither is undefined. Both arguments are CONSUMED,
+   which is js_add_slow's stack effect and the hook's.
+   THE HOOK NEVER DECLINES HERE AND THE DFAIL ASSERTS IT RATHER THAN HANDLING IT. It returns 0 having consumed
+   nothing when NEITHER operand is concolic, and `JS_ConcatString` is static in quickjs.c with no exported
+   twin, so a decline would have nowhere to go. The composition is ordered so it cannot happen: the leading
+   concrete run is minted as ONE string and the first hook call therefore pairs it with a source, after which
+   `acc` is a derivation and every later call has a concolic operand. So an arrival names the one cause left,
+   which is the value semantics not being installed in this host. */
+static bool tl_taint_join(JSContext *ctx, JSValue *acc, JSValue piece)
+{
+    JSValue sp[2];
+
+    if (JS_IsUndefined(*acc)) { *acc = piece; return true; }
+    sp[0] = *acc;                      /* the accumulator's reference moves onto the stack */
+    sp[1] = piece;
+    if (!concolic_add_hook(ctx, sp + 2, JS_CONCOLIC_ADD_CONCAT)) {
+        DFAIL("§7.1's update steps composed an attribute out of a token this component has already "
+              "established is UNKNOWN and the concatenation declined both operands — the concolic value "
+              "semantics are not installed in this host, so every operator over an unknown falls through to "
+              "the ordinary-object path and the next coercion throws out of an expression the page never "
+              "wrote (solver/concolic.h: concolic_install_hooks)");
+        /* THE RELEASE ARM, AND IT IS NOT core/html/document_write.c's FOR §AND-THE-ARM-BENEATH-A-`DFAIL`'s
+           REASON: that site's result is the MARKUP a sink must receive, so it has to answer with something,
+           while this one's is a PROVENANCE the attribute may legitimately not have. A decline consumed
+           neither operand, so both are still ours — and the alternative of returning the left one is the
+           arm that matters, because it is a taint whose shape is a PREFIX of the attribute and a sink would
+           report bytes the DOM does not hold. The caller's answer is dom_cow.h's positive statement. */
+        JS_FreeValue(ctx, sp[0]);
+        JS_FreeValue(ctx, sp[1]);
+        *acc = JS_UNDEFINED;
+        return false;
+    }
+    *acc = sp[0];
+    return true;
+}
+
+/* ONE CONCRETE RUN AS A PIECE. tl_run_faithful has already minted these exact bytes, so an arrival at the
+   CHECK is the allocator and nothing else — which is what §Offensive-programming makes an OOM. */
+static JSValue tl_taint_run(JSContext *ctx, const char *s, size_t n)
+{
+    JSValue v = JS_NewStringLen(ctx, s, n);
+
+    CHECK(JS_IsString(v), "DOMTokenList: OOM minting a concrete run of a token-set write's provenance");
+    return v;
+}
+
+/* THE PROVENANCE OF THE VALUE §7.1's UPDATE STEPS ARE ABOUT TO WRITE — one JSValue whose SHAPE is the
+   serialized token set byte for byte and whose IDENTITY names every argument that reached it. Owned; or
+   JS_UNDEFINED, which dom_cow.h makes the positive statement that no source describes this attribute.
+ *
+ * A RANGE EQUAL TO AN ARGUMENT'S SHAPE NAMES THAT ARGUMENT, which is ONE rule over all three places the
+ * mutation emits bytes — a kept token, §7.1 replace step 4's substitution, an appended token — rather than
+ * three bookkeeping sites inside the two loops that could come to disagree. It is also what makes the
+ * DEDUPLICATION right instead of a hole: §1.2's set semantics emit a token once, so `add(x)` over a set that
+ * already spells x appends nothing, and the rule still names x because the bytes the attribute holds ARE x's
+ * shape. token_bytes decided that denotation, and it is the same decision whichever loop put the bytes there.
+ *
+ * THE WALK IS OVER THE SERIALIZED VALUE AND IS EXHAUSTIVE OVER IT, because a token is whitespace-free (the
+ * DCHECK below is that precondition) and the ordered set serializer separates tokens with one U+0020: so every
+ * byte of `out` is inside exactly one token or inside a separator, the matched ranges are disjoint and in
+ * order, and every gap between them is concrete BY CONSTRUCTION with nothing left to record.
+ *
+ * NAMED RESIDUAL — NOT COVERED: a source whose bytes are in the attribute for a reason the SERIALIZED VALUE
+ * does not show. Two shapes of that: a token KEPT from the existing attribute whose bytes an earlier unknown
+ * write put there and which no argument of THIS call spells, and a run whose round trip is not faithful. Both
+ * are a taint the attribute does not get, never a wrong one. WHAT THE NEXT DIFF BUILDS: a derived concolic
+ * whose IDENTITY may name a source its SHAPE does not contain, which is a widening of what solver/concolic.c
+ * admits and not a change at this call site — the add hook cannot mint one, because its shape is a function of
+ * its operands' shapes alone and the shape here must stay the attribute's own bytes. HOW ITS ABSENCE SHOWS: an
+ * attribute two mutations wrote, read back through a sink, names the sources of the LAST mutation's own
+ * arguments and no earlier one, so an @S search starts for one breakout where the page admits two.
+ *
+ * AND THE OLD TAINT CANNOT BE DECOMPOSED BACK ONTO THE TOKENS IT SPANS, which is why the first of those is a
+ * bound rather than a gap in the plan: the shadow holds ONE value for the whole attribute, and which of its
+ * tokens a source supplied is not recoverable from it. */
+static JSValue tl_mutation_taint(JSContext *ctx, const char *out, size_t out_len, const TlToken *a, int na)
+{
+    const char *p = out, *end = out + out_len, *t;
+    size_t tlen, prev = 0;
+    TlPiece *pc;
+    int npc = 0, i, any = 0;
+    JSValue acc = JS_UNDEFINED;
+
+    for (i = 0; i < na; i++) {
+        if (JS_IsUndefined(a[i].taint)) continue;
+        DCHECK(tl_tok_walkable(a[i].s, a[i].len),
+               "§7.1 add/remove's step 1 (toggle's and replace's steps 1-2) throws for a token that is empty "
+               "or holds ASCII whitespace, and this walk finds an argument's bytes only AS ONE TOKEN of the "
+               "ordered set serializer's output — so a shape arriving here that the walk cannot match means "
+               "that validation no longer runs ahead of the serialization, and the provenance of every "
+               "mutation naming such a token would go missing with nothing to report it");
+        any = 1;
+    }
+    if (!any) return JS_UNDEFINED;     /* no unknown reached this call: the write is concrete and CLEARS */
+
+    /* AT MOST ONE PIECE PER ARGUMENT, asserted rather than argued from the loops: §1.2's set semantics emit a
+       token once, so a second range equal to an argument's shape cannot exist in `out`. */
+    pc = calloc((size_t)na, sizeof *pc);
+    CHECK(pc != NULL, "DOMTokenList: OOM recording the provenance of a token-set write");
+    while (token_next(&p, end, &t, &tlen)) {
+        size_t off = (size_t)(t - out);
+        for (i = 0; i < na; i++)
+            if (!JS_IsUndefined(a[i].taint) && a[i].len == tlen && memcmp(a[i].s, t, tlen) == 0) break;
+        if (i == na) continue;
+        /* A DCHECK AND A REFUSAL, NOT ONE OR THE OTHER — quickjs.c's own string constructor states the pair:
+           the bound is an invariant of THIS codebase and so is assertable, and the release arm must still
+           answer because §Offensive-programming's release exemption is not a licence to write past an
+           allocation. */
+        DCHECK(npc < na,
+               "the ordered set serializer emitted more ranges equal to an argument's shape than there are "
+               "arguments — DOM §1.2 \"Ordered sets\" holds each token once and the emission dedups against "
+               "the value built so far, so a repeat means that set semantics no longer hold and the "
+               "provenance below would be composed over a value this walk cannot describe");
+        if (npc >= na) break;
+        pc[npc].off = off; pc[npc].len = tlen; pc[npc].src = a[i].taint;
+        npc++;
+    }
+    /* EVERY UNKNOWN THIS CALL NAMED WAS REMOVED OR WAS NEVER EMITTED, so the value the update steps write
+       holds none of their bytes and the attribute carries no source — `remove(<an unknown>)` is exactly that
+       and its write is as concrete as any other. */
+    if (npc == 0) { free(pc); return JS_UNDEFINED; }
+
+    /* THE FAITHFULNESS OF EVERY CONCRETE GAP, DECIDED BEFORE THE FIRST MINT — see tl_run_faithful. */
+    prev = 0;
+    for (i = 0; i <= npc; i++) {
+        size_t gap_end = (i == npc) ? out_len : pc[i].off;
+        if (gap_end > prev && !tl_run_faithful(ctx, out + prev, gap_end - prev)) { free(pc); return JS_UNDEFINED; }
+        if (i < npc) prev = pc[i].off + pc[i].len;
+    }
+
+    prev = 0;
+    for (i = 0; i < npc; i++) {
+        if (pc[i].off > prev && !tl_taint_join(ctx, &acc, tl_taint_run(ctx, out + prev, pc[i].off - prev)))
+            break;
+        if (!tl_taint_join(ctx, &acc, JS_DupValue(ctx, pc[i].src))) break;
+        prev = pc[i].off + pc[i].len;
+    }
+    if (i == npc && prev < out_len)
+        tl_taint_join(ctx, &acc, tl_taint_run(ctx, out + prev, out_len - prev));
+    free(pc);
+    if (JS_IsUndefined(acc)) return JS_UNDEFINED;   /* the concatenation declined — see tl_taint_join */
+    DCHECK(tl_shape_is(acc, out, out_len),
+           "§7.1's update steps composed a provenance whose SHAPE is not the value they are about to write — "
+           "core/dom/element.c's `js_el_get_attribute` answers the taint shadow FIRST and hands the taint out "
+           "AS the attribute's value, so a shape that is not those bytes reports a value the DOM does not "
+           "hold. Every byte-level reason a round trip can diverge was refused above, so an arrival here is "
+           "the concatenation's own shape rule having changed (solver/concolic.c: concolic_add_hook spells it "
+           "display(a) ++ display(b))");
+    return acc;
 }
 
 /* THE ONE MUTATION, under four names. add/remove/toggle/replace differ only in which tokens they mean to be
@@ -675,9 +909,13 @@ static JSValue js_tl_mutate(JSContext *ctx, JSValueConst this_val, int argc, JSV
     if (na) {
         a = calloc((size_t)na, sizeof *a);
         CHECK(a != NULL, "DOMTokenList: OOM collecting a token-list mutation's tokens");
+        /* JS_UNDEFINED IS NOT ALL-ZERO BYTES (JS_TAG_UNDEFINED is 3), so a calloc'd `taint` is no JSValue at
+           all. Every one of them is written by token_bytes below before the composition reads it, and this
+           line is what keeps that from being a property of where the `goto out`s happen to be. */
+        for (i = 0; i < na; i++) a[i].taint = JS_UNDEFINED;
     }
     for (i = 0; i < na; i++) {
-        a[i].s = token_bytes(ctx, argv[i], &a[i].len, NULL);
+        a[i].s = token_bytes(ctx, argv[i], &a[i].len, &a[i].taint);
         if (!a[i].s) { result = JS_EXCEPTION; goto out; }
         tok_bytes += a[i].len;
     }
@@ -764,7 +1002,15 @@ static JSValue js_tl_mutate(JSContext *ctx, JSValueConst this_val, int argc, JSV
        element carrying `class="a  a  b"` is re-serialised to `class="a b"`. That is the spec's own
        normalisation and not a stray write — the update steps' step 1 is what keeps it from CREATING an
        attribute on an element that has none. */
-    list_update_steps(el, attr, out, out_len);
+    {
+        /* §7.1 add/remove STEP 3's VALUE AND ITS PROVENANCE ARE ONE WRITE — solver/dom_cow.h's rule, which is
+           why the composition happens HERE rather than at the chokepoint: the serialized bytes are the one
+           place the argument identities are already gone, and this is the last frame that still holds them.
+           OWNED, and freed on the spot: attr_shadow_set DUPS what it is handed. */
+        JSValue taint = tl_mutation_taint(ctx, out, out_len, a, na);
+        list_update_steps(el, attr, out, out_len, taint);
+        JS_FreeValue(ctx, taint);
+    }
     if (magic == 2)      result = JS_NewBool(ctx, want);
     else if (magic == 3) result = JS_TRUE;   /* §7.1 replace step 6 — step 3 owns the absent case */
 out:
