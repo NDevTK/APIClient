@@ -52335,11 +52335,18 @@ typedef struct JSEvalCompile JSEvalCompile;
 static JSValue js_eval_compile_continue(JSContext *ctx, JSEvalCompile **slot);
 static void js_eval_compile_drop(JSContext *ctx, JSEvalCompile **slot);
 /* WHERE A SUSPENDED COMPILE IS HANDED BACK TO, AND THE WHOLE OF WHAT CROSSES. It is a pointer to the CALLER's
-   own slot, set for the duration of one call by the one entry that can hold a parked compile, which is why it
+   own slot, set for the duration of one call by an entry that can hold a parked compile, which is why it
    changes no signature between here and the eval indirection: ctx->eval_internal is an embedder ABI, and
    threading an out-parameter through it would make every embedder state a capability it does not have.
    Thread-local for g_flow_base_gen's reason exactly — the real engine is one instance per document and
    run-test262 drives many tests on parallel OS threads.
+   THERE ARE TWO SUCH ENTRIES AND THIS SENTENCE SAID `THE ONE ENTRY`, which was exact while only a CLASSIC
+   program could park a parse and is rewritten rather than deleted because a reader meeting one carrier type
+   and one slot will re-derive it. JS_FlowCompileStep and JS_FlowEvalModule are §8.1.4.4 "Calling scripts"'
+   two entries and they offer the SAME slot to the SAME driver; that is the point rather than a duplication,
+   because what they hand over is an address on the calling thread's stack and the arrangement is a property
+   of __JS_EvalInternal's take-and-clear below, not of either caller. A THIRD entry is the same two lines
+   again, and the nesting rule beneath still covers it unchanged: the capability belongs to one compile.
    IT IS TAKEN AND CLEARED AT THE EVAL ENTRY so that a NESTED compile (a module loader, an eval reached while
    this one runs) cannot suspend into somebody else's slot: the capability belongs to one compile and not to a
    thread. */
@@ -52555,25 +52562,96 @@ static int flow_settle_await(JSContext *ctx, JSAsyncFunctionState *s) {
    host pump (JS_ResumeParkedFlow) resumes it, exactly like any other flow. What was missing was only the ENTRY:
    JS_FlowNew compiled with JS_EVAL_TYPE_GLOBAL and threw the caller's MODULE flag away, so a module source was
    parsed as a classic script and every import/export came back as "unsupported keyword" — a parser error for a
-   parser that is fine. Returns the module's evaluation PROMISE, which is what evaluating a module yields; the
-   caller settles it through the same job pump it uses for an async script. */
-JSValue JS_FlowEvalModule(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags) {
+   parser that is fine. The module's evaluation PROMISE — which is what evaluating a module yields — comes back
+   through `pev`, and the caller settles it through the same job pump it uses for an async script. (This read
+   "Returns the module's evaluation PROMISE", which was exact while the entry answered a value; it answers a
+   STATUS now because the parse can rest, and the sentence is corrected rather than dropped because the fact
+   about WHAT a module evaluation completes with is the part a reader needs.)
+   AND ITS PARSE RESTS, WHICH IS WHAT THE CARRIER IS FOR AND WHY THIS IS A STEP ENTRY RATHER THAN A VALUE ONE.
+   `pd_can_yield` is set from `g_eval_compile_slot` and from nowhere else (__JS_EvalInternal reads it at its
+   own entry), and the slot's only non-NULL write was JS_FlowCompileStep's — so a module compile reached
+   js_parse_want_yield with the seam DISARMED and parsed a program of the page's chosen length with no suspend
+   point anywhere in it. That is the one span §NO BOUNDS names as unrestable, on the half of §8.1.4.4 "Calling
+   scripts" a modern bundle actually uses: the EVALUATION half was already preemptible (a module body is an
+   async function js_async_function_resume_as_flow installs a base for), so the gap was the parse alone and
+   nothing in the evaluate half could see it.
+   THE ANSWER IS JS_FlowCompileStep's ANSWER, for the reason that entry gives for having one: 1 (the graph was
+   linked and evaluated, `*pev` holds the evaluation promise and the caller owns it), 0 (the PARSE handed the
+   thread back — `*pcompile` holds it, call again with the same arguments) or -1 (the compile or the evaluation
+   failed, the exception is pending and `*pev` is undefined). The link-and-evaluate half is BEHIND THE
+   FINISHED-PARSE ARM: a suspended parse has produced no module record to link, and 16.2.1.7.1 ParseModule is
+   the step that ends where the carrier parks.
+   A `pcompile` OF NULL IS A HOST DECLINING THE EDGE, which is JS_FlowNew's arrangement for the classic entry
+   and JSFlowControlHooks.budget's one level up — the same parse through the same driver with the seam
+   unarmed, so a 0 is unreachable and the suspend assert below is what says so where both operands are in one
+   hand.
+   THE SOURCE AND THE FILENAME ARE BORROWED FOR THE WHOLE COMPILE and not for one call, exactly as they are
+   for the classic entry: the parse reads them across every stint, so a caller that offers `pcompile` is
+   promising those bytes outlive it. The scheduler's caller satisfies it by construction — a program's text is
+   a refcounted row of the flow's sequence and a module's name is its own address or its document's, both of
+   which outlive the step that began the parse. NOTHING ELSE CROSSES: the module record, its request and
+   export tables, the descent's frame stack and the JSFunctionDef chain are all on the carrier, which is why
+   this signature grew a slot and not a context. */
+int JS_FlowEvalModule(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags,
+                      JSValue *pev, void **pcompile) {
+    JSEvalCompile *carrier = NULL;
+    JSValue bc;
+
+    DCHECK(pev != NULL,
+           "a module evaluation was started with nowhere to put the promise it completes with — 16.2.1.6.1.3 "
+           "Evaluate ( ) returns a Promise and HTML §8.1.4.4 \"Calling scripts\"' module entry step 8 reports "
+           "its rejection, so the capability is part of the completion and not an optional out-parameter");
+    *pev = JS_UNDEFINED;
     /* A MODULE'S NAME IS NOT A LABEL, it is the record's [[HostDefined]] identity: it keys the module map, it is
        the base a nested `import` and an `import.meta.url` resolve against, and it is what the loader registers a
        fetched dependency under. So there is no placeholder to substitute the way JS_FlowNew substitutes
        "<flow>" — a made-up name silently makes two documents' modules the same module and resolves relative
        specifiers against nothing. It is also a plain strlen away from the parser's atom table, so a NULL here is
-       a segfault inside js_parse_init rather than anything a reader could trace back to this call. */
+       a segfault inside js_parse_init rather than anything a reader could trace back to this call.
+       ASKED ON EVERY STINT AND NOT ONLY THE FIRST, which costs two loads and is what makes it a claim about the
+       CALLER rather than about one call: a resume that passed a different name would be resuming this parse
+       against a record keyed on another one, and the resume arm below never reads `filename` at all — so this
+       is the only line that can notice. */
     DCHECK(filename != NULL && filename[0] != '\0',
            "JS_FlowEvalModule was given no name for the module — a module's name is its resolution base (the "
            "module map key, the base of a nested import, import.meta.url), so the caller must pass the script's "
            "base URL rather than leave it to be invented here");
-    JSValue bc = JS_Eval(ctx, src, len, filename,
-                         JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY |
-                         (eval_flags & (JS_EVAL_FLAG_STRICT | JS_EVAL_FLAG_INLINE_SCRIPT)));
-    if (JS_IsException(bc)) return bc;
+    if (pcompile != NULL && *pcompile != NULL) {
+        carrier = (JSEvalCompile *)*pcompile;
+        *pcompile = NULL;
+        bc = js_eval_compile_continue(ctx, &carrier);
+    } else {
+        JSEvalCompile **outer = g_eval_compile_slot;
+        /* THE OFFER, MADE FOR THE DURATION OF ONE CALL — the same address-on-the-stack JS_FlowCompileStep
+           hands the classic parse, and the whole of what crosses: no host header, no new hook, and no second
+           spelling of the seam for the module entry to drift from. */
+        g_eval_compile_slot = (pcompile != NULL) ? &carrier : NULL;
+        bc = JS_Eval(ctx, src, len, filename,
+                     JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY |
+                     (eval_flags & (JS_EVAL_FLAG_STRICT | JS_EVAL_FLAG_INLINE_SCRIPT)));
+        g_eval_compile_slot = outer;
+    }
+    if (JS_VALUE_GET_TAG(bc) == JS_TAG_UNINITIALIZED) {
+        DCHECK(carrier != NULL && pcompile != NULL,
+               "a module compile answered SUSPENDED with nothing parked — the marker and the carrier are "
+               "written by one function and read by this one, so they cannot disagree unless a third site "
+               "produced it");
+        *pcompile = carrier;
+        return 0;
+    }
+    DCHECK(carrier == NULL, "a module compile that finished left a parked parse behind it");
+    if (JS_IsException(bc)) return -1;   /* 16.2.1.7.1 ParseModule failed: the SyntaxError is already pending */
     DCHECK(JS_VALUE_GET_TAG(bc) == JS_TAG_MODULE, "a MODULE compile must yield a module");
-    return JS_EvalFunction(ctx, bc);   /* create the module function, link the graph, evaluate; consumes bc */
+    *pev = JS_EvalFunction(ctx, bc);   /* create the module function, link the graph, evaluate; consumes bc */
+    if (JS_IsException(*pev)) {
+        /* THE EXCEPTION IS THE ANSWER AND THE SLOT IS NOT, so the two are not both handed back. `started` at
+           the one scheduler caller was `!JS_IsException(ev)` before this entry answered a status, and folding
+           an abrupt evaluation into -1 is what keeps that predicate the same predicate rather than a second
+           reading of one the caller would have to compose from two values. */
+        *pev = JS_UNDEFINED;
+        return -1;
+    }
+    return 1;
 }
 
 static JSAsyncFunctionData *flow_async_data(JSAsyncFunctionState *s);
@@ -67152,7 +67230,29 @@ static void set_eval_ret_undefined(JSParseState *s)
 #endif // QJS_DISABLE_PARSER
 
 /* 'name' is freed */
-static JSModuleDef *js_new_module_def(JSContext *ctx, JSAtom name)
+/* THE RECORD, WITHOUT ITS MODULE-MAP ENTRY. 16.2.1.7.1 ParseModule produces a Source Text Module Record and
+   16.2.1.10 HostLoadImportedModule is what puts one in a [[LoadedModules]] list; they are two steps, and this
+   engine performed them as one for as long as a module parse could not be interrupted.
+   WHY THEY ARE TWO ENTRIES NOW. `ctx->loaded_modules` IS the module map and js_find_loaded_module is the memo
+   every load consults — two sites say so in their own words ("the module map is the load's memo"). A record
+   published there is therefore reachable by ANY flow of this realm, and a record whose parse has not finished
+   has `func_obj` UNDEFINED and PARTIALLY FILLED request tables. While a module parse ran inside one call that
+   window was zero scheduler steps wide and nothing could look; a parse that hands the thread back makes it
+   unbounded, so a sibling flow's `import()` of the same specifier would find a half-built record, walk its
+   truncated request table, and reach js_create_module_bytecode_function — whose first act is
+   `b = JS_VALUE_GET_PTR(m->func_obj)` followed by a refcount increment through it. That is a NULL dereference
+   in RELEASE, on a name the page chose, and the DCHECK that would have named it sits one phase LATER in
+   js_module_link_advance's prologue arm, so the crash would land in the wrong file naming memory.
+   IT IS §Fix-the-ROOT AND NOT AN ASSERT. The state is made impossible rather than reported: a record enters
+   the map at the instant it GAINS A BODY (js_eval_compile_finish) and not at the instant its parse begins, so
+   there is no window in which the map can hand out a record that has none. Nothing during a parse reads the
+   map for its own record — the parse runs no user code, and its own two writers (add_req_module_entry,
+   add_export_entry2) take `m` directly — which is what makes the move safe rather than merely later.
+   `link` IS SELF-LINKED RATHER THAN LEFT ZEROED, because js_free_module_def's js_module_free_tables ends in an
+   unconditional `list_del(&m->link)`: on a self-linked node that is a no-op, and on a zeroed one it is a NULL
+   store. So a parse that FAILS or is DROPPED frees an unpublished record through exactly the path a published
+   one takes, with no second spelling of the teardown to drift. */
+static JSModuleDef *js_new_module_def_unpublished(JSContext *ctx, JSAtom name)
 {
     JSModuleDef *m;
     m = js_mallocz(ctx, sizeof(*m));
@@ -67170,7 +67270,30 @@ static JSModuleDef *js_new_module_def(JSContext *ctx, JSAtom name)
     m->resolving_funcs[0] = JS_UNDEFINED;
     m->resolving_funcs[1] = JS_UNDEFINED;
     m->private_value = JS_UNDEFINED;
+    init_list_head(&m->link);
+    return m;
+}
+
+/* …AND THE PUBLICATION, which is the one act that makes a record findable by name. Asserted rather than made
+   idempotent: a second publication would put one record in the list twice, after which list_del removes one
+   of the two appearances and every later walk reads a freed node. `list_empty` on the node's OWN link is the
+   unpublished test — a self-linked node is a list of itself — which is this file's own spelling and not a
+   second encoding of the fact. */
+static void js_module_publish(JSContext *ctx, JSModuleDef *m)
+{
+    DCHECK(list_empty(&m->link),
+           "a module record was published to the module map twice — `loaded_modules` would then hold one "
+           "record at two positions and the first list_del would leave a freed node on the walk");
     list_add_tail(&m->link, &ctx->loaded_modules);
+}
+
+/* The two composed, for every record whose body does not arrive from a parse that can rest: a C module is
+   complete the moment it is minted, and the bytecode reader fills its record inside one read. */
+static JSModuleDef *js_new_module_def(JSContext *ctx, JSAtom name)
+{
+    JSModuleDef *m = js_new_module_def_unpublished(ctx, name);
+    if (m)
+        js_module_publish(ctx, m);
     return m;
 }
 
@@ -76948,7 +77071,10 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
             JSAtom module_name = JS_NewAtom(ctx, filename);
             if (module_name == JS_ATOM_NULL)
                 goto fail1;
-            m = js_new_module_def(ctx, module_name);
+            /* UNPUBLISHED UNTIL THE PARSE PRODUCES A BODY — see js_new_module_def_unpublished. The publish
+               is in js_eval_compile_finish, which is the one line that runs whether this parse finished on
+               its first stint or on its tenth. */
+            m = js_new_module_def_unpublished(ctx, module_name);
             if (!m)
                 goto fail1;
             is_strict_mode = true;
@@ -77069,6 +77195,12 @@ static JSValue js_eval_compile_finish(JSContext *ctx, JSEvalCompile *ec, int err
        this engine's to) had nowhere to park inside a parser. */
     if (m) {
         m->func_obj = fun_obj;
+        /* …AND THE MODULE MAP LEARNS ABOUT IT HERE, ONE STATEMENT AFTER IT GAINED A BODY — see
+           js_new_module_def_unpublished for why the two are not one act. Every exit above this line frees the
+           record through js_free_module_def while it is still unpublished, so the map never holds a record
+           whose parse did not finish; and this line is reached by the first stint and the tenth alike, so a
+           parse that handed the thread back publishes exactly once, when it is done. */
+        js_module_publish(ctx, m);
         fun_obj = JS_NewModuleValue(ctx, m);
         ec->m = NULL;   /* the module VALUE owns it now — fail below must not free it twice */
     }

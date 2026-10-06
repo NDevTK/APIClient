@@ -11381,6 +11381,12 @@ static int64_t g_over_gap_us;      /* the worst such interval over every non-sea
 
    and `g_classic_compile_over <= that sum` is the containment engine_step_unit_runs asserts, where all
    three are in one hand.
+   `compile STINTS` THERE MEANS CLASSIC ONES, AND IT MEANS IT BY CONSTRUCTION RATHER THAN BY A READER
+   REMEMBERING. §8.1.4.4 "Calling scripts"' MODULE entry parks a parse into the same `f->compile` field now,
+   and it names its own row (`module-compile-handed-the-thread-back`) precisely so that this equality keeps
+   being an equality: a module park filed under the classic row would put stints on the right-hand side that
+   none of the three counters above counts, and the EQUALITY would silently become an inequality while both
+   asserted containments stayed true. solver/step_unit.h records that decision at the arm.
    RETIREMENT: these two rows go when the parse is a pull whose GRANULARITY solver/rest_unit.h owns — which
    is NOT the condition that has already landed, and the distinction is the whole of why they are still
    here. This clause used to read `when a compile can REST`, apposed to the rest_unit half as though they
@@ -13301,7 +13307,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                SyntaxError from a parser that is fine. */
             int started;   /* did the program START? — a classic gets a frame, a module has already evaluated */
             if (stype == SCRIPT_TYPE_MODULE) {
-                JSValue ev;
+                /* INITIALISED, because the entry below takes its ADDRESS and a suspended answer writes
+                   JS_UNDEFINED into it and nothing else — so the park arm's own assert reads a value this
+                   line put there rather than whatever the frame held. */
+                JSValue ev = JS_UNDEFINED;
                 /* `prog_name` IS THIS MODULE'S RECORD IDENTITY — see the name above. JS_FlowEvalModule asserts
                    it is non-empty for the same reason: it keys the module map, it is `import.meta.url`, and it
                    is the base the loader registers each fetched dependency under. */
@@ -13314,8 +13323,47 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        "§4.12.1.1's module arm asserts this document's currentScript is null and it is not — "
                        "a classic script's §3.1.7 bracket has outlived the program it belonged to, so this "
                        "module would run with some other script element globally exposed");
-                ev = JS_FlowEvalModule(prog_ctx, body, body_n, prog_name, src_flags);
-                started = !JS_IsException(ev);
+                /* …AND THIS PARSE CAN NOW GIVE THE THREAD BACK PART WAY THROUGH, which is the third answer and
+                   is the whole of what this call gained. 16.2.1.7.1 ParseModule used to run with the seam
+                   DISARMED on this entry alone: `pd_can_yield` is set from `g_eval_compile_slot` and nowhere
+                   else, the slot's only non-NULL write was the CLASSIC entry's, and this call passed no
+                   carrier — so js_parse_want_yield answered false for the length of a module the PAGE chose,
+                   which is exactly the quantity solver/rest_unit.h's bound (1) names as the one that must
+                   never appear in a step's cost.
+                   NOTHING HERE IS BRACKETED OR COUNTED, AND THAT IS THE SAME DECISION THE PARAGRAPH BELOW
+                   RECORDS RATHER THAN A ROW SOMEBODY FORGOT: this entry compiles AND EVALUATES, so a timing
+                   bracket round it would time a parse and an execution together and a `compiles` row raised
+                   after it would count a program that has already RUN. The arm below is the reader.
+                   NO SHARED-PARSE CONSULT EITHER, which is a statement about the MECHANISM and not about this
+                   arm: `dyn_body_parse_ref` holds a CLOSURE a later flow instantiates, and a module's parse
+                   produces a RECORD that is linked and evaluated once under its own name — the module map is
+                   that phase's own memo (js_find_loaded_module) and a second one beside it would be the two
+                   answers to one question §A-FIX-OF-THE-FORM-"X-IS-NOT-HOW-TO-ASK-Q" forbids. */
+                int mr = JS_FlowEvalModule(prog_ctx, body, body_n, prog_name, src_flags, &ev, &f->compile);
+                if (mr == 0) {
+                    /* PARKED MID-PARSE. No ENGINE_LEAVE_ROW and no cursor move, exactly as the classic arm
+                       below does it and for the same reason: the parse is suspended at an exact production,
+                       no bytecode has run, no side effect has been performed, this row is still the row the
+                       flow is at, and the ladder re-enters here when the flow is next picked. The pair of
+                       asserts above this block (`script_i > last_compiled || compile != NULL` and
+                       `compile == NULL || script_i == last_compiled`) is what keeps a parked parse from being
+                       resumed against a row the flow has moved off, and it covers this arm unchanged because
+                       both read the one field both entries park into. */
+                    DCHECK(f->compile != NULL && JS_IsUndefined(ev),
+                           "a module compile answered SUSPENDED and left neither a parked parse nor an "
+                           "evaluation — the flow would stand at a row whose module is neither evaluating "
+                           "nor being parsed");
+                    g_step_unit = STEP_UNIT_MODULE_COMPILE_YIELDED;
+                    return 0;
+                }
+                DCHECK(f->compile == NULL,
+                       "a module compile that finished left a parked parse behind it — the next step would "
+                       "resume a parse for a module that has already been linked and evaluated");
+                /* `started` IS THE SAME PREDICATE IT WAS, which is why the entry folds an abrupt evaluation
+                   into -1 rather than handing one back beside a status: this used to read
+                   `!JS_IsException(ev)` over a returned value, and `mr > 0` is that same question asked of
+                   the one answer instead of composed from two. */
+                started = (mr > 0);
                 if (started) module_report_rejection(prog_ctx, ev);   /* §8.1.4.4 step 8 */
                 JS_FreeValue(prog_ctx, ev);
             } else {
@@ -14375,7 +14423,7 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        followed by at most one resume, so over the life of the process `resumed <= yielded` with the slack
        being EXACTLY the parses begun and not ended (g_classic_compile_resumed derives it). A violation is
        therefore not an off-by-one to tolerate: it is a stint that continued a parse this process never parked,
-       which means `f->compile` was made non-NULL by some route other than the compile block's own park arm —
+       which means `f->compile` was made non-NULL by some route other than a park arm of the compile block —
        the third-site defect the PARSE ENTRY's own suspend assert names on the other side of the seam —
        quickjs.c's JS_FlowCompileStep, which is where that assert lives now that the parse and the
        instantiation are two entries; this line said JS_FlowNewStep, and a name is corrected rather than
@@ -14384,11 +14432,20 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        BOTH ROWS ARE TAKEN AT THE COPY-OUT ABOVE, one of them from the arm histogram, so this compares two
        readings of one instant; the pair's own paragraph there is why that matters more here than for the
        overrun containment, whose slack is unbounded by construction and whose sign therefore cannot flip. */
+    /* …AND IT IS STILL EXACT AFTER THE MODULE ENTRY GAINED A CARRIER, which is a claim about WHICH ARM and
+       not about the field. `f->compile` now has TWO park sites — the classic block's and the module arm's —
+       and they name DIFFERENT rows (`compile-handed-the-thread-back` against
+       `module-compile-handed-the-thread-back`), so the right-hand side here is still exactly the classic
+       phase's parks and the numerator is still raised only in the classic block. Filing both parks under one
+       row would have left this inequality TRUE and made the equality it rests on
+       (`compile STINTS == classic_compiles + arms[compile-handed-the-thread-back]`, g_classic_compiles) FALSE
+       — see solver/step_unit.h, which records that decision where the arm is named. */
     DCHECKF(out->classic_compile_resumed <= out->arms[STEP_UNIT_COMPILE_YIELDED],
-            "solver/engine.c: classic_compile_resumed %ld exceeds the %ld stint(s) that handed a parse back — "
-            "a stint may only CONTINUE a parse this process PARKED, and the park arm of the compile block is "
-            "the one site that leaves a carrier in `f->compile`, so more resumes than parks is a carrier "
-            "installed by a third site and a parse being continued that nothing here suspended",
+            "solver/engine.c: classic_compile_resumed %ld exceeds the %ld stint(s) that handed a CLASSIC parse "
+            "back — a stint may only CONTINUE a parse this process PARKED, and the classic block's park arm is "
+            "the only site that leaves a carrier in `f->compile` under THIS row (the module arm parks into the "
+            "same field under its own row), so more resumes than parks is a carrier installed by a third site "
+            "and a parse being continued that nothing here suspended",
             out->classic_compile_resumed, out->arms[STEP_UNIT_COMPILE_YIELDED]);
     /* AND THE CROSS-ROW ONE, WHICH IS WHAT TIES THE NEW PHASE TO THE TURN IT IS A PHASE OF. A compile stint
        whose own duration met the slice sits inside a step whose duration is therefore at least as large, and

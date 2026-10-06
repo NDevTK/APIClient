@@ -3203,8 +3203,20 @@ JS_EXTERN int      JS_CreationName(JSContext *ctx, JSValueConst v, char *buf, si
    TRUNCATED creation name is two values under one constraint key, which is the exact collision the ordinal
    exists to prevent. */
 #define JS_CREATION_NAME_MAX 40
-/* MODULE sources: a graph to link and evaluate, not a program to wrap. Returns the evaluation PROMISE. */
-JS_EXTERN JSValue  JS_FlowEvalModule(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags);   /* eval_flags: JS_EVAL_FLAG_STRICT threaded through; opaque flow handle (NULL on error) */
+/* MODULE sources: a graph to link and evaluate, not a program to wrap — and a PARSE THAT RESTS, which is why
+   this answers a status rather than a value. 1 = the graph was linked and evaluated and `*pev` holds the
+   evaluation PROMISE, which the caller owns; 0 = the PARSE handed the thread back and `*pcompile` holds it,
+   so call again with the same arguments; -1 = the compile or the evaluation failed with the exception pending
+   and `*pev` undefined. `eval_flags` threads JS_EVAL_FLAG_STRICT and JS_EVAL_FLAG_INLINE_SCRIPT.
+   IT IS JS_FlowCompileStep's CONTRACT, DELIBERATELY, down to the carrier type and the NULL-declines rule: the
+   module entry compiles through the same driver, polls the same budget hook and the same preempt policy from
+   the parse's own production dispatch, and parks into the same `void *` slot JS_FlowCompileDrop releases. A
+   `pcompile` of NULL is a caller declining that edge and gets the parse it always got, in which case 0 is
+   unreachable. The SOURCE and the FILENAME are borrowed for the whole COMPILE and not for one call.
+   THE PROMISE IS BEHIND THE FINISHED-PARSE ARM because 16.2.1.7.1 ParseModule is the step the carrier parks
+   inside: a suspended parse has produced no Source Text Module Record, so there is nothing to link. */
+JS_EXTERN int      JS_FlowEvalModule(JSContext *ctx, const char *src, size_t len, const char *filename,
+                                     int eval_flags, JSValue *pev, void **pcompile);
 /* 1 = suspended (preempted), 0 = completed. *pres receives the program's COMPLETION VALUE (or JS_EXCEPTION) on
    completion, JS_UNDEFINED while suspended — a script's completion value is part of its completion, so it is not
    optional: pres==NULL is a DCHECK, never a licence to discard the value the program produced. */

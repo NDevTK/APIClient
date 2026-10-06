@@ -622,9 +622,11 @@ typedef struct Flow {
      * it — JS_FlowIsProgram / JS_FlowIsCall, two predicates over the one `base_kind` field — never inferred
      * from this slot being occupied, which is what `!JS_FlowIsCall` and `f->frame ?` both did. */
     void *frame;
-    /* THIS FLOW'S PROGRAM STILL BEING PARSED, NULL WHEN THERE IS NONE (quickjs.h's JS_FlowCompileStep,
-     * which is the entry this slot is handed to — it said JS_FlowNewStep, which composed the parse with an
-     * instantiation and is no longer what the compile site calls, because that site now HOLDS the closure). The
+    /* THIS FLOW'S PROGRAM STILL BEING PARSED, NULL WHEN THERE IS NONE (quickjs.h's JS_FlowCompileStep and
+     * JS_FlowEvalModule, which are the entries this slot is handed to — it said JS_FlowNewStep, which composed
+     * the parse with an instantiation and is no longer what the compile site calls, because that site now
+     * HOLDS the closure; and it named only the classic entry, which was exact while a MODULE parse could not
+     * rest at all and is corrected rather than dropped because one slot and one carrier type invite it). The
      * compile of the row at `script_i` is the one span in the engine that is O(a length the PAGE chose) and
      * used to have no suspend point in it at all; it has one now, and this is where a parse that gave the
      * thread back is kept until the flow is next given it. It is NOT a second frame: while it stands the
@@ -635,7 +637,12 @@ typedef struct Flow {
      * recipe replays the DOCUMENT and the document re-compiles. So a park DROPS it and loses nothing, which
      * is why flow_release frees it rather than refusing to let a mid-compile flow be paged.
      * A FORK NEVER CARRIES ONE: a concolic branch is taken by RUNNING bytecode, and a flow whose program is
-     * still being parsed is running none — asserted where a sibling is built. */
+     * still being parsed is running none — asserted where a sibling is built.
+     * ONE SLOT FOR BOTH OF §8.1.4.4 "Calling scripts"' ENTRIES, AND WHICH ONE PARKED IT IS READ OFF THE STEP
+     * ARM RATHER THAN OFF THIS FIELD. A flow holds at most one row's parse (the compile runs only under
+     * `!f->frame` and the row's cursor does not move while it stands), so a second slot would be a second
+     * encoding of a fact this one already carries; what the two entries do NOT share is the accounting, which
+     * is why they name two rows of solver/step_unit.h's list and why that is recorded there. */
     void *compile;
     /* IS THAT FRAME THE ROW'S PROGRAM, OR THE REPORT THE ROW'S PROGRAM OWES?
      *

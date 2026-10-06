@@ -204,6 +204,40 @@
     /* enough that the compile is worth interleaving, which is the state that */ \
     /* used to be indistinguishable from a step that simply took a long time. */ \
     X(COMPILE_YIELDED,    "compile-handed-the-thread-back")                       \
+    /* AND THE SAME EVENT ON §8.1.4.4 "Calling scripts"' OTHER ENTRY, WHICH IS   */ \
+    /* ITS OWN ROW AND NOT A SHADE OF THE ONE ABOVE — a DECISION, because the    */ \
+    /* obvious answer is to share that row and sharing it makes two landed       */ \
+    /* accounting identities stop meaning what their own messages say.           */ \
+    /* `g_classic_compiles`' declaration states, as an EQUALITY for the life of  */ \
+    /* the process, that `compile STINTS == classic_compiles +                   */ \
+    /* arms[compile-handed-the-thread-back]`; engine_step_unit_runs asserts      */ \
+    /* `classic_compile_overruns <= that sum` and                                */ \
+    /* `classic_compile_resumed <= arms[compile-handed-the-thread-back]`, and    */ \
+    /* the second's own message calls that arm "the one site that leaves a       */ \
+    /* carrier in `f->compile`". A module park filed there would leave both      */ \
+    /* inequalities TRUE and make the equality FALSE: the right-hand side would  */ \
+    /* carry stints of a phase whose numerator counts none of them, so a reader  */ \
+    /* subtracting `yielded - resumed` to recover "parses begun and not ended"   */ \
+    /* — which is the ONE reading that row was built for — would get the classic */ \
+    /* answer plus every module park, with nothing in the output saying so. Two  */ \
+    /* populations behind one row, which is the collapse this whole list exists  */ \
+    /* to undo.                                                                  */ \
+    /* IT NARROWS NOTHING, which is the price stated rather than discovered: the */ \
+    /* population is NEW (a module parse could not rest at all before this row   */ \
+    /* existed — `g_eval_compile_slot` was NULL on that path, so `pd_can_yield`  */ \
+    /* was false for the whole parse), so an archived census is comparable with  */ \
+    /* a new one wherever this row reads zero, which is every session taken      */ \
+    /* before the module entry gained a carrier.                                 */ \
+    /* NO SCALAR COUNTERS COME WITH IT. The classic phase has three              */ \
+    /* (`classic_compiles`, `classic_compile_overruns`, `classic_compile_        */ \
+    /* resumed`) and a module stint raises none of them, deliberately: the       */ \
+    /* module entry compiles AND EVALUATES in one call, so a bracket round it    */ \
+    /* would time a parse and an execution together — which is what              */ \
+    /* solver/engine.c's compile bracket already says in its own words and is    */ \
+    /* why only the classic arm is bracketed. A counter with no reader is the    */ \
+    /* write-with-no-reader defect, and this row IS the reader.                  */ \
+    X(MODULE_COMPILE_YIELDED,                                                     \
+                          "module-compile-handed-the-thread-back")                \
     /* AND THE ROW THAT NEVER HAD A PROGRAM TO COMPILE, which is a different  */ \
     /* event and not a shade of the one above: `program-did-not-compile` is a */ \
     /* PARSER verdict on bytes that arrived, and this is HTML §4.12.1.1       */ \

@@ -2317,7 +2317,12 @@ typedef struct {
      * separately, because every stint ends in exactly one of two already-counted arms:
      *     compile STINTS == classic_compiles + arms[`compile-handed-the-thread-back`]
      * and `classic_compile_overruns <= that sum` is asserted at engine_step_unit_runs where all three are in
-     * one hand. `classic_compile_overruns <= slice_overruns` also still holds by construction and is checked
+     * one hand. EVERY ROW HERE IS THE CLASSIC PHASE'S AND SAYS SO IN ITS NAME, which became load-bearing when
+     * §8.1.4.4 "Calling scripts"' MODULE entry gained the same rest seam: a module stint parks into the same
+     * `f->compile` and names `module-compile-handed-the-thread-back`, so it is in NONE of these three rows and
+     * in none of that sum. That is what keeps the line above an EQUALITY — see solver/step_unit.h, where the
+     * decision is recorded at the arm, and note that the module phase has no counters of its own BECAUSE its
+     * entry compiles and evaluates in one call, so there is no span a bracket could time that is a parse. `classic_compile_overruns <= slice_overruns` also still holds by construction and is checked
      * there; that one additionally rests on a turn reaching the compile at most once, which its own comment
      * names.
      * READ AS A PAIR AND AGAINST A THIRD NUMBER, never alone: `classic_compile_overruns` says whether the rest
