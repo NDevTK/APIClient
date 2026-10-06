@@ -931,13 +931,51 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      silent about how much of the instance either of them is: `stepUs` is "the share of the engine's thread
      that reached a dispatch turn" ONLY against `instanceUs`, which solver/engine.c says in those words at the
      assert, and `instanceUs` was on no real-site driver's line.
-     `slices` IS THE DENOMINATOR `sliceUs` HAS AND `steps` IS NOT, which result.c states at the group and which
-     a reader without it gets WRONG IN A DIRECTION THAT INVENTS A FINDING. Measured, by the author of this
-     hunk, one command before this landed: `sliceUs / steps` on a 180 s drive of gitlab.com/explore reads
-     21.6 ms against solver/quantum.h's 12 ms, which looks like a quantum overshooting by 1.8x on every slice
-     while `sliceOverruns` reports 179 of 3769 asks — two rows contradicting each other because one of them was
-     divided by the wrong row. A slice spans as many steps as the flow takes before it yields, so `steps` and
-     `slices` are two units and `sliceUs/slices` is the mean slice.
+     `slices` IS THE DENOMINATOR `sliceUs` HAS AND `steps` IS NOT — WITHDRAWN, THREE WAYS, ONE OF THEM BY THIS
+     CLAUSE'S OWN CITED AUTHORITY; AND THE RETIRED WORDING IS KEPT BELOW THE VERDICT BECAUSE ITS WORKED
+     EXAMPLE IS THE ONE A READER RE-DERIVES. `sliceUs`' DENOMINATOR IS `steps`. (i) solver/engine.c
+     accumulates `g_slice_us` UNCONDITIONALLY on the line directly above the overrun test, so it is the STEP
+     HALF OF EVERY TURN, and solver/engine.h declares it as one of the two phases of `step_us` with
+     `slice + sched == step` asserted — a per-TURN accumulator, whose population is turns. (ii) That same
+     declaration names `g_slices` as the denominator of `g_loop_us` and `g_between_us` in those words
+     ("`g_slices` IS THEIR DENOMINATOR"), and solver/engine.h says `loop_us / slices` is what a slice costs.
+     (iii) result.c, which this clause CITES, says at that group that `slices` is the denominator NEITHER SPAN
+     would otherwise have — the two spans being `loopUs` and `betweenSlicesUs`, which is the group it is
+     emitted with (`@kind lifetime: instanceUs loopUs betweenSlicesUs slices`). The cited line is real and is
+     about a different operand, which is the mis-aimed citation CLAUDE.md rates as surviving every check a
+     reader makes of it. And the banner sixty lines up is the correction that already said all of this, landed
+     2026-09-23 under a subject naming it, where this clause landed 2026-10-04 — the same wrong division
+     re-derived eleven days after a correction that predicted it would be, which is why that correction says in
+     its own words that it is kept rather than deleted.
+     AND THE REASON IT SURVIVED IS NOT THAT IT LOOKED WRONG — IT IS THAT IT DID NOT LOOK LIKE ANYTHING.
+     MEASURED over seven real-site runs of two documents: `sliceUs/slices` agrees with `loopUs/slices` to
+     within 0.02-0.37% on EVERY ONE of them (ratios 0.9963 to 0.9998), because on these runs `sliceUs` is
+     99.6-99.98% of `loopUs`. So the wrong division does not produce a figure a reader can doubt; it produces a
+     NEAR-DUPLICATE of the row that genuinely answers what a slice cost. That is the redundant-second-answer
+     shape rather than the plausible-datum one, and it is why no reading ever contradicted it: a denominator is
+     checked against the PRODUCER'S ACCUMULATION SITE and never against whether its quotient looks reasonable.
+     AND THE PAIR THE RETIRED CLAUSE CALLED CONTRADICTORY RECONCILES TIGHTLY, AND THE RECONCILIATION IS THE
+     FINDING IT TALKED ITSELF OUT OF. A mean step half of M quanta with only p of turns reaching the slice does
+     not contradict a small p — it REQUIRES the overrunning turns to carry nearly the whole thread, and the
+     bound is TWO-SIDED because a non-overrunning turn is under one quantum BY DEFINITION: their mean step half
+     is at most `sliceUs/sliceOverruns` and at least `(sliceUs - (steps-sliceOverruns)*Q)/sliceOverruns`.
+     MEASURED on those same seven runs, the two bounds land within 1-20% of each other at 104-565 quanta — ONE
+     TURN holding the thread for 1.25 to 6.7 SECONDS against solver/quantum.h's 12 ms — with 2.8-12.2% of turns
+     reaching the slice. The derivation rather than the figures, because both move on every drive: read
+     `sliceUs`, `steps` and `sliceOverruns` off one census and compute both bounds; they are tight exactly when
+     the non-overrunning turns cannot account for the total, which those percentages are what establishes.
+     RETIREMENT: this withdrawal goes when no reading in this file divides a per-TURN accumulator by `slices`,
+     enforced by whatever reads these rows rather than by this paragraph.
+     THE RETIRED WORDING, kept for its worked example: "`slices` IS THE DENOMINATOR `sliceUs` HAS AND `steps`
+     IS NOT, which result.c states at the group and which a reader without it gets WRONG IN A DIRECTION THAT
+     INVENTS A FINDING. Measured, by the author of this hunk, one command before this landed: `sliceUs / steps`
+     on a 180 s drive of gitlab.com/explore reads 21.6 ms against solver/quantum.h's 12 ms, which looks like a
+     quantum overshooting by 1.8x on every slice while `sliceOverruns` reports 179 of 3769 asks — two rows
+     contradicting each other because one of them was divided by the wrong row. A slice spans as many steps as
+     the flow takes before it yields, so `steps` and `slices` are two units and `sliceUs/slices` is the mean
+     slice." Its own numbers are the arithmetic above: 21.6 ms is 1.8 quanta with 4.7% of turns at or over the
+     slice, which puts those turns at about 38 quanta each. Consistent — the same shape this hunk measures at
+     larger magnitudes, read as a contradiction and repaired by changing the denominator.
      `instanceUs` IS A SPAN AND THE OTHER TWO ARE ACCUMULATORS, which is why this file says so beside the kind
      the producer declares: it is ONE subtraction of two clock readings rather than a sum of anything, so it is
      the only row here a reader may put UNDER an accumulator. `loopUs + betweenSlicesUs == instanceUs` is the
@@ -1698,11 +1736,29 @@ function census(r) {
        `loopShare`      = loopUs / instanceUs — the share the engine held at all. A budget that is mostly its
                           COMPLEMENT is the host's relay and message pump rather than the engine, and the two
                           take opposite work.
-       `meanSliceUs`    = sliceUs / slices — the mean slice against solver/quantum.h's quantum. FAR ABOVE it
-                          with `sliceOverruns` small is the quantum not bounding slices at all, which is that
-                          header's named transport gap (a C activation declaring no step boundary answers no
-                          poll however the request was raised); NEAR it is a quantum doing its job and the cost
-                          being the NUMBER of slices.
+       `meanSliceUs`    = loopUs / slices — what a SLICE cost, which solver/engine.h states in those words.
+                          ITS NUMERATOR WAS `sliceUs` AND THAT WAS A WRONG PAIRING, corrected here rather than
+                          deleted because the reading the name promises is the right one and only the row under
+                          it was wrong: `sliceUs` is the STEP HALF OF EVERY TURN (solver/engine.c accumulates
+                          it unconditionally on the line directly above the overrun test, and
+                          `slice + sched == step` is asserted), so its population is TURNS, while `slices`
+                          counts slices and a slice spans as many turns as the flow takes before it yields.
+                          The wrong pairing produced no figure a reader could doubt — MEASURED over seven
+                          real-site runs, `sliceUs/slices` agreed with `loopUs/slices` to within 0.02-0.37%,
+                          because `sliceUs` was 99.6-99.98% of `loopUs` on every one of them — so what it
+                          emitted was a NEAR-DUPLICATE of the row below it rather than a plausible datum. It
+                          diverges exactly where solver/engine.h says it must: a slice that takes NO turn
+                          charges `sliceUs` nothing and charges `loopUs` its whole duration, so the two part
+                          company on precisely the runs where slices are answering without dispatching.
+       `meanStepSliceUs` = sliceUs / steps — the step half of a TURN, which is the population `sliceUs` has and
+                          the one the quantum is compared against, since the overrun test runs per turn on the
+                          line below the accumulation. FAR ABOVE `sliceMs` with `sliceOverruns` small is the
+                          quantum not bounding turns at all, which is solver/quantum.h's named transport gap (a
+                          C activation declaring no step boundary answers no poll however the request was
+                          raised); NEAR it is a quantum doing its job and the cost being the NUMBER of turns.
+                          THE TWO ARE NOT INTERCHANGEABLE AND THE OLD FIELD ANSWERED NEITHER CLEANLY: a mean
+                          over slices cannot be read against a per-turn budget, and that is the reading the
+                          retired wording sixty lines up talked itself out of.
      A DIAGNOSTIC AND NEVER A TARGET: these are identities read WITHIN one run, not totals to compare across
      two, and §Testing's spread rule governs any comparison of them. */
   const spanOf = (num, den) => (typeof o[num] === "number" && typeof o[den] === "number" && o[den] > 0)
@@ -1711,8 +1767,10 @@ function census(r) {
   o.dispatchShareOf = (o.dispatchShare === null) ? null : "stepUs / instanceUs";
   o.loopShare = spanOf("loopUs", "instanceUs");
   o.loopShareOf = (o.loopShare === null) ? null : "loopUs / instanceUs";
-  o.meanSliceUs = spanOf("sliceUs", "slices");
-  o.meanSliceUsOf = (o.meanSliceUs === null) ? null : "sliceUs / slices";
+  o.meanSliceUs = spanOf("loopUs", "slices");
+  o.meanSliceUsOf = (o.meanSliceUs === null) ? null : "loopUs / slices";
+  o.meanStepSliceUs = spanOf("sliceUs", "steps");
+  o.meanStepSliceUsOf = (o.meanStepSliceUs === null) ? null : "sliceUs / steps";
   /* AND THE TWO CONTRACTS THOSE SHARES REST ON, REFUSED BY NAME RATHER THAN LEFT TO A READER. Both are
      `DCHECKF`s at solver/engine.c's engine_step_unit_runs where every operand is in one hand, so a release
      artifact — the one a live drive measures — checks neither, and a share composed over a span that is not
@@ -1958,6 +2016,41 @@ function census(r) {
        `null` whenever either operand is, so a run that stated no quantum composes no overshoot. */
     o.sliceOvershoot = ratio(num("meanSliceUs"), o.sliceMs === null ? null : o.sliceMs * 1000);
     o.sliceOvershootOf = (o.sliceOvershoot === null) ? null : "meanSliceUs / (sliceMs * 1000)";
+    /* …AND THE SAME OVERSHOOT FOR THE POPULATION THE BUDGET IS ACTUALLY TESTED AGAINST, WHICH IS A TURN AND
+       NOT A SLICE. The row above is a SLICE against the budget and is the reading its own banner names; the
+       overrun test is per TURN — solver/engine.h calls `sliceOverruns` "the count of TURNS whose step alone met
+       or exceeded the budget" — so a reader deciding whether the quantum bounds anything wants the turn figure
+       and a reader deciding whether slices run long wants the slice one. Carrying only one of them is why the
+       retired wording sixty lines up read a consistent pair as a contradiction. */
+    o.stepSliceOvershoot = ratio(num("meanStepSliceUs"), o.sliceMs === null ? null : o.sliceMs * 1000);
+    o.stepSliceOvershootOf = (o.stepSliceOvershoot === null) ? null
+      : "meanStepSliceUs / (sliceMs * 1000)";
+    /* AND WHAT ONE OVERRUNNING TURN COST, BOUNDED ON BOTH SIDES, WHICH IS THE DERIVATION THIS DRIVER HAS BEEN
+       LEAVING IN PROSE FOR A READER TO DO BY HAND — the thing this block's own banner calls a derivation
+       nobody performs. `sliceUs` is the step half of EVERY turn, so charging all of it to the overrunning ones
+       is an UPPER bound and `sliceUs / sliceOverruns` is that bound, which solver/live-run's own correction
+       sixty lines up already names. The LOWER bound is the half nothing here has ever stated and it is what
+       makes the pair worth anything: a turn that did NOT overrun spent less than one quantum BY DEFINITION, so
+       those turns account for strictly less than `(steps - sliceOverruns) * quantum` between them and the rest
+       is the overrunning turns'. THE TWO ARE TIGHT EXACTLY WHEN THE NON-OVERRUNNING TURNS CANNOT ACCOUNT FOR
+       THE TOTAL, which is the condition a reader checks by seeing them close, and loose otherwise — so the
+       pair carries its own admissibility rather than needing a caveat. MEASURED over seven real-site runs of
+       two documents when this landed, the two bounds fell within 1-20% of each other at 104-565 quanta, i.e.
+       ONE TURN holding the thread for 1.25 to 6.7 seconds against a 12 ms budget, with 2.8-12.2% of turns
+       reaching the slice. A FRACTION AND NOT A MEAN: `sliceOverruns` is a SUBSET count, so neither of these is
+       a reading of the population `sliceUs` is over, and both are `null` whenever the run stated no quantum,
+       no overrun or no step total. The lower bound can go NEGATIVE, and that is not a defect to clamp — it is
+       the statement that the non-overrunning turns could by themselves account for the whole accumulator, so
+       the pair is UNINFORMATIVE on that run and says so in the one way a reader cannot mistake for a small
+       cost. */
+    const ovr = num("sliceOverruns"), stp = num("steps"), su = num("sliceUs");
+    const qus = (o.sliceMs === null) ? null : o.sliceMs * 1000;
+    o.overrunStepUsAtMost = ratio(su, ovr);
+    o.overrunStepUsAtMostOf = (o.overrunStepUsAtMost === null) ? null : "sliceUs / sliceOverruns";
+    o.overrunStepUsAtLeast = (su === null || ovr === null || stp === null || qus === null || ovr <= 0)
+      ? null : (su - (stp - ovr) * qus) / ovr;
+    o.overrunStepUsAtLeastOf = (o.overrunStepUsAtLeast === null) ? null
+      : "(sliceUs - (steps - sliceOverruns) * sliceMs * 1000) / sliceOverruns";
   }
 
   /* AND WHAT THE PAGE ASKED FOR AND DID NOT GET, WHICH IS THE ONE ABSENCE NOTHING ELSE ON THIS ROW CAN
