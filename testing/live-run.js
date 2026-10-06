@@ -2258,6 +2258,30 @@ function census(r) {
         }
       }
       o.stepUnitOverrunAskDensity = dens;
+      /* AND THE DENSITY DOES NOT PREDICT THE GAP IN EITHER DIRECTION, WHICH IS MEASURED RATHER THAN ARGUED AND
+         IS THE WHOLE REASON `stepUnitOverrunGapArms` HAD TO BE BUILT. A reader holding only this row ranks the
+         arms by it and reaches for the arm with the FEWEST consultations, on the intuition that one suspend
+         point in a long turn is the worst case. That intuition is wrong, and it was wrong in a brief: the two
+         orders came out OPPOSITE on one document and then opposite the other way on a second.
+         MEASURED over three fresh-browser drives of two real apps at the revision that landed the gap row:
+             9075 steps  deliver-one-reply   density    1.0   worst gap   0.28 s
+             9075 steps  resume-program      density   72.2   worst gap   0.04 s
+              520 steps  deliver-one-reply   density    1.0   worst gap   0.18 s
+              520 steps  resume-program      density  116.2   worst gap  12.88 s
+         Same two arms, same document, two drives: on one the sparse arm has the larger gap and on the other
+         the chatty arm has a gap SEVENTY TIMES larger. Neither order is a property of the arm.
+         THE TWO ROWS ANSWER DIFFERENT QUESTIONS AND THAT IS WHY: the density is HOW OFTEN a turn consulted
+         and the gap is HOW LONG the worst silence was, and a turn can consult a hundred times in its first
+         milliseconds and then run for thirteen seconds — which the engine's own one-window derivation says is
+         exactly what an overrunning turn does, since every consultation of one falls inside a single budget
+         from its slice's opening. So a high density is not a defence and a low one is not an indictment.
+         THE ARM TO READ FIRST IS THE ONE WITH THE LARGEST GAP, NEVER THE SMALLEST DENSITY. Over those same
+         three drives the gap order is `microtask-checkpoint` 51.34 s, `start-a-classic-program` 28.05 s,
+         `resume-program` 12.88 s — and `deliver-one-reply`, which the density ranks worst at exactly one
+         consultation per turn, tops out at 1.33 s and reads 0.18 to 0.28 s on the document whose density
+         determined it. It is the MILDEST of the arms that hold the thread, by two orders of magnitude.
+         RETIREMENT: this record goes when the two rows are rendered as one ordered table keyed on the gap, so
+         a reader cannot rank the arms by the density without the gap beside it. */
       o.stepUnitOverrunAskExactlyOne = determined.length ? determined : null;
       o.stepUnitOverrunAskExactlyOneOf = determined.length
         ? "arms whose ask sum EQUALS their non-seamless overrunning turn count with a zero seamless count — " +
