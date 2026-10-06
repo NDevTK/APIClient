@@ -160,8 +160,17 @@ static int sc_memory_index(JSContext *ctx, void *opaque, JSValueConst obj)
            built BY HAND off a BORROWED ArrayBuffer at every READ site (`.buf = JS_GetArrayBuffer(...)`), none
            of which frees it, so the field would be uninitialised at each -- and a zeroed JSValue is the
            INTEGER 0 rather than undefined, since JS_TAG_INT is 0, which is the hazard core/frame/history.c's
-           own stage entry names. RETIREMENT: this record goes when the entry's state fields carry their second
-           slot, because the clause below is then satisfied and nothing is left to re-derive. */
+           own stage entry names.
+           RETIREMENT — MET, AND THE RECORD IS REWRITTEN RATHER THAN DELETED BECAUSE A READER WHO RE-DERIVES WHY
+           StructuredData WAS THE WRONG RECORD TO GROW WILL PROPOSE GROWING IT AGAIN. The condition read: this
+           record goes when the entry's state fields carry their second slot. Both now do —
+           `classicStateSymbols` and `navigationStateSymbols` — both writers are routed through this file's
+           no-transfer-list entry, and both readers take the pair. THE ARM STAYS, which is the part a reader
+           must not mistake for a retirement: it still refuses a caller whose carrier has no second slot, and
+           that population is EMPTY TODAY rather than impossible, which is why the crash below is reworded and
+           not deleted. The population was derived rather than asserted — every surviving caller of the plain
+           entry is exempt by an exemption this crash already states, and the crash now carries the derivation
+           as a command so the next reader gets today's set rather than this sentence. */
         DFAIL("HTML §2.7: a CONCOLIC reached §2.7.4 StructuredSerialize ( value ) on a path whose CARRIER is one "
               "ArrayBuffer with no second slot beside it — §7.2.5's pushState/replaceState and §7.2.6.6's "
               "updateCurrentEntry, both of which land in a §7.4.1.1 session history entry's state field. A live "
@@ -170,10 +179,17 @@ static int sc_memory_index(JSContext *ctx, void *opaque, JSValueConst obj)
               "bytes are read, which is what StructuredWithTransfer's `symbols` does for a queued delivery and "
               "what §9.5's broadcast now carries. THE RECORD TO GROW IS THE ENTRY AND NOT StructuredData: that "
               "struct is freed on the line after its bytes are copied out, so a field on it crosses nothing. "
-              "Give the entry's classic and navigation API state fields a second slot each, route both writers "
-              "through this file's no-transfer-list entry, and read them back where "
-              "session_history_entry_nav_state and history.c's classic read deserialize today; the SAME-TURN "
-              "clone answers it by seeding `memory` with the value itself instead");
+              "ITS TWO NAMED PATHS ARE ROUTED AND THIS ARM NOW GUARDS A CALLER THAT DOES NOT EXIST: "
+              "§7.2.5's pushState/replaceState and §7.2.6.6's updateCurrentEntry both serialize through "
+              "this file's no-transfer-list entry, and §7.4.1.1's entry carries `classicStateSymbols` and "
+              "`navigationStateSymbols` beside its two byte fields. So a caller reaching here is a NEW one, and "
+              "it owes the same arm: the triple AS DATA beside the bytes, rebuilt by concolic_new where they "
+              "are read. DERIVE THE SET RATHER THAN TRUSTING THIS SENTENCE, replacing each comment and string "
+              "body with its OWN newline count so the line numbers are the file's: match the call construct "
+              "and subtract the four exemptions this crash states for itself — the DEFINITION, the "
+              "DECLARATION, ab_out (whose operand is the BUFFER, which recurses into no JSValue), and a caller "
+              "whose operand is a LITERAL primitive; the SAME-TURN clone answers it by seeding `memory` with "
+              "the value itself instead");
         return -1;
     }
     ln = structured_transfer_len(ctx, m->leaves);

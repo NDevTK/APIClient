@@ -291,7 +291,10 @@ JSValue session_history_entry_nav_id(JSContext *ctx, JSValueConst e);      /* th
 JSValue session_history_entry_nav_state(JSContext *ctx, JSValueConst e);
 /* §7.2.6.6's updateCurrentEntry step 4 and §7.2.6.8's notify-about-the-committed-to-entry are the writers.
    `d` is BORROWED; this copies the bytes into the entry. */
-void    session_history_entry_set_nav_state(JSContext *ctx, JSValueConst e, const StructuredData *d);
+/* `d` IS THE PAIR AND BOTH HALVES ARE ONE VALUE — the bytes and the `symbols` table a reference past the
+   transfer list resolves out of, which is how a state the page computed from unknown input survives this
+   entry's park and resume. BORROWED; both halves are copied or dupped. */
+void    session_history_entry_set_nav_state(JSContext *ctx, JSValueConst e, const StructuredWithTransfer *d);
 /* The entry's URL, as the string §7.2.6.5's `url` returns. OWNED. */
 JSValue session_history_entry_url(JSContext *ctx, JSValueConst e);
 /* Does this entry's §7.4.1.2 document state name THIS realm's Document — §7.2.6.5's `sameDocument`, and the

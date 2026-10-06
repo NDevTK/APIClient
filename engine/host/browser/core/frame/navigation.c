@@ -661,7 +661,7 @@ static int js_nav_update_current_entry(JSContext *ctx, JSStepHdr *hdr, void *sta
                       "before this body was entered");
     {
         JSValue current = nav_current_entry(ctx), she, st_v;
-        StructuredData d;
+        StructuredWithTransfer d;
 
         /* STEPS 1 AND 2: "If current is null, then throw an 'InvalidStateError' DOMException." A page reaches
            it deliberately — a detached iframe's `navigation.updateCurrentEntry({state:x})` — which is why it
@@ -678,7 +678,13 @@ static int js_nav_update_current_entry(JSContext *ctx, JSStepHdr *hdr, void *sta
            `required any state` — the member is required, so the declaration has already refused a dictionary
            without it and this read cannot be absent. */
         st_v = idl_dict_get(ctx, argv[0], "state");
-        if (structured_serialize(ctx, st_v, &d) < 0) {
+        /* THE PAIR ENTRY, AND WITH NO TRANSFER LIST IT IS §2.7.4 ITSELF. structured_clone.h states the
+           identity: over an empty memory §2.7.7's step 3 IS §2.7.4's whole body. What it buys is the `symbols`
+           table, without which a CONCOLIC reached from inside `state` has nothing to ride and that file's write
+           hook refuses it by name -- which made `navigation.updateCurrentEntry({state: location.hash})` a dev
+           abort where a browser stores a string. JS_UNDEFINED rather than an empty Array because
+           `NavigationUpdateCurrentEntryOptions` has no `transfer` member at all. */
+        if (structured_serialize_transfer(ctx, st_v, JS_UNDEFINED, &d) < 0) {
             JS_FreeValue(ctx, st_v);
             JS_FreeValue(ctx, current);
             JS_FreeValue(ctx, cb_result);
@@ -689,7 +695,7 @@ static int js_nav_update_current_entry(JSContext *ctx, JSStepHdr *hdr, void *sta
         she = navigation_history_entry_she(ctx, current);
         session_history_entry_set_nav_state(ctx, she, &d);
         JS_FreeValue(ctx, she);
-        structured_data_free(ctx, &d);
+        structured_with_transfer_free(ctx, &d);
         /* STEP 5's event: navigationType NULL — which is the whole signal a listener reads to tell this apart
            from a navigation — and `from` the entry that is STILL current, because this method moves nothing. */
         s->ev = navigation_current_entry_change_event_new_to_fire(ctx, NULL, current);
