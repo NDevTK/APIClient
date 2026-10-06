@@ -2980,6 +2980,41 @@ static const char *HTML =
        rather than to a source that never reaches an @H param at all. `v` is the claim. */
     "fetch('/api/clunknown?v=' + cll.contains(location.hash)"
     " + '&c=' + cll.contains('x') + '&h=' + location.hash);"
+    /* DOM §7.1's `value` SETTER, WHICH IS §4.9 "set an attribute value" AND NOT §7.1's UPDATE STEPS — two
+       algorithms that shared one body here, and the shared body carried the update steps' step 1. The setter
+       steps are quoted whole from the fetched standard: "The value setter steps are to set an attribute value
+       for this's element using this's attribute name and the given value", with no early return anywhere in
+       them. So assigning the EMPTY STRING to an element that carries no `class` attribute must CREATE
+       `class=""`, where the update steps' step 1 ("if get an attribute by namespace and local name ... returns
+       null and set's token set is empty, then return") correctly returns and writes nothing.
+       A FRESH ELEMENT ON PURPOSE: the statement above left `class="x y"` on `cl`, and an element that already
+       has the attribute cannot observe a CREATE. */
+    "var clv = document.createElement('i');"
+    "clv.classList.value = '';"
+    "fetch('/api/clsetempty?v=' + (clv.hasAttribute('class') && clv.getAttribute('class') === ''"
+    " ? 'created' : 'wrong'));"
+
+    /* …AND THE SAME SETTER OVER UNKNOWN EXTERNAL INPUT, WHICH IS WHERE THE PROVENANCE WAS LOST. `setAttribute`
+       hands the DOM chokepoint the SOURCE beside the shape's bytes, so `el.setAttribute('class', x)` keeps x's
+       identity in the (element, name) taint shadow and a sink fed from the attribute afterwards still names a
+       source. `el.classList.value = x` wrote the shape's BYTES and `JS_UNDEFINED` for the taint, so the same
+       bytes came back out of Lexbor with their provenance gone — and §@S's whole search for a breakout starts
+       from a sink reading a value that NAMES ITS SOURCE, so no search started at all.
+       THE WITNESS IS A FORK, FOR §Testing's REASON: an absent abort is confirmed identically by a correct fix
+       and by a path nobody took, and nothing aborts here in either case — the loss is SILENT, which is the
+       shape §NO-STUBS rates worst. So the read is BRANCHED and both arms emit: `?v=fork` is learned only if
+       `getAttribute` handed back a value carrying its domain, and `?v=other` is learned under either reading,
+       which makes it the ARMED CONTROL whose absence says the statement never ran.
+       `getAttribute` AND NOT `className`, because the taint shadow is read at the by-name attribute read whose
+       reader this fixture can point at (core/dom/element.c's `js_el_get_attribute` answers the shadow FIRST);
+       whether the `class` REFLECTION takes the same route is a separate question and not this row's.
+       `.slice(1)` FOR THE REASON THE §7.2.5 ROW BELOW GIVES: a non-empty `location.hash` always begins with
+       `#`, so `=== 'admin'` over the hash itself is infeasible and the engine would prune that arm CORRECTLY,
+       which would read as this row failing for a defect when it failed for the spec. */
+    "var clt = document.createElement('u');"
+    "clt.classList.value = location.hash.slice(1);"
+    "if (clt.getAttribute('class') === 'admin') fetch('/api/cltaint?v=fork');"
+    "else fetch('/api/cltaint?v=other');"
     "var m1 = cl.matches('div.x'); var m2 = cl.matches('span');"
     "var inner = document.createElement('b'); cl.appendChild(inner);"
     "var c1 = inner.closest('div'); var c2 = inner.closest('nav');"
@@ -16255,6 +16290,37 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "pair is the entry's `navigationStateSymbols` beside its `navigationAPIState`, and §7.2.6.5's "
              "getState is a METHOD precisely because it deserializes afresh -- so this reads the table on "
              "every call and a one-shot loss is not a shape it can have");
+    /* DOM §7.1's `value` setter: §4.9's plain set rather than the update steps, and the source it carries.
+       TWO ROWS, because the two halves fail for different reasons in different components — one is the early
+       return belonging to a caller the standard gives none, the other is the taint shadow's write — and a
+       single marker would report both as one silence. */
+    int clsetempty_tt = 1;
+    const char *clsetempty_why = NULL;
+    fold_row(&clsetempty_tt, &clsetempty_why, !!strstr(js, "\"/api/clsetempty\""),
+             "NOT REACHED: the §7.1 `value` setter statement emitted nothing, so this row says nothing about "
+             "whether the setter is §4.9's plain set. The assignment itself cannot throw -- the empty string "
+             "needs no coercion -- so an absence here is the statements above it having ended the program");
+    fold_row(&clsetempty_tt, &clsetempty_why, !!strstr(js, "clsetempty?v=created"),
+             "§7.1's `value` setter assigned \"\" to an element with NO `class` attribute and created none. The "
+             "setter steps are \"set an attribute value for this's element using this's attribute name and the "
+             "given value\" and have no early return; §7.1's UPDATE STEPS do, and their step 1 is what returns "
+             "for an absent attribute and an empty token set. A shared body gives the setter a guard the "
+             "standard does not, so `hasAttribute(\"class\")` reads false where a browser reads true");
+    int cltaint_tt = 1;
+    const char *cltaint_why = NULL;
+    fold_row(&cltaint_tt, &cltaint_why, !!strstr(js, "cltaint?v=other"),
+             "NOT REACHED: the unknown-input `value` setter statement emitted neither arm, so this row says "
+             "nothing about the taint shadow. An unknown reaching the setter is converted by token_bytes to "
+             "its SHAPE rather than through a raw coercion, so this is not the C-boundary abort -- it is the "
+             "statement not having run");
+    fold_row(&cltaint_tt, &cltaint_why, !!strstr(js, "cltaint?v=fork"),
+             "`el.classList.value = <an unknown>` ran and the attribute read back CONCRETE: the comparison was "
+             "DECIDED where this flow should have forked, so the (element, name) taint shadow holds no source "
+             "for this write. §7.1's setter writes ONE value and it is the whole of the attribute, so the "
+             "shadow's one JSValue per attribute is the right shape here -- the mutation family's is not, and "
+             "the residual at core/dom/dom_token_list.c's update steps says why. HOW THIS COSTS A FINDING: a "
+             "sink fed from the attribute afterwards reports concrete bytes with no source, so no @S search "
+             "starts for a breakout that is real");
     /* §5.1's open through to `success`, §2.7 + §2.8's request inside it, and §2.5's LIST key path over the
        store the same upgrade creates — the marker's own sentence-by-sentence account is beside the statement
        that builds it.
@@ -19341,6 +19407,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            says the triple was lost. */
         { "hist-state-symbols", hstate_tt, "hstate?v=other", SESS_EXPLORE, hstate_why },
         { "nav-state-symbols", navstate_tt, "navstate?v=other", SESS_EXPLORE, navstate_why },
+        /* §7.1's `value` setter, keyed on the control arm for the taint row and on the claim for the other:
+           `clsetempty` has ONE arm, so its endpoint IS its claim, while `cltaint` has two and the key names
+           the one whose absence means the statement did not run. */
+        { "tokenlist-value-creates", clsetempty_tt, "/api/clsetempty", SESS_EXPLORE, clsetempty_why },
+        { "tokenlist-value-taint", cltaint_tt, "cltaint?v=other", SESS_EXPLORE, cltaint_why },
         { "idb-open", idbopen_tt, "/api/idbopen", SESS_EXPLORE, idbopen_why },
         { "idb-record", idbrec_tt, "/api/idbrec", SESS_EXPLORE },
         { "idb-record-taint", idbtaint_tt, "/api/idbrec", SESS_EXPLORE },

@@ -241,16 +241,33 @@ static uint32_t tl_size(JSContext *ctx, JSValueConst this_val)
  * happen — an attribute change step, a mutation record, a custom element's attributeChangedCallback, and an
  * entry in the running flow's DOM delta.
  *
- * NAMED RESIDUAL — the write carries NO TAINT. NOT COVERED: an unknown token's provenance. `setAttribute`
- * (element.c), `input.value =` and a `dataset` write all hand dom_cow_set_attribute the source beside the
- * shape's bytes, so `el.setAttribute('class', x)` keeps x's identity in the (element, name) shadow map and
- * `el.classList.add(x)` does not. NEXT DIFF: list_write takes the taint its caller holds — which for `value =`
- * is one value and is the whole of it, and for a MUTATION is not, because the serialized attribute is composed
- * of several tokens of which only some are unknown and dom_cow_set_attribute carries ONE JSValue for the whole
- * attribute; so the mutation half needs a per-token key in that map before it can be honest, and half of it is
- * worse than none. HOW ITS ABSENCE SHOWS: `classList.add(location.hash.slice(1))` followed by a sink fed from
- * `el.className` reports concrete bytes with no source, so no @S search starts for a breakout that is real. */
-static void list_write(lxb_dom_element_t *el, const char *attr, const char *val, size_t len)
+ * AND IT IS NOT THE `value` SETTER, WHICH USED TO SHARE THIS BODY AND INHERITED STEP 1 WITH IT. §7.1's
+ * "The value setter steps are to set an attribute value for this's element using this's attribute name and
+ * the given value" — quoted from the fetched standard — names DOM §4.9 "set an attribute value" and gives it
+ * NO early return, so `el.classList.value = ""` on an element carrying no `class` attribute must CREATE
+ * `class=""`. Through this body it created nothing: the guard above is the UPDATE STEPS' step 1 and the
+ * standard gives the setter none, which is the §A-QUESTION-SOME-ENTRIES-ASK shape with the guard belonging to
+ * one caller of two. They are two spec algorithms and are now two call sites, for element.c's reason about
+ * `setAttribute` against `setAttributeNS`: "the two can each find an attribute the other cannot, so they are
+ * two functions and not one with a flag".
+ *
+ * NAMED RESIDUAL — THIS WRITE carries no taint, and the `value` setter's now does. NOT COVERED: the
+ * provenance of an unknown token reaching a MUTATION. `setAttribute` (element.c), `input.value =`, a `dataset`
+ * write and now §7.1's `value` setter all hand dom_cow_set_attribute the source beside the shape's bytes, so
+ * `el.setAttribute('class', x)` and `el.classList.value = x` keep x's identity in the (element, name) shadow
+ * map and `el.classList.add(x)` does not. WHY THIS HALF IS NOT THE SAME DIFF: the serialized attribute a
+ * mutation writes is composed of SEVERAL tokens of which only some are unknown, and the shadow map carries ONE
+ * JSValue for the whole attribute, so the honest shape is a per-token key in that map — which is why
+ * `JS_UNDEFINED` here is a decision and not an omission, and why half of it would be worse than none. WHAT THE
+ * NEXT DIFF BUILDS: a per-token entry in solver/dom_cow.h's (element, name) map, keyed by the token's own
+ * bytes, so `add` can hand each argument's taint with the token it wrote. HOW ITS ABSENCE SHOWS: an element
+ * whose `class` was set by `classList.add(<an unknown>)`, read back through a sink fed from `el.className`,
+ * reports concrete bytes with no source, so no @S search starts for a breakout that is real — while the same
+ * element written through `classList.value = <the same unknown>` now reports the source.
+ * `JS_UNDEFINED` IS ALSO THE POSITIVE STATEMENT THAT AN EARLIER TAINT NO LONGER DESCRIBES THIS ATTRIBUTE,
+ * which dom_cow.h states for every concrete write: a mutation re-serialises the whole set, so bytes an earlier
+ * source supplied are not what the attribute holds afterwards. */
+static void list_update_steps(lxb_dom_element_t *el, const char *attr, const char *val, size_t len)
 {
     size_t have = 0;
     if (len == 0 && !lxb_dom_element_get_attribute(el, (const lxb_char_t *)attr, strlen(attr), &have))
@@ -268,12 +285,26 @@ static void list_write(lxb_dom_element_t *el, const char *attr, const char *val,
    names `el.classList.contains('is-admin')` as how a bundle gates a whole branch of its UI.
    An unknown denotes its SHAPE, a real string stable per source, so one source is one stable class. Anything
    else converts with its REAL length, because a token is compared as BYTES and a NUL inside one is not a
-   terminator. OWNED either way: free with JS_FreeCString. */
-static const char *token_bytes(JSContext *ctx, JSValueConst v, size_t *len)
+   terminator. OWNED either way: free with JS_FreeCString.
+   THE TAINT IS RESOLVED HERE, AT THE BRANCH THAT DECIDES THE BYTES, which is solver/dom_cow.h's own rule for
+   this pair stated one layer up: "VALUE AND TAINT ARE ONE WRITE", because "a caller that made one and not the
+   other left a stale taint on a fresh value". A caller that computed the bytes here and asked `concolic_is`
+   again for itself would be two answers to one question, which is the shape that drifts.
+   `taint` MAY BE NULL AND THAT IS A POSITIVE STATEMENT ABOUT THE CALLER: it writes no attribute. `contains`
+   and `supports` ANSWER a question and write nothing, and the mutation family composes one attribute out of
+   several tokens, for which one JSValue is the wrong shape — the named residual at the update steps above is
+   exactly that, so a mutation passing NULL here is deliberate rather than forgetful. */
+static const char *token_bytes(JSContext *ctx, JSValueConst v, size_t *len, JSValueConst *taint)
 {
     const char *s;
 
-    if (!concolic_is(v)) return JS_ToCStringLen(ctx, len, v);
+    if (!concolic_is(v)) {
+        /* dom_cow.h: JS_UNDEFINED is what CLEARS any earlier taint — a concrete write says this attribute is
+           no longer a source. */
+        if (taint) *taint = JS_UNDEFINED;
+        return JS_ToCStringLen(ctx, len, v);
+    }
+    if (taint) *taint = v;
     s = concolic_name_cstr(ctx, v);
     *len = s ? strlen(s) : 0;
     return s;
@@ -330,6 +361,7 @@ static JSValue js_tl_set_value(JSContext *ctx, JSValueConst this_val, JSValueCon
 {
     const char *attr, *s;
     size_t slen = 0;
+    JSValueConst taint = JS_UNDEFINED;
     lxb_dom_element_t *el = list_owner(ctx, this_val, &attr);
 
     (void)magic;
@@ -337,10 +369,17 @@ static JSValue js_tl_set_value(JSContext *ctx, JSValueConst this_val, JSValueCon
     /* the declaration passes UNKNOWN input through as itself; an unknown denotes its SHAPE, so
        `el.classList.value = x` writes one stable value per source instead of ending the document at the
        coercion — token_bytes, the same answer `contains`, `supports` and every mutation give. A CONCRETE value
-       arrives with its real length there, which a strlen here did not: `class` may legitimately carry a NUL. */
-    s = token_bytes(ctx, val, &slen);
+       arrives with its real length there, which a strlen here did not: `class` may legitimately carry a NUL.
+       AND IT CARRIES THE SOURCE, which is the whole of this attribute's provenance for this one caller: §7.1
+       says the setter steps "set an attribute value for this's element using this's attribute name and THE
+       GIVEN VALUE", so every byte written is that one DOMString's and the shadow map's one JSValue per
+       attribute is the right shape here. The mutation family's is not, and the update steps say why.
+       §4.9's PLAIN SET AND NOT THE UPDATE STEPS, which is why this no longer routes through
+       list_update_steps: the setter has no early return, so `classList.value = ""` on an element with no
+       `class` attribute CREATES one, where the update steps' step 1 would have returned. */
+    s = token_bytes(ctx, val, &slen, &taint);
     if (!s) return JS_EXCEPTION;
-    list_write(el, attr, s, slen);
+    dom_cow_set_attribute(el, attr, s, slen, taint);   /* chokepoint: capture-then-mutate, per flow */
     JS_FreeCString(ctx, s);
     return JS_UNDEFINED;
 }
@@ -461,7 +500,7 @@ static JSValue js_tl_contains(JSContext *ctx, JSValueConst this_val, int argc, J
 
     (void)magic;
     if (!el || argc < 1) return JS_FALSE;
-    tok = token_bytes(ctx, argv[0], &tlen);
+    tok = token_bytes(ctx, argv[0], &tlen, NULL);
     if (!tok) return JS_EXCEPTION;
     v = list_value(el, attr, &vlen);
     has = value_has(v, vlen, tok, tlen);
@@ -515,7 +554,7 @@ static JSValue js_tl_supports(JSContext *ctx, JSValueConst this_val, int argc, J
                                       "associated element");
     /* An unknown token denotes its SHAPE, the same rule `value =` and `contains` follow — one spelling, in
        token_bytes, because three members answering the same question three times is three chances to differ. */
-    tok = token_bytes(ctx, argv[0], &tlen);
+    tok = token_bytes(ctx, argv[0], &tlen, NULL);
     if (!tok) return JS_EXCEPTION;
     /* Validation step 2: "Let lowercaseToken be token, in ASCII lowercase." */
     lower = malloc(tlen + 1);
@@ -607,7 +646,7 @@ static JSValue js_tl_mutate(JSContext *ctx, JSValueConst this_val, int argc, JSV
         CHECK(a != NULL, "DOMTokenList: OOM collecting a token-list mutation's tokens");
     }
     for (i = 0; i < na; i++) {
-        a[i].s = token_bytes(ctx, argv[i], &a[i].len);
+        a[i].s = token_bytes(ctx, argv[i], &a[i].len, NULL);
         if (!a[i].s) { result = JS_EXCEPTION; goto out; }
         tok_bytes += a[i].len;
     }
@@ -694,7 +733,7 @@ static JSValue js_tl_mutate(JSContext *ctx, JSValueConst this_val, int argc, JSV
        element carrying `class="a  a  b"` is re-serialised to `class="a b"`. That is the spec's own
        normalisation and not a stray write — the update steps' step 1 is what keeps it from CREATING an
        attribute on an element that has none. */
-    list_write(el, attr, out, out_len);
+    list_update_steps(el, attr, out, out_len);
     if (magic == 2)      result = JS_NewBool(ctx, want);
     else if (magic == 3) result = JS_TRUE;   /* §7.1 replace step 6 — step 3 owns the absent case */
 out:
