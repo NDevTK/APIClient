@@ -1789,6 +1789,18 @@ const wzOne = (m) => {
   for (const k of Object.keys(h)) tot += h[k];
   return { may: h['may-rest-on'] || 0, none: h['no-witness'] || 0, un: h['unasked'] || 0, tot, h };
 };
+/* THE DECLARED CLASS SET OF THE ARTIFACT A MEASUREMENT RAN ON, and the THREE absences kept apart rather than
+   folded, for the reason site.mjs gives at the field: `null` is no @COLD census on that record at all,
+   `(field-absent)` is a cold census from a build older than the field, and an OBJECT is the real answer. A
+   reader that treated the first two as "declares nothing" would report a build with no `unknown` arm where
+   the truth is that nobody asked — which is the accusing direction, and it is the one this pair exists to
+   refuse. `bar` is whether the key the hard bar keys on is PRESENT, at any value including zero: presence is
+   the declaration and the count is a different fact this row does not read. */
+const declOne = (m) => {
+  const d = m ? m.epAddressClassDeclared : undefined;
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return { h: false, bar: false, n: 0 };
+  return { h: true, bar: ('unknown' in d), n: Object.keys(d).length };
+};
 const rzRows = table.map((t) => {
   const per = t.measurements.map(rzOne);
   const stated = per.filter((x) => x.h);
@@ -1803,6 +1815,18 @@ const rzRows = table.map((t) => {
      about ONE run; taking each from the pass that maximises it would be two runs' margins read as one
      document, which is the defect this file's own data-door section records having committed once. */
   const wAtBest = bestAt >= 0 ? wzOne(t.measurements[bestAt]) : null;
+  /* …AND WHETHER THE ARTIFACT THAT RAN EVEN HAS THE CLASS THE BAR KEYS ON, READ AT THAT SAME PASS. This is
+     the one question a `cleared: 0` could not be read against: a build whose enum has no `unknown` arm
+     CANNOT clear the bar, and from bridge.js's own partition that is byte-identical to a build that has it
+     and reached no such address — because that partition counts OBSERVED values, so an unreached class has
+     no key. It had to be answered by `git show <head>:engine/host/solver/endpoint.h | grep -c
+     EPA_SOURCE_DETERMINED` over fifteen artifact heads, which is an archaeology standing in for a field.
+     THE MEMBER SET AND NEVER THE COUNTS, and at the BAR'S OWN PASS for §A-CONSERVATION-IDENTITY's reason
+     exactly as `wAtBest` is: site.mjs relays this from solver/result.c's `@kind gauge` row, which is the
+     partition at ONE CENSUS INSTANT while the bar is over the whole emitted array, so the two are two
+     moments and nothing here differences them. What a gauge at any instant still proves is which keys the
+     build DECLARES, and that is all this reads. */
+  const declAtBest = bestAt >= 0 ? declOne(t.measurements[bestAt]) : null;
   /* AND THE SPREAD OF THE BOUND OVER EVERY PASS THAT STATED IT, WHICH IS NOT DECORATION BESIDE THE
      AT-BEST VALUE — IT IS WHAT MAKES THAT VALUE READABLE AT ALL. The at-best pass is chosen by MAX
      `runtime-only` with ties keeping the first, and on a document where the bar reads 0 on every pass EVERY
@@ -1905,6 +1929,16 @@ console.log('hard bar totals: ' + JSON.stringify({
      `runtimeOnlyBestPass` composes an over-claim out of a floor, and adding them to each other counts one
      surface twice. Read the two as a RANGE, which is the only thing a moving quantity supports. */
   mayRestOnAtItsOwnBestPass: rzStated.reduce((n, r) => n + r.wMax, 0),
+  /* AND THE TWO FIGURES THAT SAY WHETHER A `sitesClearingTheBar` OF ZERO IS EVEN A STATEMENT ABOUT THE
+     ENGINE. `sitesStatingTheDeclaredSet` is the count that could be ASKED — a census written before the
+     field, or by a build whose cold census carried none, answers neither and is counted in neither, which is
+     the absence of a question and not a zero. `sitesWhoseBuildDeclaresTheBarClass` is how many of THOSE ran
+     an artifact whose enum has the arm the bar keys on, read off the macro rather than typed: slice
+     `#define ENDPOINT_ADDRESS_CLASSES(X)` in solver/endpoint.h to its first line not ending in a backslash
+     and the arms are `concrete`, `source-determined`, `unknown`. Never summed with anything above. */
+  sitesStatingTheDeclaredSet: rzStated.filter((r) => r.declAtBest && r.declAtBest.h).length,
+  sitesWhoseBuildDeclaresTheBarClass:
+    rzStated.filter((r) => r.declAtBest && r.declAtBest.h && r.declAtBest.bar).length,
 }));
 /* WHICH DOOR PAIRS WITH WHICH WITNESS CLASS, OVER THE CORPUS — the one statement the two margins above
    structurally cannot make, and the column that had no reader anywhere until this block. A reader holding

@@ -1300,6 +1300,37 @@ const row = {
      taken off the SAME counted entry, so each sums to that number by the producer's own assertion and the
      set is one moment rather than four. The keys are bridge.js's own spellings, derived from ONE list. */
   ...Object.fromEntries(EP_FACT_FIELDS.map((k) => [k, epFact(k)])),
+  /* …AND THE ENGINE'S OWN CLASS PARTITION BESIDE THEM, WHICH IS A DIFFERENT INSTRUMENT AND NOT A DENSER
+     COPY OF `endpointAddressClass`. The four rows above are bridge.js's, composed from the EMITTED ROWS by
+     `endpointFactHistogram`, which increments a bucket per observed value -- so a class the artifact
+     DECLARES and no row reached gets NO KEY AT ALL, and a reader cannot tell that from a class the artifact
+     does not declare. solver/endpoint.c's own walk is dense BY CONSTRUCTION (`for (c = 0; c < EPA_COUNT;
+     c++)`) and its banner says why in as many words: "an `unknown` that is ABSENT and an `unknown` that read
+     0 are the two facts a reader most needs kept apart, the first being an instrument that stopped writing
+     the field". That distinction was computed, had readers in testing/live-run.js and extension/popup.js,
+     and never reached THIS artifact -- MEASURED with an armed control: over the census files beside
+     report.mjs, `epAddressClass` occurred in 0, `endpointAddressClass` in 125, and an invented key in 0.
+     WHAT IT IS FOR, AND IT IS EXACTLY ONE THING: THE DECLARED MEMBER SET OF THE ARTIFACT THAT RAN. A key
+     present reading 0 proves that build's enum HAS that class; a key absent proves it does not. That is the
+     question a corpus-wide razor reading could not ask from a row at all -- it had to be answered by
+     `git show <artifact head>:engine/host/solver/endpoint.h | grep -c EPA_SOURCE_DETERMINED`, which is an
+     ARCHAEOLOGY over fifteen heads standing in for a field.
+     THE TWO MAY NOT BE DIFFERENCED, WHICH IS WHY NO VERDICT IS COMPOSED HERE AND WHY THIS IS A SECOND ROW
+     RATHER THAN A REPAIR OF THE FIRST. solver/result.c declares this one `@kind gauge` -- it is the
+     partition at ONE CENSUS INSTANT -- and bridge.js's is over the whole emitted array at the end of the
+     run. They are two moments, so they are free to disagree and a reader subtracting them is asking an
+     identity neither producer asserts (CLAUDE.md §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE). The
+     MEMBER SET is the one thing a gauge at any instant still proves, and it is all this row is read for.
+     `null` IS A POSITIVE STATEMENT AND NEVER A DEFAULT: no run on this record carried a @COLD census at
+     all, which is the same `null` the scheduler rows above spell for the same reason. `(field-absent)` is a
+     cold census that carried counters and NOT this key -- an artifact older than the field, a fact about the
+     BUILD. Neither is folded into the other and neither is `{}`, which would be an artifact that stated the
+     partition of an empty surface. */
+  epAddressClassDeclared: !counted.length ? null
+    : (!counted[counted.length - 1].cold || typeof counted[counted.length - 1].cold !== 'object'
+       || Array.isArray(counted[counted.length - 1].cold)) ? null
+    : ('epAddressClass' in counted[counted.length - 1].cold)
+        ? counted[counted.length - 1].cold.epAddressClass : EP_FACT_ABSENT,
   netDoorAsk: netAsk(),
   sinks: counted.length ? counted[counted.length - 1].sinks : null,
   /* THE RUNG THE @S SEARCH DIED AT, WHICH `sinks` ALONE CANNOT NAME. Emission is working-PoC-only and
