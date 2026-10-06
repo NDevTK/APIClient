@@ -817,7 +817,16 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    re-derives it from "the mint is in solver/engine.c" will write it again. It read: "a MINT-SIDE statement and
    a CLASSIFIER-SIDE read, which §A-CROSS-BOUNDARY-DIFF makes ONE landing spanning `solver/engine.c`". Both
    halves of that are true and the file list is SHORT, because the fact has to RIDE THE VALUE and the value's
-   record is solver/concolic.c's. TWO THINGS DECIDE IT AND NEITHER IS A PREFERENCE. (1) The question is a
+   record is solver/concolic.c's.
+   THE TWO SENTENCES BELOW ARE THE SCOPE ARGUMENT AND BOTH ARE NOW DISCHARGED, WHICH IS SAID HERE RATHER THAN
+   ONLY AT THE RETIREMENT EIGHTY LINES DOWN: each is written in the PRESENT TENSE about what cannot be done,
+   so a reader who stops at either one reads a standing claim the tree has answered, and a record's verdict
+   belongs where its claim is rather than at its tail. Leg (1) is discharged by the walk being paid AT THE
+   JOIN (`derived_root_whose` beside `derived_root_join`), so no consumer needs `root_member`; leg (2) by the
+   fact being a parameter of `concolic_new` evaluated PAST both arms, so no caller stamps a record that does
+   not exist. They are kept in their own words because they are the reasons the three refuted routes below are
+   refuted, and a reader who re-derives the scope question without them re-derives those routes with it.
+   TWO THINGS DECIDE IT AND NEITHER IS A PREFERENCE. (1) The question is a
    DISJUNCTION OVER THE ROOT SET, since one page root is enough to clear the bar however many instrument roots
    stand beside it — and `concolic_root_c` may name a SET whose walk `root_member` and whose one speller
    `derived_root_join` are both STATIC to that file, so no sound form of the question is spellable from here.
@@ -878,11 +887,37 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    in; what it can still answer is the grep alone, which is a statement about its hole-bearing addresses and
    not about what the bar did with them. The arithmetic that says a capture IS scorable is free and is in the
    document: both histograms SUM to its own `endpoints`.
-   RETIREMENT: this record goes when solver/concolic.h publishes a predicate answering a property over a
-   value's whole ROOT SET, because the classifier is then spellable from here and the scope argument above has
-   nothing left to decide. MEASURED ABSENT with the command, so this condition is not born met: over that
-   header, `concolic_root_all`, `concolic_roots_all`, `concolic_root_every`, `concolic_root_walk` and
-   `concolic_root_member` each answer NOTHING against `concolic_root_c` answering as the armed control.
+   RETIREMENT — MET BY A CONSTRUCTION, AND THE RECORD IS REWRITTEN RATHER THAN DELETED BECAUSE WHAT A READER
+   RE-DERIVES IS THE SCOPE ARGUMENT AND NOT THE PREDICATE. solver/concolic.h publishes
+   `concolic_root_whose_any` and `concolic_root_whose_all` — a DISJUNCTION and a UNIVERSAL over a value's whole
+   root set, over a `ConcolicRootWhose` the MINT states and `derived_root_whose` unions wherever
+   `derived_root_join` unions the names. So both legs of the scope argument are discharged: the walk is paid at
+   the JOIN, so no consumer needs `root_member`, and the fact is a parameter of `concolic_new` evaluated PAST
+   the pin and candidate arms, so no caller has to stamp a record that does not exist. What a deletion would
+   cost is the retired wording below it, because a reader who re-derives the scope question will re-derive the
+   refuted answers with it — a `{orphan` prefix test, a registry in solver/engine.c, and `concolic_src_c`'s
+   FIRST unknown operand.
+   AND THE CONDITION'S OWN COMMAND STILL ANSWERS ZERO AGAINST THE LANDED CAPABILITY, WHICH IS A FINDING ABOUT
+   THE COMMAND AND IS RECORDED RATHER THAN QUIETLY REPLACED — THE SECOND TIME THIS FILE HAS MET IT, THE FIRST
+   BEING THE WRAPPED `DCHECK` ONE RESIDUAL UP. It named five spellings, and the capability is spelled as
+   neither: re-run over that header, `concolic_root_all`, `concolic_roots_all`, `concolic_root_every`,
+   `concolic_root_walk` and `concolic_root_member` each answer **0** with `concolic_root_c` answering **7** as
+   the armed control, while `grep -cE '^int +concolic_root_whose_(any|all)\(JSValueConst'` answers **2** and an
+   invented sibling answers 0. A MEASURED-ABSENT CLAUSE THAT ENUMERATES CANDIDATE NAMES IS A GUESS AT WHAT THE
+   NEXT AUTHOR WILL CALL THE THING, so it can only see the capability if that author picked one of its guesses
+   — and its zero then reads as the condition being UNMET, which invites a second predicate beside a working
+   one. The clause that works keys on the CONSTRUCT the capability must be: a DEFINITION line, not a token, so
+   prose naming the mechanism cannot satisfy it either.
+   THE RETIRED WORDING: this record goes when solver/concolic.h publishes a predicate answering a property over
+   a value's whole ROOT SET, because the classifier is then spellable from here and the scope argument above
+   has nothing left to decide.
+   RETIREMENT: this record goes when `address_class_of` below ASKS that property — the member that clears
+   §What-the-tool-produces' bar narrowed by WHOSE unknown the address rests on rather than by whether there is
+   one — because the over-claim this residual is about is then gone rather than merely answerable. MEASURED
+   ABSENT with the command, keyed on the published predicate's own name so prose naming the question cannot
+   satisfy it: `grep -c 'concolic_root_whose' engine/host/solver/endpoint.c` answers **0**, against
+   `grep -c 'concolic_example_state' engine/host/solver/endpoint.c` answering **4** as the armed control and an
+   invented accessor answering 0.
 
    AND A SECOND POPULATION IS OVER-CLAIMED FOR A DIFFERENT REASON, WHICH IS A SIBLING AND NOT A SMALLER CASE OF
    THE ONE ABOVE. WHAT IS NOT COVERED: a value whose bytes STAND IN THE SERVED DOCUMENT and which is minted
@@ -896,8 +931,17 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    IT IS NOT ANSWERED BY THE EXAMPLE, which is the route to refute before it is reached for: concolic.h grades
    HELD as "an example a document or a SERVER supplied", so a reply field is HELD and its bytes are off-document
    while an ABSENT injected global is NONE exactly as the instrument hole above is. One accessor, two questions.
-   WHAT THE NEXT DIFF BUILDS: nothing of its own until the landing above lands, because both are the same
-   question asked of the ROOT and the second is then a MEMBER beside the first rather than a second mechanism.
+   WHAT THE NEXT DIFF BUILDS: THE CLAUSE THAT STOOD HERE IS SPENT AND IS REWRITTEN RATHER THAN DELETED,
+   because a reader who re-derives the dependency will write it again. It read "nothing of its own until the
+   landing above lands, because both are the same question asked of the ROOT and the second is then a MEMBER
+   beside the first rather than a second mechanism" — and that landing HAS landed, with the member it
+   predicted: `CONCOLIC_WHOSE_SERVED`, which core/loader/data_block.c states for §4.12.1's block and
+   solver/absent.c states on its PRESENT arm, those being the two populations this clause names. So the
+   prediction held exactly and there is no second mechanism owed. What is owed is the same ONE read the
+   residual above is now waiting on: `address_class_of` asking a property over the root set, which answers
+   both clauses at once because one predicate separates all three members. A reader standing here must not
+   build a second one — that would be the two-answers-to-one-question shape `url_display`'s banner forbids,
+   reached by reading a spent dependency as an open one.
    HOW ITS ABSENCE WOULD SHOW: a run whose razor reads `runtime-only` for a row whose hole names an element or a
    global the served markup itself spells. */
 /* AND THE `flow_running() != NULL` CONJUNCT THAT STOOD ON THE DETERMINED TEST IS GONE, BECAUSE IT WAS NOT A

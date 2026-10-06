@@ -8055,11 +8055,18 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
 
     for (k = 0; k < argc; k++) {
         snprintf(id, sizeof id, "{orphan%016llx.arg%d}", (unsigned long long)hash, k);
-        args[k] = concolic_new(ctx, id, id, JS_UNDEFINED);
+        /* THIS ENGINE'S OWN INSTRUMENT, which is the whole reason that word exists. A driven orphan's
+           argument stood in NO byte anywhere — the thing that never ran is its caller, so nothing supplied
+           it and no parse of anything could state it. §What-the-tool-produces' bar is literally TRUE of an
+           address composed from it ("it exists only at run time") and the claim that bar is MAKING is false
+           of it: nothing was LEARNED, because the hole is ours. The same sentence the assert below makes
+           about the EXAMPLE, made about the PROVENANCE. */
+        args[k] = concolic_new(ctx, id, id, CONCOLIC_WHOSE_INSTRUMENT, JS_UNDEFINED);
         ORPHAN_BINDS_OPEN(args[k], id);
     }
     snprintf(id, sizeof id, "{orphan%016llx.this}", (unsigned long long)hash);
-    self = concolic_new(ctx, id, id, JS_UNDEFINED);
+    /* AND THE RECEIVER IS THE SAME FACT — see the loop above. */
+    self = concolic_new(ctx, id, id, CONCOLIC_WHOSE_INSTRUMENT, JS_UNDEFINED);
     ORPHAN_BINDS_OPEN(self, id);
 #undef ORPHAN_BINDS_OPEN
 

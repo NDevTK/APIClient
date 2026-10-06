@@ -1861,7 +1861,10 @@ JSValue window_proxy_name_value(JSContext *ctx, JSValueConst proxy)
        assert the empty string rather than the name it had. */
     if (wp_closed(p)) return JS_NewStringLen(ctx, "", 0);
     if (p->name_known) return JS_NewString(ctx, p->name ? p->name : "");
-    return concolic_new(ctx, "{window.name}", "window.name", JS_NewStringLen(ctx, "", 0));
+    /* THE WORLD'S: §7.2.2.1's name is written by whoever NAVIGATED this navigable, which is another document
+       and often an attacker's. Nothing in this document's own served bytes states it. */
+    return concolic_new(ctx, "{window.name}", "window.name", CONCOLIC_WHOSE_WORLD,
+                        JS_NewStringLen(ctx, "", 0));
 }
 
 /* §7.2.2.1's `name` SETTER, and the ONE place it is written. It renames the BROWSING CONTEXT, which is why

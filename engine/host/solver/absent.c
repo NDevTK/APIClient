@@ -1386,7 +1386,22 @@ JSValue absent_present_hook(JSContext *ctx, JSValueConst holder, JSAtom name, JS
     if (!base)
         goto done;
     ns_member_spell(base, name, s, &shape, &src);
-    r = concolic_new(ctx, shape, src, JS_DupValue(ctx, value));
+    /* SERVED: this is the PRESENT arm, so the member is one a published record REALLY HOLDS and `value` is
+       the bytes themselves. An inline script in the document this engine was served wrote them, so a parse
+       of those bytes states this value — and it is minted unknown anyway, deliberately, so that a gate over
+       it FORKS rather than being decided for the whole run from what a logged-out visitor was sent. That is
+       exactly the member §What-the-tool-produces' bar must not count, and it is the one fact that separates
+       this arm from the MISS arm one hook down.
+       NAMED RESIDUAL — THE ARM IS WIDER THAN THE POPULATION THAT WORD IS EXACT FOR. WHAT IS NOT COVERED: a
+       record published by a script the run FETCHED rather than by the served document writes its members
+       here too, and whether a parse of a fetched body counts as "the served bytes" is the bar's own question
+       rather than this mint's — so such a member is called SERVED on the strength of a document this file
+       never read. WHAT THE NEXT DIFF BUILDS: the published-namespace registry recording WHICH script wrote
+       the record, which `ns_path_of` already looks a row up by, so the word is read off the row instead of
+       being stated once for both populations. HOW ITS ABSENCE WOULD SHOW: an emitted row whose address rests
+       on a member of a record no element of the served markup spells, reading as a class that says a parse
+       of the markup could have stated it. */
+    r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_SERVED, JS_DupValue(ctx, value));
 done:
     free(shape);
     free(src);
@@ -1487,7 +1502,12 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
        logged-in visitor's flags WOULD hold, and inventing one fabricates an observation. The provenance is
        spelled by the same speller either way — see ns_member_spell. */
     ns_member_spell(base, name, s, &shape, &src);
-    r = concolic_new(ctx, shape, src, JS_UNDEFINED);
+    /* THE WORLD'S, AND THE CONTRAST WITH THE PRESENT ARM IS THE WHOLE OF WHY THIS IS STATED PER ARM: this is
+       the MISS arm, so the member is ABSENT — the document this engine was served states nothing about it,
+       and what WOULD stand there is whatever a server injects for a visitor with state. No parse of any byte
+       this run received can state it, which is the population the bar exists for. The example-free mint one
+       line up is the same fact read from the other end: nothing here knows what a logged-in visitor holds. */
+    r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
 done:
     free(shape);
     free(src);

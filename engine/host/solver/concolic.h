@@ -24,6 +24,80 @@ void concolic_init(JSContext *ctx);
    checks it. */
 void concolic_free(void);
 
+/* WHOSE UNKNOWN A ROOT IS — the fourth fact a provenance holds, and a different question from all three
+ * above it. `concolic_src_c` names WHERE A CANDIDATE IS INJECTED, `concolic_root_c` names WHICH COMPONENT
+ * CARRIED THE BYTES IN, `concolic_ident_c` names WHICH VALUE THIS IS. None of them answers whether anything
+ * outside this engine supplied the unknown at all, and that is the question §What-the-tool-produces' hard bar
+ * turns on: an address, key or value "no parse of the served bytes can state, because it exists only at run
+ * time". Two populations satisfy that sentence literally and fail the claim it is making.
+ *
+ * IT IS A FACT ABOUT THE ROOT AND NEVER ABOUT THE COMPOSITION, which is the axis to get right because the
+ * composition is the one the emitted rows invite and it is wrong in BOTH directions: `fetch(cfg.url)` emits a
+ * single brace with no page literal around it and is entirely the page's, while an origin concatenated onto a
+ * driven orphan's argument is a page-composed string around a hole this engine minted.
+ *
+ * STATED AT THE MINT AND CARRIED, NEVER RE-DERIVED. A spelling test over the root (a `{orphan` prefix) is the
+ * count-of-a-spelling §RUN-DON'T-MATCH forbids and would answer for whatever a later diff renames the
+ * identifier to; a registry keyed by source name is engine state rather than a fact on the value, so a
+ * resumed flow finds it empty and one address grades two ways in two sessions. The mint is the one place the
+ * answer is known and the record is the one place it survives a park.
+ *
+ * `UNSTATED` IS A POSITIVE STATEMENT AND NOT A HOLE, exactly as a NULL `concolic_ident_c` is: it says NO MINT
+ * ON THIS VALUE'S PROVENANCE COULD SAY. TWO PRODUCERS REACH IT and they are one fact rather than two sharing
+ * a bit: a value REBUILT from a record that does not carry the statement (core/structured_clone.c's §2.7.8
+ * rebuild), and a DERIVATION NONE OF WHOSE OPERANDS CARRIED A ROOT, which becomes its own root and so has
+ * one with nothing behind it to speak for. In both the answer is the same: nothing anywhere has stated whose
+ * this unknown is. Neither is asserted to be a non-empty population.
+ * It is a member with a BIT of its own rather than the empty mask, so "nothing stated" and "no root
+ * at all" stay two different answers — the mask is zero exactly when `concolic_root_c` is NULL, which
+ * concolic_alloc asserts beside the `src`/`root` pair it already asserts.
+ *
+ * ORDER IS NOT FREE AT THE LOW END: `UNSTATED` is first so the member that PROVES NOTHING is the one a
+ * reader meets first, and the count is asserted against the mask width at init. */
+#define CONCOLIC_ROOT_WHOSE(X) \
+    /* No mint on this value's provenance stated whose unknown it is. */ \
+    X(CONCOLIC_WHOSE_UNSTATED,   "unstated") \
+    /* A document, a server, an attacker or the ENVIRONMENT supplied it, and no parse of the bytes this \
+       engine was served states it: an injected global the document did NOT spell, a reply field, a \
+       declared attacker source, a viewport or a clock. This is the population the bar exists for. */ \
+    X(CONCOLIC_WHOSE_WORLD,      "world") \
+    /* The bytes STAND IN THE DOCUMENT this engine was served, and the value is minted unknown anyway, \
+       deliberately and correctly, so that a gate over it FORKS rather than being decided for the whole \
+       run. A parse of the served bytes states such a value, so "it exists only at run time" is false of \
+       an address composed from one. */ \
+    X(CONCOLIC_WHOSE_SERVED,     "served") \
+    /* THIS ENGINE minted the hole so that a drive could happen at all — a driven orphan's argument or \
+       receiver, which stood in no byte anywhere because it was never in any byte. The bar is true of such \
+       an address and the product's claim is false of it: nothing was LEARNED, because the hole is ours. */ \
+    X(CONCOLIC_WHOSE_INSTRUMENT, "instrument")
+
+#define CONCOLIC_WHOSE_ARM(id, word) id,
+typedef enum { CONCOLIC_ROOT_WHOSE(CONCOLIC_WHOSE_ARM) CONCOLIC_WHOSE_COUNT } ConcolicRootWhose;
+#undef CONCOLIC_WHOSE_ARM
+
+/* A PROPERTY OVER A VALUE'S WHOLE ROOT SET — the two quantifiers, published because a root MAY NAME A SET and
+ * the walk that makes that exact (`root_member`) and the one speller that unions it (`derived_root_join`) are
+ * both static to solver/concolic.c. No sound form of the question is spellable from outside this file: a
+ * consumer recovering the members by parsing the joined string is the matching §RUN-DON'T-MATCH forbids.
+ *
+ * TWO AND NOT ONE, because the bar and its negation are not each other's complement over a SET. `_any` is the
+ * DISJUNCTION — one world root is enough to clear the bar however many instrument roots stand beside it, since
+ * the address genuinely rests on something a parse cannot state. `_all` is the UNIVERSAL, which is what a
+ * consumer refusing a claim needs: an address EVERY one of whose roots this engine minted rests on nothing
+ * anybody supplied. A value whose roots are mixed answers 1 to `_any` and 0 to `_all` for the same `whose`,
+ * and that is a third state rather than a tie to break here — the consumer decides, because what to do about
+ * a half-ours address is a question about a report and not about a value.
+ *
+ * BOTH ANSWER 0 FOR A NON-CONCOLIC AND FOR A CONCOLIC WITH NO ROOT, which is the same positive statement
+ * `concolic_root_c`'s NULL makes: these bytes entered through nothing this engine minted as a source, so no
+ * root has any property. `_all` is therefore NOT vacuously true on the empty set — a vacuous 1 there would
+ * answer "every root is this engine's own" for a value that has no root, which is the strongest possible
+ * claim made from no evidence.
+ *
+ * Side-effect-free and allocation-free. */
+int         concolic_root_whose_any(JSValueConst v, ConcolicRootWhose whose);
+int         concolic_root_whose_all(JSValueConst v, ConcolicRootWhose whose);
+
 /* Mint a concolic value AT A SOURCE — the root of a derivation, where an unknown enters the program. `shape`
    is the @H/@S display form ("{location.hash}", "/api/{region}"); a DECLARED source's shape is its provenance
    in braces and concolic_source_wrap asserts that, so a component spells the pair from ONE token of its own
@@ -31,8 +105,19 @@ void concolic_free(void);
    also this value's IDENTITY because nothing derived it AND its DELIVERY ROOT because a source read is where
    the bytes entered; `example` (consumed) is the concrete example or
    JS_UNDEFINED when none is known yet. Returns a new owned JSValue. A value produced BY an operation over an
-   unknown is not minted here — the operator's own hook composes its identity from its operands. */
-JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue example);
+   unknown is not minted here — the operator's own hook composes its identity from its operands.
+   `whose` SAYS WHOSE UNKNOWN THIS IS (see ConcolicRootWhose) and is REQUIRED rather than defaulted,
+   which is the whole of why it is a parameter and not a second door beside this one. Every caller knows
+   the answer — a component reading its own member knows whether it read the environment, the served
+   markup or a hole this engine minted — and a door that MEANT one of them by default would put a future
+   instrument mint on §What-the-tool-produces' bar for forgetting, with nothing anywhere to say so. The
+   compiler asking every caller is what makes that state unspellable rather than merely unlikely.
+   IT IS EVALUATED PAST THE TWO ARMS THAT ANSWER A NON-CONCOLIC. A pin and an @S candidate re-fire each
+   return a bare primitive with nowhere for a mark to live, so a caller stamping the fact AFTER this call
+   would lose it for exactly that population and silently; stating it here puts the write past both
+   returns, which is the same reason `src_self` is written by this mint and not by its callers. */
+JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, ConcolicRootWhose whose,
+                     JSValue example);
 
 /* Predicates + accessors — the ONLY concolic test is this domain-carrying one (never a binary know-nothing). */
 int         concolic_is(JSValueConst v);              /* 1 iff v is a concolic value */

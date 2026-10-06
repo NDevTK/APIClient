@@ -331,8 +331,12 @@ static JSValue byte_reader_content(JSContext *ctx, JSValueConst recv, JSValue va
        "the one point at which this document's run acquires attacker-controlled input" and increments the count
        an empty @S surface is read against; server-injected state is unknown input the attacker did not author,
        so minting it there would report a page that read no attacker source as one that read many. */
+    /* BOTH ARMS ARE THE WORLD'S AND THE SPLIT ABOVE IS ABOUT A COUNT RATHER THAN ABOUT WHOSE UNKNOWN IT IS —
+       an attacker authored one and a server the other, and no parse of this document's served bytes states
+       either. `concolic_source_wrap` states the same word at its own entry, so the two arms agree by
+       construction rather than by this line and that one matching. */
     r = attacker ? concolic_source_wrap(ctx, shape, src, value)
-                 : concolic_new(ctx, shape, src, value);
+                 : concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, value);
     free(shape);
     free(src);
     return r;

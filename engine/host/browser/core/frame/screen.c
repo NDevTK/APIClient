@@ -272,7 +272,8 @@ static void screen_env(JSContext *ctx, JSValueConst rec, int idx, JSValue exampl
 
     DCHECK(idx >= 0 && idx < SCR_N, "a Screen environment value was minted for a non-member index");
     CHECK(!JS_IsException(example), "a Screen member's example could not be allocated");
-    v = concolic_new(ctx, SCR_HOLE[idx], SCR_SRC[idx], example);
+    /* THE WORLD'S — a Screen member is the device's, so no parse of the served bytes can state it. */
+    v = concolic_new(ctx, SCR_HOLE[idx], SCR_SRC[idx], CONCOLIC_WHOSE_WORLD, example);
     CHECK(!JS_IsException(v), "minting a Screen environment value failed");
     JS_SetPropertyUint32(ctx, rec, (uint32_t)idx, v);
 }

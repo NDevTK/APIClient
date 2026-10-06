@@ -1362,7 +1362,9 @@ static JSValue xhr_reply_content(JSContext *ctx, XhrData *d, JSValue value)
     /* concolic_new AND NOT concolic_source_wrap: a server's reply is unknown input the ATTACKER did not
        author, and minting it through the attacker door would increment the count an empty @S surface is read
        against — reporting a page that read no attacker source as one that read many. */
-    r = concolic_new(ctx, shape, src, value);   /* consumes `value` as the example */
+    /* THE WORLD'S: a reply is bytes a SERVER stated, which the comment above already distinguishes from the
+       attacker door. Either way nothing in the document this engine was served spells them. */
+    r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, value);   /* consumes `value` as the example */
     free(shape);
     free(src);
     return r;

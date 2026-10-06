@@ -164,7 +164,11 @@ JSValue idle_deadline_new_for_idle_period(JSContext *ctx)
        SPINNING arm on the primary path, which is the one shape of this member that cannot make progress. */
     ex = hr_time_current(ctx);
     CHECK(!JS_IsException(ex), "§4.3's deadline example could not be read from the clock");
-    deadline = concolic_new(ctx, "{IdleDeadline.deadline}", "IdleDeadline.deadline", ex);
+    /* THE WORLD'S, because the deadline is a fact about the HOST'S IDLE PERIOD read off the clock above and
+       no parse of the bytes this engine was served states it — which is exactly the population
+       §What-the-tool-produces' bar exists for. */
+    deadline = concolic_new(ctx, "{IdleDeadline.deadline}", "IdleDeadline.deadline",
+                            CONCOLIC_WHOSE_WORLD, ex);
     CHECK(!JS_IsException(deadline), "minting §4.3's deadline failed");
     JS_SetProperty(ctx, rec, g_atom_deadline, deadline);
     JS_SetProperty(ctx, rec, g_atom_timeout, JS_FALSE);   /* §4.3: "initially false" */

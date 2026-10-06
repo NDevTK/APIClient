@@ -145,7 +145,13 @@ JSValue data_block_wrap_text(JSContext *ctx, lxb_dom_element_t *el, JSValue text
     shape = (char *)malloc(n);
     CHECK(shape != NULL, "data_block: OOM spelling the provenance of a data block's content");
     snprintf(shape, n, "{%s}", src);
-    r = concolic_new(ctx, shape, src, text);   /* consumes `text` as the example */
+    /* SERVED, AND IT IS THE REASON THIS MINT EXISTS AT ALL: §4.12.1 Embedding custom non-visible data with
+       the data-* attributes' block is the element's own CHILD TEXT CONTENT, so the bytes STAND IN THE
+       DOCUMENT this engine was served and the value is minted unknown anyway, deliberately, so a gate over
+       it FORKS instead of being decided for the whole run. A parse of those bytes states this value, so
+       §What-the-tool-produces' "it exists only at run time" is FALSE of an address composed from it — which
+       is why this is a member of its own and not the world's. */
+    r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_SERVED, text);   /* consumes `text` as the example */
     free(shape);
     free(src);
     return r;

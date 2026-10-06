@@ -79,6 +79,21 @@ typedef struct {
     char *root;         /* DELIVERY PROVENANCE: where the bytes ENTERED. Never changed by a derivation,
                            which UNIONS its operands' (one member = unchanged); a SET, walked by
                            root_member. NULL exactly when `src` is */
+    /* WHOSE UNKNOWN EACH MEMBER OF THAT SET IS — a MASK over ConcolicRootWhose and not one member of it,
+       because `root` names a SET and the whole point of the question is that one world root is enough to
+       clear §What-the-tool-produces' bar however many instrument roots stand beside it. A mask is what makes
+       both quantifiers answerable from one read: the DISJUNCTION is one bit, and the UNIVERSAL is the mask
+       being exactly that bit — so `concolic_root_whose_any` and `_all` are two questions asked of ONE fact
+       rather than two facts that could disagree.
+       THE UNION IS MAINTAINED WHERE THE ROOT IS JOINED AND NOWHERE ELSE (derived_root_whose, beside
+       derived_root_join), so the walk is paid at the JOIN rather than at every read, and a value whose root
+       is one member carries exactly one bit.
+       ZERO EXACTLY WHEN `root` IS NULL, which concolic_alloc asserts beside the `src`/`root` pair it already
+       asserts: these bytes entered through nothing this engine minted as a source, so no root has any
+       property. `CONCOLIC_WHOSE_UNSTATED` has a BIT OF ITS OWN rather than being that zero — "no mint could
+       say whose this is" and "there is no root at all" are two different answers, and collapsing them would
+       make the first indistinguishable from a value with no provenance. */
+    unsigned root_whose;
     char *ident;        /* IDENTITY: this exact value, composed below. NULL = this engine cannot spell it */
     /* WHICH PREDICATE A BRANCH OVER THIS VALUE IS ASKING ABOUT, AND WITH WHAT POLARITY — a SECOND name, and
        the two are not interchangeable because they answer two questions. `ident` names THIS VALUE, which is
@@ -964,12 +979,12 @@ static char *derived_operand_shape(JSContext *ctx, JSValueConst v)
 /* Mint a value DERIVED from an unknown one: `ident` is CONSUMED, `example` is CONSUMED, and the candidate
    substitution applies exactly as it does to a source read (see concolic_new). */
 static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *src, const char *root,
-                                char *ident, JSValue example);
+                                unsigned root_whose, char *ident, JSValue example);
 /* …and the same without the substitution, for a value that is NOT a source read: a comparison RESULT is a
    boolean the operator computed, so handing the attacker's payload back in its place would answer a predicate
    with a string. */
 static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src, const char *root,
-                              char *ident, JSValue example);
+                              unsigned root_whose, char *ident, JSValue example);
 
 /* THE PER-FLOW PATH CONSTRAINT. One map carrying every fact this flow has learned about the unknown input it
    read — which is the whole of what a DART/SAGE-lineage constraint is here, because concrete execution grounds
@@ -1917,6 +1932,36 @@ static JSValue pin_of(JSContext *ctx, const char *src) {
 
 static JSClassID g_concolic_class = 0;   /* runtime-allocated; 0 until concolic_init */
 
+/* THE WHOSE-MASK OF AN OPERAND, AS THE ONE IN-FILE READ OF IT — spelled once because every derivation that
+   threads a root threads this beside it, and two spellings of "what does this operand's provenance say" are
+   two chances to answer differently for one value.
+   ZERO FOR A NON-CONCOLIC, which is the same positive statement concolic_root_c's NULL makes at the same
+   call sites: an operand that is not an unknown contributes no root and therefore no property. That is what
+   makes it safe to call on an operand a derivation has not tested — the mask it returns is the empty
+   contribution, so a union over a mixed operand list needs no per-operand guard. */
+static unsigned root_whose_of(JSValueConst v)
+{
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    return c ? c->root_whose : 0u;
+}
+
+/* …AND THE MASK FOR A DERIVATION WHOSE ROOT FELL BACK TO ITS OWN SHAPE, which is the one place the mask cannot
+   simply mirror the operands'. Four derivations below spell their root as `root ? root : shape`: where no
+   operand carried a provenance, the value becomes its OWN root, so it HAS one and concolic_alloc's pair assert
+   requires a nonzero mask beside it — and the union over those operands is empty.
+   UNSTATED IS THE HONEST ANSWER THERE AND NOT A FILLER, which is why this is a named helper and not an inline
+   `: 1u`. That member says NO MINT ON THIS VALUE'S PROVENANCE COULD SAY, and no mint could: the operands had
+   no root to speak for, so nothing anywhere has stated whose this unknown is. It is the same answer the
+   structured-clone rebuild gives for the same reason — a value whose provenance nothing can speak for — which
+   is what makes it ONE fact with one bit rather than two facts sharing one.
+   IT IS NOT A CLAIM THAT THE POPULATION IS NON-EMPTY: `concolic_new_conj` mints with a NULL root and most
+   derivations run over operands that have one, so this arm may never be taken. It is spelled because the
+   assert at the mint makes the un-spelled version a crash rather than a wrong class. */
+static unsigned root_whose_or_unstated(unsigned m)
+{
+    return m ? m : (1u << CONCOLIC_WHOSE_UNSTATED);
+}
+
 /* THIS VALUE'S `src` NAMES THIS VALUE — the record's `src_self`, written from the two mints that read a pin
    under it and from nowhere else. It is a FUNCTION rather than a field write at each site because the two
    mints reach it through different returns (a source read through concolic_derived, a member read through
@@ -2171,6 +2216,29 @@ static char *concolic_joint_join(const char *const *parts, const int *order, int
  *
  * Answers NULL when no operand carries a root, which concolic_alloc reads as the other half of a NULL `src`.
  * The operands are BORROWED; the returned string is OWNED and the caller frees it. */
+/* …AND WHOSE UNKNOWN THAT JOINED SET IS — the UNION, spelled beside the join because the two answer one
+ * question about one set and a reader who found them apart would have to trust that they walk the same
+ * operands. It is the DISJUNCTION maintained AT THE JOIN rather than at every read, which is what makes a
+ * property over a whole root set answerable from one field: a derivation's set is its operands' sets unioned,
+ * so the mask of the union is the OR of theirs, exactly and with no walk left to do later.
+ *
+ * IT MUST NOT BE DERIVED FROM THE JOINED STRING, which is the one way this could have been written wrong. The
+ * string is `root_member`-walkable and says nothing about whose each member is — that fact is stated at the
+ * MINT and carried — so recovering it by matching member names against anything is the count-of-a-spelling
+ * §RUN-DON'T-MATCH forbids and is what this file's `conj` field already records as the banned move.
+ *
+ * ANSWERS 0 WHEN NO OPERAND CARRIES A ROOT, which is exactly when derived_root_join answers NULL, so the pair
+ * concolic_alloc asserts (`!!root == !!root_whose`) holds by construction at every join rather than by a
+ * caller remembering. */
+static unsigned derived_root_whose(const JSValueConst *operands, int n)
+{
+    unsigned m = 0u;
+    int i;
+
+    for (i = 0; i < n; i++) m |= root_whose_of(operands[i]);
+    return m;
+}
+
 static char *derived_root_join(const JSValueConst *operands, int n)
 {
     const char **view;
@@ -3076,7 +3144,8 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
        unknown object is a datum the attacker controls SEPARATELY — which is why this mints a new injection
        identity at all — but it is not a datum that arrives by a different route: whatever carried the object's
        bytes in carried this field's, and a report has to say so. */
-    r = concolic_alloc(ctx, shape, shape, c->root, ident, example_member(ctx, c->example, atom));
+    r = concolic_alloc(ctx, shape, shape, c->root, c->root_whose, ident,
+                       example_member(ctx, c->example, atom));
     /* A MEMBER READ'S `src` IS ITS OWN SHAPE and therefore names this value — which is exactly the
        precondition this function's own `pin_of` arm above stands on, and the reason that arm is legitimate.
        Recorded for the reader that is NOT this mint: a value stashed in the DOM by
@@ -3129,7 +3198,8 @@ static const char *cmp_op_ident(int is_neq, JSConcolicEqOp op) {
  * `ia`/`ib` are the operands' identities in the order the composition wants them and are CONSUMED; `eq_kind`
  * and `tok` are the PIN, which only an equality against a concrete side has (an ordering narrows a domain and
  * determines no value — §Solver-half: a range-gated parameter stays a domain-annotated shape). */
-static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const char *root, char *ia, char *ib,
+static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const char *root,
+                        unsigned root_whose, char *ia, char *ib,
                         int eq_kind, int algo, ConcolicLit tok_kind, const char *tok, const char *subj)
 {
     const char *f[3];
@@ -3177,7 +3247,7 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const c
     ident = concolic_ident_compose("?", f, 3);
     free(ia); free(ib);
     /* NOT a source read, so no candidate substitution — see concolic_alloc's declaration. */
-    r = concolic_alloc(ctx, "{cmp}", src, root, ident, JS_UNDEFINED);
+    r = concolic_alloc(ctx, "{cmp}", src, root, root_whose, ident, JS_UNDEFINED);
     c = JS_GetOpaque(r, g_concolic_class);
     DCHECK(c != NULL, "a comparison result was minted as something that is not a concolic value");
     c->cmp_op = eq_kind;
@@ -3369,7 +3439,16 @@ JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, ConcolicLit ki
     /* THE COMPONENT'S SOURCE IS ITS OWN HOLE. A declared source's shape is its provenance in braces
        (concolic_source_wrap asserts exactly that), so stripping them gives `src` back — stated here rather
        than by calling the stripper on a shape this function was never handed. */
+    /* …AND WHOSE UNKNOWN IT IS, STATED AT THIS ENTRY RATHER THAN ASKED OF ITS CALLERS, for the reason the
+       root one line up is stated here: this door's own contract already fixes the answer. Its operand is a
+       BROWSER COMPONENT'S OWN DECLARED MEMBER — the assert above refuses anything this engine cannot spell,
+       and a declared source's shape is its provenance in braces — so the unknown is one a person, a server or
+       the ENVIRONMENT drives and no parse of the bytes this engine was served states it. That is not a default
+       filling a hole: it is the fact being stated where it is known, exactly as `concolic_new` states a source
+       read's root instead of making seventeen components spell it twice. A door whose callers are NOT all one
+       kind takes the word as a parameter, which is why the general mint does and this one does not. */
     return pred_new(ctx, cmp_op_ident(op == OPCMP_NE, JS_CONCOLIC_EQ_STRICT), src, src,
+                    src ? (1u << CONCOLIC_WHOSE_WORLD) : 0u,
                     concolic_ident_compose("s", sf, 1), concolic_ident_compose("k", kf, 2),
                     op, JS_CONCOLIC_EQ_STRICT, kind, tok, src);
 }
@@ -3400,7 +3479,7 @@ JSValue concolic_new_rel(JSContext *ctx, const char *op, JSValueConst a, JSValue
            "two concrete operands is decided by running it, and minting a predicate for it would put a fork "
            "in the frontier over a question the engine can already answer");
     opq = concolic_is(a) ? a : b;
-    return pred_new(ctx, op, concolic_src_c(opq), concolic_root_c(opq),
+    return pred_new(ctx, op, concolic_src_c(opq), concolic_root_c(opq), root_whose_of(opq),
                     ident_of_operand(ctx, a), ident_of_operand(ctx, b),
                     OPCMP_NONE, CMP_ALGO_NONE, CONCOLIC_LIT_NONE, NULL, NULL);
 }
@@ -3484,7 +3563,7 @@ JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
     for (i = 0; i < n; i++)
         if (!members[i]) {
             free(members); free(order);
-            return concolic_alloc(ctx, "{cmp}", NULL, NULL, NULL, conj_example(ctx, a, b));
+            return concolic_alloc(ctx, "{cmp}", NULL, NULL, 0u, NULL, conj_example(ctx, a, b));
         }
 
     ident_set_order(members, n, order);
@@ -3519,7 +3598,7 @@ JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
 
     /* NOT A SOURCE READ (concolic_alloc, never concolic_derived): a conjunction is a boolean this engine
        COMPUTED, so an @S candidate substituted into it would answer a predicate with a payload. */
-    res = concolic_alloc(ctx, "{cmp}", NULL, NULL, ident, conj_example(ctx, a, b));
+    res = concolic_alloc(ctx, "{cmp}", NULL, NULL, 0u, ident, conj_example(ctx, a, b));
     c = JS_GetOpaque(res, g_concolic_class);
     DCHECK(c != NULL, "a conjunction was minted as something that is not a concolic value");
     c->conj = reclaim_malloc((size_t)n * sizeof *c->conj);
@@ -3774,7 +3853,7 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
        and 3 ("If x is null and y is undefined, return true" and its converse) leave the operand as either of
        TWO values. The pin that followed picked one of them and concretize-on-pin then decided every later
        branch over that source from the choice. See concolic.h's concolic_pin for the full reading. */
-    res = pred_new(ctx, cmp_op_ident(is_neq, op), src, root, iu, io,
+    res = pred_new(ctx, cmp_op_ident(is_neq, op), src, root, root_whose_of(opq), iu, io,
                    tok ? (is_neq ? OPCMP_NE : OPCMP_EQ) : OPCMP_NONE,
                    tok ? (int)op : CMP_ALGO_NONE, kind, tok, subj);
     /* AND WHICH VALUE THE PREDICATE IS ABOUT, BY ITS OWN IDENTITY — read off `opq` BEFORE any reordering, and
@@ -3865,7 +3944,7 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
     /* The RESULT of calling an unknown is a new injection identity — nothing here knows what the call returned,
        so a candidate substitutes at the call — and it is NOT new bytes: whatever carried the callee's bytes in
        carried these. This is the derivation the reported defect walked through (`{location.hash}.slice()`). */
-    r = concolic_derived(ctx, shape, shape, c->root, ident, JS_UNDEFINED);
+    r = concolic_derived(ctx, shape, shape, c->root, c->root_whose, ident, JS_UNDEFINED);
     /* AND THE PREDICATE THE PAGE JUST WROTE, IF THIS RESULT CAN NAME ONE. `if (path.startsWith("/api"))` is
        a gate over `path` exactly as `path === "/api"` is; it determines no VALUE, so it pins nothing and
        carries no bound, and until this line it carried nothing at all — a parameter a prefix check gated
@@ -3989,7 +4068,7 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
     (void)w;
     {
         JSValueConst opq = ca ? a : b, other = ca ? b : a;
-        JSValue res = pred_new(ctx, opid, concolic_src_c(opq), concolic_root_c(opq),
+        JSValue res = pred_new(ctx, opid, concolic_src_c(opq), concolic_root_c(opq), root_whose_of(opq),
                                ident_of_operand(ctx, a), ident_of_operand(ctx, b),
                                OPCMP_NONE, CMP_ALGO_NONE, CONCOLIC_LIT_NONE, NULL, NULL);
         /* A BOUND EXISTS ONLY WHERE THE RELATION'S OWN MEANING IS DETERMINED, and §7.2.12 IsLessThan is what
@@ -4240,7 +4319,8 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
         JS_FreeValue(ctx, exa); JS_FreeValue(ctx, exb);
     }
 
-    res = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape, ident, example);
+    res = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape,
+                           root_whose_or_unstated(derived_root_whose(ops, nops)), ident, example);
     free(shape);
     free(root);
     JS_FreeValue(ctx, sp[-nops]);
@@ -4273,7 +4353,8 @@ JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
         if (p) { example = JS_NewString(ctx, p); JS_FreeCString(ctx, p); }
     }
     JS_FreeValue(ctx, ex);
-    r = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape, ident, example);
+    r = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape,
+                         root_whose_or_unstated(root_whose_of(v)), ident, example);
     free(shape);
     return r;
 }
@@ -4331,7 +4412,7 @@ JSValue concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate) {
         example = JS_NewBool(ctx, b ^ negate);
     }
     JS_FreeValue(ctx, ex);
-    r = concolic_alloc(ctx, shape, src, root, ident, example);
+    r = concolic_alloc(ctx, shape, src, root, root_whose_of(v), ident, example);
     free(shape);
     rc = JS_GetOpaque(r, g_concolic_class);
     DCHECK(rc != NULL, "a ToBoolean result was minted as something that is not a concolic value");
@@ -4451,7 +4532,8 @@ JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst 
     }
     /* `example` is what the CALLER got by RUNNING THE REAL OPERATION on the operands' own examples. It is
        never computed here and never predicted. */
-    r = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape, ident, example);
+    r = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape,
+                         root_whose_or_unstated(derived_root_whose(operands, n)), ident, example);
     free(root);
     for (i = 0; i < n; i++) { free(parts[i]); free((char *)fields[i]); }
     free(parts);
@@ -4533,7 +4615,12 @@ const char *concolic_name_cstr(JSContext *ctx, JSValueConst v) {
    whose shape cannot name it, and merging them would have put that discriminator into every rendered
    provenance while keying the table on a name two values can share. One bit answering two questions is the
    defect this file names at concolic_shape_of; this is the same split over a record. */
-typedef struct { char *atom, *shape, *src, *root, *ident; } KeyName;
+/* `root_whose` IS A COLUMN AND NOT A DERIVED FACT, for the reason the `root` beside it is one: this table
+   re-mints a value whose ORIGINAL is gone, so a fact the re-mint cannot recover from the row is a fact the
+   restored value does not carry. A rebuilt key that answered an empty mask beside a real root would crash
+   at concolic_alloc's pair assert, and one that answered UNSTATED would say nothing could speak for a
+   provenance this table is holding the answer for. */
+typedef struct { char *atom, *shape, *src, *root, *ident; unsigned root_whose; } KeyName;
 static KeyName *g_keynames; static int g_keynames_n, g_keynames_cap;
 static int *g_keynames_hash; static int g_keynames_hash_cap;   /* the index (shape -> idx+1) */
 
@@ -4580,6 +4667,7 @@ static int keyname_str_same(const char *a, const char *b) { return a ? (b && !st
 #endif
 
 static void keyname_record(const char *atom, const char *shape, const char *src, const char *root,
+                           unsigned root_whose,
                            const char *ident)
 {
     KeyName *e;
@@ -4690,6 +4778,7 @@ static void keyname_record(const char *atom, const char *shape, const char *src,
     CHECK(!src   || e->src,   "concolic: OOM copying an unknown key's provenance");
     e->root  = root  ? strdup(root)  : NULL;
     CHECK(!root  || e->root,  "concolic: OOM copying an unknown key's delivery root");
+    e->root_whose = root_whose;   /* one fact with the root above — see the column */
     e->ident = ident ? strdup(ident) : NULL;
     CHECK(!ident || e->ident, "concolic: OOM copying an unknown key's identity");
     g_keynames_n++;
@@ -4803,7 +4892,8 @@ JSValue concolic_key_name_hook(JSContext *ctx, JSValueConst key) {
        THE ATOM AND NOT THE SHAPE THAT IS RECORDED, because the record is what concolic_key_value_hook
        inverts BY THE BYTES THE PAGE HANDS BACK: recording the shape while spending the atom would be a write
        with no reader standing next to a read with no writer, and a restored key would answer nothing. */
-    keyname_record(atom, sh ? sh : "{}", concolic_src_c(key), concolic_root_c(key), concolic_ident_c(key));
+    keyname_record(atom, sh ? sh : "{}", concolic_src_c(key), concolic_root_c(key), root_whose_of(key),
+                   concolic_ident_c(key));
     return JS_NewString(ctx, atom);
 }
 
@@ -4838,8 +4928,8 @@ JSValue concolic_key_value_hook(JSContext *ctx, JSValueConst name)
        EXAMPLE-FREE, which is a positive statement and not a dropped field: which property the attacker names
        is exactly what is not known, so §@H has nothing to carry here — the same rule concolic_key_read_hook
        states about the value such a key reads. */
-    return concolic_derived(ctx, g_keynames[i].shape, g_keynames[i].src, g_keynames[i].root, ident,
-                            JS_UNDEFINED);
+    return concolic_derived(ctx, g_keynames[i].shape, g_keynames[i].src, g_keynames[i].root,
+                            g_keynames[i].root_whose, ident, JS_UNDEFINED);
 }
 
 /* `obj[x]` WITH AN UNKNOWN KEY. Not a coercion of the operand: nothing about x says WHICH slot was meant, so
@@ -4874,7 +4964,8 @@ JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst ke
     f[0] = io; f[1] = ik;
     ident = concolic_ident_compose("[]", f, 2);
     free(io); free(ik);
-    r = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape, ident, JS_UNDEFINED);
+    r = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape,
+                         root_whose_or_unstated(root_whose_of(key)), ident, JS_UNDEFINED);
     free(shape);
     return r;
 }
@@ -4894,7 +4985,7 @@ JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
     shape = shapef("typeof %s", sh ? sh : "{}");
     f[0] = concolic_ident_c(v);
     ident = concolic_ident_compose("typeof", f, 1);
-    r = concolic_derived(ctx, shape, shape, concolic_root_c(v), ident, JS_UNDEFINED);
+    r = concolic_derived(ctx, shape, shape, concolic_root_c(v), root_whose_of(v), ident, JS_UNDEFINED);
     free(shape);
     return r;
 }
@@ -5040,7 +5131,7 @@ static JSValue own_keys_pred(JSContext *ctx, const Concolic *c)
         return JS_UNINITIALIZED;
     /* NOT a source read (concolic_alloc, never concolic_derived): this is a boolean about the record, so an @S
        candidate substituted into it would answer a question with a payload. */
-    return concolic_alloc(ctx, "{cmp}", NULL, NULL, ident, JS_UNDEFINED);
+    return concolic_alloc(ctx, "{cmp}", NULL, NULL, 0u, ident, JS_UNDEFINED);
 }
 
 JSValue concolic_own_keys_pred(JSContext *ctx, JSValueConst record)
@@ -5566,6 +5657,18 @@ static long g_source_reads;
 void concolic_init(JSContext *ctx) {
     JSRuntime *rt = JS_GetRuntime(ctx);
     g_source_reads = 0;   /* the agent's, not one document's: see the counter's declaration above */
+    /* THE WHOSE-MASK HOLDS ONE BIT PER DECLARED MEMBER AND THE RECORD'S FIELD IS WHAT BOUNDS HOW MANY THERE
+       MAY BE — asserted where both are in one hand, because a member added past the width of that field would
+       shift a bit out and answer NO for a provenance a mint had stated. The failure would be silent and in the
+       direction §What-the-tool-produces' bar reads as a positive claim: the member that fell off is the one
+       whose rows stop being distinguishable from every other. It is checked at init rather than at the mint so
+       the cost is once per agent and the report names the LIST rather than whichever value happened to be
+       minted first. */
+    DCHECK(CONCOLIC_WHOSE_COUNT <= (int)(sizeof(unsigned) * 8),
+           "concolic.h's CONCOLIC_ROOT_WHOSE declares more members than the Concolic record's `root_whose` "
+           "mask has bits — the member past the width would shift out, so concolic_root_whose_any would answer "
+           "NO for a provenance its own mint stated and that population would silently stop being "
+           "distinguishable from every other. Widen the field with the list");
     if (g_concolic_class == 0) {
         JS_NewClassID(rt, &g_concolic_class);
         DCHECK(g_concolic_class != 0, "concolic: class id allocation returned 0 — runtime class table exhausted");
@@ -5666,7 +5769,7 @@ void concolic_free(void)
 }
 
 static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src, const char *root,
-                              char *ident, JSValue example)
+                              unsigned root_whose, char *ident, JSValue example)
 {
     JSValue obj;
     Concolic *c;
@@ -5693,6 +5796,23 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
            "a concolic value carries a provenance without a delivery ROOT, or a root with no provenance — the "
            "two are one fact about where the bytes came from and every derivation inherits the second while "
            "some of them re-mint the first, so a mismatch is a derivation that forgot to thread it");
+    /* …AND THE THIRD HALF OF THAT SAME FACT, ASSERTED AT THE SAME LINE FOR THE SAME REASON. A root says WHICH
+       component carried the bytes and the mask says WHOSE UNKNOWN each member of it is, so a root with an
+       empty mask is a derivation that threaded the string and dropped the fact beside it — and the cost of
+       that is not an abort anywhere, it is that `concolic_root_whose_any` answers NO for every member and
+       §What-the-tool-produces' bar silently stops being able to tell a hole this engine minted from one a
+       server supplied. The reverse would be a claim about the provenance of bytes that entered through
+       nothing.
+       THIS IS WHAT MAKES THE THREADING MECHANICAL RATHER THAN REMEMBERED: the mask goes where the root goes at
+       every one of the derivations below, and one that forgets crashes HERE, at the mint, instead of reporting
+       a plausible class for the rest of the session. CONCOLIC_WHOSE_UNSTATED is a BIT, so "no mint could say"
+       passes this and only "nobody threaded anything" fails it. */
+    DCHECK(!!root == !!root_whose,
+           "a concolic value carries a delivery ROOT with no statement of WHOSE unknown it is, or such a "
+           "statement with no root — the two are one fact about where the bytes came from, so a mismatch is a "
+           "derivation that threaded the root string and dropped the mask beside it. Every root-threading mint "
+           "passes root_whose_of(the operand) or derived_root_whose(the operand list); a value no mint could "
+           "speak for is CONCOLIC_WHOSE_UNSTATED, which is a bit of its own and not this empty mask");
     obj = JS_NewObjectClass(ctx, g_concolic_class);
     CHECK(!JS_IsException(obj), "concolic: the value object could not be allocated — a dropped concolic "
                                 "collapses a branch to a concrete arm and deletes everything behind the other");
@@ -5704,6 +5824,7 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
     CHECK(!src || c->src, "concolic: OOM copying a source's provenance");
     c->root = root ? strdup(root) : NULL;
     CHECK(!root || c->root, "concolic: OOM copying a value's delivery root");
+    c->root_whose = root_whose;   /* one fact with the root above — see the field and the assert */
     c->ident = ident;       /* consume — NULL means this engine cannot spell the value; see the struct */
     c->example = example;   /* consume */
     c->cmp_op = OPCMP_NONE;
@@ -5722,7 +5843,7 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
 }
 
 static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *src, const char *root,
-                                char *ident, JSValue example)
+                                unsigned root_whose, char *ident, JSValue example)
 {
     /* A CANDIDATE RUN substitutes one source with a breakout. The check lived only in the field-read path, so a
        source installed as a plain property value — location.hash, document.cookie — was minted once at install
@@ -5738,13 +5859,14 @@ static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *s
         free(ident);
         return concolic_deliver(ctx, src, root, g_cand_payload);
     }
-    return concolic_alloc(ctx, shape, src, root, ident, example);
+    return concolic_alloc(ctx, shape, src, root, root_whose, ident, example);
 }
 
 /* A SOURCE READ — the root of every identity. Its identity IS its provenance, because nothing derived it: this
    is where an unknown enters the program. A source with no provenance has no identity either, which is the
    honest answer and the one that keeps both arms of every branch over it. */
-JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue example) {
+JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, ConcolicRootWhose whose,
+                     JSValue example) {
     const char *f[1];
 
     /* A SOURCE'S SHAPE NAMES A HOLE, AND THE BRACE IS WHAT MAKES IT ONE — asserted at the ONE mint every
@@ -5871,9 +5993,24 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue
        rather than by this paragraph. */
     f[0] = src;
     /* A SOURCE READ IS ITS OWN ROOT — stated here, once, rather than as a second argument every one of the
-       seventeen components that owns a source would have to spell the same way twice. */
+       seventeen components that owns a source would have to spell the same way twice.
+       AND THE `whose` PARAMETER ABOVE IS NOT THAT RULE BROKEN, WHICH IS WORTH SAYING BECAUSE IT NOW SITS TWO
+       LINES FROM IT. This rule is about a fact that is DERIVABLE at the mint — the root of a source read IS
+       its `src`, so asking seventeen callers for it would be asking them to repeat a value already in hand,
+       and the one that spelled it differently would be the defect. Whose unknown it is cannot be derived from
+       anything here: `{orphan…}` and `{__FLAGS.role}` reach this line identically, and only the component
+       that read the member knows which it is. A parameter for a DERIVABLE fact is a second chance to
+       disagree; a parameter for an UNDERIVABLE one is the only place the answer exists. The test is whether
+       this mint could compute it, and for the root it can. */
     {
-        JSValue r = concolic_derived(ctx, shape, src, src, concolic_ident_compose("s", f, 1), example);
+    /* WHOSE UNKNOWN THIS IS, STATED PAST BOTH ARMS THAT ANSWER A NON-CONCOLIC — the pin above and the
+       candidate substitution inside concolic_derived each hand back a bare primitive, and a mark written
+       before them would be written onto a record that does not exist. It rides the ROOT, which for a
+       source read is `src` itself, so the mask is empty exactly when the root is NULL and the pair assert
+       at the mint holds without a second test here. A source with no provenance carries no statement for
+       the same reason it carries no identity: there is nothing for one to be about. */
+        JSValue r = concolic_derived(ctx, shape, src, src, src ? (1u << whose) : 0u,
+                                     concolic_ident_compose("s", f, 1), example);
         /* …AND ITS OWN IDENTITY, WHICH IS THE PRECONDITION THE PIN ARM ABOVE STANDS ON, RECORDED RATHER THAN
            LEFT AS A SENTENCE. The comment at that arm says this is "the one derivation the pin may be read
            at"; `src_self` is that claim written where a reader outside this file can check it, so a seam that
@@ -5929,6 +6066,35 @@ const char *concolic_shape_c(JSValueConst v) {
 const char *concolic_src_c(JSValueConst v) {
     Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
     return c ? c->src : NULL;
+}
+
+/* A PROPERTY OVER THE WHOLE ROOT SET — see concolic.h for the two questions and why both exist.
+ *
+ * THE WALK IS PAID AT THE JOIN AND NOT HERE, which is what makes these a field read rather than a traversal:
+ * `derived_root_whose` unions the operands' masks wherever `derived_root_join` unions their names, so by the
+ * time a value exists its mask already says which members its set contains. A per-call `root_member` walk
+ * would have to recover whose each member is from its NAME, which is the count-of-a-spelling §RUN-DON'T-MATCH
+ * forbids and the reason this fact is carried at all.
+ *
+ * `_all` IS NOT VACUOUSLY TRUE ON THE EMPTY SET, which is the one way these could have been written wrong. A
+ * value with no root has mask 0, and `0 == (1u << whose)` is false for every member — so a value that entered
+ * through nothing this engine minted as a source answers NO to "is every root of yours mine", which is the
+ * only sound answer. Spelled as an equality against the single bit rather than as "no OTHER bit is set",
+ * because the latter is true of the empty mask and is exactly the vacuous reading. */
+int concolic_root_whose_any(JSValueConst v, ConcolicRootWhose whose) {
+    DCHECK(whose >= 0 && whose < CONCOLIC_WHOSE_COUNT,
+           "a property over a value's root set was asked about a provenance that is not a member of "
+           "concolic.h's CONCOLIC_ROOT_WHOSE — the mask carries one bit per member, so a question outside the "
+           "list reads a bit no mint can ever set and answers NO for every value in the program");
+    return (root_whose_of(v) & (1u << whose)) ? 1 : 0;
+}
+
+int concolic_root_whose_all(JSValueConst v, ConcolicRootWhose whose) {
+    DCHECK(whose >= 0 && whose < CONCOLIC_WHOSE_COUNT,
+           "a property over a value's root set was asked about a provenance that is not a member of "
+           "concolic.h's CONCOLIC_ROOT_WHOSE — the mask carries one bit per member, so a question outside the "
+           "list reads a bit no mint can ever set and answers NO for every value in the program");
+    return root_whose_of(v) == (1u << whose) ? 1 : 0;
 }
 
 const char *concolic_root_c(JSValueConst v) {
@@ -6302,7 +6468,8 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
     { const char *f[2]; char *ia = ident_of_operand(ctx, a), *ib = ident_of_operand(ctx, b);
       f[0] = ia; f[1] = ib; ident = concolic_ident_compose("+", f, 2); free(ia); free(ib); }
 
-    JSValue result = concolic_derived(ctx, shape, src, root, ident, example);   /* consumes example and ident */
+    JSValue result = concolic_derived(ctx, shape, src, root, derived_root_whose(ops, 2), ident, example);
+                                                              /* consumes example and ident */
     free(sha); free(shb); free(shape); free(root);
     JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
     sp[-2] = result;
@@ -6603,7 +6770,11 @@ JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src,
         free(hole);
     }
 #endif
-    return concolic_new(ctx, shape, src, computed);
+    /* A DECLARED ATTACKER SOURCE IS THE WORLD'S: the component that declared it is modelling a channel a
+       person or a server drives, and no parse of the bytes this engine was served states what arrives on
+       one. This seam is the ONE door for that population, so the word is spelled here rather than by each
+       of its callers. */
+    return concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, computed);
 }
 
 /* The permutation that sorts `srcs`, so the composed key is a property of the set. Insertion sort: `n` is a

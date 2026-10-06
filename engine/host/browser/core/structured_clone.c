@@ -857,7 +857,23 @@ JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTran
         DCHECK(csrc != NULL, "a symbol record carried no source identity — the writer DCHECKs that it has "
                              "one, so the two halves of this record's format disagree");
         /* concolic_new TAKES the example, so the read of it above is the hand-over and not a borrow. */
-        nv = concolic_new(ctx, shape, csrc, ex);
+        /* UNSTATED, AND IT IS A POSITIVE STATEMENT RATHER THAN THE ONE CASE NOBODY THOUGHT ABOUT. This is a
+           REBUILD: the record carries a display shape and a source identity and the original value is gone,
+           so whose unknown it was is a fact this call does not hold and cannot recover. The two halves above
+           are asserted and not defaulted for exactly this reason, and the third half is honestly absent —
+           concolic.h's `CONCOLIC_WHOSE_UNSTATED` says NO MINT ON THIS VALUE'S PROVENANCE COULD SAY, which is
+           true here, and guessing the world's would put a rebuilt orphan argument on
+           §What-the-tool-produces' bar on the strength of nothing.
+           NAMED RESIDUAL — THE FORMAT DOES NOT CARRY THE FACT. WHAT IS NOT COVERED: a value whose original
+           provenance was SERVED or INSTRUMENT loses that word across §2.7.8 StructuredDeserialize and comes
+           back UNSTATED, so a consumer asking a property over its root set gets "nothing stated" for a value
+           something once stated. WHAT THE NEXT DIFF BUILDS: the word as a FIELD of this record, written by
+           the serializer beside the shape and the source it already writes and asserted there the way those
+           two are, so the rebuild reads it rather than conceding it — a writer and a reader landing together,
+           because a reader alone would default and a writer alone would be a field nothing consumes. HOW ITS
+           ABSENCE WOULD SHOW: a value posted through §2.7 and read back answering UNSTATED where the same
+           value answered a member before it was serialized. */
+        nv = concolic_new(ctx, shape, csrc, CONCOLIC_WHOSE_UNSTATED, ex);
         /* RETIRED — THIS ASSERT WAS WRONG AND IT ABORTED EVERY DEV RUN THAT REBUILT A DETERMINED SOURCE.
            It read `DCHECK(concolic_is(nv), "a rebuilt triple is not concolic — the arriving value would
            stand for the example alone, so a branch on it would be DECIDED where the sender forked")`, and it

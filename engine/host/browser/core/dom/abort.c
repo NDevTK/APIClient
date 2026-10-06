@@ -1359,7 +1359,10 @@ static int js_timeout_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     /* The SHAPE carries its provenance in braces and the source identity is it bare — concolic_new's rule.
        A timeout signal's flag is the one §3.2 value a page branches on (`if (signal.aborted)` picks the
        fallback path and its endpoints), so a shape naming no hole meant that gate recorded nothing. */
-    flag = concolic_new(ctx, "{AbortSignal.timeout().aborted}", "AbortSignal.timeout().aborted", JS_FALSE);
+    /* THE WORLD'S: whether §3.2's timeout has elapsed is a fact about real time, which no parse of the
+       served bytes states. */
+    flag = concolic_new(ctx, "{AbortSignal.timeout().aborted}", "AbortSignal.timeout().aborted",
+                        CONCOLIC_WHOSE_WORLD, JS_FALSE);
     /* THE EXAMPLE IS FALSE AND TWO SEAMS DEPEND ON IT AGREEING. A session that explores nothing answers this
        predicate two different ways depending on which form asked: the plain one takes
        signal_aborted_nonforking, which is ToBoolean of THIS example, and the parking one takes the step
