@@ -207,16 +207,34 @@ static const TfChunk TF_CHUNKS[] = {
        command:
        `grep -nc 'JS_EVAL_TYPE_MODULE' engine/host/test_forced.c` answered 0 and this file's own prose said it
        "holds no dynamic `import()`" — so every module algorithm in the engine was exercised by real pages and
-       by nothing that runs on demand. That is the subsystem a real app's deterministic blocker is in: six of six
-       drives of one real bundle carried `<name> is not initialized` on a module-top-level binding AND an
+       by nothing that runs on demand. That is the subsystem a real app's deterministic blocker is in, AND THE
+       PAIRING THIS ROW ONCE CLAIMED IS WITHDRAWN IN ITS SECOND MEMBER — THE RETIRED WORDING IS KEPT BELOW THE
+       VERDICT BECAUSE A READER WHO RE-DERIVES IT FROM THE WORD `.default` WILL WRITE IT AGAIN. It read: "six of
+       six drives of one real bundle carried `<name> is not initialized` on a module-top-level binding AND an
        ESM-interop `.default` reading undefined, both of which are module state read in a world nothing wrote it
-       in. A defect with no synthetic home is a defect localised by a site nobody controls.
-       IT CARRIES BOTH OBSERVABLES AND NOTHING ELSE. `mmDeps` is a top-level `const` read from its OWN DEFAULT
+       in", and "the `default` export is the second: an interop wrapper reads it off the namespace, and a module
+       whose factory ran in another world hands back a namespace whose `default` is undefined". NEITHER HALF
+       SURVIVED A FETCH OF THE BUNDLE. The FIRST observable is FIXED, so a row resting on it rests on a closed
+       defect. The SECOND IS NOT AN ES MODULE READ AT ALL, measured on `@mux-Ce8MRpmL.js` fetched live (HTTP 200,
+       867913 bytes), whose line 2 reads `var De=h(g()),Oe={now:function(){var e=De.default.performance` with `h`
+       an INLINED `__toESM` and `g = p(function(e,t){t.exports = ...})` an INLINED `__commonJS` — so
+       `De.default === g()`, `g` is a PLAIN CLOSURE over a cache cell, `t.exports` is a PLAIN PROPERTY, and the
+       state read in a world nothing wrote it in is a CELL ANOTHER WORLD'S FACTORY FILLED. It shares with a
+       namespace read exactly the word `.default`.
+       THE GENERAL SHAPE IS THE PART TO KEEP AND IT IS NOT ABOUT MODULES: A MINIFIER INLINES ITS INTEROP
+       HELPERS, so the construct's NAME is gone from the served bytes and what is left is its SHAPE — and a
+       reader who names the mechanism from the MEMBER being read has named the SPELLING. The spelling of an ESM
+       namespace's default and the spelling of a CommonJS cache's `exports` are the same four characters after a
+       dot, and the two sit on opposite sides of the one question this fixture is for, since a namespace cell is
+       written by §16.2.1.7.3.1 "InitializeEnvironment ( )" and a cache's property by whatever ran the factory.
+       So the check is to fetch the bundle and read THE DEFINITION OF THE CALLEE, which is one `curl` and is
+       what settled this; the tell is that your mechanism is named after a property access.
+       SO THIS ROW CARRIES ONE OBSERVABLE AND THE WITHDRAWN ONE IS MODELLED BY `cj-world` BELOW, which needs no
+       module, no network and no bundle. `mmDeps` is a top-level `const` read from its OWN DEFAULT
        PARAMETER, which is the shape every rolldown/vite bundle ships for its dependency-list resolver, and
        §10.2.11 FunctionDeclarationInstantiation evaluates a formal parameter's initializer as part of the CALL —
        so by then §14.3.1 Let and Const Declarations has initialised the outer binding and `m === mmDeps` is
-       TRUE in a browser. The `default` export is the second: an interop wrapper reads it off the namespace, and
-       a module whose factory ran in another world hands back a namespace whose `default` is undefined.
+       TRUE in a browser.
        THE REPLY IS COMPILED AS A MODULE BECAUSE THE PARK SAYS SO AND NOT BECAUSE OF A CONTENT TYPE: this table
        carries no type column, and solver/pending.h's `FLOW_PENDING_MODULE` is the kind a dynamic `import()`
        parks under — "whose delivery hands the source to a compiler that reads" it as one, in that file's own
@@ -3887,6 +3905,45 @@ static const char *HTML =
        like a world that was never scheduled. Two reach letters with one `mmOK` is the defect; one reach letter
        is the schedule. */
     "(async function(){ var mw = await import('/chunk/mdmod.js'); fetch('/api/modworldreach?w=' + (cfg.admin ? 'A' : 'P')); fetch('/api/modworld?w=' + (cfg.admin ? 'A' : 'P') + mw.mmProbe()); })();"
+    /* —AND THE SAME TWO-WORLD READ WITH NO MODULE ANYWHERE IN IT, WHICH IS WHAT THE REAL BUNDLE'S
+       `.default` TURNED OUT TO BE. The row above this table's module statements carries the WITHDRAWAL and the
+       fetched evidence; what it leaves owed is a statement, because the withdrawn half named a mechanism this
+       document has no population for. A minifier INLINES `__commonJS`, so what a served bundle holds is a
+       CLOSURE OVER A CACHE CELL whose factory writes a PROPERTY ON THE OBJECT IT CACHED — and the observed
+       state is the cell TRUTHY while that property reads undefined, which is the two writes being isolated
+       from each other rather than either one being lost.
+       THE TWO WRITES ARE THE WHOLE POINT AND THEY ARE SPELLED APART ON PURPOSE. `c = { exports: {} }` writes a
+       CLOSURE CELL; `m.exports = { tag: ... }` writes a PROPERTY SLOT on the object that cell names. Every
+       other statement in this file that reads state across worlds reads ONE of those, so none of them can
+       exhibit a DISAGREEMENT between the two, and a disagreement is exactly what `c` truthy with `c.exports`
+       undefined is. The cell is read by the `||`, so a world that sees it filled skips the factory entirely
+       and whatever the property says is what it gets.
+       NO MODULE, NO IMPORT, NO SERVED BODY AND NO NETWORK, which is why this is a better instrument than the
+       module rows beside it rather than a weaker one: the module statements park on a provide loop and read a
+       cell two spec phases write, so three mechanisms stand between a 0 and a cause. This one runs wholly
+       inside the document, in ordinary script, through the ordinary property and closure-cell write hooks.
+       `cfg.admin` IS THE SECOND WORLD AND NOT A NEW FORK, for `mod-world`'s reason exactly: this document's
+       first test of that field forked thousands of lines above, so each arm here is an EXISTING world, and a
+       fresh branch would fork AFTER the first call and leave both arms descending from the world that filled
+       the cache — the one shape that cannot show the defect.
+       THE REACH EMISSION IS FIRST, IS UNCONDITIONAL AND READS NEITHER WRITE, for §Testing's reachability
+       reason and for `mod-drive-ran`'s: the claim's own request is composed from a read that can answer
+       anything, so an absent claim token is equally a world that was never scheduled, and those take opposite
+       work. Its letters are `cfg.admin`'s own arms and nothing else, so two records say two worlds ran the
+       statement; an unconditional token would merge into ONE record and say nothing about how many did.
+       EVERY WITNESS IS A CONSTANT and no token is a prefix of another (`AcjOK`/`PcjOK` against
+       `AcjLOST`/`PcjLOST`): a payload composed from anything this engine COMPUTED can itself be unknown, and
+       then the request is never made and the arm reads exactly like an arm that did not run.
+       IT CANNOT THROW, WHICH IS WHY `cjLOST` EXISTS RATHER THAN AN ABSENCE. `c.exports` reading undefined is
+       answered by `_cj && _cj.tag === 'cjHELD'` without touching a property of undefined, so the defect
+       emits a TOKEN instead of losing the request §AN-ABSENT-CRASH-IS-NOT-A-CORRECT-VALUE would otherwise
+       have had to be read backwards from. `cjLOST` with both reach letters present is the claim failing. */
+    "var _cjg = (function(){ var c; function f(m){ m.exports = { tag: 'cjHELD' }; }"
+    " return function(){ return c || (f(c = { exports: {} }), c.exports); }; })();"
+    "fetch('/api/cjreach?w=' + (cfg.admin ? 'A' : 'P'));"
+    "var _cj = _cjg();"
+    "fetch('/api/cjworld?w=' + (cfg.admin ? 'A' : 'P')"
+    " + (_cj && _cj.tag === 'cjHELD' ? 'cjOK' : 'cjLOST'));"
     /* …AND THE GATE THAT DECIDES WHETHER THOSE BYTES ARE A PROGRAM AT ALL, asked of a module served
        `application/json` whose body is VALID JavaScript. HTML §8.1.4.2's fetch a single module script extracts a
        MIME type and leaves `moduleScript` null for anything that is not a JavaScript MIME type, and
@@ -14558,6 +14615,45 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "value; the token ABSENT WITH ITS REACH LETTER PRESENT is the read having THROWN, which is the "
              "real bundle's `is not initialized` reproduced with no network and no bundle in it. A module is "
              "linked once and its status is a C record field, while the cells its body writes are per-flow");
+    /* ——— THE SAME TWO-WORLD READ WITH NO MODULE IN IT, WHICH IS WHAT THE REAL BUNDLE'S `.default` IS ———
+     *
+     * THE LADDER IS ENTAILED BY PROGRAM ORDER AND THE RUNGS ARE NOT INTERCHANGEABLE. `/api/cjreach` is the
+     * statement's FIRST emission and reads NEITHER of the two writes, so it cannot fail for the reason the two
+     * rows gated on it are about; the claim is second and reads both. A world that reached the statement
+     * emitted its reach letter whatever the cache said, so `cj-reach` at 0 ENTAILS `cj-world` at 0 (one world
+     * can contribute at most one of the two tokens the claim needs) and `cj-ran` at 0 entails both. That is
+     * what makes the LOWEST 0 the localisation and what each `.gate` asserts two-sidedly.
+     * `cj-ran` IS KEYED ON THE REACH EMISSION AND NOT ON THE CLAIM, which is `mod-drive-ran`'s design and NOT
+     * `md-fork-ran`'s. Keying a ran-row on the claim's address makes the entailment FALSE in exactly the run
+     * that matters: a claim lost for its own reason leaves the reach records standing, so the gate's own
+     * two-sided assert would abort on a 1 above a 0. A gate is an entailment or it is a label.
+     * ALL THREE ARE POSITIVE ROWS, SO NONE OWES A `reach`: a row whose claim is a token being PRESENT reads 0
+     * when its statement did not run, which is the correct polarity and is its own finding. */
+    const char *cj_ran_why = NULL; int cj_ran = 1;
+    fold_row(&cj_ran, &cj_ran_why, !!strstr(js, "\"/api/cjreach\""),
+             "NOT REACHED: there is no /api/cjreach record at all, so no world ran the statement and the two "
+             "rows gated on this one are unaskable. That is the SCHEDULE. This emission reads neither the "
+             "closure cell nor the cached object's property, so entering the statement cannot have failed for "
+             "the reason those rows are about");
+    const char *cj_reach_why = NULL; int cj_reach = 1;
+    fold_row(&cj_reach, &cj_reach_why,
+             param_value_is(js, "/api/cjreach", "w", "A") &&
+             param_value_is(js, "/api/cjreach", "w", "P"),
+             "only ONE world ran this statement: `/api/cjreach` carries one arm letter of `cfg.admin` and not "
+             "both. That is the SCHEDULE, and it is why the row gated on this one cannot be read as the cache "
+             "disagreeing across worlds — the letters carry the world and read neither write, so this row "
+             "moves for scheduling reasons alone");
+    const char *cj_world_why = NULL; int cj_world = 1;
+    fold_row(&cj_world, &cj_world_why,
+             param_value_is(js, "/api/cjworld", "w", "AcjOK") &&
+             param_value_is(js, "/api/cjworld", "w", "PcjOK"),
+             "BOTH worlds ran this statement and the cached object's PROPERTY did not read back in both: the "
+             "gate above proves two arm letters arrived, so a `cjLOST` is one world finding the closure CELL "
+             "filled and the property on the object that cell names NOT filled — two writes of one "
+             "expression isolated from each other, which is `De.default` reading undefined on a real bundle "
+             "with no module, no import and no network in it. A `cjLOST` NAMES ITS WORLD, so which arm lost "
+             "it is in the record; the token absent with its reach letter present would be the emission "
+             "having thrown, which this statement is written not to be able to do");
     /* ─── AND THE SAME TWO BINDINGS READ BY A FLOW THAT NEVER IMPORTED THE MODULE, WHICH IS THE POPULATION
      * EVERY ROW ABOVE IS OUTSIDE OF ───
      *
@@ -19124,6 +19220,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "mod-type", mod_type, "/api/modtype", SESS_EXPLORE, mod_type_why, .gate = "mod-typeask" },
         { "mod-world-reach", mod_world_reach, "/api/modworldreach", SESS_EXPLORE, mod_world_reach_why },
         { "mod-world", mod_world, "/api/modworld", SESS_EXPLORE, mod_world_why, .gate = "mod-world-reach" },
+        /* THE TWO-WORLD CACHE ROWS, WHOSE WHOLE VALUE IS BEING READ BESIDE `mod-world`: that row's subject is a
+           module cell two spec phases write, and this one's is an ordinary closure cell and an ordinary
+           property. Both at 0 says a world reads ANY state it did not write itself; `mod-world` at 0 with
+           `cj-world` at 1 localises it to the module phases. */
+        { "cj-ran", cj_ran, "/api/cjreach", SESS_EXPLORE, cj_ran_why },
+        { "cj-reach", cj_reach, "/api/cjreach", SESS_EXPLORE, cj_reach_why, .gate = "cj-ran" },
+        { "cj-world", cj_world, "/api/cjworld", SESS_EXPLORE, cj_world_why, .gate = "cj-reach" },
         /* THE DRIVE'S THREE, AND THE KEY IS `/chunk/mdmod.js` FOR `reply-program`'S REASON EXACTLY:
            `/api/moddriveran` is in a body this host SERVES and in no document at all, and what the document
            contributes is the `import()` that links the module and so mints the function object the orphan walk
