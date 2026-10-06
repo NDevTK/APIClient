@@ -60,14 +60,46 @@ async function connect() {
   };
 }
 
+/* THE OFFSCREEN DOCUMENT, WAITED FOR AND THEN REFUSED WITH THE STATE IT REFUSED IN — because this threw
+   `no offscreen document — is the extension loaded?` and the extension WAS loaded, which is two states
+   behind one answer on the one question that decides whether a run happens at all.
+   MEASURED: of six runs of a drive over two documents, the FIRST on a brand-new profile died here and the
+   five after it did not. A fresh profile has no V8 code cache (`harness.js restart` wipes it deliberately,
+   and says why), so the extension's service worker and its offscreen document come up cold exactly once —
+   and 60 polls of 200ms is twelve seconds, which was not enough for that one. The run was lost and the
+   message blamed the extension. That is §A-MEASUREMENT-THAT-A-LOADED-MACHINE-CAN-FALSIFY: an artifact of
+   HOW the run was made, reported as a fact about WHAT ran, and it cost one sixth of a drive's capacity.
+   THE WAIT IS A BACKSTOP AND IS GENEROUS, which is what CLAUDE.md §Testing allows a budget to be when the
+   real measure cannot see the case — a service worker that never wakes produces no progress of any kind, so
+   there is nothing to key the wait on but time. What it may NOT do is report that absence in the same words
+   as a missing extension.
+   THE TWO STATES ARE SEPARATED BY ASKING WHETHER ANY TARGET OF THIS EXTENSION EXISTS, which is the shipped
+   fact rather than a guess: no target under this origin at all is an extension that did not load, and
+   targets under it WITHOUT `ast-worker.html` is an offscreen document that has not come up. The second
+   message names the targets it DID see, because a reader meeting it needs to know which half of the
+   extension is alive. */
 async function offscreenPage(browser, extId) {
-  const url = `chrome-extension://${extId}/ast-worker.html`;
-  for (let i = 0; i < 60; i++) {
-    const t = browser.targets().find((t) => t.url().startsWith(url));
+  const origin = `chrome-extension://${extId}/`;
+  const url = `${origin}ast-worker.html`;
+  const WAIT_MS = 45000, STEP = 200;
+  let seen = [];
+  for (let i = 0; i < WAIT_MS / STEP; i++) {
+    const ts = browser.targets().filter((t) => t.url().startsWith(origin));
+    if (ts.length) seen = ts.map((t) => t.type() + " " + t.url().slice(origin.length));
+    const t = ts.find((t) => t.url().startsWith(url));
     if (t) { const pg = await t.page().catch(() => null); if (pg) return pg; }
-    await sleep(200);
+    await sleep(STEP);
   }
-  throw new Error("no offscreen document — is the extension loaded?");
+  if (!seen.length)
+    throw new Error(`the extension did not load: NO target under ${origin} in ` +
+                    `${WAIT_MS / 1000}s. That is this harness or this profile, not the page — ` +
+                    `check that --load-extension pointed at extension/ and that the profile is one ` +
+                    `the browser's own account can reach.`);
+  throw new Error(`the extension loaded and its offscreen document did not come up in ` +
+                  `${WAIT_MS / 1000}s. Its other target(s) are alive: ${seen.join("; ")}. This is a ` +
+                  `DIFFERENT fact from an extension that never loaded, and on a fresh profile it is ` +
+                  `usually the cold V8 cache — re-run, and if it repeats the offscreen document itself ` +
+                  `is failing to register.`);
 }
 
 /* THE ENGINE'S OWN RECORD OF WHAT THE PAGE THREW, WHICH IS A THIRD CHANNEL AND NOT A SECOND COPY OF EITHER
