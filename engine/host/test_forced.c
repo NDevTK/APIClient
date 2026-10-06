@@ -3862,6 +3862,56 @@ static const char *HTML =
     "  + (new TextDecoder().encoding === 'utf-8' ? 'c' : 'C')"
     "  + (new TextDecoder(undefined).encoding === 'utf-8' ? 'd' : 'D'); }"
     "fetch('/api/lfadefault?v=' + (lfaTd === 'abcd' ? 'islfadefault' : 'td' + lfaTd));"
+    /* ENCODING §7.2's decode() IS A STEP MACHINE, AND THE REST IS WHAT THIS ROW IS ABOUT — not the answer,
+       which a body that could not rest at all also gets right. The span is the PAGE'S size: the page chooses
+       the buffer, so a C activation walking it declares no step boundary, answers no attention poll however
+       the request was raised, and holds the thread for the whole decode — no sibling flow, no second document,
+       and a cooperative quantum with nothing to expire against. §7.2 writes its own "While true:" over single
+       ITEMS, so the rest point is the standard's own back-edge and there is no granularity constant anywhere
+       in it to choose or to hide.
+       `big` IS THE MANY-RESTS CLAUSE AND EVERY ONE OF ITS ITEMS IS MID-SEQUENCE. 196,608 bytes of `E4 B8 AD`
+       is 196,608 suspension points inside ONE member, and not one of them falls on a character boundary that
+       holds no state: every item is either the lead of a three-byte sequence or one of its continuations, so
+       §8.1.1's machine (bytes-needed, bytes-seen, the code point so far, and the bound the NEXT byte must fall
+       in) has to be carried across all of them. A resume that lost the step state answers a SHORT string, one
+       that re-walked from the top answers a LONG one, and one that lost the decoder record answers U+FFFD
+       where the code point belongs — which is why the length and BOTH end code points are asserted rather
+       than just the length. The buffer is built by SIXTEEN doublings rather than a 65,536-iteration loop so
+       that the cost of the row is in the machine under test and not in the fixture's own interpretation.
+       ITS SIZE IS A BUDGET CHOICE AND NOT A CORRECTNESS ONE. 196,608 rests is two orders of magnitude past the
+       300-node walk above and settles that the machine rests MANY times; what would decide a larger one is the
+       smoke's own CPU budget measured against quickjs-step.h's claim that a declined offer "costs one
+       predicted call per iteration", and that measurement is a BUILD, which the lane that wrote this row could
+       not make. Raise it against that number, never against a feeling about the word multi-megabyte.
+       `split` IS THE OTHER HALF OF THE STATE QUESTION: a three-byte sequence cut across two `stream: true`
+       calls resumes in the middle, which is what §7.2 step 1's "if this's do not flush is false" and the
+       standard's own note about preserving the decoder are for. It is the clause that reddens if the machine
+       put `this's decoder` in its OWN state instead of leaving it on the object.
+       `item` AND `end` ARE THE TWO ABRUPT EXITS, and they are different stages. A lone `FF` is §4.1's error
+       answered by a handler mid-queue — step 5.3.3's TypeError — while `E4 B8` with no third byte is the
+       END-OF-QUEUE item being processed, which is decoder_flush's error and the same TypeError from the other
+       stage. A machine that threw from only one of them would pass a row that tested only one. */
+    "var tdBig = 'absent', tdSplit = 'absent', tdItem = 'absent', tdEnd = 'absent';"
+    "if (typeof TextDecoder !== 'undefined') {"
+    " var tdA = new Uint8Array([0xE4, 0xB8, 0xAD]), tdi, tdB;"
+    " for (tdi = 0; tdi < 16; tdi++) { tdB = new Uint8Array(tdA.length * 2); tdB.set(tdA, 0);"
+    "  tdB.set(tdA, tdA.length); tdA = tdB; }"
+    " var tdS = new TextDecoder().decode(tdA);"
+    " tdBig = (tdS.length === 65536 && tdS.charCodeAt(0) === 0x4E2D && tdS.charCodeAt(65535) === 0x4E2D)"
+    "  ? 'isbig' : ('len' + tdS.length + 'x' + tdS.charCodeAt(0));"
+    " var tdc = new TextDecoder();"
+    " var tdp1 = tdc.decode(new Uint8Array([0xE4, 0xB8]), { stream: true });"
+    " var tdp2 = tdc.decode(new Uint8Array([0xAD]), { stream: true });"
+    " var tdp3 = tdc.decode();"
+    " tdSplit = (tdp1 === '' && tdp2.length === 1 && tdp2.charCodeAt(0) === 0x4E2D && tdp3 === '')"
+    "  ? 'issplit' : 'wrong';"
+    " tdItem = 'nothrow';"
+    " try { new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array([0xFF])); }"
+    " catch (tde1) { tdItem = (tde1 instanceof TypeError) ? 'isitem' : 'other'; }"
+    " tdEnd = 'nothrow';"
+    " try { new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array([0xE4, 0xB8])); }"
+    " catch (tde2) { tdEnd = (tde2 instanceof TypeError) ? 'isend' : 'other'; } }"
+    "fetch('/api/tdstep?big=' + tdBig + '&split=' + tdSplit + '&item=' + tdItem + '&end=' + tdEnd);"
     /* §4.13 CUSTOM ELEMENTS — the reason this component exists: connectedCallback's body is code NOTHING ELSE IN
        THE PROGRAM CALLS. The endpoints below are reachable only through the lifecycle, so their presence is the
        whole claim. `extends HTMLElement` is what a real bundle writes, and after the upgrade `this.setAttribute`
@@ -19243,6 +19293,41 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "AND NOT A DIFFERENCE: it is the control for the three above, and it reddens when the \"missing\" "
              "primitive has been mistaken for a rule about every optional position");
 
+    /* ENCODING §7.2's decode() AS A STEP MACHINE — see the fixture row for why each clause is here. The rungs
+       are ordered so the FIRST failure names the most fundamental thing that went wrong: the record existing
+       at all, then the page-sized walk, then the state the object keeps between calls, then the two abrupt
+       exits. They are INDEPENDENT clauses and not an entailed ladder, so a 0 names the clause it is about and
+       says nothing about the ones below it. */
+    const char *tdstep_why = NULL; int tdstep_tt = 1;
+    fold_row(&tdstep_tt, &tdstep_why, !!strstr(js, "\"/api/tdstep\""),
+             "NOT REACHED: there is no /api/tdstep record at all, so Encoding §7.2's decode() was never "
+             "observed from this document. That is the SCHEDULE and not the member — the row below cannot be "
+             "read until this one is 1");
+    fold_row(&tdstep_tt, &tdstep_why, param_value_is(js, "/api/tdstep", "big", "isbig"),
+             "Encoding §7.2's decode() did not survive its own rest points. 196,608 bytes of `E4 B8 AD` is "
+             "196,608 items of step 5's \"While true:\", and EVERY one of them is mid-sequence — a lead or a "
+             "continuation — so §8.1.1's bytes-needed/bytes-seen/code-point/bound machine has to be carried "
+             "across all of them. `len` names what came back: SHORT means the step state lost its cursor into "
+             "the copy §7.2 step 3 took, LONG means a resume re-walked from the top, and a right length with "
+             "0xFFFD at `x` means the decoder record on the receiver was reset or shared rather than carried");
+    fold_row(&tdstep_tt, &tdstep_why, param_value_is(js, "/api/tdstep", "split", "issplit"),
+             "a three-byte sequence cut across two `stream: true` calls did not resume in the middle. §7.2 "
+             "step 1 rebuilds the decoder only when `do not flush` is FALSE, and the standard's own note says "
+             "why — \"in a subsequent invocation this's decoder is not set anew in the first step of the "
+             "algorithm and its state is preserved\". This is the clause that reddens if `this's decoder` was "
+             "moved into the step machine's own state, where each call would start with a fresh one");
+    fold_row(&tdstep_tt, &tdstep_why, param_value_is(js, "/api/tdstep", "item", "isitem"),
+             "§7.2 step 5.3.3's TypeError did not arrive for a lone 0xFF in \"fatal\" error mode — \"otherwise, "
+             "if result is error, throw a TypeError\". `nothrow` means the machine's mid-queue error arm "
+             "returned a string instead of an abrupt completion; `other` means it threw something that is not "
+             "a TypeError");
+    fold_row(&tdstep_tt, &tdstep_why, param_value_is(js, "/api/tdstep", "end", "isend"),
+             "the same TypeError did not arrive for `E4 B8` with no third byte, which is the OTHER stage: the "
+             "END-OF-QUEUE item being processed rather than a byte of the input. §8.1.1 answers error for it "
+             "(\"if byte is end-of-queue and UTF-8 bytes needed is not 0, then set UTF-8 bytes needed to 0 "
+             "and return error\"), and a machine that threw from only the mid-queue arm would pass the clause "
+             "above and fail this one");
+
     /* ─── A JAVASCRIPT REPLY IS A PROGRAM, AND THE CONTROL THAT MAKES THAT READABLE ────────────────────────
        Three clauses, in the order the fact is built, so a 0 names which of three things happened — and the
        three are not all about the same thing, which is the point. The first two are about the REPLY DOOR
@@ -19707,6 +19792,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "lfa-select-1", lfasel1_tt, "/api/lfasel1", SESS_EXPLORE, lfasel1_why },
         { "lfa-select-2", lfasel2_tt, "/api/lfasel2", SESS_EXPLORE, lfasel2_why },
         { "lfa-default", lfadefault_tt, "/api/lfadefault", SESS_EXPLORE, lfadefault_why },
+        /* Encoding §7.2's decode() resting at its own back-edge — four clauses on one record, because they are
+           four facts about ONE member and a reader wants them to redden together or not at all. */
+        { "td-step", tdstep_tt, "/api/tdstep", SESS_EXPLORE, tdstep_why },
         /* §8.1.6.4 step 7.4's FOUR STATES, one row per state per ROUTE — see their computation for why the
            document and the stream each answer half of each state, and why the stream clauses are ratios. Keyed
            on the chunk that stages them, which is the statement these rows are about; the control below is

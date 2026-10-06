@@ -90,14 +90,34 @@ static int encoding_get(const char *label, size_t len)
  * Every decoder emits SCALAR VALUES — the standard's error handling turns a lone surrogate into U+FFFD before
  * it can reach the output — so the result is always well-formed UTF-8 and JS_NewStringLen is the right way to
  * hand it over. */
-typedef struct { char *b; size_t n, cap; } EncBuf;
+/* WHO OWNS THE BYTES, WHICH IS WHAT DECIDES THE ALLOCATOR AND IS NOT A PREFERENCE. §6's hooks for standards
+   run with no realm at all — the header says so in its own words, "they hold their strings as UTF-8 BYTES and
+   run in C with no realm to throw into" — and they hand a libc block back to a C caller, which is the contract
+   every one of their declarations states. §7.2's decode() accumulates into a STEP MACHINE'S STATE, and that
+   state's buffers are the ENGINE's: quickjs.c's js_step_visit_dup_buf clones with js_malloc and
+   js_step_visit_free_buf releases with js_free, so a libc block declared to a `visit` would be cloned by one
+   allocator and freed by another. `ctx` NULL is the realm-less owner and non-NULL is the engine's; it is a
+   field rather than two buffer types because the OUTPUT is one thing and only its owner differs. */
+typedef struct { char *b; size_t n, cap; JSContext *ctx; } EncBuf;
 
-static void enc_put(EncBuf *o, uint32_t cp)
+/* RELEASE AN EncBuf THROUGH THE ALLOCATOR THAT GREW IT. One spelling, because `free(o.b)` is the intuitive
+   one and is correct for exactly the realm-less owners — so a buffer that gains a `ctx` later would be freed
+   by the wrong allocator at whichever of the five sites was not changed with it. */
+static void dec_buf_free(EncBuf *o)
+{
+    if (o->ctx) js_free(o->ctx, o->b); else free(o->b);
+    o->b = NULL;
+    o->n = o->cap = 0;
+}
+
+static void enc_put_scalar(EncBuf *o, uint32_t cp)
 {
     if (o->n + 4 > o->cap) {
-        char *g = realloc(o->b, o->cap = o->cap ? o->cap * 2 : 64);
+        size_t want = o->cap ? o->cap * 2 : 64;
+        char *g = o->ctx ? js_realloc(o->ctx, o->b, want) : realloc(o->b, want);
         CHECK(g, "encoding: OOM decoding");
         o->b = g;
+        o->cap = want;
     }
     if (cp < 0x80) {
         o->b[o->n++] = (char)cp;
@@ -115,6 +135,37 @@ static void enc_put(EncBuf *o, uint32_t cp)
         o->b[o->n++] = (char)(0x80 | (cp & 0x3F));
     }
 }
+
+/* §4.1 "Encoders and decoders"' PROCESS AN ITEM, ASSERTED AT THE STANDARD'S OWN STEP. "Otherwise, if result
+   is one or more items: Assert: encoderDecoder is not a decoder instance or result does not contain any
+   surrogates. Push result to output." This IS that push, so this is where that assertion belongs — and a code
+   point above U+10FFFF is not a code point at all, which makes the condition infra's "scalar value".
+   IT REPLACES A SECOND COMPLETE DECODE DOWNSTREAM. core/loader/script_fetch.c asserted the same fact by
+   running encoding_is_scalar_value_string over the FINISHED output — a whole fatal-mode pass, with its own
+   allocation, over every byte of every script this engine fetches, in the DEV build that every measurement in
+   this project is taken in. The two verdicts are the same verdict and the equivalence is exact in both
+   directions, which is why the downstream pass could go rather than being kept beside this: enc_put_scalar
+   emits the minimal UTF-8 form of whatever it is handed, so the output is ill-formed exactly when some code
+   point reaching here was not a scalar value. A surrogate becomes `ED A0 80`..`ED BF BF`, which §8.1.1's
+   machine refuses at its `b == 0xED` bound of 0x9F; a value in U+110000..U+13FFFF becomes an 0xF4 lead with a
+   continuation above that lead's 0x8F bound; and anything higher leads with 0xF5 or more, which §8.1.1 admits
+   at no lead at all. So the invariant is now true BY CONSTRUCTION at the point of production rather than
+   re-measured at one of five consumers.
+   A MACRO AND NOT A LINE INSIDE THE FUNCTION, because DCHECK stamps the file and line it is WRITTEN at and
+   sixty-odd handler sites reach this one: expanded here, the abort names the §8/§10/§11/§12/§13/§14 handler
+   that computed the value, which is the only address a reader can act on. */
+#define enc_put(o_, cp_) do {                                                                              \
+        const uint32_t enc_put_cp_ = (uint32_t)(cp_);                                                      \
+                                                                                                           \
+        DCHECK(enc_put_cp_ <= 0x10FFFFu && (enc_put_cp_ < 0xD800u || enc_put_cp_ > 0xDFFFu),               \
+               "a decoder's handler answered a code point that is not a scalar value — §4.1's process an "  \
+               "item asserts that a DECODER instance's result contains no surrogates, and infra admits no "  \
+               "code point above U+10FFFF, so the output of this decode would not be well-formed UTF-8 and " \
+               "the string it becomes is one no browser produces. Every handler in this file either pushes " \
+               "a byte below 0x80, an entry of the standard's own index, or a value it computed from the "   \
+               "standard's ranges — so this is one of those three computing outside the scalar values");    \
+        enc_put_scalar((o_), enc_put_cp_);                                                                 \
+    } while (0)
 
 /* ---- §7.2 "Interface TextDecoder" --------------------------------------------------------------------------- */
 
@@ -616,26 +667,41 @@ static int iso2022jp_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
 }
 
 /* Run `len` bytes through the receiver's decoder. Returns -1 with a TypeError live in fatal mode. */
-static int decoder_run(EncDecoder *d, const uint8_t *p, size_t len, EncBuf *o)
+/* §4.1's "reading from input", WITH THE PUSHBACK QUEUE IN FRONT OF IT. A byte pushed back is read before the
+   caller's next one, and a byte pushed back from a previous decode() call is read before this call's first —
+   which is what makes a sequence split across two chunks recover the same way an unsplit one does. False is
+   the standard's `end-of-queue`: there is no item to read.
+   IT IS ITS OWN FUNCTION BECAUSE THE STANDARD HAS TWO LOOPS OVER IT, which is the whole shape of this file's
+   §7.2 conversion — see js_decoder_decode_step. §4.1's "process a queue" is the loop below; §7.2's decode()
+   writes its OWN "While true:" and does not call it. */
+static bool dec_read_item(EncDecoder *d, const uint8_t *p, size_t len, size_t *pi, uint8_t *pb)
+{
+    if (d->nback > 0) {
+        *pb = d->back[0];
+        d->nback--;
+        memmove(d->back, d->back + 1, d->nback);
+        return true;
+    }
+    if (*pi < len) {
+        *pb = p[(*pi)++];
+        return true;
+    }
+    return false;
+}
+
+/* §4.1 "Encoders and decoders"' PROCESS AN ITEM — "To process an item given an item item, encoding's encoder
+   or decoder instance encoderDecoder, I/O queue input, I/O queue output, and error mode mode" — whose return
+   set is the standard's own three and is written as such below, because every one of them is a different thing
+   for a loop to do and a bare int had the `finished` arm spelled as an early `return 0` from the middle of the
+   queue loop, where it was indistinguishable from `continue`'s. */
+enum { DEC_ITEM_ERROR = -1, DEC_ITEM_CONTINUE = 0, DEC_ITEM_FINISHED = 1 };
+
+static int dec_process_item(EncDecoder *d, uint8_t b, EncBuf *o)
 {
     int row = ENCODING_SINGLE_BYTE_ROW[d->enc];
-    size_t i = 0;
+    int repeat = 0, err = 0;
 
-    /* THE QUEUE COMES FIRST. A byte pushed back is read before the caller's next one, and a byte pushed back
-       from a previous decode() call is read before this call's first — which is what makes a sequence split
-       across two chunks recover the same way an unsplit one does. */
-    while (i < len || d->nback > 0) {
-        uint8_t b;
-        int repeat = 0, err = 0;
-
-        if (d->nback > 0) {
-            b = d->back[0];
-            d->nback--;
-            memmove(d->back, d->back + 1, d->nback);
-        } else {
-            b = p[i++];
-        }
-
+    {
         if (d->enc == ENC_UTF_8) {
             err = utf8_step(d, b, o, &repeat, d->fatal);
         } else if (d->enc == ENC_UTF_16LE || d->enc == ENC_UTF_16BE) {
@@ -683,10 +749,10 @@ static int decoder_run(EncDecoder *d, const uint8_t *p, size_t len, EncBuf *o)
                §6.1's decode when a server labels a script `charset=iso-2022-kr`. */
             if (!d->rep_error_returned) {
                 d->rep_error_returned = 1;
-                if (d->fatal) return -1;
+                if (d->fatal) return DEC_ITEM_ERROR;
                 enc_put(o, 0xFFFD);
             }
-            return 0;
+            return DEC_ITEM_FINISHED;
         } else {
             DFAIL("a page asked to decode an encoding this engine has no decoder for — every one the standard "
                   "names now has one, so reaching this means a NEW encoding was added to the registry and the "
@@ -696,8 +762,34 @@ static int decoder_run(EncDecoder *d, const uint8_t *p, size_t len, EncBuf *o)
            know what a caller makes of one. §7.2's decode() makes it a TypeError, and §6's byte-sequence hooks
            below have no realm to throw into at all — reaching for a `ctx` here is the whole reason this
            function used to need one. */
-        if (err && d->fatal) return -1;
+        if (err && d->fatal) return DEC_ITEM_ERROR;
         if (repeat) dec_push_back(d, b);
+    }
+    return DEC_ITEM_CONTINUE;
+}
+
+/* §4.1's PROCESS A QUEUE: "To process a queue given an encoding's decoder or encoder instance encoderDecoder,
+   I/O queue input, I/O queue output, and error mode mode: While true: Let result be the result of processing an
+   item with the result of reading from input, encoderDecoder, input, output, and mode. If result is not
+   continue, then return result."
+   THIS LOOP IS §6's AND NOT §7.2's, AND THE STANDARD SAYS SO IN BOTH DIRECTIONS. §6 "Hooks for standards":
+   "These hooks (as well as decode and encode) will block until the input I/O queue has been consumed in its
+   entirety. In order to use the output tokens as they are pushed into the stream, callers are to invoke the
+   hooks with an empty output I/O queue and read from it in parallel." So a hook BLOCKING is what §6 specifies,
+   and the hooks are the callers with no realm, no receiver and no flow to rest on. §7.2's decode() writes a
+   "While true:" of its OWN — it reads an item, tests `do not flush` against end-of-queue, and throws a
+   TypeError where this returns an error — so it is a DIFFERENT ALGORITHM of the standard's and it is a step
+   machine. One `process an item`, two loops, because the standard has one `process an item` and two loops. */
+static int decoder_run(EncDecoder *d, const uint8_t *p, size_t len, EncBuf *o)
+{
+    size_t i = 0;
+    uint8_t b;
+
+    while (dec_read_item(d, p, len, &i, &b)) {
+        int r = dec_process_item(d, b, o);
+
+        if (r == DEC_ITEM_ERROR) return -1;
+        if (r == DEC_ITEM_FINISHED) return 0;
     }
     return 0;
 }
@@ -799,6 +891,41 @@ static int enc_buffer_source(JSContext *ctx, JSValueConst v, const uint8_t **pp,
     return 0;
 }
 
+/* §7.1 "Interface mixin TextDecoderCommon"'s SERIALIZE I/O QUEUE: "Let output be the empty string. While
+   true: Let item be the result of reading from ioQueue. If item is end-of-queue, then return output. If
+   decoder's encoding is UTF-8 or UTF-16BE/LE, and decoder's ignore BOM and BOM seen are false: Set decoder's
+   BOM seen to true. If item is U+FEFF BOM, then continue. Append item to output."
+   ITS PER-ITEM LOOP COLLAPSES HERE BECAUSE THE OUTPUT IS ALREADY THE BYTES THE STRING IS MADE FROM. The
+   standard's ioQueue is a queue of SCALAR VALUES and this engine's `o` is the UTF-8 encoding of that queue, so
+   "append item to output" is a no-op for every item — the byte is already in place — and the only per-item work
+   the algorithm has is the BOM test on the FIRST item. What is left is that one test and the string the whole
+   buffer becomes.
+   §7.1's BOM REMOVAL IS OVER THE DECODED OUTPUT, not over the input bytes — the standard drops the first
+   SCALAR VALUE when it is U+FEFF and sets the flag on the first value either way. Written as a byte-prefix
+   test it was wrong for streaming: a BOM split across two chunks (`EF BB` then `BF 40`) has no three-byte
+   prefix to match in either call, so it decoded as a visible U+FEFF. The output is UTF-8, so U+FEFF is
+   the three bytes this drops.
+   IT IS ONE FUNCTION BECAUSE TWO ALGORITHMS RETURN THROUGH IT — §7.2's decode() at both of its own return
+   points, and the whole-sequence operation below that §7.5's chunk decode and XHR's text response drive — and
+   a second statement of the BOM rule is how those would come to disagree about a stream whose first chunk is
+   the BOM's first two bytes. It CONSUMES `o`: the buffer is freed here however the serialization ends. */
+static JSValue dec_serialize(JSContext *ctx, EncDecoder *d, EncBuf *o)
+{
+    JSValue r;
+
+    if (!d->ignore_bom && !d->bom_seen && o->n) {
+        if (o->n >= 3 && (unsigned char)o->b[0] == 0xEF && (unsigned char)o->b[1] == 0xBB &&
+            (unsigned char)o->b[2] == 0xBF) {
+            memmove(o->b, o->b + 3, o->n - 3);
+            o->n -= 3;
+        }
+        d->bom_seen = 1;
+    }
+    r = JS_NewStringLen(ctx, o->b ? o->b : "", o->n);
+    dec_buf_free(o);
+    return r;
+}
+
 /* RUN BYTES THROUGH A DECODER — §7.2's decode() minus its arguments, which is exactly what §7.5's "decode and
    enqueue a chunk" and "flush and enqueue" are. The `stream` flag decides whether an incomplete sequence at
    the end is HELD for the next call or flushed as an error, which is the whole reason a decoder has state at
@@ -806,7 +933,6 @@ static int enc_buffer_source(JSContext *ctx, JSValueConst v, const uint8_t **pp,
    so this is one operation with two callers and not two implementations that will drift. */
 JSValue enc_decoder_decode(JSContext *ctx, EncDecoder *d, const uint8_t *p, size_t len, bool stream)
 {
-    JSValue r;
     EncBuf o = { 0 };
 
     DCHECK(d != NULL, "bytes were run through a decoder that does not exist");
@@ -819,7 +945,7 @@ JSValue enc_decoder_decode(JSContext *ctx, EncDecoder *d, const uint8_t *p, size
            TextDecoderCommon" and holds no decode() at all, and the phrase "decoder error" occurs NOWHERE in the
            Encoding Standard. §7.2 holds SEVERAL lists — the constructor's and decode()'s — so the citation
            names the list in the standard's own words rather than writing a bare step number no reading fixes. */
-        free(o.b);
+        dec_buf_free(&o);
         decoder_reset(d);
         return JS_ThrowTypeError(ctx, "the encoded data was not valid %s", encoding_name(d->enc));
     }
@@ -829,59 +955,243 @@ JSValue enc_decoder_decode(JSContext *ctx, EncDecoder *d, const uint8_t *p, size
            decoder_flush's, shared with §6's byte hooks, because the set of states that count as incomplete is a
            property of the DECODER and not of who stopped feeding it. */
         if (decoder_flush(d, &o) < 0) {
-            free(o.b);
+            dec_buf_free(&o);
             decoder_reset(d);
             return JS_ThrowTypeError(ctx, "the encoded data ended mid-sequence");
         }
         decoder_reset(d);
     }
-    /* §7.1's BOM REMOVAL IS OVER THE DECODED OUTPUT, not over the input bytes — the standard drops the first
-       SCALAR VALUE when it is U+FEFF and sets the flag on the first value either way. Written as a byte-prefix
-       test it was wrong for streaming: a BOM split across two chunks (`EF BB` then `BF 40`) has no three-byte
-       prefix to match in either call, so it decoded as a visible U+FEFF. The output is UTF-8, so U+FEFF is
-       the three bytes this drops. */
-    if (!d->ignore_bom && !d->bom_seen && o.n) {
-        if (o.n >= 3 && (unsigned char)o.b[0] == 0xEF && (unsigned char)o.b[1] == 0xBB &&
-            (unsigned char)o.b[2] == 0xBF) {
-            memmove(o.b, o.b + 3, o.n - 3);
-            o.n -= 3;
-        }
-        d->bom_seen = 1;
-    }
-    r = JS_NewStringLen(ctx, o.b ? o.b : "", o.n);
-    free(o.b);
-    return r;
+    return dec_serialize(ctx, d, &o);
 }
 
-/* §7.2's decode(): the arguments, then the operation above. Step 3 is the one "IF GIVEN" in this component —
-   "If input is given, then push a copy of input to this's I/O queue" — and `input` is the one position here
-   declared optional with NO default, so Web IDL §3.6 "Overload resolution algorithm" step 15.4.2's "missing"
-   is reachable at it and `decode()` and `decode(undefined)` are the same call. idl_arg_given is that question;
-   the `argc`-and-`JS_IsUndefined` pair that stood here restated §3.6's ENCODING at the site instead of asking
-   it, which is the copy that drifts the day "missing" stops being an `undefined` in the vector. */
-static JSValue js_decoder_decode(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* ---- §7.2's decode(), AS A STEP MACHINE -------------------------------------------------------------------
+ *
+ * WHY IT IS ONE. `new TextDecoder().decode(bigBuffer)` is the ordinary way a bundle reads a binary reply, and
+ * as a plain C body it held the engine's thread for the whole decode with no rest point anywhere in it: no
+ * sibling flow ran, no second document interleaved, and the cooperative quantum had nothing to expire against
+ * because a C activation that declares no step boundary answers no poll however the request was raised. The
+ * span is the PAGE'S size — the page chooses the buffer — so §scheduler's razor calls a body that cannot rest
+ * inside it a cap, and quickjs-step.h says the same thing in its own words: running no user code is not what
+ * makes a C body safe to leave un-parkable, being O(1) is.
+ *
+ * THE STANDARD HAD ALREADY DONE THE DECOMPOSITION, which is why this is a conversion and not a design. §7.2's
+ * decode(input, options) is written as "While true:" over single ITEMS, and the item is the unit — so the rest
+ * point is the standard's own back-edge and there is no granularity constant here for anyone to tune or to
+ * hide. §NO BOUNDS' distinction between a bound and a granularity never arises: the unit is not chosen.
+ *
+ * AND IT IS §7.2's OWN LOOP, NOT §4.1's "process a queue". This is worth stating because the two are easy to
+ * read as one and the difference is what makes this a machine while §6's hooks stay blocking. §7.2 reads an
+ * item, tests `do not flush` against end-of-queue, and THROWS A TypeError where §4.1 returns an error to its
+ * caller; §4.1's loop is what §6's hooks drive, and §6 says of them in its own words that they "will block
+ * until the input I/O queue has been consumed in its entirety". One `process an item`, two loops, because the
+ * standard has one `process an item` and two loops — see decoder_run.
+ *
+ * WHAT A SUSPENDED decode() CARRIES, and why the copy is the standard's step rather than this file's caution.
+ * Step 3 is "If input is given, then push a COPY of input to this's I/O queue", and its note says
+ * implementations "are strongly encouraged to use an implementation strategy that avoids this copy. When doing
+ * so they will have to make sure that changes to input do not affect future calls to decode()." A machine that
+ * rests between items cannot make that promise: the page runs at every rest point, and it may write the
+ * ArrayBuffer or detach it. So the copy is taken, and the note's own condition is why.
+ * `this's decoder` is NOT here — it is the OBJECT's, which is what makes `stream: true` work across calls —
+ * and that is also why this machine's first act is to capture it (see the setup arm). */
+#define DECODE_STAGES(X) \
+    X(DECODE_SETUP, "Encoding §7.2 TextDecoder's decode(input, options) steps 1-4 (the decoder instance and " \
+                    "I/O queue a non-streaming predecessor left reset, `do not flush` from options[\"stream\"], " \
+                    "the copy of `input` pushed to this's I/O queue, and the output I/O queue)") \
+    X(DECODE_ITEM,  "Encoding §7.2 TextDecoder's decode(input, options) step 5 (read one item from this's I/O " \
+                    "queue; the early return §7.1's serialize I/O queue makes when it is end-of-queue and " \
+                    "`do not flush` is true, and otherwise §4.1's process an item over it)") \
+    X(DECODE_END,   "Encoding §7.2 TextDecoder's decode(input, options) step 5.3's end-of-queue item (the " \
+                    "decoder's handler answering finished, which for a sequence the input stopped inside is " \
+                    "§4.1's error and this member's TypeError)") \
+    X(DECODE_SERIALIZE, "Encoding §7.1 Interface mixin TextDecoderCommon's serialize I/O queue, which §7.2's " \
+                    "decode(input, options) step 5 returns the result of")
+enum { IDL_STEP_STAGE_BASE(DECODE_STAGES) DECODE_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DECODE_STEPS[] = { DECODE_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    /* §7.2 step 3's COPY of `input`, and how far step 5 has read into it. ENGINE-ALLOCATED, because `visit`
+       below declares it and quickjs.c clones a declared buffer with js_malloc and frees it with js_free. */
+    uint8_t *in;
+    size_t   in_n, in_i;
+    /* §7.2 step 4's `output`. Its `ctx` is what makes it the engine's too — see EncBuf. */
+    EncBuf   out;
+    /* §7.2 step 2's `do not flush`. */
+    uint8_t  stream;
+} JSDecodeState;
+
+/* WHAT A FORKED ARM MUST NOT SHARE. Both are plain storage the two arms each go on appending to: one arm's
+   remaining items are not the other's, and one arm's accumulated output is not the other's. */
+static void js_decoder_decode_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    EncDecoder *d = JS_GetOpaque(this_val, g_dec_class);
-    const uint8_t *p = NULL;
-    size_t len = 0;
-    JSValue buf = JS_UNDEFINED, r;
-    bool stream;
+    JSDecodeState *s = st;
 
-    (void)magic;
-    if (!d) return JS_ThrowTypeError(ctx, "not a TextDecoder");
-    /* Position 1 is a DICTIONARY, and the machine converts one for every call whatever the page passed, so
-       this member's count is its full declared width and `options` is always there to read. */
-    DCHECK(argc == 2,
-           "§7.2's decode declares two positions and the second is a dictionary, which Web IDL §3.2.17 "
-           "converts for every call however few arguments the page passed — so the machine hands this body "
-           "exactly two, and a different count means encoding_init's argument list changed under it");
-    if (idl_arg_given(argc, argv, 0) && enc_buffer_source(ctx, argv[0], &p, &len, &buf) < 0)
-        return JS_EXCEPTION;
-    stream = idl_dict_bool(ctx, argv[1], "stream");
-    r = enc_decoder_decode(ctx, d, p, len, stream);
-    JS_FreeValue(ctx, buf);
-    return r;
+    v->buf(ctx, (void **)&s->in, s->in_n);
+    v->buf(ctx, (void **)&s->out.b, s->out.cap);
 }
+
+static int js_decoder_decode_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                  JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    JSDecodeState *s = st;
+    EncDecoder *d = JS_GetOpaque(hdr->this_val, g_dec_class);
+    uint8_t b;
+    int r;
+
+    (void)out_cb; (void)out_argc;
+    /* This machine makes no request, so every re-entry carries the driver's filler; freeing it is what the
+       §7.2 constructor beside it does and costs nothing for a JS_UNDEFINED. */
+    JS_FreeValue(ctx, cb_result);
+
+    STEP_DISPATCH(DECODE_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(DECODE_SETUP);
+    {
+        const uint8_t *p = NULL;
+        size_t len = 0;
+        JSValue buf = JS_UNDEFINED;
+
+        /* WEB IDL §3.7.7 Operations' BRAND CHECK, and it is a THROW rather than an assert: a page reaches this
+           off the prototype with `.call` on anything it likes, so the receiver is the PAGE's input. */
+        if (!d) {
+            JS_ThrowTypeError(ctx, "not a TextDecoder");
+            return JS_STEP_ABRUPT;
+        }
+        /* Position 1 is a DICTIONARY, and the machine converts one for every call whatever the page passed, so
+           this member's count is its full declared width and `options` is always there to read. */
+        DCHECK(argc == 2,
+               "§7.2's decode declares two positions and the second is a dictionary, which Web IDL §3.2.17 "
+               "converts for every call however few arguments the page passed — so the machine hands this body "
+               "exactly two, and a different count means encoding_init's argument list changed under it");
+
+        /* §7.2's `this's decoder` IS THE OBJECT'S AND NOT THIS MACHINE'S, so it is the COW delta's to isolate
+           and not `visit`'s. It is a POD latch — every field of EncDecoder is an integer, so there is no
+           counted reference a byte copy could duplicate — which is what makes solver/cow.h's host-STATE entry
+           the right one rather than its host-RECORD entry.
+           IT IS CAPTURED HERE BECAUSE A FLOW THAT HAS REACHED THE RECORD IS ONE THAT MAY WRITE IT, which is
+           the rule's own placement: the delta dedups to one entry, so there is no write site left to miss, and
+           every write this member makes — the handler's held sequence, `bom seen`, the reset — is downstream of
+           this line. WITHOUT IT two arms of a fork would drive ONE half-read sequence: that was already true
+           ACROSS two `stream: true` calls, and resting between items would have widened it to inside one. */
+        cow_capture_host_state(ctx, hdr->this_val, d, sizeof *d);
+
+        /* Step 2: "Set this's do not flush to options["stream"]." */
+        s->stream = idl_dict_bool(ctx, argv[1], "stream") ? 1u : 0u;
+        /* Step 3: "If input is given, then push a copy of input to this's I/O queue." `input` is the one
+           position here declared optional with NO default, so Web IDL §3.6 "Overload resolution algorithm"
+           step 15.4.2's "missing" is reachable at it and `decode()` and `decode(undefined)` are the same call.
+           idl_arg_given is that question; the `argc`-and-`JS_IsUndefined` pair that used to stand here restated
+           §3.6's ENCODING at the site instead of asking it. */
+        if (idl_arg_given(argc, argv, 0)) {
+            if (enc_buffer_source(ctx, argv[0], &p, &len, &buf) < 0)
+                return JS_STEP_ABRUPT;
+            if (len) {
+                s->in = js_malloc(ctx, len);
+                if (!s->in) {
+                    JS_FreeValue(ctx, buf);
+                    return JS_STEP_ABRUPT;
+                }
+                memcpy(s->in, p, len);
+                s->in_n = len;
+            }
+            /* The borrowed view goes back HERE and not at the end: past this line the bytes this machine reads
+               are its own copy, which is the whole of what step 3's "copy of" buys a body that rests. */
+            JS_FreeValue(ctx, buf);
+        }
+        /* Step 4: "Let output be the I/O queue of scalar values « end-of-queue »." */
+        s->out.ctx = ctx;
+        STEP_GOTO(hdr->stage, DECODE_ITEM, NULL);
+        return JS_STEP_YIELD;
+    }
+
+    STEP_ARM(DECODE_ITEM);
+    DCHECK(d != NULL, "§7.2's decode resumed on a receiver that is no longer a TextDecoder — the setup arm "
+                      "threw for a receiver with no decoder, so a later stage reaching one means the brand "
+                      "was removed from a live object between two items");
+    /* Step 5.1: "Let item be the result of reading from this's I/O queue." END-OF-QUEUE IS AN ITEM LIKE ANY
+       OTHER AND GETS ITS OWN TURN of step 5's loop, which is why this rests rather than running on. */
+    if (!dec_read_item(d, s->in, s->in_n, &s->in_i, &b)) {
+        STEP_GOTO(hdr->stage, DECODE_END, NULL);
+        return JS_STEP_YIELD;
+    }
+    /* Step 5.3: "Let result be the result of processing an item with item, this's decoder, this's I/O queue,
+       output, and this's error mode." */
+    r = dec_process_item(d, b, &s->out);
+    if (r == DEC_ITEM_ERROR) {
+        /* Step 5.3.3: "Otherwise, if result is error, throw a TypeError." The decoder answered the error; this
+           is the caller that has a realm to turn it into one. THE SENTENCE THAT STOOD AT THIS THROW — `§7.1
+           step 4: "If … a decoder error occurs, then throw a TypeError."` — was WRONG IN BOTH HALVES, and it
+           is kept as a worked example because a quotation is the part of a citation a reader trusts most and
+           verifies least: §7.1 is "Interface mixin TextDecoderCommon" and holds no decode() at all, and the
+           phrase "decoder error" occurs NOWHERE in the Encoding Standard. */
+        dec_buf_free(&s->out);
+        decoder_reset(d);
+        JS_ThrowTypeError(ctx, "the encoded data was not valid %s", encoding_name(d->enc));
+        return JS_STEP_ABRUPT;
+    }
+    /* Step 5.3.2: "If result is finished, then return the result of running serialize I/O queue with this and
+       output." §14.1.1's replacement decoder is the ONLY handler in this file that answers `finished` before
+       end-of-queue — it answers it for the read after its one error, which is what makes a whole
+       `replacement`-labelled sequence one U+FFFD however long it is — and §7.2's constructor REFUSES the
+       `replacement` label with a RangeError, so no TextDecoder can hold one and this arm is not reachable from
+       this member at all. It is routed through the end-of-queue stage rather than straight to the
+       serialization so that the two agree about the decoder reset either way; §14.1.1 holds no state
+       decoder_flush counts as incomplete, so the flush it crosses is a no-op for the one decoder that could
+       ever arrive here. The handler reachable from §7.2 that WOULD distinguish them does not exist. */
+    if (r == DEC_ITEM_FINISHED) {
+        STEP_GOTO(hdr->stage, DECODE_END, NULL);
+        return JS_STEP_YIELD;
+    }
+    /* THE STANDARD'S OWN BACK-EDGE, and the only rest point this algorithm has. The stage does not move: §7.2's
+       loop re-reads, and a flow that outranks this one takes the thread here. */
+    return JS_STEP_YIELD;
+
+    STEP_ARM(DECODE_END);
+    /* Step 5.2: "If item is end-of-queue and this's do not flush is true, then return the result of running
+       serialize I/O queue with this and output." The note beside it is what the early return is FOR: "the way
+       streaming works is to not handle end-of-queue here when this's do not flush is true and to not set it to
+       false. That way in a subsequent invocation this's decoder is not set anew in the first step of the
+       algorithm and its state is preserved."
+       OTHERWISE THE END-OF-QUEUE ITEM IS PROCESSED LIKE ANY OTHER, which for every decoder here is
+       decoder_flush: WHICH held state means "the input stopped in the middle of a character" is per-decoder,
+       and it is the SAME function §6's byte hooks reach, so a hook and this member cannot come to disagree
+       about what "ended mid-sequence" means. */
+    if (!s->stream) {
+        if (decoder_flush(d, &s->out) < 0) {
+            dec_buf_free(&s->out);
+            decoder_reset(d);
+            JS_ThrowTypeError(ctx, "the encoded data ended mid-sequence");
+            return JS_STEP_ABRUPT;
+        }
+        decoder_reset(d);
+    }
+    STEP_GOTO(hdr->stage, DECODE_SERIALIZE, NULL);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(DECODE_SERIALIZE);
+    DCHECK(d != NULL, "§7.2's decode reached its serialization on a receiver that is no longer a TextDecoder");
+    *presult = dec_serialize(ctx, d, &s->out);
+    /* A STEP BODY SAYS "I THREW" WITH ITS RETURN CODE AND NOT WITH ITS COMPLETION VALUE, which is the one place
+       the conversion could not simply carry the plain body's convention over: a C function member returns
+       JS_EXCEPTION AS its result and the caller reads the context, while a machine's completion is PLACED by
+       the driver, so an exception handed back under JS_STEP_DONE would be placed as an ordinary value and the
+       throw would vanish. The only thing here that can throw is the string the whole output becomes. */
+    if (JS_IsException(*presult)) {
+        *presult = JS_UNDEFINED;
+        return JS_STEP_ABRUPT;
+    }
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl js_decoder_decode_decl = {
+    /* No release: the input copy and the output accumulator are both js_decoder_decode_visit's, and the
+       teardown discharges that one list. No `unforkable` either — `this's decoder` is the OBJECT's state and
+       the setup arm hands it to the COW delta, which is where solver/cow.h puts state a REALM owns rather than
+       the machine; a declaration here would have refused the fork for a record the delta already isolates, and
+       would still have left the wider pre-existing window (a fork BETWEEN two `stream: true` calls) open. */
+    js_decoder_decode_step, sizeof(JSDecodeState), js_decoder_decode_visit, NULL,
+    "Encoding §7.2 TextDecoder's decode(input, options)", DECODE_STEPS
+};
 
 /* ---- WHAT §7.5 AND §7.6 REACH THIS COMPONENT THROUGH ------------------------------------------------------
  *
@@ -1094,7 +1404,7 @@ bool encoding_is_scalar_value_string(const char *p, size_t n)
        statement rather than a second one that agrees only for UTF-8. In "fatal" mode the flush RETURNS that
        error instead of pushing a replacement, which is exactly what a predicate wants. */
     if (r == 0) r = decoder_flush(&d, &o);
-    free(o.b);
+    dec_buf_free(&o);
     return r == 0;
 }
 
@@ -1528,14 +1838,14 @@ void encoding_init(JSContext *ctx)
                       "Encoding §7.4's TextEncoder class — the per-realm prototype slot; §7.3 makes the "
                       "encoding always UTF-8, so the object it brands holds nothing");
 
-    g_id_decode = idl_method_id_dict(ctx, DECODE_ARGS, 2, DECODE_OPTIONS,
+    g_id_decode = idl_method_id_step(ctx, DECODE_ARGS, 2, DECODE_OPTIONS,
                                      (int)(sizeof DECODE_OPTIONS / sizeof DECODE_OPTIONS[0]),
-                                     js_decoder_decode, 0);
+                                     &js_decoder_decode_decl, 0);
     /* §7.2 "Interface TextDecoder":
        `USVString decode(optional AllowSharedBufferSource input, optional TextDecodeOptions options = {})`.
        Position 0 carries NO default, which is what makes §7.2's own step 3 read "If input is given, then push
        a copy of input to this's I/O queue" — the one arm of this component where Web IDL §3.6 step 15.4.2's
-       "missing" is reachable, and js_decoder_decode is what asks it. Position 1's `= {}` needs no
+       "missing" is reachable, and the machine's setup arm is what asks it. Position 1's `= {}` needs no
        idl_arg_default: a DICTIONARY position is converted for every call whatever the page passed, which is
        what §3.2.17 makes converting `undefined` to a dictionary produce. */
     idl_optional_from(0);

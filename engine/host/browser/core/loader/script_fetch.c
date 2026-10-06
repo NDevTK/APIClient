@@ -36,15 +36,28 @@
 #include "core/mime/mime_type.h"      /* Fetch §3.5's extract a MIME type, and its legacy extract an encoding */
 #include "core/loader/script_fetch.h"
 
-/* ONE `reason` PER ENTRY, and the emitted `cond` is what separates "answered nothing" from "answered
-   ill-formed bytes" — a @WHY carries the failing expression and the file:line beside the reason, so the
-   sentence a reader needs is which of §8.1.4.2's two algorithms was running. */
+/* ONE `reason` PER ENTRY, so the sentence a reader needs is which of §8.1.4.2's two algorithms was running.
+   THE SCALAR-VALUE HALF OF THIS REASON IS RETIRED, AND THE RETIRED WORDING IS KEPT BECAUSE A READER WHO
+   RE-DERIVES IT WILL RE-ADD THE SECOND DECODE. It read: "decoded a fetched body to something that is not a
+   scalar value string — the step runs Encoding's <hook>, whose error mode is \"replacement\" and therefore
+   answers U+FFFD for every malformed sequence, so this is a decoder contradicting its own error mode. What
+   stands downstream is a compiler that refuses an ill-formed byte outright, so the page would lose its whole
+   program to a SyntaxError no browser produces." Every clause of that is TRUE and the place to assert it was
+   never here: it was a claim about the DECODER, asserted at one of its five consumers by RE-RUNNING the whole
+   decoder over the whole output in fatal mode — a second complete pass, with its own allocation, over every
+   byte of every script this engine fetches, in the DEV build that every measurement in this project is taken
+   in. Encoding §4.1's process an item states the assertion at the step that PUSHES ("Assert: encoderDecoder
+   is not a decoder instance or result does not contain any surrogates"), and core/encoding/encoding.c's
+   enc_put is that push, so the invariant is now true by construction at the point of production.
+   WHAT THAT TRADES IS THE ADDRESS, IN THE DIRECTION THAT HELPS: this site named which of §8.1.4.2's two
+   entries was running and could not name the defect, because the defect is a decoder handler computing a
+   value outside the scalar values; the macro at enc_put is expanded at each handler, so the abort now names
+   the §8/§10/§11/§12/§13/§14 step that computed it. */
 #define SCRIPT_FETCH_WHY(entry, hook) \
-    "HTML §8.1.4.2's \"" entry "\" decoded a fetched body to something that is not a scalar value string — " \
-    "the step runs Encoding's " hook ", whose error mode is \"replacement\" and therefore answers U+FFFD for " \
-    "every malformed sequence, so this is a decoder contradicting its own error mode. What stands downstream " \
-    "is a compiler that refuses an ill-formed byte outright, so the page would lose its whole program to a " \
-    "SyntaxError no browser produces"
+    "HTML §8.1.4.2's \"" entry "\" decoded a fetched body to NOTHING — the step runs Encoding's " hook ", " \
+    "whose own contract is a malloc'd, NUL-terminated sequence and which CHECKs its allocation rather than " \
+    "answering a null pointer, so this is that contract having changed under this file. What stands " \
+    "downstream is a compiler handed a null source"
 
 /* §8.1.4.2's RESPONSE-SIDE FAILURE TEST — see script_fetch.h for which three algorithms state it and why the
    predicate is over the STATUS alone. Fetch §2.2.3 "Statuses": "An ok status is a status in the range 200 to
@@ -59,15 +72,25 @@ bool script_fetch_status_ok(int status)
     return status >= 200 && status <= 299;
 }
 
-/* WHAT EVERY SOURCE TEXT THIS FILE PRODUCES IS, asserted once for both entries. Encoding's decoders run in
-   "replacement" error mode, so nothing ill-formed can leave one — which means a violation here is the decoder
-   contradicting its own error mode, and the thing standing downstream is a COMPILER that refuses the byte
-   rather than the program. Asserted where the source is BORN, because by the time `next_token` sees it the only
-   symptom is a SyntaxError attributed to the page. */
+/* WHAT EVERY SOURCE TEXT THIS FILE PRODUCES IS, asserted once for both entries.
+   THE WELL-FORMEDNESS ASSERT THAT STOOD HERE IS GONE AND IS NOT WEAKENED — it moved to the step that produces
+   the bytes. It read `DCHECK(encoding_is_scalar_value_string(source, n), why)`, which runs Encoding's UTF-8
+   decoder a SECOND time, in fatal mode, over the whole output of the first one. The verdicts are the same
+   verdict and the equivalence is exact in both directions: core/encoding/encoding.c's enc_put emits the
+   minimal UTF-8 form of whatever code point it is handed, so the output is ill-formed exactly when some code
+   point reaching it was not a scalar value, and §8.1.1's machine refuses each of the three ways that can
+   happen (a surrogate's `ED` lead bounded at 0x9F, a value past U+10FFFF against `F4`'s bound of 0x8F, and a
+   lead of `F5` or more that no arm admits). So the assertion is now made ONCE, at Encoding §4.1's own step for
+   it, for every decode in the engine rather than for the two entries below — and the abort it produces names
+   the decoder handler that computed the value instead of naming which script was being fetched when a
+   different component misbehaved.
+   WHAT THIS DOES NOT TOUCH is the same construct at core/url/url.c, whose operands are the urlencoded parser's
+   stored bytes rather than this decoder's output — that site's own comment says it is the serializer's assert
+   about its PRODUCERS, one of which takes a USVString and never reaches enc_put at all. Same spelling, a
+   different population, and the per-site read is what separates them. */
 static char *script_fetch_source_text(char *source, size_t n, size_t *out_n, const char *why)
 {
     DCHECK(source != NULL, why);
-    DCHECK(encoding_is_scalar_value_string(source, n), why);
     if (out_n) *out_n = n;
     return source;
 }
