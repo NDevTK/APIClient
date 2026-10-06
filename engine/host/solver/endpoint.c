@@ -732,12 +732,30 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    and never reaches this question. The population this gate does decide is `unasked` AND concolic, which that
    sibling's own class bounds from above — read off a census with testing/corpus's stated derivation rather
    than off this file, because a figure here would be a claim competing with a command.
-   RETIREMENT: this record goes when the no-flow answer's direction is ASSERTED where both are in one hand —
-   a check that `address_class_of`'s flow-less member is the one `endpoint_razor_class_of` maps to
-   `runtime-only` — because the direction is then read off an exercised assertion instead of off prose.
-   MEASURED ABSENT with the command, so this condition is not born met: over this file,
-   `grep -cE 'DCHECK.*address_class_of|address_class_of.*EPZ_RUNTIME_ONLY'` answers 0 against
-   `grep -c 'DCHECK(EPA_UNKNOWN == EPA_COUNT - 1'` answering 1 as the armed control.
+   RETIREMENT — MET, AND THE RECORD IS REWRITTEN RATHER THAN DELETED BECAUSE WHAT A READER RE-DERIVES IS THE
+   DIRECTION ARGUMENT AND NOT THE ASSERT. The condition read: this record goes when the no-flow answer's
+   direction is ASSERTED where both are in one hand — a check that `address_class_of`'s flow-less member is
+   the one `endpoint_razor_class_of` maps to `runtime-only` — because the direction is then read off an
+   exercised assertion instead of off prose. The assert is at the ONE call site, because the mapping takes a
+   DOOR and only a caller holds one; the member's mapping is door-independent (it is that function's FIRST
+   line) so it passes for every door, which is the fact it pins. WHAT A DELETION WOULD COST is the retired
+   wording above it: a reader who re-derives the direction from "a proof needs evidence" writes the INVERTED
+   version, which reads this gate as PROTECTING the bar when it is what raises it.
+   AND THE CONDITION'S OWN COMMAND STILL ANSWERS ZERO AGAINST THE LANDED ASSERT, WHICH IS A FINDING ABOUT THE
+   COMMAND AND IS RECORDED RATHER THAN QUIETLY REPLACED. It read
+   `grep -cE 'DCHECK.*address_class_of|address_class_of.*EPZ_RUNTIME_ONLY'`, and a `DCHECK` whose condition
+   and whose message are on TWO LINES matches neither alternative: the condition line does not name
+   `address_class_of` and the line that does is the message's. `grep -c` counts LINES, so a construct split
+   across two of them is invisible to any pattern that wants both halves — CLAUDE.md's count-of-a-spelling
+   defect arriving inside a retirement condition, where its zero would have read as the condition being
+   UNMET and invited a second assert beside a working one. The command that reads the CONSTRUCT answers:
+   `grep -c 'endpoint_razor_class_of(door, EPA_UNKNOWN) == EPZ_RUNTIME_ONLY'` is 1, against
+   `grep -c 'endpoint_razor_class_of(door, EPA_ZZNONE)'` answering 0 as the invented control. So a
+   MEASURED-ABSENT clause states a pattern that can match the thing it is waiting for, and one that wants two
+   halves of a wrapped construct cannot.
+   RETIREMENT: this record goes when `endpoint_razor_class_of` cannot be given a door arm in front of its
+   `EPA_UNKNOWN` line at all — a list whose razor mapping is DECLARED per address class rather than computed
+   — because the direction is then unspellable-wrongly instead of asserted.
    THE ROOT IS STILL NOT ASKED, AND THE REASON HAS CHANGED FROM "IT CANNOT MATTER" TO "IT CANNOT BE SPELLED".
    The retired reason is kept because it is what a reader re-derives: a root test "would narrow this class by a
    population that mint has refused, which is a conjunct that cannot change an answer", `concolic_alloc`
@@ -752,7 +770,29 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    that is asserted where both halves are in one hand (concolic_alloc) rather than restated here.
 
    NAMED RESIDUAL — `unknown` DOES NOT ASK WHOSE UNKNOWN IT IS, AND ON A REAL SITE EVERY ROW CLEARING THE BAR
-   IS THIS ENGINE'S OWN INSTRUMENT. WHAT IS NOT COVERED: a value `engine_orphan_call` MINTED so that a drive
+   IS THIS ENGINE'S OWN INSTRUMENT.
+   THAT SENTENCE WAS A HYPOTHESIS ABOUT THIS TREE AND IS NOW MEASURED, WHICH IS THE ONE THING A NOT-COVERED
+   CLAUSE OF THIS KIND IS OWED. CLAUDE.md grades such a clause by its SUBJECT: about a fetchable document it
+   is evidence, and about THIS TREE it is "a hypothesis wearing the one grammatical position this file grades
+   as evidence". This one is about this tree, so it was owed a derivation, and the derivation is COMMITTED as
+   `testing/corpus/holewhose.mjs` — run BARE, which derives its own population rather than taking a filename.
+   WHAT IT ANSWERED, AND THE FIGURES ARE HANDED OVER AS THE COMMAND BECAUSE THE CENSUSES ARE UNTRACKED BY
+   DESIGN: of the scorable passes — scorable meaning BOTH histograms sum to the capture's own `endpoints`,
+   which is the free arithmetic that bands a pre-key capture as NOT SCORABLE rather than averaging its absent
+   histogram in as zeroes — the ones with a NONZERO razor split by whose hole they hold, and EVERY real-site
+   pass in that group held only holes this engine minted while every page hole in the whole corpus was on a
+   `127.0.0.1` fixture. Four real sites cleared the bar ZERO times and held no hole of any kind.
+   THE READER STATES ITS OWN TWO UNITS AND REFUSES THE DIFFERENCE, which is a defect its first form had: the
+   razor count's row is an EMITTED RECORD and the hole count's row is a DISTINCT ADDRESS SPELLING, so they
+   print on one line and read 136 against 135 on one site — §AND-TWO-INSTRUMENTS-CAN-DISAGREE arriving inside
+   one reader. The discriminating claim is therefore asked PER PASS, where a pass is one row on both sides.
+   AND IT READS THE BRACES RATHER THAN THE ROOT, WHICH IS THE AXIS THIS RESIDUAL REFUTES, so the reader prints
+   per site how many of its hole-bearing addresses are WHOLLY ONE BRACE — the case where the composed identity
+   IS the single root and the two axes cannot disagree. On the real site every one of them is. No capture on
+   disk carries the per-record `addressRoot` as a row (`grep -l addressRoot census-*.jsonl` answers five files
+   and in each it is a NOTE somebody wrote), which is why the braces are the only route against the artifacts
+   that exist and is what the fallback clause below already says of itself.
+   WHAT IS NOT COVERED: a value `engine_orphan_call` MINTED so that a drive
    of a never-called function could happen at all is a concolic whose own `src` and `root` are both
    `{orphan<hex>.argN}` — an unknown nobody supplied, standing in no served byte because it was never in any
    byte — so it answers `unknown` here and the bar answers `runtime-only` for it. The bar is then true of the
@@ -2259,6 +2299,20 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        read BEFORE any of the scans, for §scheduler's `an operation takes its inputs with it` at the smallest
        scale there is: nothing below this line holds the JSValue. */
     int acls = address_class_of(url);
+    /* THE NO-FLOW FALLBACK'S DIRECTION, ASSERTED WHERE BOTH ARE IN ONE HAND — `address_class_of`'s residual
+       argues at length that its flow-less answer CLAIMS MORE on §What-the-tool-produces' bar rather than
+       less, and that argument was prose. It is read HERE and not at that function because the mapping takes a
+       DOOR and only a caller holds one: an assert that cannot name its second operand is the shape this file
+       has already been bitten by. The mapping happens to be door-INDEPENDENT for this member — it is
+       `endpoint_razor_class_of`'s FIRST line — so this passes for every door, and that is the fact being
+       pinned: the day a door arm is put in front of it, this fires rather than the residual's reasoning
+       quietly becoming false. */
+    DCHECK(endpoint_razor_class_of(door, EPA_UNKNOWN) == EPZ_RUNTIME_ONLY,
+           "`address_class_of`'s flow-less member is no longer the one `endpoint_razor_class_of` maps to "
+           "`runtime-only` — that function's residual rests on the no-flow fallback CLAIMING on the product's "
+           "bar, which is why a stale pin chain would assert a determination no flow made; if this member "
+           "now maps elsewhere, the direction that argument states is inverted and the gate it justifies is "
+           "protecting the opposite thing");
     /* …AND WHAT THE PATH THAT COMPOSED IT HAD CHOSEN, read on the same line as the address class and for the
        same reason: both the merge arm and the mint below need it, and it is a fact about the RUNNING FLOW,
        which is what §scheduler's `an operation takes its inputs with it` is about at this scale — nothing
