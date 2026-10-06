@@ -781,7 +781,20 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    which is the free arithmetic that bands a pre-key capture as NOT SCORABLE rather than averaging its absent
    histogram in as zeroes — the ones with a NONZERO razor split by whose hole they hold, and EVERY real-site
    pass in that group held only holes this engine minted while every page hole in the whole corpus was on a
-   `127.0.0.1` fixture. Four real sites cleared the bar ZERO times and held no hole of any kind.
+   `127.0.0.1` fixture. SIX real sites cleared the bar ZERO times and held no hole of any kind.
+   THAT FIGURE READ `FOUR` AND THE RETIRED NUMBER IS KEPT BECAUSE WHAT A READER RE-DERIVES IS THE UNIT THAT
+   PRODUCED IT: a directory of `census-*.jsonl` invites one file = one capture, and a census file holds one
+   record PER SITE. The first reading was taken at the FILE unit, so it took `url` from a file's FIRST record
+   and the histograms from its LAST — publishing one site's address with another's count, omitting every site
+   that was not a file's last record, and MANUFACTURING one `a page hole while the razor reads zero` finding
+   that the record unit does not produce. THREE OF THE FOUR SITES THE RETIRED FIGURE NAMED HAD NEVER BEEN
+   SCORED AT ALL, which is the direction CLAUDE.md rates worst for an instrument: a site absent from every row
+   reads as a site that answered zero. Re-derived per record, the headline is 88 scorable of 147 records over
+   138 files — 88 + 59 EXCLUDED = 147, the free arithmetic that says the unit closes — with 33 of 88 nonzero
+   and 4 page-hole passes where the file unit read 82 of 138, 32, and 3. THE CENTRAL CLAIM SURVIVED THE
+   RE-DERIVATION AND IS WHY THE RESIDUAL STANDS: every one of the 29 engine-only passes is still gitpod and
+   every one of the 4 page holes is still a `127.0.0.1` fixture, so the measurement was wrong about WHICH
+   ROWS and right about WHOSE HOLE.
    THE READER STATES ITS OWN TWO UNITS AND REFUSES THE DIFFERENCE, which is a defect its first form had: the
    razor count's row is an EMITTED RECORD and the hole count's row is a DISTINCT ADDRESS SPELLING, so they
    print on one line and read 136 against 135 on one site — §AND-TWO-INSTRUMENTS-CAN-DISAGREE arriving inside
