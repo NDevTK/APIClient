@@ -758,6 +758,18 @@ async function main() {
       console.log("\n═══ " + url + "  nav=" + nav);
 
       let n = 0;
+      /* THE CENSUS AT WHICH THIS RUN'S TWO BRANCH SELECTORS FIRST SEPARATED, WHICH IS THE ONE THING A READER
+         OF THE TERMINAL LINE COULD NOT ASK. `selectorsAgree` below is a per-census GAUGE over a row that may
+         FALL, and this stream is read by taking its LAST line -- so a run that separated and then re-agreed
+         reads, at terminal, exactly like a run that never separated at all. Those are opposite facts: the
+         first is the only sample the minter triple can say anything from, and the second is the whole archive.
+         MEASURED over 809 archived censuses: ONE separated, and it is census #2 OF 3 with #3 agreeing, so a
+         terminal reading misses the single separable sample there has ever been. This is a LIFETIME landmark
+         beside that gauge and it is monotone: once set it never clears.
+         ITS WINDOW IS NAMED AND IS THIS RUN'S CENSUSES UP TO AND INCLUDING THIS LINE, because a landmark whose
+         window goes unstated reads as a claim about all time -- so `selectorsCensusesSeen` rides beside it and
+         a null with a count of 1 is a run that has barely started, never a run that agreed throughout. */
+      let sepAt = null;
       while (Date.now() - t0 < WINDOW) {
         await sleep(EVERY);
         const s = await sample(pg);
@@ -867,7 +879,12 @@ async function main() {
              absent denominator yields null and never 0. */
           out.arenaCeilingShare = share(h.arenaKiB, CEIL_KIB);
         }
-        if (!("branches" in w)) { out.brAbsent = true; console.log(JSON.stringify(out)); continue; }
+        /* THE LANDMARK RIDES THE SHORT FORM TOO, because it is a fact about the RUN and not about this
+           census's scope -- and the terminal census is free to be one that published no branch rows, which
+           would otherwise take the one row a reader needs off the one line a reader takes. */
+        if (!("branches" in w)) { out.brAbsent = true; out.selectorsEverSeparatedAt = sepAt;
+                                  out.selectorsCensusesSeen = n;
+                                  console.log(JSON.stringify(out)); continue; }
         for (const k of BR) out[k] = (k in w) ? w[k] : null;
         /* THE IDENTITIES, CHECKED. A violated one means every branch row on this line describes some other
            arrangement than the frontier it claims to, exactly as a non-zero switchDelta does above. */
@@ -910,6 +927,29 @@ async function main() {
                                      w.brCrowdBornLife === w.brBornLifeMax &&
                                      w.brCrowdUsLife   === w.brMinterUsLife);
         }
+        /* SET FROM THIS CENSUS BEFORE THE LINE IS EMITTED, so the line where a run first separates carries
+           its own index rather than the next one's.
+           AND `brMinterGoneLife == 0` IS NOT THE DISCRIMINATOR, which is the row a reader reaches for and the
+           wrong one. A shed count of zero is SUFFICIENT for the two selectors to pick one bucket and it is NOT
+           NECESSARY: measured over the archive, 19 censuses carry `gone > 0` and 18 of them still agree, since
+           a tie in `sub_born` can be broken the same way by both selectors. `selectorsAgree` above is the
+           published form and the stronger one, and it is what this landmark is keyed on.
+           WHAT THE ARCHIVE SAYS THE PAGE-SCALE ANSWER IS: UNOBSERVABLE, not `at par`. `departures` reads 0 at
+           the terminal census AND at the maximum over every census in all 16 page-scale transcripts / 434
+           censuses across three real sites, so `sub_gone` collapses the two selectors everywhere and the minter
+           triple can say nothing the crowd rows do not. The question upstream of this one -- does anything on a
+           real page's frontier ever depart -- is the blocker, and it is answered by `departures` and not here.
+           AND THE CROWD PAIR IS A PROPERTY OF THE DOCUMENT, WHICH IS WHY A FIXTURE RATIO MAY NOT BE QUOTED AS A
+           FACT ABOUT THE ENGINE. Re-derived at terminal from the archive with these same accessors: the smoke
+           fixture reads 5e-05 .. 3.2e-04, a DIFFERENT fixture of the same engine in the same directory reads
+           0.52 .. 0.86, and the page-scale runs read ~0.94 .. 1.04. Three orders of magnitude between two
+           documents under one accessor. A fixture-scale crowd figure offered as evidence that the branch term
+           demotes a branching arm is therefore evidence about that fixture; the smoke figures above disagree
+           with a relayed 0.0027-0.0046 by an order of magnitude at an unestablished revision, which is a
+           disagreement to RE-TAKE and not a refutation of either. */
+        if (out.selectorsAgree === false && sepAt === null) sepAt = n;
+        out.selectorsEverSeparatedAt = sepAt;
+        out.selectorsCensusesSeen = n;
         /* CARRIED BESIDE EVERY RAW BURN ON THIS LINE, because result.c says a raw microsecond total is
            quoted with the quantum's unit and a quotient of two burns is not. */
         out.isCpu = (s.quantum && typeof s.quantum.isCpu === "boolean") ? s.quantum.isCpu : null;
