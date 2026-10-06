@@ -256,11 +256,42 @@ static uint32_t tl_size(JSContext *ctx, JSValueConst this_val)
  * write and now §7.1's `value` setter all hand dom_cow_set_attribute the source beside the shape's bytes, so
  * `el.setAttribute('class', x)` and `el.classList.value = x` keep x's identity in the (element, name) shadow
  * map and `el.classList.add(x)` does not. WHY THIS HALF IS NOT THE SAME DIFF: the serialized attribute a
- * mutation writes is composed of SEVERAL tokens of which only some are unknown, and the shadow map carries ONE
- * JSValue for the whole attribute, so the honest shape is a per-token key in that map — which is why
- * `JS_UNDEFINED` here is a decision and not an omission, and why half of it would be worse than none. WHAT THE
- * NEXT DIFF BUILDS: a per-token entry in solver/dom_cow.h's (element, name) map, keyed by the token's own
- * bytes, so `add` can hand each argument's taint with the token it wrote. HOW ITS ABSENCE SHOWS: an element
+ * mutation writes is composed of SEVERAL tokens of which only some are unknown, so ONE of the arguments'
+ * values is not the attribute's provenance — which is why `JS_UNDEFINED` here is a decision and not an
+ * omission, and why half of it would be worse than none.
+ *
+ * AND THE NEXT-DIFF CLAUSE THAT STOOD HERE WAS WRONG, RECORDED RATHER THAN QUIETLY REPLACED BECAUSE
+ * CLAUDE.md §AND-THE-"WHAT-THE-NEXT-DIFF-BUILDS"-CLAUSE SAYS A REMEDY CLAUSE IS READ ONCE, BY SOMEBODY WHO
+ * HAS ALREADY DECIDED TO DO THE WORK — so a wrong one is not caught, it is EXECUTED. It read: "a per-token
+ * entry in solver/dom_cow.h's (element, name) map, keyed by the token's own bytes, so `add` can hand each
+ * argument's taint with the token it wrote." It is kept in its own words because a reader who re-derives it
+ * from "one JSValue cannot describe several tokens" will propose it again. TWO THINGS ARE WRONG WITH IT. It
+ * widens a SHARED primitive — the shadow map is every attribute's, and §4.9's own key is (namespace, local
+ * name) with no token in it — for one member family's benefit, and a second key in it is a second thing
+ * every read and every unapply must agree about. And it answers the wrong question: a SINK reads the WHOLE
+ * attribute (`el.className`, `getAttribute("class")`), so what it needs is one value NAMING ITS SOURCES,
+ * not a map a sink would have to re-join.
+ *
+ * WHAT THE NEXT DIFF BUILDS, derived from the engine's OWN primitive rather than from the shape of the
+ * problem: the attribute's value COMPOSED THROUGH `concolic_add_hook` (solver/concolic.h), which is
+ * 22.1.3.5's string concatenation and is what mints a JOINT concolic — "ONE concolic, ONE identity, a
+ * domain over the SET", `concolic_source_wrap_joint`'s own words, and solver/concolic.c records that
+ * derivations mint them now and that a joint's members are WALKED rather than strcmp'd. So the shadow map
+ * keeps exactly the ONE JSValue it already has, and that value names every source that reached the
+ * attribute. THE THREE FACTS THAT MAKE IT BUILDABLE, each read at the hook rather than assumed: it is
+ * PUBLIC in concolic.h; it CONSUMES both operands and writes its result to `sp[-2]` returning 1; and it
+ * returns 0 having consumed NOTHING when neither operand is concolic. The last one is why the composition
+ * accumulates CONCRETE runs as bytes and flushes them as one JSValue only when an unknown piece arrives:
+ * every hook call then has at least one concolic operand, so the hook never declines and the
+ * static-and-unexported `JS_ConcatString` is never needed. The pieces are the ones this function already
+ * emits in order — a kept token, §7.1 replace step 4's substitution, an appended token — so the
+ * composition records (offset, length, argument index) per emitted piece and walks that afterwards,
+ * skipping the byte range of a concolic piece because the hook contributes that piece's own shape.
+ * WHAT IT DOES NOT RECOVER, which is the bound rather than a gap in the plan: a token KEPT from the
+ * existing attribute whose bytes an earlier unknown write put there is concrete bytes by then, and the
+ * attribute's old taint is one value that cannot be decomposed back onto the tokens it spans. That loses
+ * nothing TODAY, because this write already passes `JS_UNDEFINED` and so already clears it.
+ * HOW ITS ABSENCE SHOWS: an element
  * whose `class` was set by `classList.add(<an unknown>)`, read back through a sink fed from `el.className`,
  * reports concrete bytes with no source, so no @S search starts for a breakout that is real — while the same
  * element written through `classList.value = <the same unknown>` now reports the source.
