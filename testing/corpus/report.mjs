@@ -35,7 +35,7 @@
 import { readFileSync, existsSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { siteList } from './list.mjs';
-import { condVerdict, armed as abortliveArmed, VERDICT_PRESENT, VERDICT_CHANGED, VERDICT_ABSENT }
+import { condVerdict, armed as abortliveArmed, reasonWindows, VERDICT_PRESENT, VERDICT_CHANGED, VERDICT_ABSENT }
   from '../../engine/abortlive.mjs';
 
 const ROOT = new URL('.', import.meta.url).pathname;
@@ -1561,6 +1561,61 @@ for (const [at, e] of [...bySig.entries()].sort((a, b) => b[1].sites.size - a[1]
                  would have called a merged-away wording live or a standing one retired. */
               [...e.reasons].map((w) => '\n     ' + sigConstructVerdict(at, w, e.revs)).join(''));
 }
+/* AND WHERE THIS QUEUE IS LONG RATHER THAN SHORT, WHICH NO COUNT ABOVE CAN SAY. The unnamed-abort line below
+   reports the queue SHORT; nothing reported it LONG, and it is, by the one mechanism the key cannot see. The key
+   is `file:line` for the reasons argued at `bySig`, and A LINE DRIFTS -- a commit that adds fifty lines above an
+   abort gives the SAME capability a second key, and a repair that rewords its message gives that second key a
+   second reason. So ONE unbuilt capability stands here TWICE, under two verdicts, and one of those verdicts is
+   the SPENT wording. That is strictly worse than a duplicate row: the two verdicts CONTRADICT each other, so a
+   reader meeting them concludes the checker is unreliable rather than that the queue is duplicated -- and both
+   verdicts are CORRECT, which is why no amount of care about either one reaches it.
+   NOT A MERGE, AND NEVER A MERGE. A false fold that SILENCED an entry would delete a defect; one that ACCUSES
+   this ranking costs one reading. So this changes no key, no site count and no order above it, and prints beside
+   the queue. The identity is the one `abortlive.mjs` already computes for its CHANGED verdict -- a reworded
+   refusal keeps a run of its message -- imported from that file rather than restated here.
+   MEASURED BEFORE LANDING, over this corpus's own 9 keys and 15 (key, reason) pairs: it accuses exactly ONE
+   cross-key pair, `engine.c`'s C-builtin-fork line at two revisions of its own message, sharing the run
+   `a C builtin forked over unknown input from inside its`. The other FOUR window-sharing pairs are all SAME-key
+   -- two operands of one line, which the ranking already prints together and which this is not allowed to call
+   a fold -- and an invented reason shares nothing. That population is small, so the count below is a FLOOR and
+   its own spelling says so.
+   AND THE SITE SETS NEED NOT DIFFER, which is the half the measurement corrected: that pair's sites are
+   {squoosh, gitpod} and {gitpod}, so folding them changes the ENTRY COUNT and not the two-site rank. The cost of
+   the split is a reader dispatching twice, never a mis-ranked head. */
+const _foldWin = new Map();
+for (const [at, e] of bySig) for (const w of e.reasons) _foldWin.set(at + '\u0000' + w, reasonWindows(w));
+const foldPairs = [];
+{
+  const ks = [..._foldWin.keys()];
+  for (let i = 0; i < ks.length; i++) for (let j = i + 1; j < ks.length; j++) {
+    /* TWO OPERANDS OF ONE LINE ARE NOT A FOLD. The ranking already prints them under one entry with one site
+       set, so reporting them here would accuse this file of a duplication it does not have -- and they are the
+       MAJORITY of window-sharing pairs, so omitting this test turns the floor below into noise. */
+    if (ks[i].split('\u0000')[0] === ks[j].split('\u0000')[0]) continue;
+    const wj = new Set(_foldWin.get(ks[j]));
+    const shared = _foldWin.get(ks[i]).find((w) => wj.has(w));
+    if (shared) foldPairs.push({ a: ks[i], b: ks[j], shared });
+  }
+}
+if (foldPairs.length) {
+  /* THE VERDICT IS READ OUT OF THE MEMO THE RANKING ABOVE ALREADY FILLED, never asked again: a second
+     `condVerdict` call would be a second reading of a tree that moves, and the whole point of this line is that
+     the two entries were graded in ONE pass. A key with no memo entry is one whose `whyOf` lookup missed, which
+     the ranking already reports as `cannot ask`; it is named as having no verdict rather than guessed at. */
+  const nameOf = (k) => {
+    const v = _sigVerdict.get(k);
+    return k.split('\u0000')[0] + '  [' + (v ? v.verdict : 'no verdict — this key carries no cond/reason pair') + ']';
+  };
+  console.log('\n*** ' + foldPairs.length + ' PAIR(S) ABOVE ARE ONE CAPABILITY AT TWO KEYS — this queue is LONG ' +
+              'by AT LEAST that many entries, and no count above can say so ***');
+  for (const p of foldPairs)
+    console.log('    ' + nameOf(p.a) + '\n    ' + nameOf(p.b) +
+                '\n      they share this run of their message: "' + p.shared + '"' +
+                '\n      the key graded ' + VERDICT_PRESENT + ' carries the wording that is still written; the ' +
+                'other is a REVISION of it,\n      so a lane dispatched at both builds the same thing twice. ' +
+                'Fold them by READING, never by deleting a row.');
+}
+
 /* THE SAME QUEUE ONE LEVEL COARSER, BECAUSE A DEFECT FAMILY OUTRANKS ITS MEMBERS AND THE FINE RANKING HIDES
    IT. The queue above keys on `file:line`, which is right for "what do I open" and wrong for "what is the
    biggest thing wrong" — the previous census's top cause was three layout files (`flow_position.c`,

@@ -199,12 +199,37 @@ function literalIsReason(literal, reason) {
   return covered >= REASON_COVERAGE * ws(reason).length;
 }
 
-function partialWindow(reason, runs) {
+/* THE RUNS A PARTIAL MATCH IS MADE OF, EXPORTED SO A SECOND READER CANNOT RESTATE THEM. `partialWindow` below
+   asks whether a reason survives in a FILE; `report.mjs` asks whether two of its ranking entries are two
+   REVISIONS of one abort, and that is the same question asked of each other rather than of a file -- a reworded
+   refusal keeps a run of its message, which is this file's whole CHANGED verdict. So it is answered from this
+   array and never from a copy of the windowing, because a restated rule is a second copy and the copy that
+   drifts is the one nobody runs. A reason shorter than the window is its own single run, which is what the
+   `w.length < PARTIAL_WORDS` arm has always done and is stated here instead of at each caller.
+   AN EMPTY REASON YIELDS NO RUNS, WHICH IS A CORRECTED ARM AND NOT AN EXTRACTION. The pre-extraction form took
+   `w.length < PARTIAL_WORDS` for an empty reason too and asked `hay.includes('')`, which is TRUE of every file
+   -- so a record carrying no message at all answered CHANGED `from its word 0`, in the flattering direction: it
+   reads as a site that still stands. Nothing in this corpus's 15 (key, reason) pairs carries one, so the
+   population is empty today and this is a narrowing of what CAN be answered rather than a change to any answer
+   anybody has read.
+   NAMED RESIDUAL. NOT COVERED: an empty reason now reaches the ladder's ABSENT arm, and ABSENT is a claim --
+   that no run of this message is in the file -- where the honest answer is that there is no message to ask for.
+   WHAT THE NEXT DIFF BUILDS: `condVerdict` answers VERDICT_UNKEYED for a record whose cond and reason are both
+   empty, beside the arm it already has for a record with no file. HOW ITS ABSENCE WOULD SHOW: a queue entry
+   whose verdict reads ABSENT while the line it names is unchanged, with nothing in its message to have gone. */
+export function reasonWindows(reason) {
   const w = ws(reason).split(' ').filter(Boolean);
+  if (!w.length) return [];
+  if (w.length < PARTIAL_WORDS) return [w.join(' ')];
+  const out = [];
+  for (let i = 0; i + PARTIAL_WORDS <= w.length; i++) out.push(w.slice(i, i + PARTIAL_WORDS).join(' '));
+  return out;
+}
+
+function partialWindow(reason, runs) {
   const hay = runs.map((r) => r.text).join('\n');
-  if (w.length < PARTIAL_WORDS) return hay.includes(w.join(' ')) ? 0 : -1;
-  for (let i = 0; i + PARTIAL_WORDS <= w.length; i++)
-    if (hay.includes(w.slice(i, i + PARTIAL_WORDS).join(' '))) return i;
+  const wins = reasonWindows(reason);
+  for (let i = 0; i < wins.length; i++) if (hay.includes(wins[i])) return i;
   return -1;
 }
 
