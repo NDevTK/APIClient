@@ -4429,6 +4429,24 @@ static int js_node_get_element_by_id(JSContext *ctx, JSStepHdr *hdr, void *st, i
         id = concolic_name_cstr(ctx, argv[0]);   /* the declaration passes UNKNOWN input through as itself, so an unknown name denotes its SHAPE */
         if (!id) return JS_STEP_ABRUPT;
         s->idlen = strlen(id);
+        /* §4.9'S ID-UNSET STEP, READ ON THE OPERAND, AND IT ENDS THE WALK BEFORE IT STARTS. §4.2.4's
+           algorithm is "the first element, in tree order, within node's descendants, whose ID is elementId",
+           and an element's ID is not its `id` ATTRIBUTE: DOM §4.9 "Interface Element" states it as "An element
+           can have an associated unique identifier (ID)" and gives the attribute change steps that maintain
+           one — "If localName is id, namespace is null, and value is null or the empty string, then unset
+           element's ID. Otherwise, if localName is id, namespace is null, then set element's ID to value." So
+           NO ELEMENT EVER HAS THE EMPTY STRING AS ITS ID, and `getElementById("")` is null for every document
+           there is. It was a MATCH here: the walk's comparison is `vlen == s->idlen && memcmp(...)`, which at
+           zero length holds for an attribute present with an empty value, and lexbor hands that back as
+           non-NULL data of length 0 (lxb_dom_attr_set_value allocates the str for a zero-length write).
+           ONE TEST IS THE WHOLE FIX, because with a non-empty elementId `vlen == s->idlen` already implies a
+           non-empty value, which is exactly "this element has an ID". The walk asserts the other half.
+           AND IT IS A PRECONDITION OF THE VALUE SEAM AT THE WALK rather than only a fidelity repair, which is
+           why it is its own diff and this one: a fork over an element whose `id` this flow has not determined
+           mints an arm saying that element's ID IS elementId, and for an empty elementId that is an arm §4.9
+           says cannot hold — a world this engine's own spec reading contradicts, which is the mirror of a
+           wrong narrowing and is not exploration. Deciding it here keeps the question out of the comparison. */
+        if (s->idlen == 0) { JS_FreeCString(ctx, id); return JS_STEP_DONE; }   /* *presult is already JS_NULL */
         s->id = js_malloc(ctx, s->idlen + 1);
         CHECK(s->id != NULL, "getElementById could not copy the id it was asked for");
         memcpy(s->id, id, s->idlen + 1);
@@ -4440,6 +4458,13 @@ static int js_node_get_element_by_id(JSContext *ctx, JSStepHdr *hdr, void *st, i
     }
 
     DCHECK(hdr->stage == BYID_WALK, "getElementById resumed into a stage §4.2.4 does not have");
+    /* THE OTHER HALF OF §4.9'S ID-UNSET STEP, ASSERTED RATHER THAN DESCRIBED. BYID_START answers null for an
+       empty elementId without walking, so the comparison below never sees one — and it is the comparison that
+       cannot express it, `vlen == s->idlen` being true of `id=""` at zero length. The length is this machine's
+       own copy's, never the page's bytes, so this asserts what this codebase computed. */
+    DCHECK(s->idlen > 0, "getElementById's walk reached an element with an EMPTY elementId — §4.9's ID-unset "
+                         "step makes the empty string no element's ID, so §4.2.4 answers null at BYID_START "
+                         "without walking, and the comparison here would have matched an `id=\"\"` attribute");
     n = s->cursor;
     if (!n) { *presult = JS_NULL; return JS_STEP_DONE; }
     if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
