@@ -107,8 +107,8 @@ const run = (cmd, args, opts = {}) => {
    shape this cannot parse THROWS, because the alternative — a hand-written list — is the second copy this
    derivation exists to avoid, and a residue taken against the wrong include set is a residue of a different
    program. */
-function includeRoots() {
-  const src = readFileSync(join(ENGINE, "build.mjs"), "utf8");
+function includeRoots(engineDir) {
+  const src = readFileSync(join(engineDir, "build.mjs"), "utf8");
   const line = src.split("\n").find((l) => /^\s*"-I"\s*\+/.test(l));
   if (!line) die(3, "build.mjs has no `\"-I\" + …` flag line — its shape moved, so the include roots this",
                     "would preprocess with are no longer derivable. Fix THIS parser against that line; do not",
@@ -131,7 +131,7 @@ function includeRoots() {
   for (const m of src.matchAll(/^const\s+([A-Z_]+)\s*=\s*(.+?);\s*$/gm)) defs.set(m[1], m[2]);
   const resolveName = (id, depth = 0) => {
     if (depth > 4) die(3, "include-root name `" + id + "` resolves through more than four `const`s");
-    if (id === "ENGINE") return ENGINE;
+    if (id === "ENGINE") return engineDir;
     const rhs = defs.get(id);
     if (!rhs) die(3, "build.mjs defines no `const " + id + "` — the include-root derivation cannot resolve it");
     const j = /^join\(\s*([A-Za-z_]+)\s*,\s*"([^"]+)"\s*\)$/.exec(rhs);
@@ -237,9 +237,47 @@ function main() {
            "  6 NOT ASKED (every path DECLINED, so nothing was judged); 2 usage; 3 the include-root derivation;",
            "  4 a command failed. A DECLINE and a FINDING used to share code 1, so the one caller that reads this",
            "  status could only say `the claim FAILED` over a path nothing had examined.");
-  const roots = includeRoots();
-  console.log("# include roots DERIVED from engine/build.mjs's own `-I` line:");
-  for (const r of roots) console.log("#   " + r);
+  const roots = includeRoots(ENGINE);
+  /* THE OLD TRANSLATION UNIT IS PREPROCESSED AGAINST THE OLD TREE'S HEADERS, WHICH IS WHAT THIS CHECK GOT
+     WRONG AND WHICH FAILED IN THE FLATTERING DIRECTION. One `-I` set for both sides preprocesses the BASE
+     `.c` against the CURRENT headers, so a diff that only widens a declared X-list in a header is INVISIBLE
+     from every consumer `.c` and each one reads PROSE-ONLY — and a declared X-list widening is this
+     project's commonest shape, so the blind spot sat over the population this instrument is most often
+     pointed at. MEASURED on one revision pair as a SEPARATING pair rather than argued: the file whose own
+     source changed reported a correct FINDING, and a file whose only change was its header's enum line
+     reported `gained 0, lost 0` and exit 0 while its preprocessed text really did gain `EPA_UNKNOWN_UNPROVEN`.
+     This file's own usage line names the broken instruction — "pass a `.c` that includes it".
+     IT MATERIALISES THE WHOLE TREE RATHER THAN THE NAMED PATHS, because a header's own includes are resolved
+     from the base tree too and a partial copy would resolve the rest forward. It THROWS rather than falling
+     back to the current roots: a fallback here is the silent wrong answer this record is about, and §A-
+     superseded-system-is-DELETED forbids keeping the shape that produced it as a safety net. */
+  const baseDir = mkdtempSync(join(tmpdir(), "prosediff-base-"));
+  /* REGISTERED BEFORE THE TREE IS WRITTEN AND NOT AT THE END OF THIS FUNCTION, because `die` calls
+     `process.exit` and there are ten of those — a cleanup placed only before the normal exit is the shape
+     §A-DESTRUCTIVE-STEP-IS-GATED forbids inverted: a tidy-up nothing reaches on the paths that need it.
+     MEASURED on all three exits before this was added: the clean path and the DECLINE path left 0 dirs and a
+     `die` left 1, so the leak was exactly the error paths and only they. `force` so a failure here cannot
+     change the verdict a reader is waiting for. */
+  process.on("exit", () => rmSync(baseDir, { recursive: true, force: true }));
+  {
+    /* `--output` AND NEVER STDOUT, because `run` decodes with `encoding: "utf8"` and a tar is BINARY — the
+       first form of this wrote the mangled string to disk and `tar` refused it, which is the right failure
+       direction and is why this is a path rather than a pipe. */
+    const tf = join(baseDir, "base.tar");
+    const ar = run("git", ["archive", "--format=tar", "--output=" + tf, base]);
+    if (ar.status !== 0)
+      die(4, "`git archive " + base + "` failed, so the OLD side has no headers of its own to preprocess",
+             "against. Not falling back to the current tree's roots: that is exactly the blind spot this",
+             "materialisation exists to close.",
+             (ar.stderr || "").split("\n").slice(0, 4).join("\n"));
+    const tx = run("tar", ["-x", "-f", tf, "-C", baseDir]);
+    if (tx.status !== 0)
+      die(4, "extracting the base tree failed", (tx.stderr || "").split("\n").slice(0, 4).join("\n"));
+  }
+  const baseRoots = includeRoots(join(baseDir, "engine"));
+  console.log("# include roots DERIVED from engine/build.mjs's own `-I` line, PER SIDE:");
+  for (const r of roots) console.log("#   new  " + r);
+  for (const r of baseRoots) console.log("#   base " + r);
   console.log("# base " + base + " (" + (run("git", ["rev-parse", "--short", base]).stdout || "?").trim() +
               ")  -DAPICLIENT_DEV=" + dev);
 
@@ -279,9 +317,11 @@ function main() {
          subject and differs only in carrying something the subject claims not to. A control that shares less
          than that is a control for a different proposition. */
       writeFileSync(ctlF, cur + "\nstatic int apiclient_prosediff_control_" + "sentinel = 1;\n");
-      const nm = [newF, oldF, ctlF, join(REPO, p), b];
+      const nm = [newF, oldF, ctlF, join(REPO, p), join(baseDir, p), baseDir, REPO, b];
       const N = preprocess(newF, roots, dev, nm);
-      const O = preprocess(oldF, roots, dev, nm);
+      /* THE BASE SIDE'S OWN ROOTS — see the materialisation above for why one set for both sides is a
+         false clean bill on every header-only change. */
+      const O = preprocess(oldF, baseRoots, dev, nm);
       const C = preprocess(ctlF, roots, dev, nm);
 
       const ctl = flatten(diffCommands(maskInts(N), maskInts(C)));
@@ -365,6 +405,11 @@ function main() {
                : worst === 5 ? "VOID: at least one path's control did not speak"
                : worst === 6 ? "NOT ASKED: every named path was DECLINED, so nothing was judged and nothing is cleared"
                : "see above"));
+  /* NO rmSync HERE. The base tree is a whole checkout of 2000-odd files and leaving one per invocation is the
+     shape CLAUDE.md's own disk-space incident is about — a build that could not START because 1281 abandoned
+     directories had taken the allowance, with the tool that would have freed it inside the thing that could
+     not run. One mechanism removes it, registered at creation, so there is no second copy to drift and no
+     exit path it does not cover (§A-superseded-system-is-DELETED). */
   process.exit(worst);
 }
 main();
