@@ -73,6 +73,30 @@ const EXT_DIR = path.join(ROOT, "extension");
    away; unset, every path is exactly what it was. The debug port must be distinct too (it is already an
    argument to `start`), and the extension ID is derived from EXT_DIR, so two browsers on one checkout still
    agree on which chrome-extension:// origin is ours. */
+/* AND A RELATIVE VALUE IS REFUSED, BECAUSE `path.resolve` MAKES IT CWD-RELATIVE AND THE CWD IS THIS SHARED
+   CHECKOUT. The two defaults below are both covered by .gitignore (its `testing/profile` glob, and its dot-out glob),
+   so the UNSET harness leaves the tree clean; every usage this file prints is absolute, for the same reason.
+   A bare name defeats both at once: `HARNESS_PROFILE=mylane` resolves to <repo>/mylane, and the Chrome log is
+   derived as `dirname(PROFILE_DIR)/.harness-chrome.out`, so ONE relative value drops an ~80 MB profile AND a
+   log into the repository root, neither of them ignored. MEASURED, by the author of this check: both landed,
+   and the cost is not disk — it is that every peer's `git status` is dirty from then on, and a stop hook that
+   reads untracked files asks each of them to COMMIT an 80 MB Chrome profile. The trap is that the harness is
+   working perfectly; nothing fails, and the damage is in a directory nobody was looking at.
+   It is thrown at module scope deliberately, so no verb can slip past it, and it refuses rather than
+   repairing: resolving a relative name against somewhere else would be this harness guessing where an agent
+   meant to put its browser, which is a decision belonging to whoever set the variable. */
+for (const [k, v] of [["HARNESS_PROFILE", process.env.HARNESS_PROFILE],
+                      ["HARNESS_LOCK", process.env.HARNESS_LOCK]]) {
+  if (v && !path.isAbsolute(v))
+    throw new Error(
+      `${k}=${JSON.stringify(v)} is RELATIVE, and this harness resolves it against the current directory —\n` +
+      `  which is this shared checkout, so it would write into the repository rather than into your own\n` +
+      `  scratch. A profile is tens of megabytes and the Chrome log rides beside it, and neither path is\n` +
+      `  ignored once it is outside testing/. Give an absolute one:\n` +
+      `      ${k}=/tmp/<lane>/${k === "HARNESS_LOCK" ? "harness.lock" : "prof"} node testing/harness.js restart\n` +
+      `  Unset, the default is under testing/ and is already ignored — that is the clean state, not a fallback\n` +
+      `  this check is steering you away from.`);
+}
 const PROFILE_DIR = process.env.HARNESS_PROFILE
   ? path.resolve(process.env.HARNESS_PROFILE) : path.join(__dirname, "profile");
 const LOCK_FILE = process.env.HARNESS_LOCK
