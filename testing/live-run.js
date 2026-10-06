@@ -2051,6 +2051,65 @@ function census(r) {
       ? null : (su - (stp - ovr) * qus) / ovr;
     o.overrunStepUsAtLeastOf = (o.overrunStepUsAtLeast === null) ? null
       : "(sliceUs - (steps - sliceOverruns) * sliceMs * 1000) / sliceOverruns";
+    /* AND THE PER-ARM RATE, WHICH IS THE READING THE BANNER SIXTY LINES UP ASKS FOR BY NAME ("read that
+       against `stepUnitRuns` arm by arm") AND WHICH NOBODY HAD TAKEN — because it is a derivation over two
+       HISTOGRAMS and this driver only ever composed derivations over numbers. It is here rather than in prose
+       for `epBeyondMarkup`'s reason: a derivation a reader must perform is one nobody performs.
+       THE COUNT AND THE RATE DISAGREE, AND THE COUNT IS THE ONE THAT MISLEADS — which is §decide.h's
+       arrivals warning arriving in this histogram. MEASURED over seven real-site runs of two documents when
+       this landed (and the figures are an era's reading, where the DERIVATION is the artifact):
+       `deliver-one-reply` carried 71-73% of every gitpod run's overruns and had the LOWEST rate of any arm
+       that overran at all — 4.6%, 6.0%, 5.5% there and 8.5-11.3% on gitlab — because it RUNS 401-622 times.
+       A reader of the count alone sends a lane at the delivery path, which is the arm answering correctly
+       19 times in 20. What actually overran was PROGRAM ENTRY: `start-a-classic-program` at 60.0-77.8% in
+       four of four gitlab runs, `evaluate-a-module-program` at 4/4 in all three gitpod runs,
+       `microtask-checkpoint` at 6/6, 3/3 and 4/4 in those same three, and
+       `compile-handed-the-thread-back` at 51.3% where it ran 76 times — while every arm that RESUMES a
+       program overran under 20% and the host-facing arms (`link-connected-time` at 17-99 runs,
+       `run-a-task` at 17-450, `resume-parked-continuation` at 29-49) overran NEVER.
+       AN ARM IS WHERE A STEP ENDED AND THIS IS NOT A MECHANISM, which the banner above already states: both
+       program arms end inside one call whether the time went into the page's own bytecode between two of its
+       raise points or into a single native call that never returned, and those take opposite work. Read
+       `sliceOverrunSeamless` beside this — 0 on every gitlab run and 4 on gitpod — because engine.h's test is
+       that `slice_overrun_seamless == slice_overruns` would EXCLUDE the ordering by construction, and it is
+       nowhere near.
+       AN ARM THAT OVERRAN WITHOUT RUNNING IS A REFUSAL AND NOT A RATE, because a turn that met the slice is a
+       turn that ran: that is a composer disagreeing with itself across the two histograms, and a quotient
+       there would print Infinity where the finding is that the pair cannot be read at all. `null` whenever
+       either histogram is absent, which is this driver's absent-versus-zero rule.
+       AND A RATE IS READ WITH ITS OWN TWO COUNTS, WHICH IS WHY THIS FIELD DOES NOT REPLACE THEM AND BOTH
+       HISTOGRAMS STAY ON THE LINE. A 2-of-2 and a 7-of-9 are both large fractions and are not the same
+       evidence, and this driver cannot state a spread from one run — §Testing's rule governs any comparison
+       of these across runs. MEASURED on the run that scored this field, one fresh browser on
+       gitlab.com/explore: the COUNT order was `deliver-one-reply` 6, `start-a-classic-program` 3,
+       `resume-program` 2 and the RATE order was EXACTLY INVERTED — `resume-program` 100% (of 2),
+       `start-a-classic-program` 50% (of 6), `deliver-one-reply` 11.3% (of 53) — with
+       `sum(stepUnitOverruns) == sliceOverruns == 11` holding, which is the identity solver/engine.c asserts
+       on the overrun line itself. That inversion is the whole reason the field exists, and the 100% is a
+       2-sample reading in a run where three earlier gitlab drives put that same arm at 0.4-18.6% over 43 to
+       952 runs: the rate NAMES a candidate and the counts say how much it is worth. */
+    const runsH = o.stepUnitRuns, ovrH = o.stepUnitOverruns;
+    if (runsH && typeof runsH === "object" && ovrH && typeof ovrH === "object") {
+      const rate = {}, impossible = [];
+      for (const k of Object.keys(ovrH)) {
+        const ov2 = ovrH[k], rn = runsH[k];
+        if (typeof ov2 !== "number" || !ov2) continue;
+        if (typeof rn !== "number" || rn <= 0) { impossible.push(k + " overran " + ov2 + " with runs=" +
+          (typeof rn === "number" ? rn : "absent")); continue; }
+        rate[k] = ov2 / rn;
+      }
+      o.stepUnitOverrunRate = rate;
+      o.stepUnitOverrunRateOf = "stepUnitOverruns[arm] / stepUnitRuns[arm], arms with no overrun omitted";
+      o.stepUnitOverrunRateRefused = impossible.length
+        ? "an arm met the cooperative slice in a turn the run count says never happened (" +
+          impossible.join("; ") + ") — a turn that overran is a turn that RAN, so the two histograms " +
+          "disagree about one arm's population and no quotient over them is a rate"
+        : null;
+    } else {
+      o.stepUnitOverrunRate = null;
+      o.stepUnitOverrunRateOf = null;
+      o.stepUnitOverrunRateRefused = null;
+    }
   }
 
   /* AND WHAT THE PAGE ASKED FOR AND DID NOT GET, WHICH IS THE ONE ABSENCE NOTHING ELSE ON THIS ROW CAN
