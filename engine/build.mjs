@@ -371,7 +371,7 @@ const loadNow = () => {
 const coldFields = sourceFact(() => censusRowSet(
   "solver/result.c", "char *result_cold_json(void)", "\n}\n",
   ["stepUnits", "stepUnitRuns", "stepUnitOverruns", "stepUnitOverrunSeamlessArms",
-   "outOfProgramsAtTheLadderUnits", "programCursors",
+   "stepUnitOverrunAskArms", "outOfProgramsAtTheLadderUnits", "programCursors",
    "programsAhead", "epDoors", "epReach", "epAddressClass", "epRazorClass", "epWitnessClass"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
   "composer rather than from a list beside it"));
@@ -2930,6 +2930,29 @@ function stepUnitOverrunReading(b) {
      total. Two numbers moving together over three passes with nothing able to join them. */
   const seam = new Map(censusHistRows(b, "stepUnitOverrunSeamlessArms", "sliceOverrunSeamless",
                                       STEP_UNIT_EXTENT));
+  /* AND THE FOURTH MEMBER, WHICH IS THE ONLY ONE OF THE FOUR THAT SEPARATES THE TWO DIFFS THE TRIPLE ABOVE
+     LEAVES JOINED. The pair says an arm held the thread and the seamless row says whether it offered a point;
+     neither says anything whatever about the arm that offered points and ran anyway, which is where every
+     overrun on a real app has landed so far. `sliceOverrunAsks` is the SUM of the consultation delta over
+     exactly those turns, so divided by them it is a DENSITY — how many times a turn that was asked anyway
+     consulted the scheduler before the budget took it.
+     THE DENOMINATOR IS OVERRUNS MINUS SEAMLESS AND NEVER OVERRUNS, which is not a refinement: a seamless turn
+     contributes ZERO to the numerator BY CONSTRUCTION (it offered not one point), so dividing by the whole
+     overrun count averages a zero that is a definition in with the measurements and reads LOW by exactly the
+     seamless share — the flattering direction, because a low density is what an engine whose consultations are
+     cheap looks like.
+     WHAT IT DECIDES is the trap solver/engine.h names at its `sched_us` banner: a reader who takes a small
+     scheduler phase for `the ordering is not the cost` has bounded the PICK and said nothing about the HOOK,
+     whose O(members) rival rescan is called from the interpreter and charged to the STEP phase. A density in
+     the thousands over a 12 ms slice is that rescan being the slice; a density of one or two is a step that
+     consulted once, was not outranked, and ran — which is a question about the page.
+     MEASURED, five fresh-browser drives of one dev artifact: `sliceOverrunSeamless` read 0 on all five gitlab
+     drives (asks 1814, 1357, 1777, 80 and 74) and 4 on gitpod, so the denominator is the whole overrun count
+     on the drives this row was built for and the density is readable for EVERY arm of them.
+     RETIREMENT: this record goes when the per-arm MAXIMUM INTER-CONSULTATION GAP is emitted beside this sum,
+     because a density is a mean and a mean cannot tell one long gap from many short ones — which is the single
+     discriminator the ask rows still cannot state, and solver/engine.h:1900 carries its own half of it. */
+  const ask = new Map(censusHistRows(b, "stepUnitOverrunAskArms", "sliceOverrunAsks", STEP_UNIT_EXTENT));
   /* SORTED BY RATE AND NOT BY COUNT, WHICH IS A CORRECTION TO THIS READER'S FIRST VERSION AND THE WHOLE OF
      WHAT IT IS FOR. It quoted the denominator per arm — which was right — and then ordered the arms by the
      NUMERATOR, so the row a reader meets first is whichever arm simply RUNS most, and the rate that decides
@@ -2969,6 +2992,12 @@ function stepUnitOverrunReading(b) {
               arm is non-numeric, so this read is direct; an arm absent from a SPARSE partition is genuinely 0
               seamless turns and not an absence, because that partition is emitted with every row. */
            const s = Number(seam.get(r[0]) ?? 0);
+           /* AND THE DENSITY OVER THE TURNS THAT WERE ASKED ANYWAY, which is the row that decides whether the
+              arm's overrun is the scheduler or the page. `asked` is this arm's non-seamless overrunning turns
+              and is the ONLY admissible denominator; where it is zero the clause above has already said every
+              one of that arm's overruns was seamless, and a density over nothing is not a smaller density. */
+           const askN = Number(ask.get(r[0]) ?? 0);
+           const asked = r[1] - s;
            return `${r[1]} of ${n} ${r[0]}` +
                   (n > 0 ? ` (${(100 * r[1] / n).toFixed(1)}%)` : "") +
                   (r[1] > 0 ? `, ${s} of them SEAMLESS` +
@@ -2979,6 +3008,19 @@ function stepUnitOverrunReading(b) {
                                            " about the page and not about this engine"
                                : "")
                             : "") +
+                  (asked > 0
+                    ? `, ${askN} consultation(s) over those ${asked} asked turn(s) ` +
+                      `(${(askN / asked).toFixed(1)} each)` +
+                      (askN / asked >= 100
+                        ? " — a turn that consulted the scheduler that many times inside one 12 ms slice is" +
+                          " the HOOK being the slice, not the page: the rival rescan is called from the" +
+                          " interpreter and charged to the step phase, which is the reading a small" +
+                          " scheduler phase cannot refute"
+                        : askN / asked <= 2
+                          ? " — a turn that consulted once or twice and ran anyway is a back-edge-free stretch" +
+                            " of the page's own code, which no ordering reaches"
+                          : "")
+                    : "") +
                   (n > 0 && r[1] === n ? " — EVERY run of that arm overran" : "");
          }).join(", ") +
          (busiest.length
