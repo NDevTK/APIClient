@@ -908,12 +908,29 @@ static int enc_buffer_source(JSContext *ctx, JSValueConst v, const uint8_t **pp,
    IT IS ONE FUNCTION BECAUSE TWO ALGORITHMS RETURN THROUGH IT — §7.2's decode() at both of its own return
    points, and the whole-sequence operation below that §7.5's chunk decode and XHR's text response drive — and
    a second statement of the BOM rule is how those would come to disagree about a stream whose first chunk is
-   the BOM's first two bytes. It CONSUMES `o`: the buffer is freed here however the serialization ends. */
+   the BOM's first two bytes. It CONSUMES `o`: the buffer is freed here however the serialization ends.
+   THE ENCODING CONJUNCT CANNOT BE READ OFF THE OUTPUT BYTES, which is why it tests `d->enc` and not a wider
+   byte pattern: the output is UTF-8 whatever the input encoding was, so a U+FEFF this decoder PRODUCED is
+   the same `EF BB BF` a UTF-8 BOM is. gb18030 decodes `84 31 95 33` to U+FEFF, and a strip that asks only
+   about the bytes deletes the character the page decoded. §14.2 "Common infrastructure for UTF-16BE/LE"
+   fixes the set at THREE — "UTF-16BE/LE is UTF-16BE or UTF-16LE" — so it is the registry's own ENC_UTF_8,
+   ENC_UTF_16BE and ENC_UTF_16LE and never a fold of the ids some other algorithm happens to range over.
+   `BOM seen` IS SET INSIDE THAT TEST because the standard sets it inside the encoding-guarded branch. For an
+   excluded encoding the flag is unobservable either way — the encoding is fixed at enc_decoder_new and the
+   flag is read at this one site, so a false first conjunct is false for that decoder's whole life — and the
+   standard's shape makes that true by CONSTRUCTION rather than by that reachability argument, which a
+   SECOND reader of the flag would silently break.
+   ITS SET IS NOT encoding_bom_sniff's, which ranges over the same three ids further down this file. §6.1's
+   sniff maps INPUT BYTES to an encoding for the `decode` hook; this one asks what the decoder WAS BUILT
+   with. §7.1's own Note says so itself — this algorithm is "intentionally different with respect to BOM
+   handling from the decode algorithm used by the rest of the platform" — so routing either through the
+   other is the conflation that Note forbids. */
 static JSValue dec_serialize(JSContext *ctx, EncDecoder *d, EncBuf *o)
 {
     JSValue r;
 
-    if (!d->ignore_bom && !d->bom_seen && o->n) {
+    if ((d->enc == ENC_UTF_8 || d->enc == ENC_UTF_16BE || d->enc == ENC_UTF_16LE) &&
+        !d->ignore_bom && !d->bom_seen && o->n) {
         if (o->n >= 3 && (unsigned char)o->b[0] == 0xEF && (unsigned char)o->b[1] == 0xBB &&
             (unsigned char)o->b[2] == 0xBF) {
             memmove(o->b, o->b + 3, o->n - 3);

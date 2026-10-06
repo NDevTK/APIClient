@@ -3912,6 +3912,45 @@ static const char *HTML =
     " try { new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array([0xE4, 0xB8])); }"
     " catch (tde2) { tdEnd = (tde2 instanceof TypeError) ? 'isend' : 'other'; } }"
     "fetch('/api/tdstep?big=' + tdBig + '&split=' + tdSplit + '&item=' + tdItem + '&end=' + tdEnd);"
+    /* ENCODING §7.1's SERIALIZE I/O QUEUE, WHOSE BOM STRIP IS RESTRICTED TO THREE ENCODINGS: "If decoder's
+       encoding is UTF-8 or UTF-16BE/LE, and decoder's ignore BOM and BOM seen are false: Set decoder's BOM
+       seen to true. If item is U+FEFF BOM, then continue." The conjunction is THREE clauses and every one of
+       them is a separate way to get this wrong, so each has its own param.
+       `gb` IS THE ONE THAT IS ABOUT THE ENCODING AND THE ONLY ONE A BYTE TEST CANNOT ANSWER. The decoded
+       output is UTF-8 whatever the input encoding was, so a U+FEFF a decoder PRODUCED is byte-for-byte the
+       `EF BB BF` a UTF-8 BOM is — gb18030 spells U+FEFF as the four bytes `84 31 95 33`, and a strip that
+       asks only about the output deletes a character the page decoded. §14.2 "Common infrastructure for
+       UTF-16BE/LE" fixes the admitted set at THREE: "UTF-16BE/LE is UTF-16BE or UTF-16LE".
+       `u8`, `le` AND `be` ARE THE THREE ADMITTED ENCODINGS, one clause each, because the plausible wrong
+       narrowing is `utf-8` alone — a test written over one id passes `u8` and reddens the other two, and a
+       strip deleted outright rather than conditioned reddens all three while `gb` goes green. The two
+       directions are therefore separable rather than summed into one verdict.
+       `ig` AND `seen` ARE THE OTHER TWO CONJUNCTS, which a diff that rewrites this condition to add the
+       encoding one is exactly where it would drop. `seen` is the only clause that needs TWO calls: the flag
+       is set on the first item tested and read on the next, so a second chunk's leading U+FEFF is a
+       CHARACTER rather than a BOM.
+       EVERY CLAUSE IS A POSITIVE TOKEN. A param that must merely NOT carry a value reads as satisfied when
+       the statement never ran at all, so each arm emits a word only the conforming answer can produce and
+       the wrong answer emits what it actually saw. */
+    "var tbGb = 'absent', tbU8 = 'absent', tbLe = 'absent', tbBe = 'absent', tbIg = 'absent', tbSeen = 'absent';"
+    "if (typeof TextDecoder !== 'undefined') { var tbS, tbD, tb1, tb2;"
+    " tbS = new TextDecoder('gb18030').decode(new Uint8Array([0x84, 0x31, 0x95, 0x33]));"
+    " tbGb = (tbS.length === 1 && tbS.charCodeAt(0) === 0xFEFF) ? 'iskept' : ('len' + tbS.length);"
+    " tbS = new TextDecoder('utf-8').decode(new Uint8Array([0xEF, 0xBB, 0xBF, 0x41]));"
+    " tbU8 = (tbS.length === 1 && tbS.charCodeAt(0) === 0x41) ? 'isu8' : ('len' + tbS.length);"
+    " tbS = new TextDecoder('utf-16le').decode(new Uint8Array([0xFF, 0xFE, 0x41, 0x00]));"
+    " tbLe = (tbS.length === 1 && tbS.charCodeAt(0) === 0x41) ? 'isle' : ('len' + tbS.length);"
+    " tbS = new TextDecoder('utf-16be').decode(new Uint8Array([0xFE, 0xFF, 0x00, 0x41]));"
+    " tbBe = (tbS.length === 1 && tbS.charCodeAt(0) === 0x41) ? 'isbe' : ('len' + tbS.length);"
+    " tbS = new TextDecoder('utf-8', { ignoreBOM: true }).decode(new Uint8Array([0xEF, 0xBB, 0xBF, 0x41]));"
+    " tbIg = (tbS.length === 2 && tbS.charCodeAt(0) === 0xFEFF) ? 'isignore' : ('len' + tbS.length);"
+    " tbD = new TextDecoder();"
+    " tb1 = tbD.decode(new Uint8Array([0xEF, 0xBB, 0xBF, 0x41]), { stream: true });"
+    " tb2 = tbD.decode(new Uint8Array([0xEF, 0xBB, 0xBF, 0x42]), { stream: true });"
+    " tbSeen = (tb1 === 'A' && tb2.length === 2 && tb2.charCodeAt(0) === 0xFEFF)"
+    "  ? 'isseen' : ('a' + tb1.length + 'b' + tb2.length); }"
+    "fetch('/api/tdbom?gb=' + tbGb + '&u8=' + tbU8 + '&le=' + tbLe + '&be=' + tbBe"
+    " + '&ig=' + tbIg + '&seen=' + tbSeen);"
     /* §4.13 CUSTOM ELEMENTS — the reason this component exists: connectedCallback's body is code NOTHING ELSE IN
        THE PROGRAM CALLS. The endpoints below are reachable only through the lifecycle, so their presence is the
        whole claim. `extends HTMLElement` is what a real bundle writes, and after the upgrade `this.setAttribute`
@@ -19328,6 +19367,50 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "and return error\"), and a machine that threw from only the mid-queue arm would pass the clause "
              "above and fail this one");
 
+    /* ENCODING §7.1's SERIALIZE I/O QUEUE — see the fixture row for why each clause is here. They are
+       INDEPENDENT clauses and not an entailed ladder, so a 0 names the clause it is about and says nothing
+       about the ones below it. The first rung is the REACHABILITY WITNESS: without it an absent abort and an
+       absent record read alike, and a clause that never ran would be read as a correct value. */
+    const char *tdbom_why = NULL; int tdbom_tt = 1;
+    fold_row(&tdbom_tt, &tdbom_why, !!strstr(js, "\"/api/tdbom\""),
+             "NOT REACHED: there is no /api/tdbom record at all, so Encoding §7.1's serialize I/O queue was "
+             "never observed from this document. That is the SCHEDULE and not the member — no clause below "
+             "can be read until this one is 1, and an absent abort is not a correct value");
+    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "gb", "iskept"),
+             "a U+FEFF this engine DECODED was deleted. §7.1 drops a leading BOM only \"if decoder's "
+             "encoding is UTF-8 or UTF-16BE/LE\", and gb18030 is none of the three — `84 31 95 33` is that "
+             "encoding's four-byte form for U+FEFF, so a conforming decode answers ONE character. `len0` is "
+             "the strip running for an encoding the standard excludes, which is what a test over the OUTPUT "
+             "BYTES does and what a test over `d->enc` cannot: the output is UTF-8 whatever went in, so a "
+             "produced U+FEFF and a BOM are the same three bytes and only the encoding separates them");
+    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "u8", "isu8"),
+             "the UTF-8 arm of that same test stopped stripping. `EF BB BF 41` under `utf-8` is the case the "
+             "standard's own list admits, so this is the control that reddens when the strip was DELETED "
+             "rather than conditioned — the over-wide repair of the clause above. `len2` is a BOM that "
+             "survived into the string");
+    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "le", "isle"),
+             "the UTF-16LE arm is missing. §14.2 \"Common infrastructure for UTF-16BE/LE\" says "
+             "\"UTF-16BE/LE is UTF-16BE or UTF-16LE\", so the admitted set is THREE encodings and not "
+             "one: `FF FE 41 00` decodes to U+FEFF then U+0041 and the BOM goes. This clause and the one "
+             "below are what redden when the encoding test was written too NARROW, which is the opposite "
+             "error from the clause above and is why they are not folded together");
+    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "be", "isbe"),
+             "the UTF-16BE arm is missing, for the same reason and from the other byte order: `FE FF 00 41` "
+             "is U+FEFF then U+0041. A test that named UTF-16LE alone would pass the clause above and fail "
+             "this one, which is the whole reason §14.2's two ids are asserted separately");
+    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "ig", "isignore"),
+             "`ignoreBOM: true` stopped being honoured. It is the SECOND of §7.1's three conjuncts — "
+             "\"and decoder's ignore BOM and BOM seen are false\" — so a decoder built with it keeps the "
+             "BOM it was handed and answers TWO characters. `len1` is the BOM stripped from a decoder that "
+             "asked for it, which is the conjunct a diff rewriting this condition drops while adding the "
+             "encoding one");
+    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "seen", "isseen"),
+             "`BOM seen` is not carried between two `stream: true` calls. §7.1 sets the flag on the first "
+             "item it tests and tests it on every item after, so a SECOND chunk's leading U+FEFF is a "
+             "character rather than a BOM: `A`, then U+FEFF followed by `B`. `a1b1` means the second "
+             "strip ran too — the flag was lost, reset, or written where this decoder's encoding no "
+             "longer reaches it; `a2b2` means the first one did not run at all either");
+
     /* ─── A JAVASCRIPT REPLY IS A PROGRAM, AND THE CONTROL THAT MAKES THAT READABLE ────────────────────────
        Three clauses, in the order the fact is built, so a 0 names which of three things happened — and the
        three are not all about the same thing, which is the point. The first two are about the REPLY DOOR
@@ -19795,6 +19878,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         /* Encoding §7.2's decode() resting at its own back-edge — four clauses on one record, because they are
            four facts about ONE member and a reader wants them to redden together or not at all. */
         { "td-step", tdstep_tt, "/api/tdstep", SESS_EXPLORE, tdstep_why },
+        /* §7.1's serialize I/O queue — SEVEN clauses on one record because they are seven facts about one
+           algorithm's single conjunction, and a reader wants the encoding clause and its three controls to
+           be readable against each other rather than spread over rows that can be scored apart. */
+        { "td-bom", tdbom_tt, "/api/tdbom", SESS_EXPLORE, tdbom_why },
         /* §8.1.6.4 step 7.4's FOUR STATES, one row per state per ROUTE — see their computation for why the
            document and the stream each answer half of each state, and why the stream clauses are ratios. Keyed
            on the chunk that stages them, which is the statement these rows are about; the control below is
