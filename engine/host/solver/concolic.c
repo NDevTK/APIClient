@@ -2016,6 +2016,14 @@ static int cand_matches(const char *src) {
     return g_cand_src && src && !strcmp(src, g_cand_src);
 }
 
+/* WHETHER THE ONE MINT WILL ANSWER A PLAIN VALUE FOR A SOURCE -- see concolic.h for the question this answers
+   and why it is the disjunction. It is HERE, immediately under the second of its two disjuncts, because both
+   arms are this file's own: the pin is `concolic_new`'s early return and the substitution is
+   `concolic_derived`'s, and a consumer composing the pair would hold a copy of a rule it cannot see change. */
+int concolic_src_determined(const char *src) {
+    return cand_matches(src) || concolic_src_pinned(src);
+}
+
 /* THE DECLARED SOURCES and what their component does to an attacker's bytes. A source that declares nothing
    delivers as-is, which is right for injected server state (`window.__STATE`) — the attacker writes that JSON
    directly and no component transforms it.
@@ -5888,6 +5896,22 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue
                    "answer NONE for a pin taken over its own source and every address composed from it will "
                    "report a shape where this flow proved a literal");
         }
+        /* …AND THAT A NON-CONCOLIC ANSWER IS ONE OF THE TWO DETERMINATIONS, which is the contract every
+           consumer of this mint reads off its return and which nothing stated. A consumer asserted the
+           NEGATION of it — `structured_clone.c`'s §2.7.8 rebuild aborted a dev build on the pin arm's own
+           correct answer — and it is an easy thing to assert, because the two arms that answer a plain value
+           are EARLY RETURNS a reader of the signature cannot see.
+           THE CONDITION IS THE WHOLE FUNCTION'S AND NOT THIS PATH'S, DELIBERATELY. The pin arm has already
+           returned by here, so the only determination `r` itself can carry is the substitution; what a
+           consumer reads is the RETURN, so the contract is stated over both arms and cannot go stale if they
+           are ever reordered. Nothing is lost by the looser disjunct: the state it would admit — the pin arm
+           not firing for a source this flow has pinned — is exactly what the DCHECK above the mint refuses,
+           by name and over the same two spellings. */
+        DCHECK(concolic_is(r) || concolic_src_determined(src),
+               "the source mint answered a value that is not concolic for a source this flow has NEITHER "
+               "pinned NOR substituted a candidate at — the two early returns above are the only arms "
+               "entitled to answer a plain value, so this is a derivation that lost the triple and every "
+               "branch over it is about to be DECIDED where both worlds are still open");
 #endif
         return r;
     }

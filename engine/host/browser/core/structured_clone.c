@@ -85,8 +85,25 @@ typedef struct {
 } SCWriteMemory;
 
 typedef struct {
-    JSValueConst values;     /* §2.7.8's [[TransferredValues]] — the first n of that same numbering */
+    /* THE WHOLE NUMBERING THIS READER RESOLVES AGAINST. On the TRANSFER path that is §2.7.8's
+       [[TransferredValues]] FOLLOWED BY the rebuilt triples, in one array, because the writer used one
+       numbering — structured_deserialize_transfer states the mechanism at the loop that fills it.
+       THE FIELD DOC THAT STOOD HERE READ "§2.7.8's [[TransferredValues]] — the first n of that same
+       numbering", which is true of the same-turn clone path (where `n` is 0 and this array is empty) and
+       false of the transfer path. It is kept because a reader who re-derives it from the TYPE NAME will write
+       it again, and because reading it that way is what made `holders` below look redundant: if this array
+       were the transfer list, its length WOULD be the holder count. */
+    JSValueConst values;
+    /* THE BOUNDARY INTO `leaves` AND NOTHING ELSE: an index below it is answered from `values` and one at or
+       above it from `leaves`. On the transfer path `leaves` is absent and this is the whole length. */
     uint32_t     n;
+    /* …AND HOW MANY OF `values` ARE §2.7.8 HOLDERS, which is a DIFFERENT number and was the same one. A
+       holder's transfer-receiving steps always produce an OBJECT; a rebuilt triple is an object exactly where
+       the receiving flow has determined NOTHING about its source, because a pin or an @S substitution makes
+       the one mint answer a plain value — so an assert that reads `n` for this question accuses every
+       determined symbol of being a hole in the numbering. ONE ARRAY, TWO QUESTIONS: the same shape
+       `structured_moved_len` exists for one function down, arriving in the read hook instead of in a length. */
+    uint32_t     holders;
     JSValueConst leaves;     /* the array the write filled, in the order it filled it */
 } SCReadMemory;
 
@@ -218,10 +235,18 @@ static JSValue sc_memory_value(JSContext *ctx, void *opaque, uint32_t index)
 
     if (index < m->n) {
         v = JS_GetPropertyUint32(ctx, m->values, index);
-        DCHECK(JS_IsObject(v), "a transfer reference resolved to something that is not a received object — the "
-                               "writer's index into the transfer list and this list of received values are the "
-                               "ONE numbering §2.7.7 and §2.7.8 build in step order, so a hole here means the "
-                               "two halves stopped agreeing about what that numbering counts");
+        /* THE HOLDER HALF ONLY, AND THE BOUND IS `holders` RATHER THAN THE BOUNDARY — see the field. The
+           condition stood here UNGUARDED, which is correct for every index of the same-turn clone path (it
+           has no holders and never takes this branch) and accuses a determined symbol on the transfer path.
+           THE SYMBOL HALF IS ASSERTED AT THE REBUILD AND NOT HERE, because the question is whether a plain
+           value is one this flow DETERMINED, and that needs the record's SOURCE IDENTITY — which the rebuild
+           holds and this hook does not. An assert that cannot name its second operand accuses whichever
+           population it can see. */
+        DCHECK(index >= m->holders || JS_IsObject(v),
+               "a transfer reference resolved to something that is not a received object — the "
+               "writer's index into the transfer list and this list of received values are the "
+               "ONE numbering §2.7.7 and §2.7.8 build in step order, so a hole here means the "
+               "two halves stopped agreeing about what that numbering counts");
         return v;
     }
     v = JS_GetPropertyUint32(ctx, m->leaves, index - m->n);
@@ -348,7 +373,7 @@ JSValue structured_deserialize(JSContext *ctx, const StructuredData *in)
 JSValue structured_clone(JSContext *ctx, JSValueConst v)
 {
     SCWriteMemory memory = { JS_UNDEFINED, 0, JS_UNDEFINED, JS_UNDEFINED };
-    SCReadMemory back = { JS_UNDEFINED, 0, JS_UNDEFINED };
+    SCReadMemory back = { JS_UNDEFINED, 0, 0, JS_UNDEFINED };
     JSTransferReadHook hook;
     StructuredData d;
     JSValue out;
@@ -833,8 +858,24 @@ JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTran
                              "one, so the two halves of this record's format disagree");
         /* concolic_new TAKES the example, so the read of it above is the hand-over and not a borrow. */
         nv = concolic_new(ctx, shape, csrc, ex);
-        DCHECK(concolic_is(nv), "a rebuilt triple is not concolic — the arriving value would stand for the "
-                                "example alone, so a branch on it would be DECIDED where the sender forked");
+        /* RETIRED — THIS ASSERT WAS WRONG AND IT ABORTED EVERY DEV RUN THAT REBUILT A DETERMINED SOURCE.
+           It read `DCHECK(concolic_is(nv), "a rebuilt triple is not concolic — the arriving value would
+           stand for the example alone, so a branch on it would be DECIDED where the sender forked")`, and it
+           is kept in its own words because a reader who re-derives it from what this loop is FOR will write
+           it again: the point of rebuilding a triple is that the sender's unknown arrives unknown, so
+           `concolic_is` is the predicate that purpose suggests.
+           WHAT IT GOT WRONG IS THE MINT'S CONTRACT, not the purpose. `concolic_new` has two arms that answer
+           a plain value and both are DETERMINATIONS — this flow pinned the source, or an @S candidate is
+           substituting at it — and the example is FREED on both, so the arriving value stands for the
+           determination and never for the sender's example, which is the one hazard the retired text names.
+           test_forced.c's `pin_kind_selftest` CHECKs exactly that read-back for four kinds, so this line was
+           asserting the negation of what a release-fatal fixture asserts.
+           SO THE QUESTION GOES TO THE COMPONENT THAT OWNS THE ARMS rather than being restated here: a
+           non-concolic rebuild is a LOSS only where this flow has determined nothing about the source. */
+        DCHECK(concolic_is(nv) || concolic_src_determined(csrc),
+               "a rebuilt triple is neither concolic nor a value this flow DETERMINED — the arriving value "
+               "stands for the sender's example alone, so a branch on it would be DECIDED where the sender "
+               "forked and this flow has proved nothing that entitles it to answer one arm");
         JS_FreeCString(ctx, shape);
         JS_FreeCString(ctx, csrc);
         JS_FreeValue(ctx, sh);
@@ -848,7 +889,7 @@ JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTran
     {
         /* THE COUNT IS THE WHOLE NUMBERING AND NOT THE HOLDERS' HALF OF IT: a reference past it is refused
            outright by the reader, so a count of `n` would make every symbol reference a forged one. */
-        SCReadMemory back = { values, n + ns, JS_UNDEFINED };
+        SCReadMemory back = { values, n + ns, n, JS_UNDEFINED };
         JSTransferReadHook hook;
 
         hook.value_at = sc_memory_value;

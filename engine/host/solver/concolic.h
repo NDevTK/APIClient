@@ -208,6 +208,26 @@ const char *concolic_pin_bytes(JSValueConst v);
  * from — the same bound the sibling states, and for the same reason: both read one borrowed chain. */
 int concolic_src_pinned(const char *src);
 
+/* …AND WHETHER THE ONE MINT WILL ANSWER A PLAIN VALUE FOR IT RATHER THAN AN UNKNOWN. That is the question a
+ * CONSUMER of `concolic_new` asks, neither sibling above answers it, and a consumer that asserted its NEGATION
+ * aborted every dev run that rebuilt a determined source.
+ * `concolic_new` HAS EXACTLY TWO ARMS THAT ANSWER A NON-CONCOLIC AND BOTH ARE DETERMINATIONS RATHER THAN
+ * LOSSES. This flow PINNED the source, so the value is what its own equality proved -- §Solver-half's
+ * CONCRETIZE-ON-PIN, and test_forced.c's `pin_kind_selftest` CHECKs that read-back's TYPE for four kinds
+ * (`undefined`, a number, a string, and a kind the store REFUSES, which stays concolic). Or an @S candidate is
+ * substituting at it, so the value is the attacker's bytes, which is the whole of a candidate re-fire. The
+ * example is FREED on both arms, so a value that comes back plain stands for the determination and never for
+ * an example some other flow wrote.
+ * IT IS THE DISJUNCTION ON PURPOSE AND THE NAME SAYS WHICH QUESTION IT ANSWERS. A caller that must tell a pin
+ * from a substitution asks the two facts separately; a caller deciding whether a plain value is LEGITIMATE
+ * here wants this one, and composing it at the call site would be a second copy of a rule that is free to
+ * grow a third arm -- which is why it lives beside the arms instead.
+ * THE MINT ASSERTS THE EQUIVALENCE rather than this sentence claiming it, so a route added later that answers
+ * a plain value without a determination fires at `concolic_new` and not at whichever consumer read it next.
+ * SIDE-EFFECT-FREE AND ALLOCATION-FREE, so it may stand in a DCHECK condition, and with the same bound as the
+ * siblings: valid until this flow pins again, is reset, or is switched away from. */
+int concolic_src_determined(const char *src);
+
 /* INSTALL THE WHOLE HOOK SET. It exists because the set was written out as a struct literal at each entry —
    main.c and test_forced.c — and the two DRIFTED: the fixture harness installed three of the ten, so every
    targeted test in this repo ran against a weaker engine than the one that ships, and a relational compare on a
