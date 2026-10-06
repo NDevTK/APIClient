@@ -2161,11 +2161,44 @@ function census(r) {
          average over, and 0 there would read as an arm whose turns offered nothing when the truth is that the
          seamless row already said so. */
       const dens = {};
+      /* AND WHERE THE SUM EQUALS THE TURN COUNT THE DENSITY IS NOT A MEAN AT ALL, WHICH IS A DETERMINATION
+         AND IS EMITTED SEPARATELY BECAUSE NOTHING ABOUT THE QUOTIENT SAYS SO. A seamless turn is one that
+         offered NOT ONE suspend point, so an arm whose seamless count is ZERO has every one of its
+         overrunning turns at ONE OR MORE — and `n` asks over `n` such turns then forces EXACTLY ONE EACH by
+         pigeonhole. That is not a reading of a distribution, it is the only assignment the two rows admit,
+         and it is the strongest statement this pair can make: a turn holding the thread for seconds while
+         offering exactly one point is a C activation that declares no step boundary in all but the arm's own
+         bookkeeping, and §C-stack's answer to one of those is a step-machine conversion in whichever
+         component owns the call.
+         IT IS ONE CONSULTATION FROM BEING COUNTED SEAMLESS, which is why this field is worth more than the
+         scalar it refines: `sliceOverrunSeamless` reads 0 for such an arm, so solver/engine.h's own
+         ordering-exclusion test (`slice_overrun_seamless == slice_overruns` would exclude the ordering BY
+         CONSTRUCTION) reads as nowhere near met while the arm is in fact at the very edge of it. A reader
+         with only the scalar concludes the opposite of what the arms say.
+         MEASURED on the drive that scored the ask row, one fresh browser on gitlab.com/explore against the
+         artifact this landed in: `deliver-one-reply` 4 asks over 4 non-seamless overrunning turns — DETERMINED
+         at exactly one each, about seven seconds apiece, 28 of the run's 65 seconds — while
+         `start-a-classic-program` read 58 over 3 and `resume-program` 12 over 2, where the same rows admit
+         anything from 1 to 56 and 1 to 11 and determine NOTHING. One row, two kinds of answer, and only the
+         flag says which you are holding.
+         RETIREMENT: this record goes when the per-arm MAXIMUM INTER-CONSULTATION GAP is emitted, because the
+         gap determines every arm rather than the one whose sum happens to equal its count, and this flag is
+         then the degenerate case of a row that answers generally. */
+      const determined = [];
       for (const k of Object.keys(ask)) {
         const turns = (ovrH[k] || 0) - (seamH[k] || 0);
-        if (typeof ask[k] === "number" && turns > 0) dens[k] = ask[k] / turns;
+        if (typeof ask[k] === "number" && turns > 0) {
+          dens[k] = ask[k] / turns;
+          if (ask[k] === turns && (seamH[k] || 0) === 0) determined.push(k);
+        }
       }
       o.stepUnitOverrunAskDensity = dens;
+      o.stepUnitOverrunAskExactlyOne = determined.length ? determined : null;
+      o.stepUnitOverrunAskExactlyOneOf = determined.length
+        ? "arms whose ask sum EQUALS their non-seamless overrunning turn count with a zero seamless count — " +
+          "every such turn offered at least one point and they sum to the count, so each offered EXACTLY " +
+          "one: forced by the two rows rather than averaged over them"
+        : null;
       o.stepUnitOverrunAskDensityOf =
         "stepUnitOverrunAskArms[arm] / (stepUnitOverruns[arm] - stepUnitOverrunSeamlessArms[arm])";
     o.stepUnitOverrunRateRefused = impossible.length
