@@ -2198,7 +2198,27 @@ function census(r) {
          with only the scalar concludes the opposite of what the arms say.
          MEASURED on the drive that scored the ask row, one fresh browser on gitlab.com/explore against the
          artifact this landed in: `deliver-one-reply` 4 asks over 4 non-seamless overrunning turns — DETERMINED
-         at exactly one each, about seven seconds apiece, 28 of the run's 65 seconds — while
+         at exactly one each — while
+         THE PER-TURN SPAN THIS RECORD ONCE PUT ON THAT ARM IS WITHDRAWN, AND THE RETIRED WORDING IS KEPT
+         BELOW THE VERDICT BECAUSE IT IS WHAT A READER RE-DERIVES FROM THE TWO BOUNDS SIXTY LINES UP. It read
+         `about seven seconds apiece, 28 of the run's 65 seconds`, and `overrunStepUsAtLeast`'s denominator is
+         `sliceOverruns` — ALL NINE overrunning turns of ALL THREE arms — so that figure is a POOLED MEAN and
+         attributing it to one arm is the mean-across-populations defect, committed with the very row that
+         exists to prevent it.
+         AND THE ARMS DEMONSTRABLY DO NOT ANSWER ALIKE, WHICH IS THE EVIDENCE ALREADY ON THE SAME LINE: the
+         ask density on that drive was 1.0, 19.3 and 6.0 — a NINETEENFOLD spread — so pooling them is not a
+         small imprecision, it is the thing the per-arm partition was landed to stop.
+         WHAT IS ACTUALLY DERIVABLE on that arm's four turns, from the rows that exist: at LEAST 4 x the
+         quantum (48 ms, because the overrun branch's own inequality is what put them in the histogram) and at
+         MOST `sliceUs` minus the other five overrunning turns' quantum apiece (64.875 s). A range of
+         THIRTEEN HUNDRED FOLD, inside which 28 s sits with nothing whatever selecting it.
+         NO PER-ARM SPAN ROW EXISTS, which is why no care with these two bounds can close it: the step-unit
+         arrays are a COUNT of overruns, a COUNT of seamless turns and a COUNT of consultations, and a count
+         cannot be a duration. The row that would close it is a per-arm overrun SPAN raised in the same branch
+         from the same two clock readings the slice arm is accumulated from — which is the engine's to emit and
+         not this driver's to derive.
+         RETIREMENT: this record goes when a per-arm overrun SPAN is emitted, because the attribution is then a
+         read rather than a division and a pooled mean has nothing left to be mistaken for.
          `start-a-classic-program` read 58 over 3 and `resume-program` 12 over 2, where the same rows admit
          anything from 1 to 56 and 1 to 11 and determine NOTHING. One row, two kinds of answer, and only the
          flag says which you are holding.
