@@ -2540,7 +2540,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind lifetime: netProgQueuedLife netProgFetchAsksLife netProgFetchQueuedLife
    @kind lifetime: netProgXhrAsksLife netProgXhrQueuedLife
    @kind constant: rootPrograms rootProgramsHeldAtSeed rootProgramsAwaitedAtSeed
-   @kind maximum: deepest completed deepestLeft
+   @kind maximum: deepest completed deepestLeft sliceOverrunGapUs stepUnitOverrunGapArms
    AND EVERY REMAINING ROW OF THIS COMPOSER, WHICH THE RESIDUAL ABOVE NAMED AS THE NEXT DIFF AND WHICH IS
    DETERMINED FROM THE ACCESSOR THAT FILLS IT RATHER THAN FROM ITS NAME. The grouping is MECHANICAL, which is
    the whole of why it is checkable by the next reader instead of being this paragraph: `cold_census` is
@@ -2629,6 +2629,12 @@ char *result_cold_json(void) {
        every arm at once — see solver/engine.h's `over_ask_arms` for why one quotient over that sum is a mean
        across arms whose densities differ by an order of magnitude. */
     char oask[STEP_UNITS_JSON_MAX];
+    /* AND THE SEVENTH, WHICH IS THE ONLY ONE OF THE SEVEN THAT IS NOT A COUNT. Same list, same derived
+       width — one row is `"<name>":<long>` either way — and a different KIND: each arm carries the widest
+       interval, in the slice's own measure, during which one of that arm's non-seamless overrunning turns
+       offered the scheduler nothing. The density beside it is a MEAN and cannot tell nine evenly spread
+       stretches from one unbroken run; see solver/engine.h's `over_gap_arms`. */
+    char ogap[STEP_UNITS_JSON_MAX];
     /* AND THE TWO HISTOGRAMS ON THE HEAP, FOR THE ONE REASON THE FIXED ONES ABOVE ARE ON THE STACK: their
        extents are the FRONTIER's and not a list's, so there is no width to derive. See cursor_hist_json,
        which composes both and is handed each one's NAME because its asserts have to say which. */
@@ -2725,6 +2731,15 @@ char *result_cold_json(void) {
                                        "stepUnitOverrunSeamlessArms");
         long askarms = cold_hist_json(oask, sizeof oask, r.over_ask_arms,
                                       "stepUnitOverrunAskArms");
+        /* AND THE SEVENTH ROW THROUGH THE SAME COMPOSER, WHOSE RETURN IS DELIBERATELY DISCARDED. That
+           function returns the SUM of the arms it wrote and asserts nothing about it, leaving each caller to
+           check its own identity — and a sum of MAXIMA is a quantity no turn produced, so there is no
+           identity here for it to be the left side of. The row still goes through it rather than beside it,
+           because what is shared is the ROW FORMAT and a second loop spelling `"<name>":%ld` is exactly the
+           drift that function's banner exists to prevent. The fold this row DOES have is a maximum and it is
+           asserted at the raise, where the turn that would break it has just returned; see the DCHECK below
+           for what crossing into this document can still lose. */
+        (void)cold_hist_json(ogap, sizeof ogap, r.over_gap_arms, "stepUnitOverrunGapArms");
         long atcursor = 0;
         long atahead = 0;
         int k;
@@ -2783,6 +2798,28 @@ char *result_cold_json(void) {
                "turn's arm and one turn's consultation delta, so a total that is not `sliceOverrunAsks` means "
                "a row was lost crossing into this document, and the loss reads as turns that offered fewer "
                "points than they did");
+        /* AND THE SEVENTH ROW'S OWN IDENTITY, WHICH IS A MAXIMUM AND NOT A SUM — the one check on this seam
+           whose fold differs, and it differs because the row does. `cold_hist_json`'s return is a sum and a
+           sum of maxima is a quantity no turn produced, so the comparison is re-folded here from the array
+           this document was composed from. WHAT IT CATCHES is the crossing and only the crossing: a row lost
+           between the accessor and this document would move the maximum DOWN — toward the arm that is merely
+           second-worst, or to zero if the worst arm is the one lost — and a smaller worst gap reads as an
+           engine that offered points more evenly, which is the flattering direction and the one that retires
+           the step-machine hypothesis this row exists to test. The per-arm containment against the scalar is
+           entailed by this and is not asserted beside it; see solver/engine.h's `over_gap_arms`. */
+        {
+            long gapmax = 0;
+            int g;
+
+            for (g = 0; g < STEP_UNIT_N; g++)
+                if (r.over_gap_arms[g] > gapmax) gapmax = r.over_gap_arms[g];
+            DCHECK((int64_t)gapmax == r.slice_overrun_gap_us,
+                   "the per-arm worst-gap row and `sliceOverrunGapUs` disagree — the two are folded from ONE "
+                   "turn's interval one statement apart in the engine's overrun branch and the fold is a "
+                   "MAXIMUM rather than a sum, so a scalar the arms do not reach means a row was lost "
+                   "crossing into this document, and the loss reads as a turn that offered its suspend "
+                   "points more evenly than it did");
+        }
         /* AND THE CURSOR HISTOGRAM'S PARTITION, WHICH IS `standing`'s IDENTITY OVER A DIFFERENT QUESTION. Every
            live member stands at exactly one program cursor, so these counts sum to the frontier too — and the
            consequence of an inequality here is sharper than for the arm histogram, because this row exists
@@ -3430,6 +3467,27 @@ char *result_cold_json(void) {
                     overrunning turn of the arm understates the density of the ones that actually asked. See
                     solver/engine.h's `over_ask_arms`. */
                  "\"stepUnitOverrunAskArms\":%s,"
+                 /* AND THE WIDEST STRETCH OF ONE OF THOSE TURNS THAT OFFERED NOTHING, WHICH IS WHAT THE
+                    DENSITY ABOVE IS A PROXY FOR — THOUGH NOT FOR THE REASON THAT READS AS OBVIOUS, AND
+                    solver/engine.h's `over_gap_arms` CARRIES THE DERIVATION RATHER THAN A SECOND COPY OF IT
+                    HERE. In short: the preempt policy's only FALSE arm is the budget test, that test is
+                    monotone inside one slice, and the first TRUE parks the flow and ends the turn — so EVERY
+                    consultation of an overrunning turn sits inside ONE window of at most ENGINE_QUANTUM_MS
+                    from its slice's opening, which makes this row the worst turn's SPAN to within one budget
+                    rather than a free quantity. The row is worth having for exactly that: `stepUnitOverruns`
+                    is a COUNT by deliberate choice and nothing anywhere says how LONG the worst turn of an
+                    arm was, so a reader holding `4 of 4` cannot tell four turns of 13 ms from four of seven
+                    seconds.
+                    IN THE SLICE'S OWN MEASURE, so a reading is directly comparable with ENGINE_QUANTUM_MS —
+                    which is what makes that window argument checkable at all — and a gap in CONSULTATIONS
+                    would be comparable with nothing, the interval between two consecutive consultations being
+                    1 by definition.
+                    NOT A PARTITION, AND ITS ZERO IS READ AGAINST A ROW ALREADY ON THIS LINE. A 0 is either an
+                    arm with no non-seamless overrunning turn at all or one whose every gap was under a
+                    microsecond, and `stepUnitOverruns` minus `stepUnitOverrunSeamlessArms` — the same
+                    denominator the density above is taken over — is what tells them apart. See
+                    solver/engine.h's `over_gap_arms`. */
+                 "\"stepUnitOverrunGapArms\":%s,"
                  /* AND WHETHER THE PAGE'S OWN CODE WAS RUNNING IN THOSE TURNS AT ALL, which the arm row
                     above cannot say and which its reading rests on. An arm is where a step ENDED, and
                     `resume-program` and `start-a-classic-program` both end inside the same call whether the
@@ -3442,6 +3500,16 @@ char *result_cold_json(void) {
                     says the points were there and the stretch ran anyway, which is a question about the page
                     and not about this engine. See solver/engine.h's `slice_overrun_asks`. */
                  "\"sliceOverrunAsks\":%llu,\"sliceOverrunSeamless\":%ld,"
+                 /* …AND THE WORST OF THOSE TURNS' NO-OFFER STRETCHES OVER EVERY ARM AT ONCE, WHICH IS WHAT
+                    THE PAIR ABOVE IS A SUM AND A COUNT OF AND NEITHER IS A MAXIMUM OF. It is the same fold as the per-arm row,
+                    over every arm at once, and it exists for the reason every per-arm row on this line has a
+                    scalar beside it: the row's only identity is `max(arms) == this`, and without it the
+                    document carries a partition-shaped object no reader could establish is whole. Read
+                    against ENGINE_QUANTUM_MS and never against another run's figure — it is a high-water
+                    mark, so a plateau says a stretch of that width WAS observed and never that none is
+                    wider, and the evidence it is worth is bounded by `stepUnitOverruns` minus
+                    `stepUnitOverrunSeamlessArms`. See solver/engine.h's `over_gap_arms`. */
+                 "\"sliceOverrunGapUs\":%lld,"
                  /* AND WHICH PHASE OF A START STEP SPENT THE TIME, which no row above can say. A start is a
                     COMPILE and then an EXECUTION and only the second runs bytecode; the compile is O(a
                     length the page chose), and it RESTS — JS_FlowCompileStep hands the parse back part way
@@ -3855,7 +3923,9 @@ char *result_cold_json(void) {
                  (long long)r.slice_us, (long long)r.sched_us, (long long)r.slice_overruns, runs, over,
                  seam,
                  oask,
+                 ogap,
                  (unsigned long long)r.slice_overrun_asks, r.slice_overrun_seamless,
+                 (long long)r.slice_overrun_gap_us,
                  r.classic_compiles, r.classic_compile_overruns,
                  r.classic_compile_again, (long long)r.classic_compile_again_bytes,
                  r.classic_compile_own_decode,

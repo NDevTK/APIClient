@@ -2130,6 +2130,172 @@ typedef struct {
      * which is the condition `slice_overrun_asks`' own banner carries, and the gap is computed in every DEV
      * build already and read only by a verdict conjoined with `asked == 0`. */
     long     over_ask_arms[STEP_UNIT_N];
+    /* …AND THE LONGEST STRETCH INSIDE ONE OF THOSE TURNS DURING WHICH NO SUSPEND POINT WAS OFFERED, WHICH IS
+     * THE ONE QUANTITY THE ROW ABOVE IS A PROXY FOR AND CANNOT BE — AND WHICH IS WORTH SOMETHING DIFFERENT
+     * FROM WHAT THIS BANNER FIRST CLAIMED, BECAUSE THE INTUITIVE ARGUMENT FOR IT IS REFUTED BY THIS ENGINE.
+     * IT READ: `over_ask_arms` divided by its own denominator is a DENSITY, and a density is a MEAN — a turn
+     * that held the thread for seven seconds and consulted the policy nine times reads 9 whether those nine
+     * were evenly spread (nine stretches of about 800 ms, which is NINE spans with no suspend point in them
+     * and therefore nine step-machine conversions' worth of C) or clustered in the first millisecond before
+     * one unbroken 7-second run, which is ONE; those take opposite work and the mean cannot separate them.
+     * IT IS KEPT IN ITS OWN WORDS BECAUSE IT IS THE ARGUMENT A READER RE-DERIVES IN ONE STEP, and the EVENLY
+     * SPREAD world it rests on CANNOT OCCUR HERE. Derived by reading, not relayed: `quantum_expired()` is
+     * MONOTONE within one open slice on BOTH hosts — the generic branch tests a monotone clock against a
+     * `g_slice_start_us` fixed at `quantum_begin`, and the linux branch reads a `g_fired` flag cleared ONLY in
+     * `quantum_begin` and `quantum_end` — and solver/engine.c's preempt_hook has exactly three returns, of
+     * which the only one that can answer FALSE is `return quantum_expired()`. Every consumer of a TRUE in
+     * quickjs.c parks (`goto do_*_park`) or, off the flow base, `DFAIL`s, and a park ENDS THE TURN. So at most
+     * ONE consultation per turn answers TRUE, every consultation that answered FALSE happened before the slice
+     * reached ENGINE_QUANTUM_MS, and an overrunning turn lies inside a slice its own span already met —
+     * therefore EVERY consultation of an overrunning turn falls inside one window of at most
+     * ENGINE_QUANTUM_MS from that slice's opening.
+     * WHICH MAKES THE GAP BOUNDED RATHER THAN FREE: it lies in [span − ENGINE_QUANTUM_MS, span] for every
+     * non-seamless overrunning turn, so a long dark stretch is GUARANTEED on any such turn whose span exceeds
+     * twice the budget and is not news. WHAT THE ROW IS THEREFORE WORTH IS THREE THINGS AND NOT THE ONE ABOVE.
+     * FIRST, and this is what nothing else publishes: to within one budget it is the per-arm MAXIMUM TURN SPAN
+     * of a non-seamless overrunning turn — `over_arms` is deliberately a COUNT and its own banner says WHY IT
+     * IS NOT PER-ARM TIME, so no row anywhere says how long the worst turn of an arm actually was, and a
+     * AND THAT FIRST USE IS NOT THIS BANNER'S ARGUMENT, IT IS A MEASUREMENT THIS TREE MADE WITHOUT IT, which
+     * is better evidence than any reasoning here and is read from the commit rather than recalled: `6813a2a`
+     * WITHDRAWS a per-arm turn span from testing/live-run.js's own banner because the row it was taken from
+     * pools its denominator over every arm, and states what IS derivable per-arm from the rows that exist —
+     * "lower 4 x 12 ms = 48 ms", "upper 64.875 s", "ratio 1352x". That bracket is the hole this row fills: it
+     * answers the same question to within ONE BUDGET instead of within three orders of magnitude. The same
+     * message records why pooling is not a small imprecision there — ask densities of 1.0, 19.3 and 6.0 on
+     * one census line, a nineteenfold spread — which is `over_ask_arms`' own per-arm argument measured. READ
+     * from `git log -1 --format=%B 6813a2a` and not re-derived here, so it is that commit's claim and not
+     * this file's; what this file asserts is only that the row it adds is denominated in the same measure the
+     * bracket is.
+     * SECOND, the
+     * RESIDUE `span − gap` is inside that one budget and says WHERE in the window the offers sat: at the
+     * span the turn went dark immediately, a budget short of it the offers ran to the window's end. THIRD, a
+     * value far above the budget IS the violation g_max_gap's own comment defines — "a step that runs five
+     * seconds between two consecutive offers is the violation, whatever its total" — and a MAXIMUM
+     * establishes it the moment it is OBSERVED, which is the one property a maximum has that a count does not.
+     * THE ONE STATE THAT BREAKS THE DERIVATION IS ALREADY A REPORTED ONE, so this is a bound and not an
+     * absolute: a consumer that DROPS a TRUE instead of acting on it leaves the turn running, after which a
+     * second consultation can answer TRUE and the window argument fails. That is exactly the
+     * `requested > fired` state solver/engine.c's seam message prints and names ("a point was reached, the
+     * preempt was wanted, and it was DROPPED because no driver at that depth adopts the seam"), so a reader
+     * who finds a gap far below `span − ENGINE_QUANTUM_MS` has found that, and not a narrow stretch.
+     * MEASURED, AND IT IS WHY THE DENSITY ALONE IS NOT ENOUGH RATHER THAN WHY IT IS WRONG — RELAYED FROM FIVE
+     * FRESH-BROWSER DRIVES OF ONE DEV ARTIFACT AND NOT RE-DERIVED HERE, SO IT IS A CLAIM TO CHECK. Two
+     * documents sat in OPPOSITE regimes four orders of magnitude apart: three drives of one read 87, 70 and 74
+     * consultations over 9, 9 and 11 overrunning turns with ZERO seamless ones — 6.7 to 9.7 each — while a
+     * drive of the other read 1010142 over its 28 asked turns, about 36000 each. WHAT THAT BUYS AS A BOUND AND
+     * NOT AS A STORY: a turn in this row met the budget, so it ran at least ENGINE_QUANTUM_MS, and nine offers
+     * across it is at most one every 1.3 ms — while the turn's own LENGTH is unbounded above by anything on
+     * this line, which is exactly why the gap is needed and is the half a density can never supply. BOTH
+     * densities are correct and they
+     * name opposite mechanisms, and in NEITHER case does the mean say where the time went: the low-ask regime
+     * is exactly the one where a handful of consultations are consistent with one enormous gap, and it is the
+     * regime the row above was built on.
+     * THE UNIT IS THE SLICE'S OWN MEASURE AND THAT IS THE WHOLE OF THE ROW'S VALUE. A gap counted in
+     * CONSULTATIONS answers nothing — the gap between two consecutive consultations is 1 by definition — and a
+     * gap in WALL milliseconds cannot be compared with anything this scheduler decides on, which is why the
+     * wall gap solver/engine.c already computes is PRINTED and never decided upon. `quantum_thread_us()` is the
+     * currency the slice is denominated in, so a reading off this row is directly comparable with
+     * ENGINE_QUANTUM_MS: "the longest stretch with no consultation was 6400000 us against a 12000 us budget"
+     * is a sentence a reader can act on and "9.7 consultations each" is not.
+     * IT COSTS ONE CLOCK READ PER CONSULTATION AND THAT IS A CHECKED CLAIM RATHER THAN A HOPE. On the generic
+     * and emscripten branch solver/quantum.c's quantum_expired() ALREADY calls quantum_thread_us() — it is
+     * `quantum_thread_us() - g_slice_start_us >= ENGINE_QUANTUM_MS * 1000` — and preempt_hook's last clause is
+     * `return quantum_expired()`, so on the host that ships this is a SECOND read of a clock that hook already
+     * reads per consultation and not a new class of cost. On the native branch quantum_expired() returns a
+     * `volatile sig_atomic_t` flag and the read is genuinely new, in a hook that already performs two
+     * flow_weight calls plus an O(members) rival rescan on a cache miss. Both brackets are free: the turn's two
+     * ends are `t_slice0` and `now`, which engine_sched_step already reads in this same measure in EVERY build.
+     * IN EVERY BUILD, for `slice_overrun_asks`' reason exactly and with a sharper consequence. A gap row
+     * compiled out in release would read ZERO beside a nonzero ask sum, and a zero maximum gap is the
+     * statement that every consultation of every overrunning turn was adjacent to the next — the FLATTERING
+     * reading, and the one that retires the step-machine hypothesis this row exists to test. That is the
+     * under-claim CLAUDE.md names as the direction nobody discovers by acting on, because acting on it means
+     * not looking.
+     * IT IS NOT A PARTITION AND SO ITS IDENTITY IS NOT A SUM, which is the one thing a reader of the three
+     * rows above must not carry over. `sum(over_arms) == slice_overruns` and its two restrictions are
+     * partitions; a sum of MAXIMA is a quantity no turn produced and no reader may compose. What holds is
+     * `max over the arms == slice_overrun_gap_us` — the scalar is the same fold of the same per-turn number
+     * over the same population — asserted inside the overrun branch where the arm, the turn's two clock
+     * readings and the turn's consultation delta are all in one hand, exactly as the three rows above are and
+     * never at the accessor. ONE ASSERT AND NOT TWO: the per-arm containment
+     * `over_gap_arms[i] <= slice_overrun_gap_us` is ENTAILED by that maximum rather than independent of it, so
+     * asserting it beside it would be one fact checked twice and would read as two. That is NOT true of the
+     * three partitions above, where a sum identity holds with one arm's subset standing above its own
+     * population and another's below it, which is exactly why each of those carries a second containment and
+     * this one does not.
+     * ITS DENOMINATOR IS THE SERIES LENGTH AND IT IS ALREADY PUBLISHED, which is what makes a ZERO readable.
+     * A 0 in this row is two states — this arm had no non-seamless overrunning turn at all, or it had some and
+     * every one of their gaps was under a microsecond — and `over_arms[i] - over_seamless_arms[i]` tells them
+     * apart, which is the same denominator `over_ask_arms`' density is taken over. So the discriminator is a
+     * row this struct already carries and this one needs no sentinel.
+     * A MAXIMUM, WHICH `slice_overruns`' OWN BANNER ARGUES AGAINST FOR ITSELF, AND THE DIFFERENCE IS WHAT THE
+     * READING IS COMPARED WITH. That banner says "A COUNT AND NOT A MAXIMUM. A high-water mark of turn length
+     * would saturate early and then plateau, and a plateau is indistinguishable from a ceiling on a short
+     * run", and it is right about a magnitude read against ANOTHER RUN'S magnitude. This one is read against a
+     * COMPILE-TIME CONSTANT: the actionable question is whether any stretch of this arm ran far past the
+     * budget, which is a FLOOR established the moment it is observed and does not get truer with a longer run.
+     * What a reader may NOT do is read it as a ceiling — "gaps never exceed this" is exactly the misreading
+     * CLAUDE.md names, and the series length beside it is what bounds how much evidence the figure is.
+     * A SEAMLESS TURN IS EXCLUDED AND ITS GAP IS A DIFFERENT QUANTITY WEARING THIS NAME. A turn that offered
+     * NOT ONE suspend point has no inter-consultation gap at all: its longest unbroken stretch is its own
+     * whole duration, which is already published as the step phase of `slice_us` and is what
+     * `over_seamless_arms` counts the turns of. Folding the two together would put a turn's LENGTH and a
+     * turn's worst GAP into one row, after which an arm's reading could not be told from its mass.
+     * IT IS NOT THE WALL GAP solver/engine.c ALREADY COMPUTES, AND THE TWO POPULATIONS ARE DISJOINT BY
+     * CONSTRUCTION. That one (`g_max_gap`, `g_last_ask`) is WALL milliseconds, is DEV-only, and is read by
+     * exactly one `DFAILF` whose condition requires the turn's consultation delta to be ZERO — so it reports
+     * the whole-turn stretch of a SEAMLESS turn and is printed deliberately beside the work count, because a
+     * wall quantity is what says whether the box was also loaded. This row is the slice's measure, is raised
+     * in every build, and covers the turns that delta is NONZERO for. Two clocks, two populations, two
+     * purposes, and neither is a second copy of the other.
+     * A `long` WHERE THE SCALAR IS AN `int64_t`, FOR `over_ask_arms`' REASON EXACTLY AND WITH A DIFFERENT
+     * HORIZON. solver/result.c composes every step-unit row through ONE `cold_hist_json`, which takes a `long`
+     * array and prints `%ld`, so a 64-bit partition would force a second speller of that row format. This row
+     * is a MAXIMUM rather than an accumulator, so a `long` of microseconds is not the 35.8-minute saturation
+     * `step_us` is a sum against: the exposure is ONE TURN whose worst gap exceeds about 2147 seconds in the
+     * slice's measure, which is an engine that has hung. The narrowing asserts its own headroom at the raise,
+     * in the form a DCHECK condition may take, before the cast and never after it.
+     * IT DECIDES NOTHING AND BOUNDS NOTHING (§NO BOUNDS), and the hazard is the sharpest of the four: a
+     * per-arm worst gap against the budget is precisely the pair a "this arm has not yielded in N ms, take the
+     * thread" watchdog would be built from. Nothing branches on either half.
+     * HOW ITS ABSENCE SHOWS, as an observation and not an instance: a reader holding an arm whose overrunning
+     * turns all offered points divides the ask sum by them, gets a density of single digits, and states that
+     * the arm consulted the scheduler regularly and ran anyway — with no row in the artifact that could say
+     * those single-digit consultations bracketed one unbroken multi-second stretch instead.
+     * NAMED RESIDUAL — THE ROW IS CORRECT AND ITS ONLY READER IS THE FIXTURE-DRIVEN BUILD VERDICT, WHICH IS
+     * NOT WHERE THE MEASUREMENT THAT MOTIVATED IT CAME FROM. WHAT IS NOT COVERED: the drives this row exists
+     * for were REAL SITES, and `engine/build.mjs`'s `stepUnitOverrunReading` is the one consumer that takes
+     * it — so a build's own smoke prints it and a real-site drive does not. That is NOT a correctness gap and
+     * nothing refuses it: `testing/live-run.js` declares only `rungEntry`, `fetchEdge` and `xhrEdge` taken
+     * WHOLE, so `cold` is a curated list by that driver's own statement and a row it does not carry is its
+     * choice rather than a silent drop. It is a REACH gap, and it is the one CLAUDE.md names for a producer
+     * whose consumer is not the instrument that measures the subject. WHAT THE NEXT DIFF BUILDS: both names
+     * on that driver's cold row lists — `stepUnitOverrunGapArms` beside `stepUnitOverrunAskArms` on its
+     * step-unit object list and `sliceOverrunGapUs` beside `sliceOverrunAsks` on its numeric one — which that
+     * driver reads with a uniform `k in c`, so an artifact older than the row prints `-` under its own
+     * absent-versus-zero rule rather than a 0. HOW ITS ABSENCE SHOWS, as an observation and not an instance:
+     * a reader driving a real app meets an arm whose overrunning turns all offered points, divides the ask
+     * sum by them, and states a per-turn density — with the row that would say whether those consultations
+     * bracketed one unbroken multi-second stretch present in the artifact and absent from the only report
+     * that drive produces. MEASURED ABSENT with the command, so this is a claim and not a recollection:
+     * `grep -cE 'stepUnitOverrunGapArms|sliceOverrunGapUs' testing/live-run.js` answers 0, against
+     * `grep -cE 'stepUnitOverrunAskArms|sliceOverrunAsks'` answering 6 as the armed control and an invented
+     * `zzNoSuchRowEver` answering 0. It is not taken in the same diff because that file is one FOUR peer
+     * commits landed in within the hour this row was written, and it is outside this change's scope.
+     * AND THAT DRIVER IS THE ONE THAT WANTED THIS ROW, WHICH IS WHY THE RESIDUAL IS WORTH MORE THAN A NOTE:
+     * the commit withdrawing a per-arm span for want of one (`6813a2a`) is a commit to THAT FILE, so the
+     * consumer whose banner had to replace a figure with a 1352x bracket is the consumer not carrying the row
+     * that would narrow it to one budget. A producer and a frustrated reader in one tree with nothing joining
+     * them is the write-with-no-reader shape at the one place it costs a reading rather than a byte.
+     * RETIREMENT: this goes when a seam verdict in engine_sched_step can judge a turn whose consultation
+     * delta is NONZERO — i.e. when a verdict decides on THIS gap against the budget rather than on a turn
+     * that offered nothing — because the existing reader then names the same population per arm and this row
+     * is a second copy of it. MEASURED ABSENT with the command rather than asserted, so the condition is not
+     * born met: `grep -c 'g_preempt_asked == pa0' engine/host/solver/engine.c` answers 2, which is BOTH
+     * verdicts in that function carrying the conjunct, against `grep -c ENGINE_SEAMLESS_CPU_US` answering 1
+     * as the armed control and an invented `seamGapVerdict` answering 0. */
+    int64_t  slice_overrun_gap_us;    /* the worst no-suspend-point stretch of any non-seamless overrunning turn */
+    long     over_gap_arms[STEP_UNIT_N];
     /* …AND THE ONE PHASE OF A START STEP THAT `slice_overruns` AND `over_arms` CAN LOCATE TO AN ARM AND
      * NEVER TO A PHASE. (This sentence said `the two rows above` until two rows were inserted between it and
      * them — a reference by POSITION resolves to whatever now occupies that position, which is why it

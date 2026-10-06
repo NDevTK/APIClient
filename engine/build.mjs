@@ -371,7 +371,8 @@ const loadNow = () => {
 const coldFields = sourceFact(() => censusRowSet(
   "solver/result.c", "char *result_cold_json(void)", "\n}\n",
   ["stepUnits", "stepUnitRuns", "stepUnitOverruns", "stepUnitOverrunSeamlessArms",
-   "stepUnitOverrunAskArms", "outOfProgramsAtTheLadderUnits", "programCursors",
+   "stepUnitOverrunAskArms", "stepUnitOverrunGapArms",
+   "outOfProgramsAtTheLadderUnits", "programCursors",
    "programsAhead", "epDoors", "epReach", "epAddressClass", "epRazorClass", "epWitnessClass"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
   "composer rather than from a list beside it"));
@@ -2638,7 +2639,18 @@ function censusRefSites(b) {
                     "census.");
   return rows;
 }
-function censusHistRows(b, name, totalName, extent) {
+/* THE SHAPE EVERY PER-ARM ROW SHARES, SEPARATED FROM THE IDENTITY NOT ONE OF THEM SHARES. Four of @COLD's
+   step-unit rows are PARTITIONS and one is a MAXIMUM, and the two need the same five checks in front of them —
+   the object is present, it is non-empty, every row is a number, the scalar it is read against is a number —
+   and then DIFFER entirely in the fold. A second copy of those five beside a second fold would be two
+   spellings of one contract, which is the drift `censusComposerFields` exists one level up to end; a single
+   function taking the fold as a parameter would be one predicate answering two questions, which is the shape
+   CLAUDE.md names for a bit and is the same defect in a validator. So the shape is one function and each
+   identity is its own caller, and the caller's NAME is what a throw reports.
+   `relation` IS A WORD AND NOT A SENTENCE, for `cold_hist_json`'s `what` reason: a shared helper's throw
+   reports this function for every caller, so the message has to be able to say which comparison the scalar was
+   wanted for or it names an action with no object. */
+function censusHistShape(b, name, totalName, extent, relation) {
   const u = b[name];
   if (u === null || typeof u !== "object" || Array.isArray(u))
     throw new Error(`[build] the @COLD census carries no \`${name}\` object — solver/result.c composes it ` +
@@ -2653,12 +2665,17 @@ function censusHistRows(b, name, totalName, extent) {
   for (const [k, v] of rows)
     if (typeof v !== "number")
       throw new Error(`[build] the @COLD census's \`${name}.${k}\` is not a number — the histogram is a ` +
-                      `count per row and a non-numeric row cannot be summed against \`${totalName}\`.`);
+                      `number per row and a non-numeric row cannot be ${relation} against \`${totalName}\`.`);
   if (typeof b[totalName] !== "number")
     throw new Error(`[build] the @COLD census carries no numeric \`${totalName}\` for \`${name}\` to be ` +
-                    `checked against — the sum is the only thing that makes a MISSING arm different from an ` +
-                    `arm that read 0, so without it this reader would be rendering a histogram it cannot ` +
-                    `establish is whole.`);
+                    `checked against — that comparison is the only thing that makes a MISSING arm different ` +
+                    `from an arm that read 0, so without it this reader would be rendering a histogram it ` +
+                    `cannot establish is whole.`);
+  return rows;
+}
+
+function censusHistRows(b, name, totalName, extent) {
+  const rows = censusHistShape(b, name, totalName, extent, "summed");
   const total = rows.reduce((t, r) => t + r[1], 0);
   if (total !== b[totalName])
     throw new Error(`[build] the @COLD census's \`${name}\` sums to ${total} over ${rows.length} rows ` +
@@ -2669,6 +2686,46 @@ function censusHistRows(b, name, totalName, extent) {
                     `convergence point for \`stepUnitRuns\`, all three re-checked at solver/result.c's ` +
                     `composer); a difference visible HERE and not there is a row lost between the ` +
                     `census and this document.`);
+  return rows;
+}
+
+/* AND THE SAME SHAPE WITH THE ONE IDENTITY A MAXIMUM HAS, WHICH IS THE WHOLE REASON IT IS A SECOND FUNCTION.
+   A SUM OF MAXIMA IS A QUANTITY NO TURN PRODUCED, so `censusHistRows` is not merely the wrong check for such a
+   row — its throw would be about an arithmetic nobody licensed, and its SILENCE would be worse, because a
+   partition-shaped object that happens to sum to its scalar would pass while meaning nothing. What a per-arm
+   maximum and its scalar share is that both are folds of the SAME per-turn number over the SAME population,
+   so the scalar IS the arms' own maximum and that is an identity as checkable as a sum.
+   THE FAILURE IT CATCHES HAS A DIRECTION AND IT IS THE FLATTERING ONE. A row lost crossing into the document
+   moves the maximum DOWN — to the second-worst arm, or to zero if the worst arm is the one lost — and a
+   smaller worst gap reads as an engine that offered its suspend points more evenly than it did, which is the
+   reading that retires the step-machine hypothesis the row exists to test. The engine asserts the same
+   identity at solver/engine.c's overrun branch where the arm and the scalar are folded from one turn's
+   interval one statement apart, and re-checks it at solver/result.c's composer; a difference visible HERE and
+   not there is a row lost between the census and this document.
+   IT RETURNS THE ROWS AND NOT THE MAXIMUM, for `censusHistRows`' reason: the caller wants the arms, and a
+   helper that answered the fold it just checked would hand its caller the number it is about to compose a
+   sentence out of while hiding the row that carries it.
+   RETIREMENT: this goes when the FOLD a per-arm row is checked under is selected from the composer's own
+   `@kind` declaration rather than from which function a reader happens to call, because a row declared
+   `maximum` could then not be handed to the sum reader at all and the two would be one mechanism keyed on the
+   producer instead of two keyed on the consumer's memory. MEASURED ABSENT with the command rather than
+   asserted, so the condition is not born met: `grep -cE 'kindsOf\([^)]*\)[^;]*(maximum|lifetime)|foldFor|
+   identityFor|censusFoldOf' engine/build.mjs` answers 0, against `grep -cE 'censusHistRows\('` answering 14
+   as the armed control and an invented `zzFoldSelectorNever` answering 0. */
+function censusHistMaxRows(b, name, totalName, extent) {
+  const rows = censusHistShape(b, name, totalName, extent, "compared");
+  const max = rows.reduce((m, r) => (r[1] > m ? r[1] : m), 0);
+  if (max !== b[totalName])
+    throw new Error(`[build] the @COLD census's \`${name}\` reaches ${max} over ${rows.length} rows ` +
+                    `against \`${totalName}\` ${b[totalName]} — these rows are a per-arm MAXIMUM and the ` +
+                    `scalar is the same fold over every arm at once, so the two sides disagree and no ` +
+                    `reading composed from this row is about the run that happened. A SUM is not the check ` +
+                    `here and never can be: a sum of maxima is a quantity no turn produced. The engine ` +
+                    `asserts this same maximum where the arm and the scalar are folded from ONE turn's ` +
+                    `interval one statement apart (solver/engine.c's overrun branch) and re-checks it at ` +
+                    `solver/result.c's composer, so a difference visible HERE and not there is a row lost ` +
+                    `between the census and this document — and the loss reads LOW, which is the direction ` +
+                    `that makes a long un-polled stretch look like a short one.`);
   return rows;
 }
 
@@ -2912,7 +2969,28 @@ function stepUnitReading(b) {
    MEASURED SHAPE: over one run of 13043 turns at 638eb345, one interleaving, FOUR turns overran. So the
    expected output of this reading is a very short list, and a short list is the deliverable rather than a
    quiet result — it names the arms to go and read. */
-function stepUnitOverrunReading(b) {
+/* AND THE YARDSTICK THIS READER COMPARES A GAP AGAINST IS THE RUN'S OWN SLICE AND NOT THIS TREE'S HEADER,
+   which is `stepCostReading`'s argument applied to the one row here that is a TIME. `q` is the `@QUANTUM`
+   line the measured run printed, so a gap is read against the budget that run was actually scheduled on;
+   reading ENGINE_QUANTUM_MS out of solver/engine.h here would be today's working tree answering for an
+   artifact built from some other revision, which is §Testing's frozen-snapshot defect arriving through the
+   reader. The prose on this line already carried a HARDCODED `12 ms` for the density clause and that is a
+   copy of the same header by another route; it is derived now, from the same place, so the two clauses cannot
+   disagree about the budget they are both read against.
+   A MISSING `q` IS IMPOSSIBLE HERE AND IS THEREFORE ASSERTED RATHER THAN HANDLED, which is a correction to
+   this paragraph's own first draft and worth keeping because the sentence it replaces is the one a reader
+   re-derives. It said the single-census arm of the hung-cause reader has no `out` in scope to ask the
+   denomination from, so the comparison had to be WITHHELD and the gap rendered bare — a stated unknown rather
+   than a default, which is the right shape for a value a producer may legitimately omit. It is the wrong
+   shape here because the value cannot be omitted: BOTH call sites are inside `hungCauseCensus(out)` and `out`
+   IS in scope at each, and `quantumDenomination` THROWS rather than answering `null` whenever `out` carries an
+   @COLD line — while `b` is a PARSED @COLD census, so it carries one by construction. A `null` arm would
+   therefore have been a path no caller can reach, which is untested code wearing a careful hedge, and the
+   hedge would have gone on telling its next reader that a missing slice is an ordinary state here.
+   SO IT CRASHES, AND THE CRASH IS WHAT KEEPS THE HEDGE'S POINT: a caller added later that genuinely has no
+   denomination to pass gets a refusal naming what to do rather than a sentence composed against a budget
+   nobody measured. */
+function stepUnitOverrunReading(b, q) {
   const rows = censusHistRows(b, "stepUnitOverruns", "sliceOverruns", STEP_UNIT_EXTENT);
   const runs = new Map(censusHistRows(b, "stepUnitRuns", "steps", STEP_UNIT_EXTENT));
   /* AND THE THIRD MEMBER OF THE TRIPLE, VALIDATED AS A PARTITION OF `sliceOverrunSeamless` for the two above's
@@ -2946,13 +3024,51 @@ function stepUnitOverrunReading(b) {
      whose O(members) rival rescan is called from the interpreter and charged to the STEP phase. A density in
      the thousands over a 12 ms slice is that rescan being the slice; a density of one or two is a step that
      consulted once, was not outranked, and ran — which is a question about the page.
-     MEASURED, five fresh-browser drives of one dev artifact: `sliceOverrunSeamless` read 0 on all five gitlab
-     drives (asks 1814, 1357, 1777, 80 and 74) and 4 on gitpod, so the denominator is the whole overrun count
-     on the drives this row was built for and the density is readable for EVERY arm of them.
-     RETIREMENT: this record goes when the per-arm MAXIMUM INTER-CONSULTATION GAP is emitted beside this sum,
-     because a density is a mean and a mean cannot tell one long gap from many short ones — which is the single
-     discriminator the ask rows still cannot state, and solver/engine.h:1900 carries its own half of it. */
+     MEASURED OVER FIVE FRESH-BROWSER DRIVES OF ONE DEV ARTIFACT, AND THE FIGURES THAT STOOD HERE WERE WRONG
+     — RELAYED BY A COORDINATOR, CORRECTED BY THE SAME COORDINATOR FROM THE DRIVES' OWN LOGS, AND NOT
+     RE-DERIVED BY THE LANE THAT WROTE THIS LINE, so it is a claim to check and not a measurement of this
+     file's. They read "asks 1814, 1357, 1777, 80 and 74" and are kept in their own words because the
+     CONCLUSION drawn from them — that the denominator is the whole overrun count on those drives — is true
+     of three of the five and false of two, which is the half a reader would otherwise carry onward. The
+     corrected pairs are 9 overrunning turns with 0 seamless and 87 asks; 9 / 0 / 70; 11 / 0 / 74; 19 / 4 / 55;
+     and 32 / 4 / 1010142.
+     WHAT THEY MAKE CONCRETE IS NOT A MAGNITUDE BUT TWO REGIMES FOUR ORDERS OF MAGNITUDE APART, which is the
+     durable half and is why the correction STRENGTHENS this row rather than weakening it: three drives of one
+     document ran at 6.7 to 9.7 consultations per overrunning turn and one drive of the other at about 36000
+     over its 28 asked turns. WHAT THAT BUYS IS A BOUND AND NOT A STORY, which is the one thing a relayed
+     figure may be used for here: a turn in this row MET the budget, so nine offers across it is at most one
+     every 1.3 ms, and the turn's own LENGTH is unbounded above by anything on this line — which is exactly
+     the half a density cannot supply. BOTH densities are correct, they name OPPOSITE mechanisms, and in
+     NEITHER case does the
+     mean say where the time went. The low-ask regime is precisely the one in which a handful of consultations
+     is consistent with one enormous unbroken stretch, and it is the regime this row was built on.
+     RETIREMENT — MET, AND THE RECORD IS REWRITTEN RATHER THAN DELETED BECAUSE WHAT A READER RE-DERIVES IS
+     THE DENSITY AND NOT THE GAP. The condition read: this goes when the per-arm MAXIMUM INTER-CONSULTATION
+     GAP is emitted beside this sum, because a density is a mean and a mean cannot tell one long gap from many
+     short ones. `stepUnitOverrunGapArms` is that row and the clause below reads it. What is NOT retired is the
+     density itself: the two are a PAIR, because the gap says how wide the worst stretch was and only the
+     count says whether the turn was polled constantly or barely at all, and a maximum alone cannot tell a
+     turn that offered thousands of points and had one bad stretch from one that offered nine. */
   const ask = new Map(censusHistRows(b, "stepUnitOverrunAskArms", "sliceOverrunAsks", STEP_UNIT_EXTENT));
+  /* AND THE FIFTH MEMBER, WHICH IS THE ONLY ROW OF THE FIVE WHOSE IDENTITY IS NOT A SUM AND WHOSE VALUE IS
+     NOT THE ONE THAT READS AS OBVIOUS. The tempting argument is that a density is a MEAN, so a nine-offer
+     seven-second turn reads 9 whether those nine were evenly spread or clustered, and the maximum separates
+     them. solver/engine.h's `over_gap_arms` carries the DERIVATION that refutes the evenly-spread half and is
+     not copied here: the policy's only FALSE arm is the budget test, that test is monotone inside one slice,
+     and the first TRUE parks the flow and ends the turn — so every consultation of an overrunning turn sits
+     inside ONE window of at most one budget from its slice's opening, and the gap is therefore in
+     [span − budget, span]. WHAT THE ROW IS WORTH IS THAT BOUND READ THE OTHER WAY: it is the worst turn's
+     SPAN to within one budget, and `stepUnitOverruns` is a COUNT by deliberate choice, so nothing else in
+     this document says how LONG the worst turn of an arm was. A reader holding `4 of 4` cannot tell four
+     turns of 13 ms from four of seven seconds, and this is the row that can.
+     `censusHistMaxRows` AND NOT `censusHistRows`, WHICH IS THE WHOLE REASON THAT SECOND READER EXISTS: a sum
+     of maxima is a quantity no turn produced, so summing these arms would be an arithmetic nobody licensed
+     and — worse — would sometimes PASS, because a partition-shaped object that happens to sum to its scalar
+     means nothing. What holds is that the scalar is the arms' own maximum, which is as checkable as a sum.
+     IN THE SLICE'S OWN MEASURE, so the figure is comparable with the budget `quantumText` names and a gap in
+     CONSULTATIONS would be comparable with nothing — the interval between two consecutive consultations is 1
+     by definition. See solver/engine.h's `over_gap_arms`. */
+  const gap = new Map(censusHistMaxRows(b, "stepUnitOverrunGapArms", "sliceOverrunGapUs", STEP_UNIT_EXTENT));
   /* SORTED BY RATE AND NOT BY COUNT, WHICH IS A CORRECTION TO THIS READER'S FIRST VERSION AND THE WHOLE OF
      WHAT IT IS FOR. It quoted the denominator per arm — which was right — and then ordered the arms by the
      NUMERATOR, so the row a reader meets first is whichever arm simply RUNS most, and the rate that decides
@@ -2965,6 +3081,21 @@ function stepUnitOverrunReading(b) {
      By count the answer is `resume-program` and it is the least interesting of the three; by rate the answer
      is that ONE START IN THREE ran past the slice. The two numbers are both correct and they name different
      arms, which is exactly why the sentence says which one it ordered by. */
+  /* THE RUN'S OWN SLICE, IN THE SAME UNIT THE GAP ROW IS IN, AND THE WORD FOR IT TAKEN FROM THE SAME PLACE.
+     `sliceMs` is what the measured run announced; a run that announced nothing leaves both `null` and every
+     clause below that would have compared against one says so instead of picking a number. */
+  if (!q || typeof q.sliceMs !== "number")
+    throw new Error("[build] stepUnitOverrunReading was handed no slice denomination to read a gap against. " +
+                    "`stepUnitOverrunGapArms` is a TIME in the slice's own measure and the only thing that " +
+                    "makes a figure off it mean anything is the budget the MEASURED RUN announced, so there " +
+                    "is nothing here to fall back on: this tree's ENGINE_QUANTUM_MS would be today's working " +
+                    "tree answering for an artifact built from some other revision, and a sentence composed " +
+                    "against it would be a verdict about a slice that run was never scheduled on. Every " +
+                    "caller today is inside `hungCauseCensus(out)` and passes `quantumDenomination(out)`, " +
+                    "which throws rather than answering null whenever `out` carries an @COLD line — and `b` " +
+                    "is a parsed @COLD census, so it carries one. Pass the run's own @QUANTUM denomination.");
+  const slice_us = q.sliceMs * 1000;
+  const slice = `${q.sliceMs} ms slice`;
   const rate = (r) => { const n = Number(runs.get(r[0]) ?? 0); return n > 0 ? r[1] / n : 1; };
   const over = rows.filter((r) => r[1] > 0).sort((x, y) => rate(y) - rate(x));
   /* NOT `Number(...)`: censusHistRows three lines up refuses a census whose `sliceOverruns` is not a number,
@@ -2997,6 +3128,10 @@ function stepUnitOverrunReading(b) {
               and is the ONLY admissible denominator; where it is zero the clause above has already said every
               one of that arm's overruns was seamless, and a density over nothing is not a smaller density. */
            const askN = Number(ask.get(r[0]) ?? 0);
+           /* AND THIS ARM'S WORST UNBROKEN NO-OFFER STRETCH. `censusHistMaxRows` has already refused a census
+              whose arm is non-numeric, so this read is direct; an arm absent from the row is genuinely 0 and
+              not an absence, because the histogram is emitted with every row including the zeroes. */
+           const gapN = Number(gap.get(r[0]) ?? 0);
            const asked = r[1] - s;
            return `${r[1]} of ${n} ${r[0]}` +
                   (n > 0 ? ` (${(100 * r[1] / n).toFixed(1)}%)` : "") +
@@ -3012,7 +3147,7 @@ function stepUnitOverrunReading(b) {
                     ? `, ${askN} consultation(s) over those ${asked} asked turn(s) ` +
                       `(${(askN / asked).toFixed(1)} each)` +
                       (askN / asked >= 100
-                        ? " — a turn that consulted the scheduler that many times inside one 12 ms slice is" +
+                        ? ` — a turn that consulted the scheduler that many times inside one ${slice} is` +
                           " the HOOK being the slice, not the page: the rival rescan is called from the" +
                           " interpreter and charged to the step phase, which is the reading a small" +
                           " scheduler phase cannot refute"
@@ -3020,6 +3155,53 @@ function stepUnitOverrunReading(b) {
                           ? " — a turn that consulted once or twice and ran anyway is a back-edge-free stretch" +
                             " of the page's own code, which no ordering reaches"
                           : "")
+                    : "") +
+                  /* AND THE WORST OF THOSE TURNS' UNBROKEN NO-OFFER STRETCHES, WHICH IS WHAT THE DENSITY
+                     ABOVE IS A MEAN OF AND THE ONE CLAUSE ON THIS LINE THAT SEPARATES THE TWO DIFFS. A
+                     density of nine is consistent with nine stretches of a second each — nine spans with no
+                     suspend point in them, which is nine step-machine conversions' worth of C — and with
+                     nine consultations in the first millisecond followed by ONE unbroken stretch, which is
+                     one. The maximum says which.
+                     IT IS QUOTED WITH ITS OWN DENOMINATOR AND NOT AS A MAGNITUDE, because it is a HIGH-WATER
+                     MARK: a plateau says a stretch of that width WAS observed and never that none is wider,
+                     so the number of turns it was drawn from is what bounds how much evidence it is — which
+                     is `asked`, the same denominator the density is taken over, and it is already on this
+                     line. It is NOT compared against another run's figure.
+                     AND A ZERO IS A STATED STATE RATHER THAN A SMALL NUMBER. With `asked` above zero a 0 is
+                     an arm whose every gap was under a microsecond, which is a real reading; with `asked` at
+                     zero the clause above has already said every one of this arm's overruns was seamless,
+                     and a worst gap over nothing is not a narrow one. 
+                     IT DECIDES NOTHING (§NO BOUNDS). The threshold below picks which SENTENCE is rendered
+                     and nothing else — exactly as the density clause above it does — and no verdict, no
+                     exit code and no engine behaviour reads either side of it. A per-arm worst gap against
+                     the budget is precisely the pair a "this arm has not yielded, take the thread" watchdog
+                     would be built from, which is why that is said at the engine's counter, at the census
+                     composer and here.
+                     RETIREMENT: this clause goes when the gap is published per arm as a DISTRIBUTION rather
+                     than as a maximum, because a plateau cannot be told from a ceiling and only a
+                     distribution over gap magnitudes can — which is CLAUDE.md's own cure for a high-water
+                     mark and is a strictly larger row than this one. MEASURED ABSENT with the command, so
+                     the condition is not born met: `grep -cE 'GapBuckets|gapDistribution|over_gap_buckets|
+                     gapHistogram' engine/build.mjs engine/host/solver/engine.h` answers 0 and 0, against
+                     `grep -cE 'stepUnitOverrunAskArms|over_ask_arms'` answering 2 and 2 as the armed control
+                     and an invented `zzNoSuchRowEver` answering 0 and 0. */
+                  (asked > 0
+                    ? `, worst stretch with NO suspend point offered ${gapN} us ` +
+                      `(${(gapN / slice_us).toFixed(1)}x the ${slice})` +
+                      (gapN >= slice_us
+                        ? ` — so the worst turn of this arm ran about ${(gapN / 1000).toFixed(0)} ms with` +
+                          " NOTHING offered across that stretch, which is the violation the engine's own" +
+                          " gap census defines (a step that runs seconds between two consecutive offers is" +
+                          " the violation whatever its total) and is ESTABLISHED by having been observed" +
+                          " rather than by a spread across runs. The consultations above all sit inside one" +
+                          " budget of the slice's opening, so this is also that turn's SPAN to within a" +
+                          " budget: a C activation declaring no step boundary, and the answer is a" +
+                          " step-machine conversion (§C-stack) in whichever component owns that call"
+                        : " — under one budget, so the worst turn of this arm ran less than TWICE the" +
+                          " budget and this is a MARGINAL overrun rather than a dark stretch. The one other" +
+                          " reading is a preempt that was WANTED and DROPPED, which is the single state that" +
+                          " breaks the one-window argument this row is read under: compare the run's own" +
+                          " preempts requested against preempts fired before taking this as marginal")
                     : "") +
                   (n > 0 && r[1] === n ? " — EVERY run of that arm overran" : "");
          }).join(", ") +
@@ -4829,7 +5011,7 @@ function hungCauseCensus(out) {
            `here is a trajectory: no difference across a window, and no landmark, because a landmark is the ` +
            `last census at which a counter ROSE and one sample has no pair to rise across. Everything that ` +
            `follows is a reading of that one census alone: ` +
-           stepUnitReading(one) + "; " + stepUnitRunReading(one) + "; " + stepUnitOverrunReading(one) + "; " +
+           stepUnitReading(one) + "; " + stepUnitRunReading(one) + "; " + stepUnitOverrunReading(one, quantumDenomination(out)) + "; " +
            ladderUnitReading(one) + "; " + programCursorReading(one) + "; " + programsAheadReading(one) +
            "; " + endpointDoorReading(one) + "; " + endpointReachReading(one) +
            /* AND BOTH FLOORS BELONG HERE, WHICH THIS ARM OMITTED WHILE ITS OWN BANNER ARGUED FOR THEM. That
@@ -4996,7 +5178,7 @@ function hungCauseCensus(out) {
                   because its yardstick is the slice THAT RUN was scheduled on and because the measure decides
                   which readings of the number are available; both are facts of the run and neither is this
                   tree's to supply. */
-               stepUnitReading(b) + "; " + stepUnitRunReading(b) + "; " + stepUnitOverrunReading(b) +
+               stepUnitReading(b) + "; " + stepUnitRunReading(b) + "; " + stepUnitOverrunReading(b, quantumDenomination(out)) +
                "; " + ladderUnitReading(b) + "; " +
                stepCostReading(a, b, quantumDenomination(out)) + "; " + programCursorReading(b) +
                /* AND THE FIFTH IS THE DISTANCE THE FOURTH IS A POSITION IN. `programCursorReading` says

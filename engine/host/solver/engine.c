@@ -10259,6 +10259,27 @@ static uint64_t g_preempt_asked = 0;
    points quickly and then one long gap. Measured per step: reset when the step starts, updated at each
    consultation, and closed off with the tail after the last one. */
 static int64_t g_last_ask = 0, g_max_gap = 0;
+/* …AND THE SAME TWO IN THE SLICE'S OWN MEASURE, WHICH IS THE PAIR A VERDICT COULD DECIDE ON AND THE PAIR
+   ABOVE IS NOT. See solver/engine.h's `over_gap_arms`: the wall pair is DEV-only and its one reader needs
+   this turn's consultation delta to be ZERO, so it reports a SEAMLESS turn's whole duration; these are
+   raised in EVERY build and report the widest interval between two consecutive offers of a turn that DID
+   offer some, in `quantum_thread_us()` microseconds so the figure is comparable with ENGINE_QUANTUM_MS.
+   DECLARED HERE RATHER THAN BESIDE THEIR LIFETIME SCALAR because preempt_hook is the writer and it stands
+   above that scalar's declaration; the scalar itself is declared with `g_over_asks`, where it is read.
+   THEY COST ONE CLOCK READ PER CONSULTATION, which is the one thing this block may not leave as a hope:
+   on the generic and emscripten branch quantum_expired() is `quantum_thread_us() - <slice start> >= …`
+   and this hook's last clause is `return quantum_expired()`, so on the host that ships the clock is
+   already read per consultation and this is a second read of it rather than a new class of cost; on the
+   native branch quantum_expired() reads a `volatile sig_atomic_t` flag and the read is genuinely new, in
+   a hook that already performs two flow_weight calls plus an O(members) rival rescan on a cache miss.
+   THAT IS WHY THE WALL CLOCK ABOVE STAYS UNDER THE GUARD AND THIS ONE DOES NOT, and it is a correction to
+   half of the reason that block gives rather than a disagreement with it. Its reason is two halves: that
+   nothing ever printed those numbers, and that `engine_now_ms()` on the host that matters most is not a
+   vDSO call at all but emscripten answering clock_gettime from JS. The FIRST half is retired for THIS
+   pair — solver/result.c publishes it as `sliceOverrunGapUs` and `stepUnitOverrunGapArms` in every
+   build — and is UNCHANGED for the wall pair, which still feeds one DEV-only message. The second half
+   is answered by the branch reading above and not by anybody's estimate. */
+static int64_t g_gap_last_us = 0, g_gap_max_us = 0;
 
 /* …AND THE ONE OF THE THREE A CENSUS READS. Exported for solver/result.c's reason and no other: the row is
    published beside `scanRivalRuns`, and a census that carried a count of its own would be a second definition
@@ -10302,7 +10323,21 @@ static int preempt_hook(int kind) {
     /* THIS CONSULTATION, COUNTED — the census's `preemptAsksLifetime`, raised before the rescan below so the
        containment its quotient rests on is an order of statements rather than an argument. */
     g_preempt_asked++;
-    /* THE GAP CENSUS IS THE SEAM MESSAGE'S, SO IT IS COMPILED OUT WITH IT — AND THE COUNT ABOVE IS NOT, WHICH
+    /* …AND THE INTERVAL SINCE THE LAST ONE, IN THE SLICE'S OWN MEASURE — the quantity solver/engine.h's
+       `over_gap_arms` is, and the one thing a density over this count cannot be. It is raised HERE, beside the
+       increment and above every clause below, so a consultation that is answered by clause (1) or by the value
+       yield and RETURNS is still an offer that happened: the two numbers then bracket exactly the same
+       population, which is what lets the arm row's identity be asserted against the count's own branch.
+       THE MAX IS TAKEN BEFORE THE READING IS STORED, so this is the interval between two CONSECUTIVE offers and
+       never a running distance from the turn's start. Opening `g_gap_last_us` at the turn's own bracket is what
+       makes the first iteration measure the stretch BEFORE the first offer rather than nothing. */
+    {
+        int64_t gap_now = quantum_thread_us();
+        if (gap_now - g_gap_last_us > g_gap_max_us) g_gap_max_us = gap_now - g_gap_last_us;
+        g_gap_last_us = gap_now;
+    }
+    /* THE *WALL* GAP CENSUS IS THE SEAM MESSAGE'S, SO IT IS COMPILED OUT WITH IT — AND NEITHER THE COUNT NOR
+       THE SLICE-MEASURE GAP ABOVE IS, WHICH
        IS THE ONE THING THIS PARAGRAPH GOT WRONG BY GROUPING THREE STATICS UNDER ONE GUARD. It read "Every one
        of these three statics is read only inside this file's `#if APICLIENT_DEV` seam assertion", which was
        TRUE WHEN WRITTEN and is retired by that count becoming a published census row: solver/result.c reads it
@@ -10313,6 +10348,16 @@ static int preempt_hook(int kind) {
        comes out. It is kept rather than deleted because a reader who re-derives "these are diagnostics, so
        they belong under the guard" will move the count back, and the row's denominator goes silent in exactly
        the build nobody runs a gate in.
+       AND THE SAME ARGUMENT NOW HOLDS OF A CLOCK, WHICH IS THE HALF THIS PARAGRAPH REASONED ITS WAY TO AND
+       COULD NOT HAVE APPLIED. Its reason is not "a clock is expensive" — it is that THESE numbers were
+       fed to nothing, and the host that matters most answers clock_gettime from JS. The second half is
+       unchanged and is why the WALL pair stays here. The first is retired for the SLICE-MEASURE pair
+       above, which solver/result.c publishes per arm in every build, and the cost of that one is argued
+       at its own declaration off what quantum_expired() already reads on each branch rather than off
+       anybody's estimate. Two gap censuses, two clocks, two populations — the wall one reports a
+       SEAMLESS turn's whole duration beside the work count because a wall number is what says whether
+       the box was loaded, and the other reports the widest interval between two offers of a turn that
+       made some. Deleting either loses a reading that nothing else in this file takes.
        WHAT IT COSTS IN RELEASE IS ONE INCREMENT, which is what solver/flow.c already spends per scan for this
        same reason and states in the same words ("the increment below is a WRITE in every build") — and this
        hook already performs two flow_weight calls, plus an O(members) walk on a cache miss, so the add is not
@@ -10977,6 +11022,24 @@ static inline long step_unit_over_asks_total(void)
     for (i = 0; i < STEP_UNIT_N; i++) t += g_step_unit_over_asks[i];
     return t;
 }
+/* …AND THE WORST NO-SUSPEND-POINT STRETCH ANY NON-SEAMLESS OVERRUNNING TURN OF EACH ARM CONTAINED — see
+   solver/engine.h's `over_gap_arms` for why the density beside it is a MEAN and what a mean cannot tell apart.
+   Raised in the same `else` as the ask row, from the same turn, one statement from its own identity.
+   NOT A PARTITION, WHICH IS THE ONE THING IT DOES NOT SHARE WITH THE THREE ROWS ABOVE IT: a sum of maxima is a
+   quantity no turn produced, so this row has no `_total` and its identity is a MAX against the scalar. */
+static long g_step_unit_over_gap[STEP_UNIT_N];
+/* ITS OWN MAXIMUM, WALKED RATHER THAN CARRIED, for `step_unit_over_asks_total`'s reason exactly — and it is a
+   max and not a sum because that is the identity this row HAS. A fold over an empty history answers 0, which
+   is the same thing every arm reads before the first non-seamless overrunning turn and is why the scalar it is
+   checked against starts there too. */
+static inline long step_unit_over_gap_max(void)
+{
+    long m = 0;
+    int i;
+
+    for (i = 0; i < STEP_UNIT_N; i++) if (g_step_unit_over_gap[i] > m) m = g_step_unit_over_gap[i];
+    return m;
+}
 /* …AND THE STEPS THEMSELVES, COUNTED WHERE THE HISTOGRAM ABOVE IS NOT, which is the whole of what makes the
    identity between the two an assertion rather than an arithmetic tautology. This is incremented where
    flow_step RESETS the name — its entry — and the histogram is incremented where the scheduler RECORDS the
@@ -11200,6 +11263,23 @@ static int64_t g_slice_over;
    offered is exactly what a "this flow is not yielding, take the thread" watchdog would be built from. */
 static uint64_t g_over_asks;       /* suspend points offered, summed over the turns that met the slice */
 static long     g_over_seamless;   /* …and how many of those turns offered NOT ONE */
+/* …AND THE LONGEST STRETCH OF ONE OF THOSE TURNS DURING WHICH THE POLICY WAS NOT CONSULTED AT ALL — see
+   solver/engine.h's `over_gap_arms` for why the pair above is a DENSITY and a density cannot tell nine evenly
+   spread stretches from one unbroken run.
+   THE LIFETIME MAXIMUM, AND THE TWO PER-TURN READINGS IT IS BUILT FROM ARE DECLARED WITH preempt_hook rather
+   than here, because that hook is their writer and it stands above this line. `g_gap_last_us` and
+   `g_gap_max_us` carry one turn; this carries the worst such interval over every non-seamless overrunning
+   turn of the run, and it is what the per-arm row is checked against. The cost of the measurement and the
+   reason it is outside the DEV guard are stated at the writer and not restated here.
+   THE LEAD AND THE TAIL ARE PART OF THE GAP. A turn that consulted nine times in its first millisecond and
+   then ran for seven seconds has its whole finding in the stretch between its LAST offer and its end, so the
+   turn's closing reading closes that interval; opening from the turn's own start closes the symmetric one
+   before the first offer. What this reports is therefore the widest span of the turn containing no offer at
+   all, which is the quantity the cooperative contract is about.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS), and this is the sharpest of the four rows: a per-arm worst gap
+   against the budget is exactly the pair a "this arm has not yielded in N ms, take the thread" watchdog is
+   built from. Nothing branches on it. */
+static int64_t g_over_gap_us;      /* the worst such interval over every non-seamless overrunning turn */
 /* …AND THE ONE PHASE INSIDE A STEP THAT IS O(A LENGTH THE PAGE CHOSE), AND HOW COARSELY IT RESTS.
    (This headline read `AND OFFERS NO RAISE POINT AT ALL` while the paragraphs under it were rewritten for the
    seam that gave it one — a retirement that edits the tail and leaves the headline is the shape that goes on
@@ -14215,6 +14295,7 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     for (i = 0; i < STEP_UNIT_N; i++) out->over_arms[i] = g_step_unit_over[i];
     for (i = 0; i < STEP_UNIT_N; i++) out->over_seamless_arms[i] = g_step_unit_over_seamless[i];
     for (i = 0; i < STEP_UNIT_N; i++) out->over_ask_arms[i] = g_step_unit_over_asks[i];
+    for (i = 0; i < STEP_UNIT_N; i++) out->over_gap_arms[i] = g_step_unit_over_gap[i];
     /* …AND THE ARM HISTOGRAM ITSELF, TAKEN HERE RATHER THAN AT THIS FUNCTION'S TAIL, because the compile
        pair's containment below READS one of its arms: `arms[STEP_UNIT_COMPILE_YIELDED]` is the other half
        of the compile-stint population `classic_compile_overruns` is drawn from. Taken at the tail it would
@@ -14234,6 +14315,15 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        another instant and the equivalence below would be an assertion about two readings. */
     out->slice_overrun_asks     = g_over_asks;
     out->slice_overrun_seamless = g_over_seamless;
+    /* …AND THE WORST NO-OFFER STRETCH, TAKEN IN THE SAME READING AS THE PER-ARM ROW IT IS THE MAXIMUM OF —
+       for the pair above's reason and with one difference worth naming, since it is the reason no identity is
+       asserted over this pair HERE. The three rows above are PARTITIONS, so the accessor can compare a copied
+       histogram with a copied total and learn something a single raise site could not have broken; this one is
+       a MAXIMUM, so the only identity it has is `max(arms) == scalar` and that is already exact at the raise,
+       where the turn that would break it has just returned. Re-asking it here would be the same statement
+       about the same two numbers one copy later, which is a second check of one fact rather than a second
+       fact. */
+    out->slice_overrun_gap_us   = g_over_gap_us;
     /* AND THE UNIT BOUNDARY'S REFUSAL ARMS, TAKEN IN THE SAME READING AS THE `steps` THEY PARTITION — for
        `step_us`' reason one line up and with a sharper edge: these three are read against a denominator that
        the dispatch loop moves, so a copy taken one call later than `out->steps` would be a split of one
@@ -15939,6 +16029,13 @@ static int engine_sched_slice(void) {
                line and consult no policy, so counting from `t0` would be counting over a span the overrun
                test is not about. It is a LOAD of a static in every build; see g_over_asks. */
             uint64_t pa_slice0 = g_preempt_asked;
+            /* …AND THE THIRD READING OF THE SAME BRACKET, WHICH NEEDS NO CLOCK CALL OF ITS OWN: `t_slice0` IS
+               the turn's opening reading in the slice's measure, so the gap census opens from the very number
+               the overrun test will subtract from. Resetting the maximum here rather than at the turn's `t0`
+               above is the same choice `pa_slice0` makes and for the same reason — the pick, the switch and
+               the delta swap consult no policy, so a gap measured from `t0` would include a span in which an
+               offer was impossible and would read as a missing seam. See solver/engine.h's `over_gap_arms`. */
+            g_gap_max_us = 0; g_gap_last_us = t_slice0;
             int r = flow_step(ctx, cur);
             /* WHERE THE STEP'S ANSWER GOES ONTO THE FLOW — the ONE point every arm of flow_step converges on,
                so a new arm cannot forget to be recorded and there is no route to remember. What the arm
@@ -16242,6 +16339,57 @@ static int engine_sched_slice(void) {
                             "difference is a second raise site for one of them",
                             (unsigned long long)step_unit_over_asks_total(),
                             (unsigned long long)g_over_asks);
+                    /* …AND THE WIDEST INTERVAL INSIDE THIS TURN DURING WHICH NO POINT WAS OFFERED, WHICH IS
+                       THE ONE THING THE SUM ABOVE IS A PROXY FOR — see solver/engine.h's `over_gap_arms`.
+                       THE TAIL IS CLOSED HERE AND NOWHERE ELSE: `now` is the turn's closing reading in the
+                       same measure `g_gap_last_us` holds, so `now - g_gap_last_us` is the stretch between the
+                       last offer and the turn's end — which on the regime this row was built for IS the
+                       finding, since a turn that consulted nine times in its first millisecond and then ran
+                       for seconds has every one of those nine inside `g_gap_max_us` and the whole of its cost
+                       in the tail. A row that took `g_gap_max_us` alone would report milliseconds for a turn
+                       that held the thread for seconds, which is the flattering direction.
+                       ONLY FOR A NON-SEAMLESS TURN, WHICH IS WHY IT IS IN THIS `else` AND NOT ABOVE IT. A turn
+                       that offered NOT ONE point has no interval between two offers at all: its widest
+                       no-offer stretch is its own whole duration, which is already published as this turn's
+                       contribution to `g_slice_us` and whose turns `g_step_unit_over_seamless` counts. The two
+                       are a turn's worst GAP and a turn's LENGTH, and one row holding both could not be read
+                       for either. */
+                    {
+                        int64_t gap = now - g_gap_last_us > g_gap_max_us
+                                      ? now - g_gap_last_us : g_gap_max_us;
+                        /* THE HEADROOM IS ASKED BEFORE THE NARROWING AND NEVER AFTER IT, for the ask row's
+                           reason exactly and against a different horizon. This row is a MAXIMUM rather than
+                           an accumulator, so the `long` it must be — solver/result.c has ONE step-unit
+                           composer and it prints `%ld` — is not the 35.8-minute saturation a SUM of
+                           microseconds is: the exposure is ONE TURN whose worst no-offer stretch exceeds
+                           about 2147 seconds in the slice's measure on a 32-bit host, which is an engine that
+                           has hung for half an hour. A check written after the cast reads a value the
+                           narrowing has already made undefined. */
+                        DCHECK(gap <= (int64_t)LONG_MAX,
+                               "one turn's widest no-suspend-point stretch does not fit the `long` the "
+                               "step-unit row composer prints — that is about 2147 seconds in the slice's "
+                               "own measure inside a SINGLE turn, so either this engine has held the thread "
+                               "for half an hour without offering a point or the two readings the interval "
+                               "is taken between belong to different clocks");
+                        if (gap > g_over_gap_us) g_over_gap_us = gap;
+                        if ((long)gap > g_step_unit_over_gap[g_step_unit])
+                            g_step_unit_over_gap[g_step_unit] = (long)gap;
+                        /* THE IDENTITY, AND IT IS A MAX AND NOT A SUM — which is the one thing a reader
+                           carrying the three identities above must not transfer. A sum of maxima is a
+                           quantity no turn produced; what the arm row and its scalar share is that both are
+                           folds of the SAME per-turn number over the SAME population, so the scalar is the
+                           arms' own maximum. Asserted HERE, where the arm, the turn's two clock readings and
+                           the turn's consultation delta are all in one hand, for the reason the three above
+                           are: a disagreement learned at the accessor arrives with the turn that caused it
+                           long gone. */
+                        DCHECKF(step_unit_over_gap_max() == g_over_gap_us,
+                                "the per-arm worst-gap row and its scalar disagree (%ld against %lld) — both "
+                                "are folded from ONE turn's interval on the two lines above this one, and the "
+                                "fold is a MAXIMUM rather than a sum because a sum of maxima is a quantity no "
+                                "turn produced, so a difference is a second raise site for one of them or a "
+                                "row reset while its scalar was not",
+                                step_unit_over_gap_max(), (long long)g_over_gap_us);
+                    }
                 }
                 DCHECKF(g_over_seamless <= g_slice_over,
                         "more overrunning turns offered no suspend point (%ld) than overran at all (%lld) — "
