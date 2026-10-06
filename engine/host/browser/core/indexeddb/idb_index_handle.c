@@ -327,6 +327,7 @@ static int js_ix_get(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValue
     STEP_ARM(IXG_R_ENTRY);
     STEP_ARM(IXG_R_SUBKEY);
     STEP_ARM(IXG_R_LEAVE);
+    STEP_ARM(IXG_R_UNKNOWN);
         return idb_key_range_walk_run(ctx, hdr, &s->rw, cb_result, IXG_R_LENGTH, out_cb, out_argc);
 
     STEP_ARM(IXG_OPERATION);
@@ -448,6 +449,7 @@ static int js_ix_get_all(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     STEP_ARM(IXGA_R_ENTRY);
     STEP_ARM(IXGA_R_SUBKEY);
     STEP_ARM(IXGA_R_LEAVE);
+    STEP_ARM(IXGA_R_UNKNOWN);
         return idb_get_all_walk_run(ctx, hdr, w, cb_result, IXGA_R_LENGTH, out_cb, out_argc);
 
     STEP_ARM(IXGA_REQUEST);
@@ -502,6 +504,7 @@ static int js_ix_count(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
     STEP_ARM(IXC_R_ENTRY);
     STEP_ARM(IXC_R_SUBKEY);
     STEP_ARM(IXC_R_LEAVE);
+    STEP_ARM(IXC_R_UNKNOWN);
         return idb_key_range_walk_run(ctx, hdr, &s->rw, cb_result, IXC_R_LENGTH, out_cb, out_argc);
 
     STEP_ARM(IXC_OPERATION);
@@ -578,6 +581,7 @@ static int js_ix_open_cursor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     STEP_ARM(IXCU_R_ENTRY);
     STEP_ARM(IXCU_R_SUBKEY);
     STEP_ARM(IXCU_R_LEAVE);
+    STEP_ARM(IXCU_R_UNKNOWN);
         return idb_key_range_walk_run(ctx, hdr, &s->rw, cb_result, IXCU_R_LENGTH, out_cb, out_argc);
 
     STEP_ARM(IXCU_OPERATION);

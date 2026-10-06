@@ -933,7 +933,7 @@ static int js_cu_continue(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         idb_key_walk_start(ctx, hdr, &s->w, argv[0], CUC_K_LENGTH, CUC_PLACE);   /* STEP 5.1 */
         return JS_STEP_YIELD;
 
-    /* STEP 5.1's conversion, whose six rest points are this member's. Named individually for the reason
+    /* STEP 5.1's conversion, whose rest points are this member's. Named individually for the reason
        core/dom/node.c names `clone a node`'s: a stage added to the algorithm does not compile until it has an
        arm here, where a partial list would silently route it into a neighbour. */
     STEP_ARM(CUC_K_LENGTH);
@@ -942,6 +942,7 @@ static int js_cu_continue(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     STEP_ARM(CUC_K_ENTRY);
     STEP_ARM(CUC_K_SUBKEY);
     STEP_ARM(CUC_K_LEAVE);
+    STEP_ARM(CUC_K_UNKNOWN);
         return idb_key_walk_run(ctx, hdr, &s->w, cb_result, CUC_K_LENGTH, out_cb, out_argc);
 
     STEP_ARM(CUC_PLACE);
@@ -1076,6 +1077,7 @@ static int js_cu_continue_pk(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     STEP_ARM(CUP_K_ENTRY);
     STEP_ARM(CUP_K_SUBKEY);
     STEP_ARM(CUP_K_LEAVE);
+    STEP_ARM(CUP_K_UNKNOWN);
         return idb_key_walk_run(ctx, hdr, &s->w, cb_result, CUP_K_LENGTH, out_cb, out_argc);
 
     STEP_ARM(CUP_TOOK_KEY);
@@ -1090,6 +1092,7 @@ static int js_cu_continue_pk(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     STEP_ARM(CUP_P_ENTRY);
     STEP_ARM(CUP_P_SUBKEY);
     STEP_ARM(CUP_P_LEAVE);
+    STEP_ARM(CUP_P_UNKNOWN);
         return idb_key_walk_run(ctx, hdr, &s->w, cb_result, CUP_P_LENGTH, out_cb, out_argc);
 
     STEP_ARM(CUP_PLACE);
@@ -1281,6 +1284,7 @@ static int js_cu_update(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
     STEP_ARM(CUU_KP_ENTRY);
     STEP_ARM(CUU_KP_SUBKEY);
     STEP_ARM(CUU_KP_LEAVE);
+    STEP_ARM(CUU_KP_UNKNOWN);
         return idb_key_walk_run(ctx, hdr, &s->w, cb_result, CUU_KP_LENGTH, out_cb, out_argc);
 
     STEP_ARM(CUU_OPERATION);

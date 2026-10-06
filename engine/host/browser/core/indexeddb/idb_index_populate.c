@@ -145,6 +145,7 @@ static int js_idb_populate_operation(JSContext *ctx, void *st, JSValue cb_result
     STEP_ARM(POP_ENTRY);
     STEP_ARM(POP_SUBKEY);
     STEP_ARM(POP_LEAVE);
+    STEP_ARM(POP_UNKNOWN);
     STEP_ARM(POP_INDEX);
     STEP_ARM(POP_INDEX_TOOK);
     STEP_ARM(POP_INDEX_UNIQUE);

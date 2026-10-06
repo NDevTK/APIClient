@@ -20,13 +20,73 @@
  * answers every OTHER arm and hands the array BACK for that walk to perform. Only that function returns it; the
  * plain-C entry below crashes on it, naming the call site to convert.
  *
+ * IDB_KEY_UNKNOWN IS THE FIFTH AND IS THE SAME KIND OF THING — not an answer, a HAND-BACK. §7.4 decides a key's
+ * type by asking what the value IS, and a value this flow has no bytes for is not any of them and is not none
+ * of them either: the answer is UNDECIDED, so it is a FORK and a fork needs a flow to snapshot. The arms that
+ * run none of the page's code are still answered in C, and this one is handed back to the same walk the array
+ * arm is handed back to, for the same reason and through the same door.
+ *
  * *pkey is OWNED on IDB_KEY_OK and JS_UNDEFINED otherwise. */
-typedef enum { IDB_KEY_OK = 0, IDB_KEY_INVALID_VALUE, IDB_KEY_INVALID_TYPE, IDB_KEY_ARRAY } IdbKeyResult;
+typedef enum { IDB_KEY_OK = 0, IDB_KEY_INVALID_VALUE, IDB_KEY_INVALID_TYPE, IDB_KEY_ARRAY,
+               IDB_KEY_UNKNOWN } IdbKeyResult;
+
+/* §7.4's COMPLETIONS OVER A VALUE THIS FLOW HAS NO KEY BYTES FOR — the worlds the fork explores, declared
+ * HERE because two files read them: core/indexeddb/idb_key_array.c asks `step_fork_run` with this many
+ * completions and switches on the arm, and idb_key.c mints the key each arm names. A second copy of the
+ * numbering is a second place for an arm to mean a different world than the one it was recorded as.
+ *
+ * WHY THREE AND NOT §7.4's SIX ARMS, AND NOT THE TWO THE CRASH THIS REPLACES ASKED FOR. A page does not
+ * observe "which arm"; it observes the ANSWER, and §2.4's compare reads a key's TYPE before it reads any
+ * value ("if ta does not equal tb" — number < date < string < binary < array), so the type of the key §7.4
+ * returns is observable with no further unknown in it. That is why a single "a key" arm would be wrong. What
+ * bounds it at three is what the engine can MINT WITHOUT INVENTING: §2.4's value for a number and for a
+ * string is a primitive the concolic can stand in for, and idb_key.c already rides it there for an unknown
+ * whose example answered. A DATE's value is a double, a BINARY key's is a byte sequence and an ARRAY key's is
+ * a list of other keys — none of the three is a place a concolic can ride, so entering those arms means
+ * minting bytes nothing observed, which is §RUN-DON'T-MATCH's invention, and an array arm additionally needs
+ * a length only a bound could supply. See idb_key_array.c's `walk_unknown` for the residual that names them.
+ *
+ * ARM 0 IS THE REFUSAL AND THAT IS THE NUMBERING RULE RATHER THAN A PREFERENCE: quickjs-step.h's
+ * `step_fork_run` requires that outcome 0 be the completion a run with NO forking policy takes, and a
+ * concolic rides an Object, so every type test in idb_key_concrete_arm answers no for one and the value falls
+ * out of §7.4's own "Otherwise: return 'invalid type'". §7.4's TWO refusals are ONE arm because nothing in
+ * this standard tells them apart (see above), so the worlds in which the unknown is a NaN number, a NaN-dated
+ * Date or a detached buffer source are inside this arm too.
+ *
+ * A NEW COMPLETION GOES LAST. solver/decide.h: the frontier is never reset, so a parked flow holds arms keyed
+ * by the numbers declared on the day it parked — appending appends a QUESTION and every existing boolean
+ * replays unchanged, while INSERTING shifts every number above it and answers questions it was never about. */
+typedef enum {
+    IDB_KEY_UNKNOWN_INVALID = 0,
+    IDB_KEY_UNKNOWN_NUMBER,
+    IDB_KEY_UNKNOWN_STRING,
+    IDB_KEY_UNKNOWN_ARMS
+} IdbKeyUnknownArm;
+
+/* THE OPERATION HALF OF THAT FORK'S CONSTRAINT KEY, SPELLED ONCE. A constraint key is what a parked flow's
+   recorded answers are filed under, in this session and out of the cold tier in the next, so two spellings of
+   one question file it under two names and a flow reaching it through the other door finds nothing recorded.
+   The walk asks at two sites — the top-level input and a subkey inside an Array — and they share this string
+   because the OPERAND half differs and the two are mutually exclusive within one conversion: the top level
+   asks only where the input is not an Array, and only an Array has subkeys. */
+#define IDB_KEY_UNKNOWN_ASK "Indexed Database §7.4 convert a value to a key"
+
+/* THE KEY ONE OF THOSE ARMS NAMES, over the unknown the arm is about. `value` is the CONCOLIC ITSELF and is
+   DUP'd onto the record: §2.4's value for a number key and for a string key is a primitive, so the unknown
+   rides it exactly as it does for an unknown whose example answered §7.4, and nothing is de-tainted — the key
+   hands that same value back through §7.3 and reaches a sink carrying the fact that an attacker chose it.
+   IDB_KEY_UNKNOWN_INVALID names no key and is not a value this entry accepts. */
+JSValue idb_key_new_unknown(JSContext *ctx, IdbKeyUnknownArm arm, JSValueConst value);
 
 /* §7.4's ARMS THAT RUN NONE OF THE PAGE'S CODE — Number, Date, String, a buffer source, this engine's concolic,
    and "otherwise". Each is one O(1) engine action, which is why they are a call. On IDB_KEY_ARRAY `*parray` is
-   the OWNED Array exotic object whose conversion is the walk's; it is JS_UNDEFINED on every other answer. */
-IdbKeyResult idb_key_convert_here(JSContext *ctx, JSValueConst input, JSValue *pkey, JSValue *parray);
+   the OWNED Array exotic object whose conversion is the walk's; it is JS_UNDEFINED on every other answer.
+   On IDB_KEY_UNKNOWN `*punknown` is the OWNED concolic the fork is about, which is NOT always `input`: the
+   concolic arm unwraps an example that is itself a concolic, so the operand with no bytes can be one this
+   function uncovered. It is handed back rather than re-derived because the constraint key is keyed on the
+   VALUE, and a fork filed under `input`'s identity would be a different question than the one being asked. */
+IdbKeyResult idb_key_convert_here(JSContext *ctx, JSValueConst input, JSValue *pkey, JSValue *parray,
+                                  JSValue *punknown);
 
 /* §7.4 STEP 6's "a new array key with value keys" — §2.4's value for type array being "a list of other keys",
    which this engine holds as a plain Array of key records. `keys` is CONSUMED. It is here rather than in the

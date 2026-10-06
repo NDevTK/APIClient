@@ -476,14 +476,23 @@ static int g_get_all_stepid = -1;
  * ignore its count. */
 static bool ga_potentially_valid_key_range(JSContext *ctx, JSValueConst v)
 {
-    JSValue key = JS_UNDEFINED, array = JS_UNDEFINED;
+    JSValue key = JS_UNDEFINED, array = JS_UNDEFINED, unknown = JS_UNDEFINED;
     IdbKeyResult r;
 
     if (idb_key_range_is(v) || JS_IsUndefined(v) || JS_IsNull(v))
         return true;
-    r = idb_key_convert_here(ctx, v, &key, &array);
+    r = idb_key_convert_here(ctx, v, &key, &array, &unknown);
     JS_FreeValue(ctx, key);
     JS_FreeValue(ctx, array);
+    JS_FreeValue(ctx, unknown);
+    /* AND A VALUE WHOSE §7.4 ARM IS UNDECIDED IS POTENTIALLY VALID, WHICH IS THIS TEST'S OWN WORD AND NOT A
+       DEFAULT. The question is whether the value has "a TYPE THAT IS CONVERTIBLE TO A KEY RANGE", and an
+       unknown's type is exactly what no arm has decided — so it COULD be, which is what "potentially" says.
+       Answering false instead would route it down the IDBGetAllOptions branch and settle §7.4's three worlds
+       here, in a C predicate with no flow to fork at, rather than at the ask
+       core/indexeddb/idb_key_array.c's UNKNOWN stage already owns one algorithm along. The refusal arm this
+       defers to is the SAME refusal: §2.9's step 3 converts the value and §4's member throws a "DataError"
+       for it, which is what this test's false branch would have produced. */
     return r != IDB_KEY_INVALID_TYPE;
 }
 

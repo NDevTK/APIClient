@@ -35,15 +35,18 @@
 #include "quickjs-step.h"
 #include "core/indexeddb/idb_key.h"
 #include "core/indexeddb/idb_key_array.h"
+#include "solver/concolic.h"
 
-/* THE PHASES, FROM THE SAME X-LIST EVERY CALLER'S LABELS COME FROM. A caller's block holds the six in this
+/* THE PHASES, FROM THE SAME X-LIST EVERY CALLER'S LABELS COME FROM. A caller's block holds them in this
    order and the body below is written against the OFFSET into it, so this file names no caller's constants and
-   the order cannot drift from the labels — they are one declaration. */
+   the order cannot drift from the labels — they are one declaration. The COUNT is not written here either:
+   the list is the one place that holds it, and a number in prose beside it is a second copy that goes stale
+   the day a stage is appended, which is what happened the day the fork's was. */
 enum { IDB_KEY_ARRAY_ALGO_STAGES(JS_STEP_STAGE_ENUM, IDB_KW, "") IDB_KW_N };
 
 /* EVERY REQUEST THIS ALGORITHM CAN HAVE IN FLIGHT, LISTED ONCE — the header's keyed-read cursor (step 1's and
-   step 5.3's Get) and its own-descriptor cursor (step 5.1's HasOwnProperty). Written out at each of the six
-   transitions they would be six statements of one fact. */
+   step 5.3's Get) and its own-descriptor cursor (step 5.1's HasOwnProperty). Written out at every transition
+   they would be one statement of one fact per transition. */
 #define IDB_KW_GOTO(hdr, to) STEP_GOTO((hdr)->stage, (to), &(hdr)->get_phase, &(hdr)->desc_phase, NULL)
 
 /* ---- the record ------------------------------------------------------------------------------------------- */
@@ -62,6 +65,10 @@ void idb_key_walk_visit(JSContext *ctx, IdbKeyWalk *w, JSStepVisit *v)
     v->val(ctx, &w->seen);
     v->val(ctx, &w->entry);
     v->atom(ctx, &w->hop_atom);
+    /* THE FORK'S OPERAND IS NAMED HERE OR THE SIBLING READS A FREED ONE. `step_fork_run` BORROWS it onto the
+       header and the sibling is cloned AT the ask, so this is the declaration that copies it into the arm
+       that will re-ask about it — a `val` the visit does not name is not copied by a fork. */
+    v->val(ctx, &w->unknown);
     v->val(ctx, &w->key);
 }
 
@@ -160,6 +167,10 @@ static int walk_finish(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, IdbKeyResu
 
     DCHECK(res != IDB_KEY_ARRAY, "§7.4's array arm finished with the answer that means \"this is an array, walk "
                                  "it\" — that answer is consumed by the push and never reaches a completion");
+    DCHECK(res != IDB_KEY_UNKNOWN, "§7.4 finished with the answer that means \"this value's arm is undecided, "
+                                   "fork it\" — that answer is consumed by the UNKNOWN stage, which replaces it "
+                                   "with the completion this flow took, and a caller handed it would read an "
+                                   "unasked question as the algorithm's result");
     walk_release(ctx, w);
     w->key = key;
     w->res = res;
@@ -228,6 +239,33 @@ static int multi_skip(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, int base)
     return JS_STEP_YIELD;
 }
 
+/* §7.4 STEPS 5.6-5.8 OVER A SUBKEY THAT HAS BEEN CONVERTED — one copy, because the conversion answers at TWO
+ * sites now: in C at the SUBKEY stage for a value whose type §7.4 can read off it, and at the UNKNOWN stage
+ * for one whose type is the fork's answer. The steps after the conversion are identical for both and the one
+ * thing they must not do is differ, since a subkey that is appended on one route and refused on the other
+ * would make the same element mean two things depending on how its type was decided.
+ * `sub` is CONSUMED (it is JS_UNDEFINED on either refusal). Returns a step code the caller returns. */
+static int subkey_answered(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, int base, IdbKeyResult sr,
+                           JSValue sub)
+{
+    /* READ AFTER the conversion and never carried across it: a nested array PUSHES, and `js_realloc` may have
+       moved the stack under a pointer taken before. */
+    IdbKeyLevel *f = &w->lv[w->sp - 1];
+
+    /* STEP 5.6: "If key is 'invalid value' or 'invalid type' abort these steps and return 'invalid value'."
+       The two refusals are ONE answer here, which is the standard's own collapse and the only place in it
+       that makes one. */
+    if (sr != IDB_KEY_OK) {
+        DCHECK(JS_IsUndefined(sub), "§7.4's arms left a key behind on a refusal");
+        if (w->multi) return multi_skip(ctx, hdr, w, base);
+        return walk_finish(ctx, hdr, w, IDB_KEY_INVALID_VALUE, JS_UNDEFINED);
+    }
+    level_append_subkey(ctx, w, f, sub);   /* STEP 5.7 */
+    f->index++;                            /* STEP 5.8 */
+    IDB_KW_GOTO(hdr, base + IDB_KW_HOP);
+    return JS_STEP_YIELD;
+}
+
 /* ---- the entry, the run and the answer -------------------------------------------------------------------- */
 
 static void walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValueConst input, int base, int after,
@@ -239,6 +277,7 @@ static void walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValueCon
     w->multi = multi ? 1 : 0;
     w->after = after;
     w->entry = JS_UNDEFINED;
+    w->unknown = JS_UNDEFINED;
     w->key = JS_UNDEFINED;
     /* STEP 1: "If seen was not given, then let seen be a new empty set." Every §4 member's call is the
        one-argument form, so the set is fresh per conversion and §4.7's `bound` converts its two values
@@ -246,7 +285,20 @@ static void walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValueCon
     w->seen = JS_NewArray(ctx);
     CHECK(!JS_IsException(w->seen), "IndexedDB: §7.4's `seen` set could not be allocated");
     /* STEP 2 is vacuous over a fresh set, and STEP 3's arms that run none of the page's code answer here. */
-    w->res = idb_key_convert_here(ctx, input, &w->key, &arr);
+    w->res = idb_key_convert_here(ctx, input, &w->key, &arr, &w->unknown);
+    /* THE ARM WHOSE ANSWER IS UNDECIDED RESTS, EXACTLY AS THE ARRAY ARM WALKS. Both are handed back by the
+       same function for the same reason — they need a FLOW, one to run the page's own index accessors and
+       one to snapshot a sibling at — and both are pointed into this block rather than at the caller's own
+       stage. The top level stands on NO LEVEL here, which is what the UNKNOWN stage reads to tell the
+       caller's answer from a subkey's. */
+    if (w->res == IDB_KEY_UNKNOWN) {
+        DCHECK(JS_IsUndefined(w->key) && JS_IsUndefined(arr),
+               "§7.4's arms handed back an undecided value and a key or an array with it — the three answers "
+               "are exclusive and a caller reading one slot would act on another arm's operand");
+        w->res = IDB_KEY_OK;   /* nothing is decided yet: the fork below is what answers */
+        hdr->stage = (uint16_t)(base + IDB_KW_UNKNOWN);
+        return;
+    }
     if (w->res != IDB_KEY_ARRAY) {
         hdr->stage = (uint16_t)after;
         return;
@@ -270,6 +322,105 @@ void idb_key_walk_start_multi_entry(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *
     walk_start(ctx, hdr, w, input, base, after, true);
 }
 
+/* §7.4 OVER A VALUE THIS FLOW HAS NO KEY BYTES FOR — the FORK, and the one stage of this algorithm that is
+ * not a step of the standard.
+ *
+ * WHY THERE IS A WORLD TO FORK OVER AT ALL. §7.4 decides a key's TYPE by asking what the value IS, and a page
+ * keys its records by what it read from the address, from a message, from a reply — so the value arriving at
+ * step 3 is routinely one whose bytes this flow does not have. Asking "is it a Number" of such a value answers
+ * no, because a concolic rides an Object, and so does every other test: the whole surface would be a
+ * "DataError" and §4's get, delete, count and openCursor over attacker-derived keys would be out of reach.
+ * That answer is not coarse, it is DECIDED — one arm taken and the rest deleted with nothing to say so — and
+ * §Solver-half's rule is that where the domain permits several outcomes they all run.
+ *
+ * HOW MANY WORLDS, AND WHY IT IS NOT THE NUMBER §7.4's PROSE ENUMERATES. The arm list is Number / Date /
+ * String / buffer source / Array / Otherwise, which is SIX, and the completions are THREE. Two corrections in
+ * opposite directions produce that, and both are read off what a PAGE OBSERVES rather than off the prose:
+ *   - §7.4's TWO refusals COLLAPSE, and so do the sub-worlds inside three of its arms. "invalid value" and
+ *     "invalid type" are told apart by no algorithm in this standard (core/indexeddb/idb_key.h argues it at
+ *     length), so the world in which the unknown is a NaN Number, the one in which it is a Date whose
+ *     [[DateValue]] is NaN, the one in which it is a detached buffer source and the one in which it is an
+ *     ordinary object are ONE arm: every §4 member answers all four with the same "DataError".
+ *   - "a key" DOES NOT COLLAPSE, which is what the crash this replaces got wrong when it asked for "a key arm
+ *     and an invalid arm". §2.4's compare reads a key's TYPE before it reads any value — "If ta does not
+ *     equal tb" over number < date < string < binary < array — so `indexedDB.cmp(x, 5)` answers from the
+ *     type ALONE, with no second unknown in it, and §7.3 hands a number key back as a Number and a string
+ *     key back as a String. A page observes which type it got.
+ *
+ * WHAT BOUNDS IT AT THREE IS WHAT CAN BE MINTED WITHOUT INVENTING, AND THE REST IS A NAMED RESIDUAL.
+ * NOT COVERED: the DATE, BINARY and ARRAY arms, and the throw that only the ARRAY arm can reach. §2.4's value
+ * for a date key is a double, for a binary key a byte sequence and for an array key a list of other keys, and
+ * core/indexeddb/idb_key.c states at its concolic arm why none of the three is a place a concolic can ride —
+ * so entering them means minting bytes nothing observed, which is §RUN-DON'T-MATCH's invention, and the array
+ * arm additionally needs a `length` that only a bound could supply. The standard's own result sentence names
+ * a fourth outcome kind beside its three answers — "or the steps may throw an exception" — and every route
+ * to it is a `?` inside the array arm's reads of the page's own object, so it is entailed by that arm rather
+ * than separate from it.
+ * WHAT THE NEXT DIFF BUILDS: a key record whose value may be a concolic for the DATE type too, which is
+ * §2.4's value being made concolic-carrying rather than a new arm here, and with it a fourth completion
+ * appended — appended, because solver/decide.h's numbering rule makes an insert a migration.
+ * HOW ITS ABSENCE WOULD SHOW: a document that keys its records by a Date built from unknown input, or by a
+ * binary key, reaches §4's member and the engine explores no world in which the lookup succeeds — observable
+ * as a store whose records are never found on any arm, where a browser finds them on the one that matters.
+ *
+ * AND THE WORLD THAT IS NOT §7.4's TO FORK OVER AT ALL IS NAMED HERE SO THE NEXT READER DOES NOT WELD IT ON.
+ * §2.9's convert-a-value-to-a-key-RANGE is what most of §4 reaches §7.4 through, and its steps 1 and 2 answer
+ * BEFORE step 3 runs: "If value is a key range, return value" and "If value is undefined or is null ... return
+ * an unbounded key range". An unknown could be either, and those worlds are observably enormous — an
+ * unbounded range is EVERY record in the store — while core/indexeddb/idb_key_range.c's `range_convert_pre`
+ * answers both of them concretely today, a brand test and a null test over a value that rides an Object. They
+ * are not completions of this algorithm: solver/decide.h is explicit that an arm asked by a DIFFERENT
+ * algorithm at a different moment is one fork answering two questions, so §2.9 owes a fork of its OWN at its
+ * own ask site, and appending its arms to this machine would be migration-safe and wrong.
+ *
+ * `real` IS JS_OUTCOME_REAL_UNSTATED ON BOTH STATES THAT REACH HERE, AND THAT IS A POSITIVE STATEMENT. A
+ * value with NO example has no bytes to run §7.4 against. A CONTRADICTED one has bytes this path's own arm
+ * PROVED WRONG, so naming the arm its example reaches would mark as forced the single world the run has
+ * already disproved. Both arms still run and neither is marked forced, which is what the sentinel means. */
+static int walk_unknown(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in, int base)
+{
+    JSValue unk, key;
+    IdbKeyResult res;
+    int arm = 0, rc;
+
+    JS_FreeValue(ctx, in);
+    DCHECK(concolic_is(w->unknown),
+           "§7.4's fork was resumed over an operand that is NOT unknown external input — a value this flow "
+           "has bytes for takes idb_key_concrete_arm, which decides its type by asking what it IS, so this "
+           "stage holding a known value means the conversion routed an arm it had already answered");
+    rc = step_fork_run(ctx, hdr, w->unknown, IDB_KEY_UNKNOWN_ASK, IDB_KEY_UNKNOWN_ARMS,
+                       JS_OUTCOME_REAL_UNSTATED, &arm);
+    if (rc)
+        return rc;   /* JS_STEP_FORK: parked at the ask, and the sibling's snapshot was taken there */
+    DCHECK(arm >= 0 && arm < IDB_KEY_UNKNOWN_ARMS,
+           "§7.4's fork came back standing at a completion it never declared — the worlds are the refusal and "
+           "the two key types whose §2.4 value a concolic can ride, and there is nothing outside them");
+    /* THE OPERAND IS TAKEN OFF THE RECORD BEFORE ANYTHING ELSE RUNS, because `step_fork_run` is answered now
+       and the next ask on this machine asserts no operand is still held. */
+    unk = w->unknown;
+    w->unknown = JS_UNDEFINED;
+    /* THE ANSWER IS COMPOSED ONCE, because the two routes below carry it to different places and a second
+       reading of the arm is a second chance for them to disagree about which world this flow is in.
+       §7.4's "Otherwise: return 'invalid type'" is what the refusal arm IS — the engine's own type tests all
+       answer no for a value riding an Object — and idb_key.h argues why the standard's OTHER refusal does
+       not need an arm of its own. */
+    res = arm == IDB_KEY_UNKNOWN_INVALID ? IDB_KEY_INVALID_TYPE : IDB_KEY_OK;
+    if (res != IDB_KEY_OK) {
+        JS_FreeValue(ctx, unk);
+        key = JS_UNDEFINED;
+    } else {
+        key = idb_key_new_unknown(ctx, (IdbKeyUnknownArm)arm, unk);
+        JS_FreeValue(ctx, unk);
+    }
+    /* WHOSE ANSWER THIS IS, READ OFF THE LEVEL STACK AND NOT OFF A FLAG. The top-level ask happens only where
+       the input is NOT an Array exotic object, so idb_key_walk_start pushed nothing and `sp` is 0; a SUBKEY
+       ask happens inside step 5.4, which is reached only from a level. The two are mutually exclusive by the
+       algorithm's own shape, and `sp` is that shape rather than a second record of it. */
+    if (w->sp == 0)
+        return walk_finish(ctx, hdr, w, res, key);
+    return subkey_answered(ctx, hdr, w, base, res, key);
+}
+
 int idb_key_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in, int base,
                      JSValue **out_cb, int *out_argc)
 {
@@ -279,9 +430,15 @@ int idb_key_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in, 
 
     DCHECK(phase >= 0 && phase < IDB_KW_N, "§7.4's array arm was resumed at a stage outside the block its "
                                            "caller declared for it");
+    /* THE ONE STAGE THAT IS NOT THE ARRAY ARM'S, ANSWERED BEFORE THE LEVEL IS READ. §7.4's fork rests on no
+       level when it is the TOP-LEVEL input that is undecided, which is the ordinary case — `store.get(x)`
+       and not `store.get([x])` — so the assertion below would fire on it. */
+    if (phase == IDB_KW_UNKNOWN)
+        return walk_unknown(ctx, hdr, w, in, base);
     DCHECK(w->sp > 0, "§7.4's array arm was driven with no level under it — idb_key_walk_start points the stage "
                       "into this block only after pushing the input's own level, and every completion points it "
-                      "back at the caller's");
+                      "back at the caller's. The fork above is the one stage this is not true of, and it is "
+                      "answered before this line");
     f = &w->lv[w->sp - 1];
 
     if (phase == IDB_KW_LENGTH) {
@@ -412,7 +569,16 @@ int idb_key_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in, 
             if (w->multi) return multi_skip(ctx, hdr, w, base);
             return walk_finish(ctx, hdr, w, IDB_KEY_INVALID_VALUE, JS_UNDEFINED);
         }
-        sr = idb_key_convert_here(ctx, w->entry, &sub, &arr);
+        /* NOTHING IS OUTSTANDING WHEN THE CONVERSION IS ASKED, which is what makes it safe to let it write
+           the operand slot directly: `idb_key_convert_here` PLACES that slot on entry, so a fork still
+           standing here would have its operand dropped with no reference left and the sibling would resume
+           over a freed value. The UNKNOWN stage takes the operand off the moment the ask is answered, and the
+           top-level ask cannot coexist with a level, so the slot is empty at every route to this line. */
+        DCHECK(JS_IsUndefined(w->unknown),
+               "§7.4's array arm reached step 5.4 with a fork's operand still on its record — the UNKNOWN "
+               "stage takes it off as soon as the ask is answered, so one standing here is a fork whose arm "
+               "nothing consumed, and the conversion below is about to overwrite the slot it lives in");
+        sr = idb_key_convert_here(ctx, w->entry, &sub, &arr, &w->unknown);
         if (sr == IDB_KEY_ARRAY) {
             /* THE RECURSION, AS A PUSH. `f` is not read again: the stack may have moved. */
             JS_FreeValue(ctx, w->entry);
@@ -423,18 +589,16 @@ int idb_key_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in, 
         }
         JS_FreeValue(ctx, w->entry);
         w->entry = JS_UNDEFINED;
-        /* STEP 5.6: "If key is 'invalid value' or 'invalid type' abort these steps and return 'invalid
-           value'." The two refusals are ONE answer here, which is the standard's own collapse and the only
-           place in it that makes one. */
-        if (sr != IDB_KEY_OK) {
-            DCHECK(JS_IsUndefined(sub), "§7.4's arms left a key behind on a refusal");
-            if (w->multi) return multi_skip(ctx, hdr, w, base);
-            return walk_finish(ctx, hdr, w, IDB_KEY_INVALID_VALUE, JS_UNDEFINED);
+        /* AN ELEMENT WHOSE OWN §7.4 ANSWER IS UNDECIDED RESTS AT THE FORK, exactly as the top-level input
+           does — `IDBKeyRange.only([x])` owes the same three worlds `only(x)` does, one level in. The level
+           stays standing, so the stage reached there reads `sp > 0` and finishes step 5.6-5.8 through the
+           same tail this arm does. */
+        if (sr == IDB_KEY_UNKNOWN) {
+            DCHECK(JS_IsUndefined(sub), "§7.4's arms handed back an undecided subkey and a key with it");
+            IDB_KW_GOTO(hdr, base + IDB_KW_UNKNOWN);
+            return JS_STEP_YIELD;
         }
-        level_append_subkey(ctx, w, f, sub);   /* STEP 5.7 */
-        f->index++;                            /* STEP 5.8 */
-        IDB_KW_GOTO(hdr, base + IDB_KW_HOP);
-        return JS_STEP_YIELD;
+        return subkey_answered(ctx, hdr, w, base, sr, sub);   /* STEPS 5.6-5.8 */
     }
 
     DCHECK(phase == IDB_KW_LEAVE, "§7.4's array arm was re-entered at a phase it never rests at");
@@ -463,6 +627,12 @@ int idb_key_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in, 
 IdbKeyResult idb_key_walk_result(JSContext *ctx, IdbKeyWalk *w, JSValue *pkey)
 {
     (void)ctx;
+    DCHECK(w->res != IDB_KEY_UNKNOWN && w->res != IDB_KEY_ARRAY,
+           "§7.4's answer was taken while one of this engine's two HAND-BACKS was still standing in it — "
+           "neither is one of the algorithm's answers, and every route out of them replaces it with one");
+    DCHECK(JS_IsUndefined(w->unknown),
+           "§7.4's answer was taken with the fork's operand still on the record — the UNKNOWN stage takes it "
+           "off the moment the fork is answered, so one left here is a fork whose arm nothing consumed");
     DCHECK(w->sp == 0, "§7.4's answer was taken while its walk still stands on a level — the algorithm points "
                        "the stage at the caller's own only once every level has left");
     *pkey = JS_UNDEFINED;

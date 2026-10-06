@@ -482,6 +482,7 @@ static int js_idb_store_operation(JSContext *ctx, void *st, JSValue cb_result, J
     STEP_ARM(OSOP_ENTRY);
     STEP_ARM(OSOP_SUBKEY);
     STEP_ARM(OSOP_LEAVE);
+    STEP_ARM(OSOP_UNKNOWN);
     STEP_ARM(OSOP_GENERATE);
     STEP_ARM(OSOP_NO_OVERWRITE);
     STEP_ARM(OSOP_REMOVE);
@@ -730,7 +731,7 @@ static int js_os_put(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValue
         idb_key_walk_start(ctx, hdr, &s->w, argv[1], OSP_K_LENGTH, OSP_TOOK_KEY);   /* STEP 8.1 */
         return JS_STEP_YIELD;
 
-    /* STEP 8.1's conversion, whose six rest points are this member's. Named individually for the reason
+    /* STEP 8.1's conversion, whose rest points are this member's. Named individually for the reason
        core/dom/node.c names `clone a node`'s: a stage added to the algorithm does not compile until it has an
        arm here, where a negation or a partial list would silently route it into a neighbour. */
     STEP_ARM(OSP_K_LENGTH);
@@ -739,6 +740,7 @@ static int js_os_put(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValue
     STEP_ARM(OSP_K_ENTRY);
     STEP_ARM(OSP_K_SUBKEY);
     STEP_ARM(OSP_K_LEAVE);
+    STEP_ARM(OSP_K_UNKNOWN);
         return idb_key_walk_run(ctx, hdr, &s->w, cb_result, OSP_K_LENGTH, out_cb, out_argc);
 
     STEP_ARM(OSP_TOOK_KEY);
@@ -782,6 +784,7 @@ static int js_os_put(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValue
     STEP_ARM(OSP_KP_ENTRY);
     STEP_ARM(OSP_KP_SUBKEY);
     STEP_ARM(OSP_KP_LEAVE);
+    STEP_ARM(OSP_KP_UNKNOWN);
         return idb_key_walk_run(ctx, hdr, &s->w, cb_result, OSP_KP_LENGTH, out_cb, out_argc);
 
     STEP_ARM(OSP_TOOK_KPK);
@@ -918,6 +921,7 @@ static int js_os_delete(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
     STEP_ARM(OSD_R_ENTRY);
     STEP_ARM(OSD_R_SUBKEY);
     STEP_ARM(OSD_R_LEAVE);
+    STEP_ARM(OSD_R_UNKNOWN);
         return idb_key_range_walk_run(ctx, hdr, &s->rw, cb_result, OSD_R_LENGTH, out_cb, out_argc);
 
     STEP_ARM(OSD_OPERATION);
@@ -1003,6 +1007,7 @@ static int js_os_get(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValue
     STEP_ARM(OSG_R_ENTRY);
     STEP_ARM(OSG_R_SUBKEY);
     STEP_ARM(OSG_R_LEAVE);
+    STEP_ARM(OSG_R_UNKNOWN);
         return idb_key_range_walk_run(ctx, hdr, &s->rw, cb_result, OSG_R_LENGTH, out_cb, out_argc);
 
     STEP_ARM(OSG_OPERATION);
@@ -1122,6 +1127,7 @@ static int js_os_get_all(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     STEP_ARM(OSGA_R_ENTRY);
     STEP_ARM(OSGA_R_SUBKEY);
     STEP_ARM(OSGA_R_LEAVE);
+    STEP_ARM(OSGA_R_UNKNOWN);
         return idb_get_all_walk_run(ctx, hdr, w, cb_result, OSGA_R_LENGTH, out_cb, out_argc);
 
     STEP_ARM(OSGA_REQUEST);
@@ -1181,6 +1187,7 @@ static int js_os_count(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
     STEP_ARM(OSC_R_ENTRY);
     STEP_ARM(OSC_R_SUBKEY);
     STEP_ARM(OSC_R_LEAVE);
+    STEP_ARM(OSC_R_UNKNOWN);
         return idb_key_range_walk_run(ctx, hdr, &s->rw, cb_result, OSC_R_LENGTH, out_cb, out_argc);
 
     STEP_ARM(OSC_OPERATION);
@@ -1261,6 +1268,7 @@ static int js_os_open_cursor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     STEP_ARM(OSCU_R_ENTRY);
     STEP_ARM(OSCU_R_SUBKEY);
     STEP_ARM(OSCU_R_LEAVE);
+    STEP_ARM(OSCU_R_UNKNOWN);
         return idb_key_range_walk_run(ctx, hdr, &s->rw, cb_result, OSCU_R_LENGTH, out_cb, out_argc);
 
     STEP_ARM(OSCU_OPERATION);

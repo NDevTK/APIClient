@@ -390,7 +390,7 @@ static int js_range_one_key(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         idb_key_walk_start(ctx, hdr, &s->w, argv[0], RG1_K_LENGTH, RG1_TAKE);
         return JS_STEP_YIELD;
 
-    /* STEP 1's conversion, whose six rest points are this member's. Named individually for the reason
+    /* STEP 1's conversion, whose rest points are this member's. Named individually for the reason
        core/dom/node.c names `clone a node`'s: a stage added to the algorithm does not compile until it has an
        arm here, where a negation or a partial list would silently route it into a neighbour. */
     STEP_ARM(RG1_K_LENGTH);
@@ -399,6 +399,7 @@ static int js_range_one_key(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     STEP_ARM(RG1_K_ENTRY);
     STEP_ARM(RG1_K_SUBKEY);
     STEP_ARM(RG1_K_LEAVE);
+    STEP_ARM(RG1_K_UNKNOWN);
         return idb_key_walk_run(ctx, hdr, &s->w, cb_result, RG1_K_LENGTH, out_cb, out_argc);
 
     STEP_ARM(RG1_TAKE);
@@ -463,6 +464,7 @@ static int js_range_bound(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     STEP_ARM(RGB_L_ENTRY);
     STEP_ARM(RGB_L_SUBKEY);
     STEP_ARM(RGB_L_LEAVE);
+    STEP_ARM(RGB_L_UNKNOWN);
         return idb_key_walk_run(ctx, hdr, &s->w, cb_result, RGB_L_LENGTH, out_cb, out_argc);
 
     STEP_ARM(RGB_TOOK_LOWER);
@@ -477,6 +479,7 @@ static int js_range_bound(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     STEP_ARM(RGB_U_ENTRY);
     STEP_ARM(RGB_U_SUBKEY);
     STEP_ARM(RGB_U_LEAVE);
+    STEP_ARM(RGB_U_UNKNOWN);
         return idb_key_walk_run(ctx, hdr, &s->w, cb_result, RGB_U_LENGTH, out_cb, out_argc);
 
     STEP_ARM(RGB_TOOK_UPPER);

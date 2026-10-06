@@ -138,7 +138,7 @@ static int js_idb_cmp(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
         idb_key_walk_start(ctx, hdr, &s->w, argv[0], CMP_A_LENGTH, CMP_TOOK_A);
         return JS_STEP_YIELD;
 
-    /* STEP 1's conversion, whose six rest points are this member's. Named individually for the reason
+    /* STEP 1's conversion, whose rest points are this member's. Named individually for the reason
        core/dom/node.c names `clone a node`'s: a stage added to the algorithm does not compile until it has an
        arm here, where a negation or a partial list would silently route it into a neighbour. */
     STEP_ARM(CMP_A_LENGTH);
@@ -147,6 +147,7 @@ static int js_idb_cmp(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
     STEP_ARM(CMP_A_ENTRY);
     STEP_ARM(CMP_A_SUBKEY);
     STEP_ARM(CMP_A_LEAVE);
+    STEP_ARM(CMP_A_UNKNOWN);
         return idb_key_walk_run(ctx, hdr, &s->w, cb_result, CMP_A_LENGTH, out_cb, out_argc);
 
     STEP_ARM(CMP_TOOK_A);
@@ -161,6 +162,7 @@ static int js_idb_cmp(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
     STEP_ARM(CMP_B_ENTRY);
     STEP_ARM(CMP_B_SUBKEY);
     STEP_ARM(CMP_B_LEAVE);
+    STEP_ARM(CMP_B_UNKNOWN);
         return idb_key_walk_run(ctx, hdr, &s->w, cb_result, CMP_B_LENGTH, out_cb, out_argc);
 
     STEP_ARM(CMP_TOOK_B);

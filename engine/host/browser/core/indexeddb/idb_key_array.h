@@ -35,12 +35,18 @@
 #include "quickjs-step.h"
 #include "core/indexeddb/idb_key.h"
 
-/* THE ALGORITHM'S SIX REST POINTS, expanded into the CALLER's stage list with the caller's own prefix and its
+/* THE ALGORITHM'S REST POINTS, expanded into the CALLER's stage list with the caller's own prefix and its
    own leading text — stage identity is the LABEL (quickjs-step.h's JSTrampStepDef::steps), so the list is
    written once here and the labels a parked flow holds name a step of §7.4 rather than a private counter.
    EVERY STEP THAT READS SOMETHING OFF THE PAGE'S OBJECT IS ITS OWN STAGE. The loop is over the page's own
    `length`, so the span from step 5 to step 6 is not a range this may name in one label; steps 2-4 and steps
-   5.4-5.8 are each one O(1) engine action and are labelled as the ranges they are. */
+   5.4-5.8 are each one O(1) engine action and are labelled as the ranges they are.
+   THE LAST ONE IS NOT A STEP OF §7.4 AND IS LABELLED AS WHAT IT IS. A value this flow has no bytes for takes
+   no arm of that algorithm and takes all of them: the answer is UNDECIDED, so it is a FORK, and a fork rests
+   at a stage like any other read does — the sibling's snapshot is taken AT it and both a park and a
+   cross-session resume land back on it. It is declared LAST because a caller's stage block is numbered by
+   position and a parked flow holds the number: appending leaves every existing label where it was, while
+   inserting would point a resumed flow's recorded stage at a step it was never standing in. */
 #define IDB_KEY_ARRAY_ALGO_STAGES(X, P, W) \
     X(P##_LENGTH, W " → Indexed Database §7.4 convert a value to a key, the Array arm step 1 (len is " \
                     "? ToLength(? Get(input, \"length\")))") \
@@ -54,7 +60,9 @@
                     "entry to a key with seen; an invalid subkey returns \"invalid value\"; append it to keys " \
                     "and increase index by 1)") \
     X(P##_LEAVE,  W " → Indexed Database §7.4 convert a value to a key, the Array arm step 6 (return a new " \
-                    "array key with value keys)")
+                    "array key with value keys)") \
+    X(P##_UNKNOWN, W " → Indexed Database §7.4 convert a value to a key, the fork over a value this flow has " \
+                     "no key bytes for (which of §7.4's arms it takes is undecided)")
 
 /* ONE LEVEL of the algorithm's own recursion — the array being walked and the subkeys collected off it. There
    is one per nested array the page wrote, so the stack these live in is grown rather than sized: a level count
@@ -84,6 +92,12 @@ typedef struct IdbKeyWalk {
        (it rides `*out_argc`), so the machine that asked is the only thing keeping it alive while the driver
        resolves a trap. JS_ATOM_NULL is 0, so a zeroed state already reads as "nothing asked". */
     JSAtom       hop_atom;
+    /* THE OPERAND THE FORK IS ABOUT, between idb_key_convert_here handing it back and the stage that asks
+       (owned). It lives HERE and not in a C local because quickjs-step.h's `step_fork_run` BORROWS the
+       operand onto the header and the DRIVER reads it after the machine has returned — and because the
+       sibling's snapshot is taken at the ask, so the arm that resumes needs the same value to re-ask about.
+       JS_UNDEFINED is "no fork outstanding", and a zeroed state is the integer 0, so it is PLACED. */
+    JSValue      unknown;
     JSValue      key;     /* THE ANSWER on IDB_KEY_OK (owned) */
     IdbKeyResult res;
     /* §7.4's SECOND ALGORITHM, "convert a value to a multiEntry key", as a MODE of this one rather than a

@@ -123,6 +123,34 @@ static JSValue idb_key_value(JSContext *ctx, JSValueConst key)
    half, because the taint rides the value that stays ON the record. OWNED. */
 static JSValue idb_concrete(JSContext *ctx, JSValueConst v)
 {
+    /* AND THE ONE STATE IN WHICH THERE IS NO SECOND HALF TO READ. `concolic_example` answers JS_UNDEFINED for
+       a value this flow has no bytes for, and every reader below then runs §2.4's own arithmetic on it:
+       `JS_ToFloat64(undefined)` is NaN, so `da > db` and `da < db` are both false and the compare answers
+       ZERO — "these two keys are EQUAL" — for a key whose bytes nothing has ever observed. That is not a
+       coarse answer, it is a WRONG one, and it is the shape §A-FIELD-A-CONSUMER-DEFAULTS names: a plausible
+       datum standing where a measurement should be, with nothing anywhere to say so.
+       IT IS UNREACHABLE UNTIL §7.4's FORK MINTS SUCH A KEY, which is why the assert lands in the same diff
+       as the arms that can produce one. §7.4 writes the concolic onto a NUMBER or STRING key's value, and
+       before the fork below existed the only route to that was an unknown whose EXAMPLE had answered — so
+       every key this engine has ever filed had bytes behind it and this condition held by construction.
+       WHAT THE NEXT DIFF BUILDS IS §2.4's OWN FORK, which is a different algorithm at a different moment and
+       therefore not an arm of §7.4's: "compare two keys" over an operand with no bytes has THREE feasible
+       completions (-1, 0, 1) and owes a `step_fork_run` of its own — which `idb_key_compare` cannot ask,
+       being a plain C entry with no JSStepHdr, so the diff that builds it is the one that converts this
+       algorithm's callers to a walk exactly as §7.4's array arm already is.
+       IN RELEASE THIS COMPILES OUT AND THE ZERO STANDS. That is a DEFINED wrong answer rather than an
+       undefined one, and it is narrower than deleting the two worlds that produce it — §a-wrong-narrowing
+       forbids retiring an arm nothing contradicted, and nothing here contradicts "the unknown is a number". */
+    DCHECK(!concolic_is(v) || (concolic_example_state(v) != CONCOLIC_EX_NONE &&
+                               concolic_example_state(v) != CONCOLIC_EX_CONTRADICTED),
+           "Indexed Database §2.4's compare, §2.11's generate-a-key or §7.3's convert-a-key-to-a-value read "
+           "the CONCRETE half of a key whose value is a concolic this flow has no bytes for — §7.4's fork "
+           "minted this key over a value whose TYPE it decided and whose BYTES it did not, so the comparison "
+           "below has nothing to run and would answer 0 — EQUAL — for every key in the store. The "
+           "answer is "
+           "§2.4's OWN fork: `compare two keys` over an operand with no bytes has three feasible completions "
+           "and must ask solver_outcome for them, which this plain-C entry has no JSStepHdr to do — so what "
+           "this names is the conversion of §2.4's callers to a walk, the way §7.4's array arm already is");
     return concolic_is(v) ? concolic_example(ctx, v) : JS_DupValue(ctx, v);
 }
 
@@ -201,6 +229,25 @@ JSValue idb_key_new_number(JSContext *ctx, double value)
                           "value\" for one, so no key of that type can hold it and §2.4's compare over it "
                           "would answer neither -1, 0 nor 1");
     return idb_key_new(ctx, IDB_RANK_NUMBER, JS_NewFloat64(ctx, value));
+}
+
+/* §7.4's NUMBER AND STRING ARMS OVER A VALUE THIS FLOW HAS NO BYTES FOR — the key each of the fork's two
+   non-refusing completions names. The value is the CONCOLIC and not a byte it stands for, which is the same
+   write idb_key_convert_here makes for an unknown whose example answered §7.4 and is why this is a mint here
+   rather than a second shape: §2.4's value for both of these types is a primitive, so there is exactly one
+   kind of record and only the route to it differs. */
+JSValue idb_key_new_unknown(JSContext *ctx, IdbKeyUnknownArm arm, JSValueConst value)
+{
+    DCHECK(arm == IDB_KEY_UNKNOWN_NUMBER || arm == IDB_KEY_UNKNOWN_STRING,
+           "§7.4's fork asked for the key of a completion that names none — IDB_KEY_UNKNOWN_INVALID is the "
+           "refusal arm and mints nothing, and an arm outside the declared set is a world this machine never "
+           "numbered");
+    DCHECK(concolic_is(value),
+           "§7.4's fork minted a key over a value that is NOT unknown external input — a value this flow has "
+           "bytes for takes idb_key_concrete_arm, which decides its type by asking what it IS, so a known "
+           "value reaching here means the fork was asked about something it already knew");
+    return idb_key_new(ctx, arm == IDB_KEY_UNKNOWN_NUMBER ? IDB_RANK_NUMBER : IDB_RANK_STRING,
+                       JS_DupValue(ctx, value));
 }
 
 bool idb_key_is_number(JSContext *ctx, JSValueConst key, double *pvalue)
@@ -288,7 +335,8 @@ static IdbKeyResult idb_key_concrete_arm(JSContext *ctx, JSValueConst input, JSV
  * THE UNWRAP IS A LOOP AND NOT A RECURSIVE CALL. It was a call into the entry below, which is a C cycle, and
  * engine/check_recursion.mjs counts those over the whole program; asking the same question of the example in a
  * loop says the same thing with no frame. */
-IdbKeyResult idb_key_convert_here(JSContext *ctx, JSValueConst input, JSValue *pkey, JSValue *parray)
+IdbKeyResult idb_key_convert_here(JSContext *ctx, JSValueConst input, JSValue *pkey, JSValue *parray,
+                                  JSValue *punknown)
 {
     JSValueConst v = input;
     JSValue held = JS_UNDEFINED;      /* the example standing in for a concolic (owned) */
@@ -296,6 +344,7 @@ IdbKeyResult idb_key_convert_here(JSContext *ctx, JSValueConst input, JSValue *p
 
     *pkey = JS_UNDEFINED;
     *parray = JS_UNDEFINED;
+    *punknown = JS_UNDEFINED;
 
     /* THE CONCOLIC ARM COMES FIRST because a concolic is an OBJECT: every test in the arm above would answer
        "no" for one and it would fall out of the bottom as "invalid type". */
@@ -317,22 +366,26 @@ IdbKeyResult idb_key_convert_here(JSContext *ctx, JSValueConst input, JSValue *p
 
         if (JS_IsUndefined(ex) && st != CONCOLIC_EX_DETERMINED) {
             JS_FreeValue(ctx, ex);
+            /* AND THE TWO REMAINING STATES ARE ONE HAND-BACK, WHICH IS WHAT `st` IS STILL READ FOR AND WHAT IT
+               IS NO LONGER READ FOR. It still separates a DETERMINED `undefined` — a DECIDED §7.4 answer, not
+               an absence — from a value with no bytes, which is the whole reason this predicate is a state
+               read and not a shape test. What it does NOT separate any more is NONE from CONTRADICTED: the
+               crash this replaces claimed a CONTRADICTED one arrives with "the fork's arms narrowed by the
+               exclusion, interval or predicate that gate recorded", and the narrowing a gate records is about
+               the value's CONTENT while §7.4 asks about its TYPE — `x !== 'admin'` excludes a string, not
+               the string type, and `x > 5` is a relational operator that coerces and therefore proves nothing
+               about what the value IS. Both states reach the same three completions and both state
+               JS_OUTCOME_REAL_UNSTATED, because a CONTRADICTED example is bytes this path holds POSITIVE
+               evidence against: offering its type as the arm a real session reaches would mark as forced the
+               one world the run has already disproved.
+               THE OPERAND IS HANDED BACK AND NEVER RE-DERIVED. `v` is `input` on the first turn of this loop
+               and an example this function uncovered on any later one, and the constraint key is keyed on the
+               VALUE — so filing the fork under `input`'s identity where the loop unwrapped would ask a
+               different question than the one that has no answer. It is DUP'd before `held` is freed because
+               the two can be the same reference. */
+            *punknown = JS_DupValue(ctx, v);
             JS_FreeValue(ctx, held);
-            /* AND THE TWO REMAINING STATES ARE STILL ONE ABORT, BECAUSE THE FORK IS STILL OWED FOR BOTH — but
-               the message NAMES which one was met, so the next diff is sent at the state it actually has to
-               build for rather than at a guess. A concolic with NO example is a value whose §7.4 answer is not
-               decidable at all — a key on one arm and a "DataError" on the other — so the step must FORK and
-               explore both. A CONTRADICTED one is the same undecided answer with a constraint already in hand:
-               the gate that disproved the example recorded an exclusion, an interval or a predicate under the
-               value's hole, so the fork's arms are narrowed by facts this flow observed rather than open. */
-            DFAILF("Indexed Database §7.4 Convert a value to a key reached a concolic this flow has no key "
-                   "bytes for (%s): whether it is a valid key is undecided, so the step must FORK a key arm "
-                   "and an invalid arm rather than answer one of them",
-                   st == CONCOLIC_EX_CONTRADICTED
-                       ? "this path's own arm CONTRADICTED the example, so the fork's arms are narrowed by the "
-                         "exclusion, interval or predicate that gate recorded"
-                       : "no example was ever computed, so neither arm is narrowed by anything");
-            return IDB_KEY_INVALID_TYPE;
+            return IDB_KEY_UNKNOWN;
         }
         JS_FreeValue(ctx, held);
         held = ex;
@@ -351,9 +404,26 @@ IdbKeyResult idb_key_convert_here(JSContext *ctx, JSValueConst input, JSValue *p
 
 IdbKeyResult idb_key_convert(JSContext *ctx, JSValueConst input, JSValue *pkey)
 {
-    JSValue arr = JS_UNDEFINED;
-    IdbKeyResult r = idb_key_convert_here(ctx, input, pkey, &arr);
+    JSValue arr = JS_UNDEFINED, unk = JS_UNDEFINED;
+    IdbKeyResult r = idb_key_convert_here(ctx, input, pkey, &arr, &unk);
 
+    if (r == IDB_KEY_UNKNOWN) {
+        JS_FreeValue(ctx, unk);
+        JS_FreeValue(ctx, arr);
+        /* THE SAME SENTENCE AS THE ARRAY ARM BELOW AND FOR THE SAME REASON, over a different missing thing:
+           an arm whose answer is UNDECIDED is a FORK, a fork needs a flow to snapshot, and this entry has
+           none. There is no second implementation of the fork for it to fall back to — it is a caller with
+           no flow base, named. */
+        DFAIL("Indexed Database §7.4's answer for a value this flow has no key bytes for is UNDECIDED and "
+              "therefore a FORK, and idb_key_convert's C entry has no flow under it to snapshot a sibling at. "
+              "Every member of §4 drives the walk in core/indexeddb/idb_key_array.h instead, which declares "
+              "the algorithm's stage block with IDB_KEY_ARRAY_ALGO_STAGES and asks the fork at its own stage; "
+              "what stands here is a caller with no flow base at all — an in-C fixture, and §7.1's "
+              "extract-a-key through idb_key_path_extract, whose own route to a flow is "
+              "idb_key_path_walk_start");
+        return IDB_KEY_INVALID_TYPE;
+    }
+    JS_FreeValue(ctx, unk);
     if (r != IDB_KEY_ARRAY)
         return r;
     JS_FreeValue(ctx, arr);
