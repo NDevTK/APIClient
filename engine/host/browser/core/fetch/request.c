@@ -16,9 +16,15 @@
  * has a fresh never-aborting signal rather than null, and one built with a signal has a NEW signal that aborts when
  * that one does. §5.4 states the invariant in the getter's own prose ("this's signal is always initialized in the
  * constructor and when cloning"), which is why the getter asserts it instead of admitting an absence. The dependency
- * is core/dom/abort.h's `abort_signal_dependent_new`, which is DOM §3.2 Interface AbortSignal's one algorithm — an
- * imitation that added an abort ALGORITHM to the source would abort one turn late and the page can see the
- * difference.
+ * is core/dom/abort.h's ONE implementation of DOM §3.2 Interface AbortSignal's algorithm — an imitation that added
+ * an abort ALGORITHM to the source would abort one turn late and the page can see the difference.
+ *
+ * ITS TWO MINTS REACH THAT ONE ALGORITHM THROUGH DIFFERENT ENTRIES, AND THE DIFFERENCE IS WHETHER THE MINT HOLDS A
+ * RESUME POINT. §3.2 step 2 asks each source signal's `aborted`, which a page's `AbortSignal.timeout()` leaves
+ * UNKNOWN, so the ask FORKS — and the constructor is a step machine and asks through `abort_signal_dependent_step`,
+ * which can return the fork code, while `clone()` is a plain C function and asks through `abort_signal_dependent_new`,
+ * which cannot. That asymmetry is not a style choice and is not finished; see js_request_clone's own residual for
+ * what the next diff builds and how the gap shows.
  *
  * WHAT IS HONESTLY ABSENT: `body` as a ReadableStream, and `formData()`/`blob()`. Each is absent rather than
  * answered wrongly. */
@@ -384,9 +390,27 @@ static JSValue js_request_clone(JSContext *ctx, JSValueConst this_val, int argc,
     }
     c->headers = headers_new(ctx, headers_list_of(d->headers), headers_guard_of(d->headers));
     if (JS_IsException(c->headers)) { c->headers = JS_UNDEFINED; JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
-    /* §5.4 clone(): "assert: this's signal is non-null", then "let clonedSignal be the result of creating a
-       dependent abort signal from « this's signal »". The clone does NOT share the signal object — aborting
-       the original's signal aborts the clone's through the dependency, and the two are still `!==`. */
+    /* §5.4 clone() steps 3 and 4: "Assert: this's signal is non-null", then "Let clonedSignal be the result of
+       creating a dependent abort signal from « this's signal », using AbortSignal and this's relevant realm".
+       The clone does NOT share the signal object — aborting the original's signal aborts the clone's through
+       the dependency, and the two are still `!==`.
+       NAMED RESIDUAL — THE NON-PARKING ENTRY, WHICH THIS METHOD CANNOT YET LEAVE. The constructor's mint asks
+       the same algorithm through `abort_signal_dependent_step` because `js_request_ctor_decl` declares it a
+       step machine; this body is a plain `JS_CFUNC_DEF` and holds no `JSStepHdr`, so there is nowhere for the
+       sibling of DOM §3.2 step 2's fork to resume and no slot on any state to hold that step's three operands.
+       WHAT IS NOT COVERED: a clone of a Request whose signal has an UNKNOWN `aborted` flag — the ordinary
+       `const r = new Request(u, {signal: AbortSignal.timeout(n)}); r.clone()`. Every other clone is covered:
+       step 2's ask over a signal whose flag is CONCRETE never reaches the solver at all.
+       WHAT THE NEXT DIFF BUILDS: this method declared a step machine (JS_CFUNC_STEP_DEF) with `signals`,
+       `result`, `held` and `at` on its own state and its `visit` naming the three that are values, after which
+       the ask routes to `abort_signal_dependent_step` exactly as the constructor's does. It is NOT the same
+       subproblem as the constructor's was and must not be landed as one: the constructor already held the
+       resume point and needed only the routing, and this needs the machine FIRST — core/dom/abort.c's residual
+       at `dependent_signal_new_at` is where that split is stated.
+       HOW ITS ABSENCE WOULD SHOW: solver/engine.c's `engine_prepare_fork` abort naming THIS file and the line
+       of the `abort_signal_dependent_new` call below as its ask site, with its question reading as a
+       derivation of an `AbortSignal.timeout()` flag. It cannot be confused with the constructor's, which
+       reaches the parking arm and therefore cannot reach that seam. */
     DCHECK(abort_signal_is(ctx, d->signal),
            "a Request being cloned carried no AbortSignal — §5.4's clone steps assert this's signal is "
            "non-null, and every path that mints a Request builds one");
@@ -408,9 +432,13 @@ static JSValue js_request_clone(JSContext *ctx, JSValueConst this_val, int argc,
    something", which is neither a resume point a later build can resolve nor a thing a park can report. */
 #define REQ_CTOR_STAGES(X) \
     X(REQ_CTOR_RECORD = IDL_STEP_FIRST, \
-      "Fetch §5.4 new Request(input, init) steps 5-30 (the request record: step 12's carry-forward of a " \
+      "Fetch §5.4 new Request(input, init) steps 5-29 (the request record: step 12's carry-forward of a " \
       "Request input's URL, method, header list, mode, credentials mode, cache mode, redirect mode, " \
-      "integrity and keepalive, then every init member that overrides one)") \
+      "integrity and keepalive, then every init member that overrides one, and step 29's « signal » list)") \
+    X(REQ_CTOR_SIGNAL, \
+      "Fetch §5.4 new Request(input, init) step 30 (set this's signal to the result of creating a dependent " \
+      "abort signal from signals — DOM §3.2 Interface AbortSignal step 2 asks each source's `aborted`, which " \
+      "is the flag a page's AbortSignal.timeout() leaves unknown, so this is a rest point)") \
     X(REQ_CTOR_HEADERS, \
       "Fetch §5.4 new Request(input, init) steps 31-33 (step 32's CORS-safelisted-method test under a " \
       "\"no-cors\" mode, then this's headers under the guard that step chose)") \
@@ -426,6 +454,16 @@ typedef struct {
        inline struct could not be declared through it. headers.h's header_list_step_ops is the pair. */
     HeaderList *list;
     JSValue     result;
+    /* §5.4 STEP 29'S « signal » LIST AND STEP 30'S THREE SLOTS, which are this machine's because the driver
+       clones THIS state at step 2's ask — see core/dom/abort.h at abort_signal_dependent_step. `sig_result` is
+       step 1's signal, minted once and held across every park; `sig_flag` is the branch seam's borrowed
+       `aborted` flag; `sig_at` is the element the outstanding ask is about, and a restart at element 0 would be
+       asked about element 0's flag while the seam held element `sig_at`'s. A plain integer is byte-copied by
+       the clone, which is why only the first two of the three are visited. */
+    JSValue     signals;
+    JSValue     sig_result;
+    JSValue     sig_flag;
+    uint32_t    sig_at;
 } JSRequestCtorState;
 
 static void js_request_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -433,6 +471,13 @@ static void js_request_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSRequestCtorState *s = st;
     headers_fill_visit(ctx, &s->fill, v);
     v->val(ctx, &s->result);
+    /* §5.4 step 29's source list and step 30's two VALUE slots. A fork at step 2's ask gives each arm its own
+       reference to the list and to the signal being built, which is what makes the two arms' writes to that
+       signal — the aborted arm's reason, the other arm's `dependent` — invisible to each other. `sig_at` is an
+       integer and must NOT be named here. */
+    v->val(ctx, &s->signals);
+    v->val(ctx, &s->sig_result);
+    v->val(ctx, &s->sig_flag);
     /* STEP 33'S LIST. This is the line that deleted this machine's ONE fork refusal and its `release` with it:
        the operation's clone gives the sibling its own list and its destroy frees it, so a teardown beside the
        declaration has nothing left to do. No cursor stands inside it — the fill takes the list as an argument
@@ -1126,28 +1171,53 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         if (request_init_apply(ctx, init, from ? &from->rec : NULL, &d->rec) < 0)
             return -1;
         CHECK(d->url != NULL, "request: OOM building a Request's URL");
-        /* §5.4 steps 4 / 6.3 / 26 and then "let signals be « signal » if signal is non-null; otherwise « »"
-           and "set this's signal to the result of creating a dependent abort signal from signals". The two
-           sources are the Request `input` (a `new Request(other)` inherits other's signal) and init["signal"],
-           and init WINS because step 26 runs after step 6.3. It is built HERE — after every step of this stage
-           that can throw and before the header fill, which is where §5.4 puts it — so a construction that
-           refuses has registered no dependency on a signal the page still holds. */
+        /* §5.4 steps 4 / 6.3 / 26 and then step 29, "Let signals be « signal » if signal is non-null;
+           otherwise « »". The two sources are the Request `input` (a `new Request(other)` inherits other's
+           signal) and init["signal"], and init WINS because step 26 runs after step 6.3. The LIST is composed
+           HERE — after every step of this stage that can throw — and step 30's ask is REQ_CTOR_SIGNAL's,
+           because that ask can fork and this stage cannot be re-entered.
+           AND THAT IS WHY THE THREE SLOTS ARE INITIALISED HERE RATHER THAN GUARDED ON `step_fork_pending`:
+           core/dom/abort.h asks for all three to be set once before the first ask, and names the exit it
+           accepts instead: "a machine whose init is in a stage its asking stage cannot re-enter has a stronger
+           guard" already, and states that fact instead. This is that stage. REQ_CTOR_RECORD never
+           returns a park code, so the only way to re-enter this machine at all is step 30's fork or the header
+           fill's delivery, and both carry a `stage` that skips this block. An init placed at the ask instead
+           would OVERWRITE the reference the seam is holding in `sig_flag` across the park, which is the leak
+           core/dom/abort.h records its first consumer having landed with. */
         {
-            JSValueConst sources[1];
-            int n = 0;
             JSValue given = idl_dict_get(ctx, init, "signal");
+            JSValueConst src = JS_UNDEFINED;
+            int n = 0;
 
-            if (abort_signal_is(ctx, given))
-                sources[n++] = given;
-            else if (from) {
+            if (abort_signal_is(ctx, given)) {
+                src = given;
+                n = 1;
+            } else if (from) {
                 DCHECK(abort_signal_is(ctx, from->signal),
                        "a Request used as `input` carried no AbortSignal — §5.4 gives every Request one, so a "
                        "source without one was built by a path that skipped the dependent signal");
-                sources[n++] = from->signal;
+                src = from->signal;
+                n = 1;
             }
-            d->signal = abort_signal_dependent_new(ctx, sources, n);
+            /* §5.4 step 29's LIST AS A JS ARRAY, which is what core/dom/abort.h's parking entry takes and the
+               form a parked flow's snapshot carries and its COW delta captures. An empty one is the ordinary
+               `new Request(u)`: DOM §3.2 step 2's loop then runs zero times, asks the solver nothing and
+               cannot park, so the common construction is unchanged by this routing. */
+            s->signals = JS_NewArray(ctx);
+            CHECK(!JS_IsException(s->signals), "request: OOM building §5.4 step 29's signal list");
+            if (n) {
+                /* THE SET IS CHECKED AND NOT IGNORED, because a DROPPED SOURCE IS A WRONG ANSWER AND NOT A
+                   MISSING ONE: step 30 over an empty list builds a signal that never aborts, so a page that
+                   passed `{signal: c.signal}` would hold a Request `c.abort()` can no longer reach, and
+                   nothing downstream would say so. It is a CHECK for the reason `d->url`'s is one — the only
+                   way a set on a freshly-minted engine-owned array fails is allocation. */
+                int set = JS_SetPropertyUint32(ctx, s->signals, 0, JS_DupValue(ctx, src));
+                CHECK(set >= 0, "request: OOM placing §5.4 step 29's lone signal on its list");
+            }
             JS_FreeValue(ctx, given);
-            if (JS_IsException(d->signal)) { d->signal = JS_UNDEFINED; return -1; }
+            s->sig_result = JS_UNINITIALIZED;
+            s->sig_flag   = JS_UNINITIALIZED;
+            s->sig_at     = 0;
         }
         /* §5.4 step 12's HEADER LIST: "A copy of request's header list" — the input Request's, which this
            constructor took none of. Step 33 then re-appends every entry UNDER THE NEW REQUEST'S GUARD when
@@ -1172,11 +1242,76 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
                     return -1;
         }
         headers_fill_init(&s->fill);
-        hdr->stage = REQ_CTOR_HEADERS;
+        hdr->stage = REQ_CTOR_SIGNAL;
     }
 
     d = request_of(s->result);
     DCHECK(d != NULL, "the Request the constructor allocated stopped being one mid-construction");
+
+    if (hdr->stage == REQ_CTOR_SIGNAL) {
+        /* §5.4 STEP 30: "Set this's signal to the result of creating a dependent abort signal from signals,
+           using AbortSignal and this's relevant realm" — THROUGH THE PARKING FORM, because DOM §3.2 Interface
+           AbortSignal's step 2 is "For each signal of signals: if signal is aborted, then set resultSignal's
+           abort reason to signal's abort reason and return resultSignal", and a page's `aborted` is routinely
+           UNKNOWN EXTERNAL INPUT. `new Request(u, {signal: AbortSignal.timeout(n)})` is the spelling that puts
+           one there, and the non-parking `abort_signal_dependent_new` returns a JSValue and therefore cannot
+           say "I forked": it reached solver/engine.c's seam from inside this C activation with nowhere for the
+           sibling to resume and ABORTED, naming this constructor as its ask site. Nothing in the fork
+           machinery had to be built — `js_request_ctor_decl` has declared this body a step machine since it
+           was written, so the driver already holds the resume point it clones at, and the whole repair is that
+           the ask can return the fork code. That is the THIRD time this abort's remedy clause has read
+           "declare that builtin a step machine" at a site that already was one; solver/engine.c carries why
+           the clause is read second.
+           WHY THIS IS A STAGE OF ITS OWN AND NOT A GUARDED ASK INSIDE REQ_CTOR_RECORD: a fork re-enters the
+           asking stage AT ITS TOP, and REQ_CTOR_RECORD's top MINTS THE REQUEST and fills its record — a
+           re-entry there would allocate a second Request, overwrite `s->result` with it and leak the first,
+           and `request_init_apply` would overwrite every JSValue of a record it had already filled. The
+           stage boundary is where this machine can rest, and step 30's ask is a rest point this machine did
+           not have. */
+        /* NOTHING IS DELIVERED INTO THIS STAGE, WHICH IS WHY NOTHING FREES `cb_result` ON THIS PATH. Only two
+           entries reach here — the fall-through from REQ_CTOR_RECORD, which is a first call, and step 2's fork,
+           whose two entries quickjs re-enters with JS_UNDEFINED rather than with the same delivery (quickjs.c
+           states it at `step_fork_pending`). A real value arriving here would be a reference this stage drops
+           on the floor, so the fact is asserted rather than papered over with a free that would ALSO drop it —
+           and the header fill below is reached with `cb_result` intact, as it was before this stage existed. */
+        DCHECK(JS_IsUndefined(cb_result),
+               "§5.4 step 30's stage was entered carrying a delivery — this stage asks only the branch seam, "
+               "whose fork entries arrive with JS_UNDEFINED, so a value here is one nothing in this machine "
+               "will release");
+        /* THE SEAM'S BORROW AND THIS MACHINE'S OUTSTANDING FORK AGREE, asserted at the one point they can
+           disagree — the same one fact core/fetch/fetch.c's §5.6 step 4 and core/dom/abort.c's
+           `AbortSignal.any` state, and the only thing about this slot a reader can check. A held slot with no
+           fork outstanding is a reference nothing will free; an empty one with a fork outstanding is the
+           operand the resuming arm was about to be asked about. */
+        DCHECK(step_fork_pending(hdr) ? !JS_IsUninitialized(s->sig_flag)
+                                      : JS_IsUninitialized(s->sig_flag),
+               "the Request constructor reached §5.4 step 30's ask with the seam's borrow and this machine's "
+               "outstanding fork disagreeing — abort_signal_dependent_step fills `sig_flag` at the ask, HOLDS "
+               "it across JS_STEP_FORK because the sibling resumes AT the ask, and clears it when the ask "
+               "answers");
+        r = abort_signal_dependent_step(ctx, hdr, s->signals, &s->sig_result, &s->sig_flag, &s->sig_at);
+        if (r)
+            return r;   /* PARKED. Nothing is outstanding to discharge: the assert on `cb_result` is what says
+                           this stage holds no delivery it would have to release first. */
+        DCHECK(!JS_IsUninitialized(s->sig_result),
+               "§5.4 step 30's create-a-dependent-abort-signal answered without minting DOM §3.2 step 1's "
+               "signal — it answers 0 only with the algorithm complete, and step 1 is its first statement");
+        /* THE ANSWER MOVES OUT OF THE SLOT, AND THE FIELD IS RELEASED BEFORE IT IS WRITTEN. Two different
+           facts, and the second is the one that is not obvious. The MOVE is because the slot OWNS the signal
+           across every park, so leaving a second name for it would have core/idl_args.c's one teardown free a
+           signal the Request is still holding. The RELEASE is because BOTH ARMS OF STEP 2'S FORK REACH THIS
+           LINE OVER ONE `RequestData`: this component does not `cow_capture_host_record` its record, and the
+           Request is created by the running flow — so it is flow-local at the fork and the clone's `visit`
+           re-takes `s->result` rather than giving the sibling its own, which is exactly why the REQ_CTOR_HEADERS
+           stage frees `d->headers` before it assigns it. Without the free the second arm to run would own two
+           references in one field and leak one. The signal OBJECT being shared is the design and not the
+           hazard: core/dom/abort.c mints it before the fork precisely so each arm's write to it — the aborted
+           arm's reason, the other's `dependent` — is an own-property write the per-flow COW delta captures. */
+        JS_FreeValue(ctx, d->signal);
+        d->signal = s->sig_result;
+        s->sig_result = JS_UNINITIALIZED;
+        hdr->stage = REQ_CTOR_HEADERS;
+    }
 
     if (hdr->stage == REQ_CTOR_HEADERS) {
         /* §5.4's headers: guard "request", or "request-no-cors" when the mode says so — which is the ONLY way

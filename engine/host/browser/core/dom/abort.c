@@ -743,10 +743,26 @@ int abort_signal_dependent_step(JSContext *ctx, JSStepHdr *h, JSValueConst signa
      git grep -cE 'abort_signal_dependent_new(_at)?[[:space:]]*\(ctx' -- '*.c'
    SPELLED AS THE CONSTRUCT AND UNABLE TO MATCH ITS OWN LINE, for the two reasons the pair's derivation above
    states; it counts this file's own definitions out because theirs spell `JSContext *ctx`.
-   WHAT THE NEXT DIFF BUILDS: each such caller routed to `abort_signal_dependent_step` with the three slots on
-   its OWN state — and the ordered subproblem is not uniform across them, because a caller that holds no header
-   AT ALL needs one first. §11's promise-returning operators and §5.4's request constructor are two different
-   answers to that, and a diff that treats them as one would add a call where there is no header to pass.
+   WHAT THE NEXT DIFF BUILDS — AND ITS HALF NAMING §5.4'S REQUEST CONSTRUCTOR IS MET AND IS KEPT IN ITS OWN
+   WORDS BELOW, BECAUSE A READER WHO RE-DERIVES THE SPLIT FROM `a caller has no header` WILL WRITE THE SAME PAIR
+   AGAIN. It read: each such caller routed to `abort_signal_dependent_step` with the three slots on its OWN
+   state — and the ordered subproblem is not uniform across them, because a caller that holds no header AT ALL
+   needs one first; §11's promise-returning operators and §5.4's request constructor are two different answers
+   to that, and a diff that treats them as one would add a call where there is no header to pass.
+   THE ROUTING IS RIGHT AND THE PAIR NAMED THE WRONG TWO SITES, WHICH IS WHY THE SHAPE IS WORTH KEEPING AND THE
+   EXAMPLES ARE NOT. §5.4's CONSTRUCTOR held a header all along — `js_request_ctor_decl` has declared that body a
+   machine since it was written — so it was the ROUTING kind and not the needs-a-machine kind, and it is now
+   routed with its three slots on `JSRequestCtorState` and a stage of its own for the ask. §11's operators hold
+   one too: `JSObsState`'s FIRST field is a `JSStepHdr`. So the split the clause describes is real and neither of
+   its examples was on the far side of it. The caller in this tree that genuinely holds NO header is
+   core/fetch/request.c's `js_request_clone`, a plain `JS_CFUNC_DEF`, and its own site carries the three-clause
+   residual for it. WHETHER THE PAIR WAS WRONG AT BIRTH IS NOT ESTABLISHABLE FROM THIS CHECKOUT — this
+   repository answers `git rev-parse --is-shallow-repository` with true, so a pickaxe here returns the graft
+   commit and not an origin, and the honest finding is that the clause disagrees with the tree TODAY.
+   WHAT IS OUTSTANDING IS THEREFORE TWO DIFFERENT DIFFS AND THE ORDER IS THE CLAUSE'S OWN: `js_request_clone`
+   needs the MACHINE first and the routing second, and §11's two sites need only the routing — with their slots
+   on `JSObsState` rather than on the per-subscription record, because the record is a JS object the COW delta
+   captures and step 2's cursor is a plain integer a deep fork's byte-copy carries.
    HOW ITS ABSENCE WOULD SHOW: solver/engine.c's `engine_prepare_fork` abort naming a caller of this entry as its
    ask site, with its question reading as a derivation of an `AbortSignal.timeout()` flag. That is the one
    observation that cannot be confused with the converted path's, because the parking arm cannot reach that seam.
