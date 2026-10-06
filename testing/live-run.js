@@ -893,8 +893,29 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      a subset count.
      `classicCompiles`/`classicCompileOverruns` SPLIT A START'S COMPILE FROM ITS EXECUTION and landed later
      than the rest; an artifact older than them prints `-`, which is this driver's absent-versus-zero rule and
-     is the honest answer — the run did not state them. As of this commit NO measurement artifact in this tree
-     carries either one, so the phase question they exist to settle has never been measured on either host.
+     is the honest answer — the run did not state them.
+     THIS SENTENCE SAID `As of this commit NO measurement artifact in this tree carries either one, so the
+     phase question they exist to settle has never been measured on either host`, AND IT IS KEPT IN ITS OWN
+     WORDS BECAUSE THE ABSENCE IS WHAT A READER RE-DERIVES FROM THE `landed later than the rest` CLAUSE ABOVE
+     IT. It was true when written and is now false: four fresh-browser drives of two real apps carry both rows
+     (`classicCompiles` 5 and 2, `classicCompileOverruns` 0, 0, 0 and 1). It rotted in the one direction this
+     project rates worst for an absence — the only reader of `never measured` is somebody deciding whether to
+     go and measure it, so a stale one argues for a drive that has already happened.
+     AND THE ROW IS NOT ABOUT `THE COMPILE`, WHICH IS THE READING ITS ZERO INVITES AND THE ONE THAT COST A
+     COORDINATOR AN OVER-CLAIM. Its bracket covers the CLASSIC arm only — the engine's own compile bracket says
+     so in as many words, that only the classic arm is bracketed because the module arm compiles AND evaluates
+     in one call and a bracket round it would time a parse and an execution together. So a zero here says NO
+     CLASSIC PARSE OVERRAN and says NOTHING WHATEVER about a module parse, and the two are not alike: the
+     module path compiles through plain `JS_Eval`, which leaves the engine's parse-carrier slot NULL, which
+     makes `pd_can_yield` FALSE for the WHOLE module parse — so a module compile has no suspend seam at all and
+     is STRUCTURALLY OUTSIDE this row.
+     MEASURED, and the two readings disagree on one drive: on app.gitpod.io `classicCompileOverruns` read 0
+     while `stepUnitOverrunSeamlessArms` read `evaluate-a-module-program: 4` — FOUR overrunning turns that
+     offered NOT ONE suspend point, in a parse this row cannot see, on the same census line that exonerates
+     the classic one. A reader who takes the zero for `the parse is not where the time went` has read a
+     correct row and drawn a conclusion about a population it excludes by construction.
+     RETIREMENT: this record goes when a module parse that handed the thread back is counted by a row of its
+     own, because the zero is then about a population with no sibling hiding behind it.
      `rootPrograms`/`deepest`/`completed`/`deepestLeft` ARE THIS FILE'S OWN NAMED NEXT DIFF, taken now: the
      banner above says in as many words that without `rootPrograms` "`deepest` names a distance with no length
      beside it, and the same absence produced a landed analysis that read `progStarts` as a script count and
