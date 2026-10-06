@@ -2522,7 +2522,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    The only other frontier size on a driver's list is the WFQ walk's, taken at whichever entry that driver's
    own index names, so a consumer that carries the total and not `live` performs the two-moments subtraction
    instead of the one this composer already makes available.
-   @kind lifetime: stepUnitRuns stepUnitOverruns stepUnitOverrunSeamlessArms
+   @kind lifetime: stepUnitRuns stepUnitOverruns stepUnitOverrunSeamlessArms stepUnitOverrunAskArms
    @kind lifetime: hostAsked hostAnswered replyAsked replyAnswered replyDeclined replyDropped
    @kind lifetime: replayHits replayLeft replayLeftArms
    @kind lifetime: branchAsked branchRefined
@@ -2623,6 +2623,12 @@ char *result_cold_json(void) {
        seamless SCALAR cannot be joined — see solver/engine.h's `over_seamless_arms` for the two opposite diffs
        that join decides between. */
     char seam[STEP_UNITS_JSON_MAX];
+    /* AND THE SIXTH, WHICH IS THE COMPLEMENT OF THE FIFTH RATHER THAN A FURTHER RESTRICTION OF IT: of the
+       overrunning turns that DID offer a point, how many points each arm's offered between them. Same
+       derivation and same width. It is a row because `slice_overrun_asks` is a SUM over every such turn and
+       every arm at once — see solver/engine.h's `over_ask_arms` for why one quotient over that sum is a mean
+       across arms whose densities differ by an order of magnitude. */
+    char oask[STEP_UNITS_JSON_MAX];
     /* AND THE TWO HISTOGRAMS ON THE HEAP, FOR THE ONE REASON THE FIXED ONES ABOVE ARE ON THE STACK: their
        extents are the FRONTIER's and not a list's, so there is no width to derive. See cursor_hist_json,
        which composes both and is handed each one's NAME because its asserts have to say which. */
@@ -2717,6 +2723,8 @@ char *result_cold_json(void) {
         long overran  = cold_hist_json(over, sizeof over, r.over_arms, "stepUnitOverruns");
         long seamless = cold_hist_json(seam, sizeof seam, r.over_seamless_arms,
                                        "stepUnitOverrunSeamlessArms");
+        long askarms = cold_hist_json(oask, sizeof oask, r.over_ask_arms,
+                                      "stepUnitOverrunAskArms");
         long atcursor = 0;
         long atahead = 0;
         int k;
@@ -2761,6 +2769,20 @@ char *result_cold_json(void) {
                "scalar are raised one statement apart from one turn's arm and one turn's consultation delta, "
                "so a total that is not `sliceOverrunSeamless` means a row was lost crossing into this "
                "document, and the loss reads as an arm that DID offer suspend points");
+        /* AND THE COMPLEMENT'S OWN IDENTITY, OVER THE SAME CROSSING AND WITH THE OPPOSITE MISREADING. The
+           arm row and its scalar are raised in the same `else` from one turn's arm and one turn's
+           consultation delta, so a total that is not `sliceOverrunAsks` means a row was lost crossing into
+           this document — and a row lost HERE reads as an arm whose overrunning turns offered FEWER points
+           than they did, which is the direction that makes a long un-polled gap look like a short one and
+           sends a reader to quantum.h's transport instead of to the page's own stretch. The cast is the
+           narrowing solver/engine.h's `over_ask_arms` states and argues for: the scalar sums every arm and
+           stays 64-bit, the row goes through this file's ONE step-unit composer and is therefore a `long`. */
+        DCHECK((uint64_t)askarms == r.slice_overrun_asks,
+               "the per-arm ask histogram does not account for every suspend point an overrunning turn "
+               "offered — the arm and the scalar are raised one statement apart in the same branch from one "
+               "turn's arm and one turn's consultation delta, so a total that is not `sliceOverrunAsks` means "
+               "a row was lost crossing into this document, and the loss reads as turns that offered fewer "
+               "points than they did");
         /* AND THE CURSOR HISTOGRAM'S PARTITION, WHICH IS `standing`'s IDENTITY OVER A DIFFERENT QUESTION. Every
            live member stands at exactly one program cursor, so these counts sum to the frontier too — and the
            consequence of an inequality here is sharper than for the arm histogram, because this row exists
@@ -3397,6 +3419,17 @@ char *result_cold_json(void) {
                     this against those overruns says whether the thread was inside C that declares no step
                     boundary. See solver/engine.h's `over_seamless_arms`. */
                  "\"stepUnitOverrunSeamlessArms\":%s,"
+                 /* AND HOW MANY POINTS THE OTHER TURNS OF EACH ARM OFFERED, WHICH IS THE COMPLEMENT OF THE
+                    ROW ABOVE AND NOT A FURTHER RESTRICTION OF IT. The scalar beside them is a SUM over every
+                    arm's non-seamless turns, so `sliceOverrunAsks / sliceOverruns` is a density averaged
+                    across arms that answer differently — measured over seven real-site drives of two
+                    documents, `deliver-one-reply` overran 4.6-11.3% of its own 401-622 runs while
+                    `evaluate-a-module-program` and `microtask-checkpoint` overran 100% of their 3-6.
+                    ITS DENOMINATOR IS THIS ARM'S OVERRUNS MINUS THIS ARM'S SEAMLESS TURNS AND NEVER ITS
+                    OVERRUNS, because a seamless turn contributes ZERO here by construction: dividing by every
+                    overrunning turn of the arm understates the density of the ones that actually asked. See
+                    solver/engine.h's `over_ask_arms`. */
+                 "\"stepUnitOverrunAskArms\":%s,"
                  /* AND WHETHER THE PAGE'S OWN CODE WAS RUNNING IN THOSE TURNS AT ALL, which the arm row
                     above cannot say and which its reading rests on. An arm is where a step ENDED, and
                     `resume-program` and `start-a-classic-program` both end inside the same call whether the
@@ -3821,6 +3854,7 @@ char *result_cold_json(void) {
                  (long long)r.loop_us, (long long)r.between_slices_us, r.slices,
                  (long long)r.slice_us, (long long)r.sched_us, (long long)r.slice_overruns, runs, over,
                  seam,
+                 oask,
                  (unsigned long long)r.slice_overrun_asks, r.slice_overrun_seamless,
                  r.classic_compiles, r.classic_compile_overruns,
                  r.classic_compile_again, (long long)r.classic_compile_again_bytes,

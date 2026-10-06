@@ -2084,6 +2084,52 @@ typedef struct {
      * the condition its own scalar carries, because the existing reader then names the same population per arm
      * and this is a second copy of it. */
     long     over_seamless_arms[STEP_UNIT_N];
+    /* …AND HOW MANY POINTS THE NON-SEAMLESS TURNS OF EACH ARM OFFERED, WHICH IS THE ONE QUANTITY
+     * `slice_overrun_asks` DESTROYS BY BEING A SUM. The scalar is a total over every overrunning turn that
+     * offered at least one point, so a turn that asked TWICE and a turn that asked TWO THOUSAND TIMES are one
+     * figure, and `asks / overruns` over the whole population averages across arms whose rates differ by an
+     * order of magnitude. Those two per-turn densities are the two readings §`slice_overrun_asks` leaves open
+     * and cannot separate: a turn that offered a handful of points and then ran for seconds is a long gap
+     * between consultations — the population solver/quantum.h names as closed by a step-machine conversion and
+     * by nothing in that file — while a turn that offered thousands and ran anyway is the page choosing a
+     * stretch no ordering reaches, which §NO BOUNDS forbids capping. PER ARM is what makes the question
+     * answerable at all, because the arms do not share a density: measured over seven real-site drives of two
+     * documents, `deliver-one-reply` overran 4.6-11.3% of its own 401-622 runs while
+     * `evaluate-a-module-program` and `microtask-checkpoint` overran 100% of their 3-6, so one ratio over the
+     * sum is a mean across populations that answer differently.
+     * RAISED IN THE SAME BRANCH AS THE SCALAR AND FROM THE SAME DELTA, one statement apart, so
+     * `sum(over_ask_arms) == slice_overrun_asks` is exact THERE and is asserted there — the same argument
+     * `over_seamless_arms` makes, and the reason neither is asked at the accessor, where a disagreement would
+     * arrive with the turn that caused it long gone. It is the COMPLEMENT of `over_seamless_arms` by the order
+     * of two statements rather than by agreement: a turn adds to one arm's ask sum precisely when it does not
+     * add to that arm's seamless count.
+     * A SUM OF CONSULTATIONS AND NOT A COUNT OF TURNS, which is why its denominator is `over_arms` minus
+     * `over_seamless_arms` and never `over_arms` — a seamless turn contributes zero to this row by
+     * construction, so dividing by every overrunning turn of the arm understates the density of the ones that
+     * actually asked. That is the gauge-and-lifetime split arriving inside one pair, and stating it here is
+     * what stops a reader composing the wrong quotient from two rows that sit side by side.
+     * LIFETIME COUNTS, never reset, raised in EVERY build for `over_seamless_arms`' reason exactly.
+     * A `long` WHERE THE SCALAR IT PARTITIONS IS A `uint64_t`, WHICH IS A NARROWING AND IS CHECKED RATHER THAN
+     * HOPED. The width is not free to choose: solver/result.c composes every step-unit row through ONE
+     * `cold_hist_json`, whose own banner exists to stop a second speller of the row format from drifting, and
+     * that composer takes a `long` array and prints `%ld`. A `uint64_t` partition would therefore force a
+     * SECOND composer for one row — the drift this project refuses — so the row is a `long` and the add
+     * asserts its own headroom at the raise, in the form a DCHECK condition may take, exactly as the
+     * microsecond accumulators do. On the host that ships a `long` is four bytes, so the horizon is about two
+     * billion consultations IN ONE ARM across a frontier that is never reset; the scalar stays 64-bit because
+     * it sums every arm and because narrowing it would be a change to a published row rather than to a new
+     * one. The assert is what makes that sentence a checked claim instead of a remembered one.
+     * IT DECIDES NOTHING AND BOUNDS NOTHING (§NO BOUNDS): a per-arm count of suspend points offered is
+     * precisely what a "this arm is not yielding, take the thread" watchdog would be built from.
+     * HOW ITS ABSENCE SHOWS, as an observation and not an instance: a reader holding an arm at 100% of its own
+     * runs overrunning reaches for `slice_overrun_asks`, divides by `slice_overruns`, and states a per-turn
+     * density that is a mean over every other arm's turns as well — with no row in the artifact that could
+     * contradict them.
+     * RETIREMENT: this goes when a turn's own maximum inter-consultation GAP is published per arm, because the
+     * density this row gives is a proxy for that gap and the gap is what the two readings actually differ on —
+     * which is the condition `slice_overrun_asks`' own banner carries, and the gap is computed in every DEV
+     * build already and read only by a verdict conjoined with `asked == 0`. */
+    long     over_ask_arms[STEP_UNIT_N];
     /* …AND THE ONE PHASE OF A START STEP THAT `slice_overruns` AND `over_arms` CAN LOCATE TO AN ARM AND
      * NEVER TO A PHASE. (This sentence said `the two rows above` until two rows were inserted between it and
      * them — a reference by POSITION resolves to whatever now occupies that position, which is why it

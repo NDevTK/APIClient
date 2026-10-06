@@ -10963,6 +10963,20 @@ static inline long step_unit_over_seamless_total(void)
     for (i = 0; i < STEP_UNIT_N; i++) t += g_step_unit_over_seamless[i];
     return t;
 }
+/* …AND THE POINTS THE NON-SEAMLESS TURNS OF EACH ARM OFFERED — see solver/engine.h's `over_ask_arms` for what
+   the scalar it partitions destroys and why the denominator is NOT this arm's overrun count. Raised in the
+   `else` of the same branch the seamless histogram is raised in, from the same delta, one statement from its
+   own identity. */
+static long g_step_unit_over_asks[STEP_UNIT_N];
+/* ITS OWN SUM, WALKED RATHER THAN CARRIED, for `step_unit_over_seamless_total`'s reason exactly. */
+static inline long step_unit_over_asks_total(void)
+{
+    long t = 0;
+    int i;
+
+    for (i = 0; i < STEP_UNIT_N; i++) t += g_step_unit_over_asks[i];
+    return t;
+}
 /* …AND THE STEPS THEMSELVES, COUNTED WHERE THE HISTOGRAM ABOVE IS NOT, which is the whole of what makes the
    identity between the two an assertion rather than an arithmetic tautology. This is incremented where
    flow_step RESETS the name — its entry — and the histogram is incremented where the scheduler RECORDS the
@@ -14200,6 +14214,7 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     out->classic_compile_resumed     = g_classic_compile_resumed;
     for (i = 0; i < STEP_UNIT_N; i++) out->over_arms[i] = g_step_unit_over[i];
     for (i = 0; i < STEP_UNIT_N; i++) out->over_seamless_arms[i] = g_step_unit_over_seamless[i];
+    for (i = 0; i < STEP_UNIT_N; i++) out->over_ask_arms[i] = g_step_unit_over_asks[i];
     /* …AND THE ARM HISTOGRAM ITSELF, TAKEN HERE RATHER THAN AT THIS FUNCTION'S TAIL, because the compile
        pair's containment below READS one of its arms: `arms[STEP_UNIT_COMPILE_YIELDED]` is the other half
        of the compile-stint population `classic_compile_overruns` is drawn from. Taken at the tail it would
@@ -16202,6 +16217,31 @@ static int engine_sched_slice(void) {
                             g_step_unit_over[g_step_unit]);
                 } else {
                     g_over_asks += g_preempt_asked - pa_slice0;
+                    /* …AND IN WHICH ARM THOSE POINTS WERE OFFERED, WHICH THE SUM ABOVE CANNOT SAY AND WHICH
+                       IS WHERE THE TWO READINGS OF AN OVERRUNNING TURN DIFFER — see solver/engine.h's
+                       `over_ask_arms`. Same turn, same arm, same delta, one statement from the scalar, so the
+                       identity below is exact HERE and nowhere else. */
+                    /* THE HEADROOM IS ASKED BEFORE THE ADD AND NEVER AFTER, for `g_step_us`' reason: a
+                       sum of non-negative deltas only climbs, the delta's sign is asserted two statements
+                       up, so the one way this row can hand a reader something that is not a total is by
+                       OVERFLOWING — and a check written after the addition reads a value the overflow has
+                       already made undefined. This is the narrowing solver/engine.h's `over_ask_arms` states:
+                       the row is a `long` because solver/result.c has ONE step-unit composer and it prints
+                       `%ld`, so a 64-bit partition would force a second speller of that format. */
+                    DCHECK((long)(g_preempt_asked - pa_slice0) <= LONG_MAX - g_step_unit_over_asks[g_step_unit],
+                           "one arm's count of suspend points offered by overrunning turns would overflow a "
+                           "`long` — the deltas are non-negative and the row only climbs, so this is a "
+                           "frontier that has run for about two billion consultations in one arm or a "
+                           "consultation counter that has stopped being monotone; either way every "
+                           "`stepUnitOverrunAsks` reading taken after it is a wrapped total");
+                    g_step_unit_over_asks[g_step_unit] += (long)(g_preempt_asked - pa_slice0);
+                    DCHECKF((uint64_t)step_unit_over_asks_total() == g_over_asks,
+                            "the per-arm ask histogram does not account for every point offered by an "
+                            "overrunning turn (%llu arm counts against %llu in the scalar) — both are raised "
+                            "on these two lines from ONE turn's arm and ONE consultation delta, so a "
+                            "difference is a second raise site for one of them",
+                            (unsigned long long)step_unit_over_asks_total(),
+                            (unsigned long long)g_over_asks);
                 }
                 DCHECKF(g_over_seamless <= g_slice_over,
                         "more overrunning turns offered no suspend point (%ld) than overran at all (%lld) — "

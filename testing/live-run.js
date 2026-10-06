@@ -520,7 +520,8 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
 const COLD_STEP_UNITS = ["stepNamedRenderingLife", "stepNamedRenderingTypeofLife", "stepNamedRenderingPropLife",
                          "stepNamedTimerLife", "stepNamedTimerTypeofLife", "stepNamedTimerPropLife",
                          "stepNamedIdleLife", "stepNamedIdleTypeofLife", "stepNamedIdlePropLife",
-                         "stepUnitRuns", "stepUnitOverruns"];
+                         "stepUnitRuns", "stepUnitOverruns", "stepUnitOverrunSeamlessArms",
+                         "stepUnitOverrunAskArms"];
 /* AND WHICH COMPOSER THE NINE ROWS ABOVE ARE THE WHOLE OF, WHICH IS THE ONLY THING THAT MAKES THEIR NUMBER
    CHECKABLE BY ANYTHING. `rung_entry_rows` publishes exactly the three-row ladder per rung and nothing else, and
    its own emitter says the three are read together — "a document whose three rows for one rung all read zero
@@ -2091,6 +2092,10 @@ function census(r) {
     const runsH = o.stepUnitRuns, ovrH = o.stepUnitOverruns;
     if (runsH && typeof runsH === "object" && ovrH && typeof ovrH === "object") {
       const rate = {}, impossible = [];
+      const seamH = (o.stepUnitOverrunSeamlessArms && typeof o.stepUnitOverrunSeamlessArms === "object")
+        ? o.stepUnitOverrunSeamlessArms : {};
+      const ask = (o.stepUnitOverrunAskArms && typeof o.stepUnitOverrunAskArms === "object")
+        ? o.stepUnitOverrunAskArms : {};
       for (const k of Object.keys(ovrH)) {
         const ov2 = ovrH[k], rn = runsH[k];
         if (typeof ov2 !== "number" || !ov2) continue;
@@ -2100,7 +2105,27 @@ function census(r) {
       }
       o.stepUnitOverrunRate = rate;
       o.stepUnitOverrunRateOf = "stepUnitOverruns[arm] / stepUnitRuns[arm], arms with no overrun omitted";
-      o.stepUnitOverrunRateRefused = impossible.length
+        /* AND THE DENSITY THE RATE ABOVE CANNOT GIVE, WHICH IS WHAT SEPARATES THE TWO READINGS OF AN
+         OVERRUNNING TURN. The rate says how OFTEN an arm overran; this says how many suspend points those
+         turns OFFERED between them, per arm, and its denominator is the arm's overruns MINUS the arm's
+         seamless turns — never its overruns — because a seamless turn contributes zero to the ask row by
+         construction and dividing by it understates the density of the turns that actually asked. That is
+         solver/engine.h's `over_ask_arms`, and the two readings it separates are in different components: a
+         handful of points and then seconds of silence is a long inter-consultation GAP, which quantum.h names
+         as closed by a step-machine conversion and by nothing in that file; thousands of points and a turn
+         that ran anyway is the page choosing a stretch no ordering reaches, which §NO BOUNDS forbids capping.
+         A `null` DENOMINATOR AND NOT A ZERO where an arm's overruns are all seamless: there is no turn to
+         average over, and 0 there would read as an arm whose turns offered nothing when the truth is that the
+         seamless row already said so. */
+      const dens = {};
+      for (const k of Object.keys(ask)) {
+        const turns = (ovrH[k] || 0) - (seamH[k] || 0);
+        if (typeof ask[k] === "number" && turns > 0) dens[k] = ask[k] / turns;
+      }
+      o.stepUnitOverrunAskDensity = dens;
+      o.stepUnitOverrunAskDensityOf =
+        "stepUnitOverrunAskArms[arm] / (stepUnitOverruns[arm] - stepUnitOverrunSeamlessArms[arm])";
+    o.stepUnitOverrunRateRefused = impossible.length
         ? "an arm met the cooperative slice in a turn the run count says never happened (" +
           impossible.join("; ") + ") — a turn that overran is a turn that RAN, so the two histograms " +
           "disagree about one arm's population and no quotient over them is a rate"
