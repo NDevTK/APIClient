@@ -373,9 +373,15 @@ JSValue headers_new(JSContext *ctx, const HeaderList *src, HeadersGuard guard)
 /* WEB IDL §3.2.11 ByteString STEP 2, over the UTF-8 the engine hands out: "If the value of any element of x
    is greater than 255, then throw a TypeError." `what` names which half of the pair it refused, because a
    fill converts three things and a message that did not say which named no site at all.
-   IT IS UNREACHABLE FROM A MEMBER'S ARGUMENT — those are converted by the declaration, in §3.6's order — and
-   is only ever the fill's own conversions, which is why it is a helper here rather than idl_args.c's
-   argument-side one. */
+   IT IS UNREACHABLE FROM A MEMBER'S ARGUMENT UNLESS THAT ARGUMENT IS UNKNOWN EXTERNAL INPUT, AND THAT
+   CLAUSE READ `UNREACHABLE` FULL STOP — it is rewritten rather than deleted because the reasoning behind it is
+   sound and a reader will re-derive it: a member's positions ARE converted by the declaration, in §3.6's
+   order, so for every value this engine can spell the range has already run and repeating it here would be a
+   second copy. What the sentence did not say is that core/idl_args.h's `idl_concolic_rule` answers
+   IDL_CONCOLIC_CROSSES for IDL_BYTESTRING, so a concolic is PLACED AS ITSELF and reaches no conversion at
+   all — neither `step_tostring_run` nor idl_args.c's argument-side range. The member path below therefore
+   owes §3.2.11 step 2 on the bytes it projects for one, exactly as the fill's three conversions owe it, which
+   is why this is still a helper here and is now reached from four roads rather than three. */
 static int headers_bytestring(JSContext *ctx, const char *utf8, size_t len, const char *what)
 {
     if (idl_is_bytestring(utf8, len))
@@ -863,11 +869,65 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
         return arr;
     }
     DCHECK(argc >= 1, "a Headers member was declared with fewer arguments than its IDL lists");
+    /* NAMED RESIDUAL — THE `name` POSITION OVER UNKNOWN EXTERNAL INPUT IS NOT COVERED, and the coercion below
+       ends the flow for one. §5.1 declares `ByteString name` at position 0 of all five members and
+       core/idl_args.h's `idl_concolic_rule` answers IDL_CONCOLIC_CROSSES for IDL_BYTESTRING, so an unknown is
+       placed as itself and this JS_ToCStringLen aborts at the C boundary — js_force_tostring's own DFAIL says
+       why, "a `const char *` cannot carry a concolic".
+       IT IS A RESIDUAL AND NOT THE VALUE'S FIX ONE POSITION OVER, BECAUSE PROJECTING THE SHAPE IS THE WRONG
+       ANSWER HERE AND IS PROVABLY SO. solver/concolic.c composes every shape out of `{`, `}` and the
+       bracketing of a derivation (`{location.hash}`, `{x}[{y}]`, `String({x})`), and §2.2.2 Headers' header
+       name is RFC 9110 §5.1 Field Names' `field-name = token`, whose tchar set admits none of those
+       characters — so a projected name fails header_name_is_valid for EVERY unknown, and the TypeError that
+       follows would be decided by the SOLVER's own value class rather than by the page's value, which is the
+       collapse the pass-through in idl_args.c exists to prevent.
+       WHAT THE NEXT DIFF BUILDS: the two READ members answer a DERIVED unknown over the name operand —
+       solver/concolic.h's `concolic_new_derived` with the real lookup over the name's own example as the
+       example, which is what core/url/url.c already does for `URL.canParse` and for the same reason (a
+       validity gate the page branches on must fork rather than die); the three WRITE members need a header
+       list key space that admits an unknown name, because `header_list_set` and `header_list_delete` key on
+       bytes and a name that is not a token has none to key on.
+       HOW ITS ABSENCE WOULD SHOW: a flow that reads or writes a header whose NAME it computed ends at this
+       line with js_force_tostring's `@WHY` naming this file and this coercion, while the same flow setting a
+       computed VALUE under a literal name runs to completion. */
     name = JS_ToCStringLen(ctx, &name_len, argv[0]);
     if (!name) return JS_EXCEPTION;
     if (magic == HDR_APPEND || magic == HDR_SET) {
-        value = JS_ToCStringLen(ctx, &value_len, argv[1]);
-        if (!value) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
+        /* THE `value` POSITION OVER UNKNOWN EXTERNAL INPUT, WHICH IS THE ONE A REAL BUNDLE PASSES. §5.1
+           declares `ByteString value` and idl_concolic_rule answers IDL_CONCOLIC_CROSSES for it, so the
+           declaration hands an unknown to this body AS ITSELF and a raw JS_ToCStringLen on one ABORTS — which
+           ended the document at `headers.set('Authorization', 'Bearer ' + token)`, the single commonest way a
+           bundle puts external input into a request, and at every `h.append(n, v)` beside it.
+           THE ANSWER IS THE ONE THIS FILE ALREADY GIVES, AND THAT IS WHY IT IS A PROJECTION RATHER THAN A
+           DERIVATION: the fill's record arm — `new Headers({'Authorization': 'Bearer ' + token})` and every
+           `fetch(u, {headers: {…}})` through it — projects the value's SHAPE and says in its own words that
+           coercing it "would either abort at the ToString boundary or, worse, quietly de-taint it into some
+           concrete-looking string". A member answering differently would make `h.set(n, v)` and
+           `new Headers({n: v})` store different bytes for one program, which is the two-answers-to-one-question
+           shape; concolic_name_cstr composes the same bytes the record arm's JS_NewString(concolic_shape_c)
+           does, so no header list content moves.
+           THE LENGTH IS strlen AND THAT IS NOT AN ASSUMPTION: the shape is a C string this engine composed,
+           so it holds no U+0000 — which is the one thing a header value may not contain and the reason every
+           other read here is length-delimited. core/dom/dom_token_list.c's token_bytes answers the identical
+           question the identical way one component over.
+           §3.2.11's RANGE IS OWED HERE BECAUSE NOTHING ELSE RAN IT: the pass-through placed the value before
+           any conversion, so the declared ByteString's step 2 never happened, and header_check below ASSERTS
+           that it did. The fill's concolic arm takes the same refusal for the same stated reason — a header
+           the engine cannot state as bytes is not one it may report. OWNED either way: JS_FreeCString, which
+           is what every exit below already does with it. */
+        if (concolic_is(argv[1])) {
+            value = concolic_name_cstr(ctx, argv[1]);
+            if (!value) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
+            value_len = strlen(value);
+            if (headers_bytestring(ctx, value, value_len, "value") < 0) {
+                JS_FreeCString(ctx, name);
+                JS_FreeCString(ctx, value);
+                return JS_EXCEPTION;
+            }
+        } else {
+            value = JS_ToCStringLen(ctx, &value_len, argv[1]);
+            if (!value) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
+        }
     }
     /* §5.1's guard, on EVERY member and not just the two that write. `headers.get({})` reads a name of
        "[object Object]", which is not a token, and the spec makes that a TypeError rather than a miss — wpt
