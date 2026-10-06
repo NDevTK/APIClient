@@ -1671,9 +1671,15 @@ static const char *HTML =
     "var nzav = nza.value;"
     "nz.setAttributeNode(nza);"
     "var nzn = nz.getAttribute('y');"
+    /* THE FOURTH WRITE SITE, which no grep over core/dom/ could see: HTML §3.2.2's DOMStringMap setter is
+       `setAttribute`'s value decision reached through `dataset`, and it held its own copy of it. The
+       population was derived from the WRITE DOOR's callers rather than from a directory. */
+    "nz.dataset.k = 'a\\u0000b';"
+    "var nzd = nz.dataset.k;"
     "fetch('/api/domnul?set=' + (nzr.length === 3 && nzr.charCodeAt(1) === 0 ? 'roundtrip' : 'truncated')"
     " + '&attrval=' + (nzav.length === 3 && nzav.charCodeAt(1) === 0 ? 'roundtrip' : 'truncated')"
-    " + '&setnode=' + (nzn.length === 3 && nzn.charCodeAt(1) === 0 ? 'roundtrip' : 'truncated'));"
+    " + '&setnode=' + (nzn.length === 3 && nzn.charCodeAt(1) === 0 ? 'roundtrip' : 'truncated')"
+    " + '&dataset=' + (nzd.length === 3 && nzd.charCodeAt(1) === 0 ? 'roundtrip' : 'truncated'));"
     "var c1 = document.createElement('p'); c1.setAttribute('k','v'); var c2 = c1.cloneNode(true);"
     "fetch('/api/equalnode?v=' + (c1.isEqualNode(c2) && !c1.isSameNode(c2) ? 'iseq' : 'wrong'));"
     /* THE WALK IS THE PAGE'S SIZE, so it is a MACHINE that yields at every pair. 300 nested nodes is 300

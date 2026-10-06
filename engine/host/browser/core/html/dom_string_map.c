@@ -239,20 +239,21 @@ static int dsm_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValue
     JS_FreeCString(ctx, name);
     if (!attr) return -1;   /* the SyntaxError §3.2.2 states */
 
-    /* A CONCOLIC value has no bytes to store, exactly as in setAttribute: record it in the shadow so the read
-       gives the SAME concolic back, and write its shape into the tree so a serialisation still shows something. */
-    if (concolic_is(val)) {
-        const char *shape = concolic_shape_c(val);
-        dom_cow_set_attribute(el, attr, shape ? shape : "", shape ? strlen(shape) : 0, val);
-        free(attr);
-        return 1;
-    }
+    /* "EXACTLY AS IN setAttribute" WAS THE COMMENT AND NOT THE CODE, so it is now the call: §4.9's value
+       decision is element.h's, and this was a fifth copy of it. A concolic value has no bytes to store, so its
+       shape goes into the tree and the value itself into the shadow, which is what makes the read give the
+       same concolic back; a concrete one writes JS_UNDEFINED, which CLEARS any old taint, and that is this
+       algorithm's answer too — §3.2.2's setter renames nothing and preserves nothing.
+       THE LENGTH WAS THE LOSS. `el.dataset.x = "a\0b"` converted with JS_ToCString and re-derived the length
+       with strlen, which stops at the first 0x00, so a DOMString holding U+0000 was stored as its first byte
+       alone. The read beside it already asks lxb_dom_element_get_attribute for a length and hands that length
+       to JS_NewStringLen, so this conversion was the only lossy half. */
     {
-        const char *s = JS_ToCString(ctx, val);
-        if (!s) { free(attr); return -1; }
-        /* JS_UNDEFINED clears any old taint: a concrete write says this attribute is no longer a source. */
-        dom_cow_set_attribute(el, attr, s, strlen(s), JS_UNDEFINED);   /* chokepoint: capture-then-mutate, per flow */
-        JS_FreeCString(ctx, s);
+        ElAttrValue v;
+
+        if (!element_attr_value_bytes(ctx, val, &v)) { free(attr); return -1; }
+        dom_cow_set_attribute(el, attr, v.bytes, v.len, v.taint);   /* chokepoint: capture-then-mutate, per flow */
+        element_attr_value_free(ctx, &v);
     }
     free(attr);
     return 1;
