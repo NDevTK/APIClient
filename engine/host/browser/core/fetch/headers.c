@@ -869,27 +869,111 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
         return arr;
     }
     DCHECK(argc >= 1, "a Headers member was declared with fewer arguments than its IDL lists");
-    /* NAMED RESIDUAL — THE `name` POSITION OVER UNKNOWN EXTERNAL INPUT IS NOT COVERED, and the coercion below
-       ends the flow for one. §5.1 declares `ByteString name` at position 0 of all five members and
-       core/idl_args.h's `idl_concolic_rule` answers IDL_CONCOLIC_CROSSES for IDL_BYTESTRING, so an unknown is
-       placed as itself and this JS_ToCStringLen aborts at the C boundary — js_force_tostring's own DFAIL says
-       why, "a `const char *` cannot carry a concolic".
-       IT IS A RESIDUAL AND NOT THE VALUE'S FIX ONE POSITION OVER, BECAUSE PROJECTING THE SHAPE IS THE WRONG
-       ANSWER HERE AND IS PROVABLY SO. solver/concolic.c composes every shape out of `{`, `}` and the
-       bracketing of a derivation (`{location.hash}`, `{x}[{y}]`, `String({x})`), and §2.2.2 Headers' header
-       name is RFC 9110 §5.1 Field Names' `field-name = token`, whose tchar set admits none of those
-       characters — so a projected name fails header_name_is_valid for EVERY unknown, and the TypeError that
-       follows would be decided by the SOLVER's own value class rather than by the page's value, which is the
-       collapse the pass-through in idl_args.c exists to prevent.
-       WHAT THE NEXT DIFF BUILDS: the two READ members answer a DERIVED unknown over the name operand —
-       solver/concolic.h's `concolic_new_derived` with the real lookup over the name's own example as the
-       example, which is what core/url/url.c already does for `URL.canParse` and for the same reason (a
-       validity gate the page branches on must fork rather than die); the three WRITE members need a header
-       list key space that admits an unknown name, because `header_list_set` and `header_list_delete` key on
-       bytes and a name that is not a token has none to key on.
-       HOW ITS ABSENCE WOULD SHOW: a flow that reads or writes a header whose NAME it computed ends at this
-       line with js_force_tostring's `@WHY` naming this file and this coercion, while the same flow setting a
-       computed VALUE under a literal name runs to completion. */
+    /* §5.1's TWO READ MEMBERS OVER AN UNKNOWN NAME, WHICH IS WHERE THE FLOW USED TO END. Both are two steps
+       in the fetched standard's own words — `get`: "If name is not a header name, then throw a TypeError",
+       then "Return the result of getting name from this's header list"; `has`: the same step 1, then "Return
+       true if this's header list contains name; otherwise false" — and core/idl_args.h's
+       `idl_concolic_rule` answers IDL_CONCOLIC_CROSSES for the IDL_BYTESTRING at position 0, so the
+       declaration hands an unknown to this body AS ITSELF and the coercion below ABORTS at the C boundary.
+       `h.get(computedName)` therefore ended the document, which is an ordinary thing for a bundle to write.
+       A DERIVATION AND NOT A PROJECTION, WHICH IS THE WHOLE REASON THIS IS NOT THE `value` POSITION'S FIX ONE
+       ARGUMENT OVER. The residual below states it and it is provable rather than preferred: solver/concolic.c
+       composes every shape out of `{`, `}` and a derivation's brackets, and §2.2.2 Headers' name is RFC 9110
+       §5.1 Field Names' `field-name = token`, whose tchar set (`header_name_is_valid` above: alnum plus
+       the sixteen punctuation marks it lists) admits NONE of those bytes — so a projected name fails step 1
+       for EVERY unknown and the TypeError would be decided by the SOLVER's value class rather than by the
+       page's value, which is the collapse the pass-through in idl_args.c exists to prevent.
+       THE PRECEDENT IS core/url/url.c's `URL.parse`/`URL.canParse` AND IT IS THE SAME SHAPE FOR THE SAME
+       REASON: a validity gate a page branches on must FORK rather than die, so the member answers a value
+       that is opaque for control flow and carries the REAL verdict as its example. `if (h.has(n))` then forks
+       both arms — which is what reaches the gated code — and the arm the real name took keeps the answer
+       this engine actually computed.
+       THE EXAMPLE IS COMPUTED BY THE ONE LOOKUP AND IS NEVER INVENTED, which is §@H's rule:
+       `header_list_get` is the same door both concrete arms below take, run here over the name's OWN
+       example, so a member answering a known name and a member answering an unknown one's example cannot
+       disagree. Where there is no example the derivation carries JS_UNDEFINED, because @H reports an absence
+       rather than fabricating a miss — and a `false` from `has` or a `null` from `get` would be exactly
+       such a fabrication, since those are real answers a page branches on.
+       AN EXAMPLE THAT IS NOT A HEADER NAME HAS NO VALUE EITHER, and that is step 1 rather than a gap: for
+       such a name §5.1 THROWS, and a throw is not a value this member returns, so there is nothing to carry
+       as the example. The derivation is still the answer — the name is unknown, so whether THIS flow's name
+       is a token is open — and the example is simply absent.
+       NAMED RESIDUAL — THE THROW ARM IS NOT EXPLORED. NOT COVERED: the world in which the unknown name is
+       not a token, where §5.1 step 1 throws a TypeError into the page's own `try`. WHAT THE NEXT DIFF
+       BUILDS: that fork belongs to the BOUNDARY and not to this body, for the reason
+       core/dom/dom_token_list.c's `toggle` residual gives about its own boolean — an ask performed here
+       would fork a value forty-odd members share the seam for, and §C-stack forbids a builtin forking on
+       its own operand — so what is owed is a declared PREDICATE position in core/idl_args.h whose rule is
+       IDL_CONCOLIC_FORKS over `header_name_is_valid`, asked once at the branch seam and filed under that
+       predicate's own identity. HOW ITS ABSENCE WOULD SHOW: a flow whose `h.get(n)` sits inside a `try`
+       reaches the `catch` in no world, so a bundle that recovers from a bad header name has its recovery
+       path unexplored, while the same flow's success path now runs to completion. */
+    if (concolic_is(argv[0]) && (magic == HDR_GET || magic == HDR_HAS)) {
+        JSValue ex = concolic_example(ctx, argv[0]);
+        JSValue real = JS_UNDEFINED;
+
+        if (JS_IsString(ex)) {
+            const char *exn = JS_ToCString(ctx, ex);
+
+            CHECK(exn != NULL,
+                  "§5.1's read could not read the String its own example holds — the example is a concrete "
+                  "value this engine minted, and a String it cannot read back is a heap it has already lost, "
+                  "which is why this is fatal in release too");
+            if (header_name_is_valid(exn, strlen(exn))) {
+                char *v = header_list_get(l, exn);
+
+                real = (magic == HDR_HAS) ? JS_NewBool(ctx, v != NULL)
+                                          : (v ? JS_NewString(ctx, v) : JS_NULL);
+                free(v);
+            }
+            JS_FreeCString(ctx, exn);
+        }
+        JS_FreeValue(ctx, ex);
+        /* ONE OPERAND, WHICH IS THE DECLARATION'S NUMBER: §5.1 declares `get(ByteString name)` and
+           `has(ByteString name)`, so a shape naming a second would render an expression this member's steps
+           never performed — url.c's `url_operand_count` makes the same point about its own two. */
+        return concolic_new_derived(ctx, magic == HDR_HAS ? "Headers.has" : "Headers.get", argv, 1, real);
+    }
+    /* NAMED RESIDUAL — THE `name` POSITION OF THE THREE *WRITE* MEMBERS IS NOT COVERED, and the coercion below
+       ends the flow for one, AND ITS READ HALF IS BUILT — THE RETIRED WORDING IS KEPT BELOW THE VERDICT
+       BECAUSE A READER WHO RE-DERIVES THE SPLIT FROM "§5.1 DECLARES ONE `name` TYPE AT POSITION 0 OF ALL FIVE
+       MEMBERS" WILL WRITE IT AGAIN, which is exactly the inference that made this ONE residual for a while.
+       It read: "THE `name` POSITION OVER UNKNOWN EXTERNAL INPUT IS NOT COVERED … WHAT THE NEXT DIFF BUILDS:
+       the two READ members answer a DERIVED unknown over the name operand — solver/concolic.h's
+       `concolic_new_derived` with the real lookup over the name's own example as the example, which is what
+       core/url/url.c already does for `URL.canParse` and for the same reason (a validity gate the page
+       branches on must fork rather than die); the three WRITE members need a header list key space that
+       admits an unknown name". THE READ CLAUSE IS MET by the arm above this comment — and it was met
+       EXACTLY as written, which is the one thing worth recording about it, because §AND-THE-"WHAT-THE-NEXT-
+       DIFF-BUILDS"-CLAUSE rates such a clause a HYPOTHESIS rather than evidence and this file has already
+       had one of its own refuted. What made it hold was that it named a MECHANISM THAT WAS GREPPED (`url.c`'s
+       answer, confirmed present) rather than one its author pictured.
+       WHAT IS STILL NOT COVERED IS THE THREE WRITES — `append`, `set` and `delete` — whose `name` position
+       reaches the coercion below and ends the flow. §5.1 declares `ByteString name` at position 0 of all
+       five members and core/idl_args.h's `idl_concolic_rule` answers IDL_CONCOLIC_CROSSES for
+       IDL_BYTESTRING, so an unknown is placed as itself and this JS_ToCStringLen aborts at the C boundary —
+       js_force_tostring's own DFAIL says why, "a `const char *` cannot carry a concolic".
+       PROJECTING THE SHAPE IS STILL THE WRONG ANSWER AND IS STILL PROVABLY SO, which is why the writes did
+       not come with the reads. solver/concolic.c composes every shape out of `{`, `}` and the bracketing of a
+       derivation (`{location.hash}`, `{x}[{y}]`, `String({x})`), and §2.2.2 Headers' header name is RFC 9110
+       §5.1 Field Names' `field-name = token`, whose tchar set admits none of those characters — so a
+       projected name fails header_name_is_valid for EVERY unknown, and the TypeError that follows would be
+       decided by the SOLVER's own value class rather than by the page's value, which is the collapse the
+       pass-through in idl_args.c exists to prevent.
+       WHY THE READS COULD BE ANSWERED AND THE WRITES CANNOT, WHICH IS THE WHOLE OF THE SPLIT AND IS NOT A
+       MATTER OF EFFORT: a read ANSWERS a question and touches nothing, so a value that is opaque for control
+       flow and carries the real verdict is a complete answer to it. A write MUTATES A KEYED STORE, and
+       `header_list_set` and `header_list_delete` key on BYTES — a name that is not a token has none to key
+       on, and a name that is unknown has no bytes this engine may choose for it without deciding the very
+       thing the page left open.
+       WHAT THE NEXT DIFF BUILDS: a header list key space that admits an unknown name — an entry whose name
+       is a VALUE rather than a `char *`, so `set` replaces and `delete` removes the entry that names THIS
+       source rather than the entry whose bytes happen to match, with the concrete path keying on bytes
+       exactly as it does now. The read arm above then reads it through the same door, since a lookup over an
+       unknown name must be able to find an entry an unknown name wrote.
+       HOW ITS ABSENCE WOULD SHOW: a flow that WRITES a header whose name it computed ends at the line below
+       with js_force_tostring's `@WHY` naming this file and this coercion, while the same flow READING one
+       now runs to completion and the same flow setting a computed VALUE under a literal name always did. */
     name = JS_ToCStringLen(ctx, &name_len, argv[0]);
     if (!name) return JS_EXCEPTION;
     if (magic == HDR_APPEND || magic == HDR_SET) {
