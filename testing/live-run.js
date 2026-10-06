@@ -521,7 +521,7 @@ const COLD_STEP_UNITS = ["stepNamedRenderingLife", "stepNamedRenderingTypeofLife
                          "stepNamedTimerLife", "stepNamedTimerTypeofLife", "stepNamedTimerPropLife",
                          "stepNamedIdleLife", "stepNamedIdleTypeofLife", "stepNamedIdlePropLife",
                          "stepUnitRuns", "stepUnitOverruns", "stepUnitOverrunSeamlessArms",
-                         "stepUnitOverrunAskArms"];
+                         "stepUnitOverrunAskArms", "stepUnitOverrunGapArms"];
 /* AND WHICH COMPOSER THE NINE ROWS ABOVE ARE THE WHOLE OF, WHICH IS THE ONLY THING THAT MAKES THEIR NUMBER
    CHECKABLE BY ANYTHING. `rung_entry_rows` publishes exactly the three-row ladder per rung and nothing else, and
    its own emitter says the three are read together — "a document whose three rows for one rung all read zero
@@ -933,6 +933,30 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      sum can be carried by one chatty turn. An artifact older than them prints `-`, which is this driver's
      absent-versus-zero rule and is the honest answer — the run did not state them. */
   "sliceOverrunAsks", "sliceOverrunSeamless",
+  /* AND THE WORST UNBROKEN STRETCH WITH NO SUSPEND POINT IN IT, WHICH IS THE ONE ROW THAT CLOSES A QUESTION
+     THIS DRIVER HAD TO WITHDRAW. The ask pair above is a COUNT of consultations and a count cannot be a
+     duration, so the per-arm SPAN this file once attributed from `overrunStepUsAtLeast` was a pooled mean over
+     every arm — withdrawn at that field's own banner, where the only bound left was one quantum to the whole
+     accumulator, a thirteen-hundred-fold range.
+     IT IS A MAXIMUM AND IS DECLARED AS ONE, which `solver/result.c` states in its own `@kind maximum:` line.
+     A maximum is monotone so it may be differenced, and it SATURATES, so a plateau in it is not a ceiling and
+     the series length is part of quoting it — the same caution this driver already carries for `deepest` and
+     its siblings, and the reason it must not be filed under LIFETIME.
+     WHY IT IS THE SPAN TO WITHIN ONE BUDGET, which is the engine's derivation and not this driver's: the
+     preempt hook's only FALSE-returning arm is the budget test, the budget is monotone within one open slice,
+     and every consumer of a TRUE answer parks — so at most ONE consultation per turn answers TRUE, every
+     other consultation predates the budget, and an overrunning turn's own span already met it. Every
+     consultation of such a turn therefore falls inside ONE window of at most one quantum from its slice's
+     opening, which puts the worst gap in `[span − quantum, span]`. That is why this row answers the question
+     the ask count cannot, and why the alternative it was built against — consultations spread evenly across
+     the turn — cannot occur at all.
+     THE ONE STATE THAT BREAKS THAT IS ALREADY REPORTED: a preempt WANTED and DROPPED, which the seam message
+     prints as a requested-against-fired pair. So a gap far BELOW the turn's span minus a quantum is that
+     dropped raise, never a narrow stretch, and it is a different reading with a different next step.
+     An artifact older than this row prints `-`, which is this driver's absent-versus-zero rule.
+     RETIREMENT: this record goes when the gap is published per arm as a DISTRIBUTION rather than a maximum,
+     because a maximum names the worst stretch and cannot say how many stretches there were. */
+  "sliceOverrunGapUs",
   /* AND THE OTHER TWO THIRDS OF THE TURN, WITHOUT WHICH `sliceUs` IS A NUMERATOR WHOSE TOTAL THIS DRIVER
      NEVER PRINTED. solver/engine.h splits a turn into the STEP (`sliceUs`) and EVERYTHING ELSE (`schedUs` —
      the pick, the context switch, the delta swap and the previous iteration's tail), and states that they are
