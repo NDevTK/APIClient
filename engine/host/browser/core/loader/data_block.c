@@ -71,7 +71,17 @@ static lxb_dom_node_t *next_in(lxb_dom_node_t *n, lxb_dom_node_t *root)
    THE POSITION COSTS A DOCUMENT WALK and is paid at the READ rather than cached, because a cache would be a
    second answer to "where is this element" that the tree can move out from under: `document.scripts` is a
    live list and a block inserted before this one renumbers it. A data block's text is read once by the code
-   that parses it, so the walk is bounded by that and not by a loop. */
+   that parses it, so the walk is bounded by that and not by a loop.
+   AND THE `getElementById` PARENTHETICAL IS NARROWER THAN THE READ BELOW, DELIBERATELY. This read is a
+   QUALIFIED-NAME read, so it also names a block whose `id` is in a non-null namespace — and DOM §4.9's ID
+   change steps fire only "if localName is id, namespace is null", so `getElementById` does NOT find that
+   block and the two spellings part company for it. The read is NOT routed to §4.9's ID (core/dom/element.h's
+   element_id_bytes) and that is a decision: this is §@H's PROVENANCE half, a name saying WHO must supply the
+   parameter, and a cross-session name is a key a parked flow's answers are filed under — re-spelling one
+   orphans them. Both candidate answers are valid names (the namespaced id, or the position the fallback
+   gives), so the change would buy no correctness and spend a key. What it costs is this sentence: for such a
+   block the parenthetical above is false, and a reader who needs the name to BE the getElementById spelling
+   has found the question rather than the answer. */
 static char *data_block_name(lxb_dom_element_t *el)
 {
     lxb_dom_node_t *node = lxb_dom_interface_node(el), *root, *n;

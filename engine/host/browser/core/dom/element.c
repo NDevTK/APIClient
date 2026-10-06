@@ -177,6 +177,32 @@ bool element_attr_value_bytes(JSContext *ctx, JSValueConst value, ElAttrValue *o
 
 void element_attr_value_free(JSContext *ctx, ElAttrValue *v) { if (v->owned) JS_FreeCString(ctx, v->owned); }
 
+/* DOM §4.9's ID, AT §4.9'S OWN KEY — element.h carries the whole contract and why the cache is not read.
+   `dom_attr_get_ns` is this engine's "get an attribute by namespace and local name" and is the only read that
+   can express the null one; the key is spelled as DATA here because §4.9's ID is a one-member key space. */
+const lxb_char_t *element_id_bytes(lxb_dom_element_t *el, size_t *plen)
+{
+    lxb_dom_attr_t *a;
+    const lxb_char_t *v;
+    size_t vlen = 0;
+
+    DCHECK(plen != NULL, "an element's ID was asked for with nowhere to report its length — §4.9's ID is "
+                         "(bytes, length) and the bytes are not NUL-terminated, so a caller that drops the "
+                         "length has no way to read the value it was handed");
+    *plen = 0;
+    if (!el) return NULL;
+    a = dom_attr_get_ns(el, NULL, "id");
+    if (!a) return NULL;
+    v = lxb_dom_attr_value(a, &vlen);
+    /* §4.9'S UNSET STEP. An `id` attribute PRESENT WITH AN EMPTY VALUE is a real state and lexbor hands it
+       back as non-NULL data of length 0 (`lxb_dom_attr_set_value` allocates the str for a zero-length write),
+       so the two arms are not one test: a NULL value is an attribute that has never been written and a
+       zero-length one is an attribute written with the empty string. §4.9 unsets the element's ID for both. */
+    if (!v || vlen == 0) return NULL;
+    *plen = vlen;
+    return v;
+}
+
 static void el_write_attribute(JSContext *ctx, lxb_dom_element_t *el, const char *name, JSValueConst value)
 {
     ElAttrValue v;

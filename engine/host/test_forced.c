@@ -3031,6 +3031,32 @@ static const char *HTML =
     "var nb = document.createElement('u'); nb.setAttribute('id', 'namedkid'); lv.appendChild(nb);"
     "fetch('/api/named?v=' + (lv.children.namedItem('namedkid') === nb && lv.children.namedkid === nb"
     " && lv.children.nosuch === undefined ? 'isnamed' : 'wrong'));"
+    /* DOM §4.9 "Interface Element"'S ID IS NOT THE `id` ATTRIBUTE, which is the key the lookup above and
+       §4.2.4's walk are both over. §4.9 gives the concept — "An element can have an associated unique
+       identifier (ID)" — and then the only steps that maintain one: "If localName is id, namespace is null,
+       and value is null or the empty string, then unset element's ID. Otherwise, if localName is id, namespace
+       is null, then set element's ID to value." So an element whose ONLY `id`-named attribute sits in a
+       non-null namespace has NO ID, and a QUALIFIED-NAME read says it does: lexbor's
+       `lxb_dom_element_attr_by_name` compares the local name and the qualified name and tests no namespace at
+       all, so `getElementById` RETURNED AN ELEMENT A BROWSER DOES NOT and §4.2.10.2's named lookup answered
+       with it. Both doors are asserted here because the repair is ONE read (core/dom/element.h's
+       element_id_bytes) that both now go through, and a statement over one of them would pass with the other
+       still wrong.
+       `has` IS THE REACHABILITY WITNESS AND IS TRUE EITHER WAY: a plain `id` is found by both doors before and
+       after the repair, so its absence says this statement did not run rather than that the repair failed.
+       `getAttributeNS` IS WHAT ARMS `ns`. Without it a pair of `=== null` readings is confirmed identically by
+       a correct repair and by a `setAttributeNS` that stored nothing — the one reading this statement must
+       not be able to give — and §4.9's own "validate and extract" throws for neither: the qualified name
+       carries no prefix, so the NamespaceError arm (prefix non-null with a null namespace) is not reached. */
+    "var idnsH = document.createElement('div'); document.body.appendChild(idnsH);"
+    "var idnsY = document.createElement('p'); idnsY.setAttribute('id', 'idnsyes'); idnsH.appendChild(idnsY);"
+    "var idnsN = document.createElement('p');"
+    "idnsN.setAttributeNS('http://x.test/idns', 'id', 'idnsonly'); idnsH.appendChild(idnsN);"
+    "fetch('/api/idns?has=' + (document.getElementById('idnsyes') === idnsY"
+    " && idnsH.children.namedItem('idnsyes') === idnsY ? 'isidnshas' : 'wrong')"
+    " + '&ns=' + (idnsN.getAttributeNS('http://x.test/idns', 'id') === 'idnsonly'"
+    " && document.getElementById('idnsonly') === null"
+    " && idnsH.children.namedItem('idnsonly') === null ? 'isidnsns' : 'wrong'));"
     /* §4.9 matches / closest, and §7.1's DOMTokenList — the two questions a router asks and the way a bundle
        gates a branch of its UI. classList holds NO tokens of its own: they are the `class` attribute split, so
        a write through the list and a write through setAttribute are the same write, and it time-travels
@@ -17278,6 +17304,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            run and the trace stops at 'd' — 'cdc' there would be two queued reactions instead of one. */
         { "/api/movebeforesyn", "cdc-0-cd-moved" },
         { "/api/named",      "isnamed" },
+        /* DOM §4.9's ID at BOTH named doors, as two rows over one statement: `isidnshas` is the reachability
+           witness (a plain `id` is found before and after, so its absence is the statement missing) and
+           `isidnsns` is the claim — an element whose only `id`-named attribute is in a non-null namespace has
+           no ID, so §4.2.4 and §4.2.10.2 must both answer null for it. */
+        { "/api/idns",       "isidnshas" },
+        { "/api/idns",       "isidnsns" },
         /* §4.2.6 installed from ONE place: Document gets the reads it never had, and the lookups scope to
            whichever node they were called on rather than to the global document */
         { "/api/parentmixin", "scoped" },

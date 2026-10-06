@@ -409,11 +409,16 @@ static int js_aria_element_get(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
     n = s->cursor;
     if (n && n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
         size_t vlen = 0;
-        const lxb_char_t *v = lxb_dom_element_get_attribute(lxb_dom_interface_element(n),
-                                                            (const lxb_char_t *)"id", 2, &vlen);
-        /* DOM §4.9's attribute change steps UNSET an element's ID for the empty string, so an element whose
-           `id` is "" has no ID at all and matches nothing — including an empty id token. */
-        if (v && vlen) {
+        const lxb_char_t *v = element_id_bytes(lxb_dom_interface_element(n), &vlen);
+        /* DOM §4.9'S ID AND NOT THE `id` ATTRIBUTE, in ONE read. This site already knew the unset half — it
+           read "DOM §4.9's attribute change steps UNSET an element's ID for the empty string, so an element
+           whose `id` is "" has no ID at all and matches nothing — including an empty id token", and tested
+           `vlen` for it — and it did NOT know the other half of the same sentence: those steps fire only "if
+           localName is id, namespace is null", and the qualified-name read that stood here found a namespaced
+           `id` as well, so an id reference resolved to an element that has no ID. element_id_bytes carries
+           both halves, which is why the `vlen` test is gone rather than kept beside it: two places answering
+           "does this element have an ID" is the shape that drifts. */
+        if (v) {
             const char *tok = s->ids;
             int i;
 

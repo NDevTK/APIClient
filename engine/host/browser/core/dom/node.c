@@ -4514,11 +4514,18 @@ static int byid_id_is(JSContext *ctx, JSStepHdr *hdr, NodeByIdState *s, lxb_dom_
     const char *pinned;
     int arm, rc;
 
-    v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"id", 2, &vlen);
+    v = element_id_bytes(el, &vlen);
     /* THE TREE'S ANSWER FIRST, which is the answer for every element of every document that stored no unknown,
-       and is also the arm each refusal below falls back to. §4.9's ID-unset step needs no test of its own:
-       BYID_START answers null for an empty elementId, so `vlen == s->idlen` implies a non-empty value, which
-       is exactly "this element has an ID". */
+       and is also the arm each refusal below falls back to. §4.2.4's comparison is over "whose ID is
+       elementId", and §4.9's ID is NOT the `id` attribute — element_id_bytes is that read, keyed on (null
+       namespace, `id`) and answering ABSENT for the empty string, so this comparison means what §4.2.4 says
+       it means for an element carrying `setAttributeNS(ns, "id", …)` as well as for every other one.
+       THE UNSET HALF USED TO BE DERIVED FROM THE OPERAND and that argument is retired rather than deleted,
+       because a reader who re-derives it will re-add it: it read "§4.9's ID-unset step needs no test of its
+       own: BYID_START answers null for an empty elementId, so `vlen == s->idlen` implies a non-empty value,
+       which is exactly 'this element has an ID'". Both halves are still true and neither is load-bearing here
+       any more — a non-empty `v` is now a statement by the READ that this element has an ID, which holds
+       whatever elementId is, so the operand's length decides nothing about the ELEMENT. */
     *out_is = (v != NULL && vlen == s->idlen && memcmp(v, s->id, s->idlen) == 0);
 
     /* THE O(1) PRECONDITION FIRST, exactly as the cascade's value read has it: this runs once per element of
@@ -4527,8 +4534,14 @@ static int byid_id_is(JSContext *ctx, JSStepHdr *hdr, NodeByIdState *s, lxb_dom_
        rest point — the shadow is per-flow COW state and the walk yields per node, so a cached count would be
        a claim about a delta that has since swapped. */
     if (attr_shadow_count() == 0) return 0;
-    taint = dom_cow_attr_taint(el, "id");   /* BORROWED. The by-NAME read, which is the twin of the qualified-
-                                               name tree read above, so the two resolve §4.9's key one way. */
+    /* BORROWED, AND AT §4.9'S KEY LIKE THE TREE READ ABOVE, so the two cannot name two different attributes.
+       It used to be the by-NAME read, whose stated reason was that it was "the twin of the qualified-name tree
+       read above, so the two resolve §4.9's key one way" — and that was exactly true of two reads that were
+       BOTH qualified-name reads: `attr_ident_of` resolves "id" by looking the attribute up with
+       `dom_attr_get_qname`, so on an element carrying a namespaced `id` both halves found it and the pair
+       agreed with each other about an attribute §4.9 says is not the element's ID. The twinning argument is
+       kept because it is the right one; what changed is which key both ends of it are at. */
+    taint = dom_cow_attr_taint_ns(el, NULL, "id");
     if (!concolic_is(taint)) return 0;
 
     pinned = concolic_pin_bytes(taint);
@@ -4619,13 +4632,17 @@ static int js_node_get_element_by_id(JSContext *ctx, JSStepHdr *hdr, void *st, i
     }
 
     DCHECK(hdr->stage == BYID_WALK, "getElementById resumed into a stage §4.2.4 does not have");
-    /* THE OTHER HALF OF §4.9'S ID-UNSET STEP, ASSERTED RATHER THAN DESCRIBED. BYID_START answers null for an
-       empty elementId without walking, so the comparison below never sees one — and it is the comparison that
-       cannot express it, `vlen == s->idlen` being true of `id=""` at zero length. The length is this machine's
-       own copy's, never the page's bytes, so this asserts what this codebase computed. */
+    /* §4.2.4'S OWN EARLY ANSWER, ASSERTED RATHER THAN DESCRIBED. BYID_START answers null for an empty
+       elementId without walking, so the walk below never runs with one. The clause that used to justify this
+       — "it is the comparison that cannot express it, `vlen == s->idlen` being true of `id=""` at zero
+       length" — is retired by element_id_bytes carrying §4.9's unset step, and is kept because the comparison
+       it describes is still the shape a reader would re-derive the test from. The length is this machine's own
+       copy's, never the page's bytes, so this asserts what this codebase computed. */
     DCHECK(s->idlen > 0, "getElementById's walk reached an element with an EMPTY elementId — §4.9's ID-unset "
                          "step makes the empty string no element's ID, so §4.2.4 answers null at BYID_START "
-                         "without walking, and the comparison here would have matched an `id=\"\"` attribute");
+                         "without walking. The comparison below can no longer be MATCHED by one: element_id_"
+                         "bytes answers ABSENT for an `id=\"\"` attribute, which is where that half of §4.9 now "
+                         "lives — so what this guards is §4.2.4's own early answer and not the comparison");
     n = s->cursor;
     if (!n) { *presult = JS_NULL; return JS_STEP_DONE; }
     if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {

@@ -231,6 +231,36 @@ typedef struct { const char *bytes; size_t len; JSValueConst taint; const char *
 bool element_attr_value_bytes(JSContext *ctx, JSValueConst value, ElAttrValue *out);
 void element_attr_value_free(JSContext *ctx, ElAttrValue *v);
 
+/* DOM §4.9 "Interface Element" — AN ELEMENT'S ID, WHICH IS NOT ITS `id` ATTRIBUTE, AS (bytes, length).
+ *
+ * §4.9 states the concept and then the only steps that maintain it: "An element can have an associated unique
+ * identifier (ID)", and "Use these attribute change steps to update an element's ID: If localName is id,
+ * namespace is null, and value is null or the empty string, then unset element's ID. Otherwise, if localName
+ * is id, namespace is null, then set element's ID to value."
+ *
+ * SO AN ID IS KEYED ON (NULL NAMESPACE, `id`) AND IS NEVER THE EMPTY STRING, and every §4.9 ID reader needs
+ * both halves. A QUALIFIED-NAME read gives neither: lexbor's `lxb_dom_element_attr_by_name` matches on
+ * `attr->node.local_name == data->attr_id || attr->qualified_name == data->attr_id` with no namespace test at
+ * all, so `el.setAttributeNS("http://example/ns", "id", "x")` — local name `id`, no prefix, a non-null
+ * namespace, and therefore NO ID under the steps above — came back from `get_attribute(el, "id", 2, …)` as
+ * though the element's ID were `x`. That is a false MATCH and not a coarse answer: `getElementById("x")`
+ * returned an element a browser does not, and §4.2.10.2's and HTML §7.2.2.3's named lookups answered with it.
+ *
+ * THE CACHE IS NOT READ AND THE CROSS-CHECK IS NOT ASSERTED, which is a decision rather than an omission.
+ * `el->attr_id` is maintained namespace-correctly by this engine's own `dom_attr_attach` (see attr_list.c) and
+ * on the PARSE path by lexbor's `lxb_dom_element_attr_append`, which keys it on the local name alone and runs
+ * before `dom_attr_normalize_parsed` rewrites namespaces — so it is a derived fact with two writers, one of
+ * them driven by a page's markup, and §4.9's key read directly is the rule rather than a copy of it. An assert
+ * that the two agree would stand on a stranger's bytes, which §WHOSE-BYTES-STATE-THE-VALUE forbids: a document
+ * could then abort this engine with markup. The §4.9 unset half is an `if` and carries no assert either,
+ * because an assert placed after it cannot fail and a condition whose two sides cannot disagree is a non-check
+ * wearing a check's syntax.
+ *
+ * Returns the ID's bytes with `*plen` its length, NOT NUL-terminated; NULL and `*plen == 0` when the element
+ * has no ID. A present answer is non-empty BY CONSTRUCTION, which is what lets a caller compare lengths
+ * against a non-empty key and have that comparison mean "this element has an ID which is that key". */
+const lxb_char_t *element_id_bytes(lxb_dom_element_t *el, size_t *plen);
+
 /* HTML §2.6.1 "Reflecting content attributes in IDL attributes" — THE URL MODEL'S RESOLVING HALF, for the
  * members whose getter is §2.6.1's steps 2-3 under a DIFFERENT step 1.
  *

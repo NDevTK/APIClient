@@ -42,6 +42,7 @@
 #include "core/idl_indexed.h"
 #include "core/dom/node.h"
 #include "core/dom/collections.h"
+#include "core/dom/element.h"   /* element_id_bytes — DOM §4.9's ID, which both named lookups below are over */
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
 
@@ -235,10 +236,28 @@ static bool coll_takes(int kind, const CollQuery *qy, const lxb_dom_node_t *c)
         /* HTML §7.2.2.3 "Named access on the Window object"' NAMED ELEMENTS, which is two rules and not one:
            any HTML element whose `id` is the
            name, and `embed`/`form`/`img`/`object` whose `name` attribute is. The tag restriction is on the
-           `name` half only — a `<div name=x>` is not a named element, a `<div id=x>` is. */
+           `name` half only — a `<div name=x>` is not a named element, a `<div id=x>` is.
+           AND THE FIRST RULE IS OVER DOM §4.9'S ID, WHICH §7.2.2.3 KEYS ON BY NAME AND NOT ON THE `id`
+           CONTENT ATTRIBUTE: its named objects are "elements whose ID is name and that are in a document tree
+           with window's associated Document as their root", and its supported property names are "the ID of
+           all elements that have an ID and are in a document tree with window's associated Document as their
+           root". The phrase "id content attribute" does not occur in HTML at all. So this half is
+           element_id_bytes and not a qualified-name read: a `setAttributeNS(ns, "id", "x")` gives the element
+           no ID, so `window.x` must not reach it, and §4.9's unset step keeps `id=""` out of the set for the
+           same reason §7.2.2.3's own name half excludes a non-empty-name requirement's complement.
+           NAMED RESIDUAL — THE `name` HALF IS UNTOUCHED AND DIVERGES THREE WAYS. WHAT IS NOT COVERED:
+           §7.2.2.3's list is `embed`, `form`, `img`, `object` and this one also takes `iframe` (an
+           approximation of the document-tree child navigable target name set, which is a different rule over a
+           navigable's TARGET NAME); its supported-property-names clause says "non-empty name content
+           attribute" and no emptiness is tested here; and "a name attribute" is §4.9's three-part definition,
+           so the `name` read below is a qualified-name read where the key is (null namespace, `name`). WHAT
+           THE NEXT DIFF BUILDS: §7.2.2.3's name half as its own predicate over (null namespace, `name`) with
+           the navigable set split out of the element list. HOW ITS ABSENCE WOULD SHOW, as an observation:
+           `window[n]` answering an element for a document whose only `n`-named thing is an `iframe` with no
+           content navigable, or whose `name` attribute is namespaced or empty. */
         lxb_dom_element_t *el = (lxb_dom_element_t *)c;
         size_t vl = 0, qn = 0;
-        const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"id", 2, &vl);
+        const lxb_char_t *v = element_id_bytes(el, &vl);
         const lxb_char_t *q;
         if (v && vl == nlen && memcmp(v, name, nlen) == 0) return true;
         q = lxb_dom_element_qualified_name(el, &qn);
@@ -520,7 +539,11 @@ static JSValue coll_named(JSContext *ctx, JSValueConst self, const char *name)
     for (c = coll_first_node(kind, n); c; c = coll_adv(kind, n, c, 1)) {
         const lxb_char_t *v;
         if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-        v = lxb_dom_element_get_attribute(lxb_dom_interface_element(c), (const lxb_char_t *)"id", 2, &vlen);
+        /* §4.2.10.2 step 2's FIRST clause, "it has an ID which is key" — DOM §4.9's ID and not the `id`
+           attribute, which is why this is element_id_bytes. A qualified-name read stood here and matched an
+           `id` in a non-null namespace, so `hc.namedItem(k)` and `hc[k]` answered an element whose ID §4.9's
+           change steps never set. The unset half rides along: no element's ID is the empty string. */
+        v = element_id_bytes(lxb_dom_interface_element(c), &vlen);
         if (v && vlen == nlen && memcmp(v, name, nlen) == 0) return node_wrap(ctx, c);
         v = lxb_dom_element_get_attribute(lxb_dom_interface_element(c), (const lxb_char_t *)"name", 4, &vlen);
         if (v && vlen == nlen && memcmp(v, name, nlen) == 0) return node_wrap(ctx, c);
