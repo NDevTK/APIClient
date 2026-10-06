@@ -290,9 +290,16 @@ static uint32_t tl_size(JSContext *ctx, JSValueConst this_val)
  * conservative and monotone, and this is a statement about CURRENT state. And NOTHING RECORDS WHAT TRANSFORM
  * WAS APPLIED, nor needs to, because forced execution RE-RUNS the filter and provenance rides the value's own
  * source identity. What the map holds is the CONCOLIC VALUE ITSELF, surviving a C tree that can only hold
- * bytes — CLAUDE.md §Attacker-sources sanctions exactly that and gives the reason in its own words, "A source
- * stashed in a DOM attribute keeps taint via an `(element,name)→opaque` shadow map (Lexbor would ToString it
- * away)". `concolic_add_hook` is the right primitive for the same reason and not by analogy: concolic.h
+ * bytes — CLAUDE.md §Attacker-sources sanctions exactly that, and the KEY is `attr_shadow_find`'s own
+ * signature `(owner, slot-kind, namespace, local name)` rather than a field list restated here: that file's
+ * header records why each field past the second exists, and a two-field spelling gives `xlink:href` and
+ * `href` ONE entry between them. THIS COMMENT USED TO QUOTE THE SPEC'S `(element,name)→opaque` AS ITS
+ * AUTHORITY, which was the stale form, and the quotation is what made it CODE: a `.md` a C file cites by name
+ * is re-imported into the tree by reference, so the stale key arrived here wearing a citation's authority and
+ * this site read as agreeing with it. The spec sentence is corrected and names this consumer's reason as the
+ * ATTRIBUTE half's only — the map's PROPERTY half holds a FileList, a number and a boolean, which no byte
+ * tree could hold under any encoding. `concolic_add_hook` is the right primitive for the same reason and not
+ * by analogy: concolic.h
  * installs it as `JSConcolicHooks.add` through `JS_SetConcolicHooks`, so it IS the interpreter's own `+` and a
  * component calling it performs the concatenation the page's own `+` performs. That is re-execution; a
  * propagation hook deriving a result-note per op would not be. */
