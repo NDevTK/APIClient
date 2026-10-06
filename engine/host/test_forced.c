@@ -4494,6 +4494,41 @@ static const char *HTML =
     " history.pushState(null, '', _route);"
     " fetch('/api/routeseed?v=' + (location.pathname === _route ? 'seeded' : 'wrong'));"
     " history.replaceState(null, '', '/p'); })();"
+    /* §7.2.5 "The History interface"'s `pushState` AND §7.2.6.6's `updateCurrentEntry`, each handed a value
+       that CONTAINS AN UNKNOWN -- which is the one shape core/structured_clone.c refused BY NAME until
+       §7.4.1.1's entry grew a second slot for the triples beside the bytes. Everything else in this fixture
+       that serializes unknown input does it WITHIN ONE TURN (`structuredClone`, a same-turn `postMessage`),
+       where the value is deserialized in the same heap and the concolic can be THE SAME OBJECT; a session
+       history entry is the opposite case and is why the slot had to exist at all -- §Security says a live
+       JSValue crosses neither a park nor a session, so the triple rides AS DATA or the arriving value stands
+       for its EXAMPLE alone and a branch on it is DECIDED where this flow forked.
+       THE WITNESS IS A FORK AND NOT AN ABSENT ABORT. A crash that stops firing is confirmed identically by a
+       correct fix and by a path nobody took, so each half emits TWO endpoints out of the two arms of a
+       comparison made on the value AFTER its round trip: `?v=fork` can only be learned if the arriving value
+       carried its DOMAIN, and `?v=other` is learned under either reading, which makes it the ARMED CONTROL
+       whose absence says the statement never ran rather than that the triple was lost.
+       WHY `.slice(1)` AND NOT `location.hash` ITSELF, WHICH IS THIS FIXTURE'S USUAL UNKNOWN: a non-empty hash
+       ALWAYS begins with `#`, so `location.hash === 'admin'` is infeasible and the engine would prune that arm
+       CORRECTLY -- the witness would then read absent for a SPEC reason rather than for a defect, which is an
+       unarmed control wearing a measurement. `location.hash.slice(1)` composes `{location.hash}.slice(1)` and
+       is this fixture's own derived-source idiom, for the same reason the attribute-value search uses it.
+       THE URL IS THIS DOCUMENT'S OWN ADDRESS, so §7.4.4 step 8 moves nothing. A route left in place would
+       resolve every later reference in this flow against it -- the §7.2.5 row above puts its own back for
+       exactly that reason -- and nothing in this fixture reads `history.length` or traverses, so the entry
+       this push adds is observable to no other row.
+       THE CONTAINMENT IS THE NEIGHBOURING ROW'S SHAPE AND IS NOT A SWALLOW. `history.state` is null until
+       §7.4.4 step 7 has run and `navigation.currentEntry` is null while §7.2.6.3's entries and events are
+       disabled, so a defect in either half is a TypeError that would end THIS ONE PROGRAM and take every
+       statement below it with it. The async form runs its whole body synchronously -- there is no `await` in
+       it -- so it changes no tempo and contains the throw, and the ladder's bottom rung is what reports it
+       rather than a `catch`. */
+    "(async function(){"
+    " history.pushState({t: location.hash.slice(1)}, '', '/p');"
+    " if (history.state.t === 'admin') fetch('/api/hstate?v=fork');"
+    " else fetch('/api/hstate?v=other');"
+    " navigation.updateCurrentEntry({state: location.hash.slice(1)});"
+    " if (navigation.currentEntry.getState() === 'admin') fetch('/api/navstate?v=fork');"
+    " else fetch('/api/navstate?v=other'); })();"
 
     /* WHAT IS NOT PROBED HERE, AND WHY IT IS NOT A CHOICE: an iframe with a REAL `src`. It would exercise the
        whole of §7.4 step 14 — the load job asks the host for the address, PARKS, resumes with the response and
@@ -16185,6 +16220,41 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&routeseed_tt, &routeseed_why, g_seed_route_derived,
              "a route was declared, and none of the declarations carried the computed address with the "
              "provenance `derived`");
+    /* §7.2.5's pushState and §7.2.6.6's updateCurrentEntry over a value that contains an unknown. TWO ROWS AND
+       NOT ONE, because the two state slots are unrelated stores -- §7.2.6.5 says so and session_history.c's
+       §7.4.4 writer says it in its own words -- so one of them surviving the round trip and the other losing
+       its table are two different defects in two different writers.
+       EACH LADDER'S FIRST RUNG IS THE ARMED CONTROL AND THE SECOND IS THE SUBJECT, which is the whole point of
+       the two arms: `?v=other` is learned whether the arriving value forked or was decided, so its absence is
+       a statement about REACH, and `?v=fork` is learned only if the comparison had both arms, which requires
+       the triple to have arrived as data. Reading the subject alone would confirm a lost table and an unreached
+       statement with the same zero. */
+    int hstate_tt = 1;
+    const char *hstate_why = NULL;
+    fold_row(&hstate_tt, &hstate_why, !!strstr(js, "hstate?v=other"),
+             "NOT REACHED: the §7.2.5 statement emitted neither arm, so this row says nothing about the "
+             "classic history API state's symbol table. Either `history.pushState` threw -- the async form "
+             "contains it, so the program below survived and only this row is silent -- or `history.state` "
+             "was null, which is §7.4.4 step 7's restore not having run at all");
+    fold_row(&hstate_tt, &hstate_why, !!strstr(js, "hstate?v=fork"),
+             "§7.2.5's pushState ran and the round trip LOST THE TRIPLE: the arriving `history.state.t` stood "
+             "for its example alone, so `=== 'admin'` was DECIDED where this flow forked. The bytes came back "
+             "and the table did not -- §7.4.1.1's classic slot pair is the entry's `classicStateSymbols` "
+             "beside its `classicHistoryAPIState`, and the writer and the reader must take both from ONE "
+             "record (core/frame/history.c step 3 and session_history.c's §7.4.6.2 restore)");
+    int navstate_tt = 1;
+    const char *navstate_why = NULL;
+    fold_row(&navstate_tt, &navstate_why, !!strstr(js, "navstate?v=other"),
+             "NOT REACHED: the §7.2.6.6 statement emitted neither arm, so this row says nothing about the "
+             "navigation API state's symbol table. `navigation.currentEntry` is null while §7.2.6.3's entries "
+             "and events are disabled -- not fully active, the initial about:blank, or an opaque origin -- and "
+             "this document is none of those, so a null here is about that predicate and not about this row");
+    fold_row(&navstate_tt, &navstate_why, !!strstr(js, "navstate?v=fork"),
+             "§7.2.6.6's updateCurrentEntry ran and the round trip LOST THE TRIPLE: `getState()` answered a "
+             "value standing for its example alone, so `=== 'admin'` was DECIDED where this flow forked. The "
+             "pair is the entry's `navigationStateSymbols` beside its `navigationAPIState`, and §7.2.6.5's "
+             "getState is a METHOD precisely because it deserializes afresh -- so this reads the table on "
+             "every call and a one-shot loss is not a shape it can have");
     /* §5.1's open through to `success`, §2.7 + §2.8's request inside it, and §2.5's LIST key path over the
        store the same upgrade creates — the marker's own sentence-by-sentence account is beside the statement
        that builds it.
@@ -19266,6 +19336,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            nothing: §7.5.10's release is observable as a COUNT and not as a fetch. */
         { "realm-reclaim", realmback_tt, "document.body.removeChild(_if)", SESS_EXPLORE, realmback_why },
         { "route-seed", routeseed_tt, "/api/routeseed", SESS_EXPLORE, routeseed_why },
+        /* THE TWO ARMS OF ONE COMPARISON, keyed on the control arm rather than on the subject: the key names
+           the endpoint whose absence means the statement did not run, and the ladder's second rung is what
+           says the triple was lost. */
+        { "hist-state-symbols", hstate_tt, "hstate?v=other", SESS_EXPLORE, hstate_why },
+        { "nav-state-symbols", navstate_tt, "navstate?v=other", SESS_EXPLORE, navstate_why },
         { "idb-open", idbopen_tt, "/api/idbopen", SESS_EXPLORE, idbopen_why },
         { "idb-record", idbrec_tt, "/api/idbrec", SESS_EXPLORE },
         { "idb-record-taint", idbtaint_tt, "/api/idbrec", SESS_EXPLORE },
