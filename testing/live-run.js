@@ -2052,6 +2052,49 @@ function census(r) {
       ? null : (su - (stp - ovr) * qus) / ovr;
     o.overrunStepUsAtLeastOf = (o.overrunStepUsAtLeast === null) ? null
       : "(sliceUs - (steps - sliceOverruns) * sliceMs * 1000) / sliceOverruns";
+    /* AND WHAT SHARE OF THE WHOLE INSTANCE SPAN THOSE TURNS HELD, which is the one number that says whether
+       an overrun is a tail or the run, and which NOTHING here stated — so every reading of these bounds so
+       far has been a magnitude with no idea of its own weight. The two bounds above say what ONE overrunning
+       turn cost; this says what ALL of them cost together against `instanceUs`, which is the span the host
+       gave this engine and therefore the only denominator a reach claim can be made against.
+       IT IS THE LOWER BOUND AND NEVER THE UPPER, which is the whole of why it is worth emitting: the upper
+       bound attributes every microsecond of the step phase to the overrunning turns, so it is near 100% by
+       construction and says nothing. The lower bound charges every OTHER turn the full quantum it is allowed
+       — the most generous reading available to them — so whatever is left is what the overrunning turns held
+       even if every well-behaved turn ran to the very edge of its budget.
+       AND THE COMPLEMENT IS WHAT CARRIES IT, which is why both are emitted: a share is persuasive only
+       against the ceiling on everything else, and `restSpanUsAtMost` is that ceiling exactly —
+       `(steps - sliceOverruns)` turns times the quantum, with no run-to-run variance in it at all, because
+       it is a definition rather than a measurement. A reader holding 98% and a 0.95-second ceiling on the
+       other 79 turns does not need to trust the 98%.
+       MEASURED, five fresh-browser drives of one dev artifact across two real apps, read off these same
+       emitted fields: the share reads 98.1%, 98.1% and 98.5% on three gitlab drives (9, 9 and 11
+       overrunning turns of 88, 89 and 90) and 91.5% and 82.7% on two gitpod drives (19 of 545, 32 of 1169),
+       while the complement ceiling reads 0.95, 0.96, 0.95, 6.31 and 13.64 seconds against instance spans of
+       64, 62, 78, 87 and 88 seconds. NINE TURNS ARE THE GITLAB DRIVE and the other seventy-nine cannot
+       account for a second of it.
+       WHAT IT IS NOT IS A MECHANISM, for `stepUnitOverrunRate`'s reason one level up: the share says the
+       engine's reach on a real app is bounded by a handful of turns that do not rest, and says nothing
+       whatever about WHY they do not — `sliceOverrunSeamless` and the per-arm ask density beside it are the
+       rows that start on that, and neither is settled by this one.
+       AND IT GOES NEGATIVE WHEREVER ITS NUMERATOR DOES, WHICH IS INHERITED AND MUST NOT BE CLAMPED — the
+       banner above states why the lower bound may be negative (the non-overrunning turns could by themselves
+       account for the whole accumulator) and a share of a negative bound is that same statement rendered as a
+       share. A clamp to zero here would turn `this pair cannot be read on this run` into `the overrunning
+       turns held none of the span`, which is the absent-versus-zero pair this driver refuses everywhere else.
+       RETIREMENT: this record goes when the share is composed by the ENGINE beside the bounds it is a share
+       of, because `instanceUs` and `sliceUs` are in one hand at the census and a quotient a driver composes
+       is a quotient a second reader of the same document can compose differently. */
+    const iu = num("instanceUs");
+    o.overrunSpanShareAtLeast = (o.overrunStepUsAtLeast === null || ovr === null || iu === null || iu <= 0)
+      ? null : o.overrunStepUsAtLeast * ovr / iu;
+    o.overrunSpanShareAtLeastOf = (o.overrunSpanShareAtLeast === null) ? null
+      : "overrunStepUsAtLeast * sliceOverruns / instanceUs — a LOWER bound, because every other turn is " +
+        "charged the full quantum it was allowed";
+    o.restSpanUsAtMost = (stp === null || ovr === null || qus === null) ? null : (stp - ovr) * qus;
+    o.restSpanUsAtMostOf = (o.restSpanUsAtMost === null) ? null
+      : "(steps - sliceOverruns) * sliceMs * 1000 — a definition rather than a measurement: a turn that did " +
+        "not overrun used at most the quantum, so this is the ceiling on everything the share leaves out";
     /* AND THE PER-ARM RATE, WHICH IS THE READING THE BANNER SIXTY LINES UP ASKS FOR BY NAME ("read that
        against `stepUnitRuns` arm by arm") AND WHICH NOBODY HAD TAKEN — because it is a derivation over two
        HISTOGRAMS and this driver only ever composed derivations over numbers. It is here rather than in prose
