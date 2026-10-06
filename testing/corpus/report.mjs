@@ -755,6 +755,35 @@ for (const p of passes) for (const r of p.rows) {
        ITS ABSENCE SHOWS as a corpus in which `gone` is nonzero on some row and no column anywhere says which
        of retirement or paging produced it -- the reader is then back to the state `parked` alone was in. */
     gone: (typeof r.wfqDepartures === 'number') ? r.wfqDepartures : null,
+    /* WHICH OF THE THREE MECHANISMS PRODUCED THEM, BY A ROUTE THE RESIDUAL ABOVE DID NOT NAME — SO HALF OF IT
+       IS DISCHARGED HERE AND HALF IS NOT, AND THE SPLIT IS STATED RATHER THAN LEFT TO A READER.
+       THE ABSENCE CLAUSE ABOVE HAS FIRED. `gone` is nonzero on a real-site row for the FIRST TIME — ONE row of
+       128, squoosh at 89 against arrivals 5718 and members 5629 — so this is no longer a hazard being guarded
+       against, it is the state the corpus is in, and until this column landed nothing said whether those 89
+       were members RETIRING or members SOLD, which are opposite verdicts about the same number.
+       THE DISCRIMINATOR WAS ALREADY ON THE ROW AND IT IS NOT `_cold`. The residual names `_cold`'s
+       `finished`/`sold` split as the next diff, and MEASURED, **0 of 140 rows carry a `cold` object at all**
+       (site.mjs reads `counted[i].cold` for its own live walk and emits none of it), so that half is genuinely
+       unbuilt. What IS on the row is `stepUnitRuns`, the step-unit ARM histogram — and `finished` is the
+       ladder's BOTTOM arm, the one a member can only take by having been offered every queue above it. So
+       `finished == departures` says every member that left did so by RETIRING through the bottom of the ladder
+       and none by being sold at the allocator's refusal edge. Two different counters from two different
+       writers — `g_step_unit_runs[FINISHED]` at the step convergence point, `g_departures` only in
+       `flow_remove` — so their agreement is a CONSERVATION IDENTITY and not a tautology.
+       MEASURED over every row carrying both: it holds in 93 of 93, including squoosh's 89 == 89.
+       THREE-STATE LIKE EVERY OTHER IDENTITY HERE, because an absent operand is not an agreement: `retired`
+       when it holds, `MIXED` when it breaks — which is a FINDING, a departure no ladder arm accounts for —
+       and `unjudged` when either operand is absent, which 47 of the 140 rows are.
+       WHAT IS STILL NOT COVERED: `MIXED` would say a sale happened and could not say whether the pager was
+       ASKED. `sold: 0` remains two opposite findings — the RAM floor never reached, or the pager asked and
+       declined — because the sale sits on the allocator's refusal edge. WHAT THE NEXT DIFF BUILDS: site.mjs
+       emits `_cold` onto the row and this file reads `sold`/`soldFlows`/`soldCands` beside `pagedAsks`, which
+       is the record-at-the-ASK this project's own rule requires of any gated operation. HOW ITS ABSENCE SHOWS:
+       a row reading `MIXED` with no column anywhere saying whether the pager was reached. */
+    fin: (r.stepUnitRuns && typeof r.stepUnitRuns.finished === 'number') ? r.stepUnitRuns.finished : null,
+    goneWhy: (typeof r.wfqDepartures !== 'number' ||
+              !r.stepUnitRuns || typeof r.stepUnitRuns.finished !== 'number') ? 'unjudged'
+             : r.stepUnitRuns.finished === r.wfqDepartures ? 'retired' : 'MIXED',
     /* THE @S ARRIVAL CENSUS, WHICH IS WHAT MAKES `sinks: 0` A FINDING RATHER THAN A SHRUG. Read in the order
        a search travels -- a source is read, a sink is reached, taint arrives at one, the search is declined
        as unforgeable -- so the column says WHERE the zero starts, and a corpus-wide `sinks: 0` stops being
@@ -1072,6 +1101,12 @@ const table = [...seen.entries()].map(([id, ms]) => ({
      refuses to fold an absent operand into a range, which is what keeps the six fatal rows out of it. */
   dwell: spread(ms, 'dwell'),
   un: spread(ms, 'units'), fpu: spread(ms, 'fpu'), gone: spread(ms, 'gone'),
+  /* `gone>via` READ LEFT TO RIGHT IS HOW MANY MEMBERS LEFT AND BY WHICH MECHANISM, in the file's own
+     left-to-right idiom rather than as two more columns on an already-wide table. The verdict is the WORST
+     seen across the passes and never the newest, for the same reason `outcome` is: a site whose departures are
+     accounted for in two passes of three may not be reported as one whose departures are accounted for. */
+  goneVia: spread(ms, 'gone') + '>' + (ms.some((m) => m.goneWhy === 'MIXED') ? 'MIXED'
+            : ms.some((m) => m.goneWhy === 'retired') ? 'retired' : '-'),
   sk: spread(ms, 'sinks'), rn: spread(ms, 'runs'), ld: spread(ms, 'load'),
   /* `src>reach>taint>sup` READ LEFT TO RIGHT IS WHERE THE @S SEARCH GOT TO. A `-` here is one of two facts
      and only the shouted line under the table tells them apart: the pass's INSTRUMENT could not answer (its
@@ -1114,7 +1149,7 @@ console.log('\n' + pad('site', 20) + pad('outcome', 20) + pad('abort/n', 8) + pa
   pad('dwellMs', dwellW) + pad('terminal', termW) +
   pad('ep', 8) + pad('sinks', 7) + pad('src>reach>taint>sup', 21) + pad('ask>drv', 13) +
   pad('sink>csp>tt', 16) + pad('miss>owed', 13) +
-  pad('flows', 12) + pad('switches', 12) + pad('units', 9) + pad('fl/unit', 14) + pad('gone', 6) +
+  pad('flows', 12) + pad('switches', 12) + pad('units', 9) + pad('fl/unit', 14) + pad('gone>via', 14) +
   pad('load', 10) + 'signature');
 for (const t of table)
   console.log(pad(t.id, 20) + pad(t.outcome, 20) + pad(t.abortedPasses + '/' + t.n, 8) +
@@ -1122,7 +1157,7 @@ for (const t of table)
     pad(t.ep, 8) + pad(t.sk, 7) + pad(t.arrival, 21) +
     pad(t.orphans, 13) +
     pad(t.policy, 16) + pad(t.absent, 13) +
-    pad(t.fl, 12) + pad(t.sw, 12) + pad(t.un, 9) + pad(t.fpu, 14) + pad(t.gone, 6) +
+    pad(t.fl, 12) + pad(t.sw, 12) + pad(t.un, 9) + pad(t.fpu, 14) + pad(t.goneVia, 14) +
     pad(t.ld, 10) + (t.sigs[0] ? t.sigs[0].split(' :: ')[0] : '-'));
 
 /* WOULD A LONGER DWELL CHANGE ANY OF IT -- the `finished` residual's own HOW-ITS-ABSENCE-WOULD-SHOW clause,
