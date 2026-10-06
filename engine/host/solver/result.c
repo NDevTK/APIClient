@@ -3677,8 +3677,12 @@ char *result_cold_json(void) {
                     said here because here is where the numbers are (CLAUDE.md §EVIDENCE-INFLATION).
                     IT IS A FLOOR AND NOT A VERDICT, AND THE HALF IT CANNOT SEE IS NAMED AT THE PRODUCER.
                     `unknown` is a POSITIVE statement that the run reached that address holding a value it had
-                    not determined, so such a row DEFINITELY clears the bar; `concrete` claims nothing
-                    whatever about a parse, because whether a static reader could have stated an address is
+                    not determined AND resting on an unknown somebody OUTSIDE the engine supplied, so such a
+                    row DEFINITELY clears the bar. (It named only the first half, and the correction is kept
+                    rather than swallowed because that half is what a reader re-derives from the word: an
+                    undetermined address standing on a hole the engine minted for its own drive is a class
+                    the engine REFUSES, so `not determined` alone was never this bar's operand.) `concrete`
+                    claims nothing whatever about a parse, because whether a static reader could have stated an address is
                     not decidable by anybody — a bundler's chunk manifest needs a scope pass to resolve. What
                     `concrete` hides is enumerated at solver/endpoint.h's list: a determined address can be a
                     literal, the document's own address, or a source this flow PINNED and re-read, and the

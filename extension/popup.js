@@ -1860,8 +1860,11 @@ function renderEngineRuns() {
         + `and one the markup declared arrive through the same door, a head whose first script runs before `
         + `the parser reaches the link below it mints that link post-program, and a literal chunk URL and one `
         + `built out of the fragment arrive through the same door as each other. "unknown" is the engine `
-        + `stating it had NOT determined that address, which is the only one of these buckets that is a `
-        + `FLOOR under the hard bar below; "concrete" claims nothing at all about what a parse could reach. `
+        + `stating it had NOT determined that address AND that its unknown is one somebody OUTSIDE the `
+        + `engine supplied, which is the only one of these buckets that is a FLOOR under the hard bar below; `
+        + `"unknown-unproven" is an address the run did not determine whose unknown the engine minted for its `
+        + `own drive, or the served document itself spells, or no mint could speak for — undetermined and `
+        + `REFUSED by that bar; "concrete" claims nothing at all about what a parse could reach. `
         + `A bucket named "(unstated)" is a row from an engine older than that key and is a fact about the `
         + `build, not about the page.`;
     /* AND THE RAZOR ITSELF — CLAUDE.md §What-the-tool-produces' "what this engine reached that a markup
@@ -1975,8 +1978,12 @@ function renderEngineRuns() {
        on exactly this, so no count of doors ever answers it — and a 19-site census closed with a full door
        table and left the product's own bar unscorable.
        IT IS A FLOOR AND THIS SENTENCE SAYS SO IN BOTH DIRECTIONS. `unknown` is the engine's POSITIVE
-       statement that the run reached that address holding a value it had not determined, so those rows
-       DEFINITELY clear the bar. `concrete` is the other positive statement — the run HAD determined it — and
+       statement that the run reached that address holding a value it had not determined AND resting on an
+       unknown somebody OUTSIDE the engine supplied, so those rows DEFINITELY clear the bar. (It named only
+       the first half, and the correction is kept rather than swallowed because that half is what a reader
+       re-derives from the word: an undetermined address standing on a hole the engine minted for its own
+       drive is a class the engine REFUSES, so `not determined` alone was never this bar's operand.)
+       `concrete` is a positive statement about the OTHER side — the run HAD determined it — and
        claims nothing whatever about a parse, because whether a static reader could have stated an address is
        not decidable by anybody: a bundler's chunk manifest needs a scope pass to resolve, so what a parse
        reaches is a moving frontier and not a property. solver/endpoint.h enumerates what `concrete` hides (a
@@ -2028,15 +2035,19 @@ function renderEngineRuns() {
             + `RUN, read WITH the surface row above and not against it.`
           : _undet === 0
             ? `hard bar — addresses NO parse of the served bytes can state: NONE of `
-              + `${esc(String(_emitted))} emitted address(es) was one this run had not determined. That is a `
+              + `${esc(String(_emitted))} emitted address(es) was one this run had not determined AND whose `
+              + `unknown somebody outside the engine supplied. That is a `
               + `REFUSAL TO CLAIM the bar on this document and NOT a small number. It is a FLOOR and not a `
               + `verdict: a determined address may still be past every parse — one a flow PINNED and re-read, `
               + `or one a REPLY named — and this engine cannot say which, so the floor here and the razor `
               + `above OVERLAP and may not be added. A DIAGNOSTIC AND NEVER A TARGET, read WITHIN this run.`
             : `hard bar — addresses NO parse of the served bytes can state: at least `
               + `${esc(String(_undet))} of ${esc(String(_emitted))} emitted address(es) — the run reached `
-              + `each of those holding a value it had NOT determined, which entered the program at a source `
-              + `and stands in no served byte. A FLOOR and not a verdict: some of the remaining `
+              + `each of those holding a value it had NOT determined, resting on an unknown a document, a `
+              + `server, an attacker or the environment supplied, so it stands in no served byte. (An `
+              + `undetermined address whose unknown the ENGINE minted for its own drive is counted by none of `
+              + `this: it is the engine's own "unknown-unproven" and the bar refuses it.) A FLOOR and not a `
+              + `verdict: some of the remaining `
               + `${esc(String(_emitted - _undet))} may be past a parse too (a pinned source re-read, an `
               + `address a reply named) and nothing here guesses which, so this floor and the razor above `
               + `OVERLAP and may not be added. A DIAGNOSTIC AND NEVER A TARGET, read WITHIN this run.`;
@@ -2102,7 +2113,8 @@ function renderEngineRuns() {
             + `that population can be.`
           : `hard bar, composed — ${esc(String(_only))} of ${esc(String(m.endpoints))} emitted address(es) `
             + `is one this run PROVED exists only at run time: it reached the address holding a value it had `
-            + `not determined, or read the address out of bytes that were never in the served document. This `
+            + `not determined AND resting on an unknown a document, a server, an attacker or the environment `
+            + `supplied, or it read the address out of bytes that were never in the served document. This `
             + `is the UNION of those two, composed per address by the engine, so it is ONE floor and not two `
             + `to bracket. Still a FLOOR: "unproven" claims nothing about what a parse could reach. A `
             + `DIAGNOSTIC AND NEVER A TARGET, read WITHIN this run; its denominator is the emitted array's `

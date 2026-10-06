@@ -2761,9 +2761,15 @@ function endpointReachReading(b) {
    IT IS A FLOOR AND THE SENTENCE SAYS SO, because "a parse could state this" is not decidable by anybody: a
    bundler's chunk manifest needs a scope pass to resolve, so what a static reader reaches is a moving
    frontier rather than a property. What the engine CAN answer is the inverse — whether the run reached the
-   address holding a value it had not determined, which solver/endpoint.c reads off the address value's own
-   concolic provenance at the recording door. `unknown` rows DEFINITELY clear the bar; `concrete` rows may or
-   may not, and this line refuses to say which.
+   address holding a value it had not determined AND resting on an unknown somebody outside it supplied, which
+   solver/endpoint.c reads off the address value's own concolic provenance at the recording door. `unknown` rows DEFINITELY clear the bar — the engine reached
+   the address holding a value it had not determined AND resting on an unknown somebody OUTSIDE it supplied,
+   which is one conjunction and one member — while `concrete` rows may or may not, and this line refuses to
+   say which. THE CONJUNCT IS NOT DECORATION AND THE SENTENCE WITHOUT IT IS WHAT A READER RE-DERIVES FROM THE
+   WORD: an undetermined address standing on a hole the engine minted for its own drive, or on bytes the
+   served document spells, is `unknown-unproven` and the engine REFUSES it — so `not determined` alone is not
+   this bar's operand and never was a sound one. This file holds no copy of that classification and states
+   only which NAME the bar is keyed on.
    IT IS A SECOND OBSERVATION AND NOT A THIRD GRAIN OF THE TWO ABOVE, which is where it differs from
    `endpointReachReading` and is why it is rendered beside it rather than folded in. `epReach` is `epDoors`
    summed by class and says so; this is keyed on a property of the ADDRESS that no door implies, so a reader
@@ -2785,7 +2791,16 @@ function endpointReachReading(b) {
    This file is INTERPRETED FROM THE TREE and the engine's C is live only after a build, so a reading that
    REQUIRED the new row would refuse every build between its own landing and the next engine build — the
    asymmetric half-deployment CLAUDE.md §A-CROSS-BOUNDARY-DIFF names. Deriving the complement makes both
-   orders of deployment correct and leaves no window in either direction. */
+   orders of deployment correct and leaves no window in either direction.
+   AND DERIVING IT IS NOT ENOUGH ONCE A NEW MEMBER IS ALSO *UNDETERMINED*, WHICH IS THE ONE WAY THAT
+   DERIVATION FAILS AND IS WHY THE UNDETERMINED SIDE IS NOW A NAMED SET RATHER THAN THE COMPLEMENT OF ONE
+   NAME. The complement was sound while `unknown` was the only class answering NOT DETERMINED; the engine's
+   `unknown-unproven` answers NOT DETERMINED too — it is the address the run did not determine and whose every
+   root the engine itself minted, the served document spells, or no mint could speak for — so the complement
+   would print it under `it had`, which is a WRONG LABEL on the product's own bar line rather than a smaller
+   number. It is listed by NAME and read OPTIONALLY: a census without that row is unchanged, which keeps both
+   deployment orders correct exactly as the derivation above does, and the `unknown` check below stays the one
+   name this reading REQUIRES, because that is the operand the bar is keyed on. */
 function endpointAddressClassReading(b) {
   const rows = censusHistRows(b, "epAddressClass", "epEmitted", "endpoint.h's ENDPOINT_ADDRESS_CLASSES list");
   const at = (k) => { const r = rows.find((x) => x[0] === k); return r ? r[1] : null; };
@@ -2797,9 +2812,21 @@ function endpointAddressClassReading(b) {
                     "class would be rendered as a 0 the engine never reported.");
   const total = b.epEmitted;
   if (total === 0) return `@H hard bar: the surface emitted no endpoint, so there is nothing to claim`;
-  const det = rows.filter((r) => r[0] !== "unknown");
+  /* THE CLASSES THAT ANSWER *NOT DETERMINED*, BY NAME AND WITHOUT REQUIRING EITHER. `unknown` is the bar's
+     own operand and is checked above; `unknown-unproven` is undetermined AND refused by the bar, so it
+     belongs on neither side of a determined/undetermined split spelled as one name's complement. A census
+     that does not state it drops out of this set and nothing changes. */
+  const UNDETERMINED = ["unknown", "unknown-unproven"];
+  const det = rows.filter((r) => !UNDETERMINED.includes(r[0]));
+  const undetOther = rows.filter((r) => r[0] !== "unknown" && UNDETERMINED.includes(r[0]));
   const detSum = det.reduce((t, r) => t + r[1], 0);
-  return `@H hard bar: ${unknown} of ${total} address(es) the run had NOT determined` +
+  const undetOtherSum = undetOther.reduce((t, r) => t + r[1], 0);
+  return `@H hard bar: ${unknown} of ${total} address(es) the run had NOT determined AND whose unknown` +
+         ` somebody OUTSIDE this engine supplied` +
+         (undetOther.length
+            ? ` (${undetOtherSum} more it had not determined and the bar REFUSES:` +
+              ` ${undetOther.map(([k, v]) => `${v} ${k}`).join(", ")})`
+            : ``) +
          ` (${detSum} it had: ${det.map(([k, v]) => `${v} ${k}`).join(", ")}) — a FLOOR under "no parse of the` +
          ` served bytes can state this" and never its value: a determined address may still be one no parse` +
          ` reaches (a reply's own chunk address, which \`razorClass\` catches through the door), and this line` +
@@ -2842,7 +2869,8 @@ function endpointRazorClassReading(b) {
   if (total === 0) return `@H bar: the surface emitted no endpoint, so there is nothing to claim`;
   return `@H bar: ${runtime} of ${total} address(es) NO parse of the served bytes could state` +
          ` (${unproven} this line will not claim either way)` +
-         ` — the UNION of "the run had not determined it" and "the bytes are not the served document's",` +
+         ` — the UNION of "the run had not determined it AND its unknown is somebody else's" and "the bytes` +
+         ` are not the served document's",` +
          ` composed per row by the engine and never assembled from the two rows above.` +
          ` ${runtime === 0 ? "0 is a REFUSAL TO CLAIM the bar on this document, not a smaller version of it"
                            : "read WITHIN this run, never across two"}`;

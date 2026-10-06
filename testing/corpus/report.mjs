@@ -1935,7 +1935,11 @@ console.log('hard bar totals: ' + JSON.stringify({
      the absence of a question and not a zero. `sitesWhoseBuildDeclaresTheBarClass` is how many of THOSE ran
      an artifact whose enum has the arm the bar keys on, read off the macro rather than typed: slice
      `#define ENDPOINT_ADDRESS_CLASSES(X)` in solver/endpoint.h to its first line not ending in a backslash
-     and the arms are `concrete`, `source-determined`, `unknown`. Never summed with anything above. */
+     and read the `X(` names off it. THE ARMS ARE NOT ENUMERATED HERE AND THAT IS THE POINT -- this sentence
+     listed them once, the list has since grown an arm, and the enumeration was then a count competing with
+     the command printed beside it (CLAUDE.md §a-count-is-the-one-derived-coordinate). What this figure
+     reads is the arm `declOne` names and nothing else, so a widening below the bar's own class leaves it
+     unchanged. Never summed with anything above. */
   sitesStatingTheDeclaredSet: rzStated.filter((r) => r.declAtBest && r.declAtBest.h).length,
   sitesWhoseBuildDeclaresTheBarClass:
     rzStated.filter((r) => r.declAtBest && r.declAtBest.h && r.declAtBest.bar).length,

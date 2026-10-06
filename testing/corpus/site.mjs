@@ -1029,8 +1029,11 @@ const learnedAddrs = [...new Set(mine.flatMap(d => d.sites))];
    statement of that bar is "an address, a key or a value that NO PARSE of the served bytes can state,
    because it exists only at run time", and solver/endpoint.c composes it PER ROW as `razorClass` out of
    `endpoint_razor_class_of(door, addr_class)` -- `runtime-only` where the run reached the address holding a
-   value it had not determined OR where the door handed it bytes that were never in the served document,
-   `unproven` otherwise. extension/bridge.js relays all four onto every engine-run record and asserts each
+   value it had not determined AND RESTING ON AN UNKNOWN SOMEBODY OUTSIDE THE ENGINE SUPPLIED, OR where the
+   door handed it bytes that were never in the served document, `unproven` otherwise. (The address-side
+   conjunct is new and the operand without it is kept because it is what a reader re-derives from the word
+   `unknown`: an undetermined address standing on a hole the engine minted for its own drive is a DIFFERENT
+   address class the engine refuses, so `not determined` alone was never this bar's operand.) extension/bridge.js relays all four onto every engine-run record and asserts each
    one SUMS to `endpoints`; engine/build.mjs, extension/popup.js and testing/live-run.js read them. THIS
    FILE -- the one that ranks the CORPUS -- was the consumer that never asked, so the bar this product is
    judged by was scored one DOCUMENT at a time and over no corpus at all. That is the write-with-no-reader

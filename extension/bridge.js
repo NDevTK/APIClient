@@ -1066,8 +1066,13 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            differing on exactly this. So the three histograms are TWO observations and not three, which is
            said here because here is where the numbers are (CLAUDE.md §EVIDENCE-INFLATION).
            IT IS A FLOOR AND THIS ZONE MAY NOT READ IT AS A VERDICT. `unknown` is the engine's positive
-           statement that the run reached that address holding a value it had not determined, so those rows
-           DEFINITELY clear the bar; `concrete` claims nothing whatever about a parse, because whether a
+           statement that the run reached that address holding a value it had not determined AND resting on
+           an unknown somebody OUTSIDE the engine supplied, so those rows DEFINITELY clear the bar. (That
+           sentence named only the first half, and it is corrected rather than deleted because the half it
+           named is what a reader re-derives from the word: an undetermined address standing on a hole the
+           engine minted for its own drive is a DIFFERENT class the engine refuses, and `not determined`
+           alone was never this bar's operand.) `concrete` claims nothing whatever about a parse, because
+           whether a
            static reader could have stated an address is not decidable — a bundler's chunk manifest needs a
            scope pass to resolve. solver/endpoint.h enumerates what `concrete` hides (a literal, the
            document's own address, a source a flow PINNED and re-read) and this zone holds no copy of that
