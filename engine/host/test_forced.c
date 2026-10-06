@@ -203,6 +203,37 @@ static const TfChunk TF_CHUNKS[] = {
        here that every later module statement invalidates. The DERIVATION rather than a figure, so the next
        reader gets today's answer: `grep -c 'type=module' engine/host/test_forced.c` for the inline statements
        and a grep of `TF_SERVED` for the bodies this host serves as modules.
+       AND THAT DERIVATION IS A COUNT OF A NAME WHERE THE CONSTRUCT WAS MEANT, SO IT ANSWERS TWICE THE
+       POPULATION, AND THE SPELLING IT NAMES IS THE ONE A READER DOES NOT TYPE. Both halves are measured with
+       their commands and an invented control, because a figure here is the thing that rots. The published
+       `grep -c 'type=module' engine/host/test_forced.c` answers SIX and three of the six are THIS BANNER'S
+       OWN PROSE, while a count anchored on the string literal that OPENS a statement answers THREE against an
+       invented attribute value answering ZERO. So the derivation offered to replace a rotting superlative is
+       itself inflated by the recording discipline that wrote the superlative down, and every later record
+       here inflates it again by one.
+       THE SECOND HALF COST A DISPATCHED LANE AND IS THE ONE NO READER OF THIS FILE CAN SEE: every real page
+       ships the attribute QUOTED, so a reader greps the HTML-conventional spelling, that grep answers ZERO,
+       and the population reads as EMPTY. A brief was written off exactly that zero stating that this engine's
+       module subsystem had never been exercised by any gate in this project, with three inline statements,
+       five served module bodies, a two-node graph and twenty-odd probe rows standing here. The zero was true
+       of the STRING and false of the TREE, which is the count-of-a-spelling defect arriving at a PRESENCE
+       question, where a zero closes the case instead of inviting a second look.
+       THE DOCUMENT MAY NOT BE RE-SPELLED TO CLOSE IT, which is why this is a derivation fix and not an edit
+       to the statements: this document is ONE LINE and a `@WHY` frame's COLUMN is the only coordinate a reader
+       has into it, so inserting two quote bytes at the first module statement re-points every column after
+       it. That is the invariant the module, crypto, operand-shape, closure and graph statements each state in
+       their own words, so the SPELLING is load-bearing and the GREP is what has to admit both.
+       SO THE DERIVATION FOR THE INLINE STATEMENTS IS `grep -cE '^ *"<script type=.{0,2}module' <this file>`,
+       which keys on the opening string literal of a statement rather than on the attribute's name, is
+       ANCHORED so a record that quotes it cannot count itself, and admits the escaped-quote form the day a
+       column shift is affordable: measured THREE here, ONE against a one-line probe written the quoted way,
+       ZERO against an invented value. `TF_SERVED` is still grepped for the bodies this host serves as modules.
+       RETIREMENT: this record goes when the count of this document's module statements is published by the
+       host reading the DOCUMENT it assembled rather than by any grep over this file's source, because a
+       spelling cannot then be the subject of the count at all. MEASURED ABSENT with the command, keyed on a
+       definition rather than a bare token so the condition is not satisfied by its own text:
+       `grep -cE 'moduleStatements|modStatementCount|docModuleCount' engine/smokerows.mjs <this file>` answers
+       0 and 0, against `grep -c 'answered' engine/smokerows.mjs` answering 8 as the armed control.
        THE MEASUREMENT BELOW IS KEPT VERBATIM AND IS STILL EXACTLY RIGHT AT THE REVISION IT NAMES. Measured by
        command:
        `grep -nc 'JS_EVAL_TYPE_MODULE' engine/host/test_forced.c` answered 0 and this file's own prose said it
