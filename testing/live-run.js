@@ -2187,7 +2187,34 @@ async function oneRun(browser, pg, url, budgetMs, engineErrs) {
                                  in it. `undefined` is a relay predating the field, for the rows above's
                                  reason. */
                               razorClass: ("endpointRazorClass" in r)
-                                ? r.endpointRazorClass : undefined })),
+                                ? r.endpointRazorClass : undefined,
+                              /* …AND WHOSE HOLE EACH NON-DETERMINED ADDRESS CARRIED, which is the one axis
+                                 none of the three above can express and the one the bar's own open question
+                                 is about. The rows beside it say WHICH DOOR, WHEN, and WHETHER THE RUN HAD
+                                 DETERMINED the address; not one of them says, of an address the run did NOT
+                                 determine, WHERE THE UNKNOWN CAME FROM — and a hole this engine minted for
+                                 its own orphan drive clears the hard bar in exactly the same bucket as one
+                                 a page's own `location.hash` put there, which are opposite findings about
+                                 the product.
+                                 IT IS NOT A FOURTH OPERAND OF THE BAR AND MAY NOT BE UNIONED INTO IT.
+                                 solver/endpoint.h states that case at `ENDPOINT_WITNESS_CLASSES` and it
+                                 holds here for the same reason: `endpoint_razor_class_of` takes TWO ints,
+                                 the address class and the door's bytes column, so the bar cannot ask a
+                                 property of a VALUE at all, and a consumer that folded this in would turn a
+                                 floor into a claim about provenance the producer never composed.
+                                 THREE OF ITS FOUR BUCKETS ARE NOT THREE FACTS. solver/endpoint.c writes
+                                 `null` on EXACTLY the rows whose `addr_class` is `EPA_CONCRETE` — read at
+                                 the emitter, not inferred — so `(no-concolic)` is ENTAILED by this line's
+                                 `addressClass: concrete` and corroborates nothing (CLAUDE.md
+                                 §EVIDENCE-INFLATION); `(unstated)` is a relay predating the field. The
+                                 observation is the `(named)`-against-`(unattributed)` split WITHIN the rows
+                                 that carried an unknown, and nothing else on this line can make it.
+                                 `undefined` IS A RELAY PREDATING THE FIELD, for the three rows above's
+                                 reason exactly, and extension/bridge.js records that NO ARCHIVED ROW
+                                 carried this key at all — so the first drive that reads it is the first
+                                 reading of this axis on a real site rather than a re-reading of one. */
+                              addressRoot: ("endpointAddressRoot" in r)
+                                ? r.endpointAddressRoot : undefined })),
     frontier: mine.map(census),
     storeEndpointsDelta: (last.endpoints === null || before.endpoints === null)
       ? null : last.endpoints - before.endpoints,
@@ -2396,6 +2423,16 @@ async function main() {
            surface reads `unproven` has REFUSED TO CLAIM the bar on that document, which is a finding about
            the run and never a target to optimise toward. */
         endpointRazorClass: rs.map((r) => r.doors.map((d) => hist(d.razorClass)).join("|") || "no-row"),
+        /* …AND WHOSE HOLE PAID FOR IT, which is the column that separates this product working from this
+           product measuring itself. A surface whose razor reads `runtime-only` on rows whose root names
+           `{orphan<hex>.argN}` is the ENGINE'S OWN MINT clearing the engine's own bar; the same figure on
+           rows naming a declared attacker source is the thing the tool exists to find. Both print an
+           identical `endpointRazorClass`, so this is the only row on this line that can tell them apart.
+           READ WITH `endpointAddressClass` ONE ROW UP AND NEVER AS A FOURTH SIGNAL: `(no-concolic)` is that
+           row's `concrete` restated, by the emitter's own `addr_class == EPA_CONCRETE` arm, so the two rows
+           carry THREE facts between them and not five. It composes no union and asserts no identity against
+           `frontier`'s engine-side census, for `endpointAddressClass`'s reason exactly. */
+        endpointAddressRoot: rs.map((r) => r.doors.map((d) => hist(d.addressRoot)).join("|") || "no-row"),
         sinks: spread(rs, first("sinks")),
         candidates: spread(rs, first("candidates")),
         flows: spread(rs, first("flows")),
