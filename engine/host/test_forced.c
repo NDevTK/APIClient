@@ -5887,6 +5887,41 @@ static const char *HTML =
        column after it. It is LAST for a second reason of its own — it is the only statement here that leaves
        an undetermined `id` in the tree, so every getElementById that runs after it would fork at that element
        too, and there is nothing after it. */
+    /* FETCH §5.4 "Request class" STEP 30 — "Set this's signal to the result of creating a dependent abort
+       signal from signals, using AbortSignal and this's relevant realm" — ASKED FROM THE CONSTRUCTOR, which is
+       the one mint of a Request this file had never made. `new Request(` occurred ZERO times in it, so the
+       §5.4 constructor's own fork point had no row anywhere and the abort it reached was observable only on a
+       real page.
+       THE CLAIM IS THE ENDPOINT PAIR AND NOTHING ELSE. DOM §3.2 "Interface AbortSignal"'s step 2 is "For each
+       signal of signals: if signal is aborted, then set resultSignal's abort reason to signal's abort reason
+       and return resultSignal", and `tsig`'s flag is UNKNOWN, so step 30 forks INSIDE the constructor: the TRUE
+       arm is born aborted with the timeout's reason and the FALSE arm walks on to an empty remainder and
+       yields a live dependent signal. `reqsig.signal.aborted` is therefore CONCRETE AND OPPOSITE on the two
+       arms, and BOTH `/api/reqsigfork` endpoints are learned. ONE endpoint here is one arm deleted.
+       `anyfork` ABOVE IS NOT A CONTROL FOR THIS ROW, which is the whole reason this one exists. It asks the
+       same algorithm through `AbortSignal.any`'s machine and proves THAT machine carries the sibling; it says
+       nothing about whether §5.4's constructor does, and a reader who takes it as the witness has established
+       that the mechanism works SOMEWHERE rather than that it ran HERE.
+       THE PAYLOAD IS CONSTANTS, deliberately: a witness composed from anything this engine COMPUTED can itself
+       become unknown, at which point the request is never issued and a reached arm reads exactly like an
+       aborted one. `v=reqhot` and `v=reqcold` are literals, so the oracle is the serving host's own access log
+       and not anything inside the engine.
+       IT BELONGS TO THIS DOCUMENT AND NOT TO ANOTHER, WHICH IS THE ONE THING AN APPEND HERE CAN GET WRONG AND
+       WHICH COST A READING TO CATCH. The row NAMES `tsig`, which `var tsig = AbortSignal.timeout(...)` declares
+       in THIS string; this file holds five document strings, and an append anchored on a nearby CONSTANT rather
+       than on the document landed the first draft of this row inside `HTML_COLD`, where `tsig` is not declared
+       and the statement would have thrown a ReferenceError — a witness that cannot speak, which reads exactly
+       like an arm that never ran. So a row that names a variable is placed by finding the `static const char *`
+       that declares it, never by finding a string to sit beside.
+       IT IS APPENDED IN FRONT OF THE `bidseed` STATEMENT AND NOT AFTER IT, for the reason that statement gives
+       for being LAST: it leaves an undetermined `id` in the tree, so every getElementById after it forks at
+       that element too. This row calls none, so it cannot be the thing that reason is about — and sitting
+       above it keeps that claim true. It re-points the `bidseed` statement's column and nothing else, which is
+       the smallest shift any placement in a ONE-LINE document has. */
+    "<script>"
+    "var reqsig = new Request('/api/reqsig', { signal: tsig });"
+    "if (reqsig.signal.aborted) { fetch('/api/reqsigfork?v=reqhot'); } else { fetch('/api/reqsigfork?v=reqcold'); }"
+    "</script>"
     "<span id=bidseed></span>"
     "<script>"
     "var bidu = location.hash.slice(1);"
