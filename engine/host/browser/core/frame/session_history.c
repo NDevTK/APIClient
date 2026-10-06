@@ -1284,11 +1284,29 @@ static void sh_restore_history_object_state(JSContext *ctx, JSValueConst entry)
     d.holders = JS_UNDEFINED;
     d.symbols = JS_GetPropertyStr(ctx, entry, SH_E_CLASSIC_SYM);
     state = structured_deserialize_transfer(ctx, &d, &values);
-    /* NOTHING WAS TRANSFERRED, SO THE LIST IS EMPTY AND IS STILL FREED: the out-parameter is owned whatever it
-       holds, and §7.2.5 has no transfer list for it to have come from. */
-    DCHECK(structured_transfer_len(ctx, values) == 0,
-           "§7.4.6.2's restore of the history object state deserialized transferred values — pushState names no "
-           "transfer list, so the record this entry holds has no `holders` and nothing can have been moved");
+    /* THE OUT-PARAMETER IS OWNED WHATEVER IT HOLDS, so it is freed below on every arm. */
+    /* NOTHING WAS MOVED, AND THE ARRAY IS NOT THEREFORE EMPTY — THE RETIRED ASSERT IS KEPT BELOW THE
+       VERDICT BECAUSE A READER WHO RE-DERIVES IT FROM "§2.7.8 CALLS THIS THE [[TransferredValues]]" WILL
+       WRITE IT AGAIN. It read `structured_transfer_len(ctx, values) == 0`, and its message was exactly right
+       about HOLDERS and silent about SYMBOLS: core/structured_clone.c appends one entry per rebuilt triple to
+       the same array the holders filled, under ONE numbering its writer chose so a reference in the body
+       resolves without the reader knowing which kind it was. So the array is non-empty for any state carrying
+       unknown external input, and the condition fired on the commonest thing a client-side router does.
+       MEASURED rather than reasoned: `history.pushState({t: location.hash.slice(1)}, '', '/p')` aborted a dev
+       build at this line, 3 of 312 fixture statements answered, at a table composed before any flow was
+       dispatched. The abort was CORRECT in the sense §Offensive-programming means — it named a wrong
+       invariant — and the invariant was this assert's, not the engine's.
+       WHAT IS LIVE HERE IS THE MOVE AND IT IS STILL WORTH ASSERTING: §7.2.5 names no transfer list, so no
+       receiving steps can have run, and a moved entry would be this file handing the deserializer a holder
+       list it had just set to JS_UNDEFINED. structured_moved_len is that question asked of the one array,
+       with the record it came from as the other operand — not a count kept beside it, which would be a
+       second copy of a numbering only the resolver reads. */
+    DCHECK(structured_moved_len(ctx, &d, values) == 0,
+           "§7.4.6.2's restore of the history object state deserialized MOVED values — §7.2.5's pushState "
+           "names no transfer list and this read set `holders` to JS_UNDEFINED three lines up, so a received "
+           "transferable here is this file disagreeing with itself. A REBUILT CONCOLIC TRIPLE IS NOT ONE OF "
+           "THESE and does not reach this count: structured_moved_len subtracts the symbols the entry "
+           "carried, which is what the retired form of this assert could not tell apart");
     JS_FreeValue(ctx, values);
     JS_FreeValue(ctx, d.symbols);
     JS_FreeValue(ctx, buf);
@@ -2205,9 +2223,22 @@ JSValue session_history_entry_nav_state(JSContext *ctx, JSValueConst e)
     /* A FRESH DESERIALIZATION, which is what §7.2.6.5's `getState()` promises and why it is a method: "unless
        the state value is a primitive, entry.getState() !== entry.getState()". */
     v = structured_deserialize_transfer(ctx, &d, &values);
-    DCHECK(structured_transfer_len(ctx, values) == 0,
-           "§7.2.6.5's getState deserialized transferred values — updateCurrentEntry names no transfer list, so "
-           "this entry's record has no holders and nothing can have been moved");
+    /* THE SAME RE-KEYING AS §7.4.6.2's RESTORE ABOVE, LANDED IN THE SAME DIFF FOR
+       §AND-THE-MIRROR-OF-THAT-IS-A-FIX-WHOSE-SITE-COUNT-IS-LARGER-THAN-ONE's REASON: the two were the only
+       sites in this tree asking `is the resolution array empty` to mean `was anything moved`, and they are
+       wrong for ONE reason, so repairing one and leaving the other would file the recurrence where nobody
+       reading this file would meet it. The derivation that bounded the sweep, rather than the figure:
+       `git grep -n 'structured_transfer_len(ctx, values) == 0'` answered these two and nothing else, and the
+       two `ports` callers of the same array were read and are SAFE — they filter by BRAND
+       (core/events/message_event.c's `message_event_ports_of`), which is not keyed on the numbering at all,
+       so a rebuilt triple is excluded there by construction rather than by luck. The §9.5 broadcast caller
+       names the array `rebuilt` and frees it, having already reasoned the dual nature out at its own site. */
+    DCHECK(structured_moved_len(ctx, &d, values) == 0,
+           "§7.2.6.5's getState deserialized MOVED values — §7.2.6.6's updateCurrentEntry names no transfer "
+           "list and this read set `holders` to JS_UNDEFINED four lines up, so a received transferable here is "
+           "this file disagreeing with itself. A REBUILT CONCOLIC TRIPLE IS NOT ONE OF THESE: an entry whose "
+           "state carries unknown external input has a non-empty `symbols`, which structured_moved_len "
+           "subtracts and the retired `== 0` form of this assert counted as a transfer");
     JS_FreeValue(ctx, values);
     JS_FreeValue(ctx, d.symbols);
     JS_FreeValue(ctx, buf);

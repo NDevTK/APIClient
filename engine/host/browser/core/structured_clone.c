@@ -602,6 +602,22 @@ uint32_t structured_transfer_len(JSContext *ctx, JSValueConst arr)
     return n;
 }
 
+uint32_t structured_moved_len(JSContext *ctx, const StructuredWithTransfer *in, JSValueConst values)
+{
+    uint32_t total = structured_transfer_len(ctx, values);
+    uint32_t syms  = structured_transfer_len(ctx, in->symbols);
+
+    /* THE NUMBERING structured_deserialize_transfer WRITES, ASSERTED WHERE IT IS RELIED ON. It appends every
+       rebuilt triple to the array the holders filled, so the array is never SHORTER than the symbol list it
+       was built from; a total below it would be the two halves of this file's own format disagreeing, and the
+       subtraction below would wrap rather than report. */
+    DCHECK(total >= syms,
+           "a resolution array is shorter than the symbol list it was deserialized from "
+                  "— structured_deserialize_transfer appends one entry per symbol to the array the "
+                  "holders filled, so the two halves of this file's own numbering disagree");
+    return total - syms;
+}
+
 int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst transfer,
                                   StructuredWithTransfer *out)
 {

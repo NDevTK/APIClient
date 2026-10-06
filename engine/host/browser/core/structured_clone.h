@@ -196,9 +196,38 @@ int  structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst 
    engine-built, so a malformed one crashes rather than reporting; no page input can reach it. JS_UNDEFINED is
    an empty one, which is what a record carrying no transfer holds. */
 uint32_t structured_transfer_len(JSContext *ctx, JSValueConst arr);
-/* Answers the deserialized message; `*pvalues` receives the [[TransferredValues]] as an Array (owned), which
-   is what a MessageEvent's `ports` is built from. */
+/* Answers the deserialized message; `*pvalues` receives the RESOLUTION ARRAY (owned).
+   IT IS NOT THE [[TransferredValues]] LIST, WHICH IS WHAT THIS SENTENCE USED TO SAY, AND THE RETIRED WORDING
+   IS KEPT BECAUSE A READER WHO RE-DERIVES IT FROM §2.7.8's OWN NAME FOR THE LIST WILL WRITE IT AGAIN. It
+   read: "`*pvalues` receives the [[TransferredValues]] as an Array (owned), which is what a MessageEvent's
+   `ports` is built from". The array holds the holders' receiving-steps results at 0..n-1 AND THE REBUILT
+   CONCOLIC TRIPLES at n..n+ns-1, under ONE numbering, because the WRITER used one: core/structured_clone.c's
+   `sc_memory_index` returns `i` for a holder and `m->n + i` for a concolic, so a reference the body carries
+   resolves without the reader having to know which kind it was. The deserializer then hands that same array
+   to its own read hook as the `memory` every reference resolves against, which is why it is one array and
+   must stay one.
+   THE RETIRED SENTENCE WAS A CLAIM A CALLER COULD BUILD AN ASSERT ON, AND TWO DID. Read as the transfer list,
+   "this algorithm names no transfer list" entails "this array is empty" — which is FALSE for any message
+   carrying unknown external input, so a page doing `history.pushState({t: location.hash}, '', '/p')` — the
+   commonest thing a client-side router does — aborted a dev build at an assert whose own text was right
+   about holders and silent about symbols. That is §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS: ONE array is the
+   FACT and each caller's question is a PREDICATE over it, never a second array that could disagree with the
+   numbering the resolver needs.
+   SO A CALLER ASKING `WAS ANYTHING MOVED` ASKS structured_moved_len AND NEVER structured_transfer_len OF THIS
+   ARRAY. A caller that wants the MessagePorts among them filters by brand instead —
+   core/events/message_event.c's `message_event_ports_of`, which is keyed on the class and not on the
+   numbering, and is why the two `ports` callers were never wrong about a rebuilt triple. */
 JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTransfer *in, JSValue *pvalues);
+/* HOW MANY OF A RESOLUTION ARRAY'S ENTRIES WERE MOVED BY §2.7.8 STEP 2's TRANSFER-RECEIVING STEPS — the
+   OTHER question that array answers, and the one a caller means when it asks whether anything was
+   transferred. `in` is the SAME record the array was deserialized from, so both operands of the
+   subtraction are named at the call rather than one of them recalled: §AN-ASSERT-NAMES-BOTH-OPERANDS.
+   IT IS DERIVED FROM THE WRITER'S OWN NUMBERING AND ASSERTS IT, rather than from a count this file could
+   keep beside the array: a holder is index i and a symbol is index n + k, so the moved count is the whole
+   length less the symbols the record carried, and the day that numbering changes this predicate changes with
+   it instead of drifting from it. A second stored count would be the second copy §AN-AUDITOR-DERIVES-THE-RULE
+   forbids, and it is the copy a resolver never reads. */
+uint32_t structured_moved_len(JSContext *ctx, const StructuredWithTransfer *in, JSValueConst values);
 void structured_with_transfer_free(JSContext *ctx, StructuredWithTransfer *d);
 
 #endif
