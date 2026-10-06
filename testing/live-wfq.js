@@ -759,9 +759,11 @@ async function main() {
 
       let n = 0;
       /* THE CENSUS AT WHICH THIS RUN'S TWO BRANCH SELECTORS FIRST SEPARATED, WHICH IS THE ONE THING A READER
-         OF THE TERMINAL LINE COULD NOT ASK. `selectorsAgree` below is a per-census GAUGE over a row that may
-         FALL, and this stream is read by taking its LAST line -- so a run that separated and then re-agreed
-         reads, at terminal, exactly like a run that never separated at all. Those are opposite facts: the
+         OF THE TERMINAL LINE COULD NOT ASK. `selectorsAgree` below is computed entirely over `BR_INSTANT` rows
+         -- this file's OWN class for them, stated at its declaration rather than coined here: a per-bucket
+         lifetime read at ONE instant, because THE BUCKET SELECTED MOVES BETWEEN SAMPLES. So the predicate is
+         not monotone and is free to go back to true, while this stream is read by taking its LAST line -- and a
+         run that separated and then re-agreed reads, at terminal, exactly like a run that never separated. Those are opposite facts: the
          first is the only sample the minter triple can say anything from, and the second is the whole archive.
          MEASURED over 809 archived censuses: ONE separated, and it is census #2 OF 3 with #3 agreeing, so a
          terminal reading misses the single separable sample there has ever been. This is a LIFETIME landmark
