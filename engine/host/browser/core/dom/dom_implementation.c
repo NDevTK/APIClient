@@ -77,23 +77,33 @@ static JSValue js_impl_create_doctype(JSContext *ctx, JSValueConst this_val, int
 {
     lxb_dom_document_t *doc = impl_doc(ctx, this_val);
     const char *name = NULL, *pub = NULL, *sys = NULL;
+    size_t pub_len = 0, sys_len = 0;
     lxb_dom_document_type_t *dt;
     lxb_dom_exception_code_t code = LXB_DOM_EXCEPTION_OK;
     JSValue r;
 
     (void)magic; (void)argc;
     if (!doc) return JS_EXCEPTION;   /* §3.7.7 Operations' brand check threw */
+    /* THE THREE ARGUMENTS ARE TWO DIFFERENT VALUE SPACES, and only step 1 is about the first of them.
+       `qualifiedName` is validated against the XML `Name` production, which excludes U+0000, so it is read
+       length-free here DELIBERATELY: making it NUL-bearing without teaching the validator to refuse one would
+       store an invalid name instead of throwing, and that refusal is a separate diff over every name this
+       engine validates. `publicId` and `systemId` are plain DOMStrings — §4.5.1 validates NEITHER and the
+       doctype stores them verbatim — so they are the attribute-value space again, and lexbor's create has
+       taken their lengths all along while this read threw them away at the first 0x00. Both getters already
+       answer `lxb_dom_document_type_{public,system}_id(dt, &len)` through JS_NewStringLen, so carrying the
+       length here is the whole of the round trip. */
     name = JS_ToCString(ctx, argv[0]);
-    pub  = name ? JS_ToCString(ctx, argv[1]) : NULL;
-    sys  = pub  ? JS_ToCString(ctx, argv[2]) : NULL;
+    pub  = name ? JS_ToCStringLen(ctx, &pub_len, argv[1]) : NULL;
+    sys  = pub  ? JS_ToCStringLen(ctx, &sys_len, argv[2]) : NULL;
     if (!sys) {
         if (pub) JS_FreeCString(ctx, pub);
         if (name) JS_FreeCString(ctx, name);
         return JS_EXCEPTION;
     }
     dt = lxb_dom_document_type_create(doc, (const lxb_char_t *)name, strlen(name),
-                                      (const lxb_char_t *)pub, strlen(pub),
-                                      (const lxb_char_t *)sys, strlen(sys), &code);
+                                      (const lxb_char_t *)pub, pub_len,
+                                      (const lxb_char_t *)sys, sys_len, &code);
     JS_FreeCString(ctx, name); JS_FreeCString(ctx, pub); JS_FreeCString(ctx, sys);
     if (!dt) {
         /* §4.5.1 step 1's only failure, and the one the corpus asserts by name. */

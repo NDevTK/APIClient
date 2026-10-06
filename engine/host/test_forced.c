@@ -1676,10 +1676,18 @@ static const char *HTML =
        population was derived from the WRITE DOOR's callers rather than from a directory. */
     "nz.dataset.k = 'a\\u0000b';"
     "var nzd = nz.dataset.k;"
+    /* §4.5.1's OTHER value space. createDocumentType validates only its FIRST argument — `publicId` and
+       `systemId` are plain DOMStrings the doctype stores verbatim — so they are the attribute-value space
+       reached through a different consumer, and a population derived from the attribute WRITE DOOR could not
+       see them either. The qualified name is NOT tested with a U+0000 in it: that one must THROW, which is the
+       name axis and a different diff. */
+    "var nzt = document.implementation.createDocumentType('n', 'a\\u0000b', 'c\\u0000d');"
     "fetch('/api/domnul?set=' + (nzr.length === 3 && nzr.charCodeAt(1) === 0 ? 'roundtrip' : 'truncated')"
     " + '&attrval=' + (nzav.length === 3 && nzav.charCodeAt(1) === 0 ? 'roundtrip' : 'truncated')"
     " + '&setnode=' + (nzn.length === 3 && nzn.charCodeAt(1) === 0 ? 'roundtrip' : 'truncated')"
-    " + '&dataset=' + (nzd.length === 3 && nzd.charCodeAt(1) === 0 ? 'roundtrip' : 'truncated'));"
+    " + '&dataset=' + (nzd.length === 3 && nzd.charCodeAt(1) === 0 ? 'roundtrip' : 'truncated')"
+    " + '&doctype=' + (nzt.publicId.length === 3 && nzt.publicId.charCodeAt(1) === 0"
+    "                  && nzt.systemId.length === 3 && nzt.systemId.charCodeAt(1) === 0 ? 'roundtrip' : 'truncated'));"
     "var c1 = document.createElement('p'); c1.setAttribute('k','v'); var c2 = c1.cloneNode(true);"
     "fetch('/api/equalnode?v=' + (c1.isEqualNode(c2) && !c1.isSameNode(c2) ? 'iseq' : 'wrong'));"
     /* THE WALK IS THE PAGE'S SIZE, so it is a MACHINE that yields at every pair. 300 nested nodes is 300
