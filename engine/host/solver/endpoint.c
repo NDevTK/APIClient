@@ -915,24 +915,49 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    conjunct could only hold a row OUT of `EPA_SOURCE_DETERMINED` and therefore IN `EPA_UNKNOWN`, which is the
    member §What-the-tool-produces' hard bar reads as a positive claim — so every row it ever decided was the
    bar OVER-claiming, and deleting it can move rows OFF the bar and never onto it.
-   AND THE CONJUNCT IS NOT WHY THE MEMBER IT GUARDS READS ZERO, WHICH IS THE LARGER FINDING AND IS NOT CLOSED
-   BY THIS DIFF. Measured over the committed capture corpus rather than argued, and with the two histograms'
-   own conservation identity as the armed control — both sum to 9489, so they are over the SAME rows: from
-   `testing/corpus`, the `endpointAddressClass` totals are `concrete` 9353 and `unknown` 136 with
-   `source-determined` at **ZERO**, while `endpointWitnessClass` reads `unasked` 113, `no-witness` 5147,
-   `may-rest-on` 4229. The conjunct is false only for the `unasked` rows, so it cannot explain a zero that
-   holds across the 9376 rows where a flow DID stand: for every one of the 136 concolic addresses ever
-   classified, `concolic_example_state` answered something other than DETERMINED. The member's own banner in
-   endpoint.h declares a worked example for it (`var u = cfg.url; if (u === '/api/v2/items') fetch(u);`), and
-   that shape has never occurred in any capture — which is a statement about REACH and not about this
-   classifier: no address this engine has ever emitted was composed from a value the running flow had PINNED.
-   THE PAIRING THAT WOULD PRICE IT IS NOT DERIVABLE FROM THOSE TWO FIGURES, which is why the bound above is a
-   bound: they are MARGINALS, so `unasked` 113 against `unknown` 136 says only that at least 23 bar-clearing
-   rows were minted with a flow standing. The per-ENDPOINT row carries `addressClass` and `witnessClass`
-   ADJACENTLY and the join is exact there; what no capture holds is that document.
+   AND THE CONJUNCT IS NOT WHY THE MEMBER IT GUARDS READS ZERO — AND THE EVIDENCE THIS RECORD GAVE FOR THAT IS
+   WITHDRAWN, BECAUSE ITS STATED ARMED CONTROL IS A NON-CHECK AND ITS FIGURES NAME A SMALLER POPULATION THAN
+   THE SENTENCE AROUND THEM. The CONCLUSION stands and is strengthened below; what goes is the reading that
+   produced it. The two histograms do NOT partition one set of rows across the corpus — `endpointAddressClass`
+   is stated by more records than `endpointWitnessClass` is, the difference being captures older than the
+   witness key — and a walk that sums both over the records holding BOTH gets its identity FOR FREE, since the
+   two partition one record's own `fetchCallSites` and can only be equal there: equal over the intersection,
+   equal over one record, equal over none. That is §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE arriving inside a
+   record's own control, and the figures it certified are the intersection's rather than the corpus's. THE
+   DERIVATION, because every figure here moves as captures are taken: from `testing/corpus`, walk every
+   `census-*.jsonl` RECORD and sum each histogram SEPARATELY, printing the RECORD COUNT per key beside its
+   total — two different record counts is the finding the identity cannot express.
+   WHAT REPLACES IT IS ONE ROW UPSTREAM OF THIS CLASSIFIER, WHICH IS WHY EVERY MECHANISM IN THIS FILE IS A
+   NARROWING AND NOT THE CAUSE. `decide.c`'s `g_fork_over_pinned` is `forked && concolic_src_pinned(src)`,
+   which tests `e && e->val` over the same chain `example_state_of` reads while asking NOTHING about
+   `src_self` and nothing about whether the address was DERIVED — the same underlying fact with strictly fewer
+   conjuncts — and it reads **ZERO** in every record that states it, against its own sibling `forks` arm in the
+   tens of thousands as the armed control. A pin does NOT prune (concolic.c states it: the value stays CONCOLIC
+   and every later branch over it still forks), so a pinned source any later gate touched would raise it. So no
+   capture evidences a §7.2.14 IsStrictlyEqual ( x, y ) arm ever writing a pin VALUE at all, which is upstream
+   of this member and of all three narrowings below it. `g_pin_any` has no census row, so that is a BOUND.
+   THE THREE NARROWINGS ARE REAL AND EACH IS READ AT ITS SITE, so a reader who closes the row above still must
+   not expect this member to fill. A pinned source RE-READ is a BARE PRIMITIVE, `pin_of` going through
+   `pin_mint` whose every arm mints a primitive — so `concolic_is` is false and the FIRST line here answers
+   `EPA_CONCRETE` without ever asking the state. `src_self` is written at exactly the two mints that read a pin
+   and never by `concolic_derived`, which concolic.c argues as deliberate, so EVERY COMPOSED address answers
+   not-DETERMINED however its operand was pinned. And §7.2.13 IsLooselyEqual ( x, y )'s holding arm writes
+   `pinned_root` WITHOUT a value, so a loosely-pinned source has an entry and no determination. Together they
+   leave ONE shape: a source or member read held in a page VARIABLE before its own strict gate and passed
+   BARE — endpoint.h's worked example, whose `fetch(u)` is bare by NECESSITY rather than for brevity.
+   THE RETIRED CONTROL IS KEPT IN ITS OWN WORDS BECAUSE A READER WHO SUMS TWO HISTOGRAMS OVER THEIR
+   INTERSECTION RE-DERIVES IT: "with the two histograms' own conservation identity as the armed control — both
+   sum to 9489, so they are over the SAME rows". Its arithmetic was right and its SUBJECT was wrong.
+   THE PAIRING THAT WOULD PRICE THE `unasked` BOUND IS STILL NOT DERIVABLE FROM MARGINALS, and is now moot for
+   the ZERO, which the row above answers without it: the per-ENDPOINT row carries `addressClass` and
+   `witnessClass` ADJACENTLY and the join is exact there; what no capture holds is that document.
    HOW ITS ABSENCE WOULD SHOW: an `endpointAddressClass` whose `source-determined` arm is still zero on a run
-   that emitted a nonzero `unknown`, which says the pin-to-address path did not fire rather than that this
-   classifier refused it.
+   whose `forkOverPinned` is NONZERO — which would say the pin-to-address path failed for a reason inside this
+   file, where today's zero says no pin was ever taken. THE CLAUSE THAT STOOD HERE IS SPENT AND IS RE-KEYED
+   RATHER THAN DELETED, because a reader who re-derives it from the two emitted arms will write it again: it
+   read "still zero on a run that emitted a nonzero `unknown`", and EVERY record in the corpus that emits a
+   nonzero `unknown` already reads `source-determined` zero — so it was satisfied on every capture that could
+   ask it and could never have fired.
    RETIREMENT: this record goes when the census publishes the ADDRESS CLASS JOINED WITH THE WITNESS CLASS as
    one keyed row, the way `testing/corpus/site.mjs` already keys `door|witnessClass`, because the bound above
    is then a count rather than an inequality. MEASURED ABSENT with the command, keyed on the emitted KEY so
