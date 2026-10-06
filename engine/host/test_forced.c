@@ -231,9 +231,28 @@ static const TfChunk TF_CHUNKS[] = {
        RETIREMENT: this record goes when the count of this document's module statements is published by the
        host reading the DOCUMENT it assembled rather than by any grep over this file's source, because a
        spelling cannot then be the subject of the count at all. MEASURED ABSENT with the command, keyed on a
-       definition rather than a bare token so the condition is not satisfied by its own text:
-       `grep -cE 'moduleStatements|modStatementCount|docModuleCount' engine/smokerows.mjs <this file>` answers
-       0 and 0, against `grep -c 'answered' engine/smokerows.mjs` answering 8 as the armed control.
+       DEFINITION over the one file a publisher would be defined in, so the condition cannot be satisfied by
+       the prose that states it:
+       `grep -cE 'function (moduleStatements|modStatementCount|docModuleCount)|const (moduleStatements|modStatementCount|docModuleCount) *=' engine/smokerows.mjs`
+       answers 0, against `grep -cE '^ *(function [a-zA-Z]|const [a-zA-Z_]+ *=)' engine/smokerows.mjs`
+       answering 15 as the armed control and an invented publisher name answering 0.
+       AND THE CLAUSE THAT STOOD HERE SAID `answers 0 and 0` OVER TWO FILES WHILE CLAIMING TO BE KEYED ON A
+       DEFINITION, AND ITS SECOND FIGURE WAS **1** — THE HIT BEING THE CLAUSE'S OWN TEXT. It is kept in its own
+       words because the self-satisfying form is the one a reader re-derives: the natural way to write a
+       MEASURED-ABSENT clause is to name the identifiers you have not built, and NAMING THEM IS WHAT MAKES THE
+       GREP ANSWER. The retired wording was `grep -cE 'moduleStatements|modStatementCount|docModuleCount'
+       engine/smokerows.mjs <this file>` answers 0 and 0, with `grep -c 'answered' engine/smokerows.mjs`
+       answering 8 — the control was real and armed, the first subject was exactly right, and only the figure
+       over THIS file was false. So a sentence may assert its own pattern is definition-keyed and be a bare
+       token set, which no instrument here reads: a MEASURED-ABSENT figure is RUN rather than described, and
+       the file it is run over is named in the command a reader can paste.
+       AND THE INVENTED CONTROL ONE PARAGRAPH UP IS WEAKER THAN IT READS, WHICH IS A PROPERTY OF THE WILDCARD
+       RATHER THAN OF THE FIGURE: `type=.{0,2}module` admits ANY two bytes before the name, so it matches
+       `type=zzmodule` and `type=xymodule` as readily as the escaped-quote form it was written for, and it
+       excludes an invented value only at THREE bytes or more (`type=notmodule`, `type=submodule` → 0).
+       Measured on a one-line probe per case rather than argued. The published THREE is unaffected, because no
+       two-byte-prefixed fake stands in this file; what is weaker is the claim that the pattern EXCLUDES an
+       invented value, which holds for the control class it was tested against and not for every one.
        THE MEASUREMENT BELOW IS KEPT VERBATIM AND IS STILL EXACTLY RIGHT AT THE REVISION IT NAMES. Measured by
        command:
        `grep -nc 'JS_EVAL_TYPE_MODULE' engine/host/test_forced.c` answered 0 and this file's own prose said it
