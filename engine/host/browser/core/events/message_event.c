@@ -154,8 +154,23 @@ JSValue message_event_ports_of(JSContext *ctx, JSValueConst transferred)
     if (JS_IsException(out)) return out;
     if (JS_IsUndefined(transferred) || JS_IsNull(transferred))
         return out;
-    /* The [[TransferredValues]] list is the ENGINE'S own array — structured_deserialize_transfer built it — so
-       none of the page's code runs in this walk and a failure here is a should-never-happen. */
+    /* THE ARRAY THIS IS HANDED IS WIDER THAN [[TransferredValues]], SO THE BRAND TEST BELOW IS LOAD-BEARING
+       AND NOT A TYPE TIDY-UP — which is said here because the retired contract on
+       core/structured_clone.c's out-parameter invited the opposite reading and TWO callers built an assert
+       on it. `structured_deserialize_transfer` writes ONE array under ONE numbering: the holders'
+       receiving-steps results at 0..n-1 AND the REBUILT CONCOLIC TRIPLES at n..n+ns-1, because the writer
+       numbered them together so a reference in the message body resolves without the reader knowing which
+       kind it was. A page that posts unknown external input therefore puts an entry in here that §2.7.8
+       never transferred.
+       `message_port_is` IS WHY THAT COSTS NOTHING, and it is the reason this walk was never wrong about one:
+       the filter is keyed on the CLASS and not on the numbering, so a rebuilt triple is excluded BY
+       CONSTRUCTION rather than by the array happening to hold only ports. DELETING IT AS REDUNDANT WOULD
+       PUT A CONCOLIC IN `event.ports`, which is a page-observable wrong answer in release as well as in dev:
+       `e.ports.length` would read 1 for a message that transferred nothing. §9.3.3 and §9.4.4 both say
+       `newPorts` is "all MessagePort objects in deserializeRecord.[[TransferredValues]]", and the word doing
+       the work in that sentence is MessagePort.
+       THE ARRAY IS STILL THE ENGINE'S OWN, which is the separate fact the asserts below rest on: none of the
+       page's code runs in this walk, so a failure here is a should-never-happen. */
     len = JS_GetPropertyStr(ctx, transferred, "length");
     DCHECK(!JS_IsException(len), "reading the length of the engine's own [[TransferredValues]] threw");
     if (JS_ToUint32(ctx, &n, len) < 0) { JS_FreeValue(ctx, len); JS_FreeValue(ctx, out); return JS_EXCEPTION; }
