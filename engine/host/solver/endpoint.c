@@ -659,6 +659,21 @@ void endpoint_suppress(int on) { g_suppress = on ? 1 : 0; }
    `else` because the true arm would mint no hole to look a domain up under. Read either half alone and you get a rule that is exactly backwards for the other: measured, two
    readers reached the two opposite wrong answers about this in one session. One equality, two spellings, two
    different records, and which one a bundle writes is the bundle's choice and not the gate's.
+   AND THE MINT HALF ALONE HAS NOW REACHED A DISPATCHED BRIEF, WHICH IS WORSE THAN A READER GETTING IT WRONG
+   ALONE AND IS WHY THE COUNT ABOVE IS NOT THE WHOLE RECORD. A reader holding only the mint half concludes
+   that every address a page builds out of a pinned source grades `concrete`, that the product's own bar is
+   therefore DEPRESSED by the pin, and that the remedy is to grade such an address `unknown` — which
+   `endpoint_razor_class_of`'s own banner measures as the OVER-claim, since a pin's bytes are the equality's
+   OTHER operand and `concolic_cmp` spells a token only where that operand is NOT concolic, so they are text
+   the page's own source states. Read once and relayed rather than opened, that becomes a brief, and
+   CLAUDE.md §A-BRIEF-WRITTEN-OUT-OF-A-CRASH-MESSAGE's multiplier applies: the claim is read by somebody who
+   will not open this file and is then dispatched to readers who act on it. The receiving lane refuted it from
+   this banner and from the address list's own macro, which is the mechanism working and cost one reading.
+   RETIREMENT: this record goes when the two pin reads answer through ONE accessor that states WHICH half it
+   took, because a reader cannot then hold the mint half without the other. MEASURED ABSENT with the command,
+   so this condition is not born met: over solver/concolic.h,
+   `grep -cE 'concolic_pin_half|pin_read_kind|concolic_example_which'` answers 0 against
+   `grep -c 'concolic_example_state'` answering 1 as the armed control.
    RETIREMENT: this record goes when the concrete branch below can state whether the address it is spelling
    ever held a determined unknown, because the three cases are then told apart at this line instead of
    re-derived from the page that wrote it. */
@@ -698,13 +713,31 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    `concolic_example` to MINT the pinned bytes and by this line to REPORT that there are some, so the value
    and the fact about it come out of ONE lookup and cannot disagree. It is documented side-effect-free and
    allocation-free. A prefix test over the shape would have been a count of a spelling.
-   IT IS GATED ON A FLOW STANDING, AND THE GATE IS A STATEMENT RATHER THAN A DEFENCE — `witness_class_now`'s
-   gate, one question over, for a sharper reason. The pin is read out of THE RUNNING FLOW'S constraint chain;
-   with no flow standing the chain is whatever the last switched-away state left installed, so a STALE pin
-   would answer `source-determined` for an address no live path determined — the permissive direction, on the
-   product's own bar. A record minted before any program started is a real and ordinary population (98 of 190
-   on one real page), so the conservative answer has to be the one that needs no flow: a concolic address with
-   nothing standing is a value this run had not determined, which is `unknown` and is what it already read.
+   IT IS GATED ON A FLOW STANDING, AND THE GATE ERRS TOWARD CLAIMING ON THE BAR RATHER THAN AWAY FROM IT —
+   THE OPPOSITE OF WHAT THIS PARAGRAPH SAID, AND THE RETIRED WORDING IS KEPT BELOW THE VERDICT BECAUSE A
+   READER WHO RE-DERIVES IT FROM "a proof needs evidence" WILL WRITE IT AGAIN. The gate is RIGHT and its
+   stated DIRECTION was wrong. The pin is read out of THE RUNNING FLOW'S constraint chain and with no flow
+   standing the chain is whatever the last switched-away state left installed, which is the real hazard; but
+   `endpoint_razor_class_of` maps `EPA_UNKNOWN` to `runtime-only` and leaves `EPA_SOURCE_DETERMINED` at
+   `unproven` unless the DOOR carries it, so `source-determined` claims LESS on the bar and this gate's
+   no-flow fallback to `unknown` claims MORE. What makes the gate correct is therefore not a direction at all
+   but that a stale chain would assert a DETERMINATION NO FLOW MADE — a false positive claim about a PROOF,
+   which is wrong whichever way it moves a figure. The retired wording read: a stale pin "would answer
+   `source-determined` for an address no live path determined — the permissive direction, on the product's own
+   bar", and a reader who believes that reads this gate as PROTECTING the bar when it is what raises it.
+   AND ITS CITED POPULATION IS BORROWED FROM THAT SIBLING AND DOES NOT REACH HERE, which is the same clause
+   failing one step over. `witness_class_now` is asked at EVERY record, so its pre-program citation (98 of 190
+   on one real page) is load-bearing THERE; this gate sits behind `if (!concolic_is(url))`, and a record
+   minted before any program started holds an address no page code composed, so it returns at that FIRST line
+   and never reaches this question. The population this gate does decide is `unasked` AND concolic, which that
+   sibling's own class bounds from above — read off a census with testing/corpus's stated derivation rather
+   than off this file, because a figure here would be a claim competing with a command.
+   RETIREMENT: this record goes when the no-flow answer's direction is ASSERTED where both are in one hand —
+   a check that `address_class_of`'s flow-less member is the one `endpoint_razor_class_of` maps to
+   `runtime-only` — because the direction is then read off an exercised assertion instead of off prose.
+   MEASURED ABSENT with the command, so this condition is not born met: over this file,
+   `grep -cE 'DCHECK.*address_class_of|address_class_of.*EPZ_RUNTIME_ONLY'` answers 0 against
+   `grep -c 'DCHECK(EPA_UNKNOWN == EPA_COUNT - 1'` answering 1 as the armed control.
    THE ROOT IS STILL NOT ASKED, AND THE REASON HAS CHANGED FROM "IT CANNOT MATTER" TO "IT CANNOT BE SPELLED".
    The retired reason is kept because it is what a reader re-derives: a root test "would narrow this class by a
    population that mint has refused, which is a conjunct that cannot change an answer", `concolic_alloc`
