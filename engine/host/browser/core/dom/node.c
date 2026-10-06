@@ -4396,10 +4396,47 @@ void node_install_non_doctype_child_mixin(JSContext *ctx, JSValueConst proto)
 enum { IDL_STEP_STAGE_BASE(NODE_BYID_STAGES) NODE_BYID_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const NODE_BYID_STEPS[] = { NODE_BYID_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
+/* WHICH COMPLETION OF §4.2.4'S ID COMPARISON OVER AN UNDETERMINED `id` THIS WORLD IS IN. TWO, and OUTCOME 0
+   IS "IS NOT THE ID" — step_fork_run's one numbering rule, read against this comparison: a run with no forking
+   policy (the @S candidate re-fire) takes 0, and 0 is the arm that does NOT divert, since it advances the
+   cursor and the walk goes on exactly as it did before this seam existed. It is also the answer every build
+   gave for an undetermined `id` before the seam, and that is a fact rather than a coincidence: a concolic
+   attribute write stores concolic_shape_c's DISPLAY SHAPE in the tree (element.c's attribute write says so by
+   name — "A concolic value has no bytes to store"), so the memcmp below has been comparing elementId against
+   `{location.hash}` and answering false.
+   THE SPELLINGS ARE NAMED HERE AND NOWHERE ELSE. document.c's selector walk declares its own two for the same
+   reason and they are a DIFFERENT question's — Selectors 4 §6's, at file scope in that file — so this is not a
+   second spelling of one count but one spelling of a second count. */
+enum { BYID_NOT_THE_ID = 0, BYID_IS_THE_ID, BYID_ID_OUTCOMES };
+
+/* THE CONSTRAINT KEY OF §4.2.4'S COMPARISON — step_fork_run's `op`, and HALF THE KEY rather than a label; the
+   other half is the VALUE, which rides `over`.
+   WHAT VARIES AND WHAT DOES NOT, because that is what makes this one entry rather than a general speller.
+   §6's predicate has four fields (attribute, operator, operand, case) and `selector_undet_key` spells all four.
+   §4.2.4 poses ONE shape: the attribute is `id`, the operator is equality, the case is sensitive, and the only
+   variable is elementId. So the key has exactly ONE variable field, at a fixed position between a fixed prefix
+   and a fixed suffix, which makes the spelling INJECTIVE in elementId by construction — `P+a+S == P+b+S`
+   implies `a == b` — and that is the whole of what concolic_ident_compose's length prefixes buy for the
+   multi-field case and this does not need.
+   AND IT CANNOT TRUNCATE, which is why there is no refusal arm here where document.c has two. The buffer is
+   sized FROM elementId's own length rather than guessed, so there is no width for a page-controlled id to
+   exceed — §Fix-the-ROOT's impossible state, in place of a `DFAILF` for a key that would merge two questions.
+   ONE SPELLER OF THE SIZE, used at the compose and at the visit, because two spellings of one length drift. */
+#define BYID_ASK_PRE  "DOM §4.2.4 getElementById[id=\""
+#define BYID_ASK_POST "\"]"
+#define BYID_ASK_BYTES(idl) (sizeof BYID_ASK_PRE - 1 + (idl) + sizeof BYID_ASK_POST)   /* includes the NUL */
+
 typedef struct {
     lxb_dom_node_t *root, *cursor;
     char   *id;
     size_t  idlen;
+    /* THE NAME OF THE FORK THIS WALK ASKS, ON THE STATE because the driver reads `JSStepHdr::fork_op` AFTER the
+       machine has returned JS_STEP_FORK, by which time a local of that body is gone. Composed ONCE on the
+       first ask and not per entry, which document.c cannot do because its predicate varies per node and this
+       one's does not: every node of this walk poses the SAME question about a DIFFERENT value, so the operand
+       half of the key is `over` and this half is a constant of the call. NULL until something forks — a
+       getElementById over a document that stored no unknown never allocates it. */
+    char   *ask;
 } NodeByIdState;
 
 static void node_byid_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -4407,8 +4444,132 @@ static void node_byid_visit(JSContext *ctx, void *st, JSStepVisit *v)
     NodeByIdState *s = st;
     /* The cursors are Lexbor nodes, which belong to the document. The id is this machine's own copy — the
        JSString it came from is released before the first suspension, and two forked arms must not share one
-       buffer that either of them frees. */
+       buffer that either of them frees. The ask key is the same: `fork_ask_key` is a CONTENT HASH, so what
+       has to survive the park is the bytes rather than the address, and a sibling that shared this one would
+       free what the parent is still holding. */
     v->buf(ctx, (void **)&s->id, s->id ? s->idlen + 1 : 0);
+    v->buf(ctx, (void **)&s->ask, s->ask ? BYID_ASK_BYTES(s->idlen) : 0);
+}
+
+/* §4.2.4'S ID COMPARISON, AND THE ATTRIBUTE VALUE SEAM UNDER IT — "whose ID is elementId", asked of an element
+ * whose `id` THIS FLOW HAS NOT DETERMINED, which has no two-valued answer and must not be given one.
+ *
+ * WHAT IT WAS. The tree holds concolic_shape_c's display shape for a concolic attribute write, so the memcmp
+ * compared elementId against `{location.hash}`, answered false, and the walk went past the one element whose
+ * ID the page is about to decide. That is not a coarse answer, it is a DECIDED one: the arm in which the
+ * source is elementId was deleted, and with it every endpoint and sink behind `document.getElementById(x).…`.
+ * §Solver-half's rule is that where the domain permits both outcomes BOTH arms run.
+ *
+ * THE ORDER IS PIN, THEN FORK, AND IT IS THE SAME ORDER AS THE CASCADE'S VALUE READ. §Solver-half's
+ * CONCRETIZE-ON-PIN is asked FIRST because the determination is made by the PAGE'S OWN predicate, in a flow the
+ * interpreter's branch seam already minted, and a value pinned there is a real string by the time this asks —
+ * the page that writes an unknown into `id` is very often the same page that branches on that unknown a few
+ * statements later. It is asked OF THE VALUE and never of a key this file composes, for the reason concolic.h
+ * gives: a pin is stored under `src`, `src` is the INJECTION identity, and a derivation inherits its first
+ * unknown operand's, so a hand-spelled key would hand `'row-' + cfg.sel` back `cfg.sel`'s bytes as if they were
+ * the concatenation's. NULL is the positive statement that this flow has determined nothing.
+ *
+ * NO IDENTITY REFUSAL, AND THAT IS A DIFFERENCE FROM THE CASCADE RATHER THAN AN OMISSION. SelectorUndet
+ * declares a value with no `concolic_ident_c` unforkable, and its stated reason is a SUPPLY loop: the matcher
+ * recognises a granted arm BY that identity, so without one the same predicate would decline at every re-match
+ * and fork for ever. THIS WALK HAS NO RE-ASK. One predicate per node, and both arms end that node's question —
+ * IS returns the element and IS NOT advances the cursor — so there is nothing to grant and nothing to loop.
+ * What the solver does with an unspellable operand is then exactly what is wanted: decide.h states that such
+ * an outcome walk "keeps BOTH arms, records no constraint and claims no replay slot", and decide.c files a SITE
+ * row and hands the sibling its arm directly. Refusing here would take ONE arm and delete the other, which is
+ * strictly worse than over-exploring, so the refusal is not owed and is not made.
+ *
+ * IT ASSERTS NOTHING ABOUT THE VALUE'S CONTENT. An `id` attribute's bytes are the PAGE'S, and §WHOSE-BYTES-
+ * STATE-THE-VALUE forbids standing an abort on a stranger's statement — a document could then abort this engine
+ * by writing any id it liked. What is asserted is what this codebase computed: the completion the solver
+ * handed back is one of the two this machine declared.
+ *
+ * NAMED RESIDUAL — `real` IS UNSTATED AND THE EXAMPLE COULD ANSWER IT. WHAT IS NOT COVERED: step_fork_run's
+ * `real` asks which completion this comparison reaches on the operand's EXAMPLE, and a concolic carrying one
+ * (concolic_example_state answering HELD or DETERMINED) has bytes this comparison could be run against, so the
+ * answer is knowable for that population and is stated as unknown — which leaves a forced request's provenance
+ * saying no arm was forced. WHAT THE NEXT DIFF BUILDS: a byte read of a STRING example that cannot throw.
+ * `concolic_example` hands back a JSValue, and the only conversion to bytes in the public header is
+ * JS_ToCStringLen, which can fail on page-supplied input — and both answers to that failure are forbidden
+ * here, a swallow by §Offensive-programming and a release-fatal CHECK by §WHOSE-BYTES-STATE-THE-VALUE, so the
+ * missing thing is the accessor and not the call. HOW ITS ABSENCE WOULD SHOW, as an observation: a request
+ * emitted down one arm of this comparison whose provenance reports neither arm forced, for a document whose
+ * `id` this engine holds an example for.
+ *
+ * NAMED RESIDUAL — THE PIN TAKEN *AT* A MATCH. WHAT IS NOT COVERED: an arm answered IS determines that the
+ * value is elementId, and nothing records it, so a later read of the same source forks again where the page can
+ * only be in one world. WHAT THE NEXT DIFF BUILDS: a pin of elementId against the value's own `src` on the IS
+ * arm, which is the same primitive concolic_pin_bytes reads above and is the cascade's deferred item (5) in
+ * this machine. HOW ITS ABSENCE WOULD SHOW: a flow holding two constraints over one source that say it is two
+ * different strings.
+ *
+ * Returns 0 with *out_is set, or JS_STEP_FORK, which the caller returns — the state is complete at that point,
+ * which is what the fork requires, and the cursor has NOT moved, so the sibling resumes at BYID_WALK and
+ * re-asks this same comparison about this same node. */
+static int byid_id_is(JSContext *ctx, JSStepHdr *hdr, NodeByIdState *s, lxb_dom_element_t *el, bool *out_is)
+{
+    size_t vlen = 0;
+    const lxb_char_t *v;
+    JSValue taint;
+    const char *pinned;
+    int arm, rc;
+
+    v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"id", 2, &vlen);
+    /* THE TREE'S ANSWER FIRST, which is the answer for every element of every document that stored no unknown,
+       and is also the arm each refusal below falls back to. §4.9's ID-unset step needs no test of its own:
+       BYID_START answers null for an empty elementId, so `vlen == s->idlen` implies a non-empty value, which
+       is exactly "this element has an ID". */
+    *out_is = (v != NULL && vlen == s->idlen && memcmp(v, s->id, s->idlen) == 0);
+
+    /* THE O(1) PRECONDITION FIRST, exactly as the cascade's value read has it: this runs once per element of
+       the walk, resolving §4.9's key allocates nothing but is a linear scan, and a document that never put an
+       unknown in an attribute pays one load for the whole tree. It is read HERE and never cached across a
+       rest point — the shadow is per-flow COW state and the walk yields per node, so a cached count would be
+       a claim about a delta that has since swapped. */
+    if (attr_shadow_count() == 0) return 0;
+    taint = dom_cow_attr_taint(el, "id");   /* BORROWED. The by-NAME read, which is the twin of the qualified-
+                                               name tree read above, so the two resolve §4.9's key one way. */
+    if (!concolic_is(taint)) return 0;
+
+    pinned = concolic_pin_bytes(taint);
+    if (pinned != NULL) {
+        /* THE BYTES ARE THE ATTRIBUTE'S VALUE AND NOT A RENDERING OF IT. DOM §4.9's attribute value is a
+           string and `setAttribute` reaches it through a Web IDL DOMString conversion, which is the spelling
+           the pin store holds — so this is the byte form the tree WOULD have held had the page run with the
+           value this flow proved it has, and §4.2.4's comparison is then decided on a real string. */
+        size_t plen = strlen(pinned);
+
+        *out_is = (plen == s->idlen && memcmp(pinned, s->id, s->idlen) == 0);
+        return 0;
+    }
+
+    if (s->ask == NULL) {
+        size_t n = BYID_ASK_BYTES(s->idlen);
+
+        s->ask = js_malloc(ctx, n);
+        CHECK(s->ask != NULL, "getElementById could not spell the constraint key for its id comparison — the "
+                              "key is what a parked flow's recorded arms are filed under, so a fork without "
+                              "one would record an arm no resume could find");
+        memcpy(s->ask, BYID_ASK_PRE, sizeof BYID_ASK_PRE - 1);
+        memcpy(s->ask + sizeof BYID_ASK_PRE - 1, s->id, s->idlen);
+        memcpy(s->ask + sizeof BYID_ASK_PRE - 1 + s->idlen, BYID_ASK_POST, sizeof BYID_ASK_POST);
+        DCHECK(strlen(s->ask) == n - 1, "getElementById's constraint key was composed to a different length "
+                                        "than BYID_ASK_BYTES measured for it — the compose and the visit's "
+                                        "byte count read that one macro, so a disagreement here means the two "
+                                        "memcpys and the size have stopped agreeing");
+    }
+    /* `over` IS BORROWED AND IS NOT DUP'D, which is where this parts company with document.c's walk and is the
+       one line not to copy from it. That machine KEEPS its decided record across the park so it can supply the
+       matcher on resume, so its `over` has to outlive the rest point. This one keeps nothing: the arm is
+       consumed at this call, the driver reads and resets `fork_over` before it snapshots anything, and no page
+       code runs between the read above and that reset. */
+    rc = step_fork_run(ctx, hdr, taint, s->ask, BYID_ID_OUTCOMES, JS_OUTCOME_REAL_UNSTATED, &arm);
+    if (rc) return rc;   /* parked at the fork; the sibling resumes at BYID_WALK and re-asks this comparison */
+    DCHECKF(arm == BYID_NOT_THE_ID || arm == BYID_IS_THE_ID,
+            "§4.2.4's id comparison was answered with a completion it never declared (%d) — it has two and the "
+            "numbering is `is not the ID` first", arm);
+    *out_is = (arm == BYID_IS_THE_ID);
+    return 0;
 }
 
 static int js_node_get_element_by_id(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -4468,10 +4629,18 @@ static int js_node_get_element_by_id(JSContext *ctx, JSStepHdr *hdr, void *st, i
     n = s->cursor;
     if (!n) { *presult = JS_NULL; return JS_STEP_DONE; }
     if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-        size_t vlen = 0;
-        const lxb_char_t *v = lxb_dom_element_get_attribute(lxb_dom_interface_element(n),
-                                                            (const lxb_char_t *)"id", 2, &vlen);
-        if (v && vlen == s->idlen && memcmp(v, s->id, s->idlen) == 0) {
+        bool is;
+        int rc = byid_id_is(ctx, hdr, s, lxb_dom_interface_element(n), &is);
+
+        /* THE CURSOR HAS NOT MOVED, which is what makes the fork's resume land on this same node's question.
+           A sibling re-enters at BYID_WALK with `fork_phase` back at ASK, re-reads the attribute and the
+           taint, re-composes nothing (the key is already on the state) and re-asks — so the arm comes from
+           its own decision vector rather than from a value baked into the clone, which is what makes a flow
+           parked today and resumed next session take the same one. It cannot short-circuit on the pin read
+           above on the way: this machine pins nothing, so the sibling's constraint chain at the resume is the
+           parent's at the fork, where that read answered NULL. */
+        if (rc) return rc;
+        if (is) {
             *presult = node_wrap(ctx, n);   /* the FIRST in tree order — the walk stops here */
             return JS_STEP_DONE;
         }

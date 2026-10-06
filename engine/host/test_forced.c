@@ -5754,6 +5754,45 @@ static const char *HTML =
     " try { await import('/chunk/mdhost.js'); fetch('/api/mhdone?w=mhDONE'); }"
     " catch (mhE) { fetch('/api/mhfail?w=' + mhE.name); } })();"
     "</script>"
+    /* §4.2.4 getElementById OVER AN ELEMENT WHOSE `id` THIS FLOW HAS NOT DETERMINED — the ONE statement in
+       this fixture that reaches core/dom/node.c's attribute value seam, and it is new because NOTHING reached
+       it before. Every other getElementById here is asked over a concrete id AND walks a tree in which no
+       element's `id` is a source: at the revision this landed, every `setAttribute('id', …)` in this document
+       passes a literal (or `'n' + <loop counter>`), so the comparison the seam is under had never once been
+       asked about an undetermined value, and a seam with no exerciser is a seam whose fork no run has taken.
+       WHAT THE TWO ARMS ARE. `bidu` is a derived source (`{location.hash}.slice(1)`), so after the write
+       `#bidseed`'s `id` is undetermined: the comparison against `bidwant` has no two-valued answer, and both
+       completions are feasible because the source could be either string. The IS arm returns the element and
+       the IS NOT arm advances the cursor past it, which is §4.2.4's own two answers.
+       THE PAYLOADS ARE CONSTANTS, which is what makes them a witness at all: `is` and `isnot` are literals, so
+       nothing about either address can become unknown and fail to be composed — a request whose path embedded
+       anything this engine computed would simply not go out on the arm that mattered.
+       `arm=isnot` IS THE REACHABILITY WITNESS AND `arm=is` IS THE SUBJECT, and the pair is what separates a
+       seam that did not fire from a statement that did not run. `isnot` is outcome 0, is the arm a run with no
+       forking policy takes, and is ALSO the answer every build gave before the seam existed — element.c stores
+       concolic_shape_c's display shape for a concolic attribute write, so the memcmp compared `bidwant`
+       against `{location.hash}.slice(1)` and answered false. So `isnot` present with `is` absent is the
+       pre-seam behaviour exactly, and `is` present is the fork having been taken.
+       `#bidwant` IS NAMED BY NOTHING ELSE IN THIS DOCUMENT, which is what makes the truthiness test about this
+       element: a second element carrying that id would answer the IS arm concretely and the row would read 1
+       for a reason the seam had no part in.
+       NO EXPANDO AND NO IDENTITY COMPARISON, deliberately, which is the one thing not to copy from the
+       `#nwisoel` statement above: that row is about WHICH WORLD MINTED A WRAPPER and needs a write to see it,
+       and a write to a wrapper both arms share is the very thing it measures. This asks only whether the walk
+       answered, so it touches nothing.
+       APPENDED IN FRONT OF `</body></html>` AND NOT INSERTED, for the reason the module, crypto,
+       operand-shape, closure and `#nwisoel` statements above each state: this document is ONE LINE, so a
+       `@WHY` frame's COLUMN is the only coordinate a reader has into it and an insertion re-points every
+       column after it. It is LAST for a second reason of its own — it is the only statement here that leaves
+       an undetermined `id` in the tree, so every getElementById that runs after it would fork at that element
+       too, and there is nothing after it. */
+    "<span id=bidseed></span>"
+    "<script>"
+    "var bidu = location.hash.slice(1);"
+    "var bidel = document.getElementById('bidseed');"
+    "bidel.setAttribute('id', bidu);"
+    "fetch('/api/byidseam?arm=' + (document.getElementById('bidwant') ? 'is' : 'isnot'));"
+    "</script>"
     "</body></html>";
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
@@ -18466,6 +18505,22 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        (a superstring makes it unable to pass, never unable to fail), which is the sign this file's own
        `strstr` rule names as correct for the whole-document form — and each is wrapped in its own JSON
        quotes, so it is a whole-token match besides. */
+    /* §4.2.4'S VALUE SEAM, AS A TWO-RUNG LADDER, AND THE RUNGS ARE ENTAILED. `byid-seam-reach` is the
+       statement having run at all and `byid-seam` is the fork having been taken, so the lower rung is implied
+       by the upper one and the LOWEST 0 is the localisation — which is the whole reason this is two rows and
+       not one. A folded row would read 0 for "the document never reached the statement" and for "the seam
+       decided one arm" alike, and those take opposite work: the first is a schedule reading and the second is
+       a defect in core/dom/node.c's byid_id_is.
+       WHY `isnot` IS THE REACHABLE ONE rather than an arbitrary choice of control: it is outcome 0, so it is
+       the arm a run with no forking policy takes, AND it is the answer every build gave before the seam
+       existed — the tree holds concolic_shape_c's display shape for a concolic attribute write, so the
+       comparison was against `{location.hash}.slice(1)` and answered false. A build with the seam compiled out
+       therefore reads `reach 1 / seam 0`, which is a scored pre-seam reading and not a lost statement.
+       THE UPPER RUNG IS BANDED BY THE LOWER, so a session that never reached the statement reports the row as
+       unaskable rather than as red — the furniture `#nwisoel`'s author declined to land. */
+    int byid_seam_reach = param_value_is(js, "/api/byidseam", "arm", "isnot");
+    int byid_seam       = param_value_is(js, "/api/byidseam", "arm", "is");
+
     const char *nwiso_why = NULL; int nwiso_iso = 1;
     fold_row(&nwiso_iso, &nwiso_why, !strstr(js, "\"/api/nwiso/t-sees-f\""),
              "the TRUE arm read back an expando the FALSE arm wrote: `/api/nwiso/t-sees-f` is in this run's "
@@ -19920,6 +19975,25 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            HTML_COLD alone names. */
         { "nwiso-park", nwiso_iso, "nwisoel", SESS_PARK, nwiso_why },
         { "nwiso-resume", nwiso_iso, "nwisoel", SESS_RESUME, nwiso_why },
+        /* §4.2.4's id comparison asked about an element whose `id` is a source. The lower rung FIRST, which
+           is this table's own reading convention and what lets the gate below resolve. Keyed on the fetch
+           this statement makes, which is the needle that says the document carrying it is this one. */
+        { "byid-seam-reach", byid_seam_reach, "/api/byidseam?arm=", SESS_EXPLORE,
+          "no `/api/byidseam?arm=isnot` record: the statement that writes a source into `#bidseed`'s `id` and "
+          "then calls getElementById did not run, or ran and emitted nothing. That is a reading about the "
+          "SCHEDULE and not about core/dom/node.c's value seam — `isnot` is outcome 0 and is also the answer "
+          "every build gave before the seam existed, so its absence is the statement missing rather than the "
+          "fork missing" },
+        { "byid-seam", byid_seam, "/api/byidseam?arm=", SESS_EXPLORE,
+          "`/api/byidseam?arm=is` is absent while `arm=isnot` is present: the walk met an element whose `id` "
+          "THIS FLOW HAS NOT DETERMINED and DECIDED the comparison instead of forking it, so the world in "
+          "which that source is `bidwant` was deleted along with every endpoint and sink behind "
+          "`getElementById('bidwant').…`. core/dom/node.c's byid_id_is is the seam: check that "
+          "attr_shadow_count is non-zero (the `setAttribute('id', bidu)` records the taint), that "
+          "dom_cow_attr_taint answers a concolic for the `id` slot, and that concolic_pin_bytes answers NULL "
+          "— a non-NULL pin DECIDES the comparison correctly and legitimately, and would mean this flow's own "
+          "predicate had already fixed the hash, which nothing in this statement does",
+          .gate = "byid-seam-reach" },
     };
     /* THE DECLARATION FITS THE CALLER'S BUFFER, ASSERTED WHERE BOTH FACTS ARE IN HAND. This is the one place in
        the translation unit that can see the table's length AND the constant its rows are copied into, which is
