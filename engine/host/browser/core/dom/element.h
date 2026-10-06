@@ -207,6 +207,30 @@ void    element_attr_set_value(JSContext *ctx, JSValueConst el, const char *name
 char *element_attr_get(JSContext *ctx, JSValueConst el, const char *name);
 void  element_attr_set(JSContext *ctx, JSValueConst el, const char *name, const char *value);
 
+/* DOM §4.9's "set an attribute value" — WHAT A DOMString ATTRIBUTE VALUE STORES, as (bytes, length). ONE
+   answer, exported because §4.9.2's `attribute DOMString value` setter and §4.9's "set an attribute" step 5
+   are that same decision reached through the Attr interface rather than through the element, and three copies
+   of it are three answers to one question.
+   THE LENGTH IS THE ENCODER'S AND NEVER strlen's. A DOMString is UTF-16 and admits U+0000 — §4.9's
+   `setAttribute(DOMString qualifiedName, (TrustedType or DOMString) value)` names no exclusion, and §1.4's
+   name production, which does exclude it, is about the NAME and not the value. This engine's encoder emits
+   U+0000 as a literal 0x00 byte and COUNTS it in the `*plen` it reports, so `strlen` over those bytes stops at
+   the first one: `el.setAttribute("x", "a\0b")` stored ONE byte where the page wrote three, and the two bytes
+   after it were dropped with nothing anywhere to say so. Lexbor's setters have taken `(value, value_len)` all
+   along and both reads hand that same length straight to JS_NewStringLen, so the whole chain round-trips and
+   the loss was this one conversion. A lone surrogate never needed the length — its WTF-8 carries no 0x00 and
+   cutils.h's decoder accepts it back by name — so U+0000 is the entire value space that was being lost.
+   `owned` is the string to free with JS_FreeCString, NULL when the bytes are a concolic's own shape (that
+   shape is a C string, which is why `strlen` is the right length for THAT arm and the wrong one for this).
+   `taint` is what the write records in §@S's shadow: the concolic ITSELF, or JS_UNDEFINED for a concrete
+   value, which is what CLEARS any earlier source. An algorithm that PRESERVES the old taint instead — §4.9's
+   "set an attribute" step 5 writes the attribute's own value back and must not clear it — overrides that one
+   field after the call and says why at its own site.
+   Returns false having thrown. */
+typedef struct { const char *bytes; size_t len; JSValueConst taint; const char *owned; } ElAttrValue;
+bool element_attr_value_bytes(JSContext *ctx, JSValueConst value, ElAttrValue *out);
+void element_attr_value_free(JSContext *ctx, ElAttrValue *v);
+
 /* HTML §2.6.1 "Reflecting content attributes in IDL attributes" — THE URL MODEL'S RESOLVING HALF, for the
  * members whose getter is §2.6.1's steps 2-3 under a DIFFERENT step 1.
  *

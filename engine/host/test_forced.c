@@ -1654,6 +1654,26 @@ static const char *HTML =
     /* getRootNode's `composed` is a page GETTER, so the option read is a request the machine parks on and the
        loop inside it forces a suspend — the answer must still be the document. */
     "fetch('/api/rootnode?v=' + (document.body.getRootNode({ get composed(){ var n=0; for (var i=0;i<400;i++) n+=i; return true; } }) === document ? 'isroot' : 'wrong'));"
+    /* DOM §4.9's VALUE SPACE, which a `const char *` cannot carry. `setAttribute(DOMString qualifiedName,
+       (TrustedType or DOMString) value)` names no exclusion and a DOMString is UTF-16, so U+0000 is an
+       ORDINARY attribute value — and every write converted it with JS_ToCString and then re-derived the length
+       with strlen, which stops at the first 0x00. Three bytes went in and ONE came out, silently, at all three
+       of §4.9's write sites: the element's own setAttribute, §4.9.2's `Attr.value` setter, and "set an
+       attribute" step 5, whose policy call had just read the value back out of Lexbor WITH its length.
+       THE LENGTH IS THE WHOLE OF IT — Lexbor's setters have always taken (value, value_len) and both reads
+       hand that length straight to JS_NewStringLen, so nothing else in the chain ever lost a byte. The middle
+       code unit is asserted as well as the length, because a length alone is satisfied by a replacement
+       character too. A lone surrogate is NOT tested here and needs no fix: its WTF-8 holds no 0x00, so strlen
+       never truncated it, and cutils.h's decoder accepts it back by name. */
+    "var nz = document.createElement('div'); nz.setAttribute('x', 'a\\u0000b');"
+    "var nzr = nz.getAttribute('x');"
+    "var nza = document.createAttribute('y'); nza.value = 'a\\u0000b';"
+    "var nzav = nza.value;"
+    "nz.setAttributeNode(nza);"
+    "var nzn = nz.getAttribute('y');"
+    "fetch('/api/domnul?set=' + (nzr.length === 3 && nzr.charCodeAt(1) === 0 ? 'roundtrip' : 'truncated')"
+    " + '&attrval=' + (nzav.length === 3 && nzav.charCodeAt(1) === 0 ? 'roundtrip' : 'truncated')"
+    " + '&setnode=' + (nzn.length === 3 && nzn.charCodeAt(1) === 0 ? 'roundtrip' : 'truncated'));"
     "var c1 = document.createElement('p'); c1.setAttribute('k','v'); var c2 = c1.cloneNode(true);"
     "fetch('/api/equalnode?v=' + (c1.isEqualNode(c2) && !c1.isSameNode(c2) ? 'iseq' : 'wrong'));"
     /* THE WALK IS THE PAGE'S SIZE, so it is a MACHINE that yields at every pair. 300 nested nodes is 300

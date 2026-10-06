@@ -143,10 +143,10 @@ static JSValue js_el_get_attribute(JSContext *ctx, JSValueConst this_val, int ar
    The reactions surface at the `[CEReactions]` boundary, not here. */
 /* THE BYTES AND THE TAINT A VALUE WRITES, which is ONE decision — resolved here because both of §4.9's key
    spaces write, and a second copy of it is a second answer to "what does a concolic attribute value store".
-   `owned` is the JS_ToCString to free, NULL when the bytes are the concolic's own shape. */
-typedef struct { const char *bytes; size_t len; JSValueConst taint; const char *owned; } ElAttrValue;
-
-static bool el_attr_value(JSContext *ctx, JSValueConst value, ElAttrValue *out)
+   EXPORTED for the same reason it is one function rather than two: §4.9.2's `Attr.value` setter and §4.9's
+   "set an attribute" step 5 reach this decision through the Attr interface, and attr.c held two more copies of
+   it. element.h carries the contract, including why the length is the encoder's and not strlen's. */
+bool element_attr_value_bytes(JSContext *ctx, JSValueConst value, ElAttrValue *out)
 {
     /* A concolic value has no bytes to store. Record it in the shadow so the read gives the SAME concolic back,
        and write its shape into the tree so a serialization of the document still shows something. */
@@ -161,27 +161,29 @@ static bool el_attr_value(JSContext *ctx, JSValueConst value, ElAttrValue *out)
         out->taint = value;
         return true;
     }
-    out->owned = JS_ToCString(ctx, value);
+    /* THE ENCODER'S OWN LENGTH. JS_ToCString is JS_ToCStringLen2At with the length argument NULL — the same
+       encoder, with the one fact a `const char *` cannot carry discarded — so asking for it costs nothing and
+       is the whole of what makes U+0000 survive the write. See element.h. */
+    out->owned = JS_ToCStringLen(ctx, &out->len, value);
     DCHECK(out->owned != NULL, "an attribute value reached the write unconverted — the IDL declaration is what "
                                "converts it, and running the page's toString from here is the "
                                "drive-to-completion the flow machinery exists to avoid");
     if (!out->owned) return false;
     out->bytes = out->owned;
-    out->len = strlen(out->owned);
     /* JS_UNDEFINED is what clears any earlier taint: a concrete write says this attribute is no longer a source. */
     out->taint = JS_UNDEFINED;
     return true;
 }
 
-static void el_attr_value_free(JSContext *ctx, ElAttrValue *v) { if (v->owned) JS_FreeCString(ctx, v->owned); }
+void element_attr_value_free(JSContext *ctx, ElAttrValue *v) { if (v->owned) JS_FreeCString(ctx, v->owned); }
 
 static void el_write_attribute(JSContext *ctx, lxb_dom_element_t *el, const char *name, JSValueConst value)
 {
     ElAttrValue v;
 
-    if (!el_attr_value(ctx, value, &v)) return;
+    if (!element_attr_value_bytes(ctx, value, &v)) return;
     dom_cow_set_attribute(el, name, v.bytes, v.len, v.taint);   /* chokepoint: capture-then-mutate, per flow */
-    el_attr_value_free(ctx, &v);
+    element_attr_value_free(ctx, &v);
 }
 
 /* DOM §4.9 "set an attribute value" AT §4.9'S OWN KEY — setAttributeNS step 3 and every reflection whose
@@ -193,9 +195,9 @@ static void el_write_attribute_ns(JSContext *ctx, lxb_dom_element_t *el, const c
 {
     ElAttrValue v;
 
-    if (!el_attr_value(ctx, value, &v)) return;
+    if (!element_attr_value_bytes(ctx, value, &v)) return;
     dom_cow_set_attribute_ns(el, ns, prefix, local, v.bytes, v.len, v.taint);
-    el_attr_value_free(ctx, &v);
+    element_attr_value_free(ctx, &v);
 }
 
 void element_ns_and_local(lxb_dom_element_t *el, const char **ns, const char **local,

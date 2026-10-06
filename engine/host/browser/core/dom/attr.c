@@ -159,31 +159,25 @@ static JSValue js_attr_set_value(JSContext *ctx, JSValueConst this_val, JSValueC
 {
     lxb_dom_attr_t *a = attr_node_of(this_val);
     AttrKey k;
-    const char *bytes, *owned = NULL;
-    size_t len;
-    JSValueConst taint;
+    ElAttrValue v;
 
     (void)magic;
     if (!a) return JS_UNDEFINED;
-    /* A concolic value has no bytes to store: its SHAPE goes into the tree and the value itself into the
-       shadow, which is what makes the read give the same concolic back. */
-    if (concolic_is(val)) {
-        const char *shape = concolic_shape_c(val);
-        bytes = shape ? shape : ""; len = shape ? strlen(shape) : 0; taint = val;
-    } else {
-        owned = JS_ToCString(ctx, val);   /* a real string by now: the declaration converted it */
-        if (!owned) return JS_EXCEPTION;
-        bytes = owned; len = strlen(owned); taint = JS_UNDEFINED;
-    }
+    /* §4.9's ONE value decision, asked at element.c's chokepoint rather than answered a second time here: a
+       concolic value has no bytes to store, so its SHAPE goes into the tree and the value itself into the
+       shadow, which is what makes the read give the same concolic back. This arm used to spell the concrete
+       half itself with JS_ToCString and strlen, which TRUNCATED a value at its first U+0000 — `a.value` is a
+       DOMString and admits one. */
+    if (!element_attr_value_bytes(ctx, val, &v)) return JS_EXCEPTION;
     /* §4.9.2 step 5's "change an attribute" is over THIS attribute, so the write is keyed on its own
        (namespace, local name) — the prefix is never consulted, because changing a value does not rename. */
     attr_key_of(a, &k);
     /* §9.4.10 STEPS 1 AND 4, which are the same test either side of the Trusted Types call: an attribute whose
        element is NULL has its value set and nothing else — no change steps, no element to run them on. */
-    if (a->owner) dom_cow_set_attribute_ns(a->owner, k.ns, NULL, k.local, bytes, len, taint);
-    else dom_cow_set_detached_attr_value(a, bytes, len, taint);
+    if (a->owner) dom_cow_set_attribute_ns(a->owner, k.ns, NULL, k.local, v.bytes, v.len, v.taint);
+    else dom_cow_set_detached_attr_value(a, v.bytes, v.len, v.taint);
     attr_key_free(&k);
-    if (owned) JS_FreeCString(ctx, owned);
+    element_attr_value_free(ctx, &v);
     return JS_UNDEFINED;
 }
 
@@ -499,7 +493,6 @@ static int js_attr_set_attribute(JSContext *ctx, JSStepHdr *hdr, void *st, int a
     attr_key_of(a, &k);
     {
         lxb_dom_attr_t *old = dom_attr_get_ns(el, k.ns, k.local);   /* step 3 */
-        const char *val;
 
         if (old == a) {                                            /* step 4 — a no-op that still ran the policy */
             attr_key_free(&k);
@@ -511,18 +504,27 @@ static int js_attr_set_attribute(JSContext *ctx, JSStepHdr *hdr, void *st, int a
            carries survives it: a concolic verified value IS the taint, and a plain one keeps whatever the node
            was holding. Written with JS_UNDEFINED instead, `a.value = location.hash; el.setAttributeNode(a)`
            would clear the source at the very step that puts it into the DOM. */
-        if (concolic_is(s->verified)) {
-            const char *shape = concolic_shape_c(s->verified);
-            dom_cow_set_detached_attr_value(a, shape ? shape : "", shape ? strlen(shape) : 0, s->verified);
-        } else {
-            int si = attr_shadow_find(a, ATTR_SLOT_ATTRIBUTE, k.ns, k.local);
-            JSValue keep = si >= 0 ? JS_DupValue(ctx, attr_shadow_opaque(si)) : JS_UNDEFINED;
+        {
+            ElAttrValue v;
+            JSValue keep = JS_UNDEFINED;
+            int si;
 
-            val = JS_ToCString(ctx, s->verified);                  /* step 5 */
-            DCHECK(val != NULL, "the verified attribute value reached the write unconverted");
-            if (val) {
-                dom_cow_set_detached_attr_value(a, val, strlen(val), keep);
-                JS_FreeCString(ctx, val);
+            /* THE ONE FIELD THIS ALGORITHM OVERRIDES, and the paragraph above is why: the converter's concrete
+               arm answers JS_UNDEFINED, which CLEARS the shadow, and step 5 is a write of the attribute's OWN
+               value — so the taint the node is already carrying has to survive it. The concolic arm's answer
+               IS the value, which is what that paragraph needs, so only the concrete one is replaced. */
+            if (!concolic_is(s->verified)) {
+                si = attr_shadow_find(a, ATTR_SLOT_ATTRIBUTE, k.ns, k.local);
+                if (si >= 0) keep = JS_DupValue(ctx, attr_shadow_opaque(si));
+            }
+            /* STEP 5. The length is the encoder's: step 1 read this attribute's current value back out of
+               Lexbor WITH its length and handed it to the policy, so a value holding U+0000 arrived here
+               whole and was then stored as its first byte alone — a round trip through setAttributeNode lost
+               the tail of its own value. */
+            if (element_attr_value_bytes(ctx, s->verified, &v)) {
+                dom_cow_set_detached_attr_value(a, v.bytes, v.len,
+                                                concolic_is(s->verified) ? v.taint : (JSValueConst)keep);
+                element_attr_value_free(ctx, &v);
             }
             JS_FreeValue(ctx, keep);
         }
