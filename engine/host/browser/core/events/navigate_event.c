@@ -81,7 +81,26 @@ static const char *const NE_NAME[] = {
     "navigationType", "destination", "canIntercept", "userInitiated", "hashChange", "signal",
     "formData", "downloadRequest", "info", "hasUAVisualTransition", "sourceElement"
 };
-#define NE_CLASSIC_STATE "classicHistoryAPIState"   /* the serialized bytes, or JS_NULL */
+/* THE SERIALIZED BYTES, OR JS_NULL — AND THEY ARE WRITTEN HERE AND READ NOWHERE IN THIS TREE. The banner above
+   names §7.2.6.10.4's commit as the reader, which is how a `pushState`'s data survives an interception; that
+   algorithm is not built, so this slot is a write with no reader today. `nef_hash_change`'s first conjunct
+   tests the fire work record's OWN copy for null-ness and never this one, and never its contents. Measured
+   rather than assumed: `NE_CLASSIC_STATE` occurs twice in this tree, at this define and at the one
+   JS_SetPropertyStr below.
+   NAMED RESIDUAL, AND IT IS A RESIDUAL BECAUSE THE CODE IS RIGHT AND NARROWER THAN THE SPEC. NOT COVERED:
+   §7.2.5's writer now serializes through core/structured_clone.c's PAIR entry, so these bytes may hold a
+   reference that resolves only out of that serialization's `symbols` table — and this slot carries the bytes
+   alone, as it always has. Nothing deserializes them, so nothing is wrong today. WHAT THE NEXT DIFF BUILDS:
+   whichever diff gives this slot its reader — §7.2.6.10.4's commit handing the state to the URL and history
+   update steps — takes the symbol table WITH it, as a second slot beside this one, filled from the work
+   record's own copy, exactly as §7.4.1.1's entry now carries `classicStateSymbols` beside `classicState`. It
+   is deliberately NOT added ahead of that reader: a second unread field beside an unread one is the
+   write-with-no-reader shape doubled, and a slot nothing has ever filled is untested code whose revival is a
+   behaviour change in its own right. HOW ITS ABSENCE WOULD SHOW: the first caller to deserialize this slot's
+   bytes for a state the page computed from unknown input meets structured_clone.c's "the engine serialized a
+   value it could not then deserialize" — a crash naming the engine disagreeing with itself rather than naming
+   this missing table. */
+#define NE_CLASSIC_STATE "classicHistoryAPIState"
 
 static JSValue ne_proto(JSContext *ctx)
 {

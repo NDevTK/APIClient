@@ -288,6 +288,14 @@ typedef struct {
     NavigateEventFireWork   fire;
     JSValue                 new_url;   /* step 5's newURL — the ADDRESS VALUE, owned (see core/dom/document.h) */
     JSValue                 classic;   /* step 3's serializedData, as the bytes (owned ArrayBuffer) */
+    /* AND ITS SYMBOL TABLE, WHICH IS THE OTHER HALF OF THE SAME VALUE. core/structured_clone.c's pair entry
+       answers `symbols` beside the bytes: the triples -- source identity, display shape, example -- that a
+       reference past the transfer list resolves out of, for a CONCOLIC the page put in its state. It is a slot
+       on THIS MACHINE rather than a C local because step 3 and step 10 are separated by the navigate event,
+       which runs every `navigate` listener the page has, so this flow can be outranked, snapshotted and resumed
+       between them -- and a table left in a C local would not survive that. It is walked by hpr_visit for the
+       same reason every other slot is. */
+    JSValue                 classic_sym;
 } HprState;
 
 static void hpr_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -298,6 +306,7 @@ static void hpr_visit(JSContext *ctx, void *st, JSStepVisit *v)
     navigate_event_fire_work_visit(ctx, &s->fire, v);
     v->val(ctx, &s->new_url);
     v->val(ctx, &s->classic);
+    v->val(ctx, &s->classic_sym);
 }
 
 /* THERE IS NO `release`. §7.4.4's record holds two ENTRIES and the navigation API's request buffer, and every
@@ -309,7 +318,7 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
                                 JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     HprState *s = state;
-    StructuredData serialized;
+    StructuredWithTransfer serialized;
     UrlRecord doc_url, target;
     const char *url_arg = NULL;
     char *new_url = NULL;
@@ -327,7 +336,7 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
        all of them. */
     session_history_url_update_start(&s->w);
     navigate_event_fire_work_start(&s->fire);
-    s->new_url = s->classic = JS_UNDEFINED;
+    s->new_url = s->classic = s->classic_sym = JS_UNDEFINED;
     /* STEPS 1-2. */
     if (!hist_entry(ctx, hdr->this_val)) { JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
     DCHECK(argc >= 2, "pushState/replaceState ran with fewer than its two required arguments — `any data` and "
@@ -340,10 +349,28 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
        [[ArrayBufferData]] is shared and which "cannot be serialized for storage". This engine has no
        SharedArrayBuffer at all (core/structured_clone.c states it: "a SharedArrayBuffer is a different class,
        so it is not transferable here"), so the two variants coincide and this IS the ForStorage one. */
-    if (structured_serialize(ctx, argv[0], &serialized) < 0) {
+    /* THE PAIR ENTRY, AND IT IS §2.7.4 ITSELF RATHER THAN A SHORTCUT THROUGH §2.7.7. structured_clone.h states
+       the identity: with no transfer list, §2.7.7's step 1 memory stays empty, its two loops iterate nothing,
+       and its step 3 is `? StructuredSerializeInternal(value, false, memory)` -- which over an empty memory IS
+       §2.7.4's whole body, since §2.7.4 is `return StructuredSerializeInternal(value, false)` and §2.7.3's
+       first step supplies the empty map. So the two coincide EXACTLY here and nothing about the algorithm
+       changes; what changes is the RECORD, which now has a second slot.
+       JS_UNDEFINED AND NOT AN EMPTY ARRAY for the transfer list, which is a positive statement: §7.2.5's
+       `pushState(any data, DOMString unused, optional USVString url)` has no `transfer` member AT ALL, where
+       §2.7.10's `structuredClone` has one defaulting to `[]`. An empty Array would say the page named nothing;
+       JS_UNDEFINED says the algorithm has nowhere for it to be named.
+       THIS IS WHAT THE WRITE HOOK WAS REFUSING. With the plain entry there is no `symbols` field, so a CONCOLIC
+       reached from inside `data` had nothing to ride and sc_memory_index aborted by name -- which made
+       `history.pushState({t: location.hash}, "")` a dev abort where a browser stores a string, on a source
+       §Attacker-sources rates primary. */
+    if (structured_serialize_transfer(ctx, argv[0], JS_UNDEFINED, &serialized) < 0) {
         JS_FreeValue(ctx, cb_result);
         return JS_STEP_ABRUPT;
     }
+    DCHECK(JS_IsUndefined(serialized.holders),
+           "§7.2.5 step 3 serialized with no transfer list and the record came back with a holders list — the "
+           "pair entry leaves it undefined for a caller that names none, and a holders list here would mean a "
+           "page had named a transferable pushState has no member for");
 
     /* STEP 4: "let newURL be document's URL." */
     url_record_init(&doc_url);
@@ -395,7 +422,7 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
            object of history" — whose API base URL is this document's address, already parsed above. */
         if (!url_parse(&target, url_arg, strlen(url_arg), &doc_url)) {
             JS_FreeCString(ctx, url_arg);
-            structured_data_free(ctx, &serialized);
+            structured_with_transfer_free(ctx, &serialized);
             url_record_free(&doc_url);
             url_record_free(&target);
             JS_FreeValue(ctx, cb_result);
@@ -406,7 +433,7 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
         have_target = true;
         if (!document_can_have_url_rewritten(&doc_url, &target)) {
             JS_FreeCString(ctx, url_arg);
-            structured_data_free(ctx, &serialized);
+            structured_with_transfer_free(ctx, &serialized);
             url_record_free(&doc_url);
             url_record_free(&target);
             JS_FreeValue(ctx, cb_result);
@@ -457,9 +484,19 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
             s->new_url = serialized_url;
         }
     }
-    s->classic = JS_NewArrayBufferCopy(ctx, serialized.buf, serialized.len);
+    s->classic = JS_NewArrayBufferCopy(ctx, serialized.data.buf, serialized.data.len);
     CHECK(!JS_IsException(s->classic),
           "history: the serialized state could not be held across the navigate event");
+    /* THE TABLE IS TAKEN ONTO THE MACHINE WITH THE BYTES, in the same breath, because the two are one value:
+       the bytes may hold a reference this table is the only resolution of, so a path that carried one without
+       the other would leave §7.4.6.2's restore deserializing a reference to nothing -- which structured_clone.c
+       answers with a crash about the engine disagreeing with itself. A DUP and not a move: `serialized` is
+       freed whole below, which is the one free this stage owns. */
+    s->classic_sym = JS_DupValue(ctx, serialized.symbols);
+    DCHECK(JS_IsArray(s->classic_sym),
+           "§7.2.5 step 3's record came back with no symbol table — the pair entry allocates one on every "
+           "path, empty where the value held no concolic, so an absent one means the two predicates disagree "
+           "about what that entry answers");
     /* STEPS 7-9: "let navigation be history's relevant global object's navigation API; let continue be the
        result of FIRING A PUSH/REPLACE/RELOAD NAVIGATE EVENT at navigation with navigationType set to
        historyHandling, isSameDocument set to true, destinationURL set to newURL, and classicHistoryAPIState set
@@ -474,10 +511,10 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
        omission — §7.4.1.1's carry-over note is about a FRAGMENT navigation's entry, and `pushState` builds an
        entry whose navigation API state §7.4.4 takes from §7.4.1.1's initial value instead. */
     navigate_event_fire_push_replace_reload_begin(ctx, &s->fire, magic == HIST_PUSH ? "push" : "replace",
-                                                  new_url, /*is_same_document*/ true, &serialized,
+                                                  new_url, /*is_same_document*/ true, &serialized.data,
                                                   JS_UNDEFINED);
     free(new_url);
-    structured_data_free(ctx, &serialized);
+    structured_with_transfer_free(ctx, &serialized);
     url_record_free(&doc_url);
     url_record_free(&target);
     /* AND IT RETURNS. Setting the stage and running on is what the declaration would then be lying about: the
@@ -520,21 +557,10 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
         /* newURL GOES OVER AS THE VALUE IT IS. It used to be read back through JS_ToCString here, which was
            the last place the address was still a value and the first place it stopped being one — and §7.4.4
            step 8 is precisely the consumer that needs the half a C string cannot carry. */
-        /* JS_UNDEFINED, AND IT IS THE TRUTH ABOUT THESE BYTES RATHER THAN A PLACEHOLDER: step 3 above still
-           takes core/structured_clone.c's PLAIN entry, which has no `symbols` field, so there is no table for
-           this entry to carry and the write hook refuses a concolic at the serialize rather than here.
-           NAMED RESIDUAL. NOT COVERED: `history.pushState({t: location.hash}, "")` still aborts at
-           core/structured_clone.c's write hook, so the slot this entry now has is never filled. WHAT THE NEXT
-           DIFF BUILDS: step 3 calls structured_serialize_transfer with JS_UNDEFINED for the transfer list --
-           which that file's own header states IS §2.7.4 StructuredSerialize exactly, not a shortcut through
-           §2.7.7 -- holds its `symbols` on this machine beside `classic` so hpr_visit walks it across the
-           navigate event, and hands it here AND to navigate_event_fire_push_replace_reload_begin, whose work
-           record and whose §7.2.6.10.1 event need the same second slot or `destination.getState()` inside a
-           `navigate` listener deserializes a reference with no table. HOW ITS ABSENCE WOULD SHOW: a page that
-           pushes unknown input into its history state aborts a dev build at the serializer, naming an
-           ArrayBuffer with no second slot beside it, while this entry's own slot reads undefined on every
-           row. */
-        session_history_url_update_begin(ctx, &s->w, s->new_url, &held, JS_UNDEFINED, magic == HIST_PUSH);
+        /* THE TABLE GOES OVER WITH THE BYTES, which is what makes this entry able to hold a state the page
+           computed from unknown input. The bytes are a BORROWED view of the ArrayBuffer's storage and the table
+           is BORROWED from this machine's slot; _begin dups what it keeps. */
+        session_history_url_update_begin(ctx, &s->w, s->new_url, &held, s->classic_sym, magic == HIST_PUSH);
     }
     STEP_GOTO(hdr->stage, HPR_UPDATE, &s->fire.phase, &s->fire.abort.phase,
               &s->fire.abort.sig.phase, &s->w.nav.phase, NULL);
