@@ -122,9 +122,16 @@ void session_history_url_update_release(JSContext *ctx, SessionHistoryUrlUpdate 
    COMPUTED has to arrive here carrying both its example and its domain: the example is what
    solver/route_seed.h declares and the trusted zone loads, the domain is what a later `location.pathname`
    branch forks on, and a `const char *` here can carry only the first. BORROWED — _begin takes its own
-   references. */
+   references.
+   `serialized_symbols` IS THE OTHER HALF OF `serialized` AND BOTH OR NEITHER. It is the `symbols` Array that
+   core/structured_clone.c's pair entry answers for THOSE bytes -- the table a reference past the transfer list
+   resolves out of -- and it is BORROWED. JS_UNDEFINED says the bytes came from the plain entry, which has no
+   such table; §7.4.1.1's initial values are serialized primitives and are exactly that. A caller that hands
+   bytes from the pair entry and omits this would store an entry whose own references resolve to nothing, which
+   the deserializer answers with a crash about the engine disagreeing with itself. */
 void session_history_url_update_begin(JSContext *ctx, SessionHistoryUrlUpdate *w, JSValueConst new_url,
-                                      const StructuredData *serialized, bool push);
+                                      const StructuredData *serialized, JSValueConst serialized_symbols,
+                                      bool push);
 int  session_history_url_update_run(JSContext *ctx, SessionHistoryUrlUpdate *w, JSValue in,
                                     JSValue **out_cb, int *out_argc);
 

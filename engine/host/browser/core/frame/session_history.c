@@ -45,6 +45,21 @@ static JSClassID g_slot = JS_INVALID_CLASS_ID;
 #define SH_E_URL     "url"
 #define SH_E_DOCSTATE "documentState"
 #define SH_E_CLASSIC "classicState" /* serialized state — an ArrayBuffer of §2.7 bytes, never a live value */
+/* THE SECOND SLOT BESIDE IT, AND IT IS WHAT MAKES A CONCOLIC ABLE TO CROSS THIS ENTRY AT ALL. core/
+   structured_clone.c's write hook REFUSES a concolic reached from a value whose carrier is one ArrayBuffer with
+   no second slot, by name, and names §7.2.5's pushState/replaceState and §7.2.6.6's updateCurrentEntry as the
+   two paths that land here -- so `history.pushState({t: location.hash}, "")` aborted where a browser stores a
+   string. §Solver makes a concolic a PRIMITIVE that stands for unknown external input, and §Security says a
+   live JSValue crosses neither a park, a session nor an instance; an entry does all three. So the triple rides
+   as DATA -- the source identity, the display shape and the example -- in the Array
+   structured_serialize_transfer answers as `symbols`, and concolic_new rebuilds it where the bytes are read.
+   JS_UNDEFINED IS A POSITIVE STATEMENT AND NOT A HOLE: it says the bytes were produced by an algorithm with no
+   symbol slot at all -- structured_serialize, the plain entry -- which is the truth for every initial value,
+   since §7.4.1.1's two are StructuredSerializeForStorage of a PRIMITIVE and §2.7.3's first arm cannot reach a
+   concolic from one. structured_transfer_len already declares JS_UNDEFINED as an empty list, so the reader
+   needs no second spelling for it. An EMPTY ARRAY would say the serializer looked and found none, which is a
+   different fact and is what a `symbols` from the pair entry carries. */
+#define SH_E_CLASSIC_SYM "classicStateSymbols"
 #define SH_E_SCROLL  "scrollRestoration"
 #define SH_E_NAV_STATE "navigationState" /* §7.2.6's serialized state — an ArrayBuffer, never a live value */
 #define SH_E_NAV_KEY   "navigationKey"
@@ -290,12 +305,12 @@ static JSValue sh_mint_uuid(JSContext *ctx)
 }
 
 /* §7.4.1.1's "a session history entry is a struct with the following items", built with the seven this engine
-   holds. `doc_state`, `classic` and `nav_state` are CONSUMED; `url` and `scroll` are copied. The KEY and the ID
+   holds. `doc_state`, `classic`, `classic_sym` and `nav_state` are CONSUMED; `url` and `scroll` are copied. The KEY and the ID
    are minted here and are never arguments: §7.4.4's new entry takes neither from the entry it replaces, and
    §7.4.2.3.1's cross-document finalize — the one algorithm that DOES carry a key across — is not in this build
    (see sh_finalize_same_document_navigation). */
 static JSValue sh_entry_new(JSContext *ctx, const char *url, JSValue doc_state, JSValue classic,
-                            JSValue nav_state, const char *scroll)
+                            JSValue classic_sym, JSValue nav_state, const char *scroll)
 {
     JSValue e = JS_NewObjectProto(ctx, JS_NULL);
 
@@ -306,6 +321,11 @@ static JSValue sh_entry_new(JSContext *ctx, const char *url, JSValue doc_state, 
     JS_SetPropertyStr(ctx, e, SH_E_URL, JS_NewString(ctx, url));
     JS_SetPropertyStr(ctx, e, SH_E_DOCSTATE, doc_state);
     JS_SetPropertyStr(ctx, e, SH_E_CLASSIC, classic);
+    /* CONSUMED LIKE THE BYTES IT BELONGS TO, and written on EVERY entry rather than only where there is
+       something to say: a slot some entries carry and others do not is read by `JS_GetPropertyStr` as
+       `undefined` either way, so the reader could not tell an entry built before this field from one whose
+       serializer found no symbols -- and those are the two states the three-state spelling above separates. */
+    JS_SetPropertyStr(ctx, e, SH_E_CLASSIC_SYM, classic_sym);
     JS_SetPropertyStr(ctx, e, SH_E_NAV_STATE, nav_state);
     JS_SetPropertyStr(ctx, e, SH_E_NAV_KEY, sh_mint_uuid(ctx));
     JS_SetPropertyStr(ctx, e, SH_E_NAV_ID, sh_mint_uuid(ctx));
@@ -1239,14 +1259,31 @@ static void sh_finalize_same_document_navigation(JSContext *ctx, JSValueConst ta
 static void sh_restore_history_object_state(JSContext *ctx, JSValueConst entry)
 {
     JSValue buf = JS_GetPropertyStr(ctx, entry, SH_E_CLASSIC), rec;
-    StructuredData d;
-    JSValue state;
+    StructuredWithTransfer d;
+    JSValue state, values = JS_UNDEFINED;
 
-    d.buf = JS_GetArrayBuffer(ctx, &d.len, buf);
-    DCHECK(d.buf != NULL, "§7.4.1.1's classic history API state held something that is not the serialized "
-                          "bytes — every writer of the field is in this file and every one writes an "
-                          "ArrayBuffer");
-    state = structured_deserialize(ctx, &d);
+    d.data.buf = JS_GetArrayBuffer(ctx, &d.data.len, buf);
+    DCHECK(d.data.buf != NULL, "§7.4.1.1's classic history API state held something that is not the serialized "
+                               "bytes — every writer of the field is in this file and every one writes an "
+                               "ArrayBuffer");
+    /* THE PAIR ENTRY, BECAUSE THE BYTES MAY NAME A SYMBOL. A reference past the transfer list resolves out of
+       the record's `symbols`, and reading these bytes through the bare entry would hand the resolver nothing to
+       resolve it from -- which core/structured_clone.c answers with "the engine serialized a value it could not
+       then deserialize", a crash about the engine disagreeing with itself rather than about this entry. The
+       bytes are BORROWED from the ArrayBuffer, so this record is never freed through
+       structured_with_transfer_free: the buffer owns them and the two JSValues are freed by hand below.
+       `holders` IS JS_UNDEFINED AND NEVER AN EMPTY ARRAY, which is the same positive statement the writer
+       makes: §7.2.5 names no transfer list, so there is nowhere for a transferable to have been named. */
+    d.holders = JS_UNDEFINED;
+    d.symbols = JS_GetPropertyStr(ctx, entry, SH_E_CLASSIC_SYM);
+    state = structured_deserialize_transfer(ctx, &d, &values);
+    /* NOTHING WAS TRANSFERRED, SO THE LIST IS EMPTY AND IS STILL FREED: the out-parameter is owned whatever it
+       holds, and §7.2.5 has no transfer list for it to have come from. */
+    DCHECK(structured_transfer_len(ctx, values) == 0,
+           "§7.4.6.2's restore of the history object state deserialized transferred values — pushState names no "
+           "transfer list, so the record this entry holds has no `holders` and nothing can have been moved");
+    JS_FreeValue(ctx, values);
+    JS_FreeValue(ctx, d.symbols);
     JS_FreeValue(ctx, buf);
     rec = sh_record(ctx);
     JS_SetPropertyStr(ctx, rec, SH_R_STATE, state);
@@ -1403,9 +1440,10 @@ void session_history_url_update_release(JSContext *ctx, SessionHistoryUrlUpdate 
 }
 
 void session_history_url_update_begin(JSContext *ctx, SessionHistoryUrlUpdate *w, JSValueConst new_url,
-                                      const StructuredData *serialized, bool push)
+                                      const StructuredData *serialized, JSValueConst serialized_symbols,
+                                      bool push)
 {
-    JSValue active, doc_state, classic, nav_state, rec;
+    JSValue active, doc_state, classic, classic_sym, nav_state, rec;
     const char *scroll;
     const char *new_url_bytes;
     JSValue scroll_v;
@@ -1432,10 +1470,25 @@ void session_history_url_update_begin(JSContext *ctx, SessionHistoryUrlUpdate *w
     scroll_v = JS_GetPropertyStr(ctx, active, SH_E_SCROLL);
     scroll = JS_ToCString(ctx, scroll_v);
     CHECK(scroll != NULL, "session history: an entry's scroll restoration mode could not be read");
-    if (serialized)
+    if (serialized) {
         classic = sh_state_buffer(ctx, serialized);
-    else
+        /* THE SYMBOLS COME FROM THE SAME CALLER AS THE BYTES AND ARE NEVER RE-DERIVED HERE. They are the
+           caller's `symbols` for THESE bytes; a concolic's source identity is what correlates every constraint
+           its flow narrowed, so a rebuilt one would be a SECOND symbol about which that narrowing says
+           nothing -- a wrong answer rather than a lossy one, which is why core/structured_clone.c interns by
+           pointer and hands the triple over rather than copying the value. */
+        classic_sym = JS_DupValue(ctx, serialized_symbols);
+    } else {
         classic = JS_GetPropertyStr(ctx, active, SH_E_CLASSIC);   /* "otherwise activeEntry's classic … state" */
+        /* AND THE SYMBOLS ARE INHERITED WITH THEM, because the standard's "otherwise activeEntry's classic
+           history API state" names ONE value and these bytes are half of it: taking the bytes from the active
+           entry and the symbols from the caller would resolve this entry's references against another
+           serialization's table, which is the one way this pair can be wrong without either half being. */
+        classic_sym = JS_GetPropertyStr(ctx, active, SH_E_CLASSIC_SYM);
+        DCHECK(JS_IsUndefined(serialized_symbols),
+               "§7.4.4 was handed symbols for a classic history API state it was not handed bytes for — the "
+               "two are one value and its caller supplies both or neither");
+    }
     /* §7.4.4's new entry names FIVE fields and the navigation API state is not one of them, so it takes
        §7.4.1.1's initial value — serialized UNDEFINED — rather than the active entry's. That is why
        `history.pushState(x, "")` leaves `navigation.currentEntry.getState()` undefined while
@@ -1452,7 +1505,7 @@ void session_history_url_update_begin(JSContext *ctx, SessionHistoryUrlUpdate *w
        of which asks for bytes today. HOW ITS ABSENCE SHOWS: a flow that pushes a computed route, calls
        `history.back()` and then `history.forward()` reads a `location.pathname` that no longer forks, where
        the same flow without the round trip forks. */
-    w->new_entry = sh_entry_new(ctx, new_url_bytes, doc_state, classic, nav_state, scroll);
+    w->new_entry = sh_entry_new(ctx, new_url_bytes, doc_state, classic, classic_sym, nav_state, scroll);
     JS_FreeCString(ctx, scroll);
     JS_FreeValue(ctx, scroll_v);
 
@@ -1747,8 +1800,12 @@ int session_history_fragment_nav_run(JSContext *ctx, SessionHistoryFragmentNav *
             dest = JS_ToCString(ctx, w->url);
             CHECK(dest != NULL, "session history: §7.4.2.3.3's destination could not be read back after the "
                                 "navigate event");
-            w->history_entry = sh_entry_new(ctx, dest, doc_state, sh_state_buffer(ctx, &null_state), nav_state,
-                                            scroll);
+            /* JS_UNDEFINED, AND IT IS DECIDED RATHER THAN DEFAULTED: these bytes are
+               StructuredSerializeForStorage(null) from sh_serialize_primitive, which goes through the PLAIN
+               entry and has no `symbols` field for a concolic to ride -- and §2.7.3's first arm cannot reach one
+               from a primitive anyway, so there is nothing for this slot to carry. */
+            w->history_entry = sh_entry_new(ctx, dest, doc_state, sh_state_buffer(ctx, &null_state),
+                                            JS_UNDEFINED, nav_state, scroll);
             JS_FreeCString(ctx, dest);
             structured_data_free(ctx, &null_state);
             JS_FreeCString(ctx, scroll);
@@ -2182,8 +2239,10 @@ void session_history_install_document(JSContext *ctx)
     }
     sh_serialize_primitive(ctx, JS_NULL, &nul);
     sh_serialize_primitive(ctx, JS_UNDEFINED, &undef);
+    /* JS_UNDEFINED for the same reason the other initial entry gives: §7.4.1.1's two initial values are
+       serialized PRIMITIVES through the plain entry, so neither has a symbol table. */
     entry = sh_entry_new(ctx, document_url(ctx), sh_document_state_new(ctx), sh_state_buffer(ctx, &nul),
-                         sh_state_buffer(ctx, &undef), "auto");
+                         JS_UNDEFINED, sh_state_buffer(ctx, &undef), "auto");
     structured_data_free(ctx, &undef);
     structured_data_free(ctx, &nul);
     /* THE FIRST ENTRY IS STEP 0 and the traversable's current step is 0 — the state §7.4.6's apply-the-history

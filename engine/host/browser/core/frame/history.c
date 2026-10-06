@@ -520,7 +520,21 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
         /* newURL GOES OVER AS THE VALUE IT IS. It used to be read back through JS_ToCString here, which was
            the last place the address was still a value and the first place it stopped being one — and §7.4.4
            step 8 is precisely the consumer that needs the half a C string cannot carry. */
-        session_history_url_update_begin(ctx, &s->w, s->new_url, &held, magic == HIST_PUSH);
+        /* JS_UNDEFINED, AND IT IS THE TRUTH ABOUT THESE BYTES RATHER THAN A PLACEHOLDER: step 3 above still
+           takes core/structured_clone.c's PLAIN entry, which has no `symbols` field, so there is no table for
+           this entry to carry and the write hook refuses a concolic at the serialize rather than here.
+           NAMED RESIDUAL. NOT COVERED: `history.pushState({t: location.hash}, "")` still aborts at
+           core/structured_clone.c's write hook, so the slot this entry now has is never filled. WHAT THE NEXT
+           DIFF BUILDS: step 3 calls structured_serialize_transfer with JS_UNDEFINED for the transfer list --
+           which that file's own header states IS §2.7.4 StructuredSerialize exactly, not a shortcut through
+           §2.7.7 -- holds its `symbols` on this machine beside `classic` so hpr_visit walks it across the
+           navigate event, and hands it here AND to navigate_event_fire_push_replace_reload_begin, whose work
+           record and whose §7.2.6.10.1 event need the same second slot or `destination.getState()` inside a
+           `navigate` listener deserializes a reference with no table. HOW ITS ABSENCE WOULD SHOW: a page that
+           pushes unknown input into its history state aborts a dev build at the serializer, naming an
+           ArrayBuffer with no second slot beside it, while this entry's own slot reads undefined on every
+           row. */
+        session_history_url_update_begin(ctx, &s->w, s->new_url, &held, JS_UNDEFINED, magic == HIST_PUSH);
     }
     STEP_GOTO(hdr->stage, HPR_UPDATE, &s->fire.phase, &s->fire.abort.phase,
               &s->fire.abort.sig.phase, &s->w.nav.phase, NULL);
