@@ -536,6 +536,18 @@ static JSValue coll_named(JSContext *ctx, JSValueConst self, const char *name)
        members. HOW ITS ABSENCE WOULD SHOW: calling that member with any receiver the corpus can reach — a
        NodeList, a plain object, a DOMTokenList — and observing a value where a browser throws. */
     if (!n || !coll_is_htmlcollection(kind)) return JS_UNDEFINED;
+    /* §4.2.10.2 STEP 1, which had no spelling here at all: "The namedItem(key) method steps are: If key is
+       the empty string, return null." IT IS NOT REDUNDANT WITH §4.9'S UNSET STEP, which is the reading that
+       would leave it out — no element's ID is the empty string, so the ID clause below could never answer an
+       empty key, and the `name` clause can: lexbor hands back a `name=""` attribute as non-NULL data of length
+       0, so `vlen == nlen` held at zero and `hc.namedItem("")` ANSWERED THAT ELEMENT. One step, two clauses,
+       and only one of them was already covered.
+       JS_UNDEFINED IS §4.2.10.2'S `null` HERE AND ALSO THE RIGHT ANSWER AT THE OTHER DOOR, which is why this
+       is one test and not two: js_coll_named_item maps JS_UNDEFINED to JS_NULL for the METHOD, and the named
+       getter needs the empty string NOT to be a supported property name — which is the same sentence's own
+       supported-property-names algorithm, whose `name` clause appends a value "neither the empty string nor
+       is in result". */
+    if (nlen == 0) return JS_UNDEFINED;
     for (c = coll_first_node(kind, n); c; c = coll_adv(kind, n, c, 1)) {
         const lxb_char_t *v;
         if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
@@ -545,6 +557,21 @@ static JSValue coll_named(JSContext *ctx, JSValueConst self, const char *name)
            change steps never set. The unset half rides along: no element's ID is the empty string. */
         v = element_id_bytes(lxb_dom_interface_element(c), &vlen);
         if (v && vlen == nlen && memcmp(v, name, nlen) == 0) return node_wrap(ctx, c);
+        /* §4.2.10.2 step 2's SECOND clause, whose namespace half was missing: "it is in the HTML namespace and
+           has a name attribute whose value is key". The ELEMENT's namespace, not the attribute's — so an
+           `<svg>` child with `name="x"` is not a match however its attribute reads, and `hc.x` answered it.
+           It is the same term HTML §2.1.3 "XML compatibility" defines for getElementsByName one arm up in
+           coll_takes, which is why that walk already tests `c->ns != LXB_NS_HTML` and this one did not.
+           NAMED RESIDUAL — THE ATTRIBUTE'S OWN NAMESPACE IS STILL UNTESTED. WHAT IS NOT COVERED: "a name
+           attribute" is §4.9's three-part definition (local name `name`, namespace null, namespace prefix
+           null), and this is a QUALIFIED-NAME read, so an HTML element carrying
+           `setAttributeNS(ns, "name", key)` matches where a browser does not — the same defect §4.9's ID half
+           above was just routed out of, one attribute over. WHAT THE NEXT DIFF BUILDS: this read at
+           `dom_attr_get_ns(el, NULL, "name")`, which is the population every `"name", 4` reader in this
+           component shares and is therefore its own subproblem rather than a line here. HOW ITS ABSENCE WOULD
+           SHOW, as an observation: `hc.namedItem(k)` or `hc[k]` answering an HTML element whose only
+           `name`-named attribute is namespaced. */
+        if (c->ns != LXB_NS_HTML) continue;
         v = lxb_dom_element_get_attribute(lxb_dom_interface_element(c), (const lxb_char_t *)"name", 4, &vlen);
         if (v && vlen == nlen && memcmp(v, name, nlen) == 0) return node_wrap(ctx, c);
     }

@@ -3057,6 +3057,31 @@ static const char *HTML =
     " + '&ns=' + (idnsN.getAttributeNS('http://x.test/idns', 'id') === 'idnsonly'"
     " && document.getElementById('idnsonly') === null"
     " && idnsH.children.namedItem('idnsonly') === null ? 'isidnsns' : 'wrong'));"
+    /* §4.2.10.2 Interface HTMLCollection's OTHER TWO STEPS, from the same fetched sentence: "The
+       namedItem(key) method steps are: If key is the empty string, return null. Return the first element in
+       the collection for which at least one of the following is true: it has an ID which is key; it is in the
+       HTML namespace and has a name attribute whose value is key; or null if there is no such element."
+       STEP 1 IS NOT REDUNDANT WITH §4.9'S UNSET STEP, and this is the statement that says so: no element's ID
+       is the empty string, so the ID clause can never answer an empty key — and the `name` clause can, because
+       lexbor hands a `name=""` attribute back as non-NULL data of length 0, so `vlen == nlen` held at zero.
+       THE NAMESPACE IS THE ELEMENT'S AND NOT THE ATTRIBUTE'S: an `<svg>` child with `name="nsgname"` is not a
+       match however its attribute reads.
+       `ctl` IS THE REACHABILITY WITNESS AND THE PROOF THAT THE `name` CLAUSE STILL WORKS, which the two
+       null-asserting arms cannot be: an engine that simply stopped matching on `name` would satisfy both of
+       them. Each null arm carries its own attribute read-back for the same reason — a `=== null` is otherwise
+       confirmed identically by the repair and by a write that stored nothing. */
+    "var nskH = document.createElement('div'); document.body.appendChild(nskH);"
+    "var nskE = document.createElement('p'); nskE.setAttribute('name', ''); nskH.appendChild(nskE);"
+    "var nskP = document.createElement('p'); nskP.setAttribute('name', 'nshname'); nskH.appendChild(nskP);"
+    "var nskG = document.createElementNS('http://www.w3.org/2000/svg', 'g');"
+    "nskG.setAttribute('name', 'nsgname'); nskH.appendChild(nskG);"
+    "fetch('/api/namedsteps?ctl=' + (nskH.children.namedItem('nshname') === nskP"
+    " && nskH.children.nshname === nskP ? 'isnsctl' : 'wrong')"
+    " + '&key=' + (nskE.getAttribute('name') === ''"
+    " && nskH.children.namedItem('') === null ? 'isnskey' : 'wrong')"
+    " + '&ns=' + (nskG.getAttribute('name') === 'nsgname'"
+    " && nskH.children.namedItem('nsgname') === null"
+    " && nskH.children.nsgname === undefined ? 'isnsns' : 'wrong'));"
     /* §4.9 matches / closest, and §7.1's DOMTokenList — the two questions a router asks and the way a bundle
        gates a branch of its UI. classList holds NO tokens of its own: they are the `class` attribute split, so
        a write through the list and a write through setAttribute are the same write, and it time-travels
@@ -17310,6 +17335,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            no ID, so §4.2.4 and §4.2.10.2 must both answer null for it. */
         { "/api/idns",       "isidnshas" },
         { "/api/idns",       "isidnsns" },
+        /* §4.2.10.2's step 1 and its step-2 namespace clause, as three rows over one statement: `isnsctl` is
+           the reachability witness AND the proof the `name` clause still matches (an engine that stopped
+           matching `name` altogether would satisfy the other two), `isnskey` is the empty-key answer that
+           §4.9's unset step cannot supply, and `isnsns` is the element's-namespace gate. */
+        { "/api/namedsteps", "isnsctl" },
+        { "/api/namedsteps", "isnskey" },
+        { "/api/namedsteps", "isnsns" },
         /* §4.2.6 installed from ONE place: Document gets the reads it never had, and the lookups scope to
            whichever node they were called on rather than to the global document */
         { "/api/parentmixin", "scoped" },
