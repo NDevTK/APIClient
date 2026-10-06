@@ -900,10 +900,49 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    question asked of the ROOT and the second is then a MEMBER beside the first rather than a second mechanism.
    HOW ITS ABSENCE WOULD SHOW: a run whose razor reads `runtime-only` for a row whose hole names an element or a
    global the served markup itself spells. */
+/* AND THE `flow_running() != NULL` CONJUNCT THAT STOOD ON THE DETERMINED TEST IS GONE, BECAUSE IT WAS NOT A
+   PRECONDITION OF ANYTHING AND COULD ONLY EVER MIS-CLASSIFY. It is recorded rather than quietly removed
+   because the reading that put it there is the one a reader re-derives: a pin is per-flow state, so asking
+   about one outside a flow LOOKS like reading a stranger's delta. The chain refutes it at every link, read
+   rather than argued. `concolic_example_state` is a plain `JS_GetOpaque` plus `example_state_of`, whose
+   DETERMINED arm is `cons_lookup(c->src)`, which is a plain read of `g_pins` and its inherited `g_pins_base`
+   chain with no flow dependency and no assert — and THREE OF ITS FOUR CALLERS ask it unguarded
+   (`console_label.c`, `idb_key.c`, `decide.c`), this being the only site that did not. The `NULL` case is not
+   a stranger's delta either: CLAUDE.md records that the scheduler DELIBERATELY leaves the running stamp UP
+   across the host boundary because a yielded flow's delta is still applied, so a NULL stamp means NO delta is
+   applied and the read is of BASELINE, which is the sound answer for a record minted before any program ran.
+   THE DIRECTION OF THE REMOVAL IS THE CONSERVATIVE ONE AND THAT IS WHY IT IS SAFE TO MAKE WITHOUT A DRIVE: the
+   conjunct could only hold a row OUT of `EPA_SOURCE_DETERMINED` and therefore IN `EPA_UNKNOWN`, which is the
+   member §What-the-tool-produces' hard bar reads as a positive claim — so every row it ever decided was the
+   bar OVER-claiming, and deleting it can move rows OFF the bar and never onto it.
+   AND THE CONJUNCT IS NOT WHY THE MEMBER IT GUARDS READS ZERO, WHICH IS THE LARGER FINDING AND IS NOT CLOSED
+   BY THIS DIFF. Measured over the committed capture corpus rather than argued, and with the two histograms'
+   own conservation identity as the armed control — both sum to 9489, so they are over the SAME rows: from
+   `testing/corpus`, the `endpointAddressClass` totals are `concrete` 9353 and `unknown` 136 with
+   `source-determined` at **ZERO**, while `endpointWitnessClass` reads `unasked` 113, `no-witness` 5147,
+   `may-rest-on` 4229. The conjunct is false only for the `unasked` rows, so it cannot explain a zero that
+   holds across the 9376 rows where a flow DID stand: for every one of the 136 concolic addresses ever
+   classified, `concolic_example_state` answered something other than DETERMINED. The member's own banner in
+   endpoint.h declares a worked example for it (`var u = cfg.url; if (u === '/api/v2/items') fetch(u);`), and
+   that shape has never occurred in any capture — which is a statement about REACH and not about this
+   classifier: no address this engine has ever emitted was composed from a value the running flow had PINNED.
+   THE PAIRING THAT WOULD PRICE IT IS NOT DERIVABLE FROM THOSE TWO FIGURES, which is why the bound above is a
+   bound: they are MARGINALS, so `unasked` 113 against `unknown` 136 says only that at least 23 bar-clearing
+   rows were minted with a flow standing. The per-ENDPOINT row carries `addressClass` and `witnessClass`
+   ADJACENTLY and the join is exact there; what no capture holds is that document.
+   HOW ITS ABSENCE WOULD SHOW: an `endpointAddressClass` whose `source-determined` arm is still zero on a run
+   that emitted a nonzero `unknown`, which says the pin-to-address path did not fire rather than that this
+   classifier refused it.
+   RETIREMENT: this record goes when the census publishes the ADDRESS CLASS JOINED WITH THE WITNESS CLASS as
+   one keyed row, the way `testing/corpus/site.mjs` already keys `door|witnessClass`, because the bound above
+   is then a count rather than an inequality. MEASURED ABSENT with the command, keyed on the emitted KEY so
+   prose naming the join cannot satisfy it:
+   `grep -cE '"epAddressWitness"|addressClass\|witnessClass' engine/host/solver/result.c` answers 0, against
+   `grep -c 'epAddressClass' engine/host/solver/result.c` answering 5 as the armed control and an invented key
+   answering 0. */
 static int address_class_of(JSValueConst url) {
     if (!concolic_is(url)) return EPA_CONCRETE;
-    if (flow_running() != NULL && concolic_example_state(url) == CONCOLIC_EX_DETERMINED)
-        return EPA_SOURCE_DETERMINED;
+    if (concolic_example_state(url) == CONCOLIC_EX_DETERMINED) return EPA_SOURCE_DETERMINED;
     return EPA_UNKNOWN;
 }
 
