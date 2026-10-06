@@ -914,10 +914,24 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    RETIREMENT: this record goes when `address_class_of` below ASKS that property — the member that clears
    §What-the-tool-produces' bar narrowed by WHOSE unknown the address rests on rather than by whether there is
    one — because the over-claim this residual is about is then gone rather than merely answerable. MEASURED
-   ABSENT with the command, keyed on the published predicate's own name so prose naming the question cannot
-   satisfy it: `grep -c 'concolic_root_whose' engine/host/solver/endpoint.c` answers **0**, against
-   `grep -c 'concolic_example_state' engine/host/solver/endpoint.c` answering **4** as the armed control and an
-   invented accessor answering 0.
+   ABSENT with the command, keyed on the CALL CONSTRUCT and never on the predicate's name:
+   `grep -cE 'concolic_root_whose_(any|all)\([A-Za-z_]' engine/host/solver/endpoint.c` answers **0**, against
+   the same shape over the file where such calls DO stand
+   (`grep -cE 'root_whose_of\([A-Za-z_]' engine/host/solver/concolic.c`) answering **13** as the armed control
+   and an invented sibling answering 0.
+   AND THE CLAUSE THAT STOOD HERE WAS SATISFIED BY ITS OWN ANNOUNCEMENT, WHICH IS RECORDED RATHER THAN QUIETLY
+   REPLACED BECAUSE IT IS THE THIRD TIME THIS ONE FILE'S RESIDUALS HAVE MET THIS DEFECT AND THAT MAKES IT A
+   CATEGORY RATHER THAN A SLIP. It read: "keyed on the published predicate's own name so prose naming the
+   question cannot satisfy it: `grep -c 'concolic_root_whose' engine/host/solver/endpoint.c` answers **0**" —
+   and keying on the NAME is the thing that LETS prose satisfy it, so the sentence asserted the opposite of
+   what its own command did. It answered 0 when it was measured and **3** in the commit that wrote it, all
+   three hits being this very paragraph naming the two predicates and quoting a grep. The two siblings are one
+   residual up (a `DCHECK` whose condition and message wrap across two lines, which no pattern wanting both
+   halves can see) and in the verdict above (five GUESSED spellings, none of them what the capability was
+   called). The three fail three different ways and share one cause: A MEASURED-ABSENT CLAUSE IS A CLAIM ABOUT
+   SOURCE TEXT THAT THE CLAUSE ITSELF BECOMES PART OF, so it may only ever key on a CONSTRUCT the prose around
+   it cannot accidentally be — a call with an argument, a definition line — and never on an identifier, which
+   the announcement is obliged to contain.
 
    AND A SECOND POPULATION IS OVER-CLAIMED FOR A DIFFERENT REASON, WHICH IS A SIBLING AND NOT A SMALLER CASE OF
    THE ONE ABOVE. WHAT IS NOT COVERED: a value whose bytes STAND IN THE SERVED DOCUMENT and which is minted
