@@ -117488,7 +117488,8 @@ static JSValue js_global_decodeURI(JSContext *ctx, JSValueConst this_val,
             JSValue real = JS_UNDEFINED;
             if (JS_IsString(ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_global_decodeURI(ctx, this_val, 1, a2, isComponent); }
             JS_FreeValue(ctx, ex);
-            return js_concolic_derive(ctx, argv[0], "decodeURI", real);
+            return js_concolic_derive(ctx, argv[0],
+                                      isComponent ? "decodeURIComponent" : "decodeURI", real);
         }
     }
     str = JS_ToString(ctx, argv[0]);
@@ -117612,7 +117613,8 @@ static JSValue js_global_encodeURI(JSContext *ctx, JSValueConst this_val,
             JSValue real = JS_UNDEFINED;
             if (JS_IsString(ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_global_encodeURI(ctx, this_val, 1, a2, isComponent); }
             JS_FreeValue(ctx, ex);
-            return js_concolic_derive(ctx, argv[0], "encodeURI", real);
+            return js_concolic_derive(ctx, argv[0],
+                                      isComponent ? "encodeURIComponent" : "encodeURI", real);
         }
     }
     str = JS_ToString(ctx, argv[0]);
