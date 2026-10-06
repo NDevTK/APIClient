@@ -2192,10 +2192,42 @@ async function oneRun(browser, pg, url, budgetMs, engineErrs) {
                                  none of the three above can express and the one the bar's own open question
                                  is about. The rows beside it say WHICH DOOR, WHEN, and WHETHER THE RUN HAD
                                  DETERMINED the address; not one of them says, of an address the run did NOT
-                                 determine, WHERE THE UNKNOWN CAME FROM — and a hole this engine minted for
-                                 its own orphan drive clears the hard bar in exactly the same bucket as one
-                                 a page's own `location.hash` put there, which are opposite findings about
-                                 the product.
+                                 determine, WHERE THE UNKNOWN CAME FROM. IT IS NOT THE WHOSE AXIS AND THE
+                                 CLAUSE THAT STOOD HERE SAID IT WAS, FALSELY, AT THIS COMMIT'S OWN PARENT —
+                                 it read "a hole this engine minted for its own orphan drive clears the hard
+                                 bar in exactly the same bucket as one a page's own `location.hash` put
+                                 there, which are opposite findings about the product", and the retired
+                                 wording is kept because a reader who re-derives it from "an unknown is an
+                                 unknown" will write it again. solver/engine.c mints a driven orphan's
+                                 argument AND its receiver `CONCOLIC_WHOSE_INSTRUMENT`, saying at the site
+                                 that the bar's own claim "is false of it: nothing was LEARNED, because the
+                                 hole is ours"; `address_class_of` asks `concolic_root_whose_any(url,
+                                 CONCOLIC_WHOSE_WORLD)` — the ONE live call to that predicate in
+                                 solver/endpoint.c, five matched as a CONSTRUCT against ten matches of the
+                                 bare name, the other four being prose — so an INSTRUMENT-only mask answers
+                                 NO, the class is `unknown-unproven`, and `endpoint_razor_class_of` clears
+                                 only on `EPA_UNKNOWN`. THE BAR ALREADY REFUSES THE ENGINE'S OWN HOLES, and
+                                 the clause describing the world before it did was published in the series
+                                 that ended it — which is the cost clause written out of what its author
+                                 FOUND rather than what they LEFT.
+                                 WHAT THE ROW ADDS IS THE NAMES, AND THAT IS WHAT MAKES THAT REFUSAL
+                                 FALSIFIABLE RATHER THAN MERELY ASSERTED: a `runtime-only` row whose root is
+                                 WHOLLY `{orphan<hex>…}` is that refusal regressed, which is the observation
+                                 solver/endpoint.c's own HOW-ITS-ABSENCE-WOULD-SHOW clause names this
+                                 emitted row for.
+                                 THE NAMES MAY NOT BE PARSED FOR WHOSE — extension/bridge.js says so at this
+                                 very histogram and solver/endpoint.c says why, the root being a SET whose
+                                 walk is static to solver/concolic.c — so `(named)` holds THREE states and
+                                 not one: a real source root; a JOINED set mixing a page source with an
+                                 engine hole, which is the one case that DOES clear the bar and the one case
+                                 this row cannot resolve; and a derivation that became its OWN root, whose
+                                 mask is `UNSTATED` (solver/concolic.c's `root ? root : shape` at four code
+                                 sites, each with `root_whose_or_unstated` beside it).
+                                 `(unattributed)` IS A TRIPWIRE AND NOT HALF OF A SPLIT. It needs a concolic
+                                 carrying a `src` and no `root`, which `concolic_alloc`'s own pair asserts
+                                 forbid in dev (`!!src == !!root` and `!!root == !!root_whose`), so a nonzero
+                                 bucket here is a release-build mask drop or a mint that has parted from
+                                 those asserts — worth a column, and not an observation about the page.
                                  IT IS NOT A FOURTH OPERAND OF THE BAR AND MAY NOT BE UNIONED INTO IT.
                                  solver/endpoint.h states that case at `ENDPOINT_WITNESS_CLASSES` and it
                                  holds here for the same reason: `endpoint_razor_class_of` takes TWO ints,
