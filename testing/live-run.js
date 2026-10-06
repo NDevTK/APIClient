@@ -2246,7 +2246,38 @@ async function oneRun(browser, pg, url, budgetMs, engineErrs) {
                                  carried this key at all — so the first drive that reads it is the first
                                  reading of this axis on a real site rather than a re-reading of one. */
                               addressRoot: ("endpointAddressRoot" in r)
-                                ? r.endpointAddressRoot : undefined })),
+                                ? r.endpointAddressRoot : undefined,
+                              /* …AND THE ROOT NAMES THEMSELVES, OFF THE PER-ROW ARRAY, BECAUSE THE BUCKET
+                                 ABOVE CANNOT ANSWER THE QUESTION IT WAS LANDED FOR. extension/bridge.js
+                                 buckets every non-empty root string to `(named)` deliberately — its own
+                                 banner says why, a root composed out of a page's property name may not be
+                                 a histogram KEY — so the NAMES solver/endpoint.c emits reach no reader at
+                                 all, and the row above cannot tell an `{orphan<hex>.argN}` the engine
+                                 minted from an injected member a page's own inline script wrote. Those are
+                                 opposite findings about the product and they print identically.
+                                 IT IS A LIST AND NEVER A HISTOGRAM, which is what makes it safe where the
+                                 bucket is not: a page-influenced string used as an object key is the hazard
+                                 bridge.js refuses, and a string in an ARRAY carries none of it.
+                                 IT IS A READING OVER A CAPTURE AND NOT A BRANCH IN THE PRODUCT, which is
+                                 the one ground on which reading these strings is admissible at all:
+                                 solver/endpoint.c states at the field that a classification keyed on this
+                                 string's SPELLING is the count of a spelling §RUN-DON'T-MATCH forbids, and
+                                 that governs the ENGINE. This driver composes no verdict, keys nothing on a
+                                 prefix and feeds nothing back — it prints what the row said, which is what
+                                 testing/corpus/holewhose.mjs already argues is admissible for a reader over
+                                 captures that exist.
+                                 ONLY THE NON-CONCRETE ROWS, because solver/endpoint.c writes `addressRoot`
+                                 as `null` on EXACTLY the rows whose class is `EPA_CONCRETE` — read at the
+                                 emitter — so including the rest would be the `(no-concolic)` bucket
+                                 restated and would bury the handful that carry a hole under a hundred
+                                 nulls. `false` is the engine's second positive statement (a non-concrete
+                                 address whose root could not be named) and prints as its own token rather
+                                 than as a missing string.
+                                 `undefined` IS A RELAY WITH NO ENGINE DOCUMENT, which bridge.js's own
+                                 `analysisHasDocument` asserts is all-three-or-none, so the absence is a
+                                 statement and not a gap. */
+                              addressRoots: ("fetchCallSites" in r)
+                                ? rootNames(r.fetchCallSites) : undefined })),
     frontier: mine.map(census),
     storeEndpointsDelta: (last.endpoints === null || before.endpoints === null)
       ? null : last.endpoints - before.endpoints,
@@ -2265,6 +2296,34 @@ async function oneRun(browser, pg, url, budgetMs, engineErrs) {
    not state it; `{}` is a run that stated the partition of an EMPTY surface, which is a finding about the page;
    anything else is the partition. Sorted by count and then by name so two runs' strings are comparable by eye,
    which is the whole reason a driver prints a histogram at all. */
+/* THE DISTINCT ROOT NAMES OF THE ROWS THAT CARRY A HOLE, most frequent first, as PAIRS and never as an
+   object — the whole reason this is a separate function from `hist` one line down is that `hist` builds an
+   object keyed by its own input, and these strings are composed out of a page's own property names. A `Map`
+   cannot be reached by `__proto__`, which is the hazard extension/bridge.js names at the histogram it
+   refuses to key on them.
+   THE CAP IS ON THE RENDERING AND NOT ON THE COUNTING, so a surface with many distinct roots reports the
+   true number of them and shows the top few: a truncated list that did not say it was truncated would be a
+   floor wearing a total's clothes. */
+function rootNames(rows) {
+  if (!Array.isArray(rows)) return undefined;
+  const m = new Map();
+  let unnamed = 0, held = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r || typeof r !== "object" || !("addressRoot" in r)) continue;
+    const v = r.addressRoot;
+    if (v === null) continue;                 // concrete by the emitter's own arm — the bucket states it
+    held++;
+    if (v === false) { unnamed++; continue; } // the engine's second positive statement
+    m.set(String(v), (m.get(String(v)) || 0) + 1);
+  }
+  if (!held) return "none";                   // no row carried a hole: a finding, not an absence
+  const ks = [...m.entries()].sort((a, b) => (b[1] - a[1]) || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  const shown = ks.slice(0, 6).map(([k, n]) => k + (n > 1 ? "\u00d7" + n : "")).join(",");
+  return (unnamed ? "(unnamed)\u00d7" + unnamed + (ks.length ? "," : "") : "") + shown +
+         (ks.length > 6 ? " +" + (ks.length - 6) + " more of " + ks.length + " distinct" : "");
+}
+
 function hist(h) {
   if (h === undefined) return "-";
   const ks = Object.keys(h);
@@ -2465,6 +2524,18 @@ async function main() {
            carry THREE facts between them and not five. It composes no union and asserts no identity against
            `frontier`'s engine-side census, for `endpointAddressClass`'s reason exactly. */
         endpointAddressRoot: rs.map((r) => r.doors.map((d) => hist(d.addressRoot)).join("|") || "no-row"),
+        /* …AND THE NAMES, WHICH IS THE ROW THAT ANSWERS WHOSE HOLE AND THE ONE THE BUCKET ABOVE CANNOT.
+           `{orphan<hex>.argN}` is a spelling solver/engine.c alone produces and no document can write, so a
+           root that begins with it is the ENGINE'S OWN MINT and anything else is not — which is the
+           difference between this tool measuring a page and measuring itself, and it is invisible in every
+           other row on this line. Read WITH `endpointAddressClass`, never instead of it: the class carries
+           whether any root is a declared attacker source (`unknown` against `unknown-unproven`) and these
+           strings carry WHICH roots, and for the injected-state family the string is BYTE-IDENTICAL on both
+           arms, so the class is the discriminator there and the names add nothing.
+           `none` IS A FINDING AND `-` IS NOT: the first is a surface every address of which the run had
+           determined, the second a relay carrying no engine document. */
+        endpointAddressRoots: rs.map((r) => r.doors.map((d) =>
+          (d.addressRoots === undefined ? "-" : d.addressRoots)).join("|") || "no-row"),
         sinks: spread(rs, first("sinks")),
         candidates: spread(rs, first("candidates")),
         flows: spread(rs, first("flows")),
