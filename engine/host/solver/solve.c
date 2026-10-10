@@ -14,6 +14,7 @@
 #include "solver/endpoint.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
+#include "solver/metrics.h"   /* detect_sink raises the arrival census */
 #include "check.h"
 #include <lexbor/html/html.h>
 #include <lexbor/dom/dom.h>
@@ -30,17 +31,6 @@ enum { SINK_EVAL = 0, SINK_HTML = 1, SINK_URL = 2 };   /* sink classes, each wit
    more searches or as bigger ones. */
 static int g_cands_seeded;
 int solve_candidate_count(void) { return g_cands_seeded; }
-/* The arrival census, which makes an empty @S surface readable (see detect_sink). `reached` counts sink
-   executions, `tainted` those that carried attacker input, and `suppressed` those whose search the
-   unforgeable-principal rule declined to open. Only the triple is a reading, so one call returns all three. */
-static long g_sink_reached, g_sink_tainted, g_sink_suppressed;
-void solve_arrival_census(long *reached, long *tainted, long *suppressed) {
-    DCHECK(reached && tainted && suppressed,
-           "the @S arrival census was asked for fewer than its three numbers — each is uninterpretable alone "
-           "(see the counters' own declaration), so a caller taking one of them is about to report a state it "
-           "cannot distinguish from its opposite");
-    *reached = g_sink_reached; *tainted = g_sink_tainted; *suppressed = g_sink_suppressed;
-}
 
 /* The running flow's candidate mode, read through the running flow so a preemption cannot cross it. A NULL flow
    (baseline setup) is not verifying. */
@@ -382,7 +372,6 @@ static int sink_class_of_name(const char *name) {
 void solve_init(JSContext *ctx) {
     g_pending = NULL; g_pending_n = g_pending_cap = 0;
     g_cands_seeded = 0;
-    g_sink_reached = g_sink_tainted = g_sink_suppressed = 0;
     g_sinks = NULL; g_sinks_n = g_sinks_cap = 0;
     /* Every row is whole and gets its breakouts from exactly one source: a class with both would derive and then
        also spray its list, and one with neither is seeded nothing and parks forever. `tt` may be -1, since the
@@ -869,9 +858,9 @@ static void detect_sink(JSValueConst arg, int cls) {
            "a JS-context arrival was recorded for a value ECMAScript §19.2.1.1 PerformEval step 2 hands back "
            "unevaluated — no program is compiled and there is no §12 lexical state for a breakout to escape "
            "from, so this would raise `reached` for a call that is not a code-execution sink at all");
-    g_sink_reached++;
+    METRIC_ADD(sink_reached, 1);
     if (!concolic_is(arg)) return;
-    g_sink_tainted++;
+    METRIC_ADD(sink_tainted, 1);
 
     shape = concolic_shape_c(arg);
     src   = concolic_src_c(arg);
@@ -886,7 +875,7 @@ static void detect_sink(JSValueConst arg, int cls) {
        deliver is a false one. No entry is emitted, since a parked entry would say "not solved yet"; the sink
        stays reportable through any other flow that reaches it without the demand. The return is counted,
        because it is a decision rather than an absence. */
-    if (concolic_principal_pinned()) { g_sink_suppressed++; return; }
+    if (concolic_principal_pinned()) { METRIC_ADD(sink_suppressed, 1); return; }
     add_pending(src ? src : (shape ? shape : "?"), root, cls);
 }
 

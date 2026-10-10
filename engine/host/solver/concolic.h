@@ -345,15 +345,6 @@ int concolic_source_overlay_declared(void);
    that gate as a predicate, so the decision lives in one place rather than being re-derived from whether some
    hook happens to be installed. */
 int concolic_is_exploring(void);
-/* HOW MANY ATTACKER-SOURCE VALUES THIS DOCUMENT'S RUN MINTED — the first of the facts an EMPTY @S surface
-   collapses, and the one that is not about sinks at all. "No finding" has at least four readings and they take
-   opposite actions: the page never read an attacker source (a driving gap — the code that reads one was never
-   reached); it read one and nothing tainted reached a code-execution sink (a propagation question, or a page
-   that has no such flow); something tainted reached a sink and the search was suppressed because the check on
-   it was unforgeable (a POSITIVE result about the page); or no sink ran at all. Solver/solve.h counts the last
-   three where they happen; this is the first. Zero here with sinks reached is a different page from zero here
-   with none, and one empty array reports both. */
-long concolic_source_reads(void);
 
 /* ANSWER [[GetOwnProperty]] FROM REAL SLOTS ONLY, for the span between these two calls.
  *

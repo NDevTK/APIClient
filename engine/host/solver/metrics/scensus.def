@@ -1,0 +1,11 @@
+/* The @S arrival census: what an empty `securitySinks` array is evidence for. No attacker source read, no sink
+   ran, only the page's own strings arrived, or taint arrived and its search was declined because the check on
+   it is unforgeable — four readings with opposite actions, which these rows split. solver/metrics.h states the
+   grammar. `_sourceReads` counts attacker-source values minted (concolic_source_wrap); the three sink rows count
+   exploration-flow arrivals at detect_sink, so each is a subset of the one before it. */
+METRIC(source_reads,    "_sourceReads",    LIFETIME, "value",   AGENT, "solver/concolic.c")
+METRIC(sink_reached,    "_sinkReached",    LIFETIME, "arrival", AGENT, "solver/solve.c")
+METRIC(sink_tainted,    "_sinkTainted",    LIFETIME, "arrival", AGENT, "solver/solve.c")
+METRIC(sink_suppressed, "_sinkSuppressed", LIFETIME, "search",  AGENT, "solver/solve.c")
+IDENTITY_LE(sink_tainted,    sink_reached)
+IDENTITY_LE(sink_suppressed, sink_tainted)

@@ -9,6 +9,7 @@
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "solver/endpoint.h"  /* the @H surface is told which globals a program names (`.global_named`) */
 #include "solver/rung_entry.h" /* the scheduler is told the arms a program asks for by name */
+#include "solver/metrics.h"   /* the attacker-source mint raises `_sourceReads` */
 #include "check.h"
 #include <stdarg.h>
 #include <stdlib.h>
@@ -4265,21 +4266,12 @@ static JSClassExoticMethods g_concolic_exotic = {
     .get_own_property_no_user_code = true,
 };
 
-/* How many values the source overlay has minted (concolic_source_wrap says what for). Reset with the agent, so
-   it is the agent's number, not one document's: a second page joining a live agent through `qjs_join` calls no
-   `_init`, so `_sourceReads` sums both documents, which is right for an origin-keyed agent cluster.
-   concolic_init is an agent's bring-up: `qjs_init` refuses a second rooting with `CHECK(g_dom == NULL)`, and the
-   native runner builds one top-level document per process (a cross-origin child is a forked `--document`
-   process; a same-origin one is `wpt_child_realm`, which calls no `_init`). A second `concolic_init` within one
-   agent, or a host rooting two agents in one process, would break that, and would show as `_sourceReads`
-   falling between two `qjs_result` calls of one instance; `_candidates` and `_absent` share the boundary
-   (result.c's grouping paragraph). Declared above its first use because concolic_init zeroes it; the
-   accessor stays beside the overlay. */
-static long g_source_reads;
-
 void concolic_init(JSContext *ctx) {
     JSRuntime *rt = JS_GetRuntime(ctx);
-    g_source_reads = 0;   /* the agent's, not one document's: see the counter's declaration */
+    /* Every host calls this once per agent before anything can mint a source or reach a sink, so the metrics
+       block is brought up here and released by solver_agent_free. A document joining through `qjs_join`
+       calls no `_init` and sums into the same rows, which is right for an origin-keyed agent cluster. */
+    metrics_agent_init();
     /* The whose-mask holds one bit per declared member, and the record's field bounds how many there may be: a
        member past its width would shift out and answer no for a provenance a mint stated. Checked once per
        agent, where both are in hand. */
@@ -4967,7 +4959,6 @@ void concolic_install_hooks(void)
    that should fork. */
 enum { SOURCE_OVERLAY_UNDECLARED = 0, SOURCE_OVERLAY_BROWSER_ONLY, SOURCE_OVERLAY_EXPLORING };
 static int g_source_overlay;
-long concolic_source_reads(void) { return g_source_reads; }
 /* The same answer, for a component that mints a source of its own (see the header). Not folded into
    concolic_source_wrap, which also files the value in the attacker-delivery registry and counts it as attacker
    input: a data block (HTML §4.12.1 The script element) is neither, and counting it would report a page that
@@ -5044,9 +5035,9 @@ JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src,
        component owning an attacker source mints through this call. An empty @S surface has four readings
        with opposite actions: no attacker source read; read but nothing tainted reached a code-execution sink;
        reached one but suppressed by an unforgeable check; or no sink ran. The last three are counted at the
-       arrival (solver/solve.h); this is the first. Counted after the overlay gate, so it counts values minted:
-       a conformance host's run would otherwise report attacker input it never acquired. */
-    g_source_reads++;
+       arrival (solve.c's detect_sink); this is the first. Counted after the overlay gate, so it counts values
+       minted: a conformance host's run would otherwise report attacker input it never acquired. */
+    METRIC_ADD(source_reads, 1);
 #if APICLIENT_DEV
     if (src && concolic_source_encodes(src)) {
         char *hole = shapef("{%s}", src);

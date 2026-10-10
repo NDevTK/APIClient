@@ -36,7 +36,7 @@ typedef struct { const char *name; ByteReaderMake make; } ByteReader;
    is none of that, and NULL is the positive statement that it is not — never a hole a default fills.
    `*attacker` splits the two KINDS of unknown, because they are counted differently and only the interface can
    say which it holds: true for a DECLARED attacker delivery (solver/concolic.h's source registry — a file the
-   user chose), which is one of the values `concolic_source_reads` exists to count, and false for
+   user chose), which is one of the values the `_sourceReads` metric counts, and false for
    server-injected state, which is unknown input the attacker does not author and must not be counted as one.
    The name is MALLOC'D and the caller frees it, and it is SPELLED SO THE @H SURFACE CAN PRINT IT: a hole is
    written between braces and the consumer reads one back with `/\{([^}\/]+)\}/`, so a name carrying `/` or `}`

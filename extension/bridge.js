@@ -81,11 +81,9 @@ function assertResultDocument(r) {
          "pageErrors and pageErrorsRetracted in the same composition, so its absence is that composition " +
          "changed under this reader and every engine-minted exploration throw would be reported to a person " +
          "as an error their own page raised");
-  /* The cost counters and the @S arrival census are emitted by result.c in one snprintf, so the contract is all
-     of them and a subset check would pass the very shapes it should reject. The @S group (`_sourceReads`,
-     `_sinkReached`, `_sinkTainted`, `_sinkSuppressed`) is what makes an empty securitySinks readable: whether
-     attacker input was acquired, whether a sink ran, whether tainted data arrived, and whether an arrival was
-     declined by an unforgeable check.
+  /* The cost counters are emitted by result.c in one composition, so the contract is all of them and a subset
+     check would pass the very shapes it should reject. The registry families (the @S arrival census among
+     them) are asserted from `_metricsSchema` below rather than listed here.
      This JS ships when pushed while its C writer ships only when built, so a counter added to both in one
      commit fails here against every older artifact until the next build. The message names that cause first;
      the assert stays, since a default would turn a name the engine stops writing into a permanent zero. */
@@ -93,7 +91,6 @@ function assertResultDocument(r) {
                    "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked",
                    "_routedDelivered", "_routedRefused", "_routedTasksFired",
                    "_routedTasksTargetOrigin", "_routedTasksTargetGone", "_routedTasksThrew",
-                   "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed",
                    "_orphansDriven", "_orphansAsked",
                    "_orphanAskMemo", "_orphanAskEmpty", "_orphanAskTook",
                    "_orphanWalks", "_orphanWalkEntries", "_orphanWalksFull",
@@ -114,6 +111,7 @@ function assertResultDocument(r) {
            "OBSERVABLE that the single BFS context-switches, forks and pumps jobs rather than running its " +
            "flows FIFO, and the only thing that tells an empty finding set from a run that never looked");
   }
+  assertMetricsFamilies(r);
   /* `_wfq` (solver/result.h) is the order the frontier was in. Its shape is asserted and its names are not:
      the object is relayed whole and popup.js renders whatever rows it carries, so a name list here would be a
      third copy of solver/flow.h's fields. `members` is always present: `{members: 0}` with no term rows is an
@@ -249,6 +247,45 @@ function assertResultDocument(r) {
          "the recipes this zone writes to IndexedDB and hands back to qjs_begin next session. An absent one " +
          "reads exactly like a fully-explored document, so every flow the engine paged out would be dropped " +
          "here and the cross-session frontier would silently restart from the boot flow on every visit");
+}
+/* The families of solver/metrics.h's registry, asserted from the schema the document carries beside them: every
+   declared row is a number on the document and every declared identity holds, so this zone keeps no row list
+   of its own. The @S arrival census's four rows are also read by name below (linesToAnalysis), so they are
+   asserted to be declared. A missing schema has a missing counter's two causes, in the same order. */
+const METRIC_KINDS = ["lifetime", "gauge", "maximum", "constant", "regime"];
+const SCENSUS_READ = ["_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed"];
+function assertMetricsFamilies(r) {
+  const schema = r._metricsSchema;
+  DCHECK(schema && typeof schema === "object" && Array.isArray(schema.families),
+         "the engine's result document carries no _metricsSchema with a `families` array — result.c composes " +
+         "solver/metrics.c's schema into every document. Check first whether the loaded wasm predates this " +
+         "reader (extension/lib/qjs/qjs.mjs.build.json's `head`), then whether result_json's composition changed");
+  for (const f of schema.families) {
+    DCHECK(typeof f.family === "string" && Array.isArray(f.rows) && f.rows.length > 0 &&
+           Array.isArray(f.identities),
+           "the engine's metrics schema carries a family with no name, no rows or no identities — " +
+           "metrics_schema_json writes all three for every family solver/metrics.h declares");
+    for (const row of f.rows) {
+      DCHECK(typeof row.key === "string" && METRIC_KINDS.includes(row.kind) && typeof row.unit === "string" &&
+             typeof row.scope === "string" && typeof row.owner === "string",
+             "the engine's metrics schema declares a `" + f.family + "` row without its key, unit, scope and " +
+             "owner, or with a kind outside " + METRIC_KINDS.join("/") + " — every METRIC(...) row names all five");
+      DCHECK(typeof r[row.key] === "number" && Number.isFinite(r[row.key]),
+             "the engine's result document carries no numeric " + row.key + ", which its own schema declares " +
+             "in the `" + f.family + "` family — the composer that splices the family's rows stopped splicing " +
+             "them, and a default here would report a row the engine stopped writing as a permanent zero");
+    }
+    for (const e of f.identities)
+      DCHECK(e.rel === "le" && r[e.sub] <= r[e.sup],
+             "the engine's result document reports " + e.sub + " = " + r[e.sub] + " and " + e.sup + " = " +
+             r[e.sup] + ", and the `" + f.family + "` family declares the first a subset of the second (" +
+             e.rel + ") — the engine's own DCHECK of it is compiled out of a release build");
+  }
+  const scensus = schema.families.find((f) => f.family === "scensus");
+  for (const k of SCENSUS_READ)
+    DCHECK(scensus && scensus.rows.some((row) => row.key === k),
+           "the engine's metrics schema does not declare " + k + " in the `scensus` family, and " +
+           "linesToAnalysis relays it by name — solver/metrics/scensus.def renamed or dropped the row");
 }
 const RUN_OUTCOMES = ["partial", "complete", "crashed", "nothing-to-run"];
 /* Writes the run's own log row. `eng` is the run's identity and is absent for records that belong to no

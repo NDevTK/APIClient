@@ -9,6 +9,7 @@
 #include "solver/decide.h"
 #include "solver/flow.h"
 #include "solver/world.h"
+#include "solver/metrics.h"
 #include "core/crypto/aes.h"
 #include "core/crypto/aes_gcm.h"
 #include "core/crypto/hmac.h"
@@ -20947,37 +20948,14 @@ static int fixture_have_answers(void) {
         printf("@S %s\n", sj);
         free(sj);
     }
-    /* …AND WHAT AN EMPTY `@S []` IS EVIDENCE FOR, WHICH THE ARRAY ITSELF CANNOT SAY. solver/solve.h's
-       detect_sink names the four readings an entry-less @S surface has — the page never read an attacker
-       source; a source was read but no sink RAN; a sink ran and only the page's own strings arrived; something
-       tainted arrived and the search was SUPPRESSED because the check on it was unforgeable — and they take
-       opposite actions: the first two are a driving gap, the third is a page that may have no such flow, the
-       fourth is a positive result ABOUT the page. The counters that split them are computed at the mint
-       (concolic_source_wrap) and at the one point all three sink classes converge (detect_sink), and their
-       ONLY reader was the result document — which this host publishes after the scheduler returns and
-       therefore, on a run whose frontier does not drain, never. A computed writer with nothing that reads it
-       is the mirror of the read-with-no-writer defect and is harder to see, because the value is real and
-       asserted and consumed by nothing.
-       MEASURED, WHICH IS WHY THIS LINE IS HERE: a full-budget run emitted 349 samples of `@S []` and 349
-       @WFQ lines reading `cands: 0`, and neither said whether a sink had run at all. It had not — the script
-       holding all four of them ended on an uncaught throw more than a thousand statements earlier — and
-       `reached=0` is the one number that says so.
-       IT IS THE PRODUCERS' OWN COUNTS AND NOT A RE-DERIVATION OUT OF `js`, for the reason the @S array above
-       is: measure what the shipped path writes, or the number is a property of the instrument.
-       AND IT SPELLS THEM THE WAY THE DOCUMENT DOES, WHICH IT DID NOT. The same four producers reach a reader
-       twice — this line, and `result_json`'s `_sourceReads`/`_sinkReached`/`_sinkTainted`/`_sinkSuppressed`,
-       which bridge.js asserts and the popup renders — and while this line dropped the underscore they were
-       EIGHT names for four numbers, four of which nothing anywhere read. That is not a cosmetic difference: a
-       field name is the whole of what a reader has, so a second spelling is a second contract, and the one
-       with no consumer is the one that goes quietly wrong. One namespace, one spelling, and a reader who
-       learns these names off the document can read them off this line. */
+    /* …AND WHAT AN EMPTY `@S []` IS EVIDENCE FOR, WHICH THE ARRAY ITSELF CANNOT SAY: solver/metrics/scensus.def
+       states the four readings and the rows that split them. Their other reader is the result document, which
+       this host publishes only after the scheduler returns, so on a run whose frontier does not drain this
+       line is the only one. One emitter composes both, so the line and the document spell the rows alike. */
     {
-        long reached = 0, tainted = 0, suppressed = 0;
-
-        solve_arrival_census(&reached, &tainted, &suppressed);
-        printf("@SCENSUS {\"_sourceReads\":%ld,\"_sinkReached\":%ld,\"_sinkTainted\":%ld,"
-               "\"_sinkSuppressed\":%ld}\n",
-               concolic_source_reads(), reached, tainted, suppressed);
+        char *sc = metrics_family_text(METRIC_FAMILY_SCENSUS);
+        printf("@SCENSUS %s\n", sc);
+        free(sc);
     }
     /* …AND THE SAME FOR THE OTHER SURFACE, FOR THE SAME REASON AND WITH THE SAME ARGUMENT. §What-the-tool-
        produces makes orphan-invoke the headline ("a sniffer shows what FIRED; this shows what the bundle CAN do
@@ -33678,6 +33656,11 @@ int main(int argc, char **argv) {
     concat_keyed_selftest(ctx);     /* §23.1.3.2's keyed walk rests per request, declaring no yield of its own */
     endpoint_init();
     solve_init(ctx);
+    /* The schema every census line of this stream is declared in, once per instance, so a reader takes a
+       family's row set and kinds from the artifact that printed its rows. */
+    char *metrics_schema = metrics_schema_text();
+    printf("@METRICS %s\n", metrics_schema);
+    free(metrics_schema);
 
     /* WHAT THIS HOST IS, SAID BEFORE IT BUILDS A REALM — and this position is the whole of the fix rather
        than a tidy-up. These two lines stood a hundred lines BELOW `tf_agent_init`, beside the COW hook, under

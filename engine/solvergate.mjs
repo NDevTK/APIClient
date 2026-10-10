@@ -1573,6 +1573,9 @@ const SURFACES = new Map([
      could split, and the `park` schedule's two sessions are one binary on one host, so both answer the same
      three constants and there is nothing for the fold to reconcile. */
   ["_quantum",       { shape: "map",   accumulates: false }],
+  /* solver/metrics.c's schema: compile-time constants of the artifact, so it is compared for `_quantum`'s
+     reason — two schedules of one wasm that disagree about it are two programs. */
+  ["_metricsSchema", { shape: "map",   accumulates: false }],
 ]);
 /* DERIVED FROM THE DECLARATION, never restated beside it. `accumulates` is already the field that separates
    emitted output from a reading of the terminal instant, and it has two readers now — the park schedule's

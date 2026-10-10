@@ -52,6 +52,7 @@
 #include "solver/pending_index.h" /* WHICH records a reply answers, without walking the frontier to find out */
 #include "solver/endpoint.h"    /* the @H surface, and one of the three tables no leak walk in this runtime can see */
 #include "solver/attr_shadow.h" /* …and the taint shadow, whose entries ARE GC objects and are leaked by two hosts */
+#include "solver/metrics.h"     /* the agent's metrics block, released with the agent */
 #include "check.h"
 #include <time.h>
 #include <stdlib.h>
@@ -7766,7 +7767,7 @@ static long g_orphan_asks;
    ran was, for every session there has been, computed and thrown away. §What-the-tool-produces makes that
    surface the headline ("Surface INTERESTING UNUSED endpoints ... A sniffer shows what FIRED; this shows what
    the bundle CAN do but didn't"), so the product's own proposition had no measurement on the shipped path.
-   BOTH OR NEITHER, for solve_arrival_census's reason exactly: `driven == 0` alone is three different findings
+   BOTH OR NEITHER, for the @S arrival census's reason exactly: `driven == 0` alone is three different findings
    — the bundle ships no uncalled code, no flow ever reached the end of its own work, or the walk ran and the
    heap had none — and only the pair tells the middle one (a scheduling result to act on) from the outer two
    (facts about the page).
@@ -18147,6 +18148,9 @@ void solver_agent_free(JSContext *ctx)
        which `platform_agent_free` has already run in full. So nothing left in this agent can report a page
        error into a table this line is about to free. */
     result_free();
+    /* The metrics block, after every composer above has run its last composition and before the next agent's
+       concolic_init asserts it zero. */
+    metrics_agent_release();
     /* THE CONCOLIC VALUE COMPONENT IS LAST, and the position is the argument. Its SOURCE REGISTRY is what a
        report asks for a source's browser delivery — the encode set, the address component, the reproduction
        mechanism — so every line above may still read it while it renders and releases what it holds. It is

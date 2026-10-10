@@ -223,6 +223,7 @@ function corpus() {
   cone.push("engine/host");
   for (const p of walk(join(ROOT, "engine", "host")))
     if (extname(p) === ".c" || extname(p) === ".h") files.push({ path: p, lang: "c", area: "engine/host" });
+    else if (extname(p) === ".def") files.push({ path: p, lang: "cdef", area: "engine/host" });
   /* …minus this file. An instrument is not a party to the seam it measures, and including it is not neutral:
      the report's OWN vocabulary — `file`, `line`, `name`, `shape`, `keys` — becomes a producer, and every one
      of those names is then immune to the read-with-no-writer diff. Reconstructing `canVerify`'s missing
@@ -1257,6 +1258,13 @@ const cObjOpens = new Map();    // body id -> object opens its own emission stat
    Derived from the declaration rather than from a list of helper names, so a second fragment written tomorrow
    is a fragment on the day it is written. */
 const cBodies = [];   // {id, file, name, root, calls:Set(name)}
+/* solver/metrics.h's registry: a family is a declaration file whose METRIC(id, "key", ...) rows are the keys
+   its emitter writes, so the rows are read from that file and a call naming the family splices them into the
+   calling body's shape, as a fragment's keys are its caller's. */
+const metricFamilies = new Map();   // family -> {file, keys:[name]}
+const metricSplices = [];           // {body, family, file, line}
+const METRIC_EMITTERS = ["metrics_family_json", "metrics_family_members_json", "metrics_family_text",
+                         "metrics_family_members_text"];
 
 const fields = new Map();   // name -> {writes:[site], reads:[site]}
 const markers = new Map();  // "@TAG" -> {writes:[site], reads:[site]}
@@ -1679,6 +1687,15 @@ function scanC(file, src) {
                    root: /\bJsonBuf\s+[A-Za-z_]\w*\s*(?:=|;)/.test(body), calls });
   }
 
+  /* A CALL NAMING A REGISTRY FAMILY SPLICES THAT FAMILY'S ROWS INTO THIS BODY. Only a literal family
+     enumerator is a splice; the emitters' own definitions and forwards pass a parameter and splice nothing. */
+  for (const fn of METRIC_EMITTERS)
+    for (const c of callSites(struct, fn)) {
+      if (!c.args || !c.args[0]) continue;
+      const fam = /^METRIC_FAMILY_([A-Z0-9_]+)$/.exec(code.slice(c.args[0][0], c.args[0][1]).trim());
+      if (fam) metricSplices.push({ body: bodyOf(c.at), family: fam[1].toLowerCase(), file, line: lineOf(src, c.at) });
+    }
+
   /* WHAT THIS BODY STATED AND WHERE, so the structure can be read in the order the C says it. Every construct
      below that writes a bracket or a name pushes one row; nothing here decides a shape, because the shape a
      name belongs to is a fact about the whole body and no single call can see it. `alt` marks a text that is
@@ -1775,6 +1792,15 @@ function scanC(file, src) {
        text from `#define` to the identifier, which is a construct and not a guess. */
     if (/^\s*#\s*define\s+$/.test(code.slice(src.lastIndexOf("\n", c.at) + 1, c.at))) continue;
     if (!c.args || !c.args[1]) { refuse(file, lineOf(src, c.at), `a ${C_KEY}( with no name argument to read`); continue; }
+    /* AND THE REGISTRY'S ROW EXPANSION IS NOT A USE EITHER: inside `#define METRIC(id, key, ...)` the name is
+       the macro's `key` parameter, and the literal it stands for is a row of a declaration file, which
+       scanMetricDecl reads as the write. Any other macro-held name is still refused below. */
+    {
+      let ls = src.lastIndexOf("\n", c.at - 1);
+      while (ls > 0 && src[ls - 1] === "\\") ls = src.lastIndexOf("\n", ls - 2);
+      const def = /^\s*#\s*define\s+METRIC\s*\(\s*\w+\s*,\s*(\w+)\s*,/.exec(code.slice(ls + 1, c.at));
+      if (def && code.slice(c.args[1][0], c.args[1][1]).trim() === def[1]) continue;
+    }
     const a = c.args[1];
     const name = cLiteral(code, struct, a[0], a[1]);
     if (name === null) {
@@ -1945,6 +1971,27 @@ function scanC(file, src) {
 
   collectDomainsC(file, src, code, struct, bodies);
   collectAbiC(file, src, code, struct);
+}
+
+/* A REGISTRY DECLARATION FILE, `solver/metrics/<family>.def`. Each METRIC(id, "key", ...) row is a field the
+   family's emitter writes at the top level of whatever object it is spliced into, so the row is the write; the
+   family's own shape is the record its emitter writes alone. A row whose key is not a literal is refused. */
+function scanMetricDecl(file, src) {
+  const { code, struct } = maskC(src);
+  const family = file.replace(/^.*\//, "").replace(/\.def$/, "");
+  const keys = [];
+  for (const c of callSites(struct, "METRIC")) {
+    const a = c.args && c.args[1];
+    const name = a ? cLiteral(code, struct, a[0], a[1]) : null;
+    if (name === null) { refuse(file, lineOf(src, c.at), "a METRIC( row whose key is not a literal"); continue; }
+    rec(fields, name).writes.push({ file, line: lineOf(src, a[0]) });
+    cEmitted.add(name);
+    cTopLevel.add(name);
+    shapeOf(`${file}:family`).add(name);
+    keys.push(name);
+  }
+  if (!keys.length) refuse(file, 1, "a metrics declaration file with no METRIC( row — its family emits nothing");
+  metricFamilies.set(family, { file, keys });
 }
 
 /* Unresolvable formats are held until the whole C corpus is read, because whether one is a hiding place for a
@@ -4370,6 +4417,7 @@ for (const f of files) {
   try { src = readFileSync(f.path, "utf8"); } catch { continue; }
   const rel = relative(ROOT, f.path);
   if (f.lang === "c") { cSrc.set(rel, src); scanC(rel, src); continue; }
+  if (f.lang === "cdef") { scanMetricDecl(rel, src); continue; }
   if (f.lang === "html") {
     const view = htmlScriptView(src);
     if (!view) continue;    /* a document with no inline script carries no seam — decided, not unreadable */
@@ -4390,6 +4438,17 @@ for (const u of pendingUnresolved)
 /* The JS writes go in first: a name written by a producer ANYWHERE — C emission or JS record construction —
    is a name the corpus produces, and that set is what anchors every read below. */
 for (const s of jsScans) for (const w of s.localWrites) rec(fields, w.name).writes.push(s.site(w.off));
+
+/* A REGISTRY FAMILY'S ROWS ARE ITS SPLICING BODY'S KEYS, folded before anything anchors for the fragment fold's
+   reason below. A splice naming a family no declaration file declares is refused rather than folded empty. */
+for (const sp of metricSplices) {
+  const fam = metricFamilies.get(sp.family);
+  if (!fam) {
+    refuse(sp.file, sp.line, `a metrics emitter names the family \`${sp.family}\`, which no solver/metrics/*.def declares`);
+    continue;
+  }
+  for (const k of fam.keys) shapeOf(sp.body).add(k);
+}
 
 /* A FRAGMENT'S KEYS ARE ITS CALLERS' KEYS. Folded before anything anchors, so no receiver is ever compared
    against half of a record. A fragment nothing in its own file calls keeps its keys where they are rather

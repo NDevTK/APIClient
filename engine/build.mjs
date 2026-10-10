@@ -3725,14 +3725,9 @@ function programCursorReading(b) {
    is the same refusal `store` gets one line down. */
 const COLDPARK_FIELDS = ["records", "segs", "flows", "cands", "orphans", "worlds", "commits", "delivers",
                          "bytes"];
-/* THE @S ARRIVAL CENSUS, SPELLED AS THE RESULT DOCUMENT SPELLS IT. test_forced.c prints the same four numbers
-   the document carries as `_sourceReads`/`_sinkReached`/`_sinkTainted`/`_sinkSuppressed`, from the same
-   producers, and it prints them under the document's own names — one namespace, so a reader who learns these
-   off `@RESULT` can read them off the line and a rename breaks in one place rather than drifting in two. */
-const SCENSUS_FIELDS = ["_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed"];
 const COLDRESUME_FIELDS = ["segs", "flows", "cands", "orphans", "worlds", "commits", "delivers",
                            "orphansMet", "orphansUnmet"];
-/* THE ORPHAN-DRIVE CENSUS, SPELLED AS THE RESULT DOCUMENT SPELLS IT, for SCENSUS_FIELDS' reason exactly — the
+/* THE ORPHAN-DRIVE CENSUS, SPELLED AS THE RESULT DOCUMENT SPELLS IT — the
    same two producers reach a reader twice (this line, and `result_json`'s `_orphansDriven`/`_orphansAsked`
    which bridge.js asserts and the popup renders), so a reader who learns the names off `@RESULT` reads them
    off the stream and a rename breaks in one place instead of drifting in two. */
@@ -3837,6 +3832,60 @@ function oneCensus(out, marker, fields) {
   catch { throw new Error(`[build] the last ${marker} line is not JSON — test_forced.c composes it in one ` +
                           `printf, so a line that will not parse is that printf truncated or interleaved.`); }
   return censusFields(v, marker, fields, "test_forced.c's printf");
+}
+/* A FAMILY OF solver/metrics.h's REGISTRY, AS THE ARTIFACT DECLARES IT. The registry prints its schema once per
+   instance as `@METRICS {...}`, so a family's rows, their kinds and the identities between them are read off
+   the stream that carries the rows and never off a list here. Every @METRICS line of one stream is the same
+   constant of the build; a stream with none answers null and its caller decides whether that is an absence. */
+const METRIC_KINDS = ["lifetime", "gauge", "maximum", "constant", "regime"];
+function metricsFamily(out, family) {
+  const lines = [...out.matchAll(/^@METRICS (\{.*\})$/gm)].map((m) => m[1]);
+  if (!lines.length) return null;
+  if (lines.some((l) => l !== lines[0]))
+    throw new Error(`[build] two @METRICS lines in one stream disagree — the schema is a constant of the build, ` +
+                    `so this stream interleaves two artifacts and no census in it can be read against one schema.`);
+  let schema;
+  try { schema = JSON.parse(lines[0]); }
+  catch { throw new Error(`[build] the @METRICS line is not JSON — solver/metrics.c composes it in one call, ` +
+                          `so a line that will not parse is that printf truncated or interleaved.`); }
+  if (!Array.isArray(schema.families))
+    throw new Error(`[build] the @METRICS schema carries no \`families\` array — metrics_schema_json writes one.`);
+  const fam = schema.families.find((f) => f.family === family);
+  if (!fam || !Array.isArray(fam.rows) || !fam.rows.length || !Array.isArray(fam.identities))
+    throw new Error(`[build] the @METRICS schema declares no whole \`${family}\` family — this reader asks for ` +
+                    `a family solver/metrics.h no longer declares, or the schema lost its rows or identities.`);
+  for (const r of fam.rows)
+    if (typeof r.key !== "string" || !METRIC_KINDS.includes(r.kind) || typeof r.unit !== "string" ||
+        typeof r.scope !== "string" || typeof r.owner !== "string")
+      throw new Error(`[build] the @METRICS \`${family}\` family carries a row without its key, unit, scope ` +
+                      `and owner, or with a kind outside ${METRIC_KINDS.join("/")}: ${JSON.stringify(r)}.`);
+  return fam;
+}
+/* A FAMILY'S LAST CENSUS LINE, read against the schema: every declared row present and numeric, every declared
+   identity holding — asserted here as well because solver/metrics.c's DCHECK is compiled out of a release build
+   and this reader runs on that build's bytes — and every row the caller renders by name declared. */
+function metricsCensus(out, marker, family, named) {
+  const fam = metricsFamily(out, family);
+  if (!fam) {
+    if (new RegExp(`^${marker} `, "m").test(out))
+      throw new Error(`[build] this stream carries ${marker} lines and no @METRICS schema — test_forced.c ` +
+                      `prints the schema once at bring-up, so its rows cannot be read against a declared set.`);
+    return null;
+  }
+  for (const k of named)
+    if (!fam.rows.some((r) => r.key === k))
+      throw new Error(`[build] the ${marker} reader renders \`${k}\` and the \`${family}\` family no longer ` +
+                      `declares it (solver/metrics/${family}.def).`);
+  const v = oneCensus(out, marker, fam.rows.map((r) => r.key));
+  if (!v) return null;
+  for (const e of fam.identities) {
+    if (e.rel !== "le")
+      throw new Error(`[build] the \`${family}\` family declares a \`${e.rel}\` identity this reader cannot check.`);
+    if (!(v[e.sub] <= v[e.sup]))
+      throw new Error(`[build] the last ${marker} line reports ${e.sub} = ${v[e.sub]} above ${e.sup} = ` +
+                      `${v[e.sup]}, and solver/metrics/${family}.def declares the first a subset of the second.`);
+  }
+  return v;
 }
 function coldRoundTrip(v1, v2, store) {
   const park = oneCensus(v1.captured, "@COLDPARK", COLDPARK_FIELDS);
@@ -4519,7 +4568,8 @@ function censusReading(out) {
      and neither said whether a sink had run at all. It had not — the script holding all four of them ended on
      an uncaught throw more than a thousand statements earlier — and `_sinkReached: 0` is the one number that
      says so. It had no reader; this is it, and it sits beside the @PAGEERR count that names the throw. */
-  const sc = oneCensus(out, "@SCENSUS", SCENSUS_FIELDS);
+  const sc = metricsCensus(out, "@SCENSUS", "scensus",
+                           ["_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed"]);
   if (sc)
     parts.push(`@S arrivals: ${sc._sourceReads} attacker-source read(s), ${sc._sinkReached} sink(s) reached, ` +
                `${sc._sinkTainted} with tainted input, ${sc._sinkSuppressed} search(es) declined as ` +

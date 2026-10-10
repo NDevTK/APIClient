@@ -11,7 +11,8 @@
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "solver/world.h"   /* what the cross-instance seam materialized here — see world_segment_stats */
-#include "solver/concolic.h"   /* whether this run ever acquired attacker input — see concolic_source_reads */
+#include "solver/concolic.h"
+#include "solver/metrics.h"    /* the @S arrival census and the schema it is declared in */
 #include "solver/cold.h"    /* …and what it parked, if the host asked this engine to page out */
 /* The reply door's rate, asked of the component that owns both ends of its membership rather than recomputed. */
 #include "solver/pending_index.h"
@@ -2228,11 +2229,11 @@ char *result_json(JSContext *ctx) {
            held far below made is a seam that materialized and released. `world_segments_held`'s own DCHECK (a
            table larger than its history) rides along. */
         int held = world_segments_held(), made = 0, segf = 0;
-        /* …and why the security array is the length it is. `securitySinks: []` has four readings — no attacker
-           source read, none reached a sink, only the page's own strings arrived, or taint arrived and the search
-           was declined because the check on it was unforgeable — and these four numbers split them
-           (solver/solve.h and solver/concolic.h). On the document because the renderer does not tee stdout. */
-        long srcReads = concolic_source_reads(), sinkReached = 0, sinkTainted = 0, sinkSuppressed = 0;
+        /* …and why the security array is the length it is: solver/metrics/scensus.def's rows, spliced at the
+           top level, and the schema that declares them, which a reader takes the row set and kinds from. On
+           the document because the renderer does not tee stdout. */
+        char *scensus = metrics_family_members_text(METRIC_FAMILY_SCENSUS);
+        char *schema = metrics_schema_text();
         /* …and what this instance did with the records a peer sent it — see engine.h for why the pair travels
            together and why a host's routed count is not comparable to a page's handler invocations. */
         long routedDelivered = 0, routedRefused = 0, routedZeroDelivery = 0;
@@ -2260,7 +2261,6 @@ char *result_json(JSContext *ctx) {
         flow_placement_census(&place);
         css_cascade_pass_census(&casc);
         world_segment_stats(&made, &segf);
-        solve_arrival_census(&sinkReached, &sinkTainted, &sinkSuppressed);
         engine_routed_census(&routedDelivered, &routedRefused, &routedZeroDelivery);
         engine_orphan_census(&orphansDriven, &orphansAsked);
         orphanExits = engine_orphan_exits();
@@ -2310,8 +2310,7 @@ char *result_json(JSContext *ctx) {
                              "\"_routedZeroDelivery\":%ld,"
                              "\"_routedTasksFired\":%ld,\"_routedTasksTargetOrigin\":%ld,"
                              "\"_routedTasksTargetGone\":%ld,\"_routedTasksThrew\":%ld,"
-                             "\"_sourceReads\":%ld,\"_sinkReached\":%ld,\"_sinkTainted\":%ld,"
-                             "\"_sinkSuppressed\":%ld,"
+                             "%s,\"_metricsSchema\":%s,"
                              /* …and the frontier's order at composition — result.h says why it rides here and what
                                 its two shapes mean. One nested object, because its rows are mostly readings of an
                                 instant. The nesting separates subsystems, never kinds. Every `_`-prefixed sibling
@@ -2320,13 +2319,13 @@ char *result_json(JSContext *ctx) {
                                 lifetime half, and the latter is read only at a drained receiver. The key is not
                                 renamed because five consumers assert it (extension/bridge.js,
                                 extension/popup.js, engine/solvergate.mjs, engine/route.mjs, testing/live-run.js).
-                                "Lifetime" means this agent's: solve_init, concolic_init, world_registry_free and
-                                solver_agent_free, which zero the resettable rows, each run once per agent on
-                                every host, and the rest are reset by nothing. So the totals are the agent
-                                cluster's: a second document taken through `qjs_join` calls none of those inits,
-                                and a same-origin frame's reads sum into the root's. A second call site of
-                                those inits within one agent would show as a row falling between two
-                                `qjs_result` calls of one instance. */
+                                "Lifetime" means this agent's: solve_init, world_registry_free and
+                                solver_agent_free (which releases the metrics block) zero the resettable rows,
+                                each once per agent on every host; the rest are reset by nothing. So the totals
+                                are the agent cluster's: a second document taken through `qjs_join` calls none
+                                of those inits, and a same-origin frame's reads sum into the root's. A second
+                                call site of those inits within one agent would show as a row falling between
+                                two `qjs_result` calls of one instance. */
                              "\"_orphansDriven\":%ld,\"_orphansAsked\":%ld,"
                              /* …and which exit each ask took. `_orphanAskMemo` is an ask the generation cache
                                 answered with no walk; `_orphanAskEmpty` a walk that found nothing, a fact about
@@ -2397,7 +2396,7 @@ char *result_json(JSContext *ctx) {
                      routedDelivered, routedRefused, routedZeroDelivery,
                      routedEnds[ROUTED_TASK_FIRED], routedEnds[ROUTED_TASK_TARGET_ORIGIN],
                      routedEnds[ROUTED_TASK_TARGET_GONE], routedEnds[ROUTED_TASK_THREW],
-                     srcReads, sinkReached, sinkTainted, sinkSuppressed,
+                     scensus, schema,
                      orphansDriven, orphansAsked,
                      orphanExits.memo, orphanExits.empty, orphanExits.took,
                      (unsigned long long)orphanWalk.walks, (unsigned long long)orphanWalk.entries,
@@ -2411,6 +2410,8 @@ char *result_json(JSContext *ctx) {
                      casc.asks_life, casc.served_life, casc.resolved_life, casc.passes_life,
                      quantum,
                      cold_park_json());
+        free(scensus);
+        free(schema);
     }
     free(eps);
     free(sinks);
