@@ -54,10 +54,10 @@ typedef struct {
 /* The top-left corner of `el`'s border box, in that space. The caller has established that the element has a
    box (core/dom/element_view.h); every box CSS 2 §9.4 places and this component does not crashes naming its
    section, with no fallback coordinate.
-   §10.1's second case makes this a recursion over ancestors, costing each box its depth. Within one whole-tree
-   geometry pass core/layout/flow_placement.h remembers answers, collapsing the climb to one derivation per box
-   with the same answer, and each served answer is re-checked against its §10.1 equation; outside a pass
-   nothing is held. */
+   §10.1's second case makes this a recursion over ancestors, costing each box its depth. The layout job's
+   placement record (core/layout/flow_placement.h) remembers answers for the job's lifetime, collapsing the
+   climb to one derivation per box, and each served answer is re-checked against its §10.1 equation; the
+   synchronous job holds the record only while a drive is open. */
 FlowPoint flow_border_box_origin(lxb_dom_element_t *el);
 
 /* The top-left corner of `el`'s padding box: the border box origin moved inward by CSS 2 §8.1 "Box dimensions"'
