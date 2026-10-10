@@ -213,6 +213,8 @@ typedef struct EncDecoder {
        queue, and it is where they push back to. Three bytes is gb18030's worst case, which is the platform's. */
     uint8_t back[3], nback;
 } EncDecoder;
+/* What a decoder record owns, for its copy-on-write capture: nothing, since every field is an integer. */
+static const CowRecord ENC_DECODER_REC = { sizeof(EncDecoder), NULL, 0 };
 
 static JSClassID g_dec_class;
 static JSClassID g_enc_class;
@@ -1081,16 +1083,15 @@ static int js_decoder_decode_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
                "converts for every call however few arguments the page passed — so the machine hands this body "
                "exactly two, and a different count means encoding_init's argument list changed under it");
 
-        /* §7.2's `this's decoder` IS THE OBJECT'S AND NOT THIS MACHINE'S, so it is the COW delta's to isolate
-           and not `visit`'s. It is a POD latch — every field of EncDecoder is an integer, so there is no
-           counted reference a byte copy could duplicate — which is what makes solver/cow.h's host-STATE entry
-           the right one rather than its host-RECORD entry.
+        /* §7.2's `this's decoder` is the object's and not this machine's, so it is the COW delta's to isolate
+           and not `visit`'s. It is a record, so it is captured as one, with a layout stating it owns no values
+           (ENC_DECODER_REC); the byte entry is for a single scalar latch.
            IT IS CAPTURED HERE BECAUSE A FLOW THAT HAS REACHED THE RECORD IS ONE THAT MAY WRITE IT, which is
            the rule's own placement: the delta dedups to one entry, so there is no write site left to miss, and
            every write this member makes — the handler's held sequence, `bom seen`, the reset — is downstream of
            this line. WITHOUT IT two arms of a fork would drive ONE half-read sequence: that was already true
            ACROSS two `stream: true` calls, and resting between items would have widened it to inside one. */
-        cow_capture_host_state(ctx, hdr->this_val, d, sizeof *d);
+        cow_capture_host_record(hdr->this_val, d, &ENC_DECODER_REC);
 
         /* Step 2: "Set this's do not flush to options["stream"]." */
         s->stream = idl_dict_bool(ctx, argv[1], "stream") ? 1u : 0u;
