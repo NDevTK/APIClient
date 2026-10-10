@@ -18596,14 +18596,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                 "one is a declaration with a cycle in it. Fix the name, or move the reach row above the row "
                 "it is the premise of", probes[pi].name, probes[pi].reach);
         /* AND BOTH STAND IN THIS ROW'S DOCUMENT: probes_report reads a gate and a reach off the same selection
-           as the row, so a document carrying the row without them aborts there in that document's run only. */
-        DCHECKF(!probes[pi].gate ||
+           as the row, so a document carrying the row without them aborts there in that document's run only.
+           Exploring rows only: the park and resume sessions run HTML_COLD, which is no member. */
+        DCHECKF(probes[pi].sess != SESS_EXPLORE || !probes[pi].gate ||
                     tf_doc_beside(probes[pi].key,
                                   probes[probe_gate_at(probes, (int)pi, probes[pi].gate, probes[pi].sess)].key),
                 "the probe `%s` is in an exploring document its gate `%s` is not — a gate is read off the same "
                 "selection as the row it gates, so the two statements belong to one document",
                 probes[pi].name, probes[pi].gate);
-        DCHECKF(!probes[pi].reach ||
+        DCHECKF(probes[pi].sess != SESS_EXPLORE || !probes[pi].reach ||
                     tf_doc_beside(probes[pi].key,
                                   probes[probe_gate_at(probes, (int)pi, probes[pi].reach, probes[pi].sess)].key),
                 "the probe `%s` is in an exploring document its reach `%s` is not — a reach is read off the "
