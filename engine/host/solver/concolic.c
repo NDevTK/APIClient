@@ -1500,31 +1500,27 @@ static void pin_src_names_self(JSValueConst v) {
     c->src_self = 1;
 }
 
-/* THE BYTES THIS FLOW HAS PROVED THIS VALUE HOLDS — see concolic.h for what may read it and why it answers
-   bytes where the two in-file reads answer a JSValue. */
+/* The bytes this flow has proved this value holds (concolic.h says who may read it and why it answers bytes
+   where the in-file reads answer a JSValue). */
 const char *concolic_pin_bytes(JSValueConst v) {
     Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
     const Cons *e;
 
-    /* THE PRECONDITION IS THE WHOLE OF THIS FUNCTION'S SOUNDNESS AND IT IS CHECKED, NOT ASSERTED. A derived
-       value reaching here is not a defect — `el.setAttribute('t', 'x-' + cfg.theme)` is ordinary page code and
-       its record legitimately carries `cfg.theme`'s `src` — so the answer for it is NONE, which leaves its
-       consumer exactly where it was. An abort here would be this engine crashing on a shape a page is
-       entitled to write, which §WHOSE-BYTES-STATE-THE-VALUE forbids in as many words. */
+    /* The precondition is this function's whole soundness, and it is checked, not asserted: a derived value is
+       ordinary page code (`el.setAttribute('t', 'x-' + cfg.theme)` carries `cfg.theme`'s `src`), so it
+       answers none and its consumer stays where it was. */
     if (!c || !c->src_self || !c->src) return NULL;
     e = cons_lookup(c->src);
     if (!e || !e->val) return NULL;
-    /* BORROWED FROM THE CONSTRAINT ENTRY, which is what bounds how long it may be held: the bytes are a
-       strdup this flow's own chain owns, and they are replaced or released only by concolic_pin,
-       concolic_clear_pins and concolic_pins_resume — a write, a fresh flow and a context switch, none of
-       which can happen inside a caller that runs no page code and reaches no rest point. A caller that keeps
-       it past one copies it. */
+    /* Borrowed from the constraint entry, which bounds how long it may be held: only concolic_pin,
+       concolic_clear_pins and concolic_pins_resume replace or release it (a write, a fresh flow, a context
+       switch), none of which happens inside a caller that runs no page code and reaches no rest point. A
+       caller keeping it longer copies it. */
     return e->val;
 }
 
-/* …AND THE SAME QUESTION ASKED OF A SOURCE PATH RATHER THAN OF A VALUE — see concolic.h for why both exist and
-   which to reach for. It is the same lookup `pin_of` makes and the same two-part test (`e && e->val`), spelled
-   once here so a caller outside this file cannot reach a different answer than the mint does. */
+/* The same question asked of a source path rather than a value (concolic.h says which to reach for). The same
+   lookup and test as `pin_of`, spelled once so a caller outside this file gets the mint's answer. */
 int concolic_src_pinned(const char *src) {
     const Cons *e;
 
@@ -1553,9 +1549,8 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     ident_list_free(c->conj, c->conj_n);
     free(c->key_atom);
     JS_FreeValueRT(rt, c->example);
-    /* …AND THE SECOND OWNED JSValue ON THIS RECORD. A field added to the struct creates an obligation here and
-       at concolic_gc_mark together, and the two are read as a pair for that reason. JS_UNINITIALIZED is not
-       refcounted, so the never-asked case costs nothing and needs no test. */
+    /* The second owned JSValue on this record. A field added to the struct is an obligation here and at
+       concolic_gc_mark together. JS_UNINITIALIZED is not refcounted, so the never-asked case needs no test. */
     JS_FreeValueRT(rt, c->proto);
     free(c);
 }
@@ -1563,67 +1558,55 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
 static void concolic_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func) {
     Concolic *c = JS_GetOpaque(val, g_concolic_class);
     if (c && !JS_IsUndefined(c->example)) JS_MarkValue(rt, c->example, mark_func);
-    /* THE DERIVED PROTOTYPE IS REACHABLE ONLY FROM HERE, so a walk that does not report it counts a live
-       object as garbage. It is another value of THIS class, which is what makes the report obligatory rather
-       than merely tidy: the chain a page walks is these records pointing at each other. */
+    /* The derived prototype is reachable only from here: another value of this class, so the chain a page
+       walks is these records pointing at each other, and an unreported one would be collected while live. */
     if (c && !JS_IsUninitialized(c->proto)) JS_MarkValue(rt, c->proto, mark_func);
 }
 
-/* @S CANDIDATE injection: during a verification re-run, the attacker source identified by g_cand_src returns
-   the concrete breakout payload instead of a concolic, so the REAL code builds the exploit and it fires. */
+/* @S candidate injection: during a verification re-run, the attacker source named by g_cand_src returns the
+   concrete breakout payload instead of a concolic, so the real code builds the exploit and it fires. */
 static char *g_cand_src = NULL, *g_cand_payload = NULL;
 
-/* IS THIS SOURCE THE ONE A CANDIDATE RE-FIRE IS SUBSTITUTING? One spelling, because it is asked at every mint
-   a source can be reached through, and two copies are how the question came to be asked in the field-read path
-   alone while a source installed as a plain property value never passed through it at all (see
-   concolic_derived) — a candidate that could not be delivered and a sink that never fired. */
+/* Whether this source is the one a candidate re-fire substitutes. One spelling, because it is asked at every
+   mint a source can be reached through, including a source installed as a plain property value (see
+   concolic_derived). */
 static int cand_matches(const char *src) {
     return g_cand_src && src && !strcmp(src, g_cand_src);
 }
 
-/* WHETHER THE ONE MINT WILL ANSWER A PLAIN VALUE FOR A SOURCE -- see concolic.h for the question this answers
-   and why it is the disjunction. It is HERE, immediately under the second of its two disjuncts, because both
-   arms are this file's own: the pin is `concolic_new`'s early return and the substitution is
-   `concolic_derived`'s, and a consumer composing the pair would hold a copy of a rule it cannot see change. */
+/* Whether the mint will answer a plain value for a source (concolic.h says why it is this disjunction). Both
+   arms are this file's: the pin is `concolic_new`'s early return and the substitution is `concolic_derived`'s,
+   so a consumer composing the pair would copy a rule it cannot see change. */
 int concolic_src_determined(const char *src) {
     return cand_matches(src) || concolic_src_pinned(src);
 }
 
-/* THE DECLARED SOURCES and what their component does to an attacker's bytes. A source that declares nothing
-   delivers as-is, which is right for injected server state (`window.__STATE`) — the attacker writes that JSON
+/* The declared sources and what their component does to an attacker's bytes. A source that declares nothing
+   delivers as-is, which is right for injected server state (`window.__STATE`): the attacker writes that JSON
    directly and no component transforms it.
-   AND EVERY ROW CARRIES ITS CLAIMANT. The array is this component's storage and each row is another
-   component's agent state (core/platform.h's fourth paragraph), so the row has to say WHOSE — that is what
-   `concolic_undeclare_sources` is keyed by, what the duplicate assert reports the existing owner from, and
-   what concolic_free names when a release did not finish. The pointer is the caller's static component name,
-   held the way core/agent_state.h holds one and for the same reason: it outlives the agent it names. */
-/* `principal` IS A SECOND COLUMN AND NOT A SECOND REGISTRY, because it is a fact about the SAME row: whether
-   the attacker WRITES this value or merely OWNS it (concolic.h states the pair, and HTML §9.3.2.2 "User
-   agents" states why one exists at all). Keeping it here is also what makes the give-back complete without a
-   second give-back — the claimant releases its rows and the property goes with them. */
+   Every row carries its claimant: the array is this component's storage, but each row is another component's
+   agent state (core/platform.h), so `concolic_undeclare_sources` is keyed by it, the duplicate assert names
+   the owner from it, and concolic_free names it when a release did not finish. The pointer is the caller's
+   static component name, which outlives the agent it names (as in core/agent_state.h). */
+/* `principal` is a column of the same row, not a second registry: whether the attacker writes this value or
+   merely owns it (concolic.h states the pair; HTML §9.3.2.2 "User agents" states why one exists). The
+   claimant's release then takes the property with the row. */
 typedef struct { const char *component; char *src; char *encode; char prefix; SourceDeliverKind deliver;
                  int principal; }
         SourceDelivery;
 static SourceDelivery *g_srcs;
 static int g_srcs_n, g_srcs_cap;
 
-/* THE JOINT DOMAIN'S SEPARATOR — see concolic.h for what reaches it, why the identity is the SET and not an
-   expression over it, and why a narrowing of the joint narrows no member.
-   THE SEPARATOR IS PART OF THE IDENTITY, so a member that contained it would let two different sets compose to
-   one key — the truncation defect in a different costume, asserted at the mint rather than trusted.
-   IT IS DECLARED HERE, ABOVE THE REGISTRY, BECAUSE THE REGISTRY IS ITS SECOND READER. It used to sit beside
-   the mint three hundred lines below, which was right while the only thing that ever looked at a joint
-   identity was the code that composed one. */
+/* The joint domain's separator (concolic.h says what reaches it, why the identity is the set and not an
+   expression over it, and why narrowing the joint narrows no member). It is part of the identity, so a member
+   containing it would let two sets compose one key; the mint asserts no member does. Declared above the
+   registry, its second reader. */
 #define CONCOLIC_JOINT_SEP " & "
 
-/* MEMBER `i` OF A ROOT, AS A SLICE OF IT — the walk that makes "a provenance can name a SET" a fact the
-   registry can act on rather than a string it fails to match.
-   A root is either one source's name or several joined by the separator above, and the mint asserts that no
-   member contains that separator — which is exactly what makes this walk EXACT rather than a guess. `*p`/`*n`
-   point into `root` and are never copied: the registry compares them against declared names and nothing here
-   outlives the call. Answers 0 past the last member, so a caller LOOPS and never first asks whether the root
-   it holds is joint — there is no second spelling for the single-source case, which answers at i == 0 and
-   stops. */
+/* Member `i` of a root, as a slice of it. A root is one source's name or several joined by the separator above,
+   and the mint asserts no member contains the separator, which makes this walk exact. `*p`/`*n` point into
+   `root` and are never copied; nothing here outlives the call. Answers 0 past the last member, so a caller
+   loops and never first asks whether the root is joint: a single source answers at i == 0 and stops. */
 static int root_member(const char *root, int i, const char **p, size_t *n)
 {
     size_t seplen = strlen(CONCOLIC_JOINT_SEP);
@@ -1640,8 +1623,8 @@ static int root_member(const char *root, int i, const char **p, size_t *n)
     return 1;
 }
 
-/* THE DECLARED ROW FOR ONE MEMBER, matched over the slice rather than a copy of it. The terminator test is
-   half the comparison: `strncmp` alone would match `location.hash` against a declared `location.hashish`. */
+/* The declared row for one member, matched over the slice. The terminator test is half the comparison:
+   `strncmp` alone would match `location.hash` against a declared `location.hashish`. */
 static int src_row(const char *p, size_t n)
 {
     int i;
@@ -1651,28 +1634,17 @@ static int src_row(const char *p, size_t n)
     return -1;
 }
 
-/* WHICH DECLARED SOURCE A ROOT NAMES, over a root that may name SEVERAL — the one walk both registry readers
- * below share, so the rule that decides an ambiguous root is stated once instead of twice.
+/* Which declared source a root names, over a root that may name several: the one walk both registry readers
+ * below share. An exact strcmp would match no row for a joint root and answer 0 / NULL, which the report reads
+ * as the positive statement "no component carries these bytes".
  *
- * WHY THIS EXISTS AT ALL. Both readers were an exact strcmp over the whole root, so a JOINT root matched no row
- * and they answered 0 / NULL — and 0 / NULL is not "I could not tell", it is the POSITIVE statement "this
- * source declares no delivery", which the report renders as "no component carries these bytes to the victim".
- * That is the defaulted-field defect standing at the exact place a wrong answer becomes a wrong PoC, and it
- * would have arrived the moment anything composed a provenance out of two attacker sources.
+ * A joint with one declaring member answers with that member: `location.search` joined with the viewport width
+ * carries attacker bytes only through the query. That is the ordinary case, since most joints are over
+ * environment facts that declare nothing.
  *
- * A JOINT WITH ONE DECLARING MEMBER HAS AN ANSWER, AND IT IS THAT MEMBER'S. A value that is a joint function of
- * `location.search` and the viewport width carries attacker bytes through the query and nothing at all through
- * the viewport: the delivery is the query's, the encode set is the query's, and there is no second constraint
- * to state. That case is the ordinary one, because most joints in this engine are over ENVIRONMENT facts that
- * declare nothing.
- *
- * TWO DECLARING MEMBERS IS THE ONE WITH NO SINGLE HONEST ANSWER, so it crashes. Each declares its own
- * percent-encode set and its own address component (`#` against `?` — the two sets deliberately differ, which
- * is the whole reason those are two sources), so answering with either states one source's constraint as the
- * whole constraint on bytes that came from both, and the envelope then tells a researcher to deliver through
- * the component the payload did not ride. §@S: a shape carrying one of its two facts is a WRONG report rather
- * than a partial one. Build the per-member emission — one candidate seeded per declaring member, each with its
- * own envelope, the one that FIRES emitted — rather than a rule for picking. */
+ * Two declaring members have no single true answer (each has its own percent-encode set and address
+ * component), so that crashes. What to build is the per-member emission: one candidate seeded per declaring
+ * member, each with its own envelope, emitting the one that fires. */
 static int root_declared_row(const char *root)
 {
     const char *p;
@@ -1692,64 +1664,29 @@ static int root_declared_row(const char *root)
     return found;
 }
 
-/* Composed BELOW, beside the mint whose identity rule it states; declared here because the derivations are
-   its first readers and they run above it. */
+/* Composed below, beside the mint whose identity rule it states; declared here because the derivations that
+   read it run above it. */
 static char *concolic_joint_join(const char *const *parts, const int *order, int n);
 
-/* THE DELIVERY ROOT OF A VALUE DERIVED FROM SEVERAL OPERANDS — the SET of the roots its unknown operands
- * entered the program through, and ONE speller for a question THREE derivations were each answering with "the
- * FIRST unknown operand's" (concolic_arith_hook, concolic_add_hook, concolic_new_derived).
+/* The delivery root of a value derived from several operands: the set of roots its unknown operands entered
+ * through. The one speller for concolic_arith_hook, concolic_add_hook and concolic_new_derived.
  *
- * WHY A SET. `root` is where the bytes ENTERED, and bytes that arrived through two components entered through
- * two. `location.hash + location.search` is carried half in the victim's fragment and half in their query, and
- * location.c declares those with DIFFERENT percent-encode sets and different address components — which is the
- * whole reason it declares them as two sources rather than one. Answering with either states one source's
- * constraint as the whole constraint on the pair, and the reproduction envelope then names the component the
- * payload did not ride. §@S: a shape carrying one of its two facts is a WRONG report rather than a partial one.
- *
- * ONE MEMBER IS THE ORDINARY CASE AND COMPOSES TO ITSELF, which is what keeps every currently-correct value
- * byte-identical rather than merely equivalent: two operands derived from ONE source (`x.slice(1) + x.slice(2)`,
- * and every `"/api/" + {state}.region` in the corpus) hold ONE root between them, and a set holds it once. So a
- * root moves in exactly the population that has two sources and in no other, and the only observable difference
- * is on values that were previously reported wrongly.
- *
- * FLATTENED, because an operand may ALREADY carry a joint root. `(a + b) + c` is a value of THREE sources, and
- * joining the two operands' root STRINGS would order `"a & b"` against `"c"` and compose a key that is not the
- * set's — `(cookie + search) + hash` and `(cookie + hash) + search` would then name two different things.
- * root_member is the walk that makes the flattening exact, and the mint asserts no member contains the
- * separator, which is what makes the slices unambiguous.
- *
- * DEDUPLICATED RATHER THAN ASSERTED, AND THAT IS WHERE THIS PARTS COMPANY WITH concolic_source_wrap_joint. That
- * mint CRASHES on a repeated member, and is right to: its caller is composing DISTINCT environment facts, so a
- * duplicate there is the arithmetic having touched one fact twice. Here a repeat is the COMMON case — every
- * derivation over two slices of one source is one — and a set holds each member once under either rule.
- *
- * CANONICALLY ORDERED through ident_set_order, so the root is a property of the SET and not of the order the
- * operands were passed in: `a + b` and `b + a` entered the program through the same two components, and a root
- * that ordered by argument position would answer one delivery question with two keys.
- *
- * THIS DOES NOT ANSWER `src`, AND THE TWO ARE DIFFERENT FACTS (see concolic.h). `root` is where the bytes came
- * IN and a value that came in by two routes has both; `src` is where an @S candidate is INJECTED, and a
- * candidate is injected at ONE source read. Seeding one candidate per declaring member is the mechanism the
- * three refusals downstream of this all name — root_declared_row's, concolic_deliver's, and cand_learn_root's
- * in solver/solve.c — and building this is what lets those see the truth instead of a first operand.
- *
- * Answers NULL when no operand carries a root, which concolic_alloc reads as the other half of a NULL `src`.
- * The operands are BORROWED; the returned string is OWNED and the caller frees it. */
-/* …AND WHOSE UNKNOWN THAT JOINED SET IS — the UNION, spelled beside the join because the two answer one
- * question about one set and a reader who found them apart would have to trust that they walk the same
- * operands. It is the DISJUNCTION maintained AT THE JOIN rather than at every read, which is what makes a
- * property over a whole root set answerable from one field: a derivation's set is its operands' sets unioned,
- * so the mask of the union is the OR of theirs, exactly and with no walk left to do later.
- *
- * IT MUST NOT BE DERIVED FROM THE JOINED STRING, which is the one way this could have been written wrong. The
- * string is `root_member`-walkable and says nothing about whose each member is — that fact is stated at the
- * MINT and carried — so recovering it by matching member names against anything is the count-of-a-spelling
- * §RUN-DON'T-MATCH forbids and is what this file's `conj` field already records as the banned move.
- *
- * ANSWERS 0 WHEN NO OPERAND CARRIES A ROOT, which is exactly when derived_root_join answers NULL, so the pair
- * concolic_alloc asserts (`!!root == !!root_whose`) holds by construction at every join rather than by a
- * caller remembering. */
+ * A set, because bytes that arrived through two components entered through two: `location.hash +
+ * location.search` rides half in the fragment and half in the query, which location.c declares with different
+ * percent-encode sets and address components. Naming either alone would make the reproduction envelope name a
+ * component the payload did not ride. One member is the ordinary case and composes to itself byte for byte
+ * (`x.slice(1) + x.slice(2)`).
+ * Flattened, because an operand may already carry a joint root: `(cookie + search) + hash` and
+ * `(cookie + hash) + search` must name one set. Deduplicated rather than asserted, unlike
+ * concolic_source_wrap_joint, because a repeated member is the common case here. Canonically ordered through
+ * ident_set_order, so `a + b` and `b + a` share one root.
+ * This does not answer `src` (see concolic.h): a candidate is injected at one source read.
+ * NULL when no operand carries a root, which concolic_alloc reads as the other half of a NULL `src`. The
+ * operands are borrowed; the returned string is owned by the caller. */
+/* …and whose unknown that joined set is: the OR of the operands' masks, kept at the join so a property over a
+ * whole root set is one field read. Never recovered from the joined string, which says nothing about whose each
+ * member is; that fact is stated at the mint and carried. Answers 0 exactly when derived_root_join answers
+ * NULL, so concolic_alloc's `!!root == !!root_whose` holds by construction. */
 static unsigned derived_root_whose(const JSValueConst *operands, int n)
 {
     unsigned m = 0u;
@@ -1767,9 +1704,8 @@ static char *derived_root_join(const JSValueConst *operands, int n)
     int cap = 0, cnt = 0, i, j, k;
     char *out;
 
-    /* SIZED FROM THE OPERANDS' OWN MEMBER COUNTS AND NOT FROM A CONSTANT: a fixed array here would be a cap on
-       how many sources a value may be a function of, which is §NO BOUNDS' bound wearing an array size. Two
-       walks, because the count is not known until the first one has been made. */
+    /* Sized from the operands' own member counts, not a constant, so there is no cap on how many sources a
+       value may be a function of. Two walks, because the count is unknown until the first is made. */
     for (i = 0; i < n; i++) {
         const char *root = concolic_root_c(operands[i]);
         const char *p;
@@ -1792,9 +1728,8 @@ static char *derived_root_join(const JSValueConst *operands, int n)
 
         if (!root) continue;
         for (j = 0; root_member(root, j, &p, &len); j++) {
-            /* THE TERMINATOR TEST IS HALF THE COMPARISON, as it is at src_row: `strncmp` alone would fold
-               `location.hash` into an already-collected `location.hashish`, and `&&` short-circuits so a
-               shorter member is never indexed past its own NUL. */
+            /* The terminator test is half the comparison, as at src_row; `&&` short-circuits, so a shorter
+               member is never indexed past its own NUL. */
             for (k = 0; k < cnt; k++)
                 if (!strncmp(mem[k], p, len) && mem[k][len] == '\0') break;
             if (k < cnt) continue;   /* a set holds each member once */
@@ -1819,9 +1754,8 @@ static char *derived_root_join(const JSValueConst *operands, int n)
     return out;
 }
 
-/* THE TOKEN A REPORT CARRIES for a mechanism, spelled once so the engine owns the whole source vocabulary —
-   the declaration side is the enum, the emission side is this, and a delivery layer switches on what comes out
-   of here. A mechanism added to the enum without a token would cross as nothing at all, so it says so. */
+/* The token a report carries for a mechanism, spelled once so the engine owns the source vocabulary: the
+   declaration side is the enum, the emission side is this, and a delivery layer switches on what comes out. */
 static const char *deliver_token(SourceDeliverKind k)
 {
     switch (k) {
@@ -1845,19 +1779,17 @@ void concolic_declare_source(const char *component, const char *src, const char 
            "an attacker source was declared by no component — the row is a CLAIM whose claimant gives it back "
            "at its own release, so a row with no owner is a row nobody can release and a registry whose "
            "emptiness asserts nothing about anybody");
-    /* THE TWO HALVES OF ONE DECLARATION MUST AGREE. A value carried in the victim's own address has the
-       component it is carried at, and a value carried by any other mechanism has none — so a `#` beside a
-       `plant`, or an `address` with no component, is a declaration whose reproduction cannot be built from it
-       and whose candidate delivery would prepend a character no browser puts there. */
+    /* The two halves of one declaration must agree: a value carried in the victim's own address has the
+       component it is carried at, and any other mechanism has none. A `#` beside a `plant` would prepend a
+       character no browser puts there. */
     DCHECK((deliver == SRC_DELIVER_ADDRESS) == (prefix != 0),
            "a source's delivery mechanism and its address component disagree — only a value carried in the "
            "victim's own address has a component, and it always has one");
     for (i = 0; i < g_srcs_n; i++)
         if (!strcmp(g_srcs[i].src, src)) {
-            /* WHO ALREADY OWNS IT IS THE HALF THAT SAYS WHAT WENT WRONG. The same component declaring twice is
-               a declaration that ran twice or a claimant whose rows are dynamic and did not ask first; a
-               DIFFERENT component is two claimants over one source, and then the give-back of either takes a
-               row it does not own. The old message could not tell those apart. */
+            /* Who already owns it says what went wrong: the same component twice is a declaration that ran
+               twice or a dynamic claimant that did not ask first; a different component is two claimants
+               over one source, either of whose release takes a row it does not own. */
             DFAILF("a source declared its browser delivery twice — `%s` is already declared by %s, and one "
                    "component owns one source in BOTH directions. A second declaration by that same "
                    "component is a claimant with dynamic rows that did not ask concolic_source_declared_by "
@@ -1876,38 +1808,23 @@ void concolic_declare_source(const char *component, const char *src, const char 
     g_srcs[g_srcs_n].encode = strdup(encode ? encode : "");
     g_srcs[g_srcs_n].prefix = prefix;
     g_srcs[g_srcs_n].deliver = deliver;
-    /* A SOURCE THE ATTACKER WRITES, WHICH IS WHAT NEARLY EVERY SOURCE IS. The exception says so with its own
-       call (concolic_declare_source_principal) rather than a sixth argument every declaration would have to
-       spell — and it is written here, at the mint, so the column can never be the uninitialized garbage a
-       later reader would read as "principal". */
+    /* A source the attacker writes, which nearly every source is. The exception says so with its own call
+       (concolic_declare_source_principal); written here at the mint so the column is never uninitialized. */
     g_srcs[g_srcs_n].principal = 0;
     CHECK(g_srcs[g_srcs_n].src && g_srcs[g_srcs_n].encode, "concolic: OOM declaring a source's delivery");
     g_srcs_n++;
 }
 
-/* THE CLAIM, GIVEN BACK BY THE COMPONENT THAT MADE IT — core/platform.h's fourth paragraph, for the one
- * registry in the solver half that a browser component writes into. A declared row is agent state whose
- * STORAGE is this file's array and whose CLAIM is the declaring component's, so the claimant removes its own
- * rows at its own release and concolic_free asserts, at this component's, that none are left.
+/* The claim, given back by the component that made it (core/platform.h): a declared row's storage is this
+ * array and its claim is the declaring component's, so the claimant removes its own rows at its release and
+ * concolic_free asserts at this component's release that none are left.
  *
- * KEYED BY THE CLAIMANT AND NOT BY THE SOURCE, and the difference is not spelling. A release naming each
- * source reads well where the rows are FIXED and fails where they are not: core/file/file_system.c declares
- * `file:NAME` per file the device has held, so it would have to keep a parallel list of the names it declared
- * — a second copy of this array, with its own growth, its own OOM edge and its own dedup, which must agree
- * with this one and has nothing to make it. That is the hand-copied-list defect core/platform.h and
- * core/realm.h exist to abolish, in miniature, and the next claimant with dynamic rows writes it again. The
- * owner is on the row instead: one list, and the give-back reads it.
+ * Keyed by the claimant, not the source: core/file/file_system.c declares `file:NAME` per file the device has
+ * held, and a release naming each source would force it to keep a parallel list of what it declared.
  *
- * IT IS NOT A BULK RESET, WHICH IS WHAT KEEPS THE HOLDER'S ASSERT FALSIFIABLE. A call that emptied the array
- * would be a release undoing a declaration it did not make — the shape core/platform.c's own table check
- * forbids one column up, and the shape three of core/dom/document.c's sub-components were in until b87eef36
- * moved them back to their declarer — and "every claimant gave its rows back" and "one claimant forgot and the
- * wipe covered it" would then be the same state. Removing exactly the caller's rows is what makes
- * `g_srcs_n == 0` a fact about the CLAIMANTS, and what lets the assert name the one that did not finish.
- *
- * ZERO ROWS IS A LEGITIMATE ANSWER and is deliberately not asserted against: a component whose rows are
- * dynamic declares as many as the agent gave it, and none is one of those numbers. What a claimant that
- * declared and did not release costs is the assert at concolic_free, which is where it is owed. */
+ * Not a bulk reset: removing exactly the caller's rows is what makes `g_srcs_n == 0` a fact about the claimants
+ * and lets the assert name the one that did not finish. Zero rows is a legitimate answer for a component whose
+ * rows are dynamic. */
 void concolic_undeclare_sources(const char *component)
 {
     int i = 0;
@@ -1919,11 +1836,8 @@ void concolic_undeclare_sources(const char *component)
         if (strcmp(g_srcs[i].component, component) != 0) { i++; continue; }
         free(g_srcs[i].src);
         free(g_srcs[i].encode);
-        /* THE ORDER OF THE REST IS PRESERVED rather than closed with a swap. Every read of this array is a
-           lookup by identity, so order decides no answer — but it decides the order a WALK would report, and a
-           registry that reshuffles itself when an unrelated component releases is a registry whose contents
-           depend on teardown. Declaration order is a fact about the browser; nothing here may make it a fact
-           about the sequence of frees. */
+        /* The order of the rest is preserved rather than closed with a swap: lookups are by identity, but a
+           walk's order must not depend on which unrelated component released first. */
         memmove(&g_srcs[i], &g_srcs[i + 1], (size_t)(g_srcs_n - i - 1) * sizeof *g_srcs);
         g_srcs_n--;
     }
@@ -1939,9 +1853,8 @@ int concolic_source_declared_by(const char *component, const char *src)
            "either drop a source or trip the duplicate assert");
     for (i = 0; i < g_srcs_n; i++)
         if (!strcmp(g_srcs[i].src, src)) {
-            /* THE DUPLICATE ASSERT SEEN FROM THE OTHER END. A claimant asking about a source ANOTHER component
-               declared is about to skip a declaration it owes, or — worse — to give back a row it does not
-               own, and the delivery a report then builds is for a source that component does not answer for. */
+            /* The duplicate assert seen from the other end: a claimant asking about a source another component
+               declared is about to skip a declaration it owes or give back a row it does not own. */
             DCHECK(strcmp(g_srcs[i].component, component) == 0,
                    "a component asked whether it owns an attacker source that a DIFFERENT component declared "
                    "— one source is owned by one component in both directions, so this is either a source "
@@ -1951,14 +1864,9 @@ int concolic_source_declared_by(const char *component, const char *src)
     return 0;
 }
 
-/* THE SECOND HALF OF A ROW — see concolic.h for what a principal IS and what it decides.
- * IT IS A SEPARATE CALL AND NOT A SIXTH ARGUMENT, for the reason core/platform.h gives about every other
- * optional property of a claim: a parameter every declaration must spell is a parameter five components would
- * spell `0` for, and a `0` written five times to describe a property four of them have never heard of is the
- * shape a reader has to decode rather than read. The call names the exception.
- * IT REFUSES A ROW THIS COMPONENT DOES NOT OWN, both directions, because the row is a CLAIM: marking somebody
- * else's would put a property on a source this component does not answer for, and marking one that does not
- * exist would be a claim whose claimant the give-back can never find. */
+/* The second half of a row (concolic.h says what a principal is and decides). A separate call rather than a
+ * sixth argument, so only the exception spells it (core/platform.h's rule for optional claim properties). It
+ * refuses a row this component does not own, and a row that does not exist yet. */
 void concolic_declare_source_principal(const char *component, const char *src)
 {
     int i;
@@ -1981,11 +1889,9 @@ void concolic_declare_source_principal(const char *component, const char *src)
           "\"no component carries these bytes to the victim\". Call concolic_declare_source first");
 }
 
-/* HAS THIS FLOW DEMANDED A PARTICULAR VALUE OF AN ATTACKER'S PRINCIPAL? — see concolic.h.
- * A WALK OF THE REGISTRY RATHER THAN A LOOKUP BY KEY, because the question is asked of the DECLARATIONS: the
- * flow does not know which sources are principals and must not be taught a name for one, and this array is the
- * one place that does know. It is O(declared principals) — the number of sources whose value the browser
- * stamps rather than the attacker writes — and each row costs one indexed probe of the constraint chain. */
+/* Whether this flow has demanded a particular value of an attacker's principal (see concolic.h). A walk of the
+ * registry rather than a keyed lookup, because the flow must not be taught which sources are principals; this
+ * array is the one place that knows. O(declared principals), one indexed chain probe each. */
 int concolic_principal_pinned(void)
 {
     int i;
@@ -1999,16 +1905,11 @@ int concolic_principal_pinned(void)
     return 0;
 }
 
-/* …AND WHAT IT DEMANDED WITHOUT PINNING — see concolic.h for what the pair decides and for the named residual.
- * THE SAME WALK OVER THE SAME COLUMN as concolic_principal_pinned above, and it is a second function rather
- * than a second return of that one because the two answers are different KINDS: a pin is a yes/no that decides
- * whether a search may open at all, and a demand is an OBSERVATION a report carries. Folding them would make
- * one call answer "may this be reported" and "what must the attacker's identity look like", which is the
- * one-predicate-two-questions shape §Solver-half forbids — and the looser half would then be decided by the
- * stricter one, since a pinned principal returns before any demand is read.
- * THE ROW IS READ THROUGH `concolic_strpred_read` AND NOT OFF `cons_lookup`, so the key composition
- * (`strp_key`) has exactly one speller: a second lookup spelling `strpred` here would be a copy of a namespace
- * whose whole purpose is that `≠ "admin"`, `> 5` and `startsWith("/api")` are three claims about one hole. */
+/* …and what it demanded without pinning (concolic.h has the named residual). The same walk as
+ * concolic_principal_pinned, as a second function because the answers are different kinds: a pin is a yes/no
+ * deciding whether a search may open, a demand is an observation a report carries. One predicate answering
+ * both would be decided by the stricter one, since a pinned principal returns before any demand is read.
+ * Rows are read through `concolic_strpred_read`, so `strp_key` stays the one speller of that key. */
 void concolic_principal_preds(void (*cb)(void *user, const char *src, const ConcolicPred *pred, int n),
                               void *user)
 {
@@ -2023,10 +1924,9 @@ void concolic_principal_preds(void (*cb)(void *user, const char *src, const Conc
         int n = 0;
 
         if (!g_srcs[i].principal) continue;
-        /* THE DECLARED `src` IS THE HOLE KEY FOR A SOURCE READ, and that is a property of the two spellings
-           rather than a coincidence: a source read's display shape is `{<src>}` (the component composes it from
-           the provenance and concolic.c asserts that composition at the mint), and a hole key is the shape with
-           every brace removed. The DERIVED spellings are what the residual in the header is about. */
+        /* The declared `src` is the hole key of a source read: the read's display shape is `{<src>}` (asserted
+           at the mint), and a hole key is the shape without braces. Derived spellings are the residual's
+           subject. */
         pr = concolic_strpred_read(g_srcs[i].src, &n);
         DCHECK(n == 0 || pr != NULL,
                "a principal's predicate set reported a COUNT with no row — the two are returned by one line, "
@@ -2053,48 +1953,30 @@ const char *concolic_source_encodes(const char *root)
     return row < 0 ? NULL : g_srcs[row].encode;
 }
 
-/* WHAT THE MECHANISM ITSELF DOES TO A BYTE NOBODY DECLARED — the OTHER half of a delivery, and the half that
-   used to be answered by one hardcoded clause for every source at once.
+/* What the mechanism itself does to a byte nobody declared: the other half of a delivery.
  *
- * A declared `encode` set states what distinguishes ONE component from its siblings: location.c declares the
- * backtick for the fragment and the apostrophe and `#` for the query, and its own comment says that difference
- * is the whole reason those are two sources. What it deliberately does NOT state is the part every URL
- * component SHARES, because restating it on each row would be a second copy of the standard's own text — and a
- * copy `bytes_probe` could not even hold, since it addresses each declared byte by ONE decimal digit and
- * DCHECKs the set at ten.
- * SO THE SHARED PART IS ASKED OF THE MECHANISM, and the mechanism is a COLUMN this registry already carries.
- * Deriving it from `deliver` rather than from a list of source names is what makes a mechanism added later
- * answer the question instead of silently inheriting whichever answer was hardcoded: the switch has no
- * default, so a new kind does not compile until somebody decides.
+ * A declared `encode` set states only what distinguishes one component from its siblings (location.c declares
+ * the backtick for the fragment, the apostrophe and `#` for the query); the part every URL component shares is
+ * the standard's, and `bytes_probe` addresses each declared byte by one decimal digit and asserts the set at
+ * ten, so it could not hold it anyway. The shared part is asked of the `deliver` column, so a mechanism added
+ * later must answer the question (the switch has no default, so the compiler warns).
  *
- * THE THREE ANSWERS ARE NOT TWO. A payload serialized INTO a URL inherits URL §1.3 "Percent-encoded bytes"'s
- * C0 control percent-encode set, which that section defines as "consisting of C0 controls and all code points
- * greater than U+007E (~)" and which the fragment, query and special-query sets are each defined as
- * "consisting of the C0 control percent-encode set and" their own few ASCII additions — the additions being
- * exactly what the rows declare. A payload carried VERBATIM inherits nothing, and this is not an omission:
- * concolic.h's own SRC_DELIVER_CROSS_DOCUMENT_MESSAGE paragraph states it as a measured property of HTML
- * §9.3.3 "Posting messages" (step 7 serializes and step 8.4 deserializes, "and neither transforms a string"),
- * and file_system.c states the same for a file, "read verbatim, with no percent-encoding and no leading
- * character". Those two declarations were already in the tree, and the loop below was contradicting both.
- * THE THIRD ANSWER IS THAT THERE IS NO ANSWER, which is why this returns a tri-state and not a flag. A PLANT's
- * `encode` column is not an encode set at all — document_metadata.c declares it as what a cookie value "cannot
- * carry", per RFC 6265 §4.1.1 "Syntax", whose `cookie-octet = %x21 / %x23-2B / %x2D-3A / %x3C-5B / %x5D-7E` is
- * annotated "US-ASCII characters excluding CTLs, whitespace DQUOTE, comma, semicolon, and backslash". The row
- * lists that production's PRINTABLE exclusions; what it leaves unlisted is the CTLs, DEL and everything above
- * US-ASCII, and for those a plant neither percent-encodes (Chrome does not) nor carries (the production
- * forbids it) — it is refused. Answering either way there would be a false PoC, so the caller crashes. */
+ * Three answers. A payload serialized into a URL inherits URL §1.3 "Percent-encoded bytes"'s C0 control
+ * percent-encode set ("C0 controls and all code points greater than U+007E (~)"), of which the fragment, query
+ * and special-query sets are supersets. A payload carried verbatim inherits nothing: HTML §9.3.3 "Posting
+ * messages" step 7 serializes and step 8.4 deserializes without transforming a string, and file_system.c reads
+ * a file verbatim. A plant has no answer: its `encode` column lists what RFC 6265 §4.1.1 "Syntax"'s
+ * cookie-octet cannot carry, and a CTL, DEL or non-ASCII byte is neither percent-encoded (Chrome does not) nor
+ * carried; it is refused, and answering either way would be a false PoC, so the caller crashes. */
 typedef enum { CARRIER_URL = 0, CARRIER_VERBATIM, CARRIER_CONSTRAINED } CarrierKind;
 
 static CarrierKind root_carrier(const char *root)
 {
     int row = root_declared_row(root);
 
-    /* A ROOT WITH NO ROW IS NOT A CASE — it is the state the ONE caller has already excluded, so a plausible
-       answer here would be the defaulted field §Architecture names rather than a fact. The caller returns the
-       payload untouched when the root declares nothing AND the injection point does too, and when the
-       injection point DOES declare one the DCHECK beside the call has already said the two name the same
-       source — so reaching this with no row means those two facts were threaded from different operands and
-       the mechanism about to be applied belongs to neither of them. */
+    /* A root with no row is a state the one caller has already excluded (it returns the payload untouched when
+       neither the root nor the injection point declares, and asserts they name the same source otherwise), so
+       reaching here means the two facts were threaded from different operands. */
     if (row < 0) {
         DFAIL("a candidate's delivery ROOT declares no source while its injection point declares one — the "
               "encode set and the carrier are the two halves of ONE row's answer, so a root with no row means "
@@ -2117,43 +1999,27 @@ static CarrierKind root_carrier(const char *root)
     return CARRIER_VERBATIM;
 }
 
-/* THE BYTES NO ROW DECLARES AND EVERY MECHANISM MUST ANSWER FOR — the question root_carrier's tri-state is an
-   answer TO, spelled once because it has two readers that must not drift: the delivery loop below, which
-   applies the mechanism to a candidate's bytes as they enter the page's program, and
-   concolic_source_carrier_bytes, which states the same fact to a search BEFORE an escape carrying one of them
-   is ever constructed. Two right answers to one question is the shape that drifts, so there is one.
-   `< 0x20` is Infra's C0 control exactly ("a code point in the range U+0000 NULL to U+001F INFORMATION
-   SEPARATOR ONE, inclusive"), and `> 0x7E` is URL §1.3 "Percent-encoded bytes"'s "all code points greater than
-   U+007E (~)" — which is why DEL needs no clause of its own: 0x7F is greater than 0x7E, and the `*p == 0x7F`
-   that stood at the loop was this set's high range implemented for ONE of its 129 members. Byte-wise `%XX`
-   over a UTF-8 payload IS §1.3's UTF-8 percent-encode, whose own loop runs "for each byte of encodeOutput"
-   and percent-encodes each one under a set it asserts "includes all non-ASCII code points". */
+/* The bytes no row declares and every mechanism must answer for, spelled once for its two readers: the
+   delivery loop below, and concolic_source_carrier_bytes, which tells a search before it builds an escape.
+   `< 0x20` is Infra's C0 control ("a code point in the range U+0000 NULL to U+001F INFORMATION SEPARATOR ONE,
+   inclusive"); `> 0x7E` is URL §1.3 "Percent-encoded bytes"'s "all code points greater than U+007E (~)", so DEL
+   needs no clause of its own. Byte-wise `%XX` over a UTF-8 payload is §1.3's UTF-8 percent-encode, which
+   percent-encodes "each byte of encodeOutput". */
 static int carrier_shared_byte(unsigned char b) { return b < 0x20 || b > 0x7E; }
 
-/* WHICH OF A ROOT'S BYTES CANNOT ARRIVE AT ALL — the declaration's half of an @S search's delivery table, and
- * the only half of it that is a FACT rather than a PRIOR.
+/* Which of a root's bytes cannot arrive at all: the declaration's half of an @S search's delivery table, and
+ * the only half that is a fact rather than a prior.
  *
- * THE DECLARED ENCODE SET IS NOT SEEDED HERE, AND THAT IS THE WHOLE OF THE DESIGN. solve_filter.h states why:
- * a page that runs `decodeURIComponent` over its own fragment receives the `<` the browser encoded, and this
- * engine already FIRES a markup PoC through exactly that round trip, so the encode column decides only WHICH
- * BYTES ARE WORTH ASKING ABOUT — solve.c builds its delivery probe out of exactly that set — and a RUN decides
- * the answer. Seeding it would decline that PoC, and it would refuse the instrument as well: the delivery
- * probe carries those very bytes, so a table that pre-cleared them would withdraw the measurement it exists
- * to take.
- * WHAT A CONSTRAINED CARRIER REFUSES IS A DIFFERENT KIND OF FACT, which is why it may be seeded when the
- * column beside it may not. A byte outside printable US-ASCII reaching SRC_DELIVER_PLANT is neither
- * percent-encoded nor carried — root_carrier says why, and concolic_deliver crashes on it by name — so there
- * is no encoded form of it anywhere in the page's program for the page's own decoding to recover. Nothing a
- * run can observe widens that.
- * THE ANSWER IS RETURNED AND NOT INFERRED FROM THE TABLE. A table narrowed by a declaration and one narrowed
- * by a run are the same 256 bytes, so a caller reading the answer off the table could not tell them apart —
- * §Architecture's defaulted field, arriving as a silence a consumer would read as a measurement. `0` is the
- * positive statement that this root's declaration constrains no byte, and it is reached by two routes that
- * are ONE instruction for the caller: a root with no row, which is the state concolic_deliver states by
- * handing the payload back untouched (nothing carries these bytes), and a row whose mechanism percent-encodes
- * or carries every byte it is given.
- * IT ONLY EVER CLEARS, which is what makes it safe at a seam a search reaches once per detection: the second
- * call for one root is the same table, and it can never widen one a run has narrowed. */
+ * The declared encode set is not seeded here (solve_filter.h says why): a page that runs `decodeURIComponent`
+ * over its fragment receives the `<` the browser encoded, so the encode column only decides which bytes are
+ * worth asking about (solve.c builds its delivery probe from it) and a run decides the answer.
+ * What a constrained carrier refuses is a different kind of fact: a byte outside printable US-ASCII reaching
+ * SRC_DELIVER_PLANT has no encoded form anywhere in the page's program for the page to decode, and no run can
+ * widen that.
+ * The answer is returned, not inferred from the table, which looks the same narrowed by a declaration or by a
+ * run. 0 states that this root's declaration constrains no byte: either the root has no row (nothing carries
+ * these bytes) or its mechanism encodes or carries every byte. It only ever clears, so a second call for one
+ * root is the same table and never widens what a run has narrowed. */
 int concolic_source_carrier_bytes(const char *root, struct SolveDelivered *d)
 {
     int b;
@@ -2162,10 +2028,9 @@ int concolic_source_carrier_bytes(const char *root, struct SolveDelivered *d)
            "the @S delivery table was seeded from a source declaration into nothing — the table is the "
            "caller's and this call is the only thing that can state the carrier's half of it, so a NULL here "
            "is a search about to construct escapes out of bytes its carrier refuses");
-    /* ASKED OF THE ROW FIRST, AND NOT OF root_carrier ALONE, which DFAILs on a root with no row. That assert
-       is concolic_deliver's and it is right there: a payload is ALREADY being delivered under a mechanism
-       nothing states. Here an undeclared root is an ordinary answer rather than an error — server-injected
-       page state (`window.__FLAGS`) is written by the attacker directly and no component transforms it. */
+    /* Asked of the row first, because root_carrier DFAILs on a root with no row; that assert is concolic_deliver's,
+       where a payload is already being delivered. Here an undeclared root is ordinary: server-injected state
+       (`window.__FLAGS`) is written by the attacker directly. */
     if (!root || root_declared_row(root) < 0) return 0;
     if (root_carrier(root) != CARRIER_CONSTRAINED) return 0;
     for (b = 0; b < 256; b++)
@@ -2173,12 +2038,11 @@ int concolic_source_carrier_bytes(const char *root, struct SolveDelivered *d)
     return 1;
 }
 
-/* JSConcolicHooks.lead — the DOMAIN fact the delivery declaration already holds, read by a builtin that has to
-   decide whether one of its completions is feasible at all. The prefix is what the component states its
-   component's value carries (`#` for a fragment, `?` for a query), so this is not a guess about the value: it
-   is the same declaration the candidate delivery is built from, asked the other way round.
-   A DERIVED value (`location.hash.slice(1)`) has its own source identity and no declaration, so it answers 0
-   and nothing is refined — which is right, since slicing is exactly what removes the prefix. */
+/* JSConcolicHooks.lead: the domain fact the delivery declaration holds, for a builtin deciding whether one of
+   its completions is feasible. The prefix is what the component says its value carries (`#` for a fragment,
+   `?` for a query), the same declaration the candidate delivery is built from. A derived value
+   (`location.hash.slice(1)`) has its own source identity and no declaration, so it answers 0: slicing is what
+   removes the prefix. */
 static int concolic_lead_hook(JSValueConst v)
 {
     const char *src = concolic_src_c(v);
@@ -2189,25 +2053,18 @@ static int concolic_lead_hook(JSValueConst v)
     return 0;
 }
 
-/* THE CANDIDATE AS THE PAGE READS IT. The solver's payload is what the ATTACKER puts in the URL; this is what
-   the browser hands the page, which is the only thing re-execution can honestly decide a breakout against.
+/* The candidate as the page reads it. The solver's payload is what the attacker puts in the URL; this is what
+ * the browser hands the page, the only thing a breakout can be decided against.
  *
- * THE TWO HALVES OF THE DECLARATION ARE ASKED WITH TWO DIFFERENT KEYS, because they are facts about two
- * different things and only one of them survives a derivation.
- *   The ENCODE SET is a fact about the ROOT: the browser percent-encoded the bytes on the way INTO the address,
- *   and `location.hash.slice(1)` does not decode them, so a candidate substituted at the slice's RESULT must
- *   still be the encoded form. Asked with `src` — an exact strcmp that a derived identity never matches — the
- *   whole set went missing for exactly the derivations real code is written in, and the payload was handed over
- *   RAW. That is not a reporting gap: an HTML-context breakout containing `<` fired in the model at
- *   `innerHTML = location.hash.slice(1)` and cannot fire in Chrome, which encodes `<` in a fragment. It is the
- *   precise false-PoC generator this declaration was introduced to end, arriving through the derivation door.
- *   The PREFIX is a fact about the INJECTION POINT: `#` is a character the fragment's own value carries, and
- *   slicing is exactly what removes it (concolic_lead_hook states the same thing from the other side). So it
- *   comes off `src`'s own row, which a derived identity correctly does not have.
- * WHEN `src` HAS A ROW AT ALL, IT IS THE ROOT'S ROW — a value carrying a declared source's own name as its
- * identity is one that inherited it unchanged, so it inherited the root unchanged too. Asserted rather than
- * assumed: the two facts are threaded from an operand each, and taking them from DIFFERENT operands would
- * encode for one source and prefix for another with nothing to say so. */
+ * The two halves of the declaration are asked with different keys, because only one survives a derivation.
+ *   The encode set is a fact about the root: the browser percent-encoded the bytes on the way into the address
+ *   and `location.hash.slice(1)` does not decode them, so a candidate substituted at the slice's result is
+ *   still the encoded form. Asked of `src`, it would go missing for every derivation and a `<` would fire in
+ *   the model that Chrome encodes in a fragment.
+ *   The prefix is a fact about the injection point: slicing removes the `#` (see concolic_lead_hook), so it
+ *   comes off `src`'s own row, which a derived identity does not have.
+ * When `src` has a row it is the root's row: a value carrying a declared source's name as its identity
+ * inherited the root unchanged too. Asserted, because the two are threaded from an operand each. */
 static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *root, const char *payload)
 {
     const SourceDelivery *at = NULL;   /* the INJECTION POINT's row, if it has one: the component's prefix */
@@ -2218,22 +2075,14 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
     size_t o = 0, n;
     int i;
 
-    /* THE ONE POINT AT WHICH THE ATTACKER'S BYTES BECOME A VALUE IN THE PAGE'S OWN PROGRAM — which is what
-     * makes it the observation site for concolic_candidate_delivered, and the reason that fact can be a fact
-     * at all. Both callers reach here through cand_matches, so there is no second door: a source read whose
-     * identity is the substitution's returns the payload HERE or the payload is not in the program.
-     * THE PAYLOAD IS ASSERTED RATHER THAN DEFAULTED, and the `if (!payload) payload = ""` that stood here is
-     * deleted with its own reason. It made "the scheduler installed a substitution with no bytes" into a
-     * delivery of the empty string: the source read succeeds, the page composes with nothing, every rung
-     * measures a zero-length payload, and solve.c's own denominator assert (`o.len > 0`) fires two subsystems
-     * away from the cause. That is §Architecture's defaulted field exactly — a hole a `?:` fills, in the one
-     * value the whole search is about. `CHECK` and not `DCHECK` because it is dereferenced immediately below,
-     * which is the rule solve.c states about its own two.
-     * AND THE BYTES BELONG TO THE FLOW THAT WILL BE CREDITED FOR THEM. concolic_set_candidate asserts the
-     * installed substitution matches the running flow at SWITCH-IN; this asks it at the moment the bytes
-     * actually enter, because everything downstream — the survival rung, the arrival rung, the PoC — is
-     * recorded against `flow_running()` and would be recorded against the wrong flow if the two had drifted
-     * between the switch and the read. */
+    /* The one point at which the attacker's bytes become a value in the page's program, so it is the
+     * observation site for concolic_candidate_delivered. Both callers reach here through cand_matches, so there
+     * is no second door.
+     * The payload is checked, not defaulted: an empty-string delivery would have every rung measure a
+     * zero-length payload. CHECK, not DCHECK, because it is dereferenced below.
+     * The bytes belong to the flow credited for them: concolic_set_candidate asserts the match at switch-in,
+     * and this asks again as the bytes enter, because the rungs and any PoC are recorded against
+     * `flow_running()`. */
     {
         Flow *f = flow_running();
         CHECK(payload != NULL,
@@ -2241,10 +2090,7 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
               "as one identity and solve.c refuses to seed a flow holding half of it, so a NULL here is an "
               "installation that skipped concolic_set_candidate's own pairing; delivered as the empty string "
               "it would read as a source the page composed nothing out of");
-        /* THE FLOW IS `CHECK`ED AND NOT ONLY `DCHECK`ED because it is now DEREFERENCED on this path in every
-           build: the ladder write below reads and raises a field of it, so a release build that reached here
-           with nothing running would segfault where dev names the cause. It is the same rule the assert above
-           states about `payload`, arriving one line later for the same reason. */
+        /* CHECKed, not only DCHECKed: the ladder write below dereferences it in every build. */
         CHECK(f != NULL,
               "concolic: an @S candidate's bytes are entering the program with no flow running — a delivery is "
               "an observation ABOUT a flow (its ladder rung, its survival fraction, its PoC), so a delivery "
@@ -2254,58 +2100,29 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
                "survival and arrival rungs, and any PoC, are recorded against the RUNNING flow, so this "
                "delivery is about to be credited to a flow whose own payload is a different string");
         g_cand_delivered = 1;
-        /* AND §@S'S BOTTOM LADDER RUNG, WRITTEN HERE BECAUSE THIS IS THE SITE — not because the flow happens
-           to be in hand. §@S(i) requires every rung to have an observation site STRICTLY BEFORE the thing it
-           is a distance to, and every other rung on the ladder reports at a SINK: a candidate that has replayed
-           800 gates without reaching its own source read and one the scheduler has never served stood at the
-           same 0 and ranked identically for the whole of the runway. This is the one honest observation in
-           between, and it is honest precisely because it is not a claim about where the bytes have got to —
-           "the payload is downstream of this operand" would need a taint tracker or a recorded
-           transform-expression, both of which §Re-execution bans. It is the narrower fact that the bytes ARE
-           IN THE PROGRAM, which only the component that puts them there can state.
-           WRITING IT AT SOLVE.C'S SINK ENTRIES INSTEAD WOULD MAKE IT WORTH NOTHING, which is worth saying
-           because that is the shorter diff: a rung recorded where the candidate has already reached a sink
-           adds no separation the sink rungs do not already carry, and leaves "delivered, still on the runway"
-           reading 0 beside "never delivered" — the two states the rung exists to tell apart.
-           IT IS NOT THE SAME FACT AS `g_cand_delivered` ABOVE, AND THE TWO MAY NOT BE COLLAPSED. That flag is
-           the component's live answer to "are this flow's bytes in the program RIGHT NOW", and it is CLEARED
-           by concolic_clear_pins when a flow is entered fresh — a candidate that is RESTARTED rather than
-           resumed replays from the baseline and its bytes are genuinely not in that replay's program until it
-           delivers again, so solve.c's sink entries must see the 0. The rung is the COMPARATOR: §@S requires
-           it monotone, so a later lower sample is another look at a fixed question and never a demotion, and
-           flow_observe_rung's early return is what makes the re-delivery cost nothing. Same event, two
-           quantities with opposite reset rules — the ledger/comparator split of §@S(ii) one level down. */
+        /* The bottom ladder rung, written here because this is its site. Every other rung reports at a sink,
+           and each rung needs an observation site strictly before what it measures; without this a candidate
+           that replayed many gates without reaching its source read would rank with one never served. It
+           states only that the bytes are in the program, which needs no taint tracker; recorded at solve.c's
+           sink entries it would add nothing the sink rungs do not carry.
+           It is not `g_cand_delivered`: that flag is the live answer for this replay, cleared by
+           concolic_clear_pins when a restarted candidate replays from the baseline, so solve.c's sinks see 0.
+           The rung is the comparator and monotone; flow_observe_rung's early return makes re-delivery free. */
         flow_observe_rung(f, FLOW_RUNG_DELIVERED);
-        /* AND THE SAME EVENT AT THE THIRD ACCOUNTING UNIT — the SEARCH's, which is the only one a reader ever
-           sees. The three are not copies and none of them can be derived from the others: `g_cand_delivered`
-           above is the COMPONENT's live answer for THIS replay and is cleared when a flow is entered fresh;
-           the rung is the flow's COMPARATOR, monotone and re-earned across a park, which the WFQ reads at the
-           pick; and this is a COUNT on the search, which orders nothing, outlives every flow that produced it
-           and is what the parked report is written out of.
-           IT IS WHAT MAKES THE REPORT'S BOTTOM STATE SAYABLE. Every other number a parked entry carries is
-           observed AT a sink, so a search whose candidates ended before their own source read reported
-           `turns:N,reached:0,survived:0` — byte-identical to one whose bytes DID enter the program and never
-           reached a sink, and to one whose sinks all ran carrying none of them. Three opposite instructions
-           under one reading, which is §@S's named tell (a rung whose absence and whose zero read alike); the
-           count that separates them can only be taken here, because this is the site.
-           NOT A CREDIT: solve.c raises a counter and touches no rung, no crossing and no frontier generation,
-           so nothing about the ordering moves on this line. */
+        /* The same event counted on the search, the one unit a reader sees; it orders nothing and outlives the
+           flows. It lets a parked report tell "bytes never entered" from "entered and reached no sink" and from
+           "sinks ran carrying none", which otherwise all read `turns:N,reached:0,survived:0`. Not a credit:
+           solve.c raises a counter and moves no ordering. */
         solve_observe_substitution(f);
     }
     for (i = 0; i < g_srcs_n; i++)
         if (src && !strcmp(g_srcs[i].src, src)) { at = &g_srcs[i]; break; }
     encode = concolic_source_encodes(root);
-    /* THE ROOT'S DECLARING MEMBER, NOT THE WHOLE ROOT, BECAUSE A ROOT MAY NAME A SET. This read
-       `!strcmp(root, src)`, which is the exact-match defect root_declared_row exists to end arriving one
-       consumer over: `location.hash + {state}.region` — an attacker source composed with server-injected page
-       state, which is how a real bundle spells an endpoint — has a root of TWO members of which exactly ONE
-       declares anything, so the delivery is unambiguously the fragment's and a whole-string comparison against
-       `location.hash` fails. The assert would then have aborted on the ORDINARY composition rather than on the
-       ambiguous one, which is the accusing direction and the worse of the two.
-       WHAT IT IS ACTUALLY ABOUT is whether the encode set and the prefix come from ONE row, and that is this
-       question asked of the members. A root with TWO declaring members never reaches it: root_declared_row
-       refuses first, naming the per-member seeding to build. The walk is side-effect-free, so asking it twice
-       in a condition is the DCHECK contract rather than a cost. */
+    /* The root's declaring member, not the whole root, because a root may name a set: `location.hash +
+       {state}.region` has two members of which only the fragment declares anything, and a whole-string
+       comparison would abort on that ordinary composition. The question is whether the encode set and the
+       prefix come from one row. A root with two declaring members never reaches here (root_declared_row
+       refuses first). The walk is side-effect-free, so calling it twice in the condition is fine. */
     DCHECK(!at || (root && root_declared_row(root) >= 0 && &g_srcs[root_declared_row(root)] == at),
            "a candidate is being delivered at an injection point that names a DECLARED source while its "
            "delivery root's DECLARING MEMBER names a different one — the two are threaded from an operand "
@@ -2313,9 +2130,8 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
            "and prefixed for the other");
     if (!at && !encode) return JS_NewString(ctx, payload);   /* nothing carries these bytes: delivered as itself */
     if (!encode) encode = "";
-    /* THE SAME KEY AS THE ENCODE SET, and it has to be: the two are the declared and the shared halves of ONE
-       row's answer, so reading them from different rows would apply one mechanism's rule to another's bytes —
-       the mistake the DCHECK above catches for the PREFIX, one column over. */
+    /* The same key as the encode set: the declared and the shared halves of one row's answer, so reading them
+       from different rows would apply one mechanism's rule to another's bytes. */
     carrier = root_carrier(root);
 
     n = strlen(payload);
@@ -2323,42 +2139,22 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
     CHECK(out != NULL, "concolic: OOM delivering a candidate");
     if (at && at->prefix) out[o++] = at->prefix;
     for (p = (const unsigned char *)payload; *p; p++) {
-        /* THE BYTE IS OUTSIDE PRINTABLE US-ASCII, so what happens to it is the MECHANISM's to say and not this
-           row's — see root_carrier. The predicate is carrier_shared_byte's and not this loop's, because
-           concolic_source_carrier_bytes answers the same question to a search one stage earlier and the two
-           must not be able to disagree about which bytes those are; its definition carries the URL §1.3 and
-           Infra text this comment used to hold. */
+        /* A byte outside printable US-ASCII is the mechanism's to answer for, not the row's (root_carrier).
+           The predicate is carrier_shared_byte's, shared with concolic_source_carrier_bytes so the two cannot
+           disagree about which bytes those are. */
         int shared = carrier_shared_byte(*p);
 
         if (shared && carrier == CARRIER_CONSTRAINED) {
-            /* NEITHER ANSWER IS AVAILABLE, so neither is given. Percent-encoding it claims a transform the
-               carrier does not perform (a `;` does not reach a cookie as `%3B`, and a CTL does not reach one at
-               all), and passing it raw claims a plant RFC 6265 §4.1.1's cookie-octet forbids — so the candidate
-               would be recorded as a search that failed rather than as one that was never deliverable.
-               THIS IS A BACKSTOP NOW AND NOT A RESIDUAL, and the residual that stood here is deleted with the
-               diff that built what it asked for: concolic_source_carrier_bytes states this same refusal to a
-               search at the moment it learns its root, so solve_html.c's and solve_js.c's emitters decline such
-               an escape where it is CONSTRUCTED and solve_seed_candidates withdraws one already queued. The
-               case it named — a cookie-sourced JS-context search whose hole sits in a §12.4 SingleLineComment,
-               whose exit escape is the one derived breakout in this engine carrying a byte outside printable
-               US-ASCII — is refused at construction and reported as a parked search.
-               THE COLD TIER WAS THE ONE ROUTE LEFT AND IT IS CLOSED, so this abort now names NO route and is a
-               backstop in the full sense rather than a residual with a door still open. The residual that
-               stood here said a candidate rebuilt from a park document carries bytes this session never
-               constructed while solve_resume_candidate was handed its search's ROOT and not those bytes, so a
-               record written before this refusal existed resumed unasked. That was exact, and the fix is the
-               one it named: the payload is now an ARGUMENT to that call, which asks solve_delivered_ok against
-               the table cand_learn_root has just seeded from the root's carrier declaration, and refuses the
-               record where the two disagree. Every route onto a candidate payload therefore passes a refusal
-               now — solve_seed_candidates withdraws a contradicted escape before it becomes a flow and asserts
-               it again where the document re-run is spent, solve_resume_candidate refuses a parked record
-               before it registers anything, and engine.c's candidate-session fork copies a payload from a
-               parent that already passed one (a sibling is its parent's path with one arm appended, so it
-               inherits the answer rather than needing its own).
-               WHAT WOULD MAKE IT FIRE IS THEREFORE A NEW PRODUCER, which is exactly what a backstop is for:
-               any future writer of Flow.cand_payload that does not go through one of those three. It is not
-               deleted with the residual, because the thing it guards is not a route but an INVARIANT over a
-               field, and the field is reachable from anywhere in this engine that can hold a Flow. */
+            /* Neither answer exists, so neither is given: percent-encoding claims a transform the carrier does
+               not perform (a `;` does not reach a cookie as `%3B`), and passing it raw claims a plant RFC 6265
+               §4.1.1 "Syntax"'s cookie-octet forbids.
+               This is a backstop over the invariant "no Flow.cand_payload carries such a byte". Every current
+               route refuses first: concolic_source_carrier_bytes tells the search when it learns its root, so
+               solve_html.c's and solve_js.c's emitters decline the escape at construction (for example a
+               cookie-sourced JS-context hole in a SingleLineComment, §12.4 Comments) and solve_seed_candidates
+               withdraws a queued one; solve_resume_candidate checks a parked record's payload with
+               solve_delivered_ok; and engine.c's candidate-session fork copies a payload from a parent that
+               already passed. What would fire it is a new writer of Flow.cand_payload outside those routes. */
             DFAILF("an @S candidate carries the byte 0x%02X to a source whose carrier can neither encode it nor "
                    "hold it — the declared set lists only the PRINTABLE bytes the carrier's own production "
                    "excludes, so a byte outside US-ASCII has no delivery this component can state and both "
@@ -2379,12 +2175,10 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
         return r;
     }
 }
-/* THE INSTALLED SUBSTITUTION BELONGS TO THE RUNNING FLOW — asserted here because this is where it is installed
-   and the scheduler is the only caller. An installed candidate that is not the running flow's means an
-   exploring flow is about to read an attacker payload where its concolic source belongs: it silently stops
-   forking and stops being a detectable sink, which produces a smaller learned surface and no error at all.
-   Two-sided on purpose — a candidate flow must have its own payload installed, and any other flow must have
-   none — so neither direction of the mismatch can return. */
+/* The installed substitution belongs to the running flow: asserted here, where it is installed by its only
+   caller, the scheduler. A mismatch would have an exploring flow read an attacker payload where its concolic
+   source belongs, silently stop forking and stop being a detectable sink. Two-sided: a candidate flow must
+   have its payload installed, and any other flow must have none. */
 void concolic_set_candidate(const char *src, const char *payload) {
     free(g_cand_src); free(g_cand_payload);
     g_cand_src = src ? strdup(src) : NULL;
@@ -2397,28 +2191,16 @@ void concolic_set_candidate(const char *src, const char *payload) {
     }
 }
 
-/* HAVE THE RUNNING FLOW'S OWN CANDIDATE BYTES ENTERED THE PROGRAM? — see the static above for where the fact
-   lives and how it travels; this is what it is FOR.
-   IT IS THE PRECONDITION OF EVERY OBSERVATION MADE ABOUT A CANDIDATE'S BYTES, and until it existed there was
-   none. solve.c's sink entries test `concolic_is(arg)` — "the injection did not reach this read" — and that
-   test is TRUE OF EVERY LITERAL THE PAGE WRITES, which solve_html_sink's own comment says in those words. So
-   during a candidate run the page's own `eval`, its own `innerHTML` and its own `location =` all reach the
-   measurement, and the survival rung (§@S's "filter-survived") takes the longest run of the candidate's bytes
-   in whatever string the PAGE built. A breakout is punctuation — `'><svg onload=X9()>`, `';X9();//` — so a run
-   of one or two characters is found in almost any markup, and the flow's fitness, the search's ratchet and the
-   popup's "S of L bytes of the furthest candidate survived" are then a reading of the page's own text.
-   THAT IS A NUMBER ABOUT NOTHING, WHICH IS WORSE THAN A ZERO: §@S's three indistinguishable zero-states — a
-   flow that never started, one whose bytes were eaten, one killed by a gate on the runway — were being told
-   apart by a coincidence, so the one rung that does exist read nonzero for candidates whose bytes were never
-   in the program at all. This fact is what the classes could not answer for themselves: a locator or an X9
-   partition identifies WHOSE bytes a string holds only once they are somewhere to be found.
-   A `0` IS NOT "NOT YET" — it is the positive statement that nothing in this program is this flow's, so a
-   string that looks like the candidate's is the page's own. Read at the sink, never latched by a reader.
-   AND IT IS NOT THE LADDER RUNG THE SAME EVENT WRITES. flow.h's FLOW_RUNG_DELIVERED is the WFQ's comparator
-   coordinate and is monotone by §@S; this is the component's live answer and is cleared for a flow entered
-   fresh, because a RESTARTED candidate's bytes are not in the replay it is now running. Anyone who reads the
-   two as one number will delete whichever they met second: see the writer in concolic_deliver for why the
-   opposite reset rules are the whole point rather than a redundancy. */
+/* Whether the running flow's own candidate bytes have entered the program (the static above says where the
+   fact lives and how it travels). It is the precondition of every observation about a candidate's bytes:
+   solve.c's sink entries test `concolic_is(arg)`, which is true of every literal the page writes, so without
+   this the survival rung would measure the longest run of candidate bytes in strings the page built itself,
+   and a breakout is punctuation (`'><svg onload=X9()>`) found in almost any markup.
+   0 is not "not yet": it states that nothing in this program is this flow's, so a string that looks like the
+   candidate's is the page's own. Read at the sink, never latched by a reader.
+   It is not FLOW_RUNG_DELIVERED (flow.h), the WFQ's monotone comparator coordinate: this is the live answer
+   and is cleared for a flow entered fresh, because a restarted candidate's bytes are not in its replay. See
+   the writer in concolic_deliver for why the opposite reset rules are both needed. */
 int concolic_candidate_delivered(void) {
     DCHECK(!g_cand_delivered || g_cand_payload != NULL,
            "a flow is recorded as having delivered its @S payload while no substitution is installed — the "
@@ -2428,83 +2210,41 @@ int concolic_candidate_delivered(void) {
     return g_cand_delivered;
 }
 
-/* THE MEMBER'S OWN EXAMPLE — the third of §Solver's triple, computed by RUNNING THE REAL READ on the parent's
-   example rather than by deriving anything from a recorded expression.
+/* The member's own example, computed by running the real read on the parent's example.
  *
- * A concolic whose example is a RECORD is what the real codec hands back:
- * ECMAScript §25.5.2 "JSON.parse ( text [ , reviver ] )" over an unknown text runs the engine's own
- * `JSON.parse` on the source's example and the completion carries that parsed value. Until this
- * existed, every field read off it minted example-free, so a loaded config's `region` — a value the run had
- * concretely in hand — reached an @H parameter as a hole with no value under it, which is §@H's "a shape
- * states two facts" with one of them thrown away. Absence stays absence: a member the record does NOT hold
- * yields no example, which is the honest statement that the payload this visitor was served does not carry
- * that field, and is exactly what keeps the gate over it forking instead of inventing a value for it.
+ * A concolic whose example is a record is what the real codec hands back:
+ * §25.5.2 JSON.parse ( text [ , reviver ] ) over an unknown text runs the engine's own JSON.parse on the
+ * source's example, so a loaded config's `region` reaches an @H parameter with the value the run had. A member the record does not hold
+ * yields no example, which keeps the gate over it forking instead of inventing a value.
  *
- * NOT [[Get]] — JS_GetOwnSlotDesc, which runs NONE of the page's code. Three reasons and each is load-bearing:
- * a prototype walk would answer `hasOwnProperty` and `toString` for members no server ever wrote; a getter is
- * the page's own function and calling it from this C activation is the drive-to-completion with no flow base
- * the whole flow machinery exists to avoid; and the question being asked is whether the RECORD holds the
- * member, which is [[GetOwnProperty]]'s question and not [[Get]]'s.
+ * Not [[Get]] but JS_GetOwnSlotDesc, which runs none of the page's code: a prototype walk would answer
+ * `hasOwnProperty` for members no server wrote, a getter is page code with no flow base under this C
+ * activation, and whether the record holds the member is [[GetOwnProperty]]'s question. An accessor therefore
+ * answers no example; JSON.parse builds only data properties, so the only route to one is a reviver, which
+ * §25.5.2 step 9 hands the walk to. */
+/* §10.4.3.5 StringGetOwnProperty ( string, propertyKey ): the own members of a value whose example is a
+ * String. §10.4.3 String Exotic Objects is the one primitive wrapper with own properties, so any other
+ * primitive example answers none. Answering them runs the real op on a value the flow had (§6.1.4 The String
+ * Type's code-unit indexing and `length`) and only fills the derived member's example; the member stays an
+ * unknown. Without it `location.hash` with example `#/a/b` would give `.length` and `[0]` no example.
  *
- * AN ACCESSOR ON AN EXAMPLE IS ANSWERED WITH NO EXAMPLE, and that is a positive statement rather than a
- * default: its value is whatever the page's getter would compute, this read may not run it, so there is no
- * concrete value here to report — the same answer as a member the record does not hold, for a different and
- * equally honest reason. `JSON.parse` builds only data properties, so the only route to one is a reviver
- * that defined one, and
- * ECMAScript §25.5.2 "JSON.parse ( text [ , reviver ] )" step 9 is what hands the walk to it, which is
- * the page's own choice.
+ * The attributes are §10.4.3's own: step 10 gives an index { [[Writable]]: false, [[Enumerable]]: true,
+ * [[Configurable]]: false }, and §10.4.3.4 StringCreate ( value, proto ) step 8 defines `length` with all
+ * three false. So the internal methods that write ask JS_IsString first: a non-configurable member cannot be
+ * materialised onto the record.
  *
- * BOTH NUMBERS ABOVE STOOD AS `25.5.1`, which the standard now titles JSON.isRawJSON ( obj ). THE STEP
- * SURVIVED THE MOVE AND THAT IS NOT AUTOMATIC: a renumber applied uniformly would have carried a step
- * number across two sections without reading either, and JSON.isRawJSON has only TWO steps, so `step 9`
- * was out of range at the number it was written under. It is in range at §25.5.2, whose step 9 is
- * `Return ? InternalizeJSONProperty(root, rootName, reviver, snapshot)` — the call that runs the reviver.
- * Read off the standard's text rather than recalled. */
-/* §10.4.3.5 StringGetOwnProperty ( string, propertyKey ) — THE OWN MEMBERS OF A VALUE WHOSE EXAMPLE IS A
- * STRING, and the only own members any PRIMITIVE example has: §10.4.3 String Exotic Objects is the one
- * primitive wrapper that owns properties at all, so a Number, Boolean, BigInt or Symbol example answers none
- * and the `!JS_IsObject` arm below was right about every primitive except this one.
+ * Step 2 runs CanonicalNumericIndexString, so `01`, `1.0`, `+1`, ` 1` and `-0` are names, not indices. A
+ * digits-only test with no leading zero is that intersected with steps 3, 4 and 8; every name it rejects is
+ * one those steps answer undefined for.
  *
- * IT IS NOT "INVENTING THE OPERATION", WHICH IS WHAT THE LINE IT REPLACES SAID. That line refused a primitive
- * example's members on the ground that `{hash}.length` is a DERIVATION rather than a slot — which is true, and
- * is an argument about what may be ANSWERED as the member's value, not about what the derivation may CARRY.
- * The bytes are not answered: concolic_exotic_get_own reports a derived unknown and concolic_exotic_get mints
- * it, and this fills that derivation's EXAMPLE exactly as `"/api/" + cfg.region` fills one — CLAUDE.md
- * §Solver-half puts it that the example propagates because the engine runs the real op, and §6.1.4 The
- * String Type's code-unit indexing and `length` are real ops run on a value the flow had in hand. Refusing
- * them did not keep the engine honest, it DROPPED an observation: `location.hash` carrying the example
- * `#/a/b` answered an EXAMPLE-FREE unknown for `.length` and for `[0]`, and every string a page built out of
- * those lost its concrete value with them — which §@H calls a wrong report rather than a partial one, since
- * the run had computed it.
+ * The value comes from the engine's own read, which answers `length` and an in-range index off the primitive
+ * before its prototype is consulted. String.prototype is page-patchable and there is no flow base here, so an
+ * index at or past the end (the read that would reach the prototype) is answered here, as step 8 does.
  *
- * THE ATTRIBUTES ARE §10.4.3's OWN AND THEY ARE NOT THIS CLASS'S USUAL ONES. §10.4.3.5 step 10 returns, for
- * an index, the PropertyDescriptor whose [[Writable]] is false, [[Enumerable]] true and [[Configurable]]
- * false; §10.4.3.4 StringCreate ( value, proto ) step 8 defines `length` with all three false. That is why
- * the three internal methods that WRITE ask JS_IsString before reaching for the example: a non-configurable
- * member cannot be materialised onto the record, and there is no character to take out of a String primitive
- * if it could be.
- *
- * CANONICAL, NOT MERELY NUMERIC. §10.4.3.5 step 2 runs CanonicalNumericIndexString ( propertyKey ), so `01`,
- * `1.0`, `+1`, ` 1` and `-0` are ordinary property names and not indices. A digits-only test with no leading
- * zero is that intersected with step 3 (an integral Number), step 4 (not -0𝔽 and not below it) and step 8
- * (below `length`) — every name it rejects is a name those steps answer undefined for anyway, including a run
- * of digits too long to be any string's index.
- *
- * THE VALUE IS TAKEN FROM THE ENGINE'S OWN READ AND NOT SPELLED HERE, which is what makes this RUNNING the
- * op rather than a second implementation of §10.4.3.1: JS_GetPropertyInternal answers `length` off a String
- * primitive with `js_int32(p1->len)` and an in-range integer index with `js_new_string_char`, both without
- * allocating a wrapper and both BEFORE the primitive's prototype is consulted — which is the property that
- * matters here, because String.prototype is page-patchable and this runs inside an internal method with no
- * flow base to run a page's getter on. The range check is therefore not an optimisation: an index at or past
- * the end is exactly the read that WOULD reach the prototype, so step 7's answer is taken here and the engine
- * is never asked for it.
- *
- * 1 = the string holds this own member; `*out_value` is OWNED and `*out_flags` is the member's own C/W/E.
- * 0 = it holds none. */
-/* HOW MANY CODE UNITS A STRING EXAMPLE HOLDS — §6.1.4 The String Type's count, which is the `length` member
-   §10.4.3.4 StringCreate ( value, proto ) step 8 defines, and the bound §10.4.3.5 step 8 tests an index
-   against. Read through the engine's own O(1) answer for a String primitive rather than converted, for the
-   reason spelled above. */
+ * 1 = the string holds this own member; `*out_value` is owned and `*out_flags` is its C/W/E. 0 = none. */
+/* How many code units a String example holds: §6.1.4 The String Type's count, the `length` §10.4.3.4 step 8
+   defines and the bound §10.4.3.5 step 8 tests an index against. Read through the engine's O(1) answer for a
+   String primitive, for the reason above. */
 static int64_t string_example_units(JSContext *ctx, JSValueConst example)
 {
     JSValue lv;
@@ -2539,9 +2279,9 @@ static int string_example_slot(JSContext *ctx, JSValueConst example, JSAtom atom
         return 0;   /* a name that would not convert names no member of a String */
     is_len = !strcmp(name, "length");
     if (!is_len && name[0] >= '0' && name[0] <= '9' && !(name[0] == '0' && name[1] != '\0')) {
-        /* TEN DIGITS IS THE WHOLE OF THE RANGE THAT CAN NAME ONE — 2^32-2 is ten digits, and a longer run
-           leaves `name[i]` non-NUL, which answers "not a member" exactly as step 7 does for an index at or
-           past the end. The bound is also what keeps the accumulate inside uint64_t. */
+        /* Ten digits cover every index (2^32-2 has ten); a longer run leaves `name[i]` non-NUL and answers
+           "not a member", as step 8 does for an index past the end. The bound also keeps the accumulate inside
+           uint64_t. */
         for (i = 0; name[i] && i < 10; i++) {
             if (name[i] < '0' || name[i] > '9') break;
             idx = idx * 10 + (uint64_t)(name[i] - '0');
@@ -2569,12 +2309,10 @@ static int string_example_slot(JSContext *ctx, JSValueConst example, JSAtom atom
     return 1;
 }
 
-/* ONE READ OF THE EXAMPLE'S OWN SLOT, answering BOTH questions the record is asked about a member: WHAT it
-   holds (the value a derived member carries) and WHETHER it holds it, with the attributes it states. They are
-   one §6.2.6 Property Descriptor and two reads of it would be two answers about one record — the same
-   one-fact-two-fields defect the Concolic struct's own comment records twice over.
-   1 = the example holds an own slot for `atom`; `*out_value` is OWNED (JS_UNDEFINED for an accessor, per the
-   paragraph above) and `*out_flags` is the slot's own C/W/E. 0 = it holds none. */
+/* One read of the example's own slot, answering both questions asked about a member: what it holds and whether
+   it holds it, with its attributes. They are one §6.2.6 The Property Descriptor Specification Type value, so
+   one read answers both. 1 = the example holds an own slot for `atom`; `*out_value` is owned (JS_UNDEFINED for
+   an accessor) and `*out_flags` is the slot's C/W/E. 0 = it holds none. */
 static int example_slot(JSContext *ctx, JSValueConst parent_example, JSAtom atom,
                         JSValue *out_value, int *out_flags)
 {
@@ -2583,9 +2321,8 @@ static int example_slot(JSContext *ctx, JSValueConst parent_example, JSAtom atom
 
     *out_value = JS_UNDEFINED;
     *out_flags = 0;
-    /* A PRIMITIVE EXAMPLE HAS THE MEMBERS §10.4.3 GIVES IT AND NO OTHERS, which for everything but a String
-       is none — see string_example_slot for why answering them is running the real op rather than inventing
-       it, and for the argument this replaces. */
+    /* A primitive example has the members §10.4.3 gives it and no others, which for everything but a String is
+       none (see string_example_slot). */
     if (!JS_IsObject(parent_example))
         return string_example_slot(ctx, parent_example, atom, out_value, out_flags);
     has = JS_GetOwnSlotDesc(ctx, &pd, parent_example, atom);
@@ -2613,13 +2350,11 @@ static JSValue example_member(JSContext *ctx, JSValueConst parent_example, JSAto
     return example_slot(ctx, parent_example, atom, &v, &flags) ? v : JS_UNDEFINED;
 }
 
-/* Exotic [[Get]]: reading ANY field of a concolic value yields a DERIVED concolic — unknown injected/attacker
-   state is unknown per-field, carrying the FIELD-PATH identity ("{state}.admin"), which doubles as the source
-   identity for @S injection. This is what lets a gated `if (state.admin)` fork AND lets an @S candidate inject
-   at a precise source. The derived value carries the parent's example READ THROUGH, so a field the record
-   holds arrives with the bytes the server sent and a field it does not hold arrives with none — opaque for
-   control flow either way, which is what §solver's trust boundary requires of a loaded config: "a loaded
-   `features.admin:false` must NOT concretize the gate, or the admin endpoint is lost". */
+/* Exotic [[Get]]: reading any field of a concolic value yields a derived concolic carrying the field-path
+   identity ("{state}.admin"), which is also the @S injection identity. This lets `if (state.admin)` fork and
+   lets a candidate inject at a precise source. The derived value carries the parent's example read through,
+   so a field the record holds arrives with the server's bytes; either way it stays opaque for control flow,
+   because a loaded `features.admin:false` must not concretize the gate or the admin endpoint is lost. */
 static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom, JSValueConst receiver) {
     (void)receiver;
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
@@ -2643,43 +2378,29 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
         free(shape); free(ident);
         return r;
     }
-    /* THE ARM ABOVE IS COMPLETE, TIED WHERE BOTH SPELLINGS OF ONE QUESTION ARE IN HAND. `pin_of` tests
-       `c && c->val` and `concolic_src_pinned` tests `e && e->val` over the same chain, and the latter's banner
-       says it is spelled separately so a caller outside this file cannot reach a different answer than the mint
-       does — which nothing checked. Two right answers to one question is the shape that drifts, and the drift
-       is silent in BOTH directions: a pinned source reaching the ordinary mint composes an address carrying no
-       determination, and an unpinned one answered by the arm hands back bytes this flow never proved. Nothing
-       in THIS function can make it fail, which is the standing `concolic_example`'s own two DCHECKs have and
-       for the reason stated there — the operands come from a different function.
-       THE CANDIDATE ARM RETURNED ALREADY, so this needs no substitution disjunct and adding one would be an
-       arm that cannot fire; `concolic_new`'s copy needs one because its candidate path falls through.
-       RETIREMENT: this goes when the two tests are ONE spelling — `pin_of` routed through the predicate rather
-       than repeating its two-part test — because the divergence is then unspellable rather than merely loud. */
+    /* Ties the arm above to the predicate, while both spellings of one question are in hand: `pin_of` and
+       `concolic_src_pinned` each test the same chain, and a divergence would be silent in both directions.
+       The candidate arm has already returned, so no substitution disjunct is needed here (concolic_new's copy
+       needs one because its candidate path falls through). This goes when `pin_of` is routed through the
+       predicate, making the divergence unspellable. */
     DCHECK(!concolic_src_pinned(shape),
            "a source this flow had PINNED reached the ordinary member mint — `pin_of` answered NO PIN for a "
            "path `concolic_src_pinned` says is pinned, so the two spellings of one question over one chain "
            "have diverged. Every later read of this member composes a value this flow has already proved "
            "otherwise, and decide.c's fork-over-pinned row counts a fork the mint was to have decided");
-    /* src = the field path (a precise @S injection point), root = the parent's, unchanged. A field of an
-       unknown object is a datum the attacker controls SEPARATELY — which is why this mints a new injection
-       identity at all — but it is not a datum that arrives by a different route: whatever carried the object's
-       bytes in carried this field's, and a report has to say so. */
+    /* src = the field path (a precise @S injection point); root = the parent's, unchanged. A field of an
+       unknown object is controlled separately, hence the new injection identity, but arrives by the same route
+       as the object's bytes, and a report must say so. */
     r = concolic_alloc(ctx, shape, shape, c->root, c->root_whose, ident,
                        example_member(ctx, c->example, atom));
-    /* A MEMBER READ'S `src` IS ITS OWN SHAPE and therefore names this value — which is exactly the
-       precondition this function's own `pin_of` arm above stands on, and the reason that arm is legitimate.
-       Recorded for the reader that is NOT this mint: a value stashed in the DOM by
-       `el.setAttribute('t', cfg.theme)` is asked the same question by the CSS cascade long after this call
-       returned, and it has only the JSValue to ask it of. */
+    /* A member read's `src` is its own shape, so it names this value: the precondition the `pin_of` arm above
+       stands on. Recorded for readers other than this mint, such as the CSS cascade asking about a value
+       `el.setAttribute('t', cfg.theme)` stashed in the DOM, which have only the JSValue. */
     pin_src_names_self(r);
-    /* THE NAME THIS READ WENT THROUGH, KEPT ON THE VALUE — the one honest source for the method name the call
-       handler below reports, and the reason it is stamped here rather than parsed out of the shape: a page may
-       name a property anything at all, `.` included, so recovering it from `{x}.a.b` would answer `b` for a
-       property literally called `a.b`. The atom cannot be wrong about itself.
-       IT IS RE-ASKED RATHER THAN REUSED because `field` was already given back above — the mint is what may
-       fail and the free follows it, so this asks the atom again for the four bytes it costs instead of moving
-       a lifetime. A name that would not convert leaves this NULL, which is the same positive statement the
-       identity above makes for it: the call over it states no predicate and both arms of every branch stay. */
+    /* The name this read went through, kept on the value: the one true source for the method name the call
+       handler reports, since a property may be called `a.b` and parsing `{x}.a.b` would answer `b`. Re-asked
+       of the atom because `field` was freed above. A name that would not convert leaves this NULL, like the
+       identity: a call over it states no predicate and both arms stay. */
     {
         const char *name = JS_AtomToCString(ctx, atom);
         if (name) {
@@ -2698,11 +2419,9 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     return r;
 }
 
-/* THE FOUR OPERATORS, SPELLED ONCE — the identity's operator field, and the ONE place the four equality
-   spellings a program can write are turned into the four ids a constraint key is composed from. It is a
-   function rather than four literals at the mint because concolic_new_cmp composes the same field for a
-   component whose IDL member IS a comparison, and the two must agree exactly or a page writing the comparison
-   the component declares would fork a second time over the same predicate. */
+/* The equality operators, spelled once: the identity's operator field. concolic_new_cmp composes the same
+   field for a component whose IDL member is a comparison, and the two must agree exactly or a page writing
+   the comparison the component declares would fork again over the same predicate. */
 static const char *cmp_op_ident(int is_neq, JSConcolicEqOp op) {
     if (op == JS_CONCOLIC_EQ_STRICT) return is_neq ? "!==" : "===";
     DCHECK(op == JS_CONCOLIC_EQ_LOOSE,
@@ -2711,13 +2430,11 @@ static const char *cmp_op_ident(int is_neq, JSConcolicEqOp op) {
     return is_neq ? "!=" : "==";
 }
 
-/* MINT A COMPARISON RESULT — the boolean `if (x === 'admin')` and `if (x < 700)` branch on.
- *
- * ITS IDENTITY IS THE OPERATOR AND BOTH OPERANDS, which is the whole of the predicate, so a comparison result
- * is an ordinary derived value as far as decide.c is concerned and that file needs no second key rule for it.
- * `ia`/`ib` are the operands' identities in the order the composition wants them and are CONSUMED; `eq_kind`
- * and `tok` are the PIN, which only an equality against a concrete side has (an ordering narrows a domain and
- * determines no value — §Solver-half: a range-gated parameter stays a domain-annotated shape). */
+/* Mint a comparison result: the boolean `if (x === 'admin')` and `if (x < 700)` branch on. Its identity is
+ * the operator and both operands, the whole predicate, so to decide.c it is an ordinary derived value.
+ * `ia`/`ib` are the operands' identities in composition order and are consumed. `eq_kind` and `tok` are the
+ * pin, which only an equality against a concrete side has; an ordering narrows a domain and determines no
+ * value. */
 static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const char *root,
                         unsigned root_whose, char *ia, char *ib,
                         int eq_kind, int algo, ConcolicLit tok_kind, const char *tok, const char *subj)
@@ -2731,32 +2448,25 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const c
            "a comparison result was minted with no OPERATOR. The operator is half the predicate: without it "
            "`x < 700` and `x > 700` compose to one identity, the flow's record of either DECIDES the other, "
            "and the arm it deletes is one nothing contradicts");
-    /* THE PIN IS THREE FIELDS. The operator says an arm determines something, the token says WHAT, and the
-       subject says WHICH HOLE the report must state it under — decide.c pins on one arm and EXCLUDES on the
-       other, and it reads all three at the same line.
-       THE SUBJECT IS THE ONE OF THE THREE THAT MAY BE HONESTLY ABSENT, and its absence is a POSITIVE
-       statement rather than a hole: a value whose shape is the unnameable `{}` has no hole the @H surface
-       will print (endpoint.c's path scan mints no param for one either), so there is no name to file a domain
-       under. The pin is unaffected, because a pin is keyed by `src` and every concolic has one. */
+    /* The pin is three fields: the operator says an arm determines something, the token says what, and the
+       subject says which hole the report states it under; decide.c reads all three at one line, pinning on one
+       arm and excluding on the other. Only the subject may be absent: a value shaped `{}` has no hole the @H
+       surface prints (endpoint.c's path scan mints no param for one), so there is nothing to file a domain
+       under. The pin is unaffected; it is keyed by `src`. */
     DCHECK(eq_kind == OPCMP_NONE ? (tok == NULL && subj == NULL) : (tok != NULL),
            "a comparison result's operator and pin token disagree about whether its arms determine anything "
            "— the two are written together at this mint and read together by decide.c, which pins on one arm "
            "and records the exclusion on the other");
-    /* THE TOKEN AND ITS KIND ARE ONE ARGUMENT IN TWO HALVES, asserted where they meet. A spelling with no
-       kind is what decide.c would pin as a string whatever the page compared against — the nine characters of
-       `undefined` for a value the flow proved falsy — and a kind with no spelling is a type stated about
-       nothing. Neither is recoverable downstream: by the time a later read asks the store, the operand is
-       gone and only the pair is left. */
+    /* The token and its kind are one argument, asserted where they meet: without the kind decide.c would pin
+       nine characters for `undefined`, and a kind with no spelling states a type about nothing. Neither is
+       recoverable downstream, where only the pair is left. */
     DCHECK((tok != NULL) == (tok_kind != CONCOLIC_LIT_NONE),
            "a comparison result's pin token and its KIND disagree about whether the concrete side can be "
            "spelled at all — the two come from one classification (operand_kind, through literal_tok), so a "
            "value carrying one without the other is a pin whose own mint cannot say what type it pinned");
-    /* AND THE ALGORITHM IS THE PIN'S FOURTH HALF, asserted here for the reason the kind is: it is what says
-       what the holding arm may CONCLUDE, and no consumer can recover it later — by the time decide.c reaches
-       the arm, the operands are gone and only this record is left. An ordering has no algorithm and says so;
-       an equality has one and may not omit it, because JS_CONCOLIC_EQ_LOOSE is zero and an omission would read
-       as the page having written `==`, which is the arm that refuses the pin — safe, and a lie about the
-       source text either way. */
+    /* The algorithm too, for the same reason: it says what the holding arm may conclude. An ordering has
+       none; an equality may not omit it, because JS_CONCOLIC_EQ_LOOSE is zero and an omission would claim the
+       page wrote `==`. */
     DCHECK(eq_kind == OPCMP_NONE ? algo == CMP_ALGO_NONE
                                  : (algo == JS_CONCOLIC_EQ_LOOSE || algo == JS_CONCOLIC_EQ_STRICT),
            "a comparison result's operator and its equality ALGORITHM disagree about whether it is an equality "
@@ -2766,7 +2476,7 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const c
     f[0] = op; f[1] = ia; f[2] = ib;
     ident = concolic_ident_compose("?", f, 3);
     free(ia); free(ib);
-    /* NOT a source read, so no candidate substitution — see concolic_alloc's declaration. */
+    /* Not a source read, so no candidate substitution (see concolic_alloc's declaration). */
     r = concolic_alloc(ctx, "{cmp}", src, root, root_whose, ident, JS_UNDEFINED);
     c = JS_GetOpaque(r, g_concolic_class);
     DCHECK(c != NULL, "a comparison result was minted as something that is not a concolic value");
@@ -2774,20 +2484,17 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const c
     c->cmp_tok = tok ? strdup(tok) : NULL;
     CHECK(!tok || c->cmp_tok, "concolic: OOM recording the value an equality pins to");
     c->cmp_kind = (signed char)tok_kind;
-    c->cmp_algo = (signed char)algo;   /* what the arm may CONCLUDE — written with `cmp_op`, for its reason */
+    c->cmp_algo = (signed char)algo;   /* what the arm may conclude; written with `cmp_op` */
     c->cmp_subj = subj ? strdup(subj) : NULL;
     CHECK(!subj || c->cmp_subj, "concolic: OOM recording the hole an equality is a fact about");
     return r;
 }
 
-/* THE UNKNOWN OPERAND'S OWN IDENTITY, STAMPED ON A PREDICATE pred_new HAS JUST MINTED — a second call for
-   pred_set_bound's reason exactly, and the reason is stronger here: only ONE of pred_new's three callers has
-   an operand VALUE at all. concolic_new_cmp mints a comparison result for a component whose IDL member IS a
-   comparison (HTML §6.2's `hidden`), so there is no separate operand this engine ever minted and nothing whose
-   example could be filed against — an absence that is a fact about that entry rather than a field it forgot.
-   THE PAIR IS ASSERTED, because the hole and the identity are two names for ONE operand and a predicate
-   carrying one without the other is a decide.c that can exclude a value it cannot degrade, or degrade one it
-   cannot name in the report. */
+/* The unknown operand's own identity, stamped on a predicate pred_new has just minted; a second call for
+   pred_set_bound's reason. Only the equality hook has an operand value to name: concolic_new_cmp's operand is
+   a component's own member (HTML §6.2 Page visibility's `hidden`), so no minted operand exists to file an
+   example against. Asserted as a pair with the hole: both name one operand, and decide.c would otherwise
+   exclude a value it cannot name in the report, or the reverse. */
 static void pred_set_subject_ident(JSValueConst pred, const char *ident) {
     Concolic *c = JS_GetOpaque(pred, g_concolic_class);
 
@@ -2803,10 +2510,9 @@ static void pred_set_subject_ident(JSValueConst pred, const char *ident) {
     CHECK(c->cmp_subj_ident, "concolic: OOM recording the value an equality is a fact about");
 }
 
-/* THE ORDERING'S OBSERVATION, STAMPED ON A PREDICATE pred_new HAS JUST MINTED. It is a second call rather than
-   four more parameters because only ONE of pred_new's callers has an ordering to state, and a signature every
-   caller has to spell `REL_NONE, NULL, 0, NULL` into is a signature that invites a caller to spell it wrong.
-   The three facts are written HERE, together, so the assert that they are one observation has a single site. */
+/* The ordering's observation, stamped on a predicate pred_new has just minted. A second call rather than four
+   more parameters, because only the ordering hook has one and every other caller would spell `REL_NONE, NULL,
+   0, NULL`. The facts are written here together, so the one-observation assert has a single site. */
 static void pred_set_bound(JSValueConst pred, RelOp rel, const char *tok, double num, const char *subj) {
     Concolic *c = JS_GetOpaque(pred, g_concolic_class);
 
@@ -2825,12 +2531,9 @@ static void pred_set_bound(JSValueConst pred, RelOp rel, const char *tok, double
     CHECK(c->rel_subj, "concolic: OOM recording the hole an ordering is a fact about");
 }
 
-/* THE CALL PREDICATE'S OBSERVATION, STAMPED ON THE RESULT concolic_call HAS JUST MINTED. It is a second call
-   for pred_set_bound's reason exactly: only ONE minting path has a call predicate to state, and a signature
-   every other caller has to spell `NULL, NULL, 0, NULL` into is a signature that invites a caller to spell it
-   wrong. The four facts are written HERE, together, so the assert that they are one observation has one site.
-   `args` is CONSUMED — the array and every string in it — because the caller has just built the only copy and
-   two owners of one list is the lifetime rule this file refuses to keep true by hand. */
+/* The call predicate's observation, stamped on the result concolic_call has just minted; a second call for
+   pred_set_bound's reason. The facts are written here together. `args` is consumed (the array and every
+   string), because the caller has just built the only copy. */
 static void pred_set_strpred(JSValueConst v, const char *method, char **args, int nargs, const char *subj) {
     Concolic *c = JS_GetOpaque(v, g_concolic_class);
 
@@ -2853,33 +2556,19 @@ static void pred_set_strpred(JSValueConst v, const char *method, char **args, in
     CHECK(c->sp_subj, "concolic: OOM recording the hole a call predicate is a fact about");
 }
 
-/* CARRY A PREDICATE'S OBSERVATION ONTO ITS NEGATION — UNCHANGED, WHICH IS THE POINT AND NOT AN OVERSIGHT.
+/* Carry a predicate's observation onto its negation, unchanged.
  *
- * decide.c reads the equality, the ordering and the call predicate off the value a branch tests, and it reads
- * them TOGETHER WITH THE ARM: it pins on the arm that makes the equality true, excludes on the other, states
- * `rel` or `rel_op_negate(rel)` by the arm, files `holds` as the arm. So there are two places the negation
- * could live — in the RECORD or in the ARM — and putting it in the record would mean negating three different
- * kinds of fact in three different ways, one of which (a call predicate) has no negation at all: §RUN-DON'T-
- * MATCH forbids deciding what `startsWith` MEANS, so there is no paired method to flip to.
- * Putting it in the ARM costs one XOR and is the same statement for all three. So the observation is carried
- * verbatim and `br_neg` carries the polarity — which is why this function copies and never inverts.
+ * decide.c reads the equality, the ordering and the call predicate together with the arm: it pins on the arm
+ * that makes the equality true and excludes on the other, states `rel` or `rel_op_negate(rel)` by the arm, and
+ * files `holds` as the arm. So the negation lives in the arm (one XOR via `br_neg`), not in the record, which
+ * would need three kinds of negation, one of which does not exist: a call predicate has no paired method.
+ * This is not a derivation's inversion: `!p` and `p` are the same boolean read through §7.1.2 ToBoolean ( arg ),
+ * so nothing is undone (unlike carrying `x.slice(1).startsWith("/api")` onto `x`, which would undo `slice`).
  *
- * IT IS NOT A DERIVATION AND SO IT IS NOT THE INVERSION §Re-execution FORBIDS. `x.slice(1).startsWith("/api")`
- * is a fact about `x.slice(1)` and carrying it onto `x` would require undoing `slice`, which is banned by
- * name. Nothing is undone here: `!p` and `p` are the SAME boolean, and §7.1.2 ToBoolean — the only operation
- * between the value and the branch — is applied identically whichever way the page spelled the test.
- *
- * `c->member` IS DELIBERATELY NOT CARRIED. It is the property NAME a member read went through, and a negation
- * is not a read of anything; carrying it would make `!x.foo` answer that it was read under `foo`, and the call
- * handler names the method it reports from exactly that field.
- *
- * `c->conj` IS NOT CARRIED EITHER, AND FOR A SHARPER REASON THAN THAT ONE. The three records above are
- * OBSERVATIONS a branch reads together with its arm, so carrying them verbatim is exactly right; the conjunct
- * list is a statement about WHAT THIS VALUE IS, and `!(p ∧ q)` is not a conjunction — it is a disjunction of
- * two negations. Copying the list would let a later `(!(p ∧ q)) ∧ r` flatten `p` and `q` into its own set and
- * compose the key of `p ∧ q ∧ r`, which is a DIFFERENT proposition that the flow would then decide off this
- * one's record. The negation keeps its own identity and enters any parent set as one opaque member, which is
- * both correct and all this engine claims: it files one entry per predicate and reasons inside none of them. */
+ * `c->member` is not carried: a negation reads no property, and the call handler reports from that field.
+ * `c->conj` is not carried either: `!(p ∧ q)` is not a conjunction, and copying the list would let
+ * `(!(p ∧ q)) ∧ r` flatten into `p ∧ q ∧ r`, a different proposition. The negation enters a parent set as
+ * one opaque member. */
 static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
     Concolic *d = JS_GetOpaque(dst, g_concolic_class);
     Concolic *s = JS_GetOpaque(src, g_concolic_class);
@@ -2898,11 +2587,10 @@ static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
            "this value's members into its own set and compose the key of a proposition nothing here states");
     d->cmp_op = s->cmp_op;
     if (s->cmp_tok)        { d->cmp_tok        = strdup(s->cmp_tok);        CHECK(d->cmp_tok,        "concolic: OOM carrying an equality's token through a negation"); }
-    d->cmp_kind = s->cmp_kind;   /* the token's other half — carried on the same line, for `cmp_tok`'s reason */
-    d->cmp_algo = s->cmp_algo;   /* …and what the arm may CONCLUDE. `!(x == L)` is `x == L` read the other way
-                                    round — the operand, the token and the ALGORITHM are all the same, and a
-                                    negation that dropped this would let a `==` reach decide.c looking like a
-                                    predicate with no algorithm, whose pin is refused for the wrong reason. */
+    d->cmp_kind = s->cmp_kind;   /* the token's other half, carried with it */
+    d->cmp_algo = s->cmp_algo;   /* …and what the arm may conclude: `!(x == L)` is `x == L` read the other way
+                                    round, so dropping it would make a `==` look like a predicate with no
+                                    algorithm. */
     if (s->cmp_subj)       { d->cmp_subj       = strdup(s->cmp_subj);       CHECK(d->cmp_subj,       "concolic: OOM carrying an equality's hole through a negation"); }
     if (s->cmp_subj_ident) { d->cmp_subj_ident = strdup(s->cmp_subj_ident); CHECK(d->cmp_subj_ident, "concolic: OOM carrying an equality's subject identity through a negation"); }
     d->rel_op  = s->rel_op;
@@ -2925,68 +2613,47 @@ static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
     }
 }
 
-/* A COMPARISON-RESULT bool carrying `src <op> tok`, for a component whose IDL member IS a comparison over its
-   own source (HTML §6.2's `document.hidden` is `visibilityState === "hidden"`). It composes the identity the
-   page's own `x === tok` composes for the same source and token, which is what makes the two ONE constraint
-   entry — the property page_visibility.h states and now the encoding rather than a coincidence of spelling. */
+/* A comparison-result bool carrying `src <op> tok`, for a component whose IDL member is a comparison over its
+   own source (HTML §6.2 Page visibility's `document.hidden` is `visibilityState === "hidden"`). It composes the
+   identity the page's own `x === tok` composes, which makes the two one constraint entry (page_visibility.h
+   relies on this). */
 JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, ConcolicLit kind, const char *tok) {
     const char *sf[1], *kf[2];
 
     DCHECK(op == OPCMP_EQ || op == OPCMP_NE,
            "a comparison result was declared with an operator that is neither an equality nor an inequality — "
            "an ordering is minted by the relational hook, which composes the engine's own operator id");
-    /* THE COMPONENT STATES THE KIND AND THIS ENTRY NO LONGER ASSUMES IT. It spelled `"s"` unconditionally,
-       which is a claim about every component that will ever declare such a member and not about this call:
-       a member comparing against a number would have composed the key of a comparison against the STRING of
-       its digits — a different predicate from the one the page's own `x === 5` composes, so the two would
-       fork each other's settled gate — and pinned the source to those digits. The kind is an argument for the
-       same reason the token is: only the caller knows it, and there is no default that is right. */
+    /* The component states the kind: only the caller knows it. A member comparing against a number must
+       compose the key the page's `x === 5` composes, not the key of a comparison against the string of its
+       digits. */
     DCHECK(kind != CONCOLIC_LIT_NONE,
            "a component declared its member as a comparison against an operand this engine cannot spell — an "
            "Object or a Symbol has no identity that survives the park a resumed flow replays through, so a "
            "member whose IDL says it compares against one is stating a predicate no key can name");
     sf[0] = src;
     kf[0] = lit_tag(kind); kf[1] = tok;
-    /* AND IT IS THE **STRICT** SPELLING, WHICH IS WHAT MAKES THIS ONE ENTRY WITH THE PAGE'S OWN TEST. The
-       specs that define these members define them as strict equalities of strings — HTML §6.2 "Page
-       visibility" states this one as "The `hidden` getter steps are to return true if this's visibility state
-       is "hidden", otherwise false" — so a page that writes the comparison out writes
-       `===`, reaches concolic_cmp_hook with JS_CONCOLIC_EQ_STRICT, and composes `===` there. Spelling `==`
-       here would make the component's own member and the page's own test two predicates over one source, each
-       forking the other's settled gate. A component whose IDL member is a LOOSE comparison does not exist and
-       would have to say so at this entry rather than be assumed by it. */
-    /* THE COMPONENT'S OWN MEMBER IS A SOURCE READ, so it is its own root exactly as concolic_new's is. */
-    /* THE COMPONENT'S SOURCE IS ITS OWN HOLE. A declared source's shape is its provenance in braces
-       (concolic_source_wrap asserts exactly that), so stripping them gives `src` back — stated here rather
-       than by calling the stripper on a shape this function was never handed. */
-    /* …AND WHOSE UNKNOWN IT IS, STATED AT THIS ENTRY RATHER THAN ASKED OF ITS CALLERS, for the reason the
-       root one line up is stated here: this door's own contract already fixes the answer. Its operand is a
-       BROWSER COMPONENT'S OWN DECLARED MEMBER — the assert above refuses anything this engine cannot spell,
-       and a declared source's shape is its provenance in braces — so the unknown is one a person, a server or
-       the ENVIRONMENT drives and no parse of the bytes this engine was served states it. That is not a default
-       filling a hole: it is the fact being stated where it is known, exactly as `concolic_new` states a source
-       read's root instead of making seventeen components spell it twice. A door whose callers are NOT all one
-       kind takes the word as a parameter, which is why the general mint does and this one does not. */
+    /* The strict spelling, which makes this one entry with the page's own test: these members are defined as
+       strict string equalities (HTML §6.2 Page visibility: "The `hidden` getter steps are to return true if
+       this's visibility state is "hidden", otherwise false"), so a page writing the comparison out reaches
+       concolic_cmp_hook with JS_CONCOLIC_EQ_STRICT. A loose IDL comparison would have to say so here.
+       The member is a source read, so it is its own root, as concolic_new's is. Its hole is `src`: a declared
+       source's shape is its provenance in braces (asserted by concolic_source_wrap).
+       Whose unknown it is is stated here rather than asked of callers, because this entry's contract fixes it:
+       a browser component's own declared member, which a person, a server or the environment drives. A door
+       whose callers are not all one kind takes the word as a parameter; this one does not. */
     return pred_new(ctx, cmp_op_ident(op == OPCMP_NE, JS_CONCOLIC_EQ_STRICT), src, src,
                     src ? (1u << CONCOLIC_WHOSE_WORLD) : 0u,
                     concolic_ident_compose("s", sf, 1), concolic_ident_compose("k", kf, 2),
                     op, JS_CONCOLIC_EQ_STRICT, kind, tok, src);
 }
-/* …AND THE TWIN FOR A RELATION OVER TWO LIVE VALUES, for a browser component whose own algorithm compares two
- * operands either of which may be unknown (HTML §8.7's timer task source orders one expiry against another).
- *
- * IT EXISTS SO THERE IS STILL ONE SPELLER OF THE KEY. The component could not reach concolic_rel_hook: that
- * entry takes the INTERPRETER'S OWN OPCODE for the operator, which is an identity quickjs never exports, and a
- * host that invented a number for it would be spelling a second opcode namespace beside the engine's. Nor could
- * it compose the key itself — decide.c keys a constraint by the value's identity precisely so that the format
- * lives in one place. So the component states the SPEC RELATION IT IS PERFORMING as the operator's name and
- * this file composes the identity, exactly as it composes `rel%d` for the interpreter; the two namespaces
- * cannot collide because concolic_ident_compose writes every field length-prefixed.
- *
- * IT PINS NOTHING, and that is the relation's own property rather than a shortcut. §Solver-half: an ordering
- * narrows a domain and determines no value, and an equality whose other side is also unknown has no concrete
- * value to pin to — so the pin stays where a pin can be honest, in the equality hook over a source and a
- * literal token. Both operands are BORROWED. */
+/* …and the twin for a relation over two live values, for a component whose own algorithm compares two
+ * operands either of which may be unknown (HTML §8.7 Timers orders one expiry against another).
+ * It keeps one speller of the key: concolic_rel_hook takes the interpreter's own opcode, which QuickJS does
+ * not export, and decide.c keys by the value's identity so the format lives in one place. The component names
+ * the spec relation it performs and this file composes the identity, as it composes `rel%d` for the
+ * interpreter; length-prefixed fields keep the two namespaces apart.
+ * It pins nothing: an ordering determines no value, and an equality whose other side is unknown has no
+ * concrete value to pin to. Both operands are borrowed. */
 JSValue concolic_new_rel(JSContext *ctx, const char *op, JSValueConst a, JSValueConst b) {
     JSValueConst opq;
 
@@ -3004,18 +2671,15 @@ JSValue concolic_new_rel(JSContext *ctx, const char *op, JSValueConst a, JSValue
                     OPCMP_NONE, CMP_ALGO_NONE, CONCOLIC_LIT_NONE, NULL, NULL);
 }
 
-/* THE TAG THAT PUTS A CONJUNCTION IN ITS OWN NAMESPACE. It cannot collide with any other composition in this
-   file — every field is written `<length>:<bytes>`, so no tag's bytes can spell another's boundary and a
-   two-member `&` (the bitwise arithmetic operator, carith_name) is a different string of a different length
-   from this one anyway. Spelled once because both the identity and the record's own invariant are about it. */
+/* The tag that puts a conjunction in its own namespace. Length-prefixed fields keep any tag from spelling
+   another's boundary, and the bitwise `&` (carith_name) is a different string anyway. Spelled once because
+   the identity and the record's invariant are both about it. */
 #define CONCOLIC_CONJ_TAG "&&"
 
-/* THE CONJUNCTION'S EXAMPLE — the real `&&` run on the conjuncts' own examples, attached only when BOTH carry
-   one, because a conjunction whose second operand has no concrete answer has none itself.
-   IT IS READ THROUGH concolic_example AND NEVER OFF THE RECORD, which is what makes the example this flow's
-   rather than the value's: that reader withholds an example the RUNNING FLOW has proved wrong, so a
-   conjunction over a contradicted conjunct arrives with no example instead of with a witness its own path
-   already refuted — and decide.c then marks NEITHER arm primary rather than the wrong one. */
+/* The conjunction's example: the real `&&` on the conjuncts' examples, attached only when both carry one.
+   Read through concolic_example, never off the record, so an example the running flow has proved wrong is
+   withheld and the conjunction arrives with none, and decide.c marks neither arm primary rather than the
+   wrong one. */
 static JSValue conj_example(JSContext *ctx, JSValueConst a, JSValueConst b)
 {
     JSValue exa = concolic_example(ctx, a), exb = concolic_example(ctx, b), r = JS_UNDEFINED;
@@ -3032,9 +2696,9 @@ static JSValue conj_example(JSContext *ctx, JSValueConst a, JSValueConst b)
     return r;
 }
 
-/* …AND THE MINT OVER TWO PREDICATES — see concolic.h for why a component cannot answer this itself, why the
- * identity is the SET of conjuncts, and why a duplicate is deduplicated here where a joint provenance's is a
- * crash. Both operands are BORROWED; the result is OWNED. */
+/* …and the mint over two predicates (concolic.h says why a component cannot answer this, why the identity is
+ * the set of conjuncts, and why a duplicate is deduplicated here where a joint provenance's crashes). Both
+ * operands are borrowed; the result is owned. */
 JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
 {
     Concolic *side[2], *c;
@@ -3051,9 +2715,8 @@ JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
 
     side[0] = JS_GetOpaque(a, g_concolic_class);
     side[1] = JS_GetOpaque(b, g_concolic_class);
-    /* THE MEMBERS, FLATTENED. A conjunct that is ITSELF a conjunction contributes its own members, so
-       `(p ∧ q) ∧ r` and `p ∧ (q ∧ r)` are ONE set and ONE key: associativity is a property of `∧`, and a fold
-       that could spell it two ways would let a flow decide one nesting and re-fork the other. */
+    /* The members, flattened: a conjunct that is itself a conjunction contributes its members, so
+       `(p ∧ q) ∧ r` and `p ∧ (q ∧ r)` are one set and one key. */
     for (i = 0; i < 2; i++) {
         DCHECK(side[i] != NULL,
                "a conjunct passed concolic_is and carries no record — the class and its opaque are written "
@@ -3077,9 +2740,8 @@ JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
                    "loops read the same two records one after the other, so a mismatch is a record mutated "
                    "between them");
 
-    /* AN UNSPELLABLE MEMBER MAKES THE WHOLE CONJUNCTION UNSPELLABLE, which is the same POSITIVE statement the
-       struct makes for every other absent identity: a value with no name is never decided from another
-       value's record, so both arms of every branch over it stay. It costs forks; a wrong name costs an arm. */
+    /* An unspellable member makes the whole conjunction unspellable: a value with no name is never decided
+       from another value's record, so both arms of every branch over it stay. */
     for (i = 0; i < n; i++)
         if (!members[i]) {
             free(members); free(order);
@@ -3087,9 +2749,8 @@ JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
         }
 
     ident_set_order(members, n, order);
-    /* DEDUPLICATED, WHERE A JOINT PROVENANCE'S DUPLICATE IS A CRASH — concolic.h states which caller could
-       have known. `order[u - 1]` is the last member KEPT and `order[i]` has not been written yet, because
-       `u <= i` holds at every step. */
+    /* Deduplicated, where a joint provenance's duplicate crashes (concolic.h says which caller could have
+       known). `order[u - 1]` is the last member kept and `order[i]` is not yet written, since `u <= i`. */
     for (i = 1, u = 1; i < n; i++)
         if (strcmp(members[order[u - 1]], members[order[i]]) != 0) order[u++] = order[i];
     DCHECK(u >= 1 && u <= n, "a conjunction's set came back with a member count outside the multiset it was "
@@ -3097,9 +2758,8 @@ JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
     n = u;
 
     if (n == 1) {
-        /* `p ∧ p` IS `p`, so the answer is that predicate and not a second key naming it. Only two ATOMS can
-           collapse this far: a conjunction operand already holds distinct members, so it contributes at least
-           two and the set cannot be one. */
+        /* `p ∧ p` is `p`, so the answer is that predicate, not a second key for it. Only two atoms can collapse
+           this far: a conjunction operand contributes at least two distinct members. */
         DCHECK(side[0]->conj_n == 0 && side[1]->conj_n == 0,
                "a conjunction over a set that collapsed to ONE member had a conjunction as an operand — that "
                "operand's own members are distinct by construction, so this is a set that was stored without "
@@ -3116,8 +2776,8 @@ JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
                           "established are all spellable — concolic_ident_compose answers NULL only for a "
                           "NULL member, and the scan above rejected every one of those");
 
-    /* NOT A SOURCE READ (concolic_alloc, never concolic_derived): a conjunction is a boolean this engine
-       COMPUTED, so an @S candidate substituted into it would answer a predicate with a payload. */
+    /* Not a source read (concolic_alloc, never concolic_derived): a conjunction is a boolean this engine
+       computed, and an @S candidate substituted into it would answer a predicate with a payload. */
     res = concolic_alloc(ctx, "{cmp}", NULL, NULL, 0u, ident, conj_example(ctx, a, b));
     c = JS_GetOpaque(res, g_concolic_class);
     DCHECK(c != NULL, "a conjunction was minted as something that is not a concolic value");
@@ -3138,9 +2798,8 @@ int concolic_cmp(JSValueConst v, const char **psrc, ConcolicLit *pkind, const ch
         if (pkind) *pkind = CONCOLIC_LIT_NONE;
         return OPCMP_NONE;
     }
-    /* THE KIND IS ANSWERED WHEREVER THE TOKEN IS, and the assert is here rather than at the caller because
-       this is the only place that can still see the value both were written on. A caller handed a spelling
-       and no kind pins the spelling as a string — nine characters where the page wrote `undefined`. */
+    /* The kind is answered wherever the token is; asserted here, the one place that still sees the value both
+       were written on. A spelling with no kind would be pinned as a string. */
     DCHECK(c->cmp_tok == NULL || c->cmp_kind != (signed char)CONCOLIC_LIT_NONE,
            "a comparison result carries a pin token with no KIND — the two are written together at pred_new "
            "and asserted together there, so a value holding only the spelling is one minted somewhere that "
@@ -3151,11 +2810,9 @@ int concolic_cmp(JSValueConst v, const char **psrc, ConcolicLit *pkind, const ch
     return c->cmp_op;
 }
 
-/* WHICH EQUALITY THE PAGE WROTE — see concolic.h. It is a SECOND read rather than a fifth out-parameter on
-   concolic_cmp for the reason pred_set_subject_ident is a second call: only the arm that PINS asks it, and a
-   signature every caller has to answer would hand the three that do not a value they must then ignore. The
-   refusal below is what keeps that safe — a caller that reaches this on a non-equality is not defaulted, it
-   aborts naming the predicate it is standing on. */
+/* Which equality the page wrote (see concolic.h). A second read rather than an out-parameter on concolic_cmp
+   for pred_set_subject_ident's reason: only the pinning arm asks it. A caller reaching it on a non-equality
+   aborts rather than being given a default. */
 JSConcolicEqOp concolic_cmp_algo(JSValueConst v) {
     Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
 
@@ -3167,13 +2824,10 @@ JSConcolicEqOp concolic_cmp_algo(JSValueConst v) {
            "an equality result carries an algorithm quickjs.h does not declare — pred_new writes it beside "
            "`cmp_op` and asserts the pair there, so a value holding one without the other is minted somewhere "
            "that does not go through that mint");
-    /* AND THE RELEASE BUILD ANSWERS THE REFUSING ARM RATHER THAN DEREFERENCING, which is a POSITIVE statement
-       and not the `|| default` that hides a producer's hole. Both asserts above vanish at APICLIENT_DEV=0, so
-       without this the first of them stops guarding the pointer the line below reads — the promotion CLAUDE.md
-       names, traded for a segfault. `LOOSE` is chosen because it is the arm that makes NO pin: a release build
-       standing somewhere dev aborts loses one narrowing and the source forks again at its next gate, which is
-       sound and is what this engine did before any pin existed. The other value would concretize a source off
-       a record that could not say it had determined anything. */
+    /* The release arm answers the refusing algorithm rather than dereferencing NULL, since both asserts above
+       compile out. LOOSE is the arm that makes no pin: a release build standing where dev aborts loses one
+       narrowing and the source forks again at its next gate, which is sound. STRICT would concretize a source
+       off a record that could not say it determined anything. */
     if (!c || c->cmp_op == OPCMP_NONE) return JS_CONCOLIC_EQ_LOOSE;
     return (JSConcolicEqOp)c->cmp_algo;
 }
@@ -3223,49 +2877,27 @@ const char *concolic_cmp_subject_ident(JSValueConst v) {
     return c ? c->cmp_subj_ident : NULL;
 }
 
-/* JSConcolicCmpHook for == / === : a concolic operand -> a concolic bool whose IDENTITY is the operator and
-   both operands, and which additionally carries the PIN when one side is concrete. Matches the slow-eq stack
-   effect (both operands freed, result in sp[-2]). is_neq flips EQ->NE.
-   LOOSE AND STRICT EQUALITY ARRIVE HERE AS ONE OPERATOR, because the hook is handed only `is_neq` — so
-   `x == 'a'` and `x === 'a'` still compose to one identity and either decides the other. That is the same
-   defect this file just removed from the ordering hook, in the one place the host cannot see the distinction:
-   it needs quickjs to say which of the two called, the way JS_CARITH_* already spares the solver the opcode
-   numbers. */
-/* IS THIS EXAMPLE ONE THE COMPARISON MAY BE RUN ON — asked of both sides before §7.2.13 or §7.2.14 is run on
-   them, and the answer for an OBJECT or a SYMBOL is no, for one reason that covers both algorithms.
-   §7.2.13 IsLooselyEqual step 12 converts an object with ToPrimitive, which runs the PAGE's own valueOf or
-   toString, and naming that call's result here would be inventing it — the same refusal literal_tok already
-   makes for the same operand. §7.2.14 IsStrictlyEqual runs no code for an object (SameType holds and
-   SameValueNonNumber compares identity), so it would be SAFE and is still refused, because the question it
-   would answer is the wrong one: an example object is a value THIS ENGINE minted to stand for an unknown, never
-   the page's own object, so comparing its identity against anything reports a fact about an allocation the
-   program never made. One rule for both, and the absence is a positive statement rather than a gap. */
+/* JSConcolicCmpHook for == / === / != / !==: a concolic operand yields a concolic bool whose identity is the
+   operator the page wrote and both operands, carrying the pin when one side is concrete. Matches the slow-eq
+   stack effect (both operands freed, result in sp[-2]). `is_neq` flips EQ to NE; `op` names the algorithm. */
+/* Whether an example may be compared, asked of both sides before §7.2.13 or §7.2.14 runs. No for an Object or
+   a Symbol: §7.2.13 IsLooselyEqual ( x, y ) step 12 would run the page's own ToPrimitive, and naming its result
+   would invent it; §7.2.14 IsStrictlyEqual ( x, y ) runs no code but would compare the identity of an object
+   this engine minted to stand for an unknown, a fact about an allocation the program never made. */
 static int example_comparable(JSValueConst v) {
     return !JS_IsObject(v) && !JS_IsSymbol(v);
 }
 
-/* THE COMPARISON'S OWN EXAMPLE — §Solver-half's "every op propagates the example" applied to the operator this
- * hook is for, and it propagates for the reason that section gives in its next sentence: "the example
- * propagates because the engine RUNS THE REAL OP on the concrete". So this runs the engine's own equality —
- * `JS_IsStrictEqual` is §7.2.14 and `JS_IsEqual` is §7.2.13 — over values the run already holds, and never a
- * re-implementation of either. A hand-rolled comparison here would be the second evaluator §Re-execution
- * forbids, and it would be wrong within a week: the two algorithms disagree at step 1 and only the engine's
- * own code knows every way they do.
+/* The comparison's own example: the engine's real equality run over values the run already holds
+ * (`JS_IsStrictEqual` is §7.2.14, `JS_IsEqual` is §7.2.13), never a re-implementation of either. The caller
+ * states which algorithm through `op`, which matters because `"1" == 1` is true and `"1" === 1` is false.
  *
- * WHICH ALGORITHM IS THE CALLER'S TO STATE and arrives as `op` (quickjs.h's JSConcolicEqOp). The hook used to
- * be told only `is_neq`, which is why this could not exist: `"1" == 1` is true and `"1" === 1` is false, so
- * with the algorithm unnamed there is no answer to run.
+ * An operand with no example yields a result with no example: attacker input and absent server state are
+ * example-free, and collapsing that to `false` would invent which arm a real session takes. decide.c reads the
+ * absence as REAL_ARM_UNOBSERVED and leaves both arms unmarked.
  *
- * AN OPERAND WITH NO EXAMPLE YIELDS A RESULT WITH NO EXAMPLE — attacker input and server-injected absent state
- * are example-free by design, and a comparison over one determines nothing about which arm a real session
- * takes. Collapsing that to `false` would invent it, which is the §@H fabrication this whole triple exists to
- * refuse; decide.c reads the absence as REAL_ARM_UNOBSERVED and keeps both arms unmarked.
- *
- * A CONCRETE OPERAND ALWAYS HAS A VALUE, INCLUDING `undefined`, and that distinction is the whole of `hava`
- * and `havb`. JS_UNDEFINED is concolic.h's spelling of "this value carries no example"; it is ALSO an ordinary
- * ECMAScript value that a page compares against constantly (`if (cfg.admin === undefined)`). Reading the
- * second as the first would drop the example of every such gate — the commonest shape after a string literal
- * — so absence is asked of the CONCOLIC side only, where it is what the encoding means. */
+ * A concrete operand always has a value, including `undefined`, hence `hava`/`havb`: JS_UNDEFINED means "no
+ * example" only on the concolic side, while `cfg.admin === undefined` compares against a real undefined. */
 static JSValue cmp_example(JSContext *ctx, JSValueConst a, JSValueConst b, int ca, int cb,
                            int is_neq, JSConcolicEqOp op) {
     JSValue exa = ca ? concolic_example(ctx, a) : JS_DupValue(ctx, a);
@@ -3287,10 +2919,9 @@ static JSValue cmp_example(JSContext *ctx, JSValueConst a, JSValueConst b, int c
                    "an equality reached the concolic derivation naming an algorithm quickjs.h does not "
                    "declare — 7.2.13 and 7.2.14 disagree, so an unnamed caller has no answer here");
             eq = JS_IsEqual(ctx, exa, exb);
-            /* §7.2.13's only failure is an abrupt ToPrimitive, which the operand test above has already made
-               unreachable: neither side is an object. A -1 here is that test and this call disagreeing about
-               what the operands are, and the throw it left standing would surface in the page's next
-               statement as a TypeError it never wrote. */
+            /* §7.2.13's only failure is an abrupt ToPrimitive, which the operand test above makes unreachable;
+               a -1 means the two disagree about the operands, and the pending throw would surface in the
+               page's next statement as a TypeError it never wrote. */
             CHECK(eq >= 0, "concolic ==: 7.2.13 IsLooselyEqual refused two operands that carry no object");
         }
         out = JS_NewBool(ctx, eq ^ (is_neq ? 1 : 0));
@@ -3312,83 +2943,47 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
     if (!ca && !cb) return 0;
     opq = ca ? a : b; other = ca ? b : a;
     src = concolic_src_c(opq);
-    root = concolic_root_c(opq);   /* THE SAME OPERAND, or the assert at concolic_alloc has two facts about two values */
-    /* THE PIN TOKEN IS THE OTHER OPERAND SPELLED, AND ONLY AN OPERAND THIS ENGINE CAN SPELL HAS ONE — which is
-       the same question literal_ident answers, asked through the same classification so the two cannot
-       disagree. It read the operand with a bare JS_ToCString, which for an OBJECT is §7.1.19 ToString step 10
-       -> ToPrimitive from C with no flow base, and for a Symbol is step 2's TypeError left pending on ctx.
-       ABSENCE IS THE RIGHT ANSWER AND NOT A GAP. §7.2.14 IsStrictlyEqual step 1 returns false whenever
-       SameType(x, y) is false, so no string this solver could substitute for the unknown is ever === a given
-       object: there is nothing to pin to. §7.2.13 IsLooselyEqual step 12 converts the OBJECT with ToPrimitive,
-       i.e. runs the page's own code, so naming the object here would be inventing that call's result — which
-       §@H forbids in the same words it forbids inventing `6` for `x > 5`. The predicate still forks: the
-       comparison result below carries the operator and both operands' identities, and only the PIN is absent. */
-    /* THE KIND IS TAKEN FROM THE SAME CLASSIFICATION AND ON THE SAME LINE AS THE SPELLING, because it is the
-       spelling's other half: §7.1.19 ToString flattens `undefined`, `null`, `0` and `false` onto text that is
-       also a legal STRING operand, so a token travelling alone reaches decide.c as a string whatever the page
-       compared against. It is TAKEN FROM literal_tok rather than asked of `operand_kind` a second time, which
-       is what this comment's last sentence used to concede: it said the second ask could not disagree with
-       the first, which is a statement that it was not a second fact at all, and a value read twice because it
-       cannot differ is one value with two spellings. */
+    root = concolic_root_c(opq);   /* the same operand, or concolic_alloc's assert sees two facts about two values */
+    /* The pin token is the other operand spelled, through literal_tok's classification, which also returns the
+       kind: §7.1.19 ToString ( arg ) maps `undefined`, `null`, `0` and `false` onto text that is also a legal
+       String operand, so the token must not travel without it. An Object or Symbol has no token, and that is
+       correct: §7.2.14 step 1 makes no substituted string === an object, and §7.2.13 step 12 would run the page's
+       own ToPrimitive. The predicate still forks over both identities; only the pin is absent. */
     if (!concolic_is(other)) tok = literal_tok(ctx, other, &kind);
-    /* EQUALITY IS SYMMETRIC, so `x === 'a'` and `'a' === x` compose to ONE identity: the unknown operand is
-       written first, and where BOTH are unknown the two identities are ordered between themselves. Without
-       that the same predicate written the other way round would be a second fact and fork a second time —
-       which costs work but is sound; the ordering is what makes the sound answer also the cheap one. */
+    /* Equality is symmetric, so `x === 'a'` and `'a' === x` compose one identity: the unknown operand is
+       written first, and where both are unknown the two identities are ordered between themselves. */
     iu = ident_of_operand(ctx, opq);
     io = ident_of_operand(ctx, other);
-    /* THE TWO SPELLINGS OF ONE OPERAND AGREE IN THE ONE DIRECTION THEY STILL MUST, asserted where they meet.
-       Only a CONCRETE other operand is spelled at all; a concolic one carries its own identity and pins
-       nothing. A TOKEN WITH NO IDENTITY is the defect it always was: a flow that PINS its source to a value no
-       predicate key mentions, where the pin outlives the branch and every later read of that source computes
-       it.
-       IT IS AN IMPLICATION AND NOT A BICONDITIONAL, AND NAMING INTRINSICS IS WHAT RETIRED THE OTHER HALF. AN
-       IDENTITY WITH NO TOKEN read as "the arm that was silently dropped when the classifications diverged"
-       only while literal_ident composed its answer OUT OF the token; it now has a second name source — an
-       intrinsic's registry slot, which is not a spelled VALUE — so `n !== Object.prototype` legitimately names
-       its predicate and pins nothing. §7.2.14 IsStrictlyEqual step 1 is why the absent pin is correct rather
-       than lost: SameType(x, y) is false for every string this solver could substitute, so no object operand
-       ever had anything to pin the unknown TO. */
+    /* The two spellings of one operand agree in the direction they must: a token with no identity would pin a
+       source to a value no predicate key mentions. It is an implication, not a biconditional: an identity
+       with no token is legitimate where the operand is named without a spelled value (an intrinsic, a
+       registered symbol, a creation name), as in `n !== Object.prototype`, which names its predicate and pins
+       nothing (§7.2.14 step 1). */
     DCHECK(concolic_is(other) ? tok == NULL : (tok == NULL || io != NULL),
            "an equality's other operand was spelled as a pin token with NO predicate identity beside it — the "
            "two come from one classification, so a token the identity speller cannot name is a pin filed under "
            "a key no branch over that source will ever look up");
     if (ca && cb && iu && io && strcmp(iu, io) > 0) { char *t = iu; iu = io; io = t; }
-    /* THE HOLE THE REPORT WILL PRINT FOR THIS OPERAND — taken from the SHAPE and not from `src`, which for
-       every derived value is the braced shape itself and would be looked up under a name the emission never
-       spells. Minted only where there is a token, because the subject and the token are one observation. */
+    /* The hole the report prints for this operand, taken from the shape rather than `src`, which for a derived
+       value is the braced shape the emission never spells. Minted only with a token: they are one observation. */
     subj = tok ? concolic_hole_key(concolic_shape_c(opq)) : NULL;
-    /* THE OPERATOR IN THE IDENTITY IS THE ONE THE PAGE WROTE, ALL FOUR OF THEM, and this spelled two. It was
-       `is_neq ? "!=" : "=="` for BOTH algorithms, so `x == '1'` and `x === '1'` composed to ONE constraint key
-       — two different predicates over one operand, and §7.2.13 and §7.2.14 answer differently for exactly the
-       pairs a minified bundle writes `==` for. A flow that decided either then DECIDED the other through
-       decide.c's feasible refinement, pruning an arm nothing had contradicted, which is the soundness bug this
-       file already fixed once for the relational operators ("`x < 700` and `x > 700` were one fact too"). The
-       algorithm is now stated by the caller, so the identity can say which. */
-    /* …AND THE ALGORITHM TRAVELS WITH THE ARM, because the arm alone does not say what it PROVED. `cmp_op`
-       records which arm makes the equality HOLD, which is the same fact for both algorithms; what differs is
-       the conclusion the holding arm licenses, and only §7.2.13 IsLooselyEqual ( x, y ) versus §7.2.14
-       IsStrictlyEqual ( x, y ) decides that. This line used to hand decide.c the arm and nothing else, so a
-       held `x == undefined` pinned the source exactly as a held `x === undefined` did — while §7.2.13 steps 2
-       and 3 ("If x is null and y is undefined, return true" and its converse) leave the operand as either of
-       TWO values. The pin that followed picked one of them and concretize-on-pin then decided every later
-       branch over that source from the choice. See concolic.h's concolic_pin for the full reading. */
+    /* The operator in the identity is the one the page wrote, all four: `x == '1'` and `x === '1'` are
+       different predicates that §7.2.13 and §7.2.14 answer differently, and one key would let a flow that
+       decided either decide the other. The algorithm also travels with the arm, because `cmp_op` only says
+       which arm makes the equality hold; whether that arm determined the operand is §7.2.13 IsLooselyEqual
+       ( x, y ) versus §7.2.14 IsStrictlyEqual ( x, y ) (a held `x == undefined` leaves undefined or null). See
+       concolic.h's concolic_pin. */
     res = pred_new(ctx, cmp_op_ident(is_neq, op), src, root, root_whose_of(opq), iu, io,
                    tok ? (is_neq ? OPCMP_NE : OPCMP_EQ) : OPCMP_NONE,
                    tok ? (int)op : CMP_ALGO_NONE, kind, tok, subj);
-    /* AND WHICH VALUE THE PREDICATE IS ABOUT, BY ITS OWN IDENTITY — read off `opq` BEFORE any reordering, and
-       under exactly the condition the hole is minted under (`subj`, which is `tok`, which is "one side is a
-       spellable literal"). `iu` above is NOT this: it is swapped with `io` when both operands are unknown, so
-       reading the subject out of it would name whichever identity happened to sort first. */
-    /* AN OPERAND THIS ENGINE CANNOT SPELL GETS NO SUBJECT IDENTITY, and the predicate is unaffected in every
-       other way: it still forks, still pins and still excludes under the hole. What is lost is only the
-       per-flow degrade, which has nowhere to be filed — the same answer, for the same reason, that
-       decide.c gives for a condition whose own identity is absent. */
+    /* Which value the predicate is about, by its own identity: read off `opq` (not `iu`, which is swapped when
+       both operands are unknown), under the same condition as the hole. An operand this engine cannot spell
+       gets none; the predicate still forks, pins and excludes, and only the per-flow degrade has nowhere to be
+       filed, as decide.c answers for a condition with no identity. */
     if (subj && concolic_ident_c(opq)) pred_set_subject_ident(res, concolic_ident_c(opq));
-    /* …AND THE RESULT'S OWN EXAMPLE, run rather than derived. It is attached AFTER the mint for the reason
-       page_visibility.c attaches one: pred_new's parameters are the PREDICATE (its operator, operands, pin and
-       subject), and the example is not part of the predicate — it is what this run computed the predicate to
-       be, which is a different fact about the same value. */
+    /* …and the result's own example, run rather than derived, attached after the mint (as page_visibility.c
+       does) because pred_new's parameters are the predicate and the example is what this run computed it to
+       be. */
     concolic_set_example(ctx, res, cmp_example(ctx, a, b, ca, cb, is_neq, op));
     free(subj);
     free(tok);
@@ -3396,14 +2991,11 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
     sp[-2] = res;
     return 1;
 }
-/* CALLING an unknown yields an unknown. `document.cookie.indexOf("role=admin")` reads a field off a concolic —
-   which concolic_exotic_get already answers with another concolic — and then CALLS it. A concolic that is not
-   callable throws "not a function" there, and the throw takes the whole program with it: every statement after
-   the first method call on an unknown string is unreachable, which silently truncated exploration at exactly
-   the checks that gate a session. The result is concolic because that is what it IS: nothing here knows what
-   indexOf would return over a cookie jar this engine was never given, so the comparison after it FORKS instead
-   of collapsing. The ARGUMENTS still ran — they are the page's own expressions and their effects have already
-   happened by the time this is reached. */
+/* Calling an unknown yields an unknown. `document.cookie.indexOf("role=admin")` reads a field off a concolic
+   (another concolic) and calls it; a non-callable concolic would throw "not a function" and make every
+   statement after the first method call on an unknown string unreachable. The result is concolic because
+   nothing here knows what indexOf returns over a cookie jar this engine never saw, so the comparison after it
+   forks. The arguments already ran: they are the page's own expressions. */
 static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst this_val,
                              int argc, JSValueConst *argv, int flags)
 {
