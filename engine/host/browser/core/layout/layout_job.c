@@ -38,6 +38,8 @@ struct LayoutJob {
     size_t    base;      /* the innermost open drive's mark; entries below it belong to drives further out */
     unsigned  nest;      /* computing LAYOUT_Q_BF_BOX entries above `base` */
     unsigned  drives;    /* drives open on this job */
+    size_t    quota;     /* bodies a resting drive may still open in this activation */
+    bool      resting;   /* a resting drive is open, as the job's outermost */
     LjSlot   *memo;
     size_t    memo_cap;  /* a power of two, or zero before the first answer */
     size_t    memo_used;
@@ -122,6 +124,16 @@ static size_t lj_push(LayoutJob *job, LayoutQuestion q, LjState state)
     return job->n++;
 }
 
+/* Whether every entry is suspended: the one shape a job may keep across a rest. */
+static bool lj_all_suspended(const LayoutJob *job)
+{
+    size_t i;
+
+    for (i = 0; i < job->n; i++)
+        if (job->stack[i].state != LJ_SUSPENDED) return false;
+    return true;
+}
+
 /* ---- driven jobs ---------------------------------------------------------------------------------------- */
 
 LayoutJob *layout_job_new(LayoutJobDriver driver)
@@ -144,9 +156,9 @@ void layout_job_free(LayoutJob *job)
 {
     DCHECK(job != NULL && job->driven, "a layout job was freed that no driver owns");
     DCHECK(job != g_entered, "a layout job was freed while its activation still holds the thread");
-    DCHECKF(job->n == 0 && job->drives == 0,
-            "a layout job was freed with %zu questions on its stack and %u drives open — a driver frees its "
-            "job only after leaving it, and leaving asserts both are zero", job->n, job->drives);
+    DCHECKF(lj_all_suspended(job) && job->drives == 0,
+            "a layout job was freed with a computing question on its stack of %zu or %u drives open; a driver "
+            "frees its job only after leaving it, and leaving asserts neither", job->n, job->drives);
     DCHECK(g_alive > 0, "a layout job was freed with no driven job alive");
     g_alive--;
     flow_placement_record_release(&job->placement);
@@ -172,9 +184,9 @@ void layout_job_enter(LayoutJob *job)
 void layout_job_leave(LayoutJob *job)
 {
     DCHECK(g_entered == job, "a layout job was left by a driver that did not enter it");
-    DCHECKF(job->n == 0 && job->drives == 0,
-            "a layout job was left with %zu questions on its stack and %u drives open — every drive computes "
-            "what it deferred before it returns, so a rest point taken now would carry live C-stack state",
+    DCHECKF(lj_all_suspended(job) && job->drives == 0,
+            "a layout job was left with a computing question on its stack of %zu or %u drives open; a rest "
+            "point taken now would carry live C-stack state, where only suspended questions may cross one",
             job->n, job->drives);
     g_entered = NULL;
 }
@@ -195,7 +207,7 @@ static void *lj_step_clone(JSContext *ctx, void *root, void **cursors[], int ncu
 
     (void)ctx; (void)cursors;
     DCHECK(ncursors == 0, "a layout job holds no interior pointer a step machine may keep");
-    DCHECK(src != g_entered && src->n == 0,
+    DCHECK(src != g_entered && lj_all_suspended(src),
            "a layout job was forked while its activation holds the thread — a job is entered only inside one "
            "step re-entry, and no fork is taken inside layout");
     /* The clone is a new job with an empty memo and records: all are re-derivable, so the arm re-derives them. */
@@ -249,9 +261,49 @@ void layout_job_drive_begin(LayoutJobDrive *d)
     d->job = job;
     d->base = job->base;
     d->nest = job->nest;
+    d->rests = false;
     job->base = job->n;
     job->nest = 0;
     job->drives++;
+}
+
+void layout_job_drive_begin_resting(LayoutJobDrive *d)
+{
+    LayoutJob *job = g_entered;
+
+    DCHECK(job != NULL && job->driver == LAYOUT_JOB_STEP,
+           "a resting drive was begun with no step machine's job entered; only a driver that yields can rest");
+    DCHECKF(job->drives == 0 && lj_all_suspended(job),
+            "a resting drive was begun under %u open drives or over a computing question; it is its job's "
+            "outermost drive, and every entry it finds is a question the last activation left", job->drives);
+    d->job = job;
+    d->base = job->base;
+    d->nest = job->nest;
+    d->rests = true;
+    job->base = 0;
+    job->nest = 0;
+    job->drives++;
+    job->quota = rest_unit_items(REST_UNIT_LAYOUT_BODIES);
+    job->resting = true;
+}
+
+bool layout_job_drive_spent(const LayoutJobDrive *d)
+{
+    DCHECK(d->job == lj_current(), "a drive was asked about under a job other than the one it began on");
+    return d->rests && d->job->quota == 0;
+}
+
+/* Whether an open is deferred because a resting drive spent its bodies. Only while the resting drive is the
+   innermost: a drive nested inside a body computes what it defers before returning, so deferring there buys
+   a replay and no rest. */
+static bool lj_quota_spent(const LayoutJob *job)
+{
+    return job->resting && job->drives == 1 && job->quota == 0;
+}
+
+static void lj_quota_take(LayoutJob *job)
+{
+    if (job->resting && job->drives == 1) job->quota--;
 }
 
 bool layout_job_drive_next(LayoutJobDrive *d, LayoutQuestion *q, size_t *at)
@@ -266,8 +318,11 @@ bool layout_job_drive_next(LayoutJobDrive *d, LayoutQuestion *q, size_t *at)
             "a drive found a %s entry of kind %d at the top of its stack — only a deferred CSS 2.1 §9.4.1 "
             "contribution is left above a drive's mark, because every other entry is closed by its own frame",
             e->state == LJ_COMPUTING ? "computing" : "suspended", (int)e->q.kind);
+    DCHECK(!layout_job_drive_spent(d),
+           "a resting drive was continued after it spent its bodies; its driver rests instead");
     e->state = LJ_COMPUTING;
     job->nest++;
+    lj_quota_take(job);
     *q = e->q;
     *at = job->n - 1;
     return true;
@@ -278,13 +333,15 @@ void layout_job_drive_end(LayoutJobDrive *d)
     LayoutJob *job = d->job;
 
     DCHECK(job == lj_current(), "a drive was ended under a job other than the one it began on");
-    DCHECKF(job->n == job->base && job->nest == 0,
+    DCHECKF((d->rests ? lj_all_suspended(job) : job->n == job->base) && job->nest == 0,
             "a drive ended with %zu entries above its mark and %u bodies computing — a drive returns only "
-            "after its own walk answered, which leaves nothing it deferred", job->n - job->base, job->nest);
+            "after its own walk answered, which leaves nothing it deferred, and a resting drive leaves only "
+            "suspended questions", job->n - job->base, job->nest);
     DCHECK(job->drives > 0, "a drive was ended with none open");
     job->base = d->base;
     job->nest = d->nest;
     job->drives--;
+    if (d->rests) job->resting = false;
     if (job == &g_sync && job->drives == 0) lj_memo_shed(job);
 }
 
@@ -310,13 +367,14 @@ LayoutAsk layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out, size_t *at)
             return LAYOUT_ASK_ANSWERED;
         }
     }
-    if (job->nest >= rest_unit_items(REST_UNIT_LAYOUT_QUESTIONS)) {
+    if (job->nest >= rest_unit_items(REST_UNIT_LAYOUT_QUESTIONS) || lj_quota_spent(job)) {
         *at = lj_push(job, q, LJ_SUSPENDED);
         METRIC_ADD(bf_deferred, 1);
         return LAYOUT_ASK_DEFERRED;
     }
     *at = lj_push(job, q, LJ_COMPUTING);
     job->nest++;
+    lj_quota_take(job);
     return LAYOUT_ASK_OPENED;
 }
 

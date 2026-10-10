@@ -7,7 +7,7 @@
 
 /* The stack position is a record the walk writes, not a remembered return value. §9.4.1 lays boxes out "one
  * after the other, vertically, beginning at the top of a containing block", so a walk of one container
- * establishes every child's top; `block_flow_child_top` asks about one child, and a memo of its return value
+ * establishes every child's top; `block_flow_child_top_ask` asks about one child, and a memo of its return value
  * would still run one walk of N children per child asked. The walk reports every position it passes, so the
  * first ask about any child answers its siblings'. The origin and the width are recursions over ancestors,
  * for which remembering the return value is the collapse; their sections below state that. */
@@ -16,7 +16,7 @@
  * synchronous job's while a drive is open. Nothing here decides whether an entry is still good: the job's
  * validity argument (no DOM write while a job's activation holds the thread; a driven job rests only inside
  * its own flow's member call) is what makes every entry an answer about the current tree. Each served answer
- * is still checked against its own derivation where that is cheap: `block_flow_child_top` asserts that the
+ * is still checked against its own derivation where that is cheap: `block_flow_child_top_ask` asserts that the
  * walk's answer for the box it named is the recorded one, and core/layout/flow_position.c re-derives a
  * recorded origin's equation at each hit.
  * RETIREMENT: this component goes when layout produces a box tree that paint reads, because a position is then
@@ -44,7 +44,7 @@ void flow_placement_record_release(FlowPlacementRecord *r);
 bool flow_placement_is_held(void);
 
 /* ONE BOX PLACED BY §9.4.1's WALK, at its TOP BORDER EDGE in the frame core/layout/block_flow.h's
-   `block_flow_child_top` answers in — the distance from the containing block's top CONTENT edge. Called for
+   `block_flow_child_top_ask` answers in — the distance from the containing block's top CONTENT edge. Called for
    every in-flow child a walk passes, with no test of whether anybody will ask: the walk has the number in hand
    and deciding here who might want it is the throw-away this component exists to end.
    A no-op when no record is held, which keeps the walk's own code free of a mode.

@@ -210,15 +210,25 @@ static bool sa_is_non_replaced_inline(lxb_dom_element_t *el)
    trailing margin, and where it is at the lower one it is the origin less the leading margin.
    IT IS ONE ORIGIN AND ONE EXTENT, SO IT IS ASKED ONLY OF A BOX THAT HAS BOTH — see `sa_is_non_replaced_inline`
    above and `sa_inline_box_edge` below for the box that has neither. */
-static CssPx sa_descendant_edge(lxb_dom_element_t *d, bool vertical, bool ending_at_hi)
+static CssPx sa_edge_from_origin(lxb_dom_element_t *d, FlowPoint o, bool vertical, bool ending_at_hi)
 {
-    FlowPoint o = flow_border_box_origin(d);
     CssPx origin = vertical ? o.y : o.x;
 
     if (!ending_at_hi)
         return css_px_sub(origin, used_value_px(d, vertical ? "margin-top" : "margin-left"));
     return css_px_add(css_px_add(origin, used_value_border_edge_px(d, vertical)),
                       used_value_px(d, vertical ? "margin-bottom" : "margin-right"));
+}
+
+/* The same edge with its origin asked without a drive: false ("not yet") leaves `*out` unwritten and the
+   deferred question suspended on the current job (core/layout/flow_position.h). */
+static bool sa_descendant_edge(lxb_dom_element_t *d, bool vertical, bool ending_at_hi, CssPx *out)
+{
+    FlowPoint o;
+
+    if (!flow_border_box_origin_ask(d, &o)) return false;
+    *out = sa_edge_from_origin(d, o, vertical, ending_at_hi);
+    return true;
 }
 
 /* CSS 2 §8.1's CONTENT BOX ORIGIN on one axis — the placed padding box moved inward by the leading padding.
@@ -404,8 +414,9 @@ static void sa_walk_open(ScrollingAreaWalk *w, lxb_dom_element_t *root, lxb_dom_
     w->n = lxb_dom_interface_node(root)->first_child;
 }
 
-/* Fold the next descendant node in tree order into the extreme, and advance the cursor past it. */
-static void sa_walk_fold(ScrollingAreaWalk *w)
+/* Fold the next descendant node in tree order into the extreme, and advance the cursor past it. Answers false
+   ("not yet") when the node's origin deferred a question: the cursor and the extreme are untouched. */
+static bool sa_walk_fold(ScrollingAreaWalk *w)
 {
     lxb_dom_node_t *root = lxb_dom_interface_node(w->root), *n = w->n;
     char wbuf[160], pbuf[160];
@@ -429,9 +440,10 @@ static void sa_walk_fold(ScrollingAreaWalk *w)
                 /* WHICH DERIVATION ANSWERS THIS BOX'S MARGIN EDGE is CSS 2.2 §9.2.2's own split between an
                    inline box and everything else, asked here because §9.4.2 gives the first a SET of
                    border areas and no `width` or `height` to size one with. */
-                CssPx e = sa_is_non_replaced_inline(d) ? sa_inline_box_edge(d, w->vertical, w->ending_at_hi)
-                                                       : sa_descendant_edge(d, w->vertical, w->ending_at_hi);
+                CssPx e;
 
+                if (sa_is_non_replaced_inline(d)) e = sa_inline_box_edge(d, w->vertical, w->ending_at_hi);
+                else if (!sa_descendant_edge(d, w->vertical, w->ending_at_hi, &e)) return false;
                 w->best = w->ending_at_hi ? css_px_max(w->best, e) : css_px_min(w->best, e);
             }
             w->best = sa_inline_context_extreme(d, w->vertical, w->ending_at_hi, w->best);
@@ -524,9 +536,10 @@ static void sa_walk_fold(ScrollingAreaWalk *w)
                   "core/layout/replaced_element.c's own gap for exactly case (3), in place of this one",
                   box_subject(parent, pbuf, sizeof pbuf), box_subject(w->root, wbuf, sizeof wbuf));
     }
-    if (descend && n->first_child != NULL) { w->n = n->first_child; return; }
+    if (descend && n->first_child != NULL) { w->n = n->first_child; return true; }
     while (n != root && n->next == NULL) n = n->parent;
     w->n = n == root ? NULL : n->next;
+    return true;
 }
 
 void scrolling_area_walk_element(ScrollingAreaWalk *w, lxb_dom_element_t *el, bool vertical)
@@ -704,7 +717,7 @@ void scrolling_area_walk_viewport(ScrollingAreaWalk *w, lxb_dom_node_t *doc, Css
     w->best = ending_at_hi ? hi : lo;
     if (element_view_has_box(rootn)) {
         lxb_dom_element_t *root = lxb_dom_interface_element(rootn);
-        CssPx own = sa_descendant_edge(root, vertical, ending_at_hi);
+        CssPx own = sa_edge_from_origin(root, flow_border_box_origin(root), vertical, ending_at_hi);
 
         sa_walk_open(w, root, NULL, ending_at_hi ? css_px_max(hi, own) : css_px_min(lo, own));
     }
@@ -715,9 +728,9 @@ bool scrolling_area_walk_done(const ScrollingAreaWalk *w)
     return w->n == NULL;
 }
 
-void scrolling_area_walk_step(ScrollingAreaWalk *w)
+bool scrolling_area_walk_step(ScrollingAreaWalk *w)
 {
-    sa_walk_fold(w);
+    return sa_walk_fold(w);
 }
 
 CssPx scrolling_area_walk_extent(const ScrollingAreaWalk *w)
@@ -746,8 +759,8 @@ CssPx scrolling_area_walk_extent(const ScrollingAreaWalk *w)
    machines stepping the walk, as `scrollIntoView` does. How its absence shows: a flow's slice overrun in
    `scrollWidth`/`scrollHeight` or §4's `scroll()` on a large document, with `_layoutJobRests` flat. */
 /* Each walk runs inside one drive, so the current job holds its memo and records across every descendant:
-   without a driven job entered, the synchronous job holds them only while a drive is open. The walk cannot
-   propagate "not yet", so it is a drive's frame. */
+   without a driven job entered, the synchronous job holds them only while a drive is open. A step that answers
+   "not yet" is retried after the drive computes what it deferred. */
 CssPx scrolling_area_extent_px(lxb_dom_element_t *el, bool vertical)
 {
     ScrollingAreaWalk w;
@@ -756,7 +769,8 @@ CssPx scrolling_area_extent_px(lxb_dom_element_t *el, bool vertical)
 
     layout_job_drive_begin(&d);
     scrolling_area_walk_element(&w, el, vertical);
-    while (!scrolling_area_walk_done(&w)) scrolling_area_walk_step(&w);
+    while (!scrolling_area_walk_done(&w))
+        if (!scrolling_area_walk_step(&w)) (void)block_flow_drive_deferred(&d);
     extent = scrolling_area_walk_extent(&w);
     layout_job_drive_end(&d);
     return extent;
@@ -770,7 +784,8 @@ CssPx scrolling_area_viewport_extent_px(lxb_dom_node_t *doc, CssPx icb_extent, b
 
     layout_job_drive_begin(&d);
     scrolling_area_walk_viewport(&w, doc, icb_extent, vertical);
-    while (!scrolling_area_walk_done(&w)) scrolling_area_walk_step(&w);
+    while (!scrolling_area_walk_done(&w))
+        if (!scrolling_area_walk_step(&w)) (void)block_flow_drive_deferred(&d);
     extent = scrolling_area_walk_extent(&w);
     layout_job_drive_end(&d);
     return extent;

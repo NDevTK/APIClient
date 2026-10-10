@@ -19,7 +19,9 @@
 #include "core/dom/shadow_root.h"
 #include "core/frame/viewport.h"
 #include "core/frame/window_proxy.h"
+#include "core/layout/block_flow.h"
 #include "core/layout/flow_position.h"
+#include "core/layout/layout_job.h"
 #include "core/layout/scroll_container.h"
 #include "core/layout/scrolling_area.h"
 #include "core/layout/used_value.h"
@@ -377,14 +379,23 @@ static void es_into_view_open(ElementScrollingIntoView *w, lxb_dom_element_t *el
 }
 
 /* One rest unit of the open box's area walks, or, once both are complete, the visit. The descendants are
-   the rest unit's items (REST_UNIT_LAYOUT_DESCENDANTS), and the bracket measures them against the slice. */
+   the rest unit's items (REST_UNIT_LAYOUT_DESCENDANTS), and the bracket measures them against the slice; the
+   unit also ends when the drive spends its bodies (REST_UNIT_LAYOUT_BODIES). */
 static bool es_into_view_measure(ElementScrollingIntoView *w, const char *behavior)
 {
     if (!scrolling_area_walk_done(&w->area)) {
-        size_t k, n = rest_unit_items(REST_UNIT_LAYOUT_DESCENDANTS);
+        size_t k = 0, n = rest_unit_items(REST_UNIT_LAYOUT_DESCENDANTS);
+        LayoutJobDrive d;
 
+        /* The step is the walk's drive: a node whose origin answers "not yet" leaves its questions suspended,
+           and each activation computes them first, up to the drive's bodies, then retries the node. */
         rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
-        for (k = 0; k < n && !scrolling_area_walk_done(&w->area); k++) scrolling_area_walk_step(&w->area);
+        layout_job_drive_begin_resting(&d);
+        while (k < n && !scrolling_area_walk_done(&w->area) && block_flow_drive_deferred(&d)) {
+            if (scrolling_area_walk_step(&w->area)) k++;
+            else if (layout_job_drive_spent(&d)) break;
+        }
+        layout_job_drive_end(&d);
         rest_unit_end();
         return true;
     }

@@ -60,6 +60,11 @@ typedef struct {
    synchronous job holds the record only while a drive is open. */
 FlowPoint flow_border_box_origin(lxb_dom_element_t *el);
 
+/* The same origin asked without a drive of its own: false ("not yet") when a question it asked was deferred,
+   with `*out` unwritten and the question suspended on the current job, whose drive the caller answers to.
+   `flow_border_box_origin` is this ask inside a drive that computes what it deferred. */
+bool flow_border_box_origin_ask(lxb_dom_element_t *el, FlowPoint *out);
+
 /* The top-left corner of `el`'s padding box: the border box origin moved inward by CSS 2 §8.1 "Box dimensions"'
    leading border on each axis. Derived from `flow_border_box_origin`, so unplaceable boxes crash there first.
    CSSOM View §2 "Terminology"'s scrolling area ("the element's top padding edge", core/layout/scrolling_area.h)

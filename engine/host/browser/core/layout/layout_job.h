@@ -31,14 +31,18 @@
  * `scrollIntoView` does. How its absence shows: a flow's slice overrun inside a layout member that is not
  * `scrollIntoView`, with `_layoutJobRests` flat. */
 
-/* NAMED RESIDUAL, the drive is not a rest point. Not covered: "not yet" propagates only through
- * core/layout/block_flow.c's stack walk, so every drive computes what it deferred inside the same
- * activation. A driven job rests only where its driver's own cursor does: between scrolling boxes, and
- * between runs of REST_UNIT_LAYOUT_DESCENDANTS nodes of a scrolling area's walk (core/dom/element_scrolling.c),
- * so one node's derivation still runs to completion. Next: the callers of a drive propagate "not yet" in turn,
- * starting with the scrolling area's per-node edge (core/layout/flow_position.c's origin), until the drive is
- * the step machine. How its absence shows: the REST_UNIT_LAYOUT_DESCENDANTS bracket's CPU assert naming one
- * unit that overran the slice on a document whose nodes are deep. */
+/* The resting drive. `scrollIntoView`'s step machine is the drive of its scrolling-area walk: a node's
+ * border-box origin through CSS 2.1 §10.1's second case (core/layout/flow_position.h's ask) propagates "not
+ * yet" to the walk step, the questions it deferred stay suspended on the job across the rest, and the next
+ * activation computes them before it retries the node. A resting drive also defers once it has opened
+ * rest_unit_items(REST_UNIT_LAYOUT_BODIES) bodies in one activation, so a node whose derivation is wide rests
+ * mid-node rather than only a deep one. */
+/* NAMED RESIDUAL, drives that are not rest points. Not covered: every other drive (core/layout/block_flow.c's
+ * entries for auto heights, baselines, anonymous boxes and static positions, and flow_position.c's other
+ * arms, which reach them) still computes what it deferred inside the same activation. Next: their callers
+ * propagate "not yet" in turn, starting with the line-box origin (`flow_inline_fragment_rects`' establishing
+ * box and anonymous-box enumeration). How its absence shows: the REST_UNIT_LAYOUT_DESCENDANTS bracket's CPU
+ * assert naming a unit whose heavy node is inline-level, out of flow, or a table part. */
 
 /* NAMED RESIDUAL, cycles that cross no question kind. Not covered: the layout call graph has recursion
  * cycles that pass through none of the three kinds (intrinsic sizes, line-box atomic extents, the
@@ -79,7 +83,8 @@ typedef struct {
 
 /* ---- driven jobs ---------------------------------------------------------------------------------------- */
 
-/* A job a driver owns across its activations. `free` asserts the job is not entered and its stack empty. */
+/* A job a driver owns across its activations. `free` asserts the job is not entered, no drive is open and
+   no question is computing. */
 typedef enum {
     LAYOUT_JOB_STEP = 1,   /* owned by a step machine's state; it may rest */
     LAYOUT_JOB_PAINT       /* owned by a paint, which runs it to completion in one activation */
@@ -88,8 +93,8 @@ LayoutJob *layout_job_new(LayoutJobDriver driver);
 void layout_job_free(LayoutJob *job);
 
 /* Make `job` current for one activation, and give the thread back. `enter` asserts no job's activation
-   holds the thread; `leave` asserts the stack is empty and no drive is open, which is what makes a rest
-   point taken after it carry nothing but the memo. */
+   holds the thread; `leave` asserts no drive is open and every entry left is suspended, which is what makes a
+   rest point taken after it carry nothing but the memo and questions not yet asked of a body. */
 void layout_job_enter(LayoutJob *job);
 void layout_job_leave(LayoutJob *job);
 
@@ -97,8 +102,9 @@ void layout_job_leave(LayoutJob *job);
    before it and served after it are what the census counts as served across a rest. */
 void layout_job_rested(LayoutJob *job);
 
-/* A driven job held in a step state. The clone answers a job with an empty memo and empty records: all are
-   re-derivable, so a forked arm re-derives them rather than sharing or copying them. A job has no interior
+/* A driven job held in a step state. The clone answers a job with an empty memo, empty records and no
+   suspended questions: all are re-derivable, so a forked arm re-derives them rather than sharing or copying
+   them, and re-asks the node its walk's cursor still names. A job has no interior
    pointers a machine holds, so a declarer passes no cursors. */
 extern const JSStepTreeOps layout_job_step_ops;
 
@@ -123,15 +129,23 @@ LineBoxRecord *layout_job_line_boxes(void);
    beneath it before it returns. `begin` takes the current job (the synchronous one when none is entered)
    and marks the stack; `next` hands back the topmost suspended question above the mark, now computing, or
    answers false when none is left; `end` asserts the stack is back at the mark. */
-typedef struct {
+typedef struct LayoutJobDrive {
     LayoutJob *job;
     size_t     base;
     unsigned   nest;
+    bool       rests;   /* begun by `layout_job_drive_begin_resting` */
 } LayoutJobDrive;
 
 void layout_job_drive_begin(LayoutJobDrive *d);
 bool layout_job_drive_next(LayoutJobDrive *d, LayoutQuestion *q, size_t *at);
 void layout_job_drive_end(LayoutJobDrive *d);
+
+/* A drive whose driver rests (a step machine's, on its entered job). `begin_resting` asserts it is the job's
+   outermost drive and takes every suspended entry the last activation left as its own; `spent` answers whether
+   this activation has opened its rest_unit_items(REST_UNIT_LAYOUT_BODIES) bodies; `end` on a resting drive
+   leaves suspended entries in place for the next activation and asserts none is computing. */
+void layout_job_drive_begin_resting(LayoutJobDrive *d);
+bool layout_job_drive_spent(const LayoutJobDrive *d);
 
 /* ---- LAYOUT_Q_BF_BOX ------------------------------------------------------------------------------------ */
 
@@ -142,7 +156,8 @@ typedef enum {
 } LayoutAsk;
 
 /* Ask a BF_BOX question. Asserts a drive is open: every ask has one beneath it on the C stack. The question
-   is deferred when the drive already hosts rest_unit_items(REST_UNIT_LAYOUT_QUESTIONS) computing bodies. */
+   is deferred when the drive already hosts rest_unit_items(REST_UNIT_LAYOUT_QUESTIONS) computing bodies, or
+   when a resting drive is innermost and has spent its bodies. */
 LayoutAsk layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out, size_t *at);
 
 /* The computing body at `at` completed: asserts it is the top, pops and memoizes it. */

@@ -111,7 +111,9 @@ CssPx scrolling_area_viewport_extent_px(lxb_dom_node_t *doc, CssPx icb_extent, b
 
 /* The same two rows as a cursor over the descendant walk, for a step machine that rests inside it: `walk_*`
    computes everything before the walk (the same preconditions as the two entries above), each `step` folds
-   one descendant node, and `extent` answers once `done`. The two entries above are this cursor driven to
+   one descendant node or answers false ("not yet": the node's origin deferred a question, which is suspended
+   on the current job for the caller's drive, and the cursor still names the node), and `extent` answers once
+   `done`. The two entries above are this cursor driven to
    completion. The cursor holds DOM nodes of the running flow, which a fork shares by address, and lengths. */
 typedef struct {
     lxb_dom_element_t *root;            /* the walk root: the element, or the viewport's document element */
@@ -126,7 +128,7 @@ typedef struct {
 void scrolling_area_walk_element(ScrollingAreaWalk *w, lxb_dom_element_t *el, bool vertical);
 void scrolling_area_walk_viewport(ScrollingAreaWalk *w, lxb_dom_node_t *doc, CssPx icb_extent, bool vertical);
 bool scrolling_area_walk_done(const ScrollingAreaWalk *w);
-void scrolling_area_walk_step(ScrollingAreaWalk *w);
+bool scrolling_area_walk_step(ScrollingAreaWalk *w);
 CssPx scrolling_area_walk_extent(const ScrollingAreaWalk *w);
 
 /* §2's OVERFLOW DIRECTIONS for the VIEWPORT's scrolling box, in the same one bit — does the ENDING edge sit at

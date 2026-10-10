@@ -800,7 +800,8 @@ static char *ev_scroll_keyword(JSContext *ctx, JSValueConst v, const char *membe
  * for core/dom/element_scrolling.h's reason: every scroll here is an instant one. */
 
 /* Step 8 is §6.1's ancestor walk, one cursor unit per re-entry of EV_SIV_BOX: opening a scrolling box, a
- * run of REST_UNIT_LAYOUT_DESCENDANTS nodes of its scrolling area, or steps 2.2 to 2.4 over it
+ * run of REST_UNIT_LAYOUT_DESCENDANTS nodes of its scrolling area (cut short where a node's derivation rests
+ * mid-node with its questions suspended on the job), or steps 2.2 to 2.4 over it
  * (core/dom/element_scrolling.h). Every layout question is asked through the job this state owns, so its
  * memo and placement record serve every later unit, and the machine rests between units with the job alive:
  * the flow is parked inside its own member call, where it writes nothing, so both stay valid (layout_job.h). */

@@ -30,10 +30,14 @@
    activation spends. 32 replays a body once per 32 levels and keeps an activation to 32 bodies. */
 #define REST_UNIT_LAYOUT_QUESTIONS_N   32u
 
+/* Layout question bodies a resting drive opens per rest point. The floor is replay: each body that
+   deferred re-runs from its start in the next activation. The ceiling is bound (2), measured by the
+   scrolling-area bracket the drive runs inside. */
+#define REST_UNIT_LAYOUT_BODIES_N   32u
+
 /* Descendants folded into a scrolling area per rest point. The floor is the cost of asking, which one
-   node's edge does not amortize; the ceiling is bound (2), asserted around each unit. A single node that
-   overruns the slice is a derivation that cannot rest mid-node (core/layout/layout_job.h), not a unit to
-   lower. */
+   node's edge does not amortize; the ceiling is bound (2), asserted around each unit. A node whose
+   derivation overruns the slice rests mid-node through its job's resting drive (core/layout/layout_job.h). */
 #define REST_UNIT_LAYOUT_DESCENDANTS_N   32u
 
 size_t rest_unit_items(RestUnitKind kind)
@@ -45,6 +49,7 @@ size_t rest_unit_items(RestUnitKind kind)
     case REST_UNIT_XML_CONSTRUCTS:   n = REST_UNIT_XML_CONSTRUCTS_N;   break;
     case REST_UNIT_SUBTREE_REMOVALS: n = REST_UNIT_SUBTREE_REMOVALS_N; break;
     case REST_UNIT_LAYOUT_QUESTIONS: n = REST_UNIT_LAYOUT_QUESTIONS_N; break;
+    case REST_UNIT_LAYOUT_BODIES:    n = REST_UNIT_LAYOUT_BODIES_N;    break;
     case REST_UNIT_LAYOUT_DESCENDANTS: n = REST_UNIT_LAYOUT_DESCENDANTS_N; break;
     }
     /* No `default:` arm, so clang's -Wswitch (on by default) warns about a kind with no case here; such a

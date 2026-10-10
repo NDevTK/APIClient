@@ -495,7 +495,7 @@ typedef struct {
    this entry for the shape that does not.
    THE POSITION COMES OUT OF §9.4.1's OWN STACK AND IS NOT RE-DERIVED, which is the whole reason this lives
    here: the offset reported is the same running position the walk reads out for an ELEMENT that asks
-   `block_flow_child_top`, taken at the same point, so an anonymous box and its block-level siblings cannot
+   `block_flow_child_top_ask`, taken at the same point, so an anonymous box and its block-level siblings cannot
    come to disagree about where a margin collapsed. */
 size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out);
 
@@ -517,24 +517,22 @@ size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
    established the property behaves as auto, which was true of the one caller there was. */
 CssPx block_flow_auto_height(lxb_dom_element_t *el);
 
-/* CSS 2 §9.4.1's VERTICAL PLACEMENT of `el`: the distance from the TOP CONTENT EDGE of `el`'s containing block
-   to `el`'s TOP BORDER EDGE, in CSS pixels. It is stated against the containing block's CONTENT edge because
-   that is the rectangle §10.1 gives the box and the one §10.6.3 measures its height from, so the caller adds
-   exactly the containing block's own origin plus its top border and padding and nothing else.
-   `el` MUST BE AN IN-FLOW BLOCK-LEVEL BOX whose containing block is §10.1's second case — core/layout/
-   flow_position.c is the caller and it has taken every other positioning scheme out through its own section
-   first. An element the walk over its containing block's children never places crashes rather than answering
-   a coordinate no box has.
-   THE WALK IT RUNS ANSWERS ABOUT EVERY CHILD AND THIS ENTRY IS ASKED ABOUT ONE, WHICH IS WHY IT REPORTS.
-   §9.4.1's rule is "boxes are laid out one after the other, vertically, beginning at the top of a containing
-   block", so the running offset the walk carries IS the top border edge of each box it passes — this entry
-   used to return the one its caller named and discard the rest, so a consumer asking about every box in a
-   container ran one whole walk per box. core/layout/flow_placement.h takes every position the walk
-   establishes, for the span of one whole-tree geometry pass and for no longer, and this entry asks it before
-   it walks. WHAT THAT DOES NOT CHANGE is the answer: outside a pass the record holds nothing and answers
-   nothing, so a page reading `offsetTop` between two renders gets the same freshly-walked number it always
-   did, and inside one the record's value is asserted equal to the walk's own at every miss. */
-CssPx block_flow_child_top(lxb_dom_element_t *el);
+/* CSS 2 §9.4.1's vertical placement of `el`: the distance from the top content edge of `el`'s containing block
+   to `el`'s top border edge, in CSS pixels; the caller adds the containing block's origin plus its top border
+   and padding. `el` must be an in-flow block-level box whose containing block is §10.1's second case
+   (core/layout/flow_position.c, the caller, takes every other scheme out first); a box the walk never places
+   crashes. The walk places every child ("boxes are laid out one after the other, vertically, beginning at the
+   top of a containing block"), so it reports each position to core/layout/flow_placement.h, which this entry
+   asks first; the record is asserted equal to the walk at every miss.
+   It answers false ("not yet") when the walk deferred a contribution: `*out` is unwritten, and the caller
+   propagates to its drive (core/layout/layout_job.h), which asserts one is open beneath it. */
+bool block_flow_child_top_ask(lxb_dom_element_t *el, CssPx *out);
+
+/* Compute the contributions suspended above drive `d`'s mark, topmost first, until none is left or a resting
+   drive has spent its bodies. Answers false when it stopped because the drive is spent (questions may
+   remain); a drive that is not resting always empties its stack. */
+struct LayoutJobDrive;
+bool block_flow_drive_deferred(struct LayoutJobDrive *d);
 
 /* ---- CSS 2.1 §10.3.7's and §10.6.4's STATIC POSITION -----------------------------------------------------
    The one thing §10.6.3 takes out of the walk above and the two constraint equations then ask for back.
@@ -542,7 +540,7 @@ CssPx block_flow_child_top(lxb_dom_element_t *el);
    positioned boxes are ignored)", and §10.3.7 and §10.6.4 each open by naming what that removal costs: "the
    term static position … refers, roughly, to the position an element would have had in the normal flow". So
    this is not a second walk beside §9.4.1's, it is a THIRD READING of the running position §9.4.1's walk
-   already computes — the same reading `block_flow_child_top` takes for a box that IS placed, taken at the
+   already computes — the same reading `block_flow_child_top_ask` takes for a box that IS placed, taken at the
    content position of one that is not.
    IT COSTS THE WALK NOTHING AND CHANGES IT NOWHERE. The hypothetical box is never put on the stack, never
    merged into §8.3.1's run and never advances the running position, because §10.6.3's sentence is that the
@@ -564,7 +562,7 @@ CssPx block_flow_child_top(lxb_dom_element_t *el);
 lxb_dom_element_t *block_flow_static_position_containing_block(lxb_dom_element_t *el);
 
 /* THE HYPOTHETICAL BOX'S TOP MARGIN EDGE, as a distance from that element's TOP CONTENT EDGE — the same frame
-   `block_flow_child_top` answers in, and the same frame §10.1's second case states.
+   `block_flow_child_top_ask` answers in, and the same frame §10.1's second case states.
    IT IS THE MARGIN EDGE AND NOT THE BORDER EDGE, which is §10.6.4's own words ("the static position for `top`
    is the distance from the top edge of the containing block to the top MARGIN EDGE of a hypothetical box")
    and which makes the round trip exact: §10.6.4 sets `top` to this number and its constraint equation then

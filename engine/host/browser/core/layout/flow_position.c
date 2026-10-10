@@ -15,6 +15,7 @@
 #include "core/layout/box_subject.h"
 #include "core/layout/flow_placement.h"
 #include "core/layout/flow_position.h"
+#include "core/layout/layout_job.h"
 #include "core/layout/line_box.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/table_box.h"
@@ -772,13 +773,16 @@ static bool fp_origin_agrees(lxb_dom_element_t *el, const lxb_dom_element_t *cb,
 
 /* CSS 2 §8.1 "Box dimensions"' border box, placed through §10.1's cases. `*cb_out` is the containing block for
    §10.1's second case and stays NULL for every other arm, which is all the record needs to know about how a
-   point was produced (core/layout/flow_placement.h). */
-static FlowPoint fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_dom_element_t **cb_out)
+   point was produced (core/layout/flow_placement.h). Answers false ("not yet") when the second case's climb
+   or §9.4.1's walk deferred a question; `*out` is then unwritten. The other arms complete in place. */
+static bool fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_dom_element_t **cb_out,
+                                         FlowPoint *out)
 {
     FlowPoint p = { { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL } };
     lxb_dom_node_t *n;
     lxb_dom_element_t *cb;
     FlowPoint o;
+    CssPx top;
     /* `vbuf` holds a computed value at two sites and a node name at the third, so it is sized for the wider. */
     char nbuf[160], vbuf[160];
 
@@ -791,7 +795,7 @@ static FlowPoint fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_d
        §10.1's third or fourth case, solved by §10.3.7 and §10.6.4, whose `auto` cases use the static
        position, so this consumes §9.4.1's flow layout. */
     if (fp_computed_is(el, "position", "absolute") || fp_computed_is(el, "position", "fixed"))
-        return fp_abs_origin(el);
+        return (*out = fp_abs_origin(el), true);
     if (!fp_computed_is(el, "float", "none"))
         DFAILF("%s, computed `float` `%s`: "
               "CSS 2 §9.5 'Floats' positions a FLOATING box, and §9.4.1's rule does not: a float is shifted to "
@@ -829,17 +833,17 @@ static FlowPoint fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_d
     fp_require_horizontal_tb(el);
     /* §9.4's two normal-flow contexts are alternatives chosen by level, so a box on a line leaves through
        §9.4.2 here, like floats and out-of-flow boxes above. */
-    if (fp_is_on_a_line_box(el)) return fp_line_box_origin(el);
+    if (fp_is_on_a_line_box(el)) { *out = fp_line_box_origin(el); return true; }
     /* CSS 2.1 §17.5 Visual layout of table contents places row, cell and row group boxes, which must not fall
        through to §9.4.1's rules; all go through `fp_table_grid_origin`. The three row group displays are
        spelled as strings, like the tests above, rather than routed through `table_box_kind_is_row_group`'s
        enum. The other three table-internal boxes are refused in `fp_require_placeable`. */
-    if (fp_computed_is(el, "display", "table-row")) return fp_table_row_origin(el);
-    if (fp_computed_is(el, "display", "table-cell")) return fp_table_cell_origin(el);
+    if (fp_computed_is(el, "display", "table-row")) { *out = fp_table_row_origin(el); return true; }
+    if (fp_computed_is(el, "display", "table-cell")) { *out = fp_table_cell_origin(el); return true; }
     if (fp_computed_is(el, "display", "table-row-group") ||
         fp_computed_is(el, "display", "table-header-group") ||
         fp_computed_is(el, "display", "table-footer-group"))
-        return fp_table_row_group_origin(el);
+        return (*out = fp_table_row_group_origin(el), true);
     fp_require_placeable(el);
 
     /* §10.1's first case, §9.4.1's base case: the root's containing block is the ICB, "anchored at the canvas
@@ -850,7 +854,8 @@ static FlowPoint fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_d
         p.x = fp_left_offset(el, fp_icb_width(el));
         /* §9.4.1's vertical rule at the top of the containing block, with §8.3.1's root-element exception. */
         p.y = used_value_px(el, "margin-top");
-        return p;
+        *out = p;
+        return true;
     }
 
     /* §10.1's second case, §9.4.1's inductive step: the containing block is "the content edge of the nearest
@@ -865,27 +870,30 @@ static FlowPoint fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_d
            "not the root. The two tests are the same test (a node whose parent is the Document), so they have "
            "come apart",
            box_subject(el, nbuf, sizeof nbuf), box_subject_node(n->parent, vbuf, sizeof vbuf));
-    o = flow_border_box_origin(cb);
+    if (!flow_border_box_origin_ask(cb, &o) || !block_flow_child_top_ask(el, &top)) return false;
     p.x = css_px_add(css_px_add(o.x, used_value_leading_edge_px(cb, false)),
                      fp_left_offset(el, used_value_containing_block_width(el)));
-    p.y = css_px_add(css_px_add(o.y, used_value_leading_edge_px(cb, true)), block_flow_child_top(el));
+    p.y = css_px_add(css_px_add(o.y, used_value_leading_edge_px(cb, true)), top);
     /* The one arm with a second route to its number, reported through `*cb_out`; the others leave it NULL. */
     *cb_out = cb;
-    return p;
+    *out = p;
+    return true;
 }
 
 /* CSS 2 §8.1 "Box dimensions"' border-box origin, asked of the pass first. The cost removed is a recursion:
    §10.1's second case climbs the containing-block chain per ask, quadratic in depth over a document; within a
    pass a climb stops at the first ancestor already derived (core/layout/flow_placement.h explains why
    remembering suits a recursion but not a walk). Outside a pass nothing is held, so `offsetTop` between two
-   renders climbs afresh. */
-FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
+   renders climbs afresh. The census counts an ask at the attempt that answers it: a "not yet" attempt is
+   asked again. */
+bool flow_border_box_origin_ask(lxb_dom_element_t *el, FlowPoint *out)
 {
     FlowPoint                p;
     const lxb_dom_element_t *cb = NULL;
 
-    DCHECK(el != NULL, "a border box's position was asked for with no element");
-    if (flow_placement_origin_ask(el, &p, &cb)) {
+    DCHECK(el != NULL && out != NULL, "a border box's position was asked for with no element or no out");
+    if (flow_placement_origin_peek(el, &p, &cb)) {
+        (void)flow_placement_origin_ask(el, &p, &cb);
         DCHECKF(fp_origin_agrees(el, cb, p),
                 "CSS 2 §10.1's second case puts this box's border-box origin at its containing block's "
                 "origin plus that block's leading border and padding plus §9.4.1's stack position, and CSS "
@@ -901,16 +909,18 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
                 "impossible. If that chokepoint did not fire, the change arrived by a route it does not own "
                 "and the route is the finding",
                 p.x.px, p.y.px);
-        return p;
+        *out = p;
+        return true;
     }
-    p = fp_border_box_origin_compute(el, &cb);
+    if (!fp_border_box_origin_compute(el, &cb, &p)) return false;
+    (void)flow_placement_origin_ask(el, &p, NULL);
     /* CSS 2.2 §9.4.3 "Relative positioning", applied once here because it shifts any placement: "Once a box has
        been laid out according to the normal flow or floated, it may be shifted relative to this position."
        The record carries the shifted point, so descendants inherit the translation through §10.1's second
        case, and a `position: absolute` child of a relative parent moves too (`fp_abs_cb_leading` reads that
        parent's `flow_padding_box_origin`).
        "Offsetting a box (B1) in this way has no effect on the box (B2) that follows" holds because
-       `block_flow_child_top` derives from used heights and §8.3.1 and calls nothing in this file; a stack walk
+       `block_flow_child_top_ask` derives from used heights and §8.3.1 and calls nothing in this file; a stack walk
        that read a border-box origin would break it without this file changing.
        Table-internal boxes take the term too: §9.3.1 says "The effect of 'position:relative' on
        table-row-group, table-header-group, table-footer-group, table-row, table-column-group, table-column,
@@ -918,6 +928,18 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
     p.x = css_px_add(p.x, fp_relative_offset(el, false));
     p.y = css_px_add(p.y, fp_relative_offset(el, true));
     flow_placement_origin_record(el, p, cb);
+    *out = p;
+    return true;
+}
+
+FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
+{
+    LayoutJobDrive d;
+    FlowPoint p;
+
+    layout_job_drive_begin(&d);
+    while (!flow_border_box_origin_ask(el, &p)) (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
     return p;
 }
 
