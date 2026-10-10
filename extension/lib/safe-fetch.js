@@ -969,10 +969,10 @@ function safeFetchDefaultArms() {
    `safeFetchPermit`.
    The shape is `{ origin: { signal: [values] } }`. An origin whose entry is not an object is a legacy
    single-switch grant: carrying it forward would permit every value of every signal, including signals that
-   did not exist when it was granted, so it is dropped and named in the answer. An origin with a signal whose
-   values are not an array is named too; the signals walked before it stay permitted and the rest are
-   skipped. A signal a stored grant does not name is not permitted, so adding a signal narrows every existing
-   grant rather than silently widening it. */
+   did not exist when it was granted, so it is dropped and named in the answer. An origin with any signal
+   whose values are not an array is dropped and named the same way, whole, so what the answer names is what
+   is not permitted. A signal a stored grant does not name is not permitted, so adding a signal narrows every
+   existing grant rather than silently widening it. */
 function safeFetchEgressStated(table) {
   var origin, signal, values, why, i, legacy = [];
   CHECK(!_EXPLORED_STATED,
@@ -997,14 +997,14 @@ function safeFetchEgressStated(table) {
           ") — the entry would sit in this table matching no request's `.origin` for ever, which is a " +
           "permission that was granted, reads as granted, and refuses nothing. A host is the only writer of " +
           "its own store, so this is that store corrupted rather than a person mistyping");
-    if (typeof table[origin] !== "object" || table[origin] === null || Array.isArray(table[origin])) {
+    if (typeof table[origin] !== "object" || table[origin] === null || Array.isArray(table[origin]) ||
+        Object.keys(table[origin]).some(function (k) { return !Array.isArray(table[origin][k]); })) {
       legacy.push(origin);
       continue;
     }
     for (signal in table[origin]) {
       if (!Object.prototype.hasOwnProperty.call(table[origin], signal)) continue;
       values = table[origin][signal];
-      if (!Array.isArray(values)) { legacy.push(origin); break; }
       for (i = 0; i < values.length; i++) {
         /* A stored value this build no longer knows is dropped, not asserted: a renamed signal or a retired
            value is an upgrade, an unknown value permits nothing, and aborting would brick every profile that
