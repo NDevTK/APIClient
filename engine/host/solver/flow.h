@@ -1,343 +1,122 @@
-/* FLOW + WFQ — the scheduler's unit of work, rebuilt clean and FRAME-AGNOSTIC.
+/* Flow and WFQ: the scheduler's unit of work and the order it is served in.
  *
- * A FLOW is a code-flow through the program: a DECISION VECTOR over the shared pre-boot baseline. Its state is
- * replay(baseline, decision vector). The engine explores by re-running flows and forking at each concolic
- * branch — and CRUCIALLY, a fork is expressed as "append an arm to a decision vector," which is identical
- * whether the branch was a bytecode OP_if or a native builtin loop-back. That is the whole point of the
- * rebuild: the old design coupled forking to a bytecode OP_if rewind, so native frames could not fork; here a
- * flow is just (fn, decision vector), frame-agnostic by construction.
+ * A flow is a code flow through the program: a decision vector over the shared pre-boot baseline, so its state
+ * is replay(baseline, decision vector). A fork appends an arm to a decision vector, which is the same operation
+ * whether the branch was a bytecode OP_if or a native builtin loop-back, so a flow is (fn, decision vector) and
+ * frame-agnostic by construction.
  *
- * The WFQ orders flows by an anytime-bandit priority: accumulated emitted VALUE + a UCB optimism bonus
- * (∝ 1/(1 + service) so a never-run flow is never starved) − CPU aging (a monopolizer that burns CPU without
- * emitting sinks below productive+unrun flows). ORDER-only: it never drops a work item.
- * THE MONOPOLIZER IS A FORK CHAIN, NOT A FLOW, which is why the AGING term reads the FAMILY's service and not
- * the flow's: an arm is one of N names one exploration wears, the reward is copied to every one of them, and
- * billing each name separately lets the chain age forever without sinking. See the `cpu`/`family`/`acct` fields
- * and flow.c's FlowAcct. */
+ * The WFQ orders flows by an anytime-bandit priority: accumulated emitted value, plus a UCB optimism bonus
+ * proportional to 1/(1 + visits) so a never-run flow is never starved, minus CPU aging so a flow that burns CPU
+ * without emitting sinks below productive and unrun flows. It orders only and never drops a work item. A
+ * monopolizer is a fork chain rather than one flow, so the reward and the family half of the aging live on the
+ * fork family's account (`family` below, flow.c's FlowAcct). */
 #ifndef ENGINE_HOST_SOLVER_FLOW_H
 #define ENGINE_HOST_SOLVER_FLOW_H
 
-#include <stdint.h>   /* int64_t — a LIFETIME WEIGHING COUNT may not be `long`; see FlowKeyChecks */
+#include <stdint.h>   /* int64_t: lifetime counts are 64-bit because `long` is 32 bits in wasm */
 #include <lexbor/dom/dom.h>
 
 #include "quickjs.h"
 #include "solver/world.h"
-#include "solver/pending.h"   /* the replies the host still owes this flow — a JS Array, not a malloc'd list */
-#include "solver/dyn_body.h"  /* …and the program text its sequence holds — shared, because no flow writes it */
-#include "solver/step_unit.h" /* …and which arm of flow_step it last returned through — a NAMED value, not a
-                                 free-form string, so the census row and the abort text are one list */
+#include "solver/pending.h"   /* the replies the host still owes a flow (a JS Array, not a malloc'd list) */
+#include "solver/dyn_body.h"  /* the program text a flow's sequence holds; shared, because no flow writes it */
+#include "solver/step_unit.h" /* the named arm of flow_step a flow last returned through */
 
-/* A NODE OF THE FORK TREE, AND THE ONLY THING IN A FLOW THAT OUTLIVES IT. It exists for one sentence: the thread
-   time a DEPARTING flow burned has to reach the flow that FORKED it, because §scheduler prices the aging term
-   against a monopolizer and a fork chain is one monopolizer wearing N names. OPAQUE here on purpose — a rank
-   input has exactly one reader (flow.c's flow_weight), and a field nothing outside can spell is a field no other
-   subsystem can grow a second ranking out of. See flow.c for the refcounting and the charge. */
+/* A node of the fork tree, and the only part of a flow that outlives it: the thread time a departing flow burned
+   must reach the flow that forked it, because the aging term prices a fork chain as one monopolizer. Opaque so
+   that flow.c's flow_weight is its only rank reader. Refcounting and the charge are in flow.c. */
 typedef struct FlowAcct FlowAcct;
 
-/* §@S'S LADDER, NAMED WHERE THE FITNESS TERM IS DEFINED RATHER THAN WHERE IT IS OBSERVED. The rungs are
-   ORDERED stages toward a fire and the comparator is composed from them (flow_distance), so the count of them
-   is arithmetic in the weight and cannot be a convention two files agree on separately.
-   THE FIRE IS NOT ONE OF THEM. §@S names {filter-survived, sink-reached, context-escaped, handler-fires}; the
-   last is the OUTCOME, and §@S(i)'s whole objection to the old fitness is that rungs sitting at or past the
-   thing they are a distance to are "the outcome restated". A fire closes the search and is a finding — the
-   LEDGER's quantity — so the comparator orders the candidates that have NOT fired.
-   AND THE FIRST RUNG IS BELOW EVERY ONE §@S NAMES, because every one it names reports AT A SINK and a
-   candidate spends most of its life on the runway getting to one. §@S(i) asks for an observation site
-   "strictly before the thing it is a distance to", and read against the sink rungs alone that condition was
-   satisfied by nothing: `filter-survived` is measured on a string a sink was handed, so a candidate 800 gates
-   into its replay and one that has not yet reached its own SOURCE READ both stand at exactly 0 and rank
-   identically for the whole of the runway. The one honest observation available in between is the DELIVERY —
-   the substitution actually being performed, which is the moment the attacker's bytes become a value in the
-   page's own program. It is not "the page has been reached" and not "the payload is downstream of something":
-   deciding the second needs a taint tracker or a recorded transform-expression, both of which §Re-execution
-   bans, while the first is a fact the component that performs the substitution holds already.
-   SO THE LADDER IS FOUR RUNGS AND ITS SITES ARE STRICTLY ORDERED: the delivery (a source read), then the
-   survival fraction and the two sink booleans (a sink write). Its range is still exactly 1.0 — one fractional
-   rung plus three booleans over a denominator of four — which is what prices it against the optimism term so
-   a PROMISE never outweighs a FINDING (flow.c's flow_weight), and the derivation of flow.c's
-   flow_silence_us_to_sink reads FLOW_RUNGS_N rather than a literal, so it moved with this and did not have to
-   be redone.
-   THE FRACTIONAL RUNG SITS BELOW THE DELIVERY IN THE ARITHMETIC AND ABOVE IT IN TIME, AND THAT IS NOT A
-   CONTRADICTION — IT IS UNREACHABILITY, ASSERTED. `flow_distance` composes `cand_surv + cand_rung`, so a
-   nonzero fraction under rung 0 would rank a flow that has delivered nothing beside one that has. No such
-   flow exists: a survival fraction is measured only on bytes that entered the program, so the delivery is
-   already recorded when it is taken, and flow_observe_survival asserts exactly that rather than trusting it. */
-/* AND THE PARAGRAPH ABOVE WAS RIGHT ABOUT THE OBJECTION AND WRONG ABOUT THE REMEDY, WHICH IS WHY THERE IS NOW
-   A RUNG BELOW THE DELIVERY. It says the delivery is "the one honest observation available in between", and
-   §@S(i) asks for a site "STRICTLY BEFORE the thing it is a distance to" — but the delivery IS the source
-   read. A site AT the thing is the outcome restated, which is this paragraph's own objection applied to the
-   answer it produced: with the delivery as the floor, a candidate 800 gates into its replay and one that has
-   not executed an opcode both still stand at exactly 0, and the sentence naming that as the defect stood four
-   lines above the rung that reproduced it. MEASURED: eight sinks at `substituted: 0`, no candidate reaching
-   its own source read, with the runway at ~866 statements and a fresh flow's optimism bonus outranking a
-   saturated frontier for about twelve quanta — which does not buy a traversal. Progress along the runway was
-   not merely unmeasured, it was PENALISED: no term of flow_weight rises there, and two of the four strictly
-   FALL as a candidate makes progress (the optimism decays per dispatch, the aging notch grows) while the
-   reward is frozen by construction.
-   THE RUNWAY'S OWN FRACTION IS THAT SITE, and it is the one quantity this codebase already computes there: how
-   far along its recorded path a candidate has REPLAYED. Its observation site is dec_replay, one arm at a time,
-   every one of them strictly before the source read the delivery reports at.
-   AND IT IS PINNED TO 1.0 AT THE DELIVERY, WHICH IS A DEFINITION AND NOT AN OBSERVATION — the ladder's rule is
-   that a flow cannot hold a rung without its predecessor, and past the source read the runway is no longer the
-   question. Left as a live fraction it would rank a delivered candidate whose recorded path runs on past its
-   source read BELOW an undelivered one that happened to consume all of its own, which inverts the ladder at
-   its first step. Pinned, the bands are disjoint and strictly ordered: undelivered [0, 0.2], delivered
-   [0.4, 0.6], arrived [0.6, 0.8], escaped [0.8, 1.0].
-   THE RANGE IS STILL EXACTLY 1.0 — two fractional rungs plus three booleans over a denominator of five — so
-   the price against the optimism term is unchanged, and flow.c's flow_silence_us_to_sink reads FLOW_RUNGS_N
-   rather than a literal so it moved with this and did not have to be redone. What DID change is what each
-   reading is WORTH: a delivery was a quarter of the range and is now two fifths. */
-#define FLOW_RUNG_DELIVERED 1 /* this flow's payload was substituted into the page's own program — a SOURCE read */
+/* The @S fitness ladder; flow_distance composes the comparator from it, so the rung count is arithmetic.
+   Rung 0 is the runway: the fraction of its recorded path a candidate has replayed, observed at dec_replay,
+   strictly before the source read. Rung 1 is the survival fraction of the payload at a sink. Above them sit
+   three booleans held as one count (Flow.cand_rung): delivered (substituted at a source read), then arrived and
+   escaped (both observed at a sink write).
+   The fire is not a rung: it is the outcome, a finding paid by the ledger, and the comparator orders the
+   candidates that have not fired.
+   At the delivery the runway fraction is pinned to 1.0 by definition, so the bands are disjoint and ordered:
+   undelivered [0, 0.2], delivered [0.4, 0.6], arrived [0.6, 0.8], escaped [0.8, 1.0]. A survival fraction below
+   the delivery is unreachable, because survival is measured only on delivered bytes; flow_observe_survival
+   asserts it. The range is exactly 1.0, which prices the distance against the optimism term so a promise never
+   outweighs a finding; flow.c's flow_silence_us_to_sink reads FLOW_RUNGS_N rather than a literal. */
+#define FLOW_RUNG_DELIVERED 1 /* this flow's payload was substituted into the page's own program (a source read) */
 #define FLOW_RUNG_ARRIVED   2 /* this flow's breakout reached the sink its own search is for */
 #define FLOW_RUNG_ESCAPED   3 /* …and stood there in a position the sink's own language executes */
-#define FLOW_RUNGS_N        5 /* the TWO fractional rungs plus the three above them — the comparator's denominator */
+#define FLOW_RUNGS_N        5 /* the two fractional rungs plus the three above: the comparator's denominator */
 
-/* WHAT ONE STEP OF A FLOW ANSWERED. OWED is not a third kind of flow — it is the same flow reporting that the
-   work it has left belongs to the host, so the scheduler can tell an exhausted frontier from a waiting one
-   without any member leaving the queue. */
+/* What one step of a flow answered. OWED is the same flow reporting that the work it has left belongs to the
+   host, so the scheduler can tell an exhausted frontier from a waiting one without any member leaving. */
 #define FLOW_STEP_MORE  0
 #define FLOW_STEP_DONE  1
 #define FLOW_STEP_OWED  2
 
 typedef struct Flow {
-    /* WHERE THIS FLOW STANDS IN THE FRONTIER'S ARRAY — the registry's own handle on the member, so asking
-       WHERE ONE FLOW IS costs a load instead of a walk of every member standing.
-       IT NAMES A SLOT AND NEVER A RANK, AND NO TERM OF flow_weight MAY EVER READ IT. The array is in ARRIVAL
-       order and the ORDER is by weight — flow.c's swap-remove says exactly that on its own line, "order is by
-       weight, not position" — so this is a fact about the registry's storage and not about the queue. A weight
-       term keyed on it would be ranking by birth position, which is the defect moving the reward onto the
-       family was landed to remove, and it would be carried by a fork as a number the arm did not earn.
-       EXACTLY TWO WRITERS, WHICH IS WHAT MAKES THE RELATION CHECKABLE RATHER THAN HOPEFUL. flow_new's append
-       is the only line the frontier ever GAINS a member on and flow_remove's swap-remove is the only line it
-       ever loses one on (the same pair `g_arrivals`/`g_departures` are defined over, so this field's
-       correctness rests on a claim this file already asserts elsewhere). There is no third site: no Flow is
-       ever copied — `reclaim_calloc(1, sizeof(Flow))` in flow_new is the only construction in the tree — and
-       the registry's `reclaim_realloc` moves the POINTER ARRAY, which relocates no member's slot.
-       IT IS CROSS-CHECKED AGAINST THE WALK IT REPLACES, AT EVERY MEMBER OF EVERY SCAN. flow_pick holds `i`
-       and the pointer for each member it visits, so it asserts this relation there — in the APICLIENT_DEV
-       builds every smoke runs, the handle is re-derived over the WHOLE frontier at every pick, every rival
-       rescan and every pager read, which is a two-sided check on real states rather than an argument.
-       IT USED TO BE ONE MEMBER PER PICK AND THE DIFFERENCE IS WHY THE CHECK MOVED. flow_is_member must answer
-       for a pointer that MAY BE DANGLING, so it compares addresses and cannot use this field to answer; it
-       therefore has the linear answer in hand and asserts the field against it — but only for the member its
-       walk MATCHED, and flow_pick called it once per dispatch purely to ask whether the incumbent was still
-       standing. That was a second full walk of the frontier per dispatch, priced by no counter; the pick
-       decides the same question inside the scan it already performs, and the check it was paying for is wider
-       here than it was there.
-       A SWAP-REMOVE RE-KEYS EXACTLY ONE OTHER MEMBER — the one moved from the end into the departing member's
-       slot — and nothing else moves. That is a fact about the registry, stated here because it is the property
-       any incremental structure over this frontier has to hold, and because a reader who assumes a departure
-       renumbers the array will write the walk this field exists to delete. */
+    /* This flow's slot in the frontier's array, so locating a member is a load rather than a walk. It names a
+       slot, never a rank: the array is in arrival order and the order is by weight, so no term of flow_weight
+       may read it. Exactly two writers keep it exact: flow_new's append and flow_remove's swap-remove, which
+       re-keys only the member moved from the end into the vacated slot. No Flow is ever copied, and the
+       registry's realloc moves the pointer array, not members. flow_pick asserts the field against its index at
+       every member of every scan; flow_is_member cannot use it, because it must answer for a dangling pointer. */
     int reg_i;
-    /* THIS FLOW'S WORLD — its name in the ONE timeline it owns, valid in every document it touches. `delta`
-       below is only this instance's SEGMENT of that world; a flow that scripts an iframe or a popup writes in
-       another WASM instance, and that instance keys ITS segment by this id. A delta cannot travel (it names
-       its targets by live heap pointers), so the name is what crosses — see solver/world.h.
-       IT CHANGES AT EVERY BRANCH THIS FLOW TAKES, and that is the point rather than an oversight: a fork
-       RETIRES the world it branched at and mints a child for BOTH arms, so the name a peer holds a segment for
-       is always a world no flow will write from again. A flow that kept its name across a branch would be
-       indistinguishable, at a peer, from the arm that diverged from it. */
+    /* This flow's world: its name in the one timeline it owns, valid in every document it touches
+       (solver/world.h). `delta` is only this instance's segment of that world; a flow that scripts an iframe or
+       a popup writes in another WASM instance, which keys its segment by this id, because a delta names live
+       heap pointers and cannot travel. It changes at every branch: a fork retires the world it branched at and
+       mints a child for both arms, so a world a peer holds a segment for is never written again. */
     WorldId world;
     JSValue fn;            /* the function this flow re-drives (JS_UNDEFINED for a boot/session flow) */
-    /* THE DECISION VECTOR IS NOT A FIELD HERE, and the flat `signed char *dec` + `dec_n` that used to be is
-       DELETED. It was the from-baseline replay mechanism — a birth vector a flow would replay from cursor 0 —
-       and no caller ever supplied one, so it had exactly one prospective user (the cold tier's resume) and was
-       the wrong shape for it: a flat per-flow array is the quadratic decide.c's shared chain deleted, and a
-       park that wrote one per flow would multiply the sharing back out on the way to disk. A flow's vector
-       lives in `dec_blob` below — the shared frozen chain — whether it was frozen by a suspend, by a fork, or
-       rebuilt by the cold tier from a recipe. ONE representation, so a resumed flow and a forked one are the
-       same kind of thing to everything downstream. */
-    /* WHAT THIS ONE MEMBER HAS EMITTED (new @H + @S), ONE POINT PER EMISSION — A CENSUS QUANTITY AND NOT A
-       RANK, WHICH IS THE CORRECTION THIS FIELD CARRIES. It used to be "the WFQ's reward term" and it was also
-       copied at every fork and at every from-baseline arrival, and those two sentences cannot both be true of
-       one number: a term COPIED AT AN INSTANT differs between two arms of one parent by whatever the parent
-       emitted between their two branches, which is birth order and not merit, and it is unbounded while every
-       other term of the weight has a range of at most 1.0 — so it dominated, and an unbounded term read
-       descending on birth order serves newest-first. Measured on the smoke fixture: a frontier growing roughly
-       twenty-four fold inside a frozen reward band a hundred and sixty-eight points wide, its floor never
-       moving off its second reading, and not one member reaching the tail.
-       §scheduler'S REWARD IS THE FORK FAMILY'S NOW (flow.c's FlowAcct `val`, reached by flow_reward below), at
-       the SAME accounting unit the aging that cancels it is charged to. This field is what the account cannot
-       say: which MEMBERS are producing. A frontier retiring members steadily while every one of them reads
-       zero here is one coasting on an ancestor's findings — the question `val_born` was invented to ask by
-       subtraction, and there is nothing to subtract once nothing is inherited, so that field is DELETED rather
-       than kept beside this one.
-       NEVER COPIED, NEVER INHERITED, NEVER READ BY flow_weight. A fork's precondition asserts it is still zero
-       (flow.c's flow_fork_inherit), which is what keeps it a measurement: the moment it is assigned at a fork
-       it is a rank again, and a rank a fork copies is the defect above. */
+    /* The decision vector is not a field here. It is `dec_blob` below, the shared frozen chain, whether it was
+       frozen by a suspend or a fork or rebuilt by the cold tier from a recipe, so a resumed flow and a forked
+       one are the same kind of thing downstream. A flat per-flow array would multiply the sharing back out. */
+    /* What this member has emitted (new @H and @S), one point per emission. A census quantity, never a rank: the
+       WFQ's reward is the fork family's (FlowAcct `val`, read through flow_reward), kept at the same accounting
+       unit as the aging that cancels it. This field says which members are producing.
+       Never copied, never inherited, never read by flow_weight; flow_fork_inherit asserts it is still zero,
+       because a value copied at a fork differs between two arms by birth order rather than merit. */
     double val;
-    /* THE AGING TERM, AND ITS UNIT IS THE WHOLE OF WHETHER THE TERM WORKS. Thread time in MICROSECONDS burned
-       since this flow's FORK FAMILY last emitted — never a step/opcode/visit count. A count is not commensurate with `val`
-       above: a step used to be a whole drain and became one unit of work, so the same charge billed a flow the
-       same amount for twelve milliseconds of execution as for advancing a script index, and §scheduler's
-       sentence ("a monopolizer that burns CPU without emitting sinks below productive AND unrun flows") could
-       not be true at any rate expressible in steps. In microseconds the two terms share a currency and the
-       exchange is stated once, at FLOW_AGE_RATE.
-       int64 rather than long because `long` is 32 bits in wasm: 2147 seconds of unproductive CPU would overflow
-       it, and a NEGATIVE cpu makes the monopolizer the highest-ranked flow in the frontier — the exact failure
-       this term exists to prevent, arriving silently after 36 minutes.
-       AND IT IS WHAT THE AGING READS AGAIN, BESIDE THE FAMILY'S — which is the correction this field carries,
-       and it is the reverse of the one it carried before. It read: "`cpu` is the OPTIMISM term's quantity and
-       only that — §scheduler's bonus is '∝ 1/(visits+1)', visits are this flow's own turns at the thread". A
-       MICROSECOND IS NOT A VISIT, and reading it as one put the same physical quantity — thread time — into
-       BOTH of flow_weight's non-reward terms at two scopes. §scheduler names three quantities (emitted value,
-       visits, CPU) and the weight then held two, so the term priced to demote a monopolizer was DOMINATED by
-       the term meant to protect a newcomer: FLOW_AGE_RATE prices one second of CPU at one emitted finding —
-       the optimism bonus's ENTIRE range — while `1/(1+cpu/Q)` spent HALF that range in ONE QUANTUM, so the
-       priced budget was dominated eighty-three to one and governed nothing, and no flow on a heavily-forking
-       document ever held the thread long enough to finish the program it was inside. What the rate buys is a
-       flow's REWARD in seconds and not a fixed grace period: the term steps in cooperative quanta (flow.c's
-       FLOW_AGE_QUANTUM), so a flow tied with an unrun sibling on reward and bonus hands over after ONE quantum
-       — which is the queue rotating — and a flow that has emitted V findings holds the thread for V seconds of
-       silence before that sibling reaches it, which is the rate doing what it is priced for. `visits` below is the optimism term's quantity now; this
-       one is the aging's own half, and the family's is the other. Both are reset by an emission credited to
-       this flow's ACCOUNT, which is what makes them AGING (silence) rather than lifetime service.
-       IT IS A QUANTITY ONLY BESIDE `cpu_gen`, AND THAT IS THE CORRECTION THIS FIELD CARRIES. It used to be the
-       burn since THIS FLOW's own last emission — a strictly longer window than the family's, since a flow's own
-       emission is one of its family's — and the two halves were summed into one notch and weighed against a
-       reward credited over the family's window. That is a unit error rather than a policy, and it had a
-       population: this field is written only for the flow HOLDING THE THREAD, so a member the scheduler has
-       never dispatched carried whatever its parent had burned at the fork for the life of the frontier, while
-       the parent's was forgiven at the parent's next emission. The arm's deficit was then repayable only by the
-       dispatch the deficit itself was foreclosing — §scheduler's razor's STARVES, and not a deprioritisation.
-       READ IT THROUGH flow.c's flow_own_silence AND NEVER RAW. The field is a reading only while `cpu_gen`
-       matches the account's `emit_gen`; past an emission it holds a previous window's arithmetic. Every reader
-       in the tree goes through that function — the weight, both notches, the census rows, flow_pick's guard,
-       the arrival rule — so the field and its mark cannot be separated by an edit that touches one of them.
-       WHY BOTH HALVES AND NOT ONE. The family charge alone cannot order anything WITHIN a family, because every
-       arm reads the identical number — and a real page's whole frontier is one family (every flow descends from
-       the boot flow through flow_fork_inherit), so §scheduler's "a monopolizer that burns CPU without emitting
-       sinks below productive+unrun flows" was a statement with no comparison left in it exactly where the
-       monopolizer is. The own half is what makes it true among siblings; the family half is what keeps a fork
-       chain one accounting unit against OTHER families (see `family` below, and the 8910-against-1124 reading
-       that put it there). Neither replaces the other. */
+    /* The own half of the aging term: thread time in microseconds this flow burned since its fork family last
+       emitted, never a step or opcode count (a count is not commensurate with the reward). The exchange rate is
+       FLOW_AGE_RATE and the term steps in flow.c's FLOW_AGE_QUANTUM. int64_t because a 32-bit wasm `long`
+       overflows after about 2147 s, and a negative value would rank a monopolizer first.
+       It is a reading only while `cpu_gen` matches the account's `emit_gen`, so every reader goes through
+       flow.c's flow_own_silence and never reads it raw. Written only for the flow holding the thread; inherited
+       at a fork. The family half (`family`) keeps a fork chain one unit against other families; this half
+       orders arms within one family, where every arm reads the same family charge. Both reset at an emission
+       credited to the account, which makes them silence rather than lifetime service. */
     int64_t cpu;
-    /* WHICH SILENCE WINDOW `cpu` ABOVE IS A READING OF — this flow's copy of its account's `emit_gen`, and the
-       half of that quantity without which the other half is a number rather than a measurement.
-       IT IS INHERITED AT A FORK exactly as `cpu` is, and for the identical reason: an arm is its parent's path
-       with one more arm on it, so it stands at the parent's silence in the parent's window. Copying the burn
-       and not the mark would make an arm of a just-emitted parent read that parent's PREVIOUS window's burn as
-       its own — a fork carrying a debt the parent had already been forgiven — and flow_fork_inherit's
-       rank-neutrality equality is what fires on it.
-       WHY A GENERATION AND NOT A WALK. An emission forgives the whole account's window, so every member of the
-       family must read zero own-silence from that instant; a frontier reaches thousands of members and
-       flow_weight is O(1) by construction (it is evaluated inside DCHECK conditions, where a walk that
-       compresses is forbidden), so the forgiveness is one increment on the account and a comparison at each
-       read. The normalisation of the stale field happens where the flow is CHARGED (flow.c's
-       flow_age_running), which is a write site already and where the write is observationally a no-op. */
+    /* Which silence window `cpu` is a reading of: this flow's copy of its account's `emit_gen`. An emission
+       forgives the whole family with one increment of `emit_gen` rather than a walk, because flow_weight is O(1)
+       and is evaluated inside DCHECK conditions. Inherited at a fork together with `cpu`; flow_fork_inherit's
+       rank-neutrality equality fails if only one is copied. flow.c's flow_age_running normalises a stale value
+       where the flow is charged. */
     uint64_t cpu_gen;
-    /* §scheduler'S "visits", WHICH IS A COUNT OF COMPLETED UNITS OF WORK AND NOT A CLOCK — the optimism term's
-       whole quantity. A flow is credited a visit when a scheduler step leaves it BETWEEN units: not inside a
-       program and holding no parked continuation, which is HTML §8.1.4.4 "Calling scripts"'s "if the JavaScript
-       execution context stack is now empty" and is the same predicate the microtask checkpoint is placed against
-       (engine.c). A flow preempted in the middle of a program has not completed a trial and is not credited one.
-       THAT IS THE WHOLE OF WHY THE JOB PUMP WAS STARVED, and it is arithmetic rather than a story. flow_step
-       can only reach a flow's queued jobs with `frame == NULL` — every job arm is under that test — so a
-       reaction runs only after its holder has finished the program it is inside. With the bonus keyed on thread
-       time, a flow was strictly outranked by every arm it had forked the moment it crossed one 12 ms quantum,
-       and each of those arms was in turn outranked by the arms IT forked inside its own first quantum: the pool
-       of members at notch 0 was refilled by branching faster than a quantum drained it, so no flow ever received
-       a SECOND quantum, no program ever ended, and no microtask ever ran. Measured on one real login page: 4650
-       flows, 3093 switches — under one turn per flow — with 217 jobs queued and ZERO run over ninety seconds,
-       against a page whose whole fetch surface hangs off promise reactions. Keyed on completed units the same
-       flow keeps the thread until it finishes the program, its arms then tie with it and take their turns, and
-       the reactions run. It is not a job priority and there is no job in it: the term counts units of work, and
-       a program is one.
-       INHERITED AT A FORK for the same reason `cpu` is — an arm has, by construction, completed every unit its
-       parent completed before the branch. flow_fork_inherit's rank-neutrality DCHECK is what forces the
-       inheritance, and it fires the moment it is forgotten.
-       AND **NOT** PLACED AT AN ARRIVAL, WHICH IS THE OPPOSITE CASE AND USED TO BE THE SAME ONE. The two doors
-       look alike and their premises are contradictory: a fork IS its parent's execution with one more arm on
-       it, while flow_add_unseeded routes a flow to the arrival precisely BECAUSE it stands on nobody's
-       decisions. So the fork's "by construction" reasoning is exactly false of an arrival, and the arrival was
-       copying the count of whichever flow happened to hold the thread — a fact about a stranger. That is the
-       two-instants test failed at a second door: two newcomers arriving at two instants read 1/9 and 1/14 for
-       units NEITHER completed. What it cost is §scheduler's guarantee at the only door that guarantee is
-       about — "a UCB optimism bonus proportional to 1/(visits+1) so a NEVER-RUN FLOW IS NEVER STARVED" is a
-       sentence whose whole content is this term's value at zero, and every from-baseline flow (the @S
-       candidate session, a joined document's boot flow, a cold-resumed recipe) was born at a tenth of it.
-       Measured: twelve candidate sessions at one reward for a whole run, `turns:0` on every one.
-       THE TERM IS THEREFORE OUTSIDE THE ARRIVAL'S COORDINATE ENTIRELY (flow.c's flow_optimism, split out of
-       flow_queue_weight beside §@S's distance for the identical sentence — a reading of the flow is not a
-       position in the queue). A newcomer ties the flow in service on the coordinate and stands one optimism
-       range above it on the weight, which is the rank §scheduler assigns a flow that has completed nothing and
-       is bounded at one emission by flow_nonreward. It pays that back at FLOW_AGE_QUANTUM per quantum burned.
-       AND NOT RESET BY AN EMISSION, WHICH IS THE ONE THING ABOUT THIS FIELD THAT USED TO BE A QUESTION AND IS
-       NOW SETTLED. It used to be written to zero on the EMITTER, on the reasoning that a flow which has just
-       produced something is not one the frontier needs protecting from and "then leads by its REWARD". That
-       reasoning was written when `val` was a per-flow field: the reward is the fork FAMILY's, so within a
-       family it leads nobody, and the zero was residue of the era when this term read `cpu` and forgiving the
-       silence and forgetting the trials were one statement in one field.
-       WHAT SETTLED IT IS THE TEST THIS ACCOUNTING ALREADY APPLIES TO EVERY TERM: two arms of one parent, forked
-       at two instants, must be worth the same, because neither did anything between the two branches. A zero
-       written on the emitter is COPIED by every fork it takes afterwards, so two arms straddling one emission
-       stood a whole optimism range apart for an event NEITHER performed and BOTH were already credited for
-       through the account they share — one credit minted once and presented twice, which is exactly what
-       FlowAcct's `val` was moved onto the family to stop. And the field that WOULD hold a per-member emission
-       preference already exists and is deliberately unranked: `Flow.val` is what one member emitted and is
-       never read by flow_weight, so the zero was that refusal being overturned through this term instead.
-       SO THIS COUNT IS ONE QUANTITY WITH ONE MEANING — units of work completed on this flow's own prefix,
-       raised only by flow_credit_visit, carried by a fork, and monotone for the life of the flow. It is the
-       ONE term of the weight with no reset of any kind, which is worth stating beside `cpu` rather than left to
-       be re-derived: `cpu` above is forgiven for the whole ACCOUNT at an emission (FlowAcct's `emit_gen`)
-       because it is weighed against a reward the account earns, and this one is weighed against nothing — it
-       is a trial count, and a trial that happened cannot un-happen.
-       A PARK DOES NOT CARRY IT, AND THAT IS CONSISTENT RATHER THAN AN OMISSION. The cold tier writes the
-       account's reward and not this (cold.c), so a resumed member re-enters at zero; it then REPLAYS its
-       document and re-completes the units its recipe describes, which is the same reason §@S's distance is
-       "re-earned rather than resumed across a park". A count that is re-earned by the work that earned it is
-       not a reset. */
+    /* The optimism term's quantity: units of work completed, not a clock. flow_credit_visit, its only raiser,
+       credits one when a step leaves the flow between units, holding neither a program nor a parked
+       continuation: the "JavaScript execution context stack is now empty" point of HTML §8.1.4.4 "Calling
+       scripts", where the microtask checkpoint also sits. Keyed on units rather than thread time, a flow keeps
+       the thread until its program ends, so the jobs it queued (reachable only with `frame == NULL`) run.
+       Inherited at a fork, since an arm has completed every unit its parent did. Not copied at an arrival
+       (flow_add_unseeded): an arrival stands on nobody's decisions and starts at zero, the value the never-starved
+       guarantee is about; flow.c's flow_optimism keeps this term outside the arrival's coordinate.
+       Never reset, including by an emission: a zero written on an emitter would be copied by its later forks and
+       split two arms of one parent by an event neither performed. A park does not carry it; a cold-resumed
+       member re-enters at zero and re-earns it by replaying. */
     int64_t visits;
-    /* HOW MANY TIMES THE SCHEDULER HAS HANDED THIS MEMBER THE THREAD — a CENSUS quantity and never a rank, in
-       the same class as `val` beside it: it is not read by flow_weight, it is not inherited at a fork, and it
-       is not reset by anything. It exists because §scheduler's word for the state the razor forbids is
-       STARVES, and no other field in this struct can name the population that sentence is about.
-       EVERY CANDIDATE FOR THAT ROLE IS A TERM OF THE WEIGHT, AND flow_credit_emit RESETS THE SILENCE HALVES OF
-       ALL OF THEM. The own-silence half goes to 0 for every member of the emitting family, so the census row
-       built on it counts a flow that has just produced something AND every arm standing beside it (build.mjs's
-       reader says so in as many words); the family notch goes to 0 on any arm's emission, so flow_pick's own
-       `unrun` population — every non-reward term at zero — is documented at its site as non-empty only within
-       one quantum of an emission, which is why its §ONE-WFQ guards short-circuit to vacuity on
-       exactly the frontier where a member is being starved. A count of DISPATCHES is the one statement none of
-       that can move: a member that was never switched in was never given the chance to emit, so nothing it
-       could have done can erase the fact.
-       `visits` USED TO BE ON THAT LIST AND IS NOT ANY MORE, WHICH SHORTENS THE ARGUMENT WITHOUT WEAKENING IT.
-       An emission zeroed the emitter's count, so "completed no unit of work" counted it too; that write is gone
-       (flow_credit_emit says why it was one credit presented twice), and `vis_zero` below now means what it
-       reads. This field is still the answer, because the two rows ask different questions: `vis_zero` counts
-       members that finished nothing, and a member can finish nothing for a whole run BECAUSE it was dispatched
-       into a program that never ends — which is a resume-seam defect and not an ordering one. Only a dispatch
-       count separates those, and it is the separation the row exists for.
-       IT IS WHAT SEPARATES TWO DIAGNOSES THAT TAKE OPPOSITE WORK, and until it existed a run could not tell
-       them apart at all: a world missing from the emitted surface because its flow was never picked is an
-       ORDERING defect, and one missing because its flow was picked and made no forward progress is a defect in
-       the resume seam. Measured, on the shipped artifact, with a four-line document — a gate whose taken world
-       emits and then enters an opaque-length walk loses the other world's endpoint entirely under `direct`,
-       `preempt` and `eager` alike — and the census could name neither cause.
-       NOT INHERITED AT A FORK, and that is what keeps it a measurement rather than a rank: an arm is its
-       parent's path with one more arm on it for every term the ORDER reads, and it is a brand-new work item
-       for the question "has the scheduler ever chosen this". flow_fork_inherit asserts it is still zero when
-       the account is handed over, for the same reason it asserts `cpu` and `visits` are: a sibling that had
-       already been dispatched was run at a weight nobody chose. Because a fork does not carry it, its
-       rank-neutrality DCHECK is also what forbids this field from ever entering flow_weight. */
+    /* How many times the scheduler has handed this member the thread. A census quantity, never a rank: not read
+       by flow_weight, not inherited at a fork (flow_fork_inherit asserts it is zero, which also keeps it out of
+       the weight), never reset. It names the starved population, which no weight term can, because an emission
+       resets the silence half of every term. It separates two diagnoses that take opposite work: a world missing
+       because its flow was never picked is an ordering defect, while one whose flow was picked and made no
+       progress is a resume-seam defect (`vis_zero` counts members that finished nothing, which covers both). */
     int64_t picks;
-    /* THE OTHER HALF OF WHAT THE AGING TERM READS — the root of this flow's fork family, shared by every arm of it, holding
-       the thread time the whole family has burned since any of its arms last emitted. A from-baseline flow founds
-       one (it points at its own `acct`); a FORK joins its parent's (flow_fork_inherit), which is what makes "a
-       fork chain is one monopolizer wearing N names" true of the arithmetic: the reward is stated once per
-       family and copied to every name, so the aging that cancels it is charged once per family too.
-       MEASURED BEFORE IT EXISTED: `svcMax` 1124 notches against `svcFamMax` 8910 on a 686-member frontier — the
-       family had burned 7.93x what its largest single arm showed, against `valMax` 10.0 and an optimism range of
-       1.0, so every from-baseline flow (every @S candidate session, every joined document's boot flow, every
-       cold-tier resume) waited on N separate arms each paying the family's whole reward off alone. `candSvcMax`
-       was 1: the security search had one quantum in fifteen minutes.
-       IT IS NOT THE ANCESTRY. `acct`/`up` below records who forked whom and is what keeps this root addressable;
-       this is a DIRECT pointer at the root so flow_weight costs one indirection rather than a walk — which it
-       must, because flow_weight is evaluated inside DCHECK conditions where a compressing find is forbidden. */
+    /* The family half of the aging term: a direct pointer at the root of this flow's fork family, shared by every
+       arm, holding the thread time the family burned since any arm last emitted. A from-baseline flow founds one
+       (its own `acct`); a fork joins its parent's (flow_fork_inherit), so a reward stated once per family is
+       cancelled by aging charged once per family. It is not the ancestry (`acct` is); it is direct so
+       flow_weight costs one indirection, as it must inside DCHECK conditions. */
     FlowAcct *family;
-    /* THIS FLOW'S PLACE IN THE FORK TREE — minted with the flow, attached under its parent's by
-       flow_fork_inherit, and refcounted so the family root above stays addressable for exactly as long as any
-       descendant can still read it. See flow.c. */
+    /* This flow's node in the fork tree: minted with the flow, attached under its parent's by flow_fork_inherit,
+       and refcounted so `family` stays addressable while any descendant can read it. See flow.c. */
     FlowAcct *acct;
 
     /* INTERLEAVING STATE — persisted while this flow is PAUSED so the scheduler can run another flow and come
