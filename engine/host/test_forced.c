@@ -983,6 +983,12 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/forms.h"
 #include "fixture/hashsinks.h"
 #include "fixture/tokenlist.h"
+#include "fixture/srcdoc.h"
+#include "fixture/messaging.h"
+#include "fixture/orphan.h"
+#include "fixture/rejection.h"
+#include "fixture/navigator.h"
+#include "fixture/abort.h"
 
 /* the "page": a real 2-<script> HTML document. Script 1 reads injected `state` into a config; script 2 (sharing
    globals) branches on it + does a baseline mutation (globalThis.n) first. Exercises: real Lexbor boot,
@@ -1164,95 +1170,6 @@ static const char HTML[] =
     " ? 'isREANY' : 'wrong:' + reLog2.length));"
     "removeEventListener('error', reH3);"
     "</script>"
-    /* ---- HTML §4.8.5 "The `iframe` element"'s SRCDOC DOCUMENTS ----------------------------------------
-       THE ONE DOCUMENT CLASS THIS FIXTURE COULD NOT BUILD, and therefore the one whose §2.4.3 arm nothing
-       here had ever asked. Two asserts over that class stand in core/dom/document.c — step 1's own
-       "Assert: document's about base URL is non-null." and the pairing checked at the record's birth — and a
-       clean run of this fixture was UNSCORABLE for both rather than confirming, which is
-       CLAUDE.md §AN-ABSENT-CRASH-IS-NOT-A-CORRECT-VALUE exactly: a check that never executes is
-       indistinguishable from one that passed.
-
-       IT IS MARKUP AND NOT SCRIPT, AND THAT IS THE REALM BUDGET RATHER THAN A STYLE. A frame these
-       `<script>`s created would be created by EVERY FLOW that reached the statement, which is
-       §A-CAPABILITY-MATERIALIZED-PER-FLOW's ceiling paid twice over on the largest document here. Inserted as
-       markup it is created ONCE, by the parse, before any `state` read has forked anything — so both child
-       navigables are BASELINE creations and the cost is O(1) in the flow count rather than O(flows). That is
-       also why this block sits ABOVE the first `<script>` to name `state`: a reader who moves it below the
-       fork is changing what it costs, not only where it reads.
-
-       EVERY WITNESS IS CONSTANTS. This engine's whole purpose is to make values unknown, so a path composed
-       from a computed value is not a concrete string and the request never goes out — after which the
-       silence reads as the path not being taken, in exact proportion to how well the engine is working
-       (§A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE-UNKNOWN). Every address below is a
-       literal and every `?v=` token is a literal per arm; the ONE thing composed at run time is the
-       RESOLUTION of `/api/` against `sdbase?v=rel`, which is the engine's own §2.4.3 answer built out of two
-       constants and is the whole of what the first row asks.
-
-       THE ROWS, AND WHAT EACH SEPARATES. They are ordered so that an earlier one surviving localises a later
-       one's absence, which is what makes a missing row readable instead of merely missing.
-         /api/sdrun      ABSOLUTE, so it depends on no base resolution at all: it is the ARMED CONTROL
-                         (§A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE) and says the srcdoc
-                         Document was built and its script ran. A run without it has established nothing
-                         about the three below.
-         /api/sdbase     RELATIVE, and the only relative reference here. §4.2.3 "The base element" freezes
-                         `/api/` against §2.4.3's FALLBACK base URL, whose step 1 for this class is
-                         "Return document's about base URL." — the parent's base URL — so the request can
-                         only carry this address if the about base URL was in hand WHEN THE TREE WAS WALKED.
-                         `about:srcdoc` has an opaque path and can be no base, so a null one resolves
-                         nothing and this row is absent.
-         /api/sdparse    DOMParser INSIDE the frame. The built Document takes its source's URL, and no
-                         parse is a navigation, so it is addressed `about:srcdoc` with a legitimately NULL
-                         about base URL and is NOT of §4.8.5's class — "The resulting Document must be
-                         considered an iframe srcdoc document." is said of the Document a srcdoc NAVIGATION
-                         produces, and this is not one. A step 1 keyed on the ADDRESS answered a strictly
-                         larger question and asserted on a state a page is entitled to reach.
-         /api/sdclone    `document.cloneNode(true)` inside the frame, which reaches the same creation by the
-                         other of its two callers. It is written FIRST of the pair so that a realm with no
-                         DOMParser cannot take the clone row down with it.
-
-       AND THE SECOND FRAME IS THE OTHER DIRECTION, WHICH IS A WRONG ANSWER RATHER THAN A WRONG ASSERT.
-       `<iframe src="about:srcdoc">` has no `srcdoc` attribute, so §4.8.5 takes its `Otherwise` arm and
-       confers nothing — while §7.4.2.2 "Beginning navigation" gives it an about base URL anyway, its step
-       for a url that matches about:blank or is about:srcdoc being
-       "Set documentState's about base URL to initiatorBaseURLSnapshot." over
-       "Set initiatorBaseURLSnapshot to sourceDocument's document base URL.". So §2.4.3 must reach step 3 and
-       answer this Document's OWN address; an address-shaped step 1 returned the creator's base URL instead,
-       and the two are told apart by nothing else a page can read.
-       ITS ROWS READ THE ADDRESS BEFORE THE BASE URL, AND THAT IS THE WHOLE OF WHY THEY CAN SEPARATE
-       ANYTHING. A frame whose navigation has not landed is still holding the Document it was CREATED with,
-       and that Document is the initial `about:blank` one — whose about base URL is non-null and which §2.4.3
-       step 2 therefore answers with the creator's base URL, CORRECTLY. So a probe reading the base URL alone
-       cannot tell `about:blank` answering its own step 2 right from `about:srcdoc` answering step 1 wrong:
-       both render as the parent's address, and the row would have charged the engine for a schedule. Reading
-       §4.5's `URL` first splits them, and every arm is a literal — `initial` (the navigation has not landed,
-       which is a statement about the SCHEDULE and not about §2.4.3), `ownaddr` (the standard's answer),
-       `inherited` (the retired address sniff's), `otheraddr` (neither, which no reading predicts).
-       WHAT THE ROWS ASSERT IS THEREFORE `NOT inherited` AND NOT `ownaddr`, because `initial` is a legitimate
-       outcome of a slower schedule and a row that refused it would be red for a reason that is not a defect.
-       The SYNC read is emitted unconditionally and is that frame's own reachability witness; the TIMER read
-       is the subject, and it is a TIMER rather than a `load` handler because the timers document
-       establishes that timers fire (`/api/timerfire`) and an absent `load` would be a silence where an arm
-       can be a value. */
-    "<iframe id=sdf srcdoc=\"<base href='/api/'>"
-    "<script>"
-    "fetch('https://x.test/api/sdrun?v=ran');"
-    "fetch('sdbase?v=rel');"
-    "var sdc = document.cloneNode(true);"
-    "fetch('https://x.test/api/sdclone?v=' + (sdc !== document ? 'cloned' : 'wrong'));"
-    "var sdp = new DOMParser().parseFromString('<p id=sdpp>x</p>', 'text/html');"
-    "fetch('https://x.test/api/sdparse?v=' + (sdp.getElementById('sdpp') ? 'built' : 'wrong'));"
-    "</script>\"></iframe>"
-    "<iframe id=sdo src=\"about:srcdoc\"></iframe>"
-    "<script>"
-    "var sdo = document.getElementById('sdo');"
-    "function sdoRead(d) {"
-    " return (d.URL === 'about:blank') ? 'initial'"
-    "  : (d.URL !== 'about:srcdoc') ? 'otheraddr'"
-    "  : (d.baseURI === 'about:srcdoc') ? 'ownaddr' : 'inherited'; }"
-    "fetch('/api/sdsync?v=' + sdoRead(sdo.contentWindow.document));"
-    "setTimeout(function(){"
-    " fetch('/api/sdotherwise?v=' + sdoRead(sdo.contentWindow.document)); }, 0);"
-    "</script>"
     "<script>var cfg = { admin: state.admin };"
     "var delObj = { k: 'keepVAL' };"   /* a shared BASELINE object; a forked flow will DELETE its k -> must revert per-flow */
     "var rx = { _f: 'base' };"   /* a reactive-framework style object: `flag` is an ACCESSOR backed by _f (Vue does exactly this) */
@@ -1364,135 +1281,7 @@ static const char HTML[] =
     "soEl.textContent = \"__so += 'X';\";"
     "document.body.appendChild(soEl);"
     "__so += 'B';</script>"
-    /* HTML §4.12.1 "The script element"'s DATA BLOCK, WHOSE BYTES ARE A QUERY — the one source this
-       document can hold whose EXAMPLE carries a `&` while its DISPLAY SHAPE cannot, which is exactly the
-       population `query_align` was widened for and the one the widening landed without a witness for.
-       THE SHAPE IS `&`-FREE BY CONSTRUCTION AND NOT BY LUCK, which is what makes this a witness rather than
-       a coincidence. core/loader/data_block.c names a block by its `id` when `id_is_spellable` admits it —
-       ASCII alphanumerics plus `_`, `-`, `.` and `$`, which does not contain `&` — and by its `script[N]`
-       position otherwise, which holds only digits. So the minted shape `{script#qrun}` cannot hold the query
-       separator whatever the block is called, while the EXAMPLE is the block's own bytes and this document
-       chooses them. Every other unknown here fails one half or the other: `navigator.userAgent`'s example
-       holds `/` and no `&`, `location.hash` and `location.search` are empty at `https://x.test/p` (the
-       document's own address, which is where their examples come from), and a string METHOD over a concolic
-       composes its derivation into the display byte for byte with its arguments (concolic.h), so
-       `.replace('/','&')` would put the separator in the shape as well and align nothing.
-       NOT A REPLY, WHICH IS WHAT WAS PROPOSED AND IS REFUTED BY READING THE ENGINE. A served reply's HEADER
-       is a plain string — core/fetch/reply_source.h's name is minted at the BODY source only
-       (core/fetch/response.c and core/xhr/xml_http_request.c are its two callers) — so
-       `r.headers.get('content-type')` is CONCRETE and its address has no hole in it to align. The reply's
-       BODY does carry the triple, and `json()`/`text()` are measured in this file's own then-chain row as
-       settling for nothing at all, so a row built on one would stand at NOT REACHED and could not fail.
-       A DATA BLOCK NEEDS NO DELIVERY AT ALL: the bytes are in the document, the read is synchronous, and the
-       only thing between the statement and the mint is whether the statement ran.
-       IT ADDS NO PROGRAM AND MOVES NO INDEX. core/loader/document_scripts.c skips a non-executing type in
-       BOTH of its walks — the document's JS identity hash and its executable inventory — so this document's
-       program list and the frontier key it is filed under are unchanged, and the block is named by its `id`
-       rather than by its position so nothing later inserted can rename it. */
-    "<script type='application/x-www-form-urlencoded' id='qrun'>a=1&page=2</script>"
     "<script>"
-    "fetch('/api/u?uid=' + state.id);"   /* concolic query param -> uid carries {state}.id */
-    /* …AND THE HOLE WHOSE VALUE IS ITSELF SEVERAL SEGMENTS, which is the half an equal-count aligner cannot
-       answer at all. `navigator.userAgent` is concolic with a real Chrome example and that example HOLDS `/`,
-       so this address's FIVE shape segments stand over NINE of the example's and the matcher that required
-       equal counts answered "not aligned" for the whole address — after which `param_add_val` skipped the
-       empty value of every param on it. The address is otherwise the ordinary one, a LITERAL origin region
-       with the hole mid-path exactly like `/v1/vis/` below, so the only thing this statement adds to that one
-       is the example's segment count.
-       IT SITS AHEAD OF THE UA GATE ON PURPOSE. `navigator.userAgent.indexOf('Chrome')` below forks on this
-       same source, so running first is what keeps this row a claim about the ALIGNMENT rather than about
-       which arm of that fork reached it. THE GATE IS NAMED AND NOT POINTED AT: this said "the line below"
-       until the query-half twin of this statement was written between the two, at which point a sentence
-       whose subject was a POSITION resolved to a statement it is not about — and a sweep over the gate's
-       own spelling could not have found it. */
-    "fetch('/api/ua/' + navigator.userAgent + '/v4');"
-    /* …AND THE SAME QUESTION ASKED OF THE OTHER HALF OF THE ADDRESS: A QUERY HOLE WHOSE VALUE IS ITSELF
-       SEVERAL PAIRS. The shape holds TWO `&`-separated pairs (`f={script#qrun}` and `tail=z`) and the
-       example holds THREE (`f=a=1`, `page=2`, `tail=z`), so an aligner requiring equal counts answers "not
-       aligned" for the WHOLE query and `kv_pairs` emits every param on it with its shape in place of the
-       bytes the code computed. That is the product's own spelling — `fetch("/s?" + new
-       URLSearchParams(f))`, a bundle composing its own filter list — and it is the case `query_align`'s
-       banner names.
-       THE LITERAL PAIR AFTER THE HOLE IS WHAT MAKES THE READING UNIQUE, and it is why `tail=z` is here
-       rather than the hole ending the address: the run's first pair is anchored by the shape pair's own
-       name (`f`), and its LAST is pinned by the next literal pair, so the hole covers `a=1&page=2` and
-       nothing else. With no `tail` the hole could equally cover one, two or three pairs, the reading count
-       would saturate at two, and the walk would refuse — a correct refusal that witnesses nothing.
-       ITS REACHABILITY IS `path-run`'s, WHICH IS THE POINT OF PUTTING IT IN THIS `<script>`: the two are
-       ADJACENT STATEMENTS OF ONE PROGRAM with nothing between them at all, so a flow that emitted the one
-       above has reached this line. `query-run` at NOT REACHED beside a `path-run` that is not is therefore a
-       statement about THIS statement — the read is DOM §4.4's descendant walk and that is a step machine,
-       so it can park — and not about whether the program was scheduled. */
-    "fetch('/api/qrun?f=' + document.getElementById('qrun').textContent + '&tail=z');"
-    "if (navigator.userAgent.indexOf('Chrome') >= 0) { fetch('/api/uafork?v=chrome'); } else { fetch('/api/uafork?v=other'); }"   /* THE UA GATE: navigator.userAgent is concolic with a real Chrome example, so the string method computes on the example AND the comparison forks -> BOTH arms' endpoints are learned */
-    "if (navigator.maxTouchPoints > 0) { fetch('/api/touch?v=touch'); } else { fetch('/api/touch?v=mouse'); }"
-    "if (screen.width < 768) { fetch('/api/layout?v=mobile'); } else { fetch('/api/layout?v=desktop'); }"
-    /* 13.12 Binary Bitwise Operators AND 13.9 Bitwise Shift Operators over UNKNOWN INPUT — the family that had
-       no concolic semantics, so `h = (h << 5) ^ h | 0` (a minified bundle's string hash) reached the ToNumber
-       boundary and aborted the whole document; three of thirty real signed-out product pages died there.
-       `screen.width` is a concolic carrying a real example, so 6.1.6.1.16 NumberBitwiseOp / 6.1.6.1.9
-       Number::leftShift / 6.1.6.1.11 Number::unsignedRightShift RUN on that example while the RESULT stays
-       unknown — which the branch proves by forking. A collapse to NaN or to a bare number leaves one arm. */
-    "var bwm = screen.width & 1023; if (bwm > 100) { fetch('/api/bwfork?v=bwwide'); } else { fetch('/api/bwfork?v=bwnarrow'); }"
-    "fetch('/api/bwhash?h=' + (((screen.width << 5) ^ (screen.width >>> 3)) | 0));"
-    /* THE OBJECT SIDE ON THE TRAMPOLINE, with a concolic on the other side.
-       13.15.3 ApplyStringOrNumericBinaryOperator ( leftValue, opText, rightValue )
-       step 3's ToNumeric(leftValue) must NOT be performed at the operator's C boundary when the left
-       is unknown (its ToNumeric is step 7's operation, which the hook answers), and step 4's
-       ToNumeric(rightValue) is where the PAGE's code runs — 7.1.3 ToNumeric ( arg )'s own step 1 is
-       "ToPrimitive(arg, number)", which reaches this object's `valueOf`, and it has a loop in it, so it parks
-       on the trampoline and resumes at the exact point. IT IS NOT STEP 1's ToPrimitive: that arm is the `+`
-       arm and `&` never enters it, so a reader chasing the literal word "ToPrimitive" through 13.15.3 lands on
-       a step this expression does not take. The result is still unknown, so the comparison forks — both arms
-       are the claim. */
-    "var bwo = { valueOf: function(){ var n = 0; for (var i = 0; i < 500; i++) { n += i; } return 12; } };"
-    "fetch('/api/bwtramp?v=' + ((screen.width & bwo) !== 0 ? 'bwand' : 'bwzero'));"
-    "var ac0c = new AbortController(); var ac0 = ac0c.signal;"
-    "ac0.addEventListener({ toString: function(){ var n = 0; for (var i = 0; i < 500; i++) { n += i; } return 'abort'; } }, function(){ fetch('/api/idlcoerce?v=coerced'); });"   /* addEventListener's `type` is a Web IDL DOMString: the toString is the PAGE's code and has a loop in it, so the machine parks on step_tostring_run and resumes at the exact stage — and the listener is registered under the string that call RETURNED, which the abort below proves by firing it */
-    "ac0c.abort();"
-    "var ac = new AbortController(); ac.signal.addEventListener('abort', function(e){ fetch('/api/aborted?v=' + (e.isTrusted && e.type === 'abort' && e.target === ac.signal ? 'fired' : 'wrong')); }); ac.abort();"   /* the controller's signal is the REAL state machine: abort() reads [[Signal]] as an internal slot and fires `abort`, whose listener runs as its own task on this flow */
-    "var tsig = AbortSignal.timeout({ valueOf: function(){ var n = 0; for (var i = 0; i < 2000; i++) { n += i; } return n; } });"   /* [EnforceRange] unsigned long long is ToNumber on the PAGE's object: the loop inside valueOf preempts, so the timeout machine must suspend and resume at the exact stage it parked on */
-    "if (tsig.aborted) { fetch('/api/deadline?v=expired'); } else { fetch('/api/deadline?v=live'); }"   /* a timeout's aborted flag is UNKNOWN, so both arms run and the fallback path's endpoint is learned too */   /* THE responsive gate: a bundle routes, hosts assets and often bases its API on this, so both arms must be reached */   /* the desktop-vs-touch gate, the same shape over a numeric member */
-    /* DOM §3.2's "create a dependent abort signal" STEP 2, which IS the whole of `AbortSignal.any(signals)`'
-       method steps — the ask that reached solver/engine.c's `engine_prepare_fork` from a plain C helper and
-       ABORTED, on exactly the flag the row above mints. THREE CLAIMS, and only the first is about the ask
-       existing at all; the other two are about the two things the parking form has to carry.
-       THE CONTROLLER IS A FRESH ONE and that is not tidiness: the two above have had `abort()` called on them,
-       so a signal of either is CONCRETELY aborted and step 2 would answer TRUE at whichever element held it and
-       return before reaching the next one — which would make every row below assert about an element step 2
-       never looked at.
-       `anyfork` IS THE ASK. `tsig.aborted` is unknown at element 0, so step 2 forks there: the TRUE arm is born
-       aborted with the timeout's reason and the FALSE arm walks on to a signal nothing has aborted and yields a
-       live dependent signal, so `anya.aborted` is CONCRETE and OPPOSITE on the two arms and both endpoints are
-       learned. One endpoint here is one arm deleted.
-       `anylate` IS THE CURSOR, AND IT IS THE ROW THE REAL PAGES ARE IN — which inverts which of these three is
-       the control. `anyfork` puts the unknown FIRST, and a measured mirror of the app corpus answered three
-       distinct `AbortSignal.any` argument lists, ALL THREE of them `[<a controller's signal>,
-       AbortSignal.timeout(<n>)]`: the concrete flag first and the unknown SECOND, 3 of 3. abort.h carries the
-       derivation as a command, because that corpus is other people's bundles and is untracked. So element-0
-       forking is the shape those pages do NOT take, and a reader who prices the cursor off `anyfork` alone has
-       priced the row that never fires in production.
-       IT IS ALSO the one shape in this fixture that can tell a cursor from a restart.
-       The concrete signal is FIRST, so step 2's ask at element 0 answers without forking (a flag that is not
-       unknown never reaches the seam) and the fork happens at element ONE. A resume that restarted step 2 at
-       element 0 would be asked about `anyac.signal`'s flag while the seam held `tsig`'s — the two differ here
-       and nowhere else above — and the arm it replayed would answer about the wrong signal.
-       `anyiter` PARKS THE SAME MACHINE TWICE FOR TWO DIFFERENT REASONS: a page iterator with a loop in `next`
-       suspends it at Web IDL §3.2.21.1 step 3, and step 2 then forks it. That is what proves the ask's held flag
-       and the iterator cursor's own in-flight values are separate slots which each survive one clone — a held
-       flag re-initialised on the fork's re-entry leaks the operand, and one shared slot answers about the wrong
-       thing. `Symbol.iterator` is ASSIGNED rather than written as a computed key for the reason the
-       `Symbol.asyncIterator` row below gives. */
-    "var anyac = new AbortController();"
-    "var anya = AbortSignal.any([tsig, anyac.signal]);"
-    "if (anya.aborted) { fetch('/api/anyfork?v=anyhot'); } else { fetch('/api/anyfork?v=anycold'); }"
-    "var anyb = AbortSignal.any([anyac.signal, tsig]);"
-    "if (anyb.aborted) { fetch('/api/anylate?v=latehot'); } else { fetch('/api/anylate?v=latecold'); }"
-    "var anyit = {}; anyit[Symbol.iterator] = function(){ var _k = 0;"
-    "   return { next: function(){ var n = 0; for (var i = 0; i < 500; i++) { n += i; }"
-    "     return _k++ === 0 ? { done: false, value: tsig } : { done: true, value: undefined }; } }; };"
-    "var anyc = AbortSignal.any(anyit);"
-    "if (anyc.aborted) { fetch('/api/anyiter?v=iterhot'); } else { fetch('/api/anyiter?v=itercold'); }"
     /* §13.15.3 ApplyStringOrNumericBinaryOperator STEP 1.c, ASKED OF THE EXAMPLE — "If leftPrimitive is a
        String or rightPrimitive is a String" — which is what decides whether `+` concatenates or ADDS. The
        concolic derivation had one arm, so `num + 1000000` carried the example "19201000000" where the code
@@ -3464,13 +3253,6 @@ static const char HTML[] =
     " ceuni = 'isuni'; } catch (e) { ceuni = 'threw-' + e.message; } fetch('/api/ceuni?v=' + ceuni);"
     /* …and the same throw UNCAUGHT, at a chunk's top level, where a page error is what it becomes. */
     "loadScript('/chunk/cethrow.js');"
-    /* …and §8.1.4.7's rejection nobody handles, from a chunk of its own — see TF_CHUNKS for why it is an
-       Error from a lazily-loaded program rather than a bare string from this one. */
-    "loadScript('/chunk/rejthrow.js');"
-    /* …and §8.1.6.4 step 7.4's half, which is what a report this engine can TAKE BACK is for. Four states come
-       out of one row's arithmetic — see TF_CHUNKS for what each of them is and why they are Errors from a
-       chunk rather than strings from here. */
-    "loadScript('/chunk/rejretract.js');"
     /* HTML §8.1.4.7 Unhandled promise rejections — the two claims that make the two lists necessary, and
        neither can be proved by the other.
        (1) A rejection nobody ever handles IS a page error: an async bundle delivers most of its errors this way
@@ -3678,113 +3460,6 @@ static const char HTML[] =
        measured before the gate existed. `SyntaxError` would be a third — a compile of bytes that did not parse —
        and is why the control's body parses. */
     "(async function(){ fetch('/api/modtypeask?w=mtASK'); try { var bad = await import('/chunk/mdbad.js'); fetch('/api/modtype?w=' + (bad ? 'mtLOADED' : 'mtEMPTY')); } catch (e) { fetch('/api/modtype?w=' + e.name); } })();"
-    /* A CONCOLIC ACROSS A TURN BOUNDARY, WHICH IS THE ONE DELIVERY §9.3.3 MAKES AND THIS FIXTURE HAD NO
-       STATEMENT FOR. `postMessage` serializes NOW (step 7) and delivers in a LATER TASK (step 8), so the value
-       does not cross as a live JSValue at all — §Security says one crosses neither a park, a session nor an
-       instance — and what the receiving handler is handed is whatever the record carried. THAT MAKES IT THE
-       CHEAPEST TEST THERE IS OF WHETHER AN ATTACKER SOURCE SURVIVES A QUEUE: §Attacker-sources rates
-       `message.data` one of the platform's richest, and a page posting `location.hash` is the canonical shape.
-       THE TWO TOKENS ARE THE WHOLE ASSERTION AND THEY ARE CONSTANTS. If the delivered value is still the
-       triple, the `===` is a branch over an unknown and §Solver-half forks it, so BOTH `scADMIN` and
-       `scPUBLIC` are in the document. If the record carried the EXAMPLE alone, the comparison is DECIDED and
-       exactly one of them is — which is a wrong answer and not a lossy one, because the admin arm is the
-       surface this tool exists to reach. Neither token is composed from anything this engine computed, for
-       §A-WITNESS-CARRIES-CONSTANTS-ONLY's reason: a payload built from a concolic can itself be unknown, and
-       then the request is never made and a reached arm reads exactly like an arm that did not run.
-       `scENTER` IS SEPARATE AND IS THE REACHABILITY HALF, because an absent fork token has two readings — the
-       delivery never ran, or it ran and the branch was decided — and those take opposite work. */
-    "window.addEventListener('message', function(e){ fetch('/api/scmsg?v=scENTER');"
-    " if (e.data === 'adminpanel') { fetch('/api/scfork?w=scADMIN'); } else { fetch('/api/scfork?w=scPUBLIC'); } });"
-    "window.postMessage(location.hash.slice(1), '*');"
-    /* AND THE SAME ASSERTION OVER §9.5's BUS, WHICH IS A DIFFERENT CARRIER AND THEREFORE A DIFFERENT CLAIM.
-       §9.3.3's post rides StructuredSerializeWithTransfer, so its record always had a second array to carry a
-       triple; §9.5's rode §2.7.4, whose out-parameter is BYTES AND NOTHING BESIDE THEM, and a concolic reached
-       from inside the message was refused BY NAME — so `postMessage(location.hash)` on a channel ABORTED THE
-       INSTANCE where a real browser delivers a string, and every row of this document went dark with it. The
-       two rows cannot be folded into the window ones for that reason: one record carried a triple and the
-       other could not, and a single pair would report both as whichever happened to be broken.
-       TWO CHANNELS AND NOT ONE, because §9.5's postMessage steps exclude the SENDER — a page that posts on its
-       own channel does not hear itself, which is the first thing every user of the bus relies on. So the
-       receiver is opened first and the post is made on the second.
-       THE TOKENS ARE CONSTANTS for §A-WITNESS-CARRIES-CONSTANTS-ONLY's reason, and `bcENTER` is separate from
-       the fork pair for the reason `scENTER` is: an absent fork token has two readings — the delivery task
-       never ran, or it ran and the branch was DECIDED — and those take opposite work. */
-    "var _bcrecv = new BroadcastChannel('tf-bus');"
-    "var _bcsend = new BroadcastChannel('tf-bus');"
-    "_bcrecv.addEventListener('message', function(e){ fetch('/api/bcmsg?v=bcENTER');"
-    " if (e.data === 'adminpanel') { fetch('/api/bcfork?w=bcADMIN'); } else { fetch('/api/bcfork?w=bcPUBLIC'); } });"
-    "_bcsend.postMessage(location.hash.slice(1));"
-    /* ORPHAN-INVOKE — the headline capability, and the ONE statement in this document that nothing in it calls.
-       It asks two things at once because they are the two halves of the mechanism and either alone would pass
-       while the other was broken: that the function RUNS at all (`/api/orphan/report`), and that its PARAMETER
-       is unknown external input rather than `undefined` — so the equality gate FORKS and the arm behind it is
-       explored (`/api/orphan/admin-only`), which is the whole of "learn the logged-in surface while logged
-       out" reduced to one line. A driven orphan that received `undefined` would emit the first and never the
-       second, and a run in which orphan-invoke does not exist emits neither: a page holding only this function
-       measured ZERO endpoints against one flow, which is what this row exists to keep from happening again. */
-    "function orphanNeverCalled(role){ fetch('/api/orphan/report');"
-    " if (role === 'admin') { fetch('/api/orphan/admin-only'); } }"
-    /* AND THE SEAM INSIDE ONE, which the two rows above cannot see: they assert an orphan RUNS and that its
-       parameter is unknown, and both are true of a body driven start-to-finish with nothing to preempt at.
-       A driven orphan's frame is a CALL-ROOT flow (JS_FlowNewCall), so a back-edge in its body must reach the
-       preempt hook, park the flow as a COW snapshot and resume it — 3000 times here, under FORK_PREEMPT. The
-       terminal value is in the PATH rather than a query parameter so one exact match decides it: `loop3000`
-       says the loop ran to its end and every one of those resumes was byte-identical, where a dropped or
-       reordered resume produces some other number and a lost one produces no endpoint at all. */
-    "function orphanLoops(){ var s = 0; for (var i = 0; i < 3000; i++) { s = s + 1; }"
-    " fetch('/api/orphan/loop' + s); }"
-    /* AND AN ORPHAN THAT COMPARES ITS UNKNOWN AGAINST AN OBJECT, which is the FIRST thing a real library does
-       with an argument it was handed and which took four unmodified bundles' engine instances down before this
-       row existed: axios's `isPlainObject` and vue's own walk are both `while (n !== Object.prototype)`. The
-       equality's other operand is an Object, and §7.1.19 ToString step 10 sends one to ToPrimitive — the page's
-       valueOf/toString, run from a C activation with no flow base under it — so spelling it aborted the whole
-       instance and every finding went with it. §7.2.14 IsStrictlyEqual step 1 returns false whenever
-       SameType(x, y) is false, so there is nothing for such a comparison to pin the unknown to: the predicate
-       forks and carries no pin. The claim is the endpoint BEHIND the walk, because an abort emits none. */
-    "function orphanIdentity(o){ var n = o;"
-    " while (n != null && n !== Object.prototype) { n = Object.getPrototypeOf(n); }"
-    " fetch('/api/orphan/identity'); }"
-    /* AND AN ORPHAN THAT PUTS ITS UNKNOWN THROUGH A COERCE-THEN-COMPUTE BUILTIN, which is the SECOND thing a
-       real library does with an argument it was handed: every hand-rolled base64 / UTF-16 / hash decoder in a
-       bundle is `String.fromCharCode(x.y)`. §22.1.2.1 step 2.a is `ℝ(? ToUint16(next))` and §7.1.11 step 1 is
-       §7.1.4 ToNumber, while the declaration's own coercion is §7.1.1 ToPrimitive — which over an unknown is
-       the identity — so the unknown reached the conversion boundary that owes C a real double and the whole
-       instance aborted. The claim is the endpoint AFTER the call, because an abort emits none: reaching it says
-       the coercion produced a value the string concatenation could carry rather than a crash. */
-    "function orphanCharCode(e){ var s = String.fromCharCode(e.charCode);"
-    " fetch('/api/orphan/charcode?c=' + s); }"
-    /* AND THE POSTFIX UPDATE OPERATOR, WHICH IS HALF OF §13.4 AND WAS THE HALF NOBODY ASKED. `++i` reaches
-       js_unary_arith_slow and its .arith hook answered; `i--` goes through §13.4.3.1 step 3's
-       `? ToNumeric(? GetValue(lhs))` first and CONVERTED, so `for (; e--; )` — a real route loader's own loop —
-       aborted the whole instance. Both spellings are here because the row must fail when only one is built:
-       the PREFIX arm passed the entire time the postfix arm was crashing, so a fixture holding only `++i`
-       reports a family that works while half of it takes documents down. */
-    "function orphanUpdate(e){ var i = e.n, j = ++i, k = i--, n = 0;"
-    " for (var m = e.n; m--;) { n = n + 1; if (n > 2) break; }"
-    " fetch('/api/orphan/update?n=' + n); }"
-    /* AND A COERCE-THEN-COMPUTE BUILTIN WITH A GENERIC BODY — the clamp every bundle writes. §21.3.2.26
-       Math.min ( ...args ) step 2 is `? ToNumber(arg)` for each argument and the declaration's own coercion is
-       §7.1.1 ToPrimitive, which over an unknown is the identity, so the body's JS_ToFloat64 reached the
-       conversion boundary. One unknown argument makes the whole result unknown (step 4's `number > highest` is
-       undecided against a value nobody has), and the endpoint AFTER the clamp is the claim because an abort
-       emits none. */
-    "function orphanClamp(e){ var v = Math.max(0, Math.min(255, e.n));"
-    " fetch('/api/orphan/clamp?v=' + v); }"
-    /* AND THE EIGHTH AND NINTH: the driven body built a DATE out of its unknown and survived it. TWO rows
-       because §21.4.2.1 Date ( ...values ) has TWO coercing arms whose repairs are DIFFERENT, and each was
-       aborting on a different real site of a 19-site corpus: the ONE-argument shape's step 4.c.iii coerces the
-       primitive step 4.c.i produced and has to keep its ToPrimitive apart, because step 4.c.ii inspects what
-       came back; the MULTI-argument shape's steps 5.b-5.h are §7.1.4 ToNumber over the ARGUMENT with no step
-       in between, so the pair is one sub-sequence call. A row holding only one of them reports a family that
-       works while half of it takes documents down, which is the same reason `orphanUpdate` spells both the
-       prefix and the postfix update.
-       THE UNKNOWN IS THE FIELD AT INDEX 0 in the multi-argument statement and the remaining two are literals,
-       deliberately: an unknown at an earlier field does not coerce the later ones (see the residual on
-       js_date_ctor_step), so a `valueOf` written into field 1 here would be asserting that residual rather
-       than this row. The requests are uninteresting and REACHING them is the claim, because an abort emits
-       none — and this is the arm that carries §21.4.2.1 step 5.i MakeFullYear too. */
-    "function orphanDate(e){ var t = new Date(e.n * 1000), u = new Date(e.y, 0, 1);"
-    " fetch('/api/orphan/date1?t=' + t); fetch('/api/orphan/datef?u=' + u); }"
     "(async function(){ var c = await (await fetch('/api/config')).json(); fetch('/api/user?region=' + c.region); })();"   /* FETCH-AWAIT-RESULT: await a safe GET, then §6.4.3 json() over the host's bytes — the parsed body's field flows into a later endpoint as a concrete example */
     /* THE SAME REPLY THROUGH THE OTHER SPELLING, AND THE ROW IS THE SECOND REACTION. Every statement above
        reaches the reply with `await`, which is §27.5.4.7.1 PromiseResolve ( ctor, resolution ) inside Await;
@@ -5131,73 +4806,18 @@ static const char HTML[] =
     " try { await import('/chunk/mdhost.js'); fetch('/api/mhdone?w=mhDONE'); }"
     " catch (mhE) { fetch('/api/mhfail?w=' + mhE.name); } })();"
     "</script>"
-    /* §4.2.4 getElementById OVER AN ELEMENT WHOSE `id` THIS FLOW HAS NOT DETERMINED — the ONE statement in
-       this fixture that reaches core/dom/node.c's attribute value seam, and it is new because NOTHING reached
-       it before. Every other getElementById here is asked over a concrete id AND walks a tree in which no
-       element's `id` is a source: at the revision this landed, every `setAttribute('id', …)` in this document
-       passes a literal (or `'n' + <loop counter>`), so the comparison the seam is under had never once been
-       asked about an undetermined value, and a seam with no exerciser is a seam whose fork no run has taken.
-       WHAT THE TWO ARMS ARE. `bidu` is a derived source (`{location.hash}.slice(1)`), so after the write
-       `#bidseed`'s `id` is undetermined: the comparison against `bidwant` has no two-valued answer, and both
-       completions are feasible because the source could be either string. The IS arm returns the element and
-       the IS NOT arm advances the cursor past it, which is §4.2.4's own two answers.
-       THE PAYLOADS ARE CONSTANTS, which is what makes them a witness at all: `is` and `isnot` are literals, so
-       nothing about either address can become unknown and fail to be composed — a request whose path embedded
-       anything this engine computed would simply not go out on the arm that mattered.
-       `arm=isnot` IS THE REACHABILITY WITNESS AND `arm=is` IS THE SUBJECT, and the pair is what separates a
-       seam that did not fire from a statement that did not run. `isnot` is outcome 0, is the arm a run with no
-       forking policy takes, and is ALSO the answer every build gave before the seam existed — element.c stores
-       concolic_shape_c's display shape for a concolic attribute write, so the memcmp compared `bidwant`
-       against `{location.hash}.slice(1)` and answered false. So `isnot` present with `is` absent is the
-       pre-seam behaviour exactly, and `is` present is the fork having been taken.
-       `#bidwant` IS NAMED BY NOTHING ELSE IN THIS DOCUMENT, which is what makes the truthiness test about this
-       element: a second element carrying that id would answer the IS arm concretely and the row would read 1
-       for a reason the seam had no part in.
-       NO EXPANDO AND NO IDENTITY COMPARISON, deliberately, which is the one thing not to copy from the
-       `#nwisoel` statement above: that row is about WHICH WORLD MINTED A WRAPPER and needs a write to see it,
-       and a write to a wrapper both arms share is the very thing it measures. This asks only whether the walk
-       answered, so it touches nothing.
-       APPENDED IN FRONT OF `</body></html>` AND NOT INSERTED, for the reason the module, crypto,
-       operand-shape, closure and `#nwisoel` statements above each state: this document is ONE LINE, so a
-       `@WHY` frame's COLUMN is the only coordinate a reader has into it and an insertion re-points every
-       column after it. It is LAST for a second reason of its own — it is the only statement here that leaves
-       an undetermined `id` in the tree, so every getElementById that runs after it would fork at that element
-       too, and there is nothing after it. */
-    /* FETCH §5.4 "Request class" STEP 30 — "Set this's signal to the result of creating a dependent abort
-       signal from signals, using AbortSignal and this's relevant realm" — ASKED FROM THE CONSTRUCTOR, which is
-       the one mint of a Request this file had never made. `new Request(` occurred ZERO times in it, so the
-       §5.4 constructor's own fork point had no row anywhere and the abort it reached was observable only on a
-       real page.
-       THE CLAIM IS THE ENDPOINT PAIR AND NOTHING ELSE. DOM §3.2 "Interface AbortSignal"'s step 2 is "For each
-       signal of signals: if signal is aborted, then set resultSignal's abort reason to signal's abort reason
-       and return resultSignal", and `tsig`'s flag is UNKNOWN, so step 30 forks INSIDE the constructor: the TRUE
-       arm is born aborted with the timeout's reason and the FALSE arm walks on to an empty remainder and
-       yields a live dependent signal. `reqsig.signal.aborted` is therefore CONCRETE AND OPPOSITE on the two
-       arms, and BOTH `/api/reqsigfork` endpoints are learned. ONE endpoint here is one arm deleted.
-       `anyfork` ABOVE IS NOT A CONTROL FOR THIS ROW, which is the whole reason this one exists. It asks the
-       same algorithm through `AbortSignal.any`'s machine and proves THAT machine carries the sibling; it says
-       nothing about whether §5.4's constructor does, and a reader who takes it as the witness has established
-       that the mechanism works SOMEWHERE rather than that it ran HERE.
-       THE PAYLOAD IS CONSTANTS, deliberately: a witness composed from anything this engine COMPUTED can itself
-       become unknown, at which point the request is never issued and a reached arm reads exactly like an
-       aborted one. `v=reqhot` and `v=reqcold` are literals, so the oracle is the serving host's own access log
-       and not anything inside the engine.
-       IT BELONGS TO THIS DOCUMENT AND NOT TO ANOTHER, WHICH IS THE ONE THING AN APPEND HERE CAN GET WRONG AND
-       WHICH COST A READING TO CATCH. The row NAMES `tsig`, which `var tsig = AbortSignal.timeout(...)` declares
-       in THIS string; this file holds five document strings, and an append anchored on a nearby CONSTANT rather
-       than on the document landed the first draft of this row inside `HTML_COLD`, where `tsig` is not declared
-       and the statement would have thrown a ReferenceError — a witness that cannot speak, which reads exactly
-       like an arm that never ran. So a row that names a variable is placed by finding the `static const char *`
-       that declares it, never by finding a string to sit beside.
-       IT IS APPENDED IN FRONT OF THE `bidseed` STATEMENT AND NOT AFTER IT, for the reason that statement gives
-       for being LAST: it leaves an undetermined `id` in the tree, so every getElementById after it forks at
-       that element too. This row calls none, so it cannot be the thing that reason is about — and sitting
-       above it keeps that claim true. It re-points the `bidseed` statement's column and nothing else, which is
-       the smallest shift any placement in a ONE-LINE document has. */
-    "<script>"
-    "var reqsig = new Request('/api/reqsig', { signal: tsig });"
-    "if (reqsig.signal.aborted) { fetch('/api/reqsigfork?v=reqhot'); } else { fetch('/api/reqsigfork?v=reqcold'); }"
-    "</script>"
+    /* §4.2.4 getElementById OVER AN ELEMENT WHOSE `id` THIS FLOW HAS NOT DETERMINED — the statement that
+       reaches core/dom/node.c's attribute value seam; every other getElementById here asks a concrete id over a
+       tree in which no `id` is a source.
+       `bidu` is a derived source (`{location.hash}.slice(1)`), so after the write `#bidseed`'s `id` is
+       undetermined and the comparison against `bidwant` has two feasible answers: the IS arm returns the
+       element and the IS NOT arm advances past it, §4.2.4's own two answers.
+       `arm=isnot` IS THE REACHABILITY WITNESS AND `arm=is` THE SUBJECT: `isnot` is outcome 0, the arm a run
+       with no forking takes, and also what a build without the seam answers (element.c stores the display
+       shape for a concolic attribute write, so the comparison against `{location.hash}.slice(1)` is false).
+       The payloads are literals, so neither address can become unknown, and `#bidwant` is named by nothing
+       else in this document, so the IS arm cannot be answered concretely by a second element.
+       IT IS LAST: it leaves an undetermined `id` in the tree, so every later getElementById would fork there. */
     "<span id=bidseed></span>"
     "<script>"
     "var bidu = location.hash.slice(1);"
@@ -5612,6 +5232,12 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "forms", HTML_FORMS },
     { "hashsinks", HTML_HASHSINKS },
     { "tokenlist", HTML_TOKENLIST },
+    { "srcdoc", HTML_SRCDOC },
+    { "messaging", HTML_MESSAGING },
+    { "orphan", HTML_ORPHAN },
+    { "rejection", HTML_REJECTION },
+    { "navigator", HTML_NAVIGATOR },
+    { "abort", HTML_ABORT },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */

@@ -1,0 +1,61 @@
+/* THE ABORT DOCUMENT: DOM §3.2's AbortSignal, its timeout and any(), and Fetch §5.4's dependent signal.
+   One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
+   test_forced.c defines before including it. */
+#ifndef ENGINE_HOST_FIXTURE_ABORT_H
+#define ENGINE_HOST_FIXTURE_ABORT_H
+#ifndef TF_CANVAS_INK
+#error "a fixture document is included before TF_CANVAS_INK, the page ink every document ends with"
+#endif
+
+static const char HTML_ABORT[] =
+    "<!doctype html><html>"
+    "<body>"
+    "<script>"
+    "var ac0c = new AbortController(); var ac0 = ac0c.signal;"
+    "ac0.addEventListener({ toString: function(){ var n = 0; for (var i = 0; i < 500; i++) { n += i; } return 'abort'; } }, function(){ fetch('/api/idlcoerce?v=coerced'); });"   /* addEventListener's `type` is a Web IDL DOMString: the toString is the PAGE's code and has a loop in it, so the machine parks on step_tostring_run and resumes at the exact stage — and the listener is registered under the string that call RETURNED, which the abort below proves by firing it */
+    "ac0c.abort();"
+    "var ac = new AbortController(); ac.signal.addEventListener('abort', function(e){ fetch('/api/aborted?v=' + (e.isTrusted && e.type === 'abort' && e.target === ac.signal ? 'fired' : 'wrong')); }); ac.abort();"   /* the controller's signal is the REAL state machine: abort() reads [[Signal]] as an internal slot and fires `abort`, whose listener runs as its own task on this flow */
+    "var tsig = AbortSignal.timeout({ valueOf: function(){ var n = 0; for (var i = 0; i < 2000; i++) { n += i; } return n; } });"   /* [EnforceRange] unsigned long long is ToNumber on the PAGE's object: the loop inside valueOf preempts, so the timeout machine must suspend and resume at the exact stage it parked on */
+    "if (tsig.aborted) { fetch('/api/deadline?v=expired'); } else { fetch('/api/deadline?v=live'); }"   /* a timeout's aborted flag is UNKNOWN, so both arms run and the fallback path's endpoint is learned too */   /* THE responsive gate: a bundle routes, hosts assets and often bases its API on this, so both arms must be reached */   /* the desktop-vs-touch gate, the same shape over a numeric member */
+    /* DOM §3.2's "create a dependent abort signal" STEP 2, which IS `AbortSignal.any(signals)`'s method steps,
+       asked from inside the step machine (solver/engine.c's `engine_prepare_fork`). The controller is FRESH:
+       the two above are concretely aborted, so step 2 would return at whichever element held one.
+       `anyfork` IS THE ASK: `tsig.aborted` is unknown at element 0, so step 2 forks there — the TRUE arm is born
+       aborted with the timeout's reason, the FALSE arm yields a live dependent signal — and both endpoints are
+       learned.
+       `anylate` IS THE CURSOR, and real pages take this shape (`[<a controller's signal>,
+       AbortSignal.timeout(<n>)]`; core/dom/abort.h carries the corpus derivation): the concrete flag first, so the fork
+       happens at element ONE. A resume that restarted at element 0 would be asked about `anyac.signal`'s flag
+       while the seam held `tsig`'s.
+       `anyiter` parks the same machine twice: a page iterator with a loop in `next` suspends it at Web IDL
+       §3.2.21.1 step 3, and step 2 then forks it, so the held flag and the iterator cursor are separate slots
+       that each survive one clone. `Symbol.iterator` is assigned rather than written as a computed key. */
+    "var anyac = new AbortController();"
+    "var anya = AbortSignal.any([tsig, anyac.signal]);"
+    "if (anya.aborted) { fetch('/api/anyfork?v=anyhot'); } else { fetch('/api/anyfork?v=anycold'); }"
+    "var anyb = AbortSignal.any([anyac.signal, tsig]);"
+    "if (anyb.aborted) { fetch('/api/anylate?v=latehot'); } else { fetch('/api/anylate?v=latecold'); }"
+    "var anyit = {}; anyit[Symbol.iterator] = function(){ var _k = 0;"
+    "   return { next: function(){ var n = 0; for (var i = 0; i < 500; i++) { n += i; }"
+    "     return _k++ === 0 ? { done: false, value: tsig } : { done: true, value: undefined }; } }; };"
+    "var anyc = AbortSignal.any(anyit);"
+    "if (anyc.aborted) { fetch('/api/anyiter?v=iterhot'); } else { fetch('/api/anyiter?v=itercold'); }"
+    "</script>"
+    /* FETCH §5.4 "Request class" STEP 30 — "Set this's signal to the result of creating a dependent abort
+       signal from signals, using AbortSignal and this's relevant realm" — asked from the CONSTRUCTOR.
+       THE CLAIM IS THE ENDPOINT PAIR. DOM §3.2's step 2 is "For each signal of signals: if signal is aborted,
+       then set resultSignal's abort reason to signal's abort reason and return resultSignal", and `tsig`'s
+       flag is unknown, so step 30 forks inside the constructor and `reqsig.signal.aborted` is concrete and
+       opposite on the two arms: both `/api/reqsigfork` endpoints are learned.
+       `anyfork` above is not a control for this: it proves `AbortSignal.any`'s machine carries the sibling and
+       says nothing about §5.4's constructor.
+       The payloads are literals, so a reached arm cannot read as an aborted one. `tsig` is declared in this
+       document's first script, which is why the statement belongs here. */
+    "<script>"
+    "var reqsig = new Request('/api/reqsig', { signal: tsig });"
+    "if (reqsig.signal.aborted) { fetch('/api/reqsigfork?v=reqhot'); } else { fetch('/api/reqsigfork?v=reqcold'); }"
+    "</script>"
+    TF_CANVAS_INK
+    "</body></html>";
+
+#endif
