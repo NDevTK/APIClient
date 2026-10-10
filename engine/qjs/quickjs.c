@@ -33318,7 +33318,10 @@ typedef struct JSArrayFromLike {
 typedef struct JSTAFromLike {
     JSStepHdr hdr;       /* MUST be first: the generic step driver casts the state to JSStepHdr * */
     JSValue items;       /* the array-like, ToObject(source) (owned) */
-    JSValue target;      /* new TA: the unattached view; from: UNDEFINED until Construct(ctor) answers (owned) */
+    JSValue target;      /* the TypedArray being filled; UNDEFINED until TFL_CREATE makes or constructs it (owned) */
+    JSValue proto;       /* new TA: the prototype AllocateTypedArray already read (an object or null); UNDEFINED
+                            for from (owned). The view is created from it once the length is known, so no
+                            unattached view is ever held across the length chain's forks. */
     JSValue ctor;        /* from: the receiver it constructs; UNDEFINED for new TA (owned) */
     JSValue mapfn, this_arg;   /* from: the mapper and its thisArg, UNDEFINED when absent (owned) */
     JSValue el;          /* the element held across its read, its mapper call and its Set (owned) */
@@ -42361,7 +42364,16 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                 goto do_consume_deliver_iterator;
                             }
                             tf->items = src6;
-                            tf->target = fs->ta_target;           fs->ta_target = JS_UNDEFINED;
+                            tf->target = JS_UNDEFINED;
+                            /* the view itself stays with the consumer and goes with its teardown: nothing but
+                               that machine ever held it, so the walk recreates it over the same prototype once
+                               its length is known, and a fork in the length chain shares no unattached view */
+                            tf->proto = JS_UNDEFINED;
+                            if (!fs->ta_isfrom) {
+                                JSObject *vp = JS_VALUE_GET_OBJ(fs->ta_target);
+                                tf->proto = vp->shape->proto ? js_dup(JS_MKPTR(JS_TAG_OBJECT, vp->shape->proto))
+                                                             : JS_NULL;
+                            }
                             tf->ctor = fs->ta_isfrom ? fs->adder : JS_UNDEFINED;
                             if (fs->ta_isfrom) fs->adder = JS_UNDEFINED;
                             tf->mapfn = fs->mapfn;                fs->mapfn = JS_UNDEFINED;
@@ -96229,9 +96241,10 @@ static int js_ta_fromlike_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
     JSTAFromLike *s = st;
     int r;
 
-    DCHECK(s->isfrom ? !JS_IsUndefined(s->ctor) : (JS_IsUndefined(s->ctor) && !JS_IsUndefined(s->target)),
+    DCHECK(s->isfrom ? (!JS_IsUndefined(s->ctor) && JS_IsUndefined(s->proto))
+                     : (JS_IsUndefined(s->ctor) && !JS_IsUndefined(s->proto)),
            "the TypedArray array-like walk was built without the operand its algorithm starts from — from "
-           "constructs its target with the receiver, new TypedArray(arrayLike) fills the view it was handed");
+           "constructs its target with the receiver, new TypedArray(arrayLike) creates one over the read prototype");
     if (s->hdr.stage == TFL_LENGTH) {
         r = step_length_run(ctx, &s->hdr, s->items, cb_result, &s->len, out_cb, out_argc);
         cb_result = JS_UNDEFINED;
@@ -96247,9 +96260,13 @@ static int js_ta_fromlike_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
             s->hdr.stage = TFL_CONSTRUCTED;
             return 4;
         }
-        DCHECK(JS_VALUE_GET_TAG(s->target) == JS_TAG_OBJECT
-               && JS_VALUE_GET_OBJ(s->target)->class_id == s->classid,
-               "AllocateTypedArrayBuffer was asked for a view whose class is not the one this walk sizes");
+        /* 23.2.5.1 step 6.a.i's object, over the prototype its GetPrototypeFromConstructor already read: creating
+           it invokes nothing and no page code has seen it, so creating it here rather than before the length is
+           unobservable — and it leaves each world that the length chain forked its own view. */
+        DCHECK(JS_IsUndefined(s->target), "new TypedArray(arrayLike)'s view is created exactly once");
+        DCHECK(is_typed_array(s->classid), "the array-like walk sizes a buffer for a class that is not a TypedArray");
+        s->target = JS_NewObjectProtoClass(ctx, s->proto, s->classid);
+        if (JS_IsException(s->target)) { s->target = JS_UNDEFINED; return -1; }
         if (js_typed_array_alloc_len(ctx, s->target, s->classid, s->len) < 0) return -1;
         s->hdr.stage = TFL_GET;
     }
@@ -96301,6 +96318,7 @@ static void js_ta_fromlike_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSTAFromLike *s = st;
     v->val(ctx, &s->items);
     v->val(ctx, &s->target);
+    v->val(ctx, &s->proto);
     v->val(ctx, &s->ctor);
     v->val(ctx, &s->mapfn);
     v->val(ctx, &s->this_arg);
