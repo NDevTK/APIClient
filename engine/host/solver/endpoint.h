@@ -349,729 +349,203 @@ char   *endpoint_reach_hist_json(void);
    `runtime-only` at 0 is a refusal to claim, and its denominator is `epEmitted` on the same census line. */
 char   *endpoint_razor_hist_json(void);
 
-/* Record one learned endpoint (deduped by method+url). `url` may be concolic (shape) or concrete. Headers are
-   MERGED into a same-identity endpoint: a header seen with a concrete value supersedes the same header seen
-   only as a shape, which is the rule the param values already follow. `body` is NULL where the request has
-   none — which is a STATEMENT (this request sends no body), never an unknown.
-
-   `prov` IS WHAT THIS SIGHTING IS EVIDENCE OF — one of solver/pending.h's PROV_* — AND IT IS PART OF THE
-   ENDPOINT'S IDENTITY. CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE: "a forced reply's values are learned and
-   CARRIED AS FORCED, never merged into the observed pool", and the choice between two pools and one pool with
-   a grade every reader must consult is settled by which one makes the wrong answer IMPOSSIBLE rather than
-   discouraged. A folded grade does not: a FORCED sighting merging into a record whose grade folds to
-   `observed` publishes, under the strongest claim this surface can make, a value that exists only because a
-   gate was forced — the same fabrication as inventing `6` for `x > 5`, arriving through a merge rule instead
-   of through a solver. Putting the grade in `same_identity` means the merge cannot happen: a forced sighting
-   and a derived one are two records, each carrying only the values observed at its own grade, and no
-   consumer has to remember anything. It is the rule `loc` already follows one field down — "two params of
-   the same name in two places are two params".
-   AND IT IS DELIBERATELY *NOT* THE PENDING LINE'S RULE, which folds a deduped set to its MOST OBSERVED
-   member. That fold is right there and wrong here, and the difference is not a preference: the pending set is
-   ONE REQUEST that ONE reply answers, so the line has to state the single fact that survives every member or
-   the host cannot fire it at all. This surface is a set of SIGHTINGS, and nothing forces two of them into one
-   row but a dedup convenience — so two rows for one address, one graded `derived` and one `forced`, are two
-   TRUE statements, and the second is precisely the row a reviewer needs in order to distrust it.
-
-   EVERY PRODUCER STATES IT AND NOTHING HERE DERIVES IT. A request this engine builds by RUNNING the page's
-   code states `engine_prov_of_running_path()` (solver/engine.h), read at the act because that is when the
-   path it is about is standing; a reply-learned address states the grade of the REPLY that named it
-   (solver/reply_decode.h), which is a fact about the REQUEST that reply answers and never about whoever is
-   standing when the bytes land. THAT REASON USED TO READ "which no flow can answer because that path runs
-   outside every flow", and it is rewritten rather than deleted because a reader who re-derives it from the
-   `engine_provide` door will re-derive the word `every`: that door does run outside every flow, and
-   core/xhr/xml_http_request.c's does not — it runs INSIDE the flow that sent, on a later turn than the one
-   §3.5.6 "The send() method" step 6 composed the request on, and carries the grade it took at that step
-   rather than asking the path it is standing on. The rule is the same at both and only the sharper half of
-   the reason was transport-specific. A default here would be `observed` by the numbering, on a record nobody
-   graded. */
-/* `door` IS WHICH MECHANISM COMPOSED THE ADDRESS — one of the EPD_* above, stated by the producer because
-   it is the one fact about a sighting no consumer of this surface can re-derive. See the enum for why it is
-   neither `prov` nor the program-state flag, and why it is not part of the endpoint's identity. */
+/* Records one learned endpoint, or merges it into the record of the same identity: method, path shape,
+   `prov`, and the ordered names and locations of its params. `url` may be concolic (its shape is recorded) or
+   concrete. `body` NULL states that the request sends no body. Headers merge into a same-identity record, a
+   concrete value superseding a shape. Asserts that `prov` is one of solver/pending.h's PROV_*, that `door` is
+   a member of ENDPOINT_DOORS, and that `body`'s kind and spans agree. Every call is counted by the ask census
+   before the suppression gate.
+   `prov` is part of the identity so a forced sighting can never merge into an observed or derived record and
+   publish a forced value under the stronger grade; two rows for one address at two grades are two true
+   statements. (The pending line folds a deduped set to its most observed member instead, because one reply
+   answers that set.) Every producer states it: running code states `engine_prov_of_running_path()` read at
+   the act, and a reply-learned address states the grade of the reply that named it, which is a fact about the
+   request that reply answers and never about whatever flow stands when its bytes land. A default would be
+   `observed` by the numbering, on a record nobody graded. */
+/* `door` is which mechanism composed the address, stated by the producer; see ENDPOINT_DOORS. */
 void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                         const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body, int prov, int door);
 
-/* The @H surface as a malloc'd JSON ARRAY (caller frees) — findings are C data, so the emit is C, never a
-   JS-object round-trip.
-   `[ {"method":..,"url":..,"provenance":"observed"|"derived"|"forced",
-      "door":"document-script"|…|"reply-chunk","mintedAt":"pre-program"|"post-program",
-      "addressClass":"concrete"|"source-determined"|"unknown",
-      "params":[{"name":..,"location":..,"valueClass":"unknown"|"concrete","validValues":[..],"excludes":[..],
-      "bounds":{"minimum"|"exclusiveMinimum":N,"maximum"|"exclusiveMaximum":N},
-      "predicates":[{"method":..,"arguments":[..],"holds":true|false}],
-      "looselyEquals":[{"value":..,"type":..}]}]}, ... ]`.
-   `addressClass` IS WHETHER THE RUN HAD DETERMINED THIS ADDRESS WHEN IT RECORDED IT, and it is the one field
-   on this record that answers CLAUDE.md §What-the-tool-produces' HARD BAR at the grain the bar is stated at.
-   It is ALWAYS PRESENT for `provenance`'s reason and `valueClass`'s: the words are exhaustive over the
-   states this engine can be in about an address value, so there is no absence to read as a statement. See
-   `ENDPOINT_ADDRESS_CLASSES` for what each word claims, for the two populations `concrete` still hides, and
-   for why the honest field is a FLOOR under the bar rather than a boolean about what a parse could reach — a
-   consumer that read `concrete` as `a static reader gets this for free` would be making a claim no producer
-   here makes.
-   THREE WORDS AND NOT TWO, AND THE BAR IS KEYED ON ONE OF THEM RATHER THAN ON A COMPLEMENT. A consumer asks
-   Q1 (did the run determine this address) as `!= "unknown"` and Q2 (does this row clear the hard bar) as
-   `== "unknown"`, which is what `razorClass` already composes; `"source-determined"` answers Q1 DETERMINED
-   and Q2 PROVES NOTHING, so a consumer reading the bar as `!= "concrete"` over-claims on exactly it. A
-   consumer that knows only the two older words still reads the BAR correctly — `unknown` is unchanged and is
-   still the bar's address-side operand — and loses only the split inside the determined side, which is why
-   this widening needed no consumer to land with it.
-   IT IS STILL THE SAME VOCABULARY AS `valueClass` ONE GRAIN OUT for the two words they share, and `valueClass`
-   deliberately does NOT gain the third: a param's value has no pinned-and-still-held population to carve out,
-   so the pair means one thing at two grains wherever both spell it.
-   A CONSUMER CANNOT RE-DERIVE IT FROM `url`, which is why it is carried. A concolic address is printed as
-   its SHAPE, so a brace in `url` looks like the evidence — and extension/lib/learn.js's live-traffic path
-   walk mints a `{path_*}` hole into a URL from two observed addresses that differ at one segment, which is a
-   brace no concolic put there and which arrives on rows this key reads `concrete` for.
-   Every param states WHERE IT LANDED — "path", "query" or "body" — because that is what the reviewer replays
-   it with, and because a consumer that has to default the field cannot tell an unknown from a query param.
-   AND EVERY PARAM STATES WHETHER ITS VALUE EVER NAMED A HOLE. `valueClass` is "unknown" where some observed
-   path minted this param from a value the code did NOT compute, and "concrete" where every one of them minted
-   it from a literal. It is ALWAYS PRESENT for `provenance`'s reason one level in: the two words are
-   exhaustive, so there is no absence to read as a statement, and this record already spells "unobserved" as a
-   silence four fields down.
-   IT IS WHAT MAKES THOSE FOUR SILENCES READABLE AT ALL, and that is the whole of why it is on the record.
-   Each of `excludes`, `bounds`, `predicates` and `looselyEquals` is OMITTED where no such claim survived every
-   observed path, and endpoint.c reads all four through the param's HOLE KEY — so where there was no hole, all
-   four were skipped at the mint and their absence means something else entirely. "No equality gate over this
-   hole took its false arm on every path" presupposes a hole; "this param is a literal and there was never
-   anything to look up" is the other reading, and the two take OPPOSITE work — the first wants more gates
-   observed and the second wants nothing, however good the solver gets. Without this key they render with
-   identical bytes, so a consumer counting parameters whose domain could have been narrowed is counting a
-   population it cannot name, and its zero is consistent with a page whose every forced-execution param was a
-   concrete query pair.
-   A CONSUMER CANNOT RE-DERIVE IT FROM `validValues`, which is why it is carried. endpoint.c's query scan
-   emits the ALIGNED EXAMPLE where the shape held a hole, so a param minted from `{location.hash}` renders a
-   computed-looking literal — the one spelling that would have betrayed the hole is exactly the one the
-   example replaced.
-   A `location:"path"` PARAM IS ALWAYS "unknown" and endpoint.c's `kv_add` asserts it: the path scan mints a
-   param only for a braced segment and passes that segment's brace-stripped name AS the hole key. That
-   invariant used to be re-derived by readers of this file — testing/corpus/site.mjs reasoned it out to build
-   a denominator it could trust — and it is now a fact the record states and the engine crashes on.
-   ITS MERGE IS A UNION AND NOT THE INTERSECTION THE FOUR DOMAINS TAKE. Those are claims about the VALUE, so a
-   path that reached the request without obeying one disproves it; this is a fact about whether the
-   OBSERVATION could ask anything, which a later concrete sighting cannot take back. The direction is also the
-   only sound one: intersecting would answer "concrete" for a param one observed path did mint from a hole,
-   dropping a row that genuinely could have carried a domain and making a coverage fraction read HIGHER than
-   the truth.
-   AND EVERY RECORD STATES WHAT IT IS EVIDENCE OF. `provenance` is one of solver/engine.h's three words and it
-   is ALWAYS PRESENT — there is no absence to read as a statement here, because the three words are exhaustive
-   over the ways this engine can come to know an address and a silent grade is read as the strongest of them.
-   It is the record's, not a param's: a sighting is graded as a whole (the path it was built on, or the reply
-   that named it), and every value on it was observed at that grade because the grade is part of the record's
-   identity — see `endpoint_record`. WHAT THE READER DOES WITH IT: `derived` is the tool's headline claim (the
-   app's own code computes this request and no session sent it); `observed` is a real load of the document;
-   `forced` is an address that exists only because a gate was forced, whose reply CLAUDE.md §@H forbids ever
-   being reported as the other two, and which extension/lib/popup-send.js renders as its own tag rather than
-   letting it wear `[UNUSED]`.
-   AND EVERY PARAM STATES BOTH OF THE TWO FACTS A SHAPE IS MADE OF. `validValues` is PROVENANCE-and-example —
-   who must supply the value, and what the code computed for it where it computed one. `excludes` is DOMAIN —
-   what this endpoint's own equality gates PROVED the value is not, on every observed path to the request.
-   Carrying only the first is a WRONG report and not a partial one: a param proved to be neither "admin" nor
-   "prod" and a param nothing ever tested render with identical bytes, so the silence about the gate is read
-   as the positive statement "anything goes". Forced multi-path is what makes the second fact plentiful — it
-   runs BOTH arms of every equality gate, so a pin and an exclusion are minted at the same rate, and the arm
-   that is not the one the shipped bundle took is exactly the arm this tool exists to explore.
-   `excludes` is OMITTED where no such constraint held on every observed path, and that absence IS the
-   statement — never an empty array, which a consumer could not tell apart from an unconstrained param.
-   `bounds` IS THE SAME FACT OVER AN ORDERED DOMAIN — what this endpoint's own ORDERING gates proved the value
-   must be greater or less than, on every observed path — and it is emitted in JSON Schema Validation 2020-12
-   §6.2 Validation Keywords for Numeric Instances (number and integer)'s own vocabulary: at most one of
-   §6.2.4 "minimum" / §6.2.5 "exclusiveMinimum", and at most one of §6.2.2 "maximum" / §6.2.3
-   "exclusiveMaximum". Each value is a JSON NUMBER, spelled as the page's own literal.
-   THE INTERVAL IS ONLY AN ASSERTION IF THE RECORD ALSO SAYS THE VALUE IS A NUMBER. §6.2.5's text is "If the
-   instance is a number, then the instance is valid only if it has a value strictly greater than (not equal
-   to) exclusiveMinimum" — so all four keywords assert NOTHING against a non-number instance, and a consumer
-   that carries this interval beside a `string` type has emitted the domain and erased it in one record.
-   That the value IS compared as a number is stated by this very field: concolic_rel_hook records a bound
-   only for a finite Number operand, and ECMAScript §7.2.12 IsLessThan step 3 takes the string comparison
-   only when BOTH sides are Strings. lib/learn.js is where that is read.
-   BOTH SIDES CAN BE PRESENT, because `if (x > 5 && x < 100)` is TWO observations of one parameter and a
-   record holding only one of them is a wrong report by this rule's own terms.
-   It carries NO member of the interval: §@H forbids inventing `6` for `x > 5`, so a value appears in
-   `validValues` only where the code COMPUTED one. `bounds` is omitted entirely where no ordering gate's claim
-   survived every observed path, and that absence is the statement, exactly as `excludes`' is.
-   `predicates` IS THE THIRD OF THE THREE WAYS A GATE NARROWS A DOMAIN, and the one §@H names in its own
-   headline example (`{startsWith:/api}`). An equality determines a VALUE on one arm, an ordering an INTERVAL
-   on both, and a METHOD CALL neither — so `if (!path.startsWith("/api")) return;` recorded nothing at all
-   through the first two, and a parameter a prefix check gated rendered with the same bytes as one nothing had
-   ever tested. Each entry is `{"method":<string>,"arguments":[<string>...],"holds":<boolean>}`: the property
-   NAME the page read off the unknown, every argument as the page's own §7.1.19 ToString of it, and WHICH ARM
-   this run took. `holds:false` is a fact and not a modifier — forced multi-path runs both arms of every gate,
-   so the proved negation arrives at the same rate as the proof, and it is the arm the shipped bundle did not
-   take. `arguments` may legitimately be EMPTY (`x.trim()` tested as a condition) and is always present.
-   IT IS THE ENGINE'S OWN VOCABULARY ON PURPOSE. JSON Schema Validation 2020-12 §6.3.3 "pattern" is the only
-   keyword that could carry one of these and it can carry only the true arm, only for a method whose meaning
-   something decided, and only through a regex translation of the page's literal — three ways to be silently
-   wrong where this record is merely a transcript. endpoint.c's emit states the same at the line that writes
-   it. Nothing downstream re-implements a method either: lib/learn.js merges these by INTERSECTION (the rule
-   `excludes` follows, because a predicate is a claim about the ENDPOINT and only one every observed path
-   obeyed belongs on the record) and lib/popup-form.js renders them as a constraint badge.
-   IT INVENTS NOTHING AND STAYS A SHAPE: no string satisfying the predicate is ever emitted, exactly as no
-   member of `bounds`' interval is. `predicates` is omitted where no call predicate survived every observed
-   path, and that absence is the statement.
-   `looselyEquals` IS THE FOURTH, AND IT IS THE ONE ARM OF AN EQUALITY THAT USED TO REACH THIS SURFACE AS
-   SILENCE. ECMAScript §7.2.14 IsStrictlyEqual ( x, y ) step 1 is "If SameType(x, y) is false, return false",
-   so a `===` that HELD determined the value and it is in `validValues`; §7.2.13 IsLooselyEqual ( x, y )
-   coerces instead, so its holding arm determines none and the pin refuses it — correctly, and until this key
-   existed that refusal was the whole of the record. A param whose only gate was `x == 0` therefore rendered
-   with the same bytes as one nothing ever tested, while the SIBLING flow that took the same gate's other arm
-   carried an `excludes` — two arms of one observation disagreeing about whether a gate was seen at all, which
-   is this file's own wrong-report-not-a-partial-one rule read against itself.
-   Each entry is `{"value":<string>,"type":"string"|"number"|"boolean"|"null"|"undefined"|"bigint"}`: the
-   operand the page wrote, as its own §7.1.19 ToString ( arg ), and WHAT THAT OPERAND SPELLS. Both halves are
-   load-bearing and the second is not decoration on the first — ToString flattens `undefined`, `null`, `0` and
-   `false` onto text that is also a legal String operand, and `x == undefined` is a demand that the value be
-   null or undefined (for a query parameter, that it be ABSENT) while `x == "undefined"` is a demand for nine
-   characters. A consumer that carried the value alone would state one of those and mean the other.
-   IT STATES THE PREDICATE AND NEVER THE SET IT ADMITS. §7.2.13's holding set differs per token kind and its
-   step 12 arm runs the PAGE's own ToPrimitive, so rendering the set would mean re-implementing fourteen spec
-   steps in a consumer, over code that is not running by then — CLAUDE.md §RUN-DON'T-MATCH, performed in a
-   report. What is carried is the transcript, and a reader reads `== 0` as JavaScript.
-   IT INVENTS NOTHING: no member of the holding set is emitted, exactly as no member of `bounds`' interval is,
-   and `validValues` still carries only what the code COMPUTED. `looselyEquals` is omitted where no loose
-   equality held on every observed path, and that absence is the statement.
-   THERE IS NO `holds:false` HERE, AND THAT IS A PROPERTY OF THE RECORD RATHER THAN A GAP IN IT. The arm this
-   key does not cover is the arm `excludes` already covers — a loose equality that FAILED proves the operand is
-   not the token as strictly as a strict one that failed, because §7.2.14 step 1 makes `x === tok` imply
-   SameType and §7.2.13 step 1 then hands a SameType pair straight to §7.2.14. So one gate files one fact per
-   arm, into two keys, and a consumer that branched on a false arm here would be reading for a value no
-   producer can emit.
-   It is an array and not a document
-   because the DOCUMENT is one thing the host reads once (result.h): a surface that wrapped itself could not
-   be composed with the others without a host-side splice, which is the host owning structure again. */
+/* The @H surface as a malloc'd JSON array (caller frees), one object per record not marked an asset; it is an
+   array and not a document because result.h composes the document. Record keys:
+     `method`; `url` (the path shape); `bodyMime` with one of `bodyBase64`, `bodyShape` or
+       `bodyExampleBase64` (see EndpointBodyKind); `provenance` (`observed`|`derived`|`forced`); `door`;
+       `mintedAt` (`pre-program`|`post-program`); `addressClass`; `razorClass`; `witnessClass`; `addressRoot`
+       (null for a `concrete` address, false when the value has no root, else the root's name); `params`;
+       and `headers` (an object, present only when some header was seen).
+   Every class key is always present, since its words are exhaustive. `provenance` is the record's, its grade
+   being part of the identity: `derived` is the headline claim (the app's code computes a request no session
+   sent), `observed` a real load of the document, and `forced` an address that exists only because a gate was
+   forced, never to be reported as either other word. `addressClass` cannot be re-derived from braces in
+   `url`: extension/lib/learn.js mints `{path_*}` holes from live traffic into addresses it reads `concrete`
+   for. Q1 (determined) is `concrete` or `source-determined`; Q2 is `unknown`, which `razorClass` already
+   composes, so a consumer reading the bar as `!= "concrete"` over-claims. */
+/* Each param: `name`; `location` (`path`|`query`|`body`, which is what the reviewer replays it with);
+   `valueClass`; `validValues`; and the optional domain keys below. `valueClass` is `unknown` when some
+   observed path minted the param from a value the code did not compute, else `concrete` (the address's two
+   older words; a param value has no pinned-and-held population for a third). It is always present and merges
+   as a union, since a later concrete sighting cannot take back a hole one path saw. It is what makes the
+   domain keys' absence readable: they are read through the param's hole key, so on a `concrete` param their
+   absence means there was nothing to look up, not that no gate narrowed a hole. It cannot be re-derived from
+   `validValues`, which carries the aligned example where the shape held a hole. A `location:"path"` param is
+   always `unknown` (asserted in `kv_add`); a body span's param is named `body[off:end]`. `validValues`
+   carries only values the code computed: nothing here emits a member of a domain (no `6` for `x > 5`, no
+   string satisfying a predicate). */
+/* Domain keys, each omitted unless a claim of its kind held on every observed path (that absence is the
+   statement, never an empty value); on a merge only claims every sighting made survive (`bounds` widens).
+   Forced multi-path runs both arms of every gate, which is what makes them plentiful.
+     `excludes`: values this endpoint's equality gates proved the param is not.
+     `bounds`: what ordering gates proved, in JSON Schema Validation 2020-12 §6.2 Validation Keywords for
+       Numeric Instances (number and integer)'s vocabulary — at most one of `minimum`/`exclusiveMinimum` and one
+       of `maximum`/`exclusiveMaximum`, each a JSON number spelled as the page's literal. Those keywords assert
+       nothing about a non-number, so the record also states that the value is compared as a number:
+       concolic_rel_hook records a bound only for a finite Number operand (ECMAScript §7.2.12 IsLessThan step 3).
+     `predicates`: `{method, arguments, holds}` per method-call gate (`path.startsWith("/api")`), with the
+       property name, each argument as the page's ToString of it (possibly none), and which arm this run took.
+     `looselyEquals`: `{value, type}` per `==` that held (ECMAScript §7.2.13 IsLooselyEqual ( x, y )), with the
+       operand's ToString and its type, since `x == undefined` and `x == "undefined"` differ. A failed loose
+       equality proves what a failed `===` does and is filed in `excludes`, so there is no `holds:false` here. */
 char   *endpoint_json_array(void);
 
-/* WHAT THE RESOURCE AT AN ADDRESS TURNED OUT TO BE, told to the surface that filed the request for it. §Attacker
-   sources: "Static assets are NEVER endpoints (magic-byte + content-type, not URL suffix) but still drive the
-   code path" — a rule whose test is over BYTES, so it is answerable only on the reply, and whose subject is
-   THIS surface, so the answer has to arrive here or it is a computation nothing reads. solver/reply_decode.c
-   asks it of `computedType` (the trusted zone's one type decision, CLAUDE.md §Architecture) and calls this with
-   the (method, url) pair the reply register was keyed on. The record is kept and OMITTED from the emit rather
-   than deleted — the same address may be recorded again by a later call site and the verdict is about the
-   resource, not about the sighting.
-   `endpoint_count` STOOD HERE AND HAD NO CALLER ANYWHERE IN THE TREE. It returned the raw record count, which
-   after the flag above is a different number from the one the surface emits, so what was merely dead became a
-   second answer waiting for its first reader to trust it. */
+/* Marks every record of (`method`, the path shape of `url`) as a static asset. solver/reply_decode.c calls it
+   with the pair the reply register was keyed on when the trusted zone's `computedType` says the reply is a
+   file: whether a resource is a static asset is a test over the reply's bytes, not the URL. The record is kept
+   and omitted from the emit and from the histograms, so a later sighting of the address stays an asset; the
+   verdict is about the resource, not the sighting. */
 void    endpoint_mark_asset(const char *method, const char *url);
 
-/* WHAT THE SURFACE ABOVE IS A FRACTION OF, WHICH ITS LENGTH ALONE CANNOT SAY. `endpoint_json_array` SKIPS every
-   record the verdict above marked, so the emitted array's length is three states wearing one number: N real
-   endpoints, or N real ones out of a far larger mint whose rest were files, or N records nothing ever
-   classified because no reply named a type. Those take different work — the first is a result, the second is a
-   working classifier, the third is a reply door that answered without a type — and a reader of the array can
-   tell them apart from nothing.
-   IT IS NOT `endpoint_count` COMING BACK. That returned a bare mint total with NO CALLER, which is why it went:
-   a second answer waiting for its first reader to trust it. This is a PARTITION with a reader in the diff that
-   added it (solver/result.c's census composes `epMinted`/`epAssets`/`epEmitted`) and an identity asserted where
-   all three are in one hand, so the total cannot move without one of its parts moving — which is the one
-   property that makes a count readable at all.
-   THE EMITTED FIGURE IS DERIVED BY THE SAME SKIP THE EMIT PERFORMS rather than by subtracting, so a record kind
-   that stops being written cannot make the two disagree silently.
-   RETIREMENT: this record goes when the emitted array carries its own denominator, because the partition is
-   then a property of the document rather than a row beside it.
-
-   …AND THE FOURTH NUMBER, WHICH IS ABOUT WHO COMPOSED THE ADDRESS RATHER THAN WHAT THE RESOURCE TURNED OUT TO
-   BE. The three rows above partition the surface by the REPLY — a file or not a file — and say nothing
-   whatever about whether the page's own code had run when a record was born. `pre_program` is how many of the
-   EMITTED records were minted while this instance had started no program at all, so `emitted - preProgram` is
-   the largest number of addresses forced execution could have contributed, and it is the product's headline
-   claim stated as a figure a reader of one run can check.
-   WHY IT IS A ROW AND NOT A COUNT OF `prov`. Every record already carries a provenance and a reader can count
-   them; on a real page that count answers the wrong question, and answers it in the flattering direction.
-   `observed` requires HTML §4.12.1.1 "Processing model"'s `parser document`, which only the PARK register
-   holds, so every subresource a browser algorithm records — core/html/html_link.c's stylesheets and preloads,
-   core/html/html_image.c's candidates — is graded through `engine_prov_of_running_path`, whose own
-   declaration states that it can never answer `observed`. Those records land on `derived`, whose definition is
-   that running code COMPUTED the address. A document whose whole surface is its own markup therefore publishes
-   a surface of `derived` rows, and a reader counting them counts addresses that were read out of the `<head>`.
-   §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS is that shape exactly, and its cure is the one taken here: the
-   provenance is left alone, because it is right for the firing policy that reads it, and the REPORTING
-   question gets its own predicate over a fact the engine already computes.
-   IT IS A CEILING ON THE CONTRIBUTION AND NOT A MEASURE OF IT, which is the one thing a reader must not
-   over-read. A record minted after the first program started is not thereby code-composed — a `<link>` the
-   parser inventoried is served by the first flow, and a document whose markup is walked late would mint markup
-   addresses on the far side of the boundary — so the complement BOUNDS what forced execution can have
-   contributed and never states it. The direction is the honest one: it cannot report a contribution that did
-   not happen.
-   NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: the markup of a document that is not the one
-   this instance opened over. The boundary is per INSTANCE, and a CHILD navigable's Document is parsed and its
-   `<link>` inventory served long after the root has started programs — so every subresource a child's own
-   markup names is minted on the post-program side while being markup, exactly like the root's own would have
-   been had it arrived later. Those records widen the complement and none of them is an address running code
-   composed. WHAT THE NEXT DIFF BUILDS: the boundary taken per DOCUMENT rather than per instance — an
-   any-program-started bit carried on the Document the record's realm belongs to, raised where that document's
-   first program starts, so a child's markup grades against its own parse and not against the root's progress.
-   HOW ITS ABSENCE WOULD SHOW: a page whose subresources are mostly its children's reports a complement that
-   grows with the number of child navigables it creates rather than with anything its code computed, and it
-   does so while the array beside the number holds nothing but files.
-   FOUR NUMBERS AND NOT A FIFTH CALL: they are one walk over one array and a second accessor would be a second
-   instant, which is the two-instants collapse §Testing names. */
+/* Partitions the record array in one walk: `minted` records, of which `assets` were marked files and `emitted`
+   were not, and `pre_program`, the emitted records minted before this instance had started any program. The
+   identities are asserted here. `emitted` uses the emit's own skip, so the array's length reads as a fraction.
+   `emitted - pre_program` is a ceiling on what forced execution contributed, never a measure of it: a markup
+   address can be minted after the first program starts. It is not a count of `prov`, because a browser
+   algorithm's subresources (links, images) are graded `derived` by `engine_prov_of_running_path`, which never
+   answers `observed`. Four outputs of one call, so they are one instant.
+   Named residual. Not covered: markup of a child navigable's document, minted after the root has started
+   programs, so it widens the complement without any code having composed it. Next diff: the boundary taken
+   per Document, an any-program-started bit on the Document the record's realm belongs to, raised where that
+   document's first program starts. Absence shows as: a complement that grows with the number of child
+   navigables while the array beside it holds only files. */
 void    endpoint_surface_census(long *minted, long *assets, long *emitted, long *pre_program);
 
-/* WHAT THE CENSUS ABOVE COUNTS IS AN OUTCOME, AND THIS IS THE ASK. Every figure that function produces comes
-   off a walk of the RECORD ARRAY, so each one says what LANDED — and CLAUDE.md §AN-INVARIANT-OVER-A-GATED-
-   OPERATION names the cost of that exactly: a census of what landed cannot tell a component that never asked
-   from one whose ask a gate correctly refused, and the repair is to record at the CALL rather than to relocate
-   the outcome. endpoint_record is the ONE door every HTTP-shaped edge in this engine passes through (see this
-   header's funnel note above and the derivation beside it), so a count taken at its entry, BEFORE the
-   suppression gate, is the number of times this engine's execution COMPOSED a request — every field of it,
-   through every step its standard states — and offered the address to this surface.
-   THAT SENTENCE READ `the number of times this engine's execution REACHED a network call site`, AND THE
-   CONCLUSION DOES NOT FOLLOW FROM THE PREMISE ABOVE IT. Being the ONLY door says every request that is
-   RECORDED passes here; it says nothing whatever about a request that was STARTED and never recorded, and the
-   two are different populations. What stands between a page's call and this door is the whole of the host
-   edge's own algorithm: core/fetch/fetch.c's machine records in `FETCH_CALL`, its SIXTH stage, so Fetch
-   §5.4's steps 10-27, steps 32-33 and steps 35-39 and §5.6 step 4's already-aborted signal all stand in front
-   of it — each of them a TypeError the standard states, and two of them stages that run the page's own code
-   and can therefore PARK and never be resumed. A `fetch()` the page called and the engine threw out of, or
-   parked inside and never came back to, is a network call site REACHED and is in none of these five rows.
-   THE COST OF THE WRONG READING IS THE ARM NAMED `NEVER REACHED` BELOW, which inherits it: `asks ==
-   preProgram` says no post-program request was fully COMPOSED, and a reader who takes it for `no arm arrived
-   at a network call site` looks for the defect upstream of every host edge when it may be inside one.
-   ITS RESIDUAL IS RETIRED IN HALF AND THE ARGUMENT IS KEPT, WHICH IS WHAT A REPLACEMENT OWES. It named the
-   host edge's OWN entry as not covered, and named the next diff as a count raised at each script-API edge's
-   one-time capture — core/fetch/fetch.c's `!s->captured` arm and core/xhr/xml_http_request.c's `send()`. The
-   FETCH half is built and is the `epFetch*` block at the foot of this header; the XHR half is not, and what
-   is written below is the residual for that half alone.
-   THE TRAP THE RETIRED CLAUSE NAMED WAS EXACT AND IS WHY THE BUILT ROWS HAVE THE SHAPE THEY DO, so it is
-   restated rather than dropped: a step state is BYTE-COPIED at a deep fork and the copy inherits the capture
-   flag, so one `fetch()` whose `input` ToString forks composes TWO requests against ONE capture and
-   `composed <= called` is FALSE — an assert on it would fire on a legitimate state, which is the concession
-   shape §Offensive-programming refuses. The sound pairing it named, per STATE rather than per call, is what
-   landed: a raise at the capture, a raise at the teardown, and the teardowns that offered nothing partitioned
-   by the stage each stood at.
-   ITS XHR RESIDUAL IS RETIRED BY THE `epXhr*` BLOCK AT THE FOOT OF THIS HEADER, AND ITS NEXT-DIFF CLAUSE
-   NAMED THE WRONG MACHINE — recorded HERE, where the clause was written, because a remedy clause is read once
-   by somebody who has already decided to do the work and a wrong one is therefore not caught but EXECUTED.
-   It read: `XMLHttpRequest`. Its own machine records at `XR_FETCH`, the FIRST stage it has, so the gap
-   between a page's `send()` and this door is structurally smaller there than at `fetch` … WHAT THE NEXT DIFF
-   BUILDS: the same three calls in core/xhr/xml_http_request.c, keyed on THAT MACHINE's own step labels.
-   THE PREMISE IS TRUE AND THE CONCLUSION IS ABOUT A DIFFERENT MACHINE. `js_xhr_run_steps[0]` IS `XR_FETCH` —
-   that X-list takes no IDL_STEP_STAGE_BASE, so the lifecycle machine owns all of its stages and numbers them
-   from zero — and the lifecycle machine is not the one a page's `send()` enters. `send()` is its OWN declared
-   member (XHR_SEND_DECL over SEND_STAGES, based at IDL_STEP_FIRST) with SEVEN stages, and it MINTS the
-   lifecycle machine at the last of them. Between the page's call and this door stand SEND_CHECKS (a TypeError
-   and two InvalidStateErrors, and a DECLARED FORK on a concolic method, which PARKS), SEND_BODY_STR (the
-   page's own `toString`, which PARKS), SEND_BODY (an extraction that can fail), SEND_FLAGS, SEND_LOADSTART
-   and SEND_UPLOAD_LOADSTART (the page's own listeners, both of which PARK, each carrying §3.5.6 step 12.6's
-   early return for a listener that aborted or reopened), and then SEND_RUN's task hop. SEVEN stages and FOUR
-   page-code park points against core/fetch's SIX and its record at the sixth — so the gap is LARGER, not
-   smaller, and larger again if `open()` is counted, which is where the method and the URL are parsed at all.
-   THE ERROR IS WORTH MORE THAN THE CLAUSE: the author reasoned from WHERE THE `endpoint_record` CALL SITS
-   rather than from WHAT THE CONSTRUCTION COSTS, and the two machines share a FILE — which is the strongest
-   thing there is for making one look like the other.
-   WHAT BUILDING THE CLAUSE WOULD HAVE COST, which is why this is a refutation and not a wording repair.
-   `XR_FETCH` runs `xhr_record_endpoint` UNCONDITIONALLY at its top and does not park before it, so on the
-   lifecycle machine a `began` row and an `offered` row could not differ except for a closure enqueued and
-   never stepped and for the XHR_MODE_ERROR machines abort() and the request error steps mint — two rows that
-   cannot disagree, which is a non-check wearing a census's shape — and the stage histogram would be over
-   twenty stages that are all DOWNSTREAM of the record, answering where the RESPONSE LIFECYCLE died and never
-   where the CONSTRUCTION did. It would have been structurally blind to the whole population the paragraph
-   above names as this census's reason for existing: a call the page MADE that the engine threw out of, or
-   parked inside and never resumed.
-   WHAT LANDED INSTEAD is that census over `send()`'s OWN machine — which is where an XHR request is
-   constructed and where it can die — plus ONE row raised at the lifecycle machine's door, so the edge's share
-   of `epAsks` is still readable. The clause's other two demands were right and are obeyed: the rows are NOT
-   summed with the `epFetch*` ones and they do NOT go through the same per-stage array.
-   WHAT IT SEPARATES, WHICH IS THE PRODUCT'S OWN QUESTION AND WAS UNMEASURABLE. `emitted - preProgram` is
-   documented above as a CEILING on what forced execution contributed, and a ZERO there has at least two
-   readings that take opposite work:
-     NEVER REACHED — no arm ever arrived at a network call site, so there was nothing for the surface to learn
-       and the work is upstream of this file entirely;
-     REACHED AND ALREADY KNOWN — arms arrived and every address they composed was one the surface already held,
-       so each ask MERGED: the record exists, its `pre_program` was decided at ITS mint and is deliberately not
-       re-armed (see the struct), `g_eps_n` does not move, and all four rows above are byte-identical to the
-       first case.
-   `asks - preProgram` is nonzero in the second and zero in the first. That is the separation, and nothing on
-   the surface could state it, because a merge is an event with no record of its own.
-   IT IS NOT A THIRD READING OF THE SAME FACT. A reader who has both lines can also see the case neither has
-   alone: in-program asks that MINTED, which must show up as `emitted - preProgram` moving unless the reply
-   classified them as files — so the two censuses constrain each other rather than repeating each other.
-   EVERY ROW IS A LIFETIME COUNT AND NONE IS A GAUGE. They may be differenced across samples and accumulated,
-   they cannot decrease, and a sample below its predecessor is this instrument and not the run — stated in the
-   contract because CLAUDE.md §Testing records this tree being misled by that distinction twice. Their SCOPE is
-   the SURFACE's: they are reset wherever `g_eps_n` is, so they answer for the session whose records the census
-   above is walking and never for the process.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on one, no ask is refused because of one, and no
-   arm is narrowed by one.
-   …AND THE SIXTH, WHICH IS THE ARM NAMED `REACHED AND ALREADY KNOWN` STATED RATHER THAN BOUNDED. The
-   paragraph above offers `asks - preProgram` as the separation between the two readings, and that is a CEILING
-   on the second exactly as `emitted - preProgram` is a ceiling on forced execution's contribution: the
-   subtraction is also nonzero for a post-program ask that MINTED, and for one that merged into a record
-   post-program code had itself minted, and neither of those is running code re-composing the MARKUP's
-   addresses. `merged_pre_program` is that population and only that one — the ask was made with a program
-   running and the record it reached was minted before any program had, which is the one shape that leaves
-   every figure on both censuses byte-identical to a run in which nothing reached a network call site at all.
-   IT IS CONTAINED IN `merged` AND IN `asks - preProgram`, asserted at the accessor where every term is in one
-   hand, and it is a CUT rather than a fourth arm: the three arms partition the door's exits and this selects
-   inside one of them on a fact about the RECORD, so it may not be summed with them.
-   READ ITS ZERO THROUGH THE ROWS BESIDE IT AND NEVER ALONE — it is four states (no post-program ask;
-   suppressed; minted, which `emitted - preProgram` then shows unless the reply classified them as files; or
-   merged only into post-program records), and its NONZERO is one statement. */
+/* Counts taken at endpoint_record's entry, before the suppression gate (the ask, not the outcome): `asks` is
+   every call and `pre_program` those made before any program started; `suppressed` (a candidate/verify
+   re-run), `merged` into an existing record and `minted` partition `asks`. `merged_pre_program` is a cut
+   inside `merged`, not a fourth arm: asks made with a program running that merged into a record minted before
+   any program, i.e. running code re-composing a markup address; it is contained in `merged` and in
+   `asks - pre_program`. All of these identities are asserted here.
+   It separates two readings of a zero `emitted - preProgram` that the surface census cannot: no post-program
+   request was composed (`asks == preProgram`), or each one merged into an address already held. A zero
+   `asks - preProgram` means no request reached this door post-program, not that no call site was reached: a
+   host edge's own algorithm can throw or park before it records (see the edge censuses below).
+   Every row is a lifetime count, never a gauge, scoped to the surface: reset with the record array in
+   endpoint_init and endpoint_free. They are reports and never bounds. */
 void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *merged, long *minted,
                             long *merged_pre_program);
 
-/* THE HOST EDGE'S OWN ENTRY, WHICH IS THE POPULATION THE CENSUS ABOVE CANNOT SEE. Its residual names this
-   diff by name: the five rows above are counted at endpoint_record's door, so a `fetch()` the page called and
-   the engine threw out of — or parked inside and never resumed — is a network call site REACHED and is in
-   none of them. These rows are the door's UPSTREAM: they count the STATES of core/fetch/fetch.c's §5.4/§5.6
-   machine, at its one-time capture and at its teardown, so a run reading `asks == preProgram` can say whether
-   the page called a request-composing API at all and, when it did, WHERE the construction died.
-   IT IS A PARTITION AND NOT A LADDER, AND THAT IS THE FIRST THING TO READ. The stage rows below are the arms
-   of ONE outcome — the stage a torn-down state was standing at — and no arm implies another: a zero in one
-   stage says NOTHING about its neighbours, so `the lowest 0 is the localisation` is not a reading this
-   histogram supports and never will be. What the rows DO support is a partition (they sum to the states that
-   were freed) and two containments, and those three are the whole of what a reader may do arithmetic with.
-   THE ROWS, AND EACH SAYS ITS KIND IN ITS OWN NAME rather than in a comment no consumer reads — `Ask` or
-   `Out` for which side of §AN-INVARIANT-OVER-A-GATED-OPERATION it counts, `Life` for a LIFETIME COUNT and
-   never a gauge. They are terse and camelCase because they are rows of `_cold`, whose own rows are:
-     `epFetchAskCalledLife` — the calls that entered the HOSTING machine's prologue. core/idl_args.h numbers a
-       declared member's stages from IDL_STEP_FIRST because stages 0 and 1 are that machine's — the argument
-       count check and the ES-to-IDL conversions — and BOTH are rest points, so a call that threw or PARKED in
-       them never reaches Fetch §5.4 at all. This is raised at stage 0, which needs no one-time flag because
-       that block's only exits are two abrupt throws and a park leaves the stage at 1. It is the row that turns
-       the next one's zero from THREE states into one: the page called nothing, the page called and the
-       conversion died, or the flow never reached the call — and the first and third are `called == 0` while
-       the second is `called > 0` with the next row at zero.
-     `epFetchAskBeganLife` — the constructions that BEGAN. Raised at the machine's one-time capture, which is
-       Fetch §5.4's first stage, so it is one per page-level `fetch()` call that reached the member body at
-       all. A call whose ARGUMENT CONVERSION threw or parked is upstream of it and is in no row here; that
-       population is core/idl_args.c's and is the difference between this row and the one above.
-     `epFetchAskOfferedLife` — the constructions that reached §5.6 step 12 and offered an address. Raised
-       on the line before the edge's own call to endpoint_record.
-     `epFetchOutFreedLife` — the states TORN DOWN after §5.4 began, DEEP-FORK COPIES INCLUDED.
-     `epFetchOutFreedOfferedLife` — of those, the ones that had offered an address.
-     `epFetchOutDiedAtLife` — ONE ARM PER STAGE: of the freed states that offered NONE, the stage each was
-       standing at, keyed by the machine's OWN label for it. The labels are `js_fetch_steps[]`, handed over
-       at the declaration rather than copied here, so a stage added to that X-list adds a row and a stage
-       renamed renames one: there is no second list to drift (§AN-AUDITOR-DERIVES-THE-RULE).
-   THE THREE IDENTITIES, EVERY ONE ASSERTED AT THE ACCESSOR WHERE ALL ITS TERMS ARE IN ONE HAND:
-     PARTITION — the stage rows plus the freed-and-offered row equal the freed row. The two sides are raised
-       in two arms of one teardown, so this fires on a third arm added without classifying it, which is
-       precisely how a state that dies in a new way would go missing.
-     CONTAINMENT — freed-and-offered <= offered. The two are raised at DIFFERENT events, one at the teardown
-       and one at the edge's record call, so the slack is a real population and not a tolerance: it is the
-       states that offered an address and are STILL LIVE at the read, parked on the reply they asked for,
-       which on a page mid-run is most of them.
-     CONTAINMENT — offered <= the ask total above. Different events again, in different files, and the slack
-       is every OTHER door into this surface: core/xhr's, the markup inventory's, the reply decoder's. It is
-       what makes the fetch edge's SHARE of the @H ask population readable, and it is the only relation that
-       ties this census to the razor it was built to explain.
-   WHAT MAY NOT BE ASSERTED, AND THE REASON IS THE TRAP THE RESIDUAL ABOVE NAMED. `freed <= began` is FALSE
-   and `offered <= began` is FALSE, both for one mechanism: a step state is BYTE-COPIED at a deep fork and the
-   copy inherits the capture flag, so ONE `fetch()` whose `input` ToString forks composes TWO requests against
-   ONE capture. The fork is not exotic — core/fetch/fetch.c's own `unforkable` banner names which stages permit
-   it, and the `input` ToString that composes the second request is one of them — and it is exactly the
-   population this tool exists for, since a forked address is an address built out of unknown external input.
-   THE PERMITTED SET GREW WHEN §2.2.5's REQUEST RECORD BECAME JSValues that machine's `visit` names, which is
-   why this sentence no longer counts those stages: it used to read "the two stages that permit it and both run
-   the page's code", and §5.4 steps 10-27 are now forkable as well. That strengthens this refusal to assert
-   rather than weakening it, and the banner is the one place the current set is stated. `began - freed` is likewise not a live
-   count: it is that difference MINUS the copies, and a census taken while states are parked is taken with
-   most of them live. So the begun row and the freed row are read as two facts and never subtracted.
-   SCOPE IS THE FETCH EDGE AND THE ROWS SAY SO IN THEIR NAMES, and a row that averaged the two edges would
-   hide which one it was about (§a-coverage-figure-states-what-it-is-a-fraction-of). THIS SENTENCE USED TO
-   CARRY A REASON THAT WAS FALSE AND IS REWRITTEN RATHER THAN DELETED, because it is the reason a reader
-   re-derives: it said core/xhr's edge records at `XR_FETCH`, the FIRST stage of its own machine, SO the gap
-   these rows measure is structurally small there. The premise is about the LIFECYCLE machine and the
-   conclusion is about `send()`, which is a SEPARATE declared member with seven stages and four page-code
-   park points in front of that mint — a LARGER gap than this machine's six. The refutation is recorded in
-   full at the ask census above, where the clause it defeated was written; what the two edges are is stated
-   at `endpoint_xhr_edge_declare` below. Their SCOPE IN TIME is the SURFACE's: they are reset in endpoint_init and endpoint_free
-   beside every other counter in this file, which is what makes them comparable with the ask rows above at all
-   — the scope defect `g_boundary_spent` exists to catch is the one this placement makes unreachable.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on one, no construction is refused because of
-   one, and no arm is narrowed by one.
-   THE RESIDUAL THAT STOOD HERE IS DISCHARGED BY `epFetchAskCalledLife`, AND WHAT IS KEPT IS THE HALF OF IT
-   THE ROW DOES NOT ANSWER. It read: NOT COVERED, a `fetch()` whose ARGUMENT CONVERSION threw or parked, which
-   never reaches the member body and so raises nothing here; NEXT DIFF, the same pair one frame out raised by
-   idl_args.c at the prologue's entry; ABSENCE SHOWS, a document whose page calls `fetch()` and whose begun row
-   reads zero, with nothing in this census distinguishing that from a page that called none. Its retirement
-   condition was that a construction which never reached the member body raise a row here, and the call row
-   above is that row — raised at core/idl_args.c's stage 0, keyed on this edge's own stage table so no second
-   list of network members exists anywhere, and tied to the begun row by a containment asserted at the emitter.
-   ITS ABSENCE CLAUSE WAS EXACTLY WHAT WAS THEN OBSERVED, WHICH IS WHY THE CLAUSE AND NOT THE FIGURE IS WHAT
-   THE NEXT READER NEEDS. Four real application pages were reported as having started no request-construction
-   machine, with `epFetchAskBeganLife` at zero — and a zero there was consistent with all three states above,
-   so the observation could not be acted on and the reading that was drawn from it (the page calls no `fetch`)
-   was the one the census is structurally least able to support. Three of those pages' captured bundles hold
-   real global `fetch(` call sites and `new XMLHttpRequest` constructions, so that reading was false.
-   WHAT THE ROW STILL CANNOT DO, AND IT IS A PROPERTY OF THE MACHINE AND NOT AN OMISSION: `called == 0` does
-   not separate a page that calls no `fetch()` from a flow that never reached a call the page does make, and no
-   counter at this edge ever will — the prologue is not entered in either case. That question is the ORDER's,
-   and `ready_picks_lifetime` is the instrument for it: solver/result.c declares its KIND beside the rest of the
-   WFQ census and states what the row answers (the dispatch REACHES a job holder, with the ladder quartet beside
-   it saying what the ladder then did with it), and solver/flow.c carries the three-reading enumeration that
-   makes a value of it actionable.
-   AND THIS SENTENCE SAID `solver/flow.h's legend`, WHICH IS A FILE THAT DOES NOT CONTAIN THE NAME — kept here
-   because the pointer is the load-bearing half of this paragraph and a reader who re-derives it from "the order
-   owns that question" will reach for `flow.h` again, the order's own header being the obvious place for it.
-   A MIS-AIMED POINTER IN A LEGEND IS WORSE THAN ONE IN A CITATION AND THIS IS WHY: a citation sends a reader to
-   a section that does not say what the code claims and they FIND OUT, while a legend naming the wrong file for
-   an instrument is read as `no such instrument` the moment the grep answers zero — which is exactly the
-   stale-absence direction, because the only reader of a named gap is somebody about to go and build one. It was
-   relayed verbatim out of this paragraph into a lane brief as "the whole brief" and cost that lane a reading
-   before it refuted the coordinate; it greped the named file, got zero, and said so rather than concluding the
-   row did not exist, which is the behaviour the pointer should not have required.
-   THE AUTHORING RULE THAT REMOVES THE NEED, AND IT IS FREE: a pointer to an instrument names the file that
-   DECLARES it, which is derivable rather than recalled — `git grep -n <row> -- engine/host/solver/` answers in
-   one command, and a pointer written without running it is a claim about this tree in the future tense.
-   THE NARROWING THAT MAKES THIS ROW LIKELIER TO READ ZERO THAN ITS OWN ARGUMENT SUGGESTS, stated so that a
-   zero here is not read as a broken hook: `idl_concolic_rule` answers IDL_CONCOLIC_CROSSES for IDL_USVSTRING,
-   so a concolic URL — `fetch('/api/u?uid=' + state.id)`, the computed address this tool exists to report —
-   CROSSES the conversion without parking or forking and reaches §5.4. The conversions park on a page GETTER,
-   which is a `Request` input's `url` or a `RequestInit` member, and not on an unknown string.
-   RETIREMENT — MET BY A DIFFERENT ROUTE THAN THIS CONDITION NAMED, AND THE RECORD IS REWRITTEN RATHER THAN
-   DELETED BECAUSE THE SENTENCE ABOVE IT IS STILL TRUE AND A READER WILL RE-DERIVE THE WRONG CONSEQUENCE FROM IT.
-   The condition asked for the separation to arrive as a row on the ORDER's own census. It arrived instead as
-   `epFetchAskNamedLife` two rows down, raised where the COMPILER resolves the free identifier against the global
-   object — so `no counter AT THIS EDGE ever will` is unchanged and correct, and what has changed is that the
-   state it names is no longer unseparated. A reader who met the condition as it stood would go and build the
-   ORDER row believing nothing yet answers the question, which is the stale-absence direction this file rates
-   worst: the only reader of a named gap is somebody about to fill it.
-   WHY THE COMPILER AND NOT THE ORDER, since the condition guessed the other one: the ask must be recorded
-   upstream of every arm that may legitimately DECLINE, and REACH is such an arm — reach is what running is — so
-   no row on the order's census is upstream of it either. The order answers WHY a call was not reached; the
-   compiler answers WHETHER the program contains one. Those are two questions and the second is the one a zero
-   here was being read as.
-   WHAT IS STILL OWED IS NARROWER: the compile row sees ONE SPELLING, the free identifier, so `window.fetch(u)`
-   and a parameter a bundle shadowed the name with reach no global resolution and raise nothing.
-   AND THE CONDITION THAT STOOD HERE NAMED A MECHANISM THAT IS NOW KNOWN TO BE WRONG TWICE OVER, SO IT IS
-   REWRITTEN RATHER THAN LEFT TO BE EXECUTED. It asked for `a member-name channel at the FIELD-GET EMITTER`
-   reporting `into the same rows`. The channel is built, for solver/rung_entry.c's rungs, and it is NEITHER of
-   those: it is raised at the SAME funnel as the row above, because a field get is where the RECEIVER exists and
-   that is the interpreter — downstream of REACH, which is the one arm this whole row is upstream of, so a
-   counter there answers `a flow got to a property-spelled read` and re-opens the three-state zero; and it has
-   rows of ITS OWN, because the `…TypeofLife` split cannot be reproduced for a property — §13.5.3 step 2.a needs
-   a non-throwing read only for an unresolvable REFERENCE, a property of an object is `undefined` when absent, so
-   `typeof window.fetch` emits the same field get as `window.fetch` and reporting into `…AskNamedLife` would
-   merge feature detection into the population read as uses.
-   WHETHER THIS FILE OWES THE CHANNEL AT ALL IS A MEASUREMENT AND NOT AN ARGUMENT, which is why the new condition
-   is a command. `node testing/static_surface.mjs` prints, per declared entry name over a mirrored corpus, the
-   count of sites that spell it ONLY as a property of the global — the one population on which this row answers
-   zero about a program that does spell the call. RETIREMENT: this record goes when that column is nonzero for an
-   entry name declared HERE and the sibling channel routes to this file, or when the row publishes that column's
-   own derivation beside itself; a relayed figure is not the condition, because it is a fact about which bundles
-   were mirrored on the day it was taken. */
-/* …AND THE FREE GLOBAL IDENTIFIER A PROGRAM MUST SPELL TO REACH IT — `entry`, stated by the edge beside its
-   stage table for `first_stage`'s reason exactly: which name a component installs itself under is that
-   component's own fact, and a table of them in this file would be the drifting second copy
-   §AN-AUDITOR-DERIVES-THE-RULE forbids, drifting in the direction where a name that stopped matching reads as a
-   corpus of programs none of which spells it. It is borrowed and never copied, and it is let go with the stage
-   table at endpoint_free, which is what scopes the compile report below to this session. */
+/* The fetch edge's own entry, the population the ask census cannot see, counted over the states of
+   core/fetch/fetch.c's §5.4/§5.6 machine. Each row names its kind (`Ask` or `Out`; `Life` is a lifetime count):
+     `epFetchAskNamedLife`, `…NamedTypeofLife`, `…NamedPropLife`: compile-time resolutions of the edge's entry
+       name (see endpoint_compile_global_named and endpoint_compile_global_member).
+     `epFetchAskCalledLife`: calls entering the hosting machine's prologue (core/idl_args.c's stage 0), ahead
+       of the argument conversions, which can throw or park.
+     `epFetchAskBeganLife`: constructions that reached the member body, raised at the one-time capture.
+     `epFetchAskOfferedLife`: constructions that reached §5.6 step 12 and offered an address, raised on the
+       line before the edge's endpoint_record call.
+     `epFetchOutFreedLife`: states torn down after §5.4 began, deep-fork copies included.
+     `epFetchOutFreedOfferedLife`: of those, the ones that had offered an address.
+     `epFetchOutDiedAtLife`: of the freed states that offered none, one arm per stage they stood at, keyed by
+       the machine's own `js_fetch_steps[]` labels handed over at the declaration. */
+/* Identities, asserted in endpoint_fetch_edge_rows: the died-at arms plus freed-and-offered equal freed (two
+   arms of one teardown); freed-and-offered <= offered (the slack is offered states still parked on their
+   reply; the offering stage returns rather than parks and no page code runs before teardown, so no flagged
+   state is cloned); offered <= `epAsks` (the slack is every other door); began <= called.
+   Not assertable: `freed <= began` and `offered <= began`. A deep fork byte-copies a step state with its
+   capture flag, so one `fetch()` whose input forks composes two requests against one capture; fetch.c's
+   banner states which stages permit a fork. For the same reason `began - freed` is not a live count. The
+   stage rows are a partition, not a ladder: a zero at one stage says nothing about its neighbours.
+   `called == 0` cannot separate a page that calls no `fetch()` from a flow that never reached its call; the
+   `Named` rows answer that from the compiler. A concolic URL crosses the USVString conversion without parking
+   (`idl_concolic_rule` answers IDL_CONCOLIC_CROSSES), so the conversions park only on a page getter such as
+   a `Request` input's `url` or a `RequestInit` member. Scope in time is the surface's (reset in endpoint_init
+   and endpoint_free). Reports, never bounds. */
+/* The edge declares its global entry identifier, its stage table and its first stage at init. Both pointers
+   are borrowed, never copied, and let go at endpoint_free; the edge owns the name it installs under, so this
+   file keeps no table of names. A second, different declaration is a DCHECK. */
 void    endpoint_fetch_edge_declare(const char *entry, const char *const *steps, int first_stage);
-/* A DECLARED MEMBER'S CALL ENTERED THE HOSTING MACHINE'S PROLOGUE — core/idl_args.c's stage 0, called once per
-   call for EVERY declared member and not only the two this file has edges for. The argument is the member's
-   own stage table, so the caller states a FACT about the member and this file decides whether it is an edge:
-   a list of network members spelled in core/idl_args.c would be the drifting second copy
-   §AN-AUDITOR-DERIVES-THE-RULE forbids, and it would drift silently, since a member missing from it reads as a
-   door nobody called. Both edges declared themselves with that same static pointer, so the match is by
-   IDENTITY and never by a label two members could share; NULL is a member that declares no steps and is
-   dropped here rather than at the caller. It is NOT per-edge for the same reason, and it is one entry rather
-   than two because the caller cannot know which edge it is calling and must not have to. */
+/* core/idl_args.c's stage 0 calls this once per call of every declared member with the member's stage table
+   (NULL for a member that declares none, which is dropped). It raises `…AskCalledLife` for the edge that
+   declared that same table pointer: the match is by identity, so the caller keeps no list of network members
+   and cannot need to know which edge it is calling. */
 void    endpoint_edge_member_asked(const char *const *steps);
 
-/* THE COMPILER RESOLVED A FREE IDENTIFIER AGAINST THE GLOBAL OBJECT — install as JSConcolicHooks.global_named.
-   `name` is bytes valid for the call only and `typeof_only` says which of the two reads it was. It raises the
-   `…AskNamed…` rows of whichever edge declared that identifier and NOTHING else: it composes no address, mints
-   no ask and takes no decision, so it cannot move a single row it exists to make readable.
-   IT IS THE ONE THING IN THIS FILE THAT IS NOT A FACT ABOUT A FLOW, AND THAT IS THE WHOLE REASON IT EXISTS.
-   Every other entry here is called from a live frame, so every row this census publishes is a row about a site
-   some flow REACHED — which left `called == 0` standing for three states that take opposite work, and left the
-   one that matters (a program spells this call and no flow got to it) reading as the one that does not (a
-   program spells no such call). A site nobody reached has no frame, no operand and no moment, so no runtime
-   edge in this engine could have reported it — and, sharper, no ASSERT could have stood on it either: the only
-   invariant that would have fired is one whose operand is a count derived from the PAGE'S OWN BYTES, which
-   §WHOSE-BYTES-STATE-THE-VALUE forbids outright, since a page does not have to be hostile to hold an abort
-   switch and only has to ship no `fetch`. That is why this lands as a ROW WITH A DENOMINATOR rather than as a
-   crash, and it is the reason §Offensive-programming was structurally unable to name this gap.
-   WHY THE COMPILER AND NOT SOME EARLIER RUNTIME EDGE. §AN-INVARIANT-OVER-A-GATED-OPERATION says to record the
-   ASK rather than the OUTCOME, and to record it upstream of every arm that may legitimately decline. REACH is
-   such an arm, and reach is what RUNNING IS — so the recording point has to be upstream of execution, and the
-   only point upstream of execution at which this engine holds the page's own program is the moment it compiles
-   it. The door census obeyed that rule one level too shallow: it censused the ask AT THE DOOR, which is itself
-   downstream of reach.
-   WHAT IT IS NOT. It is not a call-site count and its rows say `Named` rather than `Sites` so that nobody reads
-   one against a static per-bundle figure: a program is recompiled by every flow that replays it, so the row
-   counts COMPILER RESOLUTIONS and is read as a BIT — zero against nonzero — and never as a magnitude. It sees
-   ONE SPELLING, the free identifier; `window.fetch`, `self[n]` and a parameter a bundle shadowed the name with
-   are a property read or a local slot and reach no global resolution at all. So it is a FLOOR in the direction
-   that withholds a finding rather than manufactures one, and no containment between these rows and the call row
-   may be asserted in either direction — solver/endpoint.c states at the fields which spellings make each
-   inequality ordinary, and that is why those are the only ask rows in this file with no identity over them. */
-/* …AND IT ANSWERS, for the one consumer that is not a census: nonzero means an edge declared THIS name and the
-   read was not a `typeof` guard, which is what quickjs's orphan walk orders its candidates by. The rows it raises
-   are unchanged and are the whole of what this file keeps; the answer is derived from the SAME `entry` compare, so
-   there is no second list and no way for the order and the census to disagree about which names are doors. */
+/* The compiler resolved a free identifier against the global object; reached through solver/concolic.c's
+   `.global_named` dispatch. `name` is valid for the call only and `typeof_only` marks a `typeof` read. It
+   raises `…AskNamedLife` (or `…AskNamedTypeofLife`) for the edge whose entry is `name`, and composes no
+   address, mints no ask and decides nothing. It is the one entry here not about a flow: it records that the
+   program spells the call even when no flow reaches it, which a runtime edge cannot see. It counts compiler
+   resolutions, and every replaying flow recompiles, so it is read as a bit and never as a magnitude, and no
+   containment with the call row is asserted. It is a floor: `self[n]` and a parameter the bundle shadows the
+   name with reach no global resolution. */
+/* Returns nonzero when an edge declared `name` and the read was not a `typeof` guard; quickjs's orphan walk
+   orders its candidates by that, from the same `entry` compare the rows use. */
 int     endpoint_compile_global_named(const char *name, int typeof_only);
-/* …AND THE PROPERTY SPELLING OF ONE, reached through solver/concolic.c's dispatch for the two reasons stated at
-   the definition: it is that hook's SECOND consumer, and the GLOBAL-RECEIVER TEST IS NOT THIS FILE'S — the
-   dispatch holds the one statement of which names denote a realm's own global, so no `base` arrives here. It
-   raises `ep*AskNamedPropLife` and answers the orphan order; there is no `typeof` parameter and there cannot be,
-   because §13.5.3 step 2.a has nothing to patch for a property of an object. */
+/* The property spelling of the same fact (`window.fetch`), reached through solver/concolic.c's member
+   dispatch, which alone decides that the receiver is a realm's global. It raises `…AskNamedPropLife` and
+   answers the orphan order like endpoint_compile_global_named. It has no `typeof` split, because
+   `typeof window.fetch` emits the same field get as `window.fetch`. */
 int     endpoint_compile_global_member(const char *member);
 void    endpoint_fetch_edge_began(void);
 void    endpoint_fetch_edge_offered(void);
 void    endpoint_fetch_edge_freed(int stage, int offered);
-/* The rows on the heap (caller frees; NULL only on allocation failure, which every composer on the result seam
-   treats as "this census is absent" rather than as a reason to fail a run).
-   ROWS AND NOT A CENSUS OF ITS OWN, WHICH IS WHERE THEY ARE READ AND IS THE WHOLE ARGUMENT FOR THE SHAPE. They
-   are spliced into `_cold`, between the `ep*` rows they explain, each with a LEADING comma, because a reader
-   compares WITHIN a census — extension/bridge.js and extension/popup.js both say so in those words, and both
-   render a row added to `_cold` with nothing edited in either. A sixth NESTED census beside `_absent` would
-   have needed a name in bridge.js's relay list and a row in popup.js's, and those are TRUSTED-ZONE JavaScript
-   which is live on WRITE while this half is live only after a build — so it would have aborted every document
-   until an artifact carrying these rows was installed, which is the asymmetry §A-CROSS-BOUNDARY-DIFF names and
-   which bridge.js's own census loop records having already paid once.
-   THE EMPTY STRING IS THE ABSENT FORM AND IS NOT FIVE ZEROES. A host that installs no fetch runs no fetch
-   machine and there is no population; §Testing's rule is that an absent count and a zero count are different
-   facts and must never be averaged, so the rows and the comma in front of them go together. */
+/* The fetch edge's rows as a heap string (caller frees; NULL only on allocation failure, which the result
+   seam treats as an absent census). Each row carries a leading comma so solver/result.c splices them into
+   `_cold` beside the `ep*` rows they explain, where extension/bridge.js and extension/popup.js render them
+   with no edit. The empty string is the absent form: a host that installs no fetch has no population, which
+   is a different fact from five zeroes. */
 char   *endpoint_fetch_edge_rows(void);
 
-/* THE XHR EDGE'S OWN ENTRY — THE SAME CENSUS OVER A DIFFERENT SHAPE OF EDGE, AND THE DIFFERENCE IS WHY IT IS
-   SIX ROWS AND NOT FIVE. core/fetch's machine CONSTRUCTS the request and OFFERS it at the last of its own
-   stages, so one state holds both facts and the teardown can say which of them it had reached.
-   XMLHttpRequest splits that across TWO machines: `send()` (XHR_SEND_DECL over SEND_STAGES) constructs, and
-   the LIFECYCLE machine it mints at §3.5.6 step 12 or 13 (js_xhr_run_steps, XR_FETCH) is what records. The
-   send state is torn down BEFORE the asynchronous arm's task has run, so `did this state offer an address`
-   is a question it cannot answer about itself, and a census built over the partition the fetch edge uses
-   would have to invent it.
-   IN BACKTICKS AND NOT IN QUOTATION MARKS, WHICH IS AN AUTHORING RULE AND NOT A TIDY-UP. That run is this
-   file's own phrasing of a question, and quotation marks put it in the citation auditor's QUOTATION channel,
-   where it is compared against whatever standard the nearest anchor names. It was never judged while this
-   header named no standard near it — the shielded form — and the §3.5.6 citation added one paragraph up in
-   the same diff that wrote this note UNSHIELDED it, so a sentence nobody had written as a spec quotation was
-   reported as diverging from XHR §3.5.6 "The send() method" at word one. A spelling being SHOWN goes outside
-   that channel by construction rather than by relying on no anchor being in range.
-   SO THE PARTITION IS OVER THE PLACEMENT AND NOT OVER THE OFFER, and the `Placed` in the row names says so:
-   a send state either reached §3.5.6 step 12/13 and handed the constructed request to the lifecycle machine,
-   or it DIED, and where it died is the whole content of the census. That is the same question the fetch
-   edge's stage histogram answers — where did a request the page asked for stop being built — asked of the
-   machine where an XHR request is actually built.
-   THE ROWS:
-     `epXhrAskCalledLife`      — the `send()` calls that entered the HOSTING machine's prologue, which is
-       core/idl_args.c's stage 0. SEND_STAGES is based at IDL_STEP_FIRST, so the argument-count check and the
-       ES-to-IDL conversion of `send()`'s own argument run in front of the row below and BOTH are rest points.
-       It is the row that turns that row's zero from three states into one; core/fetch's sibling block states
-       the split and what it still cannot answer, and it is the same split here.
-     `epXhrAskBeganLife`       — the `send()` calls that reached the member body. Raised at SEND_CHECKS's
-       one-time capture, which is gated on a FLAG and not on a slot for core/fetch's reason exactly: that
-       stage PARKS on §3.5.6 step 3's declared fork over a concolic method, and a parked stage is re-entered
-       at its first line. A call whose ARGUMENT CONVERSION threw or parked is upstream of it and is in no row
-       here — the same population core/fetch's own residual names, and it is named again below.
-     `epXhrAskPlacedLife`      — …of those, the ones that reached §3.5.6 step 12/13 and PLACED the fetch.
-     `epXhrAskOfferedLife`     — the addresses this edge OFFERED the @H surface, raised on the line before
-       `xhr_record_endpoint`'s own endpoint_record call, which is INSIDE the lifecycle machine and therefore
-       is NOT a fact about any send state. It is here because it is the only row that ties this census to
-       `epAsks`, and the containment below is what makes the XHR edge's share of the ask population readable.
-     `epXhrOutFreedLife`       — the send states TORN DOWN after a construction began, DEEP-FORK COPIES
-       INCLUDED.
-     `epXhrOutFreedPlacedLife` — of those, the ones that had placed the fetch.
-     `epXhrOutDiedAtLife`      — ONE ARM PER STAGE: of the freed states that placed NOTHING, the stage each
-       was standing at, keyed by `SEND_STEPS` itself, handed over at the declaration rather than copied here.
-   THE IDENTITIES, EVERY ONE ASSERTED WHERE ALL ITS TERMS ARE IN ONE HAND:
-     PARTITION — the stage rows plus the freed-and-placed row equal the freed row. Two arms of ONE teardown,
-       and the one relation here that survives a deep fork: a copy gets its own teardown and files in one arm
-       of it like any other state.
-     CONTAINMENT — offered <= the ask total. Different events in different files, and the slack is every
-       OTHER door into this surface, core/fetch's included. This is the only row that ties the edge to the
-       razor, which is why it is carried even though it belongs to no partition here.
-   AND THERE IS NO `freed-and-placed <= placed`, WHICH core/fetch's SIBLING BLOCK DOES HAVE — a difference
-   between the two machines and not an omission. A step state is BYTE-COPIED at a deep fork and the copy
-   inherits `placed`, so two copies file against one placement; core/fetch survives that because the span
-   between its offer and its teardown runs no page code and its offering stage RETURNS rather than parking, so
-   no state holding a raised flag can be cloned at all. THAT REASON USED TO READ "`js_fetch_unforkable` REFUSES
-   the fork once the state holds §5.4's record", and it is rewritten rather than deleted because a reader will
-   re-derive it from the word "survives": a sibling that cannot be forked needs no argument about where its
-   offer sits, so a reader reaching for one will reach for a refusal first.
-   THERE IS NO SUCH GUARD TO REACH FOR — `js_fetch_unforkable` is DELETED, along with the sibling refusals at
-   the `Headers` and `Request` constructors, so it has no `visit`, no terms and no population. This clause
-   used to say the record "is not one of its terms", which was a true statement about a guard that had terms
-   and is now a statement about nothing; the retired wording is kept because it is the shape a reader
-   re-derives, and the SYMBOL still greps nonzero in this tree for the reason this file's own rules give — a
-   retired argument stays at its site, so every surviving hit is prose that TALKS ABOUT the deletion, and the
-   lines were READ rather than tallied.
-   WHAT IT CHANGES ABOUT THE CONTAINMENT IS NOTHING, AND THAT WAS ALREADY THE CLAUSE'S OWN CONCLUSION: a fork
-   inside §5.4 steps 10-27 is allowed, it happens BEFORE the offer, and two arms each make their own offer. So
-   core/fetch's survival rests on the offer's POSITION alone and never on a refusal, which is what the
-   emitter's own paragraph at this census's containment states in its own words.
-   IT IS NOT A CORNER: §3.5.6's SYNCHRONOUS arm sets the flag and then PARKS inside its own call
-   to the lifecycle machine, which fires `readystatechange` and `progress` at the page's own listeners — page
-   code, at a depth where the send frame is live and forkable. An assert would fire on a legitimate state,
-   which is the concession shape §Offensive-programming refuses, so the two rows are read as two facts and
-   never subtracted.
-   WHAT IS DELIBERATELY NOT ASSERTED, AND THE REASON IS THE SPLIT ABOVE. There is no relation between
-   `epXhrAskPlacedLife` and `epXhrAskOfferedLife`. They are raised in two machines whose states are not
-   paired: a placed send mints a lifecycle machine the asynchronous arm ENQUEUES, and a task that is never
-   run offers nothing, while abort() and the request error steps mint lifecycle machines of their own that
-   record nothing. An inequality between them would be a claim about which sites mint that machine, which is
-   not a fact this file can check, and it would fire on a legitimate state — which is the concession shape
-   §Offensive-programming refuses.
-   AND THAT UNASSERTABLE GAP IS THE ORDINARY STATE OF A REAL BUNDLE'S XHR DOOR, WHICH IS MEASURED HERE
-   RATHER THAN LEFT AS THE HYPOTHETICAL THE PARAGRAPH ABOVE NAMES. `a task that is never run offers nothing`
-   is that paragraph's own phrasing of the only way these two rows can differ on this machine, and it is what
-   a real application page does at EVERY call. Measured on one attributed row of `app.slack.com` through an
-   installed artifact stamped 5e2485ab95232e66bdb6851f175c833644fe7250, clean cone, dev asserts, 120 s:
-   `epXhrAskCalledLife` 379, `epXhrAskBeganLife` 379, `epXhrAskPlacedLife` 379, `epXhrAskOfferedLife` ZERO.
-   The PARTITION closes to the digit — every arm of `epXhrOutDiedAtLife` 0, `epXhrOutFreedPlacedLife` 379,
-   `epXhrOutFreedLife` 379 — so not one send state died at any stage of `send()`. The page called `send()` 379
-   times, the request was CONSTRUCTED 379 times, and the address reached the @H surface never.
-   THE CONTROL IS THE SIBLING EDGE AND IT IS ARMED. The same revision's smoke fixture reads
-   `epFetchAskCalledLife` 1954, `epFetchAskBeganLife` 1954, `epFetchAskOfferedLife` 1954 — one to one, because
-   core/fetch OFFERS inside the machine that CONSTRUCTS, which is the difference this whole block is written
-   around. That fixture also reads `epXhrAskCalledLife` 0, so NO GATE IN THIS TREE EXERCISES THIS EDGE: the
-   loss sits in the door the smoke cannot see, while the door the smoke drives 1954 times is the one that real
-   corpus did not call at all (`epFetchAskCalledLife` 0 on every attributed real-page row that produced a
-   census). That is §A-FIXTURE-BUILT-TO-EXERCISE-EVERY-MECHANISM landing on a door rather than on a rate.
-   WHAT IT LOCALISES, BECAUSE THE OFFER'S RAISE SITE ADMITS NO OTHER READING. `xhr_record_endpoint` holds no
-   `return` above `endpoint_xhr_edge_offered`; `XR_FETCH` is the lifecycle machine's FIRST stage (xhr_run_closure
-   mints at stage 0 and XR_FETCH is the first XR_ entry) and parks before nothing; and SEND_RUN's asynchronous
-   arm mints its closure XHR_MODE_FETCH, so the one arm that skips the record is not the arm that placed these.
-   A STEPPED CLOSURE THEREFORE RAISES THE ROW, and 0 against 379 says NONE OF THE 379 ENQUEUED CLOSURES WAS
-   EVER STEPPED. They are `JS_EnqueueCallTask` entries, which puts the recording site at solver/engine.c's
-   `run-a-task` arm — the `else` below the program sequence — and the same row set reads `jobsReady` 36169 with
-   `jobsReadyMicro` 0 and `jobsFramed` 28533 against `run-a-task` 163 steps of 6673 and `finished` 0.
-   AND IT IS A THIRD READING OF `asks - preProgram == 0`, WHICH THE FOURTH-NUMBER ENUMERATION ABOVE DOES NOT
-   CONTAIN AND WHICH TAKES DIFFERENT WORK FROM EITHER OF ITS TWO. That enumeration offers NEVER REACHED and
-   REACHED AND ALREADY KNOWN; this row is neither, because the door WAS reached 379 times and NOTHING merged —
-   the ask lives on the far side of a task hop and was never made. A reader holding a razor of zero on a run of
-   thousands of jobs may not spend it on either of those two without reading this edge's Called row first, and
-   the same corpus carries a row that IS the second reading (146 post-program asks, every one merged into a
-   record the markup already held) so the two are separable in practice and not only in principle.
-   RETIREMENT: this record goes when a placed send whose closure is never stepped is visible WITHOUT it — a
-   row counting the lifecycle closures this edge ENQUEUED against the ones that reached `XR_FETCH`, which makes
-   the loss a subtraction. That is NOT the began/offered pair this block already refutes as a non-check: those
-   two cannot disagree because both are raised inside the lifecycle machine, and these two are raised on
-   opposite sides of the task hop, which is exactly where the 379 went.
-   WHAT MAY NOT BE ASSERTED IS ALSO core/fetch's, and for the same mechanism as the paragraph above:
-   `freed <= began` and `placed <= began` are both FALSE,
-   because a step state is BYTE-COPIED at a deep fork and the copy inherits the capture flag. §3.5.6 step 3's
-   fork over a concolic method and step 4's `toString` are two stages of `send()` that run the page's code, so
-   this is not a corner — it is the population this tool exists for. The begun row and the freed row are read
-   as two facts and never subtracted.
-   SCOPE IN TIME IS THE SURFACE'S, exactly as core/fetch's is: reset in endpoint_init and endpoint_free beside
-   every other counter in this file, which is what makes them comparable with the ask rows at all.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on one, no construction is refused because of
-   one, and no arm is narrowed by one.
-   NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: an `xhr.send()` whose ARGUMENT CONVERSION threw
-   or parked, and an `open()` that never completed — neither reaches SEND_CHECKS, so neither raises a row
-   here, and `open()` is where §3.5.1 parses the method and the URL this record is made of. WHAT THE NEXT DIFF
-   BUILDS: the began/freed pair one frame out, raised by core/idl_args.c for EVERY declared member at its
-   prologue's entry and at its teardown, which answers it for every host edge at once instead of per
-   component — the same diff core/fetch's own residual names, so the two retire together. HOW ITS ABSENCE
-   WOULD SHOW: a document whose page calls `xhr.send()` and whose begun row reads zero, with nothing in this
-   census distinguishing that from a page that called none.
-   RETIREMENT: this record goes when a `send()` that never reached the member body raises a row here. */
+/* The XHR edge's own entry: the same census over an edge that splits construction from recording. `send()`
+   (XHR_SEND_DECL over SEND_STAGES) constructs the request and, at XHR §3.5.6 "The send() method" step 12 or
+   13, places it by minting the lifecycle machine (js_xhr_run_steps), whose `XR_FETCH` stage records. The send
+   state is torn down before the asynchronous arm's task runs, so the partition is over placement, not offer:
+     `epXhrAskNamedLife`, `…NamedTypeofLife`, `…NamedPropLife`: compile-time resolutions of the entry name.
+     `epXhrAskCalledLife`: `send()` calls entering the prologue (core/idl_args.c's stage 0).
+     `epXhrAskBeganLife`: `send()` calls reaching the member body, raised at SEND_CHECKS's one-time capture,
+       which is gated on a flag because that stage parks on step 3's declared fork over a concolic method.
+     `epXhrAskPlacedLife`: of those, the ones that reached step 12/13 and placed the fetch.
+     `epXhrAskOfferedLife`: addresses offered to @H, raised in the lifecycle machine on the line before
+       `xhr_record_endpoint`'s endpoint_record call; it belongs to no send state.
+     `epXhrOutFreedLife`, `epXhrOutFreedPlacedLife`: send states torn down after a construction began (deep-fork
+       copies included), and of those the ones that had placed.
+     `epXhrOutDiedAtLife`: of the freed states that placed nothing, one arm per `SEND_STEPS` stage. */
+/* Identities, asserted in endpoint_xhr_edge_rows: the died-at arms plus freed-and-placed equal freed (a deep
+   fork's copy gets its own teardown, so this survives forks); offered <= `epAsks`; began <= called.
+   Not assertable, unlike the fetch edge: freed-and-placed <= placed, `freed <= began` and `placed <= began`.
+   A deep fork byte-copies the send state with its flags, and `send()` runs page code after placing: the
+   synchronous arm parks inside the lifecycle machine's `readystatechange` and `progress` listeners, and
+   step 3's fork and step 4's `toString` run page code before it. Nor does any relation hold between placed
+   and offered: a placed asynchronous send offers only once its enqueued closure is stepped, and abort() and
+   the request error steps mint lifecycle machines that record nothing. Scope in time is the surface's (reset
+   in endpoint_init and endpoint_free). Reports, never bounds. */
+/* Named residual. Not covered: a placed asynchronous send whose lifecycle closure, a `JS_EnqueueCallTask`
+   entry that solver/engine.c's `run-a-task` arm steps, is never stepped offers nothing, and no row says so.
+   Next diff: a row counting the lifecycle closures this edge enqueued against those that reached `XR_FETCH`,
+   raised on opposite sides of the task hop so the loss is a subtraction. Absence shows as:
+   `epXhrAskPlacedLife` nonzero with `epXhrAskOfferedLife` zero and every send state accounted for, a zero
+   `asks - preProgram` that is neither "never reached" nor "already known".
+   Named residual. Not covered: an `open()` that threw or parked and never resumed raises no row, since this
+   census begins at `send()`, and `open()` is where the method and the URL are parsed. Next diff: `open()`'s
+   stage table matched beside `send()`'s by endpoint_edge_member_asked. Absence shows as: a page whose bundle
+   calls `open()` reading `epXhrAskCalledLife` zero, with nothing separating it from a page that makes no XHR. */
 void    endpoint_xhr_edge_declare(const char *entry, const char *const *steps, int first_stage);
 void    endpoint_xhr_edge_began(void);
 void    endpoint_xhr_edge_placed(void);
 void    endpoint_xhr_edge_offered(void);
 void    endpoint_xhr_edge_freed(int stage, int placed);
-/* The rows on the heap (caller frees; NULL only on allocation failure), spliced into `_cold` beside the fetch
-   edge's with their own LEADING comma, and NEVER summed with them: they count states of a DIFFERENT machine
-   whose stages are its own, so one number over both would be the averaged population §a-coverage-figure-
-   states-what-it-is-a-fraction-of names. THE EMPTY STRING IS THE ABSENT FORM — a host that installs no
-   XMLHttpRequest runs no send machine and has no population, and an absent count and a zero count are
-   different facts. */
+/* The XHR edge's rows (caller frees; NULL only on allocation failure), spliced into `_cold` beside the fetch
+   edge's with their own leading comma and never summed with them, since they count a different machine's
+   states. The empty string is the absent form: a host that installs no XMLHttpRequest has no population. */
 char   *endpoint_xhr_edge_rows(void);
 
 #endif
