@@ -119,706 +119,301 @@ typedef struct Flow {
        and refcounted so `family` stays addressable while any descendant can read it. See flow.c. */
     FlowAcct *acct;
 
-    /* INTERLEAVING STATE — persisted while this flow is PAUSED so the scheduler can run another flow and come
-       back. A flow is preempted mid-execution (cooperative quantum) and resumed byte-identically; its COW
-       delta, decision cursor, and pins all swap with it (see engine.c). Zero-initialized by flow_add. */
-    /* A CANDIDATE SESSION. This flow re-runs the page with one attacker payload substituted for one source, to
-       see whether it FIRES at the sink. It is not a different KIND of flow — same scripts, same scheduler, same
-       preemption — it just carries the substitution, which is why the candidate lives here rather than in a
-       driver that runs the program start-to-finish beside the BFS. NULL for an ordinary flow. */
+    /* Interleaving state, kept while this flow is paused so the scheduler can run another flow and come back. A
+       flow is preempted mid-execution (cooperative quantum) and resumed byte-identically; its COW delta,
+       decision cursor and pins swap with it (engine.c). Zero-initialized by flow_add. */
+    /* A candidate session: this flow re-runs the page with one attacker payload substituted for one source, to
+       see whether it fires at the sink. It is an ordinary flow (same scripts, scheduler and preemption) that
+       carries the substitution. NULL for an ordinary flow. */
     char *cand_src;        /* the source identity the payload replaces (owned) */
     char *cand_payload;    /* the breakout to try (owned) */
     const char *cand_sink; /* the sink name to record if it fires (static) */
-    /* DID THIS FLOW'S PoC FIRE, and is its substitution live? Both were globals in solve.c, which is only
-       correct while one candidate runs start-to-finish with nothing else scheduled — the shape the standalone
-       verify driver has and the BFS does not. As a flow among flows a candidate is preempted, parked and
-       resumed with ordinary flows in between, so a global `fired` records another flow's marker and a global
-       `verifying` leaves the substitution live for whoever runs next. They belong to the flow, and they swap
-       with it. */
-    /* AND NEITHER CROSSES THE COLD TIER, which is a decision recorded where the fields are rather than only at
-       the writer. `cand_verifying` is not independent state at all — solve_flow_begin sets it from `cand_src`
-       on every switch-in, so a parked flow re-derives it before it runs an opcode. `cand_fired` is DROPPED on
-       purpose: a candidate can fire and then be preempted before it finishes, and carrying the bit would let
-       solve_flow_end record a PoC on the strength of a fire the resuming session never saw — while a replay is
-       not obliged to reproduce one, since §Time-travel has it re-deriving values from CURRENT sources. §@S:
-       only firing proves it, so the replay re-observes or nothing is recorded. See cold.c's park_rec_cand. */
+    /* Per-flow because a candidate is preempted and resumed among other flows, so a global would record another
+       flow's marker or leave the substitution live for the next one. They swap with the flow. */
+    /* Neither crosses the cold tier. solve_flow_begin re-derives `cand_verifying` from `cand_src` at every
+       switch-in. `cand_fired` is dropped on purpose: a candidate can fire and then park before it finishes, and
+       only a fire the resuming session observes proves a PoC. See cold.c's park_rec_cand. */
     int cand_fired;        /* this flow's X9 marker executed */
     int cand_verifying;    /* this flow is a candidate run: the sink takes the concrete arg */
-    /* WHERE THIS CANDIDATE'S PAYLOAD CAME FROM — the park record it was rebuilt out of (1), or this session's
-       own search list (0). It exists so that "these bytes have no row in this session's record" is a POSITIVE
-       statement rather than a hole a reader fills with a guess.
-       §@S ALREADY SAYS THE FACT AND NOTHING STATED IT. A cold-resumed candidate's payload "rides the resumed
-       FLOW rather than this session's record" (solve.h, on `payloads` being empty beside a non-zero `tried`),
-       so solve.c's arrival check cannot decide from the payload list alone whether an unlisted payload is a
-       resumed one — which is legitimate — or a candidate assembled outside both doors, which is the assembly
-       failure that check exists to catch. Those are opposite verdicts and the list reports them identically.
-       IT IS RE-DERIVED AND NEVER PARKED, exactly like `cand_verifying` above it: a candidate that parks again
-       is written as a 'c' record and comes back through the same rebuild arm, which sets this again. Nothing
-       reads it before that arm runs — solve.c reads it only at a sink, and a flow reaches a sink by running. */
+    /* Where this candidate's payload came from: a park record it was rebuilt from (1), or this session's search
+       list (0). solve.c's arrival check reads it to tell a resumed candidate, whose payload legitimately has no
+       row in this session's list, from one assembled outside both doors. Set only by the cold tier's rebuild
+       arm, never parked (a re-park writes a 'c' record and comes back through the same arm); carried by a fork. */
     int cand_resumed;      /* this candidate was rebuilt from a park record, so its payload has no row here */
-    /* HOW FAR THIS CANDIDATE'S OWN BYTES HAVE GOT — §@S's fitness read as a COMPARATOR, which is a different
-       quantity from the reward beside it and is the half `val` structurally cannot be.
-       A REWARD IS A LEDGER AND A FITNESS IS A COMPARATOR, and the two obey opposite rules. A ledger records
-       what a search has LEARNED, so it must be paid at most once for one observation — a second payment for
-       ground already covered reorders the frontier on nothing. A comparator states where an item stands NOW,
-       so it must be readable off EVERY item, including the ones standing exactly where an earlier item already
-       stood. Pay a distance into the ledger and the rule that keeps the ledger honest is precisely the rule
-       that erases the comparison: the first candidate of a search to travel nine tenths of the way is paid for
-       it and every later candidate that travels the same nine tenths is worth what an unstarted flow is worth.
-       §@S's "a near-miss is mutated toward the gap; a dead candidate starves" is then true of nothing — not
-       because the distance is unmeasured, but because the only place it was written was a ledger.
-       SO THIS IS NEVER ACCUMULATED AND NEVER PAID. It is where THIS flow's own bytes have been observed to
-       stand on §@S's ladder, in [0,1], overwritten upward and read at the pick. It cannot double-count because
-       there is nothing to count: two flows at the same distance simply compare equal, and one that falls
-       behind another is passed. It shares the optimism term's entire range, so it is priced against the same
-       aging and buys a candidate the same order of thread time a never-run flow gets.
-       AND IT IS THE WHOLE LADDER RATHER THAN ITS FIRST RUNG, WHICH IS THE HALF THAT WAS MISSING AND THE HALF
-       THAT MATTERS MOST ON THE SINKS THAT MATTER MOST. §@S names four rungs — {filter-survived, sink-reached,
-       context-escaped, handler-fires} — and only the FIRST of them was ever written here; the other two
-       pre-fire rungs were paid into the search-level LEDGER at a 0->1 crossing and nowhere else. Read the two
-       rules above against that arrangement and the consequence is exact rather than theoretical: a page that
-       does not transform the payload delivers it whole, so the survival fraction is 1.0 for EVERY candidate of
-       that search the moment its bytes surface anywhere, and the comparator is then a CONSTANT across the one
-       population it exists to order. The candidate whose breakout arrived at its own sink and left the state it
-       was written into ranked exactly equal to the one whose bytes turned up in some unrelated string and
-       stopped — while the ledger, obeying its own honest rule, had already paid the single crossing to whichever
-       flow got there first and had nothing left for either. So the rungs are recorded HERE, per flow, and the
-       distance is composed from them; the ledger keeps its crossings and is untouched.
-       THE FIRE IS NOT ONE OF THE RUNGS, and excluding it is §@S(i) rather than an omission: a fitness whose
-       rungs sit AT the thing they are a distance to "is not a distance at all, it is the outcome restated".
-       Firing closes the search (solve.c's record_sink) and is a FINDING, which is the ledger's quantity; the
-       comparator's job is to order the candidates that have NOT fired, and every rung it reads has its
-       observation site strictly before that.
-       IT IS CARRIED BY A FORK for the reason every weight term is: an arm of a candidate is that candidate's
-       run continued under one more arm, carrying the same payload to the same sink, so a fork that dropped it
-       would let a candidate improve its own rank by branching. flow_fork_inherit's rank-neutrality assertion is
-       what forces that and fires the moment it is forgotten — and it is written over the WHOLE weight rather
-       than over a list of fields precisely so that splitting this quantity into the two fields below could not
-       be done without the fork carrying both.
-       IT DOES NOT CROSS THE COLD TIER, and that is the same decision `cand_fired` records one field up: a
-       distance is an OBSERVATION of a re-execution, and a resumed session has not made it. A parked candidate
-       comes back at zero and re-earns it from its first arrival, which is what keeps the number a measurement
-       of this session's runs rather than a rank inherited from a run nobody watched. */
-    /* RUNG ZERO, HELD AS THE FRACTION IT IS: how far along its own recorded path this candidate has REPLAYED,
-       in [0,1] — the runway, and the only rung whose observation site is strictly before the source read.
-       IT IS THE REPLAYED ARMS AND NOT THE RAW CURSOR, which is the difference between a distance travelled and
-       a distance claimed. `g_c` advances on APPENDS as well as on replays, so a diverged candidate that forks
-       nine hundred times would read a full path it never walked; dec_replay moves the cursor only on the far
-       side of the key comparison — an arm whose recorded question the branch actually re-asked — so a reading
-       taken there is the path CONSUMED. THE COMPARATOR HOLDS ONLY THE FRACTION and the two halves it was
-       computed from are kept beside it for the REPORT (the pair below); both are read live at that same site
-       rather than reconstructed, which is sound for one reason worth stating: a divergence ENDS the vector at
-       the cursor, and dec_replay asserts `g_c < dec_total()` at entry, so no reading is ever taken after a
-       truncation and the last one taken was against the untruncated path.
-       MONOTONE WITHIN A RUN, for flow_observe_survival's reason exactly: a candidate's recorded path is fixed
-       for its life, so the longest prefix any replay has consumed can only be discovered, never undone, and a
-       lower reading is another sample of the same fixed question rather than a demotion.
-       IT DOES NOT CROSS THE COLD TIER, like every other term of this comparator: a distance is an OBSERVATION
-       of a re-execution and a resumed session has not made it. */
+    /* How far this candidate's own bytes have got: the @S fitness read as a comparator, a different quantity from
+       the reward. A reward is a ledger, paid at most once per observation; a fitness states where an item stands
+       now and must be readable off every item, including ones standing where an earlier item stood. So the
+       distance is never accumulated and never paid: each rung below is overwritten upward, flow_distance
+       composes them in [0,1], and the pick reads it. It shares the optimism term's range, so it is priced against
+       the same aging.
+       The fire is not a rung (FLOW_RUNG_* says why). Carried by a fork, because an arm of a candidate continues
+       the same payload to the same sink and must not improve its rank by branching; flow_fork_inherit's
+       rank-neutrality assertion over the whole weight enforces it. It does not cross the cold tier: a distance
+       is an observation of a re-execution, so a parked candidate comes back at zero and re-earns it. */
+    /* Rung 0: the fraction of its own recorded path this candidate has replayed, in [0,1], the only rung observed
+       strictly before the source read. It counts replayed arms, not the raw cursor, because `g_c` also advances
+       on appends; dec_replay samples it only past the key comparison, where the branch re-asked the recorded
+       question. A divergence ends the vector at the cursor and dec_replay asserts `g_c < dec_total()`, so no
+       reading is taken after a truncation.
+       Monotone within a run: the recorded path is fixed, so a lower reading is another sample, not a demotion.
+       Pinned to 1.0 at the delivery by flow_observe_rung. Not parked. */
     double cand_replay;
-    /* …AND THE TWO HALVES THAT FRACTION WAS COMPUTED FROM, WHICH THE ROUNDED REPORT OF IT CANNOT RECOVER.
-       `cand_replay` is a double and the document carries thousandths of it, so `(int)(frac*1000+0.5)` is 0 for
-       any path longer than 2000 arms with one arm consumed — and decide.h records replay depths of 8000. A
-       report built on the rounded value alone therefore says "consumed NONE of its recorded path" about a
-       replay that walked arms, which is the ABSENCE-and-ZERO-read-alike defect §@S names, arriving through the
-       CONVERSION rather than through a guard. The pair is the same repair `surv_run`/`surv_len` already is one
-       rung up: a fraction held as its two halves, because the report has to be able to say WHICH numbers.
-       WRITTEN AT THE ONE SAMPLE THAT SET THE FRACTION and nowhere else, so the three describe ONE moment and
-       the identity `cand_replay == arms/of` is exact — the same division, on the same two values, computed
-       once. flow_observe_replay asserts it on the way in. `of` is 0 for a flow that has never had a reading,
-       which is the same statement as `cand_replay == 0.0` and is asserted as that biconditional rather than
-       left to a reader to infer.
-       IT IS NOT PINNED AT THE DELIVERY AND THE FRACTION IS. flow_observe_rung's pin is BY DEFINITION AND NOT
-       BY OBSERVATION — its own words — so pinning the pair would fabricate an arm count for a flow that may
-       have replayed nothing, and the identity would then have to carry an exception. Past the delivery the
-       fraction says where the COMPARATOR stands and the pair says what was last OBSERVED; those are different
-       questions and the report names them apart.
-       IT IS NOT A TERM OF THE ORDER, WHICH IS ESTABLISHED AND NOT ASSUMED: flow_distance sums exactly
-       `cand_replay + cand_surv + cand_rung`, and flow_weight's own derivation names those three and no fourth.
-       So the rank-neutrality assertion — written over the WHOLE weight — cannot see this pair, correctly, and
-       the two-instants test it would otherwise owe is answered below rather than by that assert.
-       IT IS STILL CARRIED BY A FORK, and for a reason that is NOT the rank-neutrality one. A sibling that
-       carried the FRACTION and not the pair would hold one flow's two statements about one sample
-       contradicting each other, and the identity above is asserted on that sibling's very next replayed arm —
-       so the omission would not be a quiet inconsistency, it would abort in a component that did nothing
-       wrong.
-       AND IT PASSES THE TWO-INSTANTS TEST BY CONSTRUCTION, for the reason flow.c's fork enumeration already
-       gives about the fraction rather than for a new one: a flow that FORKS has stopped REPLAYING. decide.c
-       reaches its fork arm only when `g_c >= dec_total()` or after dec_leave_path has truncated to the cursor,
-       and dec_fork_here's append moves the cursor with it, so from a flow's first fork onward `g_c <
-       dec_total()` is permanently false and dec_replay is never entered again. A parent therefore consumes NO
-       arm between two of its own forks, and two arms of it forked at two instants read this pair — and the
-       fraction it is the halves of — identically. It is not a prefix quantity that owes an exemption; it is
-       frozen before the first branch that could have separated two arms of one parent.
-       IT DOES NOT CROSS THE COLD TIER, like the fraction it is the halves of: a distance is an OBSERVATION of
-       a re-execution and a resumed session has not made it. */
+    /* The two halves `cand_replay` was computed from, for the report: its thousandths round to 0 on a long path
+       with few arms consumed, so the report needs the raw counts. Written at the one sample that set the
+       fraction, so `cand_replay == arms/of` exactly; flow_observe_replay asserts it, and `of == 0` if and only if
+       `cand_replay == 0.0`. Not pinned at the delivery (the pin is a definition, not an observation), so past the
+       delivery the pair says what was last observed while the fraction says where the comparator stands.
+       Not a weight term: flow_distance reads only `cand_replay + cand_surv + cand_rung`. Carried by a fork anyway,
+       because a sibling holding the fraction without the pair would fail the identity at its next replayed arm.
+       It passes the two-instants test by construction: a flow that forks has stopped replaying (decide.c forks
+       only past the recorded path), so a parent consumes no arm between two of its forks. Not parked. */
     long cand_replay_arms;   /* `consumed` at the sample that set `cand_replay` */
     long cand_replay_of;     /* `total` at that same sample; 0 = no reading has ever been taken */
-    /* RUNG ONE, HELD AS THE FRACTION IT IS: the best fraction of this flow's own payload that any re-execution
-       has been observed to deliver to any code-execution sink, in [0,1]. It is not the only fractional rung any
-       more — the runway above it is the other — and it is still not a boolean, because "how much of what the
-       page was given is still alive" has degrees and the two sink rungs do not. */
+    /* Rung 1: the best fraction of this flow's own payload any re-execution has delivered to a code-execution
+       sink, in [0,1]. A fraction because how much of the payload survives has degrees. */
     double cand_surv;
-    /* …AND THE BOOLEAN RUNGS, AS A COUNT RATHER THAN AS BITS, because they are ORDERED and a count is what
-       makes the order the arithmetic instead of a convention: 0 = this flow's bytes are not in the program at
-       all, FLOW_RUNG_DELIVERED = the substitution has been performed at a source read, FLOW_RUNG_ARRIVED = the
-       breakout built out of it reached the sink its own search is for, FLOW_RUNG_ESCAPED = and it stood in an
-       executable position there. A flow cannot hold one without its predecessor — every escape site in solve.c
-       runs downstream of the arrival site on the same string, and every arrival site runs downstream of a
-       delivery because a candidate arm returns at the sink's door unless its substitution has happened — and
-       flow_observe_rung asserts that rather than trusting it.
-       0 IS THEREFORE A POSITIVE STATEMENT AND NOT A "NOT YET", which is the whole reason the bottom rung is
-       worth a rung: it separates a flow the ordering has never served, or that a gate killed on the runway,
-       from one whose bytes are in the program and were eaten by a filter. Those took the same number before
-       and take opposite actions — the first is a scheduling or path question, the second a breakout one. */
+    /* The boolean rungs as one count, so their order is arithmetic: 0 = this flow's bytes are not in the program,
+       FLOW_RUNG_DELIVERED = substituted at a source read, FLOW_RUNG_ARRIVED = the breakout reached the sink its
+       search is for, FLOW_RUNG_ESCAPED = it stood in an executable position there. A flow cannot hold a rung
+       without its predecessor (each escape site in solve.c runs downstream of the arrival site on the same
+       string, and a candidate arm returns at the sink's door unless its substitution happened);
+       flow_observe_rung asserts it. 0 is a positive statement: it separates a flow never served, or killed on the
+       runway, from one whose bytes are in the program and were eaten by a filter. */
     int cand_rung;
 
-    /* IS THIS FLOW A DRIVEN ORPHAN — a flow whose frame is a CALL of a function the page defined and nothing
-       ever called (engine.c's engine_orphan_seed). It is not a different KIND of flow in any way the scheduler
-       can see: same assembly as an answer-fork arm, same delta, same world, same rank, same preemption, and its
-       branches fork ordinary siblings. It carries exactly one consequence, and the field exists to state it:
-       ITS WORK IS NOT IN ITS RECIPE. Every other flow's recipe is (decision vector, reward) and a resume
-       re-runs the DOCUMENT under it, which reproduces the flow — but re-running the document is precisely what
-       never calls this function, so a resumed orphan flow would be a document replay wearing an orphan's rank
-       and the drive would be silently gone. What closes that is the FUNCTION LOCATOR below: the recipe carries
-       the decision vector like every other flow's AND a name for the function, and the resumed flow drives the
-       body that name matches instead of taking a fresh one. Inherited by a fork, because an arm of an orphan
-       drive is the same drive continued and is no more replayable than its parent. */
+    /* Is this flow a driven orphan: one whose frame is a call of a function the page defined and nothing called
+       (engine.c's engine_orphan_seed)? To the scheduler it is an ordinary flow. Its one consequence is that its
+       work is not in its recipe: re-running the document never calls the function, so the recipe also carries a
+       function locator (`orphan_hash`) and a resumed flow drives the body it names. Inherited by a fork. */
     int orphan;
-    /* WHERE THAT FUNCTION IS, WRITTEN AS SOMETHING A LATER SESSION CAN FIND — quickjs's JS_OrphanHash of the
-       script the body was compiled from, its position in that script, and its own source text. `fn` above is a
-       live heap reference and dies with the session; this is what crosses the tier, so it is stamped when the
-       drive is created and carried unchanged by every arm of it. 0 for a flow that is not a driven orphan,
-       which is the one value the hash is never asked to mean and is asserted as such at the park. */
+    /* Where that function is, in a form a later session can find: quickjs's JS_OrphanHash of the script the body
+       was compiled from, its position in that script and its own source text. `fn` dies with the session; this
+       crosses the tier, stamped when the drive is created and carried unchanged by every arm. 0 for a flow that
+       is not a driven orphan, which the park asserts. */
     uint64_t orphan_hash;
-    /* IS THIS DRIVE STILL WAITING FOR ITS FUNCTION — set only by the cold tier's rebuild, because a drive with
-       no call frame is the one thing only a resume can produce. A resumed session's heap does not hold the
-       function at the instant the residue lands: the closure is created by the DOCUMENT'S OWN REPLAY, and it
-       becomes reachable at the moment some flow takes it as an orphan. Until then this flow replays the
-       document like any other member, and the two states it passes through are told apart by `fn` itself,
-       which is what `fn` means: UNDEFINED while it is still waiting, and the re-taken function once one has
-       been handed to it. The flow then builds its own call frame — in its OWN timeline, never in the timeline
-       of whichever flow happened to take it, because the receiver and the arguments are concolic objects and an
-       object minted under another flow's stamp is that flow's private state for the rest of the session. */
+    /* Is this drive still waiting for its function? Set only by the cold tier's rebuild. A resumed session's
+       heap holds the closure only once the document's own replay creates it and some flow takes it as an
+       orphan; until then this flow replays the document like any other. `fn` tells the two states apart:
+       undefined while waiting, the re-taken function once handed one. The flow then builds its own call frame in
+       its own timeline, because the receiver and arguments are concolic objects owned by the minting flow. */
     int orphan_want;
-    /* AND HOW MANY UNKNOWNS THAT CALL HAS TO SUPPLY — the callee's own declared formal parameter count, handed
-       over by the take beside the function. Live state and NOT part of the recipe: it is a fact about the body
-       this session compiled, so the session that resumes reads it off the take rather than trusting a number
-       an older one wrote down. Meaningful only while `orphan_want` is set and `fn` is a function. */
+    /* The callee's declared formal parameter count, handed over by the take beside the function. Live state, not
+       part of the recipe, since it is a fact about the body this session compiled. Meaningful only while
+       `orphan_want` is set and `fn` is a function. */
     int orphan_argc;
 
-    /* HAS THIS FLOW'S RECIPE BEEN WRITTEN TO THE PARK DOCUMENT? A paged flow is not a dropped one — that is the
-       whole claim the cold tier makes — and it is a fact about THIS FLOW rather than about the session. It used
-       to be asked of the engine (`engine_frontier_paged`), which is true only of the whole-frontier park: a
-       PARTIAL self-park writes the lowest-value TAIL and releases it while the engine keeps running on its top
-       flows, so an engine-wide answer would excuse every later release of a flow that was never written down.
-       `flow_release` reads it (a continuation parked on a flow whose recipe exists is replayed next session; one
-       on a flow that was not written is dropped), and `cold_park_flow` sets it and refuses to write a flow that
-       already carries it — which is the same statement the old once-per-session park assert made, said per flow
-       so that it stays exact when the park runs several times. */
+    /* Has this flow's recipe been written to the park document? A per-flow fact because a partial self-park
+       writes and releases the lowest-value tail while the engine keeps running. flow_release reads it (a
+       continuation on a written flow is replayed next session; one on an unwritten flow is dropped), and
+       cold_park_flow sets it and refuses a flow that already carries it. */
     int paged;
 
-    /* HAS THIS FLOW TOLD THE SCHEDULER IT CAN MAKE NO PROGRESS? A flow answers FLOW_STEP_OWED when the only
-       thing left to it belongs to the HOST — a fetch not yet answered, a document script whose text has not
-       arrived, a synchronous cross-instance read the peer has not resolved. The scheduler must not hand it the
-       thread again until something could have changed, and the only alternative to recording that per flow is
-       what stood in its place: a COUNT of consecutive owed answers, broken at `flow_count()`. That count is a
-       no-progress bound in §NO-BOUNDS' own list, and it was not even a correct one. The WFQ re-picks the SAME
-       top-ranked flow — an owed step burns microseconds, so its aging does not move a service notch and its
-       weight does not move at all — so N owed answers were N answers from ONE flow, and the loop then declared
-       the whole frontier stalled while runnable siblings had never once been asked. That is the razor's
-       "starves, skips" exactly: in the smoke host the provider then answers nothing, run_scheduler breaks, and
-       every one of those flows dies unexplored with the result document reporting a clean drain.
-       IT IS A GENERATION STAMP, NOT A FLAG, so clearing every mark is one increment rather than a walk of a
-       frontier that has reached tens of thousands of members — see flow_clear_host_owed. */
+    /* Has this flow told the scheduler it can make no progress? A flow answers FLOW_STEP_OWED when all it has
+       left belongs to the host (an unanswered fetch, a document script whose text has not arrived, an
+       unresolved synchronous cross-instance read), and it must not get the thread again until something could
+       have changed. Recorded per flow, because the WFQ re-picks the same top flow and a count of consecutive owed
+       answers would declare the frontier stalled while runnable siblings were never asked.
+       A generation stamp, not a flag, so clearing every mark is one increment (flow_clear_host_owed). */
     unsigned owed_gen;
 
-    /* DOES THIS MEMBER OWE THE HOST AN IMAGE OF ITS OWN WORLD? @PERWORLD. A forced multi-path solver gives one
-       document as many APPEARANCES as it has flows — §Boot's `if (__FLAGS.admin)` sibling holds a DOM and a
-       heap its primary never had — and the ONLY moment those pixels exist is while that member is switched in
-       with its COW and DOM deltas applied. A host cannot reach that moment by asking: it gets the thread at a
-       slice boundary and renders whichever timeline the scheduler happened to leave standing, which is the
-       reach main.c's `qjs_paint` residual calls "by luck". This bit is the ask that removes the luck.
-       A PLAIN FLAG AND NOT A GENERATION STAMP, WHICH IS THE OPPOSITE CHOICE FROM `owed_gen` ABOVE AND IS MADE
-       ON THE OPPOSITE FACT. A generation makes "clear every mark" one increment, and its cost is that a
-       member born AFTER the stamp moved reads as marked for free. That is exactly right for host-owed, where
-       a fresh flow must read RUNNABLE and the stamp only ever ages OUT of a mark; it is exactly wrong here,
-       where the mark must be laid down DELIBERATELY — by the frontier walk or by the mint — and a stamp
-       cannot tell those two apart from a member the ask never reached.
-       A NEWBORN IS MARKED WHEN THE EVERY-WORLD MODE IS ON, AND NEVER BY INHERITANCE. `reclaim_calloc` zeroes
-       a new Flow, so a fork still inherits nothing from its parent; what mints a mark is the MODE read at
-       `flow_new`, which is a fact about what the host asked for and not about who forked.
-       THIS FIELD USED TO REFUSE THAT OUTRIGHT, and the refusal is rewritten rather than deleted because its
-       reasoning is what a reader re-derives. It read: "A newborn arm reading marked would make an ask over a
-       forking frontier an ask that never finishes — every fork would owe an image, and §NO BOUNDS forbids
-       capping the answer once it is owed." The §NO BOUNDS half is right and is not what the mode does; the
-       "never finishes" half reads a PER-MEMBER bit as a COLLECTIVE obligation. Nothing here waits for an ask
-       to close — a mark is spent at its own member's end or free at any yield that member is standing for —
-       so what grows with the frontier is the number of WORLDS PHOTOGRAPHED, which is the quantity @PERWORLD
-       exists to make grow and the one §NO BOUNDS forbids capping. The per-member price is one extra return,
-       once, and it is paid only by a member that ever ends.
-       AND THE TREE HAD ALREADY ACCEPTED THE UNBOUNDED SET BEFORE THE MODE EXISTED, which is what makes this a
-       LATENCY fix rather than a policy change: a host asking on EVERY ROUND re-walks the frontier each round
-       and marks every arm forked since, so the marked set already grew without limit. The one population a
-       per-round ask cannot reach is a member BORN AND ENDED INSIDE ONE ROUND — the host exists only at round
-       boundaries, so no cadence it can choose is finer than one.
-       MEASURED, on a six-element document whose inline script branches on `window.__FLAGS.admin`: `_forkAt`
-       named one branch site, `@RESULT` read `flows 2, forks 1, switches 13`, and the run wrote TWO images —
-       the `baseline` and ONE world — off exactly ONE host return. The arm was born, ran and ended between two
-       rounds, and a re-ask per round photographed it never.
-       RETIREMENT: this record goes when a document that mints N worlds cannot write fewer than N world-named
-       images under the mode, asserted rather than argued.
-       IT DECIDES NOTHING ABOUT THE ORDER. The scheduler does not promote a member that owes an image; it
-       hands the thread back at the moment its own pick has already put that member in front, which is why
-       this can never forge a ranking record the WFQ did not make (engine.c's flow_switch_in writes exactly
-       such a record, which is why nothing outside the pick may perform that switch). */
+    /* Does this member owe the host an image of its own world? Each flow is a distinct appearance of the
+       document, and its pixels exist only while it is switched in with its deltas applied, so the host asks for
+       the moment instead of rendering whichever timeline is standing at a slice boundary (main.c's `qjs_paint`).
+       A plain flag, unlike `owed_gen`: a generation would read every member born after the stamp moved as
+       marked, while this mark must be laid deliberately, by the frontier walk or by the mint. With the
+       every-world mode on, flow_new marks a newborn; a fork never inherits it (`reclaim_calloc` zeroes a Flow).
+       The marked set grows with the frontier, which is the point; nothing waits for an ask to close, since a
+       mark is spent at its member's end or at any yield it stands for, so the cost is one return per member.
+       It decides nothing about the order: the scheduler hands the thread back only when its own pick has put
+       that member in front, so it cannot forge a ranking record (flow_switch_in writes one). */
     int   paint_owed;
 
-    /* HAS THIS FLOW A RECORDED PATH TO STAND ON? 0 = fresh: decide_enter gives it an empty vector and every
-       branch it meets is a new decision. 1 = it resumes from the blobs below — which is the snapshot-forked
-       sibling (a live frame plus its chain), and equally the flow the COLD TIER rebuilt from a recipe (no
-       frame, cursor 0, replaying its recorded arms as it re-runs the document from its first script). Those
-       two are deliberately one state: a resumed flow is not a third kind of flow, it is a flow whose decision
-       state was rebuilt somewhere other than a fork. */
+    /* Has this flow a recorded path to stand on? 0 = fresh: decide_enter gives it an empty vector and every
+       branch is a new decision. 1 = it resumes from the blobs below: either a snapshot-forked sibling (a live
+       frame plus its chain) or a flow the cold tier rebuilt from a recipe (no frame, cursor 0, replaying its
+       arms from the first script). They are one state on purpose. */
     int   started;
-    /* WHICH ARM OF flow_step THIS MEMBER LAST RETURNED THROUGH — solver/step_unit.h owns the list and says why
-       the answer had to move onto the flow. The scheduler stamps it at the ONE point every step converges on,
-       so it cannot go missing when an arm is added; what the arm itself declares is only its own name. It
-       decides NOTHING — a pure record, read by the `@COLD` histogram and by the seamless-stretch aborts — and
-       it is `STEP_UNIT_NONE` on a calloc'd member, which is the true answer for a flow the pick has never
-       reached rather than a hole a reader has to guess at.
-       IT DOES NOT CROSS THE COLD TIER, and that is the same decision `cand_surv` records two screens down: it
-       is an observation of a step THIS session took, so a rebuilt flow reads `none` until this session steps
-       it — which is the honest answer and not a lost field. A parked unit carried forward would report a
-       resumed frontier under the arms of the session that parked it. */
+    /* Which arm of flow_step this member last returned through (solver/step_unit.h owns the list). The scheduler
+       stamps it at the one point every step converges on. A pure record, read by the `@COLD` histogram and the
+       seamless-stretch aborts; `STEP_UNIT_NONE` on a calloc'd member, the true answer for a flow never stepped.
+       Not parked: it describes a step this session took. */
     StepUnit step_unit;
-    /* THIS FLOW'S LIVE PREEMPTIBLE BASE, NULL WHEN IT HAS NONE — and that is ALL this slot says. It read "the
-     * current script's live preemptible frame (JS_FlowNew handle), NULL between scripts", which is one of the
-     * three kinds it holds: a PROGRAM of the row at `script_i` (JS_FlowNew), a CALL this host built
-     * (JS_FlowNewCall — a driven orphan's, §8.1.4.4 step 8's report, §6.10.1's task), and a CLONE OF AN
-     * ACTIVATION THIS HOST NEVER CREATED (JS_FlowClone at a concolic branch inside a module body, which
-     * flow_step's module arm had already left the row of). The kind is a fact about the BASE and is asked of
-     * it — JS_FlowIsProgram / JS_FlowIsCall, two predicates over the one `base_kind` field — never inferred
-     * from this slot being occupied, which is what `!JS_FlowIsCall` and `f->frame ?` both did. */
+    /* This flow's live preemptible base, NULL when it has none. It holds one of three kinds: a program of the row
+     * at `script_i` (JS_FlowNew), a call this host built (JS_FlowNewCall: a driven orphan's, an HTML §8.1.4.4
+     * step 8 report, a §6.10.1 task), or a clone of an activation this host never created (JS_FlowClone at a
+     * concolic branch inside a module body). Ask the kind with JS_FlowIsProgram / JS_FlowIsCall, two
+     * predicates over one `base_kind` field; never infer it from this slot being occupied. */
     void *frame;
-    /* THIS FLOW'S PROGRAM STILL BEING PARSED, NULL WHEN THERE IS NONE (quickjs.h's JS_FlowCompileStep and
-     * JS_FlowEvalModule, which are the entries this slot is handed to — it said JS_FlowNewStep, which composed
-     * the parse with an instantiation and is no longer what the compile site calls, because that site now
-     * HOLDS the closure; and it named only the classic entry, which was exact while a MODULE parse could not
-     * rest at all and is corrected rather than dropped because one slot and one carrier type invite it). The
-     * compile of the row at `script_i` is the one span in the engine that is O(a length the PAGE chose) and
-     * used to have no suspend point in it at all; it has one now, and this is where a parse that gave the
-     * thread back is kept until the flow is next given it. It is NOT a second frame: while it stands the
-     * row's program has not STARTED, `frame` is NULL, and the cursor has not moved.
-     * IT IS RE-DERIVABLE AND THEREFORE NOT COLD-TIER STATE (§the re-derivable category). The suspended parse
-     * is a graph of raw pointers into the descent's frame chunks and a JSFunctionDef chain, which is exactly
-     * the live-graph serialization the cold tier forbids — and it does not need to be written, because a
-     * recipe replays the DOCUMENT and the document re-compiles. So a park DROPS it and loses nothing, which
-     * is why flow_release frees it rather than refusing to let a mid-compile flow be paged.
-     * A FORK NEVER CARRIES ONE: a concolic branch is taken by RUNNING bytecode, and a flow whose program is
-     * still being parsed is running none — asserted where a sibling is built.
-     * ONE SLOT FOR BOTH OF §8.1.4.4 "Calling scripts"' ENTRIES, AND WHICH ONE PARKED IT IS READ OFF THE STEP
-     * ARM RATHER THAN OFF THIS FIELD. A flow holds at most one row's parse (the compile runs only under
-     * `!f->frame` and the row's cursor does not move while it stands), so a second slot would be a second
-     * encoding of a fact this one already carries; what the two entries do NOT share is the accounting, which
-     * is why they name two rows of solver/step_unit.h's list and why that is recorded there. */
+    /* This flow's program still being parsed, NULL when there is none (quickjs.h's JS_FlowCompileStep and
+     * JS_FlowEvalModule take it). The compile of the row at `script_i` is O(a length the page chose), so it
+     * suspends, and a parse that gave the thread back waits here. It is not a second frame: while it stands the
+     * row's program has not started, `frame` is NULL and the cursor has not moved.
+     * Not cold-tier state: the suspended parse is a graph of raw pointers the cold tier cannot serialize, and a
+     * recipe replays the document, which re-compiles; flow_release frees it. A fork never carries one, because a
+     * branch is taken by running bytecode; asserted where a sibling is built.
+     * One slot for both §8.1.4.4 "Calling scripts" entries, since a flow holds at most one row's parse; which
+     * entry parked it is read off the step arm (two rows of solver/step_unit.h's list). */
     void *compile;
-    /* IS THAT FRAME THE ROW'S PROGRAM, OR THE REPORT THE ROW'S PROGRAM OWES?
-     *
-     * HTML §8.1.4.4 "Calling scripts", run a classic script step 8's third bullet reports an abrupt completion
-     * BEFORE step 8.3.2's clean up — which is where the microtask checkpoint is — so the report is the flow's
-     * very next work and takes the frame slot the program has just vacated. It is a CONTINUATION OF THE SAME
-     * ROW and not a row of its own, which is the whole content of this flag: while it is set, `script_i` still
-     * names the script that threw, and the three things a program's completion does belong to the report's
-     * completion instead of to the throw's.
-     *
-     * WITHOUT IT ALL THREE ARE WRONG AND TWO OF THEM ARE SILENT. `script_i++` at the throw would advance past
-     * the row while the report is still standing on it, so the report's own completion would advance a second
-     * time and the flow would SKIP the next script — a work item dropped, which §scheduler's razor forbids.
-     * §4.12.1.1 "Processing model"'s execute-the-script-element runs the classic script at step 3 and restores
-     * `document.currentScript` at step 4, and the report is INSIDE step 3, so a page's `error` listener reads
-     * the throwing `<script>` element from `document.currentScript`; restoring at the throw would hand it null.
-     * And a report frame that itself completes abruptly is a should-never-happen — reporting a report is what
-     * §8.1.4.6 step 6's error-reporting-mode flag exists to stop — which cannot be told from a page script's
-     * throw without this.
-     *
-     * `JS_FlowIsCall` CANNOT ANSWER IT. A report frame is a call root and so is a driven orphan's, and an
-     * orphan flow runs ordinary programs too (a lazy chunk it loaded is a row of its sequence), so a flow can
-     * hold either kind of call frame with the same `orphan` bit set. The two completions mean opposite things
-     * — an orphan's throw is this engine's invocation on unknown input and is nobody's defect; a report's is a
-     * defect in this engine — so the fact has to be written down at the moment it is true.
-     * Carried by a fork like every other field of the flow: an arm branching inside an `error` listener is
-     * standing in the same report its parent is. It is NOT cold-tier state — a resumed flow replays the
-     * document, the script throws again and the report is owed again. */
+    /* Is that frame the row's program, or the report the row's program owes? HTML §8.1.4.4 "Calling scripts",
+     * run a classic script step 8's third bullet reports an abrupt completion before step 8.3.2's clean up, so
+     * the report is the flow's next work and takes the vacated frame slot as a continuation of the same row.
+     * While set, `script_i` still names the script that threw, and the program's completion belongs to the
+     * report's: the cursor advances once (advancing at the throw would skip the next script), §4.12.1.1
+     * "Processing model" restores `document.currentScript` after the report (an `error` listener reads the
+     * throwing element), and a report frame that throws is an engine defect (§8.1.4.6 step 6's
+     * error-reporting-mode flag). JS_FlowIsCall cannot answer it, since a driven orphan also holds a call root.
+     * Carried by a fork; not cold-tier state (a replay throws and owes the report again). */
     int   reporting;
-    /* IS THIS FLOW'S LIVE FRAME A MODELLED CLOSE REQUEST'S TASK — `reporting`'s question about a different
-     * kind of frame, and asked for the same reason: the frame is a CALL ROOT, so `JS_FlowIsCall` cannot tell it
-     * from a driven orphan's call or from a report, and the three completions mean opposite things. An orphan's
-     * throw is this engine's invocation on unknown input and is nobody's defect; a report's is a defect in this
-     * engine; and this one is a step of HTML §6.10.1 "Close requests" throwing, which the standard's own text
-     * makes impossible for the page to cause (a close action "can never throw an exception", and DOM §2.9's
-     * inner invoke step 2.11 catches a listener's). Its NORMAL completion is a value that has to be read, which
-     * is the third thing the other two do not have.
-     * NOT COLD-TIER STATE, for `reporting`'s reason: a resumed flow replays its document and re-reaches its own
-     * exhaustion, where the arrival is modelled again. Carried by a fork, because an arm branching inside a
-     * watcher's `cancel` handler is standing in the same task its parent is. */
+    /* Is this flow's live frame a modelled close request's task (HTML §6.10.1 "Close requests")? Asked for
+     * `reporting`'s reason: the frame is a call root, so JS_FlowIsCall cannot tell it from an orphan's call or a
+     * report. Its throw is an engine defect (a close action never throws, and DOM §2.9's inner invoke step 2.11
+     * catches a listener's), and its normal completion is a value that has to be read.
+     * Carried by a fork; not cold-tier state (a replay re-reaches its own exhaustion). */
     int   close_req;
-    /* …AND WHETHER A MODELLED CLOSE REQUEST IN THIS TIMELINE ALREADY REACHED §6.10.1's STEP 9. "Alternative
-     * processing: Otherwise, there was nothing watching for a close request." — the standard's own statement
-     * that this document, in THIS flow's delta, has nothing for a close request to do, and therefore the one
-     * fact that lets the arrival stop being modelled without a counter, a cap or a seen-set. It is not a bound:
-     * membership of the frontier is untouched, the page may establish a watcher at any later instant, and a
-     * flow that closed something is asked again immediately (§6.10.2's process close watchers takes ONE group,
-     * so a document with three of them is modelled three times, in one flow, as three tasks).
-     * WRITTEN FROM THE TASK'S COMPLETION VALUE and nowhere else, which is why `close_req` above exists at all.
-     * Carried by a fork like every other field of the path, and NOT cold-tier state: the manager it is a fact
-     * about is per-flow COW state that a resumed flow rebuilds by replaying its document. */
+    /* Whether a modelled close request in this timeline reached §6.10.1's step 9, "Otherwise, there was nothing
+     * watching for a close request": the standard's statement that this flow's document has nothing for a close
+     * request to do, which lets the arrival stop being modelled without a counter. It is not a bound: the page
+     * may establish a watcher later, and a flow that closed something is asked again (§6.10.2's process close
+     * watchers takes one group at a time). Written from the task's completion value only, which is why
+     * `close_req` exists. Carried by a fork; not cold-tier state (the manager is per-flow COW state). */
     int   close_req_none;
-    /* HAS THIS FLOW'S PATH EVER TAKEN AN ARM THE CONCRETE EXAMPLE CONTRADICTED — the DERIVED/FORCED
-     * discriminator, and the one fact a request this flow builds cannot state without it.
-     *
-     * CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE names three provenances and requires every outbound request
-     * to declare which it is. Two of them are facts about the PARK — a parser-inserted `<script src>` is named
-     * by bytes the trusted zone itself fetched — and the third is a fact about the PATH: "a value exists only
-     * because a gate was forced". A value can be perfectly concrete and still have been reached only through a
-     * branch this run took AGAINST what the example says, and the request built from it is then evidence about
-     * what a server answers to a request no client makes. That is not derivable from any value: the value is
-     * the same bytes either way, so the discriminator has to be recorded where the ARM was taken, which is
-     * here, beside the flow's other path state.
-     *
-     * IT IS THE CONTRADICTION AND NOT THE FORK. Forced multi-path forks both arms of every branch over an
-     * unknown, so "this flow forked" is true of nearly every flow and separates nothing. What separates is
-     * whether the flow's own arm disagrees with the concrete example the value carries — §Solver-half's "at a
-     * branch the example marks the real arm" — and a branch over a value with NO example contradicts no
-     * observation and marks nothing.
-     * IT IS NOT ONE WRITER AND THIS SENTENCE SAID IT WAS. What stood here was "decide.c is the single writer
-     * (there is exactly one place an arm is taken)", and that was a claim about THIS TREE rather than about the
-     * concept — the kind that goes stale the moment a second producer lands, and it had. What the field
-     * actually records is broader than a branch and always was: EVERYTHING THIS PATH COMPUTES FROM HERE ON
-     * RESTS ON SOMETHING NOTHING OBSERVED. Three acts put a flow in that position, and each states so at its
-     * own site through the one entry point:
-     *   - a BRANCH whose arm the concrete example contradicts (solver/decide.c) — the original, and the only
-     *     one that is an "arm" in the field's own name;
-     *   - a REQUEST THE TRUSTED ZONE DECLINED, whose failure arm runs the page's `catch` over an outcome this
-     *     engine supplied and nobody sent (solver/engine.c's flow_decline_fork);
-     *   - a MODELLED POTENTIAL CLOSE REQUEST, an arrival no user performed (solver/engine.c's close-request
-     *     arm; core/html/close_request.h says why it is forced rather than fabricated).
-     * The list is here because the ONE writer is `flow_mark_forced_arm` and a reader of this field has to be
-     * able to find every act that reaches it; a fourth producer is a line in this list, not a second bit.
-     *
-     * MONOTONE, because a path cannot un-take an arm: once a flow stands past a contradicted branch,
-     * everything it computes afterwards stands on it. That is also why it can be a bit rather than a count —
-     * a count would be a second quantity with no reader, and the WFQ must never read either: this is not a
-     * weight term, and a flow that branched cheaply must not be able to change its rank by having done so.
-     * Carried by a fork exactly like every other field of the path (flow_fork_inherit states it and asserts
-     * it), because an arm is its parent's path with one more arm on it.
-     *
-     * NOT COLD-TIER STATE, for `reporting`'s reason one line up: a resumed flow REPLAYS its recorded arms
-     * through the same decide.c seam, so every contradiction it stood on is re-observed as it is re-reached —
-     * and re-observed against TODAY's examples, which §Time-travel-resume requires ("a resumed flow re-derives
-     * example VALUES from CURRENT sources"). A serialized bit would state last session's answer about this
-     * session's server. */
+    /* Has this flow's path rested on something nothing observed? It is the derived/forced discriminator a
+     * request this flow builds must declare: the value's bytes are the same either way, so the fact is recorded
+     * where it happens. It is the contradiction, not the fork: forced execution forks both arms of nearly every
+     * branch, while this marks an arm the concrete example disagrees with (an example-less branch marks nothing).
+     * One writer, flow_mark_forced_arm, reached by three acts:
+     *   - a branch whose arm the concrete example contradicts (solver/decide.c);
+     *   - a request the trusted zone declined, whose failure arm runs the page's `catch` over an outcome nobody
+     *     sent (solver/engine.c's flow_decline_fork);
+     *   - a modelled potential close request, an arrival no user performed (solver/engine.c's close-request arm).
+     * A new producer is a line in this list, not a second bit.
+     * Monotone, since a path cannot un-take an arm, and never a weight term. Carried by a fork (flow_fork_inherit
+     * asserts it). Not cold-tier state: a resumed flow re-observes each contradiction against current examples
+     * as its replay re-reaches it. */
     int   path_forced;
-    /* …AND WHETHER THIS PATH DETERMINED A VALUE ON ONE OF THOSE ARMS, WHICH IS A STRICTLY NARROWER FACT AND
-     * ANSWERS A DIFFERENT QUESTION. `path_forced` says what a reply is WORTH; this says whether an address the
-     * flow composes afterwards may rest on BYTES THIS ENGINE CHOSE, which is what decides whether the act of
-     * fetching it may be spent. Two questions, two bits — folding them into one is the defect
-     * §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS names, and the looser question is the one that would lose.
-     *
-     * WHAT SETS IT. `decide.c` pins a source (CONCRETIZE-ON-PIN) on the holding arm of an equality, and where
-     * that arm is one the flow's own concrete example CONTRADICTS, this is marked with it. From that instant
-     * `concolic_new`'s pin arm answers every later read of that source with the pinned spelling, so anything
-     * the page computes from it — a URL above all — carries a witness THIS ENGINE chose rather than one the
-     * server or the document supplied.
-     *
-     * WHY IT IS NOT READ OFF THE ADDRESS, WHICH IS THE SHAPE A READER WILL REACH FOR FIRST AND IS NOT
-     * BUILDABLE. The natural spelling of this fact is "does this request's ADDRESS carry a value this path
-     * pinned", asked of the URL at the park — and the answer is ALWAYS NO, for every pinned value, by design.
-     * `pin_mint` (solver/concolic.c) returns a BARE primitive — `JS_NewString`, `JS_NULL`, a Number — and
-     * never a concolic, and `concolic_add_hook` returns 0 when neither operand is concolic, so
-     * `"/chunks/" + region + ".js"` with `region` pinned is a PLAIN STRING carrying no identity whatever. It
-     * is byte-indistinguishable in kind from a chunk address spelled entirely in the bundle's own source.
-     * Recovering the link would mean tracking bytes through `+`, `slice` and every builtin — a TAINT TRACKER
-     * over primitives, which §Re-execution bans by name and which the concolic value exists to replace. So the
-     * fact is recorded where the bytes are CHOSEN, which is the one door they enter the program through, and
-     * not where they are spent.
-     *
-     * STRICTLY NESTED INSIDE `path_forced`, AND STRUCTURALLY SO RATHER THAN BY A SECOND COPY OF THE RULE.
-     * Its one writer is reached only on the branch where `decide_note_forced_arm` has just marked the path, so
-     * there is no state of the program in which this is set and that is clear — `pending_prov_compose` asserts
-     * exactly that, at the park, where the pair is consumed. That nesting is what makes reading it a NARROWING
-     * of the forced set and never a reach outside it (CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE).
-     *
-     * MONOTONE, FORK-CARRIED AND NOT A WEIGHT TERM, for `path_forced`'s reasons exactly, one field up: a path
-     * cannot un-choose a witness, an arm is its parent's path with one more arm on it, and a flow that pinned
-     * cheaply must not be able to change its rank by having done so.
-     *
-     * NAMED RESIDUAL — A PIN TAKEN WHERE THE FLOW HAD NO EXAMPLE AT ALL IS NOT MARKED. What is not covered:
-     * `decide_note_forced_arm` returns early on REAL_ARM_UNOBSERVED, so an equality over a source this run
-     * never observed pins a witness and leaves both bits clear. What the next diff builds: a third state on
-     * this field for "there is no example", and the arm of `decide_real_arm` that answers it — which is now
-     * HALF IN HAND rather than a mechanism to build, because that function already reads
-     * `concolic_example_state` for the DETERMINED population and therefore holds the operand that tells NONE
-     * from CONTRADICTED at the one line that would report it. The remaining work is the FIELD and the arm, and
-     * the accessor is not part of it. How its absence would show: a flow that pinned such a
-     * source, took a contradicted arm on an UNRELATED gate afterwards, and then parked — the request is graded
-     * FORCED, this bit reads clear, and the chokepoint fires an address holding the earlier witness. It is
-     * left narrow deliberately: §@H rules that a value pinned by the page's own equality is DETERMINED and not
-     * invented, so such an address is one this engine already fires at the DERIVED grade today. */
+    /* Whether this path pinned a value on one of those arms: a strictly narrower fact answering a different
+     * question. `path_forced` says what a reply is worth; this says whether an address composed afterwards may
+     * rest on bytes this engine chose, which decides whether fetching it may be spent. Set where decide.c pins a
+     * source (concretize-on-pin) on the holding arm of an equality the flow's concrete example contradicts.
+     * It cannot be read off the address: `pin_mint` (solver/concolic.c) returns a bare primitive and
+     * `concolic_add_hook` returns 0 when neither operand is concolic, so a URL built from a pinned value is a
+     * plain string; recovering the link would need a taint tracker. Strictly nested inside `path_forced` (its
+     * writer runs only where decide_note_forced_arm has just marked the path); pending_prov_compose asserts it
+     * at the park. Monotone, fork-carried, never a weight term.
+     * Named residual. Not covered: decide_note_forced_arm returns early on REAL_ARM_UNOBSERVED, so a pin over a
+     * source this run never observed leaves both bits clear. Next diff builds: a third state on this field and
+     * the arm of decide_real_arm that answers it (it already reads concolic_example_state). Absence shows as: a
+     * request graded forced by a later unrelated gate, with this bit clear, firing an address that holds the
+     * earlier witness. */
     int   path_pinned;
-    /* THE DOCUMENT'S LOAD STAGE IS NOT HERE, and the field that was is DELETED. One integer cannot hold N
-       documents: an agent is an origin-keyed CLUSTER, so a flow reaches several Documents and HTML gives each
-       its own readiness and its own DOMContentLoaded. The stage lives on each Document (document.c's readiness
-       slot), which is a heap write the COW delta already isolates per flow — so it is still per-flow, and it is
-       now also per-document, which is what it always had to be. */
+    /* The document's load stage is not here: a flow reaches several Documents in its agent cluster and each has
+       its own readiness, so it lives on each Document (document.c's readiness slot), isolated per flow by the
+       COW delta. */
     int   script_i;        /* position in this flow's ONE program sequence: a row of `dyn`, on [0, dyn_n) */
-    /* ONE SEQUENCE AND ONE ADDRESS SPACE. The cursor used to walk the SESSION document's own scripts out of a
-       separate table on [0, n) and only then this flow's rows on [n, n+dyn_n), through an offset every reader
-       restated. The document's scripts are seeded as rows of `dyn` at creation now (flow_set_seed_hook), so
-       there is no half to be in — which is also what makes §4.12.1.1's "immediately execute the script element"
-       expressible at every position rather than only past the document's last <script>.
-       A POSITION MAY BE A SCRIPT WHOSE SOURCE HAS NOT ARRIVED, and the flow STOPS at it — which is what gives
-       every document of this agent HTML §4.12.1.1's order rather than the order its replies happen to land in. The
-       row is this flow's own (engine.c's DYN_SCRIPT_SRC), holding the address until the reply replaces it with
-       the program; one host fetch still answers every flow parked on that address, because engine_provide
-       fills every register that names it.
-       STOPPING AT A ROW IS NOT WHAT STARTS ITS FETCH, AND READING IT AS THOUGH IT WERE COST THIS ENGINE THE
-       WHOLE OF A DOCUMENT'S PARALLELISM. HTML §4.12.1.1 "Processing model" step 33 fetches when the element is
-       PREPARED and step 35 — the async set, the in-order list, the when-parsed list, the pending
-       parsing-blocking script — only decides where the result EXECUTES. This engine performed the two as one
-       step for as long as the park stood at the cursor, so a document's second `<script src>` was not
-       requested until its first had been fetched AND run, and `defer` and `async` were byte-identical on the
-       wire to a parser-blocking script. Every row of this sequence owes its request from the moment it is
-       created (engine.c's engine_queue_into); what the cursor still decides is only which program RUNS. */
-    /* THE HIGHEST SCRIPT INDEX THIS FLOW HAS COMPILED, so that compiling one twice can be caught. A flow runs
-       each program in its sequence ONCE; a preempted flow RESUMES its suspended frame and never re-enters
-       JS_FlowNew for a program it already started. Re-compiling is a REPLAY, which this engine does not do — a
-       replay re-executes side effects the flow already performed against a delta that already holds them. */
+    /* One sequence and one address space: the document's own scripts are seeded as rows of `dyn` at creation
+       (flow_set_seed_hook), so HTML §4.12.1.1's "immediately execute the script element" is expressible at
+       every position. A position may be a script whose source has not arrived (engine.c's DYN_SCRIPT_SRC row
+       holding the address), and the flow stops at it, which gives every document §4.12.1.1's order rather than
+       reply order; one host fetch answers every flow parked on the address (engine_provide).
+       Stopping at a row does not start its fetch: §4.12.1.1 "Processing model" step 33 fetches when the element
+       is prepared, and step 35 only decides where the result executes. Every row owes its request from creation
+       (engine.c's engine_queue_into); the cursor decides only which program runs. */
+    /* The highest script index this flow has compiled, so that compiling one twice can be caught. A flow runs
+       each program in its sequence once and a preempted flow resumes its suspended frame; recompiling would
+       re-execute side effects against a delta that already holds them. */
     int   last_compiled;   /* -1 until the flow compiles its first program */
-    /* WHERE A RUN OF INTERPOSED PROGRAMS HAS REACHED, so that a SECOND interposition at one slot goes BEHIND
-     * the first instead of in front of it. HTML §4.12.1.1 "Processing model"'s "prepare the script element"
-     * ends "Otherwise, immediately execute the script element el, even if other scripts are already
-     * executing", and in a browser that run happens INSIDE the causing program — so two elements one program
-     * prepares run in the order it prepared them. This engine expresses "inside" as the slot after the cursor,
-     * and that expression ALONE reverses them: both interpositions compute the same slot, and the second
-     * shifts the first down. `document.write("<script>a()</script><script>b()</script>")` and
-     * `body.appendChild(s1); body.appendChild(s2)` are the same two lines of that defect.
-     *
-     * THE WITNESS IS THE BASE SLOT, NOT THE CURSOR, AND THAT IS WHAT MAKES THE PAIR SELF-VALIDATING. The base
-     * is `script_i + 1` inside a program and `script_i` between programs, so the two programs that can stand
-     * at one cursor — the row itself, and a job running before it — have DIFFERENT bases, and a stale pair can
-     * only be reused by a program whose interpositions really do belong behind the ones already there. There
-     * is therefore no invalidation site to remember, which matters because the cursor is advanced from more
-     * than one place.
-     * "INSIDE A PROGRAM" IS A QUESTION ABOUT THE FRAME'S KIND AND NOT ABOUT THE SLOT BEING OCCUPIED, which is
-     * what this sentence used to say (`frame` is exactly "inside a program") and what engine_queue_into used
-     * to spell as `f->frame ? …`. `frame` holds THREE kinds of base and only one of them is a row of this
-     * sequence — see JS_FlowIsProgram. A CALL (a driven orphan's, a §8.1.4.4 step 8 report's, a §6.10.1
-     * task's) and a CLONE OF AN ACTIVATION THE HOST NEVER CREATED (an arm forked at a concolic branch inside a
-     * module body) are both "between programs" for this pair's purposes, and both are reached with the cursor
-     * AT the end of the sequence, where `script_i + 1` is past the queue and engine_queue_into's own `CHECK`
-     * fires in release.
-     *
-     * NO PER-ROW COLUMN WOULD DO, which is the shape this was nearly built as. `Which rows did the RUNNING
-     * program interpose` cannot be read off `dyn_pos`: a row an ANCESTOR interposed carries DYN_POS_IMMEDIATE
-     * too and sits in the same run, so a scan that skipped every immediate row would put a grandchild's
-     * program behind its parent's sibling — the same reversal one level up.
-     *
-     * A FORK CARRIES IT, like every other field of the parent's history: an arm is its parent's timeline
-     * continued, standing at the same cursor over the same rows, with the same interpositions already made. */
+    /* Where a run of interposed programs has reached, so a second interposition at one slot goes behind the
+     * first. HTML §4.12.1.1 "Processing model"'s "prepare the script element" ends "Otherwise, immediately
+     * execute the script element el, even if other scripts are already executing", so two elements one program
+     * prepares run in the order prepared; expressing "inside" as the slot after the cursor alone would reverse
+     * them (both compute one slot, and the second shifts the first down).
+     * The witness is the base slot, not the cursor: `script_i + 1` inside a program and `script_i` between
+     * programs, so the row and a job running before it have different bases and a stale pair is reused only by
+     * a program whose interpositions belong behind it. No invalidation site is needed.
+     * "Inside a program" is the frame's kind (JS_FlowIsProgram), not the slot being occupied: a call or a module
+     * clone is between programs and stands at the end of the sequence. A per-row column cannot replace this,
+     * since a row an ancestor interposed also carries DYN_POS_IMMEDIATE. A fork carries it. */
     int   imm_at;          /* the base slot `imm_next` was computed from; -1 while no run is open */
     int   imm_next;        /* the slot the next IMMEDIATE row of that run takes */
-    /* this flow's OWN program bodies (per-flow, not global): a lazily-loaded chunk, a queued document script —
-       or, while the kind beside it is DYN_SCRIPT_SRC, the ADDRESS of a script whose source has not arrived. One
-       column either way, because it is one queue and the entry is one position in it.
-       THE ROW IS THIS FLOW'S; THE BYTES ARE NOT. A program's source text is fixed the moment it is decoded and
-       no flow can write it, so it is shared baseline state and every timeline holding that program holds the
-       SAME buffer (solver/dyn_body.h). It was a `char *` this table strdup'd, and the fork therefore cost
-       O(total script bytes) rather than O(rows) — a 2.1 MB module bundle is an ordinary size for one real
-       single-page app, forced multi-path execution forks per branch, and the run ended at the allocator with
-       the page's whole learned surface as nothing. This is the same conversion solver/pending.h records for
-       the register beside it, on the one column that was left. */
+    /* This flow's own program rows (a lazily loaded chunk, a queued document script), or, while the row's kind
+       is DYN_SCRIPT_SRC, the address of a script whose source has not arrived: one column, because it is one
+       queue. The row is this flow's; the bytes are not. Source text is fixed once decoded, so every timeline
+       holding a program holds the same buffer (solver/dyn_body.h) and a fork costs O(rows), not O(script
+       bytes). The parallel `dyn_*` columns below are allocated, copied and freed together, so a field added to
+       the queue is one obligation at every clone, free and finish site. */
     DynBody **dyn; int dyn_n, dyn_cap;
-    /* WHICH DOCUMENT each of those programs belongs to, which is WHERE it is compiled — a program is closed
-       over the compiling realm's global (JS_FlowNew), and an instance is an ORIGIN-KEYED AGENT CLUSTER, so the
-       document a program belongs to is a child navigable's as often as it is the session's. §7.4 step 14's
-       load hands a same-origin child its own realm and that document's classic scripts are the CREATING FLOW's
-       next programs; compiled in the session's realm they would run against the creator's Window, defining the
-       child's globals on the parent and reading the parent's back as the child's.
-       A DOCUMENT HANDLE AND NOT A JSContext*: a handle survives a park and a realm does not, and a queued
-       program outlives the turn that queued it. It is also where a cross-agent operation's document lives —
-       there was a `perform_doc` beside the token on the flow saying the same thing, and this is the field that
-       already said it. Parallel to `dyn` for the reason
-       `dyn_cand` is — a field added to the queue is an obligation at every clone, free and finish site, and the
-       eight arrays are allocated, copied and freed together so one that got a field the others did not cannot
-       stay unnoticed. */
+    /* Which document each program belongs to, which is where it is compiled: a program closes over the
+       compiling realm's global (JS_FlowNew), and in an origin-keyed agent cluster a same-origin child's classic
+       scripts are the creating flow's next programs (§7.4 step 14). A document handle rather than a JSContext*,
+       because a queued program outlives the turn that queued it and a handle survives a park. It is also where
+       a cross-agent operation's document lives. */
     uint32_t *dyn_doc;
-    /* AND WHAT EACH ROW IS CALLED — the one fact about a row that a SHIFT cannot change. Every structure
-       outside this table that named a row named it by ABSOLUTE POSITION, and a position is a fact about the
-       row only while the set is FIXED: §4.12.1.1 "Processing model"'s "immediately execute the script
-       element" interposes a row below the cursor and §7.5.10's destroy removes one, so an entry holding a
-       position silently renames its referent while staying perfectly in range. That is the defect CLAUDE.md
-       calls an index naming a thing only while the set is fixed, and it had TWO aborts standing in for it
-       here — one refusing the interposition, one refusing the removal — because neither could be answered
-       while the name was a number that other people's edits move.
-       MINTED GLOBALLY AND NEVER REUSED, so one id names one row for the life of the instance. A per-flow
-       counter is enough for a lone timeline and wrong for two: sibling arms mint independently, so both
-       would call their next row by the same name — and a register entry a fork SHARES (solver/pending.h:
-       one record is one member however many flows name it) would then resolve to a DIFFERENT row in each
-       arm, which is the exact renaming this column exists to make impossible.
-       A FORK COPIES IT like every other column: an arm is its parent's timeline continued over the same
-       rows, so a row it inherited IS the same row and answers to the same name. That is what lets one
-       shared register entry be delivered correctly into either arm.
-       IT IS NOT PARKED. The cold tier stores a recipe and replays the document from its first script, so a
-       resumed flow's rows are rebuilt and take fresh names — the same reason `dyn_el` may never be parked.
-       IT USED TO BE THE ROW'S ARRIVAL STAMP AS WELL, AND THAT ARGUMENT IS RETIRED RATHER THAN DELETED
-       BECAUSE IT IS THE ONE A READER RE-DERIVES. It held that the two jobs do not fight, on the ground that a
-       NAME must be unique and never reused, that an ARRIVAL STAMP must be unique, never reused and monotone in
-       issue order, and that the second is therefore strictly the first plus a property the mint already had.
-       THE RETIRED TEXT IS RENDERED AS INDIRECT SPEECH AND NOT IN QUOTATION MARKS, WHICH IS AN AUTHORING RULE
-       AND NOT A STYLE CHOICE. Quoted, it is a double-quoted run of more than the word floor, so the checker
-       anchors it to the nearest preceding citation and reports this tree's own prose as a fabricated spec
-       quotation — which is what it did here, and what it has now done to three lanes in one day. Backticks do
-       not fix it: CODE_SPAN's double form crosses no newline and its single form admits EXACTLY ONE (read off
-       the pattern rather than off the prose above it), and a retired argument is longer than that. Indirect
-       speech leaves the quotation channel BY CONSTRUCTION, which is the only repair that does not depend on a
-       mask reaching far enough.
-       Every clause of the retired argument is true of the MINT and its conclusion is false, because it never
-       asks WHEN the arrival of a work item is. A
-       name's moment is fixed by what a name is for — the register names a row and a name may not move, so it
-       is minted at CREATION. An arrival stamp's moment is fixed by what the order is for: a work item arrives
-       when it becomes RUNNABLE, and a DYN_SCRIPT_SRC row is created at parse and becomes runnable when its
-       bytes come back. For that one kind the two requirements are not a superset and a subset, they are two
-       different instants — which is CLAUDE.md's §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS exactly, decided by
-       the stricter question (the name, which may never move) with the cost landing silently on the looser one.
-       WHAT IT COST IS MEASURED AND IT IS THE PRODUCT'S BIGGEST BLOCKER. A root `<script src>` is inserted by
-       the seed before any program runs, so it holds one of the document's LOWEST stamps, while every queued
-       callback is pushed during execution and is therefore younger — so flow_task_precedes' `s < row_seq`
-       answers NO for every job of the flow while any seed row still stands at the cursor, and the arrival order
-       that was landed to END the sequence arm's permanent exclusion reproduces it exactly for the rows a real
-       page has most of. Measured on gitlab.com/explore/projects through a dev artifact, 5254 steps: 35 root
-       programs, cursor at 8, `run-a-task` and `microtask-checkpoint` ZERO, against a one-root-row page on the
-       same artifact whose cursor exhausted and whose tasks ran.
-       SO THE ARRIVAL STAMP IS `dyn_run` BELOW AND THIS COLUMN IS A NAME AGAIN. What the sharing did buy is
-       kept: the clock is still one clock, so a row and a queued callback remain comparable, and the ids of one
-       flow's rows are still not contiguous — nothing reads them that way (flow_dyn_row_index searches by value,
-       and the register stores one whole). */
+    /* Each row's name: the one fact about a row that a shift cannot change. §4.12.1.1's immediate execution
+       interposes rows below the cursor and §7.5.10's destroy removes them, so anything outside this table names
+       a row by this id, never by position (flow_dyn_row_index searches by value). Minted from one global clock
+       and never reused, because sibling arms mint independently and a register entry a fork shares
+       (solver/pending.h) must resolve to the same row in each. A fork copies it. Not parked: a resumed flow
+       replays its document and its rows take fresh names. Ids of one flow's rows are not contiguous. The row's
+       arrival stamp is `dyn_run`, not this: the name is fixed at creation and may never move. */
     uint64_t *dyn_id;
-    /* AND WHEN THE ROW BECAME A RUNNABLE WORK ITEM, which is a DIFFERENT INSTANT from the name above for
-       exactly one kind of row and the same instant for every other. It is the number flow_step's ladder hands
-       flow_task_precedes, and the reason it is a second column rather than a re-mint of `dyn_id` is that
-       `dyn_id` is load-bearing as an IDENTITY: the pending register names a row by it (PEND_SCRIPT_ROW), and
-       re-stamping it at a delivery would orphan every entry naming it, on every arm of a fork, at the one
-       moment the delivery is looking that row up by that name.
-       THE MOMENT IS THE STANDARD'S AND NOT A PREFERENCE, AND THE WHOLE DEFECT IS ONE SENTENCE: A SCRIPT
-       ELEMENT'S PLACE IN THE DOCUMENT IS FIXED AT PARSE, AND ITS PLACE IN THE EVENT LOOP IS FIXED WHEN ITS
-       BYTES MADE IT READY. Those are two different instants and this table used to hold one number for both.
-       THE STANDARD RESUMES A BLOCKED PARSE WITH A TASK, WHICH IS WHERE THE SECOND INSTANT COMES FROM.
-       HTML §13.2.6.4.8 The "text" insertion mode blocks only the TOKENIZER while a parser-blocking script is
-       outstanding — "Block the tokenizer for this instance of the HTML parser, such that the event loop will
-       not run tasks that invoke the tokenizer" — and then "spin the event loop until the parser's Document has
-       no style sheet that is blocking scripts and the script's ready to be parser-executed becomes true". HTML
-       §8.1.7.3 "Processing model" gives that macro's expansion, and the resumption is a QUEUED TASK taken at
-       the moment the condition is met: "Empty the JavaScript execution context stack. Perform a microtask
-       checkpoint." then, after the wait, "Queue a task on task source to: Replace the JavaScript execution
-       context stack with old stack. Perform any steps that appear after this spin the event loop instance in
-       the original algorithm." So a task queued while the bytes were in the air runs BEFORE the script, however
-       much earlier the element was inserted — and the element's place in the DOCUMENT is untouched by that,
-       which is what `dyn_id` and §4.12.1.1's order keep.
-       SO THERE ARE EXACTLY TWO WRITERS AND THE SECOND ONE IS THE KIND FLIP. It is minted from the same clock at
-       engine_queue_into, where it EQUALS `dyn_id` — every kind whose body is already a program is runnable the
-       instant it is queued — and re-minted at the two lines that take a row OUT of DYN_SCRIPT_SRC
-       (flow_deliver_one_reply's program arm and its null arm, which is §4.12.1.1 step 4's `error`). Those two
-       are the row's "ready to be parser-executed becomes true", and they are the only sites in the tree that
-       write a row's kind over an existing row.
-       IT IS NOT A BOUND AND THE ARRIVAL ARGUMENT SURVIVES WHOLE: the stamp is written once per row per
-       readiness and never moved afterwards, so the set of work items that outrank a job is still FIXED AT THAT
-       JOB'S BIRTH and finite, which is CLAUDE.md's own line between an ORDER and a BOUND. Nothing is capped,
-       counted down or decided against; a row still runs, and now it runs after the callbacks that were already
-       waiting for it.
-       ZERO IS NO STAMP, inherited from `dyn_id`'s contract because it is the same counter (flow.c's g_work_seq
-       starts at 1) — which is what lets the ladder DCHECK a live row's stamp rather than trust that the ten
-       columns were all plumbed. IT IS NOT PARKED, for `dyn_id`'s reason: the cold tier stores a recipe and
-       replays the document, so a resumed flow's rows are rebuilt and take fresh stamps. */
+    /* When the row became a runnable work item: the number flow_step's ladder hands flow_task_precedes. A
+       script element's place in the document is fixed at parse, and its place in the event loop when its
+       bytes made it ready. HTML §13.2.6.4.8 The "text" insertion mode blocks the tokenizer and spins the event
+       loop, and §8.1.7.3 "Processing model" resumes the parse with a queued task, so a task queued while the
+       bytes were in flight runs before the script. A separate column because `dyn_id` is an identity the
+       pending register names rows by (PEND_SCRIPT_ROW).
+       Two writers: engine_queue_into mints it equal to `dyn_id`, and the two lines that take a row out of
+       DYN_SCRIPT_SRC (flow_deliver_one_reply's program arm and its null arm, §4.12.1.1 step 4's `error`)
+       re-mint it. It is written once per readiness and never moved, so the set of items outranking a job is
+       fixed at the job's birth: an order, not a bound. Zero is no stamp (flow.c's g_work_seq starts at 1), which
+       lets the ladder DCHECK a live row's stamp. Not parked, for `dyn_id`'s reason. */
     uint64_t *dyn_run;
-    /* AND THE RENDEZVOUS TOKEN OF THE PEER PARKED ON IT, for the one kind of row that OWES AN ANSWER. A
-       cross-agent operation's answer IS its program's completion, so the question and the program are one thing
-       and the token is a fact about the ROW. Held beside the flow instead it was a single slot, and both halves
-       of that were wrong: a second operation arriving before the first had answered had nowhere to go, and two
-       operations that differ ONLY in the asking WORLD — same verb, same document, same member, which is what
-       route.mjs phase 3 asks twice — are indistinguishable by every other thing a row carries, so no amount of
-       re-deriving from the cursor could have paired them. NULL for every other kind, and NULL again the moment
-       the answer is sent; a DYN_CROSS_AGENT_OP row with no token is a peer suspended forever, which is why the
-       kind and the token are written together at the one queue entry allowed to create that kind. */
+    /* The rendezvous token of the peer parked on the row, for the one kind of row that owes an answer: a
+       cross-agent operation's answer is its program's completion, so the token belongs to the row. Per row
+       because a second operation may arrive before the first answers, and two operations differing only in the
+       asking world are otherwise indistinguishable. NULL for every other kind and again once the answer is
+       sent; a DYN_CROSS_AGENT_OP row without a token is a peer suspended forever, so the kind and the token are
+       written together at the one queue entry allowed to create that kind. */
     char **dyn_token;
-    /* WHAT KIND each of those programs is (a DynKind, engine.c). A page script that does not compile is a real
-       problem and asserts; the two other kinds are ORDINARY when they do not. An @S CANDIDATE that does not
-       compile is the common case — most breakouts do not fit most sink contexts, which is why the solver tries
-       several and keeps the one that FIRES, and CLAUDE.md names it: an unsolved @S candidate is a parked search,
-       never a @WHY. A `javascript:` URL that does not compile is HTML §7.4.2.3.2's abrupt evaluation, which
-       simply produces no Document. Kept as a parallel array so the page-script assert stays fully armed inside a
-       candidate flow, which still loads real chunks. */
+    /* What kind each program is (a DynKind, engine.c). A page script that does not compile asserts; the other
+       kinds are ordinary when they do not. Most @S candidates do not compile in most sink contexts, which is a
+       parked search rather than a @WHY, and a `javascript:` URL that does not compile is HTML §7.4.2.3.2's
+       abrupt evaluation, which produces no Document. A separate column so the page-script assert stays armed
+       inside a candidate flow, which still loads real chunks. */
     unsigned char *dyn_cand;
-    /* AND WHICH OF HTML §8.1.4.4 "Calling scripts"'s TWO ALGORITHMS RUNS IT (a ScriptType, core/loader/
-       document_scripts.h). §4.12.1.1 "Processing model"'s "execute the script element" ends in a switch on the
-       ELEMENT's type — "classic" runs the classic script, "module" runs the module script — and a queue with no
-       column for it could only ever answer one of the two. The consequence was not a subtlety: three separate
-       seams (core/frame/navigable.c's child-navigable Document, engine.c's engine_join_document, and
-       core/html/html_script.c's INJECTED element) each aborted outright on `<script type=module>` rather than
-       compile a module as a classic program, which would have come back a SyntaxError from a parser that is
-       perfectly correct. This column is what those three asserts were asking to exist.
-       CLASSIC IS A STATEMENT ABOUT A ROW, NOT A DEFAULT: a `setTimeout` string, a `javascript:` URL, a lazy
-       chunk and a cross-agent operation's program are classic scripts because that is what §8.1.4.4 evaluates
-       them as. Only a row an ELEMENT put there can say MODULE, which is why the two entry points that take one
-       (engine_queue_element_script / engine_queue_docscript_url) are the only ones with the parameter. */
+    /* Which of HTML §8.1.4.4 "Calling scripts"'s two algorithms runs the row (a ScriptType,
+       core/loader/document_scripts.h): §4.12.1.1 "Processing model"'s "execute the script element" switches on
+       the element's type. Classic is a statement about a row, not a default: a `setTimeout` string, a
+       `javascript:` URL, a lazy chunk and a cross-agent operation's program are classic scripts. Only a row an
+       element put there can say module, so engine_queue_element_script and engine_queue_docscript_url are the
+       only entry points with the parameter. */
     unsigned char *dyn_type;
-    /* AND THE ADDRESS ITS BYTES CAME FROM — HTML §8.1.4.2 "Fetching scripts": "let script be the result of
-       creating a classic script given sourceText, settingsObject, RESPONSE'S URL, options, mutedErrors, and
-       url". NULL for an INLINE row, whose base URL HTML §4.12.1.1 "Processing model" states as "el's node
-       document's document base URL" and which the compile therefore reads from the document instead.
-       IT CANNOT BE THE BODY COLUMN, because that column is where the address LIVED and the reply DESTROYS it: a
-       DYN_SCRIPT_SRC row holds its URL in `dyn` only until flow_deliver_one_reply replaces it with the source text.
-       Everything the address decides is needed after that moment — a nested `import('./chunk.js')` inside a
-       bundle served from `/assets/app.js` resolves to `/assets/chunk.js`, and for a MODULE the address is
-       additionally the module map KEY, so two `<script type=module src>` of one document named by their
-       document rather than by themselves are ONE module and the second evaluates nothing. Parallel to
-       `dyn_cand` for the reason stated there — the eight arrays are allocated, copied and freed together. */
+    /* The address the row's bytes came from: HTML §8.1.4.2 "Fetching scripts" creates the script with the
+       response's URL. NULL for an inline row, whose base URL is the element's node document's base URL
+       (§4.12.1.1 "Processing model"), read from the document at compile. Not the body column: a DYN_SCRIPT_SRC
+       row holds its URL in `dyn` only until flow_deliver_one_reply replaces it with the source, and the address
+       is needed after that, to resolve a nested `import()` and, for a module, as the module map key. */
     char **dyn_url;
-    /* AND THE `script` ELEMENT THE ROW IS THE PROGRAM OF, or NULL for a row no element put there.
-       HTML §4.12.1.1 "Processing model"'s "execute the script element" is a switch on EL, and its "classic" arm
-       sets the document's §3.1.7 `currentScript` to that element for the whole of the run — so the element is a
-       fact about the ROW, exactly as its type and its address are, and it has to travel with the row because
-       the run is a WORK ITEM: the program starts in one scheduler step and finishes in another, with siblings
-       running in between, so nothing at the completion could re-derive which element this was.
-       NULL IS A POSITIVE STATEMENT AND NOT A HOLE — it is §3.1.7's own answer for a program with no `script`
-       element behind it, which is most of them: a §8.6 string handler, a lazy chunk's reply, §7.4.2.3.2's
-       `javascript:` URL, an @S candidate and a cross-agent operation's program are all classic scripts that no
-       element caused, and a document running one of them has `currentScript` null.
-       A BORROWED NODE POINTER, AND IT MAY NEVER CROSS A PARK. The cold tier stores a RECIPE and replays the
-       document from its first script, so a resumed flow re-queues its rows and no pointer here outlives the
-       session — which is exactly why the element can be a pointer at all. A snapshot FORK copies it, which is
-       sound for the same reason the DOM base chain is: the sibling holds a reference on the segment the node
-       was created in. Parallel to `dyn_cand` for the reason stated there — the arrays are allocated, copied
-       and freed together. */
+    /* The `script` element the row is the program of, or NULL for a row no element put there. §4.12.1.1
+       "Processing model"'s "execute the script element" sets `currentScript` (§3.1.7) to that element for the
+       whole run, and the run is a work item spanning scheduler steps, so the element travels with the row. NULL
+       is the spec's own answer for a program no element caused (a string handler, a chunk reply, a
+       `javascript:` URL, an @S candidate, a cross-agent operation).
+       A borrowed node pointer that may never cross a park: a resumed flow replays its document and re-queues its
+       rows. A snapshot fork copies it, sound because the sibling holds a reference on the node's DOM segment. */
     lxb_dom_element_t **dyn_el;
-    /* AND WHETHER EACH ROW IS A TASK OR THE SYNCHRONOUS TAIL OF THE PROGRAM THAT CAUSED IT (a DynPos,
-       engine.h). The position a row was queued at is not consumed by the insertion — it is a fact the row
-       KEEPS, because the MICROTASK CHECKPOINT is placed against it. HTML §8.1.4.4 "Calling scripts" performs
-       the checkpoint when the JavaScript execution context stack empties, and §4.12.1.1 "Processing model"
-       ends "prepare the script element" with "Otherwise, immediately execute the script element el, even if
-       other scripts are already executing" — so a DYN_POS_IMMEDIATE row ran INSIDE the program that caused it,
-       the stack never emptied across it, and the checkpoint that program owes falls AFTER the row. Every other
-       row is a task and the checkpoint falls BEFORE it. Position alone cannot say which: an immediate row and
-       an appended one both land at the cursor when the queue was empty, so without this column the two are the
-       same row and one of the two orderings is silently wrong. Parallel to `dyn_cand` for the reason stated
-       there — the eight arrays are allocated, copied and freed together. */
+    /* Whether each row is a task or the synchronous tail of the program that caused it (a DynPos, engine.h). The
+       microtask checkpoint is placed against it: HTML §8.1.4.4 "Calling scripts" performs the checkpoint when
+       the execution context stack empties, and a DYN_POS_IMMEDIATE row (§4.12.1.1's "immediately execute")
+       runs inside its causing program, so that program's checkpoint falls after the row; every other row is a
+       task and the checkpoint falls before it. Position alone cannot say which: an immediate row and an
+       appended one both land at the cursor when the queue was empty. */
     unsigned char *dyn_pos;
     void *delta;           /* this flow's isolated HEAP COW delta (CowDelta*), applied while running */
-    void *dom; int dom_n, dom_cap;   /* this flow's isolated DOM COW delta HEAD buffer (dom_cow), swapped with the
-                                        heap delta on every context-switch so the DOCUMENT is a per-flow time-travel
-                                        entity: two flows see different trees/attributes, a rewind restores the
-                                        exact document the flow saw. Detached via dom_buf_take while parked. */
-    void *dom_base;        /* the shared IMMUTABLE base-segment chain below the head (dom_cow_fork): a snapshot-
+    void *dom; int dom_n, dom_cap;   /* this flow's isolated DOM COW delta head buffer (dom_cow), swapped with the
+                                        heap delta at every context switch, so each flow sees its own document and a
+                                        rewind restores it exactly. Detached via dom_buf_take while parked. */
+    void *dom_base;        /* the shared immutable base-segment chain below the head (dom_cow_fork): a snapshot-
                               forked sibling references the parent's O(N) DOM delta in O(1). NULL until a fork. */
     void *dec_blob;        /* suspended decision state while paused (decide_suspend) */
     void *pin_blob;        /* suspended pin state while paused (concolic_pins_suspend) */
