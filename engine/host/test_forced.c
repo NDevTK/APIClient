@@ -33695,6 +33695,10 @@ int main(int argc, char **argv) {
        reaches exhaustion rather than a popover — so it is readable only over a document with one flow. See
        HTML_POPOVER. */
     int popover_doc = arg_has(argc, argv, "--popover");
+    /* The agent's LIFE without its document's exploration: the scheduler is handed no programs, so it drains at
+       once and the run reaches what only an ended session reaches — @RESULT, the agent's release and the
+       second agent after it. The fixture's frontier is unbounded, so an exploring run never gets there. */
+    int lifecycle = arg_has(argc, argv, "--lifecycle");
     /* THE TWO SESSIONS OF THE CROSS-SESSION ROUND TRIP, one per invocation, because that is what a session
        boundary IS: the first writes its residue to this host's store and the process ends, the second starts
        from nothing but that document. Doing both inside one process would leave the endpoint surface, the sink
@@ -33927,7 +33931,8 @@ int main(int argc, char **argv) {
        session installs neither: its document drains, and its rows are about what the tier REBUILT. */
     if (cold_park_path)            engine_set_park_hook(fixture_want_park);
     else if (!cold_resume_path)    engine_set_park_hook(fixture_have_answers);
-    engine_run(ctx, scripts.bodies, scripts.srcs, scripts.types, scripts.els, scripts.n, cold_residue);   /* @H + @S detection */
+    engine_run(ctx, scripts.bodies, scripts.srcs, scripts.types, scripts.els, lifecycle ? 0 : scripts.n,
+               cold_residue);   /* @H + @S detection */
     /* No verify call: the candidate re-fires are FLOWS on the same frontier, so engine_run already ran them. */
     doc_scripts_free(&scripts);
     /* THE TREE IS NOT DESTROYED HERE ANY MORE — it goes at the END of this function, where main.c's own
