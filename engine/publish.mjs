@@ -187,7 +187,7 @@ say(`${n} commit(s) to publish, which is the --expect you stated and the remote'
 if (prose.length) {
   say(`checking the --prose claim over ${prose.length} path(s) against ${old.slice(0, 7)} ────────────────────`);
   const pd = spawnSync(process.execPath,
-                       [new URL("prosediff.mjs", import.meta.url).pathname, ...prose, "--base", old],
+                       [new URL("prosediff.mjs", import.meta.url).pathname, ...prose, "--base", old, "--head", sha],
                        { stdio: "inherit" });
   /* THE SENTENCE IS CHOSEN BY WHICH BAND DECIDED, NEVER ONE SENTENCE OVER EVERY NONZERO STATUS. This used to
      read `the prose-only claim FAILED (prosediff exited N)` for every refusal and then offer a remedy list of

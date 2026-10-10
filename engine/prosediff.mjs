@@ -1,6 +1,6 @@
 /* Is a diff prose-only? Ask the preprocessor (C) or the parser (JS), not the author.
  *
- *   node engine/prosediff.mjs <path.c|path.js|path.mjs>… [--base <rev>] [--release]
+ *   node engine/prosediff.mjs <path.c|path.js|path.mjs>… [--base <rev>] [--head <rev>] [--release]
  *
  * C: both sides are preprocessed with clang -E against their own tree's headers (the base tree is materialised
  * from `git archive`), linemarkers and blank lines dropped, paths normalised. Two questions, both required:
@@ -85,7 +85,7 @@ const maskInts = (s) => s.replace(/[0-9]+/g, "N");
 
 /* The files a translation unit included, read off its own linemarkers, as repo-relative paths. */
 let lastIncludes = new Set();
-function preprocess(file, roots, dev, paths) {
+function preprocess(file, roots, dev, paths, root) {
   const r = run("clang", ["-E", "-DAPICLIENT_DEV=" + dev,
                           ...roots.flatMap((x) => ["-I", x]), "-I", dirname(file), file],
                 {});
@@ -95,14 +95,14 @@ function preprocess(file, roots, dev, paths) {
            "A residue check cannot be read off a file that does not preprocess; fix the compile first.");
   lastIncludes = new Set();
   for (const m of r.stdout.matchAll(/^# [0-9]+ "([^"]+)"/gm))
-    if (m[1].startsWith(REPO + "/")) lastIncludes.add(m[1].slice(REPO.length + 1));
+    if (m[1].startsWith(root + "/")) lastIncludes.add(m[1].slice(root.length + 1));
   return normPaths(stripMarkers(r.stdout), paths);
 }
 
 /* A line stamp below a hunk shifts by the sum of the hunk nets above it, so every cumulative partial sum is an
    admissible delta; the last one is the file's net. */
-function hunkPartialSums(path, base) {
-  const d = run("git", ["diff", "-U0", base, "--", path]).stdout || "";
+function hunkPartialSums(path, range) {
+  const d = run("git", ["diff", "-U0", ...range, "--", path]).stdout || "";
   const sums = [];
   let add = 0, del = 0, seen = false, acc = 0;
   const flush = () => { if (seen) { acc += add - del; sums.push(acc); } add = del = 0; };
@@ -144,40 +144,56 @@ function main() {
   const argv = process.argv.slice(2);
   const bi = argv.indexOf("--base");
   const base = bi >= 0 ? argv[bi + 1] : "origin/main";
+  /* The new side is `--head`'s tree when given, else the working tree. A publish names the sha it pushes, so a
+     peer's uncommitted edit cannot decide a verdict about a range it is not in. */
+  const hi = argv.indexOf("--head");
+  const head = hi >= 0 ? argv[hi + 1] : null;
+  const range = head ? [base, head] : [base];
   const dev = argv.includes("--release") ? "0" : "1";
-  const paths = argv.filter((a, i) => !a.startsWith("--") && argv[i - 1] !== "--base");
+  const paths = argv.filter((a, i) => !a.startsWith("--") && argv[i - 1] !== "--base" && argv[i - 1] !== "--head");
   if (!paths.length)
-    die(2, "usage: node engine/prosediff.mjs <path.c|path.js|path.mjs>… [--base <rev>] [--release]",
+    die(2, "usage: node engine/prosediff.mjs <path.c|path.js|path.mjs>… [--base <rev>] [--head <rev>] [--release]",
            "  Answers whether a diff is PROSE-ONLY by preprocessing both sides and comparing.",
+           "  The new side is --head's tree, or the working tree when --head is absent.",
            "  A `.h` has no translation unit of its own — pass a `.c` that includes it (see the residual).",
            "  EXIT: 0 every named path cleared; 1 a FINDING (not prose-only); 5 VOID (a control did not speak);",
            "  6 NOT ASKED (every path DECLINED, so nothing was judged); 2 usage; 3 the include-root derivation;",
            "  4 a command failed.");
-  const roots = includeRoots(ENGINE);
-  /* The base side is preprocessed against the base tree's own headers, materialised whole, so a header-only change
+  /* Each revision side is preprocessed against its own tree's headers, materialised whole, so a header-only change
      is visible from every includer. One include set for both sides would hide it. */
-  const baseDir = mkdtempSync(join(tmpdir(), "prosediff-base-"));
-  /* Cleanup is registered before anything is written, so every exit path, including `die`, removes it. */
-  process.on("exit", () => rmSync(baseDir, { recursive: true, force: true }));
-  {
+  const materialise = (rev, tag) => {
+    const dir = mkdtempSync(join(tmpdir(), "prosediff-" + tag + "-"));
+    /* Cleanup is registered before anything is written, so every exit path, including `die`, removes it. */
+    process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
     /* `--output`, not stdout: `run` decodes as UTF-8 and a tar is binary. */
-    const tf = join(baseDir, "base.tar");
-    const ar = run("git", ["archive", "--format=tar", "--output=" + tf, base]);
+    const tf = join(dir, tag + ".tar");
+    const ar = run("git", ["archive", "--format=tar", "--output=" + tf, rev]);
     if (ar.status !== 0)
-      die(4, "`git archive " + base + "` failed, so the OLD side has no headers of its own to preprocess",
-             "against. Not falling back to the current tree's roots: that is exactly the blind spot this",
-             "materialisation exists to close.",
+      die(4, "`git archive " + rev + "` failed, so that side has no headers of its own to preprocess against.",
+             "Not falling back to the working tree's roots: that is the blind spot this materialisation closes.",
              (ar.stderr || "").split("\n").slice(0, 4).join("\n"));
-    const tx = run("tar", ["-x", "-f", tf, "-C", baseDir]);
+    const tx = run("tar", ["-x", "-f", tf, "-C", dir]);
     if (tx.status !== 0)
-      die(4, "extracting the base tree failed", (tx.stderr || "").split("\n").slice(0, 4).join("\n"));
-  }
+      die(4, "extracting the " + tag + " tree failed", (tx.stderr || "").split("\n").slice(0, 4).join("\n"));
+    return dir;
+  };
+  const baseDir = materialise(base, "base");
+  const newRoot = head ? materialise(head, "head") : REPO;
+  const readNew = (p) => {
+    if (!head) return readFileSync(join(REPO, p), "utf8");
+    const sh = run("git", ["show", head + ":" + p]);
+    if (sh.status !== 0 || !sh.stdout)
+      die(4, "`git show " + head + ":" + p + "` returned nothing — the path does not exist at that revision");
+    return sh.stdout;
+  };
+  const roots = includeRoots(join(newRoot, "engine"));
   const baseRoots = includeRoots(join(baseDir, "engine"));
   console.log("# include roots DERIVED from engine/build.mjs's own `-I` line, PER SIDE:");
   for (const r of roots) console.log("#   new  " + r);
   for (const r of baseRoots) console.log("#   base " + r);
   console.log("# base " + base + " (" + (run("git", ["rev-parse", "--short", base]).stdout || "?").trim() +
-              ")  -DAPICLIENT_DEV=" + dev);
+              ")  new " + (head ? head + " (" + (run("git", ["rev-parse", "--short", head]).stdout || "?").trim() + ")"
+                                : "the working tree") + "  -DAPICLIENT_DEV=" + dev);
 
   let worst = 0, findings = 0, declined = 0, voided = 0, cleared = 0;
   for (const p of paths) {
@@ -195,7 +211,7 @@ function main() {
         return ast.tokens.filter((k) => typeof k.type !== "string")
                          .map((k) => k.type.label + "\u0000" + (k.value === undefined ? "" : String(k.value)));
       };
-      const cur = readFileSync(join(REPO, p), "utf8");
+      const cur = readNew(p);
       const N = toks(cur), O = toks(sh.stdout), C = toks(cur + "\n;apiclient_prosediff_control_sentinel;\n");
       if (!N || !O || !C) {
         console.log("\n" + p + ": DECLINED — the parser reported errors on one side, so the token streams are not comparable.");
@@ -237,7 +253,7 @@ function main() {
     try {
       const b = basename(p);
       const newF = join(dir, "new_" + b), oldF = join(dir, "old_" + b), ctlF = join(dir, "ctl_" + b);
-      const cur = readFileSync(join(REPO, p), "utf8");
+      const cur = readNew(p);
       const sh = run("git", ["show", base + ":" + p]);
       const old = sh.stdout;
       if (sh.status !== 0 || !old)
@@ -245,12 +261,12 @@ function main() {
       writeFileSync(newF, cur); writeFileSync(oldF, old);
       /* The control is a real statement appended to the real file, so it shares the subject's whole pipeline. */
       writeFileSync(ctlF, cur + "\nstatic int apiclient_prosediff_control_" + "sentinel = 1;\n");
-      const nm = [newF, oldF, ctlF, join(REPO, p), join(baseDir, p), baseDir, REPO, b];
-      const N = preprocess(newF, roots, dev, nm);
+      const nm = [newF, oldF, ctlF, join(newRoot, p), join(baseDir, p), baseDir, newRoot, b];
+      const N = preprocess(newF, roots, dev, nm, newRoot);
       const included = lastIncludes;
       /* The base side uses the base tree's roots (see above). */
-      const O = preprocess(oldF, baseRoots, dev, nm);
-      const C = preprocess(ctlF, roots, dev, nm);
+      const O = preprocess(oldF, baseRoots, dev, nm, baseDir);
+      const C = preprocess(ctlF, roots, dev, nm, newRoot);
 
       const ctl = flatten(diffCommands(maskInts(N), maskInts(C)));
       if (!ctl.gained.length) {
@@ -263,13 +279,13 @@ function main() {
 
       const masked = flatten(diffCommands(maskInts(O), maskInts(N)));
       const rawCmds = diffCommands(O, N);
-      const sums = hunkPartialSums(p, base);
+      const sums = hunkPartialSums(p, range);
       const net = sums.length ? sums[sums.length - 1] : 0;
       /* A stamp expanded inside an included header shifts by that header's own hunk sums, so each changed header
          this unit includes contributes its partial sums to the admissible set. */
-      const changedHeaders = (run("git", ["diff", "--name-only", base]).stdout || "").split("\n")
+      const changedHeaders = (run("git", ["diff", "--name-only", ...range]).stdout || "").split("\n")
         .filter((h) => h.endsWith(".h") && included.has(h));
-      const headerSums = new Map(changedHeaders.map((h) => [h, hunkPartialSums(h, base)]));
+      const headerSums = new Map(changedHeaders.map((h) => [h, hunkPartialSums(h, range)]));
       const admissible = new Set([...sums, ...[...headerSums.values()].flat()]);
 
       /* Numeric residue: for each changed line that differs only in its numbers, the delta of each number. */
