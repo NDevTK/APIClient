@@ -123185,7 +123185,17 @@ static int typed_array_init(JSContext *ctx, JSValue obj, JSValue buffer,
    filling the array; this is the part that invokes nothing. */
 static int js_typed_array_alloc_len(JSContext *ctx, JSValueConst obj, int classid, int64_t len)
 {
-    JSValue buffer = js_array_buffer_constructor1(ctx, len << typed_array_size_log2(classid), NULL);
+    JSValue buffer;
+
+    /* typed_array_init writes the view's own JSObject record (u.typed_array, u.array) and links it into the
+       buffer's array_list, and no capture takes that record per flow. A view created before this flow's last
+       fork — a fork inside the collect of `new Uint8Array(iterable)` — is shared with its sibling, and two
+       attaches to one record leak the first buffer and leave the sibling viewing the other's bytes. */
+    DCHECK(!JS_IsFlowShared(obj),
+           "AllocateTypedArrayBuffer on a typed array shared with a forked sibling — the late buffer attach "
+           "writes the view's own record, which no capture isolates; build that record's per-flow capture "
+           "(the gen_fork-style swap the generator data has) before attaching");
+    buffer = js_array_buffer_constructor1(ctx, len << typed_array_size_log2(classid), NULL);
     if (JS_IsException(buffer))
         return -1;
     return typed_array_init(ctx, obj, buffer, 0, len, /*track_rab*/false);
