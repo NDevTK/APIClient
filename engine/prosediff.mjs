@@ -75,6 +75,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse as babelParse } from "@babel/parser";
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(ENGINE, "..");
@@ -230,7 +231,7 @@ function main() {
   const dev = argv.includes("--release") ? "0" : "1";
   const paths = argv.filter((a, i) => !a.startsWith("--") && argv[i - 1] !== "--base");
   if (!paths.length)
-    die(2, "usage: node engine/prosediff.mjs <path.c>… [--base <rev>] [--release]",
+    die(2, "usage: node engine/prosediff.mjs <path.c|path.js|path.mjs>… [--base <rev>] [--release]",
            "  Answers whether a diff is PROSE-ONLY by preprocessing both sides and comparing.",
            "  A `.h` has no translation unit of its own — pass a `.c` that includes it (see the residual).",
            "  EXIT: 0 every named path cleared; 1 a FINDING (not prose-only); 5 VOID (a control did not speak);",
@@ -291,6 +292,44 @@ function main() {
        That is the §A-PROBE-FOR-LIVENESS shape: a check answering about the wrong artifact is worse than one
        refusing, because its output looks like a result. Both arms exit nonzero, so a `--prose` claim naming one
        REFUSES rather than passing vacuously. */
+    /* JavaScript: the program is its token stream, so a comment-only diff leaves the non-comment tokens identical.
+       A control appends one statement and must change the stream, or the answer is not published. */
+    if (/\.m?js$/.test(p)) {
+      const sh = run("git", ["show", base + ":" + p]);
+      if (sh.status !== 0 || !sh.stdout)
+        die(4, "`git show " + base + ":" + p + "` returned nothing — the path does not exist at that revision");
+      const toks = (src) => {
+        const ast = babelParse(src, { sourceType: "unambiguous", errorRecovery: true, tokens: true,
+                                      allowReturnOutsideFunction: true, allowAwaitOutsideFunction: true,
+                                      plugins: ["importAttributes"] });
+        if (ast.errors && ast.errors.length) return null;
+        return ast.tokens.filter((k) => typeof k.type !== "string")
+                         .map((k) => k.type.label + "\u0000" + (k.value === undefined ? "" : String(k.value)));
+      };
+      const cur = readFileSync(join(REPO, p), "utf8");
+      const N = toks(cur), O = toks(sh.stdout), C = toks(cur + "\n;apiclient_prosediff_control_sentinel;\n");
+      if (!N || !O || !C) {
+        console.log("\n" + p + ": DECLINED — the parser reported errors on one side, so the token streams are not comparable.");
+        declined++;
+        continue;
+      }
+      const same = (a, b) => a.length === b.length && a.every((x, k) => x === b[k]);
+      if (same(N, C)) {
+        console.log("\n" + p + ": CONTROL DID NOT SPEAK — an appended statement left the token stream unchanged.");
+        voided++; worst = Math.max(worst, 5);
+        continue;
+      }
+      if (same(N, O)) {
+        console.log("\n" + p + ": PROSE-ONLY — " + N.length + " non-comment tokens identical on both sides; control spoke.");
+        cleared++;
+        continue;
+      }
+      let k = 0; while (k < N.length && k < O.length && N[k] === O[k]) k++;
+      console.log("\n" + p + ": NOT PROSE-ONLY — token streams differ at token " + k + " (" + O.length + " -> " + N.length +
+                  "): old `" + (O[k] || "<end>").replace("\u0000", " ") + "` new `" + (N[k] || "<end>").replace("\u0000", " ") + "`");
+      findings++; worst = 1;
+      continue;
+    }
     if (!p.endsWith(".c")) {
       const why = p.endsWith(".h")
         ? "NO TRANSLATION UNIT — a header emits nothing on its own, so this cannot answer about it. Pass a `.c`"
