@@ -460,12 +460,10 @@ void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, lon
    arms of one teardown); freed-and-offered <= offered (the slack is offered states still parked on their
    reply; the offering stage returns rather than parks and no page code runs before teardown, so no flagged
    state is cloned); offered <= `epAsks` (the slack is every other door); began > 0 implies called > 0.
-   Not assertable: `freed <= began` and `offered <= began`. A deep fork byte-copies a step state with its
-   capture flag, so one `fetch()` whose input forks composes two requests against one capture; fetch.c's
-   banner states which stages permit a fork. For the same reason `began - freed` is not a live count. Nor
-   `began <= called`: a fork in the prologue's conversions (a §3.2.18 enum member, a §3.2.17 presence fork,
-   a page getter) leaves stage 0 behind, so each sibling begins against one call. The
-   stage rows are a partition, not a ladder: a zero at one stage says nothing about its neighbours.
+   Not assertable: `freed <= began`, `offered <= began`, `began <= called`. A deep fork byte-copies a step
+   state with its capture flag (fetch.c's banner names the stages that permit one), and a fork in the
+   prologue's conversions leaves stage 0 behind, so siblings begin against one call; `began - freed` is not a
+   live count either. The stage rows are a partition: a zero at one stage says nothing about its neighbours.
    `called == 0` cannot separate a page that calls no `fetch()` from a flow that never reached its call; the
    `Named` rows answer that from the compiler. A concolic URL crosses the USVString conversion without parking
    (`idl_concolic_rule` answers IDL_CONCOLIC_CROSSES), so the conversions park or fork only on a page getter

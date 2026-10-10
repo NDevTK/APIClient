@@ -553,25 +553,15 @@ typedef struct {
        that application's 131 protobuf RPC methods. A thin population is not a small one when it is the only
        door an app's whole API goes through. */
     long  named_prop;
-    /* ASK, ONE FRAME FURTHER OUT THAN `began`, AND IT IS A SECOND ROW RATHER THAN A RELOCATION OF THE FIRST.
-       `began` is raised at the member's own FIRST STAGE, and core/idl_args.h numbers a declared member's
-       stages from IDL_STEP_FIRST because stages 0 and 1 belong to the hosting machine — the argument-count
-       check and the ES-to-IDL conversions — and BOTH are rest points, the second being where a page's
-       `toString` or a Proxy get trap runs. So a call the page made that THREW or PARKED in the prologue never
-       reaches the member body and raises no `began`, which left that row's zero standing for three states
-       that take opposite work: the page called nothing, the page called and the conversion died, or the flow
-       never reached the call at all. This row separates the middle one from the other two from inside ONE
-       run's census, where the alternative was a reader grepping the page's bundle and assuming.
-       IT IS RAISED AT THE PROLOGUE'S ENTRY AND NOT MOVED THERE FROM `began`, because relocating it would
-       change what the published number means and leave the old meaning unread — the split this file is an
-       instance of, stated at its own accessor.
-       IT NEEDS NO ONE-TIME FLAG, unlike `began`: the prologue's stage-0 block runs exactly once per call
-       (its only exits are two abrupt throws, and a park leaves the stage at 1, which the block does not
-       test), and a deep-fork copy re-enters at the stage it was copied holding rather than at 0.
-       So this row counts calls and `began` counts worlds, and `called >= began` holds only for a member whose
-       conversions cannot fork. A fork at stage 1 — fetch's §3.2.18 fork over a RequestInit enum member, its
-       §3.2.17 presence fork over an unknown init, a branch in a page getter the conversion runs — leaves
-       stage 0 behind and gives every sibling its own begin against the one call, so the fetch edge asserts
+    /* `called` is raised at the hosting machine's stage 0, one frame before `began` (raised at the member's
+       first stage, IDL_STEP_FIRST). Stages 0 and 1 are the argument-count check and the ES-to-IDL conversions,
+       both rest points, so a call that threw or parked in a conversion raises `called` and never `began`;
+       that separates "the conversion died" from "nothing was called" within one run's census.
+       Stage 0 runs once per call (its exits are two throws, and a park leaves the stage at 1), so `called`
+       needs no one-time flag. `called` counts calls and `began` counts worlds: a fork at stage 1 (fetch's
+       §3.2.18 enum fork over a RequestInit member, its §3.2.17 presence fork over an unknown init, a branch in
+       a page getter the conversion runs) leaves stage 0 behind and gives each sibling its own begin against
+       one call. So `called >= began` holds only where conversions cannot fork, and the fetch edge asserts
        only that a begin implies some call. */
     long  called;               /* ASK: calls that entered the HOSTING machine's prologue (stage 0) */
     long  began;                /* ASK: constructions that began (the machine's one-time capture) */
