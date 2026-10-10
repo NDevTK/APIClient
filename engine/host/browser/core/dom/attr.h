@@ -25,8 +25,9 @@ JSValue attr_by_name(JSContext *ctx, lxb_dom_element_t *el, const char *name);
 /* THE Attr BEHIND A WRAPPER, or NULL when the value is not one (or names a node that has been destroyed).
    Exported because §4.9's node-valued MEMBERS live on Element while the interface lives here. */
 lxb_dom_attr_t *attr_node_of(JSValueConst v);
-/* The class an `Attr attr` IDL position brands against (idl_iface_brand). */
-JSClassID attr_class_id(void);
+/* Whether a value is an Attr, for an `Attr attr` IDL position: every node is wrapped in node.c's class and only
+   its prototype differs, so a position brands node_class_id() and narrows with this (idl_iface_narrow). */
+bool attr_is(JSValueConst v);
 /* The element a NamedNodeMap is over — §4.9.1's "associated element". */
 lxb_dom_element_t *attr_named_node_map_owner(JSContext *ctx, JSValueConst map);
 

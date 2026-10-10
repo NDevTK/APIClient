@@ -421,7 +421,7 @@ static JSValue js_nnm_remove(JSContext *ctx, JSValueConst this_val, int argc, JS
 }
 
 
-JSClassID attr_class_id(void) { return g_attr_class; }
+bool attr_is(JSValueConst v) { return attr_node_of(v) != NULL; }
 lxb_dom_element_t *attr_named_node_map_owner(JSContext *ctx, JSValueConst map) { return nnm_owner(ctx, map); }
 
 /* §4.9 "SET AN ATTRIBUTE" (§9.4.1), AS A MACHINE, and ONE machine for FOUR members: `setAttributeNode`,
@@ -680,7 +680,8 @@ void attr_init(JSContext *ctx)
     /* `[CEReactions] Attr? setNamedItem(Attr attr)` — the `Attr attr` position is an INTERFACE type, so
        anything that is not one is a TypeError thrown before step 1 rather than a check in the body. */
     g_set_named_id = idl_method_id_step(ctx, ONE_ATTR, 1, NULL, 0, &ATTR_SET_STEP, 1);
-    idl_iface_brand(g_attr_class);
+    idl_iface_brand(node_class_id());
+    idl_iface_narrow(attr_is);
     g_create_attr_id = idl_method_id(ctx, ONE_STR, 1, js_doc_create_attribute, 0);
     g_create_attr_ns_id = idl_method_id(ctx, NS_LOCAL, 2, js_doc_create_attribute, 1);
     g_ready = 1;

@@ -3225,9 +3225,11 @@ void element_init(JSContext *ctx)
        because §4.9's "set an attribute" is what all four of those members are. Magic 0: `this` IS the element.
        The `Attr attr` position is an INTERFACE type, so a non-Attr is a TypeError before step 1. */
     g_id_set_attr_node = idl_method_id_step(ctx, ONE_ATTR, 1, NULL, 0, attr_set_attribute_decl(), 0);
-    idl_iface_brand(attr_class_id());
+    idl_iface_brand(node_class_id());
+    idl_iface_narrow(attr_is);
     g_id_remove_attr_node = idl_method_id(ctx, ONE_ATTR, 1, js_el_remove_attribute_node, 0);
-    idl_iface_brand(attr_class_id());
+    idl_iface_brand(node_class_id());
+    idl_iface_narrow(attr_is);
 
     g_attrs_key = JS_NewAtom(ctx, "__attributesSlot");
     CHECK(g_attrs_key != JS_ATOM_NULL, "the attributes slot key could not be interned");
