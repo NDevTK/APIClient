@@ -5763,7 +5763,7 @@ static const char *HTML =
     "  var bsMin = (screen.width & 7) + 1;"
     "  fetch('/api/bsreach?d=ok');"
     "  bsRd.read(new Uint8Array(8), { min: bsMin }).then("
-    "   function (bsR) { fetch('/api/bsmin?w=read&d=' + bsR.done); },"
+    "   function (bsR) { fetch('/api/bsmin?w=read'); fetch('/api/bsdone?d=' + bsR.done); },"
     "   function (bsE) { fetch('/api/bsmin?w=' + bsE.name); });"
     " } catch (bsX) { fetch('/api/bsreach?d=no&n=' + bsX.name); }"
     "</script>"
@@ -19101,10 +19101,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        whole assertion. A 0 here while `w` carries `read` says the pulling world reached §4.9.5 and came back
        with no fill (or forked downstream of a read this statement does not fork); a 0 here while `w` does NOT
        carry `read` is that world lost, and the clause above is the one that names it. */
-    fold_row(&bsmin_tt, &bsmin_why, param_value_only(js, "/api/bsmin", "d", "false"),
-             "the pulling world settled without a chunk: /api/bsmin's `d` is not exactly `false`. Read it "
-             "against `w` in the same record — with `read` present this is §4.9.5's fill answering `done` true "
-             "or answering twice, and with `read` absent it is the clause above's lost world showing up a "
+    fold_row(&bsmin_tt, &bsmin_why, param_value_only(js, "/api/bsdone", "d", "false"),
+             "the pulling world settled without a chunk: /api/bsdone's `d` is not exactly `false`. Read it "
+             "against /api/bsmin's `w` — with `read` present this is §4.9.5's fill answering `done` true or "
+             "answering twice, and with `read` absent it is the clause above's lost world showing up a "
              "second time");
 
     /* ─── HTML §6.12 The popover attribute → §6.10.1 Close requests → §6.10.2 Close watcher infrastructure ────
