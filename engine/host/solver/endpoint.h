@@ -459,16 +459,24 @@ void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, lon
 /* Identities, asserted in endpoint_fetch_edge_rows: the died-at arms plus freed-and-offered equal freed (two
    arms of one teardown); freed-and-offered <= offered (the slack is offered states still parked on their
    reply; the offering stage returns rather than parks and no page code runs before teardown, so no flagged
-   state is cloned); offered <= `epAsks` (the slack is every other door); began <= called.
+   state is cloned); offered <= `epAsks` (the slack is every other door); began > 0 implies called > 0.
    Not assertable: `freed <= began` and `offered <= began`. A deep fork byte-copies a step state with its
    capture flag, so one `fetch()` whose input forks composes two requests against one capture; fetch.c's
-   banner states which stages permit a fork. For the same reason `began - freed` is not a live count. The
+   banner states which stages permit a fork. For the same reason `began - freed` is not a live count. Nor
+   `began <= called`: a fork in the prologue's conversions (a §3.2.18 enum member, a §3.2.17 presence fork,
+   a page getter) leaves stage 0 behind, so each sibling begins against one call. The
    stage rows are a partition, not a ladder: a zero at one stage says nothing about its neighbours.
    `called == 0` cannot separate a page that calls no `fetch()` from a flow that never reached its call; the
    `Named` rows answer that from the compiler. A concolic URL crosses the USVString conversion without parking
-   (`idl_concolic_rule` answers IDL_CONCOLIC_CROSSES), so the conversions park only on a page getter such as
-   a `Request` input's `url` or a `RequestInit` member. Scope in time is the surface's (reset in endpoint_init
-   and endpoint_free). Reports, never bounds. */
+   (`idl_concolic_rule` answers IDL_CONCOLIC_CROSSES), so the conversions park or fork only on a page getter
+   such as a `Request` input's `url` or a `RequestInit` member, or on an enum or presence question over
+   unknown input. Scope in time is the surface's (reset in endpoint_init and endpoint_free). Reports, never
+   bounds. */
+/* Named residual. Not covered: a call whose conversions forked and then threw or parked in some worlds is
+   not counted as a death in those worlds; no row is raised per world at the prologue. Next diff: a row
+   raised at the teardown of a hosting state still standing at stage 0 or 1, one per world as `freed` is.
+   Absence shows as: `epFetchAskCalledLife - epFetchAskBeganLife` zero or negative on a page whose RequestInit
+   conversion throws in some worlds. */
 /* The edge declares its global entry identifier, its stage table and its first stage at init. Both pointers
    are borrowed, never copied, and let go at endpoint_free; the edge owns the name it installs under, so this
    file keeps no table of names. A second, different declaration is a DCHECK. */

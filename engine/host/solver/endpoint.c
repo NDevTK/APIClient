@@ -564,12 +564,15 @@ typedef struct {
        run's census, where the alternative was a reader grepping the page's bundle and assuming.
        IT IS RAISED AT THE PROLOGUE'S ENTRY AND NOT MOVED THERE FROM `began`, because relocating it would
        change what the published number means and leave the old meaning unread — the split this file is an
-       instance of, stated at its own accessor. `called >= began` is the containment and it is asserted.
+       instance of, stated at its own accessor.
        IT NEEDS NO ONE-TIME FLAG, unlike `began`: the prologue's stage-0 block runs exactly once per call
        (its only exits are two abrupt throws, and a park leaves the stage at 1, which the block does not
-       test), and a deep-fork copy re-enters at the stage it was copied holding rather than at 0. The same
-       property that makes `began` unpairable with the teardown rows therefore leaves this row pairable with
-       `began` and with nothing else. */
+       test), and a deep-fork copy re-enters at the stage it was copied holding rather than at 0.
+       So this row counts calls and `began` counts worlds, and `called >= began` holds only for a member whose
+       conversions cannot fork. A fork at stage 1 — fetch's §3.2.18 fork over a RequestInit enum member, its
+       §3.2.17 presence fork over an unknown init, a branch in a page getter the conversion runs — leaves
+       stage 0 behind and gives every sibling its own begin against the one call, so the fetch edge asserts
+       only that a begin implies some call. */
     long  called;               /* ASK: calls that entered the HOSTING machine's prologue (stage 0) */
     long  began;                /* ASK: constructions that began (the machine's one-time capture) */
     long  reached;              /* ASK: …of those, the ones whose construction COMPLETED (see above) */
@@ -3818,21 +3821,14 @@ char *endpoint_fetch_edge_rows(void) {
        name — `Ask` or `Out` for which side of §AN-INVARIANT-OVER-A-GATED-OPERATION it counts, `Life` for a
        lifetime count rather than a gauge. §Testing records this tree being misled by that second distinction
        twice, and a comment stating it is read by nobody holding the number. */
-    /* AND THE CONTAINMENT THAT MAKES THE NEXT ROW READABLE, asserted here because both terms are in one hand
-       and because it is the ONE relation `began` has to anything. Every construction that began entered this
-       machine's prologue first — core/idl_args.c raises the call at stage 0 and the body cannot be reached
-       without passing the line that leaves stage 1 — and a deep-fork copy raises NEITHER, since it re-enters
-       at the stage it was copied holding. So the two move together or the slack is a real population: the
-       calls that entered the prologue and threw or parked inside it, which is the whole reason the row exists.
-       A LARGER `began` IS A CONSTRUCTION THAT BEGAN WITHOUT A CALL, which is a member body reached by
-       something other than the hosting machine — the one way this pair could come apart, and the one a reader
-       of either row alone could not see. */
-    DCHECKF(g_fetch_edge.began <= g_fetch_edge.called,
-            "the fetch edge counted more constructions that began (%ld) than calls that entered the hosting "
-            "machine's prologue (%ld) — every begin is downstream of a prologue entry and a deep-fork copy "
-            "raises neither, so a larger begin count is the member body reached without core/idl_args.c's "
-            "stage 0, and the difference a reader takes for the calls that died in the conversions would be "
-            "negative",
+    /* The one relation `began` has to the call row, and it is a presence relation. Every world that began
+       descends from a world that entered core/idl_args.c's stage 0, but a fork in the conversions gives each
+       sibling its own begin against that one call (see the struct), so `began <= called` is not an identity
+       and `called - began` is not the count of calls that died in the conversions. */
+    DCHECKF(g_fetch_edge.began == 0 || g_fetch_edge.called > 0,
+            "the fetch edge counted constructions that began (%ld) with no call ever entering the hosting "
+            "machine's prologue (%ld) — every begin descends from a stage-0 entry, so this is the member body "
+            "reached by something other than core/idl_args.c's machine",
             g_fetch_edge.began, g_fetch_edge.called);
     /* THE DENOMINATOR FIRST, BECAUSE IT IS WHAT THE ROW BELOW IT IS A FRACTION OF, and a reader compares within
        a census in the order the rows arrive. No `DCHECKF` stands over this pair: the two relations a reader

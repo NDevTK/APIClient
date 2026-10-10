@@ -1413,11 +1413,11 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
            blob URL entry that its `url` string cannot express. */
         if (!s->captured) {
             s->captured = 1;
-            /* THE CONSTRUCTION BEGAN — the ASK this edge owes the @H surface, raised at the one place that
-               runs exactly once per page-level `fetch()` call that reached this body. solver/endpoint.h states
-               why it may not be paired with the teardown rows by a containment: a deep-fork copy inherits the
-               flag above and does NOT come through here, so one call whose `input` ToString forks composes two
-               requests against one of these. */
+            /* THE CONSTRUCTION BEGAN — the ASK this edge owes the @H surface, raised once per world in which a
+               page-level `fetch()` call reached this body. solver/endpoint.h states why it may be paired by a
+               containment with neither the teardown rows nor the call row: a copy forked after this line
+               inherits the flag and does not come through here, and a copy forked in the prologue's
+               conversions comes through here again against the one call. */
             endpoint_fetch_edge_began();
             s->input = JS_DupValue(ctx, input);
             s->url = s->body_mime = JS_UNDEFINED;
