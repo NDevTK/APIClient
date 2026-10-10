@@ -1,12 +1,9 @@
 /* lib/popup-endpoints.js — the Endpoints panel: one row per method the forced execution learned (a method
    record with `_astInferred`, lib/learn.js), stating its verb, its address, the razor class its sightings
-   stated, the address's provenance, and each parameter with the example values the run computed and the
-   grade of each value. Every cell is a producer field read as itself; a fact no hop carries reads "unknown".
-   Built only through lib/dom-builder.js.
-   NAMED RESIDUAL. Not covered: the four proved domains on a parameter (`_excludedValues`, `_bounds`,
-   `_predicates`, `_looselyEquals`) and the request body's bytes. The next diff renders them in the parameter
-   cell, as lib/popup-form.js badges them. Their absence shows as a hole with no example value whose row
-   says nothing about what the run proved it must satisfy. */
+   stated, the address's provenance, each parameter with the example values the run computed, and the
+   request body the run observed; a row's Send button opens the method in the Send panel. Every cell is a
+   producer field read as itself; a fact no hop carries reads "unknown". Built only through
+   lib/dom-builder.js. */
 
 const ENDPOINT_UNKNOWN = "unknown";
 
@@ -37,37 +34,69 @@ function renderEndpointsPanel() {
     return;
   }
   const head = domElement("thead", {}, [domElement("tr", {}, ["Method", "Address", "Razor", "Provenance",
-    "Parameters"].map((h) => domElement("th", { scope: "col" }, [h])))]);
+    "Parameters", ""].map((h) => domElement("th", { scope: "col" }, [h])))]);
   domReplaceChildren(body, [domElement("table", { class: "ep-table" }, [head, domElement("tbody", {}, rows)])]);
 }
 
 function endpointRow(svcName, doc, m) {
   const where = "lib/popup-endpoints.js row for " + JSON.stringify(m.id) + " of service " + JSON.stringify(svcName);
   const prov = methodProvenance(m, where);
+  const ep = endpointRecordOf(m, where);
   return domElement("tr", {}, [
     domElement("td", { class: "ep-method" }, [m.httpMethod]),
-    domElement("td", { class: "ep-address" }, [endpointAddressCell(m, where)]),
+    domElement("td", { class: "ep-address" }, [endpointAddressCell(m, ep)]),
     domElement("td", {}, [endpointRazorCell(m, where)]),
     domElement("td", {}, [domElement("span", { class: "ep-grade ep-grade-" + prov }, [prov])]),
-    domElement("td", {}, [endpointParamsCell(doc, m, where)]),
+    domElement("td", {}, [endpointParamsCell(doc, m, ep, where)]),
+    domElement("td", {}, [endpointSendButton(svcName, m)]),
   ]);
 }
 
-/* The address is the flat endpoint record's `url`, reached by the name lib/merge.js stamps on the method
-   (`_endpointKey`). A method stored before the stamp, or one whose record the moat no longer holds, names no
-   record in this reply, and its address is then not stated by anything the popup holds. */
-function endpointAddressCell(m, where) {
+/* Opens the method in the Send panel through the panel's own controls, so the request it shows is the one
+   its form composes from the method record (one computed value prefilled, several offered, none left empty).
+   Each control is driven by a change event, which runs the handler popup.js registered on it. */
+function endpointSendButton(svcName, m) {
+  const button = domElement("button", { type: "button", class: "btn-small",
+    title: "open this method in the Send panel with the example values the run computed" }, ["Send…"]);
+  button.addEventListener("click", () => {
+    const svcSelect = document.getElementById("spec-service-select");
+    svcSelect.value = svcName;
+    DCHECK(svcSelect.value === svcName,
+           "the Send panel's service list has no option " + JSON.stringify(svcName) + " — renderSendPanel lists " +
+           "every discoveryDocs entry with a doc, which this row was built from");
+    svcSelect.dispatchEvent(new Event("change"));
+    const epSelect = document.getElementById("send-ep-select");
+    const key = sendMethodOptionKey(svcName, m);
+    epSelect.value = key;
+    DCHECK(epSelect.value === key,
+           "the Send panel's method list has no option " + JSON.stringify(key) + " — renderMethodDropdown lists " +
+           "every method of the selected service, which this row was built from");
+    epSelect.dispatchEvent(new Event("change"));
+    document.querySelector(".tab[data-panel='send']").click();
+  });
+  return button;
+}
+
+/* The flat endpoint record the method names through lib/merge.js's `_endpointKey` stamp, or null. A method
+   stored before the stamp, or one whose record the moat no longer holds, names no record in this reply, and
+   its address and body are then not stated by anything the popup holds. */
+function endpointRecordOf(m, where) {
   const key = m._endpointKey;
-  if (typeof key !== "string" || !Object.prototype.hasOwnProperty.call(tabData.endpoints, key)) {
-    return domElement("span", { class: "ep-unknown",
-      title: "no endpoint record in this view is named by this method; its path template is " +
-             JSON.stringify(m.path) }, [ENDPOINT_UNKNOWN]);
-  }
+  if (typeof key !== "string" || !Object.prototype.hasOwnProperty.call(tabData.endpoints, key)) return null;
   const ep = tabData.endpoints[key];
   checkEndpointRecord(ep, where);
   DCHECK(ep.method === m.httpMethod,
          "the learned method names endpoint record " + JSON.stringify(key) + ", whose verb is " +
          JSON.stringify(ep.method) + " and not " + JSON.stringify(m.httpMethod) + " (" + where + ")");
+  return ep;
+}
+
+function endpointAddressCell(m, ep) {
+  if (ep === null) {
+    return domElement("span", { class: "ep-unknown",
+      title: "no endpoint record in this view is named by this method; its path template is " +
+             JSON.stringify(m.path) }, [ENDPOINT_UNKNOWN]);
+  }
   return domElement("code", {}, [ep.url]);
 }
 
@@ -80,27 +109,39 @@ function endpointRazorCell(m, where) {
   return domElement("span", {}, set.map((c) => domElement("span", { class: "ep-razor ep-razor-" + c }, [c])));
 }
 
-/* Path and query parameters from the method, then the fields of a request body lib/learn.js minted. A
-   method a probed discovery document declared may carry no `parameters` (RestDescription makes it
-   optional), which states that it has none. */
-function endpointParamsCell(doc, m, where) {
+/* Path and query parameters from the method, then the fields of its request schema, then the body the flat
+   record carries. The schema is read whoever created it: lib/learn.js merges the engine's body fields into a
+   schema live traffic created first without marking that schema `_astInferred`, so that flag says who
+   minted the schema, not whether the engine computed its fields. RestDescription makes `parameters`,
+   `request` and a schema's `properties` optional, and an absent one states there are none. */
+function endpointParamsCell(doc, m, ep, where) {
   const items = [];
   if (m.parameters !== undefined) {
     for (const name of Object.keys(m.parameters)) items.push(endpointParamItem(name, m.parameters[name], where));
   }
-  if (m.request && typeof m.request.$ref === "string" && doc.schemas &&
-      Object.prototype.hasOwnProperty.call(doc.schemas, m.request.$ref) && doc.schemas[m.request.$ref]._astInferred) {
-    const props = doc.schemas[m.request.$ref].properties;
-    for (const name of Object.keys(props)) items.push(endpointParamItem(name, props[name], where, "body"));
+  // lib/learn.js writes `request: null` for a method with no body; a probed document omits the key.
+  if (m.request !== null && m.request !== undefined) {
+    // A probed document is a server's input and may name a schema it does not hold; that is said, not asserted.
+    const schemas = doc.schemas === undefined ? {} : doc.schemas;
+    if (!Object.prototype.hasOwnProperty.call(schemas, m.request.$ref)) {
+      items.push(domElement("li", { class: "ep-unknown" }, ["request body schema " +
+        JSON.stringify(m.request.$ref) + " is not in this document"]));
+    } else if (schemas[m.request.$ref].properties !== undefined) {
+      const props = schemas[m.request.$ref].properties;
+      for (const name of Object.keys(props)) items.push(endpointParamItem(name, props[name], where, "body"));
+    }
+  }
+  if (ep !== null) {
+    const bodyItem = endpointBodyItem(ep);
+    if (bodyItem !== null) items.push(bodyItem);
   }
   if (items.length === 0) return domElement("span", { class: "ep-none" }, ["none learned"]);
   return domElement("ul", { class: "ep-params" }, items);
 }
 
-/* One parameter: its name and location, whether its value named a hole, and each example value with its
-   grade. `_astValidValues` holds values some unforced path computed, which the record does not split
-   between observed and derived, so they read "observed/derived"; `_astForcedValues` holds values every
-   sighting of which stood on a forced arm. lib/learn.js writes each pool only when non-empty. */
+/* One parameter: its name, location and value class, and each example value with its grade. `_astValidValues` holds values some unforced path computed, which the record does
+   not split between observed and derived, so they read "observed/derived"; `_astForcedValues` holds values
+   every sighting of which stood on a forced arm. lib/learn.js writes each pool only when non-empty. */
 function endpointParamItem(name, p, where, bodyLocation) {
   const loc = bodyLocation === undefined ? p.location : bodyLocation;
   // lib/learn.js states a location on every parameter it mints; a probed document's is that document's input.
@@ -124,8 +165,37 @@ function endpointParamItem(name, p, where, bodyLocation) {
     DCHECK(VALUE_CLASSES.indexOf(p._astValueClass) >= 0,
            "parameter " + JSON.stringify(name) + " carries the value class " + JSON.stringify(p._astValueClass) +
            ", none of " + VALUE_CLASSES.join("/") + " (" + where + ")");
-    head.push(" " + p._astValueClass);
+    head.push(", value class " + p._astValueClass);
   }
   if (values.length === 0) values.push(domElement("span", { class: "ep-none" }, ["no example value learned"]));
   return domElement("li", {}, [domElement("div", {}, head), domElement("div", { class: "ep-values" }, values)]);
+}
+
+/* The request body the flat record carries: bytes the request sends (`bodySent`), the display spelling of a
+   body built from unknown input (`bodyShape`), or what a byte-composed payload currently looks like
+   (`bodyExample`). checkEndpointRecord asserts their shapes and that at most one is set. */
+function endpointBodyItem(ep) {
+  let label, text, mime;
+  if (ep.bodySent !== null) { label = "body sent"; text = endpointBodyText(ep.bodySent.base64); mime = ep.bodySent.mime; }
+  else if (ep.bodyShape !== null) { label = "body shape"; text = ep.bodyShape.shape; mime = ep.bodyShape.mime; }
+  else if (ep.bodyExample !== null) { label = "body example"; text = endpointBodyText(ep.bodyExample.base64); mime = ep.bodyExample.mime; }
+  else return null;
+  return domElement("li", {}, [
+    domElement("div", {}, [domElement("code", { class: "ep-param-name" }, [label]),
+                           " (" + (mime === null ? "no type stated" : mime) + ")"]),
+    domElement("div", { class: "ep-values" }, [domElement("code", { class: "ep-value" }, [text])]),
+  ]);
+}
+
+// Base64 bytes as UTF-8 text where TextDecoder's fatal mode accepts them, else a byte count and the base64.
+function endpointBodyText(base64) {
+  const bin = atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (e) {
+    RETHROW_FATAL(e);
+    return bytes.length + " bytes, not UTF-8, base64 " + base64;
+  }
 }

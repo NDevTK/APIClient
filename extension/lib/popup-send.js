@@ -149,6 +149,11 @@ function _methodOrigin(m) {
   return fired ? "fired" : "declared";
 }
 
+// The Send dropdown's option value for method `m` of service `svcName`; lib/popup-endpoints.js selects by it.
+function sendMethodOptionKey(svcName, m) {
+  return `DISCOVERY ${m.httpMethod} ${svcName} ${m.id}`;
+}
+
 function renderMethodDropdown() {
   const svcFilter = document.getElementById("spec-service-select").value;
   const select = document.getElementById("send-ep-select");
@@ -173,8 +178,7 @@ function renderMethodDropdown() {
 
           for (const m of methods) {
             const opt = document.createElement("option");
-            const key = `DISCOVERY ${m.httpMethod} ${svcName} ${m.id}`;
-            opt.value = key;
+            opt.value = sendMethodOptionKey(svcName, m);
             // The tag IS the product's differentiator, so it says the finding, not the mechanism:
             //   [UNUSED]     — learned from the bundle, never observed on the wire. The headline: what the
             //                  bundle CAN do but didn't (login/click/route/flag-gated, dead-but-shipped,

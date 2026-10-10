@@ -163,6 +163,8 @@ testing/fixtures/*
 # all. So no run in this corpus has ever exercised the producer this document is built to exercise, and the
 # number stating that cannot be re-derived from a clone that does not contain the document.
 !testing/fixtures/pathdom_*
+# The Endpoints panel's example-value fixture: its header lists the rows the panel and the Send form must show.
+!testing/fixtures/endpoint_examples.html
 # THE HEADER-DELIVERED CSP PAIR, re-included by name because the two arms are ONE EXPERIMENT and because the
 # variable they differ on is a THIRD FILE that must travel with them. `cspconn_blocked.html` and
 # `cspconn_open.html` run byte-identical machinery from their first element onward; what makes one of them

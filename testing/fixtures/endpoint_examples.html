@@ -1,0 +1,29 @@
+<!doctype html><meta charset="utf-8"><title>Endpoints panel: computed example values</title>
+<!-- Fixture for lib/popup-endpoints.js and the Send panel it opens. Every value below is one the page's own
+     code computes, so the engine's @H row states it in `validValues`, and the panel and the Send form must
+     show that value and no other. Expected rows (read from the engine's fetchCallSites beside the popup):
+       GET  /api/ex/search?q=shoes&page=2     q "shoes", page "2"             derived
+       GET  /api/ex/user/42/profile           no parameter: the address is a literal the code computed
+       GET  /api/ex/team/{window.name}/cfg    window.name "admin"             forced (the gate pins it)
+       GET  /api/ex/item?sku={location.hash}  sku: no computed value          derived
+       POST /api/ex/note                      body kind "note", v "1"
+       GET  /api/ex/settings?tab=privacy      tab "privacy", from a function the page never calls
+     The Send button on each row opens the Send panel, whose form prefills a field holding exactly one
+     unforced value and leaves a field with none empty. Real Chrome also runs this page, so every row but
+     the last is also observed on the wire; the last is the one whose value only the engine computed. -->
+<script>
+fetch("/api/ex/search?q=" + ["sh", "oes"].join("") + "&page=" + (1 + 1));
+
+fetch("/api/ex/user/" + String(6 * 7) + "/profile");
+
+var who = name;
+if (name === "admin") fetch("/api/ex/team/" + who + "/cfg");
+
+fetch("/api/ex/item?sku=" + location.hash);
+
+fetch("/api/ex/note", { method: "POST", headers: { "content-type": "application/json" },
+                        body: JSON.stringify({ kind: "note", v: 1 }) });
+
+// Never called by the page, so real Chrome never sends it; only the engine's run reaches it.
+function openSettings() { fetch("/api/ex/settings?tab=" + ["priv", "acy"].join("")); }
+</script>
