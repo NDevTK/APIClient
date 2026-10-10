@@ -34055,15 +34055,13 @@ int main(int argc, char **argv) {
                g_cr.commits, g_cr.delivers, met, unmet);
     }
 
-    /* ONE result document — both surfaces and the scheduler's interleave count, serialized DIRECTLY from the
-       C findings (no JS-object round-trip). The host does one JSON.parse of this line and relays it; it used
-       to be two lines here, which meant whoever consumed them assembled the document, and assembling is
-       structure. The assertions below read the same string, so they cover the composed shape. */
+    /* One result document — both surfaces and the scheduler's interleave count — serialized directly from the
+       C findings. The host parses this one line; the assertions below read the same string. */
     char *js = result_json(ctx);
     CHECK(js, "the result document could not be rendered — this fixture's whole verdict is a function of it, so "
               "there is nothing to report and nothing to assert");
     printf("@RESULT %s\n", js);
-    /* THE VERDICT, so a 0 row is FAIL: the run is over and the row will not be reached. */
+    /* The verdict: the run is over, so a row still 0 will not be reached. */
     char unanswered[PROBE_UNANSWERED_MAX], unasked[PROBE_UNANSWERED_MAX];
     /* Under --lifecycle the document's programs are never handed to the scheduler, so the probe table states
        nothing about this run; the verdict is that the agent's life reached its end, and any defect on that
@@ -34071,24 +34069,11 @@ int main(int argc, char **argv) {
     int h_ok = lifecycle ? 1 : probes_report(js, true, unanswered, sizeof unanswered, unasked, sizeof unasked);
     if (lifecycle) unasked[0] = 0;
 
-    /* THE PASS SENTENCE NAMES WHAT THIS INVOCATION MEASURED. A cold session runs none of the @H/@S rows, so
-       reporting their verdict over it would be a claim about a program it did not run — the same defect the
-       probe key exists to prevent, one table above. */
-    /* AND A HOLE IS NOT A PASS AND NOT A FAIL, WHICH IS THE THIRD ARM THIS VERDICT DID NOT HAVE. A run that
-       answered every statement it could ASK and holds one it could not PUT has said something true about the
-       revision and something true about ITSELF, and those are different sentences: the PASS line below claims
-       "every statement this document makes has been answered", which is false of such a run, and the FAIL
-       line names rows as unanswered findings, which is false of the same run in the other direction. The
-       verdict in between says which rows and why, and it is a WITNESS: engine/build.mjs classifies this stage
-       by the shape of this sentence, exactly as it classifies a source census by the shape of that gate's own
-       verdict line, so the classification belongs to the program that knows the fact.
-       IT STILL EXITS NON-ZERO. §Testing: "NOTHING HERE IS FORGIVEN AND NO CATEGORY EXITS 0" — a hole in the
-       report must never read like a stage that asked and liked the answer, and the whole reason this arm
-       exists is that the build should say `0 DEFECT, 1 NOT ASKED` rather than `1 DEFECT`, never that it
-       should say nothing.
-       ONE SIGNAL AND NOT TWO: the exit code stays 1 and the SENTENCE carries the classification. A distinct
-       code would be a second answer to one question, kept in step with this line by nothing, and build.mjs
-       reads the child's status only as the stage's own code. */
+    /* The PASS sentence names what this invocation measured: a cold session runs none of the @H/@S rows. */
+    /* Three outcomes. NOT ASKED: every row this host could put was answered and the named rows could not be put
+       here — not a verdict on the revision. PASS: every row answered. FAIL: the false conjuncts, by name.
+       engine/build.mjs classifies the stage by this sentence's shape, and every outcome but PASS exits 1, so a
+       hole never reads like a stage that asked and liked the answer. */
     if (lifecycle)
         printf("LIFECYCLE: the agent ran without its document's programs and reached @RESULT; the probe table "
                "is not read in this mode, and the second agent below is the rest of this verdict\n");
@@ -34106,23 +34091,12 @@ int main(int argc, char **argv) {
                   "capability nothing here has) — resume it with --cold-resume over the same path"
                 : "PASS: the parked residue was rebuilt into the ONE frontier, and a resumed @S candidate "
                   "replayed its recorded arms back to the sink it was suspended in front of and FIRED there")
-            /* AND THE NON-COLD PASS NAMES NO STATEMENT EITHER, which is the correction the derived selector
-               forced on it. It read "@S eval + innerHTML + location + a REAL Location source", which is the
-               FULL document's list — the minimal one has no `location.hash` sink at all, so under --min the
-               PASS line was naming two rows that were never selected. What is true of both is the table:
-               every statement THIS document makes, answered. */
+            /* Under --min the document is smaller, so the PASS line names the table rather than a list of rows. */
             : "PASS: every statement this document makes has been answered — the @H row above is which, and "
               "the residue left over is real and parked (@COLDPARK, and `_park` in the result document)");
     else
-        /* AND THE FAILURE SENTENCE IS ONE SENTENCE FOR BOTH, BECAUSE IT IS DERIVED AND THERE IS NOTHING LEFT
-           FOR A SESSION TO CONTRIBUTE TO IT. There were two, and the cold one asserted a CAUSE the table had
-           not established — measured, on `native cold`: 24 records parked, five of the six cold rows at 1, one
-           row (`park-remoteop`) at 0, and the line printed said the round trip "did not exercise the tier" and
-           sent the reader to "the 0 rows" in the plural. That is a cause belonging to a different run, stated
-           with the authority of a verdict, and it is the same three-states-behind-one-answer defect the ladders
-           above this table exist to refuse — arriving in the last line, which is the line a killed run leaves
-           and a `tail` reads. Naming the rows says strictly more and can never be wrong about this run: the
-           conjunction's false terms ARE what failed, and each row already carries its own `why` above. */
+        /* One failure sentence for both session kinds: it names the false rows, each of which carries its own
+           `why` above, and states no cause the table did not establish. */
         printf("FAIL: %s — that is the whole of what this run left unanswered; each named row states its own "
                "claim where it is computed, and the @H stream above carries its diagnostic\n", unanswered);
 
@@ -34365,8 +34339,6 @@ int main(int argc, char **argv) {
        environment has no TOP-LEVEL CREATION URL to be given (§10.2.6.2 "Script settings for workers" sets it
        "to null"), so a parameter for one would be a fact this call could only state wrongly. */
     second_agent_selftest(TF_ORIGIN);
-    /* A HOLE IS NON-ZERO LIKE EVERY OTHER NON-PASS — see the verdict sentence above for why, and note that
-       `h_ok` alone is no longer the whole answer: it is now the conjunction over the rows this run could ask,
-       so a run with an unaskable row reaches here with `h_ok` TRUE and has not passed. */
+    /* `h_ok` is the conjunction over the rows this run could ask, so an unaskable row still exits 1. */
     return (h_ok && !unasked[0]) ? 0 : 1;
 }
