@@ -1,88 +1,25 @@
-/* @H ENDPOINT SURFACE — the deduped set of endpoints the forced execution learned, rebuilt clean.
+/* @H endpoint surface: the deduped set of endpoints forced execution learned, emitted as the `@H` array.
  *
- * Every request host-edge (fetch/XHR/...) funnels one endpoint into record_endpoint; identical (method, url)
- * pairs dedup on the way in. A concolic URL contributes its SHAPE (`/api/region/{state}.region`), a concrete
- * one its literal. endpoint_result assembles the harness `@H` structure (fetchCallSites) for JSON emit.
- *
- * A REQUEST HAS THREE PLACES A VALUE CAN LAND and this surface names all three: the PATH (a `{hole}` the code
- * interpolated into the address, whose example is recovered by aligning the concolic's concrete URL against
- * its shape), the QUERY STRING, and the BODY (read in the body's own content-type). It named one of them for
- * the whole life of the file — the query — while every consumer branched on a `location` field nothing wrote,
- * so the path-parameter registration and the entire request-body schema had never run once and both read as
- * live. See path_scan for why a hole is re-spelled around the whole segment.
- *
- * RESIDUAL: a hole's NAME is the segment's shape with the braces moved, and lib/merge.js round-trips the URL
- * through `new URL()` before matching it. WHATWG URL's path percent-encode set is the query set plus `?`, `^`,
- * backtick, `{` and `}` — so `.`, `[` and `]` survive that trip and offscreen-brain.js's `_decHoles` restores
- * the braces, while a member name holding a SPACE or a `#` would come back percent-encoded and its hole would
- * stop matching. Not yet handled anywhere; it is page data, so it is a residual rather than an assert.
- *
- * NAMED RESIDUAL — NOT COVERED: an address the page hands to a SOCKET-SHAPED constructor. Every edge that
- * reaches endpoint_record is HTTP-shaped — fetch, XHR, sendBeacon, form submit, img, link, script, and this
- * solver's own three — so a URL passed to `new WebSocket(u)` (WebSockets §3 "The WebSocket interface") or to
- * `new EventSource(u)` (HTML §9.2.2 "The EventSource interface") reaches this surface through NO path, and
- * neither interface is installed for one to be reached through. Both halves are claims about THIS TREE and
- * each is one command, so neither is stated as a count here:
- *   git grep -n 'endpoint_record(ctx' -- engine/host | grep -v solver/endpoint
- *   git grep -n '"WebSocket"\|"EventSource"' -- engine/host   # generated tables only == no installer
- * THE DURABLE HALF IS A PROPERTY AND NOT THAT POPULATION: this surface is a function of the request EDGES the
- * engine HAS, so an endpoint whose transport is unbuilt is not under-reported here — it is absent, and no
- * figure this file emits is a fraction of it.
- * IT IS NOT REFUTED BY extension/intercept.js, WHICH WRAPS window.WebSocket AND KEEPS THE URL. That is the
- * PASSIVE channel, which §What-the-tool-produces rates a DIAGNOSTIC and forbids merging into the learned
- * surface, and it emits from the `open` listener — evidence about what FIRED, never about what a bundle CAN
- * do, which is the half this surface exists to state.
- * AND THE LOSS IS NOT UNIFORM, WHICH IS THE PART A NAME-KEYED CENSUS CANNOT SEE. solver/absent.c records that
- * the NAME was read and unanswered; whether the page even COMPUTED the address depends on where the guard
- * sits relative to the URL expression, and absent.c's `owed` row reads the same either way —
- *   guard WRAPPING the construction, `if (null != window.WebSocket) { …build url…; new WebSocket(url) }`:
- *     the address is never computed at all, and is lost at its source rather than at this surface;
- *   guard AT the constructor — a `typeof` ternary choosing a polyfill, or a try/catch around the `new`:
- *     the address IS computed, then discarded, so it is one edge away from being recordable.
- * A count of unanswered NAMES is therefore not a measure of lost ADDRESSES, in either direction.
- * WHAT THE NEXT DIFF BUILDS: HTML §9.2.2 steps 8-15 together with HTML §9.2.3 "Processing model", which
- * core/eventsource/event_source_parser.h already scopes and which gives that component its first caller —
- * PLUS an endpoint_record call of its own at step 8's request, which is the half this clause first got wrong
- * and is recorded rather than quietly corrected. It called step 15's fetch
- * `an endpoint_record site by construction` — shown in backticks and not in quotation marks, because it is
- * this tree's own retired prose and the quotation channel cannot tell such a run from a fabricated spec
- * sentence. fetch.c's recording site is inside `js_fetch_step`, the JS `fetch()` builtin's step machine,
- * whose name occurs nowhere outside that file — so a spec-level fetch reaches it through nothing.
- * Every other edge here records AT ITS OWN CALL (html_script.c, html_link.c, html_image.c, html_form.c,
- * navigator_beacon.c, xml_http_request.c), and that is the pattern the constructor follows. The clause was a
- * claim about THIS TREE written by someone who had just read the SPEC, which is the half a reader cannot
- * check by fetching anything. WebSockets §3 is the diff after it and wants a transport this engine does not
- * have; its address is statable at the constructor long before its connection is.
- * AND `STATABLE AT THE CONSTRUCTOR` IS A FACT ABOUT THE STANDARD AND NOT A LANDING UNIT, WHICH IS THE
- * READING THAT SENTENCE INVITES AND THE ONE A MEASUREMENT REFUTES. WebSockets §3 "The WebSocket interface"
- * settles the address at its constructor's step 10, "Set this's url to urlRecord", and runs the connection
- * in parallel — so a constructor that records the address and connects to nothing reads as the cheap half
- * of this clause. It is the half-landing §NO STUBS forbids, and the reason is one section further on:
- * WebSockets §4 "Feedback from the protocol" is the ONLY writer of ready state past CONNECTING, while
- * WebSockets §3 "The WebSocket interface"'s send() step 1 is "If this's ready state is CONNECTING, then
- * throw an "InvalidStateError" DOMException" — so an object with no connection answers every send() with a
- * throw, which is the whole of what a socket transport calls.
- * AND THE COST IS MEASURED RATHER THAN ARGUED, ON A CHANNEL THE ABSENCE RANKING'S GUARD COLUMN DOES NOT
- * COVER. browser/platform_names.h carries `WebSocket`, so solver/absent.c leaves the read alone and a
- * bundle's presence test is answered by whether an interface object is installed; engine/js_guard_shape.mjs
- * scopes itself to the USE channels, so a `fb=0 sil=0` for this name is SILENCE about the detect channels
- * rather than evidence about them. Read those directly, over a corpus testing/corpus/fetch.mjs writes:
- *   grep -rlE '(globalThis|window|self)\.WebSocket' <corpus>   # then open each file that answers
- * Measured 2026-09-24T03:29Z over that driver's own corpus, every file that answered held a presence test
- * SELECTING an arm — resolver chains ending in a polyfill call, a config-gated assignment, and a recorder
- * that subclasses the global and reassigns it and whose own send() calls super.send(). Installing an
- * interface object takes each of those OUT of the arm this engine runs today and INTO one whose send()
- * throws, which is a regression in both directions and not a partial fix.
- * SO THE UNIT IS WebSockets §3 "The WebSocket interface", §4 "Feedback from the protocol" and §6 "The
- * CloseEvent interface" TOGETHER WITH A CONNECTION SOURCE, and that source is the open question rather
- * than the diff: extension/lib/safe-fetch.js answers any non-http(s) address `blocked-scheme:` before it
- * reaches the wire, and core/fetch/fetch.h's FETCH_MODE_WEBSOCKET has a producer and no consumer.
- * RETIREMENT: this paragraph goes when WebSockets §4 "Feedback from the protocol" has a writer of ready
- * state in this tree, because the half-landing it argues against is then unspellable rather than argued.
- * HOW ITS ABSENCE WOULD SHOW: a document whose API surface is carried over a socket emits a `@H` array that
- * is empty or holds only its subresource loads, while absent.c's census names the interface as owed — two
- * surfaces disagreeing about one document, with nothing joining them.
- * RETIREMENT: this record goes when endpoint_record has a caller that is not an HTTP-shaped edge.
+ * Every HTTP-shaped request edge (fetch, XHR, sendBeacon, form submission, script/link/img loads, the
+ * program-load park, multipart batch parts, reply-named chunks) calls endpoint_record. A concolic URL
+ * contributes its shape (`/api/region/{state}.region`), a concrete one its literal. A value lands in one of
+ * three places and each param says which: the path (a `{hole}` segment whose example is recovered by aligning
+ * the concolic's concrete URL against its shape; see path_scan), the query string, or the body (read in the
+ * body's own content type). A hole's name carries the page's bytes verbatim; extension/lib/callsite-url.js
+ * masks it around the trusted zone's `new URL` parse so it comes back intact.
+ */
+/* Named residual: an address handed to a socket-shaped constructor.
+ * Not covered: `new WebSocket(u)` (WebSockets §3 "The WebSocket interface") and `new EventSource(u)` (HTML
+ * §9.2.2 "The EventSource interface") reach this surface through no path: every endpoint_record caller is
+ * HTTP-shaped and neither interface is installed, so such an endpoint is absent here rather than
+ * under-reported. extension/intercept.js's passive wrap of window.WebSocket is a diagnostic and is not merged.
+ * Next diff: HTML §9.2.2 steps 8-15 with HTML §9.2.3 "Processing model" (the first caller of
+ * core/eventsource/event_source_parser.h), recording at step 8's request as every other edge records at its
+ * own call. WebSocket follows and needs a connection source first: only WebSockets §4 "Feedback from the
+ * protocol" moves ready state past CONNECTING and send() throws while CONNECTING, so an interface object with
+ * no transport moves bundles that feature-detect `WebSocket` off a working fallback onto an arm that throws.
+ * Absence shows as: a document whose API is carried over a socket emits an @H array holding only its
+ * subresource loads while solver/absent.c's census names the interface as owed.
  */
 #ifndef ENGINE_HOST_SOLVER_ENDPOINT_H
 #define ENGINE_HOST_SOLVER_ENDPOINT_H
@@ -93,203 +30,92 @@ void    endpoint_init(void);
 void    endpoint_free(void);
 void    endpoint_suppress(int on);   /* 1 during a candidate/verify re-run: its requests are @S artifacts, not @H */
 
-/* A HEADER THE REQUEST CARRIES — half of what makes an endpoint usable, and the half this surface did not have.
-   An endpoint reachable only with `Authorization` and `X-Api-Version` is not reproducible without them, and the
-   popup has read a `requiredHeaders` record per call site since before the engine could emit one. The value is a
-   plain string for the same reason a param's example is: a concrete one is the literal the code computed, and an
-   unknown one is its SHAPE (`{state}.token`), which is what marks it as a runtime value the reviewer must
-   supply. Borrowed for the length of the call — the surface copies what it keeps. */
+/* A header the request carries; an endpoint reachable only with, say, `Authorization` is not reproducible
+   without it. `value` is the literal the code computed, or the unknown's shape (`{state}.token`), which marks
+   a runtime value the reviewer supplies. Borrowed for the call; the surface copies what it keeps, and on a
+   merge a concrete value supersedes a shape for the same header. */
 typedef struct { const char *name, *value; } EndpointHeader;
 
-/* THE REQUEST BODY THE PAGE COMPOSED. `mime` is the content-type the request will actually send (the header
-   list's, else the one Fetch §5.4 "Request class" step 37.4 extracts) and it is what decides how the bytes are
-   READ — the body's own format, never a guess from the shape of the bytes. A JSON MIME type (MIME Sniffing
-   §4.6 "MIME type groups") is read as a name -> value document and `application/x-www-form-urlencoded` by the
-   same grammar as a query string; any other type records no FIELDS rather than a guess at some — and
-   FORWARDS ITS BYTES, which is the half that was missing. A protobuf or gRPC-Web payload has no field this
-   engine can name, and for as long as that meant silence the record said `POST /pkg.Service/Method` and
-   nothing whatever about what it posts, which is most of what §What-the-tool-produces asks. The bytes ride
-   the record as `bodyBase64` beside `bodyMime` (the engine's own `btoa` codec, never a second base64).
-   NOTHING DECODES THEM INTO FIELDS, AND THE SENTENCE THAT STOOD HERE SAID THE ZONE DID. It named a wire
-   decoder in the trusted zone as the reader that turns these bytes into a field model, and that reader is
-   gone: reconstructing a field number out of a byte stream is INFERRING an answer the run already had, since
-   the page's own serializer executed with the real names and the real values in its hands, and the pattern
-   over a MIME string that selected it was the protocol-specific recognizer §Architecture bans. The sentence
-   is rewritten rather than deleted because a reader who re-derives the bytes-are-here-so-something-should-
-   read-them argument will write that decoder again.
-   SO THESE BYTES ARE AN OBSERVATION AND NEVER A FIELD MODEL — this request sent exactly these bytes under
-   exactly this content-type, which is what a reviewer REPLAYS and is not an answer to "what values can be
-   sent". What answers that is `params`, and for every body the page composed AS A STRING it already does:
-   a concatenation carries its operands' display forms into the result's shape, so `'{"id":"' + id + '"}'`
-   reaches this surface spelling `{"id":"{state}.id"}` and the JSON arm below names `id` with the hole as its
-   value. Provenance through the page's own serializer is therefore not a thing to build for those bodies; it
-   is what the shape IS.
-   Borrowed for the length of the call like the headers.
-   It is a separate struct and not three arguments because a body is one fact: bytes with no type are bytes
-   nothing can name the fields of, and a type with no bytes is not a body — and `kind` is part of that one
-   fact rather than a fourth argument for the same reason. */
+/* The request body the page composed. `mime` is the content type the request sends (the header list's, else
+   the one Fetch §5.4 "Request class" step 37.4 extracts) and decides how the bytes are read: a JSON MIME type
+   (MIME Sniffing §4.6 "MIME type groups") or `text/plain` as a JSON object of name -> value, and
+   `application/x-www-form-urlencoded` by the query grammar. A body none of whose fields were named is kept
+   under the key its `kind` selects; nothing decodes bytes into fields by protocol, because the page's own
+   serializer already ran with the real names and values. A body composed as a string names its fields
+   anyway: concatenation carries each operand's display form into the shape, so `'{"id":"' + id + '"}'`
+   arrives as `{"id":"{state}.id"}`. Bytes, type, kind and spans are one fact, hence one struct. Borrowed
+   for the call. */
 
-/* WHOSE BYTES THESE ARE, WHICH THIS STRUCT COULD NOT SAY AND WHICH DECIDES WHETHER THEY MAY BE REPLAYED.
-   A producer holding a body built out of UNKNOWN EXTERNAL INPUT has no bytes to hand over — there are none —
-   so what it passes is the engine's own DISPLAY SPELLING of that unknown (core/fetch/body.h's BODY_SHAPE).
-   Those characters look exactly like a payload here, and the surface base64'd them into `bodyBase64` under
-   this header's promise that the request sent exactly these bytes.
-   THAT IS FABRICATED EVIDENCE AND NOT A MISSING VALUE, which is the distinction that makes it worth a field.
-   §@H's rule is that a value known only to satisfy a gate is INVENTED rather than computed; a SHAPE rendered
-   as BYTES is that defect one layer out, and it is worse than a `||` default because a default merely reads
-   as a measurement while this is handed to a reviewer to REPLAY — so a request nobody ever made gets sent,
-   carrying the literal characters of a hole. An ABSENT `bodyBase64` beside a shape body is the honest state,
-   and this field is what makes that difference expressible rather than guessable from the bytes.
-   IT HAS NO SAFE DEFAULT, so its zero is UNSTATED and endpoint_record aborts on it. Every producer computes
-   this already — each one asks core/fetch/body.h which arm its body took — and each was DROPPING the answer
-   between that question and this call, so the fix is to carry a fact that exists rather than to derive a new
-   one. A producer that forgets takes the same arm as one that has nothing to say, which is what stops
-   forgetting from being a way to be exempted. */
-/* AND A THIRD ANSWER, WHICH IS NEITHER OF THOSE TWO AND IS THE ONE A REVIEWER EDITS. The pair above is a
-   complete partition of a body whose bytes are all of ONE provenance — the page computed every one of them,
-   or the page computed none of them — and a body a serializer wrote BYTE BY BYTE is neither. `EndpointBodySpan`
-   below names which ranges of it the run did not determine; the rest IS what the page computed, and inside a
-   span stands the unknown's own EXAMPLE where it had one and a byte NOBODY WROTE where it did not, because
-   §10.4.5.18 skips the block write rather than inventing one.
-   SO THEY ARE AN EXAMPLE OF THE BODY AND NEVER WHAT THE REQUEST SENDS, and that difference is the whole of what
-   makes them safe to publish. A reviewer handed them under EPB_SENT's claim would replay a byte no run ever
-   computed, which is §@H's invented value one layer out and is exactly the fabrication the EPB_SHAPE split was
-   made to end — so the constraint is not a preference to be re-derived: a body carrying spans has no bytes the
-   request can be said to send, and endpoint_record asserts the pairing rather than trusting a producer to.
-   WITHOUT IT THE HONEST STATE IS A SILENCE, which is the same pairing EPB_SHAPE's own arm records: the spans
-   name WHERE a reviewer edits and say nothing about what currently stands there, so a panel holding them alone
-   can change WHICH value a field carries and cannot show what it carries. An ABSENT example and an example of
-   all-zero bytes are different facts, and this kind is what makes the first expressible.
-   IT IS A THIRD KIND AND NOT A FLAG ON EPB_SENT for the reason the two fields it selects between are two
-   fields: a consumer combining `sent` with `some of it is an example` decides the claim at the point of use,
-   and the claim is precisely what the key is for. THE TWO RUNS ABOVE ARE IN BACKTICKS RATHER THAN QUOTED
-   because they are SPELLINGS BEING SHOWN and not a spec sentence — a quoted run this near a section number is
-   compared against that section by engine/citegen.mjs and reported as a fabricated quotation, which is that
-   tool working and this file having written a claim it was not making. */
+/* Whose bytes `EndpointBody.bytes` are, which decides whether they may be replayed. It has no safe default:
+   its zero is EPB_UNSTATED and endpoint_record refuses it, so forgetting is not an exemption. Every producer
+   already knows which arm its body took from core/fetch/body.h. Each kind is emitted under its own key so a
+   consumer never composes the claim:
+     EPB_SENT    -> `bodyBase64`: the bytes the request sends (encoded with the engine's own base64 codec).
+     EPB_SHAPE   -> `bodyShape`: the engine's display spelling of an unknown body (body.h's BODY_SHAPE). Its
+                    characters look like a payload; publishing them as sent bytes would hand a reviewer a
+                    request nobody made.
+     EPB_EXAMPLE -> `bodyExampleBase64`: an example of the payload, which is the page's bytes where it computed
+                    them, an unknown's example inside an EndpointBodySpan, and an unwritten byte inside a span
+                    with no example (ECMAScript §10.4.5.18 TypedArraySetElement skips that write). Never
+                    replayable. A body with spans must be this kind, which endpoint_record asserts. */
 typedef enum {
     EPB_UNSTATED = 0,   /* nobody said; endpoint_record refuses it */
     EPB_SENT,           /* bytes the page composed — what the request will actually send, replayable */
-    EPB_SHAPE,          /* the engine's display spelling of an unknown body; NEVER bytes the page sent */
-    EPB_EXAMPLE         /* bytes that are an EXAMPLE of the body — the page's own where it computed them and an
-                           unknown's where it had one, with a byte nobody wrote inside an exampleless span.
-                           NEVER replayable: it is what the payload LOOKS LIKE, for a consumer holding the
-                           spans to splice a replacement into. */
+    EPB_SHAPE,          /* the engine's display spelling of an unknown body; never bytes the page sent */
+    EPB_EXAMPLE         /* an example of the body, with the spans that say where it is unknown; never replayable */
 } EndpointBodyKind;
 
-/* WHICH BYTE RANGES OF THE BODY THE PAGE DID NOT DETERMINE, AND WHERE EACH CAME FROM — the one fact that
-   turns "replay these bytes verbatim" into a request a reviewer can EDIT, and the only one a sniffer can never
-   produce. A page that composes its payload AS A STRING carries its operands' display forms into the result,
-   so the JSON arm below already names its fields; a page that writes BYTE BY BYTE into a typed array carries
-   nothing at all, because a data block holds uint8_t and an unknown cannot live in one. ECMAScript §10.4.5.18
-   TypedArraySetElement ( obj, index, value ) records the fact beside the block instead, and this is that
-   record projected onto this surface.
-   NOTHING DECODES AND NOTHING BRANCHES ON A PROTOCOL, which is what makes it answer for an encoding this
-   engine has never heard of. The page's own serializer ran with the real field names and the real values in
-   its hands and wrote these bytes itself, so a span saying that bytes 17 to 23 of the payload are the value
-   which entered at the page's own query string is an OBSERVATION of that run rather than a reconstruction
-   from a byte stream — and a wire decoder selected
-   by a MIME pattern is the protocol-specific recognizer §Architecture bans, whose next member is Connect, or
-   grpc-web-text, or a framing invented next year.
-   `shape` IS NEVER NULL AND `example` MAY BE. §10.4.5.18 skips the block write entirely for an unknown
-   carrying no example, because a byte in a buffer is indistinguishable from a byte the page computed and
-   inventing one is §@H's value known only to satisfy a gate. So the absence is a POSITIVE statement — nobody
-   knows what this byte is — and never a hole for a default to fill.
-   IT IS A PROJECTION AND NOT A SECOND REPRESENTATION, for the reason EndpointHeader is one: four fields
-   either way, and the solver must not learn what a BodyState is. Borrowed for the length of the call. */
+/* A byte range of the body the page did not determine, and where it came from: ECMAScript §10.4.5.18
+   TypedArraySetElement ( obj, index, value )'s record of an unknown written into a typed array, projected
+   onto this surface without the solver learning what a BodyState is. It lets a reviewer edit a byte-built
+   payload rather than replay it, with no protocol decoder. `shape` is never NULL; `example` is NULL when the
+   unknown had none, which states that nobody knows those bytes and is never a hole for a default. Spans are
+   sorted and disjoint (asserted), and each becomes a body param named `body[off:end]`. Borrowed for the
+   call. */
 typedef struct { size_t off, len; const char *shape, *example; } EndpointBodySpan;
 
 typedef struct { const char *mime, *bytes; size_t len; EndpointBodyKind kind;
                  const EndpointBodySpan *span; int nspan; } EndpointBody;
 
-/* WHICH MECHANISM COMPOSED THIS ADDRESS — the third fact about a sighting, and the one CLAUDE.md
-   §What-the-tool-produces' razor was standing in for. That razor is `epEmitted - epPreProgram`, and it is a
-   SUBTRACTION OF TWO TOTALS: it says how many addresses forced execution CAN HAVE contributed and names none
-   of them, so a reader cannot tell a run that learned ten gated API calls from one that learned ten
-   `<link rel=preload>` elements of one `<head>`. Its own retirement clause asks for exactly this — each row
-   carrying its own door, so the surface partitions without a subtraction.
-   IT IS NEITHER OF THE TWO FACTS ALREADY ON THE RECORD AND NEITHER CAN STAND IN FOR IT. `prov` is what the
-   sighting's PATH is evidence of (observed/derived/forced) and is blind to the mechanism: measured on one
-   document carrying a `<script src>`, a `<link rel=preload>` of each kind, an `<img src>`, a `fetch()` and
-   two JS-composed images, the only row graded `observed` was the markup `<script src>` and every other
-   mechanism graded `derived` alike (extension/lib/safe-fetch.js records that measurement at its own site).
-   `pre_program` is WHEN, which is a proxy for the markup door and not the door: a `<head>` whose first
-   `<script src>` runs before the parser reaches the `<link>` below it mints that link POST-program, so the
-   razor counts a markup subresource as forced execution's contribution — in the flattering direction, on the
-   commonest document shape there is.
-   IT IS A PROPERTY OF THE MINT AND IS NEVER RE-ARMED, for `pre_program`'s reason exactly: a later sighting of
-   an address this surface already holds teaches it structure rather than an endpoint, so what a reader wants
-   is which mechanism COMPOSED the address first. A door re-armed on every merge would answer about the last
-   sighting.
-   AND IT IS DELIBERATELY NOT PART OF `same_identity`, which is where it differs from `prov` and the reason is
-   not a preference. The grade is in the identity because a FORCED sighting merging into a `derived` record
-   would publish a fabrication under the stronger claim — a wrong VALUE. Two doors reaching one address is not
-   that: it is one endpoint two mechanisms can reach, and splitting it would inflate `epMinted`, split the
-   params of one request across two rows, and make the surface a function of how many ways the page happens to
-   name a thing.
-   IT HAS NO SAFE DEFAULT, so its zero is UNSTATED and endpoint_record aborts on it — `EPB_UNSTATED`'s rule and
-   for its reason: every producer knows which mechanism it IS, a producer that forgets takes the same arm as
-   one with nothing to say, and forgetting is therefore not a way to be exempted. There is no absence-is-the-
-   statement here, the way there is for `excludes` and `bounds`: the list below is exhaustive over the ways an
-   address can reach this surface, because it is derived from endpoint_record's own call sites —
-     git grep -n 'endpoint_record(ctx' -- engine/host | grep -v solver/endpoint
-   THE THREE PROGRAM DOORS ARE THREE AND NOT ONE, which is the case CLAUDE.md names by hand as a residual
-   worth keeping ("an injected `src` and an `import()` reporting one token where Fetch §2.2.5's DESTINATION
-   separates them"). All three arrive at ONE call site — solver/engine.c's park consumer, whose own comment
-   says they are "a `<script src>` an insertion prepared, a document's own external script taking its slot,
-   and a dynamic `import()`" and that this is the only line that sees the set — so the site cannot spell a
-   literal and reads solver/pending.h's kind instead — AND, FOR THE TWO ELEMENT DOORS, THE PARK'S OWN
-   PARSER-INSERTED MARK. THE KIND ALONE SEPARATED THEM FOR AS LONG AS THIS SENTENCE SAID SO AND IT DOES
-   NOT: a kind is chosen for a QUEUE POSITION and a door asks about ORIGIN, and HTML §4.12.1.1
-   "Processing model" sends an element to either queue on its `async`/`force async` state rather than on
-   who inserted it, so both queues hold a parser-inserted element and a script-created one. The kind
-   separates the `module-import` door exactly and the other two not at all.
-   A LIST AND NOT A SET OF `#define`s, so the enum, the token table and any census over it are ONE list: a
-   name added to the enum and not to the table is a row whose token comes off the end of a name array, which
-   is the defect endpoint_json_array's `ep_loc_name` CHECK exists for one field over. */
+/* Which mechanism composed an address, stated by every producer because no consumer can re-derive it. Its
+   zero is EPD_UNSTATED and endpoint_record refuses it. It is neither `prov` (what the sighting is evidence
+   of) nor `mintedAt` (when): a `<link>` below a `<head>` script is minted post-program and is still markup.
+   It is the first sighting's mechanism and is never re-armed, and it is not part of `same_identity`: two
+   mechanisms reaching one address are one endpoint, and splitting it would scatter one request's params.
+   Columns: id, wire token, what a markup parse reaches through the door (ENDPOINT_REACHES), and whose bytes
+   the door hands this surface (ENDPOINT_DOOR_BYTES). One list keeps the enum, the token table and every
+   census in step; a door missing a column does not compile. The three program doors share one call site,
+   solver/engine.c's park consumer, whose `program_load_door` reads the park kind for `module-import` and the
+   parser-inserted mark for the two element doors, because a kind is a queue position and not an origin. */
 #define ENDPOINT_DOORS(X)                                                                                    \
-    /* HTML §4.12.1.1 "Processing model" — a program load whose element A PARSER INSERTED. That is all    \
-       this door states, and it is read off the park's own `parser document` mark, never off the QUEUE       \
-       POSITION its reply is delivered at. THE RETIRED READING IS KEPT BECAUSE A READER RE-DERIVES IT: this  \
-       door was the park KIND, and §4.12.1.1 branches on `el has an async attribute or el's force async is  \
-       true` BEFORE it branches on `el is not parser inserted`, so each queue holds BOTH origins and the     \
-       kind answered neither — solver/engine.c's `program_load_door` states the pair and what each         \
-       direction cost. DELIVERY IS THE KIND'S AND IS NOT THIS TOKEN'S: whether the reply fills the           \
-       element's slot or is queued as the flow's next program is solver/pending.h's fact, and neither may    \
-       be read off the other. NARROWER THAN `markup` BY ONE POPULATION, NAMED AS A RESIDUAL AT               \
-       `program_load_door`: a `<script src>` a `document.write` put in the tree is parser-inserted and is    \
-       NOT in the served bytes. */                                                                           \
+    /* HTML §4.12.1.1 "Processing model": a program load whose `<script src>` a parser inserted, read off   \
+       the park's `parser document` mark and never off the queue its reply is delivered at. Narrower than   \
+       `markup` by one population, a named residual at `program_load_door`: a `<script src>` a             \
+       `document.write` put in the tree is parser-inserted and is not in the served bytes. */               \
     X(EPD_DOCUMENT_SCRIPT, "document-script", EPR_MARKUP, EPB_DOCUMENT)                             \
-    /* …a `<script src>` NO parser inserted, so running code put the element there and a parse of the      \
-       served bytes never sees it — TRUE BY CONSTRUCTION rather than by the queue the element took, this   \
-       being the complement of the door above over the one mark. Its reply is queued as the running flow's   \
-       next program, which is the KIND's fact and not this token's. */                                       \
+    /* a `<script src>` no parser inserted: running code put the element in the tree */                     \
     X(EPD_INJECTED_SCRIPT, "injected-script", EPR_BEYOND, EPB_DOCUMENT)                             \
-    /* …and a dynamic `import()`, whose promise is settled with the SOURCE TEXT the compiler is handed — \
-       no element at all, so there is nothing for a parse of the document to have found. */                  \
+    /* a dynamic `import()`: no element, so no parse of the document can find it */                          \
     X(EPD_MODULE_IMPORT,   "module-import", EPR_BEYOND, EPB_DOCUMENT)                               \
-    /* a `<script src>` whose address running code ASSIGNED and this engine cannot fetch: the taint shadow   \
-       map holds an entry only where a script wrote the attribute, so this door is never parser-inserted — \
-       which is the same sentence read as a reach and is why this one is decidable where the two below       \
-       are not. */                                                                                           \
+    /* a `<script src>` whose address running code assigned as an unknown this engine cannot fetch. The     \
+       taint shadow map holds an entry only where a script wrote the attribute, so this door is never       \
+       parser-inserted (asserted in core/html/html_script.c). */                                             \
     X(EPD_SCRIPT_ELEMENT,  "script-element", EPR_BEYOND, EPB_DOCUMENT)                              \
-    /* HTML §4.2.4.3 "Fetching and processing a resource from a link element", preloads included — and the \
-       door CANNOT SAY WHICH, which is this header's own sentence three paragraphs up: a `<link>` a router   \
-       created and one the markup declared reach this surface through it alike. */                           \
+    /* HTML §4.2.4.3 "Fetching and processing a resource from a link element", preloads included. A `<link>` \
+       the markup declared and one a script created reach it alike, and the door cannot say which. */       \
     X(EPD_LINK_ELEMENT,    "link-element", EPR_EITHER, EPB_DOCUMENT)                                \
-    /* HTML §4.8.4.3.5 "Updating the image data", its source set and its undecided arm — `link-element`'s \
-       ambiguity exactly: an `<img src>` the parser built and one `new Image()` composed are one door. */    \
+    /* HTML §4.8.4.3.5 "Updating the image data", its source set and its undecided arm. An `<img>` the      \
+       parser built and one `new Image()` composed are one door. */                                          \
     X(EPD_IMAGE_ELEMENT,   "image-element", EPR_EITHER, EPB_DOCUMENT)                               \
-    /* …and the third of the same kind: a `<form action>` in the served bytes and a form whose action a    \
-       script wrote reach core/html/html_form.c's one recording pair alike. */                               \
+    /* a `<form action>` from the markup and one whose action a script wrote reach core/html/html_form.c's  \
+       one recording pair alike */                                                                           \
     X(EPD_FORM_SUBMIT,     "form-submit", EPR_EITHER, EPB_DOCUMENT)                                 \
     X(EPD_FETCH,           "fetch", EPR_BEYOND, EPB_DOCUMENT)                                       \
     X(EPD_XHR,             "xhr", EPR_BEYOND, EPB_DOCUMENT)                                         \
     X(EPD_BEACON,          "beacon", EPR_BEYOND, EPB_DOCUMENT)                                      \
-    /* a sub-request written INSIDE a multipart batch body the page composed */                              \
+    /* a sub-request written inside a multipart batch body the page composed */                              \
     X(EPD_BATCH_PART,      "batch-part", EPR_BEYOND, EPB_DOCUMENT)                                  \
-    /* an address a REPLY named and no line of the page ever composed — which is BEYOND a parse of the     \
-       DOCUMENT and is not a claim that the page's code composed it; the class is named for what a markup    \
-       parser reaches and never for who ran. */                                                              \
+    /* an address a reply named (solver/reply_decode.c) and no line of the page composed */                  \
     X(EPD_REPLY_CHUNK,     "reply-chunk", EPR_BEYOND, EPB_OFF_DOCUMENT)
 
 typedef enum {
@@ -297,44 +123,20 @@ typedef enum {
 #define ENDPOINT_DOOR_MEMBER(id, token, reach, bytes) id,
     ENDPOINT_DOORS(ENDPOINT_DOOR_MEMBER)
 #undef ENDPOINT_DOOR_MEMBER
-    EPD_COUNT           /* the list's own end — what the mint's range check and any census over it are bounded
-                           by, and it is a MEMBERSHIP test rather than a range because the members above take
-                           no explicit values, so the enum is dense by construction */
+    EPD_COUNT           /* list end; the members take no explicit values, so the enum is dense and the mint's
+                           range check is a membership test */
 } EndpointDoor;
 
-/* THE ONE WIRE SPELLING OF A DOOR, for `engine_provenance_token`'s reason and with its severity. A `CHECK`
-   and not a `DCHECK` on the fallthrough: this is called once per emitted row in EVERY build, and a release
-   build that fell through would write whatever the register held into a JSON string — which is not a missing
-   field a consumer can see is missing but a plausible mechanism name in the @H record, the same shape as
-   `ep_loc_name` indexed out of range one field over. */
+/* The one wire token of a door. A value outside the list is a CHECK, not a DCHECK: this runs once per emitted
+   row in every build, and a release fallthrough would publish a plausible mechanism name nothing ran. */
 const char *endpoint_door_token(int door);
 
-/* WHAT A PARSE OF THE SERVED DOCUMENT WOULD HAVE REACHED THROUGH A DOOR — the third column of
-   `ENDPOINT_DOORS`, and the one fact about CLAUDE.md §What-the-tool-produces' razor that no consumer of this
-   surface can re-derive. The razor is "what this engine reached that A MARKUP PARSER COULD NOT"; the door says WHICH
-   MECHANISM composed an address and is silent on whether a parser gets it for free, so a reader holding
-   `epDoors` alone holds the raw material of the razor and not the razor.
-   IT LIVED AS PROSE IN TWO FILES AND AS DATA IN NONE, which is why it is a column rather than a table
-   somewhere: engine/build.mjs's verdict line said "a surface whose every door is `link-element` and
-   `document-script` is a `<head>` counted back, and one carrying `fetch`, `xhr` or `module-import` rows is
-   forced execution having reached a network call site" — five of twelve doors, in a comment — and
-   testing/static_surface.mjs says the same thing a third way, by naming which ENGINE FILE records each door.
-   Two copies of a fact the producer owns, neither complete, and CLAUDE.md §AN-AUDITOR-DERIVES-THE-RULE is
-   exact about what that costs. A door added to `ENDPOINT_DOORS` without a reach does not compile.
-   THREE WORDS AND NOT TWO, AND THE THIRD IS THE WHOLE OF THE HONESTY. `link-element`, `image-element` and
-   `form-submit` are reached by a parser-inserted element AND by a script-created one, and the door does not
-   record which — this header says so itself about `link-element` and the same sentence is true of the other
-   two. A two-way split would have to guess, and both guesses are wrong in a direction that matters: calling
-   them markup UNDER-credits a router-built `<link>`, and calling them beyond OVER-credits a `<head>`, which is
-   the exact over-credit the retired `epEmitted - epPreProgram` subtraction is recorded for. So the razor is
-   published as a FLOOR (`beyond`) with the undecidable population beside it, and a reader who wants one
-   number has the two that bound it.
-   `beyond` IS NAMED FOR THE PARSE AND NEVER FOR WHO RAN, which is why `reply-chunk` is in it: no line of the
-   page composed that address either, and the question this class answers is what a markup parse recovers.
-   A TIMING FLAG IS NOT ONE OF THESE AND CANNOT BE MADE INTO ONE. `pre_program` is WHEN and is a proxy for the
-   markup door in the FLATTERING direction — a `<head>` whose first `<script src>` runs before the parser
-   reaches the `<link>` below it mints that link POST-program. This column is the fact that proxy was standing
-   in for, and the two stay two: see `endpoint_reach_hist_json`. */
+/* What a markup parse of the served document reaches through a door: the door list's third column. Three
+   words, not two: `link-element`, `image-element` and `form-submit` are reached by parser-inserted and
+   script-created elements alike and the door does not record which, so a two-way split would have to guess,
+   and either guess mis-credits one population. `beyond` is named for what a markup parse reaches and never
+   for who ran, which is why `reply-chunk` is in it. This is a diagnostic, not the product's bar:
+   `endpoint_razor_class_of` composes the bar and does not read the reach. */
 #define ENDPOINT_REACHES(X)                                                                                  \
     /* a parse of the served bytes reaches every address through this door */                                \
     X(EPR_MARKUP, "markup")                                                                                  \
@@ -348,69 +150,42 @@ typedef enum {
 #define ENDPOINT_REACH_MEMBER(id, token) id,
     ENDPOINT_REACHES(ENDPOINT_REACH_MEMBER)
 #undef ENDPOINT_REACH_MEMBER
-    EPR_COUNT           /* the list's own end — dense by construction, for `EPD_COUNT`'s reason. THERE IS NO
-                           UNSTATED MEMBER HERE and that is not an omission: a reach is a property of the DOOR
-                           and is stated in the list below, so there is no producer who could forget one and
-                           nothing for a zero to mean. A door with no reach column is a compile error, which
-                           is a stronger refusal than the runtime one `EPD_UNSTATED` exists to make. */
+    EPR_COUNT           /* list end, dense. No unstated member: a reach is stated in the door list, so no
+                           producer can forget one, and a door without it does not compile. */
 } EndpointReach;
 
-/* THE ONE WIRE SPELLING OF A REACH, and `endpoint_door_token`'s severity for its reason: it runs once per
-   emitted census row in EVERY build, so a release build falling through would put whatever the register held
-   into a JSON key and publish a class name nothing decided. */
+/* The one wire token of a reach; a CHECK on a value outside the list, for endpoint_door_token's reason. */
 const char *endpoint_reach_token(int reach);
 
-/* WHAT A PARSE WOULD HAVE REACHED THROUGH A GIVEN DOOR — the list above, read through the list below, with no
-   second table anywhere. A door outside the list is a `CHECK` for `endpoint_door_token`'s reason exactly. */
+/* The reach of `door`, read off the door list's third column; a CHECK on a door outside the list. */
 int         endpoint_door_reach(int door);
 
-/* AND WHOSE BYTES THE ADDRESS WAS COMPOSED OUT OF — the FOURTH column of `ENDPOINT_DOORS`, and a DIFFERENT
-   question from the third one above it. `EPR_*` asks what a MARKUP parse reaches; this asks whether the bytes
-   the door hands this surface were in the DOCUMENT THIS ENGINE WAS SERVED at all, which is what CLAUDE.md
-   §What-the-tool-produces' HARD BAR is keyed on: "an address, a key or a value that NO PARSE of the served
-   bytes can state, because it exists only at run time".
-   IT IS A COLUMN BECAUSE THE PROSE FORM OF IT WAS WRONG IN THIS HEADER, WHICH IS A SHARPER REASON THAN THE
-   REACH COLUMN HAD. That one was two INCOMPLETE copies of a fact in two files; this one was a copy that named
-   the wrong SET, at the `ENDPOINT_ADDRESS_CLASSES` banner below — "`batch-part` and the three program doors
-   are the same shape" — of which `document-script` is `EPR_MARKUP` by this very list, so one header gave two
-   answers about one door, and `module-import` is the address CLAUDE.md names by hand as the one that "is
-   `beyond` and scores ZERO here". A third spelling stood at `endpoint_address_hist_json`'s residual and named
-   `endpoint_door_reach(door) == EPR_BEYOND`, which is `fetch`, `xhr` and `beacon` as well — "a JS AST parse
-   reads them off the text without running anything", in CLAUDE.md's own words. Three prose spellings of one
-   operand, three different sets, and only the one in `extension/popup.js` was right. A door added to
-   `ENDPOINT_DOORS` without this column does not compile, which is the whole of why it is here.
-   THE CONSERVATIVE MEMBER IS FIRST AND IS ZERO BY CONSTRUCTION, for `ENDPOINT_ADDRESS_CLASSES`' reason: a
-   door some later diff adds and forgets reads as the class that PROVES NOTHING, and the direction that
-   forgetting errs in is the one CLAUDE.md §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT rates as the invisible
-   one — which is exactly why the omission has to be a compile error rather than a safe default. */
+/* Whether the bytes a door hands this surface were in the document this engine was served at all: the door
+   list's fourth column and the door-side operand of the product's bar (an address, key or value no parse of
+   the served bytes can state because it exists only at run time). It differs from ENDPOINT_REACHES, which
+   asks what a markup parse reaches: `module-import` is `beyond`, yet its literal chunk URL stands in the
+   served scripts. The member that proves nothing is first and zero, and a door added without this column does
+   not compile. */
 #define ENDPOINT_DOOR_BYTES(X)                                                                      \
-    /* the address was composed out of the document this engine was served — its markup, or its own \
-       scripts. It claims NOTHING about whether a parse of those bytes states the address: that     \
-       depends on the VALUE, which is `ENDPOINT_ADDRESS_CLASSES`' question and not this one. */     \
+    /* the address was composed out of the served document, its markup or its own scripts. It      \
+       claims nothing about whether a parse of those bytes states the address; that depends on the  \
+       value, which is ENDPOINT_ADDRESS_CLASSES' question. */                                       \
     X(EPB_DOCUMENT,     "document")                                                                 \
-    /* …and the bytes reached this engine at RUN TIME from outside that document — today, a payload \
-       a reply carried (solver/reply_decode.c reads a Flight client reference's chunk list out of a \
-       response body, and "a route the user never navigated to still ships its chunk list in the    \
-       payload of the route they did"). No parse of the served document holds those bytes, so       \
-       such a row clears the hard bar WHATEVER its address class says — which is the half           \
-       `ENDPOINT_ADDRESS_CLASSES` structurally cannot reach, since the value is an ordinary         \
-       determined string by the time it arrives. */                                                 \
+    /* the bytes reached this engine at run time from outside that document — today a reply         \
+       payload, such as the Flight client reference chunk list solver/reply_decode.c reads. No      \
+       parse of the served document holds them, so such a row clears the bar whatever its address  \
+       class says. */                                                                               \
     X(EPB_OFF_DOCUMENT, "off-document")
 
 typedef enum {
 #define ENDPOINT_DOOR_BYTES_MEMBER(id, token) id,
     ENDPOINT_DOOR_BYTES(ENDPOINT_DOOR_BYTES_MEMBER)
 #undef ENDPOINT_DOOR_BYTES_MEMBER
-    EPB_COUNT           /* the list's own end — dense by construction, for `EPR_COUNT`'s reason, and with its
-                           reason for having NO unstated member: this is a property of the DOOR, stated in the
-                           door list, so there is no producer who could forget one and nothing for a zero to
-                           mean that the first member does not already say. */
+    EPB_COUNT           /* list end, dense; no unstated member, for EPR_COUNT's reason */
 } EndpointDoorBytes;
 
-/* WHOSE BYTES A GIVEN DOOR HANDS THIS SURFACE — the door list read through its fourth column, with no second
-   table anywhere. A door outside the list is a `CHECK` for `endpoint_door_reach`'s reason exactly: this runs
-   once per emitted row in EVERY build, so a release build falling through would classify a row under whatever
-   the register held and publish it as an answer to the product's own bar. */
+/* Whose bytes `door` hands this surface, read off the door list's fourth column; a CHECK on a door outside the
+   list, since a release fallthrough would answer the product's bar for a mechanism nothing named. */
 int         endpoint_door_bytes(int door);
 
 /* WHETHER THE RUN COMPOSED THIS ADDRESS OUT OF A VALUE IT HAD NOT DETERMINED, AND WHOSE UNKNOWN THAT VALUE
