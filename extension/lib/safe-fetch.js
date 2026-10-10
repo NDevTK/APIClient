@@ -1,189 +1,52 @@
-// safe-fetch.js — THE single external-fetch entry point for the analyzer.
-//
-// ALL external requests (lazy chunks, source maps, discovery probes, anything the
-// analyzer pulls off the network) go through safeFetch so the security invariants
-// live in ONE auditable place:
-//   • cookies OMITTED by default (credentials:"omit") — no credentialed exfiltration.
-//                        In CREDENTIALED mode (opts.credentialed) the user's cookies
-//                        ARE attached, so the bytes are the REAL authenticated ones
-//                        (the logged-in API surface) — but the reply is gated by
-//                        safeFetch's OWN SOP/CORS check (a host-permission fetch
-//                        bypasses the browser's; see below).
-//                        THE MODE HAS A CALLER: the custom browser's DOCUMENT LOAD.
-//                        CLAUDE.md §A-REAL-NAVIGABLE — "EVERY ONE OF THEM SENDS
-//                        COOKIES: safeFetch supports credentialed loads, and a
-//                        SAME-ORIGIN navigation carries them, exactly as a browser's
-//                        does" — so bridge.js's navigationLoad asks for them wherever
-//                        the address is same-origin with the BROWSER-STATED principal
-//                        of the document being loaded. A session-less tab models
-//                        nothing: not the person's browser and not a clean client.
-//   • GET only         — method is forced to GET: forced execution explores many
-//                        paths; a real POST/PUT/DELETE replay would mutate server
-//                        state. A well-designed server never mutates on GET, so even
-//                        the credentialed replay is side-effect-free; POST/PUT/DELETE
-//                        endpoints are only RECORDED by forced exec, never issued.
-//   • destructive-path — that "well-designed" is an ASSUMPTION about someone else's
-//     deny list          server, and RFC 9110 §9.2.1 Safe Methods makes it theirs to
-//                        honour rather than ours to verify. So a credentialed GET whose
-//                        path or query carries a session-ending or resource-destroying
-//                        token is REFUSED before it is sent: the one place this project
-//                        matches on a name, matching only to refuse, because an
-//                        accidental logout is a CSRF this tool commits against its own
-//                        user. See _destructiveToken for why the deny direction escapes
-//                        §RUN-DON'T-MATCH and what it may never be read as.
-//   • HTTP(S) only     — scheme must be http:/https:; file:/data:/blob:/chrome-
-//                        extension:/etc. are rejected so a crafted URL can't read
-//                        local/extension resources.
-//   • origin-relative  — the analyzer acts with the analyzed DOCUMENT's own origin,
-//     SSRF guard         passed PER CALL as opts.pageUrl (the browser's MessageSender
-//                        .url for THAT document, never `sender.tab.url`) —
-//                        never a shared global (concurrent grinds). NORMAL web rules:
-//                        a page may load cross-origin PUBLIC JS (CDN/imports) AND
-//                        a localhost/intranet page may fetch its OWN private
-//                        network (localhost->localhost). The ONLY thing blocked is
-//                        a PUBLIC page reaching the user's PRIVATE network via the
-//                        extension's host perms (confused-deputy). Replaces a
-//                        duplicated _isPublicScriptUrl that also left source-map/
-//                        discovery fetches unprotected.
-//
-// This is a DIRECT fetch from the offscreen document or its Web Worker — there is
-// NO service-worker relay. crossOriginIsolated / COEP `require-corp` does NOT block
-// fetch (it gates SharedArrayBuffer + high-res timers, and requires CORP only for
-// no-cors *subresources*); a CORS fetch with the extension's host_permissions
-// reaches any host straight from here. The only thing that ever blocked it was an
-// over-restrictive `connect-src` — the CSP must allow https:/http:.
-//
-// Returns a plain object { ok, status, statusText, headers (lowercased), body
-// (BYTES — a Uint8Array), urlList, computedType } — NOT a Response — so it is
-// identical in the offscreen document and the Worker. `computedType` is §4.2's
-// ESSENCE of what this function decided the resource IS, and it is on the record
-// because this is the zone that read the bytes: it is TOLD to the renderer, which
-// therefore never sniffs and never re-parses a raw header for a type of its own.
-//
-// THE BODY IS BYTES, AND THAT IS A LAYERING RULE RATHER THAN A TYPE PREFERENCE.
-// It was `await resp.text()`, which is Fetch §5.3 "Body mixin"'s `text()`, whose
-// steps are "to return the result of running consume body with this and UTF-8
-// decode". (§5.2 stood here and is "BodyInit unions", which EXTRACTS a body rather
-// than consuming one, so the number named the opposite direction.)
-// A decode is a SEMANTIC, and CLAUDE.md §Architecture
-// puts every semantic in the C engine and leaves this zone a BRIDGE, never logic —
-// so this chokepoint was running an algorithm that is not its, and running the
-// WRONG one: UTF-8 always, the response's charset ignored. HTML §8.1.4.2's "fetch a
-// classic script" says "let sourceText be the result of DECODING bodyBytes to
-// Unicode, using encoding as the fallback encoding", whose whole point is that the
-// `Content-Type` charset (Fetch §3.5's legacy extract an encoding) and a BOM decide
-// the decoder; the engine implements exactly that in core/loader/script_fetch.c, and
-// it was being handed bytes that algorithm's label had never touched. A
-// `charset=windows-1252` chunk arrived pre-mangled and there was no assert anywhere
-// downstream that could ever have caught it — the evidence was destroyed in
-// TRANSIT, so what the engine saw was a plausible string.
-// Nothing about the SECURITY invariants moves with it: SOP/CORS/PNA/method/
-// credentials are decided from the URL, the principal and the headers and never from
-// the body, and the one check that does read the body — CORB's sniff below — still
-// runs here, on these bytes, at the same point in this function. It decodes what it
-// needs for its own comparison, which is a check reading its evidence rather than a
-// transform applied to what crosses.
-// urlList is Fetch §2.2.6's RESPONSE URL LIST, and this is the ONLY zone that can
-// report it: the redirect chain exists here and nowhere else. §5.5 defines
-// `response.url` as its LAST item and says "The redirected getter steps are to
-// return true if this's response's URL list's size is greater than 1; otherwise
-// false", so an engine that never receives it cannot compute either — which is why
-// `redirected` was the literal false. The spec also says "Except for the first and
-// last URL, if any, a response's URL list is not directly exposed to script as that
-// would violate atomic HTTP redirect handling", and first + last is exactly what a
-// browser fetch exposes to US (the requested href and resp.url), so this list is
-// [requested] when nothing redirected and [requested, final] when something did —
-// the whole of what any caller may ever observe. A blocked or failed read reports
-// [requested]: the request URL is a fact even when the reply is not.
-// LOADED IN EXACTLY ONE PLACE — ast-worker.html, the offscreen document, after check.js. This line named a
-// second one ("ast-thread.js via importScripts") for a file that is not on disk and has no jsaudit row, which
-// is the stale-pointer failure mode: it reads as authoritative while describing a tree that no longer exists,
-// and here it also describes the wrong ENVIRONMENT — the DCHECK below is only defined because check.js is the
-// FIRST script that page loads, and a worker reached by importScripts would have had none.
-// CORB/ORB for a SCRIPT-LIKE destination (Fetch §2.2.5): a `<script src>`, an
-// injected script or an import() becomes executable code under QuickJS control, so
-// the response must be JS-typed (or same-origin) — never a cross-origin HTML/JSON/etc.
-// DATA body read as code. Lives here (the chokepoint) so every code-loader gets it and
-// a new one can't forget it — and the class is now read off the REQUEST rather than
-// from a keyword the caller had to remember, which is what a caller did forget.
-//
-// TYPE SNIFFING LIVES HERE, AND IT IS THE ONLY PLACE IN THE EXTENSION THAT SNIFFS.
-// CLAUDE.md §Architecture states it by name: "TYPE SNIFFING STAYS IN JAVASCRIPT, in
-// `safeFetch`, where SECURITY.md puts it." The four functions below — `_jsMime`,
-// `_corbProtectedMime`, the sniff, and the CORB rule that was `_corbAllowsScript` —
-// were taken out of this file into a C program that had never been compiled, and the
-// reasoning that took them — a migration mandate — is deleted; what a flow needs
-// MID-EXECUTION belongs in the engine, and this is not that. It is what the trusted zone decides
-// ONCE, between flows, about a reply it fetched, and the failure mode of getting it
-// wrong is a wrong answer rather than a corrupted heap.
-// SO THIS FILE ANSWERS THE QUESTION ONCE AND TELLS THE RENDERER WHAT IT DECIDED.
-// `computedType` on the record below is that statement, and it is the reason there
-// is no second sniffer downstream: `engine/host/solver/reply_decode.c` used to pull
-// the raw `Content-Type` off the header list and re-derive a type for itself, so two
-// zones were answering one question about one response and nothing made them agree.
-// The chokepoint that read the bytes is the one that may answer it, exactly as the
-// trusted zone — and never the untrusted engine — is what stamps a sender's origin
-// onto a delivered message.
-//
-// A REAL (tuple) origin — scheme://host[:port] — usable for same-origin and CORS.
-// An OPAQUE origin reports "null" (sandboxed iframe / data: / sandboxed doc) or
-// our minted "null:<uuid>" token (per-document, and for a mixed-origin buffer);
-// per the spec each opaque origin is UNIQUE, so it is NEVER same-origin with
-// anything — not even another "null". A real origin is the only form containing
-// "://"; "null" / "" / "null:<uuid>" do not, so this one test distinguishes them.
+/* safe-fetch.js — the single external-fetch entry point for the analyzer.
+   Every request the analyzer makes off the network (documents, lazy chunks, source maps, discovery probes)
+   goes through `safeFetch`, so its security invariants live in one auditable place:
+     • cookies omitted by default; in credentialed mode the reply passes this file's own SOP/CORS, because a
+       host-permission fetch bypasses the browser's;
+     • GET only, by a literal, with a caller-stated verb refused (`_refuseUnreadOptions`);
+     • a destructive-path deny list on credentialed requests not graded `observed` (`_destructiveToken`);
+     • http(s) only and no userinfo, so a crafted URL cannot read local or extension resources;
+     • origin-relative SSRF on the initial and the landed URL: a public page may not reach the person's private
+       network through the extension's host permissions, while a private page may reach its own;
+     • CORB by the request's destination, for every code loader at once;
+     • the per-origin egress policy (`_firingRefusal`), which decides whether an act may be spent at all.
+   It runs in the offscreen document (`ast-worker.html`, after `check.js`, which defines the asserts) and
+   verbatim in `engine/trusted.mjs`'s vm realm. It fetches directly: COEP requires CORP only of no-cors
+   subresources, so only an over-restrictive `connect-src` could block this CORS fetch. */
+/* Returns a plain record, not a Response, so both hosts read one shape: { ok, status, statusText, headers
+   (lowercased), body, urlList, computedType, refusal }.
+   The body is bytes. A decode is a semantic the engine owns: HTML §8.1.4.2's "fetch a classic script" decodes
+   "using encoding as the fallback encoding", with the `Content-Type` charset and a BOM deciding, so the engine
+   must receive what the server sent. No security decision reads a decoded body; CORB's sniff decodes only for
+   its own comparison.
+   `urlList` is Fetch §2.2.6's response URL list, which only this zone can report because the redirect chain
+   exists only here; it is [requested] or [requested, landed] (see `_urlList`).
+   Type sniffing lives here and nowhere else in the extension. What a flow needs mid-execution belongs in the
+   engine; this is a decision the trusted zone makes once about a reply it fetched, and `computedType` states
+   it to the renderer, so no zone downstream sniffs or re-parses a raw header for a type of its own. */
+/* A tuple origin (scheme://host[:port]) is usable for same-origin and CORS. An opaque origin reports "null",
+   or this zone's minted "null:<uuid>" token, and is unique, so it is same-origin with nothing, not even
+   another "null". Only a tuple origin contains "://", so this one test separates them. */
 function _isRealOrigin(o) { return typeof o === "string" && o.indexOf("://") > 0; }
-// The EMPTY byte sequence, which is what every blocked path's body is. It is not the
-// empty STRING: a caller that must tell "no bytes" from "bytes I cannot read" reads
-// `ok`/`status`, and a body is one type on every path this function has.
+/* The empty byte sequence every refusal's body is, so a body is one type on every path; a caller telling "no
+   bytes" from "bytes I cannot read" reads `ok` and `status`. */
 function _NO_BYTES() { return new Uint8Array(0); }
-/* ── WHAT A REFUSAL IS, GRADED BY THE ARM THAT MADE IT ───────────────────────────────────────────────────
-   A HOST THAT TURNS A REFUSAL INTO Fetch §5.6 "Fetch methods"' NETWORK ERROR IS TELLING THE FLOW THE SERVER
-   ANSWERED, AND FOR HALF THE ARMS BELOW THAT IS FALSE. §5.6 is explicit about what a network error becomes on
-   the page: "If response is a network error, then reject p with a TypeError and abort these steps" — so the
-   page's request RESUMES down its failure path, and every branch after that `catch` is then explored under a
-   fact about the origin that no observation supports. That is the plausible-datum defect at the level of the
-   solver's world model: nothing crashes, the arm is real code, and the report cannot tell it from an arm a
-   real failure reached.
-   THE DISCRIMINATOR IS NOT "PERMANENT VS TEMPORARY" AND IT IS NOT "PRE- VS POST-REQUEST". It is: WOULD A REAL
-   BROWSER, PERFORMING THIS SAME REQUEST, ALSO PRODUCE A NETWORK ERROR? Where it would, §5.6's answer is the
-   FIDELITY and not a fabrication — the browser half is spec-locked and a `file:` URL, a CORS failure and a
-   CORB-blocked script load all fail exactly this way in Chrome. Where no browser makes the refusal at all,
-   there is no fact to relay and the only honest thing this zone can say is nothing.
-     "network"  — a real browser refuses this same request, and Fetch §5.6's network error IS the answer.
-                  Fetch §4.3 "Scheme fetch" ends its switch with "Return a network error" (and says of `file:`
-                  "When in doubt, return a network error"); §4.10 "CORS check" failing makes §4.4 "HTTP fetch"
-                  "return a network error"; a private-network target is refused by the browser's own PNA and
-                  by CORS besides. The flow resumes down its failure path CORRECTLY.
-     "decline"  — THIS TOOL declined, and no browser is refusing anything. Forced execution builds requests no
-                  real client makes, and whether to spend an act on one is a POLICY (CLAUDE.md
-                  §A-REQUEST-CARRIES-THE-PROVENANCE), so a refusal here is this zone declining to ASK. There is
-                  no observation to hand back, and §@S says what that state is: search-not-yet-solved, a PARKED
-                  flow, never a verdict. The flow stays parked and fires the day the origin is widened.
-   WHY THERE IS NO THIRD WORD, WHICH IS A CONCLUSION AND NOT AN OMISSION. Two of the declines below are
-   PERMANENT — the destructive-path deny list has no widening, and no setting reopens it — so it is fair to
-   ask whether parking a flow on one for ever is a leak that needs an answer of its own. It is not, and the
-   arithmetic is the scheduler's: a parked flow burns no CPU and emits nothing, so the WFQ's reward term stops
-   paying it, `frontierWeight` (emit-per-visit) sinks it below productive and unrun work, and the disk share
-   sheds it as a strict suffix of the one value order. Nothing is truncated and nothing accumulates. What a
-   permanent decline owes the READER is not a third channel but the SENTENCE, and it already has one: the
-   reason travels in `statusText`, and `blocked-destructive:logout` and `blocked-signal:destination=value` say
-   different things to the person reading the stall — the second naming the ROW of their own control that
-   holds it, which is the whole of what a per-signal policy buys over a score. §Attacker-sources states the rest outright — a
-   derived-and-unfired request "is not a gap in the report, it IS the report".
-   WHAT A DECLINE DOES COST, NAMED HERE BECAUSE THIS IS WHERE IT IS DECIDED: the page's own `.catch(...)` arm
-   goes unexplored. That is a real loss and it is NOT an argument for the lie — an arm reached by fabricating
-   a network error is an arm explored under a false premise, which is worse than an unexplored one. The right
-   answer to it is a FORK (whether this request succeeds is unknown, so both arms are feasible), which is a
-   solver capability and not a thing a chokepoint may buy by mis-grading a refusal.
-   THE GRADE IS STAMPED BY THE ARM, WHICH IS WHAT MAKES THE WRONG PAIRING IMPOSSIBLE RATHER THAN DISCOURAGED.
-   `computedType` is on the record for the same reason — the zone that read the bytes is the one that may
-   answer what they are — and this is the zone that applied the rule, so it is the only one that knows which
-   rule fired without re-deriving it. A consumer that re-asked the policy would be writing a second copy of it,
-   and a consumer that MATCHED `statusText` would be writing that copy in a format nothing checks. */
-/* AND THE HEADER MAP IS STATED BY THE ARM RATHER THAN DEFAULTED HERE, because one arm legitimately has one:
-   a CORB refusal happens after the reply arrived and the headers ARE part of what was learned, while a
-   pre-request refusal has none because no response exists. `{}` at the pre-request arms is therefore the
-   positive statement "no response, therefore no headers" and not a hole this builder filled in. */
+/* What a refusal is, graded by the arm that made it. A host that turns a refusal into Fetch §5.6 "Fetch
+   methods"' network error ("reject p with a TypeError") resumes the page down its failure path under a fact
+   about the origin, so the grade answers one question: would a real browser performing this request also
+   produce a network error?
+     "network" — yes, and the network error is the faithful answer: Fetch §4.3 "Scheme fetch" ends "Return a
+                 network error", a failed §4.10 "CORS check" makes §4.4 "HTTP fetch" return one, and PNA and
+                 CORB refuse their cases. The flow resumes down its failure path correctly.
+     "decline" — only this tool refuses, because spending an act on a request no client makes is a policy
+                 question. There is no observation to hand back, so the flow parks, which is a search not yet
+                 solved and never a verdict, and fires the day the origin is widened.
+   A permanent decline (the deny list) needs no third word: a parked flow emits nothing, so the scheduler sinks
+   it, and the reason in `statusText` tells the reader which rule holds it. A decline costs the page's own
+   `.catch` arm, and the answer to that is a fork, never a fabricated network error. The grade is stamped by
+   the arm, so a consumer never re-derives the policy or matches `statusText`. */
+/* The header map is stated by the arm: a CORB refusal happens after the reply arrived and its headers are
+   part of what was learned, while a pre-request refusal has no response, so `{}` there is a statement. */
 var _REFUSAL_KINDS = ["network", "decline"];
 function _refused(kind, reason, urlList, headers) {
   DCHECK(_REFUSAL_KINDS.indexOf(kind) >= 0,
@@ -205,20 +68,11 @@ function _refused(kind, reason, urlList, headers) {
   return { ok: false, status: 0, statusText: reason, headers: headers, body: _NO_BYTES(),
            urlList: urlList, computedType: "", refusal: { kind: kind, reason: reason } };
 }
-/* THE SAME REFUSAL VALUE FOR A CALLER WHOSE REQUEST NEVER REACHES THE FETCH, WHICH IS THE OTHER HALF OF THE
-   FIRING QUESTION AND THE ONE THIS FILE ANSWERS BY ABSENCE. RFC 9110 §9.2.1 "Safe Methods" is half of whether
-   an act is spent and `_firingRefusal` is the other; this file enforces the method half STRUCTURALLY — it
-   hardcodes `method:"GET"` and reads neither `opts.method` nor `opts.body`, which is why a non-GET cannot be
-   issued here by any route — and that structure is exactly why nothing downstream can OBSERVE the answer.
-   SO IT WAS BEING RE-DERIVED IN BOTH HOSTS, which is the shape `_firingRefusal` was hoisted here to end. Each
-   held its own `if (method !== 'GET')` and each answered it differently: `engine/trusted.mjs` DECLINED (the
-   flow stays parked) and `bridge.js` returned Fetch §5.6's network error (the flow resumes down its failure
-   path having been told the server was unreachable, for a request nobody sent). One question, two answers,
-   neither of them the policy — and the grade is the policy's to give, so it is given here.
-   IT IS A DECLINE AND NOT A NETWORK ERROR: no browser refuses a POST. The address is DERIVED IN FULL AND
-   REPORTED, which §Attacker-sources says is not a gap in the report but IS the report, and the flow parks.
-   IT ANSWERS THE REFUSAL VALUE AND NOT A BOOLEAN, so a host that must tell somebody WHY cannot re-derive the
-   grade from a `false` — the same reason `_corbDeniesScript` and `_firingRefusal` answer grades. */
+/* The method half of the firing question, for a host whose request never reaches the fetch. This file
+   enforces RFC 9110 §9.2.1 "Safe Methods" structurally (it can only send GET), so nothing downstream can
+   observe the answer, and each host would otherwise re-derive it with its own grade. It is a decline: no
+   browser refuses a POST, the address is derived in full and reported, and the flow parks. It answers the
+   refusal value rather than a boolean, so a host can say why. */
 function safeFetchMethodRefusal(method) {
   CHECK(typeof method === "string" && method !== "",
         "safeFetchMethodRefusal was asked about " + JSON.stringify(method) + ", which is not a Fetch §2.2.1 " +
@@ -226,8 +80,8 @@ function safeFetchMethodRefusal(method) {
         "absent method would take the arm `GET` takes, which is the arm that spends the network");
   return method === "GET" ? null : { kind: "decline", reason: "blocked-method:" + method };
 }
-// HTML's JavaScript MIME TYPE list, and Chromium's CORB-PROTECTED set — the two
-// tables the CORB rule is stated over.
+// HTML's JavaScript MIME type list and Chromium's CORB-protected set: the two tables the CORB rule is stated
+// over.
 function _jsMime(m) {
   return m === "text/javascript" || m === "application/javascript" ||
     m === "application/ecmascript" || m === "text/ecmascript" ||
@@ -240,41 +94,23 @@ function _corbProtectedMime(m) {
     /\+xml$/.test(m) || m === "application/json" || /\+json$/.test(m) ||
     /^multipart\//.test(m);
 }
-// Fetch's DETERMINE NOSNIFF, over the `X-Content-Type-Options` value as "get a
-// header" has already joined the list's duplicates: "let values be the result of
-// getting, DECODING AND SPLITTING the header … if values[0] is an ASCII
-// case-insensitive match for `nosniff`, return true."
-// THIS WAS `indexOf("nosniff") >= 0` AND THAT IS A DIFFERENT ALGORITHM. A substring
-// test sets the flag for `foo, nosniff`, where the standard splits on U+002C, strips
-// HTTP whitespace and matches only the FIRST value — so that response was treated as
-// unsniffable here and is sniffable under Fetch, and a cross-origin body served
-// `text/plain` was refused to a code loader that a browser would have allowed. The
-// split is the whole fix and it belongs at the one place that reads the header.
+// Fetch's determine nosniff, over the `X-Content-Type-Options` value as "get a header" has already joined its
+// duplicates: "let values be the result of getting, decoding and splitting the header … if values[0] is an
+// ASCII case-insensitive match for `nosniff`, return true." Only the first comma-separated value counts, so
+// `foo, nosniff` is sniffable, as it is in a browser.
 function _determineNosniff(v) {
   if (typeof v !== "string") return false;   // absent header = §"values is null" = false
   return v.split(",")[0].replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "").toLowerCase() === "nosniff";
 }
-/* MIME Sniffing §6 "Matching a MIME type pattern", and the two of §7.1 "Identifying a resource with an unknown
-   MIME type"'s tables whose answers any reader of `computedType` can act on.
-
-   THIS IS A MIRROR OF `engine/host/browser/core/mime/mime_sniff.c` AND NOT A RIVAL TO IT, for the reason
-   `engine/host/check.h` is mirrored by `extension/check.js`: that component is inside the WASM sandbox and
-   this is the trusted zone, and no call crosses between them in either direction. CLAUDE.md §Architecture puts
-   the sniff HERE by name — "TYPE SNIFFING STAYS IN JAVASCRIPT, in `safeFetch`, where SECURITY.md puts it" —
-   while `mime_sniff.c` answers HTML §7.4.5's computed type for a NAVIGATION this engine is about to parse into
-   its own document, which its own header states is a C algorithm no host can answer instead. Neither can serve
-   the other, so the two carry the SAME spec citations and the SAME cell encoding: a reader repairing one can
-   find the other by grepping the section number, which is the only thing that keeps two mirrors from drifting.
-
-   ONE ARRAY CARRIES BOTH OF §6's COLUMNS — each cell is the pattern mask byte in bits 8-15 and the byte pattern
-   byte in bits 0-7 — and that is `mime_sniff.c`'s encoding kept for its reason rather than copied for
-   symmetry: §6's very first step is "Assert: pattern's length is equal to mask's length", and a pair of
-   hand-written arrays is the shape that assert exists to catch. With one array the two lengths cannot
-   disagree, so there is nothing here for an assert to check.
-
-   §5.2 "Reading the resource header" bounds what §7 LOOKS AT: "the number of bytes in buffer is greater than or
-   equal to 1445". It is not a truncation of the body — every byte still reaches the reader below and the
-   record still carries the whole sequence. */
+/* MIME Sniffing §6 "Matching a MIME type pattern", and the two tables of §7.1 "Identifying a resource with an
+   unknown MIME type" whose answers a reader of `computedType` can act on.
+   This mirrors `engine/host/browser/core/mime/mime_sniff.c` and is not a rival to it: that component is in
+   the WASM sandbox and answers HTML §7.4.5's computed type for a navigation the engine parses itself, this is
+   the trusted zone, and no call crosses between them. The two carry the same citations and the same cell
+   encoding, so a reader repairing one finds the other by section number.
+   One array carries both of §6's columns (mask byte in bits 8-15, pattern byte in bits 0-7), so §6's first
+   step, "Assert: pattern's length is equal to mask's length", holds by construction.
+   §5.2 "Reading the resource header" bounds what §7 looks at to 1445 bytes; it does not truncate the body. */
 var _MS_RESOURCE_HEADER_MAX = 1445;
 
 /* §6.1 "Matching an image type pattern" — the table in the standard's own row order, which is also the order
@@ -297,10 +133,9 @@ var _MS_ARCHIVE = [
   { cells: [0xFF52, 0xFF61, 0xFF72, 0xFF21, 0xFF1A, 0xFF07, 0xFF00], type: "application/x-rar-compressed" }
 ];
 
-/* §6's PATTERN MATCHING ALGORITHM, given a byte sequence and one row's packed pattern-and-mask.
-   §6's STEPS 3 AND 4 ARE ABSENT AND THAT IS THE TABLES' OWN STATEMENT RATHER THAN A SHORTCUT: they advance past
-   the `ignored` set, and every row of §6.1 and §6.4 prints that column as None — so `s` never moves ahead of
-   `p` and the two indices are one. A table with a non-empty ignored column may not be walked by this. */
+/* §6's pattern matching algorithm over one row's packed cells. Steps 3 and 4 advance past the `ignored` set,
+   and every row of §6.1 and §6.4 states that column as None, so the two indices are one; a table with an
+   ignored column may not be walked by this. */
 function _msPatternMatch(input, cells) {
   var p, masked;
   if (input.length < cells.length) return false;                        // step 2
@@ -317,69 +152,34 @@ function _msTable(rows, header) {
     if (_msPatternMatch(header, rows[i].cells)) return rows[i].type;
   return null;
 }
-/* §7.1's IMAGE STEP THEN ITS ARCHIVE STEP, in the standard's own order, and `null` where neither answers.
-
-   NAMED RESIDUAL — WHAT IS NOT COVERED IS A PROPERTY AND NOT A LIST OF INPUTS: every row of §7.1 other than the
-   two tables above. That is §6.2 "Matching an audio or video type pattern" with its three signature
-   sub-algorithms, §7.1's sniff-scriptable table, its PostScript-and-BOM table, and its closing
-   contains-no-binary-data-bytes fall-through; and, one level up, §7's steps 1, 4 and 5-6. Where neither table
-   answers, `_computedType` returns the answer it returned before this existed, so the code is CORRECT for what
-   it decides and NARROWER than §7 — never a different answer from it. The two tables may be walked alone
-   because no row of §7.1 that precedes them can match a byte sequence either of them matches: the scriptable
-   table's rows all open 0x3C, its other table's open 0x25, 0xFE, 0xFF 0xFE or 0xEF, and the only image row
-   opening 0xFF is 0xFF 0xD8 0xFF.
-
-   WHAT THE NEXT DIFF BUILDS is §6.2's table and its §6.2.1 MP4, §6.2.2 WebM and §6.2.3 MP3-without-ID3
-   signature algorithms, mirrored from `mime_sniff.c` (GREPPED there as `sniff_av_pattern` and its helpers) —
-   AND §7.1's PostScript-and-BOM table IN THE SAME DIFF, which is an ordering constraint rather than a
-   preference: §6.2.3 finds an MP3 frame by a sync whose first two bytes are 0xFF and any byte with its top
-   three bits set, and §7.1's UTF-16LE BOM row is 0xFF 0xFE, which satisfies that sync — so §6.2 landed without
-   the BOM row in front of it computes `audio/mpeg` for a UTF-16LE text document. §7.1 orders the BOM table
-   first for exactly this reason and the order is the algorithm.
-
-   HOW ITS ABSENCE WOULD SHOW, as an OBSERVATION and never as an instance: an endpoint record on the @RESULT
-   surface for an address whose reply carried no `Content-Type` at all, or one of §7 step 2's three unknown
-   essences, and whose first bytes match a §6.2 audio-or-video pattern — the learned surface naming as an API
-   a resource whose own bytes are a media stream, with the reply's header list beside it saying no server
-   named it anything. */
+/* §7.1's image step then its archive step, in the standard's order, and null where neither answers.
+   Named residual. Not covered: every other row of §7.1 — §6.2 "Matching an audio or video type pattern" with
+   its signature algorithms, the sniff-scriptable table, the PostScript-and-BOM table and the
+   no-binary-data fall-through — and §7's steps 1, 4 and 5-6. The two tables may be walked alone because no
+   earlier row of §7.1 can match what they match (the scriptable rows open 0x3C, the other table's 0x25, 0xFE,
+   0xFF 0xFE or 0xEF, and the only image row opening 0xFF is 0xFF 0xD8 0xFF). Next diff: §6.2's table and its
+   §6.2.1 MP4, §6.2.2 WebM and §6.2.3 MP3-without-ID3 algorithms, mirrored from `mime_sniff.c`'s
+   `sniff_av_pattern`, together with §7.1's PostScript-and-BOM table, because §6.2.3's MP3 sync matches the
+   UTF-16LE BOM 0xFF 0xFE and §7.1 orders the BOM table first. Its absence shows as an endpoint record whose
+   reply carried no `Content-Type` (or an unknown essence) and whose bytes are a media stream. */
 function _msUnknownTypePattern(header) {
   var m = _msTable(_MS_IMAGE, header);
   if (m) return m;
   return _msTable(_MS_ARCHIVE, header);
 }
 
-// CORB's own sniff, over BYTES — the check decoding the evidence it judges, which is
-// what Chrome's ORB does too (it attempts a JSON parse of the body). The head is
-// decoded first and the whole body only in the branch that actually needs it, so a
-// multi-megabyte JS chunk (which starts with none of `<`, `{`, `[`) costs one 4 KiB
-// decode rather than a full one.
-// IT ANSWERS WHICH SHAPE IT MATCHED RATHER THAN A BARE BOOLEAN, and that is the one
-// change on top of what stood here. Both arms already KNEW: the `{`/`[` arm ran the
-// real JSON parser and only returns having been told yes, so naming that answer
-// `application/json` invents nothing. The markup arm names NO type — a leading `<` is
-// markup and CORB protects it, but no standard says which markup a bare `<` is, and
-// answering `text/html` for `<?xml` or `<svg` would be a stamp nobody could trust.
-// `protected` is what the CORB rule reads and `type` is what the record below
-// carries, out of ONE pass over the bytes.
-// AND IT NOW RUNS FOR EVERY RESPONSE AND NOT ONLY A SCRIPT LOAD, because the record
-// states a type for every response. The two JSON attempts are therefore ordered HEAD
-// FIRST, which is free: the version that stood here parsed the WHOLE body and fell
-// back to the head in its catch, so the ANSWER is "either parses" either way, and
-// asking the head first means a body that fits in 4 KiB — which is most JSON an API
-// returns — is never parsed twice and a large one costs exactly what it cost before.
-// AND THE THIRD FIELD IS MIME Sniffing §7.1's, WHICH IS A THIRD QUESTION OVER THIS ONE PASS AND NOT A
-// WIDENING OF EITHER ANSWER ABOVE. `protected` is CORB's — may these cross-origin bytes reach a code loader —
-// and `type` is `did the bytes contradict a label this zone acts on`, which is why its only non-null value is
-// `application/json` and why `_computedType` lets it OVERRIDE a declared essence. Neither is MIME Sniffing
-// §7 "Determining the computed MIME type of a resource", and `unknownType` is: it is that algorithm's step 2
-// arm, the one case where the standard lets the BYTES name a resource the server did not. Three questions,
-// one fact, one pass — CLAUDE.md's own cure for a predicate answering two, which this file already applies at
-// `_isScriptLike` / `_isSubresource` over the destination string.
-// IT IS COMPUTED OVER §5.2 "Reading the resource header"'s BYTES AND NOT OVER THE DECODED HEAD `h`, because
-// §6.1's and §6.4's rows all state their leading-bytes-to-be-ignored column as None: a whitespace skip here
-// would match a pattern at an offset the standard does not look at.
+// CORB's own sniff, over bytes: a check decoding the evidence it judges, as Chrome's ORB does (it attempts a
+// JSON parse). The head is decoded first and the whole body only where the head starts like JSON and does not
+// parse, so a large JS chunk costs one 4 KiB decode and most API JSON is parsed once.
+// It answers three questions from one pass. `protected` is CORB's: may these cross-origin bytes reach a code
+// loader (markup and JSON may not). `type` is whether the bytes contradict a label this zone acts on, so its
+// only non-null value is `application/json`, which the real parser confirmed; a leading `<` names no type,
+// since no standard says which markup it is. `unknownType` is MIME Sniffing §7 "Determining the computed MIME
+// type of a resource"'s step 2 arm, the one case where the bytes may name what the server did not; it is
+// computed over §5.2 "Reading the resource header"'s raw bytes, because §6.1's and §6.4's rows ignore no
+// leading bytes.
 function _sniff(bytes) {
-  var dec = new TextDecoder("utf-8");   // strips a UTF-8 BOM, exactly as resp.text() did
+  var dec = new TextDecoder("utf-8");   // strips a leading UTF-8 BOM
   var hdr = bytes.subarray(0, _MS_RESOURCE_HEADER_MAX);
   var unknown = _msUnknownTypePattern(hdr);
   var h = dec.decode(bytes.subarray(0, 4096)).replace(/^﻿/, "").replace(/^\s+/, "");
@@ -396,37 +196,19 @@ function _sniff(bytes) {
   }
   return { protected: false, type: null, unknownType: unknown };
 }
-// WHAT THIS RESPONSE IS, AS ONE STATEMENT THE RENDERER IS TOLD. MIME Sniffing §4.2 "MIME type
-// miscellaneous"'s ESSENCE — the type, a solidus, the subtype — of the server's
-// `Content-Type` when it stated one, and what the bytes say when it did not or when
-// they contradict it. The empty string is MIME Sniffing §5.1 "Interpreting the resource
-// metadata"'s "the supplied MIME type is undefined" surviving the sniff: the
-// server named nothing and the bytes named nothing either, which is a POSITIVE
-// answer and not a hole (a reader that must distinguish it reads it as absent, the
-// way `mime_type_extract` reads a null header).
-// NOSNIFF IS FINAL. The server has said its label is the last word, so this returns
-// the essence unchanged whatever the body looks like — the same sentence that stops
-// the CORB rule below from sniffing past it.
+// What this response is, as one statement the renderer is told: MIME Sniffing §4.2 "MIME type
+// miscellaneous"'s essence of the server's `Content-Type` when it stated one, and what the bytes say when it
+// did not or when they contradict it with JSON. The empty string is MIME Sniffing §5.1 "Interpreting the
+// resource metadata"'s "the supplied MIME type is undefined" surviving the sniff: a positive answer that
+// neither the server nor the bytes named a type. Nosniff is final: the server's label is returned unchanged.
 //
-// AND A DECLARED TYPE THE BYTES CONTRADICT IS THE SERVER'S TO NAME, WHICH IS THE ONE THING A READER OF THIS
-// FUNCTION KEEPS RE-DERIVING BACKWARDS. MIME Sniffing §7 "Determining the computed MIME type of a resource"
-// reaches the bytes at exactly three of its nine steps — step 2 (the supplied type is undefined or unknown),
-// step 4 (the check-for-apache-bug flag), and steps 5-6 (the supplied type is already an image or an
-// audio-or-video type the user agent renders, where the bytes only REFINE it within its own group) — and its
-// last step is "The computed MIME type is the supplied MIME type." So a PNG served `text/plain` computes
-// `text/plain` IN EVERY BROWSER, and a classifier that answers `image/png` for it is not a more faithful
-// sniff, it is a different question. THAT IS WHY `classifyResponseAsset` IN `extension/lib/discovery.js` IS
-// NOT ROUTED TO FROM HERE AND MUST NOT BE: its own header says magic bytes are authoritative and the header is
-// a weaker cross-check, which is the correct rule for the question IT asks (has this captured body a schema
-// worth extracting) and the inverse of §7 for the question this one answers. Its answer set says so on its
-// face — it returns `opaque-cross-origin`, `binary-structured` and `font/woff2`, of which the first two are
-// not MIME types at all and the third is one §7 CANNOT PRODUCE FROM BYTES, since §7.1 runs §6.1, §6.2 and
-// §6.4 and never §6.3 "Matching a font type pattern", which only §8.7 "Sniffing in a font context" invokes.
-// A browser never sniffs a font, so a font-typed record here can only ever come from a server that declared
-// one, and that is faithful rather than a gap.
-// RETIREMENT: this paragraph goes when the two classifiers cannot be confused — when the asset verdict the
-// @H surface acts on is a field of its own beside `computedType` rather than `solver/reply_decode.c`'s
-// `is_asset` asked of §7's answer, at which point one of them stops being a candidate to route to.
+// A declared type the bytes contradict is otherwise the server's to name. MIME Sniffing §7 reaches the bytes
+// only at step 2 (undefined or unknown type), step 4 (the apache-bug flag) and steps 5-6 (refining an image or
+// audio-or-video type), and its last step is "The computed MIME type is the supplied MIME type", so a PNG
+// served `text/plain` computes `text/plain` in every browser. That is why `extension/lib/discovery.js`'s
+// `classifyResponseAsset`, where magic bytes are authoritative for a different question (is this body worth
+// extracting a schema from), must not be routed to from here. §7 never sniffs a font: §6.3 "Matching a font
+// type pattern" is invoked only by §8.7 "Sniffing in a font context".
 function _computedType(declared, nosniff, sniff) {
   var mime = String(declared == null ? "" : declared).split(";")[0].trim().toLowerCase();
   DCHECK(sniff !== null && typeof sniff === "object" &&
@@ -435,28 +217,20 @@ function _computedType(declared, nosniff, sniff) {
          "arm, as `null` for a resource whose bytes match no pattern it walks, so an absent one is a SECOND " +
          "sniff from somewhere else and the arm below would silently take the answer that has no bytes " +
          "behind it");
-  // §7 STEP 2, AND IT IS ASKED BEFORE STEP 3's NOSNIFF BECAUSE THE STANDARD ASKS IT THERE: "If the supplied
+  // MIME Sniffing §7 step 2, asked before step 3's nosniff because the standard asks it there: "If the supplied
   // MIME type is undefined or if the supplied MIME type's essence is "unknown/unknown", "application/unknown",
   // or "*/*", execute the rules for identifying an unknown MIME type with the sniff-scriptable flag equal to
-  // the inverse of the no-sniff flag and abort these steps." A server that sent `nosniff` and NO
-  // `Content-Type` has not named a label for nosniff to make final, so the flag narrows WHICH of §7.1's tables
-  // may run rather than stopping the algorithm — and neither of the two tables walked here is in the
-  // sniff-scriptable half, so both run under either setting and the flag has nothing to gate yet. The day
-  // §7.1's first table lands, that gate lands with it: the DCHECK below is what makes forgetting it loud.
-  // THE QUOTATION IS IN A LINE COMMENT AND NOT IN THE BLOCK ONES EITHER SIDE OF IT BECAUSE OF WHAT IS IN IT:
-  // the step's third essence is U+002A U+002F U+002A, which closes a block comment, so `mime_sniff.c` writes
-  // that essence out in prose and says it cannot be written in a C comment. It can be written here, and a
-  // quotation that PARAPHRASES the one token a reader would grep for is the mis-transcription CLAUDE.md
-  // §Browser half rates as worse than no quotation — this one was caught by the citation audit reading it.
+  // the inverse of the no-sniff flag and abort these steps." So nosniff with no `Content-Type` narrows which of
+  // §7.1's tables may run rather than stopping the algorithm; neither table walked here is in the
+  // sniff-scriptable half, so the flag gates nothing yet, and the DCHECK below makes that loud the day one is.
+  // This quotation is in line comments because its third essence would close a block comment.
   if (!mime || mime === "unknown/unknown" || mime === "application/unknown" || mime === "*/*") {
     if (sniff.unknownType) {
-      /* NOT A VACUOUS ASSERT: it cannot fail over the two tables above, and it is exactly constructible over
-         the next diff those tables name. §7.1's sniff-scriptable table returns `text/html`, `text/xml` and
-         `application/pdf`, every one of which is a CORB-protected or scriptable type, and §7.2's own note is
-         that these rules must "never determine the computed MIME type to be a scriptable MIME type, as this
-         could allow a privilege escalation attack". `computedType` is read by `solver/engine.c` to decide
-         whether a reply's bytes are QUEUED AS A PROGRAM, so a row added here without §7.1's flag in front of
-         it is that escalation with this engine's own compiler on the end of it. This fires there instead. */
+      /* It cannot fail over the two tables above and can over the next ones: §7.1's sniff-scriptable table
+         returns `text/html`, `text/xml` and `application/pdf`, and §7.2's note says these rules must "never
+         determine the computed MIME type to be a scriptable MIME type, as this could allow a privilege
+         escalation attack". `solver/engine.c` reads `computedType` to decide whether reply bytes are queued
+         as a program, so a row added without §7.1's flag would be that escalation; this fires instead. */
       DCHECK(!_jsMime(sniff.unknownType) && !_corbProtectedMime(sniff.unknownType),
              "§7.1's unknown-type sniff answered `" + sniff.unknownType + "`, which is a JavaScript or a " +
              "CORB-protected type — the tables walked here are §6.1's and §6.4's and neither can produce one, " +
@@ -467,181 +241,56 @@ function _computedType(declared, nosniff, sniff) {
   }
   if (nosniff) return mime;
   if (!mime) return sniff.type || "";
-  // The bytes contradict the label: a JSON body under `text/plain` or under a
-  // JavaScript type is JSON, and saying so is what lets the reply be LEARNED from
-  // rather than skipped as whatever the server mislabelled it.
+  // The bytes contradict the label: a JSON body under `text/plain` or a JavaScript type is JSON, and saying so
+  // lets the reply be learned from rather than skipped as whatever the server mislabelled it.
   if (sniff.type && sniff.type !== mime) return sniff.type;
   return mime;
 }
-// THE PRINCIPAL COMPARISON USED TO LIVE HERE, as `_corbSameOrigin(scriptUrl, pageOrigin)`,
-// and it is GONE rather than moved: it re-parsed the landed address under a `catch` of its
-// own to re-derive an origin the request path had already computed, which made it a THIRD
-// answer to "is the resource same-origin with the page principal" beside the credentialed
-// gate's. `_resourceSameOrigin`, computed once beside `_finalOrigin` and read by both
-// gates, is that one answer — see the paragraph that computes it for why one is the whole
-// point and for the reasoning this comment used to carry.
-// CORB FOR A SCRIPT LOAD, over the facts already computed above so nothing here
-// re-reads a header or re-decodes a body. Answers the RULE THAT REFUSED, or null for
-// allowed — because "blocked" alone sends whoever reads the status message hunting
-// for which of four rules fired, and the four are not interchangeable.
-// IT WAS `_corbAllowsScript`, RETURNING A BOOLEAN, and the name is renamed with the
-// return rather than kept over it: a function called "allows" that answers a deny
-// reason reads correctly at exactly zero of its call sites. Every rule below is the
-// one that stood in that function, in the order it stood in.
-// IS THIS REQUEST'S DESTINATION SCRIPT-LIKE — Fetch §2.2.5 "Requests": "A request's
-// destination is script-like if it is `audioworklet`, `paintworklet`, `script`,
-// `serviceworker`, `sharedworker`, or `worker`." That predicate IS the CORB question
-// this file asks, so it is asked in the spec's own words instead of being restated as
-// a bespoke load-type keyword: the caller passes the destination the ENGINE put on
-// the request (solver/engine.h), and this decides.
-// `xslt` IS DELIBERATELY NOT IN IT, and the spec's own note is why rather than an
-// oversight: it says algorithms using script-like "should also consider `xslt` as that
-// too can cause script execution", and considering it here yields exclusion — the rule
-// below is `the body must be JAVASCRIPT-TYPED or same-origin`, and an XSLT stylesheet
-// is XML, so requiring a JS MIME of one would refuse every correct response. The day
-// this engine loads an XSLT stylesheet it needs its own rule, not this one.
+// Is this request's destination script-like, in Fetch §2.2.5 "Requests"' own words: "A request's destination
+// is script-like if it is `audioworklet`, `paintworklet`, `script`, `serviceworker`, `sharedworker`, or
+// `worker`." That predicate is the CORB question, asked of the destination the engine put on the request.
+// `xslt` is deliberately outside it: the spec's note says such algorithms "should also consider `xslt` as that
+// too can cause script execution", and considering it here yields exclusion, because this rule demands a
+// JavaScript MIME type and an XSLT stylesheet is XML. Loading XSLT needs its own rule.
 function _isScriptLike(d) {
   return d === "audioworklet" || d === "paintworklet" || d === "script" ||
     d === "serviceworker" || d === "sharedworker" || d === "worker";
 }
-// AND IS THIS REQUEST A SUBRESOURCE OF THE DOCUMENT — A SECOND QUESTION ASKED OF THE
-// SAME FACT, which is CLAUDE.md's own cure for a predicate answering two questions and
-// not a second spelling of the one above: the destination STRING is the fact, and each
-// of these is a QUESTION asked of it, so the two cannot come to disagree about a chunk
-// the way two answers to one question could. `_isScriptLike` answers CORB's — may this
-// reply be ingested as CODE — and stays exactly the spec's list. This one answers the
-// EGRESS question, which CLAUDE.md §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS states as
-// whose ACT the request is rather than what its reply becomes.
-//
-// THE TWO AGREED WHILE A `<script src>` WAS THE ONLY SUBRESOURCE IN THE PERMITTED
-// GROUP, AND A `<link rel=stylesheet>` IS WHAT MADE THEM COME APART. Read by the CORB
-// predicate alone a stylesheet lands in the group that spends somebody else's server,
-// and the page then renders with UA defaults only — which is not a narrower answer but
-// a DIFFERENT DOCUMENT. The bit kept whatever the stricter question needed and the
-// looser one was refused with nothing anywhere to say it had been asked.
-//
-// IT IS FETCH §2.2.5 "Requests"' OWN subresource request MINUS THE EMPTY STRING, AND
-// THE MINUS IS THE DECISION RATHER THAN A TIDY-UP. §2.2.5 states the term verbatim: "A
-// subresource request is a request whose destination is audio, audioworklet, font,
-// image, json, manifest, paintworklet, script, style, text, track, video, xslt, or the
-// empty string" — and the empty string is what a `fetch()` and an XHR carry, since
-// §2.2.5 gives every request a destination and "unless stated otherwise it is the empty
-// string". So the standard's term AS WRITTEN admits every data request at every origin,
-// which is the whole per-origin opt-in deleted by one predicate: the same dangerous
-// spelling the arm list below already names as `{signal:"destination",value:"value"}`,
-// reached this time through a term the standard hands you rather than through a typo.
-// The departure is therefore stated HERE rather than inherited silently. A NON-EMPTY
-// subresource destination is one some element, stylesheet rule or DOM constructor in
-// the document NAMED; the empty one is page code asking for bytes directly, which is
-// the data fetch the default refuses.
-//
-// AND IT IS THE STANDARD'S POSITIVE LIST AND NEVER THE COMPLEMENT OF ITS OTHER ONE,
-// because §2.2.5's two terms DO NOT PARTITION its own enumeration: `webidentity` is in
-// neither, so a complement would have admitted a destination the standard declines to
-// call a subresource — silently, and on the widening side.
-//
-// NAMED RESIDUAL — WHAT IS NOT COVERED IS A PROPERTY AND NOT A LIST: a subresource the
-// document's own markup or its own running code names, whose §2.2.5 destination is the
-// EMPTY STRING. At this chokepoint such a request is not separable from the data fetch
-// the default refuses, because the destination is the only fact crossing the seam that
-// says what a request is FOR, and §2.2.5 gives that value to a `fetch()` and to a
-// page-declared subresource alike. The code above is CORRECT for what it decides and
-// NARROWER than the owner's sentence, which reaches every subresource; it is not a gap
-// to crash on, because the arm it feeds is a permission and the narrow answer is the
-// refusing one.
-// WHAT THE NEXT DIFF BUILDS is the PARK KIND on the pending line beside the
-// destination — the engine already separates a browser algorithm's subresource fetch
-// from a `fetch()`/XHR by kind, and that fact does not cross. GREPPED at
-// engine/host/solver/engine.c's `engine_pending_fetches`, which joins METHOD,
-// DESTINATION, INITIATOR, PROVENANCE, PINNED, CREDENTIALS and URL, and reads PEND_KIND
-// at exactly one line in that function, inside a DCHECK. A kind-derived token there
-// would say WHOSE ALGORITHM IS OWED THE REPLY, which is the egress question asked of a
-// fact the engine already holds, and the empty destination would stop having to stand
-// for two things. That phrasing is this file's own and carries no quotation marks on
-// purpose: a run shown as a SPELLING under a spec anchor is judged as a quotation of
-// that spec, which is how this very sentence was reported as a fabricated §2.2.5
-// quotation on the run before this one.
-// HOW ITS ABSENCE WOULD SHOW, as an OBSERVATION and never as an instance: a run whose
-// log carries a `blocked-signal:destination=value` refusal for an address the analysed
-// document's own markup declares — the refusal and the markup disagreeing about whose
-// act the request is, which is the one disagreement this predicate exists to end.
+// Is this request a subresource of the document: a second question asked of the same destination string, for
+// the egress policy (whose act the request is) rather than for CORB (may the reply run as code). The two part
+// at a stylesheet, which is CORB data and yet the page loading itself.
+// It is Fetch §2.2.5's subresource request — "a request whose destination is audio, audioworklet, font,
+// image, json, manifest, paintworklet, script, style, text, track, video, xslt, or the empty string" — minus
+// the empty string, and the minus is the decision: the empty string is what a `fetch()` and an XHR carry, so
+// the term as written would admit every data request at every origin. It is the positive list, never the
+// complement of another set, because §2.2.5's sets do not partition its enumeration (`webidentity` is in
+// neither).
+// Named residual. Not covered: a subresource the page's markup or code names whose destination is the empty
+// string, which this chokepoint cannot separate from a data fetch. Next diff: the park kind on the pending
+// line beside the destination (`engine_pending_fetches` joins method, destination, initiator, provenance,
+// pinned, credentials and URL), saying whose algorithm is owed the reply. Its absence shows as a
+// `blocked-signal:destination=value` refusal for an address the analysed document's own markup declares.
 function _isDocumentSubresource(d) {
   return d === "audio" || d === "audioworklet" || d === "font" || d === "image" ||
     d === "json" || d === "manifest" || d === "paintworklet" || d === "script" ||
     d === "style" || d === "text" || d === "track" || d === "video" || d === "xslt";
 }
-// FETCH §2.2.5 "Requests"' NAVIGATION REQUEST, AND IT IS HERE FOR THE REASON THE SUBRESOURCE
-// PREDICATE ABOVE IS: this file is the one that decides from the destination, and the standard already has
-// the term. §2.2.5 defines it as "A navigation request is a request whose destination is
-// `document`, `embed`, `frame`, `iframe`, or `object`", and that POSITIVE LIST is what this is, never a
-// complement — the argument the subresource predicate makes about `webidentity` being in neither of
-// §2.2.5's other two sets holds here too.
-//
-// WHAT IT CLOSES IS AN ACCIDENT AND NOT A GAP, WHICH IS WHY IT CHANGES NO VERDICT. A navigation used to
-// fall through both questions above and read `value`, so the ONLY thing keeping it out of the owner's data
-// arm was that arm's `witness: unpinned` conjunct answering `unstated` — and `unstated` is there
-// because a notice carries no witness mark, which is a fact about PLUMBING rather than a decision about
-// navigations. CLAUDE.md §A-REAL-NAVIGABLE says in as many words that the mark SHOULD travel
-// ("`engine_pinned_of_running_path()` exists; which arm it lands on is the owner's call"), so the day
-// somebody lands that plumbing — correct, owed, and not a policy diff — every derived child
-// navigable at every origin would START FIRING with nobody having decided it. That is the shape
-// CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS names at the one boundary where the consumer is the
-// PERSON: a permission whose reach moves when an unrelated field starts being stated.
-//
-// AND THE ROW'S OWN PROSE WAS ALREADY WRONG ABOUT IT, WHICH IS THE CHEAPEST EVIDENCE THAT THE VALUE WAS
-// DOING TWO JOBS: the destination signal says a `value` request "is this tool spending somebody else's
-// server", and a child navigable the analysed document's OWN MARKUP names is the page loading itself by
-// exactly the sentence the two arms above are drawn from. One value, two meanings, and the refusal's
-// stated reason was about the wrong question — §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS.
-//
-// WHERE IT IS ASKED CANNOT MATTER, AND THAT IS ASSERTED RATHER THAN ARGUED. §2.2.5's navigation set
-// is DISJOINT from the script-like set and from the subresource set — no destination is both — so
-// this question's position in the cascade cannot change any answer, which is what makes the two existing
-// values byte-identical after this diff. `_signalRegistryCheck` walks `_DESTINATION_TYPES` and DCHECKs it,
-// so the day a later edition of §2.2.5 moves a destination into two sets the host aborts at startup
-// instead of this paragraph being quietly false. It is asked LAST of the three regardless, because the two
-// above are the ones whose order IS load-bearing and the reason for theirs is written at the row.
-//
-// NO ARM NAMED `navigation` AND THAT WAS THE WHOLE OF THE VERDICT, AND IT IS REWRITTEN RATHER THAN DELETED
-// BECAUSE THE ARGUMENT IS SOUND AND A READER WILL RE-DERIVE IT FROM THE VALUE SPACE. It read: a value no arm
-// names is refused — the row above already relies on that property in the other direction — so an
-// unconfigured origin refuses a navigation exactly as it did before, and names the destination when it does;
-// whether a child navigable the page's own markup names SHOULD fire is the project owner's decision and is
-// open. THAT DECISION IS MADE, IN THE AFFIRMATIVE, and the arm at the end of `_DEFAULT_ARMS` is where it is
-// written: `destination=navigation` AND `actor=page` AND `provenance=derived`. What this predicate did was
-// make it ONE ARM rather than a question about what an unrelated plumbing fix would do, and that is exactly
-// what it bought.
-// AND THE HAZARD IT WAS WRITTEN AGAINST IS STILL CLOSED, WHICH IS THE FIRST THING A READER OF THE PARAGRAPHS
-// ABOVE WILL CHECK AND IS NOW TRUE FOR A SECOND REASON. The fear was that landing the witness mark for a
-// navigation — a correct, owed plumbing diff — would silently start firing every derived child
-// navigable with nobody having decided it. No arm a navigation can take reads the `witness` row at all: the
-// one that admits it names destination, actor and provenance, and the `provenance`/`doc-reach` arm names
-// neither. So the mark travelling changes NO firing outcome for any navigation at any setting; it changes
-// only the per-origin row a person sees, which they permit separately.
-// AND THE ARM THAT ALREADY FIRES A NAVIGATION IS UNTOUCHED, which is said here so nobody reads this as a
-// narrowing: the `observed` arm reads `provenance` and `doc-reach` and no destination, so the ambient seed
-// — which states both — still fires, and every document this tool opens still opens.
-// HOW ITS ABSENCE WOULD SHOW: a drive log whose navigation refusals read `blocked-signal:destination=value`
-// — the chokepoint naming a pinning question as its reason for refusing a document load.
-// RETIREMENT — MET BY A CONSTRUCTION, AND RE-KEYED RATHER THAN DELETED FOR THE REASON THE FIRST
-// PARAGRAPH GIVES. The condition read: this record goes when an arm names `navigation`, because the owner's
-// decision is then IN the table and the hazard this closes has a deliberate answer in front of it rather
-// than an absent field. An arm names it. What a reader re-derives from `_DESTINATION_TYPES` is the retired
-// argument and not the arm, so the wording stays.
-// RETIREMENT: this record goes when the DESTINATION VALUE a request computes is asserted against the arms
-// that can admit it — so a value this cascade produces and no arm can ever name is a host-startup
-// failure rather than a refusal a reader has to recognise — because the property this predicate relies
-// on is then checked rather than argued, at the one place both halves are in hand.
+// Fetch §2.2.5 "Requests"' navigation request: "A navigation request is a request whose destination is
+// `document`, `embed`, `frame`, `iframe`, or `object`", as the positive list. It gives a navigation its own
+// value instead of `value`, so whether a page-named child navigable fires is one arm of `_DEFAULT_ARMS`
+// (destination, actor and provenance) rather than a side effect of whether the witness mark travels: no arm
+// a navigation can take reads `witness`, so landing that plumbing changes no firing outcome. The observed arm
+// reads no destination, so the ambient seed still fires through it. The navigation set is disjoint from the
+// script-like and subresource sets, so its place in the cascade changes no answer; `_signalRegistryCheck`
+// asserts that.
 function _isNavigation(d) {
   return d === "document" || d === "embed" || d === "frame" || d === "iframe" || d === "object";
 }
-// FETCH §2.2.5 "Requests"' DESTINATION TYPE, ENUMERATED — "A destination type is one
-// of: the empty string, `audio`, `audioworklet`, `document`, `embed`, `font`, `frame`,
-// `iframe`, `image`, `json`, `manifest`, `object`, `paintworklet`, `report`, `script`,
-// `serviceworker`, `sharedworker`, `style`, `text`, `track`, `video`, `webidentity`,
-// `worker`, or `xslt`." It lives HERE, beside the script-like predicate that is a
-// SUBSET of it, because this file is the one that decides from the value; a second
-// table in a zone that only relays the field would be a copy that goes stale.
+// Fetch §2.2.5 "Requests"' destination type, enumerated: "A destination type is one of: the empty string,
+// `audio`, `audioworklet`, `document`, `embed`, `font`, `frame`, `iframe`, `image`, `json`, `manifest`,
+// `object`, `paintworklet`, `report`, `script`, `serviceworker`, `sharedworker`, `style`, `text`, `track`,
+// `video`, `webidentity`, `worker`, or `xslt`." It lives beside the predicates over it because this file is
+// the one that decides from the value.
 var _DESTINATION_TYPES = ["", "audio", "audioworklet", "document", "embed", "font", "frame", "iframe",
                           "image", "json", "manifest", "object", "paintworklet", "report", "script",
                           "serviceworker", "sharedworker", "style", "text", "track", "video",
@@ -786,8 +435,9 @@ function _actorOf(opts) {
    nothing reads `opts.method` or `opts.body`, so a caller stating a verb would otherwise get the reply to a
    GET attributed to its own request, a wrong answer worse than an absent one. That makes the `method` signal
    a fact about the transport with one value, which deleting the whole widening table would not change. The
-   general rule also refuses the retired `as` keyword. A closed set restates what the body reads, and the
-   drift direction is safe: an option added to the body and not here aborts on its author's first call. */
+   rule also refuses `as`, since the CORB class is the request's destination. A closed set restates what the
+   body reads, and the drift direction is safe: an option added to the body and not here aborts on its
+   author's first call. */
 var _SAFEFETCH_OPTIONS = ["pageUrl", "pageOrigin", "destination", "provenance", "pinned", "docReach",
                           "actor", "credentialed", "credentials", "headers", "signal", "onChunk"];
 /* Fetch §2.2.5 "Requests"' credentials mode — "which is `omit`, `same-origin`, or `include`" — the same three
