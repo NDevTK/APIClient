@@ -1098,6 +1098,9 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         if (!d) { JS_FreeValue(ctx, obj); JS_FreeValue(ctx, cb_result); return -1; }
         d->headers = JS_UNDEFINED;
         d->blob_entry = JS_UNDEFINED;
+        /* §2.2.5's record in its stated state before §5.4 steps 10-27 fill it; `js_mallocz` leaves its slots
+           holding the integer 0, which request_init_apply refuses. */
+        request_record_init(&d->rec);
         /* EVERY OWNED FIELD IS PLACED BEFORE THE FIRST STEP THAT CAN THROW — the failure path frees exactly
            what the record holds, so a field handed over late is one the teardown reads uninitialised. The
            signal is BUILT at the end of this stage, where §5.4 builds it. */
