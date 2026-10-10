@@ -9,6 +9,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
+#include "core/css/css_author_sheets.h"
 #include "core/css/css_cascade_pass.h"
 #include "core/layout/layout_job.h"   /* the record of the job whose activation holds the thread */
 
@@ -106,6 +107,49 @@ void css_cascade_record_release(CssCascadeRecord *r)
     r->tab = NULL;
     r->cap = 0;
     r->used = 0;
+    for (i = 0; i < r->author_n; i++) css_author_sheets_free(r->author[i]);
+    free(r->author);
+    r->author = NULL;
+    r->author_n = 0;
+    r->author_cap = 0;
+}
+
+bool css_cascade_pass_author_ask(const lxb_dom_node_t *root, struct CssAuthorSheets **out)
+{
+    CssCascadeRecord *r = layout_job_cascade();
+    size_t i;
+
+    DCHECK(root != NULL && out != NULL, "an author sheet set was asked for no root or with nowhere to put it");
+    if (r == NULL) return false;
+    for (i = 0; i < r->author_n; i++) {
+        if (css_author_sheets_root(r->author[i]) != root) continue;
+        *out = r->author[i];
+        return true;
+    }
+    return false;
+}
+
+bool css_cascade_pass_author_hold(struct CssAuthorSheets *sheets)
+{
+    CssCascadeRecord *r = layout_job_cascade();
+    size_t i;
+
+    DCHECK(sheets != NULL, "an author sheet set was offered to the record as nothing");
+    if (r == NULL) return false;
+    for (i = 0; i < r->author_n; i++)
+        DCHECK(css_author_sheets_root(r->author[i]) != css_author_sheets_root(sheets),
+               "a second author sheet set was offered for a root the record already holds one for — its one "
+               "caller asks before it builds");
+    if (r->author_n == r->author_cap) {
+        size_t cap = r->author_cap ? r->author_cap * 2 : 4;
+        struct CssAuthorSheets **grown = realloc(r->author, cap * sizeof *grown);
+
+        CHECK(grown != NULL, "css-cascade-pass-oom: the record's author sheet sets could not be grown");
+        r->author = grown;
+        r->author_cap = cap;
+    }
+    r->author[r->author_n++] = sheets;
+    return true;
 }
 
 bool css_cascade_record_is_held(void) { return layout_job_cascade() != NULL; }

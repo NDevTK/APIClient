@@ -98,6 +98,7 @@
 #include "core/dom/element.h"
 #include "core/dom/selector_match.h"
 #include "core/html/integer_microsyntax.h"   /* §4.3.11.1's `headingoffset` runs §2.3.4.2's rules for parsing non-negative integers */
+#include "core/css/css_author_sheets.h"   /* css-cascade-5 §6.2's author origin, one set per root */
 #include "core/css/css_cascade.h"
 #include "core/css/css_cascade_pass.h"   /* css-cascade-5 §4.2's answer, held by a layout job */
 #include "core/css/css_computed_value.h"
@@ -1286,30 +1287,13 @@ static void cssd_inline_collect(lxb_dom_element_t *el, const char *name, const c
  * sheet is a WRONG answer and not an approximate one — and why the index correspondence above is load-bearing
  * rather than a tidiness check: the layer is looked up BY the rule's position in the re-parse.
  *
- * IT IS REDONE PER READ ON PURPOSE, exactly as the element walk was: a cache would be shared state the flow
- * machinery does not swap, so a rule one arm inserted would decide another arm's computed values. Reading the
- * OBJECTS is what makes that per-flow rather than merely uncached — the sheet list is an Array on the root's
- * wrapper and the rules are an Array on the sheet's record, so both are the running flow's own.
+ * The emission is core/css/css_author_sheets.h's set, which a layout job holds per root and which is
+ * otherwise built per resolution. Reading the OBJECTS keeps it per-flow: the sheet list is an Array on the
+ * root's wrapper and the rules are an Array on the sheet's record, so both are the running flow's own.
  *
  * THE MATCH ITSELF IS core/dom/selector_match.c's, which is where the agent's one lxb_selectors_t lives. This
  * file held a second one, so "does this element match this selector" had two implementations that could
  * disagree — and the arena is scratch either way: the match cleans its own pools before it returns. */
-
-/* The sheet's serialization, rebuilt from its RULE OBJECTS, with the css-cascade-5 §6.4.3 "Layer Ordering"
-   cascade layer of every rule that went into it — NOT CSSOM §6.4.3, which is The CSSStyleRule Interface and is
-   what a §6.4.3 means everywhere else in this file.
-   THE FLATTENING IS core/css/css_rule.h's, because deciding which rules apply is CSSOM §6.4's business
-   and not this file's: a conditional group rule contributes its children only when its condition holds, so what
-   the matcher re-parses is not the sheet's top level at all — and neither is the layer a rule is in something a
-   flat text could carry. */
-static bool cssd_sheet_view(JSContext *ctx, JSValueConst sheet, CssLayerOrder *order, CssRuleCascadeSheet *out)
-{
-    JSValue rules = css_style_sheet_rules(ctx, sheet);
-    bool ok = css_rule_cascade_sheet(ctx, rules, order, out);
-
-    JS_FreeValue(ctx, rules);
-    return ok;
-}
 
 /* ---- THE SHEET, PARSED ONCE PER CONTENT -----------------------------------------------------------------
  *
@@ -1350,10 +1334,8 @@ static bool cssd_sheet_view(JSContext *ctx, JSValueConst sheet, CssLayerOrder *o
  * at any instant changes no answer. It is the re-derivable tier of §Time-travel-resume rather than a cap or
  * a floor.
  *
- * WHAT IT DOES NOT REMOVE, STATED BECAUSE A READER WILL EXPECT IT TO: the EMISSION. `css_rule_cascade_sheet`
- * still walks every rule object of every sheet on every ask, because the emission is what produces the key
- * — there is no cheaper fingerprint of a flow's rule objects than the text they serialize to. What goes is
- * the arena create, the full CSS parse of that text, and the arena destroy.
+ * The emission that is the key is core/css/css_author_sheets.h's, built once per root by a layout job; what
+ * this table removes is the arena create, the full CSS parse of that text, and the arena destroy.
  *
  * THE ROUND-TRIP ASSERTIONS ARE UNWEAKENED AND STILL RUN PER ASK, which is worth saying because a cached
  * parse sounds like it would move them: they live in the rule-matching loop below, which walks the cached
@@ -1495,76 +1477,24 @@ static bool g_collecting_sheets = false;
    so a collector that kept only a running best would have thrown away exactly what both need. `*pseq` is the
    document-order counter css-cascade-5 §6.1's Order of Appearance reads, carried across the sheets so it is one
    sequence and not one per sheet, and bumped per RULE so it also names the rule css-cascade-5 §7.3.6's
-   `revert-rule` removes. */
+   `revert-rule` removes.
+   NAMED RESIDUAL, the match per miss. Not covered: every rule of every held sheet is matched against `el`
+   once per (element, property) the record misses. Next: the job holds each element's matched rules. How its
+   absence shows: selector_match_node counts per descendant that are a multiple of the record's misses. */
 static void cssd_author_collect(lxb_dom_element_t *el, const char *name, const char *partner,
-                                CssCascade *cascade, CssLayerOrder *order, uint32_t *pseq)
+                                CssCascade *cascade, const CssAuthorSheets *sheets, uint32_t *pseq)
 {
     lxb_dom_node_t *self = lxb_dom_interface_node(el);
-    /* THE REALM IS THE ELEMENT'S OWN DOCUMENT'S, never the running one: the sheets hang off the root's WRAPPER,
-       and a wrapper belongs to the realm whose record owns that document. css_length.c's viewport DFAIL asks
-       for the same plumbing from the other end and names this entry. */
-    JSContext *ctx = document_realm_of(self);
-    JSValue sheets;
-    uint32_t ns = 0, si;
+    uint32_t k;
 
-    DCHECK(ctx != NULL,
-           "the author cascade was asked to resolve for an element whose document has NO REALM RECORD — the "
-           "author layer IS CSSOM §6.2's list of CSS style sheets, which lives on that document's root wrapper, so a "
-           "document nobody built a record for has no author style at all rather than an empty one. Give the "
-           "caller's document a record, or establish that this element cannot reach a computed value");
-    sheets = style_sheet_list_of(ctx, node_root(self));
-    if (!JS_IsArray(sheets)) { JS_FreeValue(ctx, sheets); return; }
-    {
-        JSValue len = JS_GetPropertyStr(ctx, sheets, "length");
-
-        JS_ToUint32(ctx, &ns, len);
-        JS_FreeValue(ctx, len);
-    }
-    for (si = 0; si < ns; si++) {
-        JSValue sheet = JS_GetPropertyUint32(ctx, sheets, si);
-        CssRuleCascadeSheet view = { NULL, NULL, 0 };
+    for (k = 0; k < css_author_sheets_count(sheets); k++) {
+        const CssAuthorSheet *sheet = css_author_sheets_at(sheets, k);
+        const CssRuleCascadeSheet *view = &sheet->view;
         lxb_css_stylesheet_t *sst;
 
-        DCHECK(css_style_sheet_is(sheet),
-               "CSSOM §6.2's list holds something that is not a CSS style sheet — its add is the one thing "
-               "that ever puts one in");
-        /* CSSOM §6.1's DISABLED FLAG — the FLAG is CSSOM §6.1's ("Either set or unset. Unset by default"), and CSSOM
-           §6.1.1 The StyleSheet Interface is only where the `disabled` ATTRIBUTE that sets and unsets it is
-           declared. This read is of the flag, so it cites the flag's own section; the number here was CSSOM
-           §6.1.1 beside a quotation mark, and the words inside those quotation marks appear NOWHERE IN CSSOM.
-           `sheet.disabled = true` and `<style disabled>`'s forwarding both land here, and until the cascade
-           read the objects neither could do anything at all. */
-        if (css_style_sheet_disabled(sheet)) { JS_FreeValue(ctx, sheet); continue; }
-        /* HTML §4.2.4.1 "Processing the media attribute"'s MUST, and it governs BOTH kinds of sheet in
-           this list rather than only the `<link>` that made it reachable: "if the link is an external
-           resource link, then the media attribute is prescriptive. The user agent must APPLY the external
-           resource when the media attribute's value matches the environment and the other relevant
-           conditions apply, and must not apply it otherwise."
-           A `<style media=print>` was already reaching this loop and cascading, which is the same wrong
-           answer through the other creator — CSSOM §6.1 gives a `<style>` sheet its media from the identical
-           content attribute, and CSS Cascade 5 §6.2 admits a declaration to the author origin only from a
-           sheet that applies. One question asked the same wrong way at two sites is one defect, so the
-           repair is here, at the one place both creators' sheets are read, rather than at whichever of them
-           was noticed. What made it REACHABLE at scale is the `<link>` arm: a real page's print rules ship in
-           a separate `media=print` sheet, and cascading one over a screen render is the difference between a
-           screenshot of the page and a screenshot of its printout.
-           THE `@media` AT-RULES INSIDE THE SHEET ARE A DIFFERENT QUESTION AND ARE ALREADY ANSWERED BELOW —
-           §4.2.4.1's own note says so ("the external resource might have further restrictions defined within
-           that limit its applicability. For example, a CSS style sheet might have some @media blocks. This
-           specification does not override such further restrictions"), so this gate is the OUTER one and
-           neither subsumes nor duplicates it. */
-        if (!css_style_sheet_media_matches(ctx, sheet)) { JS_FreeValue(ctx, sheet); continue; }
-        if (!cssd_sheet_view(ctx, sheet, order, &view)) { JS_FreeValue(ctx, sheet); continue; }
-        JS_FreeValue(ctx, sheet);
-        /* A SHEET CAN DECLARE LAYERS AND EMIT NO RULES — `@layer a, b;` alone is a whole sheet establishing an
-           order for the sheets after it — so the emptiness is tested on the emission and the walk that just
-           happened has already done the part that matters. */
-        if (!view.text) { css_rule_cascade_sheet_free(&view); continue; }
-        /* THE SELECTOR LISTS AND DECLARATION BLOCKS THIS EMISSION PARSES BACK TO, WHICH IS A PARSE ONLY
-           WHEN THIS SHEET'S EMISSION HAS CHANGED SINCE THE LAST ASK. See the parse table above for why a
-           served parse cannot be another flow's: the key is the emission's own BYTES, so a hit is a parse of
-           exactly what a miss would have parsed. */
-        sst = cssd_sheet_parsed(si, view.text, strlen(view.text));
+        /* The selector lists and declaration blocks this emission parses back to, which is a parse only when
+           this sheet position's emission has changed since the last ask (the parse table above). */
+        sst = cssd_sheet_parsed(sheet->si, view->text, strlen(view->text));
         if (sst && sst->root && sst->root->type == LXB_CSS_RULE_LIST) {
             lxb_css_rule_t *r;
             uint32_t back = 0;
@@ -1583,13 +1513,13 @@ static void cssd_author_collect(lxb_dom_element_t *el, const char *name, const c
                    right and shifts every layer after it, which is the silent version of the whole sheet
                    cascading in the wrong order. The layer entry is NULL for exactly the non-style rules the
                    emission writes (an `@namespace`), so the two questions answer each other. */
-                DCHECK(at_rule < view.n,
+                DCHECK(at_rule < view->n,
                        "a CSS style sheet's rules did not ROUND-TRIP: the rule objects serialized to a text "
                        "that parses back to MORE rules than went in. A rule holds the SERIALIZATION lexbor "
                        "produced for it, so re-parsing it must yield exactly what it came from — find which "
                        "rule's text does not, and fix the serializer that wrote it");
-                if (at_rule >= view.n) break;
-                layer = view.layer[at_rule];
+                if (at_rule >= view->n) break;
+                layer = view->layer[at_rule];
                 DCHECK((r->type == LXB_CSS_RULE_STYLE) == (layer != NULL),
                        "a CSS style sheet's rules did not ROUND-TRIP IN ORDER: the rule at this index parses "
                        "back as a different KIND of rule than the one the author cascade emitted there. The "
@@ -1610,7 +1540,7 @@ static void cssd_author_collect(lxb_dom_element_t *el, const char *name, const c
                    two criteria, so what arrives here is one declaration per property — which is also why one
                    counter can be both css-cascade-5 §6.1's order of appearance and css-cascade-5 §7.3.6's
                    identity of the rule. */
-                cssd_decls_from_list(st->declarations, view.text, strlen(view.text), &rd);
+                cssd_decls_from_list(st->declarations, view->text, strlen(view->text), &rd);
                 /* @LOGICAL — BOTH MEMBERS OF css-logical-1 §4's PAIR ARE TAKEN FROM THIS ONE BLOCK, in ONE
                    pass and with each declaration's own index in it. The index is css-cascade-5 §6.1's Order
                    of Appearance at the granularity a block has: two names in one rule share `*pseq +
@@ -1632,7 +1562,7 @@ static void cssd_author_collect(lxb_dom_element_t *el, const char *name, const c
                 }
                 cssd_decls_free(&rd);
             }
-            DCHECK(back == view.n,
+            DCHECK(back == view->n,
                    "a CSS style sheet's rules did not ROUND-TRIP: the rule objects serialized to a text that "
                    "parses back to FEWER rules than went in. A rule holds the SERIALIZATION lexbor produced "
                    "for it, so re-parsing it must yield exactly what it came from — find which rule's text "
@@ -1649,10 +1579,8 @@ static void cssd_author_collect(lxb_dom_element_t *el, const char *name, const c
         /* css-cascade-5 §6.1's Order of Appearance across SHEETS: "declarations from style sheets independently linked by the
            originating document are treated as if they were concatenated in linking order", so the next sheet's
            first rule follows this sheet's last one rather than restarting. */
-        *pseq += view.n;
-        css_rule_cascade_sheet_free(&view);
+        *pseq += view->n;
     }
-    JS_FreeValue(ctx, sheets);
 }
 
 /* ---- CSS Syntax's "parse a stylesheet's contents", for CSSOM §6.4's rule objects --------------------------
@@ -3284,8 +3212,11 @@ char *cssom_initial_value(const char *name)
    of those steps, and this is the one entry it reads the cascade through. */
 char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
 {
+    CssAuthorSheets *sheets;
+    lxb_dom_node_t *root;
     CssLayerOrder *order;
     CssCascade *cascade;
+    bool sheets_owned = false;
     const char *partner, *ua, *pua;
     uint32_t seq = 0;
     bool ua_important = false, pua_important = false;
@@ -3337,8 +3268,6 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
            "DIFFERENT mapping logic — one physical, one flow-relative — so a property is never its own "
            "partner, and collecting it twice would put two identical declarations at one position in "
            "css-cascade-5 §6.1's order");
-    order = css_layer_order_create();
-    cascade = css_cascade_create(order);
     /* @LOGICAL — THE BRACKET THE NESTED RESOLUTION ABOVE MADE NECESSARY. The partner is resolved BEFORE this
        line and that ordering is what keeps the two sheet walks apart: the inner one has destroyed its lexbor
        arena before the outer one sets its own, so `g_parser` has one owner at a time. Moving the partner read
@@ -3354,7 +3283,16 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
            "and `direction` the pairing above is derived from — and it is ordered ahead of this call for "
            "exactly this reason; a second nested read added below it is what this crash names");
     g_collecting_sheets = true;
-    cssd_author_collect(el, name, partner, cascade, order, &seq);
+    /* The author origin's sheet set for the element's root: the job's, or one built for this resolution
+       alone (core/css/css_author_sheets.h). Its sealed layer order is the one this cascade sorts by. */
+    root = node_root(lxb_dom_interface_node(el));
+    if (!css_cascade_pass_author_ask(root, &sheets)) {
+        sheets = css_author_sheets_build(root);
+        sheets_owned = !css_cascade_pass_author_hold(sheets);
+    }
+    order = css_author_sheets_order(sheets);
+    cascade = css_cascade_create(order);
+    cssd_author_collect(el, name, partner, cascade, sheets, &seq);
     g_collecting_sheets = false;
     /* css-cascade-5 §6.1's ELEMENT-ATTACHED STYLES: "declarations that are attached directly to an element (such as the
        contents of a style attribute) rather than indirectly mapped by means of a style rule selector take
@@ -3421,9 +3359,6 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
     ++seq;
     if (ua) css_cascade_add(cascade, CSS_ORIGIN_UA, ua_important, false, NULL, 0, seq, 0, ua);
     if (pua) css_cascade_add(cascade, CSS_ORIGIN_UA, pua_important, false, NULL, 0, seq, 1, pua);
-    /* css-cascade-5 §6.4.3 "Layer Ordering"'s order is a fact about the WHOLE document's layers, so it is sealed once every sheet has been
-       walked and before the first index is read. Nothing below declares a layer. */
-    css_layer_order_seal(order);
     /* NULL HERE IS "NO DECLARATION WON", which is a real answer and not a missing one — CSS Cascade §7.1 and
        css-cascade-5 §7.2 are both written for exactly this state ("unless the cascade results in a value"),
        and which of them
@@ -3434,7 +3369,7 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
        each is defined by a fact only the sort holds. */
     out = css_cascade_value(cascade);
     css_cascade_free(cascade);
-    css_layer_order_free(order);
+    if (sheets_owned) css_author_sheets_free(sheets);
     /* …and the answer, reported whether or not a record is held: the census counts the question and the
        resolution at the same event, and a held record decides only the storage. `out` is borrowed here; this
        function still owns it and its caller frees it. */

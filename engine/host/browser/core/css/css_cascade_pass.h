@@ -41,9 +41,12 @@
 /* The record's storage, owned by a layout job. `tab` is a power-of-two table, NULL with `cap` 0 before the
    first entry; `release` frees every string it owns and leaves it empty. */
 struct CpEntry;
+struct CssAuthorSheets;
 typedef struct {
-    struct CpEntry *tab;
-    size_t          cap, used;
+    struct CpEntry          *tab;
+    size_t                   cap, used;
+    struct CssAuthorSheets **author;      /* one per root resolved under, owned */
+    size_t                   author_n, author_cap;
 } CssCascadeRecord;
 void css_cascade_record_release(CssCascadeRecord *r);
 
@@ -65,6 +68,12 @@ void css_cascade_pass_record(lxb_dom_element_t *el, const char *name, const char
    computes and reports with `record` on the false arm. Both are counted whether or not a record is held. */
 bool css_cascade_pass_computed_ask(lxb_dom_element_t *el, const char *name, char **out);
 void css_cascade_pass_computed_record(lxb_dom_element_t *el, const char *name, const char *value);
+
+/* The author origin's sheet set for `root` (core/css/css_author_sheets.h). `ask` answers the held set,
+   borrowed, or false. On false the caller builds one and offers it to `hold`, which takes it and answers true
+   when a record is held; on false the caller still owns it and frees it after its one resolution. */
+bool css_cascade_pass_author_ask(const lxb_dom_node_t *root, struct CssAuthorSheets **out);
+bool css_cascade_pass_author_hold(struct CssAuthorSheets *sheets);
 
 /* The census, in solver/result.c's vocabulary. Every field is a lifetime counter of this agent and says so
    in its name. `asks_life` counts cascaded values asked for, `served_life` those the record answered and

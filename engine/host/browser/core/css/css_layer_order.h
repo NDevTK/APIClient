@@ -44,11 +44,10 @@
  * seal rather than computing an index that a later declaration could invalidate — which is the difference
  * between an order and a counter.
  *
- * IT IS REBUILT PER CASCADE, exactly as the sheet text it is walked out of is (core/css/css_style_declaration.c
- * says why: a cache here would be shared state the flow machinery does not swap, so a layer one arm declared
- * would order another arm's cascade). The order is GLOBAL TO THE DOCUMENT — §6.4.3's note says so — which here
- * means global to the sheet list one resolution reads, walked in document order so first-declaration order is
- * the walk's own order. */
+ * It is built with the sheet text it is walked out of, by core/css/css_author_sheets.h's set, which a layout
+ * job holds per root and which is otherwise built per cascade. The order is GLOBAL TO THE DOCUMENT — §6.4.3's
+ * note says so — which here means global to one root's sheet list, walked in document order so
+ * first-declaration order is the walk's own order. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_LAYER_ORDER_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_LAYER_ORDER_H
 
