@@ -831,460 +831,187 @@ typedef struct {
        and designated, rather than from a list here. */
     const char *(*unforkable)(const void *state);
 } IdlStepDecl;
-/* DECLARE WHERE THE OPTIONAL ARGUMENTS START. §3.6 makes an `undefined` passed for an optional argument with
-   no default mean the argument is ABSENT — `new URL("aaa:b", undefined)` is a one-argument call, and
-   converting that undefined would give the base URL the string "undefined" and throw. Set after the
-   declaration — it names the member the LAST one made, the way idl_method_id_ext sets `variadic`, because the
-   id a declaration returns is the RUNTIME's step id and not this pool's index. A member that never calls this
-   converts every declared position, which is right for a member whose arguments are all required.
-   IT IS AN INDEX INTO THE MEMBER'S OWN LIST, and its "there are none" value is `nargs` — one past the last
-   position the member declares, which is the only place "no optional arguments" can mean anything. It used to
-   be IDL_MAX_DECLARED + 1, a sentinel derived from the CEILING: a member could name a position past what it
-   declared and past what any member may declare, and the value that meant "none" changed whenever the ceiling
-   did. The declaration asserts the bound, so the state cannot be reached. */
+
+/* Declare where the optional arguments start. Per §3.6, `undefined` passed for an optional argument with no
+   default means the argument is missing (`new URL("aaa:b", undefined)` is a one-argument call). Applies to the
+   member the last declaration made, because a declaration returns the runtime's step id, not this pool's
+   index. `first_optional` indexes the member's own list; `nargs` means none, and the bound is asserted. A
+   member that never calls this has only required arguments. */
 void idl_optional_from(int first_optional);
 
-/* §3.6's "IF X IS GIVEN", WHICH IS THE QUESTION A SPEC STEP ASKS AND `argc` IS NOT AN ANSWER TO.
+/* §3.6's "if X is given": whether `values` holds an IDL value or "missing" at `index` (step 9's two kinds of
+ * entry). `argc` does not answer it: a page passing `undefined` at an optional position with no default has
+ * raised the count for a missing argument (step 15.4.2, `new Audio(undefined)`), and the count handed to a
+ * body is extended over every defaulted or dictionary position behind the passed ones (step 16.1).
  *
- * Web IDL §3.6 "Overload resolution algorithm" outputs `values`, and its step 9 says what that list holds:
- * "Initialize values to be an empty list, where each entry will be either an IDL value or the special value
- * 'missing'". Two kinds of entry — and a spec step written "If src is given" is asking WHICH KIND is at that
- * position, never how many entries there are. Both of the algorithm's arms produce the second kind:
- *
- *   - step 15.4, for a position the page REACHED — "If optionality is 'optional' and V is undefined, then: If
- *     the argument at index i is declared with a default value, then append to values that default value.
- *     Otherwise, append to values the special value 'missing'."
- *   - step 16.2, for a position it never reached — "Otherwise, if callable's argument at index i is not
- *     variadic, then append to values the special value 'missing'."
- *
- * (For a member with ONE entry in its effective overload set — every member of this platform that is not a
- * length-differing split — step 8 never runs, so `d` stays −1, step 11's loop never executes and step 15's
- * does. The same sentence appears at 11.4 and 15.4; the one this platform reaches is 15.4.)
- *
- * WHY THE COUNT IS THE WRONG INSTRUMENT, IN BOTH DIRECTIONS. It over-reports, because a page that PASSES
- * `undefined` at an optional position with no default has raised the count for an argument §3.6 calls
- * missing — `new Audio(undefined)` is a one-argument call whose `src` is not given. And it over-reports
- * again from the other side, because the count this machine hands a body is EXTENDED over every defaulted or
- * dictionary position behind the ones the page passed (step 16.1's placement), so a member with a default
- * anywhere after the position in question reaches its body at full arity for every call: `Option`'s count is
- * 4 whether or not `value` was given. A count answers "how far did the page reach", and the spec is asking
- * "is there a value here".
- *
- * THE CONTRACT. Ask this of an OPTIONAL position — one at or past the member's `idl_optional_from` index.
- * A required position is always given (§3.6 step 5 threw otherwise), so the question is not one the standard
- * poses there, and an `any` at a required position legitimately holds the `undefined` the page passed. A
- * position with a DECLARED DEFAULT is always given too, and answers so: the default was placed, and no
- * IdlDictDefault produces `undefined`.
- *
- * WHAT KEEPS IT TRUE. `undefined` in the vector IS the representation of "missing", and the machine asserts
- * both directions of that — at the placement, that step 15.4.2's arm placed nothing else; and at the body
- * boundary, that no conversion handed an optional position an IDL value that is `undefined`. A body may read
- * the vector directly for the same answer (`!JS_IsUndefined(argv[i])` is what this computes); it exists so
- * the site states the SPEC'S question rather than restating its encoding, and so the day "missing" needs a
- * representation that is not `undefined` there is one place to change. */
+ * Ask it of an optional position only (at or past idl_optional_from). A required position is always given,
+ * and a position with a declared default is always given (no IdlDictDefault produces `undefined`).
+ * `undefined` in the vector is the representation of "missing"; the machine asserts both directions, at the
+ * placement and at the body boundary. This is `!JS_IsUndefined(argv[i])`, named so a site states the spec's
+ * question and the representation has one place to change. */
 bool idl_arg_given(int argc, JSValueConst *argv, int index);
 
-/* DECLARE WHERE THE **LONGER OVERLOAD ENTRY'S** OPTIONAL ARGUMENTS START — the other half of a §3.6 split whose
- * two entries differ in LENGTH (IDL_USVSTRING_OR_DICT, IDL_UNRESTRICTED_DOUBLE_OR_DICT), and the half this file
- * stated as a rule and then applied to exactly one position.
+/* Declare where the longer overload entry's optional arguments start, for a §3.6 split whose entries differ in
+ * length. Step 15.3 reads optionality from the remaining entry, and the declaration's idl_optional_from is the
+ * shorter entry's. CSSOM View's `scroll` needs it: position 0 is optional for the dictionary entry, while
+ * position 1 is required in the entry surviving at arity 2, so `el.scrollTo(1, undefined)` converts
+ * ToNumber(undefined) rather than reading a missing optional.
  *
- * §3.6 step 15.3 reads optionality "at index i in the list of optionality values of the REMAINING entry", and
- * IDL_USVSTRING_OR_DICT's own paragraph above says so in those words — but only the SPLIT POSITION was ever
- * resolved that way. Every position AFTER it went on being measured against the DECLARATION's
- * `first_optional`, which is the SHORTER entry's, because the declaration has one number and §3.6 needs one
- * per surviving entry. Nothing had noticed, and the reason is worth stating rather than being lucky twice:
- * HTML §7.2.2's `postMessage` is the only member that had ever declared such a split, and its third argument
- * (`optional sequence<object> transfer = []`) is optional in the LONGER entry too — so the one number happened
- * to be right for both.
- *
- * CSSOM VIEW §6's `scroll(unrestricted double x, unrestricted double y)` is where they disagree, and it
- * disagrees at the ordinary case rather than at an edge: the declaration MUST make position 0 optional, because
- * the dictionary entry writes `optional ScrollToOptions options = {}` and `el.scrollTo()` is a legal call — and
- * position 1 is REQUIRED in the entry that survives at arity 2. Without this, `el.scrollTo(1, undefined)` reads
- * position 1 as an ABSENT optional and the body is handed nothing where §3.2.8 owes it ToNumber(undefined),
- * which §3.2's normalize-non-finite then makes 0. One number, two entries, and the wrong one silently wins.
- *
- * It names the member the LAST declaration made, as idl_optional_from and idl_arg_default do, and it must be
- * stated for EVERY member declaring a length-differing split: idl_args_seal walks the platform and asserts it,
- * so a member that forgot cannot reach a conversion. */
+ * Applies to the member the last declaration made. Every member declaring a length split must state it, which
+ * idl_args_seal asserts. */
 void idl_overload_split_optional_from(int longer_first_optional);
 
-/* DECLARE A §3.6 LENGTH-DIFFERING SPLIT WHOSE TWO ENTRIES SHARE THEIR TYPE AT THE SPLIT — the case the type
- * list cannot state, and which the machinery above could not express because the only two members that had
- * ever needed one also changed TYPE there.
+/* Declare a §3.6 length split whose two entries share their type at the split, which the type list cannot
+ * state. Steps 3-4 remove an entry by argument count, turning on the last position the shorter entry declares;
+ * step 15.2's type question only has a second answer where the lists differ. CSS Conditional Rules'
+ * `supports(property, value)` and `supports(conditionText)` share a prefix and type: without this,
+ * `CSS.supports("(width:1px)", undefined)` would read position 1 as missing instead of converting it.
  *
- * THEY ARE TWO FACTS AND THIS SEPARATES THEM. §3.6 steps 3-4 remove entries by ARGUMENT COUNT, and the position
- * that removal turns on is the last one the SHORTER entry declares; §3.6 step 15.2's "let T be the type at
- * index i in the type list of the remaining entry" is a different question, and it only has a second answer
- * where the two entries' type lists differ there. IDL_USVSTRING_OR_DICT and IDL_UNRESTRICTED_DOUBLE_OR_DICT
- * answer both at once, which is why the position was READ off the type list — correct for them, and an
- * expressibility hole for every overload distinguished by arity alone.
- *
- * CSS Conditional Rules 3 §7.5's `supports` is the member that needs it: `supports(CSSOMString property,
- * CSSOMString value)` and `supports(CSSOMString conditionText)` are one shared prefix, one type, and two
- * lengths. Without this the shorter entry's optional index governs at every arity, so §3.6 step 15.4.2 makes
- * position 1 "missing" for `CSS.supports("(width:1px)", undefined)` — a call whose argument count is 2, whose
- * surviving entry requires position 1, and which must therefore convert that `undefined` to the string. The
- * one-argument reading of it answers TRUE where the two-argument reading answers FALSE, so it is not a corner:
- * it is the same wrong-entry-wins defect idl_overload_split_optional_from was written for, one declaration
- * further out.
- *
- * `shorter_last_position` IS THE LAST POSITION THE SHORTER ENTRY DECLARES, which is what `split_at` means for a
- * type-declared split too — the union type sits AT the shorter entry's final index. It names the member the
- * LAST declaration made, as idl_optional_from does, and it must be stated BEFORE
- * idl_overload_split_optional_from, which asserts a split exists to describe. A member whose type list already
- * names a split may not also state one here: two answers to "which count removes an entry" is a member whose
- * every arity is resolved by whichever was found first.
- *
- * **-1 IS A SHORTER ENTRY THAT DECLARES NOTHING, AND IT IS NOT A SENTINEL.** This refused anything below 0
- * under a sentence claiming the shorter entry "DECLARES AT LEAST ONE POSITION" — which was never derived from
- * the standard: Web IDL §2.5.8 Overloading's own worked example for an effective overload set contains
- * `(f3, « », « »)`, and §3.6 step 4's removal "by argument count" has nothing to say about a count of zero.
- * The bound was true of every member that had been declared and it was read as a rule. HTML §4.10.7 "The
- * select element" is where it breaks: `[CEReactions] undefined remove();` and `[CEReactions] undefined
- * remove(long index);` are ONE identifier with two entries, the shorter declaring no argument at all, and the
- * whole of what distinguishes them is arity — §4.10.7 says so in prose rather than by type, "when it has
- * arguments" against "when it has no arguments". So the shorter entry's final index is the position BEFORE
- * the list, exactly as idl_optional_from's "there are none" is the position PAST it.
- * IT COST A SEPARATE `has_split` FIELD, WHICH IS THE §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS SPLIT: `split_at`
- * was answering both "is there a split" and "where", the two agreed for as long as no shorter entry was
- * empty, and the stricter question owned the sentinel. */
+ * `shorter_last_position` is the shorter entry's last position, which is what `split_at` means for a typed
+ * split too. -1 is a shorter entry with no arguments (HTML select's `remove()` against `remove(long index)`),
+ * not a sentinel; whether a split exists is the separate `has_split` field, because one field answering both
+ * questions breaks at -1. Applies to the member the last declaration made, before
+ * idl_overload_split_optional_from. A member whose type list already names a split may not also state one. */
 void idl_overload_length_split_at(int shorter_last_position);
 
-/* DECLARE §3.6's DISTINGUISHING ARGUMENT INDEX — the position step 12 chooses the surviving overload entry at,
- * which is a DIFFERENT number from `split_at` and was the same one for every member declared before HTML
- * §8.11.1 "The ImageData interface".
+/* Declare §3.6's distinguishing argument index `d`, where step 12 chooses the surviving entry. It is a
+ * different number from `split_at` (where the shorter entry ends, which steps 3-4 remove by): Web IDL §2.5.8
+ * Overloading only requires the types before `d` to agree. Window's `postMessage` differs and ends at index 1;
+ * ImageData differs at 0 and ends at 2.
  *
- * `split_at` is where the SHORTER entry ENDS, which is what §3.6 steps 3-4 remove an entry by. `d` is where the
- * entries' types first DIFFER, which is what step 12 reads a value at. Web IDL §2.5.8 Overloading requires the
- * two to coincide only in one direction — "for each index j, where j is less than the distinguishing argument
- * index …, the types at index j in all of the items' type lists must be the same" bounds what may differ
- * BEFORE `d` and says nothing about what lies between `d` and the shorter entry's end. Window's `postMessage`
- * differs at index 1 and ends at index 1; ImageData differs at index 0 and ends at index 2, and every assert
- * this file wrote over `split_at` as if it were `d` is an assert about the first shape only.
- *
- * IT IS READ OFF THE TYPE LIST WHEREVER THE TYPE LIST CAN SAY IT, exactly as `split_at` is: a value-resolved
- * split row AT a position states the position and both entries' types at once, so asking for the number again
- * would be one fact stated twice and free to disagree. This declaration exists for the member whose value split
- * is at a position its own type list cannot name — and there is none yet, which is why it asserts that the
- * declaration loop already found one rather than setting a number beside it.
- * RETIREMENT: this record goes when `d` and `split_at` can no longer be read as one number, which is when no
- * assert in this file names `split_at` in a sentence about which ENTRY survived. */
+ * It is read off the type list wherever a value-resolved split row states it, so a second statement could
+ * disagree. This entry is for a split at a position its type list cannot name; none exists yet, so it asserts
+ * the declaration loop already found one. */
 void idl_overload_distinguishing_at(int d);
 
-/* WEB IDL §3.6 Overload resolution algorithm's DEFAULT VALUE AT A POSITIONAL ARGUMENT — the THIRD state at a
-   position, beside "the page passed one" and "the argument is absent", and exactly the distinction
-   IdlDictDefault already draws for a dictionary member. §3.6's absent rule above is for an optional argument
-   with NO default value; where the IDL writes `= …`, the algorithm places THAT value and the body never sees
-   a hole.
-
-   THE CONVENTION FOR CITING IT, STATED ONCE HERE AND NOT RE-DERIVED AT EACH SITE — §3.6 is 17 top-level steps
-   and it places a declared default in TWO of them, which is why no single sub-number names this rule:
-     - step 15.4.1, inside `While i < argcount` — the page REACHED the position and passed `undefined` there.
-       Its guard is step 15.4, "If optionality is 'optional' and V is undefined", and its sibling 15.4.2 is the
-       absent rule ("append to values the special value 'missing'").
-     - step 16.1, inside `While i is less than the number of arguments callable is declared to take` — the page
-       STOPPED SHORT of the position. Its sibling 16.2 appends "missing" only "if callable's argument at index
-       i is not variadic", which is what makes a variadic member's declared head behave like any other.
-   A site that means the rule cites both; a site that means only one of the two cites that one. Step 11.4.1 is
-   the third such clause and is deliberately NOT cited anywhere: it sits in `While i < d`, which runs only when
-   step 8 set a distinguishing argument index, and step 8 sets one only "if there is more than one entry in S"
-   — a length-differing split has been reduced to one entry by steps 3-4 before then, so this engine cannot
-   reach it. The day a same-length overload is declared, that clause becomes reachable and this list grows.
-   IT WAS CITED AS "step 14.2" AT TWENTY-TWO SITES AND THAT NUMBER IS A REAL STEP ABOUT SOMETHING ELSE: step 14
-   is "If i = d and method is not undefined", the arm that builds a sequence from an iterator, and its 14.2 is
-   "Let T be the type at index i in the type list of the remaining entry in S". A reader who followed it landed
-   on a live step that mentions no default at all, which is the failure mode a wrong number has and a missing
-   one does not.
-   IT WAS NOT EXPRESSIBLE AND THE BODIES PAID FOR IT. Indexed Database §4.4's
-   `transaction(storeNames, optional IDBTransactionMode mode = "readonly", …)` is the member that needs it: with
-   only "absent" to say, the body would read `undefined` and substitute "readonly" itself — the IDL's own
-   declaration re-derived in a body, which is the consumer-side default §Offensive-programming names, and the
-   next member declared that way would re-derive it again with nothing to keep the two equal.
-   The default is already an IDL value — it is written in the IDL and not computed from the page — so it is
-   PLACED and never coerced, and no enumeration check runs over it. Set after the declaration, naming the member
-   the LAST one made, exactly as idl_optional_from does; the position must be one that declaration listed and
-   must already be optional, both of which are asserted. `dflt_str` must outlive the declaration. */
+/* Declare §3.6's default value at a positional argument, the third state beside passed and missing, as
+   IdlDictDefault is for a dictionary member. §3.6 places a declared default in two steps: 15.4.1 (the page
+   reached the position and passed `undefined`; sibling 15.4.2 is the missing rule) and 16.1 (the page stopped
+   short; sibling 16.2 appends "missing" only for a non-variadic argument). Step 11.4.1 is the third such
+   clause, reachable only when step 8 sets `d` for more than one entry, which a length split never reaches.
+   IndexedDB's `transaction(storeNames, optional IDBTransactionMode mode = "readonly")` needs it, so no body
+   re-derives the IDL's default. The default is an IDL value and is placed, never coerced or enum-checked.
+   Applies to the member the last declaration made; the position must be declared and already optional, both
+   asserted. `dflt_str` must outlive the declaration. */
 void idl_arg_default(int index, IdlDictDefault dflt, const char *dflt_str);
 
-/* DECLARE THE CLASS AN IDL_INTERFACE / IDL_STRING_UNLESS_IFACE POSITION BRANDS AGAINST. Set after the
-   declaration, naming the member the LAST one made, exactly as idl_optional_from does and for the same reason:
-   the id a declaration returns is the RUNTIME's step id and not this pool's index. It composes with every
-   declaration form — a method, a setter, a step body — which idl_method_id_ext's `iface` parameter did not. */
+/* Declare the class an IDL_INTERFACE / IDL_STRING_UNLESS_IFACE position brands against. Applies to the member
+   the last declaration made, and composes with every declaration form. */
 void idl_iface_brand(JSClassID iface);
 
-/* NARROW an IDL_INTERFACE position past what a CLASS can express. Every DOM node wrapper is one class, so
-   `idl_iface_brand(node_class_id())` says "a Node" and cannot say "an Element", "an HTMLElement" or "an
-   HTMLFormElement" — and the platform's IDL says all three. §4.13.7.3's `optional HTMLElement anchor` is where
-   that first mattered: `setValidity(flags, msg, document.createElementNS('some-ns','foo'))` must be a
-   TypeError and a class check crosses it as itself.
-   The predicate runs AFTER the class check and its failure is the same TypeError, so a member declares the
-   interface it means in ONE place rather than repeating a hand-written test in its body — which is the whole
-   reason the brand is part of the type. Set after the declaration, naming the member the LAST one made, as
-   idl_iface_brand and idl_optional_from do.
-   IT IS THE DECLARATION-WIDE FORM AND A DICTIONARY MEMBER HAS ITS OWN — IdlDictMember::iface_narrow, beside
-   that member's own class. A dictionary whose interface-typed members are all one interface states both here,
-   once; one that declares several (NavigateEventInit's four) cannot, because this names ONE predicate for the
-   whole declaration and a `FormData` is not an `Element`. */
+/* Narrow an IDL_INTERFACE position past what a class can express: every DOM node wrapper is one class, so a
+   class says "a Node" but not "an HTMLElement" (`setValidity(flags, msg, anchor)` must refuse a
+   non-HTML element). Runs after the class check, failing with the same TypeError. Applies to the member the
+   last declaration made. This is the declaration-wide form; a dictionary member with its own interface uses
+   IdlDictMember::iface_narrow. */
 void idl_iface_narrow(bool (*is)(JSValueConst v));
 
-/* DECLARE §3.2.15's `I` AT ONE POSITION — "If V implements I, then return … Throw a TypeError" — for a member
- * the two declarations above cannot describe. It OVERRIDES them at the position it names and at no other, which
- * is the same shape and the same reason IdlDictMember::iface has: one statement per declaration is everything a
- * member whose interface-typed positions are all one interface needs, and the members that walk past it need
- * the fact to be about the POSITION.
+/* Declare §3.2.15's `I` at one position, overriding the two declarations above there only. Needed for a
+ * member with more than one interface in its argument list (MouseEvent's `initMouseEvent` takes a `Window?`
+ * and an `EventTarget?`), and for an interface no class names (`EventTarget`, implemented by many classes;
+ * `Window`, the realm's global or a WindowProxy).
  *
- * TWO SHAPES OF MEMBER NEED IT AND THEY ARE DIFFERENT PROBLEMS.
- *   - MORE THAN ONE INTERFACE IN ONE ARGUMENT LIST. Pointer Events 4 §16.1 Initializers for interface
- *     MouseEvent declares `initMouseEvent(… optional Window? viewArg = null, … optional EventTarget?
- *     relatedTargetArg = null)` — fifteen positions, two interfaces, and one brand per declaration can name at
- *     most one of them. Declared IDL_ANY instead, BOTH positions crossed unconverted and the body ran the two
- *     conversions by hand, which is the brand test written out in a body that a declared type exists to
- *     replace.
- *   - AN INTERFACE NO CLASS ID NAMES. §3.2.15's word is "implements", and idl_iface_brand's `JSClassID` answers
- *     it only for an interface whose values are exactly one class. `EventTarget` is implemented by every Node,
- *     every Window, every MessagePort, every AbortSignal and every `new EventTarget()`; `Window` is the
- *     realm's own global OR a WindowProxy (see core/frame/window_proxy.h, which states why those are one type
- *     test and not two). For those the class-plus-narrowing pair has no class to start from — the narrowing
- *     runs AFTER a class check that has already refused the value — so the whole test has to be the predicate,
- *     which is the same conclusion idl_this_iface below reaches for the receiver and for the same sentence of
- *     the spec.
- *
- * IT TAKES A JSContext AND idl_iface_narrow DOES NOT, because an interface reached through a PROTOTYPE CHAIN is
- * a per-realm fact: "does this object implement EventTarget" is answered by looking for THIS realm's
- * EventTarget.prototype on its chain, and a predicate with no realm would have to reach for a remembered one —
- * the one-fact-answered-from-one-place defect CLAUDE.md names. The ctx the conversion passes is the MEMBER's
- * realm (js_call_c_function sets it), which is the realm whose interface object the call went through.
- *
- * `iface` is the interface's IDL identifier and it is NOT decoration: it is the subject of the TypeError, so a
- * page that passes the wrong thing is told which interface it failed rather than that "the declared interface"
- * was not implemented. It must outlive the declaration, so every caller passes a static.
- *
- * Set after the declaration, naming the member the LAST one made, exactly as idl_iface_brand and
- * idl_optional_from do. The position must be one the declaration listed and its type must be one
- * idl_type_brands_interface answers true for, both asserted here; idl_args_seal asserts the other direction
- * over the whole platform — every branding position has a brand, stated here or by idl_iface_brand. */
+ * The predicate takes a JSContext because implementing an interface through a prototype chain is a per-realm
+ * fact; the conversion passes the member's realm. `iface` is the IDL identifier the TypeError names, a static.
+ * Applies to the member the last declaration made; the position must be declared with a type
+ * idl_type_brands_interface accepts (asserted), and idl_args_seal asserts every branding position has a brand. */
 void idl_arg_iface(int index, bool (*is)(JSContext *ctx, JSValueConst v), const char *iface);
 
-/* DECLARE THE INTERFACE THIS MEMBER'S *RECEIVER* MUST IMPLEMENT — Web IDL §3.7 Interfaces' implementation-check
+/* Declare the interface this member's receiver must implement — Web IDL §3.7 Interfaces' implementation-check
  * an object, step 3: "If object does not implement interface, then throw a TypeError."
  *
- * THE TWO BRANDS ARE DIFFERENT QUESTIONS AND THIS IS THE OTHER ONE. idl_iface_brand above states what an
- * ARGUMENT position admits; this states what `this` must be. They are declared side by side because they read
- * alike and they are answered at opposite ends of the member: §3.7.7 Operations' create an operation function
- * asks the receiver's in its try-list's step 2.1.2.3, BEFORE step 2.1.4 computes the effective overload set and
- * therefore before §3.6 Overload resolution algorithm converts one argument, while an argument's own brand is
- * part of that conversion.
+ * Answered before any argument converts: §3.7.7 Operations' create an operation function checks the receiver
+ * before §3.6 runs, so `Iface.prototype.member.call({}, {toString() {…}})` throws without running the page's
+ * toString. A body-side test would run it first.
  *
- * WHICH IS WHY THE RECEIVER'S BRAND CANNOT LIVE IN A BODY. A member's body runs after every conversion, so a
- * brand test written there lets `Iface.prototype.member.call({}, { toString() { … } })` run the page's
- * `toString` and only then throw — where a browser throws with nothing of the page's code having run. The order
- * is observable, so it is the spec's and not a convenience.
- *
- * THE PREDICATE IS THE WHOLE OF THE TEST, unlike idl_iface_brand's class-plus-narrowing pair, and the reason is
- * §3.7.6 Attributes / §3.7.7 Operations' word "implement": a member declared on Element is reached on an
- * HTMLDivElement, whose wrapper carries a DIFFERENT class id, so a class comparison answers the wrong question
- * for every interface anything inherits from. The component that owns the interface already states the right
- * one (its `…_is` predicate), so this names that rather than restating it.
- *
- * `iface` is the interface's IDL identifier, used only to say which interface the TypeError is about; it must
- * outlive the declaration, so every caller passes a static. Set after the declaration, naming the member the
- * LAST one made, exactly as idl_iface_brand and idl_optional_from do and for the same reason. */
+ * The predicate is the whole test, unlike idl_iface_brand: a member declared on Element is reached on an
+ * HTMLDivElement with a different class id, so the component's own `…_is` predicate is named. `iface` is the
+ * IDL identifier the TypeError names, a static. Applies to the member the last declaration made. */
 void idl_this_iface(bool (*is)(JSValueConst v), const char *iface);
 
-/* DECLARE §3.2.18's `E` AT ONE POSITION — the enumeration whose value list IS the type, as the
- * NULL-terminated array of the identifiers the IDL lists. §3.2.18 step 2 is "If S is not one of E's
- * enumeration values, then throw a TypeError", so the conversion checks the string ToString produced against
- * this and refuses anything else: `history.scrollRestoration = "bogus"` is a TypeError from the TYPE, before
- * the setter's algorithm runs at all, and a body performing it would be one body's private copy of a rule
- * every enumeration member has.
+/* Declare §3.2.18's `E` at one position, as the NULL-terminated array of the identifiers the IDL lists. The
+ * conversion refuses a ToString result not in it with a TypeError (`db.transaction("s", "bogus")`).
  *
- * IT IS PER POSITION, and that is the whole of what this states beyond the values. It was one list per
- * DECLARATION, which is everything a member whose enumeration positions are all one enumeration needs — and
- * Web Cryptography §14.3.9 The importKey method is the member that walks past it:
+ * It is per position because one argument list may name two enumerations (Web Cryptography's `importKey`
+ * takes a KeyFormat at 0 and a `sequence<KeyUsage>` at 4). There is no declaration-wide form.
  *
- *     Promise<CryptoKey> importKey(KeyFormat format, BufferSource keyData, AlgorithmIdentifier algorithm,
- *                                  boolean extractable, sequence<KeyUsage> keyUsages);
- *
- * TWO enumerations on one line — §14.1 Data Types' KeyFormat at position 0 and KeyUsage as the ELEMENT type
- * at position 4 — so one list per declaration could name at most one of them, and the second was checked by
- * hand in the member's body. That is the brand test written out in a body which a declared type exists to
- * replace, and it is the identical shape idl_arg_iface answers for §3.2.15's `I`.
- *
- * SO THERE IS NO DECLARATION-WIDE FORM TO FALL BACK TO. A per-position list subsumes it exactly — the
- * declaration-wide one was this call at whichever position asked — where idl_iface_brand survives beside
- * idl_arg_iface because a CLASS and a PREDICATE are two different tests. Keeping both here would be one fact
- * stated two ways with a fallback between them, which is the dual system CLAUDE.md forbids, so the old form is
- * gone and every caller names its index.
- *
- * Set after the declaration, naming the member the LAST one made, exactly as idl_arg_iface and
- * idl_optional_from do. The position must be one the declaration listed and its type must be one
- * idl_type_admits_enumeration answers true for, both asserted here; idl_args_seal asserts the other direction
- * over the whole platform — every position whose type admits an enumeration has one. `values` must outlive the
- * declaration, so every caller passes a static, and IDL_ENUM_VALUES below is how one is written. */
+ * Applies to the member the last declaration made; the position must be declared with a type
+ * idl_type_admits_enumeration accepts (asserted), and idl_args_seal asserts every such position has a list.
+ * `values` must outlive the declaration; write it with IDL_ENUM_VALUES. */
 void idl_arg_enum(int index, const char *const *values);
 
-/* DEFINE A §3.2.18 VALUE LIST — AND SUPPLY ITS TERMINATOR, so it cannot be left off.
- *
- * Both readers of a value list scan it for a NULL: the positional conversion behind idl_arg_enum and the
- * dictionary member that names the list in an IdlDictMember row. Neither can bound the scan, because both
- * receive a POINTER and a pointer has already lost the extent — so the list's length lives entirely in its own
- * last element, and until now nothing about writing one made that element mandatory. A list missing it is not
- * a list that reads short; it is a scan that walks off the end of the array into whatever the link placed
- * after it, which is undefined, and which on this engine's shipping target does not fault (see check.h's
- * pointer-invariant note). The compiler is then entitled to assume the walk cannot happen and to conclude the
- * loop cannot exit, so the symptom is a HANG that presents as slowness rather than a fault at the wrong
- * declaration.
- * SUPPLYING THE TERMINATOR REMOVES THE POSSIBILITY RATHER THAN REPORTING IT, which is why this is the primary
- * mechanism and check.h's DCHECK_SENTINEL is only for a list some other macro did not declare. It also means
- * the value lists say what the IDL says and nothing else — the terminator is this engine's own bookkeeping and
- * never part of the enumeration §3.2.18 defines.
- * THE EXTENT IS DELIBERATELY LEFT UNWRITTEN (`[]`). A hand-written extent is a second copy of the list's length
- * and the two go out of sync in the one direction that is silent: an `extern T x[N]` whose definition supplies
- * MORE than N entries is truncated to N with only a warning, and the entry truncation drops is the LAST one —
- * the terminator. Writing the bound by hand to make a scan safe is therefore how the terminator goes missing.
- * A list shared across translation units uses the EXTERN form and declares `extern const char *const name[];`
- * in its header, incomplete, so no second copy of the length can exist to drift. */
+/* Define a §3.2.18 value list and supply its NULL terminator, so it cannot be left off. Both readers (the
+ * positional conversion and an IdlDictMember's `values`) receive a pointer and scan for NULL; a missing
+ * terminator is an out-of-bounds scan, which the compiler may turn into a hang. The terminator is bookkeeping,
+ * not part of the enumeration.
+ * The extent is left unwritten (`[]`): an `extern T x[N]` whose definition has more entries is truncated with
+ * only a warning, and the entry dropped is the terminator. A list shared across translation units uses the
+ * EXTERN form and is declared `extern const char *const name[];` in its header. check.h's DCHECK_SENTINEL is
+ * for a list not declared by these macros. */
 #define IDL_ENUM_VALUES(name, ...)        static const char *const name[] = { __VA_ARGS__, NULL }
 #define IDL_ENUM_VALUES_EXTERN(name, ...)        const char *const name[] = { __VA_ARGS__, NULL }
 
-/* DECLARE WHICH OF §3.2.26 Buffer source types' TWELVE TYPED ARRAYS AN IDL_TYPED_ARRAY POSITION IS, and which
-   of §3.3's two buffer extended attributes the IDL writes on it.
-   §3.2.26 step 1 is "let T be the IDL type V is being converted to" and step 2 tests [[TypedArrayName]]
-   "with a value equal to T's name", so the conversion cannot START without T — which is also why this is
-   stated per POSITION and not per member: a member may declare several, and Web Audio API §1.13.3 Methods'
-   `getFrequencyResponse(Float32Array frequencyHz, Float32Array magResponse, Float32Array phaseResponse)` on
-   the BiquadFilterNode interface is three of them on one line. The index is into the member's own type list,
-   exactly as idl_arg_default's is.
-   `allow_shared` is §3.3.2 [AllowShared] and `allow_resizable` is §3.3.1 [AllowResizable], read straight off
-   the IDL, because they are the CONDITIONS §3.2.26 steps 3 and 4 turn on: a position carrying neither refuses
-   a SharedArrayBuffer-backed view AND a resizable-buffer-backed one, and Encoding §7.4's `[AllowShared]
-   Uint8Array destination` refuses only the second. They are two independent flags because §3.3.1 and §3.3.2
-   are two independent attributes — §3.3.2's own example writes all four combinations — so collapsing them into
-   one "kind of buffer position" loses two of the four.
-   Set after the declaration, naming the member the LAST one made, exactly as idl_arg_default, idl_iface_brand
-   and idl_arg_enum do. idl_args_seal asserts BOTH directions: a position declared IDL_TYPED_ARRAY that
-   states no T is a conversion that cannot start, and a T stated at a position of any other type is a
-   declaration describing a member that is not this one. */
+/* Declare which of §3.2.26's typed arrays an IDL_TYPED_ARRAY position is, and which buffer extended attributes
+   its IDL writes. The conversion cannot start without T (it tests [[TypedArrayName]] against T's name), and a
+   member may declare several (Web Audio's `getFrequencyResponse` takes three Float32Arrays), so it is per
+   position; `index` is into the member's own type list.
+   `allow_shared` is §3.3.2 [AllowShared] and `allow_resizable` is §3.3.1 [AllowResizable], the conditions
+   §3.2.26's refusals turn on; two flags because the attributes are independent. Applies to the member the
+   last declaration made; idl_args_seal asserts both directions (an IDL_TYPED_ARRAY position states T, and a T
+   is stated only at one). */
 void idl_typed_array(int index, JSTypedArrayEnum kind, bool allow_shared, bool allow_resizable);
 
-/* DECLARE THAT THIS MEMBER'S TAIL IS VARIADIC — `T... name`, so the LAST declared type applies to every
-   argument from that position on and the member takes as many as the page passed.
-   IT IS SET AFTER THE DECLARATION, naming the member the LAST one made, exactly as idl_optional_from,
-   idl_arg_default, idl_iface_brand and idl_arg_enum do. It existed only as a parameter of
-   `idl_method_id_ext`, which builds a PLAIN-BODY member — so a member that is BOTH a step machine and variadic
-   could not be declared at all, and the Console Standard's namespace is nine of them (`log(any... data)` and
-   its eight siblings reach §2.2's Formatter, which calls the page's `toString`). A flag that composes with
-   every declaration form is the same answer this file already gave for the brand and the enumeration list. */
+/* Declare that this member's tail is variadic (`T... name`): the last declared type applies to every argument
+   from that position on. Applies to the member the last declaration made, and composes with every declaration
+   form, including a step body (Console's `log(any... data)` and its siblings). */
 void idl_variadic(void);
 
-/* DECLARE THAT THIS MEMBER'S IDL RETURN TYPE IS A PROMISE — Web IDL §3.7.7's create an operation function,
- * whose `Try` wraps the brand check, the overload resolution, EVERY argument conversion and the method steps,
- * and whose last steps are: "if an exception E was thrown: If op has a return type that is a promise type,
- * then return ! Call(%Promise.reject%, %Promise%, «E»). Otherwise, end these steps and allow the exception to
- * propagate."
- *
- * SO IT IS A DECLARATION AND NOT A BODY'S JOB. `crypto.subtle.digest('SHA-256', {})` REJECTS — a page that
- * wrote only `.catch` around it is relying on that, and a member that threw instead would take the whole flow
- * down at a call site the bundle believed it had covered. Before this the only way to get it was to declare
- * every argument `IDL_ANY`, call idl_optional_from(0) so the arity check could not throw, and re-derive each
- * argument's type inside the body — a hand-written brand test per member, which is exactly what the type list
- * above exists to have one of.
- *
- * Set AFTER the declaration, naming the member the LAST one made, exactly as idl_optional_from, idl_arg_default,
- * idl_iface_brand, idl_arg_enum and idl_variadic do, and for the same reason: the id a declaration returns
- * is the RUNTIME's step id and not this pool's index. It composes with every declaration form. */
+/* Declare that this member's IDL return type is a promise. §3.7.7's create an operation function wraps the
+ * brand check, overload resolution, every argument conversion and the method steps, and "If op has a return
+ * type that is a promise type, then return ! Call(%Promise.reject%, %Promise%, «E»)". So
+ * `crypto.subtle.digest('SHA-256', {})` rejects rather than throws, and a declaration says so instead of a body
+ * re-deriving its argument types. Applies to the member the last declaration made, and composes with every
+ * declaration form. */
 void idl_returns_promise(void);
 
 int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
                        const IdlDictMember *members, int nmembers,
                        const IdlStepDecl *decl, int magic);
 
-/* THE MAGIC THIS INVOCATION WAS DECLARED WITH. A plain body takes it as an argument; a step body cannot, because
-   its signature is the step contract and that is shared with every machine in the engine. It is read off the
-   header instead, which is the same place the receiver and the arguments come from — one declaration serving two
-   members (innerHTML and outerHTML are one walk with two starting points) is exactly what a magic is for. */
+/* The magic this invocation was declared with, read off the header because a step body's signature is the
+   shared step contract (innerHTML and outerHTML are one walk with two starting points). */
 int idl_step_magic(const JSStepHdr *hdr);
 
-/* DECLARE THAT THIS INVOCATION ENTERED §4.13.4'S ACTIVE CUSTOM ELEMENT CONSTRUCTOR MAP, so the machine gives
- * the entry back at its teardown. `ctor` is DOM §4.9 create an element step 5.1.1's `C`, BORROWED — the machine
- * takes its own reference and drops it when it leaves.
+/* Declare that this invocation entered the active custom element constructor map, so the machine gives the
+ * entry back at its teardown. `ctor` is DOM §4.9 create an element step 5.1.1's `C`, borrowed; the machine
+ * takes its own reference.
  *
- * WHY A MEMBER CANNOT SIMPLY DO THIS IN ITS `release`, which is where every other give-back on this machine
- * lives. Steps 5.1.5-5.1.6 must run at the exit a discarded flow takes — it is parked on the page's
- * constructor and no resume ever comes back — so the teardown is the only place they CAN run; and this half of
- * the pair has to leave in NESTING ORDER with the other half, §4.13.5 "Upgrades" step 10's regardless-list,
- * which custom_elements_queue_unlock pays below idl_args.c's `release` bracket. A member's `release` runs
- * BEFORE that unlock, so an upgrade reached from inside this member's own Construct would leave the OUTER
- * bracket first. This is the door that puts DOM §4.9's bracket exactly where §4.13.5's already was — below the
- * bracket, in the same teardown, unwound in nesting order.
- *
- * IT IS NOT THE FINGERPRINT THAT FORCES IT, THOUGH IT ONCE WAS, and the correction is recorded here because the
- * next reader will otherwise re-derive the old reason. The map is a map of constructors to registries, so
- * giving an entry back drops a reference to `C`, a value the member's own `visit` names for the whole bracket;
- * idl_args.c used to fold the HEAP's count of every declared value and therefore refused this give-back and a
- * `release` discharging the declaration alike, aborting every completed `document.createElement` of a defined
- * name. That fold now reads slot IDENTITY and no count, so it would no longer object. The ordering above is
- * what keeps this door, and it stands on its own.
- *
- * ONE PER INVOCATION, asserted: the pair nests one deep per declared member, because the one bracket a member
- * enters directly brackets a single Construct. */
+ * Not done in the member's `release`: steps 5.1.5-5.1.6 must also run for a discarded flow parked in the
+ * page's constructor, so only the teardown can run them, and they must unwind in nesting order with HTML
+ * §4.13.5 "Upgrades" step 10's give-back (custom_elements_queue_unlock), which the teardown pays below
+ * idl_args.c's `release` bracket. One per invocation, asserted. */
 void idl_active_ctor_owed(JSContext *ctx, JSStepHdr *hdr, JSValueConst ctor);
 
-/* READ a member of the dictionary the declaration built. An `optional D options = {}` argument that the page
-   did not pass is not there at all, so a body that reads it with JS_GetPropertyStr calls a property get on
-   `undefined` — a pending TypeError, and a truthy JS_EXCEPTION where a `false` belonged. That is a mistake per
-   BODY, which is the thing this machine exists to have only one of, so reading a dictionary is part of the
-   declaration's contract: an absent dictionary has every member absent, and that is all it means.
-   Nothing of the page's is on the object these read, so neither runs any of its code. */
+/* Read a member of the dictionary the declaration built. An omitted `optional D options = {}` argument is not
+   there at all, so a plain property get would be a get on `undefined`; here an absent dictionary has every
+   member absent. Nothing of the page's is on the object, so no page code runs. */
 JSValue idl_dict_get(JSContext *ctx, JSValueConst dict, const char *name);
-/* THE BOOLEAN READ CARRIES ITS CALLER'S ADDRESS, because its assert is one line reached from every dictionary
-   in the platform, and a crash stamped `idl_args.c` names a defect with no object. The pair is captured at the
-   CALL and never derived here, which is why this is a macro expanded at each site and not a second function
-   wrapping the first; the member's own name travels with it because one name (`bubbles`, `capture`) is
-   declared by many dictionaries and only the pair says which read it was.
-   WHAT IT NOW REPORTS IS AN OBJECT OR A DECLARATION AND NO LONGER A MISSING FORK ANYWHERE. §3.2.3's fork is
-   performed by the member loop (idl_concolic_rule answers IDL_CONCOLIC_FORKS for both boolean types, so the
-   crossing does not rewrite them and the loop asks step_tobool_run), and the loop also decides §3.2.17 step
-   4.1.4's PRESENCE at the outcome seam before that — which is what closed the one case that used to leave a
-   NO-DEFAULT boolean crossing as itself. So a member read off a converted dictionary arrives as a real truth
-   value or as an absence. An unknown here says one of two things — the object never went through §3.2.17, or
-   the member is not declared a boolean — and the refusal itself is where that split is stated. */
+/* Read a boolean member. A macro passing the caller's address, because one assert line is reached from every
+   dictionary and the member name alone (`bubbles`, `capture`) does not say which read it was.
+   The member loop has already performed §3.2.3's fork and step 4.1.4's presence decision, so the value is a
+   real truth value or absent. An unknown here means the object never went through §3.2.17 or the member is
+   not declared a boolean, and the refusal says which. */
 bool    idl_dict_bool_at(JSContext *ctx, JSValueConst dict, const char *name,
                          const char *file, int line);
 #define idl_dict_bool(ctx, dict, name) idl_dict_bool_at((ctx), (dict), (name), __FILE__, __LINE__)
 
-/* THE TWO ACCOUNTS A HAND-ROLLED MEMBER READ OWES, WHICH ARE NOT ONE DEFECT AND MUST NOT SHARE A MESSAGE.
-   A body that reads a member with idl_dict_get and then asserts its SHAPE is asserting that §3.2.17
-   (ES-to-IDL list) step 4.1.4.1 converted it — "Let idlMemberValue be the result of converting jsMemberValue
-   to an IDL value whose type is the type member is declared to be of". That assertion has TWO ways to fail
-   and only ONE of them is a conversion that went wrong.
-   THE FIRST IS THE CROSSING, AND IT IS THE ENGINE WORKING AS DESIGNED. idl_dict_walk_run's member loop
-   rewrites a CONCOLIC member's declared type to IDL_ANY BEFORE any type arm is asked — for every declared
-   type whose rule is not IDL_CONCOLIC_FORKS, which is every type this macro is used at (the one exception is
-   §3.2.3's boolean, whose conversion IS the fork and which therefore reaches its arm and is placed as a real
-   truth value; idl_dict_bool is the reader for those, and it makes the opposite assertion) — so unknown
-   external input crosses the boundary AS ITSELF and reaches the body still wearing the Object
-   solver/concolic.c gives it. Nothing was converted, so nothing failed. A shape assert phrased "reached this
-   body unconverted" is then a CORRECT CRASH WITH A FALSE EXPLANATION — the worst shape an assert has, because
-   the crash IS right and only its account is wrong, so it does not announce itself. A reader who obeys it
-   goes looking for a conversion that failed, finds a declaration doing exactly what it was written to do, and
-   is left with two conclusions the tree cannot afford: weaken the assert, or rebuild the coercion the
-   crossing exists to prevent.
-   THE SECOND IS THE ORIGINAL INVARIANT, UNCHANGED: a value that is neither the declared type's output nor
-   unknown input means the member is not declared that type in the IdlDictMember list the operation registered.
-   NEITHER IS SOFTENED — both abort, on exactly the values the one assert aborted on before — and the split is
-   what makes the first ACTIONABLE, because the remedies are different work: the second is a declaration to
-   fix, and the first is a FORK the operation does not yet ask for. A refusal is an END STATE for the second
-   and an INTERMEDIATE one for the first: while it stands, the engine is declining to explore a world the
-   unknown admits, which is the opposite of what this file's boundary rule is for.
-   IT IS A MACRO SO THE ADDRESS IS THE CALLER'S. The emitter stamps __FILE__/__LINE__ where the assert
-   EXPANDS, so the refusal names the body that read the member rather than this header — the same reason
-   idl_dict_bool is a macro over idl_dict_bool_at, and the reason this is not a function taking a `bool`.
-   `cond` and `v` are DCHECK operands and must be side-effect-free; `v` is read twice.
-   `declared` is the member's IDL AS ITS OWN SPEC WRITES IT (`` `long` with a `= 0` default ``), because the
-   declaration is what the next reader has to check it against, and `name` is the member's identifier because
-   one name is declared by many dictionaries and only the pair with the site says which one refused. */
+/* Assert the shape of a member a body read with idl_dict_get, with two separate accounts. The member loop
+   crosses a concolic member as itself for every type whose rule is not IDL_CONCOLIC_FORKS, so unknown input
+   reaching the body is the engine working as designed; the remedy is a fork at the member's own stage, never
+   a coercion or a weaker assert. Any other wrong shape means the IdlDictMember list does not declare the
+   member that type. Both abort.
+   A macro so the refusal names the body's site. `cond` and `v` are DCHECK operands, side-effect-free; `v` is
+   read twice. `declared` is the member's IDL as its spec writes it, and `name` its identifier. */
 #define IDL_DCHECK_MEMBER(cond, v, name, declared) do {                                                       \
         DCHECKF((cond) || !concolic_is(v),                                                                    \
                 "the dictionary member `%s` — declared %s — reached its body as UNKNOWN EXTERNAL INPUT. That " \
@@ -1301,63 +1028,31 @@ bool    idl_dict_bool_at(JSContext *ctx, JSValueConst dict, const char *name,
                 "that type", (name), (declared));                                                             \
     } while (0)
 
-/* §4.2.3'S TREE STEPS, DRAINED WHERE THEY CAN YIELD.
-   A DOM mutation's insertion/removing steps are a walk of the whole changed subtree, and they used to run inside
-   the mutation chokepoint — inside a C member body, the deepest place in this engine with no way to suspend. The
-   spec runs them SYNCHRONOUSLY as part of the insertion, so they cannot become a deferred job: a page that
-   appends an element and then calls a method its upgrade installed depends on the ordering. So the DOM layer
-   records what changed and this machine drains the record before the member returns — no page code in between,
-   the spec's ordering intact, and a walk that yields per node.
-   IT IS DRAINED HERE AND NOWHERE ELSE, because this is the one point every declared member converges on. A
-   per-member drain would be per-member plumbing, and every member added afterwards would be a silent gap — the
-   same shape as a dispatch predicate at each call site. A member that mutates the tree WITHOUT being declared
-   leaves a record nobody consumes, which the machine asserts on rather than letting it rot.
-   The DOM layer registers these because this file must not know what a Node is; it knows only that something
-   was recorded and that it takes N steps to consume.
-   A STEP RETURNS A STEP CODE AND IS HANDED THE DRIVING MACHINE'S HEADER, because a per-node effect ASKS
-   QUESTIONS: HTML §6.6.7's insertion steps run §6.6.6's allow focus steps, whose second clause is §6.4.1's
-   TRANSIENT ACTIVATION — unknown external state, so the answer is a FORK and not a `bool`. A walk that could
-   only say "more remains" had nowhere to put that, which is why it stood at a DFAIL naming this signature.
-   JS_STEP_YIELD = more remains, JS_STEP_FORK = the caller returns it and the walk is RE-ENTERED at the same
-   node (its own phase is what stops the effects it already performed from running twice), 0 = the walk is
-   done and the buffer has been released.
-   AND IT MAY RUN THE PAGE'S CODE, WHICH IS A PROPERTY OF DOM §4.2.3 "Mutation algorithms"'s TWO PHASES AND NOT
-   OF THIS TRANSPORT. The two are opposite and the standard states both in its own words. §4.2.3 defines the
-   INSERTION STEPS with "These steps must not modify the node tree that insertedNode participates in, create
-   browsing contexts, fire events, or otherwise execute JavaScript", so a request that parked on the page's
-   code between two of them would be a timeline the standard forbids. Its POST-CONNECTION steps are the opposite by construction —
-   insert step 10 collects staticNodeList up front precisely "because the post-connection steps can modify the
-   tree's structure, making live traversal unsafe" — and HTML §4.12.1.1 "Processing model"'s own worked example
-   REQUIRES the page's code to run between two of staticNodeList's entries: `body.append(script1, script2)`
-   where script1's body removes script2 prints nothing, which is only decidable if script1 RAN before step 12
-   re-read script2's connectedness. So a step may make a REQUEST (JS_STEP_CALL and its kin), and WHICH PHASE
-   may make one is the DOM layer's invariant, asserted at the walk that knows the phase — never here, which
-   knows only that something was recorded.
-   `in` IS THE COMPLETION OF THE REQUEST THE WALK LAST MADE, owned by the walk exactly as a step machine owns
-   its `cb_result`, and JS_UNDEFINED on every ordinary re-entry. A walk that has made no request and is handed
-   something else is being delivered an answer to a question it never asked, which it asserts on. */
+/* DOM §4.2.3's tree steps, drained where they can yield. The DOM layer records what a mutation changed and
+   this machine drains the record before the member returns: synchronous as the spec requires, with no page
+   code in between, yielding per node. It is drained here because every declared member converges here; a tree
+   mutation from an undeclared member leaves a record nobody consumes, which is asserted. The DOM layer
+   registers these so this file need not know what a Node is.
+   `step` returns JS_STEP_YIELD (more remains), JS_STEP_FORK (the caller returns it and the walk is re-entered
+   at the same node, its own phase preventing repeated effects), or 0 (done, buffer released). It may also make
+   a request: DOM §4.2.3 "Mutation algorithms" forbids the insertion steps to run script, while the
+   post-connection steps may (HTML §4.12.1.1 "Processing model": script1 removing script2 during
+   `body.append(script1, script2)` stops script2), so which phase may request is asserted by the DOM layer.
+   `in` is the completion of the walk's last request, owned by the walk, and JS_UNDEFINED otherwise; an answer
+   with no request outstanding is asserted. */
 typedef struct {
     void *(*take)(JSContext *ctx);                 /* everything recorded so far, or NULL; leaves none behind */
-    /* ONE node; a step code. `in`/`out_cb`/`out_argc` are the step-machine request contract, unchanged. */
+    /* One node; returns a step code. `in`/`out_cb`/`out_argc` are the step-machine request contract. */
     int   (*step)(JSContext *ctx, void *buf, JSStepHdr *h, JSValue in, JSValue **out_cb, int *out_argc);
     void  (*release)(JSContext *ctx, void *buf);
     bool  (*recorded)(void);                       /* is anything waiting to be taken */
-    /* THE BUFFER ACROSS A FORK. A fork inside the walk snapshots the driving machine, which byte-copies its
-       state and re-takes only what a `visit` names — so a buffer left unvisited would be ONE allocation two
-       flows both walk and both free, and the two arms would share a cursor. It is visited exactly as a step
-       machine visits its own owned storage, and the DOM layer performs it because only that layer knows how
-       the buffer is laid out. */
+    /* The buffer across a fork: the deep fork byte-copies the driving state and re-takes only what a `visit`
+       names, so an unvisited buffer would be one allocation two flows walk and free. */
     void  (*visit)(JSContext *ctx, void **buf, JSStepVisit *v);
-    /* THE HALF THE `visit` CANNOT CARRY, for a walk ABANDONED mid-request. The visit is the one list of what
-       the buffer OWNS, and the driver's teardown discharges it — but a walk that parked on the page's code can
-       also be HOLDING something that is not a reference, and nothing discharges that. HTML §8.1.4.6 "Runtime
-       script errors" step 6.1's ERROR REPORTING MODE is the one: a nested program's report takes it off the
-       global and gives it back at its own end, and a flow dropped in between would leave the global in
-       reporting mode for the rest of the session, silently swallowing every later report.
-       It is the exact pair `custom_elements_queue_unlock` already is for the reaction queue, which is why it is
-       called from the same place in the teardown and not folded into `release`: `release` runs on the walk's
-       NORMAL 0 edge, and this runs on the abandoned one. Freeing a reference here would be the second list that
-       teardown's fingerprint check exists to catch. */
+    /* Gives back what the buffer holds that is not a reference, for a walk abandoned mid-request (HTML
+       §8.1.4.6 "Runtime script errors" step 6.1's error reporting mode, which would otherwise stay set on the
+       global). `release` runs on the normal 0 edge, this on the abandoned one, called beside
+       custom_elements_queue_unlock. It frees no reference; `visit` covers those. */
     void  (*unlock)(JSContext *ctx, void *buf);
 } IdlTreeSteps;
 void idl_set_tree_steps(const IdlTreeSteps *ops);
