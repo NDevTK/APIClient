@@ -34052,7 +34052,11 @@ int main(int argc, char **argv) {
     printf("@RESULT %s\n", js);
     /* THE VERDICT, so a 0 row is FAIL: the run is over and the row will not be reached. */
     char unanswered[PROBE_UNANSWERED_MAX], unasked[PROBE_UNANSWERED_MAX];
-    int h_ok = probes_report(js, true, unanswered, sizeof unanswered, unasked, sizeof unasked);
+    /* Under --lifecycle the document's programs are never handed to the scheduler, so the probe table states
+       nothing about this run; the verdict is that the agent's life reached its end, and any defect on that
+       path has already aborted through its own DCHECK. */
+    int h_ok = lifecycle ? 1 : probes_report(js, true, unanswered, sizeof unanswered, unasked, sizeof unasked);
+    if (lifecycle) unasked[0] = 0;
 
     /* THE PASS SENTENCE NAMES WHAT THIS INVOCATION MEASURED. A cold session runs none of the @H/@S rows, so
        reporting their verdict over it would be a claim about a program it did not run — the same defect the
@@ -34072,7 +34076,10 @@ int main(int argc, char **argv) {
        ONE SIGNAL AND NOT TWO: the exit code stays 1 and the SENTENCE carries the classification. A distinct
        code would be a second answer to one question, kept in step with this line by nothing, and build.mjs
        reads the child's status only as the stage's own code. */
-    if (h_ok && unasked[0])
+    if (lifecycle)
+        printf("LIFECYCLE: the agent ran without its document's programs and reached @RESULT; the probe table "
+               "is not read in this mode, and the second agent below is the rest of this verdict\n");
+    else if (h_ok && unasked[0])
         printf("[test-forced] NOT ASKED — this host cannot put: %s — every statement this run COULD put was "
                "answered, so nothing here is a verdict on the revision; each named row carries its own `why` "
                "in the @H stream above, and `@HUNASKED` names them at every sample including the ones where "
