@@ -309,7 +309,7 @@ typedef struct Flow {
     /* The document's load stage is not here: a flow reaches several Documents in its agent cluster and each has
        its own readiness, so it lives on each Document (document.c's readiness slot), isolated per flow by the
        COW delta. */
-    int   script_i;        /* position in this flow's ONE program sequence: a row of `dyn`, on [0, dyn_n) */
+    int   script_i;        /* position in this flow's one program sequence: a row of `dyn`, on [0, dyn_n) */
     /* One sequence and one address space: the document's own scripts are seeded as rows of `dyn` at creation
        (flow_set_seed_hook), so HTML §4.12.1.1's "immediately execute the script element" is expressible at
        every position. A position may be a script whose source has not arrived (engine.c's DYN_SCRIPT_SRC row
@@ -334,7 +334,7 @@ typedef struct Flow {
      * clone is between programs and stands at the end of the sequence. A per-row column cannot replace this,
      * since a row an ancestor interposed also carries DYN_POS_IMMEDIATE. A fork carries it. */
     int   imm_at;          /* the base slot `imm_next` was computed from; -1 while no run is open */
-    int   imm_next;        /* the slot the next IMMEDIATE row of that run takes */
+    int   imm_next;        /* the slot the next immediate row of that run takes */
     /* This flow's own program rows (a lazily loaded chunk, a queued document script), or, while the row's kind
        is DYN_SCRIPT_SRC, the address of a script whose source has not arrived: one column, because it is one
        queue. The row is this flow's; the bytes are not. Source text is fixed once decoded, so every timeline
@@ -409,7 +409,7 @@ typedef struct Flow {
        task and the checkpoint falls before it. Position alone cannot say which: an immediate row and an
        appended one both land at the cursor when the queue was empty. */
     unsigned char *dyn_pos;
-    void *delta;           /* this flow's isolated HEAP COW delta (CowDelta*), applied while running */
+    void *delta;           /* this flow's isolated heap COW delta (CowDelta*), applied while running */
     void *dom; int dom_n, dom_cap;   /* this flow's isolated DOM COW delta head buffer (dom_cow), swapped with the
                                         heap delta at every context switch, so each flow sees its own document and a
                                         rewind restores it exactly. Detached via dom_buf_take while parked. */
@@ -804,10 +804,10 @@ typedef struct {
        result's `_switches`, because flow_credit_pick's one caller sits beside engine.c's switch count.
        flow_wfq_census asserts `picks_live + picks_departed == picks_lifetime` and, separately,
        `picks_live <= picks_lifetime` (the equality alone admits a negative departed total). */
-    int64_t picks_live;       /* GAUGE: dispatches held by the members standing now */
-    int64_t picks_max;        /* GAUGE: the most any one of them holds */
-    int64_t picks_lifetime;   /* LIFETIME: every dispatch this instance has made, departed members included */
-    /* LIFETIME: the dispatches departed members took with them (flow.c's `g_picks_departed`, raised at
+    int64_t picks_live;       /* gauge: dispatches held by the members standing now */
+    int64_t picks_max;        /* gauge: the most any one of them holds */
+    int64_t picks_lifetime;   /* lifetime: every dispatch this instance has made, departed members included */
+    /* lifetime: the dispatches departed members took with them (flow.c's `g_picks_departed`, raised at
        flow_remove), so `picks_lifetime` is a published partition. `departures` partitions into
        `finished + sold + teardown` (engine_frontier_census asserts it). A finish costs a dispatch (flow_finish is
        reached only from the switched-in member's FLOW_STEP_DONE arm), so `departures > 0` with
@@ -932,11 +932,11 @@ typedef struct {
        live guard and emitted here, landing with `testing/live-wfq.js`, which throws on an unnamed branch-scope
        row. Absence shows as: `branches` quoted as a fold width, high by one per family whose root departed. */
     long branches;
-    long br_live_max;   /* GAUGE: the most live members in one bucket — the fat side of a branch */
-    long br_live_min;   /* GAUGE: the fewest; see above for why the root's bucket usually owns this */
-    long br_live_sum;   /* GAUGE: their sum, published because `== members` is the partition identity */
-    long br_born_max;   /* LIFETIME: the most members ever MINTED into one live bucket */
-    long br_born_min;   /* LIFETIME: the fewest — the two ends of flow_branch_bonus's own denominator */
+    long br_live_max;   /* gauge: the most live members in one bucket — the fat side of a branch */
+    long br_live_min;   /* gauge: the fewest; see above for why the root's bucket usually owns this */
+    long br_live_sum;   /* gauge: their sum, published because `== members` is the partition identity */
+    long br_born_max;   /* lifetime: the most members ever minted into one live bucket */
+    long br_born_min;   /* lifetime: the fewest — the two ends of flow_branch_bonus's own denominator */
     /* The crowd: the fattest live bucket's own membership, mint and receipt, from one bucket. Its share of the
        members (`br_crowd_live / members`) against its share of the live buckets' thread
        (`br_crowd_us / br_held_us`) separates three states: at par, a branching arm converting fork factor into
@@ -950,9 +950,9 @@ typedef struct {
        Named residual. Not covered: what the hungriest bucket minted and shed. Next diff builds: nothing until a
        reading needs it. Absence shows as: `br_crowd_us`, `br_minter_us` and `br_us_max` all different with
        `br_us_max` inside `br_held_us`, a live arm holding the most thread that no triple names. */
-    long br_crowd_live;    /* GAUGE: live members in the bucket that owns `br_live_max` */
-    long br_crowd_born;    /* LIFETIME: that same bucket's own mint count */
-    int64_t br_crowd_us;   /* LIFETIME MICROSECONDS: that same bucket's own receipt */
+    long br_crowd_live;    /* gauge: live members in the bucket that owns `br_live_max` */
+    long br_crowd_born;    /* lifetime: that same bucket's own mint count */
+    int64_t br_crowd_us;   /* lifetime microseconds: that same bucket's own receipt */
     /* The minter: the same three numbers for the bucket that has minted the most, a different arm whenever an arm
        shed what it minted (`sub_born = live + sub_gone`). A walk over an unknown length forks a `stop at n` arm
        at every position and each arm finishes, so the minter stands narrow and is not the crowd. It carries
@@ -961,22 +961,22 @@ typedef struct {
        `br_minter_gone` is the shed count, published nowhere else. flow_wfq_census asserts
        `br_minter_live + br_minter_gone == br_born_max` (different writers, as for the crowd);
        `br_minter_us == br_crowd_us` says the two selectors name one arm. Zero semantics are the crowd's. */
-    long br_minter_live;   /* GAUGE: live members in the bucket that owns `br_born_max` */
-    long br_minter_gone;   /* LIFETIME: arms that same bucket has SHED — published nowhere else */
-    int64_t br_minter_us;  /* LIFETIME MICROSECONDS: that same bucket's own receipt */
-    int64_t br_us_max;  /* LIFETIME MICROSECONDS: the most thread time one bucket's subtree ever received */
-    int64_t br_us_min;  /* LIFETIME MICROSECONDS: the least */
-    int64_t br_us_sum;  /* LIFETIME MICROSECONDS: their sum — one half of the burn identity */
+    long br_minter_live;   /* gauge: live members in the bucket that owns `br_born_max` */
+    long br_minter_gone;   /* lifetime: arms that same bucket has shed — published nowhere else */
+    int64_t br_minter_us;  /* lifetime microseconds: that same bucket's own receipt */
+    int64_t br_us_max;  /* lifetime microseconds: the most thread time one bucket's subtree ever received */
+    int64_t br_us_min;  /* lifetime microseconds: the least */
+    int64_t br_us_sum;  /* lifetime microseconds: their sum — one half of the burn identity */
     /* `br_us_sum` split by whether anyone stands in the bucket, so a live arm's share has a live denominator
        (`br_held_us`). Two accumulators in two arms of one condition, so `br_held_us + br_empty_us == br_us_sum`
        is a check; asserted in flow_wfq_census. These rows are gauges despite the per-bucket "lifetime" labels:
        a bucket whose subtree wholly departs is freed in `acct_unref` and its receipt moves into
        `br_retired_us`, so `br_us_sum`, `br_held_us` and `br_empty_us` fall then, and only `br_retired_us` and
        `charged_us` are monotone (solver/result.c files them the same way). */
-    int64_t br_held_us;  /* LIFETIME MICROSECONDS: received by buckets holding at least one live member */
-    int64_t br_empty_us; /* LIFETIME MICROSECONDS: received by buckets still taken and holding none */
-    int64_t br_retired_us; /* LIFETIME MICROSECONDS received by buckets whose subtree has wholly departed */
-    int64_t charged_us; /* LIFETIME MICROSECONDS the scheduler has charged at all — the identity's total */
+    int64_t br_held_us;  /* lifetime microseconds: received by buckets holding at least one live member */
+    int64_t br_empty_us; /* lifetime microseconds: received by buckets still taken and holding none */
+    int64_t br_retired_us; /* lifetime microseconds received by buckets whose subtree has wholly departed */
+    int64_t charged_us; /* lifetime microseconds the scheduler has charged at all — the identity's total */
     /* Gauge: how deep in the fork tree the deepest live member sits (0 at a root). It ranks nothing; it says
        whether the fork tree is a star (a root walk is O(1) amortised) or a chain (quadratic). Real bundles read
        a star, but the binding cost of a per-node bucket is retention, which depth cannot see (FlowAcct `up`). */
@@ -995,9 +995,9 @@ typedef struct {
      * flow_wfq_census asserts `br_fan_max <= br_live_max` (a fan lies inside one bucket; the sides come from
      * different writers). No identity over `br_fan_sum` is asserted, because both terms would count trips of
      * the same loop. */
-    long br_fan_max;    /* GAUGE: the most live members forked directly off ONE non-root node */
-    long br_fan_sum;    /* GAUGE: live members forked off a non-root at all — the maximum's denominator */
-    int br_fan_depth;   /* GAUGE: the fork-tree depth of the node holding that maximum; 0 when there is none */
+    long br_fan_max;    /* gauge: the most live members forked directly off one non-root node */
+    long br_fan_sum;    /* gauge: live members forked off a non-root at all — the maximum's denominator */
+    int br_fan_depth;   /* gauge: the fork-tree depth of the node holding that maximum; 0 when there is none */
 
     /* The @S candidate sessions, asked directly (`cand_src` set). `cand_unrun` counts candidates at zero own
      * silence, the order's quantity (flow_own_silence), so it also counts a candidate of a family that just
@@ -1012,7 +1012,7 @@ typedef struct {
     long cand_unrun;      /* …of those, how many stand at zero own silence */
     int64_t cand_svc_max; /* …and the most service any one of them has consumed */
     long cand_dec_max;
-    long dec_max;         /* the deepest decision vector of ANY member — the gate sequence's own length, which
+    long dec_max;         /* the deepest decision vector of any member — the gate sequence's own length, which
                              is what the row above is a fraction of */
 
     /* The order itself, in the pick's units. `w_top` holds the front of the queue and `cand_w_max` is the best
@@ -1167,8 +1167,8 @@ typedef struct {
      * term a member raises only by finishing a turn, and a fork inherits its parent's count, so these say
      * whether the gap was earned. Gauges, read as a pair only where `deliv_ready` is non-zero (else both 0).
      * int64_t to match `Flow::visits`, since `long` is 32 bits in wasm. */
-    int64_t deliv_w_gap_vis;  /* GAUGE: `visits` of the best READY holder — the member `deliv_w_gap` is from */
-    int64_t w_top_vis;        /* GAUGE: `visits` of the member at `w_top` — the member `deliv_w_gap` is to */
+    int64_t deliv_w_gap_vis;  /* gauge: `visits` of the best ready holder — the member `deliv_w_gap` is from */
+    int64_t w_top_vis;        /* gauge: `visits` of the member at `w_top` — the member `deliv_w_gap` is to */
 
     /* How far through the document's program table the deepest member has got, and what the order offers it.
      * `programCursors` (solver/cold.h) says where members stand and the rows above say what the order offers;
@@ -1180,8 +1180,8 @@ typedef struct {
      * `cur_deep_live` repeat the top bucket of `programCursors`, a different walk; on one `workDone` they must
      * agree (a reading, not an assert, since nothing guarantees one instant).
      * A report, never a bound; a cursor term in the order would rank the youngest arm highest. */
-    int  cur_deep;        /* GAUGE: the deepest `Flow.script_i` any live member stands at; 0 on an empty walk */
-    long cur_deep_live;   /* GAUGE: how many live members stand there — the gap's own population */
+    int  cur_deep;        /* gauge: the deepest `Flow.script_i` any live member stands at; 0 on an empty walk */
+    long cur_deep_live;   /* gauge: how many live members stand there — the gap's own population */
     double cur_deep_w_gap; /* `w_top` minus the best weight offered by a member standing at `cur_deep` */
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
@@ -1232,81 +1232,26 @@ static inline const char *flow_scan_name(FlowScan s)
 long flow_scan_runs(FlowScan s);
 int64_t flow_scan_weights(FlowScan s);   /* per member per scan — 64-bit for FlowKeyChecks' reason */
 
-/* …AND WHAT THE ONE ASSERTION IN THAT SAME WALK DID WITH THE WEIGHTS THOSE ROWS COUNT — the partition the
-   banner above is the exact complement of. FLOW_SCANS counts the flow_weight the scan PERFORMED "and never
-   the ones a DCHECK below it makes"; this counts what that DCHECK did, and the two are disjoint by
-   construction.
-   WHY IT IS A ROW AT ALL: flow_pick's member-key invariant is a predicted ABSENCE — the claim is that it
-   never fires — and a clean run is satisfied identically by an invariant that HOLDS and by a path NOBODY
-   TOOK. Its condition is a four-way disjunction whose first three arms EXEMPT the member (it holds the
-   thread, it has never been weighed, or the generation has moved since it was), so a scan can walk a whole
-   frontier and compare nothing whatever. `armed` is the number of comparisons actually made and is the only
-   quantity that scores that prediction. Until this row the arming could only be INFERRED, by pigeonhole,
-   from four scan counters against `rankChanges`.
-   THE OTHER THREE ARE NOT DECORATION AND THEY TAKE DIFFERENT WORK. `running` is bounded by one member per
-   scan and `first_seen` by one per member ever created, so both are structurally small; `stale_gen`
-   approaching the total is the FRONTIER GENERATION MOVING FASTER THAN MEMBERS ARE RE-WEIGHED, which makes the
-   invariant vacuous rather than held — a finding about the frontier, and the one a bare `armed: 0` could not
-   distinguish from a quiet engine.
-   ONE STRUCT AND ONE CALL, because the four are a PARTITION and a partition read through four calls is four
-   moments. §Testing's rule is that a conservation identity holds WITHIN ONE SAMPLE and nowhere else, so this
-   is taken at one instant by construction rather than by the caller remembering to.
-   THE KIND IS THE SAME FOR ALL FOUR AND IT IS IN EVERY PUBLISHED NAME: LIFETIME COUNTS OF COMPARISONS, never
-   reset and monotone, which is the only kind a reader may DIFFERENCE. None of them is a gauge over the
-   frontier and none is per-member, so none may be read against `members` as a share of anything.
-   ZERO IN A RELEASE BUILD, AND THAT IS NOT A READING OF ANYTHING. The check and its per-member stamp are
-   `#if APICLIENT_DEV` (see `Flow.key_last` for why), so nothing raises these where the product ships — while
-   solver/result.c publishes unconditionally, because that composer has no dev arm at all and engine/build.mjs
-   takes its REQUIRED row set from that composer's own format string, so a row emitted in one build only would
-   fail every release census this repository takes. The discriminator needs no sentinel and is already on the
-   line: ALL FOUR AT ZERO WITH ANY `scan<Entry>Weights` NONZERO IS A BUILD THAT MAKES NO CHECK, because in a
-   dev build every member the dispatch loop weighs raises exactly one of the four. `armed: 0` with the four
-   summing ABOVE zero is the real finding — the walk ran, and compared nothing.
-   THE IDENTITY IS ASSERTED WHERE THE PARTS ARE IN ONE HAND, in flow_pick and across ONE call: the four are
-   raised on the statement after `g_scan_weights[why]++` with no branch between them, so their delta over one
-   loop must EQUAL that counter's delta. Two counters maintained by two statements, which is what makes it a
-   check rather than a sum compared with its own summands. It is also the one thing that catches the way this
-   pair rots — a `continue` introduced between the weighing and the block, which is the same correct-by-
-   ADJACENCY shape flow.c's `sub_born++` and the `sub_offset` written beside it already stand on.
-   THE SECOND HALF OF THAT ANALOGY USED TO BE `sub_gone++` AND IS REWRITTEN RATHER THAN DELETED, BECAUSE THE
-   RETIRED READING IS THE INTUITIVE ONE AND THIS IS THE FOURTH SITE THAT CARRIED IT. A departure obviously
-   changes a bucket, so it looks like it must change what every member of that bucket is worth — and it did,
-   while flow_branch_bonus divided by the live gauge `sub_born - sub_gone`. That denominator is the LIFETIME
-   mint count now, which no departure can move, so `sub_gone` reaches no term of flow_weight and a departure
-   re-ranks nobody; flow.c's own walk over this invariant is where the correction is argued. What
-   acct_depart's adjacency IS still load-bearing for is the census's membership identity, one scope over.
-   IT DECIDES NOTHING, for the scan counters' reason exactly: no term of flow_weight reads any of the four, no
-   pick branches on them, nothing is bounded by them.
-   RETIREMENT: this goes when the ask no longer walks the frontier — the invariant is then held at the index's
-   own update site, where it is not a disjunction and has nothing to be exempt from, so there is no arming
-   left to count. */
-/* THE WIDTH IS PART OF THE DECLARATION AND `long` WAS THE WRONG ONE — A 32-BIT ACCUMULATOR IS A STEP CAP
-   ARRIVING AS A TYPE, WHICH IS THE ONE THING §NO BOUNDS FORBIDS AND THE ONE SHAPE NO REVIEWER READS AS A BOUND.
-   These four and `flow_scan_weights` are raised ONCE PER MEMBER PER SCAN, so their unit is O(members × scans)
-   and on a real page's frontier that is BILLIONS within the hour — while every other counter in this header is
-   O(members) or O(steps) and is orders of magnitude from any wall. `long` is 8 bytes on the native host and
-   FOUR on wasm32 (measured with both controls: `_Static_assert(sizeof(long)==4)` passes for `--target=wasm32`
-   and `==8` fails), so the same source is unbounded on one host this project builds for and capped at 2^31 on
-   the one that SHIPS. That is worse than a bound, because it is a bound only the vehicle has, and the native
-   gates can never see it.
-   MEASURED, AND IT IS NOT A HAZARD BUT A REPRODUCED ABORT: a real app page driven on the shipped artifact died
-   at 19m13s, 18m53s and again inside a 25-minute window, byte-identical frame list each time, at the DCHECK in
-   solver/result.c that compares exactly these four against those four scan weights. One census before the
-   abort the right-hand side stood at 2,147,352,163 — ONE HUNDRED AND THIRTY-ONE THOUSAND short of INT32_MAX —
-   with the engine weighing tens of thousands of members a second. It wraps negative, `LHS <= RHS` turns false,
-   and the assert fires. The IDENTITY IS CORRECT and is not what was wrong; signed overflow is UB, so this
-   assert is the OBSERVED behaviour of the defect and not the defect.
-   AND THE CONSEQUENCE IS THE PRODUCT'S, NOT THE INSTRUMENT'S: every long real-page run ended at ~19 minutes,
-   inside the incremental-snapshot path, at a working set of 357-429 MiB — so the 512 MiB RAM floor that is one
-   of the two routes to the cross-session store was not merely unreached, it was UNREACHABLE, and the razor read
-   ZERO on every one of those runs.
-   SO THE RULE IS A WIDTH AND IT IS ASSERTED RATHER THAN ARGUED: a counter raised per member per scan is a
-   FIXED-WIDTH 64-bit type, and the static assertion below is what makes a future `long` here a compile error on
-   the host it would cap rather than a nineteen-minute abort nobody connects to a declaration.
-   RETIREMENT: this record goes when no lifetime counter in this header is declared `long` at all, because the
-   width is then not a thing a reader has to get right per field. */
+/* What flow_pick's member-key assertion did with the weights the scan rows count; disjoint from them, since
+   FLOW_SCANS never counts a DCHECK's weighing. The invariant is a predicted absence, and its condition is a
+   four-way disjunction whose first three arms exempt the member, so a clean run cannot tell an invariant that
+   holds from one never compared:
+     - `armed`: comparisons actually made, the only row that scores the prediction;
+     - `stale_gen`: the frontier generation moved since the member was weighed; near the total, the invariant
+       is vacuous rather than held;
+     - `first_seen` (at most one per member ever) and `running` (at most one per scan).
+   One struct and one call, because the four are a partition and a partition is read at one instant. Lifetime
+   counts of comparisons, monotone, may be differenced, never read against `members`. Zero in a release build,
+   where the check is compiled out (see `Flow.key_last`) while solver/result.c still publishes them: all four
+   zero with any `scan<Entry>Weights` nonzero is a build that makes no check, and `armed: 0` with the four
+   summing above zero is the walk comparing nothing. flow_pick asserts their delta over one loop equals
+   `g_scan_weights[why]`'s, which catches a `continue` inserted between the weighing and the block. They
+   decide nothing. */
+/* Counters raised once per member per scan grow as O(members × scans) and reach 2^31 within the hour on a real
+   page, and `long` is 32 bits on wasm32 (the shipped host) while 64 on native, so a `long` here is a step cap
+   only the vehicle has. They are int64_t, and the static assertion turns a narrower type into a compile error. */
 typedef struct {
-    int64_t armed;       /* comparisons the check actually MADE — the row that scores its predicted absence */
+    int64_t armed;       /* comparisons the check actually made — the row that scores its predicted absence */
     int64_t stale_gen;   /* exempt: the frontier generation moved since this member was last weighed */
     int64_t first_seen;  /* exempt: this member had never been weighed, so there was nothing to compare against */
     int64_t running;     /* exempt: it held the thread, which is the one writer that may move its own half */
@@ -1317,126 +1262,43 @@ _Static_assert(sizeof(((FlowKeyChecks *)0)->armed) >= 8,
                "solver/result.c rather than as anything a reader would connect to this declaration");
 FlowKeyChecks flow_key_checks(void);
 
-/* …AND WHETHER AN INDEX OVER THAT KEY WOULD HAVE RETURNED THE SAME MEMBER THE COMPARATOR DID, WHICH IS THE
-   ONE QUESTION THE PAIR ABOVE DOES NOT REACH AND THE ONE A SUB-LINEAR ORDER IS UNBUILDABLE WITHOUT.
-   flow.c's flow_pick says an index over this key "decides WHICH members can be the maximum and the exact
-   comparison stays flow_weight's, or it has changed the answer".  The check above scores whether the key
-   STANDS STILL; this scores whether the key ORDERS — two different claims, and only the second is what a
-   candidate set rests on.
-
-   WHY IT CANNOT BE SETTLED BY ARGUMENT, WHICH IS WHY IT IS A COUNTER AND NOT A PARAGRAPH.  In exact real
-   arithmetic the surrogate is the order: within one account the reward and the family notch are common, so
-   ordering by `member_key - carry*Q` is ordering by flow_weight, and that is the whole of the decomposition
-   `notch = k + K + (p + R >= S)`.  In FLOAT it is not an identity, and the reason is the summand ORDER
-   rather than the terms: flow_nonreward evaluates `((qn + opt) + dist) + bb` with the only VARYING term
-   FIRST, so every partial sum depends on it and the stable tail cannot be factored out.  A surrogate is
-   therefore a RE-ASSOCIATION, which flow.c's own words say "would differ from it in the last bit and reorder
-   two members the order currently ties".  The two available repairs are both refused here: an epsilon band
-   is not this file's idiom and cannot be made exact, and re-composing flow_weight so its member half is a
-   SUBEXPRESSION is an ORDER change in the last bit and is a decision rather than a diff.
-
-   SO THE QUESTION IS ASKED OF THE RUN INSTEAD, WHICH IS WHAT THIS PROJECT DOES WITH A CLAIM NO ARGUMENT
-   SETTLES.  flow_pick folds the surrogate over exactly the population and exactly the tie-break its own
-   comparison uses, and COUNTS what the two spellings did — whether they named one member, and where they did
-   not, which of the surrogate's two modes it was.
-   THIS READ `flow_pick … asserts that the member the surrogate picks carries the weight the comparator called
-   maximal.  THE ASSERT IS THE POINT AND IT CAN FAIL`, AND IS REWRITTEN RATHER THAN DELETED BECAUSE THAT IS
-   THE DESIGN A READER RE-DERIVES FROM THE PARAGRAPH ABOVE IT.  That equality is gone.  It asked the two
-   spellings to agree BIT FOR BIT while this header's own flow_index_margin DECLARES them free to stand a
-   derived distance apart, so it could not hold on any frontier large enough to present a candidate pair — it
-   was an EXPECTATION with a `DCHECK`'s costume, and its cost was a run's whole emitted surface discarded
-   after it had been earned.  Measured over the four real-page fires on record, every weight reproduced to the
-   bit from the operands the line printed: the pairs stood 1 to 4 ulps apart and the declared margin was 12 to
-   68 times that, so no fire ever refuted the surrogate, the margin or the order.
-   A FIRE ALSO PROVED THE SINGLE TOP KEY UNUSABLE AND SAID NOTHING WHATEVER ABOUT AN INDEX, which is the other
-   half of the retired reading and is why its removal costs no claim: flow_pick's band walk — a candidate set
-   carrying flow_index_margin, needing no edit to flow_weight — runs on the SAME scan and ASSERTS that it
-   returns the comparator's own extremum, and that assert stays.  Measured over every fire on record, three on
-   the smoke fixture and four on real application pages: the band walk's two assertions and the per-member
-   margin bound were SILENT on the very scan that aborted, which an abort being first-past-the-post makes a
-   witness rather than a coincidence — the design this header offers as the answer was observed working
-   exactly where the single top key failed.  The re-composition question survives — flow_pick's banner says
-   what it decides, and it is TIE IDENTITY rather than buildability — and it is now decided from ROWS over a
-   whole run instead of from the one pair that ended one.
-   RETIREMENT: this record goes when the TIE IDENTITY decision has been made by the project owner, because the
-   two rows below exist to inform exactly that and nothing in this file can discharge it.
-
-   READ THE PAIR AND NEVER EITHER ALONE — the same shape as `armed` against its three exemptions.  `asked` is
-   how many scans made the comparison at all, so it is the reachability witness without which a zero
-   `differed` is satisfied identically by agreement and by a walk that never ran.  `differed` is the subset in
-   which the surrogate and the comparator named DIFFERENT MEMBERS, which is the ordinary state when two
-   members tie — informative, not a defect, and the row that says the check is examining anything at all
-   rather than comparing a pointer with itself.  `differed_tie` and `differed_strict` PARTITION it by the one
-   pair that states the mode, and reading either of them without the total is reading a numerator: a strict
-   count that is a large SHARE of the differed total is the single top key naming a member the comparator calls
-   worse repeatedly, and the same count beside a far larger tie count is the order being tied.
-   …AND THE PAIR BENEATH THEM IS WHAT THE ANSWER TO THAT QUESTION COSTS, WHICH IS A DIFFERENT QUESTION AGAIN
-   AND THE ONE THAT DECIDES WHETHER AN INDEX IS WORTH HAVING AT ALL.  The two rows above say whether the key
-   ORDERS.  Where it merely TIES — which flow.c's own abort separates by reading `sur_w` against the
-   SURROGATE'S reading of the member the comparator returned, and NOT against `bw`, which is the retired pair
-   that named the wrong mode on four fires out of four and whose table flow_pick carries — and
-   which is this frontier's ordinary state — the design that answers it needs no edit to flow_weight: take a
-   CANDIDATE SET of every member within a derived margin of the surrogate's extremum and re-compare the
-   survivors through flow_weight itself.  flow_index_margin derives that margin from the two expressions and
-   flow_pick's band walk proves the set contains the comparator's own extremum, so the answer is the full
-   scan's answer pointer for pointer.  What NOBODY had measured is HOW BIG THAT SET IS, and an index that has
-   to re-compare most of the frontier has moved the walk rather than removed it.
-   READ THEM AS A FRACTION AND NEVER THE NUMERATOR ALONE.  `band_members` is how many members the candidate
-   set admitted; `band_weighed` is how many the band test was applied to, raised on the same walk over the
-   same population, which is what makes their quotient the share of the frontier a re-compare would cost
-   rather than a number over a denominator somebody supplied.  A SMALL share is an index that narrows.  A
-   share near one is an index that saves nothing — and that is a finding about whether the surrogate is worth
-   keeping, not a defect to repair.
-   A LARGE SHARE IS EXPECTED AND IS NOT A WIDE MARGIN, WHICH IS THE ONE WAY THIS ROW WILL BE MISREAD — and
-   the reason is a theorem rather than a measurement, so it is written here where the number is published
-   instead of being left for a reader to re-derive from a figure that surprised them.  THE BAND CONTAINS
-   EVERY MEMBER TIED WITH THE MAXIMUM, always: if `W(a)` equals the comparator's extremum then, with `M` the
-   derived margin and `m*` the surrogate's own pick, `S(m*) <= W(m*) + M <= W(a) + M` (because `a` carries
-   the extremum) and `S(a) >= W(a) - M`, so `S(m*) - S(a) <= 2M` and `a` is inside the edge.  The band's
-   share is therefore AT LEAST the share of the frontier standing at the top weight, whatever the margin is
-   — widen it and nothing changes, narrow it and the tie set is still in.  flow.c records this frontier as
-   "73-93% of members tied at the top", so a band near that is the ORDER being tied and not the bound being
-   loose, and a reader who responds to it by shrinking the margin has repaired the one thing that was not
-   wrong.  What such a reading DOES say is the thing the row exists for: an index cannot beat the tie, so a
-   candidate set on a tied frontier re-compares most of it and the walk is moved rather than removed.
-   THE MARGIN IS NOT THE DIAL, IN OTHER WORDS, AND THE SHARE IS A PROPERTY OF THE ORDER.  The only reading
-   that would indict the bound is a band much LARGER than the tie set — which needs the tie set measured
-   beside it and is a second question this pair does not answer.
-   BOTH ARE LIFETIME COUNTS SUMMED OVER ASKS and may be differenced; neither is a gauge, neither is
-   per-member, and neither may be read against `members`.  `index_asked` remains the reachability witness for
-   all five rows beneath it: a zero band, or a zero differed, beside a zero ask is a fold that never ran.
-   ALL SIX ARE LIFETIME COUNTS, raised under APICLIENT_DEV, and none decides anything: no term of flow_weight
-   reads any of them, no pick branches on them, nothing is bounded by them.
-   RETIREMENT: these rows go when the ask no longer walks the frontier — the index is then the thing being
-   asked and its agreement with flow_weight is held at its own update site, so there is no fold left to
-   count and no band left to price. */
+/* Whether an index over the member key would return the member the comparator did: the key standing still
+   (above) is not the key ordering. In exact arithmetic the surrogate is the order, but flow_nonreward evaluates
+   `((qn + opt) + dist) + bb` with the varying term first, so in floating point a surrogate is a re-association
+   that can differ in the last bit. flow_pick therefore folds the surrogate over its own population and
+   tie-break and counts what the two spellings did, with no equality assert, since flow_index_margin declares
+   them free to stand that far apart. Its band walk (a candidate set within flow_index_margin of the
+   surrogate's extremum, re-compared through flow_weight) asserts it returns the comparator's own extremum.
+   `index_asked` is the reachability witness for all six rows. `differed` (named a different member) is
+   partitioned by `differed_tie` (the surrogate reads the comparator's member at its own extremum: a lost
+   distinction a candidate set answers) and `differed_strict` (a real disagreement). Read the strict share of
+   `differed`, never a numerator alone.
+   `band_members / band_weighed` is the share of the frontier a re-compare costs. The band always contains every
+   member tied with the maximum (`S(m*) - S(a) <= 2M`), so its share is at least the tied share whatever the
+   margin: a large share is the order being tied, not a loose margin. Lifetime counts under APICLIENT_DEV,
+   deciding nothing. */
+/* Named residual. Not covered: whether to re-compose flow_weight so its member half is a subexpression, which
+   changes tie identity in the last bit and is the project owner's decision. Next diff builds: that decision,
+   informed by `differed_tie`/`differed_strict` over whole runs. Absence shows as: a strict share that stays
+   non-zero with the surrogate kept as only a re-association. */
 typedef struct {
     long index_asked;      /* scans that folded the surrogate and had a maximum to compare it against */
-    long index_differed;   /* …of those, the ones where the surrogate named a DIFFERENT member. IT TESTS NO
-                              WEIGHT, so `of equal weight` — which this comment said — is true of no scan in
-                              particular: the pair it counts may weigh the same or differ in the last bits,
-                              and since no abort stands here any more the run continues either way. The two
-                              rows below are what separates those, and they were this field's own next-diff
-                              clause */
-    long differed_tie;     /* …of THOSE, the ones where the surrogate reads the comparator's own member AT its
-                              own extremum — it lost a distinction the comparator makes rather than making a
+    long index_differed;   /* …of those, the ones where the surrogate named a different member. It tests no
+                              weight: the pair may weigh the same or differ in the last bits, and the two rows
+                              below separate those */
+    long differed_tie;     /* …of those, the ones where the surrogate reads the comparator's own member at its
+                              own extremum: it lost a distinction the comparator makes rather than making a
                               different one, which is the arm a margin-carrying candidate set answers with
                               flow_weight untouched */
-    long differed_strict;  /* …and the ones where it reads that member on the LOSING side of its extremum — a
-                              real disagreement, which is the arm the TIE IDENTITY decision is about. The pair
+    long differed_strict;  /* …and the ones where it reads that member on the losing side of its extremum: a
+                              real disagreement, which is the arm the tie-identity decision is about. The pair
                               is read against `index_differed`, which it partitions, and flow_pick asserts the
                               sum because the three are raised by two statements over one condition */
-    /* AND THE WIDTH IN THIS STRUCT IS THE UNIT, WHICH IS WHY THE TWO BELOW ARE WIDER THAN THE FOUR ABOVE AND
-       NOT AN INCONSISTENCY SOMEBODY WILL TIDY. The four `long` rows are raised ONCE PER ASK, so they count
-       PICKS; these two are raised inside the band walk, so they count MEMBERS × PICKS. The derivation is the
-       raises themselves and is three greps: `index_asked++`, `index_differed++` and the `differed_tie` /
-       `differed_strict` pair all sit outside the member loop, and `band_members += band` / `band_weighed +=
-       band_of` sit in it. On a real page's frontier — measured 18,724 and 25,650 members — that is four orders
-       of magnitude between the two groups, which is the whole of why only one group reached a 32-bit wall. */
+    /* The four `long` rows above are raised once per ask (outside flow_pick's member loop); the two below are
+       raised inside the band walk, once per member per ask, so they are int64_t for FlowKeyChecks' reason. */
     int64_t band_members;  /* members the derived-margin candidate set admitted, summed over those scans */
-    int64_t band_weighed;  /* …and the members that set was tested over — the denominator of the row above.
-                              PER MEMBER PER SCAN, so 64-bit for FlowKeyChecks' reason: measured 23.6 M from
-                              the same 2^31 wall as the counters that reached it. */
+    int64_t band_weighed;  /* …and the members that set was tested over — the denominator of the row above;
+                              per member per scan, so 64-bit for FlowKeyChecks' reason */
 } FlowIndexChecks;
 _Static_assert(sizeof(((FlowIndexChecks *)0)->band_members) >= 8
                    && sizeof(((FlowIndexChecks *)0)->band_weighed) >= 8,
@@ -1445,530 +1307,271 @@ _Static_assert(sizeof(((FlowIndexChecks *)0)->band_members) >= 8
                "rows of this struct are which so the answer is read rather than guessed");
 FlowIndexChecks flow_index_checks(void);
 
-/* HOW MANY TIMES THE ORDER CHANGED — the denominator the hook's rescan count has and `scanNextRuns` is NOT,
- * and without which the two readings of that count disagree with each other.
- *
- * MEASURED, ON TWO ADJACENT CENSUSES OF ONE RUN: `scanRivalRuns / scanNextRuns` read 3.22 over the run's whole
- * life and 0.86 over its last interval — one says the hook rescans three times per step and the other says it
- * rescans less than once, and NEITHER is wrong. They are answers to a question whose denominator is not the
- * step: the hook rescans when `flow_frontier_gen() != g_seen_gen || cur != g_seen_cur` (engine.c), so its
- * cadence is set by RANK CHANGES and incumbent switches, not by steps. A step during which a flow forks three
- * times moves the generation three times and costs three rescans; a step during which nothing forks costs at
- * most one. So a rate per step is a COST (how much scan work a step pays for) and a rate per rank change is
- * the CACHE's own hit rate, and the two were being read as one number.
- * WHICH IS ALSO WHY THE DISAGREEMENT IS INFORMATIVE RATHER THAN NOISE: in that run the frontier grew by ONE
- * member across the interval where the ratio fell to 0.86, so the forking had all but stopped and the rescans
- * fell with it. That is the mechanism behaving exactly as described and NOT the hypothesis failing — but it is
- * indistinguishable from the hypothesis failing while the only denominator available is the step count, which
- * is precisely what this row is for. It settles nothing on its own; it makes the question answerable.
- *
- * IT IS THE RAISE COUNT AND NOT `flow_frontier_gen`, and the difference is a lifetime rather than a spelling:
- * flow_registry_init resets the generation and resets none of the scan counters, so a ratio built on the
- * generation number would be two quantities over two lifetimes the first time a host initialised a second
- * registry. Counted at the raise, it is commensurable with the scan rows by construction.
- * IT DECIDES NOTHING, for the scan counters' reason exactly. */
+/* Lifetime count of rank changes (raises of frontier_rank_changed): the denominator of the hook's rescan count.
+ * The hook rescans when `flow_frontier_gen() != g_seen_gen || cur != g_seen_cur` (engine.c), so its cadence is
+ * set by rank changes and incumbent switches, not steps: rescans per step is a cost, rescans per rank change is
+ * the cache's hit rate. Counted at the raise rather than read from flow_frontier_gen, because
+ * flow_registry_init resets the generation and none of the scan counters. Decides nothing. */
 long flow_rank_changes(void);
-/* THE FRONTIER'S ARRIVAL AND DEPARTURE PROCESSES, for the life of this instance — see the census rows above
-   for the reading, the identity and why `flow_rank_changes` cannot answer this. */
+/* Lifetime arrival and departure counts for this instance; see the census rows for the reading and identity. */
 int64_t flow_arrivals(void);
 int64_t flow_departures(void);
-/* …AND THE THIRD ARM OF THAT DEPARTURE TOTAL: how many members were still standing when this instance's
-   registry went down. The other two arms are engine.c's (`finished`, `sold`) and live in the frontier census,
-   so the three are only ever in one hand there — which is where the partition is asserted and why this is
-   exported rather than kept private to flow.c. A departure that credits no arm is a fourth exit from the
-   frontier, and that assert is the only thing that can see one. */
+/* The third arm of the departure total: members still standing when this instance's registry went down. The
+   other arms (`finished`, `sold`) are engine.c's, so the partition is asserted in the frontier census, where a
+   departure crediting no arm would show as a fourth exit. */
 int64_t flow_departures_teardown(void);
 
-/* HOW MANY DISPATCHES THE TIE-BREAK DECIDED AGAINST A STARVED MEMBER — §scheduler's razor's STARVES, made
-   countable at the line that chooses. LIFETIME counter; the only kind a reader may difference, and it is read
-   against `picks_lifetime`, because the FRACTION is the reading and the raw count is not: a handful over a
-   session is the strict comparison doing its job, and a figure on the order of the dispatches themselves is
-   the ORDER having stopped separating members while the pick's registry position decides which one runs.
-   IT IS NOT A FOURTH GAUGE BESIDE `never_picked`, `never_picked_gap` AND `never_picked_at_top`, and the
-   difference is what it is for. Those three are taken over the frontier at an INSTANT and can say only that a
-   tied tail exists; none can say whether a PICK ever passed over one, which is the actual claim the razor
-   makes. Measured, and it is why this exists: a frontier that GROWS BY FORKING makes all three uninformative
-   at once — `never_picked` climbing is arithmetic about the fork factor rather than about the order (a run
-   creating 5786 flows against 1010 dispatches cannot reach them whatever the order says), `picks_max` cannot
-   fall toward one while a framed flow legitimately needs many quanta to finish a program, and
-   `picks_live / (members - never_picked)` sums re-dispatches that CONTINUE a program, which are necessary,
-   with re-dispatches that pass over a starved member, which are the defect.
-   AND THIS ROW DOES NOT SEPARATE THOSE TWO EITHER, WHICH THE SENTENCE THAT STOOD HERE CLAIMED IT DID ("This
-   counts only the second"). The condition is `best` having been dispatched before, and being dispatched
-   before says nothing about having anything to continue: a framed flow re-picked to finish its program while
-   an arm it forked stands at its exact weight is counted here, and on a forking page that is the ordinary
-   shape of every quantum of every multi-quantum program, because an arm is born at its parent's weight. The
-   claim was refuted by a CONSUMER of the row, which had declined to print the quotient for exactly this
-   reason while the two sites that declare it said the separation had been made. `flow_starved_picks_idle`
-   below is the separation; this row is the population it is a subset of, and kept because the REMAINDER — what a
-   forking frontier spends finishing programs — is a reading in its own right. */
+/* Lifetime count of dispatch-loop picks that switched to a member already dispatched before while a
+   never-dispatched member stood at exactly its weight. Read as a fraction of `picks_lifetime`: a handful is the
+   strict comparison working; a share near the dispatches is the order no longer separating members, so registry
+   position decides. It does not separate a framed flow re-picked to finish its program (the ordinary case on a
+   forking page, since an arm is born at its parent's weight) from a pass over a starved member;
+   flow_starved_picks_idle is that subset, and the remainder is what a forking frontier spends finishing
+   programs. */
 long flow_starved_picks(void);
 
-/* THE WHOLE REBUILD AN EPOCH-KEYED INDEX OVER `flow_index_key` WOULD PAY, SUMMED OVER A RUN — a LIFETIME
-   counter, published as `epochRebuildLifetime`, and the reading that decides whether a sub-linear order over
-   this frontier is buildable at all. flow.c holds the derivation; the reading is this.
-   THE DENOMINATOR IS `scanNextWeights` AND IT ALREADY SHIPS, which is why no new one is owed and why it is
-   named here rather than left to be re-derived: that row is the lifetime sum over scans of the members each
-   one weighed, i.e. exactly the walk an index would REPLACE. Well below it, the epoch is a COST and an index
-   narrows; at or above it, the rebuild is the walk moved rather than removed and an index buys nothing.
-   `epochResetsLifetime` is its own denominator for the other question — the quotient is the average rebuild
-   per emission, which separates a large total over many cheap emissions from a small one over few expensive
-   ones, and those take different diffs.
-   A ZERO IS A CLAIM AND NOT A CLEAN BILL, so read it against `epochResetsLifetime` first: zero resets is a
-   run that never emitted, and the row is then silent about the design rather than favourable to it. Zero
-   rebuild across NON-ZERO resets is the strongest possible result — every emission found the whole family
-   already at base — and it is reachable, because the population empties whenever nothing has been charged
-   since the last finding.
-   RELEASE-LIVE, unlike the key and index stamps beside it: the maintenance is four O(1) statements rather
-   than a per-member evaluation per scan, so this is readable off the artifact the product actually ships. */
+/* Lifetime sum of the rebuild an epoch-keyed index over flow_index_key would pay (published as
+   `epochRebuildLifetime`; flow.c holds the derivation). Its denominator is `scanNextWeights`, the walk an index
+   would replace: well below it an index narrows, at or above it the walk is only moved. `epochResetsLifetime`
+   gives the average rebuild per emission. Read a zero against the resets first: zero resets is a run that
+   never emitted; zero rebuild over non-zero resets is the best result, reachable when nothing was charged
+   since the last finding. Release-live: four O(1) maintenance statements. */
 long flow_epoch_rebuild(void);
 
-/* …AND HOW MANY EMISSIONS RESET A FAMILY'S BASE — a LIFETIME count, published as `epochResetsLifetime`, and
-   the denominator of the row above. Raised on the same statement group as that sum and nowhere else, so the
-   two cannot come to describe two different populations and no reader can take an average from one of them
-   alone. */
+/* Lifetime count of emissions that reset a family's base (`epochResetsLifetime`), raised in the same statement
+   group as the sum above, so the two describe one population. */
 long flow_epoch_resets(void);
 
-/* …AND THE SUBSET OF THOSE IN WHICH THE MEMBER RE-DISPATCHED HAD NOTHING TO CONTINUE — no live frame and no
-   microtask checkpoint owed, which is the unit boundary HTML §8.1.4.4 "Calling scripts" step 3 of clean up
-   after running script draws and the one `visits` is credited at. A member standing there has FINISHED its
-   trial, so handing it the thread again while a member that has never had one stands at its exact weight is
-   §scheduler's razor's STARVES with no necessity behind it; the remainder of the row above is a program being
-   finished, which a tie must not interrupt.
-   THE FRACTION IS OF `picks_lifetime`, exactly as the superset's is, and the two are raised under one
-   condition at one line so `idle <= starved` holds by construction and neither is a reading of a second
-   moment. A LIFETIME COUNTER and one of the few kinds a reader may difference.
-   IT ASKS ALL THREE CLAUSES OF THE BOUNDARY NOW, AND IT IS NO LONGER AN UPPER BOUND. engine.c's unit
-   boundary is `!frame && !JS_HasParkedFlow(runtime) && !flow_job_microtask`; `flow_between_units` asks the
-   first and the third and flow.c's `flow_holds_park` asks the second, so a member with no frame, no microtask
-   owed and a PARKED CONTINUATION is no longer counted here as though it had finished its trial.
-   WHAT MADE THE SECOND CLAUSE ASKABLE FROM HERE IS WHO IS COUNTED, NOT A NEW HANDLE. The raise requires
-   `best != seed`, the incumbent SEEDS that scan and can never be the member counted, so every member this row
-   counts is a NON-RUNNING one — and a non-running member's park queue is on `Flow::parked`, exactly where the
-   predicate reads it. Only the RUNNING member's queue is in the runtime, and asking about that member is an
-   assert rather than a silent NULL.
-   THE READING THIS BUYS IS THE ONE THAT MATTERS AND IT IS WORTH SAYING WHY: an upper bound NEAR ZERO is
-   decisive and an upper bound that is LARGE is not, so while this row was a bound it could not be trusted in
-   the direction an ordering question is actually asked in. */
+/* The subset of flow_starved_picks in which the re-dispatched member had nothing to continue: no frame, no
+   parked continuation and no microtask owed, the unit boundary HTML §8.1.4.4 "Calling scripts" (clean up after
+   running script step 3) draws and `visits` is credited at. Re-dispatching such a member past a level waiter
+   is starvation with no necessity behind it. Raised under the superset's condition at one line, so
+   `idle <= starved` by construction; a lifetime counter, read as a fraction of `picks_lifetime`.
+   It asks all three clauses of engine.c's boundary (`!frame && !JS_HasParkedFlow(runtime) &&
+   !flow_job_microtask`): flow_between_units asks the first and third, flow_holds_park the second. The raise
+   requires `best != seed`, so the member counted is never the running one, whose park queue is in the
+   runtime; flow_holds_park asserts that. */
 long flow_starved_picks_idle(void);
 
-/* HOW DEEP THE TIED PLATEAU IS — FOUR LIFETIME ROWS THAT SEPARATE §Attention'S VALUE YIELD FROM §scheduler'S
-   NEVER-STARVED GUARANTEE, WHICH RESOLVE OPPOSITELY ON ONE POPULATION AND WHICH NOTHING IN THIS FILE COULD
-   TELL APART. The two sentences are not in conflict and the dilemma dissolves on enumerating what each is
-   about, which is the thing to read first:
-     §Attention's yield is about an incumbent the order can SEE is top-ranked — "a top-ranked flow runs on at
-       ~zero switch cost". A RETENTION is that, and it is correct.
-     §scheduler's optimism bonus is about a member ranked BEHIND — "so a never-run flow is never starved".
-       A member TIED with the maximum is in neither population: nothing is ranked ahead of it, so there is no
-       starvation to cure, which is the argument `never_picked` above already makes in its own words and the
-       reason relaxing flow_pick's comparison would implement nothing.
-   SO THE ONLY THING EITHER SENTENCE CAN BE WRONG ABOUT IS HOW LONG A RETENTION LASTS, and that is the one
-   quantity neither of them states and no row here was measuring. flow_pick's own banner named it — "how often
-   the incumbent kept the thread while a never-run member stood level with it … belongs to a reading about
-   PLATEAU DEPTH" — and left it uncounted until the diff that added these four rows, which is where that
-   banner's own clause is rewritten.
-   WHAT THE SPECIFICATION PREDICTS, SO THAT THESE ROWS CAN REFUTE IT RATHER THAN ILLUSTRATE IT: the aging term
-   above claims in its own words that "a flow tied with an unrun sibling on reward and bonus hands over after
-   ONE quantum, which is the queue rotating". flow_age_running is called unconditionally by the dispatch loop
-   and its charges TELESCOPE (engine.c carries each turn's clock reading into the next turn's `t0`), so the
-   incumbent's own silence accumulates the whole slice and outruns a level waiter's notch — engine.c asserts
-   that observability at the charge. The prediction is therefore a BOUND ON DEPTH and not the existence of a
-   handover, and the quotient below is what scores it.
-   READ THEM AS TWO FRACTIONS AND NEVER A NUMERATOR ALONE:
-     `plateauHeld / plateauAsked`   how tied the frontier is at the line that dispatches — the share of
-                                    makeable comparisons the tie-break decided in the incumbent's favour. It
-                                    is the ORDER being tied and is not by itself a defect.
-     `plateauHeld / plateauRuns`    THE DEPTH, and the reading all four rows exist for. Bounded is the queue
-                                    rotating, which is the specification holding. `plateauRuns` at 1 beside a
-                                    large `plateauHeld` is ONE unbroken hold for the whole run, which is the
-                                    guarantee being FALSE and is the only reading here that asks for a diff.
-   `plateauAsked` IS THE REACHABILITY WITNESS AND NONE OF THE OTHER THREE MAY BE READ WITHOUT IT, the same
-   shape `index_asked` takes for the six `FlowIndexChecks` rows: a zero `plateauHeld` beside a zero ask is a scan
-   population that never existed — no incumbent the scan weighed, or no never-dispatched member to compare it
-   against — and is satisfied identically by a frontier the order is serving perfectly and by a dispatch loop
-   that never ran. A zero ask beside a non-zero `picksLifetime` is itself a finding: it says the frontier held
-   no never-dispatched member at any dispatch, which is a frontier that drains.
-   ALL FOUR ARE LIFETIME COUNTS, RELEASE-LIVE, and none decides anything: no term of flow_weight reads any of
-   them, no pick branches on them, nothing is bounded by them. `plateauHeldIdle` is an UPPER BOUND by TWO of
-   the unit boundary's three clauses — one unaskable of the running member at any price, one affordable only
-   as an O(1) predicate this file does not yet have, since the row fires on nearly every scan of a tied
-   frontier. See the residual at its counter in flow.c for both and for what closes them.
-   NAMED RESIDUAL. NOT COVERED: an automatic reading. `engine/build.mjs`'s @WFQ verdict is what turns this
-   census into a sentence — it is where "a FRONTIER ADVANCING WITHOUT RETIRING" comes from — and it says
-   nothing about the depth, so the two quotients above are computed on every census of every run and read only
-   by somebody who goes looking. WHAT THE NEXT DIFF BUILDS: that verdict clause. It is NOT built here and the
-   reason is the whole of why this is a residual rather than an omission: a verdict has to say whether a depth
-   is BOUNDED, that is a BAND, and no depth has ever been measured — so the band would be a number nobody
-   derived sitting in the one place a reader takes a number from, which is the proposed-narrowing defect with a
-   threshold in place of a rule. The first measured depth is what the band comes from and the clause lands with
-   it. HOW ITS ABSENCE SHOWS: a run whose verdict names a frontier that advances without retiring while the
-   document beside it carries `plateauRuns` at 1 and `plateauHeld` in the thousands — the verdict silent about
-   the one row that says whether the ordering is the cause.
-   RETIREMENT: these rows go when the depth is held by an assertion instead of a reading — an upper bound on
-   consecutive retentions derived from FLOW_AGE_QUANTUM and the slice, asserted where the charge meets the pick
-   as engine.c's own notch check already is — because the quotient is then a claim the build refuses to break
-   rather than a number somebody has to go and read. */
+/* How deep the tied plateau is: lifetime rows that separate the attention value yield (a top-ranked incumbent
+   runs on at near-zero switch cost; a retention is that) from the never-starved guarantee (about a member
+   ranked behind; a tied member is ranked behind nobody). Both can be wrong only about how long a retention
+   lasts. The aging spec predicts a bound: flow_age_running's charges telescope across turns, so the
+   incumbent's own silence outruns a level waiter's notch and it hands over (engine.c asserts that at the
+   charge).
+     `plateauHeld / plateauAsked`   how tied the frontier is at the dispatch line; not a defect by itself.
+     `plateauHeld / plateauRuns`    the depth: bounded is the queue rotating; `plateauRuns` at 1 beside a large
+                                    `plateauHeld` is one unbroken hold, the guarantee false.
+   `plateauAsked` is the reachability witness; a zero ask beside non-zero `picksLifetime` is a frontier holding
+   no never-dispatched member at any dispatch. Release-live, deciding nothing. `plateauHeldIdle` is an upper
+   bound (two clauses of the unit boundary are not asked; its residual is at its counter in flow.c). */
+/* Named residual. Not covered: engine/build.mjs's @WFQ verdict says nothing about plateau depth. Next diff
+   builds: that verdict clause, with a band derived from the first measured depth. Absence shows as: a verdict
+   naming a frontier advancing without retiring while `plateauRuns` is 1 and `plateauHeld` is in the thousands. */
 long flow_plateau_asked(void);
 long flow_plateau_held(void);
 long flow_plateau_runs(void);
 long flow_plateau_held_idle(void);
 
-/* The highest-priority flow in the frontier, or NULL if empty — EVERY member, whether or not it can currently
+/* The highest-priority flow in the frontier, or NULL if empty: every member, whether or not it can currently
    make progress. It answers the host's Level-1 question (this document's best weight) and the census's; the
    scheduler's own pick is flow_next_to_run below. Does not remove it. */
 Flow *flow_best(void);
 
-/* WHICH FLOW SHOULD HOLD THE THREAD, given the one that holds it now (NULL when nobody does) — the dispatch
- * loop's PICK. The same comparator and the same order as flow_best, with two things said on top of it, and
- * both of them are what separates a RANKING from a SCHEDULE:
- *   - a flow that has reported itself host-owed is not a candidate (it cannot use the thread, so handing it
- *     over hands it straight back), and
- *   - the INCUMBENT keeps the thread unless a candidate is STRICTLY better — the identical comparison the
- *     preempt hook's value clause makes, so the two ends of one decision cannot disagree. A tie is not a
- *     reason to swap two COW deltas.
- * NULL means nothing can run: either the frontier is empty, or every member is waiting on the host — which is
- * the STALL, decided by asking each member rather than by counting a run of unproductive picks.
- * `why` NAMES THE ASKER AND IS NOT DERIVED FROM THE ARGUMENTS, because two callers ask this identical question
- * for different reasons and at different cadences: the DISPATCH LOOP asks it once per iteration to decide who
- * holds the thread, and the HOST asks it per poll for its Level-1 weight (engine_top_weight). Their costs are
- * the same scan and their meanings are opposite — one is what a step pays, the other is what a report pays —
- * so summing them would put a per-poll cost inside the per-step rate that FLOW_SCANS exists to make readable.
- * The site travels with the operation; nothing here can infer it, because the arguments are identical. */
+/* Which flow should hold the thread, given the one that holds it now (NULL when nobody does): the dispatch
+ * loop's pick. Same comparator and order as flow_best, plus two scheduling rules:
+ *   - a host-owed flow is not a candidate (it cannot use the thread), and
+ *   - the incumbent keeps the thread unless a candidate is strictly better, the same comparison the preempt
+ *     hook's value clause makes, so a tie never swaps two COW deltas.
+ * NULL means nothing can run: the frontier is empty or every member waits on the host (the stall, decided by
+ * asking each member). `why` names the asker, because the dispatch loop (per step) and the host's Level-1 poll
+ * (engine_top_weight) pass identical arguments at different cadences, and FLOW_SCANS counts them apart. */
 Flow *flow_next_to_run(const Flow *incumbent, FlowScan why);
 
-/* WHO THE RUNNING FLOW IS DEFENDING AGAINST — the best flow that could USE the thread, other than `cur`. The
- * preempt hook compares it against the running flow itself, which is why this one excludes rather than seeds.
- * It is the same scan, so the hook and the pick can never rank two flows differently. */
+/* The best flow that could use the thread other than `cur`: what the preempt hook compares the running flow
+ * against, hence it excludes rather than seeds. The same scan, so the hook and the pick never disagree. */
 Flow *flow_rival_of(const Flow *cur);
 
-/* HOW MANY WHOLE QUANTA OF THREAD TIME THIS FLOW HAS CONSUMED — the quantised reading of `cpu`, and a CENSUS
- * quantity: it says who is consuming the thread, at the granularity the thread is handed out in. It is not
- * itself a term of the weight (it used to be the optimism term's, and a microsecond is not a visit), but the
- * aging term reads the SUM of it and the row below in exactly this unit. */
+/* Whole quanta of thread time this flow has consumed: the quantised own silence, a census quantity. Not itself
+ * a weight term; the aging term reads its sum with the family notch in this unit. */
 int64_t flow_service_notch(const Flow *f);
-/* …AND THE FAMILY'S, in the same unit. Two quantities with two reset points (flow.c's flow_age_running says
-   why); their RATIO is the fork factor of the widest family in the frontier. */
+/* The family's notch, in the same unit; it has its own reset point (flow.c's flow_age_running). The ratio of the
+   two is the widest family's fork factor. */
 int64_t flow_family_notch(const Flow *f);
-/* THE AGING TERM'S QUANTITY — how many whole COOPERATIVE QUANTA of silence this flow stands at: its own thread
-   time since its last emission plus its fork family's since any arm of it last emitted, in the unit of the two
-   notches above and deliberately the SAME one. The PRICE is applied where the term is summed (flow.c's
-   FLOW_AGE_QUANTUM), because what a microsecond costs and the smallest step the order can express are two
-   quantities and one constant cannot be both: this used to step in whole emitted FINDINGS, 83 quanta wide, so
-   a flow that consumed a slice of the thread had its rank unchanged and the pick that immediately followed
-   read a weight the charge had not moved. Public because it is half of what a rank CHANGE is made of: between
-   two of these notches, and between two of the flow's completed units, its weight cannot move except through
-   an emission. That pair is exactly the invariant engine.c's seam assertion holds the value yield to. */
+/* The aging term's quantity: whole cooperative quanta of silence, `(own + fam) / FLOW_SERVICE_US`. The price per
+   notch is applied where the term is summed (flow.c's FLOW_AGE_QUANTUM), since the cost of a microsecond and the
+   order's smallest step are different quantities. Public because it is half of a rank change: between two of
+   these notches and two completed units, a weight moves only through an emission, which is the invariant
+   engine.c's seam assertion holds the value yield to. */
 int64_t flow_silence_notch(const Flow *f);
 
-/* …AND THE TWO PIECES OF IT THE PAIR ABOVE DOES NOT ACCOUNT FOR, WHICH IS A CORRECTION TO THAT SENTENCE AND
-   NOT AN ADDITION TO IT. `flow_silence_notch` is `(own + fam) / S` and the two notches above are `own / S` and
-   `fam / S`; integer division of a SUM is the sum of the divisions PLUS A CARRY, so the three rows a reader
-   has do not reconcile and the missing bit is a WHOLE NOTCH — one FLOW_AGE_QUANTUM, 0.012 points, against a
-   whole-order spread measured at 0.030 and 0.036 on two documents.
-   THEY EXIST TO PRICE AN ASK, NOT TO ORDER ANYTHING. No term of flow_weight reads either, no fork carries
-   either, and flow_weight's own arithmetic is untouched by their existence: the split says that between two
-   frontier generations the ONLY per-member quantity in the weight that moves is this carry, whose threshold is
-   COMMON to the family and sweeps monotonically — so members cross it in descending order of their phase and a
-   maximum over the frontier is a maximum over two CONTIGUOUS RANGES of it. flow.c states the derivation, and
-   flow_pick's own "why this is still a walk at all" is where the claim it corrects lives.
-   RETIREMENT: this pair goes when the ask no longer walks the frontier, at which point an index is their
-   reader and `sil_phases` below stops being a row. */
+/* The remainder and carry of that division: `(own + fam) / S` is `own / S + fam / S` plus a carry of one notch,
+   so the three notch rows do not reconcile without these. Between two frontier generations the carry is the
+   only per-member quantity in the weight that moves, its threshold is common to the family and sweeps
+   monotonically, so members cross in descending phase and a frontier maximum is a maximum over two contiguous
+   phase ranges (flow.c states the derivation). They price an ask; no weight term reads them. */
 int64_t flow_silence_phase(const Flow *f);
 int flow_silence_carry(const Flow *f);
 
-/* …AND THE ONE SUMMAND THAT CLAIM DOES NOT COVER, PUBLISHED SO THAT IT CAN. The pair above says that between
-   two frontier generations the ONLY per-member quantity in the weight that moves is the aging's carry, and
-   engine.c's rival assertion is where that is checked rather than asserted in prose — over the rival's own
-   service notch, its completed-unit count, its reward and its fitness distance. flow_weight has a FIFTH
-   summand: flow_branch_bonus, `1.0 / sub_born` over the member's top-level arm, and `sub_born` is a bucket
-   field every member of that arm reads through one pointer — so ONE fork raises it for ALL of them at once.
-   Nothing was watching it, and the reason was reach and not exemption: `FlowAcct` is file-private to flow.c,
-   so the term had no spelling outside that file for an assertion to name.
-   IT PUBLISHES THE DENOMINATOR AND NOT THE TERM, WHICH IS THE STRONGER OF THE TWO AND THE ONLY EXACT ONE.
-   `1.0 / sub_born` is a pure function of this integer, so equality here ENTAILS equality of the term, while a
-   double would be compared with `==` against a quotient recomputed at another instant — the last-bit
-   comparison flow.c's own phase pair refuses for an index, refused here for the same reason. It is also what
-   a reader can reconcile against `brBornMax`/`brBornMin`, which are this field over the whole frontier.
-   IT IS NOT A TERM AND NOTHING RANKS BY IT: flow_weight is untouched, no fork carries this and no arrival
-   copies it. Its one reader is an assertion about what may move while the generation stands still.
-   RETIREMENT: this goes with the pair above and for its reason — when the ask no longer walks the frontier,
-   the index is what holds this invariant and holds it at its own update site. */
+/* The member's top-level arm's `sub_born`, the denominator of flow_branch_bonus (`1.0 / sub_born`), published
+   because FlowAcct is private to flow.c and one fork raises it for every member of the arm. engine.c's rival
+   assertion reads it to check what may move while the generation stands still. The integer rather than the
+   term, so equality is exact. Reconciles against `brBornMax`/`brBornMin`. Not a term; nothing ranks by it. */
 long flow_branch_born(const Flow *f);
 
-/* THE LOWEST-PRIORITY MEMBER OTHER THAN `exclude` — the TAIL the cold tier gives up first at the RAM floor, and
- * the SAME comparator as flow_best read in the other direction. Not a second ranking: the flow that is paged
- * out has to be the flow the WFQ would have run last, or the engine evicts what it was about to do and keeps
- * what it was starving. Asserted where it is computed, by RE-DERIVING the minimum over the same candidate set
- * — not, as it used to say here, "against flow_best": that comparison was a minimum against a maximum, which
- * is arithmetic and holds for every frontier that can exist.
- * EVERY MEMBER, not only the runnable ones — a flow waiting on the host is the cheapest thing here to page (its
- * recipe re-issues the request and gets today's answer), and filtering it out would leave the flows that cannot
- * run holding the RAM the flows that can need.
- * `exclude` is the flow the scheduler is switched into, which is the one member that can be neither written out
- * nor released: its decision state is live in decide.c and its delta is applied to the live heap. */
+/* The lowest-priority member other than `exclude`: the tail the cold tier gives up first at the RAM floor, the
+ * same comparator as flow_best read the other way, so the flow paged out is the one the WFQ would run last.
+ * Asserted where computed by re-deriving the minimum over the same candidate set. Every member, not only the
+ * runnable ones: a host-waiting flow is the cheapest to page (its recipe re-issues the request).
+ * `exclude` is the flow the scheduler is switched into, which can be neither written out nor released. */
 Flow *flow_worst(const Flow *exclude);
 
-/* THIS FLOW ANSWERED FLOW_STEP_OWED. It stays in the frontier at its own weight and keeps every work item it
-   holds — nothing is dropped, removed or reordered; it is simply not PICKED again until the HOST does something
-   that could have answered it. Asserts that the flow was not already marked, which is the two-sided half of
-   that sentence: a marked flow is out of the pick, so a second report means its mark was laundered. */
+/* This flow answered FLOW_STEP_OWED. It stays in the frontier at its own weight with every work item; it is not
+   picked again until the host does something that could answer it. Asserts the flow was not already marked,
+   since a marked flow is out of the pick and a second report means its mark was cleared without an event. */
 void  flow_set_host_owed(Flow *f);
 
-/* HOW MANY MEMBERS HAVE REPORTED THEMSELVES HOST-OWED — the scheduler stating a fact about itself, beside the
-   census's `blocked` (which asks the REGISTER whether the host owes this flow anything). The two answer
-   different questions and the gap between them is the diagnostic: `blocked: 512, owed: 59` is a frontier whose
-   marks are being cleared faster than the sweep can lay them down, which is exactly the state that made a
-   fully-blocked document swap COW deltas 1.76 million times instead of reporting STALLED. Equal numbers on a
-   stalled frontier is the healthy reading. */
+/* How many members have reported themselves host-owed. Beside the census's `blocked` (which asks the register),
+   a gap means marks are cleared faster than the sweep lays them; equal numbers on a stalled frontier is
+   healthy. */
 int   flow_host_owed_count(void);
 
-/* IS THIS ONE MEMBER OUT OF THE RUNNABLE ORDER — flow_pick's own filter, asked of a single flow. The pick
-   skips a marked member and nothing else skips anything (no seed and no exclusion on the runnable entries),
-   so this predicate answering FALSE for a live member is exactly the statement "the scan weighed it", and
-   that is what a caller comparing its own incumbent against the scan's maximum needs in order to know
-   whether the two readings are about the same population. It is published for that one consumer rather than
-   because it is generally useful: the alternative is the caller inferring the mark from the step code that
-   laid it down, which is a second writer's worth of knowledge about a mark that has exactly one writer. */
+/* Is this one member out of the runnable order (flow_pick's own filter)? False for a live member means the scan
+   weighed it, which a caller comparing its incumbent against the scan's maximum needs; published so that the
+   mark keeps one writer rather than being inferred from the step code. */
 int   flow_host_owed(const Flow *f);
 
-/* THE HOST ANSWERED THIS FLOW, so it is askable again. ONE CLEAR PER EVENT, ON THE FLOW THE EVENT REACHED —
- * a reply provided into its register, an answer delivered to its request, a record or an operation the host
- * attached to it. Those are the only things that can change a host-owed flow's answer, and each of them names
- * the flow it changes.
- *
- * IT USED TO BE CLEARED AT THE TOP OF EVERY SLICE, on the reasoning that "between two slices the host ran".
- * That is true of a slice that ended because the engine had nothing left to do, and FALSE of one that ended on
- * its CPU QUANTUM — the cooperative yield is about thread-sharing, and the host it hands the thread to has
- * nothing to answer. So the mark was being laundered by the one slice exit that means nothing: measured on a
- * document whose entire frontier was blocked (512 of 512), a slice marked the ~59 flows it had time for, the
- * quantum cut it short, and the next slice re-admitted all of them. The sweep never reached the end of the
- * frontier, the STALL was unreachable BY CONSTRUCTION, and the engine swapped COW deltas 1.76 million times
- * with not one flow finishing. Tying the lifetime to the EVENT rather than to the slice is what makes "every
- * member is waiting on the host" a state the scheduler can actually arrive at. */
+/* The host answered this flow, so it is askable again. One clear per event, on the flow the event reached: a
+ * reply provided into its register, an answer delivered, a record or operation attached to it. Tied to the
+ * event rather than to the slice, because a slice that ended on its CPU quantum gave the host nothing to answer,
+ * and clearing per slice would make "every member waits on the host" unreachable. */
 void  flow_clear_host_owed(Flow *f);
 
-/* …AND THE ONE EVENT THAT NAMES NO FLOW: an external document script's text is the DOCUMENT's, so the flow
-   that delivers that reply fills a slot every other flow parked on the same script index was waiting for. It is
-   the only unblocking that happens inside a slice, which is why it is the only clear that is not per flow. */
+/* The one event that names no flow: an external document script's text is the document's, so its reply fills a
+   slot every flow parked on that script was waiting for. The only unblocking inside a slice. */
 void  flow_clear_host_owed_all(void);
 
-/* THE IMAGE THIS MEMBER OWES THE HOST — @PERWORLD, and the whole of what it means is on `paint_owed` above.
- * The set is written on TWO ROADS, which are this entry's own call sites and are what
- * `engine_request_paint_every_world` is made of: `paint_mark_standing_members` marks the members ALIVE at the
- * ask, which only a walk of the frontier can name, and `flow_new` marks the members NOT YET BORN, which only
- * the mint can. EITHER ROAD ALONE LEAVES A POPULATION UNMARKED — the walk misses every arm forked afterwards,
- * and the mint misses the boot flow, which on a document that has not stepped is the entire frontier and the
- * only member with a document in it. Each mark is discharged by the scheduler HANDING THE THREAD BACK with
- * that member switched in, which is the one moment its pixels exist.
- *
- * IT IS NOT A HOST-OWED MARK AND MUST NOT BE FOLDED INTO ONE, which is the near-miss this pair invites. A
- * host-owed mark says the member CANNOT PROGRESS and takes it OUT of the pick; this says the member has
- * something the host wants to see FIRST and changes the pick not at all. Folding them would put every member
- * of an asked frontier out of the pick at once, which is the STALL, and the host would be handed a frontier
- * reporting that it owes replies it does not owe. */
+/* The image this member owes the host (`paint_owed`). Marked on two roads, the call sites of
+ * `engine_request_paint_every_world`: `paint_mark_standing_members` marks the members alive at the ask, and
+ * `flow_new` marks members born later; either alone misses a population (the walk misses later arms, the mint
+ * misses the boot flow). A mark is discharged when the scheduler hands the thread back with that member
+ * switched in. It is not a host-owed mark: that takes a member out of the pick, while this changes the pick not
+ * at all, and folding them would stall an asked frontier. */
 void  flow_set_paint_owed(Flow *f);
 void  flow_clear_paint_owed(Flow *f);
 int   flow_paint_owed(const Flow *f);
-/* EVERY WORLD MINTED FROM NOW ON OWES THE HOST ONE IMAGE — a standing MODE and not a second ask, which is the
-   distinction the two entries exist to keep: `flow_set_paint_owed` marks ONE member a caller is holding, and
-   this decides what a member is BORN with. It is one-way on purpose. A host turns it on because it wants one
-   picture per timeline for the whole run, and a mode that could be turned off would let a run write a
-   world-named image for some arms and not others with nothing in the artifact to say which — the plausible
-   datum §A-FIELD-A-CONSUMER-DEFAULTS names, arriving as a directory of pictures that reads as a complete set
-   of a document's worlds and is a sample of them. The members ALIVE when a host asks are not this entry's
-   business: `engine_request_paint_every_world` walks those, and this covers the ones not yet born. */
+/* Every world minted from now on owes the host one image: a standing mode deciding what a member is born with,
+   unlike flow_set_paint_owed. One-way, so a run's world-named images are a complete set of its worlds rather
+   than a sample. Members alive at the ask are `engine_request_paint_every_world`'s walk. */
 void  flow_paint_every_world(void);
 
-/* A counter bumped on every frontier membership change (add/remove). The value-yield recomputes its rival
-   only when this changes (or the running flow switches), never per-opcode. */
+/* A counter bumped at every rank change (frontier_rank_changed: membership changes, emissions, fitness
+   observations, a completed unit, host-owed transitions). The value yield recomputes its rival only when this
+   changes or the running flow switches, never per opcode; flow_age_running's charge deliberately does not bump
+   it. */
 unsigned flow_frontier_gen(void);
 
 /* The running flow (scheduler-set). Detectors credit emitted value to it; the scheduler ages it. */
 void  flow_set_running(Flow *f);
 Flow *flow_running(void);
-void  flow_credit_emit(double v);   /* a NEW @H/@S from the running flow: raise reward, reset aging */
-/* WHERE THIS CANDIDATE'S OWN BYTES STAND ON §@S's LADDER — the fitness term of flow_weight, composed from the
-   two rung fields rather than stored, so there is no second copy of the order to go stale and no writer that
-   can forget to keep one. `(cand_surv + cand_rung) / FLOW_RUNGS_N`, in [0,1], and exactly 0 for every flow
-   that is not a candidate — which is not a special case in the arithmetic but the truth about a flow with no
-   payload, asserted at both writers rather than assumed here. */
+void  flow_credit_emit(double v);   /* a new @H/@S from the running flow: raise reward, reset aging */
+/* Where this candidate's own bytes stand on the @S ladder: the fitness term of flow_weight, composed from the
+   rung fields rather than stored, `(cand_replay + cand_surv + cand_rung) / FLOW_RUNGS_N` in [0,1], and exactly
+   0 for a flow that is not a candidate (both fitness writers assert they are asked only of one). */
 double flow_distance(const Flow *f);
-/* THE RUNNING CANDIDATE'S OWN BYTES SURVIVED THIS MUCH OF THE PAGE — §@S's FIRST rung, written where a fitness
-   goes. `frac` is the fraction of this flow's payload a re-execution delivered, in [0,1]. It RAISES `cand_surv`
-   and does nothing when the flow already stands further along, so the quantity is monotone per flow and an
-   observation can never demote the flow that made it. Not a credit: nothing is added, nothing accumulates, and
-   this may be called for the same fraction any number of times. It bumps the frontier generation exactly as an
-   emission does, because a weight that moves without one is a rank the value-yield cannot see changing.
-   IT ASSERTS THE RUNG BELOW IT, which is the flow-side half of the precondition solve.c's three candidate-arm
-   sink entries state: a fraction is the surviving run of THIS flow's payload, so a flow whose payload is not
-   in the program has nothing for the number to be a fraction of and the run found is the page's own text. */
-/* A CANDIDATE HAS REPLAYED PART OF ITS OWN RECORDED PATH — rung zero, the runway, and the observation §@S(i)
- * requires that no site in this engine was making. `consumed` is the arms this run has replayed and `total` the
- * recorded path they are a prefix of; the reading is their ratio and NOTHING is accumulated. Called from
- * decide.c's dec_replay, one arm at a time, each strictly before the source read the delivery reports at.
- * A READING AND NOT A PAYMENT, so it is written rather than added and says the same thing however many times it
- * is taken — the distinction flow_observe_survival's banner draws between a comparator and a ledger, and the
- * one that makes a fitness usable at all. */
+/* A candidate has replayed part of its own recorded path: rung zero. `consumed` is the arms this run has
+ * replayed and `total` the recorded path they prefix; the reading is their ratio, written, never accumulated.
+ * Called from decide.c's dec_replay one arm at a time, strictly before the source read. */
 void  flow_observe_replay(Flow *f, long consumed, long total);
 
+/* The running candidate's own bytes survived this much of the page: rung one. `frac`, in [0,1], is the fraction
+   of this flow's payload a re-execution delivered. It raises `cand_surv` and does nothing when the flow already
+   stands further along, so it never demotes the flow and may be repeated. It bumps the frontier generation, as
+   an emission does, because the weight moved. Asserts the delivery rung, since a fraction is measured on this
+   flow's payload and a flow whose payload is not in the program has nothing to measure. */
 void  flow_observe_survival(Flow *f, double frac);
-/* …AND THE RUNGS THAT THIS FLOW'S BYTES HAVE NOW REACHED — FLOW_RUNG_DELIVERED, _ARRIVED or _ESCAPED.
-   SAME RULES, SECOND QUANTITY, AND IT IS A SEPARATE ENTRY POINT BECAUSE THE OBSERVATIONS ARE MADE AT SEPARATE
-   SITES AND NO SITE CAN SEE ANOTHER'S ANSWER. The delivery is observed where the substitution is PERFORMED
-   (solver/concolic.c), which is a source read and is in a different component from every other site here; the
-   survival fraction is measured at every code-execution sink, class-independently; the two sink rungs are
-   measured inside the candidate's OWN class, by that class's own language.
-   A single "set the distance" entry would force one of them to compose a number out of a quantity it does not
-   hold, and the way that goes wrong is silent — it reads back the other rung from the composite and rounds.
-   MONOTONE AND ORDERED: it raises `cand_rung` and never lowers it, and it refuses a rung whose predecessor
-   this flow has not stood on, because a ladder whose rungs can be taken out of order is a ranking in which
-   "escaped" and "arrived and escaped" are the same number. */
+/* The rung this flow's bytes have now reached: FLOW_RUNG_DELIVERED, _ARRIVED or _ESCAPED. A separate entry
+   because the observations are made at separate sites that cannot see each other's answers: the delivery where
+   the substitution is performed (solver/concolic.c, a source read), the survival fraction at every
+   code-execution sink, and the two sink rungs inside the candidate's own class by that class's language.
+   Monotone and ordered: it raises `cand_rung`, never lowers it, and refuses a rung whose predecessor this flow
+   has not stood on. */
 void  flow_observe_rung(Flow *f, int rung);
-/* THE RUNNING FLOW JUST TOOK AN ARM ITS CONCRETE EXAMPLE CONTRADICTS — `path_forced`'s ONE writer, and the
-   whole of what makes a request this flow goes on to build FORCED rather than DERIVED. Idempotent and
-   monotone: a path cannot un-take an arm, and the second contradiction says nothing the first did not.
-   IT IS NOT A CREDIT AND NOT A CHARGE. Nothing about the rank moves here — a fork is rank-neutral and a
-   contradicted arm is still a fork — so this deliberately does NOT bump the frontier generation the way
-   flow_credit_emit and the two fitness writers above do: no weight changed, so no rival needs recomputing. */
+/* The running flow just took an arm its concrete example contradicts: `path_forced`'s one writer. Idempotent and
+   monotone. Not a credit or a charge: a fork is rank-neutral, so it does not bump the frontier generation. */
 void  flow_mark_forced_arm(void);
-/* HAS THIS FLOW'S PATH STOOD ON ONE — read at the PARK, never at the join, because a park is a work item and
-   §scheduler's "an operation that becomes a work item takes its inputs with it" applies to its provenance
-   exactly as it applies to its address: a flow that parks a request and takes a contradicted arm afterwards
-   built that request on the path it had THEN. */
+/* Has this flow's path stood on one? Read at the park, because a parked request is a work item that takes its
+   provenance with it: it was built on the path the flow had then. */
 int   flow_path_forced(const Flow *f);
-/* THE RUNNING FLOW JUST DETERMINED A SOURCE'S VALUE ON AN ARM ITS OWN EXAMPLE CONTRADICTS — `path_pinned`'s ONE
-   writer, and the whole of what separates a request whose ADDRESS may rest on a witness this engine chose from
-   one merely built past a forced gate. Idempotent and monotone for `flow_mark_forced_arm`'s reasons.
-   IT IS CALLED ONLY WHERE THAT FUNCTION HAS JUST BEEN CALLED, which is what makes the nesting structural
-   rather than a second copy of the forced test: decide.c's `decide_note_forced_arm` ANSWERS whether it marked
-   the path, and this is reached only on that answer. Two sites spelling "did this arm contradict its example"
-   would be two rules free to disagree, and the disagreement would file a chosen witness under a path that
-   denies standing on one. */
+/* The running flow just determined a source's value on an arm its own example contradicts: `path_pinned`'s one
+   writer, idempotent and monotone. Called only where decide.c's decide_note_forced_arm has just answered that it
+   marked the path, so the nesting is structural and "did this arm contradict its example" has one spelling. */
 void  flow_mark_pinned_value(void);
-/* HAS THIS FLOW DETERMINED A VALUE ON SUCH AN ARM — read at the PARK, beside `flow_path_forced` and for the
-   same reason: a park is a work item and §scheduler's "an operation that becomes a work item takes its inputs
-   with it" applies to what its address RESTS ON exactly as it applies to the address. A flow that parks a
-   request and pins a source afterwards built that request on the path it had THEN. */
+/* Has this flow determined a value on such an arm? Read at the park, beside flow_path_forced and for its reason. */
 int   flow_path_pinned(const Flow *f);
-/* CHARGE THE RUNNING FLOW FOR THE THREAD TIME A STEP JUST BURNED, in MICROSECONDS — the same currency as the
-   reward above, which is the only reason the aging term can ever outweigh it. Charged AFTER the step, because
-   the quantity is not known before it, and by the scheduler alone (it is the only caller that holds both ends
-   of the interval). Never a step count: see the `cpu` field. NOT the only charge on it — a flow that LEAVES the
-   frontier hands what it burned to the flow that forked it, which is what makes the term price a fork CHAIN. */
+/* Charge the running flow for the thread time a step just burned, in microseconds (the reward's currency), after
+   the step and by the scheduler alone, which holds both ends of the interval. Never a step count (see `cpu`). A
+   flow that leaves the frontier also hands what it burned to the flow that forked it, which prices a fork
+   chain. */
 void  flow_age_running(int64_t us);
 
-/* THE FORKED SIBLING TAKES OVER ITS PARENT'S ACCOUNT — both terms of the rank, at the instant of the branch.
-   A fork copies every other field of the parent's history (frame, delta, DOM base, jobs, replies, chunks) and
-   used to leave these two at the constructor's zeros, which told the WFQ that a flow running since boot had
-   emitted nothing and consumed no thread — the second of those being the FULL never-run optimism bonus. The
-   sibling then outranked every flow that had ever had a turn, so the frontier could only be entered and never
-   drained. Called by the fork and by nothing else; a from-baseline flow (the first flow, a candidate session,
-   a cold resume) keeps the zeros, which is what makes ITS bonus mean what it says. Asserts that a fork is
-   RANK-NEUTRAL — see the reasoning at the definition.
-   IT ALSO RECORDS THE FORK EDGE, and the two halves are one statement. Inheriting says where the arm ENTERS the
-   queue; the edge says where the thread time it goes on to burn ENDS UP, and for an arm that runs the rest of the
-   document and finishes the answer used to be nowhere. A fork chain is charged as one monopolizer because it
-   enters as one flow's continuation. */
+/* The forked sibling takes over its parent's account: both rank terms at the instant of the branch, and the fork
+   edge that sends the thread time the arm burns to its family. Without it an arm would read zero reward and
+   the full never-run bonus and outrank every flow that ever had a turn. Called by the fork only; a
+   from-baseline flow (the first flow, a candidate session, a cold resume) keeps the constructor's zeros. Asserts
+   the fork is rank-neutral (reasoning at the definition). */
 void  flow_fork_inherit(Flow *sib, const Flow *parent);
 
-/* RELEASE A FLOW THE SCHEDULER IS NOT SWITCHED INTO — the ONE teardown for a member of the frontier, and the
- * primitive the PARTIAL self-park needs (§scheduler: "an engine self-parks its residue to the IDB cold tier
- * under pressure"; §Time-travel-resume: "under RAM pressure the cold low-value tail serializes to IDB").
- *
- * IT TAKES THE FLOW OUT OF THE FRONTIER AND GIVES ITS RAM BACK — its suspended frame chain, its heap COW delta,
- * its DOM head and its reference on the document's frozen chain, its decision and pin blobs, its chunk bodies,
- * its queued jobs and the replies the host owed it. Everything is released as PARKED state: the delta's head is
- * freed rather than unapplied, and only what the release actually FREES is walked back out of the live heap and
- * document (cow_delta_release / dom_base_release), so releasing a low-value tail while another flow runs cannot
- * disturb the flow holding the thread. Switch the flow out first; both halves assert that you did.
- *
- * WHY IT IS THE ONLY TEARDOWN. The same fourteen fields were released in two other places — the frontier's own
- * teardown and the scheduler's finish path — and a list restated is a list that drifts: the finish path grew a
- * park claim the teardown did not make, and the teardown freed a delta the finish path had already
- * unapplied differently. A field added to `Flow` now has exactly one place that must learn about it, and
- * `flow_remove` asserts from the other side that it did. */
+/* Release a flow the scheduler is not switched into: the one teardown for a frontier member, and the primitive
+ * the partial self-park to the cold tier needs. It removes the flow and returns its RAM: its suspended frames,
+ * heap COW delta, DOM head and reference on the frozen chain, decision and pin blobs, chunk bodies, queued jobs
+ * and owed replies. Everything is released as parked state: the delta's head is freed rather than unapplied,
+ * and only what the release frees is walked out of the live heap and document (cow_delta_release /
+ * dom_base_release), so the flow holding the thread is undisturbed. Switch the flow out first; both halves
+ * assert it. It is the only teardown, so a field added to `Flow` has one place to learn about it, and
+ * flow_remove asserts it did. */
 void  flow_release(JSContext *ctx, Flow *f);
 
 /* Remove + free a flow whose state has already been released. Asserts what flow_release owes it. */
 void  flow_remove(JSContext *ctx, Flow *f);
 
 int   flow_count(void);
-/* IS THIS POINTER STILL A MEMBER OF THE FRONTIER? Pure and side-effect-free, so a DCHECK may ask it. A Flow* is
-   held across a return to the host (engine.c's g_sess_cur) and across a switch-out, and nothing else can say
-   whether the thing it names is still there — a removed flow is freed, so the next read is of freed memory. */
+/* Is this pointer still a member of the frontier? Pure, so a DCHECK may ask it. A Flow* is held across a return
+   to the host (engine.c's g_sess_cur) and across a switch-out, and a removed flow is freed. */
 int   flow_is_member(const Flow *f);
-/* The i'th flow in registry order, or NULL past the end — a WALK over the frontier's members, which is what a
-   register living on the flows needs. flow_best answers which one to RUN; this answers who exists. */
+/* The i'th flow in registry order, or NULL past the end — a walk over the frontier's members, which is what a
+   register living on the flows needs. flow_best answers which one to run; this answers who exists. */
 Flow *flow_at(int i);
 
-/* HOW MANY QUEUED PROGRAMS THE WHOLE FRONTIER STILL HOLDS FOR ONE DOCUMENT — the count over every member's
- * `dyn_doc` column, summed.
- *
- * IT EXISTS BECAUSE THAT COLUMN IS THE ONE HOLDER OF A DOCUMENT THE COLLECTOR CANNOT SEE. Every other way a
- * flow names a realm is a counted JSValue — its suspended frames, its jobs, its parked continuation, the dups
- * inside its COW delta — so a realm a flow can resume into cannot be collected, which is what makes reclamation
- * safe at all. A `dyn_doc` entry is a uint32 HANDLE: it holds nothing, keeps nothing alive, and stays perfectly
- * readable after the realm behind it is gone. So it is exactly the state a realm's teardown has to be asserted
- * against, and core/frame/navigable.c asserts it at the one moment a realm dies.
- *
- * PURE: no allocation, no JS value touched, no reference taken — it is called from inside a collection (the
- * realm-teardown hook fires there), where allocating or dup'ing would re-enter the walk that is running. */
+/* How many queued programs the whole frontier holds for one document, summed over every member's `dyn_doc`.
+ * A `dyn_doc` entry is a uint32 handle that keeps nothing alive and stays readable after its realm is gone,
+ * unlike every counted JSValue by which a flow names a realm, so core/frame/navigable.c asserts this at the
+ * moment a realm dies. Pure (no allocation, no JS value, no reference), because the realm-teardown hook runs
+ * inside a collection. */
 int   flow_programs_for_document(uint32_t doc);
 
-/* HOW MANY PROGRAMS OF ONE DOCUMENT ONE FLOW STILL HAS QUEUED AND HAS NOT STARTED — the other question the
- * one above says it is not answering ("a caller that wants \"still to run\" would be asking a different
- * question with a different assert behind it"), and this is that caller.
- *
- * IT IS PER FLOW BECAUSE THE OPERATION THAT ASKS IT IS. HTML §7.5.10 "Destroying documents"' destroy a
- * Document is state a page OBSERVES, so it runs once per timeline over that timeline's own delta — at the
- * instant flow A destroys a document, flow B has not destroyed it and its rows for that document are rows of a
- * document that is still there. A sum over the frontier would call B's ordinary queue A's defect.
- *
- * AND IT IS UNSTARTED BECAUSE §7.5.10 STEP 5 IS. "Remove any tasks whose document is document from any task
- * queue (without running those tasks)" is about work that has not run; a row the flow has already compiled is
- * a program it may be SUSPENDED INSIDE, and the standard has no object at all for a continuation suspended
- * mid-program — that one is the flow's own state and §NO BOUNDS forbids touching it. `last_compiled` is the
- * line between them, because it is what the compile site advances and asserts against.
- *
- * PURE: no allocation, no JS value touched, no reference taken, so a DCHECK may ask it. */
+/* How many programs of one document one flow has queued and not started. Per flow because HTML §7.5.10
+ * "Destroying documents" runs once per timeline over its own delta, and another flow's rows for that document
+ * belong to a document that still exists there. Unstarted because step 5 removes tasks "without running those
+ * tasks"; a compiled row may hold a suspended continuation, which is the flow's own state. `last_compiled` is
+ * the line between them. Pure, so a DCHECK may ask it. */
 int   flow_programs_unstarted_for_document(const Flow *f, uint32_t doc);
 
-/* TAKE THEM OUT — HTML §7.5.10 "Destroying documents"' step 5, "Remove any tasks whose document is document
- * from any task queue (without running those tasks)", performed on the queue the runtime's own job walk cannot
- * see. Returns how many rows went, which is exactly what the count above answered one instant earlier.
- *
- * WHY THIS QUEUE IS ONE STEP 5 IS ABOUT. `JS_DropJobsForContext` empties the runtime's job queues, and a
- * document's SCRIPTS are not in them: they are rows of the running flow's one program sequence. A row is a task
- * by the standard's own reckoning — §8.1.4.4 "Calling scripts" runs it and §4.12.1.1 "Processing model" queues
- * it ("queue an element task on the DOM manipulation task source") — so a row of a destroyed Document left
- * behind is page script that will be compiled into a realm whose browsing context is null.
- *
- * IT IS THE RUNNING FLOW'S ROWS AND NOT THE FRONTIER'S, for the reason the count above is per flow: the
- * destruction is per timeline, and a sibling arm that has not destroyed this document is running a document
- * that is still there. Taking its rows would destroy something in a timeline that never asked.
- *
- * IT ALSO REPAIRS THE ABSOLUTE POSITIONS THAT ARE LEFT, which is the half a caller must not try to help
- * with: the flow's own `imm_at`/`imm_next` are absolute, and a compaction that moved rows without them would
- * order a later interposition against a run that is no longer where it was. `script_i` and `last_compiled`
- * are provably unaffected — see the note at the end of the body.
- * THE PENDING REGISTER NEEDS NO REPAIR AND THAT IS WHY THIS FUNCTION NO LONGER ABORTS. An entry names its
- * row by `dyn_id`, not by position, so a surviving row keeps its name across the compaction however far it
- * moves; what the walk still owes is to DROP the entries whose rows are going, which is HTML §7.5.11
- * "Aborting a document load" step 2's "Cancel any instances of the fetch algorithm in the context of
- * document". The abort that stood there refused a removal below an outstanding external script because the
- * entry's position could not be corrected — the record is SHARED with every forked arm and only this arm
- * destroyed the document, so one field would have had to hold two positions at once. A name is the same in
- * both arms, so there is nothing left to correct.
- *
- * NOT PURE: it frees rows and mutates the register, so unlike the two counts above it may NOT be asked from
- * inside a collection and may not stand in a DCHECK. */
+/* HTML §7.5.10 "Destroying documents" step 5, "Remove any tasks whose document is document from any task queue
+ * (without running those tasks)", on the queue JS_DropJobsForContext cannot see: a document's scripts are rows
+ * of the running flow's program sequence, and a row is a task (§8.1.4.4 "Calling scripts" runs it; §4.12.1.1
+ * "Processing model" queues it). Returns how many rows went, which the count above answered just before.
+ * The running flow's rows only, since another timeline has not destroyed the document. It repairs `imm_at` and
+ * `imm_next`, which are absolute; `script_i` and `last_compiled` are unaffected (see the note in the body). The
+ * pending register needs no repair, since entries name rows by `dyn_id`; the walk drops the entries whose rows
+ * go (HTML §7.5.11 "Aborting a document load" step 2's "Cancel any instances of the fetch algorithm in the
+ * context of document"). Not pure: it frees rows and mutates the register, so never call it inside a
+ * collection or a DCHECK. */
 int   flow_programs_remove_for_document(Flow *f, uint32_t doc);
 
-/* WHICH ROW OF `f`'s SEQUENCE IS CALLED `id`, or -1 when this flow holds none — see `dyn_id`.
- * PURE, so it may stand inside a DCHECK, and it ASSERTS NOTHING ITSELF: three call sites reach it (the two
- * halves of a document script's delivery and §7.5.10's removal walk) and a should-never-happen checked here
- * would report THIS line for all three, which CLAUDE.md names as an assert whose remedy has no site. Each
- * caller tests the answer and says what its own -1 would mean. */
+/* Which row of `f`'s sequence is called `id`, or -1 when this flow holds none (see `dyn_id`). Pure, so it may
+ * stand in a DCHECK, and it asserts nothing itself: each of its three callers (the two halves of a document
+ * script's delivery and §7.5.10's removal walk) says what its own -1 means. */
 int   flow_dyn_row_by_id(const Flow *f, uint64_t id);
 
 #endif
