@@ -450,7 +450,7 @@ static CssPx fx_anonymous_outer_hypothetical_cross(lxb_dom_element_t *container,
        `contents` element's children in this container's sequence, so the DOM predecessor of such a sequence's
        first node is NULL at the start of that element's children — and a run claiming to begin at the
        container's own content would be measured over every earlier item on the line as well. */
-    seq.after = box_tree_prev_sibling(container, first);
+    seq.after = box_tree_child_node(box_tree_prev_sibling(container, box_tree_child_of_node(first)));
     seq.end = end;
     inner = line_box_content_height(container, seq, line_box_available_width_stated(used_main),
                                     &any_line_box, &first_baseline, &last_baseline);
@@ -646,9 +646,11 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
     /* §4's CHILD LIST IS css-display-3 §2.5's SPLICED SEQUENCE, enumerated the same way
        core/layout/flex_line.c and core/layout/flex_intrinsic_size.c enumerate it — the same entries over the
        same sequence, because §9.4's step 8 takes a maximum over exactly the item list §9.3's step 5 collected
-       and a second reading of that list is a second answer to which boxes are on the line. */
-    for (c = box_tree_first_child(container); c != NULL; ) {
-        lxb_dom_node_t *next = box_tree_next_sibling(container, c);
+       and a second reading of that list is a second answer to which boxes are on the line. Every member is a
+       node: css-display-3 §2.3 "Generating Marker Boxes: the list-item keyword" pairs `list-item` with `flow`
+       or `flow-root` only, so a flex container has no marker member. */
+    for (c = box_tree_child_node(box_tree_first_child(container)); c != NULL; ) {
+        lxb_dom_node_t *next = box_tree_child_node(box_tree_next_sibling(container, box_tree_child_of_node(c)));
         FlexItemChildKind kind = flex_item_child_kind(container, c);
 
         if (kind == FLEX_ITEM_CHILD_NONE) { c = next; continue; }
@@ -688,7 +690,7 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
         case FLEX_ITEM_CHILD_ELEMENT: {
             lxb_dom_element_t *item = lxb_dom_interface_element(c);
 
-            next = box_tree_next_sibling(container, c);
+            next = box_tree_child_node(box_tree_next_sibling(container, box_tree_child_of_node(c)));
             /* §9.4's step 10 is this component's own and it is unbuilt, which is why the refusal is here and
                not a second copy of core/layout/flex_line.c's: that file refuses a collapsed item because the
                used main size it would answer is the FIRST round's, and this one refuses it because step 8
@@ -771,7 +773,7 @@ CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_elem
     vertical = flex_container_axis_is_vertical(container, FLEX_AXIS_CROSS);
     DCHECK(item != NULL,
            "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 11 was asked for with no item element");
-    DCHECK(box_tree_parent(lxb_dom_interface_node(item)) == container,
+    DCHECK(box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(item))) == container,
            "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 11 was asked for an item that is not a "
            "child of the container it was asked about. Step 11's operand is \"the flex line's cross size\", "
            "so a subject drawn from one container and a line drawn from another is an item sized against a "

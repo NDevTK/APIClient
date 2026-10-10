@@ -1472,12 +1472,9 @@ bool css_computed_models(const char *name)
               IT IS HERE BECAUSE ONE ALGORITHM ASKS FOR IT BY NAME AND COULD NOT: css-lists-3 §3.2 "Generating
               Marker Contents" is an ORDERED condition — "The contents of a marker box are determined by the
               first of these conditions that is true" — whose third arm is "list-style-type on the originating
-              element defines a marker string". THIS CLAUSE SAID core/layout/box_tree.c's
-              `bt_require_marker_box_is_spellable` REFUSES EVERY LIST ITEM FOR WANT OF IT rather than only the
-              ones §3.2's `otherwise` arm gives no marker box, AND IT IS KEPT IN ITS OWN WORDS because it is
-              why this row exists and a reader who asks what the row bought will re-derive it: that narrowing
-              LANDED, at core/layout/list_marker.h, and this row is one of the two values it reads. §3.2 reads the ORIGINATING ELEMENT's own
-              computed value, and `css_computed_value` is the entry a C spec algorithm asks.
+              element defines a marker string". core/layout/list_marker.h reads this row as one of §3.2's two
+              values; §3.2 reads the ORIGINATING ELEMENT's own computed value, and `css_computed_value` is the
+              entry a C spec algorithm asks.
               IT IS NOT THE WHOLE OF §3.2 AND THE ROW DOES NOT CLAIM TO BE, which is what the ORDER of that
               condition decides rather than a judgement made here: the arm ABOVE this one reads
               `list-style-image`, so a §3.2 built from this property alone would make true an arm that is only
@@ -1490,10 +1487,7 @@ bool css_computed_models(const char *name)
               element defines a marker image"), and css-images-3 §2 "Image Values: the <image> type" states
               the answer for one that has not loaded — "an invalid image in list-style-image it is treated as
               none, allowing the list-style-type to render in its place" — which is a FETCH and not a cascade
-              step, and is where core/layout/list_marker.h crashes today. THE CLAUSE HERE READ THAT THE
-              LANDING AFTER THIS PAIR IS §3.2 AND NOT THE MARKER MEMBER TYPE, and it is kept in its own words
-              because that order is the order that happened and a reader who re-derives it will write it again:
-              §3.2 landed on this pair, and the MEMBER TYPE is what core/layout/box_tree.h now names as next.
+              step, and is where core/layout/list_marker.h crashes today.
               `Inherited: yes`, AND THE ROW IS WHAT MAKES THAT INHERITANCE §7.2's OWN: core/css/css_defaulting.c
               already carries the name, and `css_cv_specified`'s inherited arm routes a property THIS predicate
               answers for through `css_computed_value` of the parent — so css-cascade-5 §7.2 "Inheritance"'s own
@@ -1504,6 +1498,11 @@ bool css_computed_models(const char *name)
               §3.4's line IS `specified value`, so the two readings are byte-identical at every element, and
               what the row buys is that the question is now ASKED through the entry that derives one. */
            strcmp(name, "list-style-type") == 0 ||
+           /* css-lists-3 §3.5 "Positioning Markers: The list-style-position property", `Computed value:
+              keyword, but see prose` over `inside | outside`. The prose is a layout rule ("If the list item is
+              an inline box: this value is equivalent to inside"), not a computation, so the as-specified arm is
+              the whole of the rule. core/layout/list_marker.h's position entry is the caller. */
+           strcmp(name, "list-style-position") == 0 ||
            /* css-lists-3 §3.3 "Image Markers: the list-style-image property", whose `Computed value:` line
               is "the keyword noneor the computed <image>" over a `Value:` line of `<image> | none` — and
               THE MISSING SPACE IS THE DRAFT'S OWN BYTES, not a typo to repair here: §3.3's table closes its
@@ -1521,12 +1520,9 @@ bool css_computed_models(const char *name)
               first of these conditions that is true" — whose SECOND arm is "list-style-image on the
               originating element defines a marker image" and whose THIRD reads `list-style-type`. §3.4's row
               landed first and cannot answer §3.2 alone: a narrowing built from it would make true an arm
-              that is only reached once the one above it is false. THE CLAUSE HERE ENDED BY SAYING THAT IS
-              WHY core/layout/box_tree.c's `bt_require_marker_box_is_spellable` STILL REFUSES EVERY LIST ITEM,
-              and it is kept in its own words because the ORDERING argument it rests on is still the argument:
-              with this row beside §3.4's, both arms are askable and the narrowing landed at
-              core/layout/list_marker.h, which reads this property BEFORE that one for exactly that reason. §3.2 reads the ORIGINATING
-              ELEMENT's own computed value, and `css_computed_value` is the entry a C spec algorithm asks.
+              that is only reached once the one above it is false. core/layout/list_marker.h reads this
+              property BEFORE that one for exactly that reason. §3.2 reads the ORIGINATING ELEMENT's own
+              computed value, and `css_computed_value` is the entry a C spec algorithm asks.
               `Inherited: yes`, AND THE ROW IS WHAT MAKES THAT INHERITANCE §7.2's OWN: core/css/
               css_defaulting.c already carries the name, and `css_cv_specified`'s inherited arm routes a
               property THIS predicate answers for through `css_computed_value` of the parent — so
@@ -2202,7 +2198,7 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
                strcmp(name, "visibility") == 0 || strcmp(name, "z-index") == 0 ||
                strcmp(name, "pointer-events") == 0 ||
                strcmp(name, "align-items") == 0 || strcmp(name, "align-self") == 0 ||
-               strcmp(name, "list-style-type") == 0 ||
+               strcmp(name, "list-style-type") == 0 || strcmp(name, "list-style-position") == 0 ||
                css_border_side_of(name, "style") >= 0,
            "a property this component claims to model reached the as-specified arm without a `Computed value: "
            "as specified` line to justify it — css_computed_models and this switch are one list and have come "

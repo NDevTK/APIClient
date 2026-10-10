@@ -112,6 +112,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "core/css/css_length.h"
+#include "core/layout/box_tree.h"
 
 /* CSS 2.1 §9.2.1's BLOCK CONTAINER BOX, decided from a computed `display` and from nothing else — the box
    §9.4.1's formatting context is stated over, and the box §10.1's second case looks for when it walks for a
@@ -203,10 +204,19 @@ typedef enum {
     BLOCK_FLOW_CHILD_NO_BOX = 0,  /* §9.2 generates none, or §9.3.1 takes it out of flow: contributes nothing */
     BLOCK_FLOW_CHILD_BLOCK,       /* §9.2.1's in-flow BLOCK-LEVEL box */
     BLOCK_FLOW_CHILD_INLINE,      /* §9.2.2's in-flow INLINE-LEVEL content */
-    BLOCK_FLOW_CHILD_FLOAT        /* §9.5's float: out of flow, and still counted by every caller's section */
+    BLOCK_FLOW_CHILD_FLOAT,       /* §9.5's float: out of flow, and still counted by every caller's section */
+    BLOCK_FLOW_CHILD_OUTSIDE_MARKER /* css-lists-3 §3.5's `outside` marker box: see below */
 } BlockFlowChildKind;
 
-BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, lxb_dom_node_t *child);
+/* THE OUTSIDE MARKER IS A FIFTH KIND AND NOT A NO_BOX, because it HAS a box — css-lists-3 §3.5's `outside`
+   arm: "the marker box is a block container and is placed outside the principal block box". So it is neither
+   block-level nor inline-level content of the principal box and contributes nothing to its in-flow layout,
+   while a painter still owes it marks. §3.5 leaves the rest undefined ("The size or contents of the marker box
+   may affect the height of the principal block box and/or the height of its first line box … this
+   interaction is also not defined"). An `inside` marker is §3.5's "inline element at the start of the list
+   item’s contents", whose contents (§3.2's marker string) this engine does not generate: classifying one
+   aborts naming what to build. `child` is a member of `parent`'s core/layout/box_tree.h sequence. */
+BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, BoxTreeChild child);
 
 /* ---- CSS 2.2 §9.5 "Floats"' OWN POPULATION, ASKED BY A BOX THAT IS NOT THE FLOAT -------------------------
    THE FIRST FLOAT, IN DOCUMENT ORDER, IN THE BLOCK FORMATTING CONTEXT `el`'s OWN CONTENTS ARE LAID OUT IN —
@@ -338,7 +348,8 @@ typedef struct {
    struct: `at` looks like a node whose successor is `at->next`, and it is not. The step is the ENTRY BELOW and
    the position it answers is a position in core/layout/box_tree.h's spliced sequence. */
 typedef struct {
-    lxb_dom_node_t *at;       /* the run's first content position; NULL where the run holds no node at all */
+    BoxTreeChild at;          /* the run's first content position — a list item's marker member where the run
+                                 opens its content; the end where the run holds no member at all */
     lxb_dom_element_t *open;  /* the box whose fragment it continues — the container where it follows no break */
 } BlockFlowRunStart;
 
@@ -358,7 +369,7 @@ BlockFlowRunStart block_flow_run_start(lxb_dom_element_t *el, BlockFlowRun run);
    above answers and which a walk may not compose, and stepping the CONTAINER's sequence from a position inside
    an inline box is exactly the half-converted shape core/layout/box_tree.h refuses by name.
    `open` MUST GENERATE A BOX and `at` MUST BE A POSITION IN ITS CONTENT; both are asserted there. */
-lxb_dom_node_t *block_flow_run_next(lxb_dom_element_t *open, lxb_dom_node_t *at);
+BoxTreeChild block_flow_run_next(lxb_dom_element_t *open, BoxTreeChild at);
 
 /* §9.2.1.1's PRECONDITION about ONE CHILD: is it an INLINE BOX that the section BREAKS — "when an inline box
    contains an in-flow block-level box, the inline box (and its inline ancestors within the same line box) is
@@ -368,7 +379,7 @@ lxb_dom_node_t *block_flow_run_next(lxb_dom_element_t *open, lxb_dom_node_t *at)
    when a child is in SEVERAL of them. The runs partition the container's content, not its child list, so a
    broken child sits in two or more of them and a lookup keyed by the child is ambiguous exactly here — a
    consumer that keys by one crashes on a TRUE rather than answering with whichever run it saw last. */
-bool block_flow_child_breaks_inline_box(lxb_dom_element_t *parent, lxb_dom_node_t *child);
+bool block_flow_child_breaks_inline_box(lxb_dom_element_t *parent, BoxTreeChild child);
 
 /* DOES §9.2.1.1 GENERATE AN ANONYMOUS BLOCK BOX FOR THIS RUN? The section generates one only to wrap
    inline-level content — "we assume that there is an anonymous block box around 'Some text'" — so a run

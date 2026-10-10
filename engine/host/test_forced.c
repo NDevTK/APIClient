@@ -31127,6 +31127,7 @@ static FlexSpliceCount flex_splice_count(JSContext *ctx, const char *html, const
     lxb_html_document_t *dom = bp_scratch_document(ctx, html);
     lxb_dom_element_t   *body;
     lxb_dom_node_t      *c, *first, *end;
+    BoxTreeChild         m;
     FlexSpliceCount      out;
     char                *display;
 
@@ -31188,7 +31189,7 @@ static FlexSpliceCount flex_splice_count(JSContext *ctx, const char *html, const
        and core/layout/flex_cross_size.c all make; a walk that still stepped `->next` would never reach this
        count, because core/layout/flex_item.c's classification aborts on the `contents` element ITSELF one call
        earlier. */
-    for (c = box_tree_first_child(body); c != NULL; c = box_tree_next_sibling(body, c)) {
+    for (m = box_tree_first_child(body); box_tree_child_exists(m); m = box_tree_next_sibling(body, m)) {
         CHECKF(out.members < 8,
                "css-display-3 §2.5's spliced child sequence for the container this file wrote yielded more "
                "than 8 members. The markup is a string literal here, so this is the walk not terminating "
@@ -31205,11 +31206,11 @@ static FlexSpliceCount flex_splice_count(JSContext *ctx, const char *html, const
 
     /* THE BACKWARD STEP, WHICH IS WHAT §4's SEQUENCE NEEDS AND WHICH NO `->prev` CAN ANSWER: the member before
        the second one is the first, and where the splice has run those two sit in DIFFERENT DOM child lists. */
-    c = box_tree_first_child(body);
-    CHECK(box_tree_prev_sibling(body, c) == NULL,
+    m = box_tree_first_child(body);
+    CHECK(!box_tree_child_exists(box_tree_prev_sibling(body, m)),
           "css-display-3 §2.5's spliced child sequence answered a predecessor for its own FIRST member, so "
           "the backward step and the forward one disagree about where this container's content begins");
-    CHECK(box_tree_prev_sibling(body, box_tree_next_sibling(body, c)) == c,
+    CHECK(box_tree_child_same(box_tree_prev_sibling(body, box_tree_next_sibling(body, m)), m),
           "css-display-3 §2.5's spliced child sequence read one way forward and another way back: the member "
           "after the first is not one the first PRECEDES. The two directions descend into a spliced element at "
           "opposite ends, which is the one way they can come apart");
@@ -31217,8 +31218,9 @@ static FlexSpliceCount flex_splice_count(JSContext *ctx, const char *html, const
     /* §4's ITEM LIST — "Each in-flow child of a flex container becomes a flex item, and each child text
        sequence is wrapped in an anonymous block container flex item" — collected exactly as
        core/layout/flex_line.c collects it. */
-    for (c = box_tree_first_child(body); c != NULL; ) {
-        lxb_dom_node_t     *next = box_tree_next_sibling(body, c);
+    /* A flex container has no marker member, so every member of this walk is a node. */
+    for (c = box_tree_child_node(box_tree_first_child(body)); c != NULL; ) {
+        lxb_dom_node_t     *next = box_tree_child_node(box_tree_next_sibling(body, box_tree_child_of_node(c)));
         FlexItemChildKind   kind = flex_item_child_kind(body, c);
 
         if (kind == FLEX_ITEM_CHILD_TEXT) {
@@ -31226,7 +31228,8 @@ static FlexSpliceCount flex_splice_count(JSContext *ctx, const char *html, const
 
             end = flex_item_text_sequence_end(body, c);
             if (out.items == 0)
-                for (t = c; t != end; t = box_tree_next_sibling(body, t))
+                for (t = c; t != end;
+                     t = box_tree_child_node(box_tree_next_sibling(body, box_tree_child_of_node(t))))
                     if (t->type == LXB_DOM_NODE_TYPE_TEXT) out.first_seq_texts++;
             next = end;
         }

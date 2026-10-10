@@ -58,10 +58,8 @@
  *
  * A COMPUTED VALUE'S SUBJECT IS AN ELEMENT *OR A PSEUDO-ELEMENT*, AND EVERY ENTRY HERE TAKES AN ELEMENT. The
  * key css-pseudo-4 §4 "Tree-Abiding Pseudo-elements" needs is a pair of the ORIGINATING ELEMENT and an
- * `lxb_css_selector_pseudo_element_id_t`, and TWO sites name THIS HEADER as where that gap lives: core/layout/
- * box_tree.h's named residual and the abort `bt_require_marker_box_is_spellable` raises. §4's sentence is
- * quoted at both of those and is deliberately NOT re-quoted here, because N copies of one spec sentence are N
- * chances to be stale and the sentence is not what is missing.
+ * `lxb_css_selector_pseudo_element_id_t` — the pair core/layout/box_tree.h's `BoxTreeChild` already is for a
+ * box-tree member.
  *
  * §4 NEEDS NO NEW DERIVATION IN THIS FILE, AND THAT IS WHAT DECIDES THE LANDING ORDER RATHER THAN WHICH HALF
  * READS AS MORE INTERESTING. §4 is CSS Cascade 5 §7's defaulting with the inherited value's SOURCE
@@ -72,15 +70,16 @@
  * ascents where `css_parent_element` is one; and the INITIAL arm is `cssom_initial_value`, which is
  * NAME-keyed. So the style half is a KEY and not a derivation.
  *
- * THE KEY HAS NO PRODUCER, WHICH IS WHY THE PSEUDO ID IS NOT A PARAMETER OF THESE ENTRIES. No code in this tree
- * HOLDS an `lxb_css_selector_pseudo_element_id_t` — no field, no parameter, no local — so the arm behind such a
+ * THE KEY HAS NO CONSUMER, WHICH IS WHY THE PSEUDO ID IS NOT A PARAMETER OF THESE ENTRIES. core/layout/
+ * box_tree.h's member holds one, and no walk asks a style question of a pseudo member — the one it yields, an
+ * outside ::marker, is laid out as contributing nothing (core/layout/block_flow.h) — so the arm behind such a
  * parameter would be selected against by nothing and every caller would pass the `__UNDEF` value: a dead arm
  * bought with a conversion of every call site. core/css/css_property_applies.h states the same decision for
  * CSSOM §9's identical element-or-pseudo-element line, and states it as the reason rather than as a narrowing
  * of its own — a second subject would be a parameter no caller could fill. Derive both populations rather than
  * taking a figure from here, since each moves on any commit that touches core/layout or core/paint, and READ
- * each hit rather than counting it: a HOLDER is a declaration or an assignment, and the first command below
- * answers only comment prose plus box_tree.c's two `_Static_assert`s ABOUT the type.
+ * each hit rather than counting it: a HOLDER is a declaration or an assignment, and a CONSUMER is a read that
+ * selects a style answer by the id.
  *   `git grep -nE 'lxb_css_selector_pseudo_element_id_t|LXB_CSS_SELECTOR_PSEUDO_ELEMENT_[A-Z_]+' -- 'engine/host'`
  *   `git grep -nE 'css_computed_value[[:space:]]*\(' -- 'engine/host'`
  *
@@ -105,19 +104,6 @@
  * a `::marker` declaration could reach `cssom_cascaded_value` — and on the day both do, these entries answer
  * that declaration as the ORIGINATING ELEMENT'S OWN value, which is a wrong value with no symptom and is the
  * one harm this key prevents.
- *
- * WHAT THE NEXT DIFF BUILDS IS THE MEMBER TYPE AT core/layout/box_tree.h AND NOT THIS KEY, because that pair is
- * the only thing in this tree that can produce the id these entries would take, and a key whose argument no
- * expression can compute is untested code wearing a completed subproblem. HOW THE ABSENCE SHOWS is at THIS
- * HEADER and not in a run: a reader looking for the owner of css-pseudo-4 §4's style arrives from one of the
- * two sites above and finds no subject here to be given, which is a claim re-imported by reference with
- * nothing at the site it points at.
- * RETIREMENT: this record goes when any code in this tree HOLDS an `lxb_css_selector_pseudo_element_id_t` — a
- * field, a parameter or a local, rather than a static assert ABOUT the type — because the decision above is
- * then taken by the diff that produces that value and is no longer this header's to record. MEASURED ABSENT
- * with the first command above, whose every hit today is comment prose or one of those two static asserts,
- * against `git grep -c LXB_CSS_SELECTOR_PSEUDO_ELEMENT -- engine/host/browser/core/layout/box_tree.c` as the
- * armed control showing that the pattern DOES match code where code holds one.
  */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_COMPUTED_VALUE_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_COMPUTED_VALUE_H

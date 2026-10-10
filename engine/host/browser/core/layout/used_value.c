@@ -3267,7 +3267,7 @@ static lxb_dom_element_t *uv_flex_item_container(lxb_dom_element_t *el, UvBox bo
     bool is_flex;
 
     if (box != UV_BOX_ITEM) return NULL;
-    container = box_tree_parent(lxb_dom_interface_node(el));
+    container = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
     if (container == NULL) return NULL;
     own = css_computed_value(container, "display");
     if (own == NULL) return NULL;

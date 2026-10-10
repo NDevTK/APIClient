@@ -186,14 +186,22 @@ static bool fi_invisible_to_a_text_sequence(lxb_dom_node_t *n)
 static void fi_text_sequence(lxb_dom_element_t *container, lxb_dom_node_t *n,
                              lxb_dom_node_t **first, lxb_dom_node_t **last)
 {
-    lxb_dom_node_t *c;
+    BoxTreeChild m;
 
+    /* A flex container is never a list item — css-display-3 §2.3 "Generating Marker Boxes: the list-item
+       keyword" combines `list-item` with `flow` or `flow-root` only — so every member here is a node. */
     *first = *last = n;
-    for (c = box_tree_prev_sibling(container, n); c != NULL; c = box_tree_prev_sibling(container, c)) {
+    for (m = box_tree_prev_sibling(container, box_tree_child_of_node(n)); box_tree_child_exists(m);
+         m = box_tree_prev_sibling(container, m)) {
+        lxb_dom_node_t *c = box_tree_child_node(m);
+
         if (c->type == LXB_DOM_NODE_TYPE_TEXT) { *first = c; continue; }
         if (!fi_invisible_to_a_text_sequence(c)) break;
     }
-    for (c = box_tree_next_sibling(container, n); c != NULL; c = box_tree_next_sibling(container, c)) {
+    for (m = box_tree_next_sibling(container, box_tree_child_of_node(n)); box_tree_child_exists(m);
+         m = box_tree_next_sibling(container, m)) {
+        lxb_dom_node_t *c = box_tree_child_node(m);
+
         if (c->type == LXB_DOM_NODE_TYPE_TEXT) { *last = c; continue; }
         if (!fi_invisible_to_a_text_sequence(c)) break;
     }
@@ -217,7 +225,7 @@ static bool fi_sequence_is_all_white_space(lxb_dom_element_t *container, lxb_dom
            inside whichever DOM child list `first` happens to sit in, and where css-display-3 §2.5's splice has
            run that is not the list `last` was found in. The DCHECK below is then not a should-never-happen but
            the ordinary end of a `contents` element's children, reached with §4's sequence only half read. */
-        c = box_tree_next_sibling(container, c);
+        c = box_tree_child_node(box_tree_next_sibling(container, box_tree_child_of_node(c)));
         DCHECK(c != NULL,
                "css-flexbox-1 §4's text sequence ran off the end of the box-tree child sequence before "
                "reaching the last node the same walk had just found, so the two ends came from different "
@@ -234,7 +242,7 @@ FlexItemChildKind flex_item_child_kind(lxb_dom_element_t *container, lxb_dom_nod
            "css-flexbox-1 §4's flex-item classification was asked about a child with no node, or with no flex "
            "container for it to be a child OF — the container is not decoration here, since §4's rule is "
            "stated over ITS child list and §4.1 reads the child's own out-of-flow status against it");
-    DCHECK(box_tree_parent(child) == container,
+    DCHECK(box_tree_parent(box_tree_child_of_node(child)) == container,
            "css-flexbox-1 §4's flex-item classification was asked about a node that is not a CHILD of the flex "
            "container it was asked with. §4's sentence is \"Each in-flow child of a flex container becomes a "
            "flex item\" and its text-sequence rule is over sibling nodes of that same list, so a node from "
@@ -328,7 +336,7 @@ lxb_dom_node_t *flex_item_text_sequence_end(lxb_dom_element_t *container, lxb_do
        as the run's `end` — which that type reads as a position in core/layout/box_tree.h's sequence. `b->next`
        is NULL at the end of a `contents` element's children, so it would both cut the run short and restart
        the caller's walk from the container's own next child, skipping every later member of the splice. */
-    return box_tree_next_sibling(container, b);
+    return box_tree_child_node(box_tree_next_sibling(container, box_tree_child_of_node(b)));
 }
 
 bool flex_item_is_collapsed(lxb_dom_element_t *item)

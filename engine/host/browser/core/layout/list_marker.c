@@ -187,3 +187,33 @@ bool list_marker_box_generated(lxb_dom_element_t *el)
     free(v);
     return yes;
 }
+
+ListMarkerPosition list_marker_position(lxb_dom_element_t *list_item)
+{
+    char *v;
+    bool inside;
+    char bbuf[160];
+
+    DCHECK(list_item != NULL && list_marker_box_generated(list_item),
+           "css-lists-3 §3.5 \"Positioning Markers: The list-style-position property\" was asked where the "
+           "marker box of an element that has none is placed — §3.1 generates one only for a list item, and "
+           "§3.2's last arm gives some list items none");
+    /* §3.5's inline-box arm cannot apply: the one `list-item` value this engine computes is the one-keyword
+       form, whose outer display is block and inner display flow (css-display-3 §2.3 "Generating Marker
+       Boxes: the list-item keyword"), so the list item is a block container. */
+    v = lm_computed(list_item, "display");
+    DCHECKF(strcmp(v, "list-item") == 0,
+            "%s: css-lists-3 §3.5 reads `outside` as \"equivalent to inside\" for a list item that is an inline "
+            "box, and this list item's computed `display` is not the block-level `list-item` — BUILD §3.5's "
+            "inline-box arm here", box_subject(list_item, bbuf, sizeof bbuf));
+    free(v);
+    (void) bbuf;
+    v = lm_computed(list_item, "list-style-position");
+    inside = strcmp(v, "inside") == 0;
+    DCHECKF(inside || strcmp(v, "outside") == 0,
+            "%s has `list-style-position: %s`, outside css-lists-3 §3.5's `Value:` line of `inside | outside`, "
+            "which is core/css/css_shorthand.c's grammar for it — so the cascade holds a value no declaration "
+            "could have put there", box_subject(list_item, bbuf, sizeof bbuf), v);
+    free(v);
+    return inside ? LIST_MARKER_POSITION_INSIDE : LIST_MARKER_POSITION_OUTSIDE;
+}

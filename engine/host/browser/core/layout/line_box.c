@@ -495,9 +495,10 @@ static void lb_text(LbRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
     text_run_measure_add_text(r->m, parent, n);
 }
 
-/* ONE CHILD NODE of the inline formatting context. */
-static void lb_child(LbRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
+/* ONE MEMBER of the inline formatting context. */
+static void lb_child(LbRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
 {
+    lxb_dom_node_t *n;
     lxb_dom_element_t *el;
     char *d;
     bool atomic, inline_box, inline_block, on_the_line;
@@ -507,7 +508,23 @@ static void lb_child(LbRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
        box of this run at any depth, and the walk STOPS rather than skipping it: everything after it in content
        order is on a later box of §9.4.1's stack. */
     if (r->past_end) return;
-    if (n == r->end) { r->past_end = true; return; }
+    if (box_tree_child_is_node(c, r->end)) { r->past_end = true; return; }
+    /* css-lists-3 §3.5's outside marker box "is placed outside the principal block box", so it is on no line
+       box of the list item's content; an inside one aborts at the classification.
+       NAMED RESIDUAL — §3.5 leaves undefined how "the size or contents of the marker box may affect … the
+       height of its first line box, and in some cases may cause the creation of a new line box", and real
+       Chrome answers it (its line breaker keeps a line holding the marker non-empty, and an item with no line
+       box gets the marker's block size). Not covered: that contribution. Next diff: the marker box laid out
+       over §3.2's marker string, once css-counter-styles-3 generates it, with its extent taken into the first
+       line box. Absence shows as an empty list item measuring zero tall where Chrome gives it one line. */
+    if (box_tree_child_is_pseudo(c)) {
+        DCHECK(block_flow_child_kind(parent, c) == BLOCK_FLOW_CHILD_OUTSIDE_MARKER,
+               "a pseudo-element member of a list item's inline formatting context was classified as something "
+               "other than css-lists-3 §3.5's outside marker, which is the one arm core/layout/block_flow.h "
+               "answers for it");
+        return;
+    }
+    n = c.node;
     switch (n->type) {
     case LXB_DOM_NODE_TYPE_TEXT:
         lb_text(r, parent, n);
@@ -806,12 +823,13 @@ static void lb_child(LbRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
 
 static void lb_walk(LbRun *r, lxb_dom_element_t *el)
 {
-    lxb_dom_node_t *c;
+    BoxTreeChild c;
 
     /* THE INLINE BOX'S BOX-TREE CHILDREN — css-display-3 §2.5 "Box Generation: the none and contents
        keywords" puts a `contents` child's own children in THIS box's content, and core/layout/box_tree.h's
        sequence never yields the `contents` element itself, so `lb_child` has no arm to learn. */
-    for (c = box_tree_first_child(el); c != NULL && !r->past_end; c = box_tree_next_sibling(el, c))
+    for (c = box_tree_first_child(el); box_tree_child_exists(c) && !r->past_end;
+         c = box_tree_next_sibling(el, c))
         lb_child(r, el, c);
 }
 
@@ -964,7 +982,8 @@ static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun 
                       LineBoxAvailableWidth avail, TextRunLine **lines)
 {
     CssPx available = css_px(0.0);
-    lxb_dom_node_t *root, *at;
+    lxb_dom_node_t *root;
+    BoxTreeChild at;
     lxb_dom_element_t *open;
     BlockFlowRunStart start;
     LbRun r;
@@ -992,11 +1011,13 @@ static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun 
     r.end = run.end;
     r.past_end = false;
     for (;;) {
-        lxb_dom_node_t *c, *box;
+        BoxTreeChild c;
+        lxb_dom_node_t *box;
 
         lxb_dom_element_t *up;
 
-        for (c = at; c != NULL && !r.past_end; c = block_flow_run_next(open, c)) lb_child(&r, open, c);
+        for (c = at; box_tree_child_exists(c) && !r.past_end; c = block_flow_run_next(open, c))
+            lb_child(&r, open, c);
         if (r.past_end) break;
         box = lxb_dom_interface_node(open);
         if (box == root) break;
@@ -1007,12 +1028,12 @@ static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun 
         /* THE STEP OUT IS OVER THE BOX TREE IN BOTH HALVES, exactly as the two MEASUREMENTS of this same run
            step out: css-display-3 §2.5's splice makes a `contents` element between this fragment and its box
            parent no box to leave into, and the position after this box a position outside every such element. */
-        up = box_tree_parent(box);
+        up = box_tree_parent(box_tree_child_of_node(box));
         DCHECK(up != NULL,
                "CSS 2.2 §9.2.1.1's run was inside a box with no BOX parent, so the fill cannot leave it — the "
                "box ancestors of every position in a container's content are inline boxes up to the container "
                "itself, and this chain does not reach it");
-        at = box_tree_next_sibling(up, box);
+        at = box_tree_next_sibling(up, box_tree_child_of_node(box));
         open = up;
     }
     DCHECK(run.end == NULL || r.past_end,
@@ -1745,7 +1766,7 @@ static lxb_dom_node_t *lb_container_child_of(lxb_dom_element_t *container, lxb_d
        box parent keeps every position in the chain a box, which is also what makes the result a member of
        `container`'s sequence rather than merely a descendant of it. */
     while (n != NULL) {
-        lxb_dom_element_t *p = box_tree_parent(n);
+        lxb_dom_element_t *p = box_tree_parent(box_tree_child_of_node(n));
 
         if (p == container) break;
         n = p == NULL ? NULL : lxb_dom_interface_node(p);
@@ -1789,7 +1810,8 @@ static bool lb_inside(lxb_dom_element_t *el, lxb_dom_node_t *n)
    splits the third case never arises and this reduces to the sibling scan it replaces. */
 static bool lb_run_holds_child(lxb_dom_element_t *container, BlockFlowRun run, lxb_dom_node_t *child)
 {
-    lxb_dom_node_t *c, *a, *e;
+    BoxTreeChild c;
+    lxb_dom_node_t *a, *e;
 
     if (run.after != NULL) {
         a = lb_container_child_of(container, run.after);
@@ -1797,19 +1819,21 @@ static bool lb_run_holds_child(lxb_dom_element_t *container, BlockFlowRun run, l
             /* `child` must be STRICTLY AFTER the projected bound, which `after`'s exclusivity is. The scan is
                over the CONTAINER's box-tree sequence, which both operands are members of by the projection
                above — a `->next` scan would step onto a `contents` element and out of the list entirely. */
-            for (c = box_tree_next_sibling(container, a); c != NULL && c != child;
+            for (c = box_tree_next_sibling(container, box_tree_child_of_node(a));
+                 box_tree_child_exists(c) && !box_tree_child_is_node(c, child);
                  c = box_tree_next_sibling(container, c))
                 ;
-            if (c == NULL) return false;
+            if (!box_tree_child_exists(c)) return false;
         }
     }
     if (run.end != NULL) {
         e = lb_container_child_of(container, run.end);
         if (e != child) {
             /* … and STRICTLY BEFORE the other one, which `end`'s exclusivity is. */
-            for (c = child; c != NULL && c != e; c = box_tree_next_sibling(container, c))
+            for (c = box_tree_child_of_node(child); box_tree_child_exists(c) && !box_tree_child_is_node(c, e);
+                 c = box_tree_next_sibling(container, c))
                 ;
-            if (c == NULL) return false;
+            if (!box_tree_child_exists(c)) return false;
         }
     }
     return true;
@@ -1822,7 +1846,7 @@ static void lb_anon_run(lxb_dom_element_t *container, lxb_dom_node_t *child, LbC
     /* §9.2.1.1's OWN PREDICATE, READ ONCE AND ONLY TO ASSERT WITH. The collection below does not branch on it
        — the range intersection answers both shapes — so this is the second of two derivations of one fact,
        kept apart from the first so the closing asserts can compare them. */
-    bool breaks = block_flow_child_breaks_inline_box(container, child);
+    bool breaks = block_flow_child_breaks_inline_box(container, box_tree_child_of_node(child));
     char cbuf[64], nbuf[64];
 
     ctx->box = NULL;

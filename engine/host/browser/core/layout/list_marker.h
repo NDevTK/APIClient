@@ -1,13 +1,11 @@
 /* css-lists-3 §3 "Markers" — WHETHER a list item's ::marker generates a box, which is css-lists-3 §3.2
- * "Generating Marker Contents" read for the one answer its last arm states and NOT for its contents.
+ * "Generating Marker Contents" read for the one answer its last arm states and NOT for its contents, and WHERE
+ * that box is positioned, which is css-lists-3 §3.5 "Positioning Markers: The list-style-position property".
  *
- * WHY IT IS A COMPONENT AND NOT A PREDICATE AT THE ONE CALLER THAT ASKS TODAY: §3.2's answer has three
- * consumers of different kinds, and they are REQUIRED to agree. core/layout/box_tree.h's child sequence
- * refuses a box whose first member it cannot name, and §3.1 makes that member the marker — so whether there IS
- * one decides whether the refusal applies. The member type that sequence must gain yields a marker member for
- * exactly the list items this entry answers TRUE for. And the marker's own CONTENTS are §3.2's other three
- * arms over the same two properties. A copy per consumer is one ORDERED condition with three answers about
- * which arm an element is on, which is the shape box_tree.h records five walks reaching for the splice.
+ * IT IS A COMPONENT BECAUSE ITS ANSWERS HAVE SEVERAL CONSUMERS THAT MUST AGREE: core/layout/box_tree.h yields
+ * a marker member at the head of exactly the list items this entry answers TRUE for, every walk over that
+ * sequence classifies the member through core/layout/block_flow.h by the position below, and the marker's own
+ * CONTENTS are §3.2's other three arms over the same two properties.
  *
  * IT IS ASKED OF ANY ELEMENT AND NOT ONLY OF A LIST ITEM, because css-lists-3 §3.1 "The ::marker
  * Pseudo-Element"' last sentence IS the answer for every
@@ -54,5 +52,18 @@
    every element that is not a list item and for a list item §3.2's last arm answers ("The marker box has no
    contents and ::marker does not generate a box"), TRUE where one of its first three arms is. */
 bool list_marker_box_generated(lxb_dom_element_t *el);
+
+/* css-lists-3 §3.5's two values. `inside`: "The ::marker is an inline element at the start of the list item’s
+   contents." `outside`, for a list item that is a block container: "the marker box is a block container and
+   is placed outside the principal block box". */
+typedef enum {
+    LIST_MARKER_POSITION_INSIDE,
+    LIST_MARKER_POSITION_OUTSIDE
+} ListMarkerPosition;
+
+/* Where `list_item`'s marker box is placed — §3.5 read off the list item's computed `list-style-position`,
+   after the property's own arm "If the list item is an inline box: this value is equivalent to inside".
+   `list_marker_box_generated(list_item)` must be TRUE; asserted. */
+ListMarkerPosition list_marker_position(lxb_dom_element_t *list_item);
 
 #endif

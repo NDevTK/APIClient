@@ -1,239 +1,95 @@
-/* css-display-3 §1 "Introduction"'s BOX TREE, ON ITS CHILD AXIS — the nodes whose boxes are the CHILDREN of
- * one box, which is not that box's element's DOM child list wherever css-display-3 §2.5 "Box Generation: the
- * none and contents keywords"' splice has run: "For the purposes of box generation and layout, the element
- * must be treated as if it had been replaced in the element tree by its contents (including both its
- * source-document children and its pseudo-elements, such as ::before and ::after pseudo-elements, which are
- * generated before/after the element's children as normal)."
+/* css-display-3 §1 "Introduction"'s box tree on its child axis: the members whose boxes are the children of
+ * one box. It differs from the box's DOM child list in two ways, and every layout and paint walk over a box's
+ * children reads this sequence so that the walks agree (core/layout/intrinsic_size.c and core/paint/box_paint.c
+ * assert two such agreements).
  *
- * WHY IT IS A COMPONENT AND NOT A DESCENT AT EACH WALK, which five separate crashes in this tree each said in
- * their own words before any of them could be converted: core/layout/block_flow.c's child classification,
- * core/layout/flex_item.c's flex-item classification, core/layout/line_box.c's line walk,
- * core/layout/table_box.c's anonymous-table walk and core/layout/table_column_box.c's column walk all meet a
- * `contents` child at their own child walk, and a copy per walk is ONE box-tree rule with five answers about
- * which children a box has. Those walks are REQUIRED to agree and say so: core/layout/intrinsic_size.c
- * asserts one such agreement by name, and core/paint/box_paint.c asserts another.
- *
- * WHICH OF THEM HAVE BEEN ROUTED IS NOT RECORDED HERE, AND THE OMISSION IS DELIBERATE RATHER THAN AN
- * OVERSIGHT: it is a count of what is missing, it shrinks as the work is done, and its only reader is the
- * person about to invalidate it. The DERIVATION is one command — `git grep -n box_tree_first_child` names
- * every converted walk, and `bf_element_child`'s `contents` crash is what an unconverted one reaches — and
- * that answers about the tree in hand rather than about the tree somebody was looking at.
- *
- * IT PIERCES `contents` AND NOTHING ELSE, because §2.5's other keyword is the opposite sentence — `none` is
- * "The element and its descendants generate no boxes or text sequences", so a `none` element IS yielded here
- * and each walk goes on skipping it under its own CSS 2 §9.2 arm. Piercing it too would delete that arm from
- * five files at once and put §2.5's two keywords behind one predicate, which is the shape that let one walk
- * skip a `contents` child as though it were a `none` one in the first place.
- *
- * IT READS THE COMPUTED `display` WHILE THE ANCESTOR DIRECTION READS THE SPECIFIED ONE, and §1 is why that is
- * two readings of one relation rather than one of them being sloppy: "To create the box tree, CSS first uses
- * cascading and inheritance, to assign a computed value for each CSS property to each element and text node in
- * the source tree." — "Then, for each element, CSS generates zero or more boxes as specified by that element's
- * display property." This walk is in the SECOND sentence, so §2.5's last sentence (Appendix B's suppression to
- * `none`) and §2.8's root rule are already applied and the test is one comparison.
- * core/css/css_computed_value.h's `css_box_parent_display` is in the FIRST, as part of computing `display`
- * itself, so it reads a SPECIFIED value and re-derives §2.8's root rule by hand — it cannot ask for a computed
- * one without re-entering the computation it is inside.
- *
- * IT MOVES NO STYLE, WHICH IS §2.5's OWN NOTE AND IS THE PART A CONVERTING CALLER GETS WRONG: "As only the box
- * tree is affected, any semantics based on the document tree, such as selector-matching, event handling, and
- * property inheritance, are not affected." So a node this sequence yields keeps its DOM parent for every
- * inherited property, and a walk that reads a property OF THE CHILD'S PARENT — a text node's inherited
- * `white-space`, the element whose computed properties a run of characters has — must read that node's own
- * parent element and never the box it is now a child of. The two are the same element only where no splice has
- * run. THIS CLAUSE USED TO SAY "which is every call site that exists at the moment this sequence is first
- * consumed", and it is rewritten rather than deleted because a reader who counts the converted walks will
- * re-derive it: the SECOND consumer is core/layout/table_box.c's §17.2.1 walk, whose text arm reads exactly
- * such a property, so the sentence stopped being true of every call site at the commit that routed it. What
- * closed it there is not a careful caller but a SIGNATURE: core/layout/block_flow.h's §9.2.2.1 white-space
- * predicate no longer TAKES the container, it derives the text node's own parent, so the wrong element is
- * unspellable at this sequence's remaining consumers instead of being a sentence each of them must recall.
- *
- * NOT COVERED, AND THE REFUSAL IS AT box_tree.c RATHER THAN IN THIS PARAGRAPH — WHICH IS WHAT CHANGED SINCE IT
- * WAS A RESIDUAL. THIS SEQUENCE'S MEMBER TYPE IS A DOM NODE, and css-display-3 §1 "Introduction" names a
- * box-tree child that is not one — "a principal block box and a child marker box". So a `list-item` box's
- * sequence cannot be stated here at all, and the two entries that would state it CRASH instead of answering:
- * `box_tree_first_child` for such a box, and `box_tree_prev_sibling` where its answer would be the START of
- * the sequence. Read `bt_require_marker_box_is_spellable` for the spec sentences and for what narrows it.
- * THIS CLAUSE USED TO READ `no ::before/::after box generation exists in this engine for it to splice`, AND IT
- * IS KEPT BECAUSE A READER WHO GREPS THIS ENGINE FOR A PSEUDO-ELEMENT BOX RE-DERIVES IT. It ENUMERATED where
- * the gap is a PROPERTY, and §2.5's own sentence says "such as ::before and ::after pseudo-elements" rather
- * than naming a closed pair — so the two it listed made the population look empty when the commonest member of
- * that population is neither of them. ::before AND ::after ARE STILL EMPTY, BY CONSTRUCTION RATHER THAN BY
- * OMISSION, and no diff at this component can change it: css-pseudo-4 §4.1 "Generated Content Pseudo-elements:
- * ::before and ::after" gates them on a COMPUTED VALUE — "When their computed content value is not none, these
- * pseudo-elements generate boxes as if they were immediate children of their originating element" — and
- * css-content-3 §1 "Inserting and Replacing Content: the content property" makes the initial `normal` compute
- * to `none` for exactly those two: "For ::before and ::after, this computes to none. For ::marker,
- * ::placeholder, and ::file-selector-button, this computes to itself (normal)." Nothing can move it off
- * `none`, because the property does not PARSE: the derivation is a grep of lexbor's
- * `source/lexbor/css/property/const.h` for `LXB_CSS_PROPERTY_CONTENT`, with `LXB_CSS_PROPERTY_COLOR` as the
- * armed control that shows the question reaches an answer at all.
- * AND THE SIX-POSITION NEXT-DIFF CLAUSE THAT REPLACED IT WAS ITSELF REFUTED BY THE DIFF THAT ACTED ON IT,
- * RECORDED HERE RATHER THAN DELETED BECAUSE A READER WHO RE-DERIVES IT FROM §2.5's SPLICE WILL WRITE IT AGAIN.
- * It named `bt_resolve`, `bt_continue_before`, `bt_resolve_back` and `bt_continue_after` — the four SPLICE
- * positions — on the ground that "a `contents` list item has no principal box for the marker to be a child OF
- * … and §2.5 then splices the marker into the ancestor's sequence exactly as it splices the source-document
- * children". THERE IS NO SUCH ELEMENT AND THE MARKER NEVER MEETS THE SPLICE. An element computes ONE
- * `display`, and `bt_is_spliced` is one comparison against `contents`, so an element this walk pierces is not
- * `list-item` and generates no marker at all — css-display-3 §2.3 "Generating Marker Boxes: the list-item
- * keyword" generates it from that keyword and from nothing else ("causes the element to generate a ::marker
- * pseudo-element"). A `list-item` element GENERATES a box, so it terminates the splice rather than being
- * pierced by it, and its marker is a child of that box. What §2.5's sentence really carries through the splice
- * is the pseudo-elements it names — "its children and pseudo-elements still generate boxes and text sequences
- * as normal" — which is the empty pair above. TWO positions are touched and not six, and both now refuse.
- * HOW ITS ABSENCE WOULD SHOW, NOW THAT IT IS A CRASH: a document containing a list item THAT HAS A MARKER BOX
- * reaches `box_tree_first_child` of that item through any walk over its contents and ABORTS naming
- * css-lists-3 §3.1, where before the same walk got the item's first SOURCE-DOCUMENT child and a list rendered
- * with no marker. In release, where the refusal compiles out, that earlier answer is what is still returned.
- * THIS CLAUSE READ `a document containing a list item` AND IS REWRITTEN RATHER THAN DELETED, because a reader
- * who re-derives the population from §3.1's `list-item` keyword alone will write it again: §3.2's last arm
- * gives some list items no marker box at all, and those are no longer refused.
- * WHAT THE NEXT DIFF BUILDS IS THE MEMBER TYPE, AND THE CLAUSE THAT SAID IT WAS css-lists-3 §3.2 "Generating
- * Marker Contents" INSTEAD IS KEPT IN ITS OWN WORDS BECAUSE THE ORDER IT ARGUED FOR IS THE ORDER THAT HAPPENED:
- * WHAT THE NEXT DIFF BUILDS IS §3.2, NOT THE MEMBER TYPE, and the order is forced rather than chosen — §3.2 is
- * what makes the refusal PRECISE instead of blanket, because its `otherwise` arm reads "The marker box has no
- * contents and ::marker does not generate a box", so a list item §3.2 answers that arm for has a COMPLETE
- * sequence here and must not be refused. core/layout/list_marker.h is that answer. It needed
- * `list-style-type` (css-lists-3 §3.4 "Text-based Markers: the list-style-type property", whose `Initial:`
- * line is `disc` and whose `Inherited:` line is `yes`) to be a computed value at all, and it is one.
- * THIS CLAUSE USED TO READ "a list item with no marker string", AND BOTH HALVES OF WHAT FOLLOWED IT ARE
- * REWRITTEN RATHER THAN DELETED, because a reader who reaches for `list-style-type` alone re-derives both.
- * The FIRST half enumerated ONE of §3.2's three conditions: that section is ORDERED ("The contents of a
- * marker box are determined by the first of these conditions that is true"), so its `otherwise` arm needs
- * `content` on the ::marker to be `normal`, no `list-style-image` defining a marker image AND no
- * `list-style-type` defining a marker string. The SECOND said the property "is in neither lexbor's registry
- * nor core/css/css_style_declaration.c's unregistered-initial table, so css-cascade-5 §7.1 'Initial
- * Values' has no initial value to fall to and it answers NULL for every element" — and the table half is
- * retired: it carries §3.4's `disc` and css-lists-3 §3.3 "Image Markers: the list-style-image property"'s
- * `none`, which is §3.2's image arm as well as its type arm, so both now default and inherit. THE CLAUSE THAT
- * STOOD HERE NAMED css-lists-3 §3.6 "Styling Markers: the list-style shorthand property" AS WHAT A COMPUTED
- * VALUE WAITS ON, AND IT IS RETIRED BY THAT ROW LANDING — kept in its own words because a reader who re-derives
- * the ordering will write it again: "`css_computed_value` asserts `css_shorthand_complete_for` first, and
- * `list-style` sets both longhands and has no row in core/css/css_shorthand.c, so recording completeness would
- * make a `list-style: none` page read as `disc`." §3.6's row EXISTS, with its own kind, its own grammar for each
- * of the three longhands and §3.6's four worked examples of the `none` distribution asserted at
- * `css_shorthand_init`, so that predicate now answers TRUE for all three names.
- * THE CLAUSE WAS ALSO WRONG ABOUT WHICH ASSERT, WHICH IS THE PART WORTH KEEPING RATHER THAN THE COORDINATE: the
- * predicate it named is `css_cv_modelled`'s SECOND and `css_computed_models` is its FIRST, so a reader who built
- * only the thing it named would have met a crash one line earlier than the clause predicted. WHAT A COMPUTED
- * VALUE NOW WAITS ON IS ONE ROW OF THAT FIRST PREDICATE AND NOT THREE, AND THIS CLAUSE READ `A ROW APIECE …
- * THREE different amounts of work` — kept in its own words because §3.6's three longhands invite the count.
- * css-lists-3 §3.4's row LANDED; §3.5's is not to be built at all, since §3.2 reads that property in no arm;
- * and §3.3's is the one outstanding row, whose `<url>` arm css-values-4 §4.5.1 "Relative URLs" gives a defined
- * computed value for ("The computed value of a URL that the UA cannot resolve to an absolute URL is the
- * specified value") and whose `<gradient>` arm css-images-3 §2 "Image Values: the <image> type" does not — the
- * split is at that table's own residual, AND THE ENTRY IT WAITED ON IS LANDED: core/css/css_image.h exports
- * `css_image_kind` over a `CssImageKind` whose two arms are §2's own, so what is left is the ROW alone. THIS
- * CLAUSE SAID THAT ENTRY IS ONE THE HEADER DOES NOT EXPORT YET, kept in its own words because the ORDER it
- * states is still the order — the entry before the row — and a reader who greps that header will re-derive it.
- * §3.3's ROW LANDED TOO, AND THE CLAUSE SAYING IT WAS THE OUTSTANDING ONE IS KEPT IN ITS OWN WORDS —
- * unquoted, because a run of this tree's prose is not a spec quotation — because a reader who counts the three
- * longhands will re-derive the trio. core/css/css_computed_value.c carries `list-style-image` in
- * `css_computed_models` and answers §3.3's line out of a derivation of its own, keyword arm first and then
- * core/css/css_image.h's `css_image_kind`, so BOTH values §3.2 reads are derivable.
- * §3.2 CAN BE ASKED, AND THE CLAUSE SAYING IT COULD NOT IS REWRITTEN RATHER THAN DELETED BECAUSE ITS REASON IS
- * THE ONE A READER RE-DERIVES AND ONE HALF OF IT WAS A CONFLATION. It read: §3.2 still cannot be asked, because
- * its own arms are not cascade questions — its IMAGE arm asks whether the image is VALID, which css-images-3 §2
- * "Image Values: the <image> type" answers over a FETCH ("an invalid image in list-style-image it is treated as
- * none, allowing the list-style-type to render in its place"), and its TYPE arm needs a symbol, so §3.2's arms
- * reach css-counter-styles-3 §6.3 "Symbolic: disc, circle, square, disclosure-open, disclosure-closed" for the
- * symbol a `disc` marker is filled with, and any NUMERIC style additionally needs css-lists-3 §4.6 "The
- * Implicit list-item Counter". THE IMAGE HALF STANDS and is where core/layout/list_marker.h still crashes. THE
- * TYPE HALF WAS A PREREQUISITE ON AN ARM'S VALUE WHERE THE CALLER NEEDS ITS TRUTH: §3.2's third arm asks
- * whether `list-style-type` DEFINES a marker string, and css-counter-styles-3 §5 "Extending list-style-type,
- * counter(), and counters()" answers that for every name without naming the string — "If a <counter-style-name>
- * is used that does not refer to any existing counter style, it must act identically to the decimal counter
- * style" — so §6.3 and §4.6 are the CONTENTS and a later component's, exactly as core/css/css_counter_style.h
- * already assigns them.
- * THE MEMBER TYPE IS THE NEXT LANDING AND IS NO LONGER AN OPEN QUESTION: it becomes a BY-VALUE PAIR of
- * the ORIGINATING NODE and an `lxb_css_selector_pseudo_element_id_t`, decided and PINNED at box_tree.c beside
- * the four answers it refuses and the reason each is refused. Read it there rather than re-deriving it, because
- * three of those four leave every signature in this file exactly as it is and would land with nothing noticing.
- * THE CLAUSE THAT STOOD HERE NAMED `bt_require_in_sequence` AS WHERE THAT DECISION LANDS, and the refutation is
- * recorded at that crash rather than here: a pseudo member's node half IS its originating element, so the
- * equality HOLDS for it — by a `box_tree_parent` arm that does not exist yet — and what the decision constrains
- * is therefore the ASCENT and not the refusal. `box_tree_prev_sibling`'s round trip is still the guard that
- * makes a sequence taught in only ONE of its two directions a crash rather than one that reads one way forward
- * and another way back. THE STYLE AND THE LAYOUT ARE TWO MORE AND ARE NOT THIS COMPONENT'S:
- * css-pseudo-4 §4 "Tree-Abiding Pseudo-elements" gives the box its properties ("They inherit any inheritable
- * properties from their originating element; non-inheritable properties take their initial values as usual"),
- * over a box core/css/css_computed_value.h can only key on an ELEMENT; and css-lists-3 §3.5 "Positioning
- * Markers: The list-style-position property" has an `Initial:` of `outside`, whose block-container arm is "the
- * marker box is a block container and is placed outside the principal block box" — a positioning scheme this
- * engine has no component for, and one §3.5's own text calls "handwavey nonsense from CSS2".
- * RETIREMENT: this paragraph goes when this sequence can yield a box-tree child that is NOT a DOM node,
- * because the enumeration that made its gap look empty is unspellable once the member type can name one. */
+ * css-display-3 §2.5 "Box Generation: the none and contents keywords" splices a `contents` element: "the
+ * element must be treated as if it had been replaced in the element tree by its contents". The sequence pierces
+ * `contents` and nothing else; a `none` element is yielded and each walk skips it under its own CSS 2 §9.2
+ * arm. The test reads the computed `display`, because box generation runs after the cascade (§1).
+ * core/css/css_computed_value.h's `css_box_parent_display` reads the specified value for the same relation
+ * because it runs inside the computation of `display` itself.
+ * §2.5's Note keeps style on the document tree ("any semantics based on the document tree, such as
+ * selector-matching, event handling, and property inheritance, are not affected"), so a walk reading an
+ * inherited property of a member reads it off the member's own DOM parent, never off the box it is spliced
+ * into. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_BOX_TREE_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_BOX_TREE_H
 
+#include <stdbool.h>
+
 #include <lexbor/dom/dom.h>
+#include <lexbor/css/selectors/pseudo_const.h>   /* one generated enum, no parser */
 
-/* THE FIRST NODE of `box`'s box-tree child sequence, or NULL when it is empty. `box` must GENERATE A BOX:
-   §2.5 puts a `contents` element's children in that element's own box parent's sequence, so asking this of one
-   is asking about a box that is not there.
-   SEED A LOOP WITH IT AND STEP WITH THE ENTRY BELOW — `for (c = box_tree_first_child(el); c != NULL;
-   c = box_tree_next_sibling(el, c))` is the shape every walk this replaces already had, which is why the
-   sequence is two steps and not a materialised list: a list would be an allocation per container per walk, and
-   there are five walks over one container. */
-lxb_dom_node_t *box_tree_first_child(lxb_dom_element_t *box);
+/* ONE MEMBER: the originating node and the pseudo-element it names, by value. css-pseudo-4 §1 "Introduction":
+   "Each pseudo-element is associated with an originating element". `pseudo == __UNDEF` is a source-document
+   node; `_MARKER` is css-lists-3 §3.1 "The ::marker Pseudo-Element"'s box, which is "generated by the ::marker
+   pseudo-element of a list item as the list item’s first child, before the ::before pseudo-element (if it
+   exists on the element)". It is yielded exactly when core/layout/list_marker.h's `list_marker_box_generated`
+   answers TRUE. ::before and ::after yield nothing: css-pseudo-4 §4.1 generates them only "When their computed
+   content value is not none", and `content` does not parse in this engine.
+   A pseudo member is not a DOM node because a node in the sibling chain is one the page's `childNodes` reads,
+   and a node outside it ends core/layout/box_tree.c's forward step. `node == NULL` is the end of a sequence. */
+typedef struct {
+    lxb_dom_node_t *node;
+    lxb_css_selector_pseudo_element_id_t pseudo;
+} BoxTreeChild;
 
-/* THE NEXT NODE after `child` in that sequence, or NULL at its end. `child` must be a MEMBER of it — one of
-   `box`'s own DOM children, or a child of a chain of `contents` elements inside it — and that is ASSERTED rather
-   than assumed, because a walk half-converted from `->next` hands this a node out of a DIFFERENT box's sequence and
-   would otherwise be answered plausibly. */
-lxb_dom_node_t *box_tree_next_sibling(lxb_dom_element_t *box, lxb_dom_node_t *child);
+/* The source-document member `n`, or the end of a sequence for NULL. */
+static inline BoxTreeChild box_tree_child_of_node(lxb_dom_node_t *n)
+{
+    BoxTreeChild c = { n, LXB_CSS_SELECTOR_PSEUDO_ELEMENT__UNDEF };
 
-/* THE PREVIOUS NODE before `child` in that sequence, or NULL at its start — the entry above read the other way,
-   with the same membership requirement on `child` and the same refusal of a spliced one.
-   A SEQUENCE IS NOT A SEQUENCE IN ONE DIRECTION ONLY, AND THE CALLER THAT NEEDS THE OTHER ONE IS THE ONE THE
-   FORWARD STEP CANNOT SERVE: css-flexbox-1 §4 "Flex Items"' child text sequence is a MAXIMAL run, and §4's
-   rule is stated over the whole of it — "if the entire text sequences contains only document white space
-   characters (i.e. characters that can be affected by the white-space property) it is instead not rendered" —
-   while the classification that answers it is asked about ONE member. A walk that could only step forward
-   would answer that sentence differently depending on which member it was handed, which is two anonymous flex
-   items where §4 makes one. core/layout/block_flow.h's `BlockFlowRun` wants the same direction for a different
-   question: its `after` bound is the member BEFORE a run's first node, which every caller used to compose as
-   `first->prev` — a node in a DIFFERENT box's sequence wherever §2.5 has spliced.
-   IT IS THE FORWARD STEP'S INVERSE AND SAYS SO RATHER THAN MEANING TO BE:
-   `box_tree_next_sibling(box, box_tree_prev_sibling(box, c))` is `c` for every member that has a predecessor,
-   and that round trip is ASSERTED at the site. Two directions of one sequence are exactly the pair that can be
-   taught about a tree separately and come apart on it — one descending into a spliced element's FIRST child
-   and the other out of its LAST — and an equality is what makes that impossible rather than merely unintended.
-   AND FOR THE MEMBER THAT HAS NO PREDECESSOR THE INVERSE IS `box_tree_first_child(box)`, ASSERTED BESIDE IT,
-   because the round trip's own exemption is the answer NULL: that makes the HEAD the one position the round
-   trip cannot cover, and NULL is precisely what an ascent out of a splice only the FORWARD direction has been
-   taught about produces. The two equalities are therefore one invariant with no exempt position in it, which
-   is what a `prev == NULL` accepted on its own word was not. */
-lxb_dom_node_t *box_tree_prev_sibling(lxb_dom_element_t *box, lxb_dom_node_t *child);
+    return c;
+}
 
-/* THE BOX `n`'s BOXES ARE CHILDREN OF — the nearest ancestor ELEMENT that generates a box, which is `n`'s DOM
-   parent wherever no splice has run and is the first ancestor past a chain of `contents` elements where one
-   has. NULL when the ascent leaves the element tree (a Document or a plain DocumentFragment parent, or no
-   parent at all), which is the same answer core/css/css_computed_value.h's `css_parent_element` gives at a
-   root.
-   IT IS THE ASCENT OF THE SEQUENCE ABOVE AND NOT A SECOND WALK, which is the whole reason it is here rather
-   than at the walks that need it: `box_tree_next_sibling(box_tree_parent(n), n)` is the step that continues
-   `n`'s own sequence, and the membership refusal that entry makes is spelled AS this equality, so the two
-   cannot come apart. A walk that derived a box parent for itself would be §2.5's predicate written a sixth
-   time, and the copies would disagree about exactly the tree they were written for.
-   IT READS THE COMPUTED `display`, for the reason stated at the top of this file:
-   core/css/css_computed_value.h's `css_box_parent_display` answers the same RELATION over a SPECIFIED value
-   because it is INSIDE the computation and cannot ask for a computed one, and it returns that ancestor's
-   `display` rather than the ancestor — so it is not this entry under another name and neither is derivable
-   from the other. css-display-3 §2.8 "The Root Element's Principal Box" is what makes this walk terminate at
-   the root rather than by a bound: "a display of contents computes to block on the root element", so no
-   ascent can pass a root whose computed value this entry reads.
-   IT ANSWERS FOR A SPLICED `n` AND ITS TWO SIBLINGS REFUSE ONE, AND THE ASYMMETRY IS THE QUESTION AND NOT A
-   RELAXATION. A POSITION in a `contents` element's sequence is meaningless — the element has no box for those
-   nodes to be the children of, which is what `box_tree_first_child` and `box_tree_next_sibling` refuse. Its
-   BOX PARENT is §2.5's own sentence read directly: the element "must be treated as if it had been replaced in
-   the element tree by its contents", so the box its contents are spliced INTO is exactly what this walk
-   returns, and it is the same box every one of those contents answers. REFUSING IT WOULD MASK THE CRASH THAT
-   NAMES THE WORK: core/layout/block_flow.c's child classification states its precondition as this equality,
-   and a half-converted walk handing it a `contents` element would abort HERE — "a box parent was asked of an
-   element that has none" — instead of at `bf_element_child`'s `display: contents` arm, which is the one that
-   tells its reader which walk to route and to what. */
-lxb_dom_element_t *box_tree_parent(lxb_dom_node_t *n);
+static inline bool box_tree_child_exists(BoxTreeChild c) { return c.node != NULL; }
+
+static inline bool box_tree_child_is_pseudo(BoxTreeChild c)
+{
+    return c.pseudo != LXB_CSS_SELECTOR_PSEUDO_ELEMENT__UNDEF;
+}
+
+/* Is `c` the source-document member `n`? FALSE for a pseudo member whose originating node is `n`. */
+static inline bool box_tree_child_is_node(BoxTreeChild c, const lxb_dom_node_t *n)
+{
+    return c.node == n && !box_tree_child_is_pseudo(c);
+}
+
+static inline bool box_tree_child_same(BoxTreeChild a, BoxTreeChild b)
+{
+    return a.node == b.node && a.pseudo == b.pseudo;
+}
+
+/* THE NODE OF A MEMBER THE CALLING WALK CAN ONLY MEET AS A SOURCE-DOCUMENT NODE — a walk whose container
+   generates no pseudo-element box, or one that has already taken its pseudo-member arm. Asserts that, naming
+   the calling site; the end of a sequence answers NULL. */
+lxb_dom_node_t *box_tree_child_node_at(BoxTreeChild c, const char *file, int line);
+#define box_tree_child_node(c) box_tree_child_node_at((c), __FILE__, __LINE__)
+
+/* THE FIRST MEMBER of `box`'s sequence: its ::marker where `list_marker_box_generated(box)`, otherwise its first
+   source-document member; the end where it has none. `box` must generate a box — a `contents` element's
+   children are in its box parent's sequence. Seed a loop with it and step with the entry below; the sequence
+   is two steps and not a list, so no walk allocates. */
+BoxTreeChild box_tree_first_child(lxb_dom_element_t *box);
+
+/* THE MEMBER AFTER `child`, or the end. `child` must be a member of `box`'s sequence — `box_tree_parent(child)
+   == box` — which is asserted, since a walk half-converted from `->next` would hand it a node of another
+   box's sequence and be answered plausibly. */
+BoxTreeChild box_tree_next_sibling(lxb_dom_element_t *box, BoxTreeChild child);
+
+/* THE MEMBER BEFORE `child`, or the end at the head; the same membership requirement. It is the forward step's
+   inverse and both halves are asserted: `box_tree_next_sibling(box, prev) == child` where there is a
+   predecessor, and `box_tree_first_child(box) == child` where there is none. css-flexbox-1 §4 "Flex Items"'
+   maximal text sequence and core/layout/block_flow.h's `BlockFlowRun` bounds are the callers. */
+BoxTreeChild box_tree_prev_sibling(lxb_dom_element_t *box, BoxTreeChild child);
+
+/* THE BOX `n`'s BOXES ARE CHILDREN OF. For a pseudo member it is the originating element itself. For a source
+   node it is the nearest ancestor element that generates a box — the DOM parent unless a chain of `contents`
+   elements stands between — or NULL where the ascent leaves the element tree. css-display-3 §2.8 "The Root
+   Element's Principal Box" ("a display of contents computes to block on the root element") is why the ascent
+   ends at the root. Unlike its two siblings it answers for a spliced `n`, because a spliced element's box
+   parent is exactly the box its contents are spliced into. */
+lxb_dom_element_t *box_tree_parent(BoxTreeChild n);
 
 #endif

@@ -362,7 +362,7 @@ typedef struct {
     bool past_end;
 } IsRun;
 
-static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n);
+static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c);
 /* css-sizing-3 §5.2's declared-size step, DECLARED HERE AND DEFINED WITH §9.4.1's STACK, because §9.4.2's walk
    above needs the SAME three steps for an atomic inline-level box that the stack applies to a block-level one.
    A second composition written up here is the one way those two could start disagreeing about what a child
@@ -371,19 +371,21 @@ static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, Intr
 
 static void is_walk(IsRun *r, lxb_dom_element_t *el)
 {
-    lxb_dom_node_t *c;
+    BoxTreeChild c;
 
     /* THE ONLY CALLER IS THE INLINE-BOX DESCENT BELOW, so every child this reaches is inside one.
        THE SEQUENCE IS THE BOX TREE'S AND NOT THE DOM'S, which is core/layout/box_tree.h's contract and is what
        keeps `is_child`'s own classification assert true: css-display-3 §2.5 "Box Generation: the none and
        contents keywords" puts a `contents` child's children in THIS box's content, and this sequence never
        yields the `contents` element itself — so no arm below has to know about it. */
-    for (c = box_tree_first_child(el); c != NULL && !r->past_end; c = box_tree_next_sibling(el, c))
+    for (c = box_tree_first_child(el); box_tree_child_exists(c) && !r->past_end;
+         c = box_tree_next_sibling(el, c))
         is_child(r, el, c);
 }
 
-static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
+static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
 {
+    lxb_dom_node_t *n;
     lxb_dom_element_t *el;
     char *d;
     bool inline_box;
@@ -393,7 +395,18 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
        depth, and the walk stops rather than returning: every node after it in content order belongs to a
        LATER box on §9.4.1's stack. */
     if (r->past_end) return;
-    if (n == r->end) { r->past_end = true; return; }
+    if (box_tree_child_is_node(c, r->end)) { r->past_end = true; return; }
+    /* css-lists-3 §3.5's outside marker box "is placed outside the principal block box", so it contributes
+       nothing to the list item's content's css-sizing-3 §5.1 "Intrinsic Sizes" — the same arm
+       core/layout/line_box.c's fill takes, which is what keeps the measurement and the fill one context. */
+    if (box_tree_child_is_pseudo(c)) {
+        DCHECK(block_flow_child_kind(parent, c) == BLOCK_FLOW_CHILD_OUTSIDE_MARKER,
+               "a pseudo-element member of a list item's inline formatting context was classified as something "
+               "other than css-lists-3 §3.5's outside marker, which is the one arm core/layout/block_flow.h "
+               "answers for it");
+        return;
+    }
+    n = c.node;
     switch (n->type) {
     case LXB_DOM_NODE_TYPE_TEXT:
         /* CSS 2.2 §9.2.2.1 "Anonymous inline boxes" first: a run of white space this element's `white-space`
@@ -551,7 +564,7 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
        `is_block_context` to maximise over until that boundary becomes a position in content order", naming a
        sibling-stepping entry that RETURNED A SIBLING. The boundary is such a position now and that entry is
        gone; the enumeration is `block_flow_next_block_box`, and both of its consumers take the run whole. */
-    DCHECK(block_flow_child_kind(parent, n) == BLOCK_FLOW_CHILD_INLINE,
+    DCHECK(block_flow_child_kind(parent, c) == BLOCK_FLOW_CHILD_INLINE,
            "a child of a box whose inline formatting context is being measured is not INLINE-LEVEL after this "
            "walk's own tests for a non-generating node, for §9.3.1's out-of-flow box and for §9.5's float have "
            "all let it through — so this run holds a box core/layout/block_flow.h says is not in it, and the "
@@ -641,7 +654,7 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
    just closed, so a container's LAST run walked its own content a second time and its maximum came back at
    nearly twice the width. `at` is allowed to be NULL — an ancestor with nothing after it inside its own parent
    still has a closing edge to emit, which is exactly the "even if either side is empty" half of the split. */
-static IntrinsicInlineSizes is_run_sizes(lxb_dom_element_t *el, lxb_dom_element_t *open, lxb_dom_node_t *at,
+static IntrinsicInlineSizes is_run_sizes(lxb_dom_element_t *el, lxb_dom_element_t *open, BoxTreeChild at,
                                          lxb_dom_node_t *end)
 {
     TextRunMeasure m;
@@ -654,11 +667,13 @@ static IntrinsicInlineSizes is_run_sizes(lxb_dom_element_t *el, lxb_dom_element_
     r.end = end;
     r.past_end = false;
     for (;;) {
-        lxb_dom_node_t *c, *box;
+        BoxTreeChild c;
+        lxb_dom_node_t *box;
 
         lxb_dom_element_t *up;
 
-        for (c = at; c != NULL && !r.past_end; c = block_flow_run_next(open, c)) is_child(&r, open, c);
+        for (c = at; box_tree_child_exists(c) && !r.past_end; c = block_flow_run_next(open, c))
+            is_child(&r, open, c);
         if (r.past_end) break;
         box = lxb_dom_interface_node(open);
         if (box == root) break;
@@ -667,12 +682,12 @@ static IntrinsicInlineSizes is_run_sizes(lxb_dom_element_t *el, lxb_dom_element_
            content continues after it. css-display-3 §2.5's splice makes neither of those a DOM pointer: a
            `contents` element between this inline box and its box parent is not a box to step out INTO, and the
            position after this box is outside every such element. */
-        up = box_tree_parent(box);
+        up = box_tree_parent(box_tree_child_of_node(box));
         DCHECK(up != NULL,
                "CSS 2.2 §9.2.1.1's run was inside a box with no BOX parent, so the walk cannot leave it — the "
                "box ancestors of every position in a container's content are inline boxes up to the container "
                "itself, and this chain does not reach it");
-        at = box_tree_next_sibling(up, box);
+        at = box_tree_next_sibling(up, box_tree_child_of_node(box));
         open = up;
     }
     /* THE MEASUREMENT DOES NOT EXIST UNTIL THIS RUNS, and that is [UAX14]'s doing rather than a lifecycle

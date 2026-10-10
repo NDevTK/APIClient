@@ -829,18 +829,34 @@ typedef struct {
  * no marks therefore keeps the CHARACTERS where they were while adding ink for the boxes §E.2 gives ink to,
  * and a box that contributes no character (an atomic inline reaches the line as one U+FFFC item, which
  * `line_box_glyphs` does not emit) consumes nothing and costs nothing. */
-static bool bp_step_7_2_1(BpState *st, BpRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *from)
+static bool bp_step_7_2_1(BpState *st, BpRun *r, lxb_dom_element_t *parent, BoxTreeChild from)
 {
-    lxb_dom_node_t *child;
+    BoxTreeChild member;
 
-    for (child = from; child != NULL; child = block_flow_run_next(parent, child)) {
+    for (member = from; box_tree_child_exists(member); member = block_flow_run_next(parent, member)) {
+        lxb_dom_node_t *child;
+
         /* THE RUN'S END, TESTED AT THIS DEPTH AND BEFORE ANYTHING ELSE — core/layout/line_box.c's `lb_child`
            tests it in exactly this position, and the two walks agreeing about where a run stops is the whole
            of what the cursor assert below is able to check. */
-        if (child == r->end) {
+        if (box_tree_child_is_node(member, r->end)) {
             r->past_end = true;
             return true;
         }
+        /* css-lists-3 §3.5's outside marker box "is placed outside the principal block box", so it is not a box
+           "in that line box" and step 7.2.1 lays nothing for it — the arm core/layout/line_box.c's fill takes.
+           NAMED RESIDUAL — not covered: the marker box's own marks, at the place in the painting order §3.5
+           leaves to the UA ("CSS does not specify the precise location of the marker box or its position in
+           the painting order"). Next diff: a paint offer for the marker box over §3.2's marker string, once
+           css-counter-styles-3 generates it. Absence shows as list items painting no bullet or number. */
+        if (box_tree_child_is_pseudo(member)) {
+            DCHECK(block_flow_child_kind(parent, member) == BLOCK_FLOW_CHILD_OUTSIDE_MARKER,
+                   "a pseudo-element member of a list item's inline formatting context was classified as "
+                   "something other than css-lists-3 §3.5's outside marker, which is the one arm "
+                   "core/layout/block_flow.h answers for it");
+            continue;
+        }
+        child = member.node;
         if (child->type == LXB_DOM_NODE_TYPE_TEXT) {
             while (r->cursor < r->n && r->g[r->cursor].style == parent) {
                 if (!bp_glyph(st, &r->g[r->cursor], r->origin_x, r->origin_y)) return false;
@@ -876,7 +892,7 @@ static bool bp_step_7_2_1(BpState *st, BpRun *r, lxb_dom_element_t *parent, lxb_
                `display: none`, so it placed no character for any child this test now skips. §9.5's FLOAT is
                deliberately not folded into that kind and does not need to be: line_box.c aborts on one before
                any cursor exists. So the set skipped here is the set that contributed nothing to `g`. */
-            if (block_flow_child_kind(parent, child) == BLOCK_FLOW_CHILD_NO_BOX) continue;
+            if (block_flow_child_kind(parent, member) == BLOCK_FLOW_CHILD_NO_BOX) continue;
             if (paint_order_inline_kind(box) == PAINT_INLINE_NON_ATOMIC && !bp_inline_box_marks(st, box))
                 return false;
             /* ITEM 4's THIRD ARM. `PAINT_INLINE_ATOMIC` is item 4's second AND third arms together —
@@ -979,7 +995,7 @@ static bool bp_context_step_7_2_1(BpState *st, lxb_dom_element_t *style, BlockFl
        box(es)" — and a continuing run lays none of them. */
     BlockFlowRunStart start = block_flow_run_start(style, run);
     lxb_dom_element_t *open = start.open;
-    lxb_dom_node_t *at = start.at;
+    BoxTreeChild at = start.at;
     BpRun r;
     bool ok = true;
 
@@ -1003,12 +1019,12 @@ static bool bp_context_step_7_2_1(BpState *st, lxb_dom_element_t *style, BlockFl
            rather than being a member of it. */
         if (open == style) break;
         open_node = lxb_dom_interface_node(open);
-        up = box_tree_parent(open_node);
+        up = box_tree_parent(box_tree_child_of_node(open_node));
         DCHECK(up != NULL,
                "CSS 2.2 §9.2.1.1's run was inside a box with no BOX parent, so CSS 2.1 §E.2's step 7.2.1 "
                "cannot leave it — the box ancestors of every position in a container's content are inline "
                "boxes up to the container itself, and this chain does not reach it");
-        at = box_tree_next_sibling(up, open_node);
+        at = box_tree_next_sibling(up, box_tree_child_of_node(open_node));
         open = up;
     }
 

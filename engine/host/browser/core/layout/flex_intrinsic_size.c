@@ -104,7 +104,7 @@ static IntrinsicInlineSizes fis_item_cross_contribution(lxb_dom_element_t *conta
         BlockFlowRun seq;
         IntrinsicInlineSizes run;
 
-        seq.after = box_tree_prev_sibling(container, child);
+        seq.after = box_tree_child_node(box_tree_prev_sibling(container, box_tree_child_of_node(child)));
         seq.end = end;
         run = intrinsic_inline_run_sizes(container, seq);
         *next = end;
@@ -114,7 +114,7 @@ static IntrinsicInlineSizes fis_item_cross_contribution(lxb_dom_element_t *conta
         lxb_dom_element_t *item = lxb_dom_interface_element(child);
 
         fis_require_parallel(container, item);
-        *next = box_tree_next_sibling(container, child);
+        *next = box_tree_child_node(box_tree_next_sibling(container, box_tree_child_of_node(child)));
         return intrinsic_outer_contribution(item, intrinsic_inline_sizes(item));
     }
     case FLEX_ITEM_CHILD_NONE:
@@ -135,7 +135,7 @@ static IntrinsicInlineSizes fis_item_cross_contribution(lxb_dom_element_t *conta
            where the other items put it and cannot invent a width for a box no section generates. */
         none.min_content = css_px(0.0);
         none.max_content = css_px(0.0);
-        *next = box_tree_next_sibling(container, child);
+        *next = box_tree_child_node(box_tree_next_sibling(container, box_tree_child_of_node(child)));
         return none;
     }
 }
@@ -473,7 +473,7 @@ static FisMainSizes fis_child_main_contribution(lxb_dom_element_t *container, lx
 
         /* THE BOX-TREE MEMBER BEFORE THE SEQUENCE, for the reason the cross walk above states in full: this
            pair is read as a position in css-display-3 §2.5's spliced sequence and never as a DOM sibling. */
-        seq.after = box_tree_prev_sibling(container, child);
+        seq.after = box_tree_child_node(box_tree_prev_sibling(container, box_tree_child_of_node(child)));
         seq.end = end;
         *next = end;
         return fis_outer_main(NULL, vertical, fis_measure_run(container, seq, vertical));
@@ -481,7 +481,7 @@ static FisMainSizes fis_child_main_contribution(lxb_dom_element_t *container, lx
     case FLEX_ITEM_CHILD_ELEMENT: {
         lxb_dom_element_t *item = lxb_dom_interface_element(child);
 
-        *next = box_tree_next_sibling(container, child);
+        *next = box_tree_child_node(box_tree_next_sibling(container, box_tree_child_of_node(child)));
         if (flex_item_is_collapsed(item)) {
             FisMainSizes none;
 
@@ -511,7 +511,7 @@ static FisMainSizes fis_child_main_contribution(lxb_dom_element_t *container, lx
         *counts = false;
         none.min_content = css_px(0.0);
         none.max_content = css_px(0.0);
-        *next = box_tree_next_sibling(container, child);
+        *next = box_tree_child_node(box_tree_next_sibling(container, box_tree_child_of_node(child)));
         return none;
     }
 }
@@ -520,8 +520,10 @@ static FisMainSizes fis_main_sizes(lxb_dom_element_t *el, bool vertical, bool mu
 {
     /* §4's CHILD LIST IS css-display-3 §2.5 "Box Generation: the none and contents keywords"' SPLICED
        SEQUENCE, enumerated through the same two entries core/layout/flex_line.c collects the line with,
-       because §9.9's sums and maxima are over exactly the item list that section collects. */
-    lxb_dom_node_t *c = box_tree_first_child(el);
+       because §9.9's sums and maxima are over exactly the item list that section collects. Every member is a
+       node: css-display-3 §2.3 "Generating Marker Boxes: the list-item keyword" pairs `list-item` with `flow`
+       or `flow-root` only, so a flex container has no marker member. */
+    lxb_dom_node_t *c = box_tree_child_node(box_tree_first_child(el));
     FisMainSizes out;
     bool any = false;
 
@@ -534,7 +536,7 @@ static FisMainSizes fis_main_sizes(lxb_dom_element_t *el, bool vertical, bool mu
     out.min_content = css_px(0.0);
     out.max_content = css_px(0.0);
     while (c != NULL) {
-        lxb_dom_node_t *next = box_tree_next_sibling(el, c);
+        lxb_dom_node_t *next = box_tree_child_node(box_tree_next_sibling(el, box_tree_child_of_node(c)));
         FlexItemChildKind kind = flex_item_child_kind(el, c);
         FisMainSizes one;
         bool counts;
@@ -574,7 +576,7 @@ static FisMainSizes fis_main_sizes(lxb_dom_element_t *el, bool vertical, bool mu
    nothing, and a walk over §9.9.1 will have to. */
 static IntrinsicInlineSizes fis_cross_sizes(lxb_dom_element_t *el, bool multi_line)
 {
-    lxb_dom_node_t *c = box_tree_first_child(el);
+    lxb_dom_node_t *c = box_tree_child_node(box_tree_first_child(el));
     IntrinsicInlineSizes out;
     bool any = false;
     char nbuf[160];
@@ -585,7 +587,7 @@ static IntrinsicInlineSizes fis_cross_sizes(lxb_dom_element_t *el, bool multi_li
     out.min_content = css_px(0.0);
     out.max_content = css_px(0.0);
     while (c != NULL) {
-        lxb_dom_node_t *next = box_tree_next_sibling(el, c);
+        lxb_dom_node_t *next = box_tree_child_node(box_tree_next_sibling(el, box_tree_child_of_node(c)));
         FlexItemChildKind kind = flex_item_child_kind(el, c);
         IntrinsicInlineSizes one;
 

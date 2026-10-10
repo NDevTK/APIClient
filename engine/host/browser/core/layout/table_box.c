@@ -182,13 +182,16 @@ static bool tb_text_is_all_whitespace(const lxb_dom_node_t *n)
    §9.2 arm for it. */
 static size_t tb_children(lxb_dom_element_t *parent, TbChild **out)
 {
-    lxb_dom_node_t *n;
+    BoxTreeChild m;
     TbChild *v = NULL;
     size_t cnt = 0, cap = 0;
     char nbuf[160], pbuf[160];
 
     *out = NULL;
-    for (n = box_tree_first_child(parent); n != NULL; n = box_tree_next_sibling(parent, n)) {
+    for (m = box_tree_first_child(parent); box_tree_child_exists(m); m = box_tree_next_sibling(parent, m)) {
+        /* Every member is a node: a table, row group or row is not a list item (css-display-3 §2.3
+           "Generating Marker Boxes: the list-item keyword" pairs `list-item` with `flow` or `flow-root`). */
+        lxb_dom_node_t *n = box_tree_child_node(m);
         TableBoxKind kind = TABLE_BOX_NOT_A_TABLE_BOX;
         bool ws = false;
 

@@ -126,7 +126,9 @@ static void tcb_occupy(TableColumnBoxMap *map, size_t *x, size_t span,
 
 void table_column_boxes_build(lxb_dom_element_t *table, size_t ngrid, TableColumnBoxMap *out)
 {
-    lxb_dom_node_t *c;
+    /* Every member below is a node: a table and a column group are not list items (css-display-3 §2.3
+       "Generating Marker Boxes: the list-item keyword" pairs `list-item` with `flow` or `flow-root`). */
+    BoxTreeChild tc;
     size_t occupied = 0, x = 0;
 
     DCHECK(table != NULL && out != NULL,
@@ -140,7 +142,8 @@ void table_column_boxes_build(lxb_dom_element_t *table, size_t ngrid, TableColum
        The array cannot be sized until `noccupied` is known and `noccupied` is not a function of the grid, so
        the child list is walked twice rather than grown — the two passes take the identical branch on the
        identical child list, which is why the spans are re-read rather than stashed. */
-    for (c = box_tree_first_child(table); c != NULL; c = box_tree_next_sibling(table, c)) {
+    for (tc = box_tree_first_child(table); box_tree_child_exists(tc); tc = box_tree_next_sibling(table, tc)) {
+        lxb_dom_node_t *c = box_tree_child_node(tc);
         lxb_dom_element_t *el;
         TableBoxKind kind;
 
@@ -150,10 +153,12 @@ void table_column_boxes_build(lxb_dom_element_t *table, size_t ngrid, TableColum
         if (kind == TABLE_BOX_COLUMN) {
             occupied += tcb_span_attr(el);
         } else if (kind == TABLE_BOX_COLUMN_GROUP) {
-            lxb_dom_node_t *m;
+            BoxTreeChild mc;
             size_t inner = 0;
 
-            for (m = box_tree_first_child(el); m != NULL; m = box_tree_next_sibling(el, m)) {
+            for (mc = box_tree_first_child(el); box_tree_child_exists(mc); mc = box_tree_next_sibling(el, mc)) {
+                lxb_dom_node_t *m = box_tree_child_node(mc);
+
                 if (m->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
                 if (tcb_kind_of(lxb_dom_interface_element(m)) == TABLE_BOX_COLUMN)
                     inner += tcb_span_attr(lxb_dom_interface_element(m));
@@ -172,7 +177,8 @@ void table_column_boxes_build(lxb_dom_element_t *table, size_t ngrid, TableColum
           "being laid out");
 
     /* ---- PASS TWO: which boxes occupy which columns ------------------------------------------------------ */
-    for (c = box_tree_first_child(table); c != NULL; c = box_tree_next_sibling(table, c)) {
+    for (tc = box_tree_first_child(table); box_tree_child_exists(tc); tc = box_tree_next_sibling(table, tc)) {
+        lxb_dom_node_t *c = box_tree_child_node(tc);
         lxb_dom_element_t *el;
         TableBoxKind kind;
 
@@ -187,10 +193,11 @@ void table_column_boxes_build(lxb_dom_element_t *table, size_t ngrid, TableColum
                column group), so the box occupies its columns with no group over them. */
             tcb_occupy(out, &x, tcb_span_attr(el), el, NULL);
         } else if (kind == TABLE_BOX_COLUMN_GROUP) {
-            lxb_dom_node_t *m;
+            BoxTreeChild mc;
             size_t before = x;
 
-            for (m = box_tree_first_child(el); m != NULL; m = box_tree_next_sibling(el, m)) {
+            for (mc = box_tree_first_child(el); box_tree_child_exists(mc); mc = box_tree_next_sibling(el, mc)) {
+                lxb_dom_node_t *m = box_tree_child_node(mc);
                 lxb_dom_element_t *col;
 
                 if (m->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
