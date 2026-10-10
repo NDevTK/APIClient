@@ -191,6 +191,32 @@ JSValue result_explored_throw(JSContext *ctx);
    strictly before any row exists. A DECLARED PAIR WITH NO ROW IS IN NO ARRAY: an exploration throw the page
    CAUGHT was declared and never reported, and the three arrays are three readings of the REPORTED set. */
 int result_page_error_explored(const char *msg, const char *filename);
+/* NAMED RESIDUAL — `result_page_error_explored` IS EXACT FOR WHAT IT DECLARES AND NARROWER THAN THE FACT A READER
+   OF `pageErrors` NEEDS, BECAUSE ITS DECLARATION IS MADE BY A COMPONENT AND THE COMMONER FORCED THROW HAS NONE.
+   NOT COVERED: an uncaught throw the PAGE'S OWN PROGRAM performs while standing on an arm this engine FORCED. A
+   fork over a missed read on the global (solver/absent.c's mint) decides nothing at the fork; the page runs on
+   into the forced world, and the throw that ends it is the interpreter's own property read on a base that world
+   made undefined, frames later. No component raised it, so `result_explored_throw` — whose one caller is
+   core/events/event_target.c — cannot declare it, and the pair stands in `pageErrors` exactly as a throw on the
+   observed path does. MEASURED with no network, `node engine/one_document.mjs engine/host/out/qjs-native-none
+   <file> <url> -` over a document applying a bundler's ESM-interop helper to the global object: its
+   `!mod.__esModule` test forks, the truthy arm defines no `default`, the page's next `.default.x` raises "cannot
+   read property 'x' of undefined", and the sibling arm completes. A COHERENT world — `window.__esModule = true`
+   written for real — throws byte-identically with no fork, so the throw is a faithful consequence of a sound
+   arm and NOT a fidelity defect; what is wrong is only that it is filed as the page's own.
+   WHAT THE NEXT DIFF BUILDS: the raise reads `engine_prov_of_running_path()` (solver/engine.h, which reads the
+   standing flow itself) and the row folds it as a MUST-REST-ON — a pair is forced only if EVERY standing
+   occurrence was raised on a forced path — because the cheap direction here is the reverse of the witness
+   mark's: over-claiming forced hides a real page error, and that is not found by acting on it. Its reader lands
+   with it (the document's partition and the trusted zone's reader of it), so it is a BUILD, cross-boundary, and
+   the coordinator's to perform.
+   HOW ITS ABSENCE SHOWS: a `pageErrors` row that `pageErrorsExplored` does not name and that DISAPPEARS when the
+   same document is re-run with the missed global written concretely — the error table reads as a platform gap
+   while nothing on the path the page really takes ever threw.
+   RETIREMENT: this record goes when a page-error row carries the provenance of the paths its occurrences were
+   raised on. MEASURED ABSENT, so it is not born met: `grep -cE '^(int|void) result_page_error_(forced|prov)'
+   engine/host/solver/result.c` answers 0 against `grep -cE '^int result_page_error_explored\('` over the same
+   file answering 1 as the armed control. */
 
 /* ---- TAKING ONE BACK ---------------------------------------------------------------------------------------
  *
