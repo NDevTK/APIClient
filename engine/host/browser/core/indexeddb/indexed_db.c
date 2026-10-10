@@ -110,6 +110,12 @@ static const char *const CMP_STEPS[] = { CMP_STAGES(JS_STEP_STAGE_LABEL) NULL };
 typedef struct {
     IdbKeyWalk w;      /* §7.4 in flight — one record, used for `first` and then for `second` */
     JSValue    a, b;   /* the two keys (owned) */
+    /* §2.4's FORK OPERAND — the value the two keys' ORDER depends on, where this flow has no bytes for it. It
+       lives on the state and is visited because quickjs-step.h contracts `step_fork_run`'s `over` as BORROWED
+       for the length of the request, and both a park and a cross-session resume land back on the ask: a C local
+       would be gone by then and a dup held in one would leak. JS_UNDEFINED is the positive statement that §2.4
+       answers this pair outright, which is what idb_key_order_undecided returns false for. */
+    JSValue    order_over;
 } IdbCmpState;
 
 static void js_idb_cmp_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -119,6 +125,7 @@ static void js_idb_cmp_visit(JSContext *ctx, void *st, JSStepVisit *v)
     idb_key_walk_visit(ctx, &s->w, v);
     v->val(ctx, &s->a);
     v->val(ctx, &s->b);
+    v->val(ctx, &s->order_over);
 }
 
 static int js_idb_cmp(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -134,6 +141,7 @@ static int js_idb_cmp(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
         JS_FreeValue(ctx, cb_result);
         s->a = JS_UNDEFINED;
         s->b = JS_UNDEFINED;
+        s->order_over = JS_UNDEFINED;
         if (!factory_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
         idb_key_walk_start(ctx, hdr, &s->w, argv[0], CMP_A_LENGTH, CMP_TOOK_A);
         return JS_STEP_YIELD;
@@ -168,12 +176,41 @@ static int js_idb_cmp(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
     STEP_ARM(CMP_TOOK_B);
         JS_FreeValue(ctx, cb_result);
         if (idb_key_walk_take(ctx, &s->w, &s->b) < 0) return JS_STEP_ABRUPT;   /* STEP 6 */
+        /* §2.4's QUESTION IS ASKED HERE AND THE FORK IS TAKEN AT THE NEXT STAGE, which is the shape
+           core/file/file_picker.c's dialog fork has and for the same two reasons: the operand must already be
+           on the state when `step_fork_run` borrows it, and the stage the fork is asked at is the one the
+           SIBLING resumes into, so it must re-enter holding exactly what the parent held. Minting it in the
+           stage that asks would mint it twice — once for the parent and once for every sibling's resume. */
+        if (!idb_key_order_undecided(ctx, s->a, s->b, &s->order_over))
+            DCHECK(JS_IsUndefined(s->order_over), "idb_key_order_undecided handed back an operand for a pair it "
+                                                  "says §2.4 decides outright");
         STEP_GOTO(hdr->stage, CMP_RETURN, &hdr->get_phase, &hdr->desc_phase, NULL);
         return JS_STEP_YIELD;
 
     STEP_ARM(CMP_RETURN);
         JS_FreeValue(ctx, cb_result);
-        r = idb_key_compare(ctx, s->a, s->b);                                  /* STEP 7 */
+        /* §4.3's LAST STEP, "Return the results of comparing two keys with a and b" — which for a pair whose order this
+           flow has no bytes for is §2.4's own FORK and not a comparison. The two are ALTERNATIVES: running the
+           comparison is what has nothing to run, so the arm's ordering is taken INSTEAD of calling it, never
+           after. See idb_key.h's IdbKeyOrderArm.
+           THIS MEMBER IS WHERE §2.4's THREE COMPLETIONS ARE THE PAGE'S OWN OBSERVABLE, which is why it is the
+           first caller converted and not the easiest one: `short cmp(any, any)` RETURNS the -1, 0 or 1, so the
+           three worlds the fork explores are three values the page reads, with nothing further to decide in
+           any of them. Every other caller of §2.4 BRANCHES on the result instead, and its completions are its
+           own branch's rather than this algorithm's. */
+        if (!JS_IsUndefined(s->order_over)) {
+            int arm = 0, rc = step_fork_run(ctx, hdr, s->order_over, IDB_KEY_ORDER_ASK, IDB_KEY_ORDER_ARMS,
+                                            JS_OUTCOME_REAL_UNSTATED, &arm);
+
+            /* JS_OUTCOME_REAL_UNSTATED IS A POSITIVE STATEMENT AND THE ONLY ONE AVAILABLE: the second
+               declaration quickjs-step.h asks for is which completion this operation reaches on the operand's
+               EXAMPLE, and having no example is the whole premise of the fork. Both arms still run and neither
+               is marked forced, which is what keeps a request's provenance honest about it. */
+            if (rc) return rc;
+            r = idb_key_order_of_arm((IdbKeyOrderArm)arm);
+        } else {
+            r = idb_key_compare(ctx, s->a, s->b);
+        }
         DCHECK(r >= -1 && r <= 1, "§2.4's compare two keys answered something that is not -1, 0 or 1");
         *presult = JS_NewInt32(ctx, r);   /* `short cmp(...)` — the three values the algorithm returns */
         return JS_STEP_DONE;

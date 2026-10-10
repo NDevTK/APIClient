@@ -116,6 +116,23 @@ static JSValue idb_key_value(JSContext *ctx, JSValueConst key)
     return v;
 }
 
+/* DOES THIS FLOW HOLD BYTES FOR THIS VALUE? — asked ONCE, here, because three sites owe the same question and
+   two of them must not be able to answer it differently: the assert below that a key's value has bytes, and
+   §2.4's fork predicate that fires exactly where it does not. A second spelling of it is the shape
+   §A-FIX-OF-THE-FORM-"X-IS-NOT-HOW-TO-ASK-Q" names — two right answers to one question, which is what drifts.
+   NONE and CONTRADICTED are the two states, and solver/concolic.h is explicit that they are not
+   interchangeable for a CALLER THAT ACTS on them; this caller does not act, it only asks whether there is
+   anything to read, and for that one question the two answer alike. Side-effect-free, so it may stand in a
+   DCHECK condition — which is the whole reason concolic_example_state takes no JSContext. */
+static bool idb_value_unobserved(JSValueConst v)
+{
+    ConcolicExState st;
+
+    if (!concolic_is(v)) return false;
+    st = concolic_example_state(v);
+    return st == CONCOLIC_EX_NONE || st == CONCOLIC_EX_CONTRADICTED;
+}
+
 /* THE CONCRETE VALUE BEHIND A KEY'S VALUE. A key whose value is external input carries the concolic itself, and
    every operation that needs an actual number, string or byte takes its EXAMPLE — the same seam
    core/file/file_system.c's `file_system_value_bytes` opens with, for the same reason: the domain says what the
@@ -131,26 +148,38 @@ static JSValue idb_concrete(JSContext *ctx, JSValueConst v)
        datum standing where a measurement should be, with nothing anywhere to say so.
        IT IS UNREACHABLE UNTIL §7.4's FORK MINTS SUCH A KEY, which is why the assert lands in the same diff
        as the arms that can produce one. §7.4 writes the concolic onto a NUMBER or STRING key's value, and
-       before the fork below existed the only route to that was an unknown whose EXAMPLE had answered — so
-       every key this engine has ever filed had bytes behind it and this condition held by construction.
-       WHAT THE NEXT DIFF BUILDS IS §2.4's OWN FORK, which is a different algorithm at a different moment and
-       therefore not an arm of §7.4's: "compare two keys" over an operand with no bytes has THREE feasible
-       completions (-1, 0, 1) and owes a `step_fork_run` of its own — which `idb_key_compare` cannot ask,
-       being a plain C entry with no JSStepHdr, so the diff that builds it is the one that converts this
-       algorithm's callers to a walk exactly as §7.4's array arm already is.
+       before that fork existed the only route to that was an unknown whose EXAMPLE had answered — so every
+       key this engine had ever filed had bytes behind it and this condition held by construction.
+       §2.4's OWN FORK IS DECLARED AND IS ASKED BY §4.3's `cmp`. That clause used to say the fork was what the
+       NEXT diff builds and named the remedy as "the conversion of §2.4's callers to a walk"; both halves are
+       kept here rather than deleted, because the first is the reading a reader re-derives from this assert
+       still firing and the second is a SCOPE that was derived from the call graph rather than from §2.4's
+       inputs. idb_key.h's IdbKeyOrderArm and idb_key_order_undecided are the fork, and what asks it is a
+       caller that HOLDS A HEADER ALREADY — §4.3's `cmp` does, and asked for no walk conversion at all. What
+       this assert now names is the callers that CANNOT ask it yet: §2.11's possibly-update-the-key-generator
+       through idb_key_is_number, and every §2.2-ordered SEARCH — §6.1's write, §6.2's and §6.3's retrievals,
+       §6.7's cursor iteration, §2.9's includes — each of which compares inside a C loop over a sorted record
+       list, so its fork is owed at a POSITION among N records and the loop is what becomes a walk.
+       §7.3's convert-a-key-to-a-value IS NOT ONE OF THEM, which that clause got wrong: idb_key_scalar_to_value
+       hands the concolic straight back for NUMBER and STRING (that is what keeps `range.lower` attacker-derived
+       rather than a laundered copy) and reaches idb_concrete only on the DATE arm, whose value no fork can make
+       unknown — §7.4's fork mints no date key and idb_key_new_unknown refuses the arm.
        IN RELEASE THIS COMPILES OUT AND THE ZERO STANDS. That is a DEFINED wrong answer rather than an
        undefined one, and it is narrower than deleting the two worlds that produce it — §a-wrong-narrowing
-       forbids retiring an arm nothing contradicted, and nothing here contradicts "the unknown is a number". */
-    DCHECK(!concolic_is(v) || (concolic_example_state(v) != CONCOLIC_EX_NONE &&
-                               concolic_example_state(v) != CONCOLIC_EX_CONTRADICTED),
-           "Indexed Database §2.4's compare, §2.11's generate-a-key or §7.3's convert-a-key-to-a-value read "
-           "the CONCRETE half of a key whose value is a concolic this flow has no bytes for — §7.4's fork "
-           "minted this key over a value whose TYPE it decided and whose BYTES it did not, so the comparison "
-           "below has nothing to run and would answer 0 — EQUAL — for every key in the store. The "
-           "answer is "
-           "§2.4's OWN fork: `compare two keys` over an operand with no bytes has three feasible completions "
-           "and must ask solver_outcome for them, which this plain-C entry has no JSStepHdr to do — so what "
-           "this names is the conversion of §2.4's callers to a walk, the way §7.4's array arm already is");
+       forbids retiring an arm nothing contradicted, and nothing here contradicts "the unknown is a number".
+       RETIREMENT: this assert goes when every reachable caller asks the fork, which is one landing per
+       ALGORITHM named above and never a sweep over idb_key_compare's call sites — most of those sites sit
+       inside the same handful of searches, so a site count prices the work at the wrong unit. */
+    DCHECK(!idb_value_unobserved(v),
+           "Indexed Database §2.4's compare or §2.11's generate-a-key read the CONCRETE half of a key whose "
+           "value is a concolic this flow has no bytes for — §7.4's fork minted this key over a value whose "
+           "TYPE it decided and whose BYTES it did not, so the arithmetic below has nothing to run and would "
+           "answer 0 — EQUAL — for every key in the store. The answer is §2.4's own fork, which is DECLARED: "
+           "idb_key_order_undecided names the operand and IdbKeyOrderArm names its three completions, and a "
+           "caller asks step_fork_run over them INSTEAD of calling idb_key_compare. §4.3's `cmp` does. What "
+           "reaches here is a caller that cannot yet: §2.11 through idb_key_is_number, or a search inside a C "
+           "loop over §2.2's sorted record list, whose fork is owed at a POSITION among N records and whose "
+           "loop is therefore what has to become a walk first");
     return concolic_is(v) ? concolic_example(ctx, v) : JS_DupValue(ctx, v);
 }
 
@@ -804,6 +833,91 @@ static int idb_array_compare(JSContext *ctx, JSValueConst a, JSValueConst b)
     JS_FreeValue(ctx, pb);
     free(st);
     return r;
+}
+
+/* §2.4's FORK, AS THE ONE QUESTION A CALLER THAT HOLDS A HEADER CAN ASK. See idb_key.h for why the completions
+   are three and why EQUAL is numbered first; what lives here is which PAIRS owe the question, and that is
+   derived from where §2.4's inputs are BORN rather than from who calls this file.
+   §2.4 reads four things — ta, tb, va, vb — plus, on the array arm, va[i], vb[i] and the two sizes. A TYPE is
+   written by idb_key_new out of IDB_TYPE_NAME and is always one of five (idb_key_rank asserts it), because
+   §7.4's fork decides the type rather than deferring it. A SIZE is an Array this file built. So the only input
+   that can lack bytes is a VALUE, and only on a NUMBER or a STRING key, because those are the only two arms
+   idb_key_new_unknown will mint and every other mint site writes a primitive the engine computed. */
+bool idb_key_order_undecided(JSContext *ctx, JSValueConst a, JSValueConst b, JSValue *pover)
+{
+    int ra = idb_key_rank(ctx, a), rb = idb_key_rank(ctx, b);
+    JSValue va, vb;
+    bool ua, ub, undecided = false;
+
+    *pover = JS_UNDEFINED;
+    /* STEPS 1-3. The cascade reads TYPE ONLY, and a type is never unknown here, so a pair of different types is
+       decided outright — which is also why §7.4's fork had to decide the type and could not answer "a key". */
+    if (ra != rb)
+        return false;
+    /* RESIDUAL — NOT COVERED: two ARRAY keys whose subkeys are where the unknown is. §2.4's array arm is not a
+       three-way fork over one operand at all; it compares subkey by subkey and returns at the FIRST non-zero,
+       so the question is owed at the POSITION the walk has reached and the operand is that position's pair. The
+       walk in idb_array_compare is an explicit level stack inside one C call and cannot return JS_STEP_FORK
+       from the middle of it. NEXT DIFF: lift that stack onto a caller's step state, the way
+       core/indexeddb/idb_key_array.c's walk already holds §7.4's, and ask this fork at the subkey stage with
+       the pair as the operand. ABSENCE SHOWS AS: the assert in idb_concrete firing from idb_array_compare's
+       scalar leaf for `indexedDB.cmp([location.hash], [1])`, where the top-level ranks agree and the order is
+       decided one level down. */
+    if (ra == IDB_RANK_ARRAY)
+        return false;
+    /* STEPS 4-5, and the one state in which they have nothing to read. */
+    va = idb_key_value(ctx, a);
+    vb = idb_key_value(ctx, b);
+    ua = idb_value_unobserved(va);
+    ub = idb_value_unobserved(vb);
+    DCHECK(!(ua || ub) || ra == IDB_RANK_NUMBER || ra == IDB_RANK_STRING,
+           "§2.4's value for a DATE key is a double and for a BINARY key a byte sequence, and neither is a place "
+           "a concolic can ride — THIS codebase enumerates the arms that mint an unknown-valued key and "
+           "idb_key_new_unknown's own assert admits exactly IDB_KEY_UNKNOWN_NUMBER and IDB_KEY_UNKNOWN_STRING, "
+           "so a date or binary key with no bytes behind its value was not built by anything in this file");
+    if (ua || ub) {
+        const char *ia = ua ? concolic_ident_c(va) : NULL;
+        const char *ib = ub ? concolic_ident_c(vb) : NULL;
+
+        /* A PAIR THAT IS THE SAME UNKNOWN IS DECIDED AT 0 AND MUST NOT FORK. `va > va` and `va < va` are
+           infeasible for every value va could be, so two of the three completions are worlds the domain
+           contradicts — §Solver-half prunes those rather than exploring them — and §6.7's prevunique tail in
+           core/indexeddb/idb_cursor.c relies on this reflexivity and DFAILs where it does not hold.
+           AN UNSPELLABLE IDENTITY KEEPS THE FORK, which is concolic.h's own instruction for its NULL: absence
+           is a positive statement and is safe, while deciding from it is not.
+           RESIDUAL — NOT COVERED: two DIFFERENT unknowns, where the order is a fact about BOTH and the
+           constraint key names only `a`'s. NEXT DIFF: an operand that NAMES THE PAIR, which is a value and not
+           a string — `step_fork_run` takes a JSValueConst and the solver builds the key from it, so composing
+           one with concolic_ident_compose is not a thing that entry can be handed. What the tree already has
+           for a relation over two live operands either of which is unknown is `concolic_new_rel`, and it is
+           the BRANCH seam's shape rather than this one's: it mints a two-armed predicate, and three completions
+           are not a boolean. So the next diff settles which of the two it is — a joint operand for the outcome
+           seam, or §2.4's three expressed as the two relations the standard's own arms test — and that is a
+           question about the seam, not about this file. ABSENCE SHOWS AS: `indexedDB.cmp(h, s)` and
+           `indexedDB.cmp(h, t)` over three bytes-less values replaying ONE recorded arm, because both file
+           under h. */
+        if (!(ua && ub && ia && ib && !strcmp(ia, ib))) {
+            *pover = JS_DupValue(ctx, ua ? va : vb);
+            undecided = true;
+        }
+    }
+    JS_FreeValue(ctx, va);
+    JS_FreeValue(ctx, vb);
+    return undecided;
+}
+
+int idb_key_order_of_arm(IdbKeyOrderArm arm)
+{
+    switch (arm) {
+    case IDB_KEY_ORDER_EQUAL:   return 0;    /* "Return 0" */
+    case IDB_KEY_ORDER_LESS:    return -1;   /* "If va is less than vb, then return -1" */
+    case IDB_KEY_ORDER_GREATER: return 1;    /* "If va is greater than vb, then return 1" */
+    default: break;
+    }
+    DFAIL("§2.4's fork was handed an arm outside IDB_KEY_ORDER_ARMS — the completions are declared in "
+          "idb_key.h and step_fork_run answers one of the n this file passed it, so a fourth number is a "
+          "world nothing numbered and has no ordering to be given");
+    return 0;
 }
 
 int idb_key_compare(JSContext *ctx, JSValueConst a, JSValueConst b)

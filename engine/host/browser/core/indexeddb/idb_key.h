@@ -135,6 +135,73 @@ JSValue idb_key_to_value(JSContext *ctx, JSValueConst key);
 bool    idb_key_is_array(JSContext *ctx, JSValueConst key);
 JSValue idb_key_subkeys(JSContext *ctx, JSValueConst key);
 
+/* §2.4's THREE COMPLETIONS OVER A PAIR OF KEYS WHOSE ORDER THIS FLOW HAS NO BYTES FOR — the worlds that fork
+ * explores, declared HERE for the reason IdbKeyUnknownArm is: two files read them, this one mints the question
+ * and the §4 member that asks it switches on the arm, and a second copy of the numbering is a second place for
+ * an arm to mean a different world than the one a parked flow recorded it as.
+ *
+ * WHY THREE, AND WHY THIS IS NOT AN ARM OF §7.4's FORK. §2.4's "compare two keys" is a DIFFERENT ALGORITHM AT A
+ * DIFFERENT MOMENT: §7.4 decides what a key IS and §2.4 decides how two of them ORDER, and a flow reaches the
+ * second long after the first has answered. The standard's number and string arms each return exactly 1, -1 or
+ * 0 ("If va is greater than vb, then return 1. If va is less than vb, then return -1. Return 0." / "If va is
+ * code unit less than vb, then return -1. If vb is code unit less than va, then return 1. Return 0."), so the
+ * three are the algorithm's own and not a choice made here.
+ *
+ * THE TYPE CASCADE IS NOT PART OF IT, WHICH IS WHAT BOUNDS THIS AT THREE. §2.4 reads TYPE before VALUE — steps
+ * 1-3 are "let ta be the type of a / let tb be the type of b / if ta does not equal tb, then run these steps"
+ * and the value is not read until step 4 — and every key in this engine carries a CONCRETE type, because that
+ * is exactly what §7.4's fork decides (IdbKeyUnknownArm above mints a NUMBER key or a STRING key and never "a
+ * key"). So two keys of different type order with no unknown in the question at all, and the pair that owes
+ * this fork is two keys of the SAME type whose values are the thing nothing has observed.
+ *
+ * ARM 0 IS EQUAL AND THAT IS quickjs-step.h's NUMBERING RULE RATHER THAN A PREFERENCE: `step_fork_run` requires
+ * outcome 0 to be the completion a run with NO forking policy takes, and the answer such a run reaches today is
+ * 0 — `JS_ToFloat64` of a value with no bytes is NaN, so both of the number arm's tests are false and the
+ * algorithm falls through to "Return 0". Numbering EQUAL first therefore leaves a policy-free run and a release
+ * build byte-identical to what they already do, which is the defined-wrong-answer idb_key.c's own residual
+ * already accepts for release, and it keeps the @S candidate re-fire on the path it was recorded on.
+ *
+ * A NEW COMPLETION GOES LAST, for IdbKeyUnknownArm's reason: the frontier is never reset, so a parked flow
+ * holds arms keyed by the numbers declared on the day it parked. */
+typedef enum {
+    IDB_KEY_ORDER_EQUAL = 0,
+    IDB_KEY_ORDER_LESS,
+    IDB_KEY_ORDER_GREATER,
+    IDB_KEY_ORDER_ARMS
+} IdbKeyOrderArm;
+
+/* THE OPERATION HALF OF THAT FORK'S CONSTRAINT KEY, SPELLED ONCE, for IDB_KEY_UNKNOWN_ASK's reason. It is a
+   DIFFERENT string from that one because it is a different question about the same value: §7.4 asks what type
+   the bytes are and §2.4 asks how they order against another key, and one flow legitimately answers both. */
+#define IDB_KEY_ORDER_ASK "Indexed Database §2.4 compare two keys"
+
+/* IS §2.4's ANSWER FOR THIS PAIR UNDECIDED, AND OVER WHICH VALUE? True with `*pover` the OWNED operand the
+ * order depends on; false with `*pover` JS_UNDEFINED, and then idb_key_compare answers the pair outright.
+ *
+ * IT IS A PREDICATE AND NEVER THE FORK, because the fork needs a flow to snapshot and this file's entries are
+ * plain C. A caller that holds a JSStepHdr asks `step_fork_run` over `*pover` with IDB_KEY_ORDER_ASK and
+ * IDB_KEY_ORDER_ARMS and then takes idb_key_order_of_arm's answer INSTEAD of calling idb_key_compare — the two
+ * are alternatives and not a sequence, since the comparison it would run is the one that has nothing to run.
+ *
+ * `*pover` MUST BE HELD WHERE THE SNAPSHOT CARRIES IT and never in a C local: quickjs-step.h contracts
+ * `step_fork_run`'s `over` as BORROWED for the length of the request, and both a park and a cross-session
+ * resume land back on the ask. That is why this hands the operand back rather than a caller re-deriving it,
+ * and it is also why the operand is this VALUE and not the key record: the constraint key names the value a
+ * branch tests, so filing the question under the record's identity would ask a different question.
+ *
+ * FALSE FOR A PAIR WHOSE ORDER NOTHING CAN DISAGREE WITH, which is not a narrowing but the absence of a
+ * question. Two keys of different TYPE are decided by the cascade. An operand this flow has bytes for is
+ * decided by running the standard's own arithmetic on them. And a pair of operands that are THE SAME UNKNOWN by
+ * identity is decided at 0: `va > va` and `va < va` are infeasible for every value `va` could be, so a fork
+ * there would explore two worlds the domain contradicts, and §6.7's prevunique tail in
+ * core/indexeddb/idb_cursor.c relies on exactly this reflexivity and DFAILs where it fails. Where either identity is unspellable the fork is KEPT, which is
+ * concolic.h's own instruction for a NULL identity — never decide from it. */
+bool idb_key_order_undecided(JSContext *ctx, JSValueConst a, JSValueConst b, JSValue *pover);
+
+/* THE -1, 0 OR 1 ONE OF THOSE ARMS NAMES. Aborts on an arm outside the declared set: a world this machine never
+   numbered cannot be given an ordering, and guessing one would file a record under a position no arm chose. */
+int idb_key_order_of_arm(IdbKeyOrderArm arm);
+
 /* §2.4's COMPARE TWO KEYS — -1, 0 or 1. It is THE ordering of this standard: §2.2's list of records is sorted
    by it, §2.9's key range is bounded by it, §2.10's cursor walks in it, and §4.3's `cmp` is it, exposed. */
 int idb_key_compare(JSContext *ctx, JSValueConst a, JSValueConst b);
