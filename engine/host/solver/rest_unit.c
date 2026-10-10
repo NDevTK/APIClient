@@ -1,66 +1,39 @@
-/* The rest-point granularity policy — see solver/rest_unit.h for what a rest unit is, why the scheduler owns
-   it rather than the component that rests, and the two bounds every answer below has to satisfy.
-
-   THIS FILE HOLDS THE NUMBERS AND THE REASON FOR EACH, AND NOTHING ELSE. It has no loop, no queue, no handle
-   and no knowledge of a parser: a component asks how many of its own items one rest point covers and does its
-   own counting. That is what makes "two components cannot disagree about the unit" true by construction rather
-   than by review — core/loader/html_document.c and core/loader/text_document.c fill the same input byte stream
-   under the same sentence of the standard, and there is exactly one expression of that unit in the tree for
-   them to read. */
+/* The rest-point granularity policy (see solver/rest_unit.h): one number per kind and the reason for it.
+   Components ask; none keeps its own copy, so two components filling the same stream cannot disagree about
+   the unit — core/loader/html_document.c and core/loader/text_document.c both read REST_UNIT_INPUT_BYTES. */
 #include "solver/rest_unit.h"
 
-#include "solver/engine.h"     /* ENGINE_QUANTUM_MS — the ceiling is the SCHEDULER's slice, never a private copy */
-#include "solver/quantum.h"    /* the consumed-CPU reading, and whether this host's reading IS cpu */
+#include "solver/engine.h"     /* ENGINE_QUANTUM_MS: the ceiling is the scheduler's slice */
+#include "solver/quantum.h"    /* the consumed-CPU reading, and whether this host's reading is CPU */
 #include "check.h"
 
-/* HTML §7.5.2 "Loading HTML documents" / §7.5.4 "Loading text documents": ONE NETWORKING TASK'S WORTH OF THE
-   FETCHED BYTES, as this engine sizes it. The standard names the unit and not its size, and it cannot: a task's
-   bytes are however many the transport delivered, and this engine's transport delivers none of them — the
-   trusted zone hands the loader a whole decoded entity, so there is no observed arrival to take the size from
-   and the policy must state one.
-
-   WHAT DECIDES IT is the pair of bounds rest_unit.h states, and nothing else:
-     - the FLOOR is the cost of asking. One rest point is a step-machine yield, a frontier re-rank and possibly
-       a COW delta swap, and at one byte per rest that cost is paid once per byte of every document the engine
-       loads, dwarfing the tokenizer work it brackets. 16 KiB pays it once per sixteen thousand bytes, which
-       makes it invisible beside the parse — and nothing beyond that point is worth buying, because the cost is
-       already gone.
-     - the CEILING is the scheduler's own slice. A coarser unit delays a due suspension by at most one unit, so
-       one unit's parse must stay small against ENGINE_QUANTUM_MS; below that interval the delay cannot change
-       which flow runs next, because the scheduler does not make a decision that finely. 16 KiB of tokenizer
-       and §13.2.6 tree construction is far under one 12 ms slice of CPU on any throughput this engine has ever
-       shown — and it is ASSERTED rather than left as a claim, by the bracket at the bottom of this file.
-   Between those two the exact value is free, which is the point of it being a policy input: it moves here,
-   with the reasoning, and no loader changes. */
+/* HTML §7.5.2 "Loading HTML documents" / §7.5.4 "Loading text documents": one networking task's bytes. The
+   standard names the unit but cannot size it, and this engine's transport hands the loader a whole decoded
+   entity, so the policy states one. The floor is the cost of asking (a yield, a re-rank, possibly a delta
+   swap), paid once per 16 KiB and invisible beside the parse. The ceiling is bound (2): 16 KiB of
+   tokenization and tree construction is far under one slice, and the bracket asserts it. Between the two
+   the value is free. */
 #define REST_UNIT_INPUT_BYTES_N   16384u
 
-/* HTML §7.5.3 "Loading XML documents": ONE CONSTRUCT, and it stays one.
-   A multiplier here would multiply a quantity the DOCUMENT chooses. One construct is one instance of a
-   production of XML §2.1 "Well-Formed XML Documents"' [1] `document`, and [14] `CharData` is a character run as
-   long as the response cares to make it — so "four constructs" is not four times a fixed cost, it is four
-   times an unbounded one, which is bound (1) of rest_unit.h broken by a number that looks like a granularity.
-   The floor argument does not apply either: a construct is already coarse enough that the rest cost is
-   amortized, which is exactly the difference between this unit and the per-byte one it is being contrasted
-   with. And a document whose ONE construct overruns the slice is not a policy error — it is core/xml/'s
-   [14] scan needing to become a pull itself, one layer down, which is a change to that walk and not to this
-   number. */
+/* HTML §7.5.3 "Loading XML documents": one construct. A construct's size is the document's choice ([14]
+   `CharData` is unbounded), so a multiplier would multiply a quantity the page picks and break bound (1).
+   One construct already amortizes the cost of asking. A construct that overruns the slice means core/xml/'s
+   [14] scan must become a pull itself, not that this number is wrong. */
 #define REST_UNIT_XML_CONSTRUCTS_N   1u
 
-/* §7.5.3's discard of the partial tree a failed parse left: ONE TOP-LEVEL CHILD, for the construct's reason
-   with the unboundedness one step more obvious — removing a child removes its whole subtree, and the document
-   chose that subtree. */
+/* §7.5.3's discard of a failed parse's partial tree: one top-level child, for the construct's reason —
+   removing a child removes a subtree the document chose. */
 #define REST_UNIT_SUBTREE_REMOVALS_N   1u
 
-/* ONE LAYOUT QUESTION BODY above its drive: how many nested bodies one C activation hosts before an ask is
-   deferred. The floor is the replay a deferral costs: the deferring bodies re-run from their start once the
-   deferred question is answered, so a unit of one replays a parent once per child. The ceiling is the C
-   stack one activation spends on nested bodies. 32 replays a body once per 32 levels of nesting and keeps an
-   activation's layout frames to 32 bodies; between those the value is free. */
+/* Layout question bodies above one drive before an ask is deferred. The floor is replay: deferring bodies
+   re-run from their start, so a unit of one replays a parent once per child. The ceiling is the C stack one
+   activation spends. 32 replays a body once per 32 levels and keeps an activation to 32 bodies. */
 #define REST_UNIT_LAYOUT_QUESTIONS_N   32u
 
-/* ONE DESCENDANT FOLDED INTO A SCROLLING AREA, 32 per rest point. The floor is the cost of asking, which a
-   single node's edge does not amortize; the ceiling is bound (2), asserted by the bracket the walk's driver
-   opens around each unit, so a document whose 32 nodes overrun the slice says so by name. */
+/* Descendants folded into a scrolling area per rest point. The floor is the cost of asking, which one
+   node's edge does not amortize; the ceiling is bound (2), asserted around each unit. A single node that
+   overruns the slice is a derivation that cannot rest mid-node (core/layout/layout_job.h), not a unit to
+   lower. */
 #define REST_UNIT_LAYOUT_DESCENDANTS_N   32u
 
 size_t rest_unit_items(RestUnitKind kind)
@@ -74,9 +47,8 @@ size_t rest_unit_items(RestUnitKind kind)
     case REST_UNIT_LAYOUT_QUESTIONS: n = REST_UNIT_LAYOUT_QUESTIONS_N; break;
     case REST_UNIT_LAYOUT_DESCENDANTS: n = REST_UNIT_LAYOUT_DESCENDANTS_N; break;
     }
-    /* NOT A `default:` ARM — the switch is exhaustive over RestUnitKind, so a kind added to the header with no
-       number here does not compile rather than silently reaching the crash below. What lands here is a value
-       that is in NEITHER list, which is a caller that cast an integer into the enum. */
+    /* No `default:` arm, so clang's -Wswitch (on by default) warns about a kind with no case here; such a
+       kind, or an integer cast into the enum, leaves `n` at zero and fails the check below. */
     DCHECKF(n >= 1,
             "the rest-point granularity for kind %d is %zu — a unit of zero items is a step that performs no "
             "work and a driver that never ends, and a unit is at least one BY ARCHITECTURE: what this policy "
@@ -86,20 +58,14 @@ size_t rest_unit_items(RestUnitKind kind)
     return n;
 }
 
-/* ── THE CEILING, MEASURED ──────────────────────────────────────────────────────────────────────────────────
-   Everything below is dev-only and observes: it truncates nothing, drops no flow and changes no schedule. */
+/* Bound (2), measured. Everything below is dev-only and observes: it drops, truncates and reorders nothing. */
 
 #if APICLIENT_DEV
-/* WHICH BRACKET IS OPEN, as the kind itself plus a flag — a flag rather than a sentinel kind, because every
-   value of the enum is a real kind and inventing a NONE member to mean "no bracket" would put a value in the
-   policy switch that has no number and no cost sentence.
-   ONE COPY PER PROCESS AND NOT PER THREAD, which is a claim worth stating because the shape has been wrong
-   here before: a process-wide counter asserted about by several corpus THREADS fired on a race between two
-   healthy ones. This one is safe for the reason solver/quantum.c's slice state is — an engine instance's flows
-   all run on the instance's own thread, this reading is that thread's, and the only host that drives corpus
-   work on several threads (run-test262) links no file under engine/host at all. A host that ever drove two
-   engines on two threads would need this per thread, and the unbalanced-bracket DCHECKs below are what would
-   say so first. */
+/* The open bracket: a flag plus the kind, since every enum value is a real kind with a number. One copy
+   per process is correct because an engine instance's flows all run on its own thread and this reading is
+   that thread's (as solver/quantum.c's slice state is); run-test262, the one multi-threaded host, links no
+   engine/host file. A host driving two engines on two threads needs this per thread, and the bracket's
+   pairing DCHECKs would fire first. */
 static int          g_rest_open;
 static RestUnitKind g_rest_kind;
 static int64_t      g_rest_mark_us;
@@ -132,14 +98,9 @@ void rest_unit_end(void)
            "somewhere its own bracket does not cover");
     g_rest_open = 0;
     spent = quantum_thread_us() - g_rest_mark_us;
-    /* THE CHECK IS GATED TWICE, AND BOTH GATES ARE THE POINT.
-       (a) `quantum_measure_is_cpu` — §Testing forbids a verdict a loaded machine can falsify, and on the wasm
-           host this reading is emscripten's wall clock (solver/quantum.h says so in one place so no message
-           has to restate it). A descheduled thread would fail this on a busy box while consuming nothing.
-       (b) `rest_unit_items(kind) > 1` — the unit is only a POLICY choice where the answer is more than the
-           substrate's own item. At 1 there is no smaller number to name, so an overrun is a fact about the
-           document and the fix is one layer down, in the walk that produced the item. Asserting there would
-           be a red naming a change nobody can make. */
+    /* Two gates. The reading must be CPU (solver/quantum.h): on the wasm host it is a wall clock, which a
+       descheduled thread would fail while consuming nothing. And the unit must be a choice (more than one
+       item): at one item there is no smaller number to name, so an overrun is fixed one layer down. */
     if (!quantum_measure_is_cpu() || rest_unit_items(g_rest_kind) <= 1)
         return;
     DCHECKF(spent < (int64_t)ENGINE_QUANTUM_MS * 1000,

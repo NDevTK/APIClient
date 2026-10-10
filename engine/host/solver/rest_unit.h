@@ -1,138 +1,80 @@
-/* rest_unit.h — HOW MUCH OF A SUBSTRATE'S OWN ITEMS ONE REST POINT COVERS, decided in ONE place for every
- * pull-shaped component in the engine, and owned by the scheduler rather than by the component that rests.
+/* rest_unit.h — how many of a substrate's own items one rest point covers, decided in one place for every
+ * pull-shaped component and owned by the scheduler rather than by the component that rests.
  *
- * WHAT A REST UNIT IS, AND WHY IT IS NOT A BOUND. CLAUDE.md §NO BOUNDS: "a bound decides work will not happen;
- * a granularity decides only how often a flow OFFERS to rest, and an offer declined costs one predicate." A
- * component converted from one completing call into a pull has to answer a question the call never asked —
- * how much work is one item? — and the answer is a POLICY, because it trades the cost of asking the scheduler
- * against the delay before a due suspension is taken. Neither side of that trade is a fact the component
- * knows: the cost of asking belongs to the scheduler (a step-machine yield, a frontier re-rank, possibly a COW
- * delta swap) and so does the delay that may be tolerated (the slice a flow is already allowed to hold,
- * ENGINE_QUANTUM_MS). So the answer lives here, beside the slice it is reasoned against, and the components
- * ASK.
+ * A rest unit is a granularity, not a bound: it decides how often a flow offers to rest, never whether work
+ * happens. Choosing it trades the cost of asking the scheduler (a step-machine yield, a frontier re-rank,
+ * possibly a COW delta swap) against the delay before a due suspension is taken. Both belong to the
+ * scheduler, so the answer lives here beside ENGINE_QUANTUM_MS and components ask for it. The finest unit a
+ * substrate offers is also a choice, and the expensive one: one scheduler round trip per item.
  *
- * TAKING THE FINEST UNIT THE SUBSTRATE OFFERS IS STILL A CHOICE, AND IT IS THE EXPENSIVE ONE. HTML §7.5.2
- * "Loading HTML documents" and §7.5.4 "Loading text documents" were converted to a pull that rested after ONE
- * BYTE of the response, on the stated grounds that a byte is the finest unit lexbor offers and so needs no
- * chosen quantum to invent and defend. That reading treats "no chosen constant" as a virtue in itself; it is
- * not, it is a constant of 1 that nobody had to argue for. What it buys is one whole scheduler round trip per
- * byte of every document this engine loads — the frontier re-ranked, the step machine re-entered and the
- * flow's arm re-dispatched, per byte — for a suspension opportunity nothing can use at that resolution.
- *
- * AND THE STANDARD NAMES THE UNIT, so this is not an engine-shaped constant standing where a spec-shaped one
- * belongs. HTML §7.5.2 "Loading HTML documents" and §7.5.4 "Loading text documents" carry the SAME sentence,
- * word for word:
+ * HTML §7.5.2 "Loading HTML documents" and §7.5.4 "Loading text documents" name the loaders' unit in the
+ * same sentence:
  *
  *     "Each task that the networking task source places on the task queue while fetching runs must then fill
  *      the parser's input byte stream with the fetched bytes and cause the HTML parser to perform the
  *      appropriate processing of the input stream."
  *
- * A TASK'S WORTH OF BYTES — a chunk — and the rest point is BETWEEN two of those tasks, because a task is what
- * the event loop can interleave other work between. A per-byte fill is not a stricter reading of that
- * sentence; it is a different algorithm, one in which the networking task source delivers one byte per task.
+ * The unit is one task's bytes, and the rest point is between two tasks. §7.5.3 "Loading XML documents"
+ * names none, so its unit is the XML grammar's own: one construct of XML §2.1 "Well-Formed XML Documents"'
+ * [1] `document`, which is core/xml/xml_parse.h's step.
  *
- * §7.5.3 "Loading XML documents" HANDS OVER NO SUCH UNIT and that absence is a positive statement rather than
- * a gap to fill by analogy: it says only that "user agents must follow the requirements defined in XML and
- * Namespaces in XML, XML Media Types, DOM, and other relevant specifications", so the unit that section
- * implies is the XML grammar's own — one construct of XML §2.1 "Well-Formed XML Documents"' [1] `document`,
- * which is exactly what core/xml/xml_parse.h's step already performs. See REST_UNIT_XML_CONSTRUCTS for why
- * that one stays at one construct rather than being multiplied.
+ * Every unit satisfies two bounds.
+ * (1) It does not grow with the response. A fraction of the response ("rest sixteen times per document") is
+ *     drive-to-completion under another name. `rest_unit_items` takes only a kind — no length, document or
+ *     handle — so such a unit is not expressible.
+ * (2) One unit's work is small against ENGINE_QUANTUM_MS. A coarser unit never misses a due suspension; it
+ *     delays the offer by at most one unit, which cannot change which flow runs next while the unit is small
+ *     against the slice. `rest_unit_begin`/`rest_unit_end` assert this on consumed CPU in a dev build, where
+ *     solver/quantum.h says the reading is CPU, and only for kinds whose answer is above 1: at 1 there is no
+ *     smaller number, so an overrun is a fact about the document and the fix is to make that item a pull one
+ *     layer down.
  *
- * ── THE TWO BOUNDS A UNIT MUST SATISFY ─────────────────────────────────────────────────────────────────────
- *
- * (1) IT MUST NOT GROW WITH THE RESPONSE, AND THAT IS ENFORCED BY THE SIGNATURE RATHER THAN ASSERTED.
- * CLAUDE.md §C-stack: "running no user code is not what makes a C span safe to leave un-parkable; being O(1)
- * is." The quantity that must not appear in a step's cost is the one the ATTACKER chooses — the response's
- * length. A per-byte step and a per-16-KiB step are both O(1) by that criterion and differ only in the
- * constant; the whole-document drive that both replaced is O(response) and is the thing the criterion excludes.
- * What a granularity may never be is a FRACTION of the response ("rest sixteen times per document"), because
- * that is O(response) wearing a granularity's name and would re-open the drive-to-completion on the one input
- * that matters. `rest_unit_items` is told a KIND and nothing else — no length, no document, no handle — so a
- * unit that grows with the response is not expressible through this interface at all.
- *
- * (2) ONE UNIT'S WORK MUST BE SMALL AGAINST THE SLICE, AND WHERE THE UNIT IS A CHOICE THAT IS ASSERTED.
- * A coarser unit cannot MISS a suspension that is due: the rest point is still offered at every unit boundary
- * and the resume is still byte-identical, so the only thing a coarser unit changes is WHEN the offer arrives.
- * The delay is at most ONE unit's work. That is acceptable exactly while one unit's work is small compared
- * with ENGINE_QUANTUM_MS — the slice the scheduler already permits a flow to hold without offering the thread
- * back at all — because a delay smaller than the interval the scheduler itself operates at cannot change which
- * flow runs next. That is the whole argument for the constant, and an argument about a runtime cost is worth
- * what the measurement behind it is worth, so it is MEASURED: `rest_unit_begin`/`rest_unit_end` bracket one
- * unit's work and assert the ceiling in a dev build, on consumed CPU (§Testing: "MEASURE THE THING THE
- * INVARIANT IS ABOUT — CPU actually consumed … never elapsed time"), and only where solver/quantum.h says the
- * reading IS CPU.
- *
- * THE CHECK IS GATED ON THE UNIT BEING A CHOICE, NOT ON A HAND-PICKED LIST OF KINDS. Where the answer is 1 the
- * substrate's own item is the unit, and a unit that overruns the slice is then a fact about the DOCUMENT
- * rather than about policy — there is no smaller number, so an assert naming "lower this unit" would name a
- * fix that does not exist, and the real response is to make that construct itself a pull one layer down. So
- * the bracket checks when `rest_unit_items(kind) > 1` and is silent otherwise, which follows the policy
- * automatically instead of following a list somebody has to remember to edit.
- *
- * WHAT IS NOT TUNABLE HERE IS WHETHER A SPAN CAN REST AT ALL. §NO BOUNDS again: that "is BFS versus
- * drive-to-completion, which is a different JavaScript and DOM engine rather than a setting". Every answer
- * below is at least 1, asserted, so there is no value of this policy that turns a pull back into a call.
- */
+ * Every answer is at least 1 (asserted), so no value of this policy turns a pull back into a call. */
 #ifndef ENGINE_HOST_SOLVER_REST_UNIT_H
 #define ENGINE_HOST_SOLVER_REST_UNIT_H
 
 #include <stddef.h>
 
-/* THE ITEM A REST UNIT IS COUNTED IN. Each name says what ONE item is, because the cost bound differs per
-   kind and a shared name would hide that: four of these are counted in items whose size the DOCUMENT chooses,
-   and the multiplier a policy may safely apply is a different question for those than for the one whose item
-   is a fixed amount of work. Adding a kind means adding its default and its cost sentence in rest_unit.c,
-   which does not compile until both exist. */
+/* The item a rest unit is counted in. Each name says what one item is, because the cost differs per kind:
+   four are items whose size the document chooses, where a multiplier multiplies a quantity the page picks.
+   A new kind needs its number and its reason in rest_unit.c, whose switch warns (-Wswitch) and whose check
+   fails at run time without it. */
 typedef enum {
-    /* ONE BYTE INTO AN HTML PARSER'S INPUT BYTE STREAM — HTML §7.5.2 "Loading HTML documents" and §7.5.4
-       "Loading text documents"' fill, quoted in full above. COST: linear in the unit, with HTML §13.2.5
-       "Tokenization", §13.2.6 "Tree construction" and solver/dom_cow.h's announcement of each node §13.2.6
-       makes as the per-byte constant. NOTHING UNBOUNDED HIDES INSIDE ONE, and that is a fact about this engine
-       and not about the standard: a real browser RUNS a `<script>` from inside the parse, where the fill's cost
-       would be the page's own code and no constant would bound it. Here a Document's scripts are seeded after
-       §13.2.7 "The end" (core/frame/navigable.c's navigable_seed_scripts), so a fill is parser work only. The
-       day script execution moves into the parse this unit is no longer bounded by its byte count, and the
-       bracket below is what will say so. */
+    /* One byte into an HTML parser's input byte stream, §7.5.2/§7.5.4's fill quoted above. Cost: linear in
+       the unit, with HTML §13.2.5 "Tokenization", §13.2.6 "Tree construction" and solver/dom_cow.h's
+       announcement of each node as the per-byte constant. A fill runs no page code because a Document's
+       scripts are seeded after §13.2.7 "The end" (core/frame/navigable.c's navigable_seed_scripts); if script
+       execution moves into the parse, the bracket's CPU assert is what reports the unbounded unit. */
     REST_UNIT_INPUT_BYTES = 0,
-    /* ONE CONSTRUCT OF XML §2.1 "Well-Formed XML Documents"' [1] `document` — core/xml/xml_parse.h's step,
-       which is what HTML §7.5.3 "Loading XML documents" reaches. COST: one production instance, whose SIZE the
-       document chooses ([14] `CharData` is a run as long as the response makes it), so this is the case where
-       a multiplier would multiply a quantity the attacker picks. */
+    /* One construct of XML §2.1 "Well-Formed XML Documents"' [1] `document`, core/xml/xml_parse.h's step,
+       reached from HTML §7.5.3 "Loading XML documents". Cost: one production instance, whose size the document
+       chooses ([14] `CharData` is as long as the response makes it). */
     REST_UNIT_XML_CONSTRUCTS,
-    /* ONE TOP-LEVEL CHILD REMOVED from the partial tree a failed XML parse left standing, which §7.5.3 permits
-       a user agent to replace with an inline report. COST: one subtree, whose size the document chooses —
-       the same shape as the construct above and for the same reason. */
+    /* One top-level child removed from the partial tree a failed XML parse left, which §7.5.3 permits a user
+       agent to replace with an inline report. Cost: one subtree, whose size the document chooses. */
     REST_UNIT_SUBTREE_REMOVALS,
-    /* ONE LAYOUT QUESTION BODY open on the C stack above its job's drive (core/layout/layout_job.h). The rest
-       point is the return to the drive: an ask made while the drive already hosts this many bodies is
-       deferred, and the drive computes it on a fresh C stack. COST: one body, whose own walk the document
-       sizes (a container's children), so this is the construct's shape again. The drive is not yet a
-       scheduler rest point, so this number decides C stack per activation and replay cost rather than the
-       delay of a due suspension; bound (2) applies to it once a drive returns to the scheduler. */
+    /* One layout question body open on the C stack above its job's drive (core/layout/layout_job.h). An ask
+       made while the drive already hosts this many bodies is deferred and computed on a fresh C stack. Cost:
+       one body, whose walk the document sizes. The drive is not yet a scheduler rest point, so this number
+       decides C stack per activation and replay cost; bound (2) applies once a drive returns to the
+       scheduler. */
     REST_UNIT_LAYOUT_QUESTIONS,
-    /* ONE DESCENDANT NODE FOLDED INTO A SCROLLING AREA — CSSOM VIEW §2 "Terminology"'s extreme over "all of the
-       element's descendants' boxes", walked by core/layout/scrolling_area.h's cursor. The rest point is a
-       scheduler one: core/dom/element_scrolling.c's scroll a target into view yields after each unit. COST: one
-       node's margin edge, whose derivation climbs its ancestors and lays out what it asks, so the document
-       sizes it; bound (2) is asserted by the bracket around each unit. */
+    /* One descendant node folded into a scrolling area, CSSOM View §2 "Terminology"'s extreme over "all of
+       the element's descendants' boxes", walked by core/layout/scrolling_area.h's cursor.
+       core/dom/element_scrolling.c's scroll-into-view yields to the scheduler after each unit. Cost: one
+       node's margin edge, whose derivation lays out what it asks, so the document sizes it; bound (2) is
+       asserted around each unit. */
     REST_UNIT_LAYOUT_DESCENDANTS
 } RestUnitKind;
 
-/* HOW MANY ITEMS OF `kind` ONE REST POINT COVERS. Always >= 1 (asserted): the offer to rest survives every
-   value of this policy, which is the half that is architecture rather than setting.
-   IT TAKES NOTHING BUT THE KIND, and that is the enforcement of bound (1) above rather than an economy of
-   arguments — a caller cannot pass a length, so this cannot answer a fraction of one. */
+/* How many items of `kind` one rest point covers; at least 1 (asserted). It takes only the kind, which is
+   how bound (1) is enforced: a caller cannot pass a length, so the answer cannot be a fraction of one. */
 size_t rest_unit_items(RestUnitKind kind);
 
-/* ONE UNIT'S WORK, BRACKETED — bound (2) above, measured instead of assumed. `begin` latches the kind and the
-   consumed-CPU reading; `end` asserts the unit did not overrun the scheduler's slice. They are two-sided: a
-   `begin` with a bracket already open, or an `end` with none, is a driver that lost track of its own unit.
-   NOTHING BRANCHES ON THEM AND NOTHING IS TRUNCATED BY THEM. They are a diagnostic in §Testing's sense — no
-   work is dropped, reordered or skipped whatever they observe — and both compile to nothing in release, so a
-   release build pays neither the clock reads nor the check.
-   THE ABSENCE OF A BRACKET IS NOT A CRASH, because the two loader arms whose unit is fixed at 1 have nothing
-   the check could tell them (see the head comment); what the pair asserts is only that whoever DOES bracket
-   does it in pairs. */
+/* One unit's work, bracketed: bound (2), measured. `begin` latches the kind and the consumed-CPU reading;
+   `end` asserts the unit stayed under the scheduler's slice. Brackets do not nest, and an `end` needs an open
+   `begin` (both asserted). They observe only: nothing branches on them, and both compile to nothing in
+   release. A driver whose unit is fixed at 1 may leave its units unbracketed. */
 void rest_unit_begin(RestUnitKind kind);
 void rest_unit_end(void);
 
