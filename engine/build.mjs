@@ -9267,9 +9267,7 @@ STAGES.push(onHost(runProgram("egress default-arm probe", [join(ROOT, "testing",
                        "decision and its BOUND (a page-named child navigable FIRES, a forced route stays " +
                        "REFUSED), so the right answer there is to update the row and say who decided it, never " +
                        "to fix the probe. Nothing here stores a copy of the ARM LIST, so a widening that keeps " +
-                       "those two rows passes unchanged. Two comments cite this stage by name as the authority for a repair " +
-                       "being outcome-free, in extension/bridge.js and extension/lib/safe-fetch.js, so a red " +
-                       "here also means those two sentences are unsupported until it is green."),
+                       "those two rows passes unchanged."),
   STAGE_HOST.SOURCE));
 /* THE FIFTH AREA: IS EVERY FILE IN THE TEST CORPUS COLLECTED BY SOMEBODY. §Testing — "A TEST FILE THE GATE
    DOES NOT COLLECT IS AN EXCLUDED TEST, AND AN EXCLUDED TEST IS A FAILURE … worse, because the total LOOKS
