@@ -764,9 +764,9 @@ function stampOrigin(o) { return _isRealOrigin(o) ? o : "null"; }
    group but lands in another tab; next diff joins it to its opener's group from a browser-stated opener fact;
    absence shows as an opener and its popup in two instances. Engine-opened auxiliaries take their creator's group.
    The origin half is `_senderOrigin`'s, opaque-unique, never `originOf(sourceUrl)` (a sandboxed document's
-   address parses to a tuple origin the browser refused it). An empty origin belongs to a rehydrated cold
-   recipe, whose group is its unique frontier key `cold:<origin>|<bundle>`. A NUL separator, because neither
-   half can contain one. */
+   address parses to a tuple origin the browser refused it). A rehydrated cold recipe's group is `cold:` plus
+   its frontier key (`<address>|<bundle>`), unique per recipe, so its stored principal, even an empty one,
+   collides with nothing. A NUL separator, because neither half can contain one. */
 function clusterKeyOf(msg) {
   DCHECK(msg && msg.groupId != null && msg.groupId !== "",
          "a document reached the pool naming no browsing-context group — an instance IS its (group, origin) " +
@@ -774,61 +774,24 @@ function clusterKeyOf(msg) {
          "with every document of its origin in every tab the user has open");
   return String(msg && msg.groupId) + "\u0000" + String((msg && msg.origin) || "");
 }
-/* Stable BUNDLE IDENTITY for the frontier key: the EXTERNAL <script src> set (content-hash filenames
-   like main.abc123.js ARE the app version), NOT the volatile HTML wrapper (per-request nonces/CSRF
-   tokens would change the key every visit -> the frontier would never resume). A redeploy changes a src
-   -> new key -> stale frontier invalidated. Inline-only pages fall back to the HTML hash (rare; they're
-   small, finish in one visit, never park). */
-/* The document's bundle IDENTITY is computed by the ENGINE (qjs_bundle_id, a real Lexbor <script> scan) —
-   NOT a host-side regex.
-   THE KEY IS THE DOCUMENT'S ADDRESS AND ITS PROGRAM, AND THE SENTENCE THAT STOOD HERE WAS FALSE ABOUT THIS
-   TREE. It said the key "is only a RELEVANCE grouping for which parked recipes to pull on resume (recipes
-   self-identify by function SOURCE hash, so a coarse key is sound)". No recipe carries a source hash: the
-   grammar solver/cold.c writes is `f<chain-id>,<reward>` — a POSITIONAL id into the decision chain that
-   document's own scripts built, in the order they asked their questions — and solver/cold.c's own DFAIL asks
-   for `JS_OrphanHash` to be REBUILT (deleted at 1dd6bbe4) for a record kind that does not exist yet. A source
-   hash could not make a coarse key sound even if it existed, because it locates a FUNCTION and a recipe is a
-   PATH: there is no hash under which "arm 3 of question 7" means the same thing in a different program.
-   WHAT THE COARSE KEY COST, MEASURED ON REAL ROUTE SETS: `document_bundle_id` hashes the external <script src>
-   set, and an SPA ships one bundle to every route — app.netlify.com `/`, `/login`, `/signup` and `/teams` all
-   hash to `1qi62vn`; app.asana.com `/`, `/-/login` and `/0/home` all to `1mksgsl`. Under `origin|bundle` those
-   are ONE entry, and frontierPut REPLACES, so route B's residue overwrote route A's — and worse than losing
-   it: solver/engine.c seeds a session from the recipes OR from a boot flow, never both ("they are ALTERNATIVES"),
-   so route B opened holding route A's decision vectors and NO boot flow. Route B's own document was never
-   explored from script 0, and route A's arms were replayed positionally against route B's program.
-   SO THE KEY NAMES THE DOCUMENT THE RECIPES REPLAY IN: its ADDRESS (DOM §4.5 "Interface Document" — the
-   document's URL is the browser's own name for it, it is what the engine derives the principal from and what
-   every relative URL resolves against, and it is what tells one SPA route from another) plus the PROGRAM the
-   engine identified. The bundle half is retained for exactly what it always did: a redeploy changes a
-   content-hashed src, so the key changes and the stale residue is invalidated rather than replayed against
-   new code. The origin half is subsumed — an address carries its origin — and originOf is still asserted
-   below, as the statement that this zone can serialize a principal from the address the engine accepted.
-   WHAT THIS COSTS, STATED RATHER THAN HIDDEN: a document whose ADDRESS is volatile (a per-request id in the
-   query) now keys a new entry per visit and never resumes. That is the honest reading — a residue for a
-   document at an address nobody will visit again is not resumable — and it is strictly better than the
-   alternative it replaces, which was to resume it inside a DIFFERENT document. */
-/* Cross-session flow FRONTIER (IndexedDB): the learned surface (globalStore) already persists; this
-   persists the UNFINISHED frontier as compact replay recipes, keyed by the document's ADDRESS plus the
-   bundle hash (a changed bundle invalidates a residue written against other code). A parked frontier
-   resumes next visit/session -> ONE continuous attention across sessions, extracting more breadth each
-   time until fully explored. */
-/* THE STORE VERSION IS THE ENTRY GRAMMAR'S VERSION, and the upgrade transaction is where a grammar change is
-   executed (IndexedDB §5.7 "Upgrading a database", §2.7.3 "Upgrade transactions"). v2 added `responseHeaders`
-   (see frontierDoc); a v1 entry cannot state the response its document was created from, so it cannot be
-   resumed into the environment it parked in and is DELETED here rather than resumed under a policy container
-   nobody delivered. A one-time grammar change, not a frontier reset — and not a default either, which is the
-   alternative it replaces: `|| {}` at the read would resume every v1 entry as a page whose server sent no CSP. */
-/* THE UPGRADE IS PER-VERSION AND ADDITIVE, WHICH IS WHAT IndexedDB §5.7 "Upgrading a database" MEANS BY AN
-   UPGRADE TRANSACTION AND WHAT THIS DID NOT DO. It ran ONE body for every version change and that body began
-   by DELETING the frontier object store — so the v1 purge described above, which was a deliberate one-time
-   grammar change, was written as an unconditional statement that ANY future version bump wipes every parked
-   residue on the machine. The next person to add a store would have reset the ONE continuous cross-session
-   frontier as a side effect of adding one, and nothing would have said so: an empty frontier is exactly what
-   a fresh profile looks like. `oldVersion` is what distinguishes them and it has always been on the event;
-   each arm now states which version introduced it, and a v3 profile skips both.
-   v3 ADDS `prefs`: the configured share of this person's device (see §RESIDENCY). It lives here rather than
-   in `chrome.storage.local`, which CLAUDE.md bans, and beside the frontier rather than in a database of its
-   own because it is a fact ABOUT this store that must be read on the same edge, in the same zone. */
+/* The frontier key is the document's address plus its program: `address + "|" + bundle`, with the bundle id
+   computed by the engine (qjs_bundle_id, a Lexbor <script> scan of the external src set, whose content-hashed
+   names are the app version). A recipe is a path, not a function: solver/cold.c writes `f<chain-id>,<reward>`,
+   a positional id into the decision chain that document's own scripts built, so it replays only in the same
+   document running the same program. The address (DOM §4.5 Interface Document) separates one SPA route from
+   another, since an SPA ships one bundle to every route; the bundle half invalidates a residue when a redeploy
+   changes a src. A document at a volatile address keys a new entry per visit and never resumes, which is
+   correct: no one will visit that address again. */
+/* The cross-session flow frontier (IndexedDB). The learned surface persists in globalStore; this persists the
+   unfinished frontier as compact replay recipes, so a parked frontier resumes on a later visit or session as
+   one continuous attention across sessions. */
+/* The store version is the entry grammar's version, executed in the upgrade transaction (IndexedDB §5.7
+   Upgrading a database). Each arm states the version that introduced it and runs only for older profiles,
+   so a future version bump never wipes the frontier as a side effect.
+   v2 added `responseHeaders` (see frontierDoc): a v1 entry cannot state the response its document came from,
+   so it cannot resume under the right policy container and is deleted rather than defaulted to no CSP.
+   v3 adds `prefs` (the configured device share, see residency, and the egress table): this zone's state lives
+   in IndexedDB, never `chrome.storage.local`, beside the store it is about. */
 function idbOpen() {
   return new Promise((res, rej) => {
     const r = indexedDB.open("apiclient-frontier", 3);
@@ -843,9 +806,8 @@ function idbOpen() {
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
 }
-/* THE PREFERENCE EDGE. Its failures are surfaced exactly like the frontier's own three (frontierFail): an
-   unreadable preference must not be indistinguishable from one the user never set, because the second is
-   answered by the device default and the first is this zone's storage failing. */
+/* The preference edge. Failures are surfaced like the frontier's own (frontierFail), so an unreadable
+   preference is not mistaken for one the user never set. */
 function frontierPref(name) {
   return new Promise((res, rej) => {
     idbOpen().then((db) => {
@@ -866,52 +828,34 @@ function frontierPrefPut(name, value) {
     }, rej);
   }).catch((e) => { RETHROW_FATAL(e); frontierFail("preference write", e); });
 }
-/* ─── THE PER-ORIGIN EXPLORATION WIDENING, PERSISTED ─────────────────────────────────────────────────────
-   THE DECISION IS NOT HERE. `lib/safe-fetch.js` owns it — the table, what a widening MEANS, what may be
-   widened, and the refusal every request is answered by. This file holds the two things that are the HOST's
-   and that the chokepoint cannot have: WHERE a person's standing sentence is kept between sessions, and WHEN
-   it is spoken. `engine/trusted.mjs` answers both differently (a command line, for one run, stated before it
-   parses its own flags), which is exactly why they are not in the file both hosts share.
-   IT IS A PREFERENCE AND IT LIVES WITH THE OTHER ONE. `chrome.storage.local` is banned (SECURITY.md) and
-   this zone's state is IndexedDB, so it sits in the same `prefs` object store `frontierShare` reads — a
-   record about what THIS PERSON has permitted, beside a record about how much of THIS PERSON's disk the
-   store may take. It is not learned data and it is deliberately not in the cumulative store: nothing about
-   it is a measurement, and a store-shape migration must never be able to drop a permission or invent one.
-   THE STORE FOLLOWS THE TABLE AND NEVER LEADS IT. Every grant and every revocation goes into the chokepoint
-   first and is written out afterwards FROM `safeFetchWidenedOrigins()` — so the persisted list is a
-   projection of the one table rather than a second registry that can disagree with it, which is the same
-   discipline `_frontierIndex` keeps one store along.
-   NULL IS "NOTHING HAS EVER BEEN GRANTED IN THIS PROFILE", which is a real answer and the conservative one.
-   It is NOT read as an absence to be filled: the empty list is what a host STATES, and the chokepoint holds
-   "stated empty" and "not yet stated" in two different fields for precisely that reason. */
+/* ─── The per-origin exploration widening, persisted ──────────────────────────────────────────────────
+   The decision lives in lib/safe-fetch.js (the table, what a widening means, the refusal). This file holds
+   only what is the host's: where a person's standing permission is kept between sessions, and when it is
+   stated; engine/trusted.mjs answers both differently for its command line. It sits in the `prefs` store as
+   a record of what this person permitted, outside the cumulative store, so a store-shape migration can
+   never drop or invent a permission.
+   The store follows the table: every grant and revocation goes into the chokepoint first and is written back
+   from `safeFetchEgressTable()`, so the persisted copy is a projection, never a second registry.
+   `null` means the restore has not been started; the chokepoint itself keeps "stated empty" and "not yet
+   stated" apart. */
 let _egressPolicyStated = null;
-/* WHICH ORIGINS' STANDING PERMISSIONS THIS RESTORE COULD NOT CARRY FORWARD, HELD SO THE SURFACE CAN SAY SO.
-   A permission that silently stops existing is the one failure this row must not have: a person who granted
-   something and finds it gone with no sentence anywhere concludes the control does not work, and a person
-   who is never told concludes it is still granted. It is a LIST and not a count, because the sentence the
-   surface needs names the origins. */
+/* The origins whose standing permissions this restore could not carry forward, kept as a list so the surface
+   can name them; a permission that silently vanishes reads as a broken control or as still granted. */
 let _egressLegacyDropped = [];
 function egressPolicyReady() {
   if (_egressPolicyStated === null) _egressPolicyStated = (async () => {
     const stored = await frontierPref("exploreOrigins");
-    /* THE STORED VALUE IS THIS ZONE'S OWN WRITE, so a shape the walk cannot read is this record corrupted
-       rather than a person mistyping — with one exception this build creates and must not read as corruption:
-       an ARRAY is what the PREVIOUS single-switch control persisted, and it is an UPGRADE.
-       IT IS DROPPED RATHER THAN CARRIED FORWARD, WHICH IS THE CONSERVATIVE DIRECTION AND IS NAMED AS ONE. A
-       bare origin in that shape meant "fire everything here", and "everything" now includes signals that did
-       not exist when the person said it — a credential state, an address-borne authority, a lineage nobody
-       has established. Reading it as a permission over those is the silent widening this whole model exists
-       to end, so the grant goes and the person re-permits per signal, TOLD that it happened.
-       `safeFetchEgressStated` re-asks each member with the chokepoint's own predicate and answers which
-       entries it could not use, which is the half this zone may not judge. */
+    /* The stored value is this zone's own write, so an unreadable shape is corruption, except an array: the
+       previous single-switch control's legacy shape. It is dropped rather than carried forward, because a
+       bare origin meant "fire everything here" and everything now includes signals that did not exist then;
+       the person re-permits per signal and is told. `safeFetchEgressStated` re-asks each member with the
+       chokepoint's own predicate and returns the entries it could not use. */
     DCHECK(stored === null || typeof stored === "object",
            "the stored per-origin egress table is neither null nor an object (" + String(stored) + ") — this " +
            "zone is its only writer, so this is that record corrupted, and reading past it would state an " +
            "EMPTY table while every origin this person has permitted silently stopped being permitted");
     if (Array.isArray(stored)) {
-      /* THE LEGACY SHAPE, NAMED AT THE ONE PLACE IT ARRIVES. The chokepoint's own statement takes an
-         origin-keyed object and refuses an array outright — a CHECK, because a host handing it the wrong
-         SHAPE is that host broken — so the translation is this host's, which is where the store is. */
+      /* The legacy shape is translated here: the chokepoint refuses an array outright (a CHECK). */
       _egressLegacyDropped = stored.filter((o) => typeof o === "string");
       self.safeFetchEgressStated({});
     } else {
@@ -920,63 +864,37 @@ function egressPolicyReady() {
   })();
   return _egressPolicyStated;
 }
-/* AND IT IS KICKED AND HANDED TO THE CHOKEPOINT AT THIS ZONE'S OWN LOAD, WHICH IS WHERE "WHEN IT IS SPOKEN"
-   BELONGS. The table is a fact about this ZONE and about this PERSON, restored once for the life of the
-   document; it was being read when a DOCUMENT arrived, which is a per-document event, and a zone-lifetime
-   fact restored at a per-document event is only ever as early as the first document.
-   IT WAS NOT EARLY ENOUGH, AND THAT IS MEASURED RATHER THAN FEARED. This zone has two entries into work that
-   can spend the network: the engine, behind `astDispatch`, and the PASSIVE-LEARNING arm — a captured
-   response body reaching `handleResponseBody`, whose automatic discovery sweep composes a `derived` data GET
-   and asks the chokepoint directly. The second never passes this function, and it does not merely sometimes
-   win the race: `intercept.js` is a `document_start` content script while `content.js`, which sends the only
-   message that reaches `astDispatch`, is `document_idle` — so on any page whose bundle fetches while it
-   loads, the door that ASKS runs strictly before the door that STATED. Four mirrored production SPAs aborted
-   on it, as the first line of the run.
-   SO THE PROMISE GOES TO THE CHOKEPOINT AND NOT TO A SECOND DOOR. Teaching `handleResponseBody` to await
-   this would fix the arm that was measured and leave the next one to be found the same way; `safeFetch`
-   awaits it instead, which is every asker this zone has by construction. What stays HERE is what this file
-   has always owned and the chokepoint cannot have — WHERE the person's standing sentence is kept, and WHEN
-   the read starts — and starting it at load is the earliest this zone can speak at all. */
+/* The restore is started at this zone's load and its promise is handed to the chokepoint, which awaits it in
+   `safeFetch`, so every asker waits for the person's table. Two entries reach the network: the engine behind
+   astDispatch, and passive learning (handleResponseBody's discovery sweep), which runs from intercept.js at
+   `document_start`, earlier than content.js's `document_idle` message; registering at the chokepoint covers
+   both by construction. */
 DCHECK(typeof self.safeFetchEgressStating === "function",
        "this zone has no `safeFetchEgressStating` to hand its egress-policy read to — ast-worker.html loads " +
        "lib/safe-fetch.js ahead of this file precisely so that the chokepoint exists before the host that " +
        "feeds it, and without the registration every request would race the restore and be refused with a " +
        "row of the person's own control they never ticked");
 self.safeFetchEgressStating(egressPolicyReady());
-/* THE WRITE-BACK, TAKEN OFF THE TABLE RATHER THAN OFF THE MESSAGE THAT CHANGED IT — so a grant the
-   chokepoint REFUSED cannot be persisted as one it accepted, and the two can never drift. */
+/* The write-back, taken off the table rather than off the message that changed it, so a grant the chokepoint
+   refused is never persisted. */
 function egressPolicyPersist() {
-  /* THE TABLE AND NOT THE ORIGIN LIST, because the permission is now per SIGNAL and per VALUE and a list of
-     origins cannot express one — persisting the names alone would write back "everything at these origins",
-     which is the legacy shape this restore has just refused to read. The round trip is the contract:
-     `safeFetchEgressTable` answers in exactly the shape `safeFetchEgressStated` takes. */
+  /* The whole table, not an origin list: a permission is per signal and per value. `safeFetchEgressTable`
+     answers in exactly the shape `safeFetchEgressStated` takes. */
   return frontierPrefPut("exploreOrigins", self.safeFetchEgressTable());
 }
-/* A frontier entry (the GLOBAL union spans all origins): { key: origin|hash, sourceUrl, topLevelUrl, origin,
-   responseHeaders, html, code, recipes: "idx,dec;...", emit, visits, credentialed, provenance }. Rehydration re-runs
-   (html,code) + resumes recipes -- so a parked flow on ANY site can be advanced later, even when that page
-   isn't open. */
-/* THE DOCUMENT HALF OF A COLD-TIER ENTRY, WITH ONE SPELLER FOR BOTH DIRECTIONS. solver/cold.h's recipe is the
-   FLOWS — the arms each parked flow took — and those arms replay INSIDE a document, so the entry must also
-   carry the document they replay in. That is exactly what `qjs_init` takes: its bytes, its URL (DOM §4.5
-   "Interface Document"), the top-level creation URL of HTML §8.1.3.1 "Environments", its browser-stated
-   principal, and the RESPONSE HEADER LIST that HTML §7.1.7 "Policy containers" makes this Document's policy
-   container (the CSP list, plus §7.1.3 "Cross-origin
-   opener policies" and §7.1.4 "Cross-origin embedder policies"; §7.1.2 "Origin-keyed agent clusters" reads
-   `Origin-Agent-Cluster` out of the same list). None of it is derivable from any of the rest.
-   THE MISMATCH THIS CLOSES IS STRUCTURAL, not one field's. `responseHeaders` was asserted at the engine
-   boundary and never parked, so every rehydration reached qjs_init with none and aborted before its document
-   had a policy container — the ONE continuous cross-session frontier dead in a dev build, 104 admissions and
-   202 crash banners, and the park still reporting that it had stored a resumable residue. A field the engine
-   asserts could be added at one end alone because the two ends were two object literals; now the store's
-   writer and its reader go through this, so a field written by neither crashes at the park rather than at the
-   resume a session later. NOTHING IS DEFAULTED: `{}` is the honest header list of a response that carried no
-   headers, so substituting it for a producer that stated none turns a CSP-protected page into an unprotected
-   one, and `CSP does not block this sink` is then a reported exploit that is not real. */
-/* THE HALF OF AN ENTRY THAT IS TRUE OF IT WHETHER OR NOT IT STILL HOLDS ITS DOCUMENT — the address the
-   recipes replay at, the environment they replay in, the principal they replay under, and the policy they are
-   judged against. Split out of frontierDoc verbatim so a SHED entry (below) is asserted by the same sentences
-   rather than by a second copy of them that can drift. */
+/* A frontier entry: { key: address|bundle, sourceUrl, topLevelUrl, origin, responseHeaders, html, code,
+   recipes, emit, visits, credentialed, provenance }, plus `shed`/`stranded` for a shed entry. Rehydration
+   rebuilds the document from (html, code) and resumes the recipes, so a parked flow on any site can advance
+   later even when that page is not open. */
+/* The document half of a cold-tier entry, one speller for the store's writer and its reader. Recipes replay
+   inside a document, so the entry carries exactly what `qjs_init` takes: its bytes, its URL (DOM §4.5
+   Interface Document), the top-level creation URL (HTML §8.1.3.1 Environments), its browser-stated principal,
+   and the response header list that HTML §7.1.7 Policy containers makes its policy container (CSP, COOP,
+   COEP, and `Origin-Agent-Cluster`). None is derivable from the rest. Nothing is defaulted: `{}` is the header
+   list of a response with no headers, and substituting it would turn a CSP-protected page into an unprotected
+   one and report exploits that are not real. */
+/* The half of an entry that holds whether or not it still has its document: the address the recipes replay
+   at, the environment, the principal and the policy. A shed entry is asserted by the same sentences. */
 function frontierPlace(e, when) {
   DCHECK(e && typeof e === "object",
          "a cold-tier entry " + when + " as no record at all — the entry IS the parked document, so there is " +
@@ -998,10 +916,8 @@ function frontierPlace(e, when) {
          "a cold-tier entry " + when + " with no response header list — HTML §7.1.7 \"Policy containers\" " +
          "makes those headers this Document's policy container, so the parked flows would resume under a " +
          "policy nobody delivered and every @S verdict on them would be decided against it");
-  /* AND HOW THE LOAD THAT PUT IT HERE GOT ITS ADDRESS. It is ABSENT-OR-ONE-OF-THREE rather than required,
-     because a store written before this field existed is a real population and `frontierProvenance` states
-     what that absence means; what may never be here is a FOURTH word, which would reach `safeFetch` as an
-     invented grade and be refused by a CHECK one zone in, at a line that cannot say which entry sent it. */
+  /* How the load that stored it got its address: absent (an entry written before the field existed, see
+     frontierProvenance) or one of the three words; a fourth would reach `safeFetch` as an invented grade. */
   DCHECK(e.provenance === undefined || e.provenance === PROVENANCE_OBSERVED ||
          e.provenance === PROVENANCE_DERIVED || e.provenance === PROVENANCE_FORCED,
          "a cold-tier entry " + when + " stating the provenance `" + String(e.provenance) + "`, which is none " +
@@ -1009,31 +925,20 @@ function frontierPlace(e, when) {
          "does not know would abort the fetch rather than be refused by the policy it names");
   return e;
 }
-/* WHAT THE LOAD THAT PUT THIS ENTRY IN THE STORE WAS, FOR THE RE-FETCH THAT BRINGS ITS DOCUMENT BACK — AND
-   THE ONE PLACE THE ABSENCE OF THE FIELD IS ARGUED.
-   AN ENTRY WITH NO `provenance` KEY IS A POSITIVE STATEMENT AND NOT A HOLE, by the same reading this file
-   already makes of an absent `shed`: the field is written by every entry a live build parks (asserted at
-   `frontierPut`, where the record is composed), so the only way to hold none is to have been written by a
-   build in which this zone had NO DOOR ONTO `safeFetchWiden`. At those builds the chokepoint refused every
-   forced load at every origin, so no forced address could reach this store at all and every entry in it came
-   from an ambient navigation (`observed`) or a declared route (`derived`).
-   `derived` IS THE WEAKER OF THOSE TWO AND IS THEREFORE WHAT THE ABSENCE ANSWERS. Under-claiming is the
-   direction a provenance is allowed to be wrong in (solver/engine.h says so at
-   `engine_provenance_of_running_path`), and the whole cost of calling an `observed` entry `derived` is that
-   the destructive-path deny list stays armed across its re-fetch — one refused re-derivation, recorded as a
-   stranded entry rather than lost.
-   WHAT THIS MUST NEVER BECOME is a read of the ADDRESS: deciding a grade from what a URL looks like is the
-   inference §Attacker-sources forbids in as many words, and it is the one thing that would let a widening
-   granted for one origin be re-derived for another. */
+/* The provenance of the load that stored this entry, for the re-fetch that brings its document back.
+   An absent field is a positive statement: every entry a live build parks writes it (asserted at frontierPut),
+   so a missing one was written by a build with no door onto `safeFetchWiden`, where the chokepoint refused
+   every forced load and every entry came from an ambient navigation (`observed`) or a declared route
+   (`derived`). The weaker, `derived`, is answered: under-claiming is the allowed direction (solver/engine.h's
+   `engine_provenance_of_running_path`), and its only cost is the destructive-path deny list staying armed.
+   The grade is never read off the address, since that would let a widening for one origin apply to another. */
 function frontierProvenance(e) {
   return e.provenance === undefined ? PROVENANCE_DERIVED : e.provenance;
 }
 function frontierDoc(e, when) {
   frontierPlace(e, when);
-  /* AND IT IS A RECORD THAT STILL HOLDS ITS DOCUMENT. A shed entry (see §THE THIRD CATEGORY below) is a
-     complete, resumable residue whose bytes are on the network instead of in the store; reading one HERE
-     would build an engine over `undefined` markup, which is the one thing every assert under this line is
-     for. The two states are told apart by a field, not by whether a read happened to find bytes. */
+  /* And it still holds its document: a shed entry's bytes are on the network, and the two states are told
+     apart by the `shed` field, not by whether a read found bytes. */
   DCHECK(e.shed !== true,
          "a cold-tier entry " + when + " as a document while it is SHED — its bytes were discarded against a " +
          "proved re-fetch and live on the network, so this record must be re-derived before it is read as a " +
@@ -1046,47 +951,22 @@ function frontierDoc(e, when) {
          "carries its own scripts, which is a different thing from absent");
   return e;
 }
-/* ── RESIDENCY: A CONFIGURED SHARE OF THIS PERSON'S DEVICE, AND THE ONE ORDER ─────────────────────────
-   WHAT THIS IS NOT. It is not a quota handler. The extension declares `unlimitedStorage` (manifest.json),
-   which exempts the extension origin — the offscreen document's, which is where SECURITY.md puts every
-   persisted byte; the renderer frames are opaque origins with no persistent storage at all — from the
-   ordinary origin quota. So the platform ceiling that would otherwise turn "the frontier is the union of
-   every flow from every origin ever visited and is NEVER RESET" into a certain eventual abort is REMOVED
-   rather than handled, and nothing here runs anywhere near a crash.
-   WHAT REPLACES IT IS A POLICY QUESTION, AND IT HAS NO ENGINE-SIDE ANSWER: how much of THIS person's device
-   should THIS tool consume. That depends on the device and on the person, so it is a PREFERENCE — defaulted
-   from what the device reports, adjustable by the user, and read here. A share is not a cap in §NO BOUNDS'
-   sense and the distinction is exact: a cap decides work will not HAPPEN; a share decides how much of the
-   work already done is STORED rather than RE-DERIVED. No flow is dropped, no recipe is discarded, no
-   exploration is truncated — the frontier's MEMBERSHIP is untouched at every share.
-   AND THERE IS NO EVICTION POLICY, BECAUSE THERE IS NOTHING TO ASK BUT THE ONE ORDER. Residency is not a
-   second subsystem beside the WFQ; it IS the WFQ's ordering, applied to a second resource. The store keeps
-   the DOCUMENT half of the highest-weight entries until the share is spent, and the rest keep everything
-   else. `frontierWeight` is the same function `_hostOps.evictee` asks of the resident set and `admit` asks
-   of the candidate set — no age, no recency, no count, no timestamp. AND THE STORE HOLDS NO CLOCK, which is
-   the half that makes that a property rather than a promise: an entry carried a park timestamp for as long as
-   nothing read it, and a field the record grammar does not assert, that no consumer names, and that means
-   exactly "when this was last written" is a recency cap already assembled and waiting for its first reader —
-   the ranking would not have to be changed to become one, only asked a different question. It is deleted
-   rather than commented, because a stored fact nobody may use is indistinguishable at every later reading
-   from one nobody has used YET. §THERE IS NO GRIND is satisfied by construction rather than by care: nothing
-   polls, nothing sweeps, nothing is triggered.
-   WHAT A SHED ENTRY LOSES, STATED RATHER THAN HIDDEN: nothing, until its document is needed. The recipes,
-   the counters, the address, the principal and the policy stay, so a shed residue resumes on the next VISIT
-   exactly as it always did (engineRoot seeds from `prior.recipes` and never reads the bytes) and
-   cold-rehydrates by fetching its document back. What it costs is one re-fetch, which is why the
-   re-derivability test below is a TIEBREAK on what leaves first and not a gate on whether anything may. */
-/* THE SHARE. Bytes of this profile's disk the cross-session frontier's DOCUMENT halves may occupy.
-   THE DEFAULT IS COMPUTED FROM THE DEVICE, NOT PICKED. `navigator.deviceMemory` is the coarse, deliberately
-   capped hint the platform exposes without a permission (Device Memory §2 "The deviceMemory attribute" —
-   powers of two, clamped to [0.25, 8], so a 64GB workstation reports 8); a share proportional to it lands a
-   phone somewhere a phone can afford and a workstation somewhere a workstation will not notice.
-   `chrome.system.memory.getInfo()` would report real capacity and is NOT used: it costs a new
-   `system.memory` permission on an extension that already holds `<all_urls>`, to refine a number the user
-   can simply set, and a permission bought for a default is a bad trade.
-   IT IS NOT DEFAULTED PAST — `deviceMemory` is absent in workers and in browsers that do not ship it, and
-   that absence is a POSITIVE statement ("this device declines to say"), answered by the conservative share
-   rather than by a plausible number pulled out of a `||`. The two arms are different facts and say so. */
+/* ── Residency: a configured share of this person's device, and the one order ─────────────────────────
+   This is not a quota handler: the extension declares `unlimitedStorage` (manifest.json), which exempts the
+   extension origin (where SECURITY.md puts every persisted byte) from the origin quota. What remains is a
+   preference: how much of this person's device the tool may use, defaulted from the device and adjustable.
+   A share is not a cap: it decides how much finished work is stored rather than re-derived, never whether
+   work happens. No flow, recipe or exploration is dropped; frontier membership is untouched at every share.
+   There is no eviction policy beside the WFQ: the store keeps the document half of the highest-weight entries
+   (by `frontierWeight`, the same function `_hostOps.evictee` and admission ask) until the share is spent. The
+   store holds no clock, so the order cannot become a recency cap. Nothing polls or sweeps.
+   A shed entry keeps recipes, counters, address, principal and policy: it resumes on the next visit as before
+   (engineRoot seeds from `prior.recipes`) and cold-rehydrates by fetching its document back, so the
+   re-derivability test is a tiebreak on what leaves first, not a gate. */
+/* The share: bytes of this profile's disk the frontier's document halves may occupy, defaulted from
+   `navigator.deviceMemory` (Device Memory §2 "The deviceMemory attribute", coarse and capped at 8), so a phone and a workstation each get a
+   share they can afford. `chrome.system.memory` is not used because it would cost a new permission for a
+   default the user can set. An absent `deviceMemory` is answered by the conservative constant. */
 const FRONTIER_SHARE_UNKNOWN_DEVICE = 256 * 1024 * 1024;
 const FRONTIER_SHARE_PER_DEVICE_GB = 64 * 1024 * 1024;
 function frontierDefaultShare() {
@@ -1094,18 +974,15 @@ function frontierDefaultShare() {
   if (typeof gb !== "number" || !(gb > 0)) return FRONTIER_SHARE_UNKNOWN_DEVICE;
   return Math.round(gb * FRONTIER_SHARE_PER_DEVICE_GB);
 }
-/* THE CONFIGURED VALUE, HELD IN THE STORE IT GOVERNS. `chrome.storage.local` is banned (CLAUDE.md §Security)
-   and this zone's state is IndexedDB, so the preference lives in a `prefs` object store beside the frontier —
-   read once into `_frontierShare` at the first residency question and written by the popup's setting.
-   NULL IS "NOT ASKED YET", WHICH IS A THIRD STATE AND NOT A ZERO. A zero share is a legitimate setting (store
-   no documents at all, re-derive everything) and must not be indistinguishable from an unread preference. */
+/* The configured value, held in the `prefs` store (this zone's state is IndexedDB, never
+   `chrome.storage.local`), read once into `_frontierShare` and written by the popup's setting. `null` means
+   not read yet; zero is a legitimate setting (store no documents, re-derive everything). */
 let _frontierShare = null;
 async function frontierShare() {
   if (_frontierShare !== null) return _frontierShare;
   const stored = await frontierPref("share");
-  /* THE STORED VALUE IS VALIDATED, NOT TRUSTED. It is written by the popup — a realm this zone asserts its
-     contracts against like every other — and a share that is not a finite non-negative number would make
-     every comparison below false, which reads as an unlimited share rather than as a broken preference. */
+  /* Validated, not trusted: the popup writes it, and a non-number would make every comparison false, which
+     reads as an unlimited share. */
   DCHECK(stored === null || (typeof stored === "number" && Number.isFinite(stored) && stored >= 0),
          "the frontier's stored share is not a byte count (" + String(stored) + ") — every residency " +
          "comparison against it would be false, which is an UNLIMITED store wearing the appearance of a " +
@@ -1114,62 +991,39 @@ async function frontierShare() {
                    ? stored : frontierDefaultShare();
   return _frontierShare;
 }
-/* THE SIZE OF AN ENTRY'S DOCUMENT HALF — the only part residency can give back, so the only part it counts.
-   The recipes, the counters and the address stay at every share and are not weighed against it: they are the
-   frontier's MEMBERSHIP, and a design that traded them for disk would be the reset this file exists instead
-   of. Characters are counted as bytes because the store holds them as UTF-16 and the point of the number is
-   the order it induces, not an accounting identity with the disk. */
+/* The size of an entry's document half, the only part residency can give back. Recipes, counters and address
+   stay at every share. Characters count two bytes (the store holds UTF-16); the number exists for the order it
+   induces, not as an accounting identity with the disk. */
 function frontierDocBytes(e) {
   if (e.shed === true) return 0;
   const h = (e.html instanceof Uint8Array) ? e.html.length : e.html.length * 2;
   return h + e.code.length * 2;
 }
-/* THE TIEBREAK: WHICH ENTRY GIVES UP ITS DOCUMENT FIRST WHEN TWO ARE BOTH BELOW THE LINE. It is a cheap,
-   simple test on the record itself and NOT a proof, because the stakes are a re-fetch: a residue whose
-   document does come back loses nothing, and one whose document does not keeps its recipes and its
-   visit-resume and loses only its cold rehydration (recorded as `_frontierStats.stranded`, never silent).
-   AN ELABORATE CONSERVATIVE TEST WOULD BE THE WRONG TRADE HERE and it was the first thing built for this:
-   re-fetching each candidate and requiring byte-identity before discarding it. That belongs to the frame
-   where a wrong answer destroyed the only copy at a crashing quota. It does not belong to this one, where
-   the share is a preference nobody is near the edge of.
-   EACH ARM IS A FACT ABOUT THE RECORD. An address that is not http(s) NAMES bytes rather than a server, so
-   nothing re-requests it. A principal its address does not state is an opaque or sandboxed document, whose
-   re-fetch answers with a document belonging to somebody else. A caller-assembled script inventory came from
-   a caller and no fetch of the address re-derives it. Those three are the residue §OOM/paging calls the only
-   copy there is, and they go LAST rather than never. */
+/* The tiebreak for which tail entry gives up its document first: a cheap test on the record, not a proof,
+   because a wrong answer costs only a re-fetch (a residue whose document does not come back keeps its recipes
+   and visit-resume and is counted in `_frontierStats.stranded`). Not re-derivable: a non-http(s) address
+   (nothing re-requests it), a principal the address does not state (an opaque or sandboxed document), or a
+   caller-assembled script inventory. Those are the only copies and go last, not never. */
 function frontierRederivable(e) {
   if (typeof self.safeFetch !== "function") return false;
   let u = null;
   try { u = new URL(e.sourceUrl); } catch (_) { return false; }
   if (u.protocol !== "http:" && u.protocol !== "https:") return false;
   if (e.origin !== u.origin) return false;
-  /* A SHED ENTRY HAS NO SCRIPT INVENTORY LEFT TO ASK ABOUT — it went with the document, and this record is
-     shed precisely BECAUSE this test passed on it while it still had one. Asking `e.code === ""` of an absent
-     field answers false, which would make every shed entry read as unrecoverable and frontierRederive strand
-     every single one on sight, having fetched nothing. */
+  /* A shed entry's inventory went with its document, and it was shed because this test passed. */
   if (e.shed === true) return true;
   return e.code === "";
 }
-/* THE STORE'S DECISIONS, COUNTED WHERE THEY ARE MADE. A share cannot be observed by its outcome — a store
-   that did not crash looks the same at every setting — so what is reported is what the one order DECIDED:
-   documents shed, documents re-derived, and residues that were shed and then could not be fetched back.
-   `stranded` rising is this design being wrong in the direction that costs something, stated as a number
-   rather than left as the silence CLAUDE.md's defaulted-field rule is about. `overShare` is the other one:
-   the bytes the share asked for and residency would not take, because taking them meant discarding the only
-   copy of a residue. */
+/* The store's decisions, counted where they are made, since a share cannot be observed by its outcome:
+   documents shed, re-derived, and stranded (shed and then not fetchable back, the costly direction), plus
+   `overShare`, the bytes residency refused to give back because they were the only copy of a residue. */
 const _frontierStats = { shed: 0, rederived: 0, stranded: 0, docBytes: 0, overShare: 0 };
-/* RESIDENCY, RESTORED AT THE ONE DOOR THAT CAN BREAK IT. This is not a pressure loop and has no trigger: the
-   store's document halves must fit the share, that is an invariant of the store, and `frontierPut` is the
-   only thing that can make it false — so it is re-established there, on the way through, exactly as the
-   ranking view is.
-   THE ORDER IS THE ONLY POLICY. Sort by `frontierWeight` — the same reward+optimism the pool ranks work
-   items by — keep documents from the top down while the share lasts, shed the rest. Within the tail that
-   must go, the re-derivable leave first; an unrecoverable residue is shed only once nothing re-derivable is
-   left below the line, and even then only while the share is still exceeded.
-   AND IT MAY REFUSE THE SHARE. If what remains over the line is all unrecoverable, residency STOPS: the
-   entries stay, the share is exceeded, and the overage is REPORTED. That is the sane behaviour the floor
-   case asks for — a preference about disk is not worth the only copy of work nobody can recompute — and a
-   number the popup can show is how the user finds out, instead of an abort they cannot act on. */
+/* Residency, restored at the one door that can break it. "The stored document halves fit the share" is an
+   invariant of the store and only `frontierPut` can falsify it, so it is re-established there; there is no
+   pressure loop or trigger.
+   Sort by `frontierWeight`, keep documents from the top while the share lasts, shed the rest; within the tail
+   the re-derivable leave first. If what remains over the line is all unrecoverable, residency stops and the
+   overage is reported: a disk preference is not worth the only copy of work nobody can recompute. */
 async function frontierResidency() {
   const share = await frontierShare();
   const rows = [];
@@ -1178,14 +1032,10 @@ async function frontierResidency() {
   _frontierStats.docBytes = total;
   _frontierStats.overShare = 0;
   if (total <= share) return;
-  /* HIGHEST WEIGHT FIRST, so the walk below spends the share on the work the one order says is worth most
-     and the tail it reaches is exactly the tail that order puts last. */
+  /* Highest weight first, so the share is spent on what the one order values most. */
   rows.sort((a, b) => frontierWeight(b) - frontierWeight(a));
-  /* THE LINE IS A STRICT PREFIX OF THE ORDER, WHICH IS THE WHOLE OF "the top N by the order the scheduler
-     already computes". The obvious alternative — keep walking and take whatever still fits — is a BEST FIT,
-     and a best fit is a second policy: it keeps a lower-weight small document over a higher-weight large one,
-     so the store's residency stops being the WFQ's answer and starts being a packing heuristic nobody chose.
-     The first entry that does not fit ends the resident set; everything after it is tail, whatever its size. */
+  /* The resident set is a strict prefix of the order: the first entry that does not fit ends it. A best fit
+     would keep a small low-weight document over a large high-weight one, a second policy nobody chose. */
   let kept = 0;
   let cut = rows.length;
   for (let i = 0; i < rows.length; i++) {
@@ -1193,16 +1043,12 @@ async function frontierResidency() {
     kept += rows[i].bytes;
   }
   const tail = rows.slice(cut);
-  /* THE TIEBREAK IS APPLIED WITHIN THE TAIL AND CHANGES NOTHING ABOUT WHO IS IN IT — the one order decides
-     that. It decides only the sequence in which the tail gives its documents up, so a shed that is enough
-     takes the recoverable ones and stops. */
+  /* The tiebreak orders the tail and changes nothing about who is in it. */
   tail.sort((a, b) => (a.rederivable === b.rederivable) ? 0 : (a.rederivable ? -1 : 1));
   for (const row of tail) {
     if (total <= share) break;
     if (!row.rederivable) {
-      /* NOTHING RECOVERABLE IS LEFT BELOW THE LINE. The sort put every re-derivable row ahead of this one, so
-         this is the whole remaining tail and every entry in it is the only copy of itself. Residency stops
-         here rather than buying disk with work that cannot be recomputed. */
+      /* The sort put every re-derivable row first, so the rest of the tail is unrecoverable; stop here. */
       _frontierStats.docBytes = total;
       _frontierStats.overShare = total - share;
       return;
@@ -1211,10 +1057,8 @@ async function frontierResidency() {
     DCHECK(e, "the cold tier's ranking view named an entry the store does not hold while residency was being " +
               "restored — this zone is the store's only writer, so a row with no entry is the projection and " +
               "the store having drifted apart, and shedding would be deciding about a residue nobody can read");
-    /* `provenance` IS READ THROUGH `frontierProvenance` RATHER THAN COPIED, so an entry written before the
-       field existed leaves this door STATING the word its population supports instead of propagating the
-       absence forward — the argument is made once, where it is written down, and the unstated population
-       shrinks with every shed instead of outliving every build that touches it. */
+    /* `provenance` goes through frontierProvenance, so an entry predating the field leaves stating the word
+       its population supports. */
     const shed = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
                    responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit, visits: e.visits,
                    credentialed: e.credentialed, provenance: frontierProvenance(e), shed: true };
@@ -1226,27 +1070,16 @@ async function frontierResidency() {
   }
   _frontierStats.docBytes = total;
 }
-/* THE ONE RECORD DOOR, WHICH ROUTES ON A FIELD RATHER THAN ON WHETHER A READ FOUND BYTES. The two states of
-   an entry are complementary by construction and the invariant is asserted on both halves together, so a
-   record that is shed while holding a document — or holds none while claiming not to be shed — crashes at
-   the door instead of becoming a page that parses to nothing one session later. That complementarity is also
-   why nothing here DEFAULTS `shed`: an entry written before this field existed holds its document, so the
-   absence of the field IS the positive statement "not shed", and the assert is what keeps it one. */
+/* The one record door, routing on the `shed` field rather than on whether a read found bytes. The document
+   half and `shed` are complements, asserted together, so a self-contradicting record crashes here instead of
+   parsing to nothing a session later. An absent `shed` means "not shed": entries predating the field hold
+   their document. */
 function frontierRecord(e, when) {
   frontierPlace(e, when);
-  /* THE TWO NUMBERS THE LEVEL-1 ORDER IS MADE OF, ASSERTED AT THE DOOR THEY ARE WRITTEN THROUGH — which is
-     the half this grammar had no sentence for. Every other field of an entry is checked here in both
-     directions, and the ranking pair was checked only at the READ (`frontierWeight`), where a non-negative
-     number passes whatever it means: an `emit` counting the wrong surface, an `emit` accumulating a quantity
-     its consumer divides, or a `visits` restarted at 1 on an entry that has been admitted fifty times are
-     each a perfectly well-formed pair and each of them silently decides which document this profile spends
-     its next fetch on. A field whose only assertion stands at its reader cannot distinguish a producer that
-     stopped writing it from one that never meant what the reader reads.
-     `visits` IS AT LEAST ONE ON A STORED ENTRY, and that is the row that separates the two populations
-     `frontierWeight` serves. An entry exists only because a run FINISHED and persisted its residue, so a
-     stored `visits` of 0 is a record written by something that never ran — while `visits: 0` handed to the
-     weight is the legitimate statement a WAITING work item makes about itself (`FRONTIER_UNSERVED`), which
-     is not a stored row and never reaches this door. Read at the weight alone the two are one number. */
+  /* The two numbers the Level-1 order is made of, asserted at the door they are written through, not only at
+     the read (`frontierWeight`), where any non-negative number passes. A stored `visits` is at least one: an
+     entry exists because a run finished. `visits: 0` is legitimate only for a waiting work item
+     (`FRONTIER_UNSERVED`), which is never stored. */
   DCHECK(typeof e.emit === "number" && e.emit >= 0 && Number.isFinite(e.emit),
          "a cold-tier entry " + when + " with no emitted-value count (`" + String(e.emit) + "`) — it is the " +
          "reward half of the ONE WFQ order at Level-1, so an entry without it is ranked by its optimism bonus " +
@@ -1275,14 +1108,10 @@ function frontierRecord(e, when) {
   }
   return frontierDoc(e, when);
 }
-/* THE COLD TIER'S THREE EDGES, AND WHAT THEIR ERRORS USED TO MEAN. Each was `catch (_) { return <empty> }`
-   plus an `onerror` that RESOLVED with an empty answer, so an IndexedDB that refused a read reported the same
-   thing an unvisited origin reports — no parked frontier — and an IndexedDB that refused a WRITE reported
-   nothing at all. That is the ONE continuous cross-session frontier silently becoming a per-session one: the
-   defect has no symptom, because "this page had no parked residue" is exactly what the first visit looks like.
-   The failure is surfaced instead. It is a DCHECK rather than a CHECK: in release the user is not crashed
-   because their profile's storage is unavailable — they lose cross-session resume, which is degraded, not
-   wrong — but in dev this is our own edge failing and it aborts at the line that failed. */
+/* The cold tier's edges surface failure instead of answering empty, since an empty answer is exactly what a
+   first visit looks like and the continuous frontier would silently become per-session. A DCHECK, not a CHECK:
+   in release a user whose profile storage is unavailable loses cross-session resume (degraded, not wrong);
+   in dev it is this codebase's edge failing. */
 function frontierFail(op, err) {
   DFAIL("the cross-session frontier's IndexedDB " + op + " failed (" + String((err && err.message) || err) +
         ") — the ONE continuous frontier is persisted there, and an empty answer from this edge is " +
@@ -1294,39 +1123,19 @@ async function frontierGet(key) {
     return await new Promise((res, rej) => { const t = db.transaction("frontier").objectStore("frontier").get(key); t.onsuccess = () => res(t.result || null); t.onerror = () => rej(t.error); });
   } catch (e) { RETHROW_FATAL(e); frontierFail("read", e); return null; }
 }
-/* THE COLD TIER'S LOOKUP, WHICH ANSWERS `WHY NOT` AND NOT ONLY `WHAT`. `frontierGet` answers a key with a
-   record or with null, and that null has THREE readings that take OPPOSITE work: nothing has ever been parked
-   for this document; something IS parked for this ADDRESS under a different bundle id, so the key refusing to
-   answer is the key WORKING; or this exact key is in the store and the read did not return it, which is the
-   only one of the three that is a defect. They rendered as one silence, so a live drive that read `resumed: 0`
-   could not say which it had met — and a reader hunting the third had to rule the first two out by hand, with
-   nothing published to rule them out WITH: the frontier key was composed here and emitted nowhere.
-   THE STORE'S OWN PRIMARY KEY IS THE INDEX THIS QUESTION NEEDS, AND IT IS ONE BECAUSE OF THE ORDER THE KEY IS
-   COMPOSED IN. engineRoot composes `address + "|" + bundle`, so every entry for one document is a CONTIGUOUS
-   RUN of this store's key ordering and a bounded `getAllKeys` walks the matches and nothing else. Composed the
-   other way round — bundle first — the identical question would need `getAll` over every record this profile
-   has ever parked, which is the deserialize-the-whole-store cost the ranking view exists to stop paying, taken
-   on every page load. So this adds no index, no schema version and no second door; it asks the store the
-   question its key was already shaped to answer.
-   IT ASKS FOR KEYS AND NOT RECORDS. What is wanted is which bundle ids this address has entries under, and a
-   key carries the whole of that answer, so not one parked document's bytes are deserialized to produce it.
-   BOTH READS RIDE ONE TRANSACTION, WHICH IS WHAT MAKES THE THIRD READING AN INVARIANT RATHER THAN A RACE. An
-   IndexedDB read transaction is a consistent snapshot against this zone's writes, so "the get said absent and
-   the key scan said present" cannot be two tabs of one document interleaving between two asks — it is one
-   store contradicting itself inside one snapshot, which is a DCHECK this codebase is entitled to make because
-   both halves are its own records under its own keys. Asked as two transactions the same assert would fire on
-   a legitimate interleaving, which is the shape CLAUDE.md calls an assert whose own message concedes the case
-   beneath it is sound.
-   A `keys` OF NULL IS THE EDGE HAVING FAILED AND IS NOT AN EMPTY STORE — the same distinction frontierFail
-   exists for one function up, carried OUT of this door as a value instead of collapsed inside it. */
+/* The cold tier's lookup, which answers why a key missed and not only whether: nothing was ever parked for
+   this document, something is parked at this address under another bundle id (the key working), or this key
+   is stored and the read did not return it (the only defect).
+   The key is composed `address + "|" + bundle`, so all entries for one address are a contiguous run of the
+   store's key order and a bounded `getAllKeys` finds them without deserializing any record or adding an index.
+   Both reads ride one transaction, a consistent snapshot against this zone's writes, so "get absent, scan
+   present" is the store contradicting itself, never an interleaving, which is what entitles the DCHECK.
+   A `keys` of null is the edge failing, not an empty store. */
 function frontierAddressRange(sourceUrl) {
   return IDBKeyRange.bound(sourceUrl + "|", sourceUrl + "|￿");
 }
-/* THE ADDRESS HALF OF A STORED KEY. The bundle id is `(uint32).toString(36)`, so it is alphanumeric and cannot
-   contain the separator — the LAST `|` is therefore the one the key was composed at, whatever the address
-   itself holds. That is what keeps the range above EXACT rather than merely selective: a stored address that
-   itself ends in `|<something>` sorts inside the range and is rejected here, by the key alone, with no record
-   read and no guess about which `|` was the joint. */
+/* The address half of a stored key. The bundle id is base-36, so it cannot contain `|` and the last `|` is the
+   joint; a stored address that itself ends in `|<x>` sorts inside the range and is rejected here. */
 function frontierKeyAddress(key) {
   const k = String(key);
   const i = k.lastIndexOf("|");
@@ -1343,46 +1152,31 @@ async function frontierLookup(key, sourceUrl) {
       let entry = null; let keys = [];
       g.onsuccess = () => { entry = g.result || null; };
       a.onsuccess = () => { keys = a.result || []; };
-      /* SETTLED ON THE TRANSACTION AND NOT ON THE SECOND REQUEST, because the pair is the answer: a promise
-         that resolved on `a.onsuccess` would hand back an `entry` whose own request had not necessarily been
-         delivered, and the whole point of one transaction is that the two halves describe one snapshot. */
+      /* Settled on the transaction, so both halves are delivered from one snapshot. */
       tx.oncomplete = () => res({ entry: entry, keys: keys.filter((k) => frontierKeyAddress(k) === sourceUrl) });
       tx.onerror = () => rej(tx.error || g.error || a.error);
       tx.onabort = () => rej(tx.error || g.error || a.error);
     });
   } catch (e) { RETHROW_FATAL(e); frontierFail("read", e); return { entry: null, keys: null }; }
 }
-/* WHAT THE LOOKUP MET, AS ONE WORD FROM A CLOSED SET. Every arm is a POSITIVE statement and none of them is
-   the absence of one, which is the whole difference between this and the null it replaces:
-     `not-asked`     — this document does not persist a residue, so nothing was asked of the store. It is not
-                       a miss; a run that never asked and a run that asked and found nothing take different
-                       work and used to be one silence.
-     `unreadable`    — the store's own read edge failed. frontierFail has already aborted in dev; in release
-                       this is the word that keeps "your profile's IndexedDB refused" from rendering as "this
-                       page has never been visited", which is the defect that edge's header is about.
-     `unvisited`     — the store holds NO entry for this address under ANY bundle id. Reading (a): first visit.
-     `other-bundle`  — the store holds entries for this address, none of them under THIS bundle id. Reading
-                       (b): the miss is the key doing its job. It names the OBSERVATION and not the mechanism
-                       — a rolling deploy is the usual cause and is an inference, while "a different bundle id
-                       is parked at this address" is what was read.
-     `unread`        — the store holds THIS key and the get did not answer it. Reading (c), and the only one
-                       of the six that is a defect in this codebase.
-     `hit`           — the key answered, and the session resumes from it.
-   `others` IS THE EVIDENCE UNDER THE WORD AND IS NOT ENTAILED BY IT. `other-bundle` implies a positive count,
-   and a positive count does NOT imply `other-bundle` — a HIT can have older deploys' residues parked beside it
-   — so the two are one fact and its witness rather than one fact printed twice, which is the evidence-inflation
-   shape a derived row has. It is `null` on the two arms where nothing was counted, because zero there would be
-   the positive claim that this address has no other entries, which neither arm looked for. */
+/* What the lookup met, as one word from a closed set; each is a positive statement:
+     `not-asked`     — this document does not persist a residue, so the store was not asked.
+     `unreadable`    — the store's read edge failed (frontierFail aborts in dev); not "never visited".
+     `unvisited`     — no entry for this address under any bundle id: a first visit.
+     `other-bundle`  — entries for this address, none under this bundle id: the key doing its job. It names the
+                       observation; a redeploy is the usual cause but is an inference.
+     `unread`        — this key is stored and the get did not answer it; the only defect of the six.
+     `hit`           — the key answered and the session resumes from it.
+   `others` is the evidence beside the word, not entailed by it (a hit can have older deploys' residues
+   parked beside it). It is `null` on the two arms that counted nothing. */
 const COLD_LOOKUP = ["hit", "unvisited", "other-bundle", "unread", "not-asked", "unreadable"];
 function coldLookupOf(fkey, look) {
   if (look === null) return { state: "not-asked", others: null };
   if (look.keys === null) return { state: "unreadable", others: null };
   const held = look.keys.indexOf(fkey) >= 0;
   const others = look.keys.length - (held ? 1 : 0);
-  /* THE HALF OF THE SNAPSHOT THAT CANNOT DISAGREE WITH THE OTHER HALF, IN THE DIRECTION THAT SAYS THE SCAN IS
-     WRONG. A record came back for this key, so a key scan over that record's own address must name it — and if
-     it does not, the range or the separator split this key somewhere other than where engineRoot joined it,
-     which would make `others` a count over the WRONG address on every run that took the other arm. */
+  /* A record came back for this key, so the scan of its address must name it; otherwise the range or separator
+     split the key differently from engineRoot and `others` counts the wrong address. */
   DCHECK(!look.entry || held,
          "the cold tier answered the frontier key `" + fkey + "` with a record while a key scan of that " +
          "document's own address did not name it — the two halves are one read transaction, so this is the " +
@@ -1390,13 +1184,9 @@ function coldLookupOf(fkey, look) {
          "sibling-entry count every other arm reports would be a count over a different address");
   if (look.entry) return { state: "hit", others: others };
   if (held) {
-    /* READING (c), AND THE ONLY ONE THAT IS OURS. Both halves of this comparison are records this zone wrote
-       under keys this zone composed, read back inside ONE snapshot, so a key the store enumerates and will not
-       hand over is this codebase's own store contradicting itself — never a page, never a peer, never a race.
-       THE RELEASE ARM RETURNS THE WORD RATHER THAN A SILENCE, and what it leaves behind is the state a miss
-       already leaves: `prior` is null, `begin` is handed no recipes and the engine seeds a boot flow. That is
-       a DEFINED wrong answer whose next consumer already handles it, and the word is how a release run says
-       which of the six it was. */
+    /* Reading (c): both halves are this zone's records under its keys in one snapshot, so this is the store
+       contradicting itself. Release returns the word, leaving the state a miss leaves (`prior` null, the engine
+       seeds a boot flow), so the run still says which of the six it met. */
     DFAIL("the cross-session frontier enumerates the key `" + fkey + "` for this document's address and " +
           "answered a read of that same key, in the same transaction, with nothing — this zone is the store's " +
           "only writer and both halves are one snapshot, so a parked residue is being kept out of the session " +
@@ -1405,20 +1195,9 @@ function coldLookupOf(fkey, look) {
   }
   return { state: others > 0 ? "other-bundle" : "unvisited", others: others };
 }
-/* THE ONE WRITE, WHICH ANSWERS WITH ITS FAILURE INSTEAD OF THROWING IT. Its caller must tell a full store
-   from a broken one, and an exception carries both to the same place. A QUOTA REFUSAL IS NOT AN ERROR IN THIS
-   ZONE — it is the store stating its size, which this design has an answer for — while every other failure is
-   the edge itself failing and travels on to frontierFail.
-   THE TRANSACTION'S ABORT IS LISTENED FOR AS WELL AS THE REQUEST'S ERROR, because a quota refusal is reported
-   on whichever the implementation reaches first, and a promise that only ever settles on `t.onerror` would
-   hang on the arm where the transaction aborts without the request having failed. */
-/* THE ONE WRITE. It rejects on failure like every other edge here; there is no quota arm because there is no
-   quota (`unlimitedStorage`), and the residency question is asked by frontierPut AFTER the write rather than
-   in response to one being refused.
-   THE TRANSACTION'S ABORT IS LISTENED FOR AS WELL AS THE REQUEST'S ERROR: an IndexedDB write can fail on
-   either, and a promise that only ever settled on `t.onerror` would HANG on the arm where the transaction
-   aborts without the request itself having failed — a park that never returns, which is the ONE continuous
-   frontier stopping with nothing to say so. */
+/* The one write. It rejects on failure like every edge here; there is no quota arm (`unlimitedStorage`), and
+   residency is asked by frontierPut after the write. The transaction's abort is listened for as well as the
+   request's error, since a write can fail on either and a promise settling only on `t.onerror` would hang. */
 function frontierWrite(key, entry) {
   return new Promise((res, rej) => {
     idbOpen().then((db) => {
@@ -1435,16 +1214,11 @@ async function frontierPut(key, entry) {
   if (entry && entry.recipes) frontierRecord(entry, "was written");   // before the edge: the grammar, not the storage
   try {
     await frontierWrite(key, entry);
-    /* THE RANKING VIEW MOVES WITH THE STORE, ON THE ONE DOOR THAT WRITES IT AND ONLY ONCE THE WRITE LANDED —
-       so a refused write leaves a row claiming a residue the store does not hold, which is the one way this
-       projection could start lying. It is skipped entirely when the index has not been built yet: an unbuilt
-       index is rebuilt from the store, which by then contains this. */
+    /* The ranking view moves with the store, on the one door that writes it, once the write landed; an unbuilt
+       index is skipped because it will be built from the store, which then contains this. */
     if (_frontierIndexBuilt) { if (entry && entry.recipes) _frontierIndex.set(key, frontierRow(entry)); else _frontierIndex.delete(key); }
-    /* AND RESIDENCY IS RE-ESTABLISHED HERE, ON THE ONE DOOR THAT CAN BREAK IT — after the ranking view has
-       moved, so the order this asks is the order the store is actually in. It is not a trigger and not a
-       pressure response: "the stored document halves fit the configured share" is an invariant of this store,
-       and an invariant is restored where it is broken. A store already inside its share does one comparison
-       and returns. */
+    /* Residency is re-established after the ranking view moved, so it asks the order the store is in. A store
+       inside its share does one comparison. */
     await frontierResidency();
   } catch (e) { RETHROW_FATAL(e); frontierFail("write", e); }
 }
@@ -1454,32 +1228,13 @@ async function frontierAll() {
     return await new Promise((res, rej) => { const t = db.transaction("frontier").objectStore("frontier").getAll(); t.onsuccess = () => res(t.result || []); t.onerror = () => rej(t.error); });
   } catch (e) { RETHROW_FATAL(e); frontierFail("scan", e); return []; }
 }
-/* THE LEVEL-1 WEIGHT OF A WORK ITEM THAT IS NOT RESIDENT — a parked frontier, or a document waiting for an
-   instance. It shares the engine's WFQ POLICY (rank by value + an exploration bonus, never drop a work item)
-   but NOT the engine's exact formula: flow_weight is `val + optimism − cpu-aging`; a work item with no
-   instance has no live CPU to age by, so its expected FUTURE productivity is estimated by emit-per-VISIT.
-   IT IS IN THE ENGINE'S OWN CURRENCY, AND THE CONSTANT THAT MADE IT A SECOND SCALE IS DELETED. `1 + rate +
-   bonus` stood here, and the `1 +` is exactly what stops two levels of one WFQ from being one order: an
-   UNVISITED entry read 2.0 while an UNRUN FLOW — the same statement one level down, reward 0 plus the full
-   optimism bonus — reads 1.0 (solver/flow.c: "a never-run flow carries the FULL optimism bonus, so its weight
-   is its reward + 1.0"). Every cold entry therefore outranked every live engine whose top flow had aged below
-   2.0, unconditionally and for no reason anybody chose. flow_credit_emit counts "ONE EMISSION IS ONE POINT"
-   and `emit` counts findings the same way, so with the constant gone the two terms are the same quantity and
-   the comparison the pool now makes — is a non-resident item worth more than the RAM a resident one holds —
-   is a comparison rather than a coincidence of scales.
-   A ZERO-VISIT ROW IS A POSITIVE STATEMENT, NOT A DEFAULT: it says this item has never been SERVED at this
-   level, which is what a waiting document is, and its weight is then the full optimism bonus and nothing
-   else. The duplicate JS scheduler lib/priority.js was DELETED.
-   AND `emit` IS ONE RUN'S DEMONSTRATED SURFACE, WHICH IS WHAT MAKES THE DIVISION A RATE AT ALL. The sentence
-   above — "expected FUTURE productivity is estimated by emit-per-VISIT" — was written while the writer ADDED
-   each run's whole finding count to the last, so the quotient was the mean of a sequence of totals, which for
-   a document whose surface does not change is that total: a reward that does not fall however many fetches
-   are spent re-learning the same endpoints. The consumer's arithmetic was right and the producer's quantity
-   was not, which is the shape that has no symptom — every number is real, non-negative and plausible, and the
-   only thing it decides is which address this profile spends its next fetch on, for ever. With the writer
-   stating the LAST run's surface, `emit / visits` is the running mean of the NEW findings per admission
-   whenever the surface is monotone, and §scheduler's "an unproductive document sinks rather than being
-   re-fetched at rank for ever" is a property of this expression rather than a sentence about it. */
+/* The Level-1 weight of a work item that is not resident (a parked frontier, or a document waiting for an
+   instance). It shares the engine's WFQ policy (value plus an exploration bonus, never drop work) in the
+   engine's own currency: solver/flow.c gives a never-run flow its reward plus 1.0, and an unserved item here
+   is 0 + 1/(0+1) = 1.0, so the two levels form one order. There is no CPU aging, since nothing is running.
+   `emit` is the last run's demonstrated surface (one emission one point, as flow_credit_emit counts), so
+   `emit / visits` is the mean of new findings per admission and an unproductive document sinks. A zero-visit
+   row states "never served at this level", which is what a waiting document is. */
 const FRONTIER_UNSERVED = { emit: 0, visits: 0 };
 function frontierWeight(row) {
   DCHECK(row && typeof row.emit === "number" && row.emit >= 0 && row.emit === row.emit,
@@ -1495,28 +1250,16 @@ function frontierWeight(row) {
          "so the rate below would be a total masquerading as a per-visit expectation");
   return frontierReward(row) + 1 / (row.visits + 1);     // reward + optimism; no aging (nothing is burning CPU)
 }
-/* THE REWARD TERM ALONE, NAMED, BECAUSE A CENSUS OF A SUM CANNOT SAY WHICH HALF ORDERED IT. Both Level-1
-   defects fixed this session were this term standing still — a waiting document answering the constant 1.0
-   however many fetches had been spent at its address, and a total divided by its own visit count so no
-   document could ever sink — and in BOTH the weight was a perfectly ordinary number. A spread over the SUM
-   cannot tell those from the one state that legitimately ties: a profile whose store is empty, where every
-   candidate is unserved and 0 + 1/(0+1) is exactly 1.0 for all of them, correctly. That is the same reading
-   the popup was rendering as "a rank frozen at a constant looks like this from outside", on healthy code.
-   It is one expression with one definition, read by the weight and by the census, so the terms the census
-   reports are terms OF the weight the pick used and never a second computation beside it. */
+/* The reward term alone, named so the Level-1 census can report which half of the weight ordered the pick. A
+   spread over the sum cannot tell a rank frozen at a constant from the legitimate tie of an empty store, where
+   every candidate is unserved at 1.0. One definition, read by the weight and by the census. */
 function frontierReward(row) {
   return row.visits ? row.emit / row.visits : 0;         // expected emit per admission — future productivity
 }
-/* THE COLD TIER'S RANKING VIEW, WHICH IS NOT THE COLD TIER. The Level-1 order asks two numbers of a parked
-   frontier and the store answers with a whole parked DOCUMENT — its bytes, its script inventory, its header
-   list — so ranking by `getAll` deserialized every page this profile has ever parked in order to sort by
-   `emit` and `visits`. That was affordable only while rehydration was gated on "nothing live is running";
-   the gate is gone (it was a second admission policy beside the one WFQ), so the order is asked on every
-   scheduler round and the content may not ride with it.
-   IT IS A PROJECTION OF ONE STORE, NOT A SECOND REGISTRY, and the thing that makes that true is that this zone
-   is the store's ONLY writer: frontierPut is the one door and it updates this on its way through, so a row
-   here and an entry there cannot disagree. It is built once per zone lifetime from the store itself, which is
-   the only moment the two could differ. */
+/* The cold tier's ranking view, a projection of the store. The Level-1 order asks two numbers of a parked
+   frontier on every scheduler round, and `getAll` would deserialize every parked document to answer them.
+   This zone is the store's only writer and frontierPut updates the view on its way through, so a row and an
+   entry cannot disagree; it is built once per zone lifetime from the store. */
 const _frontierIndex = new Map();   // key -> { key, sourceUrl, emit, visits }
 let _frontierIndexBuilt = false;
 function frontierRow(e) {
@@ -1527,15 +1270,10 @@ function frontierRow(e) {
          "a cold-tier entry carries no document address — the pool excludes a parked item whose document a " +
          "LIVE tab already holds, and an item with no address is one it would rehydrate into a second " +
          "instance beside the tab that is already running it");
-  /* THE STATE BITS THE ORDER READS, DECIDED AT THE ONE DOOR THAT BUILDS A ROW. `shed` says this entry has
-     already given its document up; `stranded` says the re-fetch that was supposed to bring it back stopped
-     answering, so it is not a cold candidate any more (only a VISIT resumes it). They are strict booleans
-     HERE rather than `||`-read at each consumer: frontierRecord has already asserted that their absence means
-     the entry holds its document and has never failed to re-derive, so what crosses into the ranking is a
-     decided fact rather than a field the next reader must default.
-     AND THE TWO NUMBERS RESIDENCY ASKS, COMPUTED ONCE HERE FOR THE SAME REASON THE WEIGHT'S ARE: the ranking
-     view exists so that ordering the whole store does not deserialize every page this profile has parked, and
-     a residency pass that had to open each entry to learn its size would put that cost straight back. */
+  /* The state bits the order reads, decided here as strict booleans (frontierRecord asserted what their absence
+     means): `shed` has given its document up, `stranded` failed to re-derive it and is no longer a cold
+     candidate (only a visit resumes it). The two residency numbers are computed here too, so residency never
+     opens an entry to learn its size. */
   return { key: e.key, sourceUrl: e.sourceUrl, emit: e.emit, visits: e.visits,
            shed: e.shed === true, stranded: e.stranded === true,
            bytes: frontierDocBytes(e), rederivable: frontierRederivable(e) };
@@ -1543,102 +1281,46 @@ function frontierRow(e) {
 async function frontierIndex() {
   if (_frontierIndexBuilt) return _frontierIndex;
   for (const e of await frontierAll()) {
-    /* THE STORE'S OWN INVARIANT, ASSERTED WHERE IT IS READ BACK. frontierPut DELETES an entry with no recipes
-       rather than storing one, so every row in this store has them; the `e && e.recipes` filter that stood at
-       the rehydration site read that invariant as an option and would have skipped a residue silently. */
+    /* The store's invariant: frontierPut deletes an entry with no recipes, so every stored row has them. */
     DCHECK(e && typeof e.recipes === "string" && e.recipes !== "",
            "the cross-session frontier holds an entry with no parked recipes — frontierPut deletes rather than " +
            "storing one, so this is a residue whose flows were dropped between the park and the store");
-    /* AND THE RECORD GRAMMAR ITSELF, ASSERTED IN THE DIRECTION IT IS READ. frontierPut asserts it on the way
-       IN; this is the same door on the way OUT, which is where an entry written by an older build (or by a
-       write that landed half a shed) is met. Without it the row builder below reads `e.html.length` off a
-       record that has none and the failure lands in a size computation instead of at the grammar. */
+    /* The record grammar on the way out, where an entry from an older build or a half-landed shed is met. */
     frontierRecord(e, "came back from the store");
     _frontierIndex.set(e.key, frontierRow(e));
   }
   _frontierIndexBuilt = true;
   return _frontierIndex;
 }
-/* THE RE-DERIVATION, WHICH IS THE REQUEST THE SHED WAS PROVED AGAINST — same chokepoint, same principal,
-   the same address, and the same session. It answers the document half a rehydration needs, or null.
-   IT ASKS `navigationCarriesSession`, LIKE EVERY OTHER DOCUMENT LOAD IN THIS FILE, and that is the point of
-   the question existing as a function. This call used to be described as "uncredentialed" beside a
-   `navigationLoad` that was too; leaving it behind when the loader gained the session would make the SAME
-   document load logged-in when it is live and logged-out when it comes back from the cold tier — one
-   question answered two ways, with a residue whose flows then resume into a document their recorded arms
-   were never taken against. The principal is the one PARKED with the recipe (`e.origin`), so a recipe whose
-   principal was empty re-derives uncredentialed exactly as it always did — absence read as a statement,
-   not filled in.
-   IT ALSO MAKES THE STRAND CHECK BELOW MORE LIKELY TO PASS, not less: `landed === e.sourceUrl` is what
-   proves the bytes are this document, and a logged-out GET is the one that gets redirected to a sign-in
-   page and strands.
-   THE HEADERS THAT COME BACK ARE THE ONES USED, NOT THE PARKED ONES. HTML §7.1.7 "Policy containers" makes a
-   Document's policy container out of the response THAT DOCUMENT came from, and the document about to be
-   parsed is the one this response just delivered — so relaying the stored list beside these bytes would judge
-   today's document under last week's CSP, which is the same defect as answering a child document with no
-   policy at all, one edition later.
-   A CHANGED DOCUMENT IS SAFE WITHOUT BEING CHECKED HERE, and the mechanism is the KEY rather than a
-   comparison: engineRoot re-derives `address|bundle` from what the engine actually parsed, so a redeployed
-   bundle produces a DIFFERENT key, `frontierGet` answers null and the engine boots fresh instead of replaying
-   this residue's arms positionally against a program that never asked those questions.
-   A FAILURE HERE IS NOT A `@WHY`. Residency shed this document because the record said it was re-fetchable,
-   and the world is allowed to make that false — a site goes down, a route is retired. That is not this zone's
-   logic being wrong, so it does not abort; it is RECORDED, both on the entry (which stops being a cold
-   candidate rather than being re-fetched every round) and in `_frontierStats.stranded`, which is the number
-   that keeps a shed that cost something from being a silence. The residue itself is NOT lost: its recipes are
-   untouched and the next VISIT to this address resumes them exactly as before. */
+/* The re-derivation of a shed entry's document: the same chokepoint, principal, address and session as the
+   request the shed was judged against. It answers the document half, or null.
+   It asks `navigationCarriesSession` like every document load in this file, so a document loads with the
+   same credentials live and from the cold tier; the principal is the one parked with the recipe, so an empty
+   one re-derives uncredentialed. `landed === e.sourceUrl` proves the bytes are this document.
+   The headers that come back are used, not the parked ones: HTML §7.1.7 Policy containers builds the policy
+   container from the response the document came from. A changed document is safe because engineRoot
+   re-derives the key from what the engine parsed, so a redeployed bundle boots fresh.
+   A failure is not a @WHY (the world may retire a route): it is recorded on the entry, which stops being a
+   cold candidate, and in `_frontierStats.stranded`. The recipes are untouched, so the next visit resumes. */
 async function frontierRederive(e) {
   DCHECK(e.shed === true,
          "a cold-tier entry that still holds its document was sent to be re-derived — the fetch would replace " +
          "bytes this store already has, and the round would pay a network round trip to learn nothing");
   let r = null;
   if (frontierRederivable(e)) {
-    /* A DOCUMENT, WHICH IS Fetch §2.2.5's `document` DESTINATION — the row of that section's own
-       initiator/destination table whose feature is "HTML's navigate algorithm (top-level only)". Not
-       script-like, so no CORB: this is a document being re-fetched to rebuild a shed frontier entry, and the
-       parser that will read it is the engine's own. */
-    /* AND ITS PROVENANCE, WHICH THIS ENTRY NOW PARKS. A re-derivation is the SAME LOAD as the one that put
-       this entry in the store, so §scheduler's "an operation that becomes a work item takes its inputs with
-       it" decides it, and the field sits on the record beside `credentialed` — the identical class of fact,
-       travelling the AST_ANALYZE record the same way.
-       IT USED TO BE THE LITERAL `derived`, STANDING ON A PREMISE THIS FILE ASSERTED ONE LINE BELOW IT: that no
-       forced address could be in this store, because nothing in this zone could widen an origin and the
-       chokepoint refuses a forced load at an unwidened one. That assert NAMED THE PARKING that had to exist
-       before a widening door could, and this is it — so the premise is discharged rather than re-stated, and
-       the word is READ off the entry instead of claimed for a population. At a widened origin a forced
-       document load FIRES, and what it parks is an entry whose address existed only past a gate this engine
-       forced; stating `derived` for that would have a re-fetch claim a grade the person granted to ONE
-       document about another.
-       THE ONE REMAINING ABSENCE IS ARGUED AT `frontierProvenance` AND NOWHERE ELSE — an entry written before
-       this field existed. It is a positive statement about that population rather than a default; see there.
-       `unstated` AND NO LONGER `unpinned`, WHICH THE OLD LINE GOT RIGHT ONLY BECAUSE IT SAID `derived`.
-       safe-fetch.js's own text for the third word is exact about this: `unpinned` is a CLAIM — "every byte of
-       the address came from the document, the server, or the bundle's own text" — and it is FALSE of a forced
-       address whose flow had pinned a witness, which is precisely the population a widening admits. This
-       store parks no witness mark, so the ACT DOES NOT CARRY THE FACT, which is what `unstated` says and is
-       the same word a route declaration passes for the same reason. It costs nothing: the mark refines the
-       SENTENCE a refusal gives and never the decision (`_firingRefusal` reads it only to choose between
-       `forced` and `forced-witness`). */
-    /* AND FETCH §2.2.5 "Requests"' CREDENTIALS MODE, WHICH FOR A NAVIGATION IS THE SPEC'S OWN LITERAL. HTML
-       §7.4.5 "Populating a session history entry"'s create navigation params by fetching builds "a new
-       request, with … destination `document` … credentials mode `include`", so this is not a policy this
-       zone is choosing — it is what the algorithm performing the navigation says the request IS, stated
-       here because this zone is the party performing it. It is the OTHER half of the credential decision
-       from `credentialed` beside it: that flag is this zone's willingness to spend the session, this token
-       is what the request is, and `safe-fetch.js` composes the two (see `_credentialedOf`). Stating it is
-       what lets that composition REQUIRE a mode wherever the session pays, which is the rule that stops a
-       credential question being answered by silence. */
-    /* AND THE REACH GRADE IS THE ENTRY'S OWN, WHICH IS THE SAME WORD AND NOT A COPY OF IT. No document
-       ISSUED this request — a parked residue is being re-fetched — so the context it is made from is the
-       document this entry IS, and the grade it was parked under is the whole of what this zone knows about
-       how that document was reached. Reading a different word here would re-fetch a residue under a
-       permission nobody granted it, which is the failure `frontierProvenance` exists to make impossible. */
-    /* `tool` — THIS TOOL RE-OPENING A DOCUMENT IT PARKED, and a deliberate answer rather than a default.
-       No analysed page's code asked for this load: the frontier did, rounds or sessions after the document
-       that produced the residue stopped running. The grade beside it is what that residue was parked under
-       and is a different question. It changes no outcome — the witness mark below is `unstated`, so the
-       value arm cannot fire here at any setting — which is exactly why safe-fetch.js's `_actorOf` records
-       that this class of value gets defaulted because nothing tests it. */
+    /* A document: Fetch §2.2.5 Requests' `document` destination ("HTML's navigate algorithm (top-level
+       only)"), parsed by the engine's own parser. */
+    /* `provenance` and `docReach` are the entry's own parked word, since a re-derivation is the same load that
+       stored it; a different word would re-fetch under a permission nobody granted. `pinned` is `unstated`:
+       the store parks no witness mark, and `unpinned` would be a false claim for a forced address whose flow
+       pinned a witness. The mark only refines a refusal's sentence (`_firingRefusal` chooses between `forced`
+       and `forced-witness`), never the decision. */
+    /* `credentials: "include"` is the navigation's own credentials mode (HTML §7.4.5 Populating a session
+       history entry: "destination `document` … credentials mode `include`"). `credentialed` is this zone's
+       willingness to spend the session; safe-fetch.js's `_credentialedOf` composes the two and requires a mode
+       wherever the session pays. */
+    /* `actor: "tool"`: no page asked for this load; the frontier did. It changes no outcome here, since the
+       witness mark is `unstated`. */
     try { r = await self.safeFetch(e.sourceUrl, { pageUrl: e.sourceUrl, pageOrigin: e.origin,
                                                   destination: "document", provenance: frontierProvenance(e),
                                                   docReach: frontierProvenance(e),
@@ -1664,46 +1346,30 @@ async function frontierRederive(e) {
   return null;
 }
 /* ────────────────────────────────────────────────────────────────────────────────────────────────────
-   HOST-LEVEL WFQ (Level-1 of the ONE attention): interleave the LIVE document engines by value-of-
-   information, in SLICES, so no single document (or one deep path within it) monopolizes CPU. Each
-   AGENT CLUSTER is one wasm instance (SECURITY.md: one instance per (browsing-context group, origin) — never
-   per page, which is what this line used to say and what admit used to key on); the engine exposes its best flow's
-   weight (qjs_top_weight) and yields HOT after a slice (qjs_step -> 2). The host ranks all live engines by
-   that weight and advances the winner one slice, then re-ranks — the same WFQ policy the C engine runs
-   over flows WITHIN a document, now over engines ACROSS documents. THE RANKING DOES NOT ASK: both of its
-   inputs — that weight and the instance's working set — are RECORDED by engineRecordFacts at the end of every
-   round this zone has with an instance, because an instance behind renderer-host.js's frame boundary answers
-   by postMessage and there is no synchronous value to read on the line that ranks. RAM is the bound: at most POOL_CAP hot
-   engines resident; the lowest-weight one is EVICTED (qjs_park -> replay recipe in IDB) under pressure, and
-   the cold tail is rehydrated INTO this same pool by admit (one WFQ, no second loop). Fetches don't block the pool: an engine awaiting a
-   reply is 'fetching' and skipped until its body lands, so a slow fetch on doc A never stalls doc B.
+   Host-level WFQ (Level 1 of the one attention): interleave the live document engines by value of
+   information, in slices, so no document or deep path monopolizes CPU. Each agent cluster is one wasm
+   instance (SECURITY.md: one per (browsing-context group, origin)). The engine exposes its best flow's weight
+   (qjs_top_weight) and yields hot after a slice (qjs_step -> 2); the host ranks all live engines by that
+   weight, advances the winner one slice and re-ranks, the same WFQ the engine runs over flows within a
+   document. The ranking does not ask: the weight and the working set are recorded by engineRecordFacts at the
+   end of every round, since an instance behind the frame boundary answers only by message.
+   RAM is the floor: under HOT_RAM_BUDGET of summed working set new engines are admitted; at the floor
+   `_hostOps.evictee` picks a resident engine to park (qjs_request_park, recipes to IndexedDB), and the cold
+   tail is rehydrated into this same pool by admission. An engine awaiting a reply is `fetching` and skipped
+   until its body lands, so a slow fetch on one document never stalls another.
    ──────────────────────────────────────────────────────────────────────────────────────────────────── */
-// The hot working set is bounded by ACTUAL RAM, not a fixed instance count: admit a new document engine
-// while resident WASM memory is under the budget (a light page's instance is a few MB, a heavy bundle's is
-// tens — a count would ignore that). Over the budget, new docs wait as cold recipes -> IDB, pulled back into this pool by admit.
-// This is the RAM floor (like the disk floor), not a truncating bound. Always admit >=1 so a lone doc runs.
+// The hot working set is bounded by actual RAM, not an instance count (a light page's instance is a few MB, a
+// heavy bundle's tens). Over the budget new documents wait as cold recipes and are pulled back by admission.
+// This is a RAM floor, not a truncating bound; at least one document is always admitted.
 const HOT_RAM_BUDGET = 512 * 1024 * 1024;   // bytes of summed live WASM memory before new engines wait
-/* THE HOT WORKING SET, SUMMED OVER WHAT EACH INSTANCE LAST REPORTED — never reached for across the boundary
-   an instance lives behind. This read `e.M.HEAPU8.length` live, through `(e.M && e.M.HEAPU8) ? … : 0` inside a
-   `try {} catch (_) {}`: three defaults over one number, and every one of them turns "this instance did not
-   report its working set" into "this instance occupies no memory", which admits another engine against RAM
-   that is already spoken for. engineRecordFacts writes the number at the end of every round this zone has with
-   an instance — the first of them before the record ever reaches the pool — so an absent one is a producer
-   that stopped writing rather than an engine of size zero, and it CRASHES.
-   A RESERVATION IS NOT A TERM IN THIS SUM, AND ITS ABSENCE FROM IT IS ANSWERED BY A STATE RATHER THAN BY A
-   NUMBER. An engine that has not booted has reported nothing, and there is no honest figure to stand in: 0 is
-   the exact default this comment already refuses (it admits another engine against RAM that is about to be
-   spent), and an invented floor would be a number the producer never stated. So the sum is over the instances
-   that HAVE reported, and `_admissionHasHeadroom` — not this function — is where a reservation says "not
-   yet", by COUNTING ITSELF rather than by contributing a byte count nobody said. The states are enumerated
-   rather than defaulted past: a fourth one has to be classified here before it can be silently summed or
-   silently skipped.
-   AND THE FOURTH ONE ARRIVED, WHICH IS WHY THAT SENTENCE IS A CLASSIFICATION AND NOT A WARNING. `loading` is a
-   seat taken for an admission whose DOCUMENT is still on the network — a declared route's §7.4 navigation, or a
-   shed residue's re-derivation — and it is skipped here on the identical sentence a reservation is skipped on:
-   it has reported nothing, there is no honest figure to stand in, and `_admissionHasHeadroom` is where it says
-   "not yet" by COUNTING ITSELF. A response body being read IS memory, so the sum is a LOWER BOUND while such a
-   seat stands, which is exactly the reading `booting` already has. */
+/* The hot working set, summed over what each instance last reported (engineRecordFacts writes it every round,
+   the first time before the record reaches the pool), so an absent figure is a producer that stopped writing
+   and crashes rather than counting as zero.
+   `booting` reservations and `loading` seats (an admission whose document is still on the network: a declared
+   route's navigation, HTML §7.4 Navigation and session history, or a shed residue's re-derivation) have
+   reported nothing and are skipped; there
+   is no honest figure for them, so the sum is a lower bound while one stands, and `_admissionHasHeadroom`
+   counts them by state instead. Every other state must be classified here before it can be summed. */
 function _residentBytes() {
   let b = 0;
   for (const e of _pool) {
@@ -1720,119 +1386,58 @@ function _residentBytes() {
   }
   return b;
 }
-/* THE RESERVATIONS IN FLIGHT — the POSITIVE form of "that sum is not complete yet". */
+/* The reservations in flight: the positive form of "that sum is not complete yet". */
 function _bootingCount() {
   let n = 0;
   for (const e of _pool) if (e.state === "booting") n++;
   return n;
 }
-/* AND THE ADMISSIONS WHOSE DOCUMENT IS STILL ARRIVING, WHICH IS A SECOND FACT AND THEREFORE A SECOND FUNCTION.
-   It is not a widening of the count above, and the reason is that `_bootingCount` HAS THREE OTHER READERS that
-   mean RESERVATIONS by name — `engineReserve`'s `peakBooting` high-water mark, the Level-1 census's `booting`
-   row, and that row's own `<= pool` assert — so teaching it a second state would be one name answering two
-   questions, which is the defect the split below exists to avoid rather than a shorter spelling of it. The two
-   are disjoint subsets of the pool by construction (a member holds one state), and the census asserts that. */
+/* The admissions whose document is still arriving, a separate fact from reservations: `_bootingCount`'s other
+   readers (engineReserve's `peakBooting`, the Level-1 census's `booting` row and its `<= pool` assert) mean
+   reservations by name. The two are disjoint subsets of the pool, which the census asserts. */
 function _loadingCount() {
   let n = 0;
   for (const e of _pool) if (e.state === "loading") n++;
   return n;
 }
-/* WHETHER ANOTHER INSTANCE MAY BE BUILT, ASKED IN THE ONE PLACE THAT DECIDES IT. This condition was written out
-   three times (the waiting-document loop, the cold-rehydration gate, and that gate's inner break) — three
-   copies of a rule that has just gained a term, and a term is exactly what a copy forgets.
-   A RESERVATION BLOCKS ADMISSION, and that is the honest reading of an incomplete sum rather than a cautious
-   one: while an instance is being provisioned the working set is a LOWER BOUND, so admitting against it is
-   admitting against memory that is already spoken for and merely not yet counted. It is not a stall —
-   provisioning always settles (a reservation that fails leaves the pool), hostSchedule's wait arm waits on the
-   very promise that clears this, and the next iteration re-asks.
-   AND A DOCUMENT ON THE NETWORK BLOCKS IT ON THAT SAME SENTENCE, WHICH IS WHAT THE SECOND TERM IS. A `loading`
-   seat has spent its fetch and will spend RAM the instant the bytes land, so admitting against the sum while it
-   stands is admitting against memory already spoken for — identically to a reservation, and for the identical
-   reason. IT IS NOT A BOUND. Nothing is decided not to happen: the seat's own `_readyP` is what the wait arm
-   waits on, the next round re-asks, and what changed is that the round no longer SUSPENDS on that fetch — every
-   hot engine is still ranked, stepped and serviced while it is in flight, which is the whole of the repair.
-   NAMED RESIDUAL — AND IT IS THE HALF OF THE FREEZE THIS DIFF NARROWS RATHER THAN ENDS, SAID OUT LOUD BECAUSE
-   THE NARROWING IS WHAT MAKES IT EASY TO MISS. WHAT IS NOT COVERED: a `loading` seat holds ADMISSION for as
-   long as its load takes, so a document body a remote party never ends still closes admission for the rest of
-   the session — no waiting tab and no parked residue is seated behind it — where before this diff it closed the
-   LEVEL-1 LOOP and every healthy instance with it. That is the same shape as the refusal `ops.evictee` replaced
-   (a lone over-budget engine closing admission for the whole extension), reached by a fetch instead of by a
-   heap, and it is narrower only because the loop itself keeps running.
-   WHAT THE NEXT DIFF BUILDS: a seat that does NOT hold admission, which is TWO exclusions the candidate order
-   does not have and one wake it cannot take. A cold seat must carry its frontier key so `_bestCandidate`'s
-   `resident.some((p) => p.fkey === row.key)` takes its row out of the order, and a seed seat must carry its
-   address into that walk's `live` set — without both, an unblocked admission re-picks the item already being
-   fetched and spends one request per round on it, which is why the term below is the conservative half and not
-   an oversight (the seed arm's `_seeds.delete` is unconditional and covers only the seed). And `hostSchedule`'s
-   wait arm must become releasable by an ARRIVAL, because a round blocked in `Promise.race` refuses `_hostKick`
-   on `_hostDriving`, so a document arriving while nothing is rankable would wait even with admission open.
-   HOW ITS ABSENCE WOULD SHOW: `rendererPoolProbe` reports `loadingSeats` at 1 or more with `waiting` climbing
-   and `reservations.seeded`/`rehydrated` frozen, while the Level-1 census keeps being written EVERY round with
-   `loading` at 1 or more, `cands` absent and `atFloor: 0` — which is the pair that separates this from the
-   defect this diff closed, where no round began and no census was written at all. */
+/* Whether another instance may be built, asked in one place. A reservation or a loading seat blocks admission
+   because the working set is then a lower bound, and admitting against it spends memory already spoken for.
+   It is not a bound: provisioning and loads settle, hostSchedule's wait arm waits on the promise that clears
+   it, the next round re-asks, and hot engines keep being stepped meanwhile.
+   Named residual: a `loading` seat holds admission for as long as its load takes, so a body a remote party
+   never ends closes admission for the session. Next diff builds a seat that does not hold admission: a cold
+   seat carries its frontier key so `_bestCandidate` excludes its row, a seed seat carries its address into the
+   walk's `live` set, and hostSchedule's wait arm becomes releasable by an arrival. Absence shows as
+   rendererPoolProbe reporting `loadingSeats` of 1 or more with `waiting` climbing and `reservations.seeded`
+   and `rehydrated` frozen, while the Level-1 census is still written every round with `loading` of 1 or
+   more, no `cands` and `atFloor: 0`. */
 function _admissionHasHeadroom() {
   if (_pool.length === 0) return true;     // always admit >= 1 so a lone document runs
   if (_bootingCount() > 0) return false;   // an instance that has not reported is a term the sum is missing
   if (_loadingCount() > 0) return false;   // a document already fetched FOR is memory this sum has not counted
   return !_atRamFloor();
 }
-/* THE FLOOR ITSELF, WHICH IS A DIFFERENT FACT FROM "MAY ANOTHER INSTANCE BE BUILT" AND IS NOW ASKED SEPARATELY.
-   A reservation in flight blocks admission and is NOT a reason to evict a running document — it is a reason to
-   wait for the number it has not reported yet. Written once because both askers must mean the same floor: the
-   sum of what the live instances last reported, against the working-set budget.
-   AND IT IS NO LONGER A REFUSAL. A wasm Memory never shrinks, so this predicate going true once is permanent
-   for the instances that made it true — which is exactly why answering it by declining every admission
-   deadlocked the whole extension. What answers it now is `_hostOps.evictee`: the one order decides which
-   resident engine gives its memory up, and the residue goes to the cold tier where it keeps its place. */
+/* The RAM floor, a different fact from whether another instance may be built: a reservation blocks admission
+   but is no reason to evict. A wasm Memory never shrinks, so the floor once reached is permanent for the
+   instances that reached it; it is answered by `_hostOps.evictee`, which parks one resident engine to the
+   cold tier, not by refusing admission. */
 function _atRamFloor() {
   return _residentBytes() >= HOT_RAM_BUDGET;
 }
-/* THE ONE LEVEL-1 CANDIDATE ORDER — the highest-value work item that is NOT resident, whichever kind it is.
-   §scheduler: "Cold-tail resume is the SAME admission step (not a separate loop)". A waiting document and a
-   parked frontier are the same kind of thing to this order — work with no instance — and the ONE thing that
-   used to separate them was a liveness gate (`!_waiting.length && !_pool.some(e => !e._cold)`), i.e. "a cold
-   item competes only when nothing live exists". In continuous browsing that is never true, so a flow parked
-   last week could never compete at Level-1 regardless of its value, which is a SECOND admission policy beside
-   the one WFQ and §THERE IS NO GRIND calls that the cardinal violation. It is deleted; value decides.
-   A WAITING DOCUMENT RANKS AS UNSERVED, AND THAT IS COMPUTED RATHER THAN INVENTED. Its frontier key is
-   `address|bundle` and the bundle half is the ENGINE's Lexbor <script> scan — this zone may not guess it (a
-   host-side regex over the markup is exactly what §Architecture forbids), so the host does not yet know WHICH
-   residue this visit will resume and may not attribute another key's history to it. What it does know is that
-   this item has never been served at this level, which is the same statement solver/flow.c makes about a flow
-   it has never run, and it carries the same weight: the full optimism bonus, 1.0. The residue is then picked
-   up where it IS known — engineRoot's frontierGet, once the engine has answered.
-   AN ADDRESS A LIVE DOCUMENT HOLDS IS NOT ALSO A COLD CANDIDATE. The parked entry and the open tab are ONE
-   work item: the tab's engine resumes that residue itself, and rehydrating it beside the tab would replay one
-   document's flows in two instances. The exclusion is by ADDRESS rather than by key precisely because the key
-   is not yet known for the live half — and it is exact only because the address is now IN the key. */
-/* THE KINDS OF WORK ITEM WITH NO INSTANCE, DECLARED ONCE, BECAUSE FOUR PLACES ASK WHAT THEY ARE AND A HAND
-   LIST AT EACH IS THREE COPIES A NEW KIND DOES NOT JOIN. The walk below ranks them, `_candRanked` counts one
-   into the reading, `_level1Record` asserts that the reading's populations account for its total, and the
-   admission dispatches on the pick's `kind`. Those were four independently written enumerations, and the
-   third kind reached exactly two of them: the walk ranked a DECLARED ROUTE into `cands` while the record's
-   accounting assert still read `cands === candDocs + candCold`, so the FIRST application whose bundle named a
-   route it does not link aborted that assert — out of the round's own `finally`, which is every exit — and
-   took the whole Level-1 scheduler down as `_hostDead`. An instrument built so a frozen rank could not hide
-   killed the loop it was measuring, and it did it on correct code.
-   THE DEFECT SHAPE IS THE ONE §scheduler NAMES ABOUT A FORK'S WEIGHT — "assert the equality over the whole
-   thing rather than over a list of fields, so the assertion is what forces the next term to be carried". A
-   census whose total is checked against a hand-written sum of the kinds somebody remembered is a census that
-   goes silent (or, here, LOUD AND WRONG) on the kind added next. So the kinds are a table: `kind` is the tag
-   the pick carries and the admission dispatches on, `pop` is the population row a human reads, `wMax` is the
-   extremum over that population. The plurals are irregular on purpose — these are the names already on the
-   wire to the popup, and renaming a row to make a rule prettier is the rename this file's own gate exists to
-   catch. A kind added HERE reaches all five sites; a kind added to the walk and not here fails at the count.
-   AND `from` IS THE FIFTH SITE — the member of the POPULATION that kind's arm walks, which is what makes the
-   walk answerable rather than a reader of whatever this module happens to hold. It closes the one hole the
-   four sites above cannot: a caller that hands a population with `seeds` missing produces `candSeeds: 0`, and
-   a count of zero is a READING — "no route was declared" — so an order that never LOOKED at a kind and an
-   order that looked and found none arrive at `_level1Record` as the same record, its accounting assert agrees
-   with itself, and a whole kind of work item leaves the Level-1 order with nothing anywhere to say so. That is
-   §Architecture's defaulted-field defect performed on the order's own inputs. `shape` is the container that
-   member must be, checked by SHAPE and never by `instanceof`: a driver hands populations minted in its own
-   realm (engine/trusted.mjs states the same rule about values crossing a vm context), so a realm-identity test
-   would reject a legitimate caller — which is a false abort, strictly worse than the wrong answer it is
-   guarding against. */
+/* The one Level-1 candidate order: the highest-value work item with no instance, whatever its kind. A waiting
+   document and a parked frontier compete in the same order (cold-tail resume is the same admission step), so
+   a residue parked long ago competes on value while browsing continues.
+   A waiting document ranks as unserved (weight 1.0): its key's bundle half comes from the engine's scan, so
+   the host cannot yet know which residue it will resume and attributes none. engineRoot's frontierGet picks
+   the residue up once the engine answers. An address a live document holds is not also a cold candidate,
+   since the tab's engine resumes that residue itself; the exclusion is by address because the live half's key
+   is not yet known, and exact because the address is in the key. */
+/* The kinds of work item with no instance, declared once so that the walk below, `_candRanked`'s counting,
+   `_level1Record`'s accounting assert and admission's dispatch on `kind` cannot disagree about the set. `kind`
+   is the pick's tag, `pop` the population row, `wMax` its extremum (names already on the wire to the popup).
+   `from` names the population member the kind's walk reads, so a caller that omits it fails rather than
+   reporting a zero population; `shape` is that member's container, checked by shape and never by
+   `instanceof`, because a driver may hand populations minted in its own realm. */
 const CAND_KINDS = [
   // a document waiting for an instance
   { kind: "doc",  pop: "candDocs",  wMax: "candDocWMax",  from: "waiting", shape: "list" },
@@ -1841,32 +1446,21 @@ const CAND_KINDS = [
   // a parked frontier in the cold tier
   { kind: "cold", pop: "candCold",  wMax: "candColdWMax", from: "idx",     shape: "map" },
 ];
-/* THE TWO CONTAINER SHAPES A POPULATION MEMBER CAN BE, WRITTEN AS WHAT THE WALK CALLS ON IT. `map` names
-   `get`/`keys`/`values`/`size` together rather than one of them, because an ARRAY answers `keys()` — with
-   INDICES — so a `seeds` handed as a list would rank the numbers 0..n-1 as declared routes and the failure
-   would land two suspensions later, in the admission, on an address nothing named. */
+/* The two container shapes a population member can be, written as what the walk calls on it. `map` requires
+   `get`/`keys`/`values`/`size` together, since an array answers `keys()` with indices. */
 const CAND_SHAPES = {
   list: (v) => Array.isArray(v),
   map:  (v) => v !== null && typeof v === "object" && typeof v.get === "function" &&
                typeof v.keys === "function" && typeof v.values === "function" && typeof v.size === "number",
 };
-/* THE SPREAD ROWS — the readings taken over the RANKED SET as a whole, declared once because they are attached
-   at the member that earns them and asserted at the record, and because the answer to "can this census show a
-   constant" is exactly this list. A spread over the WEIGHT can say that every candidate ties; it cannot say
-   WHY, and the two answers take opposite actions. On a profile whose store is empty every candidate is
-   unserved and every weight is 0 + 1/(0+1) = 1.0 — a tie that is the order sitting correctly at its entry
-   value. When an address that has been admitted n times ranks at that same 1.0, the tie is a rank frozen at a
-   constant, which is the defect this instrument exists for. `candVisMax` and `candUnserved` are what separate
-   them, and `candRewardMax`/`candRewardMin` say whether the term those defects froze is ordering anything at
-   all. Each row exists only over a NON-EMPTY ranked population, because an extremum over nothing is not a
-   number; `candUnserved` is a COUNT and lives with the populations below.
-   EACH ENTRY CARRIES ITS OWN WRITE, SPELLED WITH A LITERAL KEY, AND THAT IS NOT STYLE. A table-driven
-   `cen[s.row] = v` folds every one of these rows through a COMPUTED key, and a computed key is a write no
-   grep and no gate can see — `_level1Record` and popup.js then read `candWMax` and `candVisMax` by name off a
-   record whose producer has become invisible, which is READ-NO-WRITER with the writer standing right there.
-   `engine/fieldgate.mjs` reported exactly that when this table was first written the short way. So the table
-   is the one DECLARATION and each row's write is a literal at one site inside it; the DCHECK after the fold
-   is what stops an entry from naming one row and writing another. */
+/* The spread rows, readings over the ranked set as a whole, declared once because they are attached at the
+   member that earns them and asserted at the record. A spread over the weight can show that every candidate
+   ties but not why: an empty store ties every unserved candidate at 1.0 correctly, while an address admitted n
+   times still at 1.0 is a frozen rank. `candVisMax` and `candUnserved` separate the two, and
+   `candRewardMax`/`candRewardMin` show whether the reward term orders anything. Each row exists only over a
+   non-empty ranked population; `candUnserved` is a count and lives with the populations.
+   Each entry writes its row with a literal key, so engine/fieldgate.mjs and grep can see the writer; the
+   DCHECK after the fold stops an entry naming one row and writing another. */
 const CAND_SPREAD = [
   { row: "candWMax",
     fold: (c, t) => { if (!("candWMax" in c) || t.w > c.candWMax) c.candWMax = t.w; } },
