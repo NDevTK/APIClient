@@ -58,10 +58,11 @@
    activation's layout frames to 32 bodies; between those the value is free. */
 #define REST_UNIT_LAYOUT_QUESTIONS_N   32u
 
-/* ONE DESCENDANT FOLDED INTO A SCROLLING AREA, 32 per rest point. The floor is the cost of asking, which a
+/* ONE DESCENDANT FOLDED INTO A SCROLLING AREA, 16 per rest point. The floor is the cost of asking, which a
    single node's edge does not amortize; the ceiling is bound (2), asserted by the bracket the walk's driver
-   opens around each unit, so a document whose 32 nodes overrun the slice says so by name. */
-#define REST_UNIT_LAYOUT_DESCENDANTS_N   32u
+   opens around each unit, so a document whose 16 nodes overrun the slice says so by name. One node's edge
+   still re-derives its container's line boxes and string-keyed lengths; the unit grows when those are held. */
+#define REST_UNIT_LAYOUT_DESCENDANTS_N   16u
 
 size_t rest_unit_items(RestUnitKind kind)
 {
