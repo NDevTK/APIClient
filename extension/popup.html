@@ -103,12 +103,18 @@
     <div id="deep-status" class="deep-status" style="display:none"></div>
 
     <nav>
-      <button class="tab active" data-panel="response">Requests</button>
+      <button class="tab active" data-panel="endpoints">Endpoints</button>
+      <button class="tab" data-panel="response">Requests</button>
       <button class="tab" data-panel="send">Send</button>
       <button class="tab" data-panel="security">Vulns</button>
       <button class="tab" data-panel="data">Keys</button>
       <button class="tab" data-panel="discovery">Discovery</button>
     </nav>
+
+    <!-- Endpoints Panel: the learned API surface, rendered by lib/popup-endpoints.js. -->
+    <section id="panel-endpoints" class="panel active">
+      <div id="endpoints-body"></div>
+    </section>
 
     <!-- Security Panel -->
     <section id="panel-security" class="panel">
@@ -258,7 +264,7 @@
 
 
     <!-- Response Panel -->
-    <section id="panel-response" class="panel active">
+    <section id="panel-response" class="panel">
       <div id="response-log-container">
         <div class="section-header flex-between">
           <div class="flex-row">
@@ -325,6 +331,7 @@
     <script src="lib/popup-security.js"></script>
     <script src="lib/popup-send.js"></script>
     <script src="lib/popup-discovery.js"></script>
+    <script src="lib/popup-endpoints.js"></script>
     <!-- The popup is a bridge EDGE (it renders the engine's result), so per CLAUDE.md §Architecture it gets
          the same DCHECK mechanism the offscreen has: a malformed/drifted engine record crashes LOUD where it
          is read, instead of a card quietly rendering less than it claims. check.js is loaded at the TOP of

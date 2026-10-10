@@ -2066,3 +2066,63 @@ details summary:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Endpoints panel (lib/popup-endpoints.js) */
+.ep-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.ep-table th {
+  text-align: left;
+  color: #8b949e;
+  font-weight: 500;
+  padding: 4px 6px 4px 0;
+  border-bottom: 1px solid #21262d;
+}
+.ep-table td {
+  padding: 6px 6px 6px 0;
+  vertical-align: top;
+  border-bottom: 1px solid #21262d;
+}
+.ep-method {
+  font-family: monospace;
+  color: #d2a8ff;
+}
+.ep-address code {
+  word-break: break-all;
+}
+.ep-unknown,
+.ep-none {
+  color: #8b949e;
+  font-style: italic;
+}
+.ep-razor,
+.ep-grade {
+  display: inline-block;
+  margin: 0 4px 2px 0;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid #30363d;
+}
+.ep-razor-runtime-only {
+  color: #3fb950;
+  border-color: #3fb950;
+}
+.ep-grade-forced,
+.ep-value-forced {
+  color: #d29922;
+}
+.ep-params {
+  list-style: none;
+}
+.ep-params li {
+  margin-bottom: 4px;
+}
+.ep-values {
+  padding-left: 8px;
+}
+.ep-value {
+  display: block;
+  word-break: break-all;
+}
