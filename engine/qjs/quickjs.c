@@ -82987,9 +82987,11 @@ const char *JS_DiagCString(JSContext *ctx, JSValueConst v, char **powned)
     /* A THROWN FUNCTION IS DESCRIBED BY WHERE IT WAS WRITTEN, because it carries nothing else. A function has no
        `message` and no [[ErrorData]], so the name path below reported a named one as its bare name — which reads
        as an Error KIND, `foo` beside `TypeError` — and an anonymous one as the EMPTY STRING, which the host's
-       page-error surface drops as "nothing to say": a value thrown and never reported. What survived both was
-       `[object Function]` with no frame, MEASURED as the largest row of `enginePageErrors` on a real
-       application (×12), naming nothing a reader could open. The definition site is a STORED field of the
+       page-error surface drops as "nothing to say": a value thrown and never reported. NOT THE `[object
+       Function]` ROW A REAL APPLICATION REPORTS: that one is the solver's own CONCOLIC class, which is callable
+       and so tags as Function — this arm was landed against it and a drive refuted the attribution, and the
+       concolic is named by the host's report (solver/result.c) because this string also becomes a PAGE-VISIBLE
+       ErrorEvent `message`, where the solver's shapes must never appear. The definition site is a STORED field of the
        bytecode (the same three Function.prototype's fileName/lineNumber/columnNumber accessors return), so
        reading it runs no page code. A function with no bytecode — a C function, a bound function, a Proxy —
        keeps the forms below, which is narrower and honest: a callable Proxy is `[object Function]` because

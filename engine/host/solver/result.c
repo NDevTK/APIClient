@@ -245,6 +245,24 @@ void result_error_text(JSContext *ctx, JSValueConst err, char *out, size_t outsz
            "a thrown value was described into no buffer, or into one too small to hold a name and a message — "
            "the description is truncated at the caller's size and every caller must give it room to be one");
     *out = 0;
+    /* A THROWN CONCOLIC IS NAMED BY ITS SHAPE AND ITS SOURCE, because it is the solver's own value standing for
+       unknown input and the engine's describer can only call it `[object Function]` — the class is callable, so
+       Object.prototype.toString tags it Function. MEASURED on a real application as the LARGEST row of
+       `enginePageErrors` (x12 on one gitpod drive), naming nothing: a page rejecting or throwing a value it got
+       from somewhere this engine left unknown. It is answered HERE and not in JS_DiagCString because that string
+       is also §8.1.4.6's page-visible ErrorEvent `message`, and a solver shape must never reach the page.
+       Both fields are the record's own stored strings, so nothing runs. */
+    if (concolic_is(err)) {
+        const char *shape = concolic_shape_c(err), *src = concolic_src_c(err);
+        /* The record's one writer stores `shape ? shape : "{}"` and `src ? strdup(src) : NULL`, so a shape is
+           never NULL and a source legitimately is — a value derived from no minted source. */
+        DCHECK(shape != NULL,
+               "a concolic reached the page-error describer with no stored shape — its one writer defaults the "
+               "shape to \"{}\", so a NULL here is a record built outside it");
+        if (src) snprintf(buf, outsz, "an unknown value was thrown: %s (source %s)", shape, src);
+        else     snprintf(buf, outsz, "an unknown value was thrown: %s (no source)", shape);
+        return;
+    }
     /* THE ONE SHAPE THE ENGINE'S DESCRIBER ANSWERS WORSE THAN ITS SLOTS, AND THE REASON IT IS ASKED FIRST. A
        DOMException keeps `name` and `message` behind Web IDL ACCESSORS on its prototype, so `JS_DiagGetData`
        stops at the getter it may not call and reaches the bare word "DOMException" through `constructor` —
