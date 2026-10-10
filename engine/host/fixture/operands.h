@@ -10,7 +10,9 @@
 static const char HTML_OPERANDS[] =
     "<!doctype html><html>"
     "<body>"
-    "<script>var cfg = { admin: state.admin };</script>"
+    /* The boot fork: `cfg.admin` forks here, so every later test of it in this document is decided inside the
+       two arms that already exist rather than forking where it stands. */
+    "<script>var cfg = { admin: state.admin }; if (cfg.admin) { cfg.arm = 'A'; } else { cfg.arm = 'P'; }</script>"
 
     /* ─── THREE OPERAND-SHAPE STATEMENTS, APPENDED RATHER THAN INSERTED ────────────────────────────────────
        THE APPEND IS THE POINT AND IT IS NOT TIDINESS. This document is ONE LINE with no newlines, so a `@WHY`
@@ -59,9 +61,9 @@ static const char HTML_OPERANDS[] =
     /* (2b) A FORKING ZERO-ARGUMENT ACCESSOR — the ordinary shape of the borrow above. §10.1.8.1 OrdinaryGet
        ( O, P, Receiver ) step 7 calls the getter with NO arguments, so `eff_argc` and `narg_alloc` are 0 and the
        frame names the property-operation record's own buffer, which the flow clone must then carry for it.
-       THE FORK IS WHAT RUNS THE CLONE: this getter's `cfg.admin` is this document's first test of it, so the
-       branch forks WHILE THE GETTER'S FRAME IS ON THE CHAIN — the only way to reach the clone's accessor arm.
-       Both values must be present: one alone is a sibling that lost its arm or read its parent's. */
+       THE FORK IS WHAT RUNS THE CLONE: a branch that forks WHILE THE GETTER'S FRAME IS ON THE CHAIN is the only
+       way to reach the clone's accessor arm; (2c) says whether the gate was still two-armed here. Both values
+       must be present: one alone is a sibling that lost its arm or read its parent's. */
     "var _gx = { get x(){ return cfg.admin ? 'gxADMIN' : 'gxPUBLIC'; } };"
     " fetch('/api/getfork?v=' + _gx.x);"
 

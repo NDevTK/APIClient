@@ -10,7 +10,9 @@
 static const char HTML_MODULES[] =
     "<!doctype html><html>"
     "<body>"
-    "<script>var cfg = { admin: state.admin };</script>"
+    /* The boot fork: `cfg.admin` forks here, so every later test of it in this document is decided inside the
+       two arms that already exist rather than forking where it stands. */
+    "<script>var cfg = { admin: state.admin }; if (cfg.admin) { cfg.arm = 'A'; } else { cfg.arm = 'P'; }</script>"
     "<script>"
     /* A TOP-LEVEL `const` READ FROM ITS OWN DEFAULT PARAMETER, IN A CONTINUATION — the shape rolldown/vite
        bundles ship (`const __vite__mapDeps=(i,m=__vite__mapDeps,d=...)=>i.map(i=>d[i])`, which resolves a
@@ -40,10 +42,9 @@ static const char HTML_MODULES[] =
        a C record, while the cells its body writes go through the page's write hooks and are PER-FLOW — so a
        world that did not evaluate it finds the status saying there is nothing to do and the cells saying
        nothing was done.
-       `cfg.admin` IS THE SECOND WORLD AND NOT A NEW FORK: the read is behind a ternary, and this document's
-       first synchronous test of it (`/api/cjreach`) forks before the import settles, so each arm is an
-       existing world; a fresh branch after the import would leave both arms descending from the world that
-       evaluated it.
+       `cfg.admin` IS THE SECOND WORLD AND NOT A NEW FORK: the boot fork above made both worlds before the
+       import, so each arm is an existing world; a fresh branch after the import would leave both arms
+       descending from the world that evaluated it.
        THE REACH EMISSION CARRIES NO MODULE READ: `mmProbe()` throws on an uninitialised cell and loses its whole
        request, so two reach letters with one `mmOK` is the defect and one reach letter is the schedule. */
     "(async function(){ var mw = await import('/chunk/mdmod.js'); fetch('/api/modworldreach?w=' + (cfg.admin ? 'A' : 'P')); fetch('/api/modworld?w=' + (cfg.admin ? 'A' : 'P') + mw.mmProbe()); })();"
@@ -53,8 +54,8 @@ static const char HTML_MODULES[] =
        each other. `c = { exports: {} }` writes a closure cell and `m.exports = { tag: ... }` a property slot,
        spelled apart so they can disagree; the `||` skips the factory in a world that sees the cell filled.
        No module, import, served body or network: ordinary script through the ordinary write hooks.
-       `cfg.admin` IS THE SECOND WORLD: `/api/cjreach` is this document's first synchronous test of it and
-       forks before the first `_cjg()`, so each world calls the factory itself.
+       `cfg.admin` IS THE SECOND WORLD: the boot fork made both worlds before the first `_cjg()`, so each world
+       calls the factory itself.
        THE REACH EMISSION IS FIRST AND READS NEITHER WRITE; its letters are the arms', so two records say two
        worlds ran. Tokens are literals and no token is a prefix of another.
        IT CANNOT THROW: `_cj && _cj.tag === 'cjHELD'` never touches a property of undefined, so the defect is the

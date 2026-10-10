@@ -10,7 +10,9 @@
 static const char HTML_NAVIGATION[] =
     "<!doctype html><html>"
     "<body>"
-    "<script>var cfg = { admin: state.admin };</script>"
+    /* The boot fork: `cfg.admin` forks here, so every later test of it in this document is decided inside the
+       two arms that already exist rather than forking where it stands. */
+    "<script>var cfg = { admin: state.admin }; if (cfg.admin) { cfg.arm = 'A'; } else { cfg.arm = 'P'; }</script>"
     "<script>"
     /* A SYNCHRONOUS READ THE HOST MUST ANSWER — the shape `iframe.contentWindow.document.body` has. The value
        arrives at the CALL SITE, on the next line, with no promise anywhere: between the two the flow suspended,
