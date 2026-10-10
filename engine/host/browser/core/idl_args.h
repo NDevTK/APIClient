@@ -683,266 +683,152 @@ typedef struct {
     char       ask[160];
 } IdlDictWalk;
 
-/* INTERN a dictionary declaration's member names, once per runtime, and answer them. The atom must be live at
-   both the request and the answer — step_getprop_run is handed it twice with a suspension in between — so it
-   cannot be created per read, and the names are static strings, so one intern serves every conversion. It also
-   runs §3.2.17's READ-ORDER check over the declaration (see idl_args.c), which is why an algorithm's dictionary
-   goes through it rather than reaching for JS_NewAtom itself. Idempotent: a declaration already interned answers
-   with the atoms it has. Call it from the component's per-agent init. */
+/* Intern a dictionary declaration's member names, once per runtime, and return them. An atom must stay live
+   between a request and its answer, so names cannot be interned per read. Also runs §3.2.17's read-order check
+   over the declaration, which is why an algorithm's dictionary goes through this rather than JS_NewAtom.
+   Idempotent. Call it from the component's per-agent init. */
 const JSAtom *idl_dict_declare(JSContext *ctx, const IdlDictDecl *d);
 
-/* BEGIN §3.2.17 (ES-to-IDL list) over `src`, which the CALLER has already brought past step 1: a value that is
- * neither an Object, undefined nor null is that step's TypeError, and the two callers throw it in two different
- * places (the argument machine at the position, an algorithm wherever its own branch sent the value here), so it
- * is asserted here rather than performed here.
+/* Begin §3.2.17's ES-to-IDL conversion over `src`. The caller has already performed step 1 (a value that is
+ * not an Object, undefined or null is a TypeError there), and this asserts it. undefined and null run the same
+ * member loop, every member reading as undefined (step 4.1.2), so the result carries every declared default.
  *
- * undefined and null ARE legal and are not a special case: step 4.1.2 makes every member's jsMemberValue
- * undefined, so the same member loop runs and yields a dictionary carrying every declared default. That is why
- * there is no second "default them all" loop — there was one, in the argument machine, and a dictionary with
- * both would be two answers to §3.2.17 step 4.1.5.
- *
- * `frames`/`frames_cap` are the nested-conversion stack; a dictionary whose declared types nest needs at least
- * idl_members_depth of them and this asserts it, so a caller that passed none for a type that needs some crashes
- * at the start rather than at the depth. NULL/0 is right for a dictionary NONE of whose members declares a type
- * that pushes a level — no nested dictionary (`D`, `D?`) and no `sequence<(DOMString or D)>` — which is nearly
- * all of them. The two numbers are ONE STATEMENT: idl_members_depth counts exactly the member types the loop
- * pushes for, both reading idl_type_pushes_level, so a type added to that predicate is counted and pushed at
- * once rather than being pushed against a budget that never grew.
+ * `frames`/`frames_cap` are the nested-conversion stack, at least idl_members_depth deep, which this asserts.
+ * NULL/0 is right for a dictionary none of whose members pushes a frame (idl_type_pushes_level or
+ * idl_type_pushes_record), which is nearly all of them.
  * Returns 0, or -1 with a throw live (the object could not be minted). */
 int  idl_dict_walk_start(JSContext *ctx, IdlDictWalk *w, JSValueConst src,
                          const IdlDictMember *members, int n, const JSAtom *atoms, const char *name,
                          JSClassID iface, bool (*narrow)(JSValueConst v),
                          IdlConvFrame *frames, int frames_cap);
 
-/* DRIVE the conversion one re-entry's worth. Returns >0 (the caller returns it — the walk is parked inside a
-   member's [[Get]] or inside one member's own coercion), 0 when every member has been read and converted, or -1
-   with a throw live. `in` is the request answer and is CONSUMED. */
+/* Drive the conversion one re-entry's worth. Returns >0 (the caller returns it: the walk is parked in a
+   member's [[Get]] or coercion), 0 when every member is converted, or -1 with a throw live. `in` is the
+   request answer and is consumed. */
 int  idl_dict_walk_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvFrame *frames, int frames_cap,
                        JSValue in, JSValue **out_cb, int *out_argc);
 
-/* TAKE step 5's idlDict, OWNED, and leave the walk empty — so a host that converts one dictionary per call may
-   start another. Asserts the walk finished: taking a half-read dictionary would hand an algorithm an object
-   whose absent members are indistinguishable from members the page did not write. */
+/* Take step 5's idlDict, owned, and leave the walk empty so another may start. Asserts the walk finished: a
+   half-read dictionary's absent members would be indistinguishable from members the page did not write. */
 JSValue idl_dict_walk_take(JSContext *ctx, IdlDictWalk *w);
 
-/* WHAT THE WALK OWNS, for the hosting state's `visit` to chain into its own. The frames are visited here too —
-   ALL of them and not only the live ones, because a popped frame holds JS_UNDEFINED and a never-used one the
-   zeroed state's non-refcounted integer, so visiting all takes no reference it should not, where a loop bounded
-   by `conv_sp` would silently drop whatever a frame still held if the cursor and the frames ever disagreed. */
+/* What the walk owns, for the hosting state's `visit` to chain into. Visits every frame, not only live ones:
+   a popped frame holds JS_UNDEFINED and an unused one a zeroed integer, so neither takes a reference, and a
+   loop bounded by `conv_sp` would drop a frame's value if the two ever disagreed. */
 void idl_dict_walk_visit(JSContext *ctx, IdlDictWalk *w, IdlConvFrame *frames, int frames_cap, JSStepVisit *v);
 
-/* RELEASE everything an ABANDONED walk holds and leave it empty — for a host whose own teardown is not the
-   `visit`-driven discharge (an algorithm that owns its state directly). A host whose `visit` names the walk
-   needs nothing here: the driver's one discharge covers it. Safe on a walk that never started. */
+/* Release everything an abandoned walk holds and leave it empty, for a host whose teardown is not the
+   `visit`-driven discharge. A host whose `visit` names the walk needs nothing here. Safe on an unstarted walk. */
 void idl_dict_walk_clear(JSContext *ctx, IdlDictWalk *w, IdlConvFrame *frames, int frames_cap);
 
-/* DECLARE a member: the IDL types of its arguments, and the body to run once they are converted. Returns the
-   step id, which the caller CACHES. Registration and installation are separate on purpose: Element's members
-   are installed on every wrapper the tree hands out, so registering there would mint a definition per element.
-   A position the IDL does not list is passed through unconverted, which is what a variadic `any...` tail means
-   and what an optional argument beyond the listed ones means. `nargs` is how many the IDL lists, and THERE IS
-   NO CEILING ON IT. There was one — IDL_MAX_DECLARED, which sized an inline type array in the member record
-   and a per-call argument array in the machine's state, "the same bound seen from the declaration side and the
-   call side". It was four, then eight, and each time its comment named the widest member then written as
-   though that were a fact about the platform: eight was HTML 9.4.1's `initMessageEvent`, and Pointer Events 4's
-   `initMouseEvent` (fifteen) and UI Events §6.1.2's `initKeyboardEvent` (ten) were BOTH already past it, both
-   absent from this engine, and both said so in a comment naming this line. A ceiling that decides which spec
-   members may exist is a cap on the platform, and raising it only moves the next member that cannot ship.
-   So the DECLARATION owns its type list (copied at registration, freed with the pool) and the state's argument
-   vector is sized from the same number — a member is as wide as its IDL, and there is nothing left to outgrow.
-   `types` is COPIED, so a caller may pass a stack array. */
+/* Declare a member: the IDL types of its arguments and the body to run once they are converted. Returns the
+   step id, which the caller caches; registration is separate from installation so that members installed on
+   every wrapper do not mint a definition per object. A position past `nargs` is passed through unconverted
+   (a variadic `any...` tail, or an unlisted optional argument). There is no ceiling on `nargs`: the
+   declaration owns a copy of `types` (a caller may pass a stack array) and the per-call argument vector is
+   sized from the same number. */
 int  idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody body, int magic);
 
-/* §3.2's INTEGER conversion, over the double a ToNumber has already produced — sign(x)·floor(|x|) taken modulo
-   the type's width, folded into range if it is signed, with [Clamp] rounding half to even instead. Public
-   because a conversion that happens OUTSIDE this machine needs the same arithmetic: Web IDL converts a
-   callback's RETURN VALUE to the operation's declared type, and DOM §6.3's `acceptNode` returns an
-   `unsigned short`, so a filter answering 65537 accepts exactly as one answering 1 does. Written a second time
-   in the component that needed it, that is a modulo somebody has to remember. */
+/* §3.2.4.9's integer conversion over an already-computed ToNumber result: sign(x)·floor(|x|) modulo the
+   type's width, folded into range if signed, or [Clamp]'s round-half-to-even. Public so a conversion outside
+   this machine shares the arithmetic (a NodeFilter's `acceptNode` returns an `unsigned short`, so 65537
+   accepts like 1). */
 int64_t idl_integer_of(IdlArgType t, double x);
 
-/* THE NUMBER A CONVERTED NUMERIC ARGUMENT DENOTES, for a body that needs a real one — the numeric twin of
-   concolic_name_cstr, and it exists for the same reason that one does.
-   A BODY MAY NOT CALL JS_ToFloat64 ON ITS OWN ARGUMENT. §3.2's conversion is a BOUNDARY, and unknown external
-   input crosses a boundary AS ITSELF (see the pass-through in the conversion loop) so that opacity survives
-   the coercion — so a numeric position reaches its body either as the Number the declaration produced or as
-   the unknown, and JS_ToFloat64 on the second owes C a real number it cannot have. Every body that wrote
-   `JS_ToFloat64(ctx, &d, argv[i])` under a comment saying "already converted by the declaration" therefore
-   ABORTS on `f(x * n)` with an unknown operand, which is a page's ordinary arithmetic and not a broken
-   invariant.
-   FOR AN UNKNOWN IT ANSWERS THE REAL CONVERSION RUN ON THAT VALUE'S OWN EXAMPLE — §3.2.4.5's
-   ConvertToInt(V, 32, "signed") over the concrete the code actually computed, through the one copy of that
-   arithmetic above, never a rule predicting what it would have produced. The value itself stays unknown: this
-   is the modelled NUMBER an engine algorithm needs, not a collapse of the value to it.
-   RETURNS 0 WHEN THE UNKNOWN CARRIES NO EXAMPLE YET, which is a POSITIVE statement rather than a hole to
-   default: there is no number to fall back to, choosing one would INVENT a value the code never computed, and
-   what that absence means differs per member — so the CALLER answers it. */
+/* The number a converted numeric argument denotes, for a body that needs a real one; the numeric twin of
+   concolic_name_cstr. A body must not call JS_ToFloat64 on its own numeric argument, because unknown input
+   crosses the conversion as itself and reaches the body as the unknown, which owes C no real number.
+   For an unknown, this answers §3.2.4.9's conversion run on that value's own example, through
+   idl_integer_of; the value itself stays unknown. Returns 1 with `*out` written, or 0 when the unknown carries
+   no example yet: there is no number to invent, and what that means differs per member, so the caller
+   decides. */
 int idl_number_of(JSContext *ctx, IdlArgType t, JSValueConst v, double *out);
 
-/* §3.2.4.8's `unsigned long long`, as the MAGNITUDE rather than as the int64_t bit pattern the modulo leaves —
-   the half of that type's range above 2**63 is exactly the half a page reaches by writing a negative, and an
-   int64_t cannot express it. Public for the same reason idl_integer_of is: a conversion performed outside this
-   machine (File System §2.5's write algorithm reads its dictionary members with its own request) must not own
-   a second copy of the arithmetic. */
+/* Web IDL §3.2.4.8 unsigned long long as a magnitude rather than the int64_t bit pattern the modulo leaves
+   (the half above 2**63 is what a page reaches by writing a negative). Public for the reason idl_integer_of is
+   (File System's write algorithm reads its own dictionary members). */
 double  idl_unsigned_long_long_of(double x);
 
-/* §3.2.11's ByteString RANGE over UTF-8 bytes: true when every code point is 0x00..0xFF. Public because a
-   conversion that happens OUTSIDE this machine needs the same answer — Headers' fill converts a record's keys
-   itself, one [[Get]] at a time, and the range is the type's rule rather than that component's. */
+/* §3.2.11's ByteString range over UTF-8 bytes: true when every code point is 0x00..0xFF. Public because
+   Headers converts a record's keys itself, and the range is the type's rule. */
 bool idl_is_bytestring(const char *utf8, size_t len);
 
-/* The same declaration for a member whose IDL tail is VARIADIC, and/or that takes an interface-or-string
-   union. `variadic` makes the LAST declared type apply to every argument from there on, which is what a `T...`
-   tail means — stated by the member rather than assumed for all of them, because assuming it once converted
-   addEventListener's CALLBACK to a string. `iface` is the class an object must be to cross an
-   IDL_STRING_UNLESS_IFACE position as itself. */
+/* idl_method_id for a member whose IDL tail is variadic and/or that takes an interface-or-string union.
+   `variadic` applies the last declared type to every argument from there on, stated per member because
+   assuming it converted addEventListener's callback to a string. `iface` is the class an object must be to
+   cross an IDL_STRING_UNLESS_IFACE position as itself. */
 int  idl_method_id_ext(JSContext *ctx, const IdlArgType *types, int nargs, bool variadic, JSClassID iface,
                        IdlBody body, int magic);
 
-/* The same declaration for a member that takes an IDL_DICT argument: `members` lists the dictionary's members
-   in the order the IDL declares them, which is the order Web IDL reads them in. A member declares AT MOST ONE
-   dictionary argument — every one in the platform does, and a second would need its own cursor rather than
-   sharing this one, which is a DCHECK rather than a silent second read.
-   THERE IS NO CEILING ON `nmembers`. There was one, at six, and RequestInit's eleven walked past it — the same
-   ceiling-as-detector this pool already replaced once. `members` must outlive the declaration; every caller
-   passes a static, which is what lets the pool keep the pointer rather than a copy. */
+/* idl_method_id for a member taking an IDL_DICT argument: `members` lists the dictionary's members in Web
+   IDL's read order. A member declares at most one dictionary argument (a second would need its own cursor),
+   which is a DCHECK. There is no ceiling on `nmembers`. `members` must outlive the declaration (every caller
+   passes a static), so the pool keeps the pointer. */
 int  idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
                         const IdlDictMember *members, int nmembers, IdlBody body, int magic);
 
-/* A MEMBER WHOSE ALGORITHM RUNS THE PAGE'S CODE AFTER ITS ARGUMENTS ARE CONVERTED. customElements.define is
-   the first: §4.13.4 reads `constructor.observedAttributes`, which is a static GETTER, and then converts what
-   it got — the page's code, twice, after every declared argument is already a real value. A plain body cannot
-   do that: reaching for JS_GetProperty there is a C activation hosting the page's loops, which is the
-   drive-to-completion this engine aborts on. Declaring the conversions and hand-rolling them so the member can
-   be a machine is the other wrong answer — that is the duplication one machine exists to prevent.
-   So the body is itself a STEP, with the converted arguments in place: same return contract as a
-   JSTrampStepDef's step, and its own state, whose SIZE the member declares and whose owned values its visit
-   names. The state is zeroed before the first entry.
-   `presult` is where it leaves the member's answer. */
+/* A member whose algorithm runs the page's code after its arguments are converted (HTML's
+   customElements.define reads the static `observedAttributes` getter and converts it). A plain body cannot:
+   JS_GetProperty there is a C activation hosting the page's loops. So the body is itself a step, with the
+   converted arguments in place, the same return contract as a JSTrampStepDef step, and its own state, whose
+   size the member declares, which is zeroed before the first entry and whose owned values its visit names.
+   `presult` receives the member's answer. */
 typedef int (*IdlStepBody)(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc);
 
-/* THE FIRST STAGE THAT IS THE MEMBER'S OWN. Stages 0 and 1 belong to the machine that hosts every declared
-   member — the argument-count check and the ES-to-IDL conversions — and BOTH are rest points, because a page's
-   `toString` runs inside the second one. A body's own algorithm therefore starts here, and it rests on
-   `hdr->stage` rather than on a private counter of its own: a stage is where a machine parks, where a sibling
-   overtakes it and where a cold-tier resume picks it up, and the driver asserts at do_step_step that the stage
-   a machine holds is a step its declaration names. A private byte in the body's state is invisible to that
-   assert, so a body keeping one has a resume point nothing can check and nothing can report.
-   A body that has not been converted still keeps its own byte; it declares no steps and is not yet asked. */
+/* The first stage that is the member's own. Stages 0 and 1 belong to the hosting machine (the argument-count
+   check and the conversions, both rest points). A body rests on `hdr->stage`, not a private counter, because
+   the driver asserts at do_step_step that a machine's stage is one its declaration names; a private byte is a
+   resume point nothing can check. */
 #define IDL_STEP_FIRST 2
 
-/* AND A MEMBER'S OWN X-LIST IS BASED HERE, not on the first entry of every list. quickjs-step.h's
-   JS_STEP_STAGE_ENUM emits a bare `name,`, which numbers from zero — right for a machine that owns all of its
-   stages, wrong for a declared member, whose first two belong to the prologue above. Writing `= IDL_STEP_FIRST`
-   on each list's first entry would state that same fact once per member, which is the per-member line this file
-   exists to remove; here it is stated once and every list is expanded the same way:
+/* Bases a member's own stage X-list at IDL_STEP_FIRST. JS_STEP_STAGE_ENUM numbers from zero, and the first two
+   stages belong to the prologue, so every list is expanded as:
 
        enum { IDL_STEP_STAGE_BASE(QS_STAGES) QS_STAGES(JS_STEP_STAGE_ENUM) };
 
-   `list` names the machine's X-list so two members in one file declare two distinct enumerators. C numbers an
-   enumerator with no value as its predecessor + 1, which is the whole mechanism. */
+   `list` names the X-list so two members in one file declare distinct enumerators; C numbers the next
+   enumerator as this one plus one. */
 #define IDL_STEP_STAGE_BASE(list) list##_base = IDL_STEP_FIRST - 1,
 
-/* The state's OWNERSHIP contract. `visit` is the ONE declaration of what the state holds, and it has three
-   consumers, none of which knows about the others: the deep-fork clone takes a second reference to each field,
-   the teardown releases each (tramp_step_state_free_1 discharges it after idl_args_result has stated the
-   member's completion), and idl_args_result's own assert folds it into a number to check that `release` did not
-   touch it.
-   THERE IS NO SECOND LIST. `release` used to be that — the same JSValues, by hand, in another function — and
-   the pair is exactly what this engine forbids: adding a field to a state then creates an obligation in two
-   places and nothing catches the one that is missed. It had already been missed, in querySelectorAll: `visit`
-   named the collected-matches array, the teardown named nothing, and every abandoned selector walk leaked its
-   element wrappers. */
+/* A step member's declaration. `visit` is the one statement of what the state owns: the deep-fork clone takes
+   a second reference to each field, the teardown (tramp_step_state_free_1, after idl_args_result has stated the
+   completion) releases each, and idl_args_result folds them to check that `release` left them alone. There is
+   no second list of owned values. */
 typedef struct {
     IdlStepBody body;
     size_t      state_size;
     void      (*visit)(JSContext *ctx, void *state, JSStepVisit *v);
-    /* WHAT THE DECLARATION CANNOT NAME, AND WHAT HOLDS NO REFERENCE — a lexbor handle, a foreign C allocation,
-       a global or per-object FLAG the algorithm took and must give back on every exit (§4.13.4 step 14's
-       "regardless of whether the above steps threw", HTML §4.10.22.4 "Constructing the entry list" step 8's
-       give-back of the constructing-entry-list flag its step 2 took — §4.10.22.3's form-submission algorithm
-       only READS that flag, at its step 2, and never sets it).
-       It runs BEFORE the declaration is discharged, so it may READ an owned value — those flags live on one —
-       and idl_args.c folds the declaration into a number on each side of the call and requires the two to
-       agree. A member with nothing of that kind declares NULL.
-       WHAT THAT FOLD MEASURES IS SLOT IDENTITY — every declared slot's tag, and its payload where that is a
-       pointer — AND NEVER A REFERENCE COUNT, so read the rule as "leave every slot the declaration names naming
-       the same thing" rather than "hold still". It folded the heap's count once and could not: a count states
-       how many holders an object has and never which, so a give-back dropping ANOTHER holder's reference to an
-       object a declared slot also names was indistinguishable there from a `release` discharging the
-       declaration itself, and every completed `document.createElement` of a defined name aborted. A `release`
-       is therefore NOT forbidden to move reference counts elsewhere in the agent's object graph; it is
-       forbidden to free, null, replace or hand over one of these slots. §4.13.4's active custom element
-       constructor map give-back is still declared to the machine instead — see idl_active_ctor_owed — because
-       it is half of a PAIR that must unwind in nesting order below that bracket, which is a different reason
-       and an independent one. */
+    /* What `visit` cannot name and holds no reference: a lexbor handle, a foreign C allocation, or a flag the
+       algorithm took and must give back on every exit (HTML's custom element definition's "regardless of
+       whether the above steps threw", HTML §4.10.22.4 "Constructing the entry list" step 8's give-back of the
+       constructing-entry-list flag). It runs before the declaration is discharged, so it may read owned values.
+       idl_args.c folds every declared slot's identity (tag, and payload where that is a pointer) on each side
+       of the call and requires them equal: `release` may move reference counts elsewhere but must not free,
+       null, replace or hand over a declared slot. NULL when there is nothing of that kind. The active custom
+       element constructor map is given back by idl_active_ctor_owed instead, for its nesting order. */
     void      (*release)(JSContext *ctx, void *state);
-    /* WHICH ALGORITHM THIS MEMBER IS, AND WHICH OF ITS STEPS EACH STAGE RESTS AT — the host half of
-       JSTrampStepDef's own declaration, and it lands on the same field of the same definition: the pool builds
-       one JSTrampStepDef per member, prepends the two labels for the stages it owns itself, and the driver's
-       one check reads the result. So a member is asserted by exactly the mechanism a quickjs.c machine is,
-       rather than by a second one written for the host.
-       `steps` is indexed from IDL_STEP_FIRST and NULL-terminated: `steps[0]` is the step the body rests at on
-       its first entry. The label is the standard's own wording ("DOM §4.4 step 3"), because the point of it is
-       that a parked flow can SAY where it is parked and that the number means the same thing in the next
-       session as in this one. A stage names ONE spec step, and what may share one is decided by the ENGINE and
-       never by the page: quickjs-step.h's JSTrampStepDef::steps carries the rule and the reason — a boundary is
-       a rest point because the engine may have to park there (RAM pressure, a cold-tier eviction, a
-       cross-session resume, a flow that outranks this one), and none of those consult the page. A member may
-       therefore name a RANGE only when the whole range is ONE O(1) engine action, and the label says the range
-       in those terms; a span of the PAGE'S size is a stage per step, whose walking stage returns JS_STEP_YIELD
-       at every turn. js_step_def_check refuses a label that argues from the page's code at all.
-       Both or neither: a member declaring one without the other is half a declaration, which the pool refuses
-       rather than accepting an algorithm with unnamed steps or steps belonging to no algorithm. */
+    /* Which algorithm this member is and which step each stage rests at: the pool builds one JSTrampStepDef per
+       member, prepends labels for its own two stages, and the driver's one check reads it. `steps` is indexed
+       from IDL_STEP_FIRST and NULL-terminated; each label uses the standard's wording ("DOM §4.4 step 3") so a
+       parked flow says where it is, the same way in every session. A stage names one spec step; a range only
+       when the whole range is one O(1) engine action (quickjs-step.h's JSTrampStepDef::steps states the rule,
+       and js_step_def_check refuses a label arguing from the page's code). Both or neither are declared. */
     const char *algorithm;
     const char *const *steps;
-    /* THIS MEMBER'S OWN ALGORITHM CATCHES AN ABRUPT REQUEST RESULT, instead of letting it propagate. The pool's
-       definition always declares JSTrampStepDef::catches_abrupt — HTML §4.13.6 step 1.3.1 catches in the
-       epilogue EVERY member ends through — so the abrupt arrives at this machine either way; this field says
-       which of the two implementations handles it. Zero means the epilogue's, and the body never sees it: an
-       argument coercion's throw and the body's own request re-raise exactly as they did before. One means the
-       BODY's, and the body is then re-entered with JS_EXCEPTION at the request's call site with the throw
-       still live — which is what DOM §4.9 step 5.1.4's "run these steps while catching any exceptions" is, and
-       the only reason `document.createElement` can report a throwing custom element constructor instead of
-       letting it destroy the document. A body that declares this MUST answer for the abrupt at every request
-       it makes: re-issuing the request instead is an infinite re-ask, because a keyed read's own two-phase
-       cursor is reset by the abrupt delivery. */
+    /* Whether this member's own algorithm catches an abrupt request result. The pool's definition always
+       declares JSTrampStepDef::catches_abrupt, because HTML §4.13.6's step 1.3.1 catches in the epilogue every
+       member ends through. Zero: the epilogue handles it and the body never sees it. One: the body is re-entered
+       with JS_EXCEPTION at the request's call site with the throw live (DOM §4.9's "run these steps while
+       catching any exceptions", which lets createElement report a throwing constructor). Such a body must
+       answer the abrupt at every request; re-issuing it re-asks forever, because the keyed read's cursor is
+       reset by the abrupt delivery. */
     uint8_t     catches_abrupt;
-    /* WHY THIS MEMBER'S STATE MUST NOT BE FORKED RIGHT NOW — the reason, or NULL when it may be. Forwarded onto
-       the pool's definition, so the fork asks the MEMBER through the same one door it asks everything else; see
-       JSTrampStepDef.unforkable for the capability this restores and for why the question belongs at the fork
-       rather than inside the member's `visit`. NULL for a member that may always be forked.
-       WHICH MEMBERS ARE NOT NULL IS A DERIVATION AND NEVER A LIST HERE, BECAUSE THIS SENTENCE CARRIED ONE AND
-       IT WENT WRONG IN THE DIRECTION NOTHING REPORTS. It read `which is every one of them but the FRAGMENT
-       PARSE`, and that was an ENUMERATION OF AN ABSENCE: it asserts of every other member that it declares no
-       reason, so a reader is told the trajectory below is one machine from zero. Measured against the tree it
-       was false by three — the §5.6 fetch machine, the §5.4 Request constructor and §5.1's Headers constructor
-       all declare one, each for the PARSED HEADER LIST and none for any parser — and the error is the
-       UNDER-CLAIM §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT names, found by nobody acting on it, because
-       acting on it means not looking. Derive the set instead, with both forms, since this field is initialised
-       positionally at some definitions and designated at others:
-           git grep -nE '\.unforkable *= *[a-z_]' -- engine/
-           git grep -nE '^ *[0-9]+, *[a-z_]*unforkable' -- engine/
-       THE STRUCTURAL FACT, WHICH IS WHAT DOES NOT ROT: a declarer names a CAPABILITY and not a machine, so the
-       count of declarers and the count of things to build are different numbers and the first is the larger.
-       THAT FETCH TRIO IS THE WORKED EXAMPLE OF IT AND WAS MEASURED RATHER THAN ARGUED, AND IT IS NOW THE
-       WORKED EXAMPLE OF THE CAPABILITY REACHING ZERO: the fetch machine's reason went from THREE terms to one
-       to none — §2.2.5's request record became JSValues, §5.2's extracted body became a list core/fetch/body.h
-       declares, and §5.4 step 33's header list became a root quickjs-step.h's `tree` operation copies and
-       destroys through headers.h's `header_list_step_ops`. THREE capabilities built one at a time under ONE
-       declarer, which no count of declarers could have predicted. The header list was the LAST and it was the
-       same capability behind the §5.4 Request constructor's only term and behind core/fetch/headers.c's §5.1
-       constructor, so all three retired in one diff; THAT third one declared no reason at all until it was
-       found by sweeping for the capability rather than for the field, which is the direction this derivation is
-       blind in: it lists the
-       machines that DECLARE a reason and cannot list the machines that OWE one. So it is an upper bound on the
-       work and a LOWER bound on the machines a capability touches, and a machine missing from it is not
-       therefore safe — it is a fork TAKEN where its siblings refuse one.
-       Two machines holding one missing capability retire together and neither names it twice — core/frame/
-       navigable.c's load says so of itself and points at the fragment parse's own list — so read each reason
-       for WHAT IT WOULD TAKE and group by that before pricing any of it. The field goes when every one of those
-       is built, and §A-superseded-system-is-DELETED is why it may not become anything else in the meantime. */
+    /* Why this member's state must not be forked right now, or NULL when it may be. Forwarded onto the pool's
+       definition, so the fork asks the member through the one door it asks everything else (see
+       JSTrampStepDef.unforkable). A reason names a missing capability, not a machine, so several declarers
+       retire together when it is built; find them by grepping for `unforkable` initializers, both positional
+       and designated, rather than from a list here. */
     const char *(*unforkable)(const void *state);
 } IdlStepDecl;
 /* DECLARE WHERE THE OPTIONAL ARGUMENTS START. §3.6 makes an `undefined` passed for an optional argument with
