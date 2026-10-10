@@ -1,6 +1,4 @@
-/* CSS 2.1 §17.5 Visual layout of table contents' grid, over core/layout/table_box.h's rows. See table_grid.h
-   for the contract, for why the spans come from HTML §4.9.11, and for why the overlap case is recorded rather
-   than crashed on. */
+/* CSS 2.1 §17.5 Visual layout of table contents' grid, over core/layout/table_box.h's rows. See table_grid.h. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -14,10 +12,9 @@
 #include "core/layout/table_box.h"
 #include "core/layout/table_grid.h"
 
-/* HTML §4.9.12.1 Forming a table's two ceilings, as the section states them. They are not this file's policy
-   and not a bound in CLAUDE.md's sense — a page may write any digits it likes and the algorithm's own steps
-   are "If colspan is greater than 1000, let it be 1000 instead" and "If rowspan is greater than 65534, let it
-   be 65534 instead". */
+/* HTML §4.9.12.1 Forming a table's two ceilings, the section's own steps rather than engine bounds: "If colspan
+   is greater than 1000, let it be 1000 instead" and "If rowspan is greater than 65534, let it be 65534
+   instead". */
 #define TG_COLSPAN_MAX ((size_t) 1000)
 #define TG_ROWSPAN_MAX ((size_t) 65534)
 
@@ -45,23 +42,18 @@ static bool tg_html_local_name_is(lxb_dom_element_t *el, const char *name)
     return ln != NULL && strlen(name) == len && memcmp(ln, name, len) == 0;
 }
 
-/* HTML §4.9.12.1 Forming a table's parse-and-clamp for ONE span attribute, which the section states twice in
-   the same shape: parse the value with §2.3.4.2's rules for parsing non-negative integers, fall back to
-   `fallback` when the attribute is absent or the parse failed, and clamp to `ceiling`.
-   THE OVERFLOW ARM IS THE CLAMP AND NOT AN ERROR, which is why core/html/integer_microsyntax.h reports the two
-   apart: its own header says every bound in the platform belongs to the CONSUMER, so a run of digits too large
-   for a `long long` has not failed to parse — it has parsed to something above any ceiling here, and §4.9.12.1
-   answers that with the ceiling. Treating it as a parse failure would give `colspan="99999999999999999999"`
-   the value 1 where the section gives it 1000. */
+/* HTML §4.9.12.1 Forming a table's parse-and-clamp for one span attribute: §2.3.4.2's rules for parsing
+   non-negative integers, `fallback` when absent or unparsable, then the `ceiling`. An overflowing digit run has
+   parsed (core/html/integer_microsyntax.h leaves bounds to the consumer) and takes the ceiling:
+   `colspan="99999999999999999999"` is 1000, not 1. */
 static size_t tg_span_attr(lxb_dom_element_t *cell, const char *name, size_t fallback, size_t ceiling)
 {
     size_t len = 0;
     const lxb_char_t *v;
     HtmlInteger n;
 
-    /* HTML §4.9.11 Attributes common to td and th elements gives `colspan` and `rowspan` meaning on exactly
-       these two elements. Anything else — a `display: table-cell` element that is not one, and §17.2.1's
-       anonymous cell, which is not an element at all — spans one grid cell. */
+    /* HTML §4.9.11 Attributes common to td and th elements gives the spans meaning on `td` and `th` only;
+       anything else, including §17.2.1's anonymous cell, spans one grid cell. */
     if (!tg_html_local_name_is(cell, "td") && !tg_html_local_name_is(cell, "th")) return fallback;
     v = lxb_dom_element_get_attribute(cell, (const lxb_char_t *) name, strlen(name), &len);
     if (v == NULL) return fallback;
@@ -70,20 +62,13 @@ static size_t tg_span_attr(lxb_dom_element_t *cell, const char *name, size_t fal
     return (size_t) n.value;
 }
 
-/* §17.5's RULE 2 AND RULE 6's BOUND ARE ONE QUANTITY AND THIS IS THE ONE PLACE IT IS COMPUTED. Rule 2 — "A row
-   group occupies the same grid cells as the rows it contains" — and rule 6 — "A cell box cannot extend beyond
-   the last row box of a table or row group; the user agents must shorten it until it fits" — are both stated
-   over the RUN of grid rows a group holds, so the clamp below and the extent core/layout/table_height.h takes
-   read the same array. A run is a maximal stretch of consecutive rows reporting the same row group box, and a
-   stretch reporting NONE is one run of its own: those are the rows whose parent is the table box itself, which
-   HTML §4.9.12.1 Forming a table gathers into a row group as well.
-   THE RUNS ARE MAXIMAL AND CONSECUTIVE, WHICH MAKES ONE ROW GROUP APPEAR IN EXACTLY ONE OF THEM, and that is
-   §17.2's display order rather than an assumption this walk is entitled to make — core/layout/table_box.h
-   reports a header group's rows before every other row and a footer group's after every other row, so each
-   group's rows stay together. It is ASSERTED at the end of `table_grid_build` rather than trusted, because a
-   group split across two runs is silently wrong in both readings at once: rule 6 would shorten a `rowspan` at
-   a boundary the document does not have, and rule 2's extent would name only one of the two pieces.
-   Answers the run count and stores a newly allocated array of that many at `*out`; zero stores NULL. */
+/* Rule 2 ("A row group occupies the same grid cells as the rows it contains") and rule 6 ("A cell box cannot
+   extend beyond the last row box of a table or row group; the user agents must shorten it until it fits") over
+   one array: maximal stretches of consecutive rows with the same row group box, a NULL-group stretch (rows the
+   table box parents) being a run of its own, as HTML §4.9.12.1 Forming a table gathers them.
+   One group lands in one run because table_box.h's display order keeps each group's rows together; that is
+   asserted at the end of `table_grid_build`, since a split group would mis-clamp a `rowspan` and halve rule 2's
+   extent. Answers the run count and stores a newly allocated array at `*out`; zero stores NULL. */
 static size_t tg_group_runs(const TableBoxRow *rows, size_t nrows, TableGridRowGroup **out)
 {
     TableGridRowGroup *runs;
@@ -114,11 +99,9 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
     size_t nrows, y, anchor;
     TableGridRowGroup *groups = NULL;
     size_t ngroups, g = 0;
-    /* PER COLUMN, THE FIRST GRID ROW THAT COLUMN IS FREE AGAIN AT — the whole of §17.5's occupancy state, and
-       it is a row index rather than a bitmap for a reason the section supplies: every cell covers a CONTIGUOUS
-       run of rows starting at its own anchor row, and the rows are walked top-down, so one number per column
-       says exactly which slots a later row must skip. A column index at or past `ncols` has never been
-       occupied and needs no entry, which is why the array grows instead of being sized up front. */
+    /* Per column, the first grid row at which that column is free again: §17.5's whole occupancy state. A row
+       index suffices because every cell covers a contiguous run of rows from its anchor and rows are walked
+       top-down. Columns at or past `ncols` were never occupied, so the array grows. */
     size_t *free_at = NULL, free_cap = 0, ncols = 0;
     TableGridCell *cells = NULL;
     size_t ncells = 0, cell_cap = 0;
@@ -139,15 +122,13 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
     out->ngroups = 0;
     out->ncols = 0;
     out->any_overlap = false;
-    /* §17.5's rule 1 states the row count and this entry does not re-derive it: "Each row box occupies one row
-       of grid cells… the table occupies exactly as many grid rows as there are row elements." */
+    /* Rule 1: "Each row box occupies one row of grid cells… the table occupies exactly as many grid rows as
+       there are row elements." */
     nrows = table_box_rows(table, &rows);
     ngroups = tg_group_runs(rows, nrows, &groups);
-    /* RULE 1's OTHER HALF, WHICH IS THE PLACEMENT AND NOT THE COUNT: "Together, the row boxes fill the table
-       from top to bottom in the order they occur in the source document." `table_box_rows` answers them in
-       §17.2's display order, so the index of a row in that answer IS its grid row and this loop copies rather
-       than derives. It is a COPY and not a borrow of `rows` because `table_box_rows_free` runs below and every
-       other field of this grid outlives it. */
+    /* Rule 1's placement: "Together, the row boxes fill the table from top to bottom in the order they occur
+       in the source document." `table_box_rows` answers in display order, so its index is the grid row. Copied,
+       because `rows` is freed below while the grid outlives it. */
     if (nrows != 0) {
         row_els = (lxb_dom_element_t **) calloc(nrows, sizeof *row_els);
         CHECK(row_els != NULL,
@@ -158,10 +139,8 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
     for (y = 0; y < nrows; y++) {
         size_t x = 0, k;
 
-        /* §17.5's RULE 6 IS BOUNDED BY THE RUN, AND THE RUN IS READ RATHER THAN RE-DERIVED — one array for the
-           clamp here and for rule 2's extent core/layout/table_height.h takes. The runs partition the rows in
-           grid order and this loop walks the rows in that same order, so the current run advances at most once
-           per row and finding it IS the walk rather than a second search. */
+        /* Rule 6 is bounded by the run, read from the same array as rule 2's extent. Runs and rows are in the
+           same order, so the current run advances at most once per row. */
         while (g + 1 < ngroups && y >= groups[g].first + groups[g].nrows) g++;
         DCHECK(g < ngroups && y >= groups[g].first && y < groups[g].first + groups[g].nrows,
                "CSS 2.1 §17.5's rule 6 was applied to a grid row that no row-group run contains. The runs are "
@@ -177,24 +156,17 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
                in the first column it occupies must not overlap with any other cell box (i.e., a row-spanning
                cell starting in a prior row), and the cell must be to the right of all cells in the same row
                that are earlier in the source document." The running `x` is the second clause and this scan is
-               the first. HTML §4.9.12.1 Forming a table writes the same step over its own slot coordinates,
-               advancing the current x past every slot that already has a cell assigned to it.
-               THAT STEP IS DELIBERATELY NOT QUOTED, and the reason belongs beside it rather than in a report:
-               its variables are SUBSCRIPTED in the source, so the sentence has no faithful one-line
-               transcription — the text content separates the subscript as its own token while the rendering
-               joins it, and engine/citegen.mjs's committed corpus holds the first. A quotation that matches
-               neither form is worse than a paraphrase that claims to be one, so this is a paraphrase and the
-               normative words above are CSS 2.1's, which have no subscripts in them. */
+               the first. HTML §4.9.12.1 Forming a table's step advancing the current x past assigned slots is
+               paraphrased, not quoted: its subscripted variables have no faithful one-line transcription in
+               engine/citegen.mjs's corpus. */
             while (x < ncols && free_at[x] > y) x++;
             colspan = tg_span_attr(el, "colspan", 1, TG_COLSPAN_MAX);
             /* §4.9.12.1: "If parsing that value failed, or returned zero, or if the attribute is absent, then
-               let colspan be 1, instead." A parsed ZERO is the one case the fallback above cannot express,
-               because zero is a successful parse of a valid non-negative integer. */
+               let colspan be 1, instead." Zero is a successful parse, so the fallback above cannot express it. */
             if (colspan == 0) colspan = 1;
             rowspan = tg_span_attr(el, "rowspan", 1, TG_ROWSPAN_MAX);
             /* §4.9.11: "the value zero means that the cell is to span all the remaining rows in the row
-               group", which §17.5's rule 6 then bounds — so the two sentences meet in the same clamp below and
-               a zero needs no arm of its own beyond asking for everything. */
+               group"; rule 6's clamp below bounds it, so zero just asks for everything. */
             grows_downward = (rowspan == 0);
             remaining = groups[g].first + groups[g].nrows - y;
             if (grows_downward || rowspan > remaining) rowspan = remaining;
@@ -207,9 +179,8 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
                 for (c = ncols; c < want; c++) free_at[c] = 0;
                 ncols = want;
             }
-            /* §17.5's rule 5's undefined case, detected rather than assumed away: the anchor slot is free by
-               the scan above, so any collision is a COLUMN-spanning reach into a row-spanning cell — which is
-               the exact case the section declines to define. */
+            /* Rule 5's undefined case, detected: the anchor slot is free, so a collision is a column-spanning
+               reach into a row-spanning cell. */
             for (c = x; c < x + colspan; c++)
                 if (free_at[c] > y) overlaps = true;
             any_overlap = any_overlap || overlaps;
@@ -247,8 +218,7 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
                "row of this rectangle is in the row specified by the cell's parent\", and every cell here was "
                "reached by descending a row of this same walk, so a row index past the row array is the two "
                "halves of one loop having been carried apart");
-    /* THE PARTITION, ASSERTED — the property `table_grid_group_of_row` is an entry rather than a scan for, and
-       the property every consumer of a run relies on without being able to see it. */
+    /* The partition, asserted: `table_grid_group_of_row` and every consumer of a run rely on it. */
     for (g = 0; g < ngroups; g++) {
         DCHECK(groups[g].nrows >= 1,
                "CSS 2.1 §17.5's rule 2 produced a row-group run covering NO grid row. The runs are maximal "
@@ -266,12 +236,9 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
            "CSS 2.1 §17.5's rule 2's runs do not cover every grid row rule 1 placed. The last run must end at "
            "the row count, and a table with no rows must have no runs — otherwise a row belongs to no row "
            "group box and rule 6 has nothing to shorten a cell anchored in it against");
-    /* §17.2's DISPLAY ORDER PUTS EACH GROUP'S ROWS TOGETHER, AND THAT IS CHECKED RATHER THAN TRUSTED. A group
-       appearing in two runs is wrong in both readings at once and silently in each: rule 6 would shorten a
-       `rowspan` at a boundary that is not there, and rule 2's extent would name one piece of the group and
-       report it as the whole. The NULL-element runs are exempt because they name no box — two separated
-       stretches of table-box-parented rows are two implicit groups, which is what HTML §4.9.12.1 Forming a
-       table gathers them into. */
+    /* §17.2's display order keeps each group's rows together, checked here: a group in two runs would mis-clamp
+       a `rowspan` and report one piece as rule 2's whole extent. NULL-element runs are exempt: two separated
+       stretches of table-parented rows are two implicit groups (HTML §4.9.12.1 Forming a table). */
     for (g = 0; g < ngroups; g++) {
         size_t h;
 
@@ -287,12 +254,9 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
     }
 }
 
-/* THE ONE-MATCH INVARIANT IS THE POINT OF THE SCAN AND NOT A SIDE EFFECT OF IT. CSS 2.1 §17.5 Visual layout of
-   table contents places each cell box ONCE — "Each cell is thus a rectangular box, one or more grid cells wide
-   and high", one rectangle per cell — so an element appearing twice in `cells` is the placement above having
-   run over the same row or the same cell node twice, and the two entries would disagree about which columns
-   the cell covers. A consumer taking the first hit would then get a width for one of the two placements with
-   nothing to say the other exists, so the loop runs to the END rather than returning early. */
+/* The scan asserts one match and so runs to the end: §17.5 places each cell box once ("Each cell is thus a
+   rectangular box, one or more grid cells wide and high"), and a second entry would disagree about its columns
+   while a first-hit answer hid it. */
 const TableGridCell *table_grid_cell_of(const TableGrid *grid, const lxb_dom_element_t *cell)
 {
     const TableGridCell *found = NULL;
@@ -320,11 +284,7 @@ const TableGridCell *table_grid_cell_of(const TableGrid *grid, const lxb_dom_ele
     return found;
 }
 
-/* THE ONE-MATCH INVARIANT IS THE SAME INVARIANT ONE AXIS OVER, AND IT IS RULE 1's OWN SENTENCE RATHER THAN AN
-   ANALOGY. "Each row box occupies one row of grid cells" — one grid row per row box — so an element occupying
-   two of them is `table_box_rows` having reported one row twice, and a consumer taking the first hit would read
-   one of the two heights with nothing to say the other exists. The loop therefore runs to the END, exactly as
-   the cell entry's does. */
+/* The same one-match invariant for rows, from rule 1: "Each row box occupies one row of grid cells". */
 bool table_grid_row_of(const TableGrid *grid, const lxb_dom_element_t *row, size_t *out)
 {
     bool found = false;
@@ -357,10 +317,8 @@ bool table_grid_row_of(const TableGrid *grid, const lxb_dom_element_t *row, size
     return found;
 }
 
-/* See table_grid.h for why NULL has exactly ONE cause here and why `group` is not `const`. The one-match loop
-   is rule 2's own sentence read the same way rule 1's is read one entry up: a group occupies ONE run, so a
-   second hit is the runs having been built over an interleaved row order, and a consumer taking the first hit
-   would size a group box out of one piece of itself. */
+/* See table_grid.h for the single cause of NULL and why `group` is not `const`. One match, per rule 2: a group
+   occupies one run, and a first-hit answer would size the box from one piece. */
 const TableGridRowGroup *table_grid_row_group_of(const TableGrid *grid, lxb_dom_element_t *group)
 {
     const TableGridRowGroup *found = NULL;
@@ -396,8 +354,8 @@ const TableGridRowGroup *table_grid_row_group_of(const TableGrid *grid, lxb_dom_
     return found;
 }
 
-/* See table_grid.h for why an EMPTY row group box has to be answered by re-running §17.2's box generation and
-   why the LINE is a fact while the DISTANCE is a choice made at the placement. */
+/* See table_grid.h for why an empty row group is answered by re-running §17.2's box generation and why the line
+   is a fact while the distance is chosen at placement. */
 size_t table_grid_empty_row_group_line(const TableGrid *grid, lxb_dom_element_t *group)
 {
     TableBoxRowGroup *groups = NULL;
@@ -452,9 +410,8 @@ size_t table_grid_empty_row_group_line(const TableGrid *grid, lxb_dom_element_t 
     return line;
 }
 
-/* See table_grid.h. The partition is asserted where it is built, so this is a walk to the run that contains
-   `row` and never a search that can fail — the abort below is a caller asking about a row this table does not
-   have, which is a different mistake and not this component's to absorb. */
+/* See table_grid.h. The partition is asserted where built, so this walk cannot fail for `row < nrows`; a
+   larger `row` is the caller's error. */
 const TableGridRowGroup *table_grid_group_of_row(const TableGrid *grid, size_t row)
 {
     size_t i;

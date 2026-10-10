@@ -1,6 +1,5 @@
 /* CSS 2.1 §17.5.3 Table height algorithms, over core/layout/table_grid.h's grid and core/layout/table_box.h's
-   rows. See table_height.h for the contract, for which box each number is measured in, for the reduction of
-   §17.5.3's alignment procedure to MIN, and for every place the section's own declines are taken as choices. */
+   rows. See table_height.h. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -31,45 +30,29 @@ static char *th_computed(lxb_dom_element_t *el, const char *name)
     return v;
 }
 
-/* ---- §17.6 Borders' TWO MODELS, asked once, at the entry ---------------------------------------------------
-   §17.6's `border-collapse` selects between §17.6.1 The separated borders model and §17.6.2 The collapsing
-   border model, and this is the VERTICAL twin of core/layout/table_width.c's split rather than a second copy
-   of it: that one is about the terms of a WIDTH — the horizontal spacing and the table's own left and right
-   edges — and this one is about the terms of a HEIGHT, which §17.6.2 changes independently. A caller reaching
-   §17.5.3 without having gone through §17.5.2 (a table whose height is asked for and whose width is not) meets
-   its own arm here rather than none.
-   §17.5.3's SUM IS "the row heights plus any cell spacing or borders", and the cell spacing is §17.6.1's
-   VERTICAL `border-spacing`, which §17.6.2 gives no meaning to at all — "Borders are centered on the grid
-   lines between the cells" and the cells meet, so what stands between two rows there is the resolved border
-   and not a spacing. The ROW HEIGHTS need no arm at this level: they are maxima over CELL BOXES, and
-   `th_cell_vertical_edges_pair` below answers a cell's vertical edges under either model. */
+/* ---- §17.6 Borders' two models, asked once at the entry ---------------------------------------------------
+   The vertical twin of core/layout/table_width.c's split, asked here too so a table whose height is asked
+   without its width still meets it. The cell spacing in "the row heights plus any cell spacing or borders" is
+   §17.6.1's vertical `border-spacing`, which §17.6.2 gives no meaning ("Borders are centered on the grid lines
+   between the cells"). Row heights need no arm: `th_cell_vertical_edges_pair` answers either model. */
 static CssPx th_used_spacing(CssPx vertical, bool collapsing)
 {
     return collapsing ? css_px(0.0) : vertical;
 }
 
-/* ---- §17.6.1's CELL SPACING, ON THE BLOCK AXIS -------------------------------------------------------------
-   The vertical twin of core/layout/table_width.c's `tw_spacing_total`, over the same two §17.6.1 sentences:
-   BETWEEN rows it is the property itself, and at the TWO EDGES of the table it is stated separately — "The
-   distance between the table border and the borders of the cells on the edge of the table is the table's
-   padding for that side, plus the relevant border spacing distance", which is written "for that side" and
-   therefore covers the top and the bottom exactly as it covers the left and the right. So the spacing appears
-   `nrows + 1` times, and the table's own padding is NOT part of it (§17.6.1's next sentence excludes padding
-   and border from the table's own extent by name).
-   A TABLE WITH NO ROWS HAS NO SUCH DISTANCE AT ALL, which is a derivation from those sentences rather than a
-   floor chosen here: both are stated over the borders of CELLS, and a table with no rows has none. */
+/* ---- §17.6.1's cell spacing on the block axis -------------------------------------------------------------
+   The twin of `tw_spacing_total`: between rows the property, and at the top and bottom "the table's padding for
+   that side, plus the relevant border spacing distance", so `nrows + 1` times, padding excluded. A table with
+   no rows has no cell borders to separate, so zero. */
 static CssPx th_spacing_total(CssPx spacing, size_t nrows)
 {
     if (nrows == 0) return css_px(0.0);
     return css_px_scale(spacing, (double) (nrows + 1));
 }
 
-/* ---- ONE CELL'S VERTICAL PADDING AND BORDER --------------------------------------------------------------
-   See table_height.h for why this lives beside §17.5.3 rather than beside its horizontal twin, and for CSS 2.1
-   §8.4's own undefined case that makes a percentage a crash rather than a lookup. The two sides are reported
-   separately to the callers inside this file because §17.5.3's cell BASELINE needs the top alone — "if there
-   is no such line box or table-row, the baseline is the bottom of content edge of the cell box" is the box
-   height less the BOTTOM pair — while the box height needs the total. */
+/* ---- One cell's vertical padding and border --------------------------------------------------------------
+   See table_height.h. The sides are reported separately because §17.5.3's cell baseline needs them apart ("the
+   baseline is the bottom of content edge of the cell box" is the box height less the bottom pair). */
 static void th_cell_vertical_edges_pair(lxb_dom_element_t *cell, CssPx *top, CssPx *bottom)
 {
     static const char *const PADDINGS[2] = { "padding-top", "padding-bottom" };
@@ -81,18 +64,15 @@ static void th_cell_vertical_edges_pair(lxb_dom_element_t *cell, CssPx *top, Css
     char nbuf[160];
     int i;
 
-    /* §17.5.3's row height is a maximum over CELL BOXES, and a cell box is its border box — so the claim that
-       nothing else stands between a cell and its row rests on the vertical margins not applying to it. It is
-       ASKED of the component that owns CSS 2.1 §8.3 "Margin properties"' Applies-to line rather than restated,
-       and a day the two disagree is a day this walk stops rather than under-reporting every row by two
-       margins. */
+    /* A cell box is its border box only because vertical margins do not apply to it (CSS 2.1 §8.3 "Margin
+       properties"), asked of the component that owns that line. */
     DCHECK(!css_property_applies(cell, "margin-top") && !css_property_applies(cell, "margin-bottom"),
            "CSS 2.1 §17.5.3 Table height algorithms took a cell box to be its BORDER box, and CSS 2.1 §8.3 "
            "\"Margin properties\"' Applies-to line now says the vertical margins DO apply to this box — so a "
            "cell's contribution to its row has a term this walk is not adding, and §17.5's own \"the edges "
            "coincide with the border edges of cells\" no longer places the row where this component puts it");
-    /* §17.6's `border-collapse` is `Inherited: yes` and its Applies-to line is "'table' and 'inline-table'
-       elements", so the model is a fact about the TABLE and one ask covers both of this cell's sides. */
+    /* `border-collapse` applies to "'table' and 'inline-table' elements", so the table's model covers both
+       sides. */
     table = table_box_table_of(cell);
     collapsing = table_border_collapse_selected(table);
     charge.top = css_px(0.0);
@@ -119,9 +99,7 @@ static void th_cell_vertical_edges_pair(lxb_dom_element_t *cell, CssPx *top, Css
                    "value:` line is \"the percentage as specified or the absolute length\"",
                    box_subject(cell, nbuf, sizeof nbuf), PADDINGS[i]);
         if (collapsing) {
-            /* §17.6.2 replaces this cell's OWN border with half the resolution at the grid line it abuts —
-               top first, then bottom, which is the order `TableCollapsedEdges` states its four sides in and
-               the order this loop runs in. */
+            /* §17.6.2 replaces the cell's own border with half the grid-line resolution: top, then bottom. */
             side[i] = css_px_add(pad.px, i == 0 ? charge.top : charge.bottom);
         } else {
             bor = css_computed_length(cell, BORDERS[i]);
@@ -151,20 +129,13 @@ CssPx table_cell_vertical_edges(lxb_dom_element_t *cell)
     return css_px_add(top, bottom);
 }
 
-/* ---- §17.5.3's CELL BOX HEIGHT ------------------------------------------------------------------------------
-   "In CSS 2.1, the height of a cell box is the minimum height required by the content" — which is CSS 2.1
-   §10.6.3's content-based height for a block container, over the cell's USED WIDTH, converted to the BORDER box
-   the row is measured in. The used width is not read here and is not an argument either: core/layout/
-   block_flow.h's walk resolves each descendant's containing block through §10.1, whose second case lands on
-   this cell, and core/layout/used_value.c answers a CELL's own width out of §17.5.2's column widths — so the
-   operand arrives through the ordinary chain and nothing in this file composes it.
-   §17.5.3's NEXT SENTENCE IS WHY THE DECLARED `height` IS NOT READ HERE: "The table cell's 'height' property
-   can influence the height of the row (see above), but it does not increase the height of the cell box." So a
-   declared cell height is a TERM OF THE ROW'S MAXIMUM and never this number, and reading it here would count it
-   twice.
-   §10.7's CLAMP IS NOT APPLIED, and that is §10.7's own sentence rather than an omission: "In CSS 2.1, the
-   effect of 'min-height' and 'max-height' on tables, inline tables, table cells, table rows, and row groups is
-   undefined." Running the clamp would be this engine deciding a case the standard declines to. */
+/* ---- §17.5.3's cell box height ------------------------------------------------------------------------------
+   "In CSS 2.1, the height of a cell box is the minimum height required by the content": CSS 2.1 §10.6.3's
+   content height over the cell's used width, plus its vertical edges. The width arrives through
+   core/layout/block_flow.h's §10.1 resolution, which core/layout/used_value.c answers for a cell from §17.5.2.
+   The declared `height` is not read: "it does not increase the height of the cell box", so it is a term of
+   the row's maximum only. §10.7's clamp is not applied ("the effect of 'min-height' and 'max-height' on …
+   table cells … is undefined"). */
 static CssPx th_cell_box_height(lxb_dom_element_t *cell)
 {
     ReplacedElement rep = replaced_element_of(cell);
@@ -185,14 +156,11 @@ static CssPx th_cell_box_height(lxb_dom_element_t *cell)
     return css_px_add(block_flow_auto_height(cell), table_cell_vertical_edges(cell));
 }
 
-/* ---- §17.5.3's FOUR CELL ALIGNMENTS -------------------------------------------------------------------------
-   The section's own list — "In the context of tables, values for 'vertical-align' have the following meanings:
-   baseline / top / bottom / middle", with a closed catch-all beneath it, "sub, super, text-top, text-bottom,
-   <length>, <percentage> … These values do not apply to cells; the cell is aligned at the baseline instead."
-   READ THROUGH css-inline-3's LONGHANDS BECAUSE THAT IS WHAT THIS CASCADE HOLDS. See table_height.h for the
-   whole argument and for §4.2's own mapping note; the order below is that note's order — `baseline-shift`'s
-   `top` and `bottom` first, then `alignment-baseline`'s `middle` — and everything else is §17.5.3's catch-all
-   arm, which is why there is no `else` deciding anything. */
+/* ---- §17.5.3's four cell alignments -------------------------------------------------------------------------
+   "In the context of tables, values for 'vertical-align' have the following meanings: baseline / top / bottom
+   / middle", with "sub, super, text-top, text-bottom, <length>, <percentage> … These values do not apply to
+   cells; the cell is aligned at the baseline instead." Read through css-inline-3's longhands in §4.2's mapping
+   order (see table_height.h); everything else is the baseline catch-all. */
 typedef enum {
     TH_ALIGN_BASELINE = 0,
     TH_ALIGN_TOP,
@@ -214,14 +182,12 @@ static ThAlign th_cell_align(lxb_dom_element_t *cell)
     return middle ? TH_ALIGN_MIDDLE : TH_ALIGN_BASELINE;
 }
 
-/* §17.5.3's CELL BASELINE: "The baseline of a cell is the baseline of the first in-flow line box in the cell,
+/* §17.5.3's cell baseline: "The baseline of a cell is the baseline of the first in-flow line box in the cell,
    or the first in-flow table-row in the cell, whichever comes first. If there is no such line box or
-   table-row, the baseline is the bottom of content edge of the cell box." Measured from the cell box's own TOP
-   BORDER EDGE, because that is the frame the row's own "maximum distance between the top of the cell box and
-   the baseline" is stated in.
-   THE SECOND ARM IS core/layout/block_flow.c's CRASH AND NOT AN ABSENCE HERE: a nested table reached before any
-   line box aborts inside that walk naming §17.5.3, at the one point that knows which came first. So a `true`
-   from the entry below is the FIRST arm and a `false` is the THIRD, with no third possibility left to test. */
+   table-row, the baseline is the bottom of content edge of the cell box." Measured from the cell box's top
+   border edge, the frame of the row's "maximum distance between the top of the cell box and the baseline".
+   A nested table reached first crashes inside core/layout/block_flow.c, so `true` is the first arm and `false`
+   the third. */
 static CssPx th_cell_baseline(lxb_dom_element_t *cell, CssPx box_height)
 {
     CssPx top, bottom, inner = css_px(0.0);
@@ -232,11 +198,8 @@ static CssPx th_cell_baseline(lxb_dom_element_t *cell, CssPx box_height)
 }
 
 /* ---- §17.5.3's MIN ------------------------------------------------------------------------------------------
-   The four-step alignment procedure reduced to two maxima — see table_height.h for the derivation, for why
-   `max(H)` alone is a FLOOR and not the answer, and for the proof that a row with at most one baseline-aligned
-   cell needs no baseline measured at all.
-   `cells` are the cell boxes ANCHORED in this row whose rectangle is one row high; a row-SPANNING cell is
-   §17.5.3's own declined case and is handled by the constraint pass at the entry, not here. */
+   The alignment procedure as two maxima; see table_height.h. `cells` are those anchored in this row and one row
+   high; row-spanning cells go through the constraint pass in `table_heights`. */
 typedef struct {
     lxb_dom_element_t *element;
     CssPx              height;
@@ -252,10 +215,8 @@ static CssPx th_row_min(const ThRowCell *cells, size_t n)
         tallest = css_px_max(tallest, cells[i].height);
         if (cells[i].align == TH_ALIGN_BASELINE) nbaseline++;
     }
-    /* THE EXACT ARM, TAKEN WITHOUT MEASURING A BASELINE. With no baseline cell the procedure's first two steps
-       contribute nothing and every remaining step is a maximum of cell box heights; with exactly one, that
-       cell's own `A + (H - A)` is its `H`, which the same maximum already holds. Either way MIN is `max(H)` by
-       the procedure itself — so this is §17.5.3 running, not a case it is being spared. */
+    /* With at most one baseline cell, MIN is `max(H)` by the procedure itself (one cell's `A + (H - A)` is
+       its `H`), so no baseline is measured. */
     if (nbaseline <= 1) return tallest;
     for (i = 0; i < n; i++) {
         CssPx a;
@@ -278,20 +239,13 @@ static CssPx th_row_min(const ThRowCell *cells, size_t n)
     return css_px_max(css_px_add(above, below), tallest);
 }
 
-/* ---- §17.5.3's THREE TERMS ---------------------------------------------------------------------------------
+/* ---- §17.5.3's three terms ---------------------------------------------------------------------------------
    "the maximum of the row's computed 'height', the computed 'height' of each cell in the row, and the minimum
-   height (MIN) required by the cells" — this reads ONE of the first two terms off ONE element.
-   `auto` CONTRIBUTES NOTHING, which is §17.5.3's own next sentence for a row ("A 'height' value of 'auto' for a
-   'table-row' means the row height used for layout is MIN") and is the only reading that leaves MIN in charge.
-   A PERCENTAGE CONTRIBUTES NOTHING EITHER, AND THAT IS A RECORDED CHOICE RATHER THAN A DERIVATION: §17.5.3 says
-   "CSS 2.1 does not define how the height of table cells and table rows is calculated when their height is
-   specified using percentage values", so no reading is unconforming and this one is chosen because it is the
-   `auto` arm the same element would have taken with no declaration — the alternative, resolving it against the
-   table's own height, is a cycle, since that height is the sum this term is an input to.
-   THE ELEMENT MAY BE ABSENT and that is not a missing lookup: §17.2.1 Anonymous table objects generates rows
-   and cells that no element names, and CSS 2 §9.2.1.1 Anonymous block boxes gives such a box the INITIAL value
-   of every non-inherited property — `height: auto` — so an anonymous row or cell contributes nothing here by
-   the same arm a declared `auto` takes. */
+   height (MIN) required by the cells": one of the first two terms, off one element.
+   `auto` contributes nothing ("the row height used for layout is MIN"). A percentage contributes nothing too, a
+   recorded choice ("CSS 2.1 does not define how the height of table cells and table rows is calculated when
+   their height is specified using percentage values"): it is `auto`'s arm, and resolving against the table's
+   height would be a cycle. An anonymous row or cell (no element) has the initial `height: auto`. */
 static CssPx th_declared_term(lxb_dom_element_t *el)
 {
     CssLength h;
@@ -302,48 +256,23 @@ static CssPx th_declared_term(lxb_dom_element_t *el)
     return css_px(0.0);
 }
 
-/* ---- THE TABLE'S OWN DECLARED HEIGHT, WHICH §17.5.3 MAKES A MINIMUM ---------------------------------------
-   "Any other value is treated as a minimum height." The `auto` question is asked as css-sizing-3 §3.2.1's
-   BEHAVES AS AUTO rather than as a computed `auto`, for core/layout/used_value.h's reason: a percentage height
-   whose containing block's height is indefinite behaves as auto, and §3.2.1's note says legacy CSS2 conditions
-   phrased over a computed `auto` "should be interpreted as meaning behaves as auto".
-   A PERCENTAGE THAT RESOLVES IS READ, AND THE BASIS IS §10.1's RECTANGLE ON THE BLOCK AXIS. CSS 2.1 §10.5
-   "Content height: the 'height' property" resolves it against the containing block's HEIGHT — "The
-   percentage is calculated with respect to the height of the generated box's containing block" — and
-   CSS 2.1 §17.4 Tables in the visual formatting model says outright which rectangle that is for a table:
-   "Percentages on 'width' and 'height' on the table are relative to the table wrapper box's containing
-   block, not the table wrapper box itself." — so it is the table element's ordinary ancestor box, which
-   §10.1's walk already answers, and NOT the wrapper. Both of that rectangle's extents are exported and this
-   function reads the block-axis one.
-   THIS PARAGRAPH USED TO SAY THE CASE CRASHED FOR WANT OF THAT EXPORT, and it is rewritten rather than
-   deleted because the reasoning under it is what settles the SHAPE of the read: the predicate on the line
-   above has already established the basis is DEFINITE, since a percentage over an indefinite one behaves as
-   auto and returns first. THE TWO DERIVATIONS ARE COMPLEMENTARY BY CONSTRUCTION AND NOT BY AGREEMENT, which
-   is why the assert below is a two-sided check and not a guard: on §10.1's SECOND case the definiteness
-   entry's own last gate IS this predicate asked of the containing block, and on every other case the two
-   read one tag — the initial containing block and the viewport are definite and never behave as auto, and
-   §17.4's wrapper is the reverse of both. A table box reaches none of the arms where they could differ.
-   THE BASIS CANNOT RE-ENTER §17.5.3 THROUGH ITS OWN TABLE, which is the recursion the crash that stood here
-   warned its reader away from: it is §10.1's walk, which starts at the table's PARENT, so nothing on it asks
-   this table for a height. `used_value_px(table, "height")` would — it dispatches a table box to the §17.5.3
-   route that runs `table_heights`, which runs this function — and that remains the call not to reach for.
-   AN EARLIER FORM OF THIS PARAGRAPH SAID THE WRAPPER WAS ANONYMOUS AND THAT READING THE ANCESTOR WOULD BE A
-   RECTANGLE ONE LEVEL TOO FAR OUT. Both halves were wrong, and the second was SPEC-WRONG in the direction that
-   gets executed: §17.4 calls the wrapper the table's PRINCIPAL block box, generated by the table element, and
-   the sentence quoted above sends this very percentage to the ancestor the old text ruled out.
-   CSS 2 §9.2.1.1 "Anonymous block boxes" reaches the same ancestor even had the wrapper been anonymous —
-   "Anonymous block boxes are ignored when resolving percentage values that would refer to it: the closest
-   non-anonymous ancestor box is used instead" — so the rectangle is the same under either reading, and
-   that quotation is kept here rather than deleted with the crash that used to carry it. */
+/* ---- The table's own declared height, which §17.5.3 makes a minimum ---------------------------------------
+   "Any other value is treated as a minimum height." `auto` is css-sizing-3 §3.2.1's behaves-as-auto, per its
+   note that CSS2 conditions on a computed `auto` "should be interpreted as meaning behaves as auto".
+   A resolving percentage uses CSS 2.1 §10.5 "Content height: the 'height' property" ("calculated with respect
+   to the height of the generated box's containing block"), and §17.4: "Percentages on 'width' and 'height' on
+   the table are relative to the table wrapper box's containing block, not the table wrapper box itself." That
+   is §10.1's walk from the table's parent, which never asks this table for a height; `used_value_px(table,
+   "height")` would recurse into `table_heights` and must not be used. (CSS 2 §9.2.1.1 "Anonymous block boxes"
+   reaches the same ancestor: "the closest non-anonymous ancestor box is used instead".)
+   The behaves-as-auto test above and the definiteness of that basis are complementary by construction (on
+   §10.1's second case the definiteness gate is that predicate; elsewhere one tag decides both), so the assert
+   below is a two-sided check. */
 static bool th_declared_minimum(lxb_dom_element_t *table, CssPx *out)
 {
     CssLength h;
-    /* WRITTEN THROUGH A VARIABLE THAT IS ALREADY A NUMBER, for `uv_abs_solve`'s reason at its own definite-
-       basis assert: the assert below cannot fire, and a state that cannot arise is still a state the release
-       build has to leave somewhere defined. A ZERO basis makes the percentage resolve to zero, and §17.5.3
-       reads a zero minimum and an `auto` height the same way — "the height is the sum of the row heights
-       plus any cell spacing or borders" is never less than zero — so the release arm is §17.5.3's own
-       `auto` arm rather than a number from somewhere else. */
+    /* Initialised so the release arm under the assert is defined: a zero basis resolves to zero, which
+       §17.5.3 reads like `auto` (the row sum is never negative). */
     CssPx basis = css_px(0.0);
     bool definite;
     char nbuf[160];
@@ -369,11 +298,9 @@ static bool th_declared_minimum(lxb_dom_element_t *table, CssPx *out)
             "`uv_cb` TOOK before reading either predicate: a tag the two classify differently is the "
             "finding, and a second test beside them here would only hide which one moved",
             box_subject(table, nbuf, sizeof nbuf));
-    /* §10.5's resolution, then css-values-4 §9.1 "Numeric Functions"' clamp in that order, exactly as every
-       other percentage arm in core/layout/used_value.c takes them: CSS 2.1 §10.5 states the range in words
-       ("Negative values for 'height' are illegal") and css-values-4 §5.1 "Range Restrictions and Range
-       Definition Notation" makes a negative LITERAL a dropped declaration, so a negative reaching here is a
-       math function's top-level result, which §9.1 clamps at used value time instead of refusing. */
+    /* §10.5's resolution, then css-values-4 §9.1 "Numeric Functions"' clamp, as used_value.c's percentage arms
+       do: "Negative values for 'height' are illegal", a negative literal is dropped (css-values-4 §5.1 "Range
+       Restrictions and Range Definition Notation"), so a negative here is a math function's result. */
     *out = css_px_max(css_length_resolve_pct(h, basis), css_px(0.0));
     return true;
 }
@@ -413,15 +340,12 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
                "to the table box above this one (core/layout/table_box.h's `table_box_table_of`) and ask it "
                "for the rows the caller wants",
                box_subject(table, nbuf, sizeof nbuf));
-    /* §17.6's MODEL, ASKED ONCE FOR THE WHOLE ALGORITHM — a fact about the TABLE (`border-collapse` is
-       `Inherited: yes`, Applies-to "'table' and 'inline-table' elements"), so the spacing term below takes its
-       arm from this one read and every cell's own edges take theirs from the same ask inside
+    /* §17.6's model, asked once for the spacing; each cell's edges ask the same table in
        `th_cell_vertical_edges_pair`. */
     collapsing = table_border_collapse_selected(table);
-    /* §17.6.1's `Computed value: two absolute lengths` — core/css/css_computed_value.h answers the pair whole
-       because neither the text entry nor the single-length one can carry it. Only the VERTICAL half is a term
-       of a height; the horizontal half is CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout'
-       property's. */
+    /* §17.6.1's `Computed value: two absolute lengths`, answered whole by core/css/css_computed_value.h. Only
+       the vertical half is a height term; the horizontal half is CSS 2.1 §17.5.2 Table width algorithms: the
+       'table-layout' property's. */
     spacing = css_computed_border_spacing(table);
     DCHECK(spacing.vertical.px >= 0.0,
            "CSS 2.1 §17.6.1 The separated borders model states \"Lengths may not be negative\" of "
@@ -445,11 +369,8 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
         CssPx term = th_declared_term(rows[r].element);
         size_t n = 0;
 
-        /* §17.5.3's SECOND AND THIRD TERMS are over "each cell in the row", and the cells this row OWNS are the
-           ones ANCHORED in it — `TableGridCell.row` is "the grid row it is anchored at", which §17.5 fixes as
-           "the row specified by the cell's parent". A cell anchored ABOVE and reaching down into this row is
-           §17.5.3's declined spanning case and contributes through the constraint pass below instead, which is
-           the only thing the section requires of it. */
+        /* "each cell in the row" means the cells anchored here (`TableGridCell.row`, "the row specified by the
+           cell's parent") and one row high; a cell reaching down from above goes through the constraint pass. */
         for (i = 0; i < grid->ncells; i++) {
             const TableGridCell *c = &grid->cells[i];
 
@@ -457,10 +378,8 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
             DCHECK(n < grid->ncells, "more cells were collected for one row than the grid holds");
             bucket[n].element = c->element;
             bucket[n].height = c->element == NULL ? css_px(0.0) : th_cell_box_height(c->element);
-            /* §17.2.1's ANONYMOUS cell box has no element to declare anything, so CSS 2 §9.2.1.1's "non-
-               inherited properties have their initial value" gives it `vertical-align: baseline` — the initial
-               value css-inline-3 §4.2 states — and a zero-height empty box. Both are read as the constants
-               they are rather than through a cascade that has no element to run over. */
+            /* An anonymous cell has initial values (CSS 2 §9.2.1.1): `vertical-align: baseline` (css-inline-3
+               §4.2's initial value) and an empty, zero-height box. */
             bucket[n].align = c->element == NULL ? TH_ALIGN_BASELINE : th_cell_align(c->element);
             if (c->element != NULL) term = css_px_max(term, th_declared_term(c->element));
             n++;
@@ -473,18 +392,13 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
                "sign, and the rectangle it would put through CSSOM VIEW is one no reader can tell from a "
                "measured one");
     }
-    /* ---- §17.5.3's SPANNING CONSTRAINT, WHICH IS THE ONE THING THE SECTION REQUIRES OF A ROW-SPANNING CELL --
-       "CSS 2.1 does not specify how cells that span more than one row affect row height calculations EXCEPT
+    /* ---- §17.5.3's spanning constraint --------------------------------------------------------------------------
+       "CSS 2.1 does not specify how cells that span more than one row affect row height calculations except
        that the sum of the row heights involved must be great enough to encompass the cell spanning the rows."
-       So this is a floor to SATISFY and not a distribution to invent, and the freedom the sentence leaves —
-       WHICH of the spanned rows grows — is the recorded choice: the whole deficit goes to the LAST row the cell
-       covers. Growing the last row keeps every row above the cell where the rows without a spanning cell put
-       it, so a document whose only spanning cell is in its final column does not move its own earlier rows.
-       THE PASS IS ONE SWEEP IN GRID ORDER AND THAT IS SOUND rather than lucky: each step only INCREASES a row,
-       and each cell's available height is re-read from the array, so a later cell sees every earlier
-       widening — and the boundary assert below re-checks every cell against the final heights.
-       THE CELL'S OWN DECLARED `height` IS FOLDED INTO WHAT MUST BE ENCOMPASSED, because §17.5.3's row maximum
-       could not take it: that maximum is over "each cell in the row" and a spanning cell is in several. */
+       A floor to satisfy; the recorded choice puts the whole deficit on the last spanned row, so rows above
+       stay where unspanned rows put them. One sweep in grid order suffices: steps only increase rows and each
+       re-reads the array, and the boundary assert re-checks every cell. A spanning cell's declared `height` is
+       folded in here because the row maximum is over cells in one row. */
     for (i = 0; i < grid->ncells; i++) {
         const TableGridCell *c = &grid->cells[i];
         CssPx need, have;
@@ -498,12 +412,8 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
                "rule shortens a `rowspan` that would overflow it: \"A cell box cannot extend beyond the last "
                "row box of a table or row group; the user agents must shorten it until it fits.\" So a cell "
                "past the end is that shortening having been lost between the placement and this read");
-        /* RULE 6's OTHER HALF, WHICH THIS ASSERT USED TO SAY IT COULD NOT MAKE. The sentence binds a cell to
-           its ROW GROUP as well as to the table, and core/layout/table_grid.h now reports the run of grid rows
-           each group holds — so a `rowspan` reaching out of its `<tbody>` and into the next one is caught here
-           instead of passing as a cell that is merely inside the table. The lookup is inside the DEV guard and
-           not inside the DCHECK's own condition because it is a walk with an abort in it, and a condition this
-           file states must be one a release build can drop whole. */
+        /* Rule 6 binds a cell to its row group too, checked against core/layout/table_grid.h's runs. The lookup is
+           under the dev guard, not in the DCHECK condition, because it is a walk with an abort in it. */
 #if APICLIENT_DEV
         {
             const TableGridRowGroup *run = table_grid_group_of_row(grid, c->row);
@@ -528,21 +438,12 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
     }
     sum = th_spacing_total(used_spacing, nrows);
     for (r = 0; r < nrows; r++) sum = css_px_add(sum, out->rows[r]);
-    /* ---- §17.5's LAST PARAGRAPH OVER THE ROW GROUPS, ASSERTED AGAINST THE SUM ABOVE -------------------------
-       The two readings of one gap, checked against each other. The paragraph names the gaps "between the rows,
-       columns, row groups or column groups" as one set corresponding to `border-spacing`, so the distance
-       between the last row of one group and the first row of the next is ONE spacing described twice — and
-       §17.5.3's sum has no term for a row group at all, which is only consistent if that is so. Every run's
-       extent plus the gaps BETWEEN the runs plus the one at each end must therefore be the same number this
-       algorithm answers the table with. THE FAILURE THIS CATCHES IS THE ONE A READER WOULD MAKE: charging a
-       second spacing between two groups, which no document can distinguish from a taller table and which
-       `table_row_group_used_extent` would then carry into every row group's rectangle.
-       IT IS UNDER `nrows != 0` BECAUSE §17.6.1's DISTANCE IS STATED OVER THE BORDERS OF CELLS: a table with no
-       rows has no such distance and no runs either, so both sides are zero and the `ngroups + 1` count below
-       would invent one spacing out of neither.
-       THE WHOLE BLOCK IS UNDER THE DEV GUARD and not only its DCHECK, because the sum it compares against is
-       computed here rather than being a value the algorithm already holds — a release build that computed it
-       and dropped the comparison would be doing one pass over the runs for nothing. */
+    /* ---- §17.5's last paragraph over the row groups, asserted against the sum above -------------------------
+       The gaps "between the rows, columns, row groups or column groups" are one set, so one spacing stands
+       between two groups and §17.5.3's sum needs no group term. Each run's top must be one spacing below the
+       previous run's bottom, and the last bottom plus one spacing must be the sum; this catches a second
+       spacing at a group boundary, otherwise indistinguishable from a taller table. Skipped for no rows (no
+       cell borders, no runs). The whole block is dev-only because the comparison sum exists only for it. */
 #if APICLIENT_DEV
     if (nrows != 0) {
         CssPx run_bottom = css_px(0.0), run_top, run_expect, run_slack;
@@ -579,22 +480,15 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
     }
 #endif
     has_declared = th_declared_minimum(table, &declared);
-    /* §17.5.3's TWO SENTENCES, IN ORDER: the `auto` height IS the sum, and any other value "is treated as a
-       minimum height" — so the used height is the greater of the two. WHAT THE SURPLUS DOES IS THE RECORDED
-       CHOICE: "CSS 2.1 does not define how extra space is distributed when the 'height' property causes the
-       table to be taller than it otherwise would be", so the rows keep the heights the algorithm gave them and
-       the difference stands below the last one, inside the table box's content edge. The alternative readings
-       — spreading it over the rows, or over the last row alone — are equally conforming and equally arbitrary,
-       and this one is chosen because it leaves every row where a reader measuring one row can predict. */
+    /* The `auto` height is the sum and any other value "is treated as a minimum height", so the greater of
+       the two. The surplus stands below the last row (table_height.h): every row stays where a reader measuring
+       one row predicts; spreading it is equally conforming. */
     out->content = has_declared ? css_px_max(sum, declared) : sum;
     check_sum = th_spacing_total(used_spacing, out->nrows);
     for (r = 0; r < out->nrows; r++) check_sum = css_px_add(check_sum, out->rows[r]);
     slack = css_px_sub(out->content, check_sum);
-    /* §17.5.3's SUM, ASSERTED RATHER THAN ASSUMED — the vertical twin of the identity core/layout/table_width.c
-       asserts over §17.6.1's width, and stated as an INEQUALITY because the declared minimum may legitimately
-       exceed the rows: the section's own decline is exactly about that surplus. What must never happen is the
-       other direction, a content height SHORTER than the rows it is made of, which would place every row after
-       the first outside the box a consumer sizes from `content`. */
+    /* §17.5.3's sum, asserted as an inequality (a declared minimum may exceed the rows). A content height
+       shorter than its rows would place rows outside the box sized from `content`. */
     DCHECK(slack.px >= -1e-9 * (1.0 + (out->content.px < 0.0 ? -out->content.px : out->content.px)),
            "CSS 2.1 §17.5.3 Table height algorithms makes a table's height \"the sum of the row heights plus "
            "any cell spacing or borders\", floored by a declared minimum — and this answer's content height is "
@@ -670,32 +564,14 @@ CssPx table_row_group_used_extent(const TableUsedHeights *heights, const TableGr
            "CSS 2.1 §17.5.3's answer was indexed for a row group while holding no row array and a non-zero row "
            "count — `table_heights` stores NULL only for a table with no rows, so the two have been carried "
            "apart since it answered");
-    /* AN EMPTY ROW GROUP IS A CHOICE AND IT IS RECORDED HERE, WITH ITS ALTERNATIVE, BECAUSE CSS 2.1 DECIDES
-       NEITHER. `<tbody></tbody>` contains no row, so rule 2's union over its rows is EMPTY and §17.5's last
-       paragraph names no edges for a box occupying no grid cell — core/layout/table_grid.h's
-       `table_grid_row_group_of` answers NULL for exactly that and for nothing else. The extent taken here is
-       ZERO, and the reasoning is rule 2 itself: on THIS axis a group's extent IS a function of how many grid
-       rows it holds, so a group holding none is zero rows tall the same way a group holding two is two rows
-       tall. That is the exact inverse of the choice core/layout/used_value.c records on the INLINE axis, where
-       an empty group takes the WHOLE grid row — and the two are consistent rather than opposed, because there
-       rule 1 makes the extent independent of the row count and a zero would have invented a dependence, while
-       here the dependence is what rule 2 states. THE ALTERNATIVE READING is that a box the section places
-       nowhere has no rectangle at all, which would be a crash; it is declined because §17.5's rules are a
-       PLACEMENT and a box a placement gives no grid cell to is placed, not unplaceable, and a crash would
-       refuse a document CSS 2.1 conforms for. A REAL BROWSER MAY DISAGREE AND NOTHING HERE WOULD SAY SO: the
-       zero is unobservable in the table's own height (the group holds no row, so no row height and no spacing
-       moves), and it shows only in `getBoundingClientRect().height` on the empty `<tbody>` itself.
-       THE SIZE IS DECIDED HERE AND THE POSITION IS DECIDED WHERE THE BOX IS PLACED, and the residual that
-       stood here is retired rather than deleted, because a reader re-deriving its argument would rebuild the
-       gap. It said `table_row_used_block_offset` takes a GRID ROW and rule 2's union over zero rows names
-       none, so an empty group had an extent and no `first` to be measured from. That was true of a component
-       whose block-axis entry was stated over ROWS; it is stated over grid LINES now, of which there are
-       `nrows + 1`, and core/layout/table_grid.h's `table_grid_empty_row_group_line` answers which one an empty
-       group stands on out of CSS 2.1 §17.2 The CSS table model's display order — the enumeration that residual
-       named as what the next diff had to leave behind, which core/layout/table_box.h's `table_box_row_groups`
-       now is. WHICH DISTANCE that line becomes is the remaining choice and it is recorded at the placement
-       (core/layout/flow_position.c) rather than here, for the same reason this file records the extent: the
-       choice is only visible in the box's own rectangle. */
+    /* An empty row group (`<tbody></tbody>`, which `table_grid_row_group_of` answers NULL for) is a recorded
+       choice CSS 2.1 leaves open: §17.5's last paragraph names no edges for a box in no grid cell. The extent
+       is zero, from rule 2: on this axis an extent is a function of the rows held. (On the inline axis
+       used_value.c gives an empty group the whole grid row, consistently, since rule 1 makes that extent
+       independent of the row count.) The alternative, no rectangle at all, would be a crash on a conforming
+       document. Browsers may differ; only `getBoundingClientRect().height` on the empty `<tbody>` shows it.
+       Its position is core/layout/table_grid.h's `table_grid_empty_row_group_line`, turned into a distance at
+       the placement (core/layout/flow_position.c). */
     if (group == NULL) return css_px(0.0);
     DCHECK(group->nrows >= 1,
            "CSS 2.1 §17.5's rule 2 reported a row group run covering NO grid row. core/layout/table_grid.h "
@@ -707,13 +583,9 @@ CssPx table_row_group_used_extent(const TableUsedHeights *heights, const TableGr
            "algorithms answered a height for. The runs partition the grid rows of the grid `table_heights` was "
            "given, and that entry answers one height per grid row of it — so the run in hand belongs to a grid "
            "these heights are not of, and every row it names is another table's");
-    /* THE N-1 SPACINGS ARE THE ONES INSIDE THE GROUP AND THERE ARE NO OTHERS. §17.5's last paragraph puts the
-       group's edges at the border edges of the cells in its first and last grid rows under §17.6.1 The
-       separated borders model, so the gaps between its OWN rows are inside it and the gaps to the groups above
-       and below it are outside — the same reading `table_cell_used_border_box_height` takes over a cell's
-       rectangle, over a group's run instead. Under §17.6.2 The collapsing border model `spacing` is zero, the
-       term vanishes, and what is left is the run's row heights, which is that model's own sentence: "the rows
-       together exactly cover the table, leaving no gaps". */
+    /* The N-1 spacings inside the group: under §17.6.1 its edges are its first and last rows' cell border edges,
+       so gaps to neighbouring groups are outside. Under §17.6.2 `spacing` is zero: "the rows together exactly
+       cover the table, leaving no gaps". */
     h = css_px_scale(heights->spacing, (double) (group->nrows - 1));
     for (r = 0; r < group->nrows; r++) h = css_px_add(h, heights->rows[group->first + r]);
     DCHECK(h.px >= 0.0,
@@ -723,8 +595,8 @@ CssPx table_row_group_used_extent(const TableUsedHeights *heights, const TableGr
     return h;
 }
 
-/* See table_height.h for why this is ONE distance with three names, for the leading spacing in each of CSS 2.1
-   §17.6's two border models, and for why it is measured from the table box's CONTENT edge. */
+/* See table_height.h for why this is one distance for three boxes, the leading spacing in each of CSS 2.1
+   §17.6's two border models, and why it is measured from the table box's content edge. */
 CssPx table_row_used_block_offset(const TableUsedHeights *heights, size_t row)
 {
     CssPx y;
@@ -746,10 +618,8 @@ CssPx table_row_used_block_offset(const TableUsedHeights *heights, size_t row)
            "admits at `nrows` is rule 2's union over ZERO rows, whose box stands on the line its first row "
            "would occupy. A caller wanting the distance to the BOTTOM of the last row asks for this at that "
            "row and adds its height, which is the one arithmetic that stays right when the row count is zero");
-    /* §17.6.1 The separated borders model's one spacing before the first row, and one more between each
-       adjoining pair above `row`. Under §17.6.2 The collapsing border model `spacing` is the algorithm's own
-       term rather than the property and is ZERO, so this collapses to the row heights and grid row 0 starts at
-       the table box's content edge — which is where §17.5's last paragraph puts it in that model. */
+    /* One spacing before the first row and one between each adjoining pair above `row`; zero under §17.6.2,
+       where grid row 0 starts at the table box's content edge. */
     y = heights->spacing;
     for (j = 0; j < row; j++) y = css_px_add(css_px_add(y, heights->rows[j]), heights->spacing);
     DCHECK(y.px >= 0.0,

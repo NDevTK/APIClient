@@ -1,6 +1,5 @@
-/* CSS 2.1 §17.2 The CSS table model and §17.2.1 Anonymous table objects — a table box's rows and cells. See
-   table_box.h for the contract, for the range convention every anonymous box is reported through, and for what
-   each neighbouring algorithm is still waiting on. */
+/* CSS 2.1 §17.2 The CSS table model and §17.2.1 Anonymous table objects: a table box's rows and cells. See
+   table_box.h. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -24,9 +23,8 @@ static char *tb_computed(lxb_dom_element_t *el, const char *name)
     return v;
 }
 
-/* ONE GROWTH STEP for the three arrays this file builds. The allocation failure is a `CHECK` and not a
-   `DCHECK` for CLAUDE.md's own reason: a dropped row is a table laid out with fewer rows than it has, which is
-   a wrong geometry in release rather than an absent one. */
+/* One growth step for the three arrays this file builds. Allocation failure is a `CHECK`: a dropped row would
+   be wrong geometry in release (a data-integrity failure), not an absent one. */
 static void *tb_reserve(void *v, size_t n, size_t *cap, size_t esz)
 {
     void *grown;
@@ -106,11 +104,9 @@ static bool tb_caption_or_internal(TableBoxKind kind)
 }
 
 /* §17.2.1: "A box D is a proper table descendant of A if D can be a descendant of A without causing the
-   generation of any intervening 'table' or 'inline-table' boxes." Read off the section's own parentage rules:
-   a caption, a column group, a column and a row group are children of a table box; a row is a child of a table
-   box or of a row group; a cell is a child of a row. Anything reachable only by generating a table box on the
-   way — a caption under a row group, a row group under a row — is NOT one, which is exactly the case
-   §17.2.1's third stage wraps in an anonymous table. */
+   generation of any intervening 'table' or 'inline-table' boxes." From the parentage rules: captions, column
+   groups, columns and row groups under a table box; rows under a table box or row group; cells under a row.
+   Anything else (a caption under a row group) needs §17.2.1's third stage's anonymous table. */
 static bool tb_proper_table_descendant(TableBoxKind ancestor, TableBoxKind d)
 {
     switch (ancestor) {
@@ -128,24 +124,20 @@ static bool tb_proper_table_descendant(TableBoxKind ancestor, TableBoxKind d)
     }
 }
 
-/* ---- one parent's child BOXES ------------------------------------------------------------------------------ */
+/* ---- One parent's child boxes ------------------------------------------------------------------------------ */
 
 typedef struct {
     lxb_dom_node_t *node;
     TableBoxKind kind;
-    /* §17.2.1's first stage is stated about "an anonymous inline box that contains only white space", which is
-       TWO facts about one child and not one: the box exists (CSS 2.2 §9.2.2.1 Anonymous inline boxes decides
-       that, and core/layout/block_flow.h owns the sentence), and the character data it holds is white space
-       throughout. A run under `white-space: pre` satisfies both; a run under `normal` generates no box at all
-       and never reaches this array. */
+    /* "an anonymous inline box that contains only white space" is two facts: the box exists (CSS 2.2
+       §9.2.2.1 Anonymous inline boxes, core/layout/block_flow.h) and its data is all white space. A `pre`
+       run can be both; a `normal` one generates no box and never reaches this array. */
     bool anon_inline_ws;
 } TbChild;
 
-/* The four characters core/layout/block_flow.c's §9.2.2.1 predicate reads, asked of the character data alone.
-   It is not a second copy of that predicate: that one answers whether a run GENERATES A BOX, which is a joint
-   question about the data and the inherited `white-space` of the element the run is a child OF — which after
-   css-display-3 §2.5's splice is not the container this walk was asked about — and this one is the data half
-   §17.2.1 asks for separately once the box is known to exist. */
+/* The data half: block_flow.c's §9.2.2.1 predicate's four characters, asked of the character data alone. That
+   predicate also reads the inherited `white-space` of the run's own DOM parent, which after css-display-3
+   §2.5's splice need not be the container walked here. */
 static bool tb_text_is_all_whitespace(const lxb_dom_node_t *n)
 {
     const lxb_dom_character_data_t *cd = lxb_dom_interface_character_data((lxb_dom_node_t *) n);
@@ -161,25 +153,15 @@ static bool tb_text_is_all_whitespace(const lxb_dom_node_t *n)
     return true;
 }
 
-/* `parent`'s child boxes, in tree order, each with §17.2's classification of its computed `display`. Answers
-   the count and stores a newly allocated array at `*out`, which the caller frees. A child that generates no
-   box is not in it — which is CSS 2 §9.2's own answer and not this file's, so a `display: none` element, a
-   comment, a processing instruction, a doctype and a collapsed run of white space are all simply absent.
-   THE CHILDREN ARE THE BOX TREE'S AND NOT THE DOM'S, which is css-display-3 §2.5 "Box Generation: the none
-   and contents keywords" and is why this steps core/layout/box_tree.h rather than `->next`: "For the
-   purposes of box generation and layout, the element must be treated as if it had been replaced in the
-   element tree by its contents". §2.5's own Note names THIS SECTION as what that is for — "anonymous box
-   generation rules will ignore the elided elements entirely, as if they did not exist in the box tree" — so
-   a `display: contents` row's cells are children of the TABLE box for §17.2.1's purposes, and the section's
-   "consecutive siblings" is consecutive in THAT sequence.
-   WHICH IS WHY THIS WALK MATERIALISES AN ARRAY AND IS THE REASON THAT IS NOT AN EXTRAVAGANCE: every rule of
-   §17.2.1 is stated over a child's NEIGHBOURS, and the four callers below read those off `v[i-1]`/`v[i+1]`
-   and `v[j]`. Not one of them steps a sibling itself, so the splice is asked exactly once per container and
-   no caller can be half-converted — which for a sequence whose step needs the CONTAINER in hand is the
-   difference between one conversion and four.
-   A `none` ELEMENT IS STILL YIELDED HERE and still skipped below: box_tree.h pierces §2.5's `contents` and
-   nothing else, because §2.5's other keyword is the opposite sentence and this walk keeps its own CSS 2
-   §9.2 arm for it. */
+/* `parent`'s child boxes, in tree order, each classified by its computed `display`. Answers the count and
+   stores a newly allocated array at `*out`, which the caller frees. A child generating no box is absent (CSS 2
+   §9.2): a `display: none` element, a comment, a processing instruction, a doctype, collapsed white space.
+   Children come from core/layout/box_tree.h, per css-display-3 §2.5 "Box Generation: the none and contents
+   keywords" ("the element must be treated as if it had been replaced in the element tree by its contents";
+   its Note names anonymous box generation), so a `display: contents` row's cells are children of the table
+   box and "consecutive siblings" means consecutive in that sequence. The array exists because every §17.2.1
+   rule reads a child's neighbours; callers index it and never step siblings. `none` elements are still yielded
+   by box_tree.h (it pierces only `contents`) and skipped below. */
 static size_t tb_children(lxb_dom_element_t *parent, TbChild **out)
 {
     BoxTreeChild m;
@@ -203,25 +185,18 @@ static size_t tb_children(lxb_dom_element_t *parent, TbChild **out)
             kind = table_box_kind(d);
             free(d);
             if (none) continue;
-            /* NO `contents` ARM STANDS HERE AND ONE USED TO. It was a DFAILF naming this conversion, and what
-               replaces it is the SEQUENCE and not a second test: core/layout/box_tree.h never yields an element
-               whose computed `display` is `contents` — it replaces one by its contents, per css-display-3 §2.5 —
-               and its own step ASSERTS that of every node it is handed, so a re-added test here would be a
-               second answer to a question one component owns. `none` is not that question: §2.5's two keywords
-               are opposite sentences, box_tree.h pierces only the first, and the arm above is CSS 2 §9.2's. */
+            /* No `contents` arm: box_tree.h replaces such an element by its contents (css-display-3 §2.5) and
+               asserts it never yields one. The `none` arm above is CSS 2 §9.2's. */
         } else if (n->type == LXB_DOM_NODE_TYPE_TEXT) {
-            /* §9.2.2.1's white-space rule reads an INHERITED property, so the element it reads is this run's
-               own DOM parent and NOT `parent`: css-display-3 §2.5's Note keeps inheritance on the document tree,
-               so a run the sequence above spliced in inherits from the `contents` element it is a child of. The
-               predicate derives that itself and takes no element, which is why routing this walk could not hand
-               it the container by mistake — core/layout/block_flow.h states why the parameter is gone. */
+            /* §9.2.2.1's white-space rule reads an inherited property from the run's own DOM parent, not from
+               `parent` (css-display-3 §2.5's Note keeps inheritance on the document tree); the predicate
+               derives it and takes no element (see core/layout/block_flow.h). */
             if (!block_flow_text_child_generates_box(n)) continue;
             ws = tb_text_is_all_whitespace(n);
         } else if (n->type == LXB_DOM_NODE_TYPE_COMMENT ||
                    n->type == LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION ||
                    n->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE) {
-            /* CSS 2 §9.2 generates boxes for elements and for text; a comment, a processing instruction and a
-               doctype are neither, and every user agent lays out none of the three. */
+            /* CSS 2 §9.2 generates boxes for elements and text only. */
             continue;
         } else {
             DFAILF("%s, a child of the table box %s: "
@@ -243,20 +218,18 @@ static size_t tb_children(lxb_dom_element_t *parent, TbChild **out)
     return cnt;
 }
 
-/* ---- §17.2.1's FIRST STAGE, "Remove irrelevant boxes" ------------------------------------------------------- */
+/* ---- §17.2.1's first stage, "Remove irrelevant boxes" ------------------------------------------------------- */
 
-/* The four rules, over the child boxes of a parent whose own box type is `pk`, applied in place; answers how
-   many survive. Every drop is decided against the PRE-REMOVAL neighbour list, because the section states one
-   stage and not a fixpoint: a whitespace box's neighbours are the siblings it had when the stage began, and
-   evaluating a rule against a list the same stage is compacting would let the order of the scan decide the
-   answer. */
+/* The four rules over the child boxes of a parent of type `pk`, in place; answers how many survive. Every drop
+   is decided against the pre-removal neighbours, since the section states one stage, not a fixpoint, and the
+   scan order must not decide the answer. */
 static size_t tb_remove_irrelevant(TableBoxKind pk, TbChild *v, size_t n)
 {
     size_t i, kept = 0;
     bool *drop;
 
     if (n == 0) return 0;
-    /* RULE 1: "All child boxes of a 'table-column' parent are treated as if they had 'display: none'." */
+    /* Rule 1: "All child boxes of a 'table-column' parent are treated as if they had 'display: none'." */
     if (pk == TABLE_BOX_COLUMN) return 0;
     drop = (bool *) calloc(n, sizeof *drop);
     CHECK(drop != NULL,
@@ -268,27 +241,24 @@ static size_t tb_remove_irrelevant(TableBoxKind pk, TbChild *v, size_t n)
         TableBoxKind next = have_next ? v[i + 1].kind : TABLE_BOX_NOT_A_TABLE_BOX;
         bool rule3, rule4;
 
-        /* RULE 2: "If a child C of a 'table-column-group' parent is not a 'table-column' box, then it is
+        /* Rule 2: "If a child C of a 'table-column-group' parent is not a 'table-column' box, then it is
            treated as if it had 'display: none'." */
         if (pk == TABLE_BOX_COLUMN_GROUP && v[i].kind != TABLE_BOX_COLUMN) {
             drop[i] = true;
             continue;
         }
         if (!v[i].anon_inline_ws) continue;
-        /* RULE 3: "If a child C of a tabular container P is an anonymous inline box that contains only white
+        /* Rule 3: "If a child C of a tabular container P is an anonymous inline box that contains only white
            space, and its immediately preceding and following siblings, if any, are proper table descendants of
            P and are either 'table-caption' or internal table boxes, then it is treated as if it had
-           'display: none'." The "if any" is what makes a run of white space between a table's first child and
-           its start — and a table whose only child is white space — removable: a side with no sibling states
-           no condition. */
+           'display: none'." With "if any", a missing side states no condition. */
         rule3 = table_box_kind_is_tabular_container(pk) &&
                 (!have_prev || (tb_proper_table_descendant(pk, prev) && tb_caption_or_internal(prev))) &&
                 (!have_next || (tb_proper_table_descendant(pk, next) && tb_caption_or_internal(next)));
-        /* RULE 4: "If a box B is an anonymous inline containing only white space, and is between two immediate
+        /* Rule 4: "If a box B is an anonymous inline containing only white space, and is between two immediate
            siblings each of which is either an internal table box or a 'table-caption' box then B is treated as
-           if it had 'display: none'." It is not rule 3 with the descendant test dropped — it requires BOTH
-           siblings to exist, and it holds in a parent that is not a tabular container at all, which is the
-           case §17.2.1's third stage is about. */
+           if it had 'display: none'." Both siblings must exist, and the parent need not be a tabular container
+           (§17.2.1's third stage case). */
         rule4 = have_prev && have_next && tb_caption_or_internal(prev) && tb_caption_or_internal(next);
         if (rule3 || rule4) drop[i] = true;
     }
@@ -298,18 +268,15 @@ static size_t tb_remove_irrelevant(TableBoxKind pk, TbChild *v, size_t n)
     return kept;
 }
 
-/* ---- §17.2.1's SECOND STAGE, "Generate missing child wrappers" ---------------------------------------------- */
+/* ---- §17.2.1's second stage, "Generate missing child wrappers" ---------------------------------------------- */
 
 typedef struct {
     TableBoxRow *v;
     size_t n, cap;
 } TbRowSink;
 
-/* THE ROW GROUP BOXES §17.2's display order visits, RECORDED BY THE SAME WALK THAT EMITS THE ROWS. It is a
-   second sink and not a second walk because §17.2's two exceptions to source order (a header group's rows
-   before every other row, a footer group's after) are ONE statement, and a walk written a second time to
-   enumerate the groups would be free to order them differently from the rows they contain — which no document
-   could distinguish from a table whose row groups are simply somewhere else. */
+/* The row group boxes §17.2's display order visits, recorded by the walk that emits the rows, so groups and
+   rows share one ordering. */
 typedef struct {
     TableBoxRowGroup *v;
     size_t n, cap;
@@ -337,12 +304,11 @@ static void tb_row_push(TbRowSink *s, lxb_dom_element_t *element, lxb_dom_elemen
     s->n++;
 }
 
-/* §17.2.1's second stage, THIRD rule, over the surviving child boxes `[from, to)` of one row box: "If a child C
+/* §17.2.1's second stage, third rule, over the surviving child boxes `[from, to)` of one row box: "If a child C
    of a 'table-row' box is not a 'table-cell', then generate an anonymous 'table-cell' box around C and all
    consecutive siblings of C that are not 'table-cell' boxes."
-   `v`/`n` is the WHOLE surviving child list and `[from, to)` is the row's slice of it, because the two differ
-   for an ANONYMOUS row — its children are a run inside its own parent's list — and the node one past the slice
-   is what `end` has to name. */
+   `v`/`n` is the whole surviving list and `[from, to)` the row's slice (they differ for an anonymous row,
+   whose children are a run of its parent's list); the node past the slice is what `end` names. */
 static size_t tb_cells(const TbChild *v, size_t n, size_t from, size_t to, TableBoxCell **out)
 {
     TableBoxCell *cells = NULL;
@@ -371,8 +337,7 @@ static size_t tb_cells(const TbChild *v, size_t n, size_t from, size_t to, Table
     return cnt;
 }
 
-/* The same rule over a real 'table-row' ELEMENT's own child list, which is the ordinary case and the one whose
-   first stage is asked with `TABLE_BOX_ROW` as the tabular container. */
+/* The same rule over a 'table-row' element's own child list, with `TABLE_BOX_ROW` as the tabular container. */
 static size_t tb_cells_of_row_element(lxb_dom_element_t *row, TableBoxCell **out)
 {
     TbChild *v = NULL;
@@ -385,7 +350,7 @@ static size_t tb_cells_of_row_element(lxb_dom_element_t *row, TableBoxCell **out
     return cnt;
 }
 
-/* §17.2.1's second stage, SECOND rule, over one row group box: "If a child C of a row group box is not a
+/* §17.2.1's second stage, second rule, over one row group box: "If a child C of a row group box is not a
    'table-row' box, then generate an anonymous 'table-row' box around C and all consecutive siblings of C that
    are not 'table-row' boxes." */
 static void tb_rows_of_group(lxb_dom_element_t *group, TableBoxKind gk, TbRowSink *sink)
@@ -415,11 +380,9 @@ static void tb_rows_of_group(lxb_dom_element_t *group, TableBoxKind gk, TbRowSin
     free(v);
 }
 
-/* ONE ROW GROUP BOX VISITED — its rows generated into `sink` and, where a caller asked for them, the box
-   itself recorded into `gsink` with the range of rows it contributed. THE RANGE IS TAKEN AROUND THE CALL AND
-   NOT COUNTED AFTERWARD, which is what makes an EMPTY row group box appear at all: `<tbody></tbody>` generates
-   no row, so it is invisible in `table_box_rows`' answer and in every array derived from it, and the only
-   moment at which it is distinguishable from a group that is not there is the moment the walk stands on it. */
+/* One row group box visited: its rows go to `sink` and, if asked, the box goes to `gsink` with the rows it
+   contributed. The range is taken around the call, which is the only moment an empty `<tbody></tbody>` is
+   distinguishable. */
 static void tb_visit_group(lxb_dom_element_t *group, TableBoxKind gk, TbRowSink *sink, TbGroupSink *gsink)
 {
     size_t first = sink->n;
@@ -450,12 +413,9 @@ static TableBoxKind tb_table_kind(lxb_dom_element_t *table, const char *asked)
     return tk;
 }
 
-/* §17.2.1's SECOND STAGE OVER A WHOLE TABLE BOX, RUN ONCE FOR BOTH ANSWERS THIS FILE GIVES ABOUT IT. `sink`
-   collects the rows and `gsink`, when a caller passes one, collects the row group boxes the same visit passes
-   through. The two entries below are the two ways of asking for what this walk produces and never two walks:
-   §17.2's display order, §17.2.1's three anonymous-box rules and the "only the first is rendered as a header"
-   sentence are stated HERE and nowhere else, so no second enumeration can order the groups differently from
-   the rows inside them. */
+/* §17.2.1's second stage over a whole table box, run once for both answers: `sink` gets the rows and `gsink`,
+   if passed, the row group boxes. The display order, the anonymous-box rules and "only the first is rendered
+   as a header" are stated here only. */
 static void tb_generate(lxb_dom_element_t *table, const char *asked, TbRowSink *sink, TbGroupSink *gsink)
 {
     TbChild *v = NULL;
@@ -465,11 +425,9 @@ static void tb_generate(lxb_dom_element_t *table, const char *asked, TbRowSink *
     tk = tb_table_kind(table, asked);
     n = tb_children(table, &v);
     n = tb_remove_irrelevant(tk, v, n);
-    /* §17.2's own two exceptions to source order, and the sentence that makes each of them apply to exactly
-       ONE group: "If a table contains multiple elements with 'display: table-header-group', only the first is
-       rendered as a header; the others are treated as if they had 'display: table-row-group'" — and the same
-       for the footer. So the FIRST of each is found here, and every later one falls through the row-group arm
-       below with no special case of its own. */
+    /* §17.2's two exceptions to source order apply to one group each: "If a table contains multiple elements
+       with 'display: table-header-group', only the first is rendered as a header; the others are treated as if
+       they had 'display: table-row-group'", likewise the footer. Later ones fall through the row-group arm. */
     hdr = n;
     ftr = n;
     for (i = 0; i < n; i++) {
@@ -477,8 +435,7 @@ static void tb_generate(lxb_dom_element_t *table, const char *asked, TbRowSink *
         if (ftr == n && v[i].kind == TABLE_BOX_FOOTER_GROUP) ftr = i;
     }
     /* "for visual formatting, the row group is always displayed before all other rows and row groups and after
-       any top captions" — the captions are §17.4's wrapper box's and not the table box's, so what that
-       sentence decides HERE is only that the header's rows come first. */
+       any top captions": captions are the wrapper's (§17.4), so here only the header's rows come first. */
     if (hdr < n)
         tb_visit_group(lxb_dom_interface_element(v[hdr].node), TABLE_BOX_HEADER_GROUP, sink, gsink);
     i = 0;
@@ -504,16 +461,14 @@ static void tb_generate(lxb_dom_element_t *table, const char *asked, TbRowSink *
             i = j;
             continue;
         }
-        /* A 'table-column', a 'table-column-group' and a 'table-caption' are proper table children that are
-           not rows and generate none: §17.2 says a column and a column group "are not rendered (exactly as if
-           they had 'display: none')", and §17.4 puts the caption boxes in the WRAPPER box beside the table box
-           rather than inside it (`table_box_captions`). Skipping them here is those two sentences and not an
-           omission — a run they interrupted would otherwise be one anonymous row spanning them. */
+        /* A column, column group or caption is a proper table child that generates no row: columns "are not
+           rendered (exactly as if they had 'display: none')", and captions are the wrapper's (§17.4,
+           `table_box_captions`). Skipping them keeps a run they interrupt from becoming one anonymous row. */
         if (table_box_kind_is_proper_table_child(v[i].kind)) {
             i++;
             continue;
         }
-        /* §17.2.1's second stage, FIRST rule: "If a child C of a 'table' or 'inline-table' box is not a proper
+        /* §17.2.1's second stage, first rule: "If a child C of a 'table' or 'inline-table' box is not a proper
            table child, then generate an anonymous 'table-row' box around C and all consecutive siblings of C
            that are not proper table children." */
         for (j = i; j < n && !table_box_kind_is_proper_table_child(v[j].kind); j++) { }
@@ -563,10 +518,8 @@ size_t table_box_row_groups(lxb_dom_element_t *table, TableBoxRowGroup **out)
     gsink.n = 0;
     gsink.cap = 0;
     *out = NULL;
-    /* THE ROWS ARE GENERATED AND RELEASED, AND THAT IS NOT WASTE THIS ENTRY COULD AVOID: a group's `first` is
-       a COUNT OF ROWS EMITTED BEFORE IT, so the rows are this answer's arithmetic and not a by-product of it.
-       Nothing in this directory caches a layout (core/layout/block_flow.h's reason — a cached one is shared
-       state solver/dom_cow.h's delta does not swap), so a caller wanting both asks for both. */
+    /* The rows are generated and released: a group's `first` is a count of rows emitted before it. Nothing is
+       cached (layout is per-flow state solver/dom_cow.h does not swap). */
     tb_generate(table, "row groups", &sink, &gsink);
     table_box_rows_free(sink.v, sink.n);
     *out = gsink.v;
@@ -585,15 +538,10 @@ void table_box_rows_free(TableBoxRow *rows, size_t nrows)
     free(rows);
 }
 
-/* §17.2's BOX NESTING READ UPWARD. What may stand between a cell and its table box is a 'table-row' and a row
-   group box and nothing else, which is the same nesting `table_box_rows` descends and is why this is one
-   `while` rather than a recursion: §17.2 The CSS table model nests a cell in a row, a row in a row group or in
-   the table box, and a column in a column group, so the chain is at most two links deep before the table.
-   A NON-TABLE BOX IN THE CHAIN IS §17.2.1's ANONYMOUS TABLE BOX AND IT CRASHES BY NAME. §17.2.1's third stage
-   generates a table box around a run of internal boxes whose parent is not a tabular container, so a cell
-   under an ordinary `<div>` IS in a table box — one no element in this tree names. The nearest `<table>`
-   further up is a DIFFERENT box and returning it would report this cell's used width out of another table's
-   columns, which is why this is a crash and not a wider walk. */
+/* §17.2's box nesting read upward. Between a cell and its table box stand only a row and a row group (a column
+   only a column group), so the chain is at most two links before the table. A non-table box in the chain means
+   §17.2.1's third stage's anonymous table box, which no element names; returning the next `<table>` up would
+   size this box from another table's columns, so it crashes by name. */
 lxb_dom_element_t *table_box_table_of(lxb_dom_element_t *internal)
 {
     lxb_dom_node_t *n;
