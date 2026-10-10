@@ -1,0 +1,14 @@
+/* The invoker rungs' denominator (solver/rung_entry.h), spliced into `_cold` beside `stepUnitRuns`. Three rows
+   per declared rung: compiler resolutions of a free identifier the rung's entry table names, of its `typeof`
+   form, and of the property spelling on a receiver the source spells as the global. They count resolutions,
+   not sites — every replaying flow recompiles — so each is read as a bit, never as a magnitude. A rung whose
+   component this host did not install is absent; an installed rung its names never reached reads 0. */
+METRIC(rung_named_rendering,        "stepNamedRenderingLife",       LIFETIME, "resolution", PROCESS, "solver/rung_entry.c", INT)
+METRIC(rung_named_rendering_typeof, "stepNamedRenderingTypeofLife", LIFETIME, "resolution", PROCESS, "solver/rung_entry.c", INT)
+METRIC(rung_named_rendering_prop,   "stepNamedRenderingPropLife",   LIFETIME, "resolution", PROCESS, "solver/rung_entry.c", INT)
+METRIC(rung_named_timer,            "stepNamedTimerLife",           LIFETIME, "resolution", PROCESS, "solver/rung_entry.c", INT)
+METRIC(rung_named_timer_typeof,     "stepNamedTimerTypeofLife",     LIFETIME, "resolution", PROCESS, "solver/rung_entry.c", INT)
+METRIC(rung_named_timer_prop,       "stepNamedTimerPropLife",       LIFETIME, "resolution", PROCESS, "solver/rung_entry.c", INT)
+METRIC(rung_named_idle,             "stepNamedIdleLife",            LIFETIME, "resolution", PROCESS, "solver/rung_entry.c", INT)
+METRIC(rung_named_idle_typeof,      "stepNamedIdleTypeofLife",      LIFETIME, "resolution", PROCESS, "solver/rung_entry.c", INT)
+METRIC(rung_named_idle_prop,        "stepNamedIdlePropLife",        LIFETIME, "resolution", PROCESS, "solver/rung_entry.c", INT)

@@ -1,6 +1,8 @@
 /* @H endpoint surface — see endpoint.h. Findings are C data; params + values merge in C; emit is C. */
 #include "solver/endpoint.h"
 #include "core/json_buf.h"
+#include "solver/compose.h"   /* the edge splices' leading comma */
+#include "solver/metrics.h"   /* the edge rows, declared in solver/metrics/{fetch,xhr}_edge.def */
 #include "core/mime/mime_type.h"
 #include "solver/concolic.h"
 #include "solver/engine.h"    /* the provenance's ONE wire spelling — this surface prints the same three words */
@@ -3672,62 +3674,10 @@ static void edge_stage_hist(JsonBuf *b, const EndpointEdge *e) {
     json_buf_raw(b, "}");
 }
 
-/* THE KIND OF EVERY ROW THIS COMPOSER PUBLISHES THAT A CONSUMER CARRIES — stated HERE because it is this
-   composer's fact and nowhere else's, and stated in a form a machine reads because a comment stating it is
-   read by nobody holding the number. CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER: a quantity whose kind a
-   reader cannot name FROM ITS OUTPUT is one they are not entitled to do arithmetic on, and the names do not
-   say. Four kinds and what each permits:
-     lifetime  raised and never lowered — MAY be differenced across two samples of ONE instance.
-     gauge     a walk at one instant — may FALL, so differencing one reads a level as a rate.
-     constant  written once at a seed and never again — neither differenced nor read as a level.
-     maximum   monotone like a count and a HIGH-WATER MARK — it saturates and then plateaus, so a plateau is
-               NOT a ceiling and the length of the series is part of quoting it. Filed apart from `lifetime`
-               for that reason and no other: both may be differenced, and only one may be compared across two
-               runs of different length.
-   IT IS HERE AND NOT AT THE CONSUMER BECAUSE THE PERSON WHO ADDS A ROW IS THE PERSON WHO KNOWS. Every reader
-   of this census used to hold its own kind list, and the row that made the case landed one commit before this
-   one with a kind stated in no artifact at all: the author added it here and had no reason to open a driver
-   two directories away. A declaration at the emitter is edited by the diff that adds the row.
-   IT IS A SET EQUALITY AND BOTH DIRECTIONS THROW. `testing/census_rows.js` refuses a name here that this
-   composer no longer publishes — a kind statement about a renamed row is a sentence about nothing that a
-   consumer goes on printing — and refuses a row this composer PUBLISHES that no line here states a kind for.
-   Neither side is defaulted and neither is guessed. It also refuses a SECOND declaration for one composer and
-   a row stated twice, because a reader that resolved either would publish a shorter contract as a complete
-   one.
-   THE CONSUMER-SIDE CHECK THAT USED TO STAND BESIDE THOSE IS GONE AND IS NOT TO BE RE-ADDED. That reader once
-   threw separately on a row a driver CARRIES with no kind stated here; with the equality above standing, the
-   declared set and the published set are ONE set, so the carried-and-published check it already makes decides
-   that case as well, and a second test for it would be a predicate whose two sides cannot disagree.
-   COMPLETENESS IS REQUIRED HERE AND IS NO LONGER COUNTED. A row nobody carries must be declared anyway, so
-   the kind is stated by whoever adds the row rather than by whoever later needs it. That reader used to return
-   the number of rows here with no kind and a driver printed it, on the ground that a kind nobody has
-   determined must not be invented: a WRONG kind is worse than a missing one, since it LICENSES the arithmetic
-   a missing one merely fails to authorise. That is still exactly right about the KIND and was never a reason
-   to leave the ROW unnamed — the figure's only reader was whoever re-read a driver's header line, so an
-   omission stayed an omission for as long as nobody did. The count is DELETED rather than kept beside the
-   refusal, because a count that can no longer be nonzero is dead reporting that reads as live.
-   IT CHANGES NO EMITTED BYTE. This is comment text, so there is no half of it that goes live at an instant
-   the other does not — a consumer reads it from SOURCE and is therefore right about an artifact of any age,
-   including one whose stamp predates a row, where the kind is stated and the row is absent. Those are two
-   facts and they stay two.
-   AND THE SUFFIX IS NOT THE DECLARATION, WHICH IS WHY THIS BLOCK EXISTS BESIDE IT. The paragraph inside this
-   composer already spells each row's kind into its NAME — `Life` for a lifetime count rather than a gauge —
-   and says in the same breath that a comment stating it is read by nobody holding the number. A consumer
-   keying on the suffix instead would be a second mechanism answering this one's question, with the partial
-   one drifting; the suffix stays a note to a reader and this is the statement to a machine.
-   THESE ROWS REACH THE FRONTIER CENSUS THROUGH A SPLICE THAT NAMES NONE OF THEM, so no presence reader in
-   this tree can see them at all — `build.mjs`'s row set is taken from a name-and-conversion match on the
-   receiving composer's format string, and an unnamed splice lands in neither its numeric list nor its object
-   one, so the mismatch that would report it never fires. A kind stated here is therefore the only machine-
-   readable fact about these rows anywhere.
-
-   @kinds-of fetchEdge
-   @kind lifetime: epFetchAskNamedLife epFetchAskNamedTypeofLife epFetchAskNamedPropLife
-   @kind lifetime: epFetchAskCalledLife epFetchAskBeganLife epFetchAskOfferedLife
-   @kind lifetime: epFetchOutFreedLife epFetchOutFreedOfferedLife epFetchOutDiedAtLife
-*/
+/* The fetch edge's rows, declared in solver/metrics/fetch_edge.def, as a splice for `_cold`. */
 char *endpoint_fetch_edge_rows(void) {
-    JsonBuf b = { 0 };
+    JsonBuf hist = { 0 };
+    char *died, *rows, *out;
     long sum = 0;
 
     if (!g_fetch_edge.steps) {
@@ -3737,63 +3687,24 @@ char *endpoint_fetch_edge_rows(void) {
            would be exactly that average, published on the census whose whole subject is what a zero means.
            The EMPTY STRING and not `{}`: these are ROWS of the census above, spliced between its own, so the
            absent form has to be the absence of the rows and of the comma in front of them. */
-        json_buf_raw(&b, "");
-        return json_buf_take(&b);
+        METRIC_ABSENT(fetch_named);
+        METRIC_ABSENT(fetch_named_typeof);
+        METRIC_ABSENT(fetch_named_prop);
+        METRIC_ABSENT(fetch_called);
+        METRIC_ABSENT(fetch_began);
+        METRIC_ABSENT(fetch_offered);
+        METRIC_ABSENT(fetch_freed);
+        METRIC_ABSENT(fetch_freed_offered);
+        METRIC_ABSENT(fetch_died_at);
+        return metrics_family_members_text(METRIC_FAMILY_FETCH_EDGE);
     }
     sum = edge_stage_sum(&g_fetch_edge);
     edge_partition(&g_fetch_edge, "fetch", sum);
-    /* AND THE FIRST CONTAINMENT, WHICH IS THIS EDGE'S AND NOT THE OTHER ONE'S. The two sides are raised at
-       DIFFERENT events — one at the teardown, one on the line before the door — so the slack is a POPULATION
-       and not a tolerance: it is the constructions that offered an address and are STILL LIVE, parked on the
-       reply they asked for, which on a page mid-run is most of them. An EQUALITY here would be that
-       misreading frozen into an assert and would fire on the first document that parks.
-       IT HOLDS BECAUSE THE SPAN BETWEEN THE OFFER AND THE TEARDOWN IS FORK-FREE, AND THAT REASON IS NARROWER
-       THAN THE ONE WRITTEN HERE BEFORE. The fork that breaks this containment is one raised AFTER the offer: a
-       deep-fork copy inherits `offered` and gets its own teardown, so two copies would then file against one
-       offer. A fork raised BEFORE it is harmless — both arms set their own flag and each makes its own offer,
-       which is two requests in two worlds and is what the surface is for.
-       THIS USED TO READ "`js_fetch_unforkable` refuses a fork once the state holds §5.4's record, which it does
-       at every stage from which an offer is reachable", AND THAT ARGUMENT IS RETIRED RATHER THAN RESTATED: the
-       §2.2.5 request record's nine fields are JSValues core/fetch's `visit` names, so the record is no longer
-       one of that guard's terms and a fork inside §5.4 steps 10-27 is allowed. It is kept in its own words
-       because a reader who re-derives the containment from that guard will write it again.
-       AND THAT SHRINK HAS NOW COMPLETED, WHICH RETIRES THE CLAUSE THAT MEASURED IT RATHER THAN THE REASON
-       BELOW. This paragraph used to narrate a guard losing its terms one at a time — "the guard's REMAINING
-       TERMS — the extracted body and the parsed header list — still covered FETCH_CALL for any request
-       carrying EITHER", then "§5.2's extracted body is now a list core/fetch/body.h declares, so the ONE term
-       left is the header list". It is kept in its own words for the reason the retirement above is: a reader
-       who re-derives this containment from a refusal will narrate its terms the same way. THERE ARE NO TERMS
-       LEFT, BECAUSE THERE IS NO GUARD — `js_fetch_unforkable` is deleted, and so are the sibling refusals at
-       the `Headers` and `Request` constructors.
-       IT WAS VERIFIED AS A PRESENCE QUESTION AND READ RATHER THAN COUNTED, which is the one direction a count
-       cannot answer here: this file's own rules keep a retired argument AT its site, so the symbol still
-       greps nonzero across the tree and every one of those hits is prose that TALKS ABOUT the deletion ("the
-       deleted", "is DELETED", "USED TO READ"). A tally would have reported the guard alive on the strength of
-       the sentences recording that it is not.
-       SO THE REAL REASON BELOW CARRIES THE WHOLE POPULATION AND NO LONGER MERELY MOST OF IT, which makes this
-       containment STRONGER than when that narration was written rather than weaker — nothing the retired
-       clause rested on was holding anything up, and `fetch(u, {method:"POST", body: b})` was already the
-       shape it conceded reached FETCH_CALL with nothing in front of it.
-       WHAT ACTUALLY HOLDS IT IS THE OFFER'S POSITION: `s->offered = 1` is set at §5.6 step 12 and everything
-       after it in that stage is straight-line C that runs no page code (`endpoint_record`, the batch parse, the
-       park), and the stage then RETURNS its promise rather than parking — which core/fetch asserts at that
-       stage's own entry ("this stage does not park"). So there is no point at which a state holding a raised
-       `offered` can be cloned. The XHR edge gets no such assert for a reason its own emitter states, and it is
-       a different reason: its flag is set and the state then PARKS inside page code. */
-    DCHECKF(g_fetch_edge.freed_reached <= g_fetch_edge.reached,
-            "the fetch edge counted more torn-down states that had offered an address (%ld) than offers it "
-            "made at all (%ld) — the offer is raised once, on the line before the door, and the teardown row "
-            "once per state, so a larger teardown row is a state marked as having offered by something other "
-            "than the offer itself, and the difference a reader takes for the constructions still parked on "
-            "their replies would be negative",
-            g_fetch_edge.freed_reached, g_fetch_edge.reached);
-    /* AND THE SECOND, WHICH IS THE ONE THAT TIES THIS CENSUS TO THE ROWS IT SITS BESIDE AND IS ASSERTABLE ONLY
-       HERE. Every offer is followed by an endpoint_record call that raises `g_asks` before any gate, so the
-       fetch edge's offers are contained in this surface's asks and the slack is every OTHER door: core/xhr's,
-       the markup inventory's, the reply decoder's. That difference is the fetch edge's SHARE of the ask
-       population, which is what a reader of `epAsks` actually wants and what no figure stated before. The two
-       are raised in two files at two events, so they part company when an offer is raised without the record
-       call under it, which is the one way this row could come to overstate the edge. */
+    /* The containment that ties this census to the rows it sits beside, assertable only here: every offer is
+       followed by an endpoint_record call that raises `g_asks` before any gate, so the fetch edge's offers are
+       contained in this surface's asks and the slack is every other door (core/xhr's, the markup inventory's,
+       the reply decoder's) — the fetch edge's share of the ask population. The two are raised in two files at
+       two events, so they part company when an offer is raised without the record call under it. */
     DCHECKF(g_fetch_edge.reached <= g_asks,
             "the fetch edge offered this surface more addresses (%ld) than the surface counted asks at its "
             "door (%ld) — the offer is raised on the line before endpoint_record and that door raises the ask "
@@ -3801,16 +3712,6 @@ char *endpoint_fetch_edge_rows(void) {
             "it, and a reader taking the rest of the asks as the OTHER doors' share would read a negative "
             "count as a large one",
             g_fetch_edge.reached, g_asks);
-    /* THE NAMES ARE LITERALS AT THE json_buf_key CALL AND CANNOT BE ANYTHING ELSE — the macro concatenates
-       them with the quotes and the colon, so a `const char *` in that position is a syntax error and every
-       field name this seam emits is readable off this source. IT IS ALSO WHY THE TWO EDGES' EMITTERS ARE TWO
-       FUNCTIONS WHILE EVERYTHING ABOVE THEM IS SHARED: a computed key is not a thing this seam can express.
-       THEY ARE TERSE AND camelCase BECAUSE THEY ARE ROWS OF `_cold`, whose own rows are, and not prose like
-       solver/absent.c's: a reader compares WITHIN a census, and these exist to be compared with `epAsks` and
-       `epPreProgram` three rows down. WHAT THEY CARRY THAT THOSE DO NOT is each row's KIND, spelled into the
-       name — `Ask` or `Out` for which side of §AN-INVARIANT-OVER-A-GATED-OPERATION it counts, `Life` for a
-       lifetime count rather than a gauge. §Testing records this tree being misled by that second distinction
-       twice, and a comment stating it is read by nobody holding the number. */
     /* The one relation `began` has to the call row, and it is a presence relation. Every world that began
        descends from a world that entered core/idl_args.c's stage 0, but a fork in the conversions gives each
        sibling its own begin against that one call (see the struct), so `began <= called` is not an identity
@@ -3820,84 +3721,30 @@ char *endpoint_fetch_edge_rows(void) {
             "machine's prologue (%ld) — every begin descends from a stage-0 entry, so this is the member body "
             "reached by something other than core/idl_args.c's machine",
             g_fetch_edge.began, g_fetch_edge.called);
-    /* THE DENOMINATOR FIRST, BECAUSE IT IS WHAT THE ROW BELOW IT IS A FRACTION OF, and a reader compares within
-       a census in the order the rows arrive. No `DCHECKF` stands over this pair: the two relations a reader
-       would reach for — `named >= called` and `called >= named` — are BOTH ordinary, and the struct's own field
-       comment says which spellings make each of them so. */
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epFetchAskNamedLife");        edge_num(&b, g_fetch_edge.named);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epFetchAskNamedTypeofLife");  edge_num(&b, g_fetch_edge.named_typeof);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epFetchAskNamedPropLife");    edge_num(&b, g_fetch_edge.named_prop);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epFetchAskCalledLife");       edge_num(&b, g_fetch_edge.called);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epFetchAskBeganLife");        edge_num(&b, g_fetch_edge.began);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epFetchAskOfferedLife");      edge_num(&b, g_fetch_edge.reached);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epFetchOutFreedLife");        edge_num(&b, g_fetch_edge.freed);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epFetchOutFreedOfferedLife"); edge_num(&b, g_fetch_edge.freed_reached);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epFetchOutDiedAtLife");
-    edge_stage_hist(&b, &g_fetch_edge);
-    return json_buf_take(&b);
+    edge_stage_hist(&hist, &g_fetch_edge);
+    died = json_buf_take(&hist);
+    METRIC_SET(fetch_named, g_fetch_edge.named);
+    METRIC_SET(fetch_named_typeof, g_fetch_edge.named_typeof);
+    METRIC_SET(fetch_named_prop, g_fetch_edge.named_prop);
+    METRIC_SET(fetch_called, g_fetch_edge.called);
+    METRIC_SET(fetch_began, g_fetch_edge.began);
+    METRIC_SET(fetch_offered, g_fetch_edge.reached);
+    METRIC_SET(fetch_freed, g_fetch_edge.freed);
+    METRIC_SET(fetch_freed_offered, g_fetch_edge.freed_reached);
+    METRIC_SET_OBJECT(fetch_died_at, died);
+    rows = metrics_family_members_text(METRIC_FAMILY_FETCH_EDGE);
+    free(died);
+    out = composef(",%s", rows);
+    free(rows);
+    return out;
 }
 
-/* THE OTHER EDGE'S ROWS. endpoint.h states what each is, which identities close over them, that the stage
-   arms are a PARTITION and not a ladder, and why there is no relation between the placement row and the offer
-   row. The two emitters are separate for one reason and it is the one above: the row NAMES are literals. */
-/* THE KIND OF EVERY ROW THIS COMPOSER PUBLISHES THAT A CONSUMER CARRIES — stated HERE because it is this
-   composer's fact and nowhere else's, and stated in a form a machine reads because a comment stating it is
-   read by nobody holding the number. CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER: a quantity whose kind a
-   reader cannot name FROM ITS OUTPUT is one they are not entitled to do arithmetic on, and the names do not
-   say. Four kinds and what each permits:
-     lifetime  raised and never lowered — MAY be differenced across two samples of ONE instance.
-     gauge     a walk at one instant — may FALL, so differencing one reads a level as a rate.
-     constant  written once at a seed and never again — neither differenced nor read as a level.
-     maximum   monotone like a count and a HIGH-WATER MARK — it saturates and then plateaus, so a plateau is
-               NOT a ceiling and the length of the series is part of quoting it. Filed apart from `lifetime`
-               for that reason and no other: both may be differenced, and only one may be compared across two
-               runs of different length.
-   IT IS HERE AND NOT AT THE CONSUMER BECAUSE THE PERSON WHO ADDS A ROW IS THE PERSON WHO KNOWS. Every reader
-   of this census used to hold its own kind list, and the row that made the case landed one commit before this
-   one with a kind stated in no artifact at all: the author added it here and had no reason to open a driver
-   two directories away. A declaration at the emitter is edited by the diff that adds the row.
-   IT IS A SET EQUALITY AND BOTH DIRECTIONS THROW. `testing/census_rows.js` refuses a name here that this
-   composer no longer publishes — a kind statement about a renamed row is a sentence about nothing that a
-   consumer goes on printing — and refuses a row this composer PUBLISHES that no line here states a kind for.
-   Neither side is defaulted and neither is guessed. It also refuses a SECOND declaration for one composer and
-   a row stated twice, because a reader that resolved either would publish a shorter contract as a complete
-   one.
-   THE CONSUMER-SIDE CHECK THAT USED TO STAND BESIDE THOSE IS GONE AND IS NOT TO BE RE-ADDED. That reader once
-   threw separately on a row a driver CARRIES with no kind stated here; with the equality above standing, the
-   declared set and the published set are ONE set, so the carried-and-published check it already makes decides
-   that case as well, and a second test for it would be a predicate whose two sides cannot disagree.
-   COMPLETENESS IS REQUIRED HERE AND IS NO LONGER COUNTED. A row nobody carries must be declared anyway, so
-   the kind is stated by whoever adds the row rather than by whoever later needs it. That reader used to return
-   the number of rows here with no kind and a driver printed it, on the ground that a kind nobody has
-   determined must not be invented: a WRONG kind is worse than a missing one, since it LICENSES the arithmetic
-   a missing one merely fails to authorise. That is still exactly right about the KIND and was never a reason
-   to leave the ROW unnamed — the figure's only reader was whoever re-read a driver's header line, so an
-   omission stayed an omission for as long as nobody did. The count is DELETED rather than kept beside the
-   refusal, because a count that can no longer be nonzero is dead reporting that reads as live.
-   IT CHANGES NO EMITTED BYTE. This is comment text, so there is no half of it that goes live at an instant
-   the other does not — a consumer reads it from SOURCE and is therefore right about an artifact of any age,
-   including one whose stamp predates a row, where the kind is stated and the row is absent. Those are two
-   facts and they stay two.
-   THE TWO EDGES ARE NEVER SUMMED and their kinds are stated apart for the reason the rows are emitted apart:
-   they count states of two different machines whose stages are their own, so one declaration over both would
-   read as one population.
-
-   @kinds-of xhrEdge
-   @kind lifetime: epXhrAskNamedLife epXhrAskNamedTypeofLife epXhrAskNamedPropLife
-   @kind lifetime: epXhrAskCalledLife epXhrAskBeganLife epXhrAskPlacedLife epXhrAskOfferedLife
-   @kind lifetime: epXhrOutFreedLife epXhrOutFreedPlacedLife epXhrOutDiedAtLife
-*/
+/* The other edge's rows, declared in solver/metrics/xhr_edge.def; endpoint.h states what each is, which
+   identities close over them, that the stage arms are a partition and not a ladder, and why there is no
+   relation between the placement row and the offer row. */
 char *endpoint_xhr_edge_rows(void) {
-    JsonBuf b = { 0 };
+    JsonBuf hist = { 0 };
+    char *died, *rows, *out;
     long sum = 0;
 
     /* THE CROSS-CHECK THAT HAS TO COME BEFORE THE ABSENT ARM, because the absent arm returns. An offer at this
@@ -3917,8 +3764,17 @@ char *endpoint_xhr_edge_rows(void) {
            XMLHttpRequest runs no send machine and there is no population. The EMPTY STRING and not `{}`,
            because these are ROWS of the census above and the absent form has to be the absence of the rows
            and of the comma in front of them. */
-        json_buf_raw(&b, "");
-        return json_buf_take(&b);
+        METRIC_ABSENT(xhr_named);
+        METRIC_ABSENT(xhr_named_typeof);
+        METRIC_ABSENT(xhr_named_prop);
+        METRIC_ABSENT(xhr_called);
+        METRIC_ABSENT(xhr_began);
+        METRIC_ABSENT(xhr_placed);
+        METRIC_ABSENT(xhr_offered);
+        METRIC_ABSENT(xhr_freed);
+        METRIC_ABSENT(xhr_freed_placed);
+        METRIC_ABSENT(xhr_died_at);
+        return metrics_family_members_text(METRIC_FAMILY_XHR_EDGE);
     }
     sum = edge_stage_sum(&g_xhr_edge);
     edge_partition(&g_xhr_edge, "xhr send", sum);
@@ -3941,42 +3797,23 @@ char *endpoint_xhr_edge_rows(void) {
             "it, and a reader taking the rest of the asks as the OTHER doors' share would read a negative "
             "count as a large one",
             g_xhr_offered, g_asks);
-    /* AND THE CONTAINMENT THIS EDGE SHARES WITH THE OTHER ONE, which is the only relation either edge's
-       `began` has and holds here for the identical reason: `send()` is a declared member, so its stages are
-       based at IDL_STEP_FIRST and every call reaches SEND_CHECKS through core/idl_args.c's stage 0. A call
-       whose argument conversion threw or parked — §3.6's conversion of `send()`'s own argument is the page's
-       code when the page passes an object — raises the call and no begin, and that difference is the
-       population. A deep-fork copy raises neither, which is what lets this pair be asserted where the
-       placement pair below may not be. */
-    DCHECKF(g_xhr_edge.began <= g_xhr_edge.called,
-            "the XHR edge counted more send() calls that reached the member body (%ld) than calls that entered "
-            "the hosting machine's prologue (%ld) — every begin is downstream of a prologue entry and a "
-            "deep-fork copy raises neither, so a larger begin count is SEND_CHECKS reached without "
-            "core/idl_args.c's stage 0, and the difference a reader takes for the calls that died in the "
-            "conversions would be negative",
-            g_xhr_edge.began, g_xhr_edge.called);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epXhrAskNamedLife");        edge_num(&b, g_xhr_edge.named);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epXhrAskNamedTypeofLife");  edge_num(&b, g_xhr_edge.named_typeof);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epXhrAskNamedPropLife");    edge_num(&b, g_xhr_edge.named_prop);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epXhrAskCalledLife");       edge_num(&b, g_xhr_edge.called);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epXhrAskBeganLife");        edge_num(&b, g_xhr_edge.began);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epXhrAskPlacedLife");       edge_num(&b, g_xhr_edge.reached);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epXhrAskOfferedLife");      edge_num(&b, g_xhr_offered);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epXhrOutFreedLife");        edge_num(&b, g_xhr_edge.freed);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epXhrOutFreedPlacedLife");  edge_num(&b, g_xhr_edge.freed_reached);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "epXhrOutDiedAtLife");
-    edge_stage_hist(&b, &g_xhr_edge);
-    return json_buf_take(&b);
+    edge_stage_hist(&hist, &g_xhr_edge);
+    died = json_buf_take(&hist);
+    METRIC_SET(xhr_named, g_xhr_edge.named);
+    METRIC_SET(xhr_named_typeof, g_xhr_edge.named_typeof);
+    METRIC_SET(xhr_named_prop, g_xhr_edge.named_prop);
+    METRIC_SET(xhr_called, g_xhr_edge.called);
+    METRIC_SET(xhr_began, g_xhr_edge.began);
+    METRIC_SET(xhr_placed, g_xhr_edge.reached);
+    METRIC_SET(xhr_offered, g_xhr_offered);
+    METRIC_SET(xhr_freed, g_xhr_edge.freed);
+    METRIC_SET(xhr_freed_placed, g_xhr_edge.freed_reached);
+    METRIC_SET_OBJECT(xhr_died_at, died);
+    rows = metrics_family_members_text(METRIC_FAMILY_XHR_EDGE);
+    free(died);
+    out = composef(",%s", rows);
+    free(rows);
+    return out;
 }
 
 /* Serialize the @H surface DIRECTLY to a JSON string in C (caller frees) — no JS-object round-trip. The

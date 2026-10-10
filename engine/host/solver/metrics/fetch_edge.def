@@ -1,0 +1,15 @@
+/* The fetch edge (solver/endpoint.h states each row, the identities over them and why the stage arms are a
+   partition rather than a ladder), spliced into `_cold` beside `epAsks`. Absent as a whole on a host that
+   installs no fetch. `epFetchOutDiedAtLife` is an object with one arm per stage of the machine's own table.
+   The `Named` rows come first because the call row is read against them; no relation between them holds in
+   either direction (endpoint.h says which spellings make each ordinary). */
+METRIC(fetch_named,         "epFetchAskNamedLife",        LIFETIME, "resolution",   AGENT, "solver/endpoint.c", INT)
+METRIC(fetch_named_typeof,  "epFetchAskNamedTypeofLife",  LIFETIME, "resolution",   AGENT, "solver/endpoint.c", INT)
+METRIC(fetch_named_prop,    "epFetchAskNamedPropLife",    LIFETIME, "resolution",   AGENT, "solver/endpoint.c", INT)
+METRIC(fetch_called,        "epFetchAskCalledLife",       LIFETIME, "call",         AGENT, "solver/endpoint.c", INT)
+METRIC(fetch_began,         "epFetchAskBeganLife",        LIFETIME, "construction", AGENT, "solver/endpoint.c", INT)
+METRIC(fetch_offered,       "epFetchAskOfferedLife",      LIFETIME, "construction", AGENT, "solver/endpoint.c", INT)
+METRIC(fetch_freed,         "epFetchOutFreedLife",        LIFETIME, "state",        AGENT, "solver/endpoint.c", INT)
+METRIC(fetch_freed_offered, "epFetchOutFreedOfferedLife", LIFETIME, "state",        AGENT, "solver/endpoint.c", INT)
+METRIC(fetch_died_at,       "epFetchOutDiedAtLife",       LIFETIME, "state",        AGENT, "solver/endpoint.c", OBJECT)
+IDENTITY_LE(fetch_freed_offered, fetch_offered)

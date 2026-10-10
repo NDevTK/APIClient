@@ -1,0 +1,15 @@
+/* The XHR edge (solver/endpoint.h states each row and the identities over them), spliced into `_cold` after
+   the fetch edge. Absent as a whole on a host that installs no XMLHttpRequest. `epXhrAskOfferedLife` belongs
+   to no send state, so no relation to the placement row holds. `epXhrOutDiedAtLife` is an object with one arm
+   per `SEND_STEPS` stage. */
+METRIC(xhr_named,        "epXhrAskNamedLife",       LIFETIME, "resolution", AGENT, "solver/endpoint.c", INT)
+METRIC(xhr_named_typeof, "epXhrAskNamedTypeofLife", LIFETIME, "resolution", AGENT, "solver/endpoint.c", INT)
+METRIC(xhr_named_prop,   "epXhrAskNamedPropLife",   LIFETIME, "resolution", AGENT, "solver/endpoint.c", INT)
+METRIC(xhr_called,       "epXhrAskCalledLife",      LIFETIME, "call",       AGENT, "solver/endpoint.c", INT)
+METRIC(xhr_began,        "epXhrAskBeganLife",       LIFETIME, "call",       AGENT, "solver/endpoint.c", INT)
+METRIC(xhr_placed,       "epXhrAskPlacedLife",      LIFETIME, "call",       AGENT, "solver/endpoint.c", INT)
+METRIC(xhr_offered,      "epXhrAskOfferedLife",     LIFETIME, "address",    AGENT, "solver/endpoint.c", INT)
+METRIC(xhr_freed,        "epXhrOutFreedLife",       LIFETIME, "state",      AGENT, "solver/endpoint.c", INT)
+METRIC(xhr_freed_placed, "epXhrOutFreedPlacedLife", LIFETIME, "state",      AGENT, "solver/endpoint.c", INT)
+METRIC(xhr_died_at,      "epXhrOutDiedAtLife",      LIFETIME, "state",      AGENT, "solver/endpoint.c", OBJECT)
+IDENTITY_LE(xhr_began, xhr_called)

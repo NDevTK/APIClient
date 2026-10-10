@@ -1,107 +1,22 @@
-/* WHAT KIND OF NUMBER A CENSUS ROW IS, READ FROM THE PRODUCER THAT EMITS IT — one reader, every driver.
+/* What kind of number a census row is, read from the declaration its producer composes it from.
  *
- * WHAT THIS IS FOR. CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER: a gauge states what is true NOW and may never
- * be differenced; a lifetime count states what has happened since the start and may; a constant is written
- * once at a seed and is neither; a maximum is monotone like a count and is a HIGH-WATER MARK, so a plateau in
- * one is not a ceiling and it is not comparable across two runs of different length. Four kinds, one shape of
- * number, and the names do not say which. A quantity whose kind a reader cannot name FROM ITS OUTPUT is one
- * they are not entitled to do arithmetic on, so the kind is part of publishing the row.
+ * A lifetime count may be differenced across two samples of one instance; a gauge is a level and may fall; a
+ * maximum is a high-water mark, so a plateau is not a ceiling and runs of different length do not compare; a
+ * constant is written once; a regime is a policy the rows beside it are read under.
  *
- * WHY IT IS DERIVED AND WHAT IT REPLACES. `testing/live-run.js` kept SIX hand lists that were a kind
- * statement, and its own banner said why they were hand-kept: `engine/build.mjs`'s `coldFields()` derives
- * PRESENCE — which rows a composer publishes — and "no artifact in this tree states a @COLD row's kind at
- * all", so a kind list was "a fact only a reader of the producer's header can state, and a derivation that
- * guessed it from a name would be guessing". That is the gap this file closes: the producer states it, in a
- * machine-read declaration beside the composer, and every consumer derives.
- *
- * THE LISTS ANSWERED TWO QUESTIONS AND ONLY ONE OF THEM IS DERIVABLE, which is the whole of the design and is
- * why this file does not return "the rows". CLAUDE.md §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS, in a data
- * table: those lists said WHICH ROWS A DRIVER CARRIES and WHAT KIND EACH IS, and the two have different
- * owners. The curation is the DRIVER'S and is deliberately a subset — `live-run.js`'s `census()` banner
- * refuses to take everything in as many words, because "a driver that took everything would be a second copy
- * of the popup" — so deriving it would not repair the driver, it would replace its output. The KIND is the
- * PRODUCER'S and is what no artifact stated. So a consumer keeps one curated list and asks this file what each
- * member is.
- *
- * AND THE FOUR FIGURES THAT USED TO STAND HERE ARE REPLACED BY THE COMMAND THAT DERIVES THEM, because they
- * were dated status in the file whose whole job is to end a drift. They read "`result_cold_json` publishes 124
- * rows and that driver carries 56; `result_wfq_json` publishes 107 and it carries 9", and every one of the four
- * had moved: both composers grew. The derivation, which cannot go stale:
+ * A composer is a family of solver/metrics.h's registry: its rows, their kinds and representations are the
+ * METRIC lines of `engine/host/solver/metrics/<family>.def`, and solver/metrics.c composes exactly those keys,
+ * asserting at composition that every declared row was set or stated absent. So the row set and the kinds
+ * are one declaration, read here from source and therefore right about an artifact of any age (an artifact
+ * older than a row has its kind stated and the row absent, two different facts). Which rows a driver prints
+ * is the driver's curation and is not derived here; a consumer keeps its list and asks `kindsOf`,
+ * `requireWhole` and `requireFrom`. The row counts per composer:
  *     node -e 'const {censusKinds}=require("./testing/census_rows.js"), a=censusKinds();
- *              for (const k of Object.keys(a)) console.log(k, Object.keys(a[k].kindOf).length)'
- * and the carried half by spelling a consumer's own text against that row set — a FLOOR, because a consumer
- * may DERIVE rows by prefix and spell none of them.
- * THE TRAP IS ARITHMETIC AND IS WHY THIS IS WORTH MORE THAN A REFRESH: the retired "124 cold" is numerically
- * equal to what `wfq` emits TODAY, so a reader reproducing 124 would think they had matched `cold` when they
- * had matched its sibling — two composers' totals crossing over, with nothing in either number to say which.
- *
- * THREE EMISSION SHAPES AND NOT ONE, which a consumer must not paper over. `solver/result.c` composes with
- * printf format strings; `solver/endpoint.c` composes its two host-edge row sets with a key-emitting macro
- * whose argument is a string literal, and splices them into the @COLD document through a bare conversion that
- * names no row. That third fact is why the eleven `epFetch*`/`epXhr*` rows are invisible to
- * `censusComposerFields`' `name-colon-conversion` match and therefore to `build.mjs`'s presence loop: an
- * unnamed splice lands in neither its numeric list nor its object one, so the mismatch that would report it
- * never fires. This file reads BOTH shapes, so those rows have a kind here even though nothing in this tree
- * can yet require their presence.
- *
- * THE CONTRACT IS A SET EQUALITY AND EVERY SIDE OF IT THROWS. Declared-but-not-published is a row that has
- * been renamed or dropped while a kind statement about it stands; published-but-not-declared is a row whose
- * producer has stated nothing about what may be done with it. Neither is defaulted and neither is guessed —
- * CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS, where the default is the concealment. A second declaration for one
- * composer is REFUSED rather than resolved to the first, which is the cure for the hazard CLAUDE.md records at
- * exactly this shape: prose about a machine-read region that WRITES that region's markers becomes one, the
- * derived span collapses, and the contract silently empties. Prose here describes the markers and does not
- * write them, and the duplicate refusal is what makes that a backstop rather than the mechanism.
- *
- * COMPLETENESS IS REQUIRED AND IS NO LONGER COUNTED, AND THE COUNT IS DELETED RATHER THAN KEPT BESIDE THE
- * REFUSAL. This file used to return an `undeclared` count and a driver printed it, on the ground that a kind
- * nobody has determined must not be invented — a WRONG kind is worse than a missing one, since it LICENSES the
- * arithmetic a missing one merely fails to authorise. That argument is still exactly right about the KIND and
- * was never a reason to leave the ROW unnamed: the figure's only reader was whoever re-read a header line, so
- * an omission stayed an omission for as long as nobody did, and a count that shrinks as the work is done is
- * read by exactly the population about to invalidate it. It is a THROW now. The count does not survive beside
- * it, because a count that can no longer be nonzero is dead reporting that reads as live — CLAUDE.md
- * §A-superseded-system-is-DELETED — and a consumer's header clause printing a permanent zero is the same
- * statement in the same costume.
- *
- * WHAT THAT COSTS IS BORNE DELIBERATELY AND IS NOT A GAP. A composer row nobody carries must now be declared
- * anyway, so the person adding a row states its kind whether or not any driver has yet asked for it. That is
- * the whole of the price and it is paid by the one person who can pay it cheaply: they are already reading the
- * site that raises the row, which is the only place the kind can be determined from.
- *
- * NO BUILD IS NEEDED AND THIS IS NOT A CROSS-BOUNDARY DIFF, which is established rather than assumed. The
- * declarations are C COMMENT TEXT: they change no emitted byte, so there is no half that goes live at a
- * different instant from the other, and this reader takes them from SOURCE exactly as `absent_census.js` takes
- * `absent.c`'s identifiers and `build.mjs` takes `result.c`'s format strings. A driver using it therefore
- * answers correctly against an artifact of any age — including one whose stamp predates the rows, where the
- * kind is stated and the row is absent, which are two different facts and stay two here.
- *
- * NO DEFAULT, NO FALLBACK, NO SUFFIX RULE. `endpoint.c` spells a lifetime count's kind into its row names with
- * a suffix and says at that line that "a comment stating it is read by nobody holding the number"; live-run.js
- * refused to key on that suffix because "a suffix rule standing beside these lists would be two mechanisms
- * answering one question with the partial one drifting". Both are right and this file keys on neither — the
- * suffix is the producer's note to a reader and the declaration is the producer's statement to a machine.
- *
- * RETIREMENT: this file's derivation goes when a census states each row's kind in the DOCUMENT it emits, at
- * which point a consumer reads the kind off the same object it reads the number off and has nothing to parse.
- * A SECOND CONDITION STOOD HERE AND HAS BEEN MET RATHER THAN DROPPED — the `undeclared` count was to go when
- * every row of every composer carried a declaration, and it has gone. It is recorded as met rather than
- * deleted because the argument a reader re-derives is the one that put the count there: a kind must not be
- * invented, so an undeclared row cannot be given a default, so the reader has to do SOMETHING other than
- * answer — and counting is the move that suggests itself. The paragraph above says why the refusal is that
- * something, so a reader who re-derives the premise does not re-derive the count.
- *
- * NAMED RESIDUAL. NOT COVERED: the TEMPO of the refusal rather than its subject. This reader throws when a
- * DRIVER runs it, and no stage of `engine/build.mjs` asks it anything — verified, not assumed: that file names
- * this one nowhere — so the interval between a row landing with no kind and anybody meeting the refusal is
- * whatever interval separates a commit from the next driver run, which nothing bounds. WHAT THE NEXT DIFF
- * BUILDS: a build stage that CALLS this reader rather than re-deriving its rule, because a second
- * implementation of the composer walk and the declaration walk is CLAUDE.md §AN-AUDITOR-DERIVES-THE-RULE's
- * redundant copy and the copy that drifts is the one nobody runs against reality; what such a stage buys is
- * tempo and never coverage, and saying so is part of proposing it. HOW ITS ABSENCE SHOWS: an undeclared row
- * rides green through every build it is present for and refuses the first driver run afterwards, so the diff
- * that meets the refusal is reliably not the diff that introduced it, and the reader who meets it is reliably
- * not its author. */
+ *              for (const k of Object.keys(a)) console.log(k, Object.keys(a[k].kindOf).length)' */
+/* Named residual. Not covered: `wfq` and `cold` still state their kinds in `@kinds-of` comment blocks beside
+   solver/result.c's format strings, read by the comment path below. Next diff: their families in
+   solver/metrics/wfq.def and cold.def, composed through the registry, and this path deleted. Absence shows as:
+   a row added to either composer whose kind is a comment line no compiler or composition reads. */
 
 "use strict";
 
@@ -110,194 +25,125 @@ const path = require("path");
 
 const ROOT = path.join(__dirname, "..");
 
-/* THE KINDS, WHICH ARE THIS FILE'S ONE CLOSED SET AND ARE SPELLED HERE SO A TYPO IN A DECLARATION IS A THROW
-   RATHER THAN A FIFTH KIND NOBODY DEFINED. What a consumer may do with each is the whole content:
-     lifetime  raised and never lowered — MAY be differenced across two samples of ONE instance.
-     gauge     a walk at one instant — may FALL, so differencing it reads a level as a rate.
-     constant  written once at a seed and never again — neither differenced nor read as a level.
-     maximum   monotone like a count and a HIGH-WATER MARK — it saturates and then plateaus, so a plateau is
-               NOT a ceiling and the series length is part of quoting it. CLAUDE.md records a run of six
-               censuses whose maximum read the same low number at every revision because the runs were short,
-               and a whole cross-revision comparison that was a comparison of run lengths. It is filed apart
-               from `lifetime` for that reason and for no other: both may be differenced and only one may be
-               compared across two runs. */
-const KINDS = ["lifetime", "gauge", "constant", "maximum"];
+/* solver/metrics.h's MetricKind, spelled as metrics.c's schema spells it. A token outside it is a throw. */
+const KINDS = ["lifetime", "gauge", "constant", "maximum", "regime"];
+const KIND_TOKENS = { LIFETIME: "lifetime", GAUGE: "gauge", CONSTANT: "constant", MAXIMUM: "maximum",
+                      REGIME: "regime" };
+/* solver/metrics.h's MetricRepr; an OBJECT row is a nested composer's object, every other row a number. */
+const REPRS = ["INT", "FIXED1", "FIXED3", "OBJECT"];
 
-/* THE COMPOSERS THIS FILE KNOWS, EACH WITH THE SHAPE IT EMITS IN. `from`/`to` bound the function body the way
-   `build.mjs`'s reader bounds it, and `shape` picks which match finds a row. A composer added here is one
-   line; a composer whose shape is neither of these is a THIRD reader and a deliberate edit, never something
-   this file guesses past. */
+/* The composers, each with the declaration file of its family; a `format` composer is one whose kinds are
+   still comment text beside its format string (the residual above). */
 const COMPOSERS = {
   cold:      { file: "engine/host/solver/result.c",
                from: "char *result_cold_json(void)", to: "\n}\n", shape: "format" },
   wfq:       { file: "engine/host/solver/result.c",
                from: "char *result_wfq_json(void)",  to: "\n}\n", shape: "format" },
-  fetchEdge: { file: "engine/host/solver/endpoint.c",
-               from: "char *endpoint_fetch_edge_rows(void)", to: "\n}\n", shape: "key" },
-  xhrEdge:   { file: "engine/host/solver/endpoint.c",
-               from: "char *endpoint_xhr_edge_rows(void)",   to: "\n}\n", shape: "key" },
-  /* THE INVOKER RUNGS' DENOMINATOR, spliced into `_cold` beside `stepUnitRuns` exactly as the two edges above
-     are spliced beside `epAsks` — so its rows are this composer's and not `cold`'s, and the kind statement that
-     covers them has to name THIS composer or it names nothing. `key` shape for the edges' reason: the rows go
-     out through `json_buf_key`, whose argument the compiler already refuses to let be anything but a literal. */
-  rungEntry: { file: "engine/host/solver/rung_entry.c",
-               from: "char *rung_entry_rows(void)",          to: "\n}\n", shape: "key" },
+  fetchEdge: { def: "engine/host/solver/metrics/fetch_edge.def" },
+  xhrEdge:   { def: "engine/host/solver/metrics/xhr_edge.def" },
+  /* Spliced into `_cold` beside `stepUnitRuns`, as the two edges are spliced beside `epAsks`. */
+  rungEntry: { def: "engine/host/solver/metrics/rung_entry.def" },
 };
 
-/* THE ROWS A COMPOSER PUBLISHES, FROM ITS OWN EMISSION AND NOT FROM A LIST HERE. The format shape matches the
-   key and its conversion and splits on the object conversion, which is the same rule `build.mjs` states and
-   for its reason: an object row is a nested composer's and takes a different check from a number. The key
-   shape matches the macro's string-literal argument, which `endpoint.c` records cannot be anything else
-   ("a `const char *` in that position is a syntax error").
-   NO C STRING DECODING, on the rule the sibling readers in this tree already keep: a name is matched as plain
-   bytes, so a key needing an escape is simply not found — and not-found is this function's LOUD arm. */
+/* A declaration file's rows, in declaration order, which is the order the composer emits them in. Every
+   `METRIC(` is one row of the full grammar or a throw, so a row this reader cannot parse is never skipped. */
+function defRowsFromText(src, label) {
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/.*$/gm, " ");
+  const opens = (code.match(/\bMETRIC\s*\(/g) || []).length;
+  const ROW = /\bMETRIC\(\s*([A-Za-z_]\w*)\s*,\s*"([^"\\]*)"\s*,\s*([A-Z]+)\s*,\s*"([^"\\]*)"\s*,\s*([A-Z]+)\s*,\s*"([^"\\]*)"\s*,\s*([A-Z0-9]+)\s*\)/g;
+  const kindOf = Object.create(null), numeric = [], object = [];
+  let rows = 0;
+  for (const m of code.matchAll(ROW)) {
+    rows++;
+    const [, , key, kindTok, , , , repr] = m;
+    const kind = KIND_TOKENS[kindTok];
+    if (!kind)
+      throw new Error(label + ": `" + key + "` is declared with the kind " + kindTok + ", which is not one of " +
+                      Object.keys(KIND_TOKENS).join(", ") + " — solver/metrics.h's MetricKind would not compile " +
+                      "it either, so this file and that enum have parted.");
+    if (!REPRS.includes(repr))
+      throw new Error(label + ": `" + key + "` is declared with the representation " + repr + ", which is " +
+                      "not one of " + REPRS.join(", ") + ".");
+    if (key in kindOf)
+      throw new Error(label + ": `" + key + "` is declared twice — one composition would emit the key twice, " +
+                      "and a JSON reader keeps whichever came last.");
+    kindOf[key] = kind;
+    (repr === "OBJECT" ? object : numeric).push(key);
+  }
+  if (rows !== opens)
+    throw new Error(label + ": " + opens + " METRIC( rows and " + rows + " of them parse — a row this reader " +
+                    "cannot read would be a published row with no kind.");
+  if (!rows)
+    throw new Error(label + ": a declaration file with no METRIC row — its family emits nothing, and an empty " +
+                    "row set would pass every census ever printed.");
+  return { kindOf, numeric, object };
+}
+
+/* The comment path, for `format` composers only (the residual above). The rows are the key/conversion
+   pairs of the composer's format string, split on the object conversion as engine/build.mjs splits them. */
 function composerRowsFromText(src, spec, label) {
   const open = src.indexOf(spec.from);
   if (open < 0)
-    throw new Error(label + ": no composer " + JSON.stringify(spec.from) + " — its shape moved, and this " +
-                    "reader takes a census's row set from the composer rather than from a list beside it. A " +
-                    "renamed composer is a change to be told about, not one to guess a remembered list past.");
+    throw new Error(label + ": no composer " + JSON.stringify(spec.from) + " — a renamed composer is a change " +
+                    "to be told about, not one to guess a remembered list past.");
   if (src.indexOf(spec.from, open + 1) >= 0)
-    throw new Error(label + ": " + JSON.stringify(spec.from) + " occurs twice — one of them is prose quoting " +
-                    "the other, and this reader cannot say which body it is meant to read. A region anchored " +
-                    "on a string that its own surrounding prose also writes yields a SHORT or a WRONG row " +
-                    "set, which is a contract that got weaker rather than one that broke.");
+    throw new Error(label + ": " + JSON.stringify(spec.from) + " occurs twice, and this reader cannot say " +
+                    "which body it is meant to read.");
   const close = src.indexOf(spec.to, open);
   if (close < 0)
     throw new Error(label + ": the composer " + JSON.stringify(spec.from) + " is unterminated — an " +
-                    "unterminated region yields a SHORT row set, which is a contract that silently got " +
-                    "weaker rather than one that broke, so it stops here.");
+                    "unterminated region yields a short row set.");
   const body = src.slice(open, close).replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^[ \t]*\/\/.*$/gm, " ");
-
   const numeric = [], object = [];
-  if (spec.shape === "format") {
-    for (const m of body.matchAll(/\\"([A-Za-z_][A-Za-z0-9_]*)\\":%([-0-9.]*)([a-zA-Z]+)/g)) {
-      const to = m[3] === "s" ? object : numeric;
-      if (!numeric.includes(m[1]) && !object.includes(m[1])) to.push(m[1]);
-    }
-  } else if (spec.shape === "key") {
-    for (const m of body.matchAll(/json_buf_key\s*\(\s*&?[A-Za-z_][A-Za-z0-9_]*\s*,\s*"([^"\\]*)"\s*\)/g))
-      if (!numeric.includes(m[1])) numeric.push(m[1]);
-  } else {
-    throw new Error(label + ": unknown emission shape " + JSON.stringify(spec.shape));
+  for (const m of body.matchAll(/\\"([A-Za-z_][A-Za-z0-9_]*)\\":%([-0-9.]*)([a-zA-Z]+)/g)) {
+    const to = m[3] === "s" ? object : numeric;
+    if (!numeric.includes(m[1]) && !object.includes(m[1])) to.push(m[1]);
   }
   if (!numeric.length && !object.length)
-    throw new Error(label + ": the composer " + JSON.stringify(spec.from) + " names no row at all — every " +
-                    "row it publishes is written in its own emission, so a composer with none is one whose " +
-                    "shape this reader no longer recognises, and an empty row set would pass every census " +
-                    "ever printed.");
+    throw new Error(label + ": the composer " + JSON.stringify(spec.from) + " names no row at all.");
   return { numeric, object };
 }
 
-/* THE DECLARATION. Its header binds a block to ONE composer by that composer's function NAME — never by its
-   signature, which is what the row reader anchors on and which prose must therefore not write. Each line of a
-   block names one kind and the rows of that kind.
-   A SECOND BLOCK FOR ONE COMPOSER IS REFUSED AND NOT RESOLVED TO THE FIRST, which is the cure for the hazard
-   this file's banner names: a comment that writes the markers a derivation scans for BECOMES one, and the
-   quiet failure is a span that collapses to the first match while every consumer goes on reading a shorter
-   contract as a complete one. A duplicate is louder than prose discipline and does not depend on anybody
-   remembering the rule.
-   A ROW DECLARED TWICE IS REFUSED FOR THE SAME REASON — under one kind it is noise and under two it is a
-   contradiction, and a reader that took the first would publish whichever the file happened to state first. */
+/* A `format` composer's `@kinds-of <composer>` block: one `@kind <kind>: rows…` line per kind, inside one
+   comment. A second block for one composer, a row stated twice and a kind outside KINDS are refused. */
 function kindDeclarationFromText(src, composer, label) {
-  const head = new RegExp("@kinds-of[ \\t]+" + composer + "\\b", "g");
-  const hits = [...src.matchAll(head)];
-  if (!hits.length)
-    throw new Error(label + ": no kind declaration for the composer `" + composer + "` — this reader will " +
-                    "not guess a row's kind from its name, because a WRONG kind is worse than a missing one: " +
-                    "it licenses the arithmetic a missing one merely fails to authorise.");
-  if (hits.length > 1)
+  const hits = [...src.matchAll(new RegExp("@kinds-of[ \\t]+" + composer + "\\b", "g"))];
+  if (hits.length !== 1)
     throw new Error(label + ": " + hits.length + " kind declarations for the composer `" + composer + "` — " +
-                    "one of them is prose about the other, and a reader taking the first would publish a " +
-                    "shorter contract as a complete one. This is the shape that empties a machine-read " +
-                    "region in silence, so it stops here rather than resolving.");
-  /* THE BLOCK RUNS FROM ITS HEADER TO THE END OF THE COMMENT IT IS IN, which is the one terminator a C
-     comment cannot contain. Anchored forward from the header so a block is bounded by its own comment rather
-     than by a count of lines, which an inserted sentence would move. */
-  const start = hits[0].index;
-  const end = src.indexOf("*/", start);
-  if (end < 0)
-    throw new Error(label + ": the kind declaration for `" + composer + "` is not inside a terminated " +
-                    "comment — an unterminated block runs to the end of the file and would sweep every later " +
-                    "row name into whichever kind it stated last.");
-  const block = src.slice(start, end);
-
+                    "this reader will not guess a kind from a name, nor pick one of two declarations.");
+  const end = src.indexOf("*/", hits[0].index);
+  if (end < 0) throw new Error(label + ": the kind declaration for `" + composer + "` is unterminated.");
   const kindOf = Object.create(null);
   let lines = 0;
-  for (const m of block.matchAll(/@kind[ \t]+([a-z]+)[ \t]*:([^\n]*)/g)) {
+  for (const m of src.slice(hits[0].index, end).matchAll(/@kind[ \t]+([a-z]+)[ \t]*:([^\n]*)/g)) {
     lines++;
     if (!KINDS.includes(m[1]))
       throw new Error(label + ": the kind declaration for `" + composer + "` states the kind " +
-                      JSON.stringify(m[1]) + ", which is not one of " + KINDS.join(", ") + ". A fifth kind " +
-                      "is a real thing to add here deliberately; a typo silently files rows under a kind no " +
-                      "consumer knows what to do with.");
+                      JSON.stringify(m[1]) + ", which is not one of " + KINDS.join(", ") + ".");
     for (const name of m[2].split(/[\s,]+/).filter(Boolean)) {
       if (name in kindOf)
-        throw new Error(label + ": the kind declaration for `" + composer + "` states `" + name + "` twice (" +
-                        kindOf[name] + " and " + m[1] + ") — under one kind that is noise and under two it is " +
-                        "a contradiction, and a reader taking the first would publish whichever this file " +
-                        "happened to state first.");
+        throw new Error(label + ": the kind declaration for `" + composer + "` states `" + name + "` twice.");
       kindOf[name] = m[1];
     }
   }
-  if (!lines)
-    throw new Error(label + ": the kind declaration for `" + composer + "` states no kind line at all — an " +
-                    "empty declaration is a parse that matched nothing rather than a census with no kinds, " +
-                    "and it would leave every row undeclared while reading as a contract.");
+  if (!lines) throw new Error(label + ": the kind declaration for `" + composer + "` states no kind line.");
   return kindOf;
 }
 
-/* THE JOIN, WHICH IS WHERE THE SET EQUALITY LIVES AND WHERE BOTH OF ITS DIRECTIONS THROW. A declared name the
-   composer does not publish is a kind statement about a row that is no longer emitted — a sentence about
-   nothing that a consumer will go on printing. A published row no line declares is the other direction, and it
-   is a REFUSAL rather than a count: the count it replaces could only be read by somebody re-reading a header,
-   which is nobody, while a throw is met by every consumer at once.
-   IT FIRES FOR EVERY COMPOSER AND NOT ONLY FOR THE ROWS A CONSUMER ASKED ABOUT, because `censusKinds` walks
-   all of them before any consumer selects a subset. That is deliberate and is the whole forcing function: a row
-   added to a census no driver carries still stops the next driver run, so the kind is stated by the person who
-   added the row rather than by whoever later needs it.
-   AND IT IS WHY `kindsOf` NO LONGER ASKS ITS OWN VERSION OF THIS QUESTION. That function used to throw on a
-   CARRIED row with no declared kind; with this refusal standing, the declared set and the published set are one
-   set, so its carried-and-published check already decides it and a carried-and-undeclared row cannot exist to
-   be caught. It was DELETED rather than kept as a backstop — CLAUDE.md §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-
-   DISAGREE: a check that cannot fail is not a weak check but a non-check that certifies what it never
-   examined. Its REMEDY sentence survives, in the message below, at the site that can actually fire. */
-function censusKindsFromText(src, key, spec, label) {
+/* The comment path's join: the declared and published sets are one set, refused in both directions. */
+function commentKindsFromText(src, key, spec, label) {
   const rows = composerRowsFromText(src, spec, label);
   const published = new Set([...rows.numeric, ...rows.object]);
   const kindOf = kindDeclarationFromText(src, key, label);
   const gone = Object.keys(kindOf).filter((n) => !published.has(n));
   if (gone.length)
     throw new Error(label + ": the kind declaration for `" + key + "` states a kind for [" + gone.join(", ") +
-                    "], which " + JSON.stringify(spec.from) + " no longer publishes — the row has been " +
-                    "renamed or dropped while a statement about what a reader may do with it still stands. " +
-                    "Re-point the declaration at the row's new name, or drop it with the row.");
-  /* THE TWO MARKER LITERALS IN THE MESSAGE BELOW ARE SPLIT ACROSS A CONCATENATION ON PURPOSE AND ARE NOT A
-     TYPO. CLAUDE.md records the defect: prose that WRITES the delimiter a derivation scans for BECOMES one,
-     the derived span collapses, and the contract silently empties. Nothing scans this file today — the
-     declaration reader above is handed the C composer's source, never this — so the split is insurance against
-     the day somebody points a reader at `testing/` and not a present requirement. It costs two characters and
-     removes the only way this message could ever falsify the thing it is reporting on.
-     THE TEMPLATE NAMES ONE ROW AND NEVER THE WHOLE LIST, because a kind is determined per row: several rows
-     with no kind are several questions, and a template spelling them on one line would suggest filing them
-     under whichever kind the first one turned out to be. The full list is in the sentence above it. */
+                    "], which " + JSON.stringify(spec.from) + " no longer publishes.");
   const undeclared = [...published].filter((n) => !(n in kindOf));
   if (undeclared.length)
     throw new Error(label + ": " + JSON.stringify(spec.from) + " publishes [" + undeclared.join(", ") + "] " +
-                    "and the `@kinds" + "-of " + key + "` block in that same file states no kind for " +
-                    (undeclared.length === 1 ? "it" : "them") + ". STATE THE KIND THERE — one line per kind, " +
-                    "`@kin" + "d <" + KINDS.join("|") + ">: " + undeclared[0] + "`, and a row per row — " +
-                    "DETERMINED FROM " +
-                    "THE SITE THAT RAISES THE ROW AND NEVER FROM ITS NAME: a key spelling `Life` is a lifetime " +
-                    "counter of its own BUCKET while the ROW may be an extremum or a sum over whichever " +
-                    "buckets a walk reached, so it can FALL, and a kind read off the key is read off the wrong " +
-                    "noun. The kind is stated at the emitter because the person adding a row is the person " +
-                    "who knows what may be done with it; a consumer two directories away has only the name. " +
-                    "THIS IS A REFUSAL AND NOT A COUNT, which is a decision and not an oversight: a figure " +
-                    "for how many rows had no kind was read by whoever re-read a driver's header line, so it " +
-                    "left an omission standing for as long as nobody did, and it is gone. Declaring the row " +
-                    "is the only way past this, because a kind nobody has determined must not be invented — a " +
-                    "WRONG kind licenses the arithmetic a missing one merely fails to authorise.");
+                    "with no kind stated. State it, determined from the site that raises the row and never " +
+                    "from its name: a wrong kind licenses the arithmetic a missing one fails to authorise.");
   return { key, kindOf, numeric: rows.numeric, object: rows.object };
 }
 
@@ -305,29 +151,20 @@ let memo = null;
 function censusKinds() {
   if (memo) return memo;
   const byFile = new Map();
+  const read = (f) => {
+    if (!byFile.has(f)) byFile.set(f, readFileSync(path.join(ROOT, f), "utf8"));
+    return byFile.get(f);
+  };
   const out = Object.create(null);
-  for (const [key, spec] of Object.entries(COMPOSERS)) {
-    if (!byFile.has(spec.file)) byFile.set(spec.file, readFileSync(path.join(ROOT, spec.file), "utf8"));
-    out[key] = censusKindsFromText(byFile.get(spec.file), key, spec, spec.file);
-  }
+  for (const [key, spec] of Object.entries(COMPOSERS))
+    out[key] = spec.def ? { key, ...defRowsFromText(read(spec.def), spec.def) }
+                        : commentKindsFromText(read(spec.file), key, spec, spec.file);
   return (memo = out);
 }
 
-/* WHAT A CONSUMER ASKS FOR: the kinds of the rows IT carries, over one or more composers, as lists a header
-   line can print. ONE THING IS REFUSED HERE AND IT IS NOT THE MISSING KIND — a carried row the composers do
-   not publish at all is a DRIVER asking for a row nobody emits, which is this function's own question, and it
-   would otherwise print `null` for ever while reading as an artifact too old to state the row.
-   THE MISSING KIND IS REFUSED ONE LEVEL UP AND THIS FUNCTION MUST NOT RE-ASK IT. `censusKindsFromText` now
-   makes the declared set and the published set ONE set per composer, so `carried ⊆ published` — the check
-   below — already entails `carried ⊆ declared`, and a second `if` testing the second would be a predicate
-   whose two sides cannot disagree. There WAS such a check here and it is deleted rather than demoted to a
-   backstop, because the transcript of a check that can never fire is the harm: it reads as the thing that
-   guarantees the property while the guarantee is entirely upstream, and it would go on reading that way if
-   the upstream refusal were ever weakened to a count again. Its remedy sentence moved to the refusal that
-   can fire.
-   SO THE PARTITION BELOW IS TOTAL BY CONSTRUCTION, which is worth stating because a reader is entitled to
-   ask: every carried name is published, every published name is declared, and every declared kind is one of
-   `KINDS` — so the four lists sum to `carried` and a name cannot fall out of all of them. */
+/* The kinds of the rows a consumer carries, over one or more composers, as lists a header line can print.
+   A carried row no composer publishes is refused: it would print `null` for ever and read as an artifact too
+   old to state it. Every published row has a kind, so the partition below is total. */
 function kindsOf(carried, keys) {
   const all = censusKinds();
   const ks = keys || Object.keys(all);
@@ -349,36 +186,10 @@ function kindsOf(carried, keys) {
   return { byKind };
 }
 
-/* AND THE DIRECTION `kindsOf` CANNOT ASK: A ROW THE PRODUCER PUBLISHES THAT A CONSUMER TAKING THAT COMPOSER
-   WHOLE DOES NOT CARRY. `kindsOf` refuses `carried ⊄ published` — a driver asking for a row nobody emits — and
-   is silent the other way round, deliberately and correctly, because a consumer's CURATION is its own: this
-   file's banner says so in as many words, and `live-run.js` carries a deliberate MINORITY of
-   `result_cold_json`'s rows by design — the figures are not quoted here for the reason the banner above gives,
-   and the command that derives them is there. A SUBSET IS NOT A DEFECT and cannot be made one in general.
-   WHAT IS A DEFECT IS A SUBSET NOBODY DECLARED. A consumer that takes a whole composer — because the producer
-   says its rows are ONE READING, as `rung_entry_rows`' three-per-rung ladder does — has a length that is
-   CHECKABLE, and until it says so nothing anywhere can tell a curated six from a missed nine. MEASURED at
-   56206ade: `rung_entry_rows` published NINE rows and `testing/live-run.js` named SIX, omitting exactly one
-   VARIANT across all three families, which is the signature of an emitter that grew and a hand list that did
-   not — while that list's own banner said `ALL SIX`. NOTHING IN THIS TREE COULD HAVE REPORTED IT: those rows
-   reach `_cold` through a splice that names no row, so `build.mjs`'s presence loop cannot require them
-   (`censusComposerFields`' own `\"name\":%` match cannot see an unnamed splice), and this file required their
-   KIND and never their carriage.
-   IT IS AN ASSERT AND NOT A DERIVATION OF THE LIST, WHICH IS A DECISION AND IS WHY THE NAMES STAY SPELLED AT
-   THE CONSUMER. Replacing the list with a call that returns the composer's rows reads as the stronger fix and
-   measurably is not: the names then appear in no construct anywhere, and `engine/fieldgate.mjs`'s holder band —
-   which is what keeps a spelled-and-computed-read row out of its WRITE-with-no-reader accusation — has nothing
-   left to see. MEASURED in a frozen snapshot at 56206ade, both arms: the derived form takes that accusation
-   from FOUR rows of this composer to NINE, which is §Architecture's prescribed remedy arguing for undoing the
-   fix. What was missing was never the list, it was the invariant CLAUDE.md
-   §THE-COROLLARY-IS-THE-MORE-USEFUL-HALF prescribes — one added total covers every future spelling of the
-   question, where a rewritten predicate covers only the one somebody happened to find.
-   IT TAKES THE COMPOSER KEYS AND NEVER A REGION, so the consumer states WHICH COMPOSER it takes whole and this
-   file keeps the only statement of where that composer lives. A path and two literals repeated at the consumer
-   would be a second copy of `COMPOSERS`, which is the drift this whole file exists to end.
-   THE TEMPO IS THE ONE THIS FILE ALREADY HAS and is stated rather than implied: a throw at the next driver run,
-   naming the rows to add, with no build stage asking it — §AN-UNDECLARED-ROW rides green through every build it
-   is present for, so the reader who meets this refusal is reliably not its author. */
+/* A consumer that takes a composer whole carries every row it publishes. A subset is a curation and is not a
+   defect; a subset of a composer the consumer declared whole is, because those rows are spliced into their
+   document under no name and nothing else can require them. The names stay spelled at the consumer, where
+   engine/fieldgate.mjs reads them; this asserts the list is complete. */
 function requireWhole(carried, keys) {
   const all = censusKinds();
   const have = new Set(carried);
@@ -394,45 +205,19 @@ function requireWhole(carried, keys) {
       throw new Error("testing/census_rows.js: the composer `" + k + "` publishes [" + missing.join(", ") +
                       "] and the consumer that declares it TAKEN WHOLE does not carry " +
                       (missing.length === 1 ? "it" : "them") + ". CARRY THE ROW, or stop declaring `" + k +
-                      "` whole — those are the two answers and a silent subset is neither. This refusal " +
-                      "exists because a hand-kept subset of one composer's rows cannot be told from a " +
-                      "complete list by anything: the rows are spliced into their document under no name, so " +
-                      "no presence loop can require them, and a driver's own banner claiming to carry all of " +
-                      "them is prose. A row whose producer says it is read WITH its siblings — a ladder, a " +
-                      "pair, a partition — is a row whose omission makes the siblings unreadable rather than " +
-                      "merely absent.");
+                      "` whole — those are the two answers and a silent subset is neither. A row whose " +
+                      "producer says it is read WITH its siblings — a ladder, a pair, a partition — is a row " +
+                      "whose omission makes the siblings unreadable rather than merely absent.");
   }
 }
 
-/* AND THE DIRECTION NEITHER OF THE TWO ABOVE CAN ASK: A ROW CARRIED FROM THE WRONG OBJECT. `kindsOf` asks
-   whether a carried row is published by ANY composer and `requireWhole` asks whether one composer's rows are
-   all carried; a consumer that reads its census objects SEPARATELY — `r.cold` for one list and `r.wfq` for
-   another, which is what every driver here does — can satisfy both and still look a row up in the object that
-   does not publish it. The row is then `null` ON EVERY RUN FOR EVER, which is this project's
-   absent-versus-zero pair landing on the consumer's own lookup: a reader meets `-` and reads it as an artifact
-   too old to state the row.
-   MEASURED, AND BY THE AUTHOR OF THE TWO CHECKS ABOVE, IN THE DIFF THAT ADDED ROWS TO CLOSE EXACTLY THIS
-   DEFECT ELSEWHERE. Twelve `wfq`-composer rows (`preemptAsksLifetime`, the four `scan*Runs`/`scan*Weights`
-   pairs and the three `rivalMiss*`) were added to `live-run.js`'s COLD_COUNTERS, which reads `r.cold`. Both
-   checks above PASSED — every one of the twelve is published, and no composer was declared whole — and a
-   180 s drive of a real page read `null` for all twelve. The defect was found by asking which composer owned
-   them, which is the question this function makes unspellable-to-get-wrong.
-   IT NAMES THE COMPOSER THAT REALLY OWNS THE ROW, because the repair is to MOVE the row rather than to think
-   about it: a message that says only "wrong object" sends a reader back to the producer's format string, which
-   is the lookup they already got wrong. */
+/* A consumer reads each row out of the object that publishes it. An object is not one composer: a census
+   document splices several (`_cold` carries `rungEntry`, `fetchEdge` and `xhrEdge` beside `cold`), so the
+   caller states the union spliced into each object, which only the producer's arrangement decides. A row
+   looked up in the wrong object is `null` on every run, and the message names the composer that owns it. */
 function requireFrom(spec) {
   const all = censusKinds();
   for (const k of Object.keys(spec)) {
-    /* AN OBJECT IS NOT A COMPOSER, WHICH THIS FUNCTION ASSUMED AND THE TREE REFUTED ON ITS FIRST RUN. A census
-       DOCUMENT splices SEVERAL producers into one object — `_cold` carries `rungEntry`, `fetchEdge` and
-       `xhrEdge` rows beside `cold`'s own, which is exactly why `live-run.js` declares those three TAKEN WHOLE
-       — so the permitted set for an object is the UNION of the composers spliced into it and never one
-       composer's rows. Written the narrow way, this refused eleven correctly-placed `rungEntry` rows the first
-       time it ran: a check whose first output is an accusation against correct code is the over-strict
-       direction CLAUDE.md rates as needing more suspicion than the quiet one, and it is recorded here rather
-       than quietly widened because a reader who re-derives `one object, one composer` from the names will
-       narrow it again. The caller states the union; it cannot be inferred, because which producers a document
-       splices is the producer's own arrangement. */
     const names = spec[k].composers;
     const rows = spec[k].rows;
     const pub = new Set();
@@ -464,5 +249,4 @@ function requireFrom(spec) {
   }
 }
 
-module.exports = { KINDS, COMPOSERS, composerRowsFromText, kindDeclarationFromText, censusKindsFromText,
-                   censusKinds, kindsOf, requireWhole, requireFrom };
+module.exports = { KINDS, COMPOSERS, defRowsFromText, censusKinds, kindsOf, requireWhole, requireFrom };

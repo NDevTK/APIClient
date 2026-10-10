@@ -5,14 +5,14 @@
    clone of a step machine's job is a step job), `_layoutJobRests` the rest points a driver took
    with its job alive, and `_layoutServedAcrossRest` the memo answers recorded before such a rest and served
    after it: a nonzero value is a job that suspended and resumed with its memo. */
-METRIC(bf_asks,            "_layoutBfAsks",           LIFETIME, "ask",  AGENT, "core/layout/layout_job.c")
-METRIC(bf_served,          "_layoutBfServed",         LIFETIME, "ask",  AGENT, "core/layout/layout_job.c")
-METRIC(bf_deferred,        "_layoutBfDeferred",       LIFETIME, "ask",  AGENT, "core/layout/layout_job.c")
-METRIC(bf_replays,         "_layoutBfReplays",        LIFETIME, "body", AGENT, "core/layout/layout_job.c")
-METRIC(jobs_step,          "_layoutJobsStep",         LIFETIME, "job",  AGENT, "core/layout/layout_job.c")
-METRIC(jobs_paint,         "_layoutJobsPaint",        LIFETIME, "job",  AGENT, "core/layout/layout_job.c")
-METRIC(job_rests,          "_layoutJobRests",         LIFETIME, "rest", AGENT, "core/layout/layout_job.c")
-METRIC(served_across_rest, "_layoutServedAcrossRest", LIFETIME, "ask",  AGENT, "core/layout/layout_job.c")
+METRIC(bf_asks,            "_layoutBfAsks",           LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
+METRIC(bf_served,          "_layoutBfServed",         LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
+METRIC(bf_deferred,        "_layoutBfDeferred",       LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
+METRIC(bf_replays,         "_layoutBfReplays",        LIFETIME, "body", AGENT, "core/layout/layout_job.c", INT)
+METRIC(jobs_step,          "_layoutJobsStep",         LIFETIME, "job",  AGENT, "core/layout/layout_job.c", INT)
+METRIC(jobs_paint,         "_layoutJobsPaint",        LIFETIME, "job",  AGENT, "core/layout/layout_job.c", INT)
+METRIC(job_rests,          "_layoutJobRests",         LIFETIME, "rest", AGENT, "core/layout/layout_job.c", INT)
+METRIC(served_across_rest, "_layoutServedAcrossRest", LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
 IDENTITY_LE(bf_served,          bf_asks)
 IDENTITY_LE(bf_deferred,        bf_asks)
 IDENTITY_LE(served_across_rest, bf_served)

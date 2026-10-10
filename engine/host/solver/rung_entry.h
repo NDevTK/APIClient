@@ -135,7 +135,8 @@ void  rung_entry_compile_global_named(const char *name, int typeof_only);
    this file's own census for what is still owed about it. */
 void  rung_entry_compile_global_member(const char *member);
 
-/* The rows on the heap (caller frees; NULL only on allocation failure). ROWS AND NOT A CENSUS OF THEIR OWN, for
+/* The rows on the heap (caller frees; NULL only on allocation failure), composed from the registry family
+   solver/metrics/rung_entry.def declares. ROWS AND NOT A CENSUS OF THEIR OWN, for
    the reason solver/endpoint.h gives for the edge rows: they are spliced into `_cold` beside `stepUnitRuns`,
    each with a LEADING comma, because a reader compares WITHIN a census — and a nested census would have needed
    a name in extension/bridge.js's relay list and a row in extension/popup.js's, which are TRUSTED-ZONE

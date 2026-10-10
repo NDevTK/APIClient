@@ -1,5 +1,6 @@
 #include "solver/rung_entry.h"
-#include "core/json_buf.h"
+#include "solver/compose.h"   /* the splice's leading comma — see rung_entry_rows */
+#include "solver/metrics.h"   /* the rows, declared in solver/metrics/rung_entry.def */
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
@@ -9,10 +10,8 @@
    not three pairs of `#define`s for `ENDPOINT_DOORS`' reason: the slot table, the declaration's membership test
    and the census over it are ONE enumeration, so a rung added here gains its slot, its assertion arm and its
    two rows in the same expansion and a rung added anywhere else gains none of them.
-   THE ROW NAMES ARE LITERALS BECAUSE `json_buf_key` TAKES ONE and the compiler enforces it (core/json_buf.h
-   states why), which is the property that makes every field name this seam publishes readable off this source.
-   That is also the whole reason the list exists rather than a loop over `StepUnit`: a computed key is not a
-   thing this seam can express, so the rungs that may be counted are exactly the rungs written here.
+   The row names are declared in solver/metrics/rung_entry.def, each a literal, so a rung added here also needs
+   its rows there and an arm in rung_entry_rows, which asserts it has one for every declared rung.
    WHY THESE THREE AND NOT THE REST OF THE LADDER: they are the arms whose work a PROGRAM asks for by naming a
    global — solver/engine.c's rendering, timer and idle arms. `run-a-task`, `deliver-one-reply` and the program
    arms are asked for by the document's own structure or by a reply arriving, so there is no identifier a
@@ -151,110 +150,48 @@ void rung_entry_compile_global_named(const char *name, int typeof_only) {
     }
 }
 
-/* …the same number conversion solver/endpoint.c's `edge_num` performs, and for its reason: core/json_buf.h has
-   no numeric entry, so a count reaches the buffer as the bytes of its own decimal form. */
-static void rung_num(JsonBuf *b, long v) {
-    char t[32];
-    int n = snprintf(t, sizeof t, "%ld", v);
+/* One declared rung's three rows, or their absence: a rung whose component this host did not install has no
+   rows, and a rung that is installed and whose names the compiler never resolved has rows reading 0. Two
+   different facts, told apart by presence. */
+#define RUNG_SAMPLE(slot, named_id, typeof_id, prop_id)            \
+    do {                                                            \
+        if (g_rungs[slot].names) {                                  \
+            METRIC_SET(named_id, g_rungs[slot].named);              \
+            METRIC_SET(typeof_id, g_rungs[slot].named_typeof);      \
+            METRIC_SET(prop_id, g_rungs[slot].named_prop);          \
+            emitted++;                                              \
+        } else {                                                    \
+            METRIC_ABSENT(named_id);                                \
+            METRIC_ABSENT(typeof_id);                               \
+            METRIC_ABSENT(prop_id);                                 \
+        }                                                           \
+    } while (0)
 
-    DCHECK(n > 0 && (size_t)n < sizeof t,
-           "a census number did not fit its own conversion buffer — the width of a long's decimal form is a "
-           "property of the type, so this is a host whose long is wider than this buffer was written for and "
-           "the number about to be published has lost its leading digits");
-    json_buf_raw(b, t);
-}
-
+/* No containment with `stepUnitRuns` holds in either direction, so none is asserted: a rung may run more times
+   than its names were resolved (one `setInterval` call feeds the timer arm for ever) or fewer, and running fewer
+   is two states — reached and declined, or never given a turn — which solver/engine.h's `clock_render_asks`
+   triple, published beside `stepUnitRuns`, separates. */
 char *rung_entry_rows(void) {
-    JsonBuf b = { 0 };
     int declared = 0, emitted = 0;
+    char *rows, *out;
 
     for (int s = 0; s < RUNG_SLOT_N; s++) if (g_rungs[s].names) declared++;
-    /* NOTHING DECLARED IS THE ABSENT FORM AND IS NOT SIX ZEROES — see the header. `json_buf_take` on an untouched
-       buffer answers the empty string, which is what the splice wants, and the leading commas below are why the
-       rows and their separator go together. */
-    if (!declared) return json_buf_take(&b);
-    /* THE KEYS ARE WRITTEN OUT AND ARE NOT GENERATED FROM `RUNG_ENTRIES`, which is solver/endpoint.c's own rule
-       for its two edges and is load-bearing twice. `json_buf_key` takes a STRING LITERAL and the compiler
-       enforces it, so a key composed by a macro parameter is not a thing this seam can express — and the wider
-       reason is that testing/census_rows.js reads a `key`-shaped composer by matching that macro's literal
-       argument, so a generated key would publish a row whose KIND no artifact states and which that gate is
-       structurally unable to see. A field name this seam publishes is readable off this source or it is not
-       checked by anything.
-       ONLY THE DECLARED RUNGS, WHICH MAKES THE KEY SET ITSELF THE STATEMENT OF WHICH ARMS HAVE A DENOMINATOR. A
-       rung whose component this host did not install has no row; a rung that IS installed and whose names the
-       compiler never resolved has a row reading 0. Two different facts, told apart by presence. */
-    if (g_rungs[RUNG_SLOT_RENDERING].names) {
-        json_buf_raw(&b, ",");
-        json_buf_key(&b, "stepNamedRenderingLife");
-        rung_num(&b, g_rungs[RUNG_SLOT_RENDERING].named);
-        json_buf_raw(&b, ",");
-        json_buf_key(&b, "stepNamedRenderingTypeofLife");
-        rung_num(&b, g_rungs[RUNG_SLOT_RENDERING].named_typeof);
-        json_buf_raw(&b, ",");
-        json_buf_key(&b, "stepNamedRenderingPropLife");
-        rung_num(&b, g_rungs[RUNG_SLOT_RENDERING].named_prop);
-        emitted++;
-    }
-    if (g_rungs[RUNG_SLOT_TIMER].names) {
-        json_buf_raw(&b, ",");
-        json_buf_key(&b, "stepNamedTimerLife");
-        rung_num(&b, g_rungs[RUNG_SLOT_TIMER].named);
-        json_buf_raw(&b, ",");
-        json_buf_key(&b, "stepNamedTimerTypeofLife");
-        rung_num(&b, g_rungs[RUNG_SLOT_TIMER].named_typeof);
-        json_buf_raw(&b, ",");
-        json_buf_key(&b, "stepNamedTimerPropLife");
-        rung_num(&b, g_rungs[RUNG_SLOT_TIMER].named_prop);
-        emitted++;
-    }
-    if (g_rungs[RUNG_SLOT_IDLE_PERIOD].names) {
-        json_buf_raw(&b, ",");
-        json_buf_key(&b, "stepNamedIdleLife");
-        rung_num(&b, g_rungs[RUNG_SLOT_IDLE_PERIOD].named);
-        json_buf_raw(&b, ",");
-        json_buf_key(&b, "stepNamedIdleTypeofLife");
-        rung_num(&b, g_rungs[RUNG_SLOT_IDLE_PERIOD].named_typeof);
-        json_buf_raw(&b, ",");
-        json_buf_key(&b, "stepNamedIdlePropLife");
-        rung_num(&b, g_rungs[RUNG_SLOT_IDLE_PERIOD].named_prop);
-        emitted++;
-    }
-    /* AND THE TWO SIDES IN ONE HAND, which is what the declaration's own membership assert cannot reach. That one
-       refuses a rung outside `RUNG_ENTRIES`; this one refuses a rung INSIDE it that this function has no arm
-       for — a slot that accumulates a count reaching no reader, which is §A-FIELD-A-CONSUMER-DEFAULTS' write
-       with no reader and the one thing a census cannot show, since the absent row looks exactly like a row
-       nobody has added yet. It is the reason the keys being written out costs nothing: the day a fourth rung
-       joins the list, THIS fires rather than its denominator going quietly unpublished. */
+    RUNG_SAMPLE(RUNG_SLOT_RENDERING, rung_named_rendering, rung_named_rendering_typeof, rung_named_rendering_prop);
+    RUNG_SAMPLE(RUNG_SLOT_TIMER, rung_named_timer, rung_named_timer_typeof, rung_named_timer_prop);
+    RUNG_SAMPLE(RUNG_SLOT_IDLE_PERIOD, rung_named_idle, rung_named_idle_typeof, rung_named_idle_prop);
+    /* A slot of `RUNG_ENTRIES` with no arm above would accumulate a count that reaches no reader, which a census
+       cannot show: the absent row looks exactly like a row nobody has added yet. */
     DCHECKF(emitted == declared,
             "%d rungs declared an entry table and this census published %d of them — every counted rung needs "
-            "an arm here, because its row name is a literal and cannot be composed, so a declared rung with no "
-            "arm raises a count that reaches no reader and reads as a rung nobody has instrumented yet",
+            "an arm here and rows in solver/metrics/rung_entry.def, or its count reaches no reader",
             declared, emitted);
-    return json_buf_take(&b);
+    rows = metrics_family_members_text(METRIC_FAMILY_RUNG_ENTRY);
+    if (!rows || !rows[0]) return rows;
+    out = composef(",%s", rows);
+    free(rows);
+    return out;
 }
-
-/* @kinds-of rungEntry
-   @kind lifetime: stepNamedRenderingLife stepNamedRenderingTypeofLife stepNamedRenderingPropLife
-   @kind lifetime: stepNamedTimerLife stepNamedTimerTypeofLife stepNamedTimerPropLife
-   @kind lifetime: stepNamedIdleLife stepNamedIdleTypeofLife stepNamedIdlePropLife
-   EVERY ROW HERE IS A LIFETIME COUNT AND NONE IS A GAUGE — they may be differenced and accumulated, they cannot
-   decrease, and a sample below its predecessor is this file and not the run. THE KIND IS STATED AT THE EMITTER
-   because the person who adds a row is the person who knows what may be done with it, which is the rule
-   solver/result.c's own declaration block gives at length.
-   AND THEY ARE NOT SITE COUNTS. A program is recompiled by every flow that replays it, so these count COMPILER
-   RESOLUTIONS and are read as a BIT — zero against nonzero — never as a magnitude and never against a static
-   per-bundle figure. The names say `Named` rather than `Sites` so that nobody reads them as the second.
-   NO CONTAINMENT WITH `stepUnitRuns` MAY BE ASSERTED IN EITHER DIRECTION, which is why there is no identity in
-   this file over the pair the header is about. A rung may run MORE times than its names were resolved (one
-   `setInterval` call feeds the timer arm for ever) and it may run FEWER, and the two inequalities are both
-   ordinary.
-   THAT SENTENCE READ `and it may run FEWER (the finding)`, AND THE PARENTHESIS IS RETIRED RATHER THAN DELETED
-   BECAUSE IT IS THE LABEL A READER RE-DERIVES FROM THIS PAIR ALONE. Running fewer is TWO states and not one:
-   the rung was REACHED and declined every time, or the ladder never gave it a turn — and only the first is a
-   fact about the rung. solver/engine.h's `clock_render_asks` triple is the arrival count that separates them,
-   published beside `stepUnitRuns`, and this file's own header now carries the three-row ladder. THE SENTENCE
-   AROUND IT IS UNCHANGED AND WAS NEVER THE DEFECT: it is about MAGNITUDES, where no containment holds in
-   either direction, and the claim that went wrong was the one-word LABEL on one of its two inequalities. */
+#undef RUNG_SAMPLE
 
 /* THE RESIDUAL THAT ASKED FOR THE `…PropLife` ROWS IS RETIRED, AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE
    ITS REMEDY CLAUSE WAS WRONG IN TWO WAYS A READER WILL RE-DERIVE FROM ITS OWN REASONING. Its NOT-COVERED half

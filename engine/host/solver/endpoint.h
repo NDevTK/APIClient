@@ -456,7 +456,8 @@ void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, lon
      `epFetchOutFreedOfferedLife`: of those, the ones that had offered an address.
      `epFetchOutDiedAtLife`: of the freed states that offered none, one arm per stage they stood at, keyed by
        the machine's own `js_fetch_steps[]` labels handed over at the declaration. */
-/* Identities, asserted in endpoint_fetch_edge_rows: the died-at arms plus freed-and-offered equal freed (two
+/* Identities, asserted in endpoint_fetch_edge_rows or, where solver/metrics/fetch_edge.def declares them, at
+   the family's composition: the died-at arms plus freed-and-offered equal freed (two
    arms of one teardown); freed-and-offered <= offered (the slack is offered states still parked on their
    reply; the offering stage returns rather than parks and no page code runs before teardown, so no flagged
    state is cloned); offered <= `epAsks` (the slack is every other door); began > 0 implies called > 0.
@@ -525,7 +526,8 @@ char   *endpoint_fetch_edge_rows(void);
      `epXhrOutFreedLife`, `epXhrOutFreedPlacedLife`: send states torn down after a construction began (deep-fork
        copies included), and of those the ones that had placed.
      `epXhrOutDiedAtLife`: of the freed states that placed nothing, one arm per `SEND_STEPS` stage. */
-/* Identities, asserted in endpoint_xhr_edge_rows: the died-at arms plus freed-and-placed equal freed (a deep
+/* Identities, asserted in endpoint_xhr_edge_rows or, where solver/metrics/xhr_edge.def declares them, at the
+   family's composition: the died-at arms plus freed-and-placed equal freed (a deep
    fork's copy gets its own teardown, so this survives forks); offered <= `epAsks`; began <= called.
    Not assertable, unlike the fetch edge: freed-and-placed <= placed, `freed <= began` and `placed <= began`.
    A deep fork byte-copies the send state with its flags, and `send()` runs page code after placing: the
