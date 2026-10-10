@@ -25,6 +25,7 @@
 
 /* One computed value; the arm is css_property_shape(id)'s. */
 typedef union {
+    char            *text;            /* CSS_COMPUTED_SHAPE_TEXT; the record owns it, and NULL is an answer */
     CssLength        length;          /* CSS_COMPUTED_SHAPE_LENGTH */
     CssLineHeight    line_height;     /* CSS_COMPUTED_SHAPE_LINE_HEIGHT */
     CssBorderSpacing border_spacing;  /* CSS_COMPUTED_SHAPE_BORDER_SPACING */
@@ -46,10 +47,14 @@ typedef struct {
 void css_computed_style_hold_begin(CssComputedStyleHold *h);
 void css_computed_style_hold_end(CssComputedStyleHold *h);
 
-/* Inside a hold: answers true and writes `*out` when `el`'s record holds `id`. False marks the pair as being
-   derived, and its one caller derives it and reports it with `answer` with no return between the two; asking
-   a pair already being derived is a derivation that depends on itself, and crashes. */
+/* Inside a hold: answers true and writes `*out` when `el`'s record holds `id`; a text arm is borrowed until the
+   record is released. False marks the pair as being derived, and its one caller derives it and reports it
+   with `answer` with no return between the two, which takes a text arm's ownership; asking a pair already
+   being derived is a derivation that depends on itself, and crashes. */
 bool css_computed_style_ask(lxb_dom_element_t *el, CssPropertyId id, CssComputedValue *out);
 void css_computed_style_answer(lxb_dom_element_t *el, CssPropertyId id, const CssComputedValue *v);
+
+/* Lifetime counters of this agent: asks, those a record answered, and those derived. They close. */
+void css_computed_style_census(long long *asks, long long *served, long long *derived);
 
 #endif /* ENGINE_HOST_BROWSER_CORE_CSS_CSS_COMPUTED_STYLE_H */

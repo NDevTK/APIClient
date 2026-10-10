@@ -15,29 +15,22 @@
 #include "core/css/css_match_result.h"
 #include "core/layout/layout_job.h"   /* the record of the job whose activation holds the thread */
 
-/* One entry per (element, property), holding two facts about the pair: its cascaded value and its computed
-   value (css_computed_value), each with its own presence flag because the two are recorded by different
-   callers at different moments. The name is copied whole: a custom property's name (css-variables-1
-   §2's `--*`) arrives on the stack of the frame that composed it, so a stored pointer would answer for freed
-   bytes, and a fixed-size copy would let two names agreeing in their first N bytes share an answer. */
+/* One entry per (element, property): its cascaded value. The name is copied whole: a custom property's name
+   (css-variables-1 §2's `--*`) arrives on the stack of the frame that composed it, so a stored pointer would
+   answer for freed bytes, and a fixed-size copy would let two names agreeing in their first N bytes share an
+   answer. */
 typedef struct CpEntry {
     lxb_dom_element_t *el;      /* NULL is empty; nothing is ever removed, so there are no tombstones */
     char              *name;    /* owned, and never NULL in an occupied slot */
     /* The cascaded value, owned. NULL is one of the answers: "if the output of the cascade is an empty list,
        there is no cascaded value" (css-cascade-5 §4.2), which css-cascade-5 §7 "Defaulting" is written for. */
     char              *value;
-    char              *computed;      /* the computed value, owned */
-    bool               has_value;
-    bool               has_computed;
 } CpEntry;
 
 /* The census: lifetime counters of this agent, raised at the question and at its one outcome. */
 static long long g_asks;
 static long long g_served;
 static long long g_resolved;
-static long long g_computed_asks;
-static long long g_computed_served;
-static long long g_computed_resolved;
 static long long g_match_asks;
 static long long g_match_served;
 static long long g_match_built;
@@ -88,10 +81,9 @@ static void cp_grow(CssCascadeRecord *r)
     r->cap = cap;
 }
 
-/* Claim slot `i` for (el, name) when it is empty; a slot already holding the pair keeps its other fact. */
+/* Claim the empty slot `i` for (el, name). */
 static void cp_occupy(CssCascadeRecord *r, size_t i, lxb_dom_element_t *el, const char *name)
 {
-    if (r->tab[i].el != NULL) return;
     r->tab[i].el = el;
     r->tab[i].name = strdup(name);
     CHECK(r->tab[i].name != NULL, "css-cascade-pass-oom: a property name could not be copied into "
@@ -106,7 +98,6 @@ void css_cascade_record_release(CssCascadeRecord *r)
     for (i = 0; i < r->cap; i++) {
         free(r->tab[i].name);
         free(r->tab[i].value);
-        free(r->tab[i].computed);
     }
     free(r->tab);
     r->tab = NULL;
@@ -309,7 +300,7 @@ bool css_cascade_pass_ask(lxb_dom_element_t *el, const char *name, char **out)
     g_asks++;
     if (r == NULL || r->cap == 0) return false;
     i = cp_probe(r->tab, r->cap, el, name);
-    if (r->tab[i].el == NULL || !r->tab[i].has_value) return false;
+    if (r->tab[i].el == NULL) return false;
     /* The copy is the contract: the cascade's own answer is owned by its caller, who frees it. */
     if (r->tab[i].value == NULL) {
         *out = NULL;
@@ -336,63 +327,16 @@ void css_cascade_pass_record(lxb_dom_element_t *el, const char *name, const char
     i = cp_probe(r->tab, r->cap, el, name);
     /* One answer per key: the one caller asks before it resolves and resolves only on a miss, so a key
        already here is a probe that looked one way and stored another. */
-    DCHECK(r->tab[i].el == NULL || !r->tab[i].has_value,
+    DCHECK(r->tab[i].el == NULL,
            "css-cascade-5 §4.2's cascaded-value record was handed a SECOND answer for a pair it already "
            "holds. Its one caller asks before it resolves the cascade and resolves only when the ask came "
            "back empty, so the ask and the record disagreed about which slot the pair occupies, and every "
            "answer served since is filed under some other question");
     cp_occupy(r, i, el, name);
-    r->tab[i].has_value = true;
     if (value != NULL) {
         r->tab[i].value = strdup(value);
         CHECK(r->tab[i].value != NULL, "css-cascade-pass-oom: a cascaded value could not be copied into "
                                        "css-cascade-5 §4.2's record");
-    }
-}
-
-bool css_cascade_pass_computed_ask(lxb_dom_element_t *el, const char *name, char **out)
-{
-    CssCascadeRecord *r = layout_job_cascade();
-    size_t i;
-
-    DCHECK(el != NULL && name != NULL && out != NULL,
-           "a computed value was asked of the record with no element, no property name or nowhere to put it");
-    g_computed_asks++;
-    if (r == NULL || r->cap == 0) return false;
-    i = cp_probe(r->tab, r->cap, el, name);
-    if (r->tab[i].el == NULL || !r->tab[i].has_computed) return false;
-    if (r->tab[i].computed == NULL) {
-        *out = NULL;
-    } else {
-        *out = strdup(r->tab[i].computed);
-        CHECK(*out != NULL, "css-cascade-pass-oom: a recorded computed value could not be copied for its "
-                            "caller, who owns and frees what css_computed_value hands back");
-    }
-    g_computed_served++;
-    return true;
-}
-
-void css_cascade_pass_computed_record(lxb_dom_element_t *el, const char *name, const char *value)
-{
-    CssCascadeRecord *r = layout_job_cascade();
-    size_t i;
-
-    DCHECK(el != NULL && name != NULL,
-           "a computed value was handed to the record with no element or no property name to file it under");
-    g_computed_resolved++;
-    if (r == NULL) return;
-    if (r->used * 2 >= r->cap) cp_grow(r);
-    i = cp_probe(r->tab, r->cap, el, name);
-    DCHECK(r->tab[i].el == NULL || !r->tab[i].has_computed,
-           "the record was handed a SECOND computed value for a pair it already holds. css_computed_value asks "
-           "before it computes and computes only on a miss, so the ask and the record disagreed about which "
-           "slot the pair occupies");
-    cp_occupy(r, i, el, name);
-    r->tab[i].has_computed = true;
-    if (value != NULL) {
-        r->tab[i].computed = strdup(value);
-        CHECK(r->tab[i].computed != NULL, "css-cascade-pass-oom: a computed value could not be copied into "
-                                          "the record");
     }
 }
 
@@ -406,11 +350,6 @@ void css_cascade_pass_census(CssCascadePassCensus *out)
             "%lld resolved. A gap is an arm that took an answer without saying which outcome it was, and "
             "every share a reader divides out of these rows is over a denominator that is not the population",
             g_asks, g_served, g_resolved);
-    DCHECKF(g_computed_asks == g_computed_served + g_computed_resolved,
-            "the computed-value census does not close: %lld asks against %lld served and %lld resolved. "
-            "css_computed_value asks the record and on a miss computes and records with no return between, so "
-            "a gap is an arm that answered without saying which outcome it was",
-            g_computed_asks, g_computed_served, g_computed_resolved);
     DCHECKF(g_match_asks == g_match_served + g_match_built,
             "the match-result census does not close: %lld asks against %lld served and %lld built. "
             "cssom_cascaded_value asks the record and on a miss builds and offers the result with no return "
@@ -419,7 +358,6 @@ void css_cascade_pass_census(CssCascadePassCensus *out)
     out->asks_life = g_asks;
     out->served_life = g_served;
     out->resolved_life = g_resolved;
-    out->computed_asks_life = g_computed_asks;
-    out->computed_served_life = g_computed_served;
-    out->computed_resolved_life = g_computed_resolved;
+    css_computed_style_census(&out->computed_asks_life, &out->computed_served_life,
+                              &out->computed_resolved_life);
 }

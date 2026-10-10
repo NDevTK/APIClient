@@ -1,13 +1,10 @@
-/* A CSS property as an ID: the one table of the properties whose computed value core/css/css_computed_style.h
- * holds, each with its name, its lexbor registry id (LXB_CSS_PROPERTY_*, or __UNDEF for a property this engine
- * registers itself) and the shape its `Computed value:` line gives it. Blink's CSSPropertyID under its own name.
- * The registry column is checked against lexbor's own table when the name index is built, so a lexbor sync that
- * renames or drops a row crashes there. */
+/* A CSS property as an ID: the one table of the properties whose computed value core/css/css_computed_value.h
+ * derives and core/css/css_computed_style.h holds, each with its name, its lexbor registry id
+ * (LXB_CSS_PROPERTY_*, or __UNDEF for a property this engine registers itself) and the shape its `Computed
+ * value:` line gives it. Blink's CSSPropertyID under its own name. The registry column is checked against
+ * lexbor's own table when the name index is built, so a lexbor sync that renames or drops a row crashes there.
+ * A property with no row is one this engine derives no computed value for. */
 
-/* NAMED RESIDUAL, the keyword family. Not covered: the properties css_computed_value answers as text have no
- * row, so their computed values are still held by name in core/css/css_cascade_pass.h's string record. Next:
- * their rows, with a keyword shape, and the text record deleted. How its absence shows: cp_probe and
- * css_computed_models' strcmp leaves in a layout unit's CPU samples. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_PROPERTY_ID_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_PROPERTY_ID_H
 
@@ -15,8 +12,10 @@
 
 /* What a computed value is, per its property's `Computed value:` line. */
 typedef enum {
+    /* a keyword, number, string or list whose computed value is its serialization: owned text */
+    CSS_COMPUTED_SHAPE_TEXT = 1,
     /* "the percentage as specified or the absolute length", or a keyword as specified: a `CssLength` */
-    CSS_COMPUTED_SHAPE_LENGTH = 1,
+    CSS_COMPUTED_SHAPE_LENGTH,
     /* css-inline-3 §5.1 "Line Spacing: the line-height property": a keyword, a number or a length */
     CSS_COMPUTED_SHAPE_LINE_HEIGHT,
     /* CSS 2.1 §17.6.1 "The separated borders model": "two absolute lengths" */
@@ -61,7 +60,46 @@ typedef enum {
     X(BASELINE_SHIFT,      "baseline-shift",      LXB_CSS_PROPERTY_BASELINE_SHIFT, LENGTH)            \
     X(FLEX_BASIS,          "flex-basis",          LXB_CSS_PROPERTY_FLEX_BASIS,     LENGTH)            \
     X(LINE_HEIGHT,         "line-height",         LXB_CSS_PROPERTY_LINE_HEIGHT,    LINE_HEIGHT)       \
-    X(BORDER_SPACING,      "border-spacing",      LXB_CSS_PROPERTY__UNDEF,         BORDER_SPACING)
+    X(BORDER_SPACING,      "border-spacing",      LXB_CSS_PROPERTY__UNDEF,         BORDER_SPACING)    \
+    CSS_PROPERTY_TEXT_LIST(X)
+
+/* The text-shaped rows. Which `Computed value:` line each derives, and which algorithm reads it, is stated at
+ * its arm of css_computed_value.c's derivation. */
+#define CSS_PROPERTY_TEXT_LIST(X)                                                                     \
+    X(OVERFLOW_X,          "overflow-x",          LXB_CSS_PROPERTY_OVERFLOW_X,     TEXT)              \
+    X(OVERFLOW_Y,          "overflow-y",          LXB_CSS_PROPERTY_OVERFLOW_Y,     TEXT)              \
+    X(DISPLAY,             "display",             LXB_CSS_PROPERTY_DISPLAY,        TEXT)              \
+    X(FLOAT,               "float",               LXB_CSS_PROPERTY_FLOAT,          TEXT)              \
+    X(CLEAR,               "clear",               LXB_CSS_PROPERTY_CLEAR,          TEXT)              \
+    X(POSITION,            "position",            LXB_CSS_PROPERTY_POSITION,       TEXT)              \
+    X(BOX_SIZING,          "box-sizing",          LXB_CSS_PROPERTY_BOX_SIZING,     TEXT)              \
+    X(WHITE_SPACE,         "white-space",         LXB_CSS_PROPERTY_WHITE_SPACE,    TEXT)              \
+    X(DIRECTION,           "direction",           LXB_CSS_PROPERTY_DIRECTION,      TEXT)              \
+    X(WRITING_MODE,        "writing-mode",        LXB_CSS_PROPERTY_WRITING_MODE,   TEXT)              \
+    X(ALIGNMENT_BASELINE,  "alignment-baseline",  LXB_CSS_PROPERTY_ALIGNMENT_BASELINE, TEXT)          \
+    X(BASELINE_SOURCE,     "baseline-source",     LXB_CSS_PROPERTY_BASELINE_SOURCE, TEXT)             \
+    X(TEXT_ALIGN_ALL,      "text-align-all",      LXB_CSS_PROPERTY_TEXT_ALIGN_ALL, TEXT)              \
+    X(TEXT_ALIGN_LAST,     "text-align-last",     LXB_CSS_PROPERTY_TEXT_ALIGN_LAST, TEXT)             \
+    X(TRANSFORM,           "transform",           LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
+    X(CAPTION_SIDE,        "caption-side",        LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
+    X(TABLE_LAYOUT,        "table-layout",        LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
+    X(BORDER_COLLAPSE,     "border-collapse",     LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
+    X(FLEX_DIRECTION,      "flex-direction",      LXB_CSS_PROPERTY_FLEX_DIRECTION, TEXT)              \
+    X(FLEX_WRAP,           "flex-wrap",           LXB_CSS_PROPERTY_FLEX_WRAP,      TEXT)              \
+    X(FLEX_GROW,           "flex-grow",           LXB_CSS_PROPERTY_FLEX_GROW,      TEXT)              \
+    X(FLEX_SHRINK,         "flex-shrink",         LXB_CSS_PROPERTY_FLEX_SHRINK,    TEXT)              \
+    X(ALIGN_ITEMS,         "align-items",         LXB_CSS_PROPERTY_ALIGN_ITEMS,    TEXT)              \
+    X(ALIGN_SELF,          "align-self",          LXB_CSS_PROPERTY_ALIGN_SELF,     TEXT)              \
+    X(VISIBILITY,          "visibility",          LXB_CSS_PROPERTY_VISIBILITY,     TEXT)              \
+    X(Z_INDEX,             "z-index",             LXB_CSS_PROPERTY_Z_INDEX,        TEXT)              \
+    X(POINTER_EVENTS,      "pointer-events",      LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
+    X(LIST_STYLE_TYPE,     "list-style-type",     LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
+    X(LIST_STYLE_POSITION, "list-style-position", LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
+    X(LIST_STYLE_IMAGE,    "list-style-image",    LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
+    X(BORDER_TOP_STYLE,    "border-top-style",    LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
+    X(BORDER_RIGHT_STYLE,  "border-right-style",  LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
+    X(BORDER_BOTTOM_STYLE, "border-bottom-style", LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
+    X(BORDER_LEFT_STYLE,   "border-left-style",   LXB_CSS_PROPERTY__UNDEF,         TEXT)
 
 typedef enum {
 #define CSS_PROPERTY_ID_ROW(id, name, lxb, shape) CSS_PROPERTY_##id,

@@ -8,7 +8,6 @@
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
-#include "core/css/css_cascade_pass.h"   /* the layout job's record of computed values */
 #include "core/css/css_color.h"
 #include "core/css/css_computed_style.h"
 #include "core/css/css_computed_value.h"
@@ -779,7 +778,8 @@ static FontMetricsAdvanceDirection css_cv_advance_direction(lxb_dom_element_t *e
               "wide by 1em tall\". css-writing-modes-4 §5.1 \"Orienting Text: the text-orientation property\" "
               "gives it `Value: mixed | upright | sideways`, `Initial: mixed`, `Inherited: yes` and `Computed "
               "value: specified value`, and lexbor's property registry carries it — so this is ONE ROW of "
-              "css_computed_models' as-specified arm plus one of css_shorthand_complete_for, exactly as "
+              "core/css/css_property_id.h's table, one case of css_cv_computed's as-specified arm and one of "
+              "css_shorthand_complete_for, exactly as "
               "`writing-mode` and `direction` were. `sideways` and `mixed`-when-sideways then take the "
               "HORIZONTAL advance and not a rotated vertical one — css-writing-modes-4 §5.1.1 \"Vertical "
               "Typesetting and Font Features\" defines sideways typesetting as character units \"typeset as a "
@@ -1043,24 +1043,6 @@ static CssLength computed_length(lxb_dom_element_t *el, const char *name, char *
 
 /* ---- CSS Backgrounds §3.2 and §3.3's BORDER LONGHANDS ----------------------------------------------------- */
 
-/* The four sides in the order every four-side rule in CSS states them, so a width's index IS its style's. */
-static const char *const CSS_BORDER_SIDES[] = { "top", "right", "bottom", "left" };
-
-/* Which side `border-<side>-<part>` names, or -1. The SIDE is the whole reason this exists: `border-top-width`
-   has to read `border-top-style` and not some fixed one, so the sibling's name is DERIVED from this property's
-   rather than tabulated a second time. */
-static int css_border_side_of(const char *name, const char *part)
-{
-    char probe[32];
-    unsigned i;
-
-    for (i = 0; i < sizeof(CSS_BORDER_SIDES) / sizeof(CSS_BORDER_SIDES[0]); i++) {
-        snprintf(probe, sizeof probe, "border-%s-%s", CSS_BORDER_SIDES[i], part);
-        if (strcmp(probe, name) == 0) return (int)i;
-    }
-    return -1;
-}
-
 /* css-backgrounds-3 §3.3: "The thin, medium, and thick keywords are equivalent to 1px, 3px, and 5px,
    respectively." CSS 2.1 §8.5.1 left the three UA-dependent and required only `thin <= medium <= thick`; the
    level-3 sentence PINS them, so these are the spec's numbers and not this UA's preference. */
@@ -1084,14 +1066,12 @@ static const struct { const char *kw; double px; } CSS_LINE_WIDTH[] = {
  * `border-style` had to be modelled before `border-width` could be. */
 static bool css_border_width_off(lxb_dom_element_t *el, int side)
 {
-    char sibling[32];
     char *style;
     bool off;
 
-    DCHECK(side >= 0, "the `border-*-width` computed-value rule was asked for a property that is not one of "
-                      "the four — css_computed_models and this switch are one list and have come apart");
-    snprintf(sibling, sizeof sibling, "border-%s-style", CSS_BORDER_SIDES[side < 0 ? 0 : side]);
-    style = css_computed_value(el, sibling);
+    DCHECK(side >= 0 && side < 4, "the `border-*-width` computed-value rule was asked for a side that is not "
+                                  "one of the four");
+    style = css_computed_value(el, css_property_name((CssPropertyId)(CSS_PROPERTY_BORDER_TOP_STYLE + side)));
     off = css_cv_is(style, "none") || css_cv_is(style, "hidden");
     free(style);
     return off;
@@ -1197,7 +1177,8 @@ static CssLength computed_font_size(lxb_dom_element_t *el, char *spec)
               "things are missing and they are not one absence: `math-depth` is a property with its own "
               "computed-value rule (`auto-add | add(<integer>) | <integer>`, resolved against the INHERITED "
               "value and against `math-style`), `math-style` is a `Computed value: specified keyword` line "
-              "that is one row of css_computed_models' as-specified arm plus one of css_shorthand_complete_for "
+              "that is one row of core/css/css_property_id.h's table, one case of css_cv_computed's as-specified "
+              "arm and one of css_shorthand_complete_for "
               "— and lexbor's property registry carries NEITHER, so §6's cascade answers nothing for either "
               "and §7.1 has no initial value to fall to. The MATH table is the FONT RECORD css_length.c's "
               "font-metric crash names. BUILD the two properties first: with no OpenType MATH table §4.5's "
@@ -1311,174 +1292,10 @@ bool css_computed_models_length(const char *name)
     return id != CSS_PROPERTY_INVALID && css_property_shape(id) == CSS_COMPUTED_SHAPE_LENGTH;
 }
 
+/* Every row of core/css/css_property_id.h's table is a property this component derives. */
 bool css_computed_models(const char *name)
 {
-    DCHECK(name != NULL, "the computed-value model question was asked about a NULL property name");
-    return strcmp(name, "overflow-x") == 0 || strcmp(name, "overflow-y") == 0 ||
-           strcmp(name, "display") == 0 || strcmp(name, "float") == 0 || strcmp(name, "clear") == 0 ||
-           strcmp(name, "position") == 0 ||
-           strcmp(name, "box-sizing") == 0 || strcmp(name, "white-space") == 0 ||
-           strcmp(name, "direction") == 0 || strcmp(name, "writing-mode") == 0 ||
-           strcmp(name, "line-height") == 0 ||
-           strcmp(name, "alignment-baseline") == 0 || strcmp(name, "baseline-source") == 0 ||
-           strcmp(name, "text-align-all") == 0 || strcmp(name, "text-align-last") == 0 ||
-           strcmp(name, "transform") == 0 ||
-           /* CSS 2.1 §17 Tables' four. Three state `Computed value: as specified` over a keyword-only `Value:`
-              line and are rows of the as-specified arm; `border-spacing` states "two absolute lengths" and has
-              its own entry, and it is IN this set because that is what routes §7.2's inheritance to that entry
-              rather than through the text one — the same reason `line-height` is in it. */
-           strcmp(name, "caption-side") == 0 || strcmp(name, "table-layout") == 0 ||
-           strcmp(name, "border-collapse") == 0 || strcmp(name, "border-spacing") == 0 ||
-           /* css-flexbox-1 §5.1 "Flex Flow Direction: the flex-direction property" and §5.2 "Flex Line
-              Wrapping: the flex-wrap property", each `Computed value: specified keyword` over a keyword-only
-              `Value:` line. The two are one row because ONE algorithm asks for both: css-flexbox-1 §9.9
-              "Intrinsic Sizes" dispatches on which axis is the main axis (§5.1) and on whether the container
-              is single-line or multi-line (§5.2, whose two arms §6 "Flex Lines" names). See the as-specified
-              arm below for why neither has a defensible default. */
-           strcmp(name, "flex-direction") == 0 || strcmp(name, "flex-wrap") == 0 ||
-           /* css-flexbox-1 §7.2.1 "The flex-grow property" (`Computed value: specified number`) and §7.2.2
-              "The flex-shrink property" (`Computed value: specified value`), over a `Value:` line that is
-              `<number [0,∞]>` and nothing else. A `<number>` is the one shape the TEXT entry carries with
-              NOTHING LOST — it has no unit, no percentage and no environment fact behind it, which is the
-              whole of why `css_computed_length` exists for the properties that do — so the as-specified arm
-              is the whole of both rules. THEIR CONSUMER CONVERTS: §9.9.3 "Flex Item Intrinsic Size
-              Contributions" asks whether an item is growable and whether it is shrinkable, which are the two
-              questions `== 0` answers, and a string comparison against "0" would answer them wrong for the
-              `0.0` and `0e0` a page may write. The third longhand, §7.2.3's `flex-basis`, is length-shaped
-              and leaves through css_computed_models_length above. */
-           strcmp(name, "flex-grow") == 0 || strcmp(name, "flex-shrink") == 0 ||
-           /* css-flexbox-1 §8.3 "Cross-axis Alignment: the align-items and align-self properties", whose
-              `Computed value:` line is "specified keyword" over a `Value:` line of
-              `flex-start | flex-end | center | baseline | stretch` — `align-self` adding `auto` — so the
-              as-specified arm is the whole of both rules. THEY ARE ONE ROW BECAUSE ONE ALGORITHM ASKS FOR
-              BOTH AND CANNOT ANSWER WITH EITHER ALONE: css-flexbox-1 §8.3's own prose makes the container's value the
-              default and the item's the override, so core/layout/flex_cross_size.h reads `align-items` off
-              the container and `align-self` off the item three lines apart, and css-flexbox-1 §4 "Flex Items"' ANONYMOUS
-              FLEX ITEM has no `align-self` to read at all. The answer decides which of css-flexbox-1 §9.4 "Cross Size
-              Determination"' step 8 collections an item belongs to, and the two are summed differently — so
-              a specified value handed back under the word `computed` would not be a rounding error, it would
-              put a baseline-aligned box into the arm that measures outer cross sizes.
-              THIS ENGINE IMPLEMENTS css-flexbox-1 §8.3 AND NOT css-align-3 §7.2, which supersedes it: lexbor's parser takes
-              ONE IDENT over css-flexbox-1 §8.3's five keywords and its registry initial is `LXB_CSS_ALIGN_ITEMS_STRETCH`,
-              css-flexbox-1 §8.3's `Initial:` line rather than css-align-3 §7.2's `normal`. The two
-              `Computed value:` lines agree on the RULE this entry is and differ only in the grammar it
-              runs over, so widening that grammar later
-              does not move this row — core/css/css_shorthand.c's `place-items` entry owns that residual.
-              `Inherited: no` on both is why neither is in core/css/css_defaulting.c's table — that table is
-              the INHERITED longhands, and non-inheritance is CSS's default rather than an omission. */
-           strcmp(name, "align-items") == 0 || strcmp(name, "align-self") == 0 ||
-           /* css-display-3 §4 "Invisibility: the visibility property" (`visible | hidden | collapse`),
-              `Computed value: as specified` over a keyword-only `Value:` line. It is here because
-              css-flexbox-1 §4.4 "Collapsed Items" is stated over ONE of its three keywords — "Specifying
-              visibility:collapse on a flex item causes it to become a collapsed flex item" — and §9.9.1.2 and
-              §9.9.1.3 both state their operand as the NON-COLLAPSED flex items, so a flex container's
-              intrinsic main size cannot be summed without asking this property of every item. */
-           strcmp(name, "visibility") == 0 ||
-           /* CSS 2.1 §9.9.1 "Specifying the stack level: the 'z-index' property", `Computed value: as
-              specified` over a `Value:` line of `auto | <integer> | inherit`, so the as-specified arm is the
-              whole of its rule. IT IS HERE BECAUSE §9.9.1's OWN STACKING-CONTEXT TEST NAMES THE COMPUTED
-              VALUE and no other value answers it: "Other stacking contexts are generated by any positioned
-              element (including relatively positioned elements) having a computed value of 'z-index' other
-              than 'auto'." core/paint/stacking_order.h asks exactly that, and asks the same read for the
-              STACK LEVEL the same section defines over it, so a specified value handed back under the word
-              `computed` would decide which stacking context every positioned box in the document belongs to.
-              `Inherited: no` is why it is absent from core/css/css_defaulting.c's table — that table is the
-              INHERITED longhands and non-inheritance is CSS's default rather than an omission. */
-           strcmp(name, "z-index") == 0 ||
-           /* css-ui-4 §6.2 "Exclusion from Hit-testing: the pointer-events property", `Computed value:
-              specified keyword` over a `Value:` line of `auto | none`, so the as-specified arm is the whole
-              of its rule. IT IS HERE BECAUSE A HIT TEST HAS NO DEFENSIBLE DEFAULT FOR IT and css-ui-4 §6.2's own
-              `none` arm says why: "Hit-testing acts as if the boxes generated by the element (see
-              [CSS-DISPLAY-3]) were not there, effectively causing the element behind the pointer-events:
-              none element to become the target of hit-testing-based events instead." So the property does
-              not tint an answer, it CHOOSES A DIFFERENT ELEMENT — an overlay read as `auto` returns the
-              overlay where a browser returns the control beneath it, which is a wrong element and not a
-              wrong pixel.
-              THE INHERITANCE DOES NOT CARRY THE EXCLUSION, which is the one thing a consumer of this row
-              must not assume: css-ui-4 §6.2's Note says "This pointer-events: none only excludes the element itself
-              from hit-testing, not the whole subtree — while this property propagates to descendants via
-              inheritance, pointer-events: auto can be specified on a descendant of a pointer-events: none
-              element, and such an element will participate normally in hit-testing." So a walk asks this of
-              EVERY box it considers and never prunes a subtree on one answer. */
-           strcmp(name, "pointer-events") == 0 ||
-           /* css-lists-3 §3.4 "Text-based Markers: the list-style-type property", whose `Computed value:` line
-              is `specified value` over a `Value:` line of `<counter-style> | <string> | none` — read off the
-              fetched editor's draft, because engine/specindex carries no css-lists-3 row and nothing in this
-              tree judges a citation to it. Every arm of that line is a value with no unit, no percentage and
-              no environment fact behind it, so the as-specified arm is the whole of the rule: a
-              `<counter-style-name>` is an ident core/css/css_shorthand.c's §3.4 grammar has already
-              canonicalized through core/css/css_counter_style.c's `css_counter_style_canonical_name`, a
-              `<string>` is the author's own bytes, and `none` is the keyword.
-              IT IS HERE BECAUSE ONE ALGORITHM ASKS FOR IT BY NAME AND COULD NOT: css-lists-3 §3.2 "Generating
-              Marker Contents" is an ORDERED condition — "The contents of a marker box are determined by the
-              first of these conditions that is true" — whose third arm is "list-style-type on the originating
-              element defines a marker string". core/layout/list_marker.h reads this row as one of §3.2's two
-              values; §3.2 reads the ORIGINATING ELEMENT's own computed value, and `css_computed_value` is the
-              entry a C spec algorithm asks.
-              IT IS NOT THE WHOLE OF §3.2 AND THE ROW DOES NOT CLAIM TO BE, which is what the ORDER of that
-              condition decides rather than a judgement made here: the arm ABOVE this one reads
-              `list-style-image`, so a §3.2 built from this property alone would make true an arm that is only
-              reached once the one above it is false. THE CLAUSE HERE READ THAT THAT PROPERTY'S OWN ROW IS THE
-              NEXT LANDING, AND IT IS RETIRED BY THAT ROW LANDING — kept in its own words, unquoted because a
-              run of this tree's prose is not a spec quotation, because a reader who re-derives §3.2's order
-              will write it again. §3.3's row is one entry down in this same predicate and its derivation is
-              one page up, so §3.2 can now read BOTH arms. What this row still does not claim is §3.2 itself:
-              its image arm is a VALIDITY question about the image ("list-style-image on the originating
-              element defines a marker image"), and css-images-3 §2 "Image Values: the <image> type" states
-              the answer for one that has not loaded — "an invalid image in list-style-image it is treated as
-              none, allowing the list-style-type to render in its place" — which is a FETCH and not a cascade
-              step, and is where core/layout/list_marker.h crashes today.
-              `Inherited: yes`, AND THE ROW IS WHAT MAKES THAT INHERITANCE §7.2's OWN: core/css/css_defaulting.c
-              already carries the name, and `css_cv_specified`'s inherited arm routes a property THIS predicate
-              answers for through `css_computed_value` of the parent — so css-cascade-5 §7.2 "Inheritance"'s own
-              sentence, "The inherited value of a property on an element is the computed value of the property
-              on the element's parent element", was answered with the parent's SPECIFIED value for every list
-              item on every page until this row. THAT IS A DISTINCTION WITH NOTHING OBSERVABLE BEHIND IT HERE,
-              which is why the row is safe to land on its own and is not a behaviour change wearing a comment:
-              §3.4's line IS `specified value`, so the two readings are byte-identical at every element, and
-              what the row buys is that the question is now ASKED through the entry that derives one. */
-           strcmp(name, "list-style-type") == 0 ||
-           /* css-lists-3 §3.5 "Positioning Markers: The list-style-position property", `Computed value:
-              keyword, but see prose` over `inside | outside`. The prose is a layout rule ("If the list item is
-              an inline box: this value is equivalent to inside"), not a computation, so the as-specified arm is
-              the whole of the rule. core/layout/list_marker.h's position entry is the caller. */
-           strcmp(name, "list-style-position") == 0 ||
-           /* css-lists-3 §3.3 "Image Markers: the list-style-image property", whose `Computed value:` line
-              is "the keyword noneor the computed <image>" over a `Value:` line of `<image> | none` — and
-              THE MISSING SPACE IS THE DRAFT'S OWN BYTES, not a typo to repair here: §3.3's table closes its
-              `<a>` element directly against the next word, so the document renders and stores `noneor`. A
-              reader who "corrects" it makes this quotation unverifiable against the one artifact that can
-              judge it. THIS CLAUSE USED TO READ "engine/specindex carries no css-lists-3 row and nothing in
-              this tree judges a citation to it", and that was true when written and is now false — the module
-              is indexed, so every css-lists-3 quotation in this file is compared against its text on every
-              run. It is rewritten rather than deleted because a reader who re-derives the old reason would go
-              back to citing an unjudged draft. IT IS NOT THE AS-SPECIFIED ARM and leaves
-              `css_computed_value` by name, which is why it is absent from that arm's own enumeration: two of
-              its three arms ARE the specified value and the third is a crash.
-              IT IS HERE BECAUSE §3.2 "Generating Marker Contents" READS IT AHEAD OF §3.4 AND COULD NOT.
-              That section is an ORDERED condition — "The contents of a marker box are determined by the
-              first of these conditions that is true" — whose SECOND arm is "list-style-image on the
-              originating element defines a marker image" and whose THIRD reads `list-style-type`. §3.4's row
-              landed first and cannot answer §3.2 alone: a narrowing built from it would make true an arm
-              that is only reached once the one above it is false. core/layout/list_marker.h reads this
-              property BEFORE that one for exactly that reason. §3.2 reads the ORIGINATING ELEMENT's own
-              computed value, and `css_computed_value` is the entry a C spec algorithm asks.
-              `Inherited: yes`, AND THE ROW IS WHAT MAKES THAT INHERITANCE §7.2's OWN: core/css/
-              css_defaulting.c already carries the name, and `css_cv_specified`'s inherited arm routes a
-              property THIS predicate answers for through `css_computed_value` of the parent — so
-              css-cascade-5 §7.2 "Inheritance"' own sentence, "The inherited value of a property on an element
-              is the computed value of the property on the element's parent element", was answered with the
-              parent's SPECIFIED value for every list item on every page until this row.
-              THE ROW CHANGES WHAT CSSOM §9 ANSWERS FOR A GRADIENT AND THAT IS THE POINT rather than a side
-              effect: `css_resolved_value` asks this predicate first, so
-              `getComputedStyle(el).listStyleImage` on a `list-style-image: linear-gradient(red, blue)` page
-              reached `css_cv_specified` and answered the author's bytes under the word computed, and now
-              reaches the derivation's own crash. CSSOM §9 puts the property under "Any other property", so
-              its resolved value IS its computed value and `css_resolved_kind` needs no row of its own — the
-              name occurs ZERO times in that standard, measured against the fetched text. */
-           strcmp(name, "list-style-image") == 0 ||
-           css_computed_models_length(name) ||
-           css_border_side_of(name, "style") >= 0;
+    return css_property_id_of(name) != CSS_PROPERTY_INVALID;
 }
 
 /* THE THREE CONDITIONS EVERY COMPUTED-VALUE RULE BELOW IS DERIVED UNDER. Both entries go through it, so
@@ -1498,10 +1315,10 @@ static void css_cv_modelled(lxb_dom_element_t *el, const char *name)
     DCHECK(el != NULL && name != NULL, "a computed value was asked for with no element or no property name");
     DCHECKF(css_computed_models(name),
             "`%s`: a computed value was asked for a property this component does not derive. It answers a "
-            "NAMED set (css_computed_models) and crashes outside it rather than handing back a specified value "
-            "under the word `computed` — the two differ for every length-valued property, and the caller "
-            "asking is a spec algorithm that reads the computed one. BUILD THAT PROPERTY'S own `Computed "
-            "value:` line here, and record the shorthands that can set it in css_shorthand.c",
+            "NAMED set (core/css/css_property_id.h's rows) and crashes outside it rather than handing back a "
+            "specified value under the word `computed` — the two differ for every length-valued property, and "
+            "the caller asking is a spec algorithm that reads the computed one. BUILD THAT PROPERTY'S own "
+            "`Computed value:` line here, and record the shorthands that can set it in css_shorthand.c",
             name);
     DCHECKF(css_shorthand_complete_for(name),
             "`%s`: a computed value was derived for a property whose SHORTHANDS are not all expanded by "
@@ -1511,13 +1328,18 @@ static void css_cv_modelled(lxb_dom_element_t *el, const char *name)
             name);
 }
 
-/* The `border-*-width` row's side in CSS_BORDER_SIDES' order, or -1 for any other row. */
+/* The `border-*-width` row's side, counted top, right, bottom, left as every four-side rule in CSS states
+   them, or -1 for any other row. The `border-*-style` rows are in the same order, so a width's side indexes
+   its style's row. */
 static int cv_border_width_side(CssPropertyId id)
 {
     _Static_assert(CSS_PROPERTY_BORDER_RIGHT_WIDTH == CSS_PROPERTY_BORDER_TOP_WIDTH + 1 &&
                        CSS_PROPERTY_BORDER_BOTTOM_WIDTH == CSS_PROPERTY_BORDER_TOP_WIDTH + 2 &&
-                       CSS_PROPERTY_BORDER_LEFT_WIDTH == CSS_PROPERTY_BORDER_TOP_WIDTH + 3,
-                   "core/css/css_property_id.h lists the border widths in CSS_BORDER_SIDES' order");
+                       CSS_PROPERTY_BORDER_LEFT_WIDTH == CSS_PROPERTY_BORDER_TOP_WIDTH + 3 &&
+                       CSS_PROPERTY_BORDER_RIGHT_STYLE == CSS_PROPERTY_BORDER_TOP_STYLE + 1 &&
+                       CSS_PROPERTY_BORDER_BOTTOM_STYLE == CSS_PROPERTY_BORDER_TOP_STYLE + 2 &&
+                       CSS_PROPERTY_BORDER_LEFT_STYLE == CSS_PROPERTY_BORDER_TOP_STYLE + 3,
+                   "core/css/css_property_id.h lists the border widths and styles top, right, bottom, left");
     if (id < CSS_PROPERTY_BORDER_TOP_WIDTH || id > CSS_PROPERTY_BORDER_LEFT_WIDTH) return -1;
     return (int)(id - CSS_PROPERTY_BORDER_TOP_WIDTH);
 }
@@ -1984,60 +1806,26 @@ static char *computed_list_style_image(char *spec)
     return spec;
 }
 
-static char *css_cv_computed(lxb_dom_element_t *el, const char *name)
+static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
 {
+    const char *name = css_property_name(id);
     char *spec;
 
-    /* THE OPERAND IS PRINTED, for the reason `css_cv_modelled` states one paragraph up and for a measured
-       one of this crash's own: the remedy is `ask the other entry AT YOUR CALL SITE`, and a reader holding
-       the crash text alone cannot find that site — a real page (webamp.org) aborted here and the abort named
-       neither the property nor which of this engine's flex readers had asked for it, so the call had to be
-       found by reading every forwarding predicate in core/layout/ rather than by reading the message. */
-    DCHECKF(!css_computed_models_length(name),
-           "`%s`: css_computed_value was asked for a property whose `Computed value:` line is `the percentage "
-           "as specified or THE ABSOLUTE LENGTH`. An absolute length is where a `50vw` is resolved against the "
-           "INITIAL CONTAINING BLOCK and a `border-*-width` is snapped to a DEVICE PIXEL, and both of those "
-           "rectangles are PICKED environment facts (core/frame/viewport.h) — so the answer is a `CssPx` and "
-           "text would carry the number while dropping the domain behind it, which is the fork "
-           "`getComputedStyle(el).width < 768` shares with `innerWidth < 768`. Ask css_computed_length — or, "
-           "where the call site is asking whether that length is a KEYWORD, `css_computed_length_is`",
-           name);
     css_cv_modelled(el, name);
-    /* THE THIRD SHAPE LEAVES HERE BY NAME rather than through the as-specified assert below, which would fire
-       with a true message about the wrong thing. css-inline-3 §5.1's `Computed value:` line is "the specified
-       keyword, a number, or a computed <length> value", so `line-height` is neither of this file's two shapes
-       and neither entry can carry it: text drops a length's environment fact and a `CssLength` has no number.
-       Its own entry answers all three (css_computed_value.h). */
-    if (strcmp(name, "line-height") == 0)
-        DFAIL("`line-height`'s computed value was asked for through the TEXT entry. css-inline-3 §5.1 \"Line "
-              "Spacing: the line-height property\" gives it a `Computed value:` of \"the specified keyword, a "
-              "number, or a computed <length> value\" — a union of three shapes, of which this entry can carry "
-              "only the first without losing something: a computed `<length>` serialized to text drops the "
-              "environment fact it derives from (the reader's own default font size reaches a page through "
-              "`line-height: 2em` exactly as it reaches one through `margin: 2em`), and a `<number>` is not a "
-              "length at all. Ask `css_computed_line_height`, which answers the union");
-    /* AND THE FOURTH SHAPE LEAVES HERE BY NAME for the same reason. CSS 2.1 §17.6.1's `Computed value:` line
-       is "two absolute lengths", so neither of this file's two shapes can carry it: text would drop both
-       environment facts, and `css_computed_length` has one slot for two numbers. */
-    if (strcmp(name, "border-spacing") == 0)
-        DFAIL("`border-spacing`'s computed value was asked for through the TEXT entry. CSS 2.1 §17.6.1 \"The "
-              "separated borders model\" gives it a `Computed value:` of \"two absolute lengths\" — a PAIR, of "
-              "which this entry can carry neither half without losing what it derives from: a `border-spacing: "
-              "1em 2vw` is the reader's own default font size and the viewport's width, and serializing the "
-              "pair hands a page two numbers with both domains dropped. Ask `css_computed_border_spacing`, "
-              "which answers both halves as `CssPx` and doubles §17.6.1's one-length form into the two the "
-              "computed value has");
     spec = css_cv_specified(el, name);
     DCHECK(spec != NULL,
            "§7's defaulting produced no SPECIFIED value for a property this component models — every one of "
            "them has an `Initial:` value to fall to, either from lexbor's own property registry or from "
            "css_style_declaration.c's unregistered-initial table, whose own invariant asserts that every row "
            "it carries has a non-empty one and that no row's name is in that registry");
-    if (strcmp(name, "overflow-x") == 0 || strcmp(name, "overflow-y") == 0)
+    switch (id) {
+    case CSS_PROPERTY_OVERFLOW_X:
+    case CSS_PROPERTY_OVERFLOW_Y:
         return computed_overflow(el, name, spec);
-    if (strcmp(name, "display") == 0)
+    case CSS_PROPERTY_DISPLAY:
         return computed_display(el, spec);
-    if (strcmp(name, "text-align-all") == 0 || strcmp(name, "text-align-last") == 0)
+    case CSS_PROPERTY_TEXT_ALIGN_ALL:
+    case CSS_PROPERTY_TEXT_ALIGN_LAST:
         return computed_text_align(el, name, spec);
     /* css-transforms-1 §3 "The transform Property" states `Computed value: as specified, but with lengths made
        absolute` — TWO CLAUSES, and `none` satisfies the second vacuously because it contains no lengths, so
@@ -2051,15 +1839,16 @@ static char *css_cv_computed(lxb_dom_element_t *el, const char *name)
        states everywhere else: a test asked at one of two entries is a place the two can disagree about which
        arm of §3's `Value:` line an element is on, and the text shape and the list shape must never do that.
        What is returned for `none` is byte-identical either way. */
-    if (strcmp(name, "transform") == 0)
+    case CSS_PROPERTY_TRANSFORM:
         return computed_transform(el, spec);
     /* css-lists-3 §3.3's row leaves here by NAME rather than through the as-specified assert below, which
        would fire with a true message about the wrong thing: §3.3's `Computed value:` line is "the keyword
        noneor the computed <image>" (the draft's own bytes), and only two of its three arms are the specified
        value. See the
        derivation above for which two, and for the sentence of css-values-4 §4.5.1 "Relative URLs" that makes
-       the `<url>` one of them. */
-    if (strcmp(name, "list-style-image") == 0)
+       the `<url>` one of them. CSSOM §9 puts the property under "Any other property", so this is also its
+       resolved value. */
+    case CSS_PROPERTY_LIST_STYLE_IMAGE:
         return computed_list_style_image(spec);
     /* `float` (CSS2 §9.5.1), `position` (css-position §2) and `box-sizing` (css-sizing §5) all state "Computed
        value: as specified" (`box-sizing`'s line is "specified keyword"), and a keyword has no absolutization to
@@ -2182,38 +1971,111 @@ static char *css_cv_computed(lxb_dom_element_t *el, const char *name)
        core/paint/stacking_order.h reads. Its two arms are not two values of one kind: `auto` decides whether
        the box FORMS a context and an `<integer>` decides both that and WHERE it sits, so a caller that could
        not tell them apart could place neither. */
-    DCHECK(strcmp(name, "float") == 0 || strcmp(name, "clear") == 0 ||
-               strcmp(name, "position") == 0 || strcmp(name, "box-sizing") == 0 ||
-               strcmp(name, "white-space") == 0 || strcmp(name, "direction") == 0 ||
-               strcmp(name, "writing-mode") == 0 || strcmp(name, "alignment-baseline") == 0 ||
-               strcmp(name, "baseline-source") == 0 || strcmp(name, "caption-side") == 0 ||
-               strcmp(name, "table-layout") == 0 || strcmp(name, "border-collapse") == 0 ||
-               strcmp(name, "flex-direction") == 0 || strcmp(name, "flex-wrap") == 0 ||
-               strcmp(name, "flex-grow") == 0 || strcmp(name, "flex-shrink") == 0 ||
-               strcmp(name, "visibility") == 0 || strcmp(name, "z-index") == 0 ||
-               strcmp(name, "pointer-events") == 0 ||
-               strcmp(name, "align-items") == 0 || strcmp(name, "align-self") == 0 ||
-               strcmp(name, "list-style-type") == 0 || strcmp(name, "list-style-position") == 0 ||
-               css_border_side_of(name, "style") >= 0,
-           "a property this component claims to model reached the as-specified arm without a `Computed value: "
-           "as specified` line to justify it — css_computed_models and this switch are one list and have come "
-           "apart");
-    return spec;
+    case CSS_PROPERTY_FLOAT:
+    case CSS_PROPERTY_CLEAR:
+    case CSS_PROPERTY_POSITION:
+    case CSS_PROPERTY_BOX_SIZING:
+    case CSS_PROPERTY_WHITE_SPACE:
+    case CSS_PROPERTY_DIRECTION:
+    case CSS_PROPERTY_WRITING_MODE:
+    case CSS_PROPERTY_ALIGNMENT_BASELINE:
+    case CSS_PROPERTY_BASELINE_SOURCE:
+    case CSS_PROPERTY_CAPTION_SIDE:
+    case CSS_PROPERTY_TABLE_LAYOUT:
+    case CSS_PROPERTY_BORDER_COLLAPSE:
+    case CSS_PROPERTY_FLEX_DIRECTION:
+    case CSS_PROPERTY_FLEX_WRAP:
+    case CSS_PROPERTY_VISIBILITY:
+    case CSS_PROPERTY_Z_INDEX:
+    case CSS_PROPERTY_BORDER_TOP_STYLE:
+    case CSS_PROPERTY_BORDER_RIGHT_STYLE:
+    case CSS_PROPERTY_BORDER_BOTTOM_STYLE:
+    case CSS_PROPERTY_BORDER_LEFT_STYLE:
+    /* A `<number>` is carried as text with nothing lost, so the consumer compares the number, never the text:
+       `0.0` and `0e0` are zero. */
+    case CSS_PROPERTY_FLEX_GROW:
+    case CSS_PROPERTY_FLEX_SHRINK:
+    /* css-flexbox-1 §8.3 "Cross-axis Alignment: the align-items and align-self properties", `Computed value:
+       specified keyword`. core/layout/flex_cross_size.h reads `align-items` off the container and `align-self`
+       off the item. This is §8.3's grammar and not css-align-3 §7.2's, which supersedes it: lexbor takes one
+       ident over §8.3's keywords and its initial is `stretch`; core/css/css_shorthand.c's `place-items` entry
+       owns that residual. */
+    case CSS_PROPERTY_ALIGN_ITEMS:
+    case CSS_PROPERTY_ALIGN_SELF:
+    /* css-ui-4 §6.2 "Exclusion from Hit-testing: the pointer-events property", `Computed value: specified
+       keyword` over `auto | none`. `none` excludes the element itself and not its subtree, since a descendant
+       may declare `auto`, so a hit test asks it of every box and never prunes a subtree on one answer. */
+    case CSS_PROPERTY_POINTER_EVENTS:
+    /* css-lists-3 §3.4 "Text-based Markers: the list-style-type property" (`Computed value: specified value`;
+       a `<counter-style-name>` arrives canonicalized by core/css/css_shorthand.c) and §3.5 "Positioning
+       Markers: The list-style-position property" (`keyword, but see prose`, the prose being a layout rule).
+       core/layout/list_marker.h reads both off the originating element, after `list-style-image`, which
+       §3.2 "Generating Marker Contents" orders first. */
+    case CSS_PROPERTY_LIST_STYLE_TYPE:
+    case CSS_PROPERTY_LIST_STYLE_POSITION:
+        return spec;
+    default:
+        DFAILF("`%s` reached the text derivation and is not a text-shaped row — css_computed_value refuses "
+               "every other shape before it derives, so its shape test and this switch have come apart", name);
+        return spec;
+    }
 }
 
-/* The layout job's record answers a pair it already computed, which ends §7.2's inheritance climb at the
-   first answered ancestor (core/css/css_cascade_pass.h). The answer is owned by the caller either way. */
+/* The element's computed style record answers a value it already derived (core/css/css_computed_style.h).
+   The answer is an owned copy. A name with no row, or a row of another shape, crashes; in release each is
+   answered with the specified value and held nowhere. */
 char *css_computed_value(lxb_dom_element_t *el, const char *name)
 {
-    char *v;
+    CssPropertyId id = css_property_id_of(name);
+    CssComputedShape shape;
+    CssComputedStyleHold hold;
+    CssComputedValue v;
+    char *out;
 
-    if (css_cascade_pass_computed_ask(el, name, &v)) return v;
-    v = css_cv_computed(el, name);
-    css_cascade_pass_computed_record(el, name, v);
-    return v;
+    DCHECKF(id != CSS_PROPERTY_INVALID,
+            "`%s`: a computed value was asked for a property this component does not derive — it has no row in "
+            "core/css/css_property_id.h. BUILD THAT PROPERTY'S own `Computed value:` line in css_cv_computed, "
+            "give it a row, and record the shorthands that can set it in css_shorthand.c",
+            name);
+    if (id == CSS_PROPERTY_INVALID) return css_cv_specified(el, name);
+    shape = css_property_shape(id);
+    /* The operand is printed because the remedy is to ask the other entry at the call site. */
+    DCHECKF(shape != CSS_COMPUTED_SHAPE_LENGTH,
+           "`%s`: css_computed_value was asked for a property whose `Computed value:` line is `the percentage "
+           "as specified or THE ABSOLUTE LENGTH`. An absolute length is where a `50vw` is resolved against the "
+           "INITIAL CONTAINING BLOCK and a `border-*-width` is snapped to a DEVICE PIXEL, and both of those "
+           "rectangles are PICKED environment facts (core/frame/viewport.h) — so the answer is a `CssPx` and "
+           "text would carry the number while dropping the domain behind it, which is the fork "
+           "`getComputedStyle(el).width < 768` shares with `innerWidth < 768`. Ask css_computed_length — or, "
+           "where the call site is asking whether that length is a KEYWORD, `css_computed_length_is`",
+           name);
+    DCHECK(shape != CSS_COMPUTED_SHAPE_LINE_HEIGHT,
+           "`line-height`'s computed value was asked for through the TEXT entry. css-inline-3 §5.1 \"Line "
+           "Spacing: the line-height property\" gives it a `Computed value:` of \"the specified keyword, a "
+           "number, or a computed <length> value\" — a union of three shapes, of which this entry can carry "
+           "only the first without losing something: a computed `<length>` serialized to text drops the "
+           "environment fact it derives from (the reader's own default font size reaches a page through "
+           "`line-height: 2em` exactly as it reaches one through `margin: 2em`), and a `<number>` is not a "
+           "length at all. Ask `css_computed_line_height`, which answers the union");
+    DCHECK(shape != CSS_COMPUTED_SHAPE_BORDER_SPACING,
+           "`border-spacing`'s computed value was asked for through the TEXT entry. CSS 2.1 §17.6.1 \"The "
+           "separated borders model\" gives it a `Computed value:` of \"two absolute lengths\" — a PAIR, of "
+           "which this entry can carry neither half without losing what it derives from: a `border-spacing: "
+           "1em 2vw` is the reader's own default font size and the viewport's width, and serializing the "
+           "pair hands a page two numbers with both domains dropped. Ask `css_computed_border_spacing`, "
+           "which answers both halves as `CssPx` and doubles §17.6.1's one-length form into the two the "
+           "computed value has");
+    if (shape != CSS_COMPUTED_SHAPE_TEXT) return css_cv_specified(el, name);
+    css_computed_style_hold_begin(&hold);
+    if (!css_computed_style_ask(el, id, &v)) {
+        v.text = css_cv_computed(el, id);
+        css_computed_style_answer(el, id, &v);
+    }
+    out = v.text != NULL ? css_cv_strdup(v.text) : NULL;
+    css_computed_style_hold_end(&hold);
+    return out;
 }
 
-/* ---- CSSOM §9's resolved value ---------------------------------------------------------------------------- */
 
 CssResolvedKind css_resolved_kind(const char *name)
 {

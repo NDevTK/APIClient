@@ -228,9 +228,9 @@ static LgDirection logical_used_direction(lxb_dom_element_t *el, LgWritingMode w
               "abort one component over. BUILD that row: css-writing-modes-4 §5.1 \"Orienting Text: the "
               "text-orientation property\" gives `Value: mixed | upright | sideways`, `Initial: mixed`, "
               "`Inherited: yes` and `Computed value: specified value`, and lexbor's registry carries the "
-              "property — so it is ONE row of css_computed_models' as-specified arm plus one of "
-              "css_shorthand_complete_for, which is the same row core/css/css_computed_value.c's `ch`-unit "
-              "advance-direction crash already names. The BLOCK axis needs none of this and is answered for "
+              "property — so it is ONE row of core/css/css_property_id.h's table, one case of "
+              "css_computed_value.c's as-specified arm and one of css_shorthand_complete_for, which is the same "
+              "row core/css/css_computed_value.c's `ch`-unit advance-direction crash already names. The BLOCK axis needs none of this and is answered for "
               "every writing mode above");
     dir = css_computed_value(el, "direction");
     DCHECK(dir != NULL, "the cascade produced no computed `direction` — css-writing-modes-4 §2.1 "

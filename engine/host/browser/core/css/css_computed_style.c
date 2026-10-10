@@ -23,6 +23,10 @@ struct CssComputedStyle {
     CssComputedValue   value[CSS_PROPERTY_COUNT];   /* meaningful where `state` is HELD */
 };
 
+static long long g_asks;
+static long long g_served;
+static long long g_derived;
+
 CssComputedStyle *css_computed_style_create(lxb_dom_element_t *el)
 {
     CssComputedStyle *s;
@@ -44,6 +48,9 @@ void css_computed_style_free(CssComputedStyle *s)
                 "`%s` was being derived when its element's computed style record was released — the record "
                 "goes with its job, and an ask's derivation answers inside the hold that asked it",
                 css_property_name((CssPropertyId)i));
+    for (i = 0; i < CSS_PROPERTY_COUNT; i++)
+        if (s->state[i] == CSS_COMPUTED_HELD && css_property_shape((CssPropertyId)i) == CSS_COMPUTED_SHAPE_TEXT)
+            free(s->value[i].text);
     free(s);
 }
 
@@ -80,8 +87,10 @@ bool css_computed_style_ask(lxb_dom_element_t *el, CssPropertyId id, CssComputed
             "font-relative units inside a font-affecting property read the parent, so a cycle is a rule that "
             "reads this element where the spec says another",
             css_property_name(id));
+    g_asks++;
     if (s->state[id] == CSS_COMPUTED_HELD) {
         *out = s->value[id];
+        g_served++;
         return true;
     }
     s->state[id] = CSS_COMPUTED_DERIVING;
@@ -99,4 +108,16 @@ void css_computed_style_answer(lxb_dom_element_t *el, CssPropertyId id, const Cs
             css_property_name(id));
     s->value[id] = *v;
     s->state[id] = CSS_COMPUTED_HELD;
+    g_derived++;
+}
+
+void css_computed_style_census(long long *asks, long long *served, long long *derived)
+{
+    DCHECKF(g_asks == g_served + g_derived,
+            "the computed style census does not close: %lld asks against %lld served and %lld derived. Every "
+            "ask is answered by its record or derived and answered with no return between, so a gap is an arm "
+            "that derived without answering", g_asks, g_served, g_derived);
+    *asks = g_asks;
+    *served = g_served;
+    *derived = g_derived;
 }

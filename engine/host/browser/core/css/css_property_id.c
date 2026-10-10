@@ -22,7 +22,7 @@ static const CssPropertyRow CSS_PROPERTY_ROWS[CSS_PROPERTY_COUNT] = {
 
 /* The name index: a power-of-two open-addressed table over the rows, at most half full, built once per process
    from the immutable row table. A slot holds a row's id plus one, so a zeroed slot is empty. */
-#define CSS_PROPERTY_INDEX_CAP 64u
+#define CSS_PROPERTY_INDEX_CAP 128u
 _Static_assert(CSS_PROPERTY_COUNT * 2 <= CSS_PROPERTY_INDEX_CAP,
                "the property name index must stay at most half full; double CSS_PROPERTY_INDEX_CAP");
 static uint8_t g_index[CSS_PROPERTY_INDEX_CAP];
