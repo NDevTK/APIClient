@@ -257,6 +257,45 @@ const CALLSITE_PROVENANCE = Object.freeze(["observed", "derived", "forced"]);
 
 function isCallSiteProvenance(p) { return CALLSITE_PROVENANCE.indexOf(p) >= 0; }
 
+/* WHAT A SIGHTING PROVED ABOUT THE ADDRESS AGAINST THE PRODUCT'S BAR — engine/host/solver/endpoint.h's
+   `ENDPOINT_RAZOR_CLASSES`, in that list's order. `runtime-only` is a proof that the address exists only at
+   run time; `unproven` is no proof either way, never the claim that a parse could state it.
+   A method record collects the SET its sightings stated rather than folding them: the engine computes the
+   class per @H row at its emitter and never folds it, so two rows of one address that disagree are both
+   shown. A sighting from an engine build that emitted no `razorClass` adds nothing to the set. */
+const CALLSITE_RAZOR_CLASSES = Object.freeze(["unproven", "runtime-only"]);
+
+/* The set a method's sightings stated, in vocabulary order, with `incoming` added. `prior` is the method's
+   own list or undefined (no sighting has stated one yet). Returns rather than mutates. */
+function razorClassSetWith(prior, incoming, where) {
+  DCHECK(CALLSITE_RAZOR_CLASSES.indexOf(incoming) >= 0,
+         "a sighting states the razor class " + JSON.stringify(incoming) + ", which is none of " +
+         CALLSITE_RAZOR_CLASSES.join("/") + " (" + where + ") — solver/endpoint.c writes it through one " +
+         "table of C literals, so this is that emission and this vocabulary having parted");
+  const have = prior === undefined ? [] : checkRazorClassSet(prior, where);
+  return CALLSITE_RAZOR_CLASSES.filter((c) => c === incoming || have.indexOf(c) >= 0);
+}
+
+// Asserts a stored set's shape: a non-empty list of distinct vocabulary members in vocabulary order.
+function checkRazorClassSet(set, where) {
+  const rank = (c) => CALLSITE_RAZOR_CLASSES.indexOf(c);
+  DCHECK(Array.isArray(set) && set.length > 0 &&
+         set.every((c, i) => rank(c) >= 0 && (i === 0 || rank(set[i - 1]) < rank(c))),
+         "a method's razor-class set " + JSON.stringify(set) + " is not a non-empty, ordered list of " +
+         CALLSITE_RAZOR_CLASSES.join("/") + " (" + where + ") — razorClassSetWith is its one writer");
+  return set;
+}
+
+/* A method's razor-class set; null for a method no bundle sighting reached (`_astInferred` false), and
+   undefined for one whose every sighting came from an engine build that stated no class. */
+function methodRazorClasses(m, where) {
+  DCHECK(!!m && typeof m === "object" && !Array.isArray(m),
+         "a razor class was asked of something that is not a method record (" + where + ")");
+  if (!m._astInferred) return null;
+  if (m._astRazorClasses === undefined) return undefined;
+  return checkRazorClassSet(m._astRazorClasses, where);
+}
+
 /* THE FOLD, WHERE TWO SIGHTINGS OF ONE ADDRESS MEET — the MOST OBSERVED of them, which is the rule the
    engine's own pending-line join uses and for the same argument: the two sightings are one ADDRESS, so if
    either was reached without standing on a contradicted arm then a real client's code computes it and the

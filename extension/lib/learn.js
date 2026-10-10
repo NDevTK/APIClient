@@ -564,6 +564,13 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     const _prev = m._astProvenance === undefined ? callSite.provenance : m._astProvenance;
     m._astProvenance = mostObservedProvenance(_prev, callSite.provenance);
   }
+  /* …and what this sighting proved about the address against the product's bar, collected as a set
+     (lib/endpoint-record.js states why it is not folded). A row from an engine build that predates the key
+     states nothing, so it adds nothing. */
+  if ("razorClass" in callSite) {
+    m._astRazorClasses = razorClassSetWith(m._astRazorClasses, callSite.razorClass,
+                                           "lib/learn.js registering method " + JSON.stringify(methodName));
+  }
 
   /* `_astCallSites` IS GONE, AND SO IS THE SOURCE LOCATION IT WAS MADE OF. It recorded one entry per call
      site as {script, line, column, enclosingFunction}, keyed and deduped on `line:column`, and its comment

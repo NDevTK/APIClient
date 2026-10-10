@@ -727,7 +727,7 @@ function _sumStats(byDoc) {
    on — did not, so `_methodOrigin` tagged the endpoint the forced execution had just found in the bundle as
    "fired only (no bundle origin)". The cumulative moat is where "what the bundle CAN do but didn't" is read,
    and it was answering the opposite.
-   THE IDENTITY FIELDS ARE KEPT, THE LEARNED ONES ARE FILLED, AND THE TWO THAT ARE NOT FIRST-WRITER-WINS SAY
+   THE IDENTITY FIELDS ARE KEPT, THE LEARNED ONES ARE FILLED, AND THE ONES THAT ARE NOT FIRST-WRITER-WINS SAY
    SO: `_astInferred` is MONOTONE (a call site found in the bundle by either page is a call site in the
    bundle), and `_stats` is SUMMED PER CONTRIBUTING DOCUMENT (see `_sumStats`). Everything else the newer record carries and the older lacks is copied
    as-is — a real discovery document's methods carry server-authored fields (scopes, parameterOrder, flatPath)
@@ -735,10 +735,17 @@ function _sumStats(byDoc) {
    would silently drop what it had not heard of. */
 function _mergeMethodInto(em, nm, docKey) {
   for (const k in nm) {
-    if (k === "parameters" || k === "_stats" || k === "_astInferred") continue;   // the three with real rules
+    if (k === "parameters" || k === "_stats" || k === "_astInferred" || k === "_astRazorClasses") continue;
     if (em[k] === undefined || em[k] === null) em[k] = nm[k];
   }
   if (nm._astInferred) em._astInferred = true;
+  // The razor-class set is a union across documents, for the reason it is a set within one.
+  if (nm._astRazorClasses !== undefined) {
+    const where = "lib/merge.js moat-merging a method's razor classes";
+    for (const c of checkRazorClassSet(nm._astRazorClasses, where)) {
+      em._astRazorClasses = razorClassSetWith(em._astRazorClasses, c, where);
+    }
+  }
   if (nm.parameters) {
     if (!em.parameters) em.parameters = {};
     for (const pn in nm.parameters) {
