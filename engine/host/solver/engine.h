@@ -183,159 +183,72 @@ void engine_set_link_connected_hook(int (*fn)(JSContext *ctx));
    free. */
 void engine_set_checkpoint_hook(void (*fn)(JSContext *ctx));
 
-/* WHERE A SIBLING COMES BACK — the one thing a prepared fork needs that the decision seam cannot derive, so
- * this is where it is decided and where a fork that has no answer CRASHES.
- *
- * decide.c calls this with the sibling's decision + pin blobs already built. Two things can consume them, and
- * exactly one of them will:
- *   - AN ACTIVATION THAT WILL BE CLONED. The interpreter asking at an OP_if, or the step driver asking for a
- *     machine that yielded JS_STEP_FORK, both hold a resume point and clone it a moment later. They ask
- *     through the flow-control hooks, which is how this knows: engine.c installs its own wrappers and they
- *     declare it. The blobs are stashed and engine_fork_finalize assembles from them plus the clone. Returns 1
- *     — the caller still owes the snapshot.
- *   - THE FLOW'S OWN SCHEDULER STEP, when `restartable` says the asking code is re-reached by re-running it
- *     (solver_decide_restartable). There is no activation, and none is needed: the sibling is assembled here
- *     with NO frame, and re-entering its step re-runs the same engine code and replays the arm recorded for
- *     it. Returns 0 — nothing is owed and the FORKED bit is never raised.
- * A C body that is neither — already inside its own activation with nothing that will clone it — has no
- * resume point at all, and this DFAILs naming the predicate it asked. What that names is the declaration to
- * build (JS_CFUNC_STEP_DEF), never a way to ask less. `asked` is the constraint key, or NULL.
- *
- * IT USED TO STASH UNCONDITIONALLY, and the cost of that was a diagnosis three layers from the cause: a C body
- * took the FORKED bit, nothing consumed it, and the NEXT fork anywhere in the agent aborted on a stash that
- * was still full — 20 documents of one WPT area, with nothing in the message about where the blobs came from. */
+/* Decide where a prepared fork's sibling comes back. decide.c calls this with the sibling's decision and pin
+ * blobs already built, and exactly one consumer takes them:
+ *   - An activation that will be cloned: the interpreter at an OP_if, or the step driver for a machine that
+ *     yielded JS_STEP_FORK, asking through engine.c's flow-control hook wrappers. The blobs are stashed and
+ *     engine_fork_finalize assembles the sibling from them plus the clone. Returns 1: the caller owes the
+ *     snapshot.
+ *   - The flow's own scheduler step, when `restartable` (solver_decide_restartable) says re-running the step
+ *     reaches the asking code again. The sibling is assembled here with no frame and replays its recorded arm.
+ *     Returns 0: nothing is owed and the FORKED bit is not raised.
+ * A C body that is neither has no resume point, and this DFAILs naming `site`; the fix is to declare it with
+ * JS_CFUNC_STEP_DEF, never to ask less. It does not stash unconditionally, because an unconsumed stash would
+ * abort the next fork far from its cause. `asked` is the constraint key, or NULL. Requires a running flow in
+ * a forking session (asserted). */
 int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const char *asked, int restartable,
                         const char *site);
 
-/* DOES THIS SESSION FORK AT ALL — the explore/verify bit, asked rather than copied.
- *
- * The bit reaches the INTERPRETER and the STEP DRIVER through the flow-control hook table, and each of those
- * two already has its own answer for a session that installs none: the interpreter's `branch` is absent, so
- * the arm is -1 and the ordinary ToBool decides; the step driver's `outcome` is absent, so the machine takes
- * outcome 0, which every step machine numbers as its ordinary completion. A caller that asks the decision seam
- * BY SYMBOL — a browser component with no OP_if and no machine — consults neither table, so decide.c asks this
- * and answers with the arm THAT SITE declared (solver/decide.h's `nonforking`).
- *
- * IT IS ASKED AND NOT PASSED IN, because a second copy of the bit is a second thing that can disagree with the
- * hook table, and the disagreement would be invisible: a session whose hooks say verify and whose copy says
- * explore mints frontier members from inside a verification, which is the exact defect engine_prepare_fork's
- * own assert names. There is one writer, at the one point a session declares its policy. */
+/* Whether this session forks at all (explore vs verify). The interpreter and step driver read the policy
+ * through the flow-control hook table, whose absent `branch`/`outcome` already mean the ordinary arm (-1, or
+ * outcome 0). A caller that asks the decision seam by symbol (a browser component with no OP_if and no
+ * machine) consults neither, so decide.c asks this and takes the arm that site declared (solver/decide.h's
+ * `nonforking`). It is asked rather than passed in so the bit has one copy, written where the session
+ * declares its policy; a second copy could disagree with the hook table and mint frontier members inside a
+ * verification. */
 int engine_session_forks(void);
 
-/* Run the scripts to frontier exhaustion: seed the first flow, bracket each run with the decision state +
-   per-flow COW delta, and drain the frontier by WFQ order.
-   `recipes` is the PARKED RESIDUE this host stored for the document, or NULL/"" for one with none — the same
-   parameter engine_sched_begin takes and for the same reason, because the choice between a residue and a boot
-   flow is the SCHEDULER's and not the store's. This driver used to pass NULL unconditionally, on the reasoning
-   that the cold tier "belongs to the host that has an IndexedDB"; that made the entire resume path unreachable
-   from every host in this tree that can be run without a browser, so the language cold_resume parses had no
-   producer any process could reach. */
-/* `els[i]` is entry i's `script` ELEMENT, which HTML §4.12.1.1's "execute the script element" needs and which
-   only the scan that built the table can supply — see engine_sched_begin, which this hands it straight to. */
+/* Run the scripts to frontier exhaustion in one call: seed the first flow, bracket each run with the decision
+   state and per-flow COW delta, and drain the frontier by WFQ order. It is a forking session stepped to the
+   end, so the arguments are engine_sched_begin's, including `recipes` (the parked residue, or NULL/"") and
+   `els`. */
 void engine_run(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types,
                 lxb_dom_element_t **els, int n, const char *recipes);
 
-/* …AND WHETHER THIS ENGINE SHOULD LEAVE MEMORY NOW, asked at each step boundary of the one-call driver. It is
-   the Level-1 eviction seam: the HOST decides (it is the only zone that can see the other documents' engines and
-   the summed working set) and the ENGINE decides when — the next boundary with no flow switched in, which is the
-   only moment every flow's state is in its own blob. A non-zero answer requests the park (engine_request_park);
-   a host that never evicts installs nothing.
-   IT IS A QUESTION, NOT A BUDGET. The park writes EVERY member of the frontier and the host stores it, so what
-   this decides is when the residue leaves memory and never how much of it survives.
-   PRESSURE IS NOT THE ONLY REASON, AND THE SEAM NEVER ASKED FOR ONE. The other is a host that has what it came
-   for: the fixture is finished when the document it is DEMONSTRATING has answered every statement it makes, and
-   its frontier is unbounded, so "the frontier drained" is a completion condition no document owes it. Both
-   answers mean the same thing here — this engine leaves memory, with its residue written down — which is also
-   why there is no "stop driving" seam beside this one: a driver that merely stopped would hand the teardown
-   flows suspended mid-frame with replies outstanding, and flow_release asserts that is a DROPPED work item. A
-   residue is parked or it is nothing. */
+/* Install the Level-1 eviction seam, asked at each step boundary of the one-call driver. The host decides
+   whether this engine should leave memory (only it sees the other engines and the summed working set); the
+   engine decides when (the next boundary with no flow switched in, where every flow's state is in its own
+   blob). A non-zero answer requests the park (engine_request_park), which writes every frontier member for the
+   host to store, so it decides when the residue leaves memory, never how much of it survives. A host that has
+   what it came for answers it too: there is no "stop driving" seam, because a driver that merely stopped would
+   leave flows suspended mid-frame with replies outstanding, which flow_release asserts against. A host that
+   never evicts installs nothing. */
 void engine_set_park_hook(int (*want_park)(void));
 
-/* THE WORK THIS ENGINE HAS PERFORMED — forks taken, flows created, jobs run, context switches. Exported because
-   a host that REPORTS on its own run needs the cadence to be the same quantity the engine's own progress stream
-   uses; a host carrying its own would be a second definition of "has anything happened", and the one that
-   already existed went silent exactly when there was most to say (see the definition). */
+/* Work this engine has performed: forks taken, flows created, jobs run and context switches, a lifetime sum.
+   Exported so a host reporting on its run uses the same cadence quantity as the engine's own progress stream. */
 long engine_work_done(void);
 
-/* HOW MANY TIMES THE SCHEDULER'S PREEMPT POLICY WAS ASKED — suspend points REACHED, which is not the same
-   quantity as preempts WANTED (quickjs's JS_FlowPreemptStats) and not the same as rescans PERFORMED
-   (solver/flow.h's `scanRivalRuns`). A LIFETIME count, never reset, so it is one of the few rows a reader may
-   difference across two censuses; a caller that wants a rate takes that delta and never the total.
-   IT IS THE DENOMINATOR `scanRivalRuns` DID NOT HAVE, and the containment that makes the quotient a fraction
-   of anything is structural: flow_rival_of has ONE caller, the rescan branch of that policy, which runs after
-   this count is raised. So the quotient is the hook's cache MISS rate, and it is asserted at the census where
-   both halves are in one hand (solver/result.c) rather than left to whoever divides them.
-   IT DECIDES NOTHING, for the scan counters' reason exactly — no policy reads it. */
+/* How many times the scheduler's preempt policy was asked: suspend points reached, which differs from preempts
+   wanted (JS_FlowPreemptStats) and rescans performed (solver/flow.h's `scanRivalRuns`). A lifetime count,
+   never reset, so a rate is a difference between two censuses. It is the denominator of the hook cache's miss
+   rate: flow_rival_of's one caller is that policy's rescan branch, which runs after this count is raised, and
+   solver/result.c asserts `scanRivalRuns` never exceeds it. No policy reads it. */
 uint64_t engine_preempt_asks(void);
 
-/* …AND WHICH OF THE TWO THINGS THE RESCAN KEYS ON HAD MOVED, WHICH IS THE ONE QUESTION THE COUNT ABOVE AND
-   `scanRivalRuns` TOGETHER STILL CANNOT ASK. The hook's cache is keyed on a DISJUNCTION — the frontier
-   generation OR the incumbent — and both rows publish only how often it MISSED, so every reading of that miss
-   rate has to assume which disjunct supplied it. The two take opposite diffs: a miss on the GENERATION is the
-   page branching and the rescan is the order genuinely having changed, while a miss on the INCUMBENT is a
-   walk for a frontier whose GENERATION stood still — which is not the same statement, and the clause that
-   said it was is retired below.
-   IT READ: a rescan for a frontier nothing moved in, the rival being best eligible other than cur, so only the
-   EXCLUDED member changed, and a walk that folded its top two would answer it without one. IT IS REWRITTEN
-   RATHER THAN DELETED BECAUSE A READER WHO RE-DERIVES IT FROM THE KEY WILL WRITE IT AGAIN: the generation is
-   what the rescan keys on, so a generation that stood still reads as a frontier that stood still. TWO THINGS
-   MOVE UNDER A CUR-ONLY MISS AND EITHER ONE ALONE DEFEATS A TOP-TWO FOLD.
-   (a) THE ORDER MOVES, and it is solver/flow.c that says so rather than this header. flow_silence_carry's
-   banner calls the carry bit THE ONE PART OF A NON-RUNNING MEMBER'S WEIGHT THAT MOVES WITH NO GENERATION BUMP
-   BEHIND IT; its threshold is the family's residue, sweeps DOWNWARD as the family burns, and members flip it
-   in descending order of their own residue — so any two members within one FLOW_AGE_QUANTUM of each other may
-   be in either order by the time the fold is asked. The exact precondition for a cached maximum is that the
-   bit be a COMMON offset, which is the frontier standing on ONE residue, and `sil_phases` is the row that
-   says whether it does. NO FIGURE IS QUOTED HERE DELIBERATELY: solver/flow.h carries that row's measurement
-   with the corpus it was taken over and the derivation as a command, and a count copied away from its
-   derivation is a claim competing with a command. Run it before building anything over a cached maximum.
-   (b) THE POPULATION MOVES, WHICH IS A PROPERTY OF THE CODE AND NOT OF A ROW — no census row was found that
-   prices it, and the three rows here cannot, since all three are raised before the walk and none of them
-   reads a weight. flow_pick_skipped drops the EXCLUDED member and returns before flow_weight is called, so a
-   rival scan never takes the incumbent's weight at all — and a cur-only
-   miss REMOVES the new incumbent from the population and RE-ADMITS the old one, which is the one member the
-   key change is about and the one member a retained pair can hold no reading of. The common shape is the
-   costly one: the yield fires because the cached rival outweighs the incumbent, the loop dispatches that
-   rival, and the outgoing flow is what the next ask's answer most often is.
-   WHAT A SOUND FOLD WOULD BE, so the next reader starts from a design rather than from this refutation. (b)
-   costs one more weighing per scan: retain the pair over the FULL eligible set instead of over the set minus
-   the incumbent, and the top-two identity holds for ANY incumbent. (a) has no key that fixes it — invalidating
-   on the carry invalidates on nearly every step, which is the population the fold was for — so what is left is
-   a MARGIN, and the test is a COMPARISON rather than a quantum. Every member's weight is monotone
-   NON-INCREASING between two generations — the member half is fixed and the notch divides two operands
-   flow_age_running only adds to, which engine.c's hook now asserts over the one member it holds — so the
-   scan's THIRD-best weight is an upper bound on every member outside the pair FOR AS LONG AS THE GENERATION
-   STANDS, however long that is. Recompute the pair's two weights at the fold, return the better of those that
-   is not the incumbent, and the answer is the walk's EXACTLY WHEN that recomputed weight exceeds the retained
-   third — strictly, so no tie-break over members the fold never held can arise. Over a one-step interval that
-   amounts to a gap of about one FLOW_AGE_QUANTUM, because one step is where the fall is one notch or none;
-   over a longer one it is the whole fall. Either way, on the large EQUAL-WEIGHT cohort solver/result.c calls
-   the ordinary state of a one-family page there is no gap at all and the test never licenses the fold. The
-   answer is a structure over the FIXED residue domain, which is what solver/flow.h already prefers.
-   THE THIRD ROW IS THE ONE THAT DECIDES WHETHER EITHER DIFF IS WORTH ANYTHING, and it is why this is a
-   partition rather than a pair. Where both moved in one interval, removing one invalidator alone buys NOTHING:
-   the other would have forced the same walk. So `both` is not a rounding row — a large `cur` beside a large
-   `both` and a large `cur` beside a zero `both` recommend the same work at completely different prices, and no
-   arithmetic over two rows can separate them.
-   IT IS A PARTITION OF `scanRivalRuns` EXACTLY, and the raise is placed to make that structural rather than
-   hoped for: it sits inside the rescan branch, after the key is compared and before the walk, under the same
-   `cur != NULL` test that decides whether flow_rival_of is called at all — so a consultation that misses with
-   no incumbent buys no walk and is counted in neither. The identity `gen + cur + both == scanRivalRuns` is
-   asserted at the census, where all four are in one hand (solver/result.c).
-   ONE STRUCT AND ONE CALL, for solver/flow.h's FlowKeyChecks reason: a partition read through three calls is
-   three moments, and §Testing's rule is that a conservation identity holds WITHIN ONE SAMPLE and nowhere else.
-   LIFETIME COUNTS, never reset, raised in EVERY build — because `scanRivalRuns`, the total they are a
-   partition of, is raised unconditionally too, and a partition compiled out in release would print three zeros
-   beside a nonzero total and read as a hook that never missed rather than as a build that never classified.
-   IT DECIDES NOTHING, for the scan counters' reason exactly: no term of flow_weight reads any of the three, no
-   pick branches on them, nothing is bounded by them.
-   RETIREMENT: this goes when the rival is no longer a WALK — when the ask is answered over the fixed residue
-   domain solver/flow.h's `sil_phases` record prefers, so the `cur` arm stops costing a scan and there is
-   nothing left for the partition to be about. IT READ: a fold that names the top two members answers an
-   incumbent change in O(1). It is kept in its own words because it is CLAUDE.md's fourth bad condition — one
-   SATISFIABLE BY NOTHING, since the clause above refutes the mechanism it names, and a condition nothing can
-   satisfy never comes up again, so the record it guards becomes permanent by accident rather than by anybody
-   deciding it should be. A reader who re-derives that mechanism from the key will write the condition again. */
+/* Which key of the preempt hook's rival cache had moved when it missed; a partition of `scanRivalRuns`. The
+   cache is keyed on the frontier generation or the incumbent, and the two misses call for different work: a
+   generation miss is the page branching, an incumbent (`cur`) miss is a rescan over an unmoved generation.
+   A cached top-two fold does not answer a `cur` miss: the carry bit (solver/flow.c's flow_silence_carry)
+   reorders members with no generation bump, and flow_pick_skipped drops the excluded member before weighing,
+   so the old incumbent re-enters a population the pair never held. A sound fold retains the pair over the
+   full eligible set and is used only when a recomputed weight strictly exceeds the retained third best, which
+   bounds every other member because weights do not increase between generations. `both` counts intervals in
+   which removing either invalidator alone would still have forced the walk.
+   The raise sits in the rescan branch after the key compare, under the `cur != NULL` test that decides whether
+   flow_rival_of runs, and solver/result.c asserts `gen + cur + both == scanRivalRuns` at the census. One
+   struct and one call so the three are one sample. Lifetime counts, raised in every build like the total they
+   partition; no policy reads them. */
 typedef struct {
     uint64_t gen;    /* the frontier GENERATION had moved and the incumbent had not */
     uint64_t cur;    /* the INCUMBENT had changed and the generation had not */
@@ -343,216 +256,107 @@ typedef struct {
 } EngineRivalMiss;
 EngineRivalMiss engine_rival_miss(void);
 
-/* THE SESSION — the same dispatch loop, stepped by its HOST instead of drained. The extension's host has other
-   work between quanta (its message port, other documents' engines, streaming findings), and CLAUDE.md's
-   cooperative-quantum yield says the scheduler RETURNS for exactly that and then resumes the byte-identical
-   frontier. engine_run is a host with nothing else to do, so it is these two in a loop — one scheduler either
-   way. ENGINE_STEP_YIELD leaves the session live and every flow where it was; ENGINE_STEP_DONE means the
-   frontier is empty and the session's hooks are uninstalled.
-   THERE ARE THREE AND EVERY HOST CARRIES THREE. The shipped ABI (main.c's qjs_step) used to FOLD the stall
-   into the yield, and this file said elsewhere that it did; that fold is deleted, because it is the one a
-   host cannot undo. A YIELD and a STALL ask for opposite things and only the engine knows which it meant. */
+/* The session: the same dispatch loop, stepped by its host instead of drained, so a host with other work
+   between quanta (its message port, other engines, streamed findings) gets the cooperative-quantum return and
+   then resumes the byte-identical frontier. engine_run is these entries in a loop. A step answers one of three
+   values and every host keeps all three apart: a yield and a stall ask for opposite things, and only the
+   engine knows which it meant.
+   ENGINE_STEP_DONE: the frontier is empty and the session's hooks are uninstalled.
+   ENGINE_STEP_YIELD: the session is live and every flow is where it was. */
 #define ENGINE_STEP_DONE   0
-#define ENGINE_STEP_YIELD  2   /* the value the extension bridge's qjs_step already speaks */
-/* STALLED: every flow has run as far as it can, but the frontier is not exhausted — one or more are parked on
-   something only the HOST can supply (a reply the sandbox cannot fetch). The session stays LIVE and every
-   parked flow keeps its snapshot; the host supplies what is owed and steps again. Without this the scheduler
-   closes the session on an empty run-queue and those flows are never resumed, which is how a page whose config
-   gates its later endpoints loses everything after the first request.
-   IT IS A BILL, WHICH IS WHY IT MAY NOT BE ANSWERED BY STEPPING AGAIN. A yield asks to be OUTRANKED and costs
-   nothing to ignore — step back in and the same top flow runs on. A stall asks to be PAID, and a host that
-   answers it with another step converts nothing into work: measured on the two-instance drive, 10.8 million
-   steps against a peer owed one reply, with zero context switches, zero jobs and no emission, draining on the
-   very next step once the reply was supplied. So a driver's loop needs this as a TERMINATOR (a peer that
-   stalls on a payment the driver will not make has said all it is going to say) and never a step count — the
-   engine states the condition, so nothing has to count rounds to guess at it. */
+#define ENGINE_STEP_YIELD  2   /* the value the extension bridge's qjs_step speaks */
+/* ENGINE_STEP_STALLED: every flow has run as far as it can, but some are parked on something only the host can
+   supply (a reply the sandbox cannot fetch). The session stays live and parked flows keep their snapshots; the
+   host supplies what is owed (engine_host_owes) and steps again. A stall is a bill: stepping again without
+   paying converts nothing into work, so a driver treats an unpaid stall as its terminator, never a step
+   count. */
 #define ENGINE_STEP_STALLED 3
-#define ENGINE_QUANTUM_MS  12  /* a thread-sharing floor, not a cap: nothing is dropped across it. It is a budget
-                                  of CPU actually consumed — solver/quantum.h owns the edge that expires it and
-                                  says what each host can measure. */
-/* HOW OFTEN THAT BUDGET IS ASKED, counted in the interpreter's own DISPATCHES — the second half of one policy
-   and declared beside the first so the two cannot drift and a reader finds them together. It reaches the
-   interpreter as JSFlowControlHooks.budget_period rather than as a constant quickjs.c could read, because
-   quickjs.c includes no host header and must not: a period spelled there would be a second component's opinion
-   about this policy, which is the disagreement §a-bound-is-not-a-granularity says a scheduler-owned unit exists
-   to make impossible.
-   IT IS AN OCCASION AND NEVER A VERDICT, AND A DISPATCH-DENOMINATED BUDGET IS THE BANNED THING NEXT DOOR. The
-   budget stays the CLOCK; this only says how often the clock is read. What forbids the other reading is not a
-   grammar but the same fact that bounds what this can reach: quickjs.c's retired-dispatch count has ONE
-   increment site, inside DISPATCH, so a C activation that declares no step boundary retires zero of it however
-   long it runs — see the aging charge in engine.c, which is denominated in thread time for exactly that reason
-   and which states the history of having been denominated otherwise.
-   WHY 4096, AS A DERIVATION RATHER THAN A NUMBER TO PRESERVE. It bounds two quantities at once and both are
-   read against ENGINE_QUANTUM_MS above. OVERSHOOT: a flow can pass the budget by at most one period of
-   dispatches, and a few thousand dispatches is tens of microseconds against a twelve-millisecond slice. COST:
-   on the host that needs this edge most, the budget is a clock read that calls into JS, so it has to be
-   amortised over enough dispatches to disappear — the same arithmetic, and the same answer. Both land under one
-   percent of the slice anywhere from about a thousand to about sixteen thousand, so re-derive this against the
-   slice rather than copying it. Nothing requires a power of two: the gate counts down. */
+#define ENGINE_QUANTUM_MS  12  /* a thread-sharing floor, not a cap: nothing is dropped across it. A budget of CPU
+                                  consumed; solver/quantum.h owns the edge that expires it. */
+/* How often the quantum budget is read, in interpreter dispatches. It reaches quickjs.c as
+   JSFlowControlHooks.budget_period because quickjs.c includes no host header, so the scheduler owns the one
+   value. It is an occasion to read the CPU clock, never a dispatch-denominated budget: a C activation that
+   declares no step boundary retires no dispatches however long it runs (the aging charge in engine.c is
+   denominated in thread time for that reason). The value bounds overshoot (at most one period past the budget,
+   tens of microseconds) and amortises the clock read (a call into JS on some hosts); both stay under one
+   percent of ENGINE_QUANTUM_MS from about 1024 to 16384, so re-derive it against the slice. The gate counts
+   down, so it need not be a power of two. */
 #define ENGINE_QUANTUM_ASK_EVERY 4096
-/* THE SEAM ASSERTION'S MARGIN, counted in WORK the step performed (forks + flows created + jobs run) rather
-   than in milliseconds — see the verdict in engine_sched_step for why a WALL clock cannot decide this on a
-   loaded machine. A step that performs this much work without once consulting the preempt hook has no
-   suspend/resume seam on that path, whatever else is running on the box. Deliberately enormous: an ordinary step
-   forks a handful of times between two suspend points, so nothing short of a genuinely non-returning stretch
-   approaches it. It is a DIAGNOSTIC, never a bound — it truncates no work, drops no flow, and is compiled out
-   of release. */
+/* Dev-build diagnostic margin, in work one step performs (forks + flows created + jobs run): a step that does
+   this much without consulting the preempt hook has no suspend/resume seam on that path. It is work rather
+   than wall time because a wall clock cannot decide this on a loaded machine (see engine_sched_step), and it
+   sits far above an ordinary step's few forks between suspend points. It truncates and drops nothing. */
 #define ENGINE_SEAMLESS_WORK 1000
-/* THE OTHER MARGIN, in CPU ACTUALLY CONSUMED, for the seamless stretch the work count is blind to by
-   construction: a bare `for(;;);` inside C forks nothing, queues nothing and emits nothing, so it reaches
-   ENGINE_SEAMLESS_WORK never and hangs the engine silently. Consumed CPU is the one quantity a loaded machine
-   cannot inflate, which is what makes this decidable where a wall clock was not — so it is asked only where
-   quantum_measure_is_cpu() says the reading IS CPU. 400x the quantum: anything under it is merely a slow step,
-   anything over it has offered the scheduler nothing across four hundred slices' worth of thread it actually
-   burned. A DIAGNOSTIC on the same terms as the one above — no truncation, no drop, absent in release. */
+/* The CPU margin for a seamless stretch the work count cannot see (a C `for(;;);` forks and queues nothing):
+   400 quanta of consumed CPU without offering the scheduler a seam. Asked only where quantum_measure_is_cpu()
+   says the reading is CPU, since consumed CPU is what a loaded machine cannot inflate. Dev-build only; it
+   truncates and drops nothing. */
 #define ENGINE_SEAMLESS_CPU_US ((int64_t)ENGINE_QUANTUM_MS * 1000 * 400)
-/* WHAT THE HOST IS OWED — non-zero if ANY member of the frontier is still waiting on something only the host
-   can supply, which is the scheduler's own last question before it may call a frontier exhausted (STALLED
-   rather than DONE). It is the union of the two lists below and is answered from the same registers they walk,
-   which is the correction: this was a host CALLBACK, every host restated it, and main.c restated it wrong by
-   naming only the reply register — so a frontier suspended entirely inside cross-instance reads reported
-   exhausted and its continuations died with the session. A host may still ask it (the fixture's park hook does,
-   because a park wants the same moment), but nothing has to TELL the engine any more. */
+/* Whether the host owes anything: non-zero if any frontier member waits on something only the host can supply,
+   the union of engine_pending_fetches and engine_host_requests read from the same registers. It is the
+   scheduler's last question before calling a frontier exhausted (STALLED rather than DONE), so a host does not
+   report it; a host may still ask (the fixture's park hook does). */
 int engine_host_owes(void);
 
-/* …AND THE OTHER WAY A FRONTIER CAN HAVE NOTHING LEFT TO CONVERT INTO WORK, which is not a bill and must never
-   be read as one. Every member is parked on a request the TRUSTED ZONE REFUSED: outstanding to its own flow
-   (so the timeline is not torn down) and owed by nobody, because the two joins skip a refused entry precisely
-   so it is not re-asked and re-refused. The bill above therefore answers 0 for such a frontier and is right
-   to; what this answers is the fact that makes that 0 honest rather than a mark resting on an event that can
-   never happen.
-   THE TWO ARE ASKED IN ORDER AND CANNOT BOTH HOLD BY ACCIDENT: one billable member falsifies this, and a
-   refused member can never be what a bill names. `-inf` from a frontier in this state is not "the other
-   document is worth more" and not "pay me" — it is "rank me last and let me write my residue down", which is
-   what engine_sched_slice's close then does before the session ends. */
+/* Whether every frontier member is parked on a request the trusted zone refused: outstanding to its own flow
+   (so the timeline is not torn down) and owed by nobody, because the joins skip a refused entry so it is not
+   re-asked. engine_host_owes answers 0 for such a frontier; this says that 0 is final. The two cannot both
+   hold, since one billable member falsifies this. A settled frontier ranks last (`-inf`), and
+   engine_sched_slice's close writes its residue down before the session ends. */
 int engine_frontier_settled(void);
 
-/* THIS INSTANCE'S DOCUMENT IS ONE ANOTHER INSTANCE HOLDS A REFERENCE INTO, so its timelines may not RUN OUT.
-   A document's state IS its flows (engine_perform says so where it attaches an operation to every one of
-   them), so a peer that still holds a WindowProxy for this document can ask it something at any moment — and a
-   frontier that drained has nothing left to answer in. Seeding a fresh flow at that point is not the same
-   document: the page's own scripts wrote into the delta of the flow that ran them, so a flow starting from the
-   baseline answers about a document where none of them ever ran, silently.
-   So the last timeline does not finish; it reports itself HOST-OWED (flow.h) — waiting, not finished — and the
-   session STALLS instead of closing. Nothing spins on that: a host-owed flow is out of the pick, so the
-   scheduler returns to the host, which is blocked on the channel the next operation arrives over. It is the
-   ordinary park: the flow keeps its snapshot, its delta and its place in the WFQ, and the operation that
-   arrives is the work that resumes it.
-   Set by the HOST, because whether a peer holds a reference is a fact about the instance's provisioning and not
-   one the engine can see: a child instance exists precisely because some other agent created its navigable. */
+/* Mark this instance's document as one another instance holds a reference into (a WindowProxy), so its
+   timelines may not run out: a peer can ask it something at any time, and a fresh flow seeded from the
+   baseline would answer about a document in which none of the page's scripts ran. The last timeline reports
+   itself host-owed (flow.h) instead of finishing and the session stalls instead of closing; a host-owed flow
+   is out of the pick, so nothing spins, and the arriving operation resumes it. Set by the host, because
+   provisioning (another agent created this instance's navigable) is invisible to the engine; it belongs to
+   the instance and survives session boundaries. */
 void engine_set_referenced(int referenced);
 
-/* HOW THE HOST PAYS WHAT IT OWES, for the driver that runs the frontier to completion in one call
-   (engine_run). The stepping entry answers a stall by returning to its caller, which is what the extension's
-   qjs_step does; a one-call driver has no such caller, so a stall with nobody to answer it ended the run — and
-   a flow that had issued a request stopped at that request, its continuation never reaching the reply. The
-   provider fills what engine_pending_fetches and engine_host_requests name, and answers how many entries it
-   filled; 0 at a stall ends the run, which is the honest answer to "nobody can supply this".
-   IT IS CALLED AT EVERY SLICE, which is the fix this paragraph used to describe as a known defect with the
-   sequence to follow written out beneath it. That instruction OUTLIVED the absence it named: run_scheduler
-   pays the provider unconditionally after every engine_sched_step and asserts at the seam that the payment
-   left nothing outstanding, so both registers are settled at the next quantum exactly as the extension's
-   bridge settles them — a blocked flow's reply is no longer a function of every sibling in the document also
-   having blocked. What the STALL still decides is only whether the driver STOPS: a stall with `filled == 0` is
-   a frontier waiting on something outside this host's tables, and nothing this provider holds will move it. */
+/* Install how the host pays what it owes, for the one-call driver (engine_run), which has no caller to return a
+   stall to. The provider fills what engine_pending_fetches and engine_host_requests name and answers how many
+   entries it filled. run_scheduler calls it after every engine_sched_step and asserts nothing was left
+   outstanding, so replies settle at the next quantum as the extension bridge settles them; a stall with
+   `filled == 0` ends the run, since nothing this host holds will move it. */
 void engine_set_provider(int (*provide)(JSContext *ctx));
 
-/* `recipes` is the PARKED RESIDUE the host stored for this bundle (';'-joined records — see solver/cold.h), or
-   NULL/"" for a document with none. It seeds the frontier INSTEAD of the boot flow, never beside it: a resumed
-   flow re-runs the same document under its own recorded arms, so adding a fresh boot flow would explore the
-   un-forked path twice and re-fork every branch the residue already stands on.
-   `types[i]` is entry i's HTML §4.12.1.1 script type, and it is what the compile ASKS rather than assumes: a
-   classic script is wrapped in a preemptible program frame (JS_FlowNew) and completes with a value, while a
-   MODULE is linked and evaluated (JS_FlowEvalModule) and completes with a PROMISE. The scheduler cannot
-   recover the kind from the body — `await` at the top level is a SyntaxError in one and legal in the other,
-   which is exactly the difference that has to arrive from the element. The array is BORROWED for the life of
-   the session, like `bodies` and `srcs`.
-   `bodies[i]` and `srcs[i]` are the TWO INDEPENDENT ITEMS core/loader/document_scripts.h states — source text,
-   and the address §8.1.4.1 "Scripts" makes the script's base URL — so a host that has already fetched an
-   external entry passes BOTH and the row runs as a program AT its own address. Only NEITHER is refused. */
-/* `els[i]` is entry i's `script` ELEMENT (core/loader/document_scripts.h), BORROWED for the life of the
-   session like the three columns beside it. It is what HTML §4.12.1.1 "Processing model"'s "execute the script
-   element" is a switch ON, and what its "classic" arm sets §3.1.7's `currentScript` to for the whole of the run
-   — the one fact about a `<script>` that nothing downstream of the scan can recover, because by the time the
-   scheduler holds a body the element is behind it. NULL for a sequence no element produced (a host driving a
-   synthesized program list); the row's `currentScript` is then null, which is §3.1.7's own answer for a
-   document that is not executing a script element. */
+/* Begin a stepped session over `n` scripts. `forking` is the explore/verify policy engine_session_forks
+   answers. `recipes` is the parked residue the host stored for this bundle (';'-joined records, solver/cold.h),
+   or NULL/"" for none; it seeds the frontier instead of the boot flow, never beside it, because a resumed flow
+   already re-runs the document under its recorded arms.
+   `types[i]` is entry i's HTML §4.12.1.1 script type: a classic script runs in a preemptible program frame
+   (JS_FlowNew) and completes with a value, a module is linked and evaluated (JS_FlowEvalModule) and completes
+   with a promise, and the body cannot say which (top-level `await`).
+   `bodies[i]` and `srcs[i]` are core/loader/document_scripts.h's two independent items, source text and the
+   HTML §8.1.4.1 "Scripts" base URL; an already-fetched external entry passes both, and an entry with neither
+   is refused. `els[i]` is entry i's `script` element, which "execute the script element" switches on and whose
+   classic arm sets §3.1.7 `currentScript`; NULL for a synthesized program list, where `currentScript` stays
+   null. All four arrays are borrowed for the life of the session. One session at a time (asserted). */
 void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types,
                         lxb_dom_element_t **els, int n, int forking, const char *recipes);
 int  engine_sched_step(void);
 
-/* THE PERIODIC CENSUS, FOR A HOST WHOSE OUTPUT IS A STREAM OF LINES — @SWAP, @COLD, @HEAP, @WFQ, @FORKAT,
- * in that order, from the same five composers that put these bytes on the result document.
- *
- * CALLED BETWEEN TWO STEPS, ON THE HOST'S OWN TIME, ONCE PER ROUND. It decides for itself whether a sample is
- * DUE — `ENGINE_PROGRESS_EVERY` units of `engine_work_done()` or a new @S candidate, whichever comes first —
- * so a host's rule is "call it when you come back from a step" with nothing to get right, which is the same
- * shape `engine_sched_end` gives the session close one entry up. A host that called it per opcode would be
- * choosing a cadence the engine already owns.
- *
- * WHY A HOST NEEDS IT AT ALL, WHICH IS THE WHOLE OF THE ENTRY. The result document is built when the frontier
- * DRAINS or STALLS, and a real page's frontier does neither inside any budget anyone has run — so a host that
- * waits for it reports NOTHING about a run that is killed, and a run exploring thousands of worlds and a run
- * wedged on one member are the same silence. These five lines are what tell them apart while the run is still
- * going: @COLD's `live`/`forks`/`finished`/`steps`, @SWAP's `installs` and @WFQ's `picksLifetime`/`members`
- * rising is a frontier being explored, and the same numbers frozen across two samples is one member holding
- * the thread.
- *
- * WHO CALLS IT: `run_scheduler` here, and `test_forced.c`'s `--abi` arm. NOT the wasm ABI hosts — they read
- * the RESULT DOCUMENT, which carries these same bytes, and a line for them would be a second spelling of a
- * number they already hold. NOT inside `engine_sched_step`, which would put the emission on every host of
- * this ABI whether its stdout is a record stream or a console.
- *
- * ITS COST IS ON THE LINE IT PRINTS. A sample is O(frontier members) and solver/flow.h's `FLOW_SCAN_CENSUS`
- * note says it weighs every member TWICE; @WFQ's `scanCensusWeights` against `scanNextWeights` is what
- * fraction of all frontier-weighing went to the REPORT rather than to the run, on the very run being read.
- *
- * IT ANSWERS WHETHER THIS ROUND WAS A SAMPLE — 1 when the five lines went out, 0 when the cadence was not
- * due — AND THAT RETURN IS A SEAM AND NOT A CONVENIENCE. The paragraph above says why a host needs the
- * census: the result DOCUMENT is built when the frontier drains or stalls, which a real page's frontier does
- * neither of inside any budget anyone has run. That argument is about the FINDINGS as much as it is about
- * these five lines — §What-the-tool-produces' endpoint surface, its example values and its verified sinks are
- * on that same document and reach nobody on a killed run — and the engine already exports the ungated channel
- * for them: main.c's `qjs_emit_partial` writes the one result document on the host's own cadence, which is
- * what extension/bridge.js calls every PARTIAL_MS while an instance is live. A line-stream host that wants
- * its findings streamed therefore needs ONE fact this function already computes and used to keep: WHEN.
- *
- * WHY THE CADENCE IS NOT THE HOST'S TO CHOOSE, WHICH IS THE WHOLE REASON THIS IS A RETURN RATHER THAN A
- * SECOND COUNTER IN THE CALLER. The banner above already refuses one ("a host that called it per opcode would
- * be choosing a cadence the engine already owns"), and §Testing refuses the obvious alternative for a sharper
- * reason: a cadence denominated in ELAPSED TIME is a fact about the machine, while `engine_work_done()` is
- * work ACTUALLY PERFORMED, which is exactly the quantity that rule names. A host holding its own interval
- * would also publish a stream whose `@RESULT` and whose five census lines describe two different instants,
- * with nothing saying so — the two-moments defect §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE names,
- * manufactured by the reporting rather than met in it.
- *
- * WHAT A HOST THAT IGNORES THE RETURN GETS IS EXACTLY WHAT IT GOT BEFORE, which is why this is not a
- * behaviour change for `run_scheduler`: the five lines still go out on the same cadence and nothing else
- * happens. The return is information the caller may spend, never an obligation it may forget. */
+/* Emit the periodic census for a host whose output is a stream of lines: @SWAP, @COLD, @HEAP, @WFQ, @FORKAT, in
+ * that order, from the composers that put the same bytes on the result document. Call it after each step; it
+ * decides whether a sample is due (`ENGINE_PROGRESS_EVERY` units of engine_work_done() or a new @S candidate),
+ * because a cadence in work performed belongs to the engine, and an elapsed-time cadence would describe the
+ * machine. A host needs it because the result document is built only when the frontier drains or stalls, which
+ * a real page may never do; rising or frozen counters tell exploration from one member holding the thread.
+ * Callers are run_scheduler and test_forced.c's `--abi` arm. The wasm ABI hosts read the result document
+ * instead, and engine_sched_step does not emit, so a console host is not handed a record stream. A sample is
+ * O(frontier members) and weighs each member twice (solver/flow.h's FLOW_SCAN_CENSUS), visible as @WFQ's
+ * `scanCensusWeights` against `scanNextWeights`.
+ * Returns 1 when the lines went out and 0 when not due, so a line-stream host can emit its findings
+ * (main.c's `qjs_emit_partial`) at the census's instant. Ignoring the return changes nothing. */
 int engine_census_emit(void);
 
-/* THE SESSION ENDS WHEN THE HOST STOPS STEPPING, AND EVERY HOST SAYS SO THE SAME WAY. `begin`/`step`/`end`,
- * with `end` called unconditionally at the point the host leaves its loop — never `if (r != ENGINE_STEP_DONE)`,
- * which is a condition each host has to copy correctly and which one of them will not.
- *
- * WHAT IT IS FOR. Only ONE way out of a stepping loop closes the session by itself: DONE, where the frontier
- * drained. Every other exit is the host's own decision — a stall nobody will pay, a measurement that is over —
- * and it leaves the session LIVE: the scheduler's hooks installed over a frontier the host is about to tear
- * down, and, the part that is not merely untidy, ONE FLOW STILL SWITCHED IN. That flow's heap delta is applied
- * to the shared baseline, its created DOM nodes are in the document, and its decision state is in decide.c's
- * globals rather than in its own blob — so the teardown releases one copy of each while the scheduler still
- * holds the other, and flow_release asserts exactly that ("the RUNNING flow was released"). Measured: a wpt
- * runner that ended its loop when testharness reported the file complete aborted 26 files on that assert.
- *
- * IT IS NOT A DROP, WHICH IS THE WHOLE REASON THIS IS A MECHANISM AND NOT A `free`. Ending performs the
- * ORDINARY SUSPEND on the running flow — the same switch-out a park takes — so the frontier a closed session
- * leaves behind is a set of SNAPSHOTS, every member in the state §Time-travel says a parked flow is in.
- * Nothing is dropped, starved, skipped, reordered or forgotten; what ends is the SESSION, and whether those
- * snapshots are then resumed is a question about the host's frontier and not about this call.
- *
- * CALLING IT AFTER DONE IS CORRECT AND IS NOTHING. A session that already closed has no running flow to
- * suspend and no hooks left installed, which is a positive answer rather than a guard against a caller that
- * got it wrong — and it is what lets the rule above be "call it when you stop stepping", with no condition. */
+/* End the session when the host stops stepping. Call it unconditionally where the host leaves its loop, never
+ * behind `if (r != ENGINE_STEP_DONE)`. Only DONE closes a session by itself; any other exit leaves the hooks
+ * installed and one flow switched in (its heap delta applied, its DOM nodes in the document, its decision
+ * state in decide.c's globals), and a teardown would then release state the scheduler still holds, which
+ * flow_release asserts against. Ending performs the ordinary suspend on the running flow, as a park does, so
+ * the frontier left behind is a set of snapshots and nothing is dropped. After DONE it does nothing. */
 void engine_sched_end(void);
 
 /* A SECOND DOCUMENT OF THIS AGENT RUNS ITS OWN SCRIPTS, ON THE FRONTIER THAT IS ALREADY RUNNING.
