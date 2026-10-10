@@ -3148,16 +3148,13 @@ function owedList(method, s) {
   return s.split("\n").filter(Boolean);
 }
 
-/* THE INSTANCE HOLDING A DOCUMENT, by exact name. A child's name is PREFIXED by its creator's ("<creator>.<n>")
-   and the creator is precisely the instance that does NOT hold it — that is why the notice exists at all — so a
-   prefix match routes a message straight back to its sender. The engine catches that, twice; it should not have
-   to be the thing that catches it. */
-/* AND IT ANSWERS FOR EVERY DOCUMENT THE INSTANCE HOLDS, NOT ONLY THE ONE IT WAS ROOTED AT. `qjs_join` adds a
-   second document of this cluster to the live agent (main.c records it in `g_joined_ctx`/`g_joined_dom`), and
-   the engine interns every document by NAME — `qjs_route`'s own arrival assert is
-   `world_doc_hosted(world_doc_intern(doc))` (solver/engine.c) — so a name this table cannot resolve is a
-   delivery routed to the wrong instance or dropped, which the post branch's assert reports as a create notice
-   that was lost. The two lists are read as one because they ARE one on the other side of the boundary. */
+/* The instance holding a document, by exact name. A child's name is prefixed by its creator's
+   ("<creator>.<n>") and the creator is exactly the instance that does not hold it, so a prefix match would
+   route a message back to its sender. */
+/* It answers for every document the instance holds, not only its root: `qjs_join` adds documents to the live
+   agent (main.c's `g_joined_ctx`/`g_joined_dom`) and the engine interns every document by name (`qjs_route`'s
+   arrival assert is `world_doc_hosted(world_doc_intern(doc))`, solver/engine.c), so the two lists are one
+   table on the other side of the boundary. */
 function hostHolderOf(docName) {
   for (const e of _pool) {
     if (e.docId === docName) return e;
@@ -3166,144 +3163,89 @@ function hostHolderOf(docName) {
   return null;
 }
 
-/* THE INSTANCE OF AN AGENT CLUSTER — and it is a DIFFERENT QUESTION from the one above, which is why they are
-   two functions. `hostHolderOf` asks WHERE A NAMED DOCUMENT IS, and is ROUTING: it answers for the one document
-   an instance is ROOTED at, and a message posted to a document nothing holds is a dropped delivery. This asks
-   WHICH INSTANCE A NEW DOCUMENT BELONGS IN, and is ADMISSION: it answers by the (group, origin) cluster, so a
-   document the engine has already created inside that heap answers here even though nothing has ever named it
-   to this zone. `admit` used to ask the ROUTING question and take a "no" as licence to build a second instance
-   — one question standing in for the other, which is exactly how a same-origin pair ended up in two heaps. */
+/* The instance of an agent cluster, a different question from the one above: `hostHolderOf` is routing (where
+   a named document is), this is admission (which instance a new document belongs in), answered by the
+   (group, origin) cluster, so a document the engine created inside that heap answers here before anything has
+   named it to this zone. Asking the routing question for admission would put a same-origin pair in two
+   heaps. */
 function hostClusterOf(key) {
   for (const e of _pool) if (e.cluster === key) return e;
   return null;
 }
 
-/* THE RENDEZVOUS FOR A CROSS-AGENT OPERATION, and it is THIS ZONE'S because neither engine can hold it. The
-   asking instance knows only its own request id, which is unique inside that instance alone — two peers may
-   ask one holder the same number — and the holder must echo something back that says which instance and which
-   call site the completion belongs to. So the token is minted here, is opaque to both engines (main.c states
-   that at both entries), and carries nothing an untrusted engine could state for itself.
-   IT IS NOT DELETED WHEN THE FIRST COMPLETION ARRIVES, and that is the design rather than a leak. A peer
-   document's state IS its flows: the operation is performed by EVERY live timeline the holder has and each one
-   completes with its own answer, so one token names N completions and all of them are true. Relaying every one
-   is what makes the asking engine's own assert — engine_host_answer's, which names the fork the asking flow
-   still owes — reachable at all; dropping the second here would hide the missing half in this zone instead.
-   One entry per operation that actually crossed, dropped with the instance that asked (engineFinalize). */
+/* The rendezvous for a cross-agent operation, owned by this zone because neither engine can hold it: the
+   asking instance's request id is unique only inside that instance, so the token, opaque to both engines
+   (main.c states that at both entries), names which instance and call site a completion belongs to.
+   It is not deleted at the first completion: the holder performs the operation on every live timeline and
+   each completes with its own answer, so one token names N true completions, and relaying each makes
+   engine_host_answer's assert on the fork the asking flow still owes reachable. One entry per operation that
+   crossed, dropped with the asking instance (engineFinalize). */
 const _remoteOps = new Map();   // token -> { asker, req }
 let _nextRemoteToken = 1;
-/* §7.3.2.3's "let group be a NEW browsing context group", as the only thing this zone needs of one: an id no
-   other group has. It is minted here and never derived from anything an engine said, for the same reason the
-   rendezvous token above is — a group id decides which documents share a heap, and an untrusted instance that
-   could name an existing group could put its own document behind another origin's principal. */
+/* A new browsing context group (HTML §7.1.3.2's switch creates one), as the only thing this zone needs of it:
+   an id no other group has. Minted here, never derived from an engine's word, since a group id decides which
+   documents share a heap. */
 let _nextSwapGroup = 1;
-/* AND §7.3.2.3's SAME SENTENCE FOR A DECLARED ROUTE, which is a top-level traversable in a group of its own for
-   the reason a swap's is: it is not nested in the declaring document and it may not share that document's heap.
-   A SEPARATE COUNTER FROM THE SWAP'S, because they are two different acts and a shared counter would make a
-   log line about one unreadable as the other; the only property either needs is that no other group has its id,
-   and `seed:` prefixes it for the same reason the cold tier's `cold:` prefixes its own — a group id is compared
-   against a browser tab id, and two namespaces that can collide are one namespace. */
+/* The same for a declared route, a top-level traversable in a group of its own (not nested in the declaring
+   document, so it may not share its heap). A separate counter from the swap's so log lines stay readable;
+   `seed:` prefixes it as `cold:` prefixes the cold tier's, because group ids are compared against tab ids and
+   colliding namespaces would be one namespace. */
 let _nextSeedGroup = 1;
 
-/* THE OUTBOUND REQUEST VOCABULARY, spelled here because every branch below reads it and a string literal at a
-   branch is a vocabulary with no name. The verb is solver/route_seed.h's `ROUTE_SEED_NOTICE`; the three
-   provenance words are solver/engine.h's `PENDING_PROVENANCE_*`, which is the SAME vocabulary that header
-   declares for every outbound request rather than a second one per record — a request is a request whether it
-   becomes a fetch or a NAVIGATION, and the zone's firing policy has to read one set of words.
-   ALL THREE ARE NAMED HERE NOW, because the third has readers: `navigationLoad` asserts the whole vocabulary
-   and the ambient seed states `observed` (the person's own browser performed that navigation, which is what
-   `observed` means). It is still unreachable on a `document.seed` RECORD — no load of anything produces a
-   declaration — and that arm's own check is what says so, which is where a fact about one record belongs. */
+/* The outbound request vocabulary, named once. The verb is solver/route_seed.h's `ROUTE_SEED_NOTICE`; the
+   provenance words are solver/engine.h's `PENDING_PROVENANCE_*`, one vocabulary for every outbound request,
+   fetch or navigation, so the firing policy reads one set of words. `observed` is stated by the ambient seed
+   (the person's browser performed that navigation); it is unreachable on a `document.seed` record, which that
+   arm's own check states. */
 const ROUTE_SEED_NOTICE = "document.seed";
 const PROVENANCE_OBSERVED = "observed";
 const PROVENANCE_DERIVED = "derived";
 const PROVENANCE_FORCED = "forced";
-/* AND THE WITNESS MARK'S TWO WORDS BESIDE THEM — solver/engine.h's `PENDING_PINNED_*`, the SECOND field a
-   request carries about itself and never a fourth provenance word, because the provenance says what a REPLY IS
-   WORTH and this says whether the ACT MAY BE SPENT. Named here for the trio's reason above: the `xhr.send`
-   relay asserts this vocabulary off a record now rather than stating a literal, and a string literal at an
-   assert is a vocabulary with no name.
-   THE THIRD WORD IS DELIBERATELY NOT HERE. `unstated` is extension/lib/safe-fetch.js's — what a READER
-   composes for an act whose record carries no mark, which is how an artifact older than the key reads as a
-   fact about the BUILD — so it is that file's `_PINNED_MARKS` that enumerates all three, and the engine never
-   spells it. Naming it here would put the zone's own word in the engine's vocabulary block and invite a
-   producer to state it. */
+/* The witness mark's two words, solver/engine.h's `PENDING_PINNED_*`: a separate field from provenance
+   (provenance says what a reply is worth; this says whether the act may be spent). `unstated` is not here: it
+   is safe-fetch.js's word for a record with no mark (its `_PINNED_MARKS` lists all three), and the engine
+   never spells it. */
 const PINNED_YES = "pinned";
 const PINNED_NO = "unpinned";
 
-/* WHAT THIS ZONE OWES A ONE-WAY NOTICE. Two ops today, and each is an ACTION only this zone can take —
-   SECURITY.md makes the offscreen the only zone that knows which instance holds which document.
+/* What this zone owes a one-way notice. Each op is an action only this zone can take (SECURITY.md: the
+   offscreen alone knows which instance holds which document); ops not listed here are described at their arms.
    `navigable.create <child> <creator> <url> <origin> <topLevelUrl> <cspSelfOrigin> <coep> <coepEndpoint>
    <coepReportOnly> <coepReportOnlyEndpoint> <parentNavigable> <containerPolicy> <ancestorOrigins>
-   <creationSandboxFlags> <csp>` —
-   the engine has already named the document and
-   already handed the page a WindowProxy for it; what is missing is an INSTANCE. This provisions one under that
-   name, loading the child's own document through the one safeFetch chokepoint.
-   `windowproxy.post <target> <world> <targetOrigin> <base64>` — routed VERBATIM to the instance holding
-   <target>, with THIS engine's origin stamped on it. The engine may not state that origin for itself: it is
-   untrusted, and a forgeable event.origin defeats every origin check in every bundle. */
+   <creationSandboxFlags> <provenance> <csp>` — the engine has named the document and handed the page a
+   WindowProxy for it; this provisions (or joins) an instance under that name, loading the child's document
+   through the safeFetch chokepoint.
+   `navigable.swap <new document> <url> <origin> <provenance>` — see that arm.
+   `windowproxy.post <target> <world> <targetOrigin> <base64>` — routed verbatim to the instance holding
+   <target>, with this engine's origin stamped on it: the untrusted engine may not state its own origin, since
+   a forgeable event.origin defeats every origin check in every bundle. */
 async function hostNotice(eng, line) {
   const f = line.split("\t");
   if (f[0] === "navigable.create") {
-    /* SIXTEEN FIELDS AFTER THE VERB, because CSP §2.2's SELF-ORIGIN, §7.1.4's four EMBEDDER POLICY items,
-       HTML §7.3.1.3's TWO LINKS, HTML §3.1.3's ANCESTOR ORIGINS, HTML §7.1.5's CREATION SANDBOXING FLAG SET,
-       the NAVIGATION'S PROVENANCE, the POLICY and HTML §8.1.3.1's TOP-LEVEL CREATION URL are all
-       read below. The count said five
-       once, so a record that stopped at the origin passed the assert and then took `undefined` for the
-       creator's policy clone — a child document judged under NO policy, which is §7.1.7's inheritance silently
-       deleted, and the one field a CSP-blocked sink verdict is decided against.
-       An assert that permits the record it is about to misread is the shape of check that reports green while
-       the value is missing, so it counts every field the reader below indexes — and it MOVES when the record
-       grows, because the field added last is exactly the one an unmoved count would let arrive as
-       `undefined`. */
+    /* The count covers every field the reader below indexes and moves when the record grows, because the
+       field added last is the one a stale count would let arrive as `undefined`. */
     DCHECK(f.length >= 17, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL, CSP self-origin, the four items of §7.1.4's embedder policy, HTML §7.3.1.3's parent navigable and its container's Permissions Policy §9.5 answer, HTML §3.1.3's internal ancestor origin objects list, HTML §7.1.5's creation sandboxing flag set, CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for the navigation, and the policy");
     if (hostHolderOf(f[1])) return;   // already provisioned: the engine announces a document once
-    /* FIELD 15 IS WHAT THIS NAVIGATION IS EVIDENCE OF, AND IT IS THE FIELD THE LOAD BELOW IS DECIDED FROM.
-       Until it existed this arm fetched every child navigable a page's own code named, CREDENTIALED wherever
-       it was same-origin, with nothing anywhere in the path saying who had named the address — which is
-       exactly the state CLAUDE.md §Attacker-sources calls a navigation whose provenance is not established and
-       makes a crash at the decision rather than a load. The engine states it; `navigationLoad` decides on it;
-       this arm neither re-derives it nor acts on it, which is why it is passed through rather than tested
-       here — one decision, at the one document-load path, for every caller of it. */
-    /* `none` \u2014 A NOTICE CAN STATE NOTHING. \u00a77.3.1.3's create arrives as a notice, so there is no
-       request id a refusal could be addressed to, and the only arm below for a bytes-less load fabricates an
-       EMPTY DOCUMENT \u2014 which is what the word names rather than the absent rendezvous, because the
-       rendezvous is not what decides this (a route seed holds none and states `report`).
-       `navigationLoad` aborts instead, naming what to build. */
+    /* Field 15 is the engine's word for what this navigation is evidence of; navigationLoad and the chokepoint
+       decide on it, and this arm passes it through without testing it. */
+    /* `none`: a notice has no request id for a refusal, and its only arm for a bytes-less load would fabricate
+       an empty document, so navigationLoad aborts on a decline instead, naming what to build. */
     const loaded = await eng.fetchedDocument(f[3], f[15], /*refusalArm*/"none");
-    /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED — derived HERE and not read off the
-       notice, even though the notice carries one at f[4]. SECURITY.md draws that line at this exact record:
-       "identity may be minted by the untrusted side because it is only a name, but ROUTING and the ORIGIN
-       STAMPED ON A DELIVERED MESSAGE are the trusted zone's alone." The name is a name; the origin is the
-       thing every bundle's cross-origin check is written against, so it comes from the load this zone
-       performed. RESIDUAL, and HALF OF WHAT IT ONCE ASKED FOR IS BUILT: the flag set IS carried on the notice
-       now (field 14, read below), so the missing half is only the MINT. A child whose creator applied
-       `sandbox` without `allow-same-origin` has an OPAQUE origin by HTML §7.3.2.1's determine the origin
-       ("if sandboxFlags's sandboxed origin browsing context flag is set, then return a new opaque origin"),
-       and this line still stamps it with its address's TUPLE origin — so it would be same origin with every
-       other document of that server, which is the whole of what the attribute removes. WHAT BUILDS IT: read
-       §7.1.5's sandboxed origin flag out of `creationSandboxFlags` below and mint a per-document opaque token
-       here, the way `_senderOrigin` does, so the cluster key and the principal are that token. HOW ITS ABSENCE
-       SHOWS: main.c's root entry asserts the pairing — a document rooted with that flag and a tuple principal
-       aborts naming this line — so the state is a crash rather than a silent wrong principal.
-       AND "THE URL THIS ZONE FETCHED" IS THE URL THE RESPONSE CAME FROM, WHICH IS `loaded.url` AND NOT `f[3]`.
-       The notice carries the address the creating engine ASKED for; only this zone followed the redirect
-       chain, so only this zone can say where the bytes below actually came from. Every one of the three
-       things derived from it is a different answer when they differ: the child's PRINCIPAL (this line),
-       the cluster it is routed to, and the ADDRESS its instance is rooted at — which is what HTML §7.5.1
-       "Shared document creation infrastructure" calls `creationURL` and what every relative URL that
-       document builds resolves against. Loading a redirected child under the requesting address gave a peer
-       instance a principal its own response contradicts, consistently enough that `origin_agent_adopt`'s
-       one-adopt-per-agent assert could not see it. */
-    /* THE CHILD'S BROWSING-CONTEXT GROUP IS ITS CREATOR'S, and that is the spec rather than a convenience: a
-       nested navigable is in its parent's group by construction, and §7.4's auxiliary one is too unless
-       `noopener` severed it. So the child's cluster key is (creator's group, the origin of the URL this zone
-       fetched) — which is what makes two cross-origin children of ONE page at the SAME origin one cluster, the
-       way HTML says they are, instead of two heaps for a pair that can script each other. */
-    /* THE CHILD'S DOCUMENT, AS BYTES. `(loaded && loaded.body) || ""` was a defaulted read of a producer's
-       field — and the field it defaulted was a STRING this zone had decoded, so a cross-origin child served in
-       any encoding but UTF-8 was provisioned from a document already replaced with U+FFFD. The bytes go
-       through `arg` unchanged (see engineCreate); a load that did not load carries none, and the empty byte
-       sequence is the `about:blank`-shaped document the engine's own child_document builds for one. */
+    /* The child's principal is the origin of the response's URL (`loaded.url`, after redirects, which only
+       this zone followed), not the notice's f[4]: SECURITY.md makes routing and the origin stamped on a
+       delivered message the trusted zone's alone. The same URL gives the cluster and the address the instance
+       is rooted at (HTML §7.5.1 Shared document creation infrastructure's `creationURL`).
+       Named residual: a child whose creator applied `sandbox` without `allow-same-origin` has an opaque origin
+       (HTML §7.3.2.1 Creating browsing contexts: the sandboxed origin browsing context flag yields "a new
+       opaque origin"), and this still stamps its address's tuple origin. Next diff reads that flag out of
+       `creationSandboxFlags` and mints a per-document opaque token here, as `_senderOrigin` does. Absence
+       shows as main.c's root entry aborting on the pairing of that flag with a tuple principal. */
+    /* The child's browsing-context group is its creator's: a nested navigable is in its parent's group, and an
+       auxiliary one too unless `noopener` severed it. So two cross-origin children of one page at one origin
+       are one cluster, as HTML has them. */
+    /* The child's document as bytes, passed unchanged (see engineCreate); a load that did not load carries
+       none, and the empty byte sequence is the `about:blank`-shaped document the engine's child_document builds
+       for one. */
     DCHECK(loaded && (loaded.bytes === null || loaded.bytes instanceof Uint8Array),
            "the document load answered neither bytes nor the null that means it did not load");
     DCHECK(loaded && typeof loaded.url === "string" && loaded.url !== "",
@@ -3311,118 +3253,59 @@ async function hostNotice(eng, line) {
            "carries is the one the creating engine ASKED for, and the principal this zone stamps on a peer " +
            "instance has to be the origin of the URL its bytes CAME from");
     const _childBytes = loaded.bytes === null ? new Uint8Array(0) : loaded.bytes;
-    /* AND HOW THIS DOCUMENT WAS REACHED, WHICH IS THE JOIN AND NOT THE NOTICE'S OWN WORD. This document
-       exists because the creating one did, so `safeFetchReachJoin` composes it under the WEAKER of the
-       creating document's grade and the engine's word for the navigation — taking `f[15]` alone would let a
-       child of a document this zone chose to open read as one the person navigated to, after which every
-       request that child makes is relayed by the default arm this grade exists to hold.
-       IT IS STATED ON EVERY ANALYZE RECORD NOW AND NOT ONLY ON THE ONES THAT PERSIST. `fetched` and the XHR
-       relay read it off this message for every request the document makes, so a composer that left it off
-       would hand the chokepoint `undefined` and abort at the first park rather than at this line. */
+    /* How this document was reached is the join (`safeFetchReachJoin`) of the creating document's grade and the
+       engine's word for the navigation, the weaker of the two, so a child of a document this tool opened is
+       never graded as one the person navigated to. It is on every analyze record, since `fetched` and the XHR
+       relay read it for every request the document makes. */
     const msg = { type: "AST_ANALYZE", pageHtml: _childBytes, sourceUrl: loaded.url,
                   origin: originOf(loaded.url), groupId: eng.groupId,
                   provenance: self.safeFetchReachJoin(eng.msg.provenance, f[15]),
                   responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
-    /* THE RESPONSE'S OWN HEADER LIST, WHOLE. The creator's inherited container does NOT go in here — it is
-       relayed as a container of its own below, for the reason stated there. */
+    /* The response's own header list, whole; the creator's container is relayed separately below. */
     DCHECK(loaded && loaded.headers && typeof loaded.headers === "object",
            "the document load answered no header list — §7.5.1 creates the child's Document from its " +
            "response's headers, and a missing list is a producer that stopped writing one rather than a " +
            "response that carried none, which is the empty object");
     for (const _n of Object.keys(loaded.headers)) msg.responseHeaders[_n] = loaded.headers[_n];
-    /* THE CREATOR'S CLONE IS RELAYED AS A CONTAINER AND NEVER AS A RESPONSE HEADER, and that distinction is
-       the whole of what this line used to get wrong. It read
-           `if (!responseHeaders["content-security-policy"]) responseHeaders["content-security-policy"] = …`
-       — writing the CREATOR's policy into the CHILD's response header list — and the engine then did the only
-       thing it could with a response header: CSP §2.2.2 "Parse response's Content Security Policies" says
-       "Return a CSP list whose policies is policies and self-origin is response's URL's origin", so the peer
-       resolved `'self'` against the CHILD's address. CSP §2.2 "Policies" makes a CSP list "a struct consisting
-       of policies (a list of policies) and a self-origin", and its note names this exact case: the self-origin
-       exists "to facilitate the 'self' checks of local scheme documents/workers that have INHERITED their
-       policy". §6.7.2.8 "Does url match expression in origin with redirect count?" is what reads it, so the
-       consequence was one directive answered backwards in both directions — a creator's `script-src 'self'`
-       permitting the child's origin and refusing the creator's, which is a real @S sink reported as
-       CSP-blocked or a blocked one reported as live.
-       SO BOTH HALVES CROSS, SEPARATELY FROM THE HEADERS, and the engine decides which container the Document
-       is created with (main.c's document_csp_list). This zone RELAYS, it does not decide: the self-origin is
-       the CREATOR's, stated by the engine that performed HTML §7.1.7's clone, and there is nothing here for
-       this zone to compute — the one field it does own, the child's PRINCIPAL, is still derived from the URL
-       it fetched.
-       THE POLICY IS THE REST OF THE RECORD, not one field: it is a raw CSP header value and HTTP allows HTAB
-       inside one (this engine's own CSP parser treats tab as source-list whitespace), so a policy carrying one
-       splits into more fields than the record has. That is why it is LAST, and why both the top-level creation
-       URL and the self-origin sit before it — an origin's serialization cannot contain a tab. The C router
-       already reads it this way — its splitter stops at the policy and keeps the remainder verbatim — and two
-       readers of one format that disagree about where a field ends are two formats. */
-    /* §7.1.4'S FOUR ITEMS SIT BETWEEN THE SELF-ORIGIN AND THE POLICY, for the reason the self-origin sits
-       before the policy: everything that is not the policy comes first, because the policy is the remainder.
-       They are SAFE in split fields and that is the standard's own guarantee — §7.1.4's values are three fixed
-       tokens, and §7.1.4.1 makes `report-to` a structured-field STRING, which RFC 8941 §3.3.3 "Strings" defines
-       as "zero or more printable ASCII characters (i.e., the range %x20 to %x7E)" and notes "excludes tabs,
-       newlines, carriage returns". A raw CSP header may hold a tab; none of these may.
-       RELAYED VERBATIM. This zone does not read the tokens — the engine that receives them is the only party
-       that turns one into a value, and it crashes on one it does not know rather than reading it as the
-       default. See NEW_EMBEDDER_POLICY. */
-    /* THE POLICY IS THE REMAINDER FROM FIELD 16, AND THE INDEX HERE WAS ONE SHORT ONCE ALREADY. It read
-       `f.slice(13)`,
-       which is the position the policy held before §3.1.3's ancestor origins was inserted before it, so this
-       zone had been relaying the ancestor list JOINED TO THE FRONT OF THE CREATOR'S CSP — a policy whose first
-       directive is a list of origin serializations. CSP §2.2.2's parse discards a directive it cannot read, so
-       the symptom was not a crash but a creator's `script-src` arriving at the child with an extra unparseable
-       neighbour, and every `@S` verdict decided against it. That is precisely the failure navigable.c's own
-       assert named as the silent one — a reader that tests a MINIMUM accepts a longer record and reads the
-       policy off the wrong field — and it had already happened here once. The count above tests every field
-       this function indexes and MOVES with the record for that reason. It moved again when the PROVENANCE was
-       inserted at field 15, which is the same edit as the ancestor list's and is why the same paragraph is
-       still worth reading: the policy is the remainder, so every field added is added in front of it. */
+    /* The creator's clone is relayed as a container, never as a response header: a response header's policy
+       gets the response URL's origin as its self-origin (CSP §2.2.2 Parse response's Content Security
+       Policies), while CSP §2.2 Policies gives an inherited list the creator's self-origin, which §6.7.2.8 Does
+       url match expression in origin with redirect count? reads. Mixing them answers `'self'` backwards. Both
+       halves cross separately and the engine decides which container the Document gets (main.c's
+       document_csp_list); this zone relays and computes only the child's principal.
+       The policy is the record's remainder: a raw CSP header may contain HTAB, so it is last and every other
+       field precedes it. The C router splits the same way, keeping the remainder verbatim. */
+    /* The embedder policy's four items sit between the self-origin and the policy and are safe in split
+       fields: their values are fixed tokens, and `report-to` is a structured-field string (RFC 8941 §3.3.3
+       Strings: printable ASCII %x20-%x7E, no tabs). Relayed verbatim; only the receiving engine maps the tokens,
+       and it crashes on an unknown one (see NEW_EMBEDDER_POLICY). */
+    /* The policy is the remainder from field 16; every field added to the record is added in front of it, so
+       this index and the count above move together. A wrong index would join a neighbouring field onto the
+       creator's CSP, which CSP's parser drops as an unreadable directive without a crash. */
     const inherited = { csp: f.slice(16).join("\t"), selfOrigin: f[6],
                         embedder: { value: f[7], endpoint: f[8],
                                     reportOnlyValue: f[9], reportOnlyEndpoint: f[10] } };
-    /* HTML §7.3.1.3's PARENT NAVIGABLE, AT FIELD 11 AND NOT INSIDE THE CONTAINER BESIDE IT. A §7.1.7 container
-       is five policies; a parent is a frame-tree link, and the two are relayed separately because they are
-       separately true — an AUXILIARY navigable created by `window.open` has a full container and NO parent, and
-       a record that folded the second into the first could not say so. It is the emitting engine's own
-       navigable identity (core/frame/remote_object.h) and this zone relays it verbatim: the receiving engine is
-       the only party that decodes one, and it crashes on a record it cannot parse rather than reading it as an
-       absence. It sits BEFORE the policy for the reason everything else does — the policy is the record's
-       remainder and a raw CSP header may hold a tab, while this field is a one-letter tag and base64 fields
-       terminated by '.', none of which can. */
+    /* HTML §7.3.1.3 Child navigables' parent navigable at field 11, separate from the container policy: an
+       auxiliary navigable (`window.open`) has a full container and no parent. It is the emitting engine's own
+       navigable identity (core/frame/remote_object.h), relayed verbatim; only the receiving engine decodes it,
+       and it crashes on an unparseable record. A one-letter tag and '.'-terminated base64 contain no tab. */
     const parentNavigable = f[11];
-    /* AND §7.3.1.3's CONTAINER AT FIELD 12 — the OTHER link of that same section, and not the parent said
-       twice. A navigable has both or neither: §7.3.1.3's create is handed an element and links both in its own
-       steps, so an AUXILIARY navigable (`window.open`, §7.3.1.7 step 8) has neither and a child `<iframe>` has
-       both. What this field carries is not the element — an object crosses no instance boundary — but what it
-       ANSWERED: Permissions Policy §9.5's result, which only the creating engine could compute because §9.5's
-       two arguments are that element and the child's origin and it holds both. Relayed verbatim like the
-       parent; the receiving engine is the only party that reads it, and it crashes on a record it cannot parse
-       rather than on an absence it fills in. It sits BEFORE the policy for the reason everything else does —
-       §4.1's feature tokens and §4.2's `Enabled`/`Disabled` cannot contain a tab, and a raw CSP header can. */
+    /* The container answer at field 12, the other §7.3.1.3 link: a child `<iframe>` has both links and an
+       auxiliary navigable has neither. It carries Permissions Policy §9.5's result, computable only in the
+       creating engine, which holds the element and the child's origin. Relayed verbatim; feature tokens and
+       `Enabled`/`Disabled` contain no tab. */
     const containerPolicy = f[12];
-    /* AND HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST AT FIELD 13 — a THIRD
-       statement about the same navigable and not either of the two above said again, because it is a THIRD
-       algorithm reading a set of things neither of them carries: the PARENT DOCUMENT's own recorded list, that
-       Document's ORIGIN RECORD, and the container element. The parent field is a navigable IDENTITY and holds
-       no Document's ancestry; the container field is §9.5's answer over two of the same inputs.
-       AND THE ORIGIN RECORD IS WHY THE ANSWER TRAVELS RATHER THAN THE INPUTS. §3.1.3's step 12.1 asks whether
-       an ancestor "is same origin with parentDoc's origin", HTML §7.1.1 decides an opaque origin by IDENTITY, and
-       every opaque origin serializes to the same three bytes `null` — so a receiving engine handed the
-       creator's list plus a serialized parent origin would mask an entry that is not the parent's the moment
-       the parent is opaque, which on this route is the ordinary case rather than a corner (a `data:` document
-       is in its own instance BECAUSE its origin is opaque). Relayed verbatim like the two beside it. It sits
-       BEFORE the policy for the reason everything else does: the list is origin serializations joined by
-       SPACE, and URL §3.2 "Host miscellaneous" makes both SPACE and TAB forbidden host code points, so neither
-       byte can occur inside an entry — while a raw CSP header may hold a tab. */
+    /* The internal ancestor origin objects list (HTML §3.1.3 Ancestor origins) at field 13, a third algorithm
+       over inputs neither field above carries. The answer travels rather than the inputs because §3.1.3 asks
+       whether an ancestor is same origin with the parent document's origin, and opaque origins are compared by
+       identity while all serialize to `null` (a `data:` document is in its own instance because it is
+       opaque). Entries are origin serializations joined by SPACE, which URL §3.2 Host miscellaneous forbids in
+       a host, as it does TAB. */
     const ancestorOrigins = f[13];
-    /* AND HTML §7.1.5 "Sandboxing"'s CREATION SANDBOXING FLAG SET AT FIELD 14 — a FOURTH statement about this
-       navigable and not an item of the §7.1.7 container: that section's container is a CSP list, an embedder
-       policy, a referrer policy and two integrity policies, and §7.3.2.1 sets the container and the flag set
-       from different algorithms in different steps. §7.1.5's two inputs are the embedder ELEMENT's iframe
-       sandboxing flag set and that element's node document's active set, so the algorithm runs in the creating
-       engine — an element crosses no instance boundary — and this field is its RESULT. It sits BEFORE the
-       policy for the reason everything else does, and its members are joined by COMMA rather than by the SPACE
-       that joins the ancestor list above: §7.1.5's flag names CONTAIN SPACES, so a space-joined set could not
-       be taken apart at all. Relayed verbatim; the receiving engine is the only party that turns a name back
-       into a flag, and it crashes on a word outside that section rather than reading it as the empty set. */
+    /* The creation sandboxing flag set (HTML §7.1.5 Sandboxing) at field 14, not an item of the policy
+       container; it reads the embedder element and its node document's active flags, so the creating engine
+       computes it. Members are joined by COMMA because §7.1.5's flag names contain spaces. Relayed verbatim;
+       the receiving engine crashes on a word outside that section. */
     const creationSandboxFlags = f[14];
     DCHECK(typeof creationSandboxFlags === "string" && creationSandboxFlags !== "",
            "a navigable.create notice carried no HTML §7.1.5 CREATION SANDBOXING FLAG SET — navigable.c " +
@@ -3461,57 +3344,36 @@ async function hostNotice(eng, line) {
            "record because HTML §7.1.7 clones the container whole and CSP §2.2 makes its list a struct of " +
            "policies AND an origin, so an empty one is an engine that stopped writing the field and a child " +
            "whose inherited `'self'` would resolve against its own address");
-    /* HTML §8.1.3.1's TOP-LEVEL CREATION URL, which the CREATOR decided (§7.4: the creator's own for a nested
-       navigable, the navigable's own address for an auxiliary one) and this zone carries, because the new
-       instance cannot see what embeds it. §8.1.3.5 reads it to decide whether the child is a SECURE CONTEXT,
-       and Web IDL §3.3.13's members exist in that child or do not by that answer. */
-    /* AND ITS CLUSTER DECIDES WHICH OF TWO OPERATIONS THIS IS. A SAME-ORIGIN child never reaches this line at
-       all — navigable.c's `child_in_this_agent` builds it as a realm in the creator's own heap and emits no
-       notice — so a cluster hit here is a SECOND CROSS-ORIGIN document of one cluster (two `<iframe
-       src="https://cdn/…">` of one page), which HTML puts in ONE heap for exactly the reasons the same-origin
-       pair is in one. That document is JOINED to the instance already running the cluster; only a cluster with
-       no instance is PROVISIONED one. Both arms exist now, so there is no third state in which a child is
-       announced and nothing happens — the "host gap, visible as a parked flow" navigable.h names is what this
-       zone used to be left with, and a document that is never hosted is one every read through its proxy parks
-       on forever. */
+    /* The top-level creation URL (HTML §8.1.3.1 Environments) is the creator's decision (its own for a nested
+       navigable, the navigable's address for an auxiliary one), carried because the new instance cannot see
+       what embeds it; HTML §8.1.3.5 Secure contexts reads it. */
+    /* The cluster decides which of two operations this is. A same-origin child never reaches here
+       (navigable.c's `child_in_this_agent` builds it as a realm in the creator's heap and emits no notice), so a
+       cluster hit is a second cross-origin document of one cluster (two `<iframe src="https://cdn/…">` of one
+       page), which HTML puts in one heap: it is joined to the running instance. A cluster with no instance is
+       provisioned one. */
     const _ckey = clusterKeyOf(msg);
     DCHECK(_ckey !== eng.cluster,
            "the engine sent a create notice for a child in its OWN agent cluster — a same-origin child is a " +
            "second REALM in that heap and never leaves it, so this zone and navigable.c's child_in_this_agent " +
            "have answered one origin question two ways");
-    /* AND THE QUESTION IS ASKED OF THE RESERVATIONS TOO, which is what makes asking it worth anything here.
-       This check stood a document fetch, a frame boot and three ABI round trips away from the push that made
-       its answer true, and detached service rounds run concurrently with admit — so two arrivals for one
-       cluster could both be told "no instance" and both build one. engineCreate takes the pool slot before its
-       first await now, so a cluster that is merely BEING provisioned answers here exactly as a provisioned one
-       does, and the case below is reached only when it is genuinely a second document. */
+    /* Reservations answer too: engineCreate takes the pool slot before its first await, so a cluster being
+       provisioned answers here as a provisioned one does. */
     const holder = hostClusterOf(_ckey);
     if (holder) {
-      /* A RESERVATION IS STILL THE HOLDER, AND THE JOIN WAITS FOR IT — the same suspension the delivery branch
-         below takes, for the same reason: the pool slot is taken before the first await precisely so that a
-         cluster being provisioned answers here exactly as a provisioned one does, and the honest thing to do
-         with a document whose agent is being built is to hold it until it is. `qjs_join` needs both `qjs_init`
-         and `qjs_begin` to have run, which is what `_readyP` settling means. */
+      /* A reservation is still the holder, so the join waits for it: `qjs_join` needs `qjs_init` and
+         `qjs_begin` to have run, which `_readyP` settling means. */
       if (holder.state === "booting") await holder._readyP;
       DCHECK(holder.state === "hot" || holder.state === "fetching",
              "a document was announced for a cluster whose instance never became one — the reservation holding " +
              "it failed to boot, so this child has an agent that does not exist rather than one it can join, " +
              "and every read through its proxy would park forever");
-      /* AND THE JOINED DOCUMENT IS A REFERENCED ONE BY THE SAME SENTENCE THE PROVISIONED ARM BELOW IS — the
-         create notice EXISTS because the creating engine minted a name its page already holds a WindowProxy
-         under. So the instance that takes it may not be one whose timelines are entitled to run out, and the
-         instance's flag is the only place that is recorded: `qjs_set_referenced` is stated BEFORE `qjs_begin`
-         and this instance was seeded long ago, so there is nothing to say here and the honest thing is to
-         refuse rather than to invent a second moment the flag may be set at.
-         REACHABLE, AND NOT BY THE ROUTE IT LOOKS LIKE. A content script reports every frame, but a
-         cross-origin sub-frame with a real origin never ROOTS a cluster (`admit`'s walk leaves it waiting for
-         its embedder to name it), so an unreferenced holder cannot come from that race. What reaches it is
-         frame nesting that comes BACK to an origin a top-level document already runs in this browsing-context
-         group — A embeds cross-origin B and B embeds A — where the holder was rooted by that top document
-         with nothing holding a proxy for it. WHAT TO BUILD when it fires: the flag has to be statable for an
-         instance whose frontier is live, which is a different entry from the one the ABI has (its `!g_begun`
-         assert is exactly the statement that this is not it) and a different question for the scheduler,
-         since a frontier that has ALREADY drained cannot be un-drained by being told late. */
+      /* The joined document is referenced (the creating engine minted this name because its page holds a
+         WindowProxy under it), so its instance may not be one whose timelines may run out; the flag is stated
+         only before `qjs_begin`, so an unreferenced holder is refused rather than told late. It is reachable
+         through nesting that returns to an origin a top-level document already runs in this group (A embeds
+         cross-origin B, B embeds A). What to build: an entry that states the flag for a live frontier, a
+         different ABI entry from the one whose `!g_begun` assert exists. */
       DCHECK(holder.referenced === 1,
              "a cross-origin child was joined to an instance that never declared a peer reference — the create " +
              "notice is itself the proof that one exists (the creating engine minted this name because its " +
@@ -3519,50 +3381,34 @@ async function hostNotice(eng, line) {
              "flag that says so can only be stated before the frontier is seeded; this instance's was seeded " +
              "for a document nothing held a proxy for, and the first read through the new child's proxy will " +
              "arrive at a heap entitled to have finished");
-      /* THE BYTES ARE ON THE MESSAGE HERE, and this is the one caller for which that is true: `msg` is the
-         object this zone composed for the announced child (`{ type: "AST_ANALYZE", pageHtml: _childBytes, … }`)
-         rather than one an ambient observer sent. Passed explicitly for the same reason the engineCreate call
-         on the arm below it does — one operation, one statement of what it acts on. */
+      /* The bytes are on the message here, the one caller for which that holds: `msg` is the object this zone
+         composed for the announced child. */
       await engineJoin(holder, msg.pageHtml, msg, f[1], f[5], inherited, parentNavigable, containerPolicy,
                        ancestorOrigins, creationSandboxFlags);
       return;
     }
-    /* A CHILD DOCUMENT IS A DOCUMENT: it joins the ONE pool and is ranked, sliced, parked and finalized by the
-       one host WFQ like every other. It has no caller to resolve to, so its findings merge the way a
-       rehydrated cold engine's do rather than being returned to a requester that never asked for it — which
-       is `cold`, stated at the reservation because it is a fact about this call site and not about how the
-       boot turns out. AWAITED, because the notices of one round are acted on IN ORDER: a page opens a window
-       and posts to it in the same turn, so the instance must exist before the post that names it is routed.
-       REFERENCED, AND THE NOTICE IS ITSELF THE PROOF: the creating engine minted `f[1]` because its page
-       already holds a WindowProxy for this navigable, which is the only reason a delivery has to be routed
-       here at all. Its `w.length`, its `w.closed` and every post it makes arrive at this document, so this
-       document's timelines may not run out before they do. */
+    /* A child document joins the one pool and is ranked, sliced, parked and finalized like every other. It has
+       no caller, so its findings merge like a rehydrated engine's (`cold`, stated at the reservation). Awaited,
+       because one round's notices are acted on in order: a page opens a window and posts to it in one turn, so
+       the instance must exist before the post is routed. Referenced, since the notice itself proves a
+       WindowProxy is held for it. */
     await engineCreate("", msg.pageHtml, msg, false, f[1], f[5], true, inherited, parentNavigable,
                        containerPolicy, ancestorOrigins, creationSandboxFlags, 1)._readyP;
     return;
   }
-  /* `navigable.swap <new document> <url> <origin>` — HTML §7.1.3.2 "Browsing context group switches due to
-     opener policy", step 10: a navigation whose response's opener policy does not match the navigable's active
-     document's builds its Document in a NEW top-level browsing context in a NEW browsing context group, and the
-     old browsing context is left behind (the emitting instance has already recorded that, which is what makes
-     the opener's own handle answer `closed === true`).
-     SO THIS IS THE ONE PROVISIONING THAT MUST NOT JOIN. An instance is `(browsing context group, origin)` and a
-     swap changes the FIRST half, so a swapped-to document at an origin this pool already runs is still a
-     SEPARATE heap — joining it to the existing instance would put the two principals COOP exists to separate
-     behind one heap and one object graph. The group id is therefore minted HERE and by a counter: it is a
-     routing fact, this zone's alone (SECURITY.md), and deriving it from anything the engine said would let an
-     untrusted instance name a group that already exists.
-     THREE FIELDS AND NO MORE, because §7.3.2.3 creates the new browsing context "with null, null, and group" —
-     a NULL CREATOR, so there is no policy container to clone, no opener policy to inherit and no opener link to
-     make. The swapped-to navigable is a top-level traversable, so HTML §8.1.3.1's top-level creation URL for
-     its environments is its own address, derived here rather than sent twice and able to disagree.
-     AND THE BYTES ARE LOADED BY THIS ZONE, not carried on the record: the emitting instance HAS the response
-     (it needed the headers to obtain the opener policy that decided the swap) and may not hand it over — an
-     untrusted engine that could supply bytes AND a principal could name any origin's document into existence.
-     RESIDUAL, and it is one request too many rather than a wrong answer: a real browser commits the response it
-     already has, and this fetches the address again, so a server that answers differently gives the new
-     instance a document the first response's policy did not describe. Closing it is this zone remembering its
-     OWN reply to the `document.fetch` that navigation already made, keyed by (instance, address). */
+  /* `navigable.swap <new document> <url> <origin> <provenance>` — HTML §7.1.3.2 Browsing context group
+     switches due to opener policy: a navigation whose response's opener policy does not match builds its
+     Document in a new top-level browsing context in a new browsing context group, and the old one is left
+     behind (the emitting instance has recorded that, so the opener's handle answers `closed === true`).
+     It must not join: an instance is (group, origin) and a swap changes the group, so even at an origin this
+     pool runs it is a separate heap. The group id is minted here by a counter, a routing fact that is this
+     zone's alone. The new context has a null creator, so no container or opener is inherited, and its
+     top-level creation URL is its own address. This zone loads the bytes: an untrusted engine that supplied
+     bytes and a principal could name any origin's document into existence.
+     Named residual: the address is fetched again instead of committing the response the navigation already
+     had. Next diff remembers this zone's own reply to that `document.fetch`, keyed by (instance, address).
+     Absence shows as a swapped-to document whose content or headers differ from the response that decided
+     the swap when the server answers the two requests differently. */
   if (f[0] === "navigable.swap") {
     DCHECK(f.length >= 5 && !!f[1] && !!f[2] && !!f[4],
            "a navigable.swap notice was short of its fields — the engine writes the new document's name, the " +
@@ -3574,12 +3420,11 @@ async function hostNotice(eng, line) {
            "§7.1.3.2's swap named a document this pool already holds — the name is minted fresh for each swap " +
            "(solver/world.h), so a collision is one instance provisioned for two Documents, which is one heap " +
            "answering for two");
-    /* AND THE SECOND FETCH THE PARAGRAPH ABOVE CALLS ONE TOO MANY IS MADE UNDER THE SAME DECISION THE FIRST
-       ONE WAS, because it is the SAME NAVIGATION: the provenance on this record is the load job's own
-       (core/frame/browsing_context_group.c takes it from there), so a swap cannot become a way for an address
-       this zone declined at `document.fetch` to be fetched anyway one notice later. */
-    /* `none` FOR THE CREATE ARM'S REASON EXACTLY \u2014 \u00a77.1.3.2's swap is a notice too, and its own
-       `pageHtml` line turns a null body into an empty Uint8Array, which is the fabrication the word names. */
+    /* The re-fetch is made under the same decision as the navigation's own load, since the provenance on this
+       record is the load job's (core/frame/browsing_context_group.c takes it from there); a swap cannot fetch
+       an address this zone declined at `document.fetch`. */
+    /* `none`, for the create arm's reason: a swap is a notice, and its `pageHtml` line turns a null body into
+       an empty Uint8Array. */
     const swapped = await eng.fetchedDocument(f[2], f[4], /*refusalArm*/"none");
     DCHECK(swapped && (swapped.bytes === null || swapped.bytes instanceof Uint8Array),
            "the swapped-to document load answered neither bytes nor the null that means it did not load");
@@ -3587,140 +3432,80 @@ async function hostNotice(eng, line) {
            "the swapped-to document load answered no header list — §7.5.1 creates its Document from the " +
            "response's headers, and §7.1.3 obtains the opener policy that decides its new group's cross-origin " +
            "isolation mode out of the same list");
-    /* AND ITS RESPONSE'S URL, for the create arm's reason exactly: the notice carries the address the engine
-       ASKED for, this zone is the only party that followed the redirect chain, and the swapped-to instance's
-       principal and §7.5.1 `creationURL` are both the address its bytes CAME from. */
+    /* The response's URL, for the create arm's reason: the instance's principal and `creationURL` are the
+       address the bytes came from. */
     DCHECK(typeof swapped.url === "string" && swapped.url !== "",
            "the swapped-to document load answered no RESPONSE URL — §7.1.3.2 provisions a new instance from " +
            "the address the Document is at, which after a redirect is not the address the swap requested");
-    /* AND HOW THIS DOCUMENT WAS REACHED, WHICH IS THE JOIN AND NOT THE NOTICE'S OWN WORD. This document
-       exists because the creating one did, so `safeFetchReachJoin` composes it under the WEAKER of the
-       creating document's grade and the engine's word for the navigation — taking `f[4]` alone would let a
-       child of a document this zone chose to open read as one the person navigated to, after which every
-       request that child makes is relayed by the default arm this grade exists to hold.
-       IT IS STATED ON EVERY ANALYZE RECORD NOW AND NOT ONLY ON THE ONES THAT PERSIST. `fetched` and the XHR
-       relay read it off this message for every request the document makes, so a composer that left it off
-       would hand the chokepoint `undefined` and abort at the first park rather than at this line. */
+    /* The reach grade is the join of the creating document's grade and the engine's word (`f[4]`), as for a
+       created child, and is stated on every analyze record. */
     const swapMsg = { type: "AST_ANALYZE", pageHtml: swapped.bytes === null ? new Uint8Array(0) : swapped.bytes,
                       sourceUrl: swapped.url, origin: originOf(swapped.url),
                       groupId: "swap:" + (_nextSwapGroup++),
                       provenance: self.safeFetchReachJoin(eng.msg.provenance, f[4]),
                       responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     for (const _n of Object.keys(swapped.headers)) swapMsg.responseHeaders[_n] = swapped.headers[_n];
-    /* NO INHERITED POLICY LINE HERE, and its absence is the spec rather than a field this record forgot: the
-       create arm above falls back to the creator's cloned container for a response that carried none, and a
-       swapped-to Document HAS no creator to clone one from. A response with no `Content-Security-Policy` is a
-       Document under no policy, which is what §7.3.2.1 with a null creator produces. */
+    /* No inherited policy: a swapped-to Document has no creator to clone a container from (HTML §7.3.2.1 with
+       a null creator), so a response without CSP is a Document under no policy. */
     DCHECK(hostClusterOf(clusterKeyOf(swapMsg)) === null,
            "§7.1.3.2's swap minted a browsing-context group this pool already runs an instance for — the group " +
            "id is a fresh counter, so a hit means two swaps were given one id and the second would JOIN the " +
            "heap the first built, which is exactly the boundary a group switch exists to draw");
-    /* NULL: §7.3.2.3 creates the swapped-to browsing context "with null, null, and group" — a NULL CREATOR,
-       so HTML §7.1.7 has no container to clone and this Document is judged against its own response alone. */
-    /* AND HTML §7.3.1.3's PARENT IS `u`, WHICH IS §7.1.3.2's OWN STEP 2 AND NOT A BLANK: "if browsingContext
-       is not a top-level browsing context, then return browsingContext" — the swap is only ever reached for a
-       top-level one (the engine asserts it where the record is written), so the navigable this provisions has
-       no parent by the standard rather than by this zone having nothing to say.
-       AND HTML §3.1.3's LIST IS `none` BY THAT SAME SENTENCE READ ONE ALGORITHM ALONG: its steps 2-3 return
-       an empty output for a Document with no CONTAINER DOCUMENT, and a top-level browsing context has none. */
-    /* HTML §8.1.3.1's TOP-LEVEL CREATION URL is `swapped.url` AND NOT `f[2]`, for the same sentence as the
-       principal above: the swapped-to navigable IS a top-level traversable, so its environments' top-level
-       creation URL is its own Document's address (§7.5.1's `creationURL`), which after a redirect is where
-       the response came from and not where the swap pointed. */
-    /* NOT REFERENCED, WHICH IS THE ONE ARM WHERE "AN ENGINE MINTED THE NAME" IS THE WRONG READING. §7.1.3.2's
-       step 10 note says the old browsing context "will not be used by the new Document that we are about to
-       initialise", and the emitting engine discards it right after writing this notice — so the page that
-       navigated still holds its handle, and that handle answers about the document it HAD (which is exactly
-       why its `closed` reads true) rather than about this one. Nothing anywhere holds a proxy for the
-       swapped-TO document, so keeping its timelines open would park its last flow on a question no instance
-       can ask, for as long as the pool holds it. */
+    /* `null` container: the swapped-to context is created with a null creator, so HTML §7.1.7 has nothing to
+       clone and the Document is judged against its own response. */
+    /* The parent is `u`: HTML §7.1.3.2's swap is reached only for a top-level browsing context (the engine
+       asserts it where the record is written), so the navigable has no parent. The ancestor list (HTML §3.1.3)
+       is `none` for the same reason: a top-level context has no container document. */
+    /* The top-level creation URL is `swapped.url`: the swapped-to navigable is a top-level traversable, so it is
+       its own Document's address after redirects. */
+    /* Not referenced: the old browsing context "will not be used by the new Document" (HTML §7.1.3.2's note)
+       and the emitting engine discards it after writing this notice, so the opener's handle answers about the
+       document it had (its `closed` is true) and nothing holds a proxy for this one. */
     await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[1], swapped.url, true, null, "u", "null",
                        "none", "none", 0)._readyP;
     return;
   }
-  /* `document.seed <address> <provenance>` — AN ADDRESS THE APPLICATION DECLARED IS A PAGE OF ITSELF, reached
-     when forced execution ran the bundle's own `history.pushState`/`replaceState` (solver/route_seed.h states
-     what a declaration is and why running a routing member is not the string-matching §RUN-DON'T-MATCH bans).
-     THIS BRANCH SPENDS NO NETWORK, and that is the whole of its design. Every other provisioning notice above
-     names a navigable a page already holds a WindowProxy for, so its document has to exist now; a declared
-     route is a WORK ITEM and its fetch is an external effect the Level-1 order carries like any other cost.
-     So this RECORDS and `admit` loads — see `_seeds`. */
+  /* `document.seed <address> <provenance>` — an address the application declared is a page of itself, reached
+     when forced execution ran the bundle's own `history.pushState`/`replaceState` (solver/route_seed.h says what
+     a declaration is). This branch spends no network: a declared route is a work item whose fetch is a cost the
+     Level-1 order carries, so it records and `admit` loads (see `_seeds`). */
   if (f[0] === ROUTE_SEED_NOTICE) {
     DCHECK(f.length >= 3 && !!f[1] && !!f[2],
            "a route declaration was short of its fields — the engine writes the ADDRESS and the PROVENANCE, " +
            "and a record missing either is a writer this zone no longer shares a grammar with: an absent " +
            "address is a page nothing can load, and an absent provenance is the one field the decision to " +
            "load it at all is made from");
-    /* CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE, enumerated rather than defaulted. `observed` is
-       UNREACHABLE for a declaration and is therefore not one of the two words: §7.4.4 is reached only by
-       running the page's code, so no load of anything produces one, and a record carrying it would be a field
-       read at the wrong offset rather than a claim this zone should act on. */
+    /* Enumerated, not defaulted. `observed` is unreachable for a declaration (HTML §7.4.4 is reached only by
+       running the page's code), so a record carrying it is a field read at the wrong offset. */
     DCHECK(f[2] === PROVENANCE_DERIVED || f[2] === PROVENANCE_FORCED,
            "a route declaration carries the provenance `" + f[2] + "`, which is neither `derived` nor " +
            "`forced` — those are the only two a declaration can have, so this is either the field split at " +
            "the wrong tab or an engine speaking a vocabulary this zone does not");
-    /* AND IT IS A ROUTE OF *THIS* DOCUMENT, ESTABLISHED FROM THE TWO ADDRESSES. HTML §7.2.5 "The History
-       interface"' can-have-its-URL-rewritten refuses a rewrite whose target differs "in their scheme,
-       username, password, host, or port components", so the engine has already refused a cross-origin one —
-       and this zone establishes the same thing from the facts it holds rather than trusting that, exactly as
-       the ambient seed's admission does one entry along. The comparison is between two ADDRESSES and decides
-       no principal: the principal this load reads under is `eng.origin`, which is browser-stated and is never
-       derived from a URL.
-       IT IS A REPORT-SHAPED REFUSAL AND NOT AN ASSERT for the address half, because the engine is UNTRUSTED —
-       a record it wrote naming another origin is a thing this zone must simply not act on, never a proof that
-       its own invariant broke. */
+    /* A route of this document, established from the two addresses: HTML §7.2.5 The History interface's
+       can-have-its-URL-rewritten already refuses a cross-origin rewrite in the engine, and this zone checks the
+       same thing from its own facts. The comparison decides no principal (the load reads under `eng.origin`).
+       It is a refusal, not an assert, because the engine is untrusted. */
     if (originOf(f[1]) !== originOf(eng.msg.sourceUrl)) {
       console.warn("[bridge] a route declaration named an address outside the declaring document's origin (" +
                    f[1] + " vs " + eng.msg.sourceUrl + ") — HTML §7.2.5's can-have-its-URL-rewritten permits " +
                    "no such rewrite, so this is not a page of that application and it is not seeded");
       return;
     }
-    /* AN ADDRESS THE CHOKEPOINT WOULD NOT FIRE IS NOT ENQUEUED, AND THE QUESTION IS ASKED OF THE CHOKEPOINT
-       RATHER THAN ANSWERED HERE. This arm used to hold its own copy of the firing rule — `f[2] === forced` →
-       refuse — which was the right policy in the wrong place: `navigationLoad` held a second copy, the native
-       host held a third that disagreed, and this one could never learn that an origin had been widened.
-       `safeFetchFiringRefusal` is the SAME function the chokepoint refuses with (`_firingRefusal`), asked by
-       a caller whose act is to RECORD A WORK ITEM rather than to fetch — §scheduler makes that load an
-       external effect the Level-1 order pays for, so enqueuing one the chokepoint will refuse would spend an
-       admission slot every round to be told no. Asking one function twice is not two policies; it is the
-       opposite. It answers the GRADE that refused rather than a boolean, so this line can say which.
-       WHY IT MATTERS FOR A NAVIGATION SPECIFICALLY: the address IS the whole of the safety. There is no
-       partition, no interception and no second policy point behind it, and a navigation of one of the custom
-       browser's own tabs CARRIES THE PERSON'S SESSION — so a credentialed load of an address that exists only
-       because a gate was forced is a reply about a request no client makes, delivered under the person's own
-       name. It is not merely unhelpful: §@H makes such a reply's values FORCED for ever, because one invented
-       field is the example that shapes the next endpoint.
-       REPORTED RATHER THAN ASSERTED, because nothing is broken: the engine did exactly what it should — it
-       derived the address and STATED how it got there — and this zone did exactly what it should, which is to
-       decline. A derived-and-unfired address is not a gap in the report; §Attacker-sources says it IS the
-       report. */
-    /* `document` AND `unstated`, FOR THE REASON `navigationLoad` STATES: a route declaration is a notice and
-       not a park, so the engine composed no witness mark for it, and a document load is never §2.2.5
-       SCRIPT-LIKE so neither field can change this answer. Both are stated because the GRADE is the
-       chokepoint's — a caller that guessed either would be the second copy of the rule this call exists to
-       avoid. */
-    /* THE FACTS ARRIVE AS ONE OBJECT AND EVERY ONE OF THEM IS THIS CALLER'S TO STATE, which is the shape
-       rather than a preference: the policy's signal set GROWS, and a positional call is exactly where adding
-       one shifts every operand after it silently — which this project has now paid for once, at the
-       chokepoint's own post-redirect gate, where a widening from two parameters to four missed a call site
-       and an ordinary reply aborted the trusted zone.
-       `credentialed` IS THE ANSWER THIS SEED WOULD ACTUALLY GET, asked with the same predicate the load will
-       ask with: a hypothetical answered from facts the real request would not state is a permission question
-       about a different request, and the credential row is one a person permits separately now. `headers` is
-       genuinely absent on a navigation and is stated as such rather than omitted.
-       AND THE PRINCIPAL IS `eng.origin` AND NEVER `originOf(...)`, which is the SAME value the seed below
-       carries into `_seeds` as its `principalOrigin`: the browser's `MessageSender.origin`, opaque-unique.
-       The same-origin test a few lines up compares two URL-DERIVED origins because it is asking about an
-       ADDRESS, and this is asking whose SESSION pays — SECURITY.md's credentialed-read principal, which is
-       the one value in this zone that may never be parsed out of an address. Using the derived one here
-       would answer `true` for a sandboxed document the browser refused to give an origin to. */
-    /* AND THE DECLARING DOCUMENT'S OWN REACH GRADE, WHICH IS THE FACT THE REAL REQUEST WILL STATE — a
-       hypothetical answered from fewer facts than the request makes is a permission question about a
-       different request. It is `eng.msg.provenance` and NOT the join: this ask is about a request issued BY
-       the declaring document, and the join names the document the load would produce. */
-    /* AND `page` FOR THE ACTOR — a route this document's OWN CODE declared, which is the act this ask is
-       about. Stated on the hypothetical because it is stated on the load: a permission question answered
-       from fewer facts than the real request makes is a question about a different request. */
+    /* An address the chokepoint would not fire is not enqueued. `safeFetchFiringRefusal` is the same function
+       the chokepoint refuses with (`_firingRefusal`), asked here because enqueuing a load it will refuse would
+       spend an admission slot every round. It answers the refusing grade, which the warning names. For a
+       navigation the address is the whole of the safety, and a navigation carries the person's session. A
+       derived but unfired address is still reported. */
+    /* `document` and `unstated`, as navigationLoad states them: a declaration is a notice, so no witness mark was
+       composed, and a document load is never script-like. */
+    /* The facts arrive as one object so the growing signal set cannot shift positional operands. `credentialed`
+       is the answer this seed's load would get, asked with the same predicate; `headers` is absent on a
+       navigation and stated as such. The principal is `eng.origin` (MessageSender.origin, the same value the
+       seed carries as `principalOrigin`), never a URL-derived origin, which would answer `true` for a sandboxed
+       document. */
+    /* `docReach` is the declaring document's own grade, not the join, since this asks about a request issued by
+       that document. */
+    /* `actor: "page"`: the route was declared by this document's own code, as the load will state. */
     const _seedRefusal = self.safeFetchFiringRefusal({
       url: f[1], destination: "document", provenance: f[2], pinned: "unstated",
       docReach: eng.msg.provenance, actor: "page",
@@ -3732,31 +3517,17 @@ async function hostNotice(eng, line) {
                    "holds it");
       return;
     }
-    /* THE PRIVATE-NETWORK PRINCIPAL AND THE CREDENTIALED-READ PRINCIPAL ARE TAKEN NOW AND CARRIED WITH THE
-       WORK ITEM — §scheduler's "an operation that becomes a work item takes its inputs with it". They belong
-       to the DECLARING document and not to the declared address: `safeFetch` classifies the SSRF host relative
-       to `principalUrl`, so an address that supplied itself would self-authorize into the person's intranet,
-       and the credentialed-read principal is the browser's `MessageSender.origin` for the document whose
-       router declared this route. Reading either off the pool at admission time would read whatever that
-       engine had become by then — including gone.
-       AND THE PROVENANCE IS ONE OF THOSE INPUTS, taken from the record rather than reconstructed at
-       admission. This arm has already declined a `forced` declaration two branches above, so a stored entry
-       is `derived` by construction — and storing that word rather than assuming it is the whole difference
-       between a work item that STATES what it is and one whose reader has to remember which arm it came
-       through. `navigationLoad` asserts the vocabulary on the way out, so an entry that lost the field would
-       stop the admission at the load rather than fetching under a provenance nobody wrote. */
+    /* The work item takes its inputs with it: both principals belong to the declaring document, not the declared
+       address (`safeFetch` classifies the SSRF host relative to `principalUrl`, so an address supplying itself
+       would self-authorize), and the pool may no longer hold that engine at admission. The provenance is stored
+       from the record (always `derived` here, since a refused one returned above); navigationLoad asserts the
+       vocabulary on the way out. */
     if (!_seeds.has(f[1]))
-      /* AND THE DECLARING DOCUMENT'S REACH GRADE TRAVELS WITH THE ITEM FOR THE SAME REASON THE TWO
-         PRINCIPALS DO — §scheduler's "an operation that becomes a work item takes its inputs with it". The
-         load happens rounds later and the engine that declared the route may be gone, so a read of the pool
-         at that point would answer about whatever instance is standing there instead. */
+      /* The declaring document's reach grade travels with the item for the same reason. */
       _seeds.set(f[1], { url: f[1], principalUrl: eng.msg.sourceUrl, principalOrigin: eng.origin,
                          provenance: f[2], reach: eng.msg.provenance });
-    /* AND NOTHING IS KICKED. A `_hostKick()` here would be a call that cannot do anything: this router runs
-       inside `serviceFetch`, which runs inside the ONE scheduling loop, so `_hostDriving` is true and the kick
-       returns on its first line — a computed call with no effect, which is the read-with-no-writer defect
-       facing the other way. The round that delivered this notice is a round of that loop and `admit` is asked
-       at the top of the next one, which is where this entry is ranked. */
+    /* Nothing is kicked: this router runs inside serviceFetch within the one scheduling loop, so `_hostDriving`
+       is true and a `_hostKick()` would return on its first line. `admit` ranks this entry next round. */
     return;
   }
   if (f[0] === "windowproxy.post") {
@@ -3765,84 +3536,61 @@ async function hostNotice(eng, line) {
     DCHECK(target !== null, "a message was posted to a document no instance in this pool holds — the create " +
                             "notice naming it was dropped, or that instance was finalized while a peer still " +
                             "held a WindowProxy for it");
-    /* A TARGET MID-BOOT IS STILL THE TARGET, AND THE DELIVERY WAITS FOR IT. The reservation carries the
-       document's name from the instant its provisioning began, so hostHolderOf answers with a record whose
-       instance does not exist yet — and the honest thing to do with a message for a document that is being
-       built is to hold it until it is, which is the same suspension every other cross-instance operation in
-       this zone takes. Routing it now would post into `null`; refusing it would drop a delivery the engine has
-       already handed the page a WindowProxy for. */
+    /* A target mid-boot is still the target, and the delivery waits for it: the reservation carries the name
+       from the start, so routing now would post into `null` and refusing would drop a delivery the page already
+       holds a WindowProxy for. */
     if (target.state === "booting") await target._readyP;
     DCHECK(target.state === "hot" || target.state === "fetching",
            "a message was posted to a document whose instance never became one — the reservation holding that " +
            "name failed to boot, so the send is a delivery with nowhere to go rather than a message in flight");
-    /* THE STAMP IS THE SENDER'S BROWSER-STATED ORIGIN, SERIALIZED. An empty one means this instance was
-       rehydrated from a cold recipe written before the principal was part of it — this zone then does not know
-       whose message this is, and the one thing it may not do is invent it (a wrong `event.origin` makes the
-       engine report exploits that are not real and miss ones that are). CHECK, not DCHECK: in release the
-       delivery would otherwise carry a fabricated identity into a security decision. */
+    /* The stamp is the sender's browser-stated origin, serialized. An empty one is an instance rehydrated from a
+       recipe written before the principal was recorded; this zone does not know whose message it is and must
+       not invent one. A CHECK, because in release the delivery would carry a fabricated identity into a
+       security decision. */
     CHECK(!!eng.origin, "a cross-document message was posted by an instance with no recorded principal — only " +
                         "the trusted zone may state a sender's origin, and this one has none to state; carry " +
                         "the document's browser-stated origin into the cold recipe so a resumed instance keeps it");
     await target.r.renderer.route({ record: line, senderOrigin: stampOrigin(eng.origin) });
     return;
   }
-  /* `remoteop.answer <token> <world> <completion>` — a COMPLETION this instance produced for an operation it was asked
-     to perform, naming the token this zone minted. It leaves as a NOTICE and not as a return value because a
-     peer answers BY RUNNING A PROGRAM (an IDL getter, a page's setter, a page's function) as a flow on its own
-     frontier, so the answer does not exist when qjs_perform returns and may be parked behind anything else that
-     frontier is doing.
-     RELAYED VERBATIM AND UNREAD. The completion is in remote_object.c's grammar, not JSON, because a member
-     whose value is an OBJECT crosses as a NAME in the answering agent's namespace — which means nothing outside
-     an engine, and which JSON could only either serialize (returning something that is not the thing) or drop.
-     This zone routes text; only an engine knows what a name means, so the remainder is kept whole rather than
-     re-joined field by field on a grammar this file does not own. */
+  /* `remoteop.answer <token> <world> <completion>` — a completion this instance produced for an operation it
+     was asked to perform, under the token this zone minted. It is a notice, not a return value, because a peer
+     answers by running a program (an IDL getter, a page's setter or function) as a flow on its own frontier.
+     Relayed verbatim and unread: the completion is in remote_object.c's grammar, where an object crosses as a
+     name in the answering agent's namespace, which only an engine can interpret. */
   if (f[0] === "remoteop.answer") {
     DCHECK(f.length >= 4, "a remoteop.answer notice was short of its fields — the engine writes the rendezvous " +
                           "token, the TIMELINE that computed the answer and the completion record, and a " +
                           "notice missing any of them names no call site or no timeline");
     const to = _remoteOps.get(f[1]);
-    /* A TOKEN THIS ZONE DID NOT MINT names no asker, and the answer is then unroutable: the flow that asked is
-       parked on a completion that will never arrive, which is silent everywhere. It is this zone's own key, so
-       an unknown one means the holder echoed something other than what it was handed. */
+    /* A token this zone did not mint names no asker, leaving the asking flow parked on an answer nothing can
+       deliver. */
     DCHECK(to !== undefined, "a peer answered a cross-agent operation under a rendezvous token this zone never " +
                              "minted — the token is echoed verbatim by the instance that performed it, so the " +
                              "flow that asked is parked on an answer nothing can deliver");
-    /* THE COMPLETION IS THE REMAINDER AFTER THE THIRD FIELD, and the WORLD is that third field. It is split
-       here and not left whole because the two are different kinds of thing: the world is a name in a grammar
-       BOTH engines share (world_serialize's, whose own separators are ':' and ','), so it is a field with a
-       boundary; the completion is remote_object.c's and may contain a tab, so it can only be the remainder.
-       This zone reads NEITHER — it relays both — but it has to know where one ends. */
+    /* The world is the third field (world_serialize's grammar, separators ':' and ','), the completion the
+       remainder (it may contain a tab). This zone reads neither but must know where one ends. */
     const _t2 = line.indexOf("\t", line.indexOf("\t") + 1);
     const _t3 = _t2 < 0 ? -1 : line.indexOf("\t", _t2 + 1);
     DCHECK(_t3 > _t2 + 1, "a remoteop.answer notice carried no completion record after its timeline — an empty " +
                           "answer is not `undefined`, it is a relay that lost the peer's completion, and the " +
                           "engine's own decoder says so at the other end");
-    /* AND EVERY ONE OF THEM IS RELAYED, never the last one to arrive. A peer's document state IS its flows, so
-       one question has one true answer per timeline and the asking flow forks an arm over each; a zone that
-       kept one per token — which the two-instance harness driver did, in a one-slot map — hands the asking
-       page whichever answer the step interleaving happened to leave there, and a page reading one member twice
-       in one expression is then answered out of two CONTRADICTORY timelines of one document. The engine
-       refuses a repeat of the same timeline at its own delivery entry, which is what makes relaying all of
-       them safe rather than merely permitted. */
+    /* Every completion is relayed: a peer's document state is its flows, so one question has one true answer per
+       timeline, and the asking flow forks an arm over each. Keeping one per token would answer a page from
+       whichever timeline the interleaving left. The engine refuses a repeat of one timeline at its delivery
+       entry. */
     if (!to || _t3 < 0) return;
     await to.asker.r.renderer.hostAnswerRemote({ request: to.req, world: line.slice(_t2 + 1, _t3),
                                                  completion: line.slice(_t3 + 1) });
     return;
   }
-  /* `world.gone <world>` — a world of THIS instance is finished with: the flow holding it left the frontier, or
-     the whole session parked into a generation that will never mint again. Every peer that ever received a
-     delivery or an operation from that world materialized a COW segment keyed on it (solver/world.h) and holds
-     it until told — so this record is the only thing that ever removes one, and without it an instance that
-     answered anything carries a foreign flow's state for the rest of its process and can never park at all
-     (its own cold_park refuses, correctly: a foreign segment has no recipe of ours).
-     BROADCAST, WHICH IS THE DESIGN AND NOT THIS ZONE BEING COARSE. The sending engine deliberately does not
-     record which peers a flow reached: releasing a world with no segment here is a NO-OP, so tracking it would
-     be state kept only to avoid one. The record therefore names no target document, and only this zone knows
-     what the other instances are — which is this notice's whole reason to be a notice.
-     A BOOTING INSTANCE IS SKIPPED AS A POSITIVE STATEMENT, not as a default: a segment is materialized by a
-     routed delivery or a performed operation, and both branches above WAIT for `_readyP` before they hand an
-     instance either, so an instance that has not finished booting has never been given a foreign world to hold.
-     The engine says the same thing from its side — qjs_world_gone asserts the frontier was seeded. */
+  /* `world.gone <world>` — a world of this instance is finished (its flow left the frontier, or the session
+     parked into a generation that will never mint again). Every peer that received a delivery or operation from
+     it holds a COW segment keyed on it (solver/world.h) until told, and cannot park while it does (cold_park
+     refuses a foreign segment). Broadcast by design: the sender does not track which peers a flow reached,
+     since releasing an unheld world is a no-op, and only this zone knows the other instances. A booting
+     instance is skipped because both delivery branches wait for `_readyP`, so it holds no foreign world
+     (qjs_world_gone asserts the frontier was seeded). */
   if (f[0] === "world.gone") {
     DCHECK(f.length >= 2 && !!f[1],
            "a world.gone notice carried no world name — world_parse answers out of whatever the receiving " +
@@ -3854,34 +3602,22 @@ async function hostNotice(eng, line) {
     }
     return;
   }
-  /* `remoteop.retracted <token>` — an instance is parking with a question it was asked, and it is handing that
-     question back rather than carrying it. STARTED OR NOT: a half-run answering program's partial work is the
-     parking flow's own COW delta and leaves with it, and what this zone asked for was a CALL rather than a
-     value (HTML §7.2.1.3.5 "CrossOriginGet ( O, P, Receiver )" ends "Return ? Call(getter, Receiver)"), so a
-     call abandoned before it completed has been made zero times and the re-ask below makes it once.
-     ONE NOTICE PER QUESTION, NOT PER HOLDER — the operation was attached to every live timeline of that
-     instance, and the notice is sent by the LAST holder leaving, so a token arriving here is one no timeline
-     over there will answer under again. THIS ZONE'S ACTION IS TO FORGET, and that is the
-     whole of it: the suppression below (`_remoteAsked`) exists because `engine_host_requests` deliberately does
-     NOT dedupe — two identical questions from two flows are two questions — so without it one operation would
-     be performed once per step, each a program with the page's own side effects. The ASKING flow is still
-     suspended and its request is still being reported every step, so lifting the suppression is the whole
-     re-ask: the next sighting carries it to whichever instance holds that document by then.
-     NOTHING IS STORED, AND THAT IS THE POINT. A token is this zone's name for an entry in this zone's
-     in-memory table; it has no generation and it does not outlive this session, so it can never be written into
-     a residue (solver/engine.h says why, and it is the defect the world-name generation closes one namespace
-     over). Across a browser restart the ASKER is gone too and its own recipe RE-ISSUES the request under a new
-     id — which is what the engine's late-answer refusal has always been built on. So neither side carries
-     anything, and the only thing that has to happen is this forget. */
+  /* `remoteop.retracted <token>` — an instance is parking with a question it was asked and hands it back,
+     started or not: a half-run answering program's work is the parking flow's own delta, and what was asked
+     for was a call (HTML §7.2.1.3.5 CrossOriginGet ( O, P, Receiver ) ends "Return ? Call(getter, Receiver)"),
+     so an abandoned call was made zero times. One notice per question, sent by the last holding timeline.
+     This zone forgets: `_remoteAsked` suppresses re-asks because `engine_host_requests` does not dedupe, and
+     the asking flow is still suspended and re-reported every step, so lifting the suppression is the re-ask.
+     Nothing is stored: a token is this session's in-memory name and never enters a residue; across a restart
+     the asker's own recipe re-issues the request under a new id. */
   if (f[0] === "remoteop.retracted") {
     DCHECK(f.length >= 2 && !!f[1],
            "a remoteop.retracted notice carried no rendezvous token — the token is the only thing that names " +
            "which asking flow's question is being handed back, so an empty one leaves that flow suspended " +
            "forever with this zone still suppressing the re-ask");
     const back = _remoteOps.get(f[1]);
-    /* AN UNKNOWN TOKEN IS THIS ZONE ANSWERING FOR A QUESTION IT DID NOT ASK. The token is echoed verbatim by
-       the instance that was handed it, exactly as `remoteop.answer` echoes it, so anything else means the
-       engine minted a name of its own — and the flow this was meant to release is not the one released. */
+    /* An unknown token means the engine minted a name of its own, and the flow this was meant to release is not
+       the one released. */
     DCHECK(back !== undefined,
            "an engine handed back a cross-agent operation under a rendezvous token this zone never minted — " +
            "the token is echoed verbatim by the instance that was asked, so the asking flow this was meant to " +
@@ -3891,24 +3627,13 @@ async function hostNotice(eng, line) {
     _remoteOps.delete(f[1]);
     return;
   }
-  /* `world.parked <world vector>` — the OPPOSITE statement to the one above, and the one this zone cannot yet
-     act on. A park writes the foreign segments this instance holds into its residue as replay recipes
-     (solver/cold.h's 'w' record), so a PEER's timeline now outlives the session that held it: whichever
-     instance resumes this document rebuilds a segment for that world from the vector this notice carries.
-     WHAT IS OWED HERE IS A MAPPING ACROSS A PARK, and it is a decision about THIS zone rather than a missing
-     line: `world.gone` is BROADCAST to the instances that are LIVE (the sending engine deliberately does not
-     record which peers a flow reached, because releasing a world with no segment is a no-op), and a cold
-     document is not one of them. So every death announced while this document is parked misses it, the
-     instance that resumes rebuilds a segment for a world that has ended, and it holds it for the rest of its
-     process — the exact leak `world.gone` exists to close, re-opened one tier down. Only this zone knows an
-     instance is parked and which document it was, which is why the engine states the set exactly (the worlds
-     the residue really carries, not every death for every cold document forever) and stops there.
-     THE DECISION, NAMED SO IT IS BUILT AND NOT GUESSED: where does that index live, and how far does it
-     survive? The frontier entry is keyed by (origin, bundle) and a death arrives naming a WORLD, so an index
-     on the entry needs a persisted reverse world -> entry map; a store of its own needs its own eviction. And
-     it must survive a BROWSER RESTART, because the residue does. Decide that, then deliver the held deaths to
-     the resuming instance through the `worldGone` call that already exists (ordinal 20) — after `begin`, which
-     is when its segments exist to be released. */
+  /* `world.parked <world vector>` — a park wrote the foreign segments this instance holds into its residue
+     (solver/cold.h's 'w' record), so a peer's timeline outlives the session that held it. `world.gone` is
+     broadcast only to live instances, so a death announced while this document is parked is missed and the
+     resuming instance would hold a segment for an ended world for the rest of its process.
+     What to build: a persisted index from world name to the parked document carrying a segment for it (the
+     frontier entry is keyed by address|bundle, so this is a reverse map or a store of its own), surviving a
+     browser restart as the residue does, drained into the resuming instance's `worldGone` after `begin`. */
   if (f[0] === "world.parked") {
     DCHECK(f.length >= 2 && !!f[1],
            "a world.parked notice carried no world vector — the vector is what the resuming instance hands " +
@@ -3924,50 +3649,35 @@ async function hostNotice(eng, line) {
         "host's half is the unbuilt one: `" + f[0] + "`");
 }
 
-// WHAT ONLY THIS ZONE CAN ANSWER. A cross-document operation is answered by the instance holding that document,
-// and SECURITY.md makes the offscreen the only zone that knows which instance that is — the same reason it owns
-// the routing and stamps the sender's origin. The asking flow is SUSPENDED mid-frame until the answer lands, so
-// this is pumped every round alongside the fetch replies; leaving one unanswered parks that flow indefinitely
-// (its siblings keep running, which is the point of suspending rather than blocking).
-/* AND IT ANSWERS HOW MANY REGISTERS IT FILLED, for `engineDeliverLanded`'s reason: the round above waits on
-   bytes only where it made no progress of its own, and a notice acted on or an operation carried to a peer is
-   progress this host made. A branch that answers nothing — an op this zone may not guess at — deliberately
-   counts none, which is what leaves the asking flow parked and visible. */
+// What only this zone can answer. A cross-document operation is answered by the instance holding that document,
+// and only the offscreen knows which instance that is (SECURITY.md). The asking flow is suspended mid-frame
+// until the answer lands, so this is pumped every round beside the fetch replies; an unanswered one parks that
+// flow while its siblings keep running.
+/* It returns how many registers it filled, for engineDeliverLanded's reason; a branch that answers nothing (an
+   op this zone may not guess at) counts none, leaving the asking flow parked and visible. */
 async function engineServiceHostRequests(eng) {
   let did = 0;
-  // ONE-WAY NOTICES, and this zone OWES each of them an action — a notice it reads and discards is a document
-  // nothing runs and a message nothing delivers, with every later read through them parked forever. They were
-  // being read and discarded. Handled IN ORDER and one at a time: a page opens a window and posts to it in the
-  // same turn, so the create must have finished provisioning before the post that names it is routed.
+  // One-way notices: this zone owes each an action, handled in order and one at a time, because a page opens a
+  // window and posts to it in the same turn and the create must finish provisioning before the post is routed.
   for (const line of owedList("GetHostNotices", (await eng.r.renderer.getHostNotices()).notices)) {
     await hostNotice(eng, line);
     did++;
   }
-  // ONE BRANCH, AND ONLY BECAUSE THIS ZONE CAN GENUINELY ANSWER IT. The rule that deleted every other branch
-  // stands: a loop that walks the owed requests is a place to be tempted into GUESSING an answer, which is what
-  // answering `navigable.create` with "not created" was. `document.fetch` is not a guess — it is a network
-  // fetch, and this zone already relays those through the one safeFetch chokepoint SECURITY.md requires. Every
-  // other op is still left UNANSWERED: the asking flow stays parked with its snapshot intact, its siblings keep
-  // running, and qjs_host_requests keeps reporting it, which is visible where a wrong answer is not.
-  //
-  // AND IT HAS TO BE ANSWERED, not merely answerable. A flow parked on a request this host never satisfies
-  // leaves the engine stalled forever, and the step loop above has no other reason to stop — the same shape the
-  // WPT pump was spinning on. Answering is what lets a navigation finish.
+  // Only ops this zone can answer are answered: `document.fetch` is a network fetch through the safeFetch
+  // chokepoint, and a cross-agent operation is asked of the peer. Every other op stays unanswered: the asking
+  // flow stays parked with its snapshot intact and qjs_host_requests keeps reporting it, which is visible where
+  // a guessed answer is not. Answering is what lets a navigation finish.
   const reqs = owedList("GetHostRequests", (await eng.r.renderer.getHostRequests()).requests);
   for (const line of reqs) {
-    /* `id<TAB>op`, which engine_host_requests writes with a snprintf of a counter it CHECKs against wrapping.
-       `if (tab < 0) continue` dropped a record that did not have that shape — and dropping it is the one
-       outcome with no symptom anywhere: the asking flow stays parked on an answer nobody will ever send, its
-       siblings keep running, and the engine reports the same unanswerable request every step forever. */
+    /* `id<TAB>op`, written by engine_host_requests from a counter it CHECKs against wrapping; a record without
+       that shape is asserted, since dropping it would leave its flow parked with no symptom. */
     const tab = line.indexOf("\t");
     DCHECK(tab > 0, "an owed host request is not `id<TAB>op` — the id is what an answer is routed by, so a " +
                     "record without one names a call site this zone can never reach");
     if (tab < 0) continue;   // release: an unanswerable record leaves its flow parked, which is visible
     const id = +line.slice(0, tab), op = line.slice(tab + 1);
-    /* THE ID IS THE WHOLE ROUTING TABLE for an answer — engine_host_answer walks every flow's register for
-       exactly this number and the engine's own counter starts at 1, so a 0 or a NaN answers a call site that
-       does not exist and the answer is silently dropped on the other side (its `return 0` means "the asking
-       flow is gone", which would be a lie). */
+    /* The id is the whole routing table for an answer: engine_host_answer matches every flow's register on it
+       and the engine's counter starts at 1, so 0 or NaN would answer a call site that does not exist. */
     DCHECK(Number.isInteger(id) && id > 0,
            "an owed host request carries no usable id — an answer is routed by that number alone");
     /* A CROSS-AGENT OPERATION IS NOT ANSWERED BY THIS ZONE AT ALL — it is ASKED OF A PEER, which is the one
