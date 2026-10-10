@@ -12,44 +12,33 @@
 #include "solver/flow.h"
 #include "solver/world.h"   /* what the cross-instance seam materialized here — see world_segment_stats */
 #include "solver/concolic.h"   /* whether this run ever acquired attacker input — see concolic_source_reads */
-#include "solver/cold.h"    /* …and what it PARKED, if the host asked this engine to page out */
-/* THE REPLY DOOR'S RATE, asked of the component that owns both ends of the membership it is a rate over —
-   never recomputed here, which would be a second producer of a fact one file already holds. */
+#include "solver/cold.h"    /* …and what it parked, if the host asked this engine to page out */
+/* The reply door's rate, asked of the component that owns both ends of its membership rather than recomputed. */
 #include "solver/pending_index.h"
 #include "solver/dom_cow.h"   /* the DOM half of the swap census — see result_swap_json */
 #include "solver/decide.h"    /* …and which predicate grew the frontier — see decide_fork_json */
 #include "solver/absent.h"    /* …and which names a standard owns this realm answered with silence */
-/* …and what the ORDER above them was denominated in, which is the fact that decides whether two of these
-   documents may be compared at all. Composed by the component that owns it — see result.h and quantum.h. */
+/* …and what the order above them was denominated in, which decides whether two of these documents may be
+   compared at all. Composed by its owner — see result.h and quantum.h. */
 #include "solver/quantum.h"
-/* THE REALM COUNT IS THE ONE ROW OF THE HEAP CENSUS THAT quickjs CANNOT ANSWER, and it is a BROWSER fact: a
-   child realm is built per flow that creates a navigable with an address, so the component that holds the list
-   is the one that answers. §A-CAPABILITY-MATERIALIZED-PER-FLOW makes it a ceiling, and navigable.c's own OOM
-   CHECK sends its reader to this number by name. */
+/* The realm count is the one heap-census row QuickJS cannot answer, and it is a browser fact: a child realm is
+   built per flow that creates a navigable with an address, so the component holding the list answers. A
+   per-flow capability must be reclaimed, so this count is a ceiling; navigable.c's OOM CHECK names it. */
 #include "core/frame/navigable.h"
 #include "core/css/css_cascade_pass.h"   /* what the run spent on css-cascade-5 §4.2's values — see the `_cascade` block */
 #include "core/layout/flow_placement.h"   /* what the render spent on CSS 2.1 §9.4.1's positions — see the `_layout` block */
-#include "core/frame/window_proxy.h"   /* the ASK behind the realm census — see window_proxy_destroy_releases */
+#include "core/frame/window_proxy.h"   /* the ask behind the realm census — see window_proxy_destroy_releases */
 /* §8.1.4.6 "Runtime script errors"'s throw site — one component derives it, this one reports it. */
 #include "core/events/report_exception.h"
 #include "core/timing/event_loop.h"   /* whether the clock's licence was wanted and refused — see event_loop_advance_census */
 
-/* THE PAGE'S OWN UNCAUGHT ERRORS, deduped. See result.h: a script that throws is the forcing function naming an
-   unbuilt capability, and it was silent. The message is the page's own, so nothing here interprets it.
-   EACH ENTRY IS A PAIR — the message and §8.1.4.6 "Runtime script errors"'s throw site — and the DEDUPE KEY IS
-   THE PAIR. Keyed on the message alone, two different scripts raising one error are one entry, which is the
-   one collapse a reader cannot afford: a document that stages an uncaught error on purpose and a regression
-   raising the same message somewhere else become a single indistinguishable line. `at` is "" for a thrown
-   value with no backtrace, which is §8.1.4.6's own answer and not an absent field.
-   AND THE ROW COUNTS ITS OCCURRENCES, which is what makes a report revocable — see result.h. `standing` is
-   how many occurrences of this pair have been reported and NOT taken back; `retracted` is how many were.
-   Their SUM is how many times the pair was reported, and neither is derivable from the other: a row at
-   standing 0 with retracted 3 is a pair this engine named three times and withdrew three times, which is a
-   different fact from a pair that was never recorded (no row at all) and must not read like it anywhere.
-   ONE ARRAY OF ROWS AND NOT FOUR PARALLEL COLUMNS. The message and the throw site were two `char **` grown by
-   two reallocs, and the comment on that growth had to say out loud that a half-grown pair misfiles a row the
-   dedupe then reads across. Two more columns would be two more chances at exactly that; one row is one
-   allocation and the failure has nowhere to be partial. */
+/* The page's own uncaught errors, deduped (see result.h). The message is the page's own and is not interpreted.
+   The dedupe key is the pair (message, HTML §8.1.4.6 "Runtime script errors" throw site), so two scripts raising
+   one message stay two rows. `at` is "" for a thrown value with no backtrace, which is §8.1.4.6's own answer.
+   A row counts occurrences so a report is revocable: `standing` were reported and not taken back, `retracted`
+   were taken back, and their sum is how many were reported. A row at standing 0 is a pair named and withdrawn,
+   a different fact from a pair never recorded (no row).
+   One array of rows rather than parallel columns, so a growth failure cannot leave a half-grown row. */
 typedef struct {
     char *msg;
     char *at;
@@ -58,24 +47,19 @@ typedef struct {
 } PageErrorRow;
 static PageErrorRow *g_errs; static int g_errs_n, g_errs_cap;
 
-/* The row for this pair, or NULL. The ONE place the (message, throw site) key is spelled, so the report and
-   the retraction cannot come to disagree about what identifies a row. */
+/* The row for this pair, or NULL. The one place the (message, throw site) key is spelled, so the report and
+   the retraction agree on what identifies a row. */
 static PageErrorRow *errs_find(const char *msg, const char *filename) {
     for (int i = 0; i < g_errs_n; i++)
         if (!strcmp(g_errs[i].msg, msg) && !strcmp(g_errs[i].at, filename)) return &g_errs[i];
     return NULL;
 }
 
-/* THE PAIRS THIS ENGINE DECLARED ITS OWN EXPLORATION — see result.h for what the declaration means and why the
-   site that raises is the only place it can be made. Keyed on the SAME (message, throw site) pair a row is,
-   through the SAME derivation, because a mark filed under one key and read under another is a classification
-   that confidently answers about a different row.
-   IT IS NOT A FIELD ON PageErrorRow, AND THAT IS THE WHOLE OF WHY IT CANNOT DRIFT. The declaration is made at
-   the RAISE, which is strictly before §8.1.4.6 reports anything, so a row could only ever be a SECOND copy of
-   what this table already holds — kept in step at every insert, by hand, for ever. One fact, one place, asked
-   by key; the row stays what it was.
-   PROCESS-LIFETIME, like the rows beside it: a declaration is a statement about a throw this run made, and a
-   run that raised the same pair twice made one statement. */
+/* The pairs this engine declared its own exploration (see result.h; only the raising site can declare one).
+   Keyed on the same (message, throw site) pair as a row, through the same derivation, so a mark answers about
+   the row it was filed for. Not a field on PageErrorRow: the declaration is made at the raise, before §8.1.4.6
+   reports anything, so a row field would only be a second copy of this table.
+   Process-lifetime, like the rows; a pair raised twice is one declaration. */
 typedef struct { char *msg; char *at; } ExploredPair;
 static ExploredPair *g_expl; static int g_expl_n, g_expl_cap;
 
@@ -94,9 +78,8 @@ static void explored_add(const char *msg, const char *filename) {
     if (g_expl_n >= g_expl_cap) {
         int c = g_expl_cap ? g_expl_cap * 2 : 8;
         ExploredPair *a = realloc(g_expl, (size_t)c * sizeof(*g_expl));
-        /* A LOST DECLARATION IS STILL NOT WORTH FAILING A RUN OVER — the row's own growth beside this says the
-           same, and the cost of losing one here is that a line lands in the population a reader reads by hand
-           rather than in the one this engine minted it into. Never a wrong verdict: nothing here is a verdict. */
+        /* A lost declaration is not worth failing a run over: the line then lands among the errors a reader
+           reads by hand rather than among the engine's own. Nothing here is a verdict. */
         if (!a) return;
         g_expl = a;
         g_expl_cap = c;
@@ -104,16 +87,14 @@ static void explored_add(const char *msg, const char *filename) {
     g_expl[g_expl_n].msg = strdup(msg);
     g_expl[g_expl_n].at = strdup(filename);
     if (g_expl[g_expl_n].msg && g_expl[g_expl_n].at) { g_expl_n++; return; }
-    /* HALF A PAIR IS WORSE THAN NONE — it would compare equal on the half that allocated and answer about a
-       row nobody declared, so the partial entry goes rather than being committed with a hole in it. */
+    /* Half a pair is worse than none — it would match on the half that allocated — so it is discarded. */
     free(g_expl[g_expl_n].msg); free(g_expl[g_expl_n].at);
     g_expl[g_expl_n].msg = NULL; g_expl[g_expl_n].at = NULL;
 }
 
-/* WHO PRINTS ONE AS IT HAPPENS, AND THE FACT THAT A HOST ANSWERED THE QUESTION AT ALL — see result.h. The
-   second is not bookkeeping for the first: a NULL hook USED to mean "this host publishes the document", so a
-   host that had considered where an uncaught page error is read and a host that never had made the identical
-   call, and the one that never had was the fixture whose whole job is naming unbuilt capabilities. */
+/* Who prints a page error as it happens, and whether the host declared a route at all (see result.h). The
+   latch is separate from the hook because "publishes the document" is a declaration of its own, and a NULL
+   hook alone cannot tell it from a host that never considered the question. */
 static void (*g_err_hook)(const char *msg, const char *filename, ResultPageErrorEdge edge);
 static int g_err_route_declared;
 void result_set_page_error_hook(void (*fn)(const char *msg, const char *filename, ResultPageErrorEdge edge)) {
@@ -128,19 +109,13 @@ void result_page_errors_ride_the_document(void) { g_err_route_declared = 1; }
 
 void result_page_error(const char *msg, const char *filename) {
     if (!msg || !*msg) return;
-    /* NEVER NULL, AND "" IS THE ANSWER RATHER THAN THE ABSENCE OF ONE — result.h states why. A NULL here would
-       be a caller that never asked §8.1.4.6 where the throw was, which reads downstream exactly like a value
-       that carried no backtrace, and those are different facts about different runs. */
+    /* Never NULL: "" is §8.1.4.6's answer for no backtrace, and NULL would be a caller that never asked. */
     DCHECK(filename != NULL,
            "a page error was recorded with no throw-site field at all — §8.1.4.6's `filename` is \"\" for a "
            "thrown value carrying no backtrace and that is a positive answer, so a null one is a caller that "
            "did not ask rather than a value that had nothing to say");
-    /* AT THE ORIGIN — the FIRST uncaught page error, which is the last moment at which this host's silence is
-       still recoverable. A page's throw is the forcing function that names an unbuilt capability, so a host
-       that reaches one having declared neither route is a host in which that name cannot be read, and the
-       failure is silent in the one direction nobody checks: the run continues and reports the surface it
-       happened to reach. The message is recorded either way — what is undeclared is whether anything ever
-       says so. */
+    /* Asserted at the first uncaught page error: a page's throw names an unbuilt capability, and a host that
+       declared neither route has no place that name can be read. The message is recorded either way. */
     DCHECK(g_err_route_declared,
            "the page threw and this host has never said where an uncaught page error is READ — call "
            "result_set_page_error_hook (this host's output is a stream of lines, so it must print the error "
@@ -149,31 +124,25 @@ void result_page_error(const char *msg, const char *filename) {
            "run is the FIRST of those, not the second: a run that is killed before it drains publishes "
            "nothing, and the throw that ended a <script> is then the one fact its report cannot state");
     {
-        /* AN OCCURRENCE, NOT A DUPLICATE TO DROP. The pair is still the dedupe key for what a reader SEES —
-           the document is a console and the stream is one line per pair — but the row now counts what it
-           stands for, so a later retraction has one occurrence to take back rather than a whole row to
-           erase. This early return used to lose the second occurrence entirely. */
+        /* A repeat is an occurrence, not a duplicate to drop. The pair is still the dedupe key for what a reader
+           sees (one line per pair), but the row counts occurrences so a retraction takes back exactly one. */
         PageErrorRow *row = errs_find(msg, filename);
         if (row) {
-            /* THE PAIR'S LATCH, RISING — see result.h. Silent while it already stands, because the line
-               announcing it is still true; announced again after a correction, because that correction was
-               the stream's last word on this pair and it has stopped being true. */
+            /* The pair's latch, rising (see result.h): silent while it already stands, announced again after a
+               retraction, because the retraction was the stream's last word on this pair. */
             int was_standing = row->standing;
             row->standing++;
             if (!was_standing && g_err_hook) g_err_hook(msg, filename, RESULT_PAGE_ERROR_STANDS);
             return;
         }
     }
-    /* routing between the two declared answers, never a default past one. BEFORE the row is committed, so an
-       allocation failure below loses the row and not the announcement: the line is true either way, and the
-       stream is the route whose whole purpose is saying so at the moment it happens. */
+    /* Routes between the two declared answers. Announced before the row is committed, so an allocation failure
+       below loses the row and not the announcement. */
     if (g_err_hook) g_err_hook(msg, filename, RESULT_PAGE_ERROR_STANDS);
     if (g_errs_n >= g_errs_cap) {
         int c = g_errs_cap ? g_errs_cap * 2 : 8;
         PageErrorRow *a = realloc(g_errs, (size_t)c * sizeof(*g_errs));
-        /* ONE ALLOCATION, so there is no half-grown row to misfile — the two `char **` columns this replaced
-           needed a paragraph here saying a MISFILED row is worse than a lost one. A lost diagnostic is still
-           not worth failing a run over. */
+        /* One allocation, so there is no half-grown row; a lost diagnostic is not worth failing a run over. */
         if (!a) return;
         g_errs = a;
         g_errs_cap = c;
@@ -187,7 +156,7 @@ void result_page_error(const char *msg, const char *filename) {
     g_errs[g_errs_n].msg = NULL; g_errs[g_errs_n].at = NULL;
 }
 
-/* TAKING ONE BACK — result.h states the algorithm this serves and why a no-op is a positive answer here. */
+/* Takes one occurrence back — result.h states the algorithm this serves and why a no-op is a positive answer. */
 void result_page_error_retract(const char *msg, const char *filename) {
     PageErrorRow *row;
     if (!msg || !*msg) return;   /* the same description `result_page_error` declines to record */
@@ -196,44 +165,24 @@ void result_page_error_retract(const char *msg, const char *filename) {
            "(message, throw site) pair the report does, so a null one cannot name the row it means to take "
            "back and would silently retract nothing");
     row = errs_find(msg, filename);
-    /* NO ROW, OR A ROW WITH NOTHING STANDING: §8.1.4.7 step 4.1.4 appends promises step 4.1.3 declined to
-       report (the append is gated on [[PromiseIsHandled]], the report on notCanceled), so a page that cancels
-       `unhandledrejection` is still owed a `rejectionhandled` this console never reported. There is nothing
-       to take back and nothing to record — a row minted here would say this engine had named an error it
-       never named, which is the fabrication the retraction exists to remove. */
+    /* No row, or nothing standing: §8.1.4.7 step 4.1.4 appends promises step 4.1.3 declined to report (the
+       append is gated on [[PromiseIsHandled]], the report on notCanceled), so a page that cancels
+       `unhandledrejection` is still owed a `rejectionhandled` this console never reported. Nothing to take
+       back, and a row minted here would claim an error this engine never named. */
     if (!row || !row->standing) return;
     row->standing--;
     row->retracted++;
-    /* THE PAIR'S LATCH, FALLING. A correction printed while another occurrence still stands would withdraw a
-       line that is still true of this run. */
+    /* The pair's latch, falling: a correction printed while another occurrence stands withdraws a true line. */
     if (!row->standing && g_err_hook) g_err_hook(msg, filename, RESULT_PAGE_ERROR_RETRACTED);
 }
 
-/* Describe a thrown value WITHOUT running any of the page's code — see result.h. It ROUTES to the engine's own
-   describer rather than deriving a second answer, and the two things it adds to that answer are the
-   DOMException internal slots and the throw site's frames.
-   THIS USED TO READ THE PAGE'S OBJECT WITH `JS_GetOwnSlot`, WHICH IS THE WRONG PRIMITIVE FOR AN OPERAND A PAGE
-   AUTHORED AND HAD TWO WAYS OF ABORTING ON ONE. quickjs.h states that call's subject in its own words — "for a
-   component reading a slot IT created … an accessor there says the read landed on an object that is not the one
-   it named" — and a thrown value is the opposite of that: every slot on it is the page's to define. So its
-   accessor arm (a `DFAIL`) and `JS_GetOwnSlotDesc`'s no-Proxy arm (a `DCHECK`) were both reachable from ONE
-   statement of page JavaScript — `Promise.reject(new Proxy({},{}))`, or an own `message` behind a getter — which
-   is §Offensive-programming's page-held abort switch: a `DCHECK` may only stand on a value this codebase
-   COMPUTED, and these stood on bytes a stranger stated.
-   AND THE SAME READ WAS WHY THE REPORT SAID NOTHING. An OWN-property read cannot see `TypeError.prototype.name`
-   or a class's `get message()`, so an uncaught `TypeError('x')` reported the bare `x` with no kind on it and
-   everything whose name and message live on a prototype collapsed into one anonymous row — MEASURED as the
-   LARGEST row of `enginePageErrors` on two drives of one real application, at 10 and 7, naming none of the ten.
-   `JS_DiagCString` is the answer this engine already owns for exactly this question (§8.1.4.6's
-   `extract_error_information` is its other caller): it walks the prototype chain for a DATA property, falls back
-   to the CONSTRUCTOR's name, and answers `[object Class]` when there is neither — never invoking an accessor,
-   never touching a Proxy's traps, and so never aborting on what a page handed it. Two describers of one value
-   drift, and this is the half that had.
-   THE SPEC LICENSES THE CHOICE RATHER THAN DICTATING IT. HTML §8.1.4.6 "Runtime script errors"' extract error
-   information says "Set attributes[message], attributes[filename], attributes[lineno], and attributes[colno] to
-   implementation-defined values derived from exception", and notes that browsers "gather values which are
-   helpful". So a better description is conformant and a worse one is too — which is why this is argued from what
-   a reader can act on and not from a step. */
+/* Describes a thrown value without running any page code (see result.h). Every slot on a thrown value is the
+   page's to define, so it routes to the engine's describer `JS_DiagCString` (also used by §8.1.4.6's
+   `extract_error_information`), which walks the prototype chain for data properties, falls back to the
+   constructor's name, and answers `[object Class]` — never invoking an accessor or a Proxy trap. This function
+   adds the concolic form, DOMException's internal slots and the throw site's frames.
+   HTML §8.1.4.6 "Runtime script errors" extract error information leaves message and position
+   "implementation-defined values derived from exception", so the choice is argued from what a reader can use. */
 void result_error_text(JSContext *ctx, JSValueConst err, char *out, size_t outsz) {
     char *buf = out;
     JSValue name, msg, stk;
@@ -245,13 +194,10 @@ void result_error_text(JSContext *ctx, JSValueConst err, char *out, size_t outsz
            "a thrown value was described into no buffer, or into one too small to hold a name and a message — "
            "the description is truncated at the caller's size and every caller must give it room to be one");
     *out = 0;
-    /* A THROWN CONCOLIC IS NAMED BY ITS SHAPE AND ITS SOURCE, because it is the solver's own value standing for
-       unknown input and the engine's describer can only call it `[object Function]` — the class is callable, so
-       Object.prototype.toString tags it Function. MEASURED on a real application as the LARGEST row of
-       `enginePageErrors` (x12 on one gitpod drive), naming nothing: a page rejecting or throwing a value it got
-       from somewhere this engine left unknown. It is answered HERE and not in JS_DiagCString because that string
-       is also §8.1.4.6's page-visible ErrorEvent `message`, and a solver shape must never reach the page.
-       Both fields are the record's own stored strings, so nothing runs. */
+    /* A thrown concolic is named by its shape and source: the engine's describer would call it
+       `[object Function]`, since its class is callable. Answered here and not in JS_DiagCString because that
+       string is also §8.1.4.6's page-visible ErrorEvent `message`, which a solver shape must never reach.
+       Both fields are the record's stored strings, so nothing runs. */
     if (concolic_is(err)) {
         const char *shape = concolic_shape_c(err), *src = concolic_src_c(err);
         /* The record's one writer stores `shape ? shape : "{}"` and `src ? strdup(src) : NULL`, so a shape is
@@ -263,12 +209,9 @@ void result_error_text(JSContext *ctx, JSValueConst err, char *out, size_t outsz
         else     snprintf(buf, outsz, "an unknown value was thrown: %s (no source)", shape);
         return;
     }
-    /* THE ONE SHAPE THE ENGINE'S DESCRIBER ANSWERS WORSE THAN ITS SLOTS, AND THE REASON IT IS ASKED FIRST. A
-       DOMException keeps `name` and `message` behind Web IDL ACCESSORS on its prototype, so `JS_DiagGetData`
-       stops at the getter it may not call and reaches the bare word "DOMException" through `constructor` —
-       where the INTERNAL SLOTS carry `SyntaxError` and the sentence saying what was wrong. That cost a whole
-       debugging cycle once: an aborted sibling flow reported as an anonymous object when it was a
-       NotSupportedError naming exactly what was wrong. A stored value, never an operation. */
+    /* A DOMException is asked first: its `name` and `message` are Web IDL accessors on the prototype, so the
+       describer stops at the getter and answers only "DOMException", while the internal slots hold the name
+       (e.g. `SyntaxError`) and the message. A stored value, never an operation. */
     name = JS_GetDOMExceptionName(ctx, err);
     msg  = JS_GetDOMExceptionMessage(ctx, err);
     if (JS_IsString(name)) ns = JS_ToCString(ctx, name);
@@ -277,25 +220,18 @@ void result_error_text(JSContext *ctx, JSValueConst err, char *out, size_t outsz
     else if (ns)         n = snprintf(buf, outsz, "%s", ns);
     else {
         what = JS_DiagCString(ctx, err, &owned);
-        /* A NULL IS ANSWERED WITH A POSITIVE STATEMENT AND NEVER WITH AN EMPTY ONE, because `result_page_error`
-           DROPS an empty description — a value nothing could describe would become an error this engine never
-           named, which is the fabrication-by-omission this whole surface exists to prevent.
-           A SYMBOL IS THE ONE CAUSE THIS SIDE CAN NAME. It is the only primitive whose ToString throws, which
-           `JS_DiagCString`'s own paragraph records as a page-held wrong answer rather than an invariant. The
-           others — an allocation failure, and a REVOKED Proxy whose `JS_ToObjectString` throws its
-           ValidateNonRevokedProxy TypeError — are not distinguishable from here without reading the context's
-           exception, which is not this function's to read or to clear, so the text claims neither. */
+        /* A NULL gets a positive statement, never an empty one, because `result_page_error` drops an empty
+           description. A Symbol is the one cause nameable here (the only primitive whose ToString throws); an
+           allocation failure or a revoked Proxy is indistinguishable without reading the context's exception,
+           which is not this function's to read or clear, so the text claims neither. */
         if (what)                  n = snprintf(buf, outsz, "%s", what);
         else if (JS_IsSymbol(err)) n = snprintf(buf, outsz, "a Symbol was thrown");
         else                       n = snprintf(buf, outsz, "a thrown value whose description this engine "
                                                             "could not compose");
     }
-    /* WHERE it threw. A genuine Error keeps its stack in the [[ErrorData]] internal slot behind an accessor on
-       Error.prototype, so no own-property read can see it and calling the getter would run page code (a page may
-       have replaced Error.prepareStackTrace, and this runs from OUTSIDE any flow). JS_GetErrorStackString reads
-       the slot directly, which is exactly the "a stored value, never an operation" rule the rest of this
-       function follows. Without it a message like "not a function" names a capability and nothing else — the
-       whole diagnostic is WHERE, and finding it by hand meant re-serving the library wrapped in a try/catch. */
+    /* Where it threw. An Error keeps its stack in the [[ErrorData]] slot behind an accessor on Error.prototype,
+       and calling the getter would run page code (Error.prepareStackTrace) outside any flow, so
+       JS_GetErrorStackString reads the slot directly. */
     stk = JS_GetErrorStackString(ctx, err);
     if (JS_IsString(stk)) ss = JS_ToCString(ctx, stk);
     if (ss && n > 0 && (size_t)n < outsz) {
@@ -315,28 +251,19 @@ void result_error_text(JSContext *ctx, JSValueConst err, char *out, size_t outsz
     JS_FreeValue(ctx, msg);
     JS_FreeValue(ctx, stk);
 }
-/* NAMED RESIDUAL — A THROWN OBJECT IS DESCRIBED BY ITS KIND AND NEVER BY ITS SHAPE.
-   NOT COVERED: the description is derived from `name`, `message` and `constructor` alone, so every object whose
-   kind is the SAME answers the same string however differently it is built — the property is that no own
-   property other than those three reaches the report. A plain object resolves `Object.prototype.constructor` and
-   is reported as `Object`; one with no prototype at all resolves nothing and reaches `JS_ToObjectString`'s
-   `[object Object]`; and `{status,body}` and `{code,detail}` are indistinguishable in either form.
-   WHAT THE NEXT DIFF BUILDS: the own property KEYS, appended by `JS_DiagCString` in quickjs.c beside the forms
-   it already composes — KEYS and never VALUES, because a value's description is a coercion and that is the
-   page's code on the path that reports the page's error. It belongs in the engine rather than here for the
-   reason this function was just repaired for: that is the canonical describer every C embedder reaches, and a
-   key list composed here would be the second answer again.
-   HOW ITS ABSENCE WOULD SHOW: a real application's `enginePageErrors` carries a row whose whole message is a
-   kind — no colon, no message, no frames — at a count above one, and nothing in it names a property. */
+/* Named residual: a thrown object is described by its kind, never its shape.
+   Not covered: only `name`, `message` and `constructor` reach the description, so `{status,body}` and
+   `{code,detail}` both read `Object` (or `[object Object]` with no prototype).
+   Next diff: `JS_DiagCString` appends the own property keys — keys, never values, since describing a value is
+   a coercion that runs page code; in the engine, so every C embedder shares one describer.
+   Absence shows as an `enginePageErrors` row whose whole message is a kind (no colon, message or frames) at a
+   count above one, naming no property. */
 
-/* THE PAIR A THROWN VALUE KEYS ON, DERIVED ONCE FOR BOTH EDGES. The report and its retraction must compose the
-   identical (message, throw site) or no retraction would ever find the row it means to take back, and two
-   copies of this derivation is exactly how they would come to differ. */
+/* The (message, throw site) pair a thrown value keys on, derived once for the report, the retraction and the
+   exploration mark so all three find the same row. */
 static void page_error_key(JSContext *ctx, JSValueConst err, char *buf, size_t bufsz, char **at) {
-    /* §8.1.4.6 "Runtime script errors"'s THROW SITE, asked of the component that owns the derivation
-       (core/events/report_exception.h) rather than re-parsed out of the rendered frame `result_error_text`
-       appends. Two parsers of one backtrace disagree the first time either is corrected, and the answer here
-       is the one a reader partitions a run's errors by. */
+    /* §8.1.4.6 "Runtime script errors"'s throw site, asked of its owner (core/events/report_exception.h)
+       rather than re-parsed from the frames `result_error_text` appends: one parser of one backtrace. */
     uint32_t line = 0, col = 0;
     *at = report_exception_position(ctx, err, &line, &col);
     result_error_text(ctx, err, buf, bufsz);
@@ -350,11 +277,9 @@ void result_page_error_value(JSContext *ctx, JSValueConst err) {
     free(at);
 }
 
-/* THE SITE THAT CHOSE THE COMPLETION SAYING SO — see result.h. It runs at the RAISE and derives its key
-   through `page_error_key`, which is the same derivation the report and the retraction use: the value is the
-   very object §8.1.4.6 will later be handed, its backtrace was captured when it was constructed and nothing
-   here touches it, so the pair recorded now IS the pair the row will be keyed on rather than a second reading
-   of a second value. Runs NO page code, for `result_error_text`'s reason. */
+/* Marks the pending exception as this engine's own exploration (see result.h). Runs at the raise and keys
+   through `page_error_key` on the very value §8.1.4.6 will later be handed, whose backtrace is already
+   captured, so the recorded pair is the pair its row will carry. Runs no page code. */
 JSValue result_explored_throw(JSContext *ctx) {
     char buf[320];
     char *at;
@@ -368,9 +293,8 @@ JSValue result_explored_throw(JSContext *ctx) {
     page_error_key(ctx, e, buf, sizeof buf, &at);
     explored_add(buf, at);
     free(at);
-    /* RE-RAISED UNCHANGED, which is the half that keeps this from being a second way to throw: JS_Throw takes
-       the reference this function is holding and returns JS_EXCEPTION, so the page sees the identical value
-       with the identical backtrace and the only thing that is new is that a consumer can now ask whose it was. */
+    /* Re-raised unchanged: JS_Throw takes this reference and returns JS_EXCEPTION, so the page sees the identical
+       value and backtrace. */
     return JS_Throw(ctx, e);
 }
 
@@ -384,35 +308,18 @@ void result_page_error_value_retract(JSContext *ctx, JSValueConst reason) {
     free(at);
 }
 
-/* THIS COMPONENT'S EIGHT SLOTS, GIVEN BACK — solver/engine.c's release column. There was no release at all.
- *
- * THE ROWS WERE FREED BY NOBODY, AND NOTHING IN THIS TREE COULD SAY SO: a malloc'd block appears in neither
- * of JS_FreeRuntime's censuses, so the one detector every host runs at teardown is blind to it by
- * construction and the leak was silent in dev AND release. Same shape core/agent_state.h records for
- * core/file/file_system_handle.c, in the solver half.
- *
- * AND `g_err_route_declared` IS NOT A LEAK BUT THE COSTLIER HALF. It is the latch a host sets once at its
- * agent bring-up, and the whole of what it buys is the DCHECK at `result_page_error`: a host reaching an
- * uncaught page error having declared neither route aborts there, because a page's throw is the forcing
- * function naming an unbuilt capability and a host in which that name cannot be READ reports whatever surface
- * it happened to reach instead. Carried past its agent it hands the NEXT one that answer for free, so the
- * host that never considered the question passes the check that exists to ask it — core/agent_state.h's
- * `fetch_init` in miniature, and the only reader of the stale number is the next bring-up.
- *
- * WHY THIS IS NOT DECLARED TO core/agent_state.h, since that header is where a reader will go next: two
- * aborts, each one grep. `platform_check_agent_state` requires every declaration's `component` to be A ROW OF
- * core/platform.c's LIST, and this component has none — so a declaration fires at agent BRING-UP. And
- * `agent_state_check_released` runs at the END of `platform_agent_free`, which every host runs BEFORE
- * `solver_agent_free`: even under a row, the registry would assert these slots released strictly before the
- * call that releases them, on every run that recorded one page error. That registry is the browser half's;
- * this half's release column is `solver_agent_free`. Retired the day the solver half gets a registry of its own.
- *
- * ALL EIGHT SLOTS OR NONE. `errs_json_array` walks `g_errs[0 .. g_errs_n)` and dereferences both halves of
- * every row, so giving back the array and keeping the count is not a partial fix — it is a use-after-free
- * with a plausible table in front of it. Free, assert, then undo the handles, which is that header's order. */
+/* Releases this component's eight slots; solver/engine.c's solver_agent_free calls it. A malloc'd row
+ * appears in neither of JS_FreeRuntime's censuses, so nothing else would report a leak here.
+ * `g_err_route_declared` is reset too: carried past its agent it would let the next host pass
+ * `result_page_error`'s route DCHECK without ever declaring a route.
+ * Not declared to core/agent_state.h: `platform_check_agent_state` requires a row of core/platform.c's list,
+ * which this component has none of, and `agent_state_check_released` runs at the end of `platform_agent_free`,
+ * before `solver_agent_free` releases these slots. This half's release column is `solver_agent_free`.
+ * All eight or none: `errs_json_array` walks `g_errs[0 .. g_errs_n)` and dereferences both halves of every
+ * row, so freeing the array but keeping the count is a use-after-free. Free, assert, then reset the handles. */
 void result_free(void)
 {
-    /* Every host declares the route in its AGENT init, unconditionally, beside `platform_agent_init`. */
+    /* Every host declares the route in its agent init, unconditionally, beside `platform_agent_init`. */
     DCHECK(g_err_route_declared,
            "the page-error console was released in an agent that never declared where an uncaught page error "
            "is READ. A host states that once, at its agent bring-up, so this is either a SECOND release of one "
@@ -440,16 +347,13 @@ void result_free(void)
     }
     free(g_expl); g_expl = NULL; g_expl_n = g_expl_cap = 0;
 
-    /* THE HANDLES LAST, AND THE LATCH'S RESET IS WHAT MAKES A POST-RELEASE REPORT LOUD. With both tables
-       nulled, a `result_page_error` arriving after this would `realloc(NULL, …)` and rebuild a console for an
-       agent that has ended, publishing rows nothing will free or read; down, that entry's own route DCHECK
-       fires instead. */
+    /* The handles last. Resetting the latch makes a report after release loud: `result_page_error` would
+       otherwise `realloc(NULL, …)` a console for an ended agent; instead its route DCHECK fires. */
     g_err_hook = NULL;
     g_err_route_declared = 0;
 }
 
-/* Append RAW (a delimiter this file controls) or ESCAPED (page-supplied text). Escaping the delimiters too was
-   a bug: the quotes around each message came out as \" inside the JSON string. */
+/* Appends raw text (a delimiter this file controls); page-supplied text goes through errs_append. */
 static void errs_raw(char **buf, size_t *cap, size_t *len, const char *s) {
     size_t k = strlen(s);
     if (*len + k + 1 >= *cap) {
@@ -462,7 +366,7 @@ static void errs_raw(char **buf, size_t *cap, size_t *len, const char *s) {
     memcpy(*buf + *len, s, k); *len += k; (*buf)[*len] = 0;
 }
 
-/* JSON-escape a page-supplied string (its own message text, so it can hold anything). */
+/* JSON-escapes a page-supplied string (its own message text, so it can hold anything). */
 static void errs_append(char **buf, size_t *cap, size_t *len, const char *s) {
     for (const char *p = s; *p; p++) {
         char esc[8]; int k;
@@ -480,55 +384,25 @@ static void errs_append(char **buf, size_t *cap, size_t *len, const char *s) {
     }
 }
 
-/* ONE ENTRY PER DISTINCT MESSAGE, which is what `pageErrors` has always been and what the readers of the
-   document expect — core/events/report_exception.c calls this a developer console, and a console is a list of
-   what went wrong rather than a list of occurrences. The RECORD is keyed on (message, throw site) now, so this
-   is the one place the two shapes part: a message raised from two scripts is two rows there and one line
-   here, and the per-script fact is carried by the STREAM (result.h), which is where a reader that needs it
-   reads. The skip is written out rather than folded into the record because collapsing it at the record would
-   put the document's shape back into the dedupe and lose the pair again.
-   TWO ARRAYS AND THEY ARE DISJOINT, WHICH IS WHAT MAKES AN EMPTY ONE READABLE. A message with any STANDING
-   occurrence is in `pageErrors` — the page raised it and nothing took it back. A message with no standing
-   occurrence anywhere and at least one retracted one is in `pageErrorsRetracted`: this engine named it and
-   then withdrew it, because HTML §8.1.6.4 step 7.4 told it the page had handled the rejection after all. A
-   message in NEITHER was never recorded. Those are three different facts about a page and, before the second
-   array, the last two were the same absence — which is precisely §Testing's "an absent count and a zero count
-   are different facts" wearing a name instead of a number.
-   DISJOINT AND NOT OVERLAPPING, BECAUSE THE OVERLAP WOULD CONTRADICT ITSELF ON ONE SCREEN. A message that
-   still stands at one script and was retracted at another DID go wrong, so it belongs in the console; listing
-   it in both would render one message twice under two opposite claims. The per-site half of that fact is the
-   STREAM's, exactly as the per-site half of the report is — the routes differ in form, never in what they
-   know.
-   A RETRACTED ROW IS STILL A CAPABILITY THE PAGE REACHED FOR, which is why the second array carries the
-   MESSAGE rather than merely a count of withdrawals. `Element.matches is not a function` names an unbuilt
-   engine capability whether or not the bundle caught the rejection it arrived in — the retraction says the
-   page did nothing wrong, never that the engine has nothing to build.
-   AND WHOSE THROW IT WAS IS THE THIRD ARRAY, WHICH IS ORTHOGONAL TO THE PAIR ABOVE AND NOT A FOURTH STATE OF
-   IT. "Did this still stand" and "whose throw was it" are two questions, and a message honestly answers both:
-   `pageErrorsExplored` names the messages this engine MINTED — a browser component forking N feasible
-   completions over unknown external input, reaching on one of them a spec step whose answer IS a throw, which
-   CLAUDE.md names among the things that are deliberately NOT a `@WHY`. It is EVIDENCE and is still reported;
-   what it is not is a page error of the kind `pageErrors` exists for, and before this array the DOCUMENT route
-   could not say so — a consumer reading only `pageErrors` saw an engine-minted exploration TypeError sitting
-   among the page's own errors with nothing to distinguish it, which is a person being shown an error their
-   page did not have. The STREAM route has partitioned the two since `@PAGEERR-EXPLORED`; this is the same
-   answer on the route an extension popup reads.
-   PER MESSAGE LIKE THE OTHER TWO, AND EXACT HERE RATHER THAN A COMPROMISE: the text is this engine's own prose
-   raised at its own seam, so a message explored at one throw site is explored at every one.
-   IT IS ASKED OF `result_page_error_explored` AND NOT OF A FIELD ON THE ROW, which is what keeps it one fact in
-   one place — the declaration is made at the RAISE, strictly before §8.1.4.6 reports anything, so a column here
-   could only ever be a second copy kept in step by hand. The consumer's job is to ASK.
-   A DECLARED PAIR WITH NO ROW IS NOT LISTED, AND THAT IS A POSITIVE STATEMENT RATHER THAN A GAP. This walk is
-   over `g_errs` — what was REPORTED — so an exploration throw the page CAUGHT was declared, never reported,
-   and belongs in no partition of a console it is not in. The arrays are three readings of one reported set.
-   ITS ABSENCE WOULD SHOW as an extension popup listing `options.signal does not implement AbortSignal (on the
-   forced arm …)` under a page's own errors, on a run whose smoke log printed the same pair as explored. */
+/* One entry per distinct message, the console shape readers expect (core/events/report_exception.c calls it
+   a developer console). Rows are keyed per (message, throw site), so this is where the two shapes part: the
+   per-script fact is carried by the stream (result.h).
+   Three arrays, each per message across every row carrying it. `pageErrors`: some occurrence stands.
+   `pageErrorsRetracted`: none stands and at least one was withdrawn because HTML §8.1.6.4 step 7.4 reported
+   the rejection handled; disjoint from the first, since a message still standing somewhere did go wrong. A
+   message in neither was never recorded. A retracted message is still a capability the page reached for, so
+   the message is kept, not a count.
+   `pageErrorsExplored` is orthogonal: messages this engine minted on its own exploration (a browser component
+   forking completions over unknown input and reaching a spec step whose answer is a throw), asked of
+   `result_page_error_explored` rather than a row field. Evidence, still reported, but not a page error, so a
+   consumer renders it apart. A declared pair with no row (an exploration throw the page caught) is in no
+   array, since this walks what was reported. */
 typedef enum {
     /* the page raised it and nothing took it back */
     ERRS_STANDING,
     /* named and then withdrawn, standing nowhere — disjoint from the above */
     ERRS_RETRACTED,
-    /* whose throw it was — ORTHOGONAL to both, so a message may be in this and in one of them */
+    /* whose throw it was — orthogonal to both, so a message may be in this and in one of them */
     ERRS_EXPLORED
 } ErrsArray;
 
@@ -538,38 +412,28 @@ static char *errs_json_array(ErrsArray which) {
     errs_raw(&b, &cap, &len, "[");
     for (int i = 0; i < g_errs_n; i++) {
         int seen = 0, stands_somewhere = 0, retracted_somewhere = 0, explored_somewhere = 0;
-        int want = 0;   /* the conservative answer for a value outside ErrsArray — see the switch below */
-        /* BY MESSAGE, ACROSS EVERY ROW THAT CARRIES IT, because the three arrays are decided per MESSAGE while
-           the rows are per pair: a message standing at one throw site is not retracted just because another
-           site withdrew it. */
+        int want = 0;   /* the answer for a value outside ErrsArray — see the switch below */
+        /* Per message, across every row carrying it: a message standing at one site is not retracted because
+           another site withdrew it. */
         for (int j = 0; j < g_errs_n; j++) {
             if (strcmp(g_errs[j].msg, g_errs[i].msg)) continue;
             if (j < i) seen = 1;
             if (g_errs[j].standing) stands_somewhere = 1;
             if (g_errs[j].retracted) retracted_somewhere = 1;
-            /* THE PAIR IS THE KEY HERE TOO, and it is the row's own pair rather than this one's: the
-               declaration is keyed on (message, throw site) and this loop is walking every site that raised
-               the message, so asking with `g_errs[i]`'s site would answer about a different row. */
+            /* Asked with the row's own pair, since the declaration is keyed per (message, throw site). */
             if (result_page_error_explored(g_errs[j].msg, g_errs[j].at)) explored_somewhere = 1;
         }
         if (seen) continue;
-        /* EVERY ROW STANDS FOR AT LEAST ONE OCCURRENCE, WHICH IS WHAT MAKES THE PAIR ABOVE A PARTITION and is
-           therefore what the third array is orthogonal TO. `result_page_error` mints a row at standing 1 and
-           the retraction moves an occurrence between the two counters without destroying it, so their sum is
-           invariant and a row at neither is a row created by something that is not an occurrence. */
+        /* Every row stands for at least one occurrence: minted at standing 1, and a retraction moves an occurrence
+           between the counters, so their sum is invariant and the two arrays above stay a partition. */
         DCHECK(g_errs[i].standing || g_errs[i].retracted,
                "a page-error row stands for no occurrence at all — the row is minted at standing 1 and the "
                "retraction only MOVES an occurrence to the retracted counter, so a row at zero on both was "
                "created by a path that never reported anything, and the two arrays this file calls a partition "
                "would silently stop being one");
-        /* NO `default:` ARM, AND THAT IS WHAT MAKES THIS SWITCH TOTAL. A default would suppress `-Wswitch`
-           (in `-Wall` on both compilers this tree builds with), so a FOURTH array added to `ErrsArray` would
-           compile silently and be caught only by a runtime abort somebody has to exercise. Without one the
-           compiler names the missing arm at the line that has to answer for it — which is strictly stronger
-           than a DFAIL, because it fires on a build rather than on a run that happened to ask. The `want = 0`
-           above is the conservative answer for an out-of-range CAST, which is unreachable here (the enum is
-           static to this file and every caller passes a literal): it emits an empty array rather than every
-           message, so an impossible state cannot publish a console it has not decided. */
+        /* No `default:` arm, so `-Wswitch` (in `-Wall`) names a missing arm when ErrsArray grows. `want = 0` above
+           covers an out-of-range cast, unreachable here (the enum is static and callers pass literals), by
+           emitting an empty array rather than every message. */
         switch (which) {
         case ERRS_STANDING:  want = stands_somewhere; break;
         case ERRS_RETRACTED: want = !stands_somewhere && retracted_somewhere; break;
@@ -585,250 +449,42 @@ static char *errs_json_array(ErrsArray which) {
     return b ? b : strdup("[]");
 }
 
-/* EVERY COMPOSER BELOW IS SIZED BY WHAT IT WRITES, AND NO CALL SITE HERE HAS A BUFFER AT ALL — the mechanism
-   is solver/compose.h's `composef`, and that file states in full what it replaces and why the arithmetic it
-   replaces had already been got wrong twice IN THIS FILE, both times in the safe-looking direction. What is
-   worth keeping at this end is the shape of the miss rather than its numbers: each composer carried a
-   `DCHECK(m > 0 && m < n)` under its snprintf, and a fit assert fires only on a document WIDE ENOUGH to reach
-   the end of the buffer. The rows a real page produces are small, so an under-count sat inside the slack for
-   as long as the slack lasted, and the margin raised to protect a bad count was the same margin that hid one.
-   A field added to any composer below now costs nothing here — no count, no term, no margin, nothing to re-do. */
+/* Every composer below is sized by what it writes: solver/compose.h's `composef` measures and allocates, so no
+   call site here has a buffer or a byte count. A fit assert only fires on a document wide enough to reach the
+   end of a buffer, so a hand count hides inside its own slack. */
 
-/* THE ORDERING, COMPOSED — see result.h for why this lives here rather than in a host's printf, and for what
-   the two shapes below mean. This function DECIDES NOTHING: it reads flow_wfq_census and renders it.
-
-   HOW TO READ THE FULL SHAPE, kept beside the composer because a reader who has the bytes is the one who needs
-   it. `valMax - valMin` against 1.0 is the reward spread against the optimism term's ENTIRE range: wider than
-   that and the bonus can no longer reorder the frontier's ends, so the order is the reward's and the bottom
-   waits on the aging term alone. `valZero` names who is down there (a from-baseline flow enters at reward 0 —
-   every candidate session and every joined document's boot flow), `selfEmit` says whether anything has emitted
-   since it was born, `svcMin` beside `svcMax` says whether the aging term is measuring one flow or the whole
-   frontier, and `families` is what turns `svcFamMin == svcFamMax` from an ambiguity into a reading (1 is an
-   identity of the structure and the family half can never order anything; more than 1 is a term that orders
-   and is momentarily level). solver/flow.h states each row in full.
-
-   AND HOW TO READ THE JOB ROWS, which are the ones that say what the ORDER is costing. `jobsOwed`,
-   `jobsFramed` and `jobsReady` are the cold line's `jobs` total split by what each job waits on — the host,
-   the member finishing its own program (HTML §8.1.4.4 "Calling scripts", clean up after running script step
-   3), or RANK. Only the last is the WFQ's to move, and `jobWGap` says how far behind the front of the queue it
-   stands, in the order's own points: 0 with `jobsReady > 0` is the top of the queue holding a runnable job and
-   no ordering problem at all; a gap on the scale of `valMax - valMin` is the reward spread burying the backlog
-   where the aging term — FLOW_AGE_QUANTUM per quantum of silence — cannot reach it inside a session. `jobsReady`
-   at 0 makes `jobWGap` 0 too, which is why the pair is read together and neither alone.
-   AND THAT SPLIT IS THE COLD TOTAL BY CONSTRUCTION RATHER THAN BY TWO WRITERS AGREEING, WHICH IS WHY IT IS A
-   READER'S CROSS-ROW CHECK ON THIS DOCUMENT AND NOT AN ASSERT. `cold_census` sums `flow_job_pending(f)` over
-   `flow_at(i)`, which IS `g_flows[i]` for `i < g_flows_n`; `flow_wfq_census` walks that identical range of
-   that identical array and partitions the SAME accessor's value with an exhaustive `if / else if / else`,
-   neither loop skipping a member. A sum over a set equals the sum over an exhaustive partition of it, so
-   `jobs == jobsOwed + jobsFramed + jobsReady` is ARITHMETIC within one sample, and the only program state
-   that could break it is the two censuses being taken at two instants, which is the one state that would
-   make asserting it invalid. BOTH ANSWERS THEREFORE REFUSE IT, so a lane proposing this assert is finished
-   before it reads the callers: composition IS synchronous (`result_json` calls the two composers as ADJACENT
-   statements, and `engine_run` puts only `result_heap_json`, a counter read, between them), so the assert
-   cannot fail and is the non-check CLAUDE.md §Offensive-programming names; and were composition NOT
-   synchronous it would fire on a healthy engine. pending.c's own three-walk partition names the test this
-   one fails: it calls its three `independent walks` an edit to any one of which can break the identity, and
-   that is exactly what the two walks here are not. Writing it would also need a SECOND `flow_wfq_census`,
-   which raises `g_scan_runs[FLOW_SCAN_CENSUS]` and re-weighs every member: a full weighing walk spent to
-   corrupt the rows that price this report. `framed == members - memUnframed` is the same shape for the same
-   reason, which `mem_unframed`'s own site already gives.
-   RETIREMENT: this note goes when `cold_census` stops reaching its job total through `flow_job_pending` over
-   `flow_at`, because the pair is a two-writer fact then and the identity becomes assertable.
-   AND THAT SPLIT IS WHAT A ZERO JOB COUNT HAS TO BE READ THROUGH, WHICH IS THE ONE READING IT INVITES AND THE
-   ONE IT DOES NOT SUPPORT. A run reporting no job run at all looks like the scheduler failing to serve the
-   queue — §Every-runtime-job-is-a-scheduler-flow makes every reaction, microtask, timer and delivery a
-   first-class member, so a queue that never moves reads as an ORDERING result. The three rows above are what
-   refuse that: only `jobsReady` is the WFQ's to move, so a run whose jobs are all `jobsFramed` has nothing
-   rank-eligible for the order to have got wrong, and its zero is a statement about MEMBERS NOT FINISHING THEIR
-   OWN PROGRAMS — §8.1.4.4's clean-up step, one component away from anything this file orders. `jobsOwed` says
-   the same for the host. So the pair is read BEFORE a zero is charged to the ordering, and a reader who has
-   only the job count has not got the evidence to charge anything.
-   AND THEIR MAGNITUDE IS A FORK FACTOR AND NOT A DEPTH, WHICH IS THE READING TWO RELAYS HAVE NOW GOT WRONG
-   IN THE SAME DIRECTION. These three are counted over JOBS and a fork BYTE-COPIES its parent's queue, so a
-   frontier that has run none of them holds `jobsQueued` slots on every one of `members` — the row that says
-   how many queue operations the instance ever made is `_jobsQueued` on the work line, and it does not move
-   when a member forks. `jobsFramed` in the hundreds of thousands is therefore not a backlog of that depth; it
-   is a SMALL per-member depth times a large frontier, and the per-member figure is `(jobsReady + jobsFramed) /
-   members`, derivable here from rows already on this line. Read it before pricing the backlog: a reader who
-   takes the magnitude at face value is reading the document's fork factor as a queue and will go looking for
-   whatever queued a hundred thousand jobs. Measured on five drives of two real documents through the artifact
-   stamped d17472ff0ee24a38d6e2964ad530bcee8be23c7a: on the three that ran no job the per-member depth is 17
-   against `_jobsQueued` 17, EXACTLY, at frontiers of 8705, 13672 and 13142.
-   AND `jobsReady` ITSELF HAS TWO POPULATIONS UNDER IT, WHICH IS WHERE THAT REFUSAL USED TO STOP. Having
-   declined to charge the zero to the order, a reader is left with the LADDER — and flow_step has two job arms
-   on opposite sides of the program sequence, so "the ladder is holding it" is two statements and the row that
-   sends a reader there cannot say which. `jobsReadyTask` and `jobsReadyMicro` are that split, and what they
-   turn from an inference into a reading is ONE claim and not the whole diagnosis: all TASK is the SEQUENCE
-   ARM'S exclusion measured, and any MICROTASK refutes that exclusion for the jobs it counts, whose arm stands
-   above the sequence. What is left over when it is refuted — the arms above the checkpoint, and the pick — is
-   not decided here and must not be read as decided. A reader who charges a flat `_jobsRun` to the arm below
-   the sequence without this pair has made the same shape of claim the paragraph above refuses one level up.
-   THE READING IS AVAILABLE HERE AND IS NOW ALSO WHERE THE ZERO IS PRINTED — the residual that stood here is
-   SPENT, and it is REWRITTEN RATHER THAN DELETED because a reader who re-derives its reason would re-add a
-   second copy of a row that already has one. It said the `@HWORK` line a host prints carried the job count
-   without these three, so a reader meeting the zero in a log had to know to come to the frontier census for
-   the split, and that the next diff would put `jobsReady` beside the job count on that line. It did: the host
-   composes `_jobsReady` into `@HWORK` off this same census, and deliberately ONE of the three rather than all
-   of them, because `jobsReady` is the only one whose value decides which component a zero belongs to.
-   `jobsOwed` and `jobsFramed` stay here, on the line that carries the rest of the split. A RESIDUAL LEFT
-   STANDING AFTER ITS THING IS BUILT IS THE ONE FAILURE THIS RECORD KIND HAS: it is read once, by someone who
-   has already decided to do the work, so a spent one is not disbelieved — it is executed, and what it buys is
-   a second spelling of a row whose first spelling is what made the reader able to find it. `visZero` is the count
-   `visMin` cannot give: how many members have completed NO unit of work, which is both the population
-   `jobsFramed` belongs to and the population whose optimism bonus can never decay.
-
-   AND `neverPicked`/`neverPickedGap` ARE THE SAME PAIR ASKED OF THE ONE WORD IN §scheduler'S RAZOR THAT NO
-   OTHER ROW HERE CAN ANSWER. The razor forbids a resume that "drops, starves, skips, reorders, or forgets ANY
-   flow"; every row above that looks like it names the starved population is a TERM OF THE WEIGHT, and
-   flow_credit_emit resets the SILENCE ones — `unrun` is zero own silence and an emission by ANY arm of the
-   member's family writes that zero for the whole family at once, and flow_pick's own `unrun` needs all three
-   at zero, which its own comment says is non-empty only within one quantum of an emission. So each of those
-   counts a member that has just PRODUCED something — and every arm standing beside it — as one that has never
-   run, and on a frontier that has gone quiet neither can name anybody. `visZero` is the exception and is not
-   the answer either: an emission used to write `visits = 0` on the emitter and no longer does, so the row now
-   means exactly "completed no unit of work" — which a member can read for a whole run BECAUSE it was
-   dispatched into a program that never ends, a resume-seam defect wearing an ordering row's shape.
-   `neverPicked` counts members the scheduler has never handed the thread — the one
-   quantity nothing resets, because the member did nothing to reset it — and `neverPickedGap` is how far the
-   best of them stands behind the weight the pick actually returned, in the order's own points. Read them the
-   way `jobsReady`/`jobWGap` are read: a large gap is the ordering WORKING (those members are outranked, and
-   the aging term is what reaches them). Neither half is a reading alone.
-
-   AND A GAP AT ZERO IS NOT THE OPPOSITE VERDICT — THIS PARAGRAPH USED TO SAY IT WAS, AND THE SENTENCE IS
-   RETIRED HERE RATHER THAN DELETED, because the reading it licensed is the one a reader re-derives. It said a
-   gap at or near ZERO beside a non-zero count was, in this file's own words and no standard's, a member
-   standing at the front of the order that the pick is not returning — starvation rather than ordering, a
-   defect in the dispatch rather than in the weight. That
-   does not follow, for a reason visible in flow_pick: the comparison is STRICT, so on a frontier carrying a
-   large EQUAL-WEIGHT cohort — which is the ordinary state of a one-family page, since every member of a family
-   reads one reward and an emission zeroes that family's silence at every arm at once — the pick returns ONE of
-   N tied maxima and the other N-1 are, at that instant, never-picked members standing exactly at the front.
-   Zero is then the EXPECTED reading of a healthy sweep, not evidence of anything, and the row cannot tell that
-   state from the one the retired sentence named.
-   MEASURED, which is why the sentence is going rather than being softened: six runs of the native fixture at
-   3ca1e281, 212 `@WFQ` censuses, `neverPickedGap` min 0.000 / median 0.476 / max 5.563 with SIXTY-THREE samples
-   at exactly 0.000 — spread across every run, including runs whose ladder drained all the way to the orphan
-   seed. A verdict that fires on 30% of samples of a frontier that is working is not a verdict.
-   WHAT THE PAIR HONESTLY SAYS is the count and the distance, and the reading that needs neither guessed is a
-   SERIES: `neverPicked` climbing across consecutive censuses while the frontier grows is the tail not being
-   reached, and that is a throughput statement. A single sample of this row — of any row here — characterises
-   an instant and never a run, which is the same rule §Testing states for every other number in this tree.
-
-   AND EVEN THAT SERIES HAS THREE STATES BEHIND IT, WHICH IS WHY `picksLive`/`picksMax`/`picksLifetime` ARE ON
-   THIS LINE. "The tail is not being reached" is consistent with a frontier growing faster than one thread can
-   sweep it, with an order re-serving a reachable cohort ahead of members it has never served, and with one
-   member holding the thread outright — and the first of those is not an ordering defect at all while the other
-   two are ordering defects of different kinds, so a weight change made against the pair alone is a change made
-   against a reading that cannot say which repair it is asking for. `picksLive / (members - neverPicked)` is
-   the discriminator and `picksMax` separates the second state from the third; solver/flow.h derives all three
-   and states the identity `picksLifetime` is checked by, which is that it equals `_switches` on this same
-   document. Their KINDS are in their names because the kinds decide the arithmetic: the two gauges are taken
-   over the members standing now and can fall between samples, so only `picksLifetime` may be differenced.
-
-   AND `topSvc`/`topSvcFam`/`nonrewardMax` ARE WHAT TURN `valTop` FROM A DIGIT INTO A STATEMENT ABOUT THE
-   LEADER. `valTop` is the front flow's fork FAMILY's ledger, and a ledger only climbs — so a reward that has
-   not moved between two censuses reads exactly like one being earned slowly, and "is the leading account still
-   producing" is precisely the question the row cannot answer alone. The silence is the half an emission RESETS
-   (flow_credit_emit zeroes the account's `fam_us`), so `topSvcFam` climbing IS the leading account being
-   silent, and `topSvcFam` at or near zero is its aging being forgiven. READ `topSvc` FOR ANYTHING ABOUT A GAP
-   AND NEVER `topSvcFam`: every arm of one family reads one `fam_us`, so on a `families: 1` frontier that half
-   is charged to the leader and to every member behind it in the same instant and cancels out of
-   `neverPickedGap` entirely, while the OWN half is charged only to the flow being dispatched. A leader
-   genuinely monopolising the thread shows `topSvc` climbing monotonically and the gaps closing behind it; a
-   front being REFILLED by freshly-minted arms shows `topSvc` low or sawtoothing with the same gaps standing,
-   and no amount of waiting closes those because the flow being charged is never the flow at the front. Those
-   two take opposite work and no other row here separates them — `svcMax` and `svcMin` are the frontier's ends
-   and the leader need be neither. `nonrewardMax` is flow.c's FLOW_NONREWARD_MAX carried out so a reader
-   DERIVES the bound it judges the gaps by instead of restating it: a weight is an account's reward plus a
-   non-reward sum that function bounds, so `(valTop - valMin) + nonrewardMax` is the largest gap a NON-NEGATIVE
-   non-reward sum can produce, and a gap above it says the trailing member's own terms are already net negative
-   — behind by AGING, which nothing bounded reaches, rather than behind by LIFT, which one term reading
-   differently would close. On a one-family frontier the reward half of that is identically zero.
-
-   NO BYTE COUNT — see solver/compose.h's `composef`. This composer used to carry one, and it was the widest
-   of the five: a
-   `%.1f` double's widest decimal form is 309 integer digits plus sign, point and fraction, so ten of them made
-   a 4096-byte buffer out of a document whose real pages are two lines long. That number was the reason nothing
-   here could ever have found a miscount — the slack was three orders larger than the rows. */
-/* THE KIND OF EVERY ROW THIS COMPOSER PUBLISHES THAT A CONSUMER CARRIES — stated HERE because it is this
-   composer's fact and nowhere else's, and stated in a form a machine reads because a comment stating it is
-   read by nobody holding the number. CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER: a quantity whose kind a
-   reader cannot name FROM ITS OUTPUT is one they are not entitled to do arithmetic on, and the names do not
-   say. Four kinds and what each permits:
-     lifetime  raised and never lowered — MAY be differenced across two samples of ONE instance.
-     gauge     a walk at one instant — may FALL, so differencing one reads a level as a rate.
-     constant  written once at a seed and never again — neither differenced nor read as a level.
-     maximum   monotone like a count and a HIGH-WATER MARK — it saturates and then plateaus, so a plateau is
-               NOT a ceiling and the length of the series is part of quoting it. Filed apart from `lifetime`
-               for that reason and no other: both may be differenced, and only one may be compared across two
-               runs of different length.
-   IT IS HERE AND NOT AT THE CONSUMER BECAUSE THE PERSON WHO ADDS A ROW IS THE PERSON WHO KNOWS. Every reader
-   of this census used to hold its own kind list, and the row that made the case landed one commit before this
-   one with a kind stated in no artifact at all: the author added it here and had no reason to open a driver
-   two directories away. A declaration at the emitter is edited by the diff that adds the row.
-   IT IS A SET EQUALITY AND BOTH DIRECTIONS THROW. `testing/census_rows.js` refuses a name here that this
-   composer no longer publishes — a kind statement about a renamed row is a sentence about nothing that a
-   consumer goes on printing — and refuses a row this composer PUBLISHES that no line here states a kind for.
-   Neither side is defaulted and neither is guessed. It also refuses a SECOND declaration for one composer and
-   a row stated twice, because a reader that resolved either would publish a shorter contract as a complete
-   one.
-   THE CONSUMER-SIDE CHECK THAT USED TO STAND BESIDE THOSE IS GONE AND IS NOT TO BE RE-ADDED. That reader once
-   threw separately on a row a driver CARRIES with no kind stated here; with the equality above standing, the
-   declared set and the published set are ONE set, so the carried-and-published check it already makes decides
-   that case as well, and a second test for it would be a predicate whose two sides cannot disagree.
-   COMPLETENESS IS REQUIRED HERE AND IS NO LONGER COUNTED. A row nobody carries must be declared anyway, so
-   the kind is stated by whoever adds the row rather than by whoever later needs it. That reader used to return
-   the number of rows here with no kind and a driver printed it, on the ground that a kind nobody has
-   determined must not be invented: a WRONG kind is worse than a missing one, since it LICENSES the arithmetic
-   a missing one merely fails to authorise. That is still exactly right about the KIND and was never a reason
-   to leave the ROW unnamed — the figure's only reader was whoever re-read a driver's header line, so an
-   omission stayed an omission for as long as nobody did. The count is DELETED rather than kept beside the
-   refusal, because a count that can no longer be nonzero is dead reporting that reads as live.
-   IT CHANGES NO EMITTED BYTE. This is comment text, so there is no half of it that goes live at an instant
-   the other does not — a consumer reads it from SOURCE and is therefore right about an artifact of any age,
-   including one whose stamp predates a row, where the kind is stated and the row is absent. Those are two
-   facts and they stay two.
+/* The ordering, composed (see result.h). It decides nothing: it reads flow_wfq_census and renders it;
+   solver/flow.h states each row's reading, and the format string notes the readings that span rows.
+   `valMax - valMin` is read against 1.0, the optimism term's whole range: wider, and the bonus can no longer
+   reorder the frontier's ends. `families` 1 makes `svcFamMin == svcFamMax` an identity of the structure.
+   The job rows split the cold line's `jobs` total by what each job waits on — the host, the member finishing
+   its own program (HTML §8.1.4.4 "Calling scripts" clean up after running script step 3), or rank — and only
+   rank is the WFQ's to move, so a zero job count is charged to the ordering only through `jobsReady`. They
+   count jobs and a fork byte-copies its parent's queue, so `(jobsReady + jobsFramed) / members` is the
+   per-member depth; `_jobsQueued` on the work line counts queue operations.
+   `jobs == jobsOwed + jobsFramed + jobsReady` is arithmetic within one sample, not asserted: cold_census sums
+   `flow_job_pending` over `flow_at` (`g_flows[i]`) and flow_wfq_census partitions the same accessor over the
+   same range, and result_json composes the two adjacently, so the assert could not fail — and a second
+   census would raise `g_scan_runs[FLOW_SCAN_CENSUS]`. `framed == members - memUnframed` likewise. It becomes
+   assertable when cold_census stops reaching its total that way. */
+/* The kind of every row this composer publishes, read by testing/census_rows.js from source; the four kinds
+   and the rules the reader enforces are stated above result_cold_json. Rows folded by this census's own walk
+   are gauges at one instant; each free function beside them (scan pair, preempt ask, rival-miss partition,
+   member-key and index checks, epoch pair, starvation and plateau counters, arrivals and departures, credit
+   triple, work total, rank changes) states lifetime at its declaration.
+   `vt` is a high-water mark: flow.c keeps the larger value, asserting it is the maximum coordinate any account
+   stands at, so it plateaus and is not a ceiling.
+   Keys spelling `Life` on the branch rows are gauges: the suffix names the horizon of the per-bucket quantity,
+   but the row is an extremum or sum over whichever buckets the walk reached, so it may fall (solver/flow.h).
+   The burn split follows the asserted identity `brUsLifeSum + brRetiredUsLife == chargedUsLife`: a bucket whose
+   subtree wholly departs is freed and its receipt folded into the retired total, so `chargedUsLife` and
+   `brRetiredUsLife` only grow, while `brUsLifeSum`, `brHeldUsLife` and `brEmptyUsLife` fall by a departed
+   bucket's receipt; a live arm's share is taken against `brHeldUsLife`.
 
    @kinds-of wfq
    @kind gauge: members jobsReady jobsFramed jobsOwed jobWGap jobsReadyTask jobsReadyMicro memUnframed visZero
    @kind lifetime: picksLifetime picksDeparted unframedPicksLifetime readyPicksLifetime
    @kind lifetime: taskHeldDelivLifetime taskHeldSeqLifetime taskArmOlderLifetime taskArmNoRowLifetime
-   AND EVERY REMAINING ROW OF THIS COMPOSER, DETERMINED FROM THE ACCESSOR THAT FILLS IT AND NEVER FROM ITS
-   KEY. Most need no argument: a row folded by this census's own walk over the live frontier is a reading at
-   ONE INSTANT, and each free function beside them — the scan pair, the preempt ask, the rival-miss partition,
-   the member-key and index checks, the epoch pair, the starvation pair, the arrival and departure processes,
-   the credit triple, the work total and the rank-change count — states LIFETIME, NEVER RESET, at its own
-   declaration. Three groups do not follow from that and are the ones this block exists to state.
-   THE FRONTIER'S CLOCK IS A HIGH-WATER MARK AND NO OTHER ROW ON THIS LINE IS. flow.c's whole statement of it
-   is one comparison that keeps the larger value, under an assertion that it IS the maximum coordinate any
-   account stands at and that no account's coordinate ever falls. So it SATURATES and then PLATEAUS exactly as
-   the program maxima on the @COLD line do, and a plateau in it is not a ceiling. Filed as a gauge it would be
-   differenced as a rate of virtual time; filed as a lifetime count it would be compared across two runs of
-   different length, which is the misreading CLAUDE.md §Testing records a maximum being dispatched on three
-   times and the only reason that kind is filed apart from `lifetime` at all.
-   ELEVEN KEYS HERE SPELL `Life` AND ARE GAUGES, WHICH IS THE ONE TRAP IN THIS DECLARATION AND IS NOT A
-   DISAGREEMENT WITH THE SUFFIX. The suffix names the horizon of the PER-BUCKET QUANTITY a row reports — a
-   bucket's mint count and its receipt really are lifetime counters OF THAT BUCKET — and the ROW is an
-   EXTREMUM OR A SUM OVER WHICHEVER BUCKETS THIS WALK REACHED, so the bucket SELECTED moves between two
-   samples and the row may FALL. solver/flow.h says exactly that of the crowd and minter triples in its own
-   words: an extremum's rule applies to them, neither may be DIFFERENCED, and both are read as ratios at one
-   instant. A kind read off a key is therefore read off the WRONG NOUN, and this is the line where that would
-   have licensed differencing eleven falling quantities.
-   AND THE BURN SPLIT IS THREE GAUGES AND TWO LIFETIME COUNTS, DETERMINED FROM THE ASSERTED IDENTITY RATHER
-   THAN FROM THE UNIT. `brUsLifeSum + brRetiredUsLife == chargedUsLife` is asserted where all four terms are in
-   one hand, and a bucket whose subtree WHOLLY DEPARTS is freed with its whole receipt folded into the retired
-   total at that free, leaving the walk the other three are accumulated over — so `chargedUsLife` is every
-   microsecond ever charged, `brRetiredUsLife` is the other population that only ever grows, and `brUsLifeSum`,
-   `brHeldUsLife` and `brEmptyUsLife` FALL by a bucket's entire receipt the moment its last arm departs. What
-   stays true of them is the arithmetic they exist for: a live arm's share may only be taken against a
-   denominator drawn from the LIVE buckets, which is what `brHeldUsLife` is and what `brUsLifeSum` is not.
-   THIS USED TO BE A CORRECTION OF solver/flow.h AND IS NOW AN AGREEMENT WITH IT, which is a change in that
-   file and not a change of mind here. Its own block stated of the same two rows that "unlike every extremum on
-   this line they MAY be differenced"; it now states the falling arm beside the identity, so the prose and this
-   declaration tell a reader the same thing and the correction's retirement condition is MET. The reason the
-   two disagreed at all is the one trap the paragraph above this names and is worth keeping: the rows carry a
-   `Life` suffix and a MICROSECONDS unit that name the horizon of the PER-BUCKET quantity each is folded from,
-   never the horizon of the ROW, so a kind read off either is read off the wrong noun.
    @kind maximum: vt
    @kind gauge: valMin valMax valTop valZero valArrived valUnplaced selfEmit unrun
    @kind gauge: neverPicked neverPickedGap neverPickedAtTop picksLive picksMax
@@ -857,45 +513,25 @@ char *result_wfq_json(void) {
     WfqCensus w;
 
     flow_wfq_census(&w);
-    /* THE FOUR ARMING BUCKETS IN ONE READ, BECAUSE THEY ARE A PARTITION. solver/flow.h states the kind, the
-       reading, and why a partition taken through four calls is four moments; one call makes the sample true by
-       construction rather than by this caller remembering that nothing between the calls steps anything.
-       AFTER THE CENSUS AND NOT BEFORE IT, because flow_wfq_census calls flow_best — which is flow_pick, which
-       classifies every member it weighs — so a read taken above that walk would publish a partition one whole
-       frontier older than the scan rows it is contained by, and the containment below would be slack by that
-       walk for no reason. Nothing between this line and the composition steps anything. */
+    /* The four arming buckets in one read, since they are a partition (solver/flow.h). After the census,
+       because flow_wfq_census calls flow_best — flow_pick, which classifies every member it weighs — so an
+       earlier read would be one walk older than the scan rows containing it. Nothing below steps anything. */
     FlowKeyChecks kc = flow_key_checks();
     FlowIndexChecks ic = flow_index_checks();
-    /* AND THE PARTITION OF THE PREEMPT HOOK'S CACHE MISSES, IN ONE READ, for the two reads above's reason —
-       solver/engine.h states why it is a struct and what the three rows separate. */
+    /* …and the partition of the preempt hook's cache misses, in one read (solver/engine.h). */
     EngineRivalMiss rm = engine_rival_miss();
-    /* AND WHICH ARM OF flow_step TOOK THE STEP OF A MEMBER THAT HELD A RUNNABLE TASK, in one read for the
-       reason every struct above is one — solver/engine.h states the four rows, the identity between two of
-       them and `run-a-task`, and the two populations they do not reach. It is the other half of
-       `readyPicksLifetime`'s question: that row says the dispatch REACHES a job holder, and these say what the
-       ladder did with it when it got there. */
+    /* …and which arm of flow_step took the step of a member holding a runnable task, in one read
+       (solver/engine.h states the four rows and their identity with `run-a-task`); `readyPicksLifetime` says
+       the dispatch reaches a job holder, these what the ladder did there. */
     EngineLadderTaskCensus lt;
 
     engine_ladder_task_census(&lt);
-    /* THE ONE CLAIM ABOUT THE PARTITION THAT HOLDS IN BOTH BUILDS. Every bucket is raised on the statement
-       after a scan's own `g_scan_weights[why]++`, so a classification without a weighing is impossible and the
-       four can never sum above the weighings this instance performed. The EQUALITY is not asserted here and
-       must not be: the scan totals also carry flow_pick's seed fold and the census's own walk, neither of
-       which is stamped, so a reader comparing them expects slack — the tight identity is asserted inside
-       flow_pick, over ONE loop, where both deltas are in one hand. This is the containment only, which is what
-       makes a violation unambiguous: the check has been moved off the line that weighs.
-       IN RELEASE ALL FOUR ARE ZERO AND THIS PASSES VACUOUSLY, which is stated rather than relied on — the
-       discriminator a reader uses is the one solver/flow.h names, four zeros beside a nonzero scan row.
-       AND THIS LINE HAS FIRED, REPRODUCIBLY, WITH THE CONTAINMENT CLAIM ABOVE ENTIRELY CORRECT — recorded here
-       because a reader who meets the abort reads THIS text and would repair the identity, which was never what
-       was wrong. Both sides were `long`, `long` is FOUR bytes on wasm32 and eight natively, and these rows are
-       raised once per member per scan: the right-hand side wrapped past 2^31 and `LHS <= RHS` went false. So
-       the fire was the observed behaviour of a 32-BIT ACCUMULATOR, which is §NO BOUNDS' step cap arriving as a
-       type, and the repair is a WIDTH at the declaration rather than a word in this message. solver/flow.h's
-       FlowKeyChecks carries the measurement and the static assertion that makes a future `long` there a compile
-       error on the host it would cap; nothing about this assert's reasoning changed.
-       THE TELL, IF IT EVER FIRES AGAIN: read the two sides' MAGNITUDES before their difference. Near 2^31 with
-       a negative right-hand side is a width; anything else is the block having moved off the line it is about. */
+    /* The containment that holds in both builds: every bucket is raised on the statement after a scan's own
+       `g_scan_weights[why]++`, so the four never sum above the weighings. Equality is not asserted here — the
+       scan totals also carry flow_pick's seed fold and the census walk — but inside flow_pick, over one loop.
+       In release all four are zero and this passes vacuously. Both sides are 64-bit (solver/flow.h's
+       FlowKeyChecks static assertion): a `long` wraps past 2^31 on wasm32. If it fires, read the magnitudes
+       first; near 2^31 with a negative right-hand side is a width, not the identity. */
     DCHECK(kc.armed + kc.stale_gen + kc.first_seen + kc.running
                <= flow_scan_weights(FLOW_SCAN_NEXT) + flow_scan_weights(FLOW_SCAN_RIVAL)
                 + flow_scan_weights(FLOW_SCAN_OTHER) + flow_scan_weights(FLOW_SCAN_CENSUS),
@@ -904,59 +540,36 @@ char *result_wfq_json(void) {
            "of those weighings by construction. A count above them is a classification reached without a "
            "weighing, which means the block has been moved off the line it is about and `keyArmedLifetime` is "
            "no longer a count of comparisons this order made");
-    /* THE ONE IDENTITY THAT DEFINES `picksLifetime`, CHECKED AT THE ONE MOMENT BOTH TERMS ARE IN ONE HAND.
-       solver/flow.h states it ("across the document, `picks_lifetime` must EQUAL the result's `_switches`")
-       and the composition below repeats it, and until this line NOTHING asserted it — a counter whose stated
-       identity is checked nowhere is a digit with a paragraph attached, which is the shape §Testing calls
-       holding a digit rather than a measurement. It is asserted HERE and not at either writer because that is
-       what makes it a statement about ONE SAMPLE: `g_picks_total` and `g_switches` are raised seven lines
-       apart in engine_sched_step's one `best != cur` block (flow_credit_pick is its only caller and neither
-       counter is reset with an agent), so within one composition — which steps nothing — they cannot differ.
-       Read across two documents they can and must not be: that is the two-moments reading this session paid
-       three wrong mechanisms for. A break is a second writer of one of the two, and every reading built on
-       either row is then about dispatches that did not happen. */
+    /* `picksLifetime == _switches` (solver/flow.h), checked within one composition: `g_picks_total` and
+       `g_switches` are raised in engine_sched_step's one `best != cur` block (flow_credit_pick's only caller),
+       neither is reset with an agent, and composition steps nothing. Across two documents they may differ. A
+       break is a second writer of one of them. */
     DCHECK(w.picks_lifetime == (int64_t)engine_switch_count(),
            "the scheduler's lifetime dispatch count and its context-switch count disagree WITHIN ONE "
            "COMPOSITION — flow_credit_pick has exactly one caller and engine_sched_step raises `g_switches` in "
            "the same straight-line block, so these are one event counted twice and nothing between the two "
            "reads can step the engine. One of them has acquired a writer that is not that block, and `_wfq`'s "
            "`picksLifetime` is about to be published beside a `_switches` it is defined to equal");
-    /* AND THE IDENTITY THAT MAKES `starvedPicksIdle` A SUBSET RATHER THAN A SECOND OPINION, checked at the one
-       moment both are in one hand for the reason directly above. flow_pick raises the two under ONE condition
-       at ONE line, the subset behind a further predicate, so this cannot fail while that stays true — which is
-       exactly why it is worth asserting: the reading these two rows carry is a REMAINDER (`starvedPicks -
-       starvedPicksIdle` is what the frontier spent finishing programs), and a remainder that can go negative
-       is not a population, it is two counters somebody subtracted. A break here is a second writer of one of
-       them, and every reading built on either row is then about dispatches that did not happen. */
+    /* `starvedPicksIdle` is a subset of `starvedPicks`: flow_pick raises both under one condition at one line,
+       the subset behind a further predicate. Asserted because `starvedPicks - starvedPicksIdle` is published as
+       a population; a break is a second writer. */
     DCHECK(flow_starved_picks_idle() <= flow_starved_picks(),
            "the scheduler reports MORE starved dispatches in which the re-dispatched member had nothing to "
            "continue than starved dispatches altogether — these are raised under one condition at one line in "
            "flow_pick, the second behind a further predicate, so the subset has acquired a writer that is not "
            "that line and `starvedPicks - starvedPicksIdle` is about to be published as a negative population");
-    /* AND THE IDENTITY THAT MAKES THE FRACTION A FRACTION OF ANYTHING, which is the one this row spent a
-       session without. `starvedPicks` is read as a share of `picksLifetime`, and that quotient means nothing
-       unless the two count the SAME EVENT — which they did not: the raise was per FLOW_SCAN_NEXT *scan* while
-       `picksLifetime` advances per *switch*, and engine.c retains the incumbent on any weight that is not
-       STRICTLY better. On a frontier standing at one weight the retained incumbent is most scans, it always
-       has `picks > 0`, and a never-picked member is always level with it, so the row counted the value-yield
-       working as if it were starvation. It was caught by arithmetic that cost nothing: a real page reported
-       964 against at most 353 re-dispatches, and a count that cannot be true is a count whose denominator
-       names another event. flow_pick now raises it only where `best != seed` — the same displacement engine.c
-       credits `flow_credit_pick` for — so the containment below is by construction and the quotient is a share
-       of dispatches, which is what every site that reads it always claimed it was. */
+    /* `starvedPicks / picksLifetime` is a share of dispatches: flow_pick raises it only where `best != seed`,
+       the displacement engine.c credits flow_credit_pick for, so the containment holds by construction. A
+       per-scan raise would count the value yield retaining an incumbent as starvation. */
     DCHECK(flow_starved_picks() <= w.picks_lifetime,
            "the scheduler reports MORE dispatches that passed over a never-run member than dispatches — "
            "flow_pick raises the starved count only where the pick DISPLACES the incumbent, which is exactly "
            "the branch engine.c credits flow_credit_pick in, so this cannot exceed unless one of the two has "
            "acquired a second writer; `starvedPicks / picksLifetime` is about to be published as a share "
            "above 1, which is the reading that says the two rows are counting different events again");
-    /* AND THE THREE IDENTITIES THAT MAKE THE PLATEAU DEPTH A DEPTH, checked where all four rows are in one
-       hand and immediately before the quotients are published. flow_pick raises the four in ONE evaluation,
-       each subset inside the `if` of its own population, so none of these can fail while that stays true —
-       which is why they are worth asserting rather than assuming: every reading these rows carry is a
-       QUOTIENT, and a quotient whose numerator exceeds its denominator is not a depth, it is two counters
-       somebody divided. A break in any of them is a second writer, and `plateauHeld / plateauRuns` is about to
-       be published as a mean below one — a stretch shorter than the retentions it is made of. */
+    /* The plateau identities: flow_pick raises the four in one evaluation, each subset inside its population's
+       own `if`. Asserted because every reading of these rows is a quotient (`plateauHeld / plateauRuns` is a
+       depth that cannot be below one); a break is a second writer. */
     DCHECK(flow_plateau_held() <= flow_plateau_asked(),
            "the scheduler reports MORE dispatch scans on which the incumbent kept the thread over a level "
            "never-run member than scans on which that comparison was makeable at all — the two are raised in "
@@ -973,35 +586,19 @@ char *result_wfq_json(void) {
            "retentions altogether — the subset is raised behind a further predicate inside the superset's own "
            "`if`, so this is a second writer, and the remainder `plateauHeld - plateauHeldIdle` is about to be "
            "published as a negative population of incumbents that were finishing work");
-    /* AND THE IDENTITY THAT GIVES `scanRivalRuns` A DENOMINATOR AT ALL, checked here for the two above's
-       reason: this is the one moment both halves are in one hand, and the quotient is about to be published.
-       solver/engine.c raises `preemptAsksLifetime` at the TOP of its preempt policy and calls flow_rival_of —
-       whose only caller that is — from the rescan branch BELOW it, so the rescans are a subset of the
-       consultations by the order of two statements. A break here is a second caller of flow_rival_of, and the
-       cache MISS rate this row exists to make readable is then a fraction of some other population: above 1 it
-       reads as a hook rescanning more often than it is asked, which is not a state the engine has.
-       IT IS NOT THE SAME CHECK AS THE TWO ABOVE AND MUST NOT BE COLLAPSED WITH THEM. Those bound one pick's
-       counters against another's; this one spans two FILES, so it is the only one here that can see a writer
-       added on the other side of a header. */
+    /* `scanRivalRuns` has a denominator: engine.c raises `preemptAsksLifetime` at the top of its preempt policy
+       and calls flow_rival_of (its only caller) from the rescan branch below, so rescans are a subset of
+       consultations. This spans two files, so it is the one check here that sees a writer on the other side of
+       a header. */
     DCHECK((long long)flow_scan_runs(FLOW_SCAN_RIVAL) <= (long long)engine_preempt_asks(),
            "the scheduler reports MORE preempt-hook rescans than consultations of the preempt policy — the "
            "rescan branch is inside that policy and runs after it raises its own count, and flow_rival_of has "
            "no other caller, so one of the two has acquired a writer that is not that hook; "
            "`scanRivalRuns / preemptAsksLifetime` is about to be published as a cache miss rate above 1");
-    /* …AND THE IDENTITY THAT MAKES THE THREE ROWS BELOW A PARTITION OF THAT SAME COUNT RATHER THAN THREE
-       OPINIONS ABOUT IT. The containment directly above says the rescans are a subset of the consultations;
-       this says the three arms account for EVERY rescan and for nothing else. It is an EQUALITY and not a
-       containment because the raise sits inside the rescan branch under the same `cur` test that decides
-       whether flow_rival_of runs, so the two counters are one event counted twice — which is what makes it
-       worth asserting rather than assuming: the reading these rows carry is "which invalidator would have to
-       go away for this walk not to have happened", and an arm that has drifted off the line that walks turns
-       that into three numbers a reader would still divide.
-       ASSERTED HERE AND NOT AT THE HOOK for the identities above's reason exactly: this is the one moment all
-       four are in one hand and nothing between the reads steps the engine. A break spans two FILES — the
-       partition is solver/engine.c's and the total is solver/flow.c's — so nothing inside either can see one.
-       IT HOLDS IN BOTH BUILDS, which the four arming buckets above deliberately do not: all four counters here
-       are raised unconditionally, so a release run that passed this vacuously would be a build in which the
-       partition was compiled out and the total was not, and that is the state this equality refuses. */
+    /* …and the three miss arms partition those rescans: each is raised inside the rescan branch under the same
+       `cur` test that decides whether flow_rival_of runs, so the sum is the walk counted twice. Asserted here,
+       where the partition (engine.c) and the total (flow.c) are in one hand. All four counters are raised in
+       every build, so this holds in release too. */
     DCHECK(rm.gen + rm.cur + rm.both == (uint64_t)flow_scan_runs(FLOW_SCAN_RIVAL),
            "the preempt hook's cache-miss partition does not sum to the rescans those misses bought — the "
            "three arms are raised inside the rescan branch under the same `cur` test that decides whether "
@@ -1011,761 +608,312 @@ char *result_wfq_json(void) {
            "`rivalMissBoth` are about to be published as a partition of a number they are not a partition of, "
            "and the reading they exist for — which invalidator a rescan would have to lose to not happen — "
            "is no longer a question these rows can answer");
-    /* AN EMPTY FRONTIER SAYS SO AND SAYS NOTHING ELSE — result.h states why the term rows are absent rather
-       than zero. This is the shape `qjs_result` composes, because a session answers DONE by draining or by
-       parking and both leave no members standing. */
+    /* An empty frontier says so and nothing else (result.h states why the term rows are absent rather than
+       zero). `qjs_result` composes this shape, since a session that drains or parks leaves no members. */
     if (w.members == 0)
         return composef("{\"members\":0}");
     return composef(
                      "{\"members\":%ld,\"valMin\":%.1f,\"valMax\":%.1f,\"valTop\":%.1f,"
-                     /* …AND THE CLOCK THOSE THREE ARE POSITIONS ON, without which a pinned `valMin` has no
-                        subject. `vt` is the frontier's virtual time (solver/flow.h): the queue coordinate of
-                        the item in service, and therefore the coordinate every account that has never been
-                        served is standing at. Read `valMin` AGAINST it — a floor far below `vt` is accounts
-                        being left behind by a clock that moved on, a floor tracking `vt` is the queue's own
-                        position — and read `vt` against `valMax`, since a clock above the whole band is a
-                        clock no member stands at and a clock frozen while the band climbs is the one-time
-                        copy the arrival rule stopped making. */
+                     /* …and the clock those three are positions on. `vt` is the frontier's virtual time
+                        (solver/flow.h): the queue coordinate of the item in service, where every never-served
+                        account stands. A `valMin` far below `vt` is accounts left behind by a clock that moved on;
+                        a `vt` above the whole band is a clock no member stands at. */
                      "\"vt\":%.1f,"
-                     /* `valZero` IS THE CEILING POPULATION AND `valArrived` IS THE ONE THAT EMITTED NOTHING, and they
-                        stopped being one row the day a from-baseline flow began entering at the frontier's
-                        virtual time rather than at zero. An @S candidate session now holds whatever the leader
-                        held while having produced nothing, so it is OUTSIDE `valZero` and inside `valArrived`.
-                        Read `valArrived` against `valMin`/`valMax`: a large count sitting at the FLOOR of the
-                        reward band is the arrival coordinate being left behind by accounts that earn past it.
-                        `valUnplaced` IS THE ROW THAT SAYS WHICH OF TWO OPPOSITE THINGS THAT IS, and it is the
-                        subset of `valArrived` whose coordinate is still a READING of `vt` because the order
-                        has never once given the account the thread. A large `valUnplaced` sitting far below
-                        `vt` is a placement defect; `valUnplaced` at zero with the same floor is a frontier of
-                        accounts that have all been served and been out-earned, which is the bandit doing its
-                        job. `valArrived - valUnplaced` is then the population §@S's "a dead candidate starves"
-                        is about: served, and still carrying nothing. `selfEmit` is the same question asked of
-                        one MEMBER rather than of its account. */
+                     /* `valZero` is the ceiling population; `valArrived` the members that emitted nothing, which
+                        since a from-baseline flow enters at the frontier's virtual time includes @S candidate
+                        sessions holding what the leader held. A large `valArrived` at the floor of the band is the
+                        arrival coordinate being left behind. `valUnplaced` is the subset never given the thread,
+                        whose coordinate is still a reading of `vt`: large and far below `vt` is a placement
+                        defect; zero with the same floor is served accounts out-earned, the bandit working.
+                        `valArrived - valUnplaced` is served and still carrying nothing. `selfEmit` asks the same
+                        of one member rather than its account. */
                      "\"valZero\":%ld,\"valArrived\":%ld,\"valUnplaced\":%ld,\"selfEmit\":%ld,"
                      "\"unrun\":%ld,"
                      "\"neverPicked\":%ld,\"neverPickedGap\":%.3f,"
-                     /* …AND HOW WIDE THE PLATEAU IS, WITHOUT WHICH THE GAP ABOVE IS SILENT IN EXACTLY THE
-                        DIRECTION THAT DECIDES THE REPAIR. `neverPickedGap` reads 0.0 for the best of a
-                        six-hundred-wide tie AND for the best of a lone near-miss, and solver/flow.h's own
-                        retired sentence says a 0.0 is ALSO the expected reading of a healthy sweep — the pick
-                        returns one of N tied maxima and the other N-1 stand at the front with `picks == 0`.
-                        N was reported NOWHERE, so the pair could not tell a sweep in progress from an order
-                        that separates nothing. This is N.
-                        A GAUGE, NEVER DIFFERENCED, for `neverPicked`'s reason: a member that is chosen leaves
-                        this population and every member born since joins it, so the series falls as well as
-                        rises. It is `<= neverPicked` by construction and non-zero exactly when
-                        `neverPickedGap` is 0.000 — both asserted at the end of flow_wfq_census, so the row
-                        already had a reader in every dev build before it had one here. Read it beside
-                        `visZero` and `jobsFramed`, which is what says WHICH of the two within-family
-                        separators flattened the order: the optimism bonus (frozen because flow_credit_visit
-                        asserts `frame == NULL` and a member inside a program cannot advance `visits`) or the
-                        own silence (forgiven for a whole account at any arm's emission). */
+                     /* …and how wide the plateau is. `neverPickedGap` reads 0.0 for the best of a wide tie and for
+                        a lone near-miss, and 0.0 is also the expected reading of a healthy sweep (the pick returns
+                        one of N tied maxima), so read `neverPicked` as a series. This is N. A gauge, `<=
+                        neverPicked` and nonzero exactly when `neverPickedGap` is 0.000, both asserted in
+                        flow_wfq_census. Beside `visZero` and `jobsFramed` it says which within-family separator
+                        flattened the order: the optimism bonus (frozen while a member is inside a program, since
+                        flow_credit_visit asserts `frame == NULL`) or the own silence (forgiven account-wide at
+                        any arm's emission). */
                      "\"neverPickedAtTop\":%ld,"
-                     /* …AND WHERE THE DISPATCHES THAT DID HAPPEN WENT, which the pair above cannot say and
-                        without which its reading has three states behind one answer. See solver/flow.h for
-                        the three and for why two of them take DIFFERENT weight changes while the third takes
-                        none. Read `picksLive / (members - neverPicked)`: near 1 and the thread reached a
-                        fresh member nearly every time, so the frontier is outgrowing one thread and no term
-                        of the order reaches it; well above 1 and the order is returning members it has
-                        already served ahead of members it never has, which is the ordering's own defect;
-                        `picksMax` near `picksLive` is neither — it is one member holding the thread.
-                        THE KINDS ARE IN THE KEYS BECAUSE THEY DECIDE WHAT MAY BE DONE WITH THE NUMBERS.
-                        `picksLive` and `picksMax` are gauges over the members standing NOW and can FALL
-                        between two samples, so neither may be differenced; `picksLifetime` is the only
-                        counter here and is the only one that may. Its identity is checkable on this same
-                        document and is the reason it is emitted at all: it must EQUAL `_switches`, since
-                        flow_credit_pick has one caller and engine.c raises the switch count beside it. */
+                     /* …and where the dispatches went (solver/flow.h has the three states). `picksLive / (members
+                        - neverPicked)` near 1: the thread reached a fresh member nearly every time and the
+                        frontier is outgrowing one thread; well above 1: the order re-serves members ahead of
+                        ones it never served; `picksMax` near `picksLive`: one member holds the thread.
+                        `picksLive` and `picksMax` are gauges and may fall; `picksLifetime` is the only counter
+                        and must equal `_switches` (asserted above). */
                      "\"picksLive\":%lld,\"picksMax\":%lld,\"picksLifetime\":%lld,"
-                     /* …AND THE HALF OF THAT COUNTER THE FRONTIER NO LONGER HOLDS, WHICH IS WHAT MAKES
-                        THE THREE ABOVE A PARTITION AND NOT A TOTAL WITH TWO GAUGES BESIDE IT. A reader
-                        who wants what a departed member held used to subtract `picksLive` from
-                        `picksLifetime` — a GAUGE from a LIFETIME COUNTER, which is a number for every
-                        pair of inputs including the pair where the gauge stopped describing the
-                        counter's population. This is that quantity stated, so
-                        `picksLive + picksDeparted == picksLifetime` is checkable HERE and not only in a
-                        dev process (asserted over these same three fields at the end of
-                        flow_wfq_census).
-                        AND IT IS THE RETIRE-VERSUS-SELL DISCRIMINATOR FOR `departures` TWELVE ROWS
-                        DOWN, WHICH IS WHY IT IS HERE RATHER THAN IN `_cold` BESIDE THE ARMS. That total
-                        is one number over three causes and engine.c asserts
-                        `finished + sold + teardown == departures` — in a SIBLING object with its own
-                        sample index, so a reader of this census alone could not tell a frontier that
-                        RETIRED members from one that SOLD them. A finish costs a dispatch by
-                        construction: flow_finish is reached only from the `FLOW_STEP_DONE` arm, whose
-                        subject is the switched-in member, and `cur = best` is assigned inside the one
-                        `if (best != cur)` block that credits flow_credit_pick. So `departures` above
-                        zero WITH this row at zero proves `finished` is zero and every departure was a
-                        sale or a teardown. THE CONVERSE IS NOT AVAILABLE: a sold member may have been
-                        dispatched, so a nonzero here proves nothing retired — the implication runs one
-                        way and only the zero names a cause. */
+                     /* …and the half of that counter the frontier no longer holds, so `picksLive + picksDeparted
+                        == picksLifetime` is a partition (asserted at the end of flow_wfq_census) rather than a
+                        gauge subtracted from a counter. It also separates retiring from selling in `departures`
+                        (engine.c asserts `finished + sold + teardown == departures`): flow_finish is reached only
+                        from the `FLOW_STEP_DONE` arm, whose member was switched in by the block that credits
+                        flow_credit_pick, so a finish costs a dispatch. `departures > 0` with this row at zero
+                        proves nothing retired; a nonzero here proves nothing. */
                      "\"picksDeparted\":%lld,"
-                     /* THE SEVEN NOTCH ROWS ARE QUOTIENTS AND THEIR NAMES DO NOT SAY SO, WHICH IS THE ONE
-                        THING A READER OF THIS DOCUMENT CANNOT RECOVER FROM IT. `svcMax`, `svcMin`,
-                        `svcFamMax`, `svcFamMin`, `candSvcMax`, `topSvc` and `topSvcFam` are every one of them
-                        `<thread time> / FLOW_SERVICE_US` — flow.c's flow_service_notch and flow_family_notch,
-                        which divide flow_own_silence and acct_family_us by one cooperative quantum. So one
-                        increment is ONE QUANTUM OF UNFORGIVEN SILENCE, never one dispatch, never one step and
-                        never one microsecond, and a reading that multiplies by FLOW_AGE_QUANTUM gets the
-                        points the weight actually charges. MEASURED, AS A WRONG RELAY: `svcMax: 1764` beside
-                        `svcMin: 0` was passed on as "one member serviced 1764 times while another has zero",
-                        and the count that reading names EXISTS NOWHERE IN THIS PROGRAM — 1764 was twenty-one
-                        seconds of unforgiven thread time and the zero was what an emission by ANY arm of a
-                        family writes for every arm at once. The dispatch count a reader reaches for is
-                        `picksLive`/`picksMax`/`picksLifetime` one line up, and those are not these.
-                        THEY ARE GAUGES BESIDE THAT: a notch is silence SINCE the account's last forgiveness,
-                        so flow_credit_emit sends every one of them to zero for a whole family in one
-                        statement and each may FALL between two samples. `topForgiven` below counts those
-                        events and is the only row on this line that is a lifetime count of them. */
+                     /* The seven notch rows (`svcMax`, `svcMin`, `svcFamMax`, `svcFamMin`, `candSvcMax`, `topSvc`,
+                        `topSvcFam`) are quotients `<thread time> / FLOW_SERVICE_US` (flow.c's flow_service_notch
+                        and flow_family_notch), so one increment is one quantum of unforgiven silence — never a
+                        dispatch, step or microsecond; multiply by FLOW_AGE_QUANTUM for the points the weight
+                        charges. Dispatch counts are the `picks*` rows. Gauges: silence since the account's last
+                        forgiveness, which flow_credit_emit zeroes family-wide; `topForgiven` counts those. */
                      "\"svcMax\":%lld,\"svcMin\":%lld,\"svcFamMax\":%lld,\"svcFamMin\":%lld,\"families\":%ld,"
-                     /* …AND WHAT ASKING THE ORDER COSTS, WHICH IS A PROPERTY OF THOSE SAME NOTCHES AND NOT
-                        A SIXTH ONE. The seven quotients above divide `<thread time> / FLOW_SERVICE_US` and
-                        THROW THE REMAINDER AWAY; the aging term does not, because it divides the SUM of two
-                        of them, and a sum's quotient is the quotients plus a CARRY. `silPhases` is how many
-                        DISTINCT remainders the frontier is standing on and `silCarry` is how many members are
-                        currently on the far side of the carry boundary.
-                        WHY A READER WANTS THEM: between two frontier generations the ONLY per-member quantity
-                        in the order that moves is that carry, and members sharing a remainder flip it
-                        together. `silPhases: 1` would therefore say NOTHING IN THE FRONTIER REORDERS
-                        between generation bumps — the bit is a common offset and one cached maximum is exact
-                        — while a large reading is the number of groups a maximum has to sweep through. THE
-                        CONDITIONAL IS THE REPAIR AND NOT A HEDGE: this read as a flat statement of what a `1`
-                        SAYS, and in this repository's whole archived corpus every `silPhases == 1` stands at
-                        `members == 1`, which is the frontier being empty of the question rather than
-                        structurally ordered. A live page reads about HALF its frontier. solver/flow.h carries
-                        the measurement, the corpus it was taken over and the retirement condition; it is
-                        repaired here too because one sentence held at three sites is three chances to be
-                        stale, and fixing the one a reader happens to find certifies the other two.
-                        EITHER ROW IS A STATEMENT about what a sub-linear ask would have to index, never about
-                        what the order decided; no term of flow_weight reads either.
-                        THE KINDS DIFFER AND THE NAMES DO NOT SAY SO, as with the notch rows above: `silPhases`
-                        is a count of distinct keys and `silCarry` is a GAUGE that may FALL between samples,
-                        because the boundary sweeps downward as the family burns and every member resets at
-                        once when the family's own remainder wraps. Neither may be differenced. */
+                     /* …and what asking the order costs. The notches drop their remainder, but the aging term
+                        divides the sum of two, whose quotient carries a carry bit. `silPhases` is how many
+                        distinct remainders the frontier stands on and `silCarry` how many members are past the
+                        carry boundary; between two generation bumps only that carry moves, and members sharing a
+                        remainder flip together. `silPhases: 1` would mean nothing reorders between bumps, but in
+                        the archived corpus it occurs only at `members == 1` (solver/flow.h). A statement about
+                        what a sub-linear ask must index; no term of flow_weight reads either. `silPhases` counts
+                        keys and `silCarry` is a gauge; neither may be differenced. */
                      "\"silPhases\":%ld,\"silCarry\":%ld,"
-                     /* AND THE SCOPE BETWEEN THOSE TWO — a FORK SUBTREE, which neither of the pairs on the
-                        line above can reach. `svcMax`/`svcMin` are one MEMBER's silence; `svcFamMax`/
-                        `svcFamMin` are the FAMILY ROOT's and, on the `families: 1` frontier a real page
-                        presents, a common offset that orders nothing. So within a family the branch is
-                        invisible and between families there is only one family, and "the two sides of this
-                        branch received X and Y" had no number anywhere. A bucket is a TOP-LEVEL ARM (a node
-                        forked directly off a family root); a branch taken deeper is summed into its
-                        top-level arm — solver/flow.c's residual at FlowAcct `up` states that limit.
-                        THE KINDS DIFFER ON THIS LINE AND THE NAMES SAY SO. `branches`, `brLive*` and
-                        `brDepthMax` are GAUGES over the buckets standing NOW and may FALL between samples, so
-                        none may be differenced. Every name carrying `Life` is a LIFETIME counter in
-                        MICROSECONDS or in members, never forgiven and never reset — which is exactly what
-                        separates them from the seven notch rows above, all of which are silence SINCE an
-                        account's last emission and go to zero for a whole family in one statement. An arm
-                        that burned an hour and then emitted did not RECEIVE less, and receipt is what these
-                        ask. There is no quotient hidden in any of them.
-                        READ `brLiveMax / members` for how concentrated the FRONTIER is in one side of one
-                        top-level branch and `brUsLifeMax / chargedUsLife` for how concentrated the THREAD is.
-                        `brBornLifeMax` beside `brLiveMax` separates a bucket that MINTS unboundedly from one
-                        merely HOLDING a lot now, and those take opposite diffs. Do NOT read `brLiveMin` as
-                        the other side: a family ROOT's bucket holds exactly one member by construction, so
-                        while the root stands this is 0 or 1 and says nothing about any arm.
-                        AND THIS SAID THE OTHER SIDE OF THE BRANCH WAS THE REMAINDER OF EACH, WHICH READ THREE
-                        EXTREMA OVER THREE POPULATIONS AS ONE ARM'S THREE PROPERTIES. A maximum is a fact
-                        about whichever bucket owns it, and with more than two buckets standing they need not
-                        be one bucket — the burn maximum is routinely a DEPARTED family root that holds no
-                        live member and keeps boot's whole burn, so dividing it by the live maximum's
-                        membership reported boot's thread time as the crowd's. `brCrowdLive`,
-                        `brCrowdBornLife` and `brCrowdUsLife` are the SAME bucket's three numbers — the one
-                        that owns `brLiveMax` — so that sentence is true of them and of nothing above them,
-                        and the remainder is taken from the published totals.
-                        READ THE CROWD'S SHARE OF THE MEMBERS STANDING against its share of the thread the
-                        LIVE buckets hold: `brCrowdLive / members` against `brCrowdUsLife / brHeldUsLife`. AT
-                        PAR is a branching arm turning fork factor into thread one for one while having
-                        emitted nothing; NEAR ZERO on the thread side is the opposite finding with the
-                        opposite diff, an arm the order is already demoting and that nothing retires; ABOVE
-                        PAR is an ordinary monopolist, which the aging charge catches. Those three read
-                        identically in every other row on this line. `brCrowdUsLife == brUsLifeMax` says the
-                        crowd IS the hungriest bucket and `brCrowdBornLife == brBornLifeMax` says it IS the
-                        arm that has taken most arms; below either, the maxima belong to two arms.
-                        AND ONE OF THOSE TWO HAS AN EXIT AND THE OTHER DOES NOT. Below `brCrowdBornLife ==
-                        brBornLifeMax` the minter triple on the next line IS that other arm's three numbers,
-                        so the pairing says which arm to read rather than only that this one is the wrong one.
-                        Below `brCrowdUsLife == brUsLifeMax` there is no such row: the hungriest bucket stays
-                        a bare extremum with no membership and no shed count, deliberately, because on a real
-                        page it is routinely a DEPARTED family root holding nobody and a triple over it would
-                        describe a bucket no member stands in. solver/flow.h states what that leaves uncovered
-                        and what would make it worth building.
-                        A `brCrowdUsLife` OF ZERO WITH `brCrowdLive` ABOVE ZERO IS THE STARVED READING AND NOT
-                        AN UNOBSERVED BUCKET — the three are folded inside the same live guard as `brLiveMax`,
-                        so all three at zero is `no live bucket seen', which the engine asserts cannot happen
-                        with members standing.
-                        THE SHARE IS A RATIO FOR A SECOND REASON BESIDES ITS DENOMINATOR: every burn on this
-                        line is charged in whatever the quantum's own measure answers, thread CPU where the
-                        host has a clock and wall where it has none, so one name is two quantities across the
-                        two hosts this engine is driven through and the `@QUANTUM` line's `isCpu` says which.
-                        A quotient of two burns from ONE run in ONE unit is the same number either way; a raw
-                        microsecond total from this line is not, and is quoted with that line beside it.
-                        AND `brHeldUsLife`/`brEmptyUsLife` ARE THAT FRACTION'S DENOMINATOR AND ITS COMPLEMENT.
-                        `brUsLifeSum` keeps every bucket the walk takes, live or not, because receipt outlives
-                        a departed subtree — so a live arm's share of it is a share of a total holding thread
-                        time no live arm has, and on a real page the departed root's term is the largest in
-                        it. Both halves are published rather than one and a subtraction so the split is a
-                        CHECK: they are raised by two accumulators in the two arms of one condition.
-                        AND THE MINT PAIR IS THE BRANCH TERM'S OWN RANGE, WHICH THE LIVE PAIR IS NOT.
-                        flow_branch_bonus returns `1.0 / sub_born`, so `1/brBornLifeMin - 1/brBornLifeMax` is
-                        how many of the one point that term can lift a member it actually spans across this
-                        frontier; the live pair answers CONCENTRATION and orders nothing. Both ends are taken
-                        over buckets holding at least one live member — a weight is read only for a member
-                        that is standing — which is why they sit inside the same guard as `brLiveMax`/`Min`
-                        while `brUsLife*` deliberately keeps every bucket: receipt outlives a departed
-                        subtree, membership does not.
-                        AND AN EXTREMUM OVER THE BUCKETS STANDING IS NOT ITS FIELD'S KIND. `sub_born` per
-                        bucket is never forgiven; a maximum of it ACROSS buckets falls the instant the bucket
-                        that owned it departs whole. So `brBornLife*` is read as a ratio at one instant and
-                        differenced by nobody, exactly like `brLive*`. The only rows on this line a reader may
-                        difference are `brUsLifeSum`, `brRetiredUsLife` and `chargedUsLife`, whose population
-                        is every microsecond ever charged rather than whichever buckets are standing.
-                        TWO IDENTITIES DEFINE THESE AND BOTH ARE CHECKABLE ON THIS DOCUMENT, which is the one
-                        property of a per-bucket number a reader can check without re-deriving the mechanism:
-                        `brLiveSum == members` (the buckets partition the frontier — below is a member counted
-                        nowhere, above is one counted twice) and `brUsLifeSum + brRetiredUsLife ==
-                        chargedUsLife` (every charged microsecond lands on exactly one bucket, and a bucket
-                        whose subtree has wholly departed folds its total into the retired term rather than
-                        losing it). Both are asserted in flow_wfq_census where every term is in one hand.
-                        AND TWO MORE THE CROWD ROWS BRING WITH THEM, CHECKABLE ON THIS DOCUMENT FOR THE SAME
-                        REASON. `brCrowdLive == brLiveMax` says the three crowd rows describe the bucket the
-                        live maximum names — two writers at two instants, a running maximum folded during the
-                        walk against a dereference of the retained node taken after it. And `brHeldUsLife +
-                        brEmptyUsLife == brUsLifeSum` splits the bucket burn by whether anybody is standing in
-                        it, which chained with the identity above gives every microsecond ever charged exactly
-                        one of three published homes: `brHeldUsLife + brEmptyUsLife + brRetiredUsLife ==
-                        chargedUsLife`. That total cannot move without one of its three parts moving. */
+                     /* The fork-subtree scope between member and family. A bucket is a top-level arm (forked
+                        directly off a family root); deeper branches sum into it (flow.c's residual at FlowAcct
+                        `up`). `branches`, `brLive*` and `brDepthMax` are gauges. `brLiveMax / members` is how
+                        concentrated the frontier is; `brLiveMin` is 0 or 1 while a family root stands.
+                        `brLiveSum == members` is asserted in flow_wfq_census. */
                      "\"branches\":%ld,\"brLiveMax\":%ld,\"brLiveMin\":%ld,\"brLiveSum\":%ld,"
+                     /* The branch term is `1.0 / sub_born`, so `1/brBornLifeMin - 1/brBornLifeMax` is its span.
+                        `brBornLifeMax` beside `brLiveMax` separates a bucket that mints unboundedly from one
+                        holding a lot now. Mint extrema are over buckets with a live member. */
                      "\"brBornLifeMax\":%ld,\"brBornLifeMin\":%ld,"
+                     /* `brCrowd*` are the bucket owning `brLiveMax`; the other maxima may belong to different
+                        buckets (the burn maximum is often a departed root holding boot's burn). Compare
+                        `brCrowdLive / members` with `brCrowdUsLife / brHeldUsLife`: at par, branching turned into
+                        thread one for one; near zero, an arm already demoted that nothing retires; above, an
+                        ordinary monopolist. `brCrowdUsLife` 0 with `brCrowdLive > 0` is starvation, not an
+                        unobserved bucket. `brCrowdLive == brLiveMax` is asserted in flow_wfq_census. */
                      "\"brCrowdLive\":%ld,\"brCrowdBornLife\":%ld,\"brCrowdUsLife\":%lld,"
-                     /* AND THE SAME THREE FOR THE ARM THAT HAS TAKEN THE MOST ARMS, WHICH IS A DIFFERENT ARM
-                        WHENEVER ONE HAS SHED WHAT IT MINTED. The crowd is selected by `brLiveMax` — a
-                        membership fact — and these by `brBornLifeMax`, and `sub_born = live + sub_gone` makes
-                        those one bucket only while nothing has departed. An arm that forks at every position
-                        of an unknown length and lets each arm FINISH mints unboundedly and stands narrow, so
-                        it owns the mint maximum, is NOT the crowd, and had no live count and no receipt on
-                        this line at all. That is the shape the whole aging mechanism was written against.
-                        IT IS ALSO THE ARM THE ORDER SEPARATES BY: flow_branch_bonus returns `1/sub_born`, so
-                        this bucket carries the SMALLEST branch bonus in the frontier. READ
-                        `brMinterUsLife / brHeldUsLife` AGAINST `brMinterLive / members` — at par the branch
-                        term is not demoting a branching arm at all, near zero it is demoting it and what
-                        keeps the frontier from draining is retention rather than ordering, above par it is an
-                        ordinary monopolist. Three diffs, and every other row on this line reads the same in
-                        all three.
-                        `brMinterGoneLife` IS PUBLISHED NOWHERE ELSE and is why these are three rows and not
-                        two: the live rows carry `sub_born - sub_gone` and the mint rows carry `sub_born`, so
-                        a bucket's shed count was recoverable only where the two maxima happened to name ONE
-                        bucket. It separates an arm holding N from an arm that minted ten N and shed nine,
-                        which read identically in `brLiveMax` and take opposite diffs.
-                        KINDS: the live count is a GAUGE; the shed count and the burn are per-bucket LIFETIME
-                        counters read as ratios at ONE instant and differenced by nobody, because the BUCKET
-                        SELECTED moves between samples — the extremum's rule, for the extremum's reason. The
-                        burn is in the quantum's own unit, so a raw total is quoted with `@QUANTUM` beside it.
-                        ONE MORE IDENTITY, CHECKABLE ON THIS DOCUMENT: `brMinterLive + brMinterGoneLife ==
-                        brBornLifeMax`. Two writers at two instants — one dereference of the node the walk
-                        retained, taken after it ended, against a running maximum folded during it — and it is
-                        the only bound on `brMinterGoneLife`, which has no extremum beside it. Asserted in
-                        flow_wfq_census where every term is in one hand.
-                        AND `brMinterUsLife == brCrowdUsLife` IS THE PUBLISHED STATEMENT THAT THE TWO
-                        SELECTORS NAME ONE ARM on this run, which is the caveat that has stood beside
-                        `brBornLifeMax` since it was written turned into a reading rather than a warning. */
+                     /* …and the same three for the arm that has taken the most arms (selected by `brBornLifeMax`,
+                        where the crowd is selected by `brLiveMax`; `sub_born = live + sub_gone` makes them one
+                        bucket only while nothing has departed). An arm forking at every position of an unknown
+                        length and letting each finish mints unboundedly and stands narrow. It carries the smallest
+                        branch bonus; compare `brMinterUsLife / brHeldUsLife` with `brMinterLive / members` as for
+                        the crowd. `brMinterGoneLife` (shed count) is published nowhere else. The live count is a
+                        gauge; the shed count and burn are per-bucket lifetime counts read at one instant, since
+                        the bucket selected moves. `brMinterLive + brMinterGoneLife == brBornLifeMax` is asserted
+                        in flow_wfq_census; `brMinterUsLife == brCrowdUsLife` says both selectors name one arm. */
                      "\"brMinterLive\":%ld,\"brMinterGoneLife\":%ld,\"brMinterUsLife\":%lld,"
+                     /* Burn rows are over every bucket, in the quantum's own measure (@QUANTUM's `isCpu`), so a
+                        raw total is quoted with that line; `brUsLifeMax / chargedUsLife` is how concentrated the
+                        thread is. Asserted in flow_wfq_census: `brHeldUsLife + brEmptyUsLife == brUsLifeSum` and
+                        `brUsLifeSum + brRetiredUsLife == chargedUsLife`. */
                      "\"brUsLifeMax\":%lld,\"brUsLifeMin\":%lld,"
                      "\"brUsLifeSum\":%lld,\"brHeldUsLife\":%lld,\"brEmptyUsLife\":%lld,"
                      "\"brRetiredUsLife\":%lld,\"chargedUsLife\":%lld,"
                      "\"brDepthMax\":%d,"
-                     /* AND WHICH FORK INSIDE A BUCKET DID THE MINTING, which no row above can say: a bucket
-                        is a TOP-LEVEL ARM, so an arm forked off boot that then forks unboundedly and boot
-                        forking unboundedly at one top-level branch present IDENTICALLY up there. A fan is the
-                        live members forked directly off ONE non-root node (solver/flow.h states why the key
-                        is exact and why roots are excluded), and `brFanDepth` is the discriminator — depth 1
-                        is the top-level arm minting the crowd itself, depth D is the minting sitting D-1
-                        levels below the arm the rows above name.
-                        GAUGES, so no `Life` in the names and none of them may be differenced: a fan is how
-                        wide a fork stands NOW and the arms it has minted and shed are not in it.
-                        READ `brFanMax / brFanSum` for how concentrated the DEEP forking is, and
-                        `members - brFanSum` for everything the bucket rows already describe. `brFanMax: 0`
-                        says every fork here is a top-level one and those rows are complete for this run.
-                        ONE MORE IDENTITY, CHECKABLE ON THIS DOCUMENT: `brFanMax <= brLiveMax`. A fork off a
-                        non-root joins its parent's bucket, so a fan's members are all live members of one
-                        bucket — and the two sides are counted by different writers, which is what makes it a
-                        check. Asserted in flow_wfq_census where both are in one hand. */
+                     /* …and which fork inside a bucket did the minting. A fan is the live members forked directly
+                        off one non-root node (solver/flow.h); `brFanDepth` 1 is the top-level arm minting the
+                        crowd itself, depth D is minting D-1 levels below it. Gauges. `brFanMax / brFanSum` is how
+                        concentrated the deep forking is; `brFanMax: 0` says every fork is top-level.
+                        `brFanMax <= brLiveMax`, asserted in flow_wfq_census. */
                      "\"brFanMax\":%ld,\"brFanSum\":%ld,\"brFanDepth\":%d,"
                      "\"visMin\":%lld,\"visMax\":%lld,\"visZero\":%ld,"
                      "\"cands\":%ld,\"candUnrun\":%ld,\"candSvcMax\":%lld,\"candDecMax\":%ld,\"decMax\":%ld,"
                      "\"distMax\":%.3f,\"wTop\":%.3f,\"wMin\":%.3f,\"candWMax\":%.3f,"
-                     /* …AND THE EVENT THE TWO NOTCHES BESIDE IT ARE A READING BETWEEN. `topSvc`/`topSvcFam`
-                        say how much silence the front's account has accumulated SINCE its window was last
-                        forgiven; `topForgiven` is how many forgivenesses there have been, which is what turns
-                        "the leader's aging is being reset" from an inference into a count. Read it against
-                        `picksMax`: an emission zeroes both aging halves for EVERY arm of the account at once,
-                        so the frontier collapses into visit tiers that are exactly tied and flow_pick sweeps a
-                        tier from its oldest member forward, one member per quantum, restarting at the head of
-                        the registry on the next emission. If that is what is happening, `picksMax` tracks this
-                        number and `picksLive / picksMax` is the sweep depth between two emissions.
-                        ITS SERIES IS NOT A COUNTER EVEN THOUGH IT IS ONE. The count belongs to whichever
-                        account is at the FRONT, and that can change, so this row may fall between samples — a
-                        fall is a change of leader, which `valTop` falling beside it confirms. solver/flow.h
-                        states the pair. `valTop / topForgiven` is points per finding on the leading account. */
+                     /* …and the event the two leader notches are a reading between: `topForgiven` counts
+                        forgivenesses of the front account's silence. An emission zeroes both aging halves for
+                        every arm of the account, collapsing the frontier into exactly tied visit tiers that
+                        flow_pick sweeps one member per quantum; if so, `picksMax` tracks this and `picksLive /
+                        picksMax` is the sweep depth. It belongs to whichever account leads, so it may fall on a
+                        change of leader (`valTop` falling beside it). `valTop / topForgiven` is points per
+                        finding. Read `topSvc`, never `topSvcFam`, for a gap: every arm of a family reads one
+                        `fam_us`, which cancels out of `neverPickedGap`. A monopolising leader shows `topSvc`
+                        climbing with gaps closing; a front refilled by fresh arms shows `topSvc` low or
+                        sawtoothing with gaps standing. `nonrewardMax` is flow.c's FLOW_NONREWARD_MAX: `(valTop -
+                        valMin) + nonrewardMax` is the largest gap a non-negative non-reward sum can produce, so a
+                        larger gap is aging, not lift. */
                      "\"topSvc\":%lld,\"topSvcFam\":%lld,\"topForgiven\":%lld,\"nonrewardMax\":%.3f,"
                      "\"jobsReady\":%ld,\"jobsFramed\":%ld,\"jobsOwed\":%ld,\"jobWGap\":%.3f,"
-                     /* …AND THE RANK-READY ROW SPLIT AGAIN BY WHICH ARM OF flow_step CAN DISPATCH THE JOB.
-                        The triple above says what a job WAITS ON; this pair says which arm TAKES it, and those
-                        are different questions: a MICROTASK is taken by the checkpoint arm, which stands ABOVE
-                        the program sequence, and a TASK by the arm below it, which is the `else` of `a program
-                        starts on this step`. Read the pair when `jobsReady` is above zero and the run's
-                        `_jobsRun` is not moving, and read it for the NARROW claim it makes: all TASK says the
-                        SEQUENCE ARM'S EXCLUSION is what holds the backlog, every job of it standing behind the
-                        `else` of `a program starts on this step`; any `jobsReadyMicro` REFUTES that for the
-                        jobs it counts, their holders satisfying `flow_checkpoint_due` outright and their arm
-                        standing above the sequence. It does not say those jobs would have RUN — flow_step has
-                        arms above the checkpoint as well, and the pick may not have reached the holder — and
-                        both of those are different work from an arm order. The two sum to `jobsReady` by an
-                        identity flow_wfq_census asserts and engine/build.mjs re-asserts for the release build;
-                        solver/flow.h carries the legend and states why neither half is a rate. */
+                     /* …and the rank-ready row split by which arm of flow_step can dispatch the job: a microtask
+                        is taken by the checkpoint arm above the program sequence, a task by the arm below it (the
+                        `else` of `a program starts on this step`). With `jobsReady > 0` and `_jobsRun` flat, all
+                        TASK says the sequence arm's exclusion holds the backlog; any `jobsReadyMicro` refutes that
+                        for the jobs it counts. Neither says the jobs would have run (arms above the checkpoint, or
+                        the pick). The two sum to `jobsReady`, asserted in flow_wfq_census and re-asserted by
+                        engine/build.mjs for release (solver/flow.h). */
                      "\"jobsReadyTask\":%ld,\"jobsReadyMicro\":%ld,"
-                     /* AND THE DENOMINATOR `jobsReady` HAS ALWAYS NEEDED — how many members hold no
-                        frame, taken on the same walk as `members` so the two are ONE SAMPLE. A reader
-                        who has correctly declined to charge `jobsReady: 0` to the ordering needs this
-                        to say WHICH silence it is: with `memUnframed: 0` the resume seam is not ending
-                        frames and the reader goes to flow_step, and with `memUnframed > 0` the jobs sit
-                        on framed members while the unframed hold none, and the reader goes to where
-                        jobs are queued. Printed beside the split rather than beside `visZero` because it
-                        is that split's denominator and not a second extremum over the frontier. */
+                     /* …and `jobsReady`'s denominator: members holding no frame, on the same walk as `members`.
+                        With `jobsReady: 0`, `memUnframed: 0` sends the reader to flow_step (frames not ending),
+                        and `memUnframed > 0` to where jobs are queued. */
                      "\"memUnframed\":%ld,"
-                     /* …AND THE LIFETIME HALF OF IT, WHICH THE GAUGE BESIDE IT STRUCTURALLY CANNOT BE.
-                        `memUnframed` says who stands with an empty stack at this instant; this says how many
-                        dispatches that state has EVER received, so a member that was picked and then framed
-                        itself by running is in the second and not the first. Raised in flow_credit_pick beside
-                        `picksLifetime` and conditionally on the same flow_stack_empty the split above is asked
-                        through, so it is contained in `picksLifetime` by construction — flow_wfq_census
-                        asserts that, and engine/build.mjs asserts it again because the DCHECK is compiled out
-                        of a release build where this reader still runs.
-                        IT IS WHAT SEPARATES `jobWGap: 0`'s TWO READINGS, which no other row on this line can:
-                        a gap of zero says the front of the order IS a ready holder, and that is consistent
-                        both with the order ranking this population first while the dispatch does not take it
-                        and with `wTop` not being the quantity the dispatch compares at all. Zero here with
-                        `picksLifetime` large is the first; above zero is the second. Read beside
-                        `picksLifetime` and never alone — with no dispatch made at all this is 0 for a third
-                        reason that is about neither. solver/flow.h carries the legend. */
+                     /* …and its lifetime half: dispatches the unframed state ever received, raised in
+                        flow_credit_pick beside `picksLifetime` on the same flow_stack_empty, so contained in it
+                        (asserted in flow_wfq_census and again by engine/build.mjs for release). With `jobWGap: 0`,
+                        zero here with `picksLifetime` large is the order ranking ready holders first while the
+                        dispatch does not take them; above zero is `wTop` not being what the dispatch compares.
+                        With no dispatch at all it is 0 for a third reason (solver/flow.h). */
                      "\"unframedPicksLifetime\":%lld,"
-                     /* …AND THE SUBSET OF THOSE DISPATCHES THAT REACHED A MEMBER HOLDING A RANK-READY JOB,
-                        which is what turns the row above from a BOUND on the job backlog into a MEASUREMENT of
-                        it. Read the three together — this, `unframedPicksLifetime`, and the run's `jobsRun` —
-                        because that triple is the only thing on this document that separates the two states a
-                        flat job count leaves: 0 here with the row above non-zero says the dispatch never
-                        reaches a job holder at all and sends the reader to flow_pick; above 0 with `jobsRun`
-                        flat says it does reach them and flow_step declines the job at an arm ABOVE the one
-                        that would run it, which sends the reader to the ladder and makes
-                        `jobsReadyTask`/`jobsReadyMicro` the next pair. Raised inside the unframed count's own
-                        `if` in flow_credit_pick under the ready arm's three conjuncts, so the containment is
-                        by construction; flow_wfq_census asserts it and solver/flow.h carries the legend. */
+                     /* …and the subset of those dispatches reaching a member with a rank-ready job, which turns
+                        that bound into a measurement. With `jobsRun` flat: 0 here and the row above nonzero sends
+                        the reader to flow_pick; above 0 says flow_step declines the job at a higher arm, and
+                        `jobsReadyTask`/`jobsReadyMicro` are next. Raised inside the unframed count's `if` in
+                        flow_credit_pick under the ready arm's three conjuncts; contained by construction and
+                        asserted in flow_wfq_census (solver/flow.h). */
                      "\"readyPicksLifetime\":%lld,"
-                     /* …AND WHAT THE LADDER DID WITH THOSE DISPATCHES, WHICH THE ROW ABOVE HANDS OFF AND
-                        COULD NOT ANSWER. Its own legend ends "above 0 with `jobsRun` flat says it does reach
-                        them and flow_step declines the job at an arm ABOVE the one that would run it, which
-                        sends the reader to the ladder" — these four are what the ladder says when the reader
-                        arrives, and until they existed that sentence was where the trail stopped.
-                        READ THEM AS A SET AND AGAINST `run-a-task` ON THE @COLD LINE. The first two are the
-                        two arms above the task arm that can be reached with a task runnable; the last two
-                        PARTITION the task arm's own step count, and solver/engine.c asserts that sum where
-                        both halves and the histogram are in one hand. solver/engine.h states which diff each
-                        of the four sizes, and names the two things none of them reaches: the three arms above
-                        the delivery one, and the DEPTH of the member's own queue — the pick is the oldest
-                        entry within the kind rules, so an arm reached freely can still never reach one
-                        particular task.
-                        LIFETIME COUNTS beside a line of gauges, which is why the names carry the suffix: a
-                        `jobsReadyTask` that FALLS between two samples is the backlog draining and one of these
-                        falling is a counter with a second writer. */
+                     /* …and what the ladder did with those dispatches. The first two count the arms above the task
+                        arm reached with a task runnable; the last two partition the task arm's own step count
+                        (asserted in solver/engine.c). Read against `run-a-task` on @COLD; solver/engine.h states
+                        what each sizes and what none reaches (the three arms above delivery, and the depth of the
+                        member's own queue). Lifetime counts beside gauges: one of these falling is a second
+                        writer. */
                      "\"taskHeldDelivLifetime\":%ld,\"taskHeldSeqLifetime\":%ld,"
                      "\"taskArmOlderLifetime\":%ld,\"taskArmNoRowLifetime\":%ld,"
                      "\"delivReady\":%ld,\"delivFramed\":%ld,\"delivOwed\":%ld,\"delivWGap\":%.3f,"
-                     /* AND WHICH TERM THAT GAP IS, AT THE TWO MEMBERS IT IS BETWEEN — solver/flow.h states
-                        why the OPTIMISM operand is the one of flow_weight's four summands that has no row
-                        anywhere else, and why the pair is read only where `delivReady` is non-zero. Printed
-                        directly after the gap rather than beside `visMin`/`visMax`, because those two are
-                        extrema over the WHOLE frontier and these are about two named members; a reader who
-                        met them there would be one row away from subtracting quantities taken over
-                        different populations. */
+                     /* …and which term that gap is at the two members it is between: the optimism operand, which
+                        has no row elsewhere, read only where `delivReady` is nonzero (solver/flow.h). Placed after
+                        the gap, not beside `visMin`/`visMax`, which are extrema over the whole frontier. */
                      "\"delivWGapVis\":%lld,\"wTopVis\":%lld,"
-                     /* …AND THE SAME DIFFERENCE TAKEN AGAINST THE MEMBERS THAT HAVE RUN FURTHEST THROUGH THE
-                        DOCUMENT'S OWN PROGRAM TABLE — the row that joins this line to `programCursors` on the
-                        @COLD one, which no row on either could do alone. solver/flow.h carries the derivation;
-                        what a reader does with it is one comparison: `curDeepWGap` at 0.000 says a member
-                        standing at the deepest row IS the front of the order, so the sequence the thread is
-                        being offered in is right and a tail that is not being reached is not being reached for
-                        want of DISPATCHES; a positive gap is the order ranking members that have got LESS far
-                        ahead of every member that has got further, which is the ordering, and the distance is
-                        in the same points as `neverPickedGap` and `nonrewardMax` so it can be priced against
-                        one emission's worth without a second rule. Those two take OPPOSITE work and nothing in
-                        this document told them apart.
-                        READ THE THREE TOGETHER OR NONE OF THEM. `curDeepLive` is the gap's population and is
-                        what separates "156 members got through and stand at the front" from "one did"; without
-                        it the distance is a statement about an unnamed member. GAUGES, both counts: a member
-                        at the deepest row departing, or one advancing past it, moves them DOWN, so neither may
-                        be differenced and neither is `deepest`/`deepestLeft`, which are the monotone pair.
-                        AND THE PAIR CHECKS ITSELF ACROSS THE TWO CENSUSES when they carry one `workDone`:
-                        `curDeep` is `programCursors`' top non-empty index and `curDeepLive` is that bucket's
-                        count, computed by a DIFFERENT walk in a different file over the same `Flow.script_i`.
-                        The top bucket is repeated here rather than left to be joined across two objects for
-                        the reason `workDone` itself was added to this line — two censuses share no identity
-                        unless a row holds one. */
+                     /* …and the same difference against the members furthest through the program table, joining
+                        this line to `programCursors` on @COLD (solver/flow.h). `curDeepWGap` 0.000: a member at
+                        the deepest row is the front of the order, so an unreached tail wants dispatches; positive:
+                        the order ranks less-advanced members ahead, in the same points as `neverPickedGap` and
+                        `nonrewardMax`. `curDeepLive` is the gap's population. Gauges (unlike the monotone
+                        `deepest`/ `deepestLeft`). `curDeep` and `curDeepLive` repeat `programCursors`' top bucket,
+                        computed by a different walk over `Flow.script_i`, so they cross-check when both share
+                        `workDone`. */
                      "\"curDeep\":%d,\"curDeepLive\":%ld,\"curDeepWGap\":%.3f,"
-                     /* AND WHAT ASKING THIS ORDER COST, which every row above is silent about because every
-                        row above is about what the order DECIDED. solver/flow.h's FLOW_SCANS states why the
-                        three entries are counted apart and why the quantity is a count rather than a clock;
-                        what they are FOR is that "the tail is not being reached" has two causes — not enough
-                        thread time for the members standing, or the thread spent asking the order rather than
-                        running it — and no row here separated them. Read `scanNextWeights / steps` against
-                        `members` for the first and `scanRivalRuns` against `forks` for the second: the
-                        dispatch loop asks once per STEP and the preempt hook asks once per frontier
-                        GENERATION, which a forking page moves per fork.
-                        SPELLED OUT RATHER THAN NESTED as the three histograms are, because these six are two
-                        quantities over three entries and not a partition of any total on this line — there is
-                        nothing for a histogram's sum check to be checked against, and a shape whose contract
-                        cannot be stated is one a reader has to hold a second rule about. */
+                     /* …and what asking the order cost (solver/flow.h's FLOW_SCANS: three entries, counted apart,
+                        in counts not time). Two causes of an unreached tail: too little thread for the members
+                        standing, or thread spent asking. Read `scanNextWeights / steps` against `members` and
+                        `scanRivalRuns` against `forks`: the dispatch loop asks once per step, the preempt hook
+                        once per frontier generation. Spelled out, not nested: two quantities over three entries
+                        partition no total. */
                      "\"scanNextRuns\":%ld,\"scanNextWeights\":%lld,"
                      "\"scanRivalRuns\":%ld,\"scanRivalWeights\":%lld,"
                      "\"scanOtherRuns\":%ld,\"scanOtherWeights\":%lld,"
-                     /* …AND WHAT THIS CENSUS ITSELF COSTS, which every row above is silent about because every
-                        row above is about the engine and this one is about the instrument. flow_wfq_census
-                        weighs the frontier TWICE per sample — once in its own walk, counted here, and once
-                        inside the flow_best it calls, which lands in `scanOther*` where a shared entry makes
-                        it unattributable afterwards; the engine asserts the two are equal at the sample, so
-                        `scanCensusWeights` doubled is what a sample really costs.
-                        READ IT AS A FRACTION, NEVER AS A TOTAL. `scanCensusWeights / scanCensusRuns` is the
-                        mean frontier a sample paid for, and `scanCensusWeights` against `scanNextWeights` is
-                        the share of all frontier-weighing that went to REPORTING rather than to running —
-                        which is the only way to settle whether an instrument is heavy enough to change the run
-                        it samples. A count and not a clock, for the reason solver/flow.h gives at FLOW_SCANS:
-                        this host's quantum is wall-denominated, so a duration here would be a fact about the
-                        machine and these are facts about what the engine did. */
+                     /* …and what this census itself costs: flow_wfq_census weighs the frontier twice per sample,
+                        once in its own walk (counted here) and once in the flow_best it calls (in `scanOther*`);
+                        the engine asserts the two equal, so a sample costs twice `scanCensusWeights`. Read as
+                        fractions: `scanCensusWeights / scanCensusRuns` is the mean frontier a sample paid for, and
+                        against `scanNextWeights` the share of weighing spent reporting. */
                      "\"scanCensusRuns\":%ld,\"scanCensusWeights\":%lld,"
-                     /* …AND HOW OFTEN THE HOOK WAS ASKED, which every scan row above is silent about because
-                        every scan row above counts a walk PERFORMED. The rival entry is the preempt policy's
-                        rescan and is close to half of all the frontier weighing this engine does, and until
-                        this row there was no way to tell a cache that absorbs nothing from a generation that
-                        moves as fast as the hook is consulted — the first says the hook costs the frontier's
-                        size at every suspend point and the repair is at the CACHE, the second says the rescans
-                        are the page branching and the repair is nowhere near it. Both print the same rival
-                        count.
-                        READ IT AS THE MISS RATE AND NEVER AS A TOTAL: the rival runs over this is the share of
-                        CONSULTATIONS that bought a walk, which is not the row below (rescans per rank change,
-                        i.e. whether one generation is being rescanned twice) and not `scanNextRuns` (what a
-                        STEP pays). Three questions, three denominators, and the engine asserts the containment
-                        that makes this one a fraction — see the DCHECK above.
-                        A LIFETIME COUNTER AND MAY BE DIFFERENCED, which most of this line is not: solver/
-                        engine.c never resets it, so two censuses carrying one `workDone` give a RATE over the
-                        interval between them, and that is the only reading a wall-denominated quantum leaves
-                        quotable at all. */
+                     /* …and how often the hook was asked. The rival rescan is close to half of all frontier
+                        weighing; this tells a cache that absorbs nothing (repair the cache) from a generation
+                        moving as fast as the hook is consulted (the page branching). `scanRivalRuns /
+                        preemptAsksLifetime` is the miss rate, distinct from rescans per rank change and from
+                        per-step cost; the containment is asserted above. A lifetime counter (never reset in
+                        engine.c), so it may be differenced. */
                      "\"preemptAsksLifetime\":%llu,"
-                     /* …AND WHICH HALF OF THAT HOOK'S KEY HAD MOVED WHEN IT MISSED, which the row above and
-                        `scanRivalRuns` together still cannot ask. The cache is keyed on a DISJUNCTION — the
-                        frontier GENERATION or the INCUMBENT — and both rows publish only the miss, so every
-                        reading of that rate has had to ASSUME which disjunct supplied it. Measured once and
-                        read as the generation alone: `scanRivalRuns / forks` near 2.0 was taken as evidence
-                        that something raises the generation a second time per fork, and that inference does
-                        not follow from these rows — a raise is not a miss, and raises made inside one C call
-                        with no interpreter opcode between them collapse into ONE miss at the next poll.
-                        READ AS A PARTITION AND NEVER AS THREE RATES. `rivalMissGen` is the order genuinely
-                        having changed and the walk is what a forking page owes; `rivalMissCur` is a walk for a
-                        frontier whose GENERATION stood still, which is NOT a frontier nothing moved in — see
-                        solver/engine.h, where this clause is retired with its two mechanisms, and `silPhases`
-                        twelve lines up for the row that prices the repair it used to recommend. IT READ: a
-                        rescan for a frontier in which nothing moved but the EXCLUDED member, which a walk that
-                        folded its top two would answer without one. Kept in its own words because the carry
-                        bit moves with no generation bump behind it and the excluded member's weight is never
-                        taken at all, and a reader who re-derives the clause from the key will write it again.
-                        `rivalMissBoth` is the row that prices either repair:
-                        where both moved in one interval, removing one invalidator buys NOTHING because the
-                        other would have forced the same walk, so a large `cur` beside a large `both` and a
-                        large `cur` beside a zero `both` recommend the same diff at completely different
-                        prices. LIFETIME counts, raised in every build, and their sum is asserted equal to
-                        `scanRivalRuns` at the DCHECK above — see solver/engine.h. */
+                     /* …and which half of the hook's key had moved when it missed. The cache is keyed on a
+                        disjunction — the frontier generation or the incumbent — and raises inside one C call
+                        collapse into one miss at the next poll, so a rate alone cannot say which. A partition, not
+                        three rates: `rivalMissGen` is the order having changed; `rivalMissCur` a walk for a
+                        frontier whose generation stood still, which is not a frontier where nothing moved
+                        (solver/engine.h; `silPhases` prices that repair); `rivalMissBoth` prices either repair,
+                        since removing one invalidator buys nothing where both moved. Lifetime counts in every
+                        build; their sum is asserted equal to `scanRivalRuns` above. */
                      "\"rivalMissGen\":%llu,\"rivalMissCur\":%llu,\"rivalMissBoth\":%llu,"
-                     /* …AND WHETHER THE ONE ASSERTION THE DISPATCH WALK MAKES WAS EVER ACTUALLY ASKED,
-                        WHICH EVERY ROW ABOVE IS SILENT ABOUT BECAUSE EVERY ROW ABOVE COUNTS A WALK PERFORMED.
-                        flow_pick's member-key invariant — solver/flow.h's FlowKeyChecks — is a predicted
-                        ABSENCE, and a run in which it never fires is satisfied identically by an invariant
-                        that HOLDS and by a walk that COMPARED NOTHING. Its condition exempts a member on
-                        three arms before it compares anything, so until these rows the arming could only be
-                        INFERRED by pigeonhole from the scan counts against `rankChanges`.
-                        READ `keyArmedLifetime` AS THE SCORE AND THE OTHER THREE AS WHY. The three are the
-                        exemptions, they PARTITION the classifications with `keyArmedLifetime`, and they are
-                        not alike: `keyRunningLifetime` is bounded by one member per scan and
-                        `keyFirstSeenLifetime` by one per member ever created, while `keyStaleGenLifetime`
-                        near the total is the frontier generation moving faster than members are re-weighed —
-                        which makes the invariant VACUOUS rather than held, and is a finding about the
-                        frontier that `keyArmedLifetime: 0` alone cannot distinguish from a quiet engine.
-                        ALL FOUR LIFETIME COUNTS OF COMPARISONS, which the names say and which is the only
-                        kind on this line a reader may DIFFERENCE. None is a gauge, none is per-member, and
-                        none may be read against `members` as a share of anything.
-                        ALL FOUR AT ZERO BESIDE A NONZERO `scan<Entry>Weights` IS A RELEASE BUILD AND NOT A
-                        READING. The check and its per-member stamp are dev-only; this composer has no dev arm
-                        and engine/build.mjs takes its required row set from this format string, so a row
-                        emitted in one build only would fail every release census. In a dev build every member
-                        the dispatch loop weighs raises exactly one of the four, so the four summing to zero
-                        while the order demonstrably weighed something is the build, and nothing else. */
+                     /* …and whether the dispatch walk's one assertion was ever asked. flow_pick's member-key
+                        invariant (solver/flow.h's FlowKeyChecks) is a predicted absence, exempting a member on
+                        three arms before comparing. `keyArmedLifetime` is the score and the other three, which
+                        partition the classifications with it, are why: `keyRunningLifetime` is bounded by one
+                        member per scan, `keyFirstSeenLifetime` by one per member created, and
+                        `keyStaleGenLifetime` near the total means the generation moves faster than members are
+                        re-weighed — vacuous rather than held. Lifetime counts of comparisons, never read against
+                        `members`. All four zero beside a nonzero `scan<Entry>Weights` is a release build: the
+                        check is dev-only, and the row is emitted in both builds because engine/build.mjs derives
+                        its required set from this format string. */
                      "\"keyArmedLifetime\":%lld,\"keyStaleGenLifetime\":%lld,"
                      "\"keyFirstSeenLifetime\":%lld,\"keyRunningLifetime\":%lld,"
-                     /* …AND WHETHER AN INDEX OVER THAT KEY WOULD HAVE ANSWERED WHAT THE COMPARATOR ANSWERED,
-                        WHICH THE FOUR ROWS ABOVE CANNOT SAY AND WHICH IS THE ONE QUESTION A SUB-LINEAR ORDER
-                        IS UNBUILDABLE WITHOUT. Those score whether the member key STANDS STILL between two
-                        frontier generations; these score whether it ORDERS. Two different claims, and a
-                        candidate set rests on the second — flow_pick's own words are that an index over this
-                        key "decides WHICH members can be the maximum and the exact comparison stays
-                        flow_weight's, or it has changed the answer".
-                        THEY ARE A PAIR AND NEITHER IS READ ALONE, the same shape as `keyArmedLifetime`
-                        against its three exemptions. `keyIndexAskedLifetime` is how many scans folded the
-                        surrogate and had a maximum to compare it against, so it is the reachability witness
-                        without which a zero beside it is satisfied identically by agreement and by a fold
-                        that never ran. `keyIndexDifferedLifetime` is the subset in which the surrogate and
-                        the comparator named DIFFERENT MEMBERS and the assert still held — which is the
-                        ordinary state when two members tie, is NOT a defect, and is the row that says the
-                        check examined anything at all rather than comparing a pointer with itself. A zero
-                        there with a large ask is the strongest result available: the surrogate picked the
-                        same member every time.
-                        THE DISAGREEMENT THAT MATTERS IS ON THIS LINE AND USED TO ABORT INSTEAD, WHICH IS
-                        REWRITTEN RATHER THAN DELETED BECAUSE THE RETIRED SENTENCE IS THE ONE A READER
-                        RE-DERIVES. It read `A FIRE IS NOT ON THIS LINE AND CANNOT BE — the disagreement that
-                        matters ABORTS at flow_pick rather than being counted`, and that abort is gone: it
-                        asked two spellings to agree BIT FOR BIT where solver/flow.c's flow_index_margin
-                        DECLARES them a derived distance apart, so it ended every run that reached a few
-                        thousand members on a real page for a divergence inside its own licence. The claim
-                        survives — an index returning a member the comparator calls worse HAS changed the
-                        answer — and it is a DECISION about tie identity rather than a rate to watch, so it is
-                        published as the partition on the row below instead of as a line that discards a run's
-                        emitted surface after it has been earned.
-                        BOTH ARE LIFETIME COUNTS raised under APICLIENT_DEV, so two zeros are a question about
-                        the BUILD before they are a question about the run — the same caveat the four rows
-                        above carry and for the same reason. */
+                     /* …and whether an index over that key would have answered what the comparator answered: the
+                        four rows above score whether the key stands still, these whether it orders, which a
+                        candidate set rests on. `keyIndexAskedLifetime` counts scans that folded the surrogate
+                        against a maximum (the reachability witness); `keyIndexDifferedLifetime` the subset naming
+                        a different member while the assert held, ordinary when two members tie. A zero there
+                        with a large ask means the surrogate picked the same member every time. The
+                        disagreement that matters is not an abort, since flow.c's flow_index_margin declares
+                        the two spellings a derived distance apart; it is the partition on the next row.
+                        Lifetime counts raised under APICLIENT_DEV, so two zeros first question the build. */
                      "\"keyIndexAskedLifetime\":%ld,\"keyIndexDifferedLifetime\":%ld,"
-                     /* …AND WHICH OF THE TWO MODES EACH OF THOSE DISAGREEMENTS WAS, WHICH THE ROW ABOVE SUMS
-                        AND CANNOT SEPARATE — and the two take DIFFERENT work, which is the whole reason they
-                        are apart. `keyIndexDifferedTieLifetime` is the surrogate reading the comparator's own
-                        member AT its own extremum: it LOST a distinction rather than making a different one,
-                        and solver/flow.c proves a margin-carrying candidate set answers that arm with
-                        flow_weight untouched. `keyIndexDifferedStrictLifetime` is the surrogate reading that
-                        member on the LOSING side: a real disagreement, and the arm the TIE IDENTITY decision
-                        solver/flow.h reserves for the project owner is about.
-                        THE MODE IS STATED BY ONE PAIR AND NOT ANOTHER, which is why this is a row and not a
-                        reading a driver could compose. It is `sur_w` against the SURROGATE's reading of the
-                        member the comparator returned — never against that member's WEIGHT, which crosses two
-                        axes at once and which solver/flow.c scores at four wrong modes out of four on the
-                        fires then on record.
-                        READ THEM AGAINST THE ROW ABOVE AND NEVER ALONE: they PARTITION it, solver/flow.c
-                        asserts the sum because the three counters are raised by two statements over one
-                        condition, and a strict count is a SHARE rather than a quantity — large against the
-                        total is the single top key naming a worse member repeatedly, and small beside a much
-                        larger tie count is the order being tied.
-                        BOTH ARE LIFETIME COUNTS raised under APICLIENT_DEV and may be differenced;
-                        `keyIndexAskedLifetime` is the reachability witness for both. */
+                     /* …and which mode each disagreement was. `keyIndexDifferedTieLifetime`: the surrogate read
+                        the comparator's own member at its extremum, losing a distinction (flow.c shows a
+                        margin-carrying candidate set answers it with flow_weight untouched).
+                        `keyIndexDifferedStrictLifetime`: the member on the losing side, a real disagreement and
+                        the tie-identity decision solver/flow.h reserves for the project owner. The mode compares
+                        `sur_w` with the surrogate's reading of the returned member, never that member's weight.
+                        They partition the row above (asserted in flow.c), so a strict count is read as a share.
+                        Lifetime counts under APICLIENT_DEV; `keyIndexAskedLifetime` is the witness. */
                      "\"keyIndexDifferedTieLifetime\":%ld,\"keyIndexDifferedStrictLifetime\":%ld,"
-                     /* …AND WHAT THE ANSWER TO THAT QUESTION WOULD COST, WHICH THE PAIR ABOVE CANNOT SAY.
-                        Where the surrogate merely TIES with the comparator rather than disagreeing with it,
-                        the design that answers it edits flow_weight not at all: a CANDIDATE SET of every
-                        member within a derived margin of the surrogate's extremum, whose survivors are
-                        re-compared through flow_weight itself. solver/flow.c proves that set contains the
-                        comparator's own extremum and asserts that re-comparing it returns the same member
-                        POINTER FOR POINTER, so the design is exact rather than approximate — and what
-                        nobody had measured is HOW BIG THE SET IS.
-                        THEY ARE A FRACTION AND THE NUMERATOR IS NEVER READ ALONE.
-                        `keyIndexBandMembersLifetime` is how many members the set admitted;
-                        `keyIndexBandWeighedLifetime` is how many the test was applied to, raised on the same
-                        walk over the same population. Their quotient is the share of the frontier an index
-                        would still have to re-compare: a SMALL share is an index that narrows, and a share
-                        near one is an index that saves nothing and whose per-ask cost is the walk the order
-                        already performs. That reading is a decision about whether to build one at all rather
-                        than a defect to repair, and it is why the row exists.
-                        A LARGE SHARE IS EXPECTED AND IS NOT A WIDE MARGIN. solver/flow.h proves the band
-                        contains every member TIED with the maximum whatever the margin is, and flow.c
-                        records this frontier as "73-93% of members tied at the top" — so a band near that
-                        is the ORDER being tied, and shrinking the margin in response repairs the one thing
-                        that was not wrong. Read that banner before acting on this quotient.
-                        BOTH ARE LIFETIME COUNTS SUMMED OVER ASKS, raised under APICLIENT_DEV, and may be
-                        differenced; neither is a gauge and neither may be read against `members`.
-                        `keyIndexAskedLifetime` is the reachability witness for both, exactly as it is for
-                        the row above — a zero band beside a zero ask is a fold that never ran, and two zeros
-                        are a question about the BUILD before they are a question about the run. */
+                     /* …and what answering it would cost. The design that answers a tie edits flow_weight not at
+                        all: a candidate set of every member within a derived margin of the surrogate's extremum,
+                        re-compared through flow_weight, which flow.c proves contains the comparator's extremum
+                        and asserts returns the same member. `keyIndexBandMembersLifetime` is how many members
+                        the set admitted and `keyIndexBandWeighedLifetime` how many were tested, on the same
+                        walk: their quotient is the share an index would still re-compare (near one saves
+                        nothing). A large share is expected — the band holds every member tied with the maximum
+                        whatever the margin (solver/flow.h) — so it is the order being tied, not a wide margin.
+                        Lifetime counts summed over asks, under APICLIENT_DEV; `keyIndexAskedLifetime` is the
+                        witness. */
                      "\"keyIndexBandMembersLifetime\":%lld,\"keyIndexBandWeighedLifetime\":%lld,"
-                     /* AND THE DENOMINATOR THE HOOK'S RESCAN COUNT HAS. `scanRivalRuns / scanNextRuns` is
-                        a COST — scan work per step — and it was being read as the hook's cadence, which it
-                        is not: the rescan fires on a rank change or an incumbent switch, so a step that
-                        forks three times costs three and a step that forks none costs at most one. Read
-                        against this row instead, the same count answers the cache's own question. See
-                        solver/flow.h for the two readings that disagreed without it. */
-                     /* AND WHEN THIS CENSUS WAS TAKEN, IN THE ONE CLOCK EVERY OTHER STREAM OF THIS RUN IS
-                        CADENCED BY — `engine_work_done()`, which is what `fixture_have_answers` samples on and
-                        what run_scheduler gates its censuses on. Every row above is a reading at a MOMENT and
-                        no row said which moment, so a reader holding two lines of one run had nothing to align
-                        them by but the order they were printed in. That is not a small gap: it is the whole
-                        difference between a quantity that is WRONG and one that is EARLY, and the two send a
-                        reader to opposite places.
-                        MEASURED, ON THIS ENGINE, AT THE COST OF A BISECT. A reader took `workDone: 1` and
-                        `_switches: 0` off the @H stream, set them beside `forks: 175` off @COLD, and concluded
-                        the work accounting was broken — because `workDone` is defined as @COLD's `forks` +
-                        `_flows` + `_jobsRun` + `_switches`, and 1 cannot be 175 plus anything. Both numbers
-                        were exactly right. The @H sampler fires every PROBE_SAMPLE_EVERY units from zero, so
-                        its first table is composed at `workDone` 1 — one flow created, nothing run — and a run
-                        whose whole lifetime total never reaches the second threshold prints that table and no
-                        other, while @COLD goes on being emitted to the end. Two lines, two moments, one
-                        identity that holds at neither. The identity is real; it is only ever checkable BETWEEN
-                        ROWS OF ONE SAMPLE, and until this row there was no sample to belong to.
-                        IT IS A LIFETIME COUNTER AND MAY BE DIFFERENCED, which is what most of this line is
-                        not: the gauges above characterise an instant, and dividing any of them by the interval
-                        between two of these is the only way to get a RATE out of this stream. `picksLifetime`
-                        against this is dispatches per unit of work; `scanCensusWeights` against it is what the
-                        instrument costs per unit of what the engine did — the question a reader cannot
-                        otherwise settle without a clock, and a clock on this host is a fact about the machine.
-                        SPELLED THE WAY THE DOCUMENT SPELLS IT, one namespace and one spelling, so a reader who
-                        learns the name off @HWORK reads it off here. */
-                     /* …AND THE ONE WORD OF §scheduler'S RAZOR THAT HAD NO INSTRUMENT ANYWHERE. `neverPicked`,
-                        `neverPickedGap` and `neverPickedAtTop` are three gauges over the frontier at an
-                        INSTANT, and between them they can say only that a tied tail EXISTS — none can say
-                        whether a PICK ever passed one over, which is the claim STARVES actually makes. This
-                        counts dispatches where the scan returned an already-dispatched member while a
-                        never-dispatched one stood at exactly the same weight.
-                        A LIFETIME COUNTER — the only kind here that may be differenced — and it is read as a
-                        FRACTION of `picksLifetime`, never raw. A handful over a session is flow_pick's strict
-                        comparison doing its job, since the incumbent seeds the scan and a tie legitimately
-                        goes to it; a figure on the order of the dispatches themselves is the ORDER having
-                        stopped separating members while registry position decides which one runs. Those are
-                        opposite repairs, and nothing else in this document tells them apart.
-                        WHY THE THREE GAUGES COULD NOT: a frontier that GROWS BY FORKING makes all of them
-                        uninformative at once, and this run measured it — 5786 flows against 1010 dispatches,
-                        so `neverPicked` climbing is arithmetic about the fork factor rather than about the
-                        order. `picksMax` cannot fall toward 1 while a framed flow legitimately needs many
-                        quanta to finish one program, and `picksLive/(members-neverPicked)` sums re-dispatches
-                        that CONTINUE a program — necessary — with those that pass over a starved member,
-                        which are the defect. A ratio of both is a reading of neither.
-                        AND THIS ROW SUMS THEM TOO, WHICH IS THE CORRECTION THIS BLOCK CARRIES. The paragraph
-                        above used to end by offering this row as the thing that tells the two apart, and it
-                        does not: it fires on `best` having been dispatched before, which says nothing about
-                        whether `best` had a program to finish. On a forking page a newborn arm stands at its
-                        parent's exact weight, so every quantum of every multi-quantum program is one of
-                        these. `starvedPicksIdle` beside it is the separation, and the remainder — this minus
-                        that — is what the frontier spends finishing programs. */
-                     /* THE AWAY-FROM-BASE POPULATION AND WHAT IT COSTS AN INDEX — four rows, and the two
-                        KINDS are in the keys because a reader who cannot name a quantity's kind from the
-                        output is not entitled to do arithmetic on it. The two `Live` rows are GAUGES at this
-                        instant; the two `Lifetime` rows are counters and are the only ones a reader may
-                        difference.
-                        THE PAIR OF GAUGES IS A CONSERVATION IDENTITY AND NOT TWO OPINIONS. `epochAwayLive`
-                        is maintained incrementally at four sites in solver/flow.c and summed over distinct
-                        families at the census's family door; `epochAwayWalk` is that same census asking
-                        flow_own_silence of every member. Two maintainers, one instant, so `epochAwayLive ==
-                        epochAwayWalk` is a check — asserted in flow_wfq_census and published here so it is
-                        checkable on this document from outside the process. A difference is a FIFTH
-                        transition site the incremental count does not have, never a disagreement about what
-                        the population is.
-                        `epochRebuildLifetime` IS THE READING AND THE GAUGE IS NOT. flow_credit_emit sends a
-                        whole family back to base by moving a generation with no per-member write, so an
-                        index over solver/flow.c's `flow_index_key` rebuilds exactly the members standing
-                        away — and this is that number summed AT EACH EMISSION, which is the whole
-                        maintenance such an index pays. The gauge cannot answer it: a census lands at an
-                        arbitrary point between two emissions, so it reads near zero just after one and at
-                        its peak just before, and one sample is a lottery.
-                        READ IT AGAINST `scanNextWeights`, WHICH IS ALREADY ON THIS LINE. That row is the
-                        lifetime sum over scans of the members each one weighed — exactly the walk an index
-                        would REPLACE — so well below it the epoch is a COST and an index narrows, and at or
-                        above it the rebuild is the walk moved rather than removed. `epochResetsLifetime` is
-                        the other denominator: the quotient is the average rebuild per emission, which tells
-                        a large total over many cheap emissions from a small one over few expensive ones.
-                        A ZERO IN `epochRebuildLifetime` IS READ AGAINST `epochResetsLifetime` FIRST. Zero
-                        resets is a run that never emitted, and the row is then silent about the design
-                        rather than favourable to it; zero rebuild across non-zero resets is the strongest
-                        result available and is reachable, because the population empties whenever nothing
-                        was charged since the last finding. */
+                     /* The away-from-base population and what it costs an index. The `Live` rows are gauges, the
+                        `Lifetime` rows counters. `epochAwayLive` is maintained incrementally at four sites in
+                        solver/flow.c and summed per family at the census's family door; `epochAwayWalk` asks
+                        flow_own_silence of every member. Two maintainers at one instant, so equality is asserted
+                        in flow_wfq_census and checkable here; a difference is a fifth transition site.
+                        `epochRebuildLifetime` is the reading: flow_credit_emit returns a family to base by moving
+                        a generation, so an index over `flow_index_key` rebuilds exactly the members standing away,
+                        and this sums that at each emission (a gauge sample between emissions is a lottery). Read
+                        it against `scanNextWeights`, the walk an index would replace; `epochResetsLifetime` gives
+                        the mean rebuild per emission. Zero resets is a run that never emitted, so read a zero
+                        rebuild against it first. */
                      "\"epochAwayLive\":%ld,\"epochAwayWalk\":%ld,"
                      "\"epochRebuildLifetime\":%ld,\"epochResetsLifetime\":%ld,"
+                     /* Whether a pick ever passed over a never-run member, which no gauge can answer. This counts
+                        dispatches where the scan returned an already-dispatched member while a never-dispatched
+                        one stood at exactly the same weight, raised only where `best != seed`, the
+                        displacement engine.c credits flow_credit_pick for. A lifetime counter, read as a
+                        fraction of `picksLifetime`: a handful is flow_pick's strict comparison letting the
+                        incumbent keep a tie, a figure near the dispatches is the order no longer separating
+                        members. On a forking page a newborn arm stands at its parent's weight, so this also
+                        counts every quantum of a multi-quantum program; `starvedPicksIdle` separates those. */
                      "\"starvedPicks\":%ld,"
-                     /* …AND THE SUBSET IN WHICH THE RE-DISPATCHED MEMBER HAD NOTHING TO CONTINUE, which is
-                        the one of the two populations §scheduler's razor calls STARVES. A member with no live
-                        frame and no microtask checkpoint owed stands at the unit boundary HTML §8.1.4.4
-                        "Calling scripts" step 3 of clean up after running script draws — it has FINISHED
-                        its trial — so a dispatch handed back to it while a never-dispatched member stands at
-                        its exact weight is a pass-over with nothing necessary in it.
-                        READ THIS AGAINST `picksLifetime` AND NOT `starvedPicks` AGAINST IT. The superset
-                        answers how often the tie-break decided a dispatch; only this one answers how often it
-                        decided one WRONGLY, which is the question the two opposite repairs hang
-                        on. A LIFETIME COUNTER, raised at the same line and under the same condition as the
-                        superset, so `starvedPicksIdle <= starvedPicks` is an identity of one evaluation.
-                        IT IS STILL AN UPPER BOUND, by one clause solver/flow.c states at the counter: a
-                        parked continuation is a per-member fact for every member EXCEPT the one holding the
-                        thread, whose park queue lives in the runtime for the duration of its turn. */
+                     /* …and the subset in which the re-dispatched member had nothing to continue — no live frame
+                        and no checkpoint owed, standing at the unit boundary of HTML §8.1.4.4 "Calling scripts"
+                        clean up after running script step 3 — a pass-over with nothing necessary in it. Read this,
+                        not `starvedPicks`, against `picksLifetime`. Raised at the same line under the same
+                        condition, so the subset relation is one evaluation. An upper bound: the thread holder's
+                        parked continuations live in the runtime during its turn (solver/flow.c). */
                      "\"starvedPicksIdle\":%ld,"
-                     /* AND HOW DEEP THE PLATEAU THOSE TWO ROWS SIT ON IS, WHICH IS THE COMPLEMENT OF
-                        BOTH OF THEM AND THE READING THAT DECIDES WHETHER THE ORDER IS WORKING AS SPECIFIED.
-                        The pair above counts the pick that DISPLACES the incumbent over a level never-run
-                        member; these count the pick that KEEPS it. §Attention's value yield blesses a
-                        retention ("a top-ranked flow runs on at ~zero switch cost") and §scheduler's optimism
-                        bonus claims it ENDS ("a never-run flow is never starved"), and the two resolve
-                        oppositely on exactly this population — so the only thing either can be wrong about is
-                        HOW LONG one lasts, which neither states and nothing was measuring.
-                        READ `plateauHeld / plateauRuns` AND NEVER `plateauHeld` ALONE. That quotient is the
-                        MEAN number of consecutive dispatch scans an incumbent held the thread while somebody
-                        untouched stood level with it. BOUNDED is the queue rotating, which is what solver's
-                        aging term is priced for — flow.h says a tied flow "hands over after ONE quantum" and
-                        engine.c asserts at the charge that a whole quantum moves the notch. `plateauRuns` at
-                        1 beside a large `plateauHeld` is ONE unbroken hold for the whole run, which is that
-                        guarantee being FALSE rather than the yield being cheap.
-                        `plateauAsked` IS THE REACHABILITY WITNESS AND THE OTHER THREE ARE UNREADABLE WITHOUT
-                        IT: a zero `plateauHeld` beside a zero ask is a scan population that never existed —
-                        no incumbent this scan weighed, or no never-dispatched member to stand level — and is
-                        satisfied identically by an order serving its frontier perfectly and by a dispatch
-                        loop that never ran. A zero ask beside a non-zero `picksLifetime` is its own finding:
-                        no dispatch ever faced a never-dispatched member, which is a frontier that drains.
-                        `plateauHeld / plateauAsked` is then how tied the frontier is AT THE LINE THAT
-                        DISPATCHES, which the three census GAUGES can only say of an instant.
-                        ALL FOUR ARE LIFETIME COUNTERS and may be differenced across two samples, which is
-                        what turns the depth into a rate over a window instead of an average over a session.
-                        `plateauHeldIdle` is an UPPER BOUND by TWO of the unit boundary's three clauses: an
-                        incumbent's parked continuations live in the RUNTIME for the duration of its turn and
-                        cannot be asked about from the pick at all, and the microtask clause is a queue WALK
-                        that this row — firing on nearly every scan of a tied frontier — may not pay in a
-                        release build. So a retention by an incumbent holding queued work is counted here as
-                        one with nothing to continue. solver/flow.c's residual names both and what closes
-                        them; until then read this against `jobsQueued`, which is the only thing that
-                        separates the two. */
+                     /* …and how deep the plateau is: the pick that keeps the incumbent over a level never-run
+                        member, where the pair above counts the one that displaces it. `plateauHeld / plateauRuns`
+                        is the mean consecutive scans an incumbent held the thread with someone untouched level;
+                        bounded is the queue rotating as the aging term is priced for (flow.h: a tied flow hands
+                        over after one quantum), while `plateauRuns` 1 beside a large `plateauHeld` is one unbroken
+                        hold. `plateauAsked` is the reachability witness; zero beside nonzero `picksLifetime` is a
+                        frontier that drains, and `plateauHeld / plateauAsked` is how tied the frontier is at the
+                        dispatching line. Lifetime counters. `plateauHeldIdle` is an upper bound: an incumbent's
+                        parked continuations are not visible from the pick, and the microtask clause is a queue
+                        walk too costly here in release (flow.c's residual); read it against `jobsQueued`. */
                      "\"plateauAsked\":%ld,\"plateauHeld\":%ld,"
                      "\"plateauRuns\":%ld,\"plateauHeldIdle\":%ld,"
-                     /* AND WHETHER THE ORDER PUBLISHED ABOVE IS DECIDING ANYTHING AT ALL — the frontier's
-                        arrival and departure processes, which every row above presupposes and none of them
-                        asks. Read `arrivals / picksLifetime`: MEMBERS MINTED PER DISPATCH. Below 1 the
-                        frontier drains and a `neverPickedAtTop` plateau is the ORDER failing to separate
-                        members that are being reached, so the repair is in flow_weight's terms; above 1 it
-                        does not drain at any ordering, the served prefix is a vanishing fraction of a set
-                        that grows, and a term separating two members of the untouched remainder has
-                        reordered something nothing consumes. Those take opposite diffs and no other row here
-                        tells them apart.
-                        DO NOT READ `rankChanges` FOR THIS. frontier_rank_changed has NINE callers and two of
-                        them change the membership — the other seven are the clock write, three fitness
-                        observations and three host-owed transitions — so that row is a mixture of nine
-                        populations over a denominator raised at one event. It happens to agree: measured at
-                        artifact c23bfe6a on a fixture that emits nothing and fetches nothing, `rankChanges`
-                        stood exactly SIX above `members` at all twelve samples of a 180 s series, which is
-                        the shape that never gets checked.
-                        BOTH ARE LIFETIME COUNTERS and are the only rows on this line that are, so both may be
-                        DIFFERENCED across two samples — which is what turns the ratio into a RATE over a
-                        window instead of an average over a session. `members` at the head of this record is a
-                        GAUGE and is neither. Their identity is `arrivals - departures == members`, asserted
-                        in flow_wfq_census where all three are in one hand and checkable on this document
-                        from outside the process; a violation means one of them has a second writer and the
-                        ratio is about some other population than the members it is divided against. */
+                     /* …and whether the order is deciding anything: the frontier's arrival and departure
+                        processes. `arrivals / picksLifetime` is members minted per dispatch: below 1 the frontier
+                        drains and a `neverPickedAtTop` plateau is the order failing to separate reachable members
+                        (repair flow_weight); above 1 no ordering drains it. Do not read `rankChanges` for this:
+                        frontier_rank_changed has many callers, most of which do not change the membership.
+                        Lifetime counters; `arrivals - departures == members` (a gauge) is asserted in
+                        flow_wfq_census and checkable here. */
                      "\"arrivals\":%lld,\"departures\":%lld,"
-                     /* …AND WHETHER THE ORDER WAS EVER OFFERED ANYTHING TO ORDER BY, which every reward row
-                        on this line presupposes and none of them asks. `valTop`, `topForgiven` and `selfEmit`
-                        all read ZERO both for a run in which no detector fired and for a run in which every
-                        detection happened on HOST TIME with no flow to pay — the root document's markup,
-                        inventoried by `qjs_init`'s parse before `qjs_begin` seeds the frontier. Those take
-                        opposite work (build the reach, against nothing at all: the discard is correct) and no
-                        other row here separates them. `creditsDroppedLifetime > 0` with
-                        `creditsPaidLifetime: 0` is the second; `creditsOfferedLifetime: 0` is the first.
-                        THREE LIFETIME COUNTERS, so all three may be DIFFERENCED, unlike the reward rows above
-                        which are gauges. Their identity is offered == paid + dropped, asserted in
-                        flow_wfq_census where all three are in one hand and checkable on this document. */
+                     /* …and whether the order was ever offered anything to order by. `valTop`, `topForgiven` and
+                        `selfEmit` read zero both when no detector fired and when every detection happened on host
+                        time with no flow to pay (the root markup inventoried by `qjs_init`'s parse before
+                        `qjs_begin` seeds the frontier). `creditsOfferedLifetime: 0` is the first;
+                        `creditsDroppedLifetime > 0` with `creditsPaidLifetime: 0` the second. Lifetime counters;
+                        offered == paid + dropped is asserted in flow_wfq_census. */
                      "\"creditsOfferedLifetime\":%lld,\"creditsPaidLifetime\":%lld,"
                      "\"creditsDroppedLifetime\":%lld,"
+                     /* `workDone` (`engine_work_done()`) dates this census in the clock every other stream of the
+                        run is cadenced by (`fixture_have_answers` samples on it, run_scheduler gates censuses on
+                        it), so rows of two lines are compared only within one sample: the @H sampler fires every
+                        PROBE_SAMPLE_EVERY units from zero, so its first table can be composed at `workDone` 1
+                        while @COLD continues to the end. A lifetime counter: `picksLifetime` and
+                        `scanCensusWeights` against it are per-unit-of-work rates. `rankChanges` is the hook's
+                        rescan denominator: `scanRivalRuns / scanNextRuns` is scan work per step, not cadence,
+                        since a rescan fires on a rank change or an incumbent switch (solver/flow.h). */
                      "\"workDone\":%ld,\"rankChanges\":%ld}",
                      w.members, w.val_min, w.val_max, w.val_top, w.vt,
                      w.val_zero, w.val_arrived, w.val_unplaced, w.self_emit, w.unrun,
@@ -1797,11 +945,9 @@ char *result_wfq_json(void) {
                      w.deliv_ready, w.deliv_framed, w.deliv_owed, w.deliv_w_gap,
                      (long long)w.deliv_w_gap_vis, (long long)w.w_top_vis,
                      w.cur_deep, w.cur_deep_live, w.cur_deep_w_gap,
-                     /* THE WEIGHT COUNTERS ARE 64-BIT AND THE RUN COUNTERS ARE NOT, which is not an
-                        inconsistency: a run is raised ONCE PER SCAN and a weight ONCE PER MEMBER PER SCAN,
-                        so they differ by the frontier size and only the second reached 2^31. The cast is
-                        here rather than a PRI macro because int64_t is `long` where this links native and
-                        `long long` on wasm32, so no fixed specifier is right on both targets. */
+                     /* Weight counters are 64-bit and run counters are not: a run is raised once per scan, a
+                        weight once per member per scan, and only the latter reaches 2^31. Cast rather than a PRI
+                        macro, since int64_t is `long` natively and `long long` on wasm32. */
                      flow_scan_runs(FLOW_SCAN_NEXT),  (long long)flow_scan_weights(FLOW_SCAN_NEXT),
                      flow_scan_runs(FLOW_SCAN_RIVAL), (long long)flow_scan_weights(FLOW_SCAN_RIVAL),
                      flow_scan_runs(FLOW_SCAN_OTHER), (long long)flow_scan_weights(FLOW_SCAN_OTHER),
@@ -1823,23 +969,12 @@ char *result_wfq_json(void) {
                      engine_work_done(), flow_rank_changes());
 }
 
-/* ONE ROW-COMPOSER FOR THE TWO STATE-KIND HISTOGRAMS on the line below. They differ in exactly one thing — the
-   side of the pair they count — and not at all in how a row is spelled, so a second copy of this loop would be
-   a second speller of the row format, which is the drift `cold_hist_json`'s own banner exists to prevent one
-   census over.
-   IT HOLDS NO LIST OF ITS OWN, which is the whole reason it is affordable: the bound is cow_state_kind_count()
-   and the row name is cow_state_kind_name(), both expansions of solver/cow.h's COW_STATE_KINDS, so a capture
-   unit added there is counted, named and rendered without anybody editing this file. A census that kept its own
-   kind names would be the second copy CLAUDE.md §AN-AUDITOR-DERIVES-THE-RULE is about, and the one that drifts
-   is always the copy nobody runs against reality.
-   A SELECTOR RATHER THAN AN ARRAY, because the two counts live behind ONE accessor and are read together: a
-   caller that copied one side into a local array would be a second place where a kind's INDEX means something,
-   and an index is only a name while the list is fixed.
-   `what` NAMES THE HISTOGRAM IN THE WIDTH ASSERT for the reason cold_hist_json's does — a DCHECK stamps the
-   line it is WRITTEN at, so a shared helper's message reports this function for both callers and "the histogram
-   did not fit" would otherwise name an action with no object (CLAUDE.md §AN-ASSERT-THAT-NAMES-A-REMEDY).
-   IT RETURNS NOTHING AND ASSERTS NO SUM. There is no total these rows add up to: the pair's own identity is
-   per-kind (`made <= asks`) and it is asserted in cow.c at the entry that makes it, where both are in hand. */
+/* One row composer for the two state-kind histograms, which differ only in the side of the pair counted.
+   It holds no list of its own: the bound is cow_state_kind_count() and the names cow_state_kind_name(), both
+   expansions of solver/cow.h's COW_STATE_KINDS, so a capture unit added there renders with no edit here. A
+   selector rather than an array, so a kind's index means something in one place only. `what` names the
+   histogram in the width assert. Asserts no sum: the pair's identity is per kind (`made <= asks`), asserted
+   in cow.c. */
 static void cow_state_hist_json(char *buf, size_t cap, int want_made, const char *what) {
     int hi = 0, k, n = cow_state_kind_count();
 
@@ -1862,27 +997,13 @@ static void cow_state_hist_json(char *buf, size_t cap, int want_made, const char
     buf[hi] = 0;
 }
 
-/* WHICH COMPONENT ASKED — the per-site breakdown of ONE of the histogram rows above, and the reason it is a
-   separate object rather than a wider row is that it is a different KIND of partition: `cowStateAsks` splits
-   the asks by solver/cow.h's capture-unit list, which is seven rows and fixed at compile time, and this splits
-   ONE of those rows by the ~30 component accessors that reach it, which is a population only a run can know.
-   IT IS A HEAP COMPOSITION FOR EXACTLY THAT REASON. The two kind histograms go into stack buffers whose width
-   COW_STATE_KINDS_JSON_MAX derives from the list they render; there is no list here to derive one from, so
-   the size is COUNTED FROM THE ROWS THEMSELVES the way solver/decide.c's fork census counts its own — a row
-   costs its key, the two quotes, the colon, the comma, up to eleven digits of `int` line and a `long`'s
-   widest twenty, which is the key plus 36.
-   THE KEYS ARE NOT ESCAPED AND THAT IS A STATEMENT ABOUT WHOSE BYTES THEY ARE, not an omission. decide.c
-   escapes its rows because they are the PAGE's; these are `__FILE__` at a call site in this repository,
-   rewritten repo-relative by the build's own `-ffile-prefix-map`, so the only way a quote or a backslash
-   reaches this loop is a source path containing one — which the DCHECK below says out loud rather than
-   letting it write a document that will not parse.
-   NO ROW IS OMITTED AND NO ROW IS SYNTHESISED: a call site that has never been reached under a running flow
-   is not on the list at all, because this is a census of ASKS and a 0 here would be a claim about that site's
-   reachability which an ask count is not entitled to make. `{}` is the positive statement that no component
-   record was reached, and engine/build.mjs's reader takes it as one against the `cowStateAsks.hostRec` it is
-   handed in the same census.
-   NULL ON ALLOCATION FAILURE, which result_swap_json passes on as "this census is absent" exactly as composef
-   already does — see solver/compose.h. */
+/* Which component asked: the per-site split of the `hostRec` row of `cowStateAsks`, a population only a run
+   can know, so it is composed on the heap and sized from its own rows (key plus 36: quotes, colon, comma, an
+   `int` line and a `long`'s widest twenty). The keys are `__FILE__` at call sites in this repository, made
+   repo-relative by the build's `-ffile-prefix-map`, so they are not escaped; the DCHECK states that. A site
+   never reached is absent, not 0 — an ask count makes no claim about reachability — and `{}` is the positive
+   statement that no component record was reached. NULL on allocation failure, which result_swap_json passes
+   on as an absent census (solver/compose.h). */
 static char *cow_site_hist_json(void) {
     const CowHostRecSite *head = cow_host_rec_sites(), *s;
     size_t n = 3;            /* "{}" and the NUL */
@@ -1918,158 +1039,12 @@ static char *cow_site_hist_json(void) {
     return out;
 }
 
-/* WHAT A CONTEXT SWITCH COSTS, AND WHAT THE TWO CHAINS ARE STILL HOLDING — see result.h for why this composes
-   here rather than in a host's printf. It DECIDES NOTHING: it reads cow.c's and dom_cow.c's own stats and
-   renders them.
-
-   THE TWO HALVES ANSWER DIFFERENT QUESTIONS AND THAT IS WHY THEY ARE ON ONE LINE. `installs`/`entries`/`worst`
-   are the COST of a switch — how many the scheduler made and how many delta slots it had to unapply and
-   re-apply, with `mean` the per-switch figure a reader actually compares. `heapSegs`/`domSegs` and their entry
-   counts are RETENTION, which is the other thing a delta can get wrong and which the cost rows are blind to: a
-   frontier of four flows whose chains hold tens of thousands of frozen segments is a lifetime bug that reads
-   exactly like a healthy run in the first three numbers.
-
-   THE KINDS, PER ROW, BECAUSE THEY DECIDE WHAT MAY BE DONE WITH THE NUMBERS AND THE KEYS DO NOT SAY.
-   `installs` and `entries` are LIFETIME COUNTS (cow.c's `g_swap_count`/`g_swap_entries`, raised at the swap
-   and lowered by nothing), so only those two may be differenced across two samples. `worst` is a HIGH-WATER
-   MARK, monotone but not a count of anything — differencing it answers about no quantity. `mean` is a
-   DIVISION, `entries / installs`, which is invisible from its key and is the trap CLAUDE.md records under
-   `svcMax`: it is per-switch cost and is not a count, so it moves when either term moves and cannot be summed
-   with anything. `heapSegs`/`heapSegEntries`/`domSegs`/`domSegEntries` are GAUGES of the live frozen chains
-   (`g_seg_live`/`g_seg_entries_live`, which the release path decrements) and FALL whenever a segment is let
-   go, which is the one event they exist to make visible.
-   THE IDENTITY IS `entries >= worst` WHENEVER `installs > 0` and holds by construction (`worst` is a maximum
-   over the terms `entries` sums), which is the whole of what a reader can check from these bytes.
-
-   AND THE THIRD HALF IS WHICH STATE UNITS WERE EXERCISED AT ALL, which the two above are blind to in the way a
-   total is always blind to its parts: `installs`/`entries` say a swap moved N delta slots and say nothing about
-   what KIND of thing any of them held, so a capture unit that has never recorded one entry in the life of the
-   engine is indistinguishable here from one carrying the traffic. `cowStateAsks` and `cowStateMade` are that
-   partition, per kind, and they are a PAIR for the reason solver/cow.h gives at the accessor: a bare `made` of
-   zero means three different things — nothing reached that capture point under a running flow, or it was
-   reached and the unit's own gate correctly refused because the object was flow-private, or the unit is broken
-   — and only the ask count separates the first from the second.
-   THEIR KINDS: both are per-kind LIFETIME COUNTS (cow.c's `g_state_asks`/`g_state_made`, raised at the capture
-   CALL and at the entry it makes, and lowered by nothing), so either may be differenced across two samples.
-   THEY ARE NOT A RATIO AND MUST NOT BE DIVIDED — a walk asks once per key and records ONCE, because the dedup
-   is the mechanism working, so `asks` running far ahead of `made` is a healthy unit and not a refusal rate.
-   The identity that does hold is `made <= asks` per kind, and it is asserted in cow.c where an entry is made
-   rather than checked here, because that is the one place both numbers are in hand.
-
-   AND WITHIN ONE OF THOSE KINDS, WHICH COMPONENT ASKED — `cowHostRecAsksBySite`, the third half taken one
-   level further down on the one row where the aggregate ran out of answers. A census window measured
-   125,800,636 asks of `hostRec`, 99.6% of every stepped microsecond in it and byte-identical across two
-   independent runs, and `cowStateAsks` cannot be made to say which of the ~30 component `*_of(v)` accessors
-   supplied them: it is one counter behind all of them, so "which unwrap is the plurality" is not a finer
-   reading of that number but a partition it has no room for.
-   ITS KIND IS THE SAME AS THE ROW IT SPLITS: a per-SITE LIFETIME COUNT of asks (cow.c raises it immediately
-   after the prologue that raises `g_state_asks[HOST_REC]` and before this unit's own gate), so it may be
-   differenced across two samples, and it must not be divided by `cowStateMade` for the reason the pair above
-   must not — a walk asks once per key and records ONCE.
-   THE IDENTITY IS THAT THE ROWS SUM TO `cowStateAsks.hostRec`, which is the one thing a reader cannot check
-   from the rows alone and the reason this is worth publishing as an object rather than as a largest-row
-   number. It is asserted TWICE over two different subjects: cow.c's `cow_host_rec_sites` checks the COUNTERS
-   where both halves are in one hand, and engine/build.mjs's @SWAP reader sums the RENDERED rows against the
-   `cowStateAsks.hostRec` of the same census — so a row lost between the counters and this composer is visible
-   only in the second, which is also the only one of the two that survives a release build.
-   A SITE THAT HAS NEVER BEEN REACHED IS ABSENT RATHER THAN 0, because this is a census of asks and a zero row
-   would be a claim about a call site's reachability that an ask count is not entitled to make; `{}` is the
-   positive statement that no component record was reached under a running flow at all.
-
-   AND THE FOURTH HALF IS AN ENTRY KIND THE THIRD CANNOT SPEAK FOR: the per-flow COROUTINE-ACTIVATION SWAP.
-   `cowStateAsks`/`cowStateMade` partition the `is_state` entry kind and nothing else, so the `is_gendata`
-   entry — a shared generator object's or async closure's execution-state pointer, swapped per flow — passes
-   through neither cow_state_ask nor cow_state_entry_set and is invisible in every row above it: a run that
-   never swapped one prints bytes identical to a run built on them. `coroSwapGenCalls`/`coroSwapGenMade` and
-   `coroSwapAsyncCalls`/`coroSwapAsyncMade` are that kind, split by its two sub-kinds.
-   EACH IS A PAIR FOR THE THIRD HALF'S REASON AND NOT THE SAME ONE. There a bare `made` of zero is three
-   states; here it is two, and for the ASYNC sub-kind they take opposite work — the capture was never reached
-   (nothing in the run resumed a shared suspended activation), or it was reached and DECLINED because no delta
-   owned the swap, in which case the hook is live and the arm that adopts the clone's references still never
-   ran. Only the call count separates those, and it is why an entry count alone would not have answered.
-   THE WORD IS `Calls` AND NOT `Asks` BECAUSE THE GATE IS DIFFERENT, which a key cannot carry: cow.c raises a
-   state kind's ask only after `cow_hooks_off() || !g_current`, so a zero there means "not reached under a
-   running flow", while these are raised before any gate cow.c owns and a zero means "not reached".
-   WHAT THE GAP MEANS IS PER SUB-KIND AND THE TWO MUST NOT BE ADDED. The generator producer is handed its
-   delta by the fork assembly and its only early return is the dedup-REPLACE of a re-fork inside one flow, so
-   `GenCalls - GenMade` is re-forks; the async producer is a hook whose only early return is the decline, so
-   `AsyncCalls - AsyncMade` is declines. Neither is a refusal rate and neither is divided here.
-   THEY ARE FOUR LIFETIME COUNTS (cow.c's `g_coro_*`, raised at the producer and at the entry it makes, and
-   lowered by nothing), so any of them may be differenced across two samples. The identity is `Made <= Calls`
-   per sub-kind and cow.c DCHECKs it at the one entry constructor where both are in hand; that check is
-   compiled out of a release build, so nothing re-derives it here.
-   THE GENERATOR PAIR IS THE ARMING OF THE ASYNC PAIR'S ZERO AND IS NOT A CONTROL FOR ITS REACHABILITY — the
-   distinction matters and is the reason it is on this line at all. The two sub-kinds share this composer, the
-   accessor and the entry constructor, so a nonzero `coroSwapGenMade` beside a zero `coroSwapAsyncMade` proves
-   the counting reaches the census and the async zero is a fact about the run. It proves nothing about whether
-   the async hook CAN be reached: the two producers have different callers entirely — one is the scheduler's
-   fork assembly, the other the interpreter's await-resume — so they share a mechanism and not a reachability.
-
-   AND THE FIFTH HALF IS WHICH OF THE PAGE'S OWN LINES CHANGED THE DOCUMENT, which every row above it is
-   blind to in the way a DELTA is always blind to its author: `domSegs`/`domSegEntries` say a flow's DOM delta
-   holds N entries and say nothing about how many DISTINCT places in the bundle wrote them, so a surface built
-   by one `innerHTML` assignment and one built by four hundred scattered `appendChild`s are one number here.
-   `domWrites`/`domWritesSited`/`domWritesUnsited`/`domSites` are that question, and they are FOUR rows rather
-   than a ratio for the reason the pairs above are pairs: a bare `domSites` of zero means two things — no page
-   code changed the document at all (the tree is the parse's, and `domWritesUnsited` carries the traffic), or
-   nothing changed it (both write rows are zero) — and only the partition separates them.
-   THEIR KINDS AND THEIR IDENTITIES ARE THE ACCESSOR'S, stated at solver/dom_cow.h's `dom_cow_site_stats` and
-   asserted in dom_cow.c where both halves of each are in one hand: all four are LIFETIME COUNTS, so any may be
-   differenced; `domWrites == domWritesSited + domWritesUnsited` and `domSites <= domWritesSited`.
-   `domSites` IS ALSO A HIGH-WATER MARK — a name is inserted once and never retired — so a plateau in it across
-   two samples of one run is what a complete alphabet looks like and not a ceiling, and only its terminal value
-   beside `domWritesSited` says anything.
-   IT IS NOT A COUNT OF SURFACES AND MUST NOT BE READ AS ONE. The identity a rendered surface would be keyed by
-   is the SET of sites that built it, held PER FLOW; this counts names over the WHOLE SESSION, which is the
-   alphabet that identity would be drawn over and not the identity.
-   AND THE PER-FLOW SET IS `domSiteFolds`/`domSiteRepeats`/`domSiteSetsSeen`, three more LIFETIME counts from
-   solver/dom_cow.h's `dom_cow_site_set_stats`, which is where their kinds and their three identities are
-   stated and dom_cow.c is where all three are asserted: `domWritesSited == domSiteFolds + domSiteRepeats`
-   (the partition), `domSiteSetsSeen <= domSiteFolds` and `domSites <= domSiteFolds`. The last of those is the
-   one line tying the two halves of this census together — a name new to the SESSION was new to whichever flow
-   ran it — so a reader who divides them gets how many flows executed the average site, which is the traffic an
-   identity keyed on the set would have to key and is the number these rows exist to produce.
-   `domSiteSetsSeen` IS A CEILING ON THE NUMBER OF SURFACES AND NOT A COUNT OF THEM. A flow passes through every
-   PREFIX of its own set on the way to it, so a flow that ends at three sites contributes three sets; a count of
-   surfaces needs a moment at which a flow's set has SETTLED, and §NO BOUNDS says no such moment can be decided
-   from the inside. It is emitted because it is the quantity that can be MEASURED, and it is named for what it
-   is so that nobody reads it as the one that cannot.
-   IT DOES NOT PARTITION `cowHostRecAsksBySite` ABOVE IT AND SHARES NO QUANTITY WITH IT, which is worth saying
-   because the two carry the same word: that row names the ENGINE'S OWN C call sites that asked a capture unit,
-   by `__FILE__`/`__LINE__`, and this one names the PAGE'S JavaScript, by quickjs's JS_RunningSiteHash. They
-   answer about different programs and neither is a floor or a bound on the other.
-
-   AND THE SIXTH HALF IS THE MOMENT, which is the one thing every row above it is structurally unable to give.
-   `domSiteSetsSeen` is a CEILING because a flow passes through every PREFIX of its own set, and a COUNT of
-   surfaces needs a moment at which that set has SETTLED — which §NO BOUNDS says cannot be decided from inside
-   the flow, because every candidate (a timer, a write count, "when the flow finishes") is a bound somebody
-   chose. HTML §8.1.7.3 "Processing model"'s RENDERING OPPORTUNITY is a moment the STANDARD names, so it is the
-   one candidate that is not. `renderingOpportunityAsks`/`renderingOpportunities`/
-   `renderingOpportunitiesSited`/`renderingDigests` are solver/dom_cow.h's `dom_cow_rendering_stats`, where
-   their kinds and their three identities are stated and dom_cow.c is where all three are asserted:
-   `renderingOpportunities <= renderingOpportunityAsks`, `renderingOpportunitiesSited <= renderingOpportunities`
-   and `renderingDigests <= renderingOpportunitiesSited + 1`.
-   THEY EXIST TO REFUTE THE MOMENT, NOT TO ASSUME IT, and they can do it three ways. A `renderingOpportunities`
-   at or near zero says the moment is UNREACHABLE and nothing can be keyed on it — and the ask row is what
-   attributes that, since a zero `renderingOpportunityAsks` is the scheduler's rung never being reached while a
-   nonzero one with no grants is the gate declining every time. A `renderingDigests` near `renderingOpportunities`
-   says the COLLAPSE BUYS NOTHING: every opportunity stood in a set no other one did, so the moment is a flow
-   serial number and not a surface, which is exactly the refutation `domSiteSetsSeen` names for itself one level
-   down. `renderingDigests` well below `renderingOpportunities` is the collapse working, and the ratio is how
-   much — a flow's forty DOM writes between two opportunities contributing ONE surface rather than forty.
-   `renderingOpportunitiesSited` IS WHAT SEPARATES A SMALL `renderingDigests` FROM A GOOD ONE. A flow reaches
-   that rung having run out of work, and one that ran out of work without the page's own code touching the
-   document stands at the EMPTY set — so a `renderingOpportunitiesSited` far below `renderingOpportunities` says
-   the opportunities are landing on flows that rendered nothing, which reads in `renderingDigests` exactly like
-   a collapse that worked and is the opposite finding.
-   THE DECLINES ARE NOT A ROW. `renderingOpportunityAsks - renderingOpportunities` is a function of its two
-   neighbours, and a derived row printed beside the rows it is made of is one fact counted twice.
-   IT SHARES NO QUANTITY WITH `domSiteSetsSeen` AND IS NOT BOUNDED BY IT, which is worth saying because the two
-   are digests of the same sets: that row records a set at every FOLD, and a flow standing at the EMPTY set has
-   never folded, so a digest counted here can be one it does not hold. The empty set is the likeliest digest at
-   this rung, not a corner.
-
-   NO BYTE COUNT — see solver/compose.h's `composef`. */
+/* What a context switch costs and what the two chains still hold, rendered from cow.c's and dom_cow.c's own
+   stats (see result.h); it decides nothing. Rows are grouped below at their format lines.
+   `installs`/`entries`/`worst`/`mean` are the cost of a switch: lifetime counts `installs` and `entries`
+   (cow.c's `g_swap_count`/`g_swap_entries`), `worst` a high-water mark, and `mean` the division
+   `entries / installs`, which is not a count and sums with nothing. `entries >= worst` whenever
+   `installs > 0`. Sized by composef (solver/compose.h). */
 char *result_swap_json(void) {
     long sc = 0, st = 0, sm = 0, hs = 0, he = 0, ds = 0, de = 0;
     long gc = 0, gm = 0, ac = 0, am = 0;
@@ -2092,13 +1067,56 @@ char *result_swap_json(void) {
     if (!sites) return NULL;   /* this census is absent — composef's own arm for the same failure */
     out = composef(
                  "{\"installs\":%ld,\"entries\":%ld,\"worst\":%ld,\"mean\":%.1f,"
+                 /* Retention, which the cost rows are blind to: gauges of the live frozen chains
+                    (`g_seg_live`/`g_seg_entries_live`), falling whenever a segment is released — a few flows
+                    holding tens of thousands of segments is a lifetime bug that reads healthy above. */
                  "\"heapSegs\":%ld,\"heapSegEntries\":%ld,\"domSegs\":%ld,\"domSegEntries\":%ld,"
+                 /* Which of the page's own lines changed the document, which a delta cannot say of its author:
+                    one `innerHTML` assignment and four hundred `appendChild`s are one `domSegEntries`. Lifetime
+                    counts from solver/dom_cow.h's `dom_cow_site_stats` (identities asserted in dom_cow.c):
+                    `domWrites == domWritesSited + domWritesUnsited` and `domSites <= domWritesSited`. A
+                    `domSites` 0 is no page code writing (traffic in `domWritesUnsited`) or no writes at all.
+                    `domSites` is also a high-water mark — a complete alphabet plateaus — and counts names over
+                    the session, the alphabet a surface's per-flow site set would be drawn from, not surfaces.
+                    It is keyed by QuickJS's JS_RunningSiteHash over page JavaScript and shares nothing with
+                    `cowHostRecAsksBySite`, which names this engine's C call sites. */
                  "\"domWrites\":%ld,\"domWritesSited\":%ld,\"domWritesUnsited\":%ld,\"domSites\":%ld,"
+                 /* The per-flow site sets: lifetime counts from solver/dom_cow.h's `dom_cow_site_set_stats`,
+                    asserted in dom_cow.c: `domWritesSited == domSiteFolds + domSiteRepeats`,
+                    `domSiteSetsSeen <= domSiteFolds` and `domSites <= domSiteFolds` (a name new to the session
+                    was new to its flow), so `domSiteFolds / domSites` is how many flows ran the average site.
+                    `domSiteSetsSeen` is a ceiling on surfaces, not a count: a flow passes through every prefix
+                    of its set, and when a set has settled cannot be decided from inside the flow. */
                  "\"domSiteFolds\":%ld,\"domSiteRepeats\":%ld,\"domSiteSetsSeen\":%ld,"
+                 /* The moment the standard names: HTML §8.1.7.3 "Processing model"'s rendering opportunity,
+                    from solver/dom_cow.h's `dom_cow_rendering_stats` (asserted in dom_cow.c):
+                    `renderingOpportunities <= renderingOpportunityAsks`, `renderingOpportunitiesSited <=
+                    renderingOpportunities`, `renderingDigests <= renderingOpportunitiesSited + 1`. They can
+                    refute the moment: opportunities near zero make it unreachable (zero asks is the rung never
+                    reached, asks without grants the gate declining); digests near opportunities mean the
+                    collapse buys nothing; digests well below are the collapse working. A low
+                    `renderingOpportunitiesSited` means opportunities land on flows that rendered nothing (the
+                    empty set). Declines are derived, not a row. Not bounded by `domSiteSetsSeen`: a flow at the
+                    empty set has never folded. */
                  "\"renderingOpportunityAsks\":%ld,\"renderingOpportunities\":%ld,"
                  "\"renderingOpportunitiesSited\":%ld,\"renderingDigests\":%ld,"
+                 /* The per-flow coroutine-activation swap, the `is_gendata` entry kind (a shared generator's or
+                    async closure's execution-state pointer) that `cowStateAsks`/`cowStateMade` cannot see.
+                    `Calls` because they are raised before any gate cow.c owns. The gap is per sub-kind and the
+                    two are not added: the generator producer's only early return is the dedup replace of a
+                    re-fork, so `GenCalls - GenMade` is re-forks; the async hook's is the decline, so
+                    `AsyncCalls - AsyncMade` is declines. Lifetime counts (cow.c's `g_coro_*`); `Made <= Calls`
+                    is DCHECKed in cow.c. A nonzero `coroSwapGenMade` proves the counting reaches this census,
+                    not that the async hook (the interpreter's await-resume) is reachable. */
                  "\"coroSwapGenCalls\":%ld,\"coroSwapGenMade\":%ld,"
                  "\"coroSwapAsyncCalls\":%ld,\"coroSwapAsyncMade\":%ld,"
+                 /* Which state units were exercised: per-kind lifetime counts (cow.c's `g_state_asks`/
+                    `g_state_made`). A pair because `made` 0 is nothing reached under a running flow, a gate
+                    correctly refusing a flow-private object, or a broken unit (solver/cow.h). Not a ratio: a walk
+                    asks once per key and records once, so `asks` far ahead of `made` is healthy; `made <= asks`
+                    is asserted in cow.c. `cowHostRecAsksBySite` splits the `hostRec` asks per component site, a
+                    per-site lifetime count summing to `cowStateAsks.hostRec`, asserted over the counters in
+                    cow.c's `cow_host_rec_sites` and over the rendered rows by engine/build.mjs's @SWAP reader. */
                  "\"cowStateAsks\":%s,\"cowStateMade\":%s,\"cowHostRecAsksBySite\":%s}",
                  sc, st, sm, sc ? (double)st / (double)sc : 0.0, hs, he, ds, de,
                  dw, dsi, du, dn, df, dr, dss, roa, rog, ros, rod,
@@ -2107,326 +1125,23 @@ char *result_swap_json(void) {
     return out;
 }
 
-/* WHAT THE FRONTIER IS MADE OF AND WHAT ITS PARKED SNAPSHOTS WEIGH — solver/cold.h's ColdCensus, this
-   instance's own totals (solver/engine.h's EngineFrontierCensus) and what a resume rebuilt out of a residue.
-   See result.h for why it composes here.
-
-   THE KINDS, AND THIS CENSUS IS THE ONE THAT MIXES THEM — the grouping is MECHANICAL because it is exactly
-   the four structs this composer fills, so a row added to any of them inherits its kind from the accessor
-   rather than from anybody remembering to write it down here.
-     From `cold_census` — ONE WALK OF THE LIVE FRONTIER, so every one of these is a GAUGE and may FALL:
-     `live`, `framed`, `blocked`, `stackEmpty`, `canDeliver`, `pend`, `pendReady`, `outOfPrograms` and the
-     three rows that partition it (`outOfProgramsUnrun`, `outOfProgramsFramed`, `outOfProgramsAtTheLadder`,
-     which are gauges for the same reason and sum to it at every census, empty frontier included), every
-     `*Entries`/`*KiB` row, `dynBodies`, `pinSegs`/`decSegs` and their entry counts, and the four histograms
-     `stepUnits`, `outOfProgramsAtTheLadderUnits`, `programCursors` and `programsAhead` — the second of
-     which partitions `outOfProgramsAtTheLadder` rather than the frontier, so it is the one histogram here
-     whose sum is a row on this line and not `live`. `programsAhead` is a gauge for the reason the other
-     three are and carries the one identity this census has between a histogram and a SCALAR: its zero
-     bucket IS `outOfPrograms`, asserted at the composition below, so the two may be read against each
-     other at ONE census and neither may be differenced against the other across two.
-     `owed` is `flow_host_owed_count()`, a second walk of the same frontier and a gauge for the same
-     reason, and `rowsAwaitingBytes` is `engine_rows_awaiting_bytes()`, a third walk
-     and a gauge for the same reason again — which is why it is a free function rather than a field of the
-     record below, since this grouping is by ACCESSOR and a gauge inside that record would make it wrong. `perFlowKiB` and `sharedKiB` are SUMS OF GAUGES taken in that one walk.
-     From `engine_frontier_census` — LIFETIME COUNTS over this session, the only rows here a reader may
-     difference: `finished`/`finishedFlows`/`finishedCands`, `sold`/`soldFlows`/`soldCands`, `forks`,
-     `orphanClaimsMet`/`orphanClaimsUnmet`, every `host*` row, and `pagedReqs`/`pagedAsks`/`pagedUnarmed`/
-     `pagedFloor`. TWO OF ITS ROWS ARE NOT COUNTS AT ALL: `deepest` and `completed` are HIGH-WATER MARKS —
-     monotone, a count of nothing, and a difference between two of them answers about no quantity.
-     From `engine_step_unit_runs` — LIFETIME COUNTS: `steps`, `slices` and the `stepUnitRuns` histogram; and
-     `stepUs`, `sliceUs`, `schedUs`, `loopUs` and `betweenSlicesUs`, which are MICROSECOND ACCUMULATORS rather
-     than counts and are on this line as the denominators `steps` and `slices` have. `instanceUs` is on this
-     line and is NEITHER: it is a SPAN, read at the census as one subtraction of two clock readings rather
-     than accumulated, so two of them may be differenced exactly as the accumulators may and it is the one row
-     here whose value is not a sum of anything. The last three PARTITION it — `loopUs + betweenSlicesUs ==
-     instanceUs`, asserted in the engine — so those two may be differenced and may also be READ AGAINST EACH
-     OTHER at one census, which no other pair on this line can be.
-     From `decide_replay_stats` — LIFETIME COUNTS in TWO UNITS, which is the half a key cannot carry:
-     `replayHits` and `replayLeftArms` are ARMS (decision-vector slots) and `replayLeft` is EVENTS (one per
-     divergence, whatever it abandoned), so the three may be differenced and only two of them may be compared.
-     From `decide_refine_stats` — LIFETIME COUNTS in a THIRD UNIT, which is why they are on their own line
-     rather than joined to the three above: `branchAsked` and `branchRefined` are DECISIONS, and a refinement
-     consumes no arm and mints no member, so the two ledgers partition decide_arm's arms and may not be summed
-     as though they counted one thing. They are a FRACTION and the denominator is a reachability witness —
-     see decide.h for why a bare `branchRefined` reads as a finding about refinement on exactly the runs where
-     it is a finding about SPELLING.
-     From `pending_index_*_total` — LIFETIME COUNTS: `replyAsked`, `replyAnswered`.
-     From `cold_preview_census` — LIFETIME COUNTS OF ASKS over this document, and the only rows on this
-     line whose KEY carries its own kind: every `previewAsks*` row counts a CONSULTATION of the cold tier,
-     and a count of events can be differenced and cannot fall. They are the ASK beside a park's OUTCOME —
-     see solver/cold.h for why a census of the outcome cannot tell a moment that was never met from a host
-     that never asked. `previewAsksRefusing`/`previewAsksEmpty`/`previewAsksWritable` PARTITION
-     `previewAsks`, asserted in cold.c at every ask; the eight `previewAsksWith*` rows are contained by it
-     and are not a partition of anything, because a host's moment is a conjunction and several may stand at
-     once. `previewAsksAfterCommit` is contained by it too and is NOT one of those eight: it counts asks
-     taken at an instant when the commitment ledger had already been written to, rather than asks at which
-     the frontier was holding a row, and the two differ by exactly the commitments that departed with their
-     flows. `previewCommitRowsWritten` is the ONE row of this group that is not a count of asks at all — it
-     is solver/flow.h's LIFETIME COUNT OF LEDGER ROWS over this same document, and its key says so by not
-     joining the `previewAsks*` family. Read the three together or not at all: cold.h names the three states
-     they separate, and a `previewAsksWithCommits` of 0 read without them was already taken once for a
-     producer that does not exist, when that producer had run thirteen times in the run being read.
-     From `cold_resumed` — A LAST-EVENT RECORD AND NOT A COUNTER OF ANY KIND: `resumed`, `resumedSegs`,
-     `resumedFlows`, `resumedCands`, `resumedWorlds` and `orphanClaims` describe the MOST RECENT rebuild
-     (`cold_resume` memsets the record on entry), so they are neither monotone nor a reading of the frontier,
-     and differencing them is arithmetic over no quantity. `resumed` is the row that says whether the other
-     five describe anything at all.
-   `stepUnits` VERSUS `stepUnitRuns` IS THE ONE PAIR WHOSE KEYS ALREADY CARRY THE DISTINCTION, and it is the
-   worked example of why the rest of this list has to be written down: the same two questions are asked of
-   `finished` (lifetime) beside `live` (gauge) with nothing in either key to say so.
-
-   THE PER-FLOW ROWS ARE WHAT MULTIPLY BY THE FRONTIER'S SIZE and the SHARED rows are counted once for the
-   whole frontier, because a frozen segment is referenced by every flow forked below it — so `perFlowKiB` and
-   `sharedKiB` are the two totals a pager actually trades against each other, and each is a SUM of the rows
-   named beside it rather than a separate measurement. `dynKiB` is priced with the shared half and not the
-   per-flow one: a program's text is ONE buffer however many timelines hold that program (solver/dyn_body.h),
-   and summing it per flow would report the sharing as if it did not exist.
-
-   `owed` BESIDE `blocked`, because the two answer different questions and the GAP between them is the
-   diagnostic. `blocked` asks each flow's REGISTER whether the host owes it anything; `owed` counts the flows
-   that have told the SCHEDULER they cannot progress, which is what the pick actually reads. A fully blocked
-   frontier reporting `blocked: 512, owed: 59` is one whose marks are being cleared faster than the sweep can
-   lay them down. On a healthy stall the two agree.
-
-   `live` IS NAMED AFTER WHAT IT COUNTS, WHICH IT WAS NOT. It was emitted as `flows` while the run's created
-   count was ALSO called `flows` one line away, so the frontier's current size and the number of flows ever
-   made were one word — and those two are opposite verdicts on the same shape: a frontier that stops growing
-   has either RETIRED its flows or PAGED them out, and `finished` and `sold` beside `live` are what tells those
-   apart. The created total keeps its own name on the document (`_flows`), where it is a TOTAL among totals.
-
-   AND `finished` AND `sold` EACH CARRY THE TWO POPULATIONS THEY ARE THE SUM OF, because one counter over a
-   frontier that is mostly @S candidate sessions answers neither question a reader has. An exploration flow
-   retiring is coverage this document gained; a candidate MEMBER retiring is search spent on a derived payload
-   that did not fire — and on a frontier where the candidates are the great majority of the members, "the
-   engine retired N flows" IS "the search gained essentially nothing" with nothing in the row to say so.
-   `finishedCands` AND `soldCands` ARE COUNTS OF MEMBERS AND NOT OF SESSIONS, AND THIS PARAGRAPH USED TO SAY
-   `a candidate session retiring is one derived payload` — kept in its own words because the KEY reads `Cands`
-   and a reader who re-derives the unit from the key will write it again. solver/engine.c raises both at the
-   one line a member completes on and the one line a member is sold on, and engine_sibling_assemble copies the
-   whole candidate identity to every sibling, so N arms of ONE seed each raise them once; solver/engine.h
-   carries the mechanism, names this file's own top-level `_candidates` as the per-SESSION count, and says why
-   no inequality between the two may be asserted. The KEYS ARE NOT RENAMED FROM HERE: this composer's output is
-   in `qjs.wasm` and engine/build.mjs reads it live from the tree, so a rename lands a reader demanding a key
-   the shipped artifact does not emit (CLAUDE.md §A-CROSS-BOUNDARY-DIFF) and re-points every archived-log
-   query at once. The label is `Flow.cand_src` and it is a binary partition for the whole of a
-   member's life (solver/engine.h says why it is two rows and not three), the totals STAY so the parts have
-   something to be checked against, and engine_frontier_census asserts the identity at the one place all six
-   are in one hand — the same discipline `stepUnits` keeps against `live` at the composition below.
-   THE PARTS ARE ROWS AND NOT A SUBTRACTION, deliberately. Emitting the candidate half alone would leave the
-   other half to be derived by a consumer, and a derived half cannot be checked: `finished - finishedCands`
-   is a number for every pair of inputs, including the pair where one of them stopped being written. Both
-   arms are emitted, always, zeroes included, and engine/build.mjs's `coldFields()` throws on either going
-   absent exactly as it does for every other row here. THAT GUARD IS A DERIVATION FROM THIS COMPOSER'S OWN
-   FORMAT STRING and never a list beside it, so a row added here is required there with no second copy for
-   anybody to edit. It WAS such a list, spelled COLD_FIELDS, and that name is rewritten here rather than
-   deleted because a reader who re-derives the hand-kept list will re-add it: the derivation is the reason
-   the list is gone, never a reason to rebuild it.
-
-   `live` IS NOT SPLIT HERE AND THAT IS NOT AN OVERSIGHT. It is compound in the same way — `cold_census` and
-   `flow_wfq_census` walk the SAME registry — and the `_wfq` census on this same document already carries the
-   candidate half of it as `cands` (solver/flow.h: "members carrying a payload substitution"). A `liveCands`
-   row would be the second spelling of one number in one document, which is precisely the drift the
-   record-field contract exists to catch and which `resumedOrphans` is refused for six paragraphs down.
-   `framed` and `blocked` are compound too and are deliberately whole: the first is the park's re-execution
-   COST and the second is what the host owes, and a pager and a host each pay for a member whichever
-   population it belongs to, so a split of either would be a row no consumer could state anything new from.
-
-   THE THREE ORPHAN-CLAIM ROWS ARE THE COLD ROUND TRIP'S VERDICT. `orphanClaims` is how many inherited drives a
-   resume rebuilt out of the residue, `orphanClaimsMet` how many of those waits a take satisfied, and
-   `orphanClaimsUnmet` how many waiting flows FINISHED never having been handed a body. THE LAST IS THE VERDICT
-   AND THE FIRST TWO ARE CONTEXT: met can legitimately EXCEED the records, because a waiting drive forks arms
-   while it replays and every arm is the same drive of the same body, so met-minus-claims is not a loss.
-   Unmet is the loss, exactly — on a document whose bytes did not change between two sessions it is ZERO.
-
-   AND ZERO IS ALSO WHAT A SESSION THAT NEVER RESUMED WROTE THERE, WHICH MADE THE VERDICT UNREADABLE. All three
-   are derived from a rebuild: `cold_resumed` reports the LAST one and its record is memset at the top of
-   `cold_resume`, and the claim counters are reset with the session — so a session handed NO RESIDUE AT ALL
-   reports the identical 0/0/0 as a resume that rebuilt a frontier and lost nothing. Two states, one number, on
-   the row this comment calls THE VERDICT: a reader taking `orphanClaimsUnmet: 0` for a pass was reading a pass
-   out of a session that never resumed. §Testing — an absent count and a zero count are DIFFERENT facts and
-   must never be averaged — and the defaulted-field rule, one hop earlier: here the producer emitted the hole
-   itself, so no consumer had to fill one.
-
-   `resumed` IS THE POSITIVE STATEMENT AND IT IS ALWAYS PRESENT, WHICH IS THE WHOLE OF WHY IT IS A ROW OF ITS
-   OWN RATHER THAN A SHAPE A READER INFERS. `resumed: 0` says THIS SESSION WAS HANDED NO RESIDUE, so the three
-   zeroes beside it are not a verdict at all; `resumed: 1` says a rebuild ran, and only under it is
-   `orphanClaimsUnmet: 0` the pass this comment claims. It is answerable from the record because `cold_resume`
-   ends by asserting it landed at least one flow (`DCHECK(flows > 0)`) and memsets its census on entry, so
-   `flows + cands == 0` is producible only by a session that never called it — a READING, not an inference, and
-   the DCHECK at the composition below is what keeps it one. It is not a count and cannot be averaged with one,
-   and there is no absent value for a consumer to fill: the two states are two values of one always-emitted
-   number, which is the shape the defaulted-field rule asks for and the shape a nested object or an omitted row
-   would each have missed — the first because this census's readers assert every row is a finite number
-   (extension/bridge.js) and render it generically (extension/popup.js), the second because an absent number is
-   exactly what `|| 0` turns back into a zero.
-
-   AND THE DECOMPOSITION RIDES BESIDE IT — `resumedSegs`/`resumedFlows`/`resumedCands`/`resumedWorlds`, which
-   cold.h calls "the observable that says which ARMS of the grammar ran". A residue of nothing but 'f' records
-   exercised neither park_unhex nor solve_resume_candidate nor the foreign-world rebuild, and `@RESUMED 4`
-   looks identical either way, so this is what tells an EXERCISED round trip from an unexercised one — the
-   difference between a rebuild that proved the read half of the cold tier and one that proved a quarter of it.
-   ALWAYS PRESENT, ZEROES INCLUDED, and that is not the defect this row exists to fix — it is the reason
-   `resumed` is a row of its own. result.h's contract for these three censuses is that EVERY ROW IS ALWAYS
-   PRESENT because they read subsystems that exist at every instant a document can be composed at, so omitting
-   four of them under one condition would trade a two-states-one-number defect for a broken shape contract, and
-   an omitted number is in any case exactly what `|| 0` turns back into a zero. Under `resumed: 0` the four
-   zeroes are the true decomposition of a rebuild that did not happen; under `resumed: 1` they are a reading.
-   One row says which, and it cannot be absent.
-   THIS WAS READABLE AT THE POPUP ALONE AND NOWHERE ELSE. The JS half of this round trip rides the per-run LOG
-   ROW, which happens to carry `cold` beside it; the ANALYSIS DOCUMENT — what test_forced.c, the ABI entry and
-   every other in-process host holds — carried no statement of the kind at all, so every consumer but one read
-   a resumed session and a session that never resumed as the same three zeroes.
-   `resumedOrphans` IS NOT A ROW: `orphanClaims` IS that number, and two spellings of one number in one
-   document is the drift the record-field contract exists to catch — the same sentence the paragraph below
-   makes about `_orphansDriven`.
-   ALL FIVE ARE IN engine/build.mjs's `coldFields()`, which is the guard that a row this composer stops emitting
-   or renames fails there instead of being compared as `undefined` — and both of that set's readers throw on a
-   non-numeric row, so dropping one of these five is caught rather than reported as a verdict nobody can read.
-   The set is DERIVED from this function's own format string, so it cannot fall behind the rows above it.
-
-   NO `orphans` ROW: the count of drives this session STARTED is `_orphansDriven` on the document already, and
-   two spellings of one number in one document is the drift the record-field contract exists to catch.
-
-   `steps` AND `stepUnitRuns` ARE NOT A SECOND SPELLING OF `stepUnits`, WHICH IS THE ONE THING A READER MUST NOT
-   TAKE THEM FOR. `stepUnits` is a GAUGE — the members standing in each arm at the instant this document is
-   composed — so its zero says nobody is sitting there now. `stepUnitRuns` is a LIFETIME COUNT of the steps this
-   instance has run through each arm, so its zero says the ladder has never once reached that arm, and `steps`
-   is the total those arms partition. The pair is the axis the census had no instrument for: with the gauge
-   alone, "the ladder is never entered below rung N" and "it is entered constantly and no member is resting
-   there when a census happens to be taken" are ONE zero, and they are opposite diagnoses with opposite fixes.
-   Both rows are therefore emitted and neither is derived from the other — a derived half is a half that cannot
-   fail, which is the same argument `coldPartition` makes about `finished - finishedCands` in engine/build.mjs.
-   THEY ARE A REPORT AND NEVER A BOUND (§NO BOUNDS). Nothing in the engine reads them to decide anything, and
-   the counters say so at their declaration in solver/engine.c; it is worth saying here too, because the census
-   is where a reader MEETS the numbers and a lifetime per-arm total is exactly the shape someone reaches for
-   when they want a no-progress detector.
-
-   `stepUs` IS `steps`' DENOMINATOR AND IS ON THE SAME LINE FOR THAT REASON. It is the thread time the dispatch
-   loop's turns consumed, telescoped across the pick, the context switch and the step, in the SLICE's own
-   measure (solver/engine.h's `step_us` states the extent exactly). The pair is the axis this census had no row
-   for: `steps` says how many choices a run made and is silent about why so few, and the two candidate answers
-   take opposite work — a turn that costs a whole slice makes about one choice per slice BY CONSTRUCTION, which
-   is a granularity floor and no ordering finding at all, while cheap turns mean the loop was simply given
-   little thread time and the question moves off the scheduler entirely. Neither `steps` nor the @WFQ census's
-   scan counts can separate those: the scan rows price what ASKING THE ORDER costs in members walked, which is
-   one term of a turn and not the turn.
-   IT IS READ AS A RATIO AND NEVER AS A TOTAL. §Testing: two passes of one revision on one artifact came back a
-   2x spread apart, so a count here is unquotable against another run; `stepUs / steps` is two lifetime totals
-   of ONE run that move together, and both sides are in one measure, so the quotient is what that spread cannot
-   reach. A sentence that calls the quantity CPU needs the `@QUANTUM` line, which is where this host says
-   whether it has a CPU clock; the ratio against the slice does not, because the slice is denominated in the
-   same measure.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS), for the two rows above: nothing in the engine reads it, and a
-   per-step cost is exactly what a watchdog would be built out of.
-
-   `programCursors` IS THE SAME SERVICE PERFORMED FOR `deepest` AND `completed`, AND IT IS THE ROW THIS CENSUS
-   WAS MISSING. Those two are GLOBAL MAXIMA (solver/engine.h), so each is set by whichever ONE member got
-   furthest through the document and neither states anything about where the rest of the frontier is: `deepest
-   11` is exactly as true of one member at 11 with two thousand at 3 as it is of two thousand at 11. The first
-   is a frontier whose mass never advances while a few members run deep; the second is BFS working as designed
-   on a page that forks. They take OPPOSITE work and no maximum separates them at any value — which is why the
-   same stall has been diagnosed three different ways off these rows, each reading refuting the last. The
-   histogram is the per-member companion that decides it: read against `deepest` on the same line, mass sitting
-   LOW is the first and mass sitting AT it is the second. solver/cold.h carries the derivation, why its extent
-   is the frontier's own rather than a list's, and why it is a report that decides nothing.
-   READ AGAINST `deepest` MEANS READ IN ITS OWN UNIT, WHICH THE SENTENCE ABOVE DOES NOT SAY AND A READER
-   CANNOT SUPPLY. The buckets are CURSORS and `deepest` is a PROGRAM INDEX, and a cursor's range is closed at
-   `dyn_n` while a program index's is not — so the cursor that means "this member has finished the deepest
-   program ANY FLOW HAS STARTED" is `deepest + 1`, not `deepest`. The mass sitting AT `deepest + 1` is the
-   second diagnosis; a top bucket one above `deepest` is not two instruments disagreeing, which is how it has
-   been read. `outOfPrograms` beside them is the count of members standing there with no row left at all.
-   AND `deepest + 1` IS A CEILING ONLY WHERE EVERY ROW RAN, WHICH IS NOT GUARANTEED AND IS NOT RARE — the
-   number the top bucket is bounded by is `deepestLeft + 1`, and that is what the identity below asserts. A
-   row HTML §4.12.1.1 "Processing model"'s "execute the script element" step 4 skipped — an external
-   `<script src>` whose fetch failed — is LEFT without being STARTED, so the cursor passes it and `deepest`
-   does not move. The gap `deepestLeft - deepest` is exactly how far the mass has run ahead of the deepest
-   program that actually began, and on a MIRRORED page, where a script whose origin was not mirrored is
-   precisely a script that fails to load, it is the ordinary state rather than a fault. Read the top bucket
-   against `deepest + 1` and every such skip reads as the two instruments disagreeing, which is the one
-   misreading this whole block exists to end.
-   THAT USED TO READ "the deepest program THE DOCUMENT HAS", AND THOSE ARE DIFFERENT NUMBERS — `rootPrograms`
-   is the document's own count and `deepest` is how far anybody got, so a top bucket at `deepest + 1` says
-   where the MASS reached and never that the sequence ends there. `engine_seed_scripts` queues the whole table
-   at flow creation, so a member at that bucket may have sixteen chunk rows still in front of it; read the old
-   way it looks like a document that finished. Those are opposite diagnoses and `outOfPrograms` is the row
-   that tells them apart — which is exactly what the paragraph below says and what the wrong phrase above it
-   made unnecessary to read.
-
-   `outOfPrograms` IS THE ROW THE HISTOGRAM CANNOT CARRY FOR ITSELF. One cursor value covers a member INSIDE
-   the program at that index and a member PAST THE LAST ROW of its own sequence; `framed` separates those two
-   over the WHOLE frontier and cannot be attributed to a bucket, and `dyn_n` is per-flow and crosses no
-   boundary. What turns on the difference is engine.c's orphan arm, which is reached only where a member has no
-   program left — so zero orphan asks reads identically for "nobody has run out of programs" and for "members
-   have and something else is due", which are different files to open.
-   THE SECOND HALF OF THAT SENTENCE USED TO ENUMERATE "a job, a timer, a lifecycle event, a rendering
-   opportunity or an owed reply", AND THEN USED TO SAY THE LAST THREE WERE ALL BELOW THE ORPHAN ARM — which
-   was true of one seed placement and is true of neither since, because the seed now sits BELOW the three
-   clock-driven sources and only the owed reply is beneath it. A TIMER AND A RENDERING OPPORTUNITY CAN AGAIN
-   HOLD A MEMBER BACK FROM THE ASK, which is the whole of what the owner's ordering decided.
-   THE ENUMERATION IS STILL GONE FROM HERE RATHER THAN CORRECTED A SECOND TIME, and the reason is now
-   evidenced rather than asserted: a list of rungs written down where the ladder is not is the stale-claim
-   failure with no grep to find it, and this site has now been wrong about that list TWICE, in opposite
-   directions, from two different seed placements. solver/cold.h owns the ladder's own list, and the three
-   `outOfPrograms*` rows beside this one are what answer the question without one.
-   RETIREMENT: this record goes when no site outside solver/engine.c enumerates a rung of that ladder, because
-   the failure it teaches is then unspellable rather than merely discouraged.
-   AND THOSE THREE ARE WHY THE PAIRING IS NOT ENOUGH ON ITS OWN. Two of the things that hold a member with no
-   row left are not rungs at all — it was never dispatched, or it is suspended in a live frame and the whole
-   ladder sits below `if (!f->frame)` — so `outOfPrograms` alone names a population of which only one part is
-   even eligible to be held by a rung. See solver/cold.h for the partition and for what it measured.
-
-   `replyAsked`/`replyAnswered` ARE THE OTHER DOOR'S PAIR AND THEY ARE NOT `hostAsked`/`hostAnswered`. Those
-   two are minted at engine.c's `mint_req`, whose callers push FLOW_PENDING_HOSTREQ — the four cross-instance
-   reads (a navigable's, a remote object's, a WindowProxy's, an iframe's) AND `XMLHttpRequest`, which places
-   its request through the same rendezvous because §3.5.6's synchronous arm must BLOCK the flow and the
-   asynchronous arm places the identical request from a task. That component states it in its own header: ONE
-   network edge and not two, the only difference between the modes being who waits on it.
-   THIS PARAGRAPH SAID "CROSS-INSTANCE RENDEZVOUS AND NOTHING ELSE", AND THAT IS FALSE BY EXACTLY THE CALLER
-   A READER OF THIS FILE MOST NEEDS TO KNOW ABOUT. It was wrong in the direction that costs evidence rather
-   than the direction that fabricates it, which is why nothing caught it: it under-claims, so a reader who
-   believes it DISCARDS a true reading instead of publishing a false one. Measured — a lane investigating why
-   a real bundle emitted nothing read `hostAsked: 0`, was told by this sentence that the row could not speak
-   about network requests, and set aside what was in fact independent evidence for the conclusion it went on
-   to reach by another route: no XHR had been issued either. A document that makes no cross-document read and
-   no XHR reads `0/0` and is right to; a document that XHRs does not. The reply door — a fetch, an injected `<script src>`, the document's own script slots,
-   a dynamic `import()` — had no rate here at all, only the three levels `pend`, `owed` and `blocked`, which is
-   exactly the gap engine.c argues the synchronous pair out of ("Starvation is a RATE"). It is the door
-   §Learning-from-replies calls the POINT, and an absent number on a report is read off whichever plausible
-   neighbour is printed beside it: `hostAsked: 0` has already been relayed as "nothing is ever asked of the
-   host" for a document holding hundreds of thousands of records. Both pairs, each naming its door.
-
-   `hostAnswersExtra` IS BESIDE `hostAnswered` AND IS NOT PART OF IT. One rendezvous has one answer per peer
-   TIMELINE and every one of them is true, but only the FIRST settles the ask; the rest each fork an arm and
-   unblock nothing. They were being added into `hostAnswered`, which made a peer holding four timelines read as
-   four payments for one ask and inverted the census's own `answered <= asked`.
-
-   THE ARITHMETIC IS GONE AND THE QUESTION IT ANSWERED WAS THE WRONG ONE. This composer carried the count as
-   TERMS THE COMPILER ADDS rather than as a sum somebody typed, and that was a real improvement over the prose
-   it replaced — the prose had read "fixed bytes 503 … the thirty-nine numbers' widest forms are 753" against a
-   string measuring 521 over FORTY, so the honest sum was 1295 inside a 1280-byte buffer that was already
-   fifteen bytes short. But the terms were still a HAND CENSUS of one string, its own paragraph said so, and it
-   went on to say "there is no portable way to ask a format string its widest expansion" — which is TRUE, and
-   is why nobody should be asking it. The ACTUAL expansion is portable, exact and already the mechanism check.h
-   and solver/concolic.c use; solver/compose.h's `composef` states it with its citations. The three counts,
-   the STEP_UNITS
-   term and the assert under the snprintf all go with it, and adding a row here now costs nothing at all.
-   WHAT IS LOST WITH THEM IS WORTH NAMING: the old terms were a WORST case, so a miscount showed up first on
-   whichever host made the numbers widest — which the paragraph pointed out was never the shipping one, since
-   a WASM32 `long` is 32 bits and every long term was generous by nine bytes there. A measured length has no
-   host-dependence at all: it is the length THIS run writes, on the host that is running. */
-/* ONE ROW-COMPOSER FOR THE TWO PER-ARM HISTOGRAMS THIS CENSUS CARRIES. They differ in exactly one thing — the
-   POPULATION they are counts of — and not at all in how a row is spelled, so a second copy of the loop would be
-   a second speller of solver/step_unit.h's row format, which is the drift that file's own "THE ONE LIST"
-   paragraph exists to prevent one level down.
-   `what` NAMES THE HISTOGRAM IN THE WIDTH ASSERT, and it is a parameter rather than a sentence because a
-   DCHECK stamps the line it is WRITTEN at: a shared helper's message reports this function for both callers, so
-   "the histogram did not fit" would name an action with no object (CLAUDE.md §AN-ASSERT-THAT-NAMES-A-REMEDY).
-   With two callers that is cheap to fix and it is fixed rather than deferred, because the third caller is the
-   one who would have paid for it.
-   IT RETURNS THE SUM AND ASSERTS NOTHING ABOUT IT. The two callers' identities are DIFFERENT — one sums to the
-   frontier's live members, the other to the scheduler's step count — so the comparison belongs at each caller
-   where its own other side is in hand, and a shared assert would have to be given the answer it is checking. */
+/* What the frontier is made of and what its parked snapshots weigh: solver/cold.h's ColdCensus, this
+   instance's totals (solver/engine.h's EngineFrontierCensus), the step-unit runs, the replay and refinement
+   ledgers, the park preview, and what a resume rebuilt (see result.h). Each row's kind is declared in the
+   block above result_cold_json and follows its accessor; `instanceUs` is a span (one subtraction of two clock
+   readings), not an accumulator, and `perFlowKiB`/`sharedKiB` are sums of gauges from one walk.
+   Per-flow rows multiply by the frontier's size; shared rows are counted once, since a frozen segment is
+   referenced by every flow forked below it, so `perFlowKiB` and `sharedKiB` are what a pager trades. `dynKiB`
+   is priced with the shared half: a program's text is one buffer however many timelines hold it
+   (solver/dyn_body.h).
+   Every row is emitted, zeroes included, and engine/build.mjs's `coldFields()` derives its required set from
+   this format string, so a row dropped or renamed fails there. These are reports, never bounds: nothing in
+   the engine reads them to decide anything. Sized by composef (solver/compose.h), which measures the length
+   this run writes. */
+/* One row composer for the step-unit histograms: they differ only in the population counted, so one loop
+   spells solver/step_unit.h's row format. `what` names the histogram in the width assert, since a shared
+   helper's DCHECK stamps this line for every caller. Returns the sum and asserts nothing about it: each
+   caller's identity has a different other side (the live members, the step count). */
 static long cold_hist_json(char *buf, size_t cap, const long *counts, const char *what) {
     int hi = 0, k;
     long seen = 0;
@@ -2449,25 +1164,11 @@ static long cold_hist_json(char *buf, size_t cap, const long *counts, const char
     return seen;
 }
 
-/* THE CURSOR HISTOGRAM'S COMPOSER, AND IT IS NOT `cold_hist_json` FOR THE ONE REASON THAT DECIDES A BUFFER.
-   That one renders solver/step_unit.h's list, whose width is an expansion of the list itself, into a STACK
-   buffer sized before the bytes exist. This one renders a row set whose extent is the FRONTIER's (solver/
-   cold.h), so there is no list to derive a width from and no honest fixed number to pick — and picking one
-   anyway is precisely the hand-counted buffer solver/compose.h exists to have ended.
-   SO IT IS compose.h's OWN MECHANISM APPLIED TO A ROW LIST INSTEAD OF TO A FORMAT STRING: measure, allocate
-   exactly, write. C99 §7.19.6.5 "The snprintf function" — "If n is zero, nothing is written, and s may be a
-   null pointer" — is what makes the measuring pass legal with no buffer in existence; compose.h states the
-   citation and the argument in full and this does not restate them.
-   THE TWO PASSES READ ONE ARRAY, so they can disagree only if a count changed between them, and the assert
-   under the write is composef's for composef's reason: a truncation here does not lose a digit, it loses the
-   CLOSING BRACE, and the host is handed a document that will not parse and reports nothing for the page. */
-/* THE COMPOSER FOR A HISTOGRAM WHOSE ROW SET IS THE POPULATION'S OWN, and it takes the histogram's NAME
-   because there are two of them now and its three asserts each name a site to open. A shared helper stamps
-   its own file and line for every caller, so a message that says "the program-cursor histogram" is a crash a
-   reader of the OTHER caller cannot act on — CLAUDE.md's assert-that-names-a-remedy-but-not-a-site, arriving
-   through a second call rather than through a thousand. The name travels with the operation; it is not
-   derived here, and a caller that passes the wrong one is passing a wrong string rather than being silently
-   attributed to its sibling. */
+/* The composer for a histogram whose row set is the population's own (solver/cold.h): there is no list to
+   derive a width from, so it applies compose.h's mechanism to a row list — measure, allocate exactly, write.
+   C99 §7.19.6.5 "The snprintf function" ("If n is zero, nothing is written, and s may be a null pointer")
+   makes the measuring pass legal. Both passes read one array, so they disagree only if a count changed; a
+   truncation would lose the closing brace. */
 static char *cursor_hist_json(const long *counts, int n, const char *what)
 {
     int k, need = 2, hi;   /* the two braces, then each row as it measures */
@@ -2503,82 +1204,31 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
     return out;
 }
 
-/* THE KIND OF EVERY ROW THIS COMPOSER PUBLISHES THAT A CONSUMER CARRIES — stated HERE because it is this
-   composer's fact and nowhere else's, and stated in a form a machine reads because a comment stating it is
-   read by nobody holding the number. CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER: a quantity whose kind a
-   reader cannot name FROM ITS OUTPUT is one they are not entitled to do arithmetic on, and the names do not
-   say. Four kinds and what each permits:
-     lifetime  raised and never lowered — MAY be differenced across two samples of ONE instance.
-     gauge     a walk at one instant — may FALL, so differencing one reads a level as a rate.
-     constant  written once at a seed and never again — neither differenced nor read as a level.
-     maximum   monotone like a count and a HIGH-WATER MARK — it saturates and then plateaus, so a plateau is
-               NOT a ceiling and the length of the series is part of quoting it. Filed apart from `lifetime`
-               for that reason and no other: both may be differenced, and only one may be compared across two
-               runs of different length.
-   IT IS HERE AND NOT AT THE CONSUMER BECAUSE THE PERSON WHO ADDS A ROW IS THE PERSON WHO KNOWS. Every reader
-   of this census used to hold its own kind list, and the row that made the case landed one commit before this
-   one with a kind stated in no artifact at all: the author added it here and had no reason to open a driver
-   two directories away. A declaration at the emitter is edited by the diff that adds the row.
-   IT IS A SET EQUALITY AND BOTH DIRECTIONS THROW. `testing/census_rows.js` refuses a name here that this
-   composer no longer publishes — a kind statement about a renamed row is a sentence about nothing that a
-   consumer goes on printing — and refuses a row this composer PUBLISHES that no line here states a kind for.
-   Neither side is defaulted and neither is guessed. It also refuses a SECOND declaration for one composer and
-   a row stated twice, because a reader that resolved either would publish a shorter contract as a complete
-   one.
-   THE CONSUMER-SIDE CHECK THAT USED TO STAND BESIDE THOSE IS GONE AND IS NOT TO BE RE-ADDED. That reader once
-   threw separately on a row a driver CARRIES with no kind stated here; with the equality above standing, the
-   declared set and the published set are ONE set, so the carried-and-published check it already makes decides
-   that case as well, and a second test for it would be a predicate whose two sides cannot disagree.
-   COMPLETENESS IS REQUIRED HERE AND IS NO LONGER COUNTED. A row nobody carries must be declared anyway, so
-   the kind is stated by whoever adds the row rather than by whoever later needs it. That reader used to return
-   the number of rows here with no kind and a driver printed it, on the ground that a kind nobody has
-   determined must not be invented: a WRONG kind is worse than a missing one, since it LICENSES the arithmetic
-   a missing one merely fails to authorise. That is still exactly right about the KIND and was never a reason
-   to leave the ROW unnamed — the figure's only reader was whoever re-read a driver's header line, so an
-   omission stayed an omission for as long as nobody did. The count is DELETED rather than kept beside the
-   refusal, because a count that can no longer be nonzero is dead reporting that reads as live.
-   IT CHANGES NO EMITTED BYTE. This is comment text, so there is no half of it that goes live at an instant
-   the other does not — a consumer reads it from SOURCE and is therefore right about an artifact of any age,
-   including one whose stamp predates a row, where the kind is stated and the row is absent. Those are two
-   facts and they stay two.
-   THE THREE ROWS `programsAhead` ASIDE ARE OBJECTS AND ARE STATED HERE TOO, because a histogram has a kind
-   exactly as a scalar does — a per-arm partition raised once per event may be differenced and a per-member
-   walk may not, and a reader who differences the second reads a level as a rate whether it arrived as one
-   number or as twenty.
-
-   THE @H SURFACE ROWS SPLIT ACROSS TWO KINDS AND USED TO BE DECLARED AS ONE, WHICH IS A CORRECTION AND NOT A
-   REFINEMENT — a declared kind LICENSES arithmetic, so the wrong one is worse than a missing one and this one
-   licensed differencing a quantity that falls. `endpoint_mark_asset` MARKS RATHER THAN DELETES: it sets
-   `is_asset` on a record that is already in `g_eps`, and the verdict arrives with the REPLY while the record
-   was minted at the REQUEST. So a census composed between those two instants counts the record in `epEmitted`
-   and the next one does not, and `epEmitted` FALLS by one with nothing wrong. `epPreProgram` is raised inside
-   that same emitted arm and falls with it; `epDoors`, `epReach`, `epAddressClass` and `epRazorClass`
-   partition `epEmitted` — the first two are that walk at two grains, the third is a second walk over the same
-   skip, and the fourth is the UNION of the third with the door list's bytes column and so is a fourth walk
-   rather than a sum of any of them — so all six are GAUGES. `epMinted` and `epAssets` are the monotone
-   halves — records are never removed and `is_asset` is never cleared — and they stay LIFETIME.
-   THE SHAPE IS `epEmitted = epMinted - epAssets` WITH BOTH TERMS RISING, which is the tell for any row of this
-   kind: a difference of two monotone counts is not monotone, and it reads exactly like a count until the day
-   an asset verdict lands between two samples. CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER's free check — the
-   samples decreased — needs a series and a reader holding one census has none, so the kind has to be stated
-   from the MECHANISM rather than waited for.
+/* The kind of every row this composer publishes, in a form testing/census_rows.js reads from source: a
+   quantity whose kind a reader cannot name from its output may not be used in arithmetic. The kinds:
+     lifetime  raised and never lowered — may be differenced across two samples of one instance.
+     gauge     a walk at one instant — may fall, so differencing one reads a level as a rate.
+     constant  written once at a seed — neither differenced nor read as a level.
+     maximum   a high-water mark — may be differenced, but a plateau is not a ceiling, so unlike `lifetime`
+               it may not be compared across runs of different length.
+   Declared at the emitter because whoever adds a row knows its kind. The reader enforces set equality both
+   ways (a declared row no longer published, a published row with no kind) and refuses a second declaration
+   for one composer or a row stated twice. Comment text changes no emitted byte, so a reader of the source is
+   right about an artifact of any age. Histograms carry kinds like scalars.
+   Kinds come from the filling accessor, never the name. `cold_census` is a walk, so its rows are gauges
+   (including the out-of-programs rows, keyed on the per-member `script_i == dyn_n`, and `live`, declared so
+   `live - outOfPrograms` is one walk); EngineFrontierCensus admits no gauge (solver/engine.h), so its rows are
+   lifetime, maxima or seed constants; ColdPreviewCensus only accumulates; ColdResumed is the session's at
+   most one rebuild, so constant. Exceptions: `owed` is its own walk whose marks age out (a gauge), and
+   `orphanClaims` comes from the rebuild (constant) while `orphanClaimsMet`/`Unmet` are lifetime. The @H
+   surface splits: `endpoint_mark_asset` marks a record already in `g_eps` when the reply lands, so
+   `epEmitted = epMinted - epAssets` falls with nothing wrong, and it, `epPreProgram` and the histograms
+   partitioning it are gauges while `epMinted` and `epAssets` are lifetime.
 
    @kinds-of cold
    @kind gauge: stepUnits programCursors replyOutstanding rowsAwaitingBytes
    @kind gauge: live outOfPrograms outOfProgramsUnrun outOfProgramsFramed outOfProgramsAtTheLadder
    @kind gauge: outOfProgramsAtTheLadderUnits
-   THE OUT-OF-PROGRAMS WALK'S SIX ROWS ARE GAUGES, DETERMINED AT THE SITE THAT RAISES THEM AND NEVER FROM
-   THEIR NAMES, which is what the residual below asks of every line here. solver/cold.c raises `live` at the
-   top of its loop body and the other five inside it, keyed on `f->script_i == f->dyn_n` — a per-member state
-   NOW — so every one of them FALLS when a member advances its cursor, is sold, or forks a copy standing short
-   of the tail. The `…Units` row is a histogram and is stated for the reason the scalars are: a per-member
-   walk may not be differenced whether it arrives as one number or as twenty.
-   `live` IS DECLARED BESIDE THEM RATHER THAN LEFT OUT, because the quantity a consumer wants is
-   `live - outOfPrograms` — the members flow_step's ladder cannot reach at all — and it is ONE WALK AT ONE
-   INSTANT with them (`out->flows++` at the top of that loop, `out->out_of_programs++` inside the same body).
-   The only other frontier size on a driver's list is the WFQ walk's, taken at whichever entry that driver's
-   own index names, so a consumer that carries the total and not `live` performs the two-moments subtraction
-   instead of the one this composer already makes available.
    @kind lifetime: stepUnitRuns stepUnitOverruns stepUnitOverrunSeamlessArms stepUnitOverrunAskArms
    @kind lifetime: hostAsked hostAnswered replyAsked replyAnswered replyDeclined replyDropped
    @kind lifetime: replayHits replayLeft replayLeftArms
@@ -2598,26 +1248,6 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind lifetime: netProgXhrAsksLife netProgXhrQueuedLife
    @kind constant: rootPrograms rootProgramsHeldAtSeed rootProgramsAwaitedAtSeed
    @kind maximum: deepest completed deepestLeft sliceOverrunGapUs stepUnitOverrunGapArms
-   AND EVERY REMAINING ROW OF THIS COMPOSER, WHICH THE RESIDUAL ABOVE NAMED AS THE NEXT DIFF AND WHICH IS
-   DETERMINED FROM THE ACCESSOR THAT FILLS IT RATHER THAN FROM ITS NAME. The grouping is MECHANICAL, which is
-   the whole of why it is checkable by the next reader instead of being this paragraph: `cold_census` is
-   declared as a WALK of the frontier that takes no reference and mutates nothing, so every row it fills is a
-   reading at ONE INSTANT; `EngineFrontierCensus` is the record solver/engine.h relies on as admitting NO
-   GAUGE — which is stated there as the reason `engine_rows_awaiting_bytes` and `flow_host_owed_count` are
-   free functions BESIDE it rather than fields of it — so its rows are the monotone kinds, the maxima and seed
-   constants above included; `ColdPreviewCensus` states in its own banner that every row of it accumulates
-   over the document and none of them can fall, the one row that counts LEDGER ROWS rather than asks included;
-   and `ColdResumed` describes the LAST REBUILD of a session whose rebuild runs at most once, which this
-   composer asserts one screen down, so its rows are written at a seed and never again.
-   THREE ROWS DO NOT INHERIT THEIR NEIGHBOURS' ACCESSOR AND THOSE ARE THE ONES TO READ TWICE. `owed` is filled
-   by neither census — a walk of its own, whose marks AGE OUT with a generation, so it is a GAUGE standing
-   among lifetime counts. And `orphanClaims` is filled from the REBUILD while `orphanClaimsMet` and
-   `orphanClaimsUnmet` beside it are filled from the frontier census, so that triple is ONE CONSTANT AND TWO
-   LIFETIME COUNTS: a reader differencing all three differences a seed, and the round trip's verdict is the
-   two that may be differenced read against the one that may not.
-   RETIREMENT: these three sentences go when a row's kind is asked of the accessor by something mechanical —
-   a reader that resolves a row to the record field feeding it — because the grouping is then derived rather
-   than stated and a row added to a census cannot be filed by hand at all.
    @kind gauge: framed blocked owed
    @kind gauge: decEntries decKiB headEntries headKiB domHeadEntries domHeadKiB pendKiB miscKiB perFlowKiB
    @kind gauge: jobs pend pendReady stackEmpty canDeliver
@@ -2636,137 +1266,79 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
 */
 char *result_cold_json(void) {
     ColdCensus c;
-    /* THE THREE PER-ARM HISTOGRAMS, EACH COMPOSED INTO ITS OWN BUFFER AND SPLICED AS ONE `%s`. Their width is
-       STEP_UNITS_JSON_MAX, an expansion of solver/step_unit.h's list, so an arm ADDED there widens all three
-       automatically. These are the only fixed buffers left in this composer and they stay fixed for a reason
-       the deleted ones did not have: their width is DERIVED from the list they render rather than counted off
-       the string that renders them, which is the same property solver/compose.h's `composef` gives the
-       document around them.
-       THEY ARE SEPARATE ROWS BECAUSE THEY ARE SEPARATE QUESTIONS, and this is the whole reason the second and
-       third exist.
-       `hist` is a census of the MEMBERS STANDING at this instant, so a zero there says nobody is sitting in
-       that arm right now; `runs` is a count of the STEPS this instance has run, so a zero there says the
-       ladder has never once reached that arm. A reader holding only the first cannot tell "the arm is never
-       entered" from "it is entered constantly and left again before every census" — opposite diagnoses with
-       opposite fixes — and a reader holding only the second cannot tell where the frontier is parked. Neither
-       is derivable from the other and neither may be defaulted into the other.
-       AND THE THIRD ASKS THE FIRST'S QUESTION OF A SUBSET, which is a third question and not a slice of one
-       already answered. `ladder` is `hist` restricted to the members standing at the orphan ladder, and it
-       exists because `hist` is over the WHOLE frontier and therefore cannot be attributed to them — the
-       cross-reference solver/cold.h names twice as the thing it could not make. Its identity is a SUBSET sum
-       and not `flows`, which is asserted below and is what keeps a partition from becoming a selection.
-       EVERY ROW IS EMITTED, INCLUDING THE ZEROES, and that is the contract rather than a courtesy: an ABSENT
-       row and a ZERO row are different facts (this composer changed, against this frontier had nobody in that
-       arm), and a reader that cannot tell them apart is the defect that made `@RESUMED` read 0 for every
-       session there has ever been. The consumer asserts the row's presence and reads its value; neither side
-       may default the other's hole.
-       THE FOURTH HISTOGRAM ON THIS DOCUMENT IS NOT ONE OF THESE THREE AND IS NOT SIZED HERE. `programCursors` is
-       keyed on the members' own CURSOR — solver/flow.h's `script_i`, whose range is closed at `dyn_n` and so
-       runs one wider than the program indices `deepest` and `completed` are maxima over — rather than on
-       solver/step_unit.h's arms, so its extent is the frontier's own and there is nothing to expand a width
-       from: cursor_hist_json measures what it is about to write, which is the same discipline
-       STEP_UNITS_JSON_MAX gives these three by derivation. */
+    /* The step-unit histograms, each composed into its own buffer and spliced as one `%s`. Their width
+       STEP_UNITS_JSON_MAX is derived from solver/step_unit.h's list, so an arm added there widens them all.
+       `hist` is the members standing in each arm now; `runs` the steps this instance ran in each arm — neither
+       derivable from the other (an arm never entered and one entered and left before every census both read 0
+       in `hist`). `ladder` is `hist` restricted to members at the orphan ladder, whose identity is a subset sum
+       (solver/cold.h). Every row is emitted including zeroes, since an absent row and a zero row differ.
+       `programCursors` is keyed on the frontier's own `script_i` (closed at `dyn_n`), so cursor_hist_json
+       measures it instead. */
     char hist[STEP_UNITS_JSON_MAX];
     char runs[STEP_UNITS_JSON_MAX];
-    /* AND THE THIRD EXPANSION OF THAT SAME LIST, sized by the same derivation for the same reason — it is
-       solver/step_unit.h's arms again, restricted to the members standing at the orphan ladder, so its width
-       is the list's and not the frontier's. See solver/cold.h for what it separates. */
+    /* …`ladder`: the same list restricted to members at the orphan ladder (solver/cold.h). */
     char ladder[STEP_UNITS_JSON_MAX];
-    /* AND THE FOURTH EXPANSION OF THE SAME LIST — solver/step_unit.h's arms again, restricted to the turns
-       that overran the cooperative slice. Same derivation, same width, for the same reason. */
+    /* …`over`: restricted to the turns that overran the cooperative slice. */
     char over[STEP_UNITS_JSON_MAX];
-    /* AND THE FIFTH, RESTRICTED ONE STEP FURTHER: of those turns, the ones that offered NOT ONE suspend point.
-       Same derivation and same width. It is a row rather than a reader's subtraction because `over` and the
-       seamless SCALAR cannot be joined — see solver/engine.h's `over_seamless_arms` for the two opposite diffs
-       that join decides between. */
+    /* …`seam`: of those, the turns that offered no suspend point; a row because `over` and the seamless scalar
+       cannot be joined (solver/engine.h's `over_seamless_arms`). */
     char seam[STEP_UNITS_JSON_MAX];
-    /* AND THE SIXTH, WHICH IS THE COMPLEMENT OF THE FIFTH RATHER THAN A FURTHER RESTRICTION OF IT: of the
-       overrunning turns that DID offer a point, how many points each arm's offered between them. Same
-       derivation and same width. It is a row because `slice_overrun_asks` is a SUM over every such turn and
-       every arm at once — see solver/engine.h's `over_ask_arms` for why one quotient over that sum is a mean
-       across arms whose densities differ by an order of magnitude. */
+    /* …`oask`: of the overrunning turns that did offer a point, how many points each arm's offered; the scalar
+       sums every arm, and arms' densities differ (solver/engine.h's `over_ask_arms`). */
     char oask[STEP_UNITS_JSON_MAX];
-    /* AND THE SEVENTH, WHICH IS THE ONLY ONE OF THE SEVEN THAT IS NOT A COUNT. Same list, same derived
-       width — one row is `"<name>":<long>` either way — and a different KIND: each arm carries the widest
-       interval, in the slice's own measure, during which one of that arm's non-seamless overrunning turns
-       offered the scheduler nothing. The density beside it is a MEAN and cannot tell nine evenly spread
-       stretches from one unbroken run; see solver/engine.h's `over_gap_arms`. */
+    /* …`ogap`: not a count but a maximum — each arm's widest interval, in the slice's own measure, during which
+       one of its non-seamless overrunning turns offered nothing (solver/engine.h's `over_gap_arms`). */
     char ogap[STEP_UNITS_JSON_MAX];
-    /* AND THE TWO HISTOGRAMS ON THE HEAP, FOR THE ONE REASON THE FIXED ONES ABOVE ARE ON THE STACK: their
-       extents are the FRONTIER's and not a list's, so there is no width to derive. See cursor_hist_json,
-       which composes both and is handed each one's NAME because its asserts have to say which. */
+    /* The two frontier-extent histograms live on the heap, since there is no list width to derive; see
+       cursor_hist_json, which takes each one's name for its asserts. */
     char *cursors;
     char *ahead;
     char *out;
     ColdResumed resumed;
-    /* AND HOW OFTEN THE HOST ASKED THIS TIER WHAT A PARK WOULD WRITE — the ASK beside that OUTCOME, taken
-       in ONE call for the reason the replay ledger below is: the partition over its arms is an assertion
-       about one moment, and four getter calls in an argument list are not one. */
+    /* The park preview ask census, taken in one call so the partition over its arms is one moment. */
     ColdPreviewCensus pv;
     EngineFrontierCensus e;
     EngineStepUnitRuns r;
     int ran;
-    /* THE REPLAY LEDGER, TAKEN IN ONE CALL — see decide.h. Three locals and not three getter calls in the
-       argument list, because the identity below is an assertion about ONE MOMENT and an argument list is not
-       one: a composer that read `left` and `left_arms` in two calls could publish a pair no instant of this
-       session ever held. */
+    /* The replay ledger, taken in one call (decide.h) so the identity below is about one moment. */
     long rp_hits, rp_left, rp_left_arms;
-    /* AND THE REFINEMENT PAIR, IN ONE CALL FOR THE SAME REASON — see decide.h. It is decide_arm's THIRD arm,
-       whose two siblings are `replayHits` and the `_forkAt` census, and it is what a naming diff moves. */
+    /* The refinement pair, in one call (decide.h): decide_arm's third arm, beside `replayHits` and `_forkAt`. */
     long rf_asked, rf_refined;
     long fk_total, fk_pinned;
     long orph_pref;
     long orph_scripts;
-    /* THE CLOCK LICENCE'S PAIR — see core/timing/event_loop.h for what it partitions and why the
-       count beside it could not be asked without it. BOTH OR NEITHER at the accessor. */
+    /* The clock licence's pair — see core/timing/event_loop.h. Both or neither at the accessor. */
     long adv_asked, adv_declined;
-    long awaiting_rows;   /* the awaited-rows gauge, read ONCE below and used by the assert and the row */
+    long awaiting_rows;   /* the awaited-rows gauge, read once below and used by the assert and the row */
     /* what the emitted @H array is a fraction of, and what of it predates any program — endpoint.h */
     long ep_minted, ep_assets, ep_emitted, ep_pre_program;
     long ep_asks, ep_ask_pre, ep_ask_sup, ep_ask_merged, ep_ask_minted, ep_ask_merged_pre;
-    /* AND WHAT STANDS IN FRONT OF THE ONE DOOR THOSE SIX ARE COUNTED AT — solver/endpoint.h states the
-       contract, the three identities and, first, that the stage arms are a PARTITION and not a ladder. It is
-       ROWS and not a census of its own so that it lands BESIDE `epAsks`, which is what it exists to be read
-       against: every consumer of `_cold` renders a row added to it with nothing edited, and a sixth nested
-       census would have needed a name in extension/bridge.js and extension/popup.js, both of which are
-       trusted-zone JavaScript that is live on WRITE while this half is live only after a build. */
+    /* …and what stands in front of the door those six are counted at: solver/endpoint.h states the contract,
+       its three identities, and that the stage arms are a partition. Spliced as rows beside `epAsks`, so
+       consumers of `_cold` (including extension/bridge.js and extension/popup.js, live on write while this
+       half is live only after a build) render them with no edit. */
     char *edge;
     char *xedge;
-    /* …AND THE INVOKER RUNGS' OWN DENOMINATOR, which is the same SHAPE of fact one ladder over and is here for
-       the same reason: it lands BESIDE `stepUnitRuns`, which is what it exists to be read against. A rung's arm
-       of that histogram is an `else if` inside flow_step, so a zero in it stood for a document that hangs
-       nothing off the rung AND for a ladder that never gave the rung a turn — solver/rung_entry.h states why no
-       counter inside the ladder could ever tell those apart, and why no assert could stand on either. */
+    /* …and the invoker rungs' own denominator, beside `stepUnitRuns`: a rung's arm there is an `else if` in
+       flow_step, so its zero cannot separate a document that hangs nothing off the rung from a ladder that
+       never gave it a turn (solver/rung_entry.h). */
     char *rungs;
-    /* …AND THE SAME SURFACE PARTITIONED BY THE MECHANISM THAT COMPOSED EACH ADDRESS — solver/endpoint.h
-       states the contract and asserts the partition where both sides are in one hand. */
+    /* …the same surface partitioned by the mechanism that composed each address (solver/endpoint.h). */
     char *doors;
-    /* …AND BY WHAT A PARSE OF THE DOCUMENT WOULD HAVE REACHED THROUGH EACH OF THOSE MECHANISMS, which is
-       the row above COARSENED BY A MAP and not a second observation of anything — solver/endpoint.h states
-       the map, why it has three classes and not two, and that the two histograms are ONE fact at two grains. */
+    /* …by what a markup parse would have reached through each mechanism: the row above coarsened by a map, one
+       fact at two grains (solver/endpoint.h states the map and its three classes). */
     char *reach;
-    /* …AND BY WHETHER THE RUN HAD DETERMINED EACH ADDRESS AT ALL, which is CLAUDE.md
-       §What-the-tool-produces' HARD BAR and is a SECOND OBSERVATION rather than a third grain of the two
-       above: no door implies it in either direction, so a literal chunk URL through `module-import` is
-       `beyond` a parse and clears nothing at this bar. solver/endpoint.h states what each class claims, why
-       the honest field is a FLOOR under the bar, and the identity it is asserted against. */
+    /* …by whether the run had determined each address at all: a second observation, not a third grain, since
+       no door implies it (solver/endpoint.h states each class and why the field is a floor). */
     char *acls;
-    /* …AND THE UNION OF THAT ROW AND THE DOOR'S BYTES COLUMN, WHICH IS THE BAR ITSELF AND NOT AN OPERAND OF
-       IT. The three rows above are the bar's RAW MATERIAL at three grains and none of them states it: a union
-       is a claim about per-row MEMBERSHIP, so no marginal carries it and a reader holding `epReach` and
-       `epAddressClass` could reach the bar only by adding two overlapping floors. solver/endpoint.h states
-       what each class claims, why it is a FOURTH walk rather than a sum of the two tables, and why it is a
-       CROSS-CHECK against the emitted array's per-row `razorClass` and never a sum with it. */
+    /* …and the bar itself: the per-row union of that row with the door's bytes column, which no marginal
+       carries. A fourth walk, and a cross-check against the emitted array's `razorClass`, never a sum with it
+       (solver/endpoint.h). */
     char *razor;
-    /* …AND THE ONE FACT THAT BAR DOES NOT CARRY, which is published here because nothing published it
-       anywhere: `path_pinned` is written at five request sites and read by one accessor, and no census in this
-       engine had a row for it, so the razor's own banner could name the population its `unproven` holds whose
-       BYTES THIS ENGINE CHOSE and no reader could ask how large it was. See solver/endpoint.h for why it is
-       a SEPARATE row and may never be unioned into the bar. (That clause read "really is past every parse"
-       until endpoint.h measured the claim: a pin's bytes are a literal the page's own predicate spelled, so
-       `unproven` holds that population CORRECTLY and what this row bounds is REPRODUCIBILITY — whether an
-       address rests on bytes this engine chose rather than on bytes a server sent, which is a §@H fact and
-       not a bar fact. The row, its denominator and its refusal to be unioned in are unchanged.) */
+    /* …and the one fact that bar does not carry: how many addresses rest on a path that had pinned a source
+       (`path_pinned`, set in flow.c and stamped onto requests at engine.c's pending_push sites). It bounds
+       reproducibility — bytes this engine chose rather than a server sent — and is never unioned into the bar,
+       since a pin's bytes are a literal the page's own predicate spelled (solver/endpoint.h). */
     char *witness;
 
     cold_census(&c);
@@ -2774,11 +1346,8 @@ char *result_cold_json(void) {
     cursors = cursor_hist_json(c.program_cursors, c.program_cursor_n, "program-cursor");
     ahead   = cursor_hist_json(c.programs_ahead, c.programs_ahead_n, "remaining-rows");
     {
-        /* THE SUMS ARE TAKEN OUTSIDE THE ASSERTS AND NOT INSIDE THEM, because the composition is the WORK and a
-           DCHECK's condition is compiled out in release: a `DCHECK(cold_hist_json(...) == x)` would leave both
-           buffers unwritten in exactly the build that ships, and the document would carry whatever the stack
-           held. A DCHECK condition must be side-effect-free, so the effect happens here and only the
-           comparison is asserted. */
+        /* The compositions run outside the asserts because a DCHECK's condition is compiled out in release; only
+           the comparisons are asserted. */
         long standing = cold_hist_json(hist, sizeof hist, c.step_units, "stepUnits");
         long stepped  = cold_hist_json(runs, sizeof runs, r.arms, "stepUnitRuns");
         long atladder = cold_hist_json(ladder, sizeof ladder, c.at_the_ladder_units,
@@ -2788,82 +1357,51 @@ char *result_cold_json(void) {
                                        "stepUnitOverrunSeamlessArms");
         long askarms = cold_hist_json(oask, sizeof oask, r.over_ask_arms,
                                       "stepUnitOverrunAskArms");
-        /* AND THE SEVENTH ROW THROUGH THE SAME COMPOSER, WHOSE RETURN IS DELIBERATELY DISCARDED. That
-           function returns the SUM of the arms it wrote and asserts nothing about it, leaving each caller to
-           check its own identity — and a sum of MAXIMA is a quantity no turn produced, so there is no
-           identity here for it to be the left side of. The row still goes through it rather than beside it,
-           because what is shared is the ROW FORMAT and a second loop spelling `"<name>":%ld` is exactly the
-           drift that function's banner exists to prevent. The fold this row DOES have is a maximum and it is
-           asserted at the raise, where the turn that would break it has just returned; see the DCHECK below
-           for what crossing into this document can still lose. */
+        /* `ogap` goes through the same row composer for the shared row format, and its return — a sum of maxima —
+           is discarded; its own identity is the maximum re-folded below. */
         (void)cold_hist_json(ogap, sizeof ogap, r.over_gap_arms, "stepUnitOverrunGapArms");
         long atcursor = 0;
         long atahead = 0;
         int k;
         for (k = 0; k < c.program_cursor_n; k++) atcursor += c.program_cursors[k];
         for (k = 0; k < c.programs_ahead_n; k++) atahead += c.programs_ahead[k];
-        /* THE PARTITION IS THE POINT, SO IT IS ASSERTED. Every live member carries exactly one arm, so these
-           counts SUM to the frontier — an inequality is the walk having missed a member or a member having
-           been counted twice, and either makes every reading composed from this row a statement about a
-           frontier that is not the one standing. */
+        /* Every live member carries exactly one arm, so the counts sum to the frontier. */
         DCHECK(standing == c.flows,
                "the step-unit histogram does not account for every member of the frontier — each live flow "
                "carries exactly one arm, so a total that is not `flows` means the census walk and the "
                "histogram disagree about who is standing");
-        /* AND THE LIFETIME HISTOGRAM'S OWN IDENTITY, WHICH IS A DIFFERENT ONE AND IS ASKED TWICE ON PURPOSE.
-           engine.c asserts it at the scheduler's convergence point, where it is exact and where the step that
-           broke it has just returned; this is the other side of the same contract, at the boundary the number
-           CROSSES — the census composer. A difference visible here and not there is a row lost between the
-           accessor and this document rather than a step that failed to record itself, and those are two
-           different files to open. */
+        /* The lifetime histogram's identity, asked again at the boundary the number crosses (engine.c asserts it
+           at the convergence point): a difference only here is a row lost on the way into this document. */
         DCHECK(stepped == r.steps,
                "the lifetime step histogram does not account for every scheduler step — the arms are counted "
                "at the convergence point and the steps at flow_step's entry, so a total that is not `steps` "
                "means one of the two stopped being written, and every reading of which rung the ladder stops "
                "at is then about a ladder this document did not climb");
-        /* AND THE OVERRUN HISTOGRAM'S, WHICH IS THE SAME CONTRACT AS `stepped`'s OVER A SUBSET OF THE SAME
-           TURNS. engine.c asserts it inside the branch that raises both, where it is exact; this is the other
-           side, at the boundary the numbers cross. It is worth asking here for a reason the runs identity is
-           not: this histogram is normally SPARSE — four turns of thirteen thousand, on the run that motivated
-           it — so a row silently lost between the accessor and this document would move the total from four to
-           three and read as an engine that rested more often, which is the flattering direction. */
+        /* The same contract over the overrunning subset (engine.c asserts it in the raising branch). This
+           histogram is normally sparse, so a lost row would read as a loop that rested more often. */
         DCHECK(overran == r.slice_overruns,
                "the slice-overrun histogram does not account for every overrunning turn — the arm and the "
                "total are raised on one line from one turn's clock readings, so a total that is not "
                "`sliceOverruns` means a row was lost crossing into this document, and a sparse histogram "
                "losing a row reads as a loop that rested more often rather than as a broken count");
-        /* AND THE SAME IDENTITY ONE RESTRICTION FURTHER, for the same reason and with the sharper consequence.
-           A row lost HERE reads as an arm whose overruns offered suspend points and ran anyway — which is "the
-           page choosing a back-edge-free stretch, which no ordering reaches" — when the truth may be a C
-           activation with no step boundary at all, and those are opposite diffs in different components. */
+        /* One restriction further: a lost row here reads as an arm whose overruns offered suspend points, when the
+           truth may be a C activation with no step boundary. */
         DCHECK(seamless == r.slice_overrun_seamless,
                "the seamless-overrun histogram does not account for every seamless turn — the arm and the "
                "scalar are raised one statement apart from one turn's arm and one turn's consultation delta, "
                "so a total that is not `sliceOverrunSeamless` means a row was lost crossing into this "
                "document, and the loss reads as an arm that DID offer suspend points");
-        /* AND THE COMPLEMENT'S OWN IDENTITY, OVER THE SAME CROSSING AND WITH THE OPPOSITE MISREADING. The
-           arm row and its scalar are raised in the same `else` from one turn's arm and one turn's
-           consultation delta, so a total that is not `sliceOverrunAsks` means a row was lost crossing into
-           this document — and a row lost HERE reads as an arm whose overrunning turns offered FEWER points
-           than they did, which is the direction that makes a long un-polled gap look like a short one and
-           sends a reader to quantum.h's transport instead of to the page's own stretch. The cast is the
-           narrowing solver/engine.h's `over_ask_arms` states and argues for: the scalar sums every arm and
-           stays 64-bit, the row goes through this file's ONE step-unit composer and is therefore a `long`. */
+        /* The complement's identity: a lost row reads as turns that offered fewer points than they did. The cast
+           is the narrowing solver/engine.h's `over_ask_arms` states: the scalar is 64-bit, the row a `long`. */
         DCHECK((uint64_t)askarms == r.slice_overrun_asks,
                "the per-arm ask histogram does not account for every suspend point an overrunning turn "
                "offered — the arm and the scalar are raised one statement apart in the same branch from one "
                "turn's arm and one turn's consultation delta, so a total that is not `sliceOverrunAsks` means "
                "a row was lost crossing into this document, and the loss reads as turns that offered fewer "
                "points than they did");
-        /* AND THE SEVENTH ROW'S OWN IDENTITY, WHICH IS A MAXIMUM AND NOT A SUM — the one check on this seam
-           whose fold differs, and it differs because the row does. `cold_hist_json`'s return is a sum and a
-           sum of maxima is a quantity no turn produced, so the comparison is re-folded here from the array
-           this document was composed from. WHAT IT CATCHES is the crossing and only the crossing: a row lost
-           between the accessor and this document would move the maximum DOWN — toward the arm that is merely
-           second-worst, or to zero if the worst arm is the one lost — and a smaller worst gap reads as an
-           engine that offered points more evenly, which is the flattering direction and the one that retires
-           the step-machine hypothesis this row exists to test. The per-arm containment against the scalar is
-           entailed by this and is not asserted beside it; see solver/engine.h's `over_gap_arms`. */
+        /* `ogap`'s identity is a maximum, re-folded here from the array the row was composed from. A lost row
+           moves the maximum down, which would read as points offered more evenly. The per-arm containment
+           against the scalar is entailed (solver/engine.h's `over_gap_arms`). */
         {
             long gapmax = 0;
             int g;
@@ -2877,36 +1415,22 @@ char *result_cold_json(void) {
                    "crossing into this document, and the loss reads as a turn that offered its suspend "
                    "points more evenly than it did");
         }
-        /* AND THE CURSOR HISTOGRAM'S PARTITION, WHICH IS `standing`'s IDENTITY OVER A DIFFERENT QUESTION. Every
-           live member stands at exactly one program cursor, so these counts sum to the frontier too — and the
-           consequence of an inequality here is sharper than for the arm histogram, because this row exists
-           precisely to say whether the frontier's MASS has advanced. A walk that missed members reports their
-           absence as mass that is not there, which is the reading inverted rather than degraded. */
+        /* Every live member stands at exactly one program cursor, so the counts sum to the frontier; a short walk
+           would misreport where the mass stands. */
         DCHECK(atcursor == c.flows,
                "the program-cursor histogram does not account for every member of the frontier — each live "
                "flow stands at exactly one cursor, so a total that is not `flows` means the census walk and "
                "the histogram disagree about who is standing, and this is the one row a reader consults to "
                "decide whether the mass advanced or a few members ran deep ahead of it");
-        /* AND THE REMAINING-ROWS HISTOGRAM'S PARTITION, which is `atcursor`'s identity over the OTHER half of
-           the same two fields. Every live member has exactly one distance to the end of its own sequence, so
-           these counts sum to the frontier too, and a walk that missed members reports their distance as
-           absent — which on THIS row reads as a frontier closer to retiring than it is, since the members a
-           short walk loses are the ones it never asked. */
+        /* Every live member has one distance to the end of its own sequence, so these sum to the frontier. */
         DCHECK(atahead == c.flows,
                "the remaining-rows histogram does not account for every member of the frontier — each live "
                "flow has exactly one distance to the end of its own program sequence, so a total that is not "
                "`flows` means the census walk and the histogram disagree about who is standing, and every "
                "reading of whether the frontier is converging on a retirement is then composed from a "
                "population nobody enumerated");
-        /* AND THE ONE CROSS-ROW IDENTITY THIS CENSUS HAS BETWEEN A HISTOGRAM AND A SCALAR, asserted here
-           because here is where both are in one hand. `out_of_programs` selects `script_i == dyn_n` and this
-           histogram buckets `dyn_n - script_i`, so BUCKET 0 IS THAT ROW — the same members counted by two
-           walks of one pass over two fields. It is asserted rather than assumed for the reason every other
-           partition on this line is: two numbers that are supposed to be one population are two numbers that
-           can drift, and drifted they are worse than the one they replaced, because each still looks like a
-           measurement. It is also what stops the new row being read as a second spelling of the old one — the
-           old one is this row's bucket 0 and nothing else, and the reading it could never make is everything
-           in the buckets ABOVE it. */
+        /* `out_of_programs` selects `script_i == dyn_n` and this histogram buckets `dyn_n - script_i`, so bucket 0
+           is that row counted by a second walk of the same pass. */
         DCHECKF(c.programs_ahead[0] == c.out_of_programs,
                 "the remaining-rows histogram's ZERO bucket (%ld) and `outOfPrograms` (%ld) disagree — they "
                 "are the same predicate written two ways over the same two fields on the same pass "
@@ -2914,13 +1438,8 @@ char *result_cold_json(void) {
                 "having been given a member the other was not, and the census is about a frontier that is not "
                 "the one standing",
                 c.programs_ahead[0], c.out_of_programs);
-        /* AND THE ORPHAN LADDER'S OWN PARTITION, WHICH IS `standing`'s IDENTITY OVER A SUBSET RATHER THAN
-           OVER THE FRONTIER — the one difference that matters here, because a histogram of a SUBSET is the
-           shape that silently becomes a SELECTION. `step_units` sums to `flows` and cannot be short without
-           losing a member outright; this one sums to a row raised on the SAME if/else chain that raises it,
-           so a disagreement is that chain having gained an arm without a row, at which point every reading
-           of which rung the ladder stops at is being composed from a population nobody enumerated. That is
-           the state solver/cold.h says this row exists to end, so it is asserted rather than assumed. */
+        /* The orphan ladder's histogram is over a subset, so it sums to the row raised on the same if/else chain;
+           a disagreement is that chain gaining an arm without a row, a selection read as a partition. */
         DCHECK(atladder == c.out_of_programs_at_the_ladder,
                "the orphan-ladder step-unit histogram does not account for every member standing at the "
                "ladder — the two are raised in one pass over one if/else arm, so a total that is not "
@@ -2930,32 +1449,18 @@ char *result_cold_json(void) {
     cold_resumed(&resumed);
     cold_preview_census(&pv);
     engine_frontier_census(&e);
-    /* THE ONE READING OF THE AWAITED-ROWS GAUGE, TAKEN ONCE AND USED TWICE — the assert below and the row
-       emitted far down this composef are THE SAME NUMBER by construction. CLAUDE.md §Testing: an identity
-       holds WITHIN one sample and nowhere else, and this session has already paid for the other reading once,
-       when two rows taken at two ends of a run were differenced into a contradiction that held of no
-       quantity. A second call at the emit would be a second instant. */
+    /* The awaited-rows gauge, read once so the assert below and the emitted row are the same sample. */
     awaiting_rows = engine_rows_awaiting_bytes();
-    /* AND WHAT THE @H SURFACE ITSELF IS A FRACTION OF, read once here beside the other gauges. The emitted
-       array's length is the product's headline number and it has never carried a denominator, so a reader has
-       had no way to tell a run that learned N endpoints from one that minted many and classified nearly all of
-       them as files. endpoint.c asserts the two arms sum to the mint where all three are in one hand. */
+    /* What the emitted @H array is a fraction of, read once beside the other gauges; endpoint.c asserts the two
+       arms sum to the mint where all three are in one hand. */
     endpoint_surface_census(&ep_minted, &ep_assets, &ep_emitted, &ep_pre_program);
     endpoint_ask_census(&ep_asks, &ep_ask_pre, &ep_ask_sup, &ep_ask_merged, &ep_ask_minted,
                         &ep_ask_merged_pre);
-    /* AND IT IS A SUBSET OF THE REGISTERS IT IS COUNTED AGAINST, which is the only relation these two rows
-       have and therefore the only one worth asserting. Every row standing as an external script has exactly
-       one entry naming it by `dyn_id` on the SAME member's register — solver/engine.c pushes the two together
-       at the one site that creates such a row, flow_deliver_one_reply removes the entry and flips the row's
-       kind inside one C activation, a fork duplicates both (the arm's register is asserted the same length as
-       its parent's), and HTML §7.5.10 "Destroying documents"' removal walk takes the entry and the row
-       together. So an EXCESS is not a
-       large debt: it is a row whose park was retired without it, which is the state solver/engine.c's
-       cursor-side walk can only see for the ONE row a member happens to be standing at, and this sees it for
-       every row of every member. `pend_count` is the whole register and therefore a generous bound — the
-       chain is the same shape as `pend_ready <= pend_count` above and is asserted here for its reason, that
-       both are summed over ONE frontier in ONE pass and a disagreement is two sums over different
-       populations. */
+    /* Rows awaiting bytes are a subset of the register entries owing them. Every row standing as an external
+       script has one entry naming it by `dyn_id` on the same member's register: engine.c pushes both at the
+       one creating site, flow_deliver_one_reply removes the entry and flips the row's kind in one activation,
+       a fork duplicates both, and HTML §7.5.10 "Destroying documents"' removal walk takes both. An excess is a
+       row whose park was retired without it, which this sees for every row of every member. */
     DCHECK(awaiting_rows <= c.pend_count,
            "more program rows of the frontier are standing on an address than there are pending register "
            "entries to owe them bytes — a row awaiting a program and the park that names it are created and "
@@ -2965,23 +1470,14 @@ char *result_cold_json(void) {
            "not hold");
     decide_replay_stats(&rp_hits, &rp_left, &rp_left_arms);
     decide_refine_stats(&rf_asked, &rf_refined);
-    /* THE PAIR'S OWN CONTAINMENT, ASSERTED WHERE BOTH ARE IN ONE HAND — which is the whole reason the accessor
-       hands back the total this document gets its `forks` row from elsewhere. It is NOT a restatement of
-       decide.c's own bookkeeping: that file raises the two counters at two different lines, and this is the one
-       place a reader holds both AT ONE MOMENT, which is the condition solver/decide.h says makes the identity
-       checkable at all. `fk_total` has no other reader here deliberately — a value read into a frame and never
-       consulted is the write-with-no-reader §A-FIELD-A-CONSUMER-DEFAULTS names, and this is its consumer. */
+    /* The fork pair's containment, at the one moment both are in one hand (solver/decide.h); decide.c raises
+       them at two lines. `fk_total` is read only for this assert. */
     decide_fork_pinned_stats(&fk_total, &fk_pinned);
-    /* …AND THE ORPHAN WALK'S OWN ORDER WITNESS, read here rather than in the block below for the same reason the
-       pair above is: its DENOMINATOR is `_orphansDriven`, which this document already carries, and the two are
-       in one hand only here.
-       WHAT IT SEPARATES, which is the whole reason it exists: `JS_OrphanTakeOne` prefers a body whose source
-       resolved a network door's own entry name against the global object, and falls through to any body when no
-       such candidate remains. A run in which NOTHING carries that bit behaves byte-identically to a run with no
-       order at all, so without this row a reader cannot tell AN ORDER THAT FIRED from AN ORDER WHOSE PREFERRED
-       POPULATION WAS EMPTY — and those take opposite work. Nonzero says read the addresses; zero beside a
-       nonzero `epFetchAskNamedLife` says the bundle's `fetch` occurrences are in PROGRAM bodies, which this
-       walk skips by construction, and the next diff is about those and not about the order. */
+    /* The orphan walk's order witnesses, read here because their denominator `_orphansDriven` is in hand only
+       here. `JS_OrphanTakeOne` prefers a body whose source resolved a network door's entry name against the
+       global object and falls through otherwise, so a run with no such body is byte-identical to no order.
+       Nonzero: read the addresses. Zero beside nonzero `epFetchAskNamedLife`: the `fetch` occurrences are in
+       program bodies, which this walk skips by construction. */
     orph_pref = engine_orphan_preferred();
     orph_scripts = engine_orphan_scripts();
     event_loop_advance_census(&adv_asked, &adv_declined);
@@ -2990,15 +1486,10 @@ char *result_cold_json(void) {
            "evaluation at the ask, ahead of the answer, so a refusal above the ask count is a second "
            "writer of one of them and the partition this pair exists to be is no longer one");
     {
-        /* THE CONTAINMENT, ASSERTED WHERE BOTH ARE IN ONE HAND. A preferred take IS a take, so the engine's
-           count of the first can never exceed the host's count of the second — and the two are kept in two
-           different address spaces by two different mechanisms (one is a runtime field bumped inside the walk,
-           the other is this solver's own `g_orphans_driven` raised by the visitor the walk calls), so the
-           inequality is the ONE thing that says they are about the same walk. It fires on exactly the defect a
-           two-pass refactor produces: a preferred take that marks the body and returns without the visitor
-           having run, which would publish an order that fired over drives that did not happen.
-           `od` HAS NO OTHER READER HERE DELIBERATELY — this is its consumer, for the reason the fork pair above
-           states one paragraph up. */
+        /* A preferred take is a take. The two counts come from different mechanisms (a runtime field bumped in the
+           walk, and `g_orphans_driven` raised by the visitor it calls), so the inequality is what ties them to
+           one walk: it fires on a take that marks a body and returns without the visitor. `od` is read only
+           for these asserts. */
         long od, oa;
 
         engine_orphan_census(&od, &oa);
@@ -3007,12 +1498,8 @@ char *result_cold_json(void) {
                 "so a numerator above this denominator means the walk marked a body `entered` and returned "
                 "without its visitor seeding a flow, which loses that body for the life of the instance and "
                 "publishes an order that fired over work that never happened", orph_pref, od);
-        /* THE SAME CONTAINMENT FOR THE FAIRNESS WITNESS, AND IT IS A SEPARATE CLAIM RATHER THAN A SECOND
-           CONJUNCT OF THE ONE ABOVE. A script enters the take table only when a take is charged to it, so the
-           distinct-script count can never exceed the drive count — and the two numerators come out of two
-           different mechanisms on the runtime, so an equality between them is not available and only the
-           inequality is. Asserted apart so a reader meeting the abort is told WHICH of the two witnesses
-           disagreed with the drive count; folding them would name one defect for two states. */
+        /* The fairness witness's containment, asserted apart so the abort names which witness disagreed: a script
+           enters the take table only when a take is charged to it. */
         DCHECKF(orph_scripts >= 0 && orph_scripts <= od,
                 "the orphan walk reports takes charged to %ld distinct SCRIPTS against %ld drives — a script is "
                 "charged only when a take is made, so a numerator above this denominator means the per-script "
@@ -3023,31 +1510,13 @@ char *result_cold_json(void) {
             "the two are raised in decide.c at the SAME decision, the subset's raise being gated on the very "
             "`forked` answer the total counts, so this is a numerator that outran its denominator and the "
             "share is about to be published above 1", fk_pinned, fk_total);
-    /* THE CURSOR HISTOGRAM AGAINST THE MAXIMUM IT IS READ BESIDE — the one identity that says the two rows are
-       about the same run, asserted here because this is the only place both are in one hand. It is not a
-       restatement of the partition above: that one asks whether the walk saw every member, and this asks
-       whether where they are standing is consistent with how far the document has got.
-       THE DERIVATION, so a reader can check it rather than obey it. A cursor of `c` above zero means the
-       member LEFT the row at `c - 1`; every site that advances a cursor is engine.c's ENGINE_LEAVE_ROW, which
-       raises `deepestLeft` to the row it is about to leave before it leaves it; therefore
-       `deepestLeft >= c - 1` for every standing member, and the histogram's top index is at most
-       `deepestLeft + 1`. An empty frontier satisfies it too — cold.c gives it the one row 0 and
-       `deepestLeft` is -1.
-       IT IS ASSERTED AGAINST `deepestLeft` AND NOT AGAINST `deepest`, AND THAT USED TO BE THE OTHER WAY
-       ROUND. The old derivation said every cursor advance is downstream of the compile block, which raises
-       `deepest` to the index it is about to START. That is false of ONE arm and the arm is not an error
-       state: HTML §4.12.1.1 "Processing model"'s "execute the script element" step 4 — "If el's result is
-       null, then fire an event named error at el, and return" — is a row whose program never existed, so the
-       cursor passes it and `deepest` is never raised for it. A single external `<script src>` that 404s
-       therefore left a member standing at cursor 1 with `deepest` at -1, and this line charged it as a
-       defect. `deepest` is the deepest program STARTED and the cursor is one past the deepest row LEFT, and
-       those are two facts (solver/engine.h): the identity holds of the second and never held of the first.
-       WHAT A BREAK MEANS AND WHAT IT DOES NOT. It is one of exactly two things, and neither of them is this
-       histogram being too narrow: a cursor advanced somewhere other than ENGINE_LEAVE_ROW, or that macro
-       moved a cursor without raising the row it left. Both are in engine.c and both make every reading of
-       "has the mass advanced" a statement about a document this run did not execute. Do not widen anything
-       here to accommodate it — the width is measured from the members and is not a choice this file makes,
-       and widening it to `deepest` is exactly what was wrong with it. */
+    /* The cursor histogram against the maximum it is read beside. A cursor `c > 0` means the member left row
+       `c - 1`, and every cursor advance is engine.c's ENGINE_LEAVE_ROW, which raises `deepestLeft` to the row
+       before leaving it; so the top index is at most `deepestLeft + 1`. An empty frontier has row 0 and
+       `deepestLeft` -1. Not `deepest` (the deepest program started): HTML §4.12.1.1 "Processing model"'s
+       execute-the-script-element step 4 skips a row whose result is null, so a failed external script is left
+       without being started. A break is a cursor advanced elsewhere, or that macro failing to raise the row;
+       the width is measured, so do not widen it here. */
     DCHECK(c.program_cursor_n - 1 <= e.deepest_left + 1,
            "the frontier's deepest STANDING cursor is more than one past the deepest row this document has "
            "ever LEFT — a cursor is one-past-the-row-it-left, so those two numbers are the same fact read "
@@ -3055,30 +1524,18 @@ char *result_cold_json(void) {
            "other than engine.c's ENGINE_LEAVE_ROW, or that macro moved one without raising `deepestLeft`. "
            "This is NOT `deepest`: a row HTML §4.12.1.1's step 4 skipped is left without being started, so a "
            "failed external script legitimately puts a cursor one past a program that never began");
-    /* THE REPLY DOOR'S PAIR DESCRIBES ONE POPULATION, said here for the reason engine.c says it of the
-       synchronous door's: this is a RATE, and a rate whose numerator can exceed its denominator is two counts
-       that have stopped being about the same thing. It holds by construction — pending_index_key DCHECKs a
-       record is keyed at most once and pending_index_answered untracks the record it credits, so each record
-       contributes at most one to each term and cannot be answered without having been keyed. A break is
-       therefore a record credited outside that pair of sites, and the census is about to publish a document
-       that was paid more replies than it ever put requests. */
+    /* The reply door's pair is one population: pending_index_key DCHECKs a record is keyed at most once and
+       pending_index_answered untracks the record it credits, so a break is a record credited elsewhere. */
     DCHECK(pending_index_answered_total() <= pending_index_asked_total(),
            "the reply door was answered more times than it was asked — a record is keyed once and untracked "
            "when it is answered, so a payment credited without a key is a reply settling a record the host was "
            "never shown, and `replyAnswered/replyAsked` is about to be published as a rate over two different "
            "populations. Both terms are written in solver/pending_index.c and nowhere else");
-    /* …AND THE GAP BETWEEN THEM IS A PARTITION AND NOT A NUMBER, which is the assertion the inequality above
-       could never make and the one a reader of the gap actually needs. Every record this door has ever KEYED
-       is, at the instant this census is composed, in exactly one of four states — a reply reached it, the
-       trusted zone REFUSED to make the request, the flow that asked DEPARTED owing it, or the host still owes
-       it — and solver/pending_index.c credits each at the one line that puts it there, with `pend_untrack`'s
-       three callers being the first three and `pend_unkey` the only line the fourth ever leaves on.
-       IT IS AN ASSERTION ABOUT ONE INSTANT, which is why it is written here and not composed from two
-       readings: three of the five terms are LIFETIME counts and `keyed_now` is a GAUGE, so the identity holds
-       at the moment all five are in one hand and at no other (CLAUDE.md §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-
-       ONE-SAMPLE). A break is a record credited at a fifth site, or one that left the set without being
-       credited at all — and the second is exactly the shape that made the gap unreadable in the first place,
-       so it is the one this line exists to make loud. */
+    /* …and the gap between them is a partition: every record the door has keyed is, at this instant, answered,
+       declined by the trusted zone, dropped with the flow that asked, or still owed. solver/pending_index.c
+       credits each at the one line that puts it there (`pend_untrack`'s three callers, and `pend_unkey` for
+       the fourth). Three terms are lifetime counts and `keyed_now` is a gauge, so the identity holds only
+       with all five in one hand, here. */
     DCHECK(pending_index_asked_total() ==
                pending_index_answered_total() + pending_index_declined_total() +
                pending_index_dropped_total() + pending_index_keyed_now(),
@@ -3088,19 +1545,10 @@ char *result_cold_json(void) {
            "to any of them, and `replyAsked - replyAnswered` is about to be published as a gap whose reading "
            "a reader cannot recover: a host that still owes replies and a surface this tool refused to ask "
            "for are opposite findings and only one of them is about the reply door");
-    /* AND THE DELIVERY DEBT IS A SUBSET OF THE REGISTER IT IS COUNTED OUT OF, which is the only relation these
-       two rows have and therefore the only one worth asserting. Both are summed in ONE pass of cold_census over
-       ONE frontier — `pend_count` is every entry of every live register and `pend_ready` is the entries of those
-       same registers that flow_deliver_one_reply may take — so an excess is not a large debt, it is the two
-       counters having been summed over different populations, and `pendReady` would then publish as a debt the
-       frontier does not hold. */
-    /* AND THE MEMBER-SIDE PAIR IS A SUBSET CHAIN FOR THE SAME REASON THE ENTRY-SIDE ONE IS, asserted here
-       because this is where both are in one hand. `can_deliver` is the reply-delivery arm's WHOLE guard and
-       `stack_empty` is its left conjunct, counted on ONE walk of ONE frontier (cold_census), so an excess is
-       not a large number — it is the two counters having been summed over different populations, and the pair
-       is about to be published as the reading that says whether the frontier's delivery debt is held by
-       members that could take it. `stack_empty` is bounded by the walk's own member count for the same
-       reason. */
+    /* Two subset chains over one cold_census walk of one frontier, so an excess is two sums over different
+       populations: `pend_ready` (entries flow_deliver_one_reply may take) within `pend_count` (every register
+       entry), and `can_deliver` (the delivery arm's whole guard) within `stack_empty` (its left conjunct)
+       within the member count. */
     DCHECK(c.can_deliver <= c.stack_empty && c.stack_empty <= c.flows,
            "the frontier holds more members that can DELIVER than members whose execution context stack is "
            "empty, or more of the latter than there are members at all — the two rows are the whole of "
@@ -3113,79 +1561,49 @@ char *result_cold_json(void) {
            "of the register by construction, so this is two sums over different populations and the census is "
            "about to publish a delivery debt larger than the registers it was read out of");
     ran = resumed.flows + resumed.cands > 0;
-    /* A REBUILD IS ALL OF ITSELF OR NONE OF IT, asserted here because `resumed: 0` is a POSITIVE claim that this
-       session was handed no residue and this is the one place both halves of that claim are in one hand.
-       cold_resume ends with `DCHECK(flows > 0)` and memsets its census on entry, so `flows + cands == 0` can
-       only be the never-called state — unless a census arrives holding segments, foreign worlds or orphan
-       locators under no flow at all, which is neither state and would publish as the claim that nothing came
-       back. */
+    /* A rebuild is all of itself or none of it. cold_resume memsets its census on entry and ends with
+       `DCHECK(flows > 0)`, so `flows + cands == 0` is the never-called state and must carry no segments,
+       foreign worlds or orphan locators; `resumed: 0` is a positive claim that no residue was handed over. */
     DCHECK(ran || (resumed.segs == 0 && resumed.worlds == 0 && resumed.orphans == 0),
            "the cold tier reported a rebuild that landed no flow and yet rebuilt segments, foreign worlds or "
            "orphan locators — `resumed` is about to be emitted as 0, which STATES that this session was handed "
            "no residue, and that would be a lie about a residue that was read back. cold_resume's own "
            "`flows > 0` is the other side of this pair");
-    /* AND A CLAIM IS EVIDENCE OF A DRIVE THAT WAS INHERITED, never of one this session started. `orphan_want` is
-       written at exactly one site (cold.c's 'o' record) and spreads only by fork, so met-or-lost claims under a
-       zero `resumed.orphans` mean the two counters have stopped describing one population and the round trip's
-       verdict is being read off the wrong session. The comparison is legitimate at all only because
-       engine_sched_begin calls cold_resume AT MOST ONCE per session — `cold_resumed` describes the last rebuild
-       while the claim totals describe the whole session — so a second call site is precisely what this fires
-       on, and it should. Met and unmet may both EXCEED `orphans` (a waiting drive forks arms and every arm is
-       the same drive), which is why the implication runs one way only. */
+    /* A claim is evidence of an inherited drive, never one this session started: `orphan_want` is written only
+       at cold.c's 'o' record and spreads by fork. The comparison holds because engine_sched_begin calls
+       cold_resume at most once per session; met and unmet may exceed `orphans` (a drive's arms are one drive),
+       so the implication runs one way. */
     DCHECK(resumed.orphans > 0 || (e.claims_met == 0 && e.claims_unmet == 0),
            "an inherited-drive claim was met or lost in a session whose rebuild carried no orphan locator — the "
            "three orphanClaims rows are about to describe a round trip that this document also says did not "
            "happen");
-    /* AND THE PARK PREVIEW'S OWN PARTITION, ASKED HERE FOR THE REASON THE LIFETIME STEP HISTOGRAM'S IS:
-       cold.c asserts it at every ask, where it is exact and where the arm that broke it has just run; this
-       is the other side of the same contract, at the boundary the numbers CROSS. A difference visible here
-       and not there is a row lost between the accessor and this document rather than an arm that failed to
-       record itself, and those are two different files to open. It matters on this row in particular
-       because the four are about to be published as the explanation of a park that did not happen — a
-       total no part of it accounts for would name the wrong conjunct, and naming the wrong one is a diff
-       somebody then builds. */
+    /* The park preview's partition, at the boundary the numbers cross; cold.c asserts it at every ask, so a
+       difference only here is a row lost between the accessor and this document. */
     DCHECK(pv.asks_refusing + pv.asks_empty + pv.asks_writable == pv.asks,
            "the park preview's ask census does not partition itself — `previewAsksRefusing`, "
            "`previewAsksEmpty` and `previewAsksWritable` are the three arms of one `if` chain over one ask "
            "and sum to `previewAsks` by construction, so a difference is a row lost crossing into this "
            "document and the rows are about to be read as which conjunct of a park moment refused");
-    /* THE REPLAY LEDGER'S IDENTITY, ASSERTED AT THE ONE MOMENT ALL THREE ARE IN ONE HAND — which is the whole
-       reason decide.h hands them back in one call. §Testing: an identity holds WITHIN one sample and nowhere
-       else, and this session has already paid for the other reading — two rows taken at two ends of a run were
-       differenced into a contradiction that held of no quantity, and three mechanisms were written down for it
-       before the file's owner read the constant that explained it. These three are read one line apart from
-       one accessor and are asserted here, so a break is the ledger and never the sampling.
-       BOTH CLAUSES ARE NEEDED AND THAT IS NOT PEDANTRY: `left_arms >= left` alone permits `left == 0` beside a
-       non-zero sum, which is exactly the state a counter incremented on the wrong side of dec_leave_path's
-       early return would produce. Both come from that function's own precondition — `g_c < dec_total()`, so
-       every divergence abandons at least one arm — and a break here is a divergence counted without its arms
-       or arms counted without their divergence, either of which publishes `replayLeftArms` as a loss no
-       `replayLeft` accounts for. */
+    /* The replay ledger's identity, at the one moment all three are in one hand (decide.h returns them in one
+       call). Both clauses are needed: `left_arms >= left` alone permits `left == 0` beside a nonzero arm sum.
+       dec_leave_path's precondition (`g_c < dec_total()`) makes every divergence abandon at least one arm. */
     DCHECK(rp_left_arms >= rp_left && (rp_left == 0) == (rp_left_arms == 0),
            "the replay ledger's two divergence rows contradict each other — every call of dec_leave_path "
            "abandons AT LEAST ONE arm (its own precondition is that the cursor is short of the end), so the "
            "arm total can be neither smaller than the event count nor zero beside a non-zero one. "
            "`replayLeft` and `replayLeftArms` are about to be published as the statement of what a resume did "
            "with its recorded path, and they are counted at one site two lines apart");
-    /* AND THE REFINEMENT PAIR'S ONE IDENTITY, ASSERTED HERE FOR THE REASON THE THREE ABOVE ARE: `refined` is
-       raised one line below the test that raises `asked` and on the same `key`, so a numerator above its
-       denominator is a SECOND WRITER of one of them rather than a sampling artifact — and the fraction is
-       about to be published as the share of this session's spellable decisions that cost nothing, which a
-       consumer reads as a percentage. A single clause is the whole identity here and that is not an oversight:
-       `refined == 0` beside `asked == 0` is the legitimate and important state (no spellable question was
-       reached), which is exactly what decide.h's witness paragraph is for, so the second clause the replay
-       ledger needs would forbid the reading this pair exists to make. */
+    /* `refined` is raised one line below the test that raises `asked`, on the same `key`, so an excess is a
+       second writer. One clause only: `refined == 0` beside `asked == 0` is the legitimate state of no
+       spellable question reached (decide.h's witness paragraph). */
     DCHECK(rf_refined <= rf_asked,
            "more decisions were refined out of a flow's own constraint than were ASKED over a spellable "
            "question — decide_arm raises the denominator on the `key` test and the numerator one line below "
            "it, so a subset larger than its population is a second writer of one of the two. "
            "`branchRefined / branchAsked` is about to be published as the share of this session's spellable "
            "decisions that cost nothing at all");
-    /* A HISTOGRAM THAT COULD NOT BE ALLOCATED MAKES THE CENSUS ABSENT, never a census with a row missing.
-       composef's own contract on this seam is that a NULL is "this census is absent" and every caller already
-       treats it as one; splicing a hole into the document instead would publish a @COLD line whose readers —
-       which assert the shape rather than defaulting it — would report a broken relay for what is an
-       allocation failure, and §Testing's absent-is-not-zero rule is the same sentence one layer up. */
+    /* A histogram that could not be allocated makes the census absent (composef's NULL contract), never a census
+       with a row missing, which readers that assert the shape would report as a broken relay. */
     edge = endpoint_fetch_edge_rows();
     xedge = endpoint_xhr_edge_rows();
     rungs = rung_entry_rows();
@@ -3209,232 +1627,146 @@ char *result_cold_json(void) {
         return NULL;
     }
     out = composef(
+                 /* `live` is the frontier's current size; the created total is `_flows` on the document. A
+                    stalled frontier has retired (`finished`) or paged (`sold`) its members. `live` is not split
+                    by candidate (`_wfq.cands` carries that half), and `framed` (the park's re-execution cost)
+                    and `blocked` (what the host owes) stay whole. `owed` counts flows that told the scheduler
+                    they cannot progress, which the pick reads; `blocked` asks each register whether the host
+                    owes it anything; the gap between them is marks cleared faster than the sweep lays them. */
                  "{\"live\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
+                 /* `finished` and `sold` carry their two populations: an exploration flow retiring is coverage
+                    gained, a candidate member retiring is search spent on a payload that did not fire.
+                    `*Cands` count members, not sessions — engine_sibling_assemble copies the candidate identity
+                    to every sibling, and `_candidates` is the per-session count (solver/engine.h). The parts are
+                    rows rather than a subtraction so they can be checked; engine_frontier_census asserts the
+                    identity. The keys are not renamed: the composer ships in `qjs.wasm` while build.mjs reads
+                    the tree live. */
                  "\"finished\":%ld,\"finishedFlows\":%ld,\"finishedCands\":%ld,"
+                 /* `deepest` (deepest program started) and `completed` are global high-water marks set by one
+                    member; `deepestLeft` is the deepest row any member left. */
                  "\"deepest\":%d,\"completed\":%d,\"deepestLeft\":%d,"
-                 /* AND THE NUMBER THOSE TWO MAXIMA ARE READ AGAINST, without which "deepest 7" is equally
-                    "this document has eight programs and a flow ran them all" and "it has far more and
-                    nothing reached them" — two readings that take opposite work and that no other row on
-                    this line separates. It is the ROOT DOCUMENT'S OWN <script> count and NOT the length of
-                    any flow's sequence, which continues past it with every chunk, injection and candidate
-                    the run queued; solver/engine.h states why no inequality between the two holds and why
-                    there is therefore no assert. */
+                 /* …and the number those two maxima are read against: the root document's own <script> count, not
+                    any flow's sequence length (which continues with chunks, injections and candidates).
+                    solver/engine.h states why no inequality between them holds. */
                  "\"rootPrograms\":%d,"
-                 /* …AND ITS TWO ARMS, WHICH ARE WHAT `replyAsked` BELOW IS READ AGAINST. `rootProgramsAwaitedAtSeed`
-                    is the reply-door openings this document owes for its OWN bundle, so `replyAsked` equal to
-                    it is a run that issued no page `fetch()`, no XHR and no dynamic `import()` — it learned
-                    nothing, which is the one verdict §What-the-tool-produces cares about and which was being
-                    reached by counting `<script src>` elements off the page by hand. A partition, asserted at
-                    engine_frontier_census. */
+                 /* …and its two arms. `rootProgramsAwaitedAtSeed` is the reply-door openings this document owes
+                    for its own bundle, so `replyAsked` equal to it is a run that issued no page `fetch()`, XHR or
+                    dynamic `import()`. A partition, asserted at engine_frontier_census. */
                  "\"rootProgramsHeldAtSeed\":%d,\"rootProgramsAwaitedAtSeed\":%d,"
-                 /* …AND THE LIVE HALF OF THAT PAIR, WHICH IS A GAUGE AND WHICH THE TWO ROWS ABOVE ARE NOT.
-                    `…AwaitedAtSeed` is a CONSTANT — what the document OWED the reply door when its rows were
-                    laid down, written at one line and never again — so on its own it cannot say whether those
-                    bytes ever came, and the misreading it invites (`…Awaited 17` read as "seventeen are STILL
-                    owed") has already sent a reader to a component with nothing wrong in it. This row is the
-                    question that misreading was reaching for: how many program rows of the LIVE frontier are
-                    standing on an address right now.
-                    THE TWO READINGS TAKE OPPOSITE WORK, which is the whole of why the pair is worth a row.
-                    `17` beside `0` is a bundle that arrived WHOLE, so a run that never reached its later
-                    programs is the ORDER failing and the reader wants `programCursors`; `17` beside `17` is a
-                    bundle whose bytes never came, which is the fetch path and the reply door. Nothing on this
-                    line separated them.
-                    IT IS SUMMED PER MEMBER AND NO INEQUALITY AGAINST `…AwaitedAtSeed` HOLDS IN EITHER
-                    DIRECTION, so there is no assert between them: a fork copies its parent's rows, so one
-                    document row awaited by N members counts N times and drives this ABOVE the seed's arm,
-                    while a member the pager sells takes its awaited rows out of the number and drives it
-                    below. The relation this row does have is to `pend` and is asserted where both are in one
-                    hand, at the head of this composer. */
+                 /* …and the live half of that pair: a gauge, where `…AwaitedAtSeed` is a constant written once at
+                    the seed. It counts program rows of the live frontier standing on an address now: `17` beside
+                    `0` is a bundle that arrived whole (read `programCursors`), `17` beside `17` a bundle whose
+                    bytes never came (the fetch path). Summed per member, so a fork raises it and a sale lowers it
+                    and no inequality against the seed's arm holds; its relation to `pend` is asserted at the head
+                    of this composer. */
                  "\"rowsAwaitingBytes\":%ld,"
-                 /* THE COUNTS BESIDE THOSE TWO MAXIMA, AND THE @S SEARCH'S OWN NUMERATOR AND DENOMINATOR. See
-                    solver/engine.h for the whole reading; the part a reader of THIS line needs is that
-                    `progStartsCand` alone means nothing. A `0` there is `no breakout was ever queued` and it
-                    is also `N were queued and the scheduler started none`, which take opposite work, and
-                    `progQueuedCand` is what tells them apart. `progStarts` is the third: a run that started no program at all
-                    has said nothing about candidates either way.
-                    THE PARTS ARE ROWS AND NOT A SUBTRACTION, for the reason `finishedCands` states above — a
-                    derived half cannot be checked, and `progStarts - progStartsCand` is exactly the arithmetic
-                    that would silently absorb a start path added without a label. Emitted as three, so the
-                    identity solver/engine.c asserts in dev is one a reader can also check off a release log.
-                    THEY ARE NOT COMPARABLE AS AN INEQUALITY: a fork copies unstarted rows into the arm it
-                    makes, so `progStartsCand` above `progQueuedCand` is one asked-for program started on
-                    several timelines and is not a broken count.
-                    AND `cand*` ON THE @WFQ LINE IS A DIFFERENT POPULATION — those rows count frontier MEMBERS
-                    carrying a payload substitution, and these count PROGRAMS. A grep for `cand` over a log
-                    returns both, which is worth knowing before either number is quoted as the other. */
+                 /* The @S search's own numerator and denominator (solver/engine.h has the full reading).
+                    `progStartsCand` 0 is either no breakout queued or N queued and none started;
+                    `progQueuedCand` tells them apart, and `progStarts` 0 says nothing either way. The parts are
+                    rows rather than a subtraction so the identity engine.c asserts in dev is checkable off a
+                    release log. A fork copies unstarted rows, so `progStartsCand` may exceed `progQueuedCand`.
+                    `cand*` on the @WFQ line counts members carrying a payload substitution, a different
+                    population from these programs. */
                  "\"progStarts\":%ld,\"progStartsCand\":%ld,\"progStartsOther\":%ld,"
                  "\"progQueuedCand\":%ld,"
-                 /* AND WHETHER A REPLY EVER BECAME A PROGRAM, WHICH `progStartsOther` ONE ROW UP CANNOT SAY
-                    AND WHICH IS THE PRODUCT'S HEADLINE CAPABILITY. CLAUDE.md §Learning-from-replies makes "a
-                    fetch whose body is JAVASCRIPT is ALWAYS fetched + EXECUTED" the headline moat surface, and
-                    two doors build it — solver/engine.c's FLOW_PENDING_RESOLVE delivery and
-                    core/xhr/xml_http_request.c's `xhr_take_reply`. Both end in `engine_queue_fetched_script`,
-                    which queues a DYN_PAGE_SCRIPT, so the row's KIND is the same kind the document's own
-                    seeded `<script>` rows carry and `progStartsOther` sums a chunk that arrived over the
-                    network with the page's own bundle. NO ROW ANYWHERE SAID A PROGRAM HAD BEEN QUEUED FROM A
-                    REPLY AT ALL.
-                    EACH DOOR IS A PAIR AND NEITHER HALF IS READABLE ALONE, which is the whole reason there are
-                    five rows and not two. `…Asks` is raised where the door HOLDS A REPLY RECORD, upstream of
-                    the type gate — both doors DECLINE correctly for a reply whose computed type is not
-                    JavaScript, and a preload, a modulepreload and an image decode park a kind of their own
-                    precisely so a JavaScript-typed reply is NOT compiled — so a census of what landed reports
-                    every correct refusal as the door failing (§AN-INVARIANT-OVER-A-GATED-OPERATION). `0/0` is
-                    a door this run never reached; `0/N` is a door reached N times that queued nothing, and
-                    those take opposite work.
-                    THE TWO DENOMINATORS COUNT ONE POPULATION — reply RECORDS, not network errors — which is
-                    made true at the fetch door by a guard on the reply being a record rather than assumed,
-                    because the XHR door returns before its own program block for a reply with no body.
-                    `netProgQueuedLife` IS THE ONE ENTRY'S OWN TOTAL AND IS NOT THE SUM OF THE TWO ARMS. It is
-                    raised inside `engine_queue_fetched_script`, so every caller moves it, and a third caller
-                    exists on purpose — test_forced.c's `loadScript` host edge, which stands in for a
-                    `<script src>`-shaped door and says at its own site that it CANNOT exercise the delivery
-                    arm. So the relation is `fetch + xhr <= total`, asserted in the engine, and the residue is
-                    ZERO in the shipped program and the fixture's own edge in that binary. What the inequality
-                    catches is a door crediting itself with a program the compile entry never saw, which is the
-                    second compile door §A-superseded-system-is-DELETED forbids arriving as an observation.
-                    THE FIVE ARE NOT FIVE INDEPENDENT READINGS. Each door's two rows share a precondition —
-                    nothing can be queued at a door that was never asked — so a pair reading `0/0` is ONE fact
-                    about that door and not two, and the three queued rows are bound by the inequality above,
-                    so `netProgQueuedLife` reading 0 entails both arms at 0. What is genuinely independent is
-                    the two DOORS: a page may send no `fetch()` and many XMLHttpRequests, and axios's browser
-                    adapter IS one. */
+                 /* …and whether a reply became a program — the "fetched JS is always executed" surface. Two doors
+                    build it, solver/engine.c's FLOW_PENDING_RESOLVE delivery and core/xhr/xml_http_request.c's
+                    `xhr_take_reply`; both end in `engine_queue_fetched_script`, which queues a DYN_PAGE_SCRIPT,
+                    so `progStartsOther` cannot separate them from the page's own bundle.
+                    Each door is an ask/queued pair: `…Asks` is raised where the door holds a reply record,
+                    upstream of the type gate, so `0/0` is a door never reached and `0/N` one reached that
+                    queued nothing (correctly, for a non-JavaScript type). Both asks count reply records.
+                    `netProgQueuedLife` is raised inside `engine_queue_fetched_script` itself, and test_forced.c's
+                    `loadScript` host edge is a third caller, so `fetch + xhr <= total` (asserted in the engine);
+                    the residue is zero in the shipped program. A door crediting a program the compile entry
+                    never saw would break it. The two doors are independent (axios's browser adapter is XHR). */
                  "\"netProgQueuedLife\":%ld,"
                  "\"netProgFetchAsksLife\":%ld,\"netProgFetchQueuedLife\":%ld,"
                  "\"netProgXhrAsksLife\":%ld,\"netProgXhrQueuedLife\":%ld,"
-                 /* THE TWO COLD-TIER ROWS, WHICH ARE BOTH OUTCOME CENSUSES OVER GATES WITH LEGITIMATE
-                    DECLINING ARMS AND HAD NO BANNER AT ALL — the only rows on this line that carried none,
-                    while being the pair a reader reaches for to ask whether the ONE CONTINUOUS FRONTIER
-                    §scheduler describes is accumulating.
-                    `sold` IS GATED ON THE ALLOCATOR'S REFUSAL, so a zero is THE RAM FLOOR WAS NEVER MET and
-                    not THE PAGER FAILED. Its ask side is already on this line — `pagedAsks` with
-                    `pagedFloor` and `pagedUnarmed` beside it — and the pair is read together or neither is
-                    read, which is the same contract `epAssets` carries against its own ask and `progStarts`
-                    against `progQueuedCand` two rows up.
-                    `resumed` IS GATED ONE ZONE OUT, ON A KEY MATCH THIS FILE CANNOT SEE. The trusted zone
-                    keys a residue by the document's ADDRESS plus its BUNDLE ID, so a zero here has THREE
-                    readings and they take opposite work: no residue was ever written; residue was written
-                    and the key MISSED, which a changed bundle is supposed to cause and which is the design
-                    working; or the key matched and the rebuild produced nothing, which is the only one that
-                    is a defect. NO ROW ANYWHERE PUBLISHES THAT KEY — the engine's run record carries `park`
-                    and `resumed` and not the key either was taken against — so the three cannot be separated
-                    from any document this engine composes. That is a next diff in the trusted zone and not
-                    in this file, and it is named here because this is where a reader meets the zero.
-                    THE CAPABILITY ITSELF IS MEASURED AND WORKS, WHICH IS WORTH STATING BECAUSE THREE ROWS
-                    READING ZERO ON EVERY LIVE RUN INVITE THE OPPOSITE CONCLUSION. Written as the derivation
-                    rather than as figures, because the figures rot and the command does not — serve
-                    testing/fixtures over a static port and drive ONE document TWICE, the second time through
-                    the harness command named for this question:
+                 /* `sold` and `resumed` are outcome censuses over gates with legitimate declining arms.
+                    `sold` is gated on the allocator's refusal, so 0 is the RAM floor never met; its ask side is
+                    `pagedAsks` with `pagedFloor` and `pagedUnarmed`. `resumed` is gated in the trusted zone on a
+                    key of the document's address plus bundle id that no document publishes, so 0 is no residue
+                    written, a key miss (the design working on a changed bundle), or a rebuild that produced
+                    nothing — only the last a defect, and separating them is a trusted-zone diff.
+                    The capability is checkable on a tracked fixture (a live page's rolling deploy makes a miss
+                    correct): serve testing/fixtures and drive one document twice,
                       node testing/harness.js restart      <port>
                       node testing/live-run.js 1 'http://127.0.0.1:<p>/wjp_absent.html?__forcepark=1'
-                      node testing/harness.js restart-keep <port>     # PRESERVES IndexedDB
+                      node testing/harness.js restart-keep <port>     # preserves IndexedDB
                       node testing/live-run.js 1 'http://127.0.0.1:<p>/wjp_absent.html?__forcepark=1'
-                    The second run must report `resumed` above zero AND `park` at zero — the second is the
-                    independent half, because the trusted zone arms that forced park only when it found no
-                    prior recipes, so a run that does NOT re-park has said it found some. A tracked fixture
-                    is the subject rather than a live page DELIBERATELY: the key carries the bundle id, so a
-                    third party's rolling deploy makes a miss CORRECT and the experiment unable to
-                    distinguish the readings above.
-                    AND THE PARK THAT EXPERIMENT EXERCISES IS NOT THE ONE A VISIT TAKES. `?__forcepark=1` is
-                    a trusted-zone test hook; the production route is the Level-1 pool's eviction under RAM
-                    pressure, which is why an ordinary visit reports these rows at zero. That is the gate
-                    declining, not the mechanism failing, and the two are what `pagedAsks` separates. */
+                    and the second must report `resumed > 0` and `park` 0 (the forced park arms only when no
+                    prior recipes exist). `?__forcepark=1` is a test hook; a visit parks only under Level-1 RAM
+                    pressure, which is why these rows read 0 on an ordinary visit. */
                  "\"sold\":%ld,\"soldFlows\":%ld,\"soldCands\":%ld,\"forks\":%ld,"
+                 /* `resumed` is the positive statement that a rebuild ran, always present: `resumed: 0` says
+                    no residue was handed over, so zeroes beside it are not a verdict. `resumedSegs`/`Flows`/
+                    `Cands`/`Worlds` decompose it into which arms of the residue grammar ran (cold.h). No
+                    `resumedOrphans` row: `orphanClaims` is that number. */
                  "\"resumed\":%d,\"resumedSegs\":%ld,\"resumedFlows\":%ld,\"resumedCands\":%ld,"
                  "\"resumedWorlds\":%ld,"
-                 /* THE PATH HALF'S VERDICT ROWS — LIFETIME COUNTS over the session, and the pair of units is
-                    the thing a reader must carry: `replayHits` and `replayLeftArms` are ARMS (decision-vector
-                    slots) and `replayLeft` is EVENTS (one per divergence, whatever it abandoned). They are
-                    emitted together and on ONE line because the identity over them
-                    (`replayLeftArms >= replayLeft` and `replayLeft == 0` exactly when `replayLeftArms == 0`)
-                    is an assertion about one moment, asserted above where all three were in one hand.
-                    WHAT THEY SAY THAT THE FOUR ROWS ABOVE CANNOT. `resumed`/`resumedSegs`/`resumedFlows`/
-                    `resumedCands` state what the DOCUMENT HELD; a session that rebuilt every one of those and
-                    then left its recorded path at the FIRST branch of every flow — replaying nothing and
-                    re-exploring from the baseline — wrote the identical four numbers. Under `resumed: 1`,
-                    `replayLeftArms: 0` says no flow abandoned a single recorded arm and `replayHits` says how
-                    many were honoured; a large `replayLeftArms` is the loss, quantified in arms.
-                    THEY ARE A REPORT AND NOT A PASS. §Time-travel-resume has a replay run against TODAY's code
-                    and TODAY's replies, so a divergence is PERMITTED — decide.h names the residual that keeps
-                    these three from attributing one to a moved peer rather than to a lost path, and `resumed:
-                    0` beside a non-zero `replayLeft` is the one attribution they make on their own: siblings,
-                    because that row states this session was handed no residue at all. */
+                 /* The path half's verdict rows, lifetime counts. Units differ: `replayHits` and `replayLeftArms`
+                    are arms (decision-vector slots), `replayLeft` is divergence events; their identity is asserted
+                    above. They say what the `resumed*` rows cannot: whether a rebuilt session followed its
+                    recorded path. A divergence is permitted (a replay runs against today's code and replies);
+                    decide.h names the residual. `resumed: 0` beside nonzero `replayLeft` attributes it to
+                    siblings. */
                  "\"replayHits\":%ld,\"replayLeft\":%ld,\"replayLeftArms\":%ld,"
-                 /* THE THIRD OF decide_arm'S THREE ARMS, PUBLISHED BESIDE THE SECOND BECAUSE THEY PARTITION
-                    ONE POPULATION AND THE THIRD IS WHAT A NAME BUYS. A spellable decision is REFINED (this
-                    pair's numerator, no slot, no member), REPLAYED (`replayHits`) or NEW (the `_forkAt`
-                    census's predicate rows), and until these two rows the first was counted nowhere — so
-                    `how much did naming this operand collapse` had no reading on any document. THE UNIT IS
-                    DECISIONS and it is NOT `replayHits`' unit, which is ARMS: a refinement consumes no slot,
-                    which is the whole point of it, so the three may be read as a partition of DECISIONS and
-                    the two ledgers may not be summed. `branchAsked` IS THE REACHABILITY WITNESS and is why
-                    there are two rows rather than one — a zero `branchRefined` beside a zero `branchAsked`
-                    says no spellable question was REACHED, which is the state solver/decide.c's
-                    fork_site_name residual is entirely about and is therefore the NEAR MISS rather than the
-                    exotic case; beside a non-zero `branchAsked` the same zero is a finding about refinement.
-                    Read them as a fraction or not at all. */
+                 /* The third of decide_arm's three arms. A spellable decision is refined (no slot, no member),
+                    replayed (`replayHits`) or new (`_forkAt`'s predicate rows). The unit is decisions, not
+                    `replayHits`' arms, so the two ledgers may not be summed. `branchAsked` is the reachability
+                    witness: zero `branchRefined` beside zero `branchAsked` is no spellable question reached
+                    (decide.c's fork_site_name residual). Read as a fraction or not at all. */
                  "\"branchAsked\":%ld,\"branchRefined\":%ld,"
-                 /* AND THE ONE POPULATION THE THREE ROWS ABOVE PARTITION AND NONE OF THEM SIZES: of the NEW
-                    decisions, how many FORKED over a subject this flow had already PROVED. §Solver-half's
-                    CONCRETIZE-ON-PIN says such a branch "is decided by RUNNING the real predicate on a real
-                    string and does not fork at all", and that holds for the two pin MINT arms, whose bare
-                    primitive never reaches a branch hook. It does NOT hold for a source the page MATERIALISED
-                    before its gate — `concolic_example` leaves the record intact — so a SECOND predicate over
-                    it arrives with a singleton domain and one arm the run itself contradicted.
-                    IT IS A POPULATION SIZE AND NOT A DEFECT COUNT, which is why it is a row and not an assert:
-                    §Testing requires a prediction to state its own reachability witness, and the refusal this
-                    is the precondition for would be the stub §NO-STUBS forbids if the number were zero.
-                    READ AGAINST `forks`, WHICH IS ITS DENOMINATOR AND IS ON THIS SAME DOCUMENT: both come out
-                    of ONE call for solver/decide.h's stated reason, so `forkOverPinned <= forks` is an
-                    assertion about one moment rather than two getters joined by hand. */
+                 /* …and of the new decisions, how many forked over a subject this flow had already proved. The two
+                    pin mint arms hand back a bare primitive that never reaches a branch hook, but a source the
+                    page materialized before its gate keeps its record (`concolic_example`), so a second predicate
+                    over it forks with a singleton domain. A population size, not a defect count. Its
+                    denominator `forks` comes from the same call (solver/decide.h), so `forkOverPinned <= forks`
+                    holds within one moment. */
                  "\"forkOverPinned\":%ld,"
-                 /* THE ORPHAN WALK'S PREFERRED TAKES — see where it is read for what a zero beside a nonzero
-                    `epFetchAskNamedLife` means and why that is a different next diff. Its denominator is
-                    `_orphansDriven` on this same document, and the containment between them is asserted where
-                    both are in one hand. */
+                 /* The orphan walk's preferred takes, over `_orphansDriven` on this document; the containment is
+                    asserted where both are in one hand. */
                  "\"orphanPreferred\":%ld,"
-                 /* …AND OVER HOW MANY DISTINCT SCRIPTS THE SAME DRIVES WERE SPREAD, which is the order's OTHER
-                    witness and the one that answers the defect it was built for. The two are independent: a run
-                    can be all-preferred and all from one chunk, and a run can be fairly spread with no
-                    preferred body in it. Its denominator is `_orphansDriven` on this same document — one
-                    script against a hundred drives is the monopoly, a count near the page's chunk count is the
-                    order working — and `orphanScripts <= orphansDriven` is asserted where both are in one
-                    hand, because a script cannot be charged a take that was not made. */
+                 /* …and over how many distinct scripts the same drives were spread, independent of the preferred
+                    count: one script against a hundred drives is a monopoly. `orphanScripts <= orphansDriven` is
+                    asserted where both are in one hand. */
                  "\"orphanScripts\":%ld,"
+                 /* The cold round trip's verdict: `orphanClaims` is the inherited drives a resume rebuilt,
+                    `orphanClaimsMet` the waits a take satisfied, `orphanClaimsUnmet` the waiting flows that
+                    finished never handed a body — the loss, zero when the bytes did not change. Met may exceed
+                    claims (a drive's arms are one drive). Read only under `resumed: 1`. No `orphans` row:
+                    `_orphansDriven` is that number. */
                  "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
+                 /* `hostAsked`/`hostAnswered` are minted at engine.c's `mint_req` for FLOW_PENDING_HOSTREQ: the
+                    four cross-instance reads and XMLHttpRequest, whose async and sync (§3.5.6) arms share that
+                    rendezvous. The reply door (fetch, injected `<script src>`, the document's script slots,
+                    dynamic `import()`) is the `reply*` pair below. `hostAnswersExtra` is not part of
+                    `hostAnswered`: only a rendezvous's first answer settles it, the rest fork arms. */
                  "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersExtra\":%ld,"
                  "\"hostAnswersLate\":%ld,\"hostTerminated\":%ld,"
-                 /* THE FOUR ENDS OF THE REPLY DOOR, PUBLISHED TOGETHER BECAUSE THE GAP BETWEEN THE FIRST
-                    TWO IS MEANINGLESS WITHOUT THE OTHER TWO. Measured on one real SPA: `replyAsked 9 /
-                    replyAnswered 7` in four of four fresh-browser drives, where the two were REFUSALS of the
-                    page's own boot `fetch()` and of its `.catch` arm's error report — the door owed nothing.
-                    A second page in the same browser read 31/31 with no refusal. One pair, opposite
-                    findings, and until these rows existed nothing in this census could tell them apart.
-                    `replyOutstanding` IS THE GAUGE AND THE OTHER THREE ARE LIFETIME COUNTS — see
-                    solver/pending_index.h. A reader who differences the gauge is reading a level as a rate;
-                    a reader who wants "is the host actually behind" wants that row and none of the others. */
+                 /* The four ends of the reply door, together because the asked/answered gap means nothing without
+                    the other two: a gap may be refusals of the page's own requests, where the door owes nothing.
+                    `replyOutstanding` is the gauge (is the host behind); the other three are lifetime counts
+                    (solver/pending_index.h). */
                  "\"replyAsked\":%ld,\"replyAnswered\":%ld,"
                  "\"replyDeclined\":%ld,\"replyDropped\":%ld,\"replyOutstanding\":%ld,"
                  "\"pagedReqs\":%ld,"
                  "\"pagedAsks\":%ld,\"pagedUnarmed\":%ld,\"pagedFloor\":%ld,"
-                 /* AND WHY A PARK THAT NEVER HAPPENED DID NOT, WHICH THE THREE ROWS ABOVE CANNOT SAY.
-                    Those are the ALLOCATOR's edge reaching this engine; this is the HOST asking the cold
-                    tier what a park would write, which is the other door onto the same tier and the one a
-                    fixture-chosen moment comes through. `previewAsks: 0` is the positive statement that no
-                    host consulted it at all — a session that never parks, which is most of them — and every
-                    row below it is meaningless under that 0 rather than a verdict.
-                    THE ROWS EXIST BECAUSE A MOMENT IS A CONJUNCTION AND A 0 IS NOT. A host names several of
-                    ColdPreview's rows at once, so a residue that was never written is one number standing
-                    for one state per conjunct: measured at 69c09793, four conjuncts and fifteen
-                    non-satisfying states, all reported alike. A row that NEVER ROSE wants its producer
-                    built and rows that each rose and never COINCIDED want a different moment, and those are
-                    different diffs.
-                    THE PARTITION IS THE TIER'S OWN VERDICT AND RESTATES NO HOST'S LATCH — refusing is a park
-                    that would ABORT, empty one that would write no bytes, writable one that would write a
-                    residue — which is what lets the eight rows beside it be derived from ColdPreview's
-                    struct rather than from whatever some fixture happens to ask for. */
+                 /* …and why a park that never happened did not. These are the host asking the cold tier what a
+                    park would write; `previewAsks: 0` is no host consulting it, and every row below is then
+                    meaningless. A moment is a conjunction, so the rows split it: a row that never rose wants its
+                    producer built, rows that rose and never coincided want a different moment. The partition is
+                    the tier's own verdict — refusing (would abort), empty (writes no bytes), writable (writes a
+                    residue) — and the rest derive from ColdPreview's struct. */
                  "\"previewAsks\":%ld,"
                  "\"previewAsksRefusing\":%ld,\"previewAsksEmpty\":%ld,"
                  "\"previewAsksWritable\":%ld,"
+                 /* The eight `previewAsksWith*` rows are contained in `previewAsks` and partition nothing, since
+                    several conjuncts may stand at once. `previewAsksAfterCommit` counts asks after the commitment
+                    ledger was written, differing from `previewAsksWithCommits` by commitments that departed with
+                    their flows; `previewCommitRowsWritten` counts ledger rows (solver/flow.h), not asks. Read the
+                    three together (cold.h). */
                  "\"previewAsksWithFlows\":%ld,\"previewAsksWithCands\":%ld,"
                  "\"previewAsksWithDeep\":%ld,\"previewAsksWithDeepCands\":%ld,"
                  "\"previewAsksWithWorlds\":%ld,\"previewAsksWithOrphans\":%ld,"
@@ -3448,490 +1780,227 @@ char *result_cold_json(void) {
                  "\"segKiB\":%ld,\"domSegKiB\":%ld,\"pinSegs\":%ld,\"pinSegEntries\":%ld,"
                  "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
                  "\"dynBodies\":%ld,\"dynKiB\":%ld,\"sharedKiB\":%ld,"
-                 /* `stepUs` IS `%lld` AND ITS NEIGHBOUR IS `%ld` FOR A REASON THAT IS NOT STYLE: `steps` is a
-                    count and this is a MICROSECOND accumulator; on the wasm32 instance this engine ships as,
-                    a `long` of microseconds saturates in 35.8 minutes. solver/engine.h's `step_us` carries
-                    the arithmetic and solver/engine.c asserts the width; here it is the same `(long long)`
-                    cast the @WFQ census's notch rows already take, so this line has one idiom for 64-bit
-                    quantities rather than two. */
+                 /* `steps` and `stepUnitRuns` are lifetime counts of steps run through each arm, and `stepUnits` a
+                    gauge of members standing in each arm now: with the gauge alone, an arm never entered and one
+                    entered and left before every census read alike. `stepUs` is `steps`' denominator — the thread
+                    time the loop's turns consumed, in the slice's own measure — so a turn costing a whole slice
+                    makes one choice per slice by construction, while cheap turns mean little thread time was
+                    given. Read `stepUs / steps` as a ratio within one run, never a total across runs; calling it
+                    CPU needs the @QUANTUM line. `%lld` because on wasm32 a `long` of microseconds saturates in
+                    35.8 minutes (solver/engine.h's `step_us`; engine.c asserts the width). */
                  "\"steps\":%ld,\"stepUs\":%lld,"
-                 /* AND WHAT THAT TOTAL IS A SHARE OF, WHICH IT HAS NEVER HAD — the thread measure this
-                    instance has consumed since its dispatch loop first ran. `stepUs` and the two phase rows
-                    below it are counts over the turns the loop TOOK and are silent about the turns it did
-                    not, so a small `stepUs/steps` is equally a loop whose turns are cheap and a loop that was
-                    barely entered — and the second is not a statement about the scheduler at all. The only
-                    way to reach it was to compare `stepUs` against the budget the DRIVER was launched under,
-                    which is a fact about the host that appears nowhere in the artifact, so no reader of a log
-                    could re-derive it and a reader who had it was mixing an rlimit's PROCESS cpu with this
-                    row's THREAD measure. Both sides of this quotient are one clock — `quantum_thread_us()`,
-                    which the @QUANTUM line already names — so it survives a host that can only measure wall
-                    time, which a ratio against an rlimit does not. The containment `stepUs <= instanceUs` is
-                    asserted at engine_step_unit_runs, where both are in one hand; see solver/engine.h's
-                    `instance_us` for the named residual that says what the REMAINDER still cannot separate. */
+                 /* …and what that total is a share of: the thread measure this instance consumed since its
+                    dispatch loop first ran. `stepUs` counts only turns taken, so a small `stepUs/steps` is a cheap
+                    loop or one barely entered. Both sides are one clock, `quantum_thread_us()` (named on
+                    @QUANTUM), so the ratio survives a wall-only host. `stepUs <= instanceUs` is asserted at
+                    engine_step_unit_runs; solver/engine.h's `instance_us` holds the residual. */
                  "\"instanceUs\":%lld,"
-                 /* AND ITS TWO HALVES, WHICH IS THE ONLY WAY A SMALL `stepUs/instanceUs` NAMES A COMPONENT.
-                    The remainder of that share is one number over two populations that take OPPOSITE work:
-                    the thread the HOST held between slices, and the thread the engine held inside its own
-                    dispatch bracket outside a turn. `loopUs` is the second and `betweenSlicesUs` the first,
-                    and they PARTITION `instanceUs` exactly — the accessor closes the open tail (the span
-                    since the last slice returned, during which this document is being composed) into
-                    `betweenSlicesUs` from the same clock reading `instanceUs` closes on, so a reader ADDS two
-                    published rows instead of subtracting one from a total and inferring what is left. The
-                    identity is asserted at engine_step_unit_runs where all three are in one hand.
-                    READ AS A PAIR: `loopUs` small says the engine was barely GIVEN the thread and the next
-                    question is the DRIVER; `loopUs` large with `stepUs` small says it had the thread and
-                    spent it outside a turn, and the next question is this scheduler — starting with the
-                    slices that dispatched nobody, which is `slices` against `steps`.
-                    `slices` IS THE DENOMINATOR NEITHER SPAN WOULD OTHERWISE HAVE, and the two quotients it
-                    makes — what a slice costs, and what the host takes between two of them — are both in the
-                    slice's own measure and therefore comparable against the `@QUANTUM` line this run printed.
-                    It is `%ld` beside two `%lld` for `steps`' reason exactly: it counts slices where they
-                    accumulate a clock. See solver/engine.h's `loop_us`. */
+                 /* …and its two halves. `loopUs` is the engine's thread inside its dispatch bracket outside a turn
+                    and `betweenSlicesUs` the host's between slices; they partition `instanceUs` exactly (the open
+                    tail closes into `betweenSlicesUs` from the same clock reading), asserted at
+                    engine_step_unit_runs. `loopUs` small points at the driver; large with `stepUs` small points
+                    at this scheduler, starting with `slices` against `steps`. `slices` is `%ld` because it is a
+                    count (solver/engine.h's `loop_us`). */
                  "\"loopUs\":%lld,\"betweenSlicesUs\":%lld,\"slices\":%ld,"
-                 /* THE TWO PHASES `stepUs` IS THE SUM OF, WITHOUT WHICH A SLICE-BOUND TURN CANNOT SAY WHICH
-                    HALF SPENT THE TIME — a step overrunning the slice is the quantum with no asynchronous
-                    source to expire it, and a pick-and-swap that dominates is the ordering and the delta
-                    costing more than the work they order. Different components, different diffs. Rows rather
-                    than a subtraction, with the identity asserted at engine_frontier_census; `schedUs` is
-                    EVERYTHING IN THE TURN THAT IS NOT THE STEP, which includes the previous iteration's tail
-                    because the charge telescopes (solver/engine.h). */
-                 /* AND THE PARTITION, BECAUSE `stepUs`/`steps` IS A MEAN NO TURN IS NEAR — the marginal
-                    cost between consecutive censuses of one run spans four orders of magnitude, so the
-                    quotient cannot answer whether the loop is slice-bound and this fraction can. Raised once
-                    per turn from the same readings `sliceUs` is accumulated from, with the containment
-                    asserted at engine_step_unit_runs; see solver/engine.h's `slice_overruns`. */
+                 /* The two phases `stepUs` sums: a step overrunning the slice is the quantum with no asynchronous
+                    source to expire it, a dominant pick-and-swap is the ordering costing more than the work.
+                    `schedUs` is everything in the turn that is not the step, including the previous iteration's
+                    tail (the charge telescopes; solver/engine.h); identity asserted at engine_frontier_census. */
+                 /* …and `sliceOverruns`, because `stepUs/steps` is a mean no turn is near: raised once per turn
+                    from the readings `sliceUs` accumulates, containment asserted at engine_step_unit_runs
+                    (solver/engine.h's `slice_overruns`). */
                  "\"sliceUs\":%lld,\"schedUs\":%lld,\"sliceOverruns\":%lld,\"stepUnitRuns\":%s,"
-                 /* AND WHICH ARM EACH OVERRUNNING TURN WAS IN — the same list as `stepUnitRuns`, restricted
-                    to the turns `sliceOverruns` counts, so the PAIR is the reading: an arm with many runs and
-                    no overruns is cheap however often it is taken, and an arm whose two counts are EQUAL is a
-                    step that cannot rest. See solver/engine.h's `over_arms`. */
+                 /* …and which arm each overrunning turn was in: `stepUnitRuns` restricted to `sliceOverruns`'
+                    turns. An arm whose two counts are equal is a step that cannot rest (solver/engine.h's
+                    `over_arms`). */
                  "\"stepUnitOverruns\":%s,"
-                 /* …AND WHICH OF THOSE TURNS OFFERED NO SUSPEND POINT AT ALL, PER ARM — the join neither
-                    `stepUnitOverruns` nor `sliceOverrunSeamless` can make, and the row that decides between a
-                    step-machine conversion and a page's own back-edge-free stretch. Read as a TRIPLE with the
-                    two rows it sits between: an arm's overruns against its runs says whether it can rest, and
-                    this against those overruns says whether the thread was inside C that declares no step
-                    boundary. See solver/engine.h's `over_seamless_arms`. */
+                 /* …and which of those turns offered no suspend point, per arm: against the arm's overruns it says
+                    whether the thread was inside C that declares no step boundary, which decides between a
+                    step-machine conversion and a page's own stretch (solver/engine.h's `over_seamless_arms`). */
                  "\"stepUnitOverrunSeamlessArms\":%s,"
-                 /* AND HOW MANY POINTS THE OTHER TURNS OF EACH ARM OFFERED, WHICH IS THE COMPLEMENT OF THE
-                    ROW ABOVE AND NOT A FURTHER RESTRICTION OF IT. The scalar beside them is a SUM over every
-                    arm's non-seamless turns, so `sliceOverrunAsks / sliceOverruns` is a density averaged
-                    across arms that answer differently — measured over seven real-site drives of two
-                    documents, `deliver-one-reply` overran 4.6-11.3% of its own 401-622 runs while
-                    `evaluate-a-module-program` and `microtask-checkpoint` overran 100% of their 3-6.
-                    ITS DENOMINATOR IS THIS ARM'S OVERRUNS MINUS THIS ARM'S SEAMLESS TURNS AND NEVER ITS
-                    OVERRUNS, because a seamless turn contributes ZERO here by construction: dividing by every
-                    overrunning turn of the arm understates the density of the ones that actually asked. See
-                    solver/engine.h's `over_ask_arms`. */
+                 /* …and how many suspend points each arm's other overrunning turns offered. The denominator is the
+                    arm's overruns minus its seamless turns, which contribute zero by construction; the scalar
+                    `sliceOverrunAsks / sliceOverruns` averages arms that answer differently (solver/engine.h's
+                    `over_ask_arms`). */
                  "\"stepUnitOverrunAskArms\":%s,"
-                 /* AND THE WIDEST STRETCH OF ONE OF THOSE TURNS THAT OFFERED NOTHING, WHICH IS WHAT THE
-                    DENSITY ABOVE IS A PROXY FOR — THOUGH NOT FOR THE REASON THAT READS AS OBVIOUS, AND
-                    solver/engine.h's `over_gap_arms` CARRIES THE DERIVATION RATHER THAN A SECOND COPY OF IT
-                    HERE. In short: the preempt policy's only FALSE arm is the budget test, that test is
-                    monotone inside one slice, and the first TRUE parks the flow and ends the turn — so EVERY
-                    consultation of an overrunning turn sits inside ONE window of at most ENGINE_QUANTUM_MS
-                    from its slice's opening, which makes this row the worst turn's SPAN to within one budget
-                    rather than a free quantity. The row is worth having for exactly that: `stepUnitOverruns`
-                    is a COUNT by deliberate choice and nothing anywhere says how LONG the worst turn of an
-                    arm was, so a reader holding `4 of 4` cannot tell four turns of 13 ms from four of seven
-                    seconds.
-                    IN THE SLICE'S OWN MEASURE, so a reading is directly comparable with ENGINE_QUANTUM_MS —
-                    which is what makes that window argument checkable at all — and a gap in CONSULTATIONS
-                    would be comparable with nothing, the interval between two consecutive consultations being
-                    1 by definition.
-                    NOT A PARTITION, AND ITS ZERO IS READ AGAINST A ROW ALREADY ON THIS LINE. A 0 is either an
-                    arm with no non-seamless overrunning turn at all or one whose every gap was under a
-                    microsecond, and `stepUnitOverruns` minus `stepUnitOverrunSeamlessArms` — the same
-                    denominator the density above is taken over — is what tells them apart. See
-                    solver/engine.h's `over_gap_arms`. */
+                 /* …and the widest no-offer stretch of one such turn, in the slice's own measure. The preempt
+                    policy's only false arm is the budget test, monotone within a slice, and the first true parks
+                    the flow, so every consultation sits within ENGINE_QUANTUM_MS of the slice's opening and this
+                    row is the worst turn's span to within one budget (`stepUnitOverruns` is only a count). A 0 is
+                    no non-seamless overrunning turn or gaps under a microsecond; `stepUnitOverruns` minus
+                    `stepUnitOverrunSeamlessArms` tells them apart (solver/engine.h's `over_gap_arms`). */
                  "\"stepUnitOverrunGapArms\":%s,"
-                 /* AND WHETHER THE PAGE'S OWN CODE WAS RUNNING IN THOSE TURNS AT ALL, which the arm row
-                    above cannot say and which its reading rests on. An arm is where a step ENDED, and
-                    `resume-program` and `start-a-classic-program` both end inside the same call whether the
-                    time went into the page's bytecode between two of its own raise points or into ONE native
-                    call that never returned — and those are opposite diffs in different components.
-                    `sliceOverrunAsks` is how many suspend points those turns OFFERED and
-                    `sliceOverrunSeamless` is how many of them offered NOT ONE; a sum alone can be carried by
-                    a single chatty turn, so the pair is the reading. All-seamless says the thread was inside
-                    C that declares no step boundary and the answer is a step-machine conversion; a large sum
-                    says the points were there and the stretch ran anyway, which is a question about the page
-                    and not about this engine. See solver/engine.h's `slice_overrun_asks`. */
+                 /* …and whether the page's own code ran in those turns: an arm is where a step ended, and the time
+                    may be the page's bytecode between its raise points or one native call that never returned.
+                    `sliceOverrunAsks` is the suspend points those turns offered and `sliceOverrunSeamless` how
+                    many offered none; all-seamless asks for a step-machine conversion, a large sum is a question
+                    about the page (solver/engine.h's `slice_overrun_asks`). */
                  "\"sliceOverrunAsks\":%llu,\"sliceOverrunSeamless\":%ld,"
-                 /* …AND THE WORST OF THOSE TURNS' NO-OFFER STRETCHES OVER EVERY ARM AT ONCE, WHICH IS WHAT
-                    THE PAIR ABOVE IS A SUM AND A COUNT OF AND NEITHER IS A MAXIMUM OF. It is the same fold as the per-arm row,
-                    over every arm at once, and it exists for the reason every per-arm row on this line has a
-                    scalar beside it: the row's only identity is `max(arms) == this`, and without it the
-                    document carries a partition-shaped object no reader could establish is whole. Read
-                    against ENGINE_QUANTUM_MS and never against another run's figure — it is a high-water
-                    mark, so a plateau says a stretch of that width WAS observed and never that none is
-                    wider, and the evidence it is worth is bounded by `stepUnitOverruns` minus
-                    `stepUnitOverrunSeamlessArms`. See solver/engine.h's `over_gap_arms`. */
+                 /* …and the worst no-offer stretch over every arm at once, so `max(arms) == this` makes the
+                    per-arm row checkable as whole. A high-water mark: read against ENGINE_QUANTUM_MS, never
+                    another run's figure; its evidence is bounded by `stepUnitOverruns` minus
+                    `stepUnitOverrunSeamlessArms`. */
                  "\"sliceOverrunGapUs\":%lld,"
-                 /* AND WHICH PHASE OF A START STEP SPENT THE TIME, which no row above can say. A start is a
-                    COMPILE and then an EXECUTION and only the second runs bytecode; the compile is O(a
-                    length the page chose), and it RESTS — JS_FlowCompileStep hands the parse back part way
-                    through, so one program is parsed over one or more STINTS. (This banner said the compile
-                    had `no raise point in it at all` and that the overruns were `spans no ordering could
-                    have rested`; both were true of the parse before that seam and are kept in their own
-                    words because a reader re-derives them from quickjs's four raise kinds.)
-                    THE TWO ROWS COUNT DIFFERENT EVENTS, SO THEY ARE NOT A RATIO. `classicCompiles` is ONE
-                    PER PROGRAM and `classicCompileOverruns` is ONE PER STINT that met the slice, which says
-                    the parse's rest point is too coarse for a stint to stay under it. The denominator the
-                    second one is drawn from is not published as a row because it is DERIVED from two that
-                    are: `classicCompiles + stepUnitRuns[compile-handed-the-thread-back]` is the stint
-                    population exactly, and the engine asserts the containment against that sum.
-                    THIS SAID `classicCompiles`, READ AGAINST THE PROGRAMS THIS DOCUMENT REACHED, SAYS
-                    WHETHER A COMPILE IS REPEATED PER FLOW, AND THAT DIFFERENCE IS BETWEEN TWO POPULATIONS
-                    OF DIFFERENT WIDTH — kept in its own words because it is what two counters side by side
-                    invite and because a brief was written out of it and a lane dispatched on it.
-                    `classicCompiles` counts every FLOW and every TIMELINE and every APPENDED row (a lazy
-                    chunk, an injected `<script>`, a `javascript:` URL, a peer's operation, a value dump),
-                    where `rootPrograms` is the document's own `<script>` rows ONCE; a bundle's chunks are
-                    DISTINCT BYTES, so a figure many times that count is what a healthy run of an app page
-                    MUST read. `classicCompileAgain` states the repeat DIRECTLY — parses whose bytes some
-                    flow of this process had already parsed to completion — with `classicCompileAgainBytes`
-                    pricing it and `classicCompileOwnDecode` bounding it, since a reply is decoded PER
-                    DELIVERY and a repeat inside that population is unobservable. The two subsets are TWO
-                    PARTITIONS of one total and may not be added to each other. See solver/engine.h's
-                    `classic_compiles`. */
+                 /* …and which phase of a start step spent the time. A start compiles then executes; the compile
+                    rests (JS_FlowCompileStep hands the parse back part way), so one program parses over one or
+                    more stints. `classicCompiles` is one per program, `classicCompileOverruns` one per stint that
+                    met the slice, so they are not a ratio; the stint population is `classicCompiles +
+                    stepUnitRuns[compile-handed-the-thread-back]`, against which the containment is asserted.
+                    `classicCompiles` counts every flow, timeline and appended row (chunks, injected scripts,
+                    `javascript:` URLs, peer operations, value dumps), so it far exceeds `rootPrograms` on a
+                    healthy app page. `classicCompileAgain` states repeats directly (bytes some flow already
+                    parsed to completion), priced by `classicCompileAgainBytes` and bounded by
+                    `classicCompileOwnDecode`, since a reply is decoded per delivery. The two subsets partition
+                    differently and may not be added (solver/engine.h's `classic_compiles`). */
                  "\"classicCompiles\":%ld,\"classicCompileOverruns\":%ld,"
                  "\"classicCompileAgain\":%ld,\"classicCompileAgainBytes\":%lld,"
                  "\"classicCompileOwnDecode\":%ld,"
-                 /* …AND THE PROGRAMS STARTED FROM A PARSE ANOTHER TIMELINE HAD ALREADY FINISHED, which is
-                    what makes a FALLING `classicCompiles` attributable at all. A shared parse parses no bytes,
-                    so it raises none of the four rows above, and a document whose timelines share their parses
-                    therefore reads as a document with fewer programs — the one reading that cannot be told from
-                    an engine that stopped starting them. READ THE PAIR: `classicCompiles + classicParseShared`
-                    is the classic programs whose closure was obtained at all, and that sum is what compares
-                    with a pre-sharing revision's compile count while neither half does. `classicCompileAgain`
-                    staying nonzero is NOT the sharing failing — a failed parse holds nothing, and a flow
-                    already mid-parse of a row somebody else finished resumes its own parse to the end. See
-                    solver/engine.h's `classic_parse_shared` and solver/dyn_body.h for the mechanism. */
+                 /* …and programs started from a parse another timeline already finished, which parse no bytes and
+                    raise none of the four rows above: `classicCompiles + classicParseShared` is the classic
+                    programs that obtained a closure at all. `classicCompileAgain` staying nonzero is not sharing
+                    failing (a flow mid-parse of a row someone finished resumes its own parse). See
+                    solver/engine.h's `classic_parse_shared` and solver/dyn_body.h. */
                  "\"classicParseShared\":%ld,"
-                 /* …AND WHETHER A PARSE HANDED BACK WAS EVER CARRIED FORWARD, which is the partition
-                    `stepUnitRuns[compile-handed-the-thread-back]` cannot make on its own and the one a small
-                    `classicCompiles` needs before it means anything. Subtract this from that arm and what is
-                    left is the parses BEGUN AND NOT ENDED — near zero is a seam carrying every parse forward,
-                    so a program count under `rootPrograms` is a budget rather than a stall; large is parses
-                    handed back and not picked up again. It is NOT a subset of `classicCompiles` and their
-                    quotient is not a rate: the two are raised at different events, one per stint that
-                    continued and one per parse that ended. See solver/engine.h's `classic_compile_resumed`. */
+                 /* …and whether a parse handed back was carried forward:
+                    `stepUnitRuns[compile-handed-the-thread-back]` minus this is the parses begun and not ended.
+                    Not a subset of `classicCompiles`, and not a rate against it: one is raised per continued
+                    stint, the other per ended parse (solver/engine.h's `classic_compile_resumed`). */
                  "\"classicCompileResumed\":%ld,"
-                 /* AND WHY EVERY TURN THAT DID NOT END A UNIT OF WORK DID NOT — the three rows without
-                    which `_unitsDone` reading low is three states behind one answer. It is a GATED count, so
-                    a low value is equally consistent with a thread that did nothing and with one that spent
-                    every turn advancing programs it never finished, and those take opposite work. The four
-                    arms sum to `steps` exactly (the credited one is `_unitsDone`, in the OTHER object, and is
-                    deliberately not repeated here), asserted in the engine where all four are in one hand —
-                    which is what lets a reader compose the split across two objects of this document at all.
-                    See solver/engine.h's `unit_mid_program`. */
+                 /* …and why each turn that ended no unit of work did not. `_unitsDone` is a gated count, so low is
+                    either a thread that did nothing or one advancing programs it never finished. With the credited
+                    arm (`_unitsDone`, in the other object) the four sum to `steps`, asserted in the engine
+                    (solver/engine.h's `unit_mid_program`). */
                  "\"unitMidProgram\":%ld,\"unitParked\":%ld,\"unitCheckpointOwed\":%ld,"
-                 /* AND HOW MANY STEPS DESCENDED flow_step's WORK LADDER AT ALL, which is the denominator the
-                    four `outOfPrograms` rows below it were being read as and are not. Every arm of that
-                    ladder — the deliveries, the checkpoint, the reply, the sequence, the task, the lifecycle,
-                    the ORPHAN rungs, the clock-driven sources and every resting arm — sits inside one
-                    `if (!f->frame)`, so a step on a framed member asks none of them and appears in none of
-                    them. This is a LIFETIME count of the steps that entered that block, and it is what makes
-                    `_orphansAsked == 0` readable: 0 here says the ladder was never descended and the cause is
-                    upstream of every arm in it, while a large value says it WAS descended and an arm above
-                    the orphan rung took every descent — which `stepUnitRuns` then names.
-                    IT IS NOT `outOfProgramsAtTheLadder`, AND THAT ROW CAN NO LONGER STAND IN FOR IT. That
-                    family selects on `script_i == dyn_n`, which WAS the rung's precondition and is not any
-                    more: the rung binds to `seq_compiles`, so a member holding a row it cannot RUN descends
-                    the ladder and is in none of those four rows. On a document whose members always hold a
-                    row they read 0 for a reason that has nothing to do with the ladder — measured on one live
-                    page at 0 while 75 steps descended.
-                    NOT COMPARABLE WITH `steps` ABOVE: that is raised once per entry into flow_step and this
-                    per PASS through the block, because the loop body iterates. What it IS comparable with is
-                    `_orphansAsked`, raised on the same basis inside the same block, with the containment
-                    asserted in the engine where both are in one hand. See solver/engine.h's
-                    `unframed_steps`. */
+                 /* …and how many steps descended flow_step's work ladder: every arm of it (deliveries, checkpoint,
+                    reply, sequence, task, lifecycle, orphan rungs, clock sources, resting arms) sits inside one
+                    `if (!f->frame)`. A lifetime count of passes through that block, so not comparable with
+                    `steps` (the loop body iterates) but with `_orphansAsked`, raised on the same basis, the
+                    containment asserted in the engine. 0 puts the cause upstream of the ladder; large, with
+                    `_orphansAsked == 0`, says an arm above the orphan rung took every descent (`stepUnitRuns`).
+                    The `outOfProgramsAtTheLadder` family cannot stand in: it selects on `script_i == dyn_n`,
+                    while the rung binds to `seq_compiles` (solver/engine.h's `unframed_steps`). */
                  "\"unframedStepsLifetime\":%ld,"
-                 /* …AND HOW FAR DOWN THAT LADDER THE DESCENTS GOT, WHICH IS THE ROW ABOVE ONE BOUNDARY
-                    FURTHER ON AND THE DISCRIMINATOR `stepUnitRuns`' THREE CLOCK ARMS STRUCTURALLY CANNOT BE.
-                    `queue-rendering-opportunity`, `fire-due-timer` and `start-or-run-an-idle-period` are
-                    raised only when their hook TAKES the step, so each is an OUTCOME over a gated operation
-                    and a 0 in one is two opposite things: the rung was reached and the clock legitimately had
-                    nothing due, or no descent ever got far enough to ask it. The first is a fact about the
-                    page's own timers and frames, the second about the arms ABOVE this boundary, and they take
-                    opposite work. These three are the ASK, raised at the arm ahead of the gate; no existing
-                    counter moved, because relocating one changes what its number means and leaves the old
-                    meaning unread.
-                    THEY ARE SUFFIX SUMS AND `stepUnitRuns` IS A PARTITION, WHICH IS THE WHOLE REASON A READER
-                    NEEDS THEM. The three rungs are consecutive arms of one `else if` chain, so
-                    `stepReachedRenderingLife` counts every descent that reached the chain, the next those the
-                    rendering rung did not take, the next those the timer rung did not take either. An arm of
-                    `stepUnitRuns` reading 0 says THAT ARM NEVER TOOK A DISPATCH and never says it was not
-                    reached — an upper clock arm at 0 with a LOWER one nonzero is that rung correctly declining
-                    every descent it was handed, which is the commonest shape on a document with timers and no
-                    rendering opportunity — so "the lowest 0 is the localisation" is FALSE of that histogram
-                    read row by row and TRUE of these, which are the cumulative quantity at the three points a
-                    clock rung can be asked.
-                    AND THE READING THAT NEEDED THEM: a frontier that never retires. `finished` at 0 with
-                    `stepReachedRenderingLife` at 0 says the retirement arm was never ASKED and the cause is
-                    upstream of this boundary; the same 0 with it LARGE says the boundary was reached and one
-                    of the ten arms ABOVE `finished` took every descent — it is the LAST of the eleven — which
-                    `stepUnitRuns` then names. Those two states were ONE string in the hung-cause verdict
-                    engine/build.mjs composes, which is the conflation this row exists to end; that verdict
-                    reads `finishedFlows` and has no way to ask this question until it reads a row like this.
-                    NO SUM IS PUBLISHED BESIDE THEM AND THAT IS DELIBERATE — a second spelling of one number in
-                    one document is the drift the record-field gate exists to catch, and every operand of all
-                    four identities is already on this line: `stepReachedRenderingLife` is the ELEVEN arms of
-                    `stepUnitRuns` at or below this boundary, the next two are it less
-                    `queue-rendering-opportunity` and less `fire-due-timer`, and all three are contained in
-                    `unframedStepsLifetime`. Asserted at engine_step_unit_runs where every operand is in one
-                    hand — the containment being the one that licenses reading them against that row at all.
-                    LIFETIME COUNTS, PER INSTANCE, RELEASED BY NOTHING: the `Life` in each key is the kind, so
-                    they may be differenced and accumulated and a sample below its predecessor is the engine
-                    and not the run. See solver/engine.h's `clock_render_asks`. */
+                 /* …and how far down the ladder the descents got. The three clock arms of `stepUnitRuns` are
+                    raised only when their hook takes the step, so a 0 there is "nothing due" or "never asked";
+                    these count the ask, at the arm ahead of each gate. The three rungs are consecutive arms of one
+                    `else if` chain, so these are suffix sums: `stepReachedRenderingLife` is every descent reaching
+                    the chain, the next two those the rendering, then the timer, rung did not take. Unlike a 0 in
+                    the partition, the lowest 0 here localises. `finished` 0 with `stepReachedRenderingLife` 0
+                    means retirement was never asked; with it large, one of the ten arms above `finished` took
+                    every descent. No sum is published beside them; the identities with `stepUnitRuns` and
+                    containment in `unframedStepsLifetime` are asserted at engine_step_unit_runs. Lifetime
+                    counts per instance (solver/engine.h's `clock_render_asks`). */
                  "\"stepReachedRenderingLife\":%ld,\"stepReachedTimerLife\":%ld,"
                  "\"stepReachedIdleLife\":%ld,"
-                 /* …AND WHICH OF THE TWO REASONS THE TIMER RUNG DECLINED FOR, WHICH THE SUFFIX SUMS
-                    ABOVE CANNOT BE ASKED AT ANY VALUE. `stepReachedIdleLife` IS the descents the
-                    timer rung declined, and that is two reasons: no source became due, or a source
-                    WAS due and core/timing/event_loop.h's licence refused to manufacture its
-                    dueness. The first is a fact about the page's own timers; the second is this
-                    engine declining to substitute a jump for a wait it cannot represent, which is
-                    the residual stated at that header. They take opposite work, and no row here
-                    could tell them apart — so a run whose WHOLE reach was lost to an unpaid debt
-                    read identically to a page that armed no timer at all.
-                    THE PAIR IS NOT A SECOND SPELLING OF `stepReachedIdleLife` and that is why it is
-                    admissible beside it (this file refuses a second spelling of one number in one
-                    document by name): it PARTITIONS that count rather than restating it, and its ask
-                    half spans BOTH refusing rungs — the timer's and the rendering one's — so it is
-                    not contained in any single suffix sum either.
-                    LIFETIME COUNTS RELEASED BY NOTHING, matching the scope of the three above so the
-                    four may be read on one line. `Declined <= Asked` is asserted where both are in
-                    one hand. */
+                 /* …and which of two reasons the timer rung declined for: no source became due, or one was due and
+                    core/timing/event_loop.h's licence refused to manufacture its dueness (that header's
+                    residual). The pair partitions rather than restates `stepReachedIdleLife`, and its ask half
+                    spans both refusing rungs (timer and rendering). Lifetime counts; `Declined <= Asked` is
+                    asserted where both are in one hand. */
                  "\"clockAdvanceAskedLife\":%ld,\"clockAdvanceDeclinedLife\":%ld,"
+                 /* `outOfPrograms` separates a member inside its last program from one past the last row, which
+                    a cursor value cannot: only the latter reaches engine.c's orphan arm. Its three parts also
+                    name members never dispatched or suspended in a live frame (the ladder sits below
+                    `if (!f->frame)`). solver/cold.h owns the ladder's list; do not enumerate its rungs here. */
                  "\"outOfPrograms\":%ld,"
                  "\"outOfProgramsUnrun\":%ld,\"outOfProgramsFramed\":%ld,"
                  "\"outOfProgramsAtTheLadder\":%ld,"
                  "\"outOfProgramsAtTheLadderUnits\":%s,"
+                 /* `programCursors` is the per-member companion to the maxima: `deepest 11` is as true of one
+                    member at 11 as of two thousand. Buckets are cursors (closed at `dyn_n`); a cursor one past
+                    the deepest row left is `deepestLeft + 1`, the bound asserted above. A failed external script
+                    is left without being started, so the mass may run ahead of `deepest`. A top bucket says where
+                    the mass reached, never that the sequence ends (engine_seed_scripts queues the whole table);
+                    `outOfPrograms` says who has no row left. */
                  "\"stepUnits\":%s,\"programCursors\":%s,"
-                 /* AND HOW FAR EACH STANDING MEMBER IS FROM HAVING NOTHING LEFT TO RUN — solver/cold.h states
-                    why this is not derivable from the row beside it and why `outOfPrograms` above is exactly
-                    its BUCKET 0. The pair is a POSITION and a DISTANCE: the cursor histogram says where the
-                    mass got to, and this says how much is in front of it, and a frontier one row from its
-                    first retirement and one forty rows from it render as the same bytes in every other row on
-                    this line. */
+                 /* …and how far each standing member is from having nothing left to run (solver/cold.h;
+                    `outOfPrograms` is its bucket 0). The cursor histogram is a position, this a distance. */
                  "\"programsAhead\":%s,"
-                 /* THE @H SURFACE'S OWN DENOMINATOR — endpoint.h states why its length is three states. A run
-                    whose `epEmitted` is small with `epAssets` large learned little because the bundle's
-                    addresses were FILES. Those are different diffs and until these rows existed the array's
-                    length was the only thing published and could not tell them apart.
-                    AND `epAssets` 0 UNDER A LARGE `epMinted` IS NOT ONE READING, WHICH THIS SENTENCE USED TO
-                    SAY IT WAS. It read `a reply door that answered without naming a type`, which is a
-                    MECHANISM asserted over a predicate that tests MEMBERSHIP in five media groups. This row
-                    counts the flag `endpoint_mark_asset` SET, so it is an OUTCOME census over a classifier
-                    with a legitimate DECLINING arm, and a 0 is at least three states taking different work:
-                    no reply reached the classifier; one reached it carrying an EMPTY `computedType`, which is
-                    the chokepoint's own refusal record and the only state the retired sentence described; or
-                    one reached it with a perfectly good type on which `is_asset` answered FALSE. The third is
-                    the design working and is what a real page most often produces. MEASURED WITH A CONTROL:
-                    a production host serves its `.woff2` under `application/octet-stream` with `nosniff`, so
-                    the trusted zone's decision returns that essence unchanged and none of the five predicates
-                    names it, while a `.css` on the same host returns `text/css` — four font addresses on the
-                    emitted surface, `epAssets` 0, and nothing marked and nothing wrong. A reader who widens
-                    the predicate to catch them is proposing the URL-suffix matching CLAUDE.md
-                    §RUN-DON'T-MATCH bans.
-                    NAMED RESIDUAL. NOT COVERED: the ASK — how many replies reached the classifier carrying a
-                    type that PARSED — so the first state cannot be told from the other two on this document,
-                    and `hostAsked`/`hostAnswered` bound it from above without being it. WHAT THE NEXT DIFF
-                    BUILDS: that count, raised in solver/reply_decode.c where the type parses, published here
-                    beside this one so the pair is ask-and-outcome rather than outcome alone. HOW ITS ABSENCE
-                    SHOWS: a reader meeting a 0 here and reporting a reply-path defect against a run whose
-                    classifier declined correctly.
-                    RETIREMENT: this record goes when that ask count is published beside `epAssets`. */
-                 /* AND HOW MANY OF THE EMITTED ROWS WERE MINTED BEFORE THIS INSTANCE STARTED A PROGRAM —
-                    the row the three above cannot compose, because they partition the surface by what the
-                    REPLY was and this is about who composed the ADDRESS. `epEmitted - epPreProgram` is the
-                    most addresses forced execution can have contributed to this document's surface, so a run
-                    reading them EQUAL learned nothing the markup did not already state, whatever the array's
-                    length says. THE SHAPE THIS ROW EXISTS FOR, measured on one production single-page app
-                    and re-derived from its served markup: every row of a 43-row surface was one of that
-                    document's own `<script src>`, `<link rel=stylesheet>` or `<link rel=preload>` elements,
-                    so the number a person reads as a learned API surface was the `<head>` counted back. It
-                    reproduced across two engine revisions and across two different terminal events, which is
-                    what a figure fixed before the search starts looks like. endpoint.h holds the contract,
-                    the ceiling reading and the residual for a resumed timeline. */
+                 /* The @H surface's own denominator — endpoint.h states why its length is three states: small
+                    `epEmitted` with large `epAssets` learned little because the addresses were files.
+                    `epAssets` counts the flag `endpoint_mark_asset` set, an outcome over a classifier with a
+                    declining arm, so 0 under a large `epMinted` is: no reply reached the classifier; one
+                    arrived with an empty `computedType` (the chokepoint's refusal record); or the type was good
+                    and `is_asset` answered false (e.g. a `.woff2` served `application/octet-stream` with
+                    `nosniff`), the design working. Widening the predicate by URL suffix would be matching, not
+                    running.
+                    Named residual. Not covered: the ask — replies reaching the classifier with a type that
+                    parsed — so the first state cannot be told from the others (`hostAsked`/`hostAnswered` only
+                    bound it). Next diff: that count, raised in solver/reply_decode.c where the type parses,
+                    published beside this one. Absence shows as a 0 here reported as a reply-path defect on a
+                    run whose classifier declined correctly. */
+                 /* …and how many emitted rows were minted before this instance started a program: `epEmitted -
+                    epPreProgram` bounds what forced execution contributed, and equal values learned nothing the
+                    markup did not state (a surface can be the `<head>`'s own `<script src>` and `<link>` rows
+                    counted back). endpoint.h holds the contract, the ceiling reading and the resumed-timeline
+                    residual. */
                  "\"epMinted\":%ld,\"epAssets\":%ld,\"epEmitted\":%ld,\"epPreProgram\":%ld,"
-                 /* …AND WHICH MECHANISM COMPOSED EACH OF THOSE EMITTED ADDRESSES, which is the row the four
-                    above cannot compose and the one the razor's own retirement clause asks for. `epEmitted -
-                    epPreProgram` is a SUBTRACTION OF TWO TOTALS: it bounds what forced execution contributed
-                    and names none of it, and a reader holding only that cannot tell a run that learned ten
-                    gated API calls from one that learned ten `<link rel=preload>` elements of one `<head>`.
-                    These rows are a PARTITION OF `epEmitted` and are asserted to be at the composer
-                    (solver/endpoint.c), re-checked here against the published document by
-                    engine/build.mjs's `censusHistRows` and by extension/bridge.js's histogram contract — the
-                    engine-side identity reads the record array and those read what was EMITTED, so the two
-                    halves can disagree and that is the test.
-                    IT IS NOT A SECOND SPELLING OF `epPreProgram` AND THE TWO ARE READ TOGETHER. The door is
-                    WHICH MECHANISM and that flag is WHEN, and neither implies the other: a `<link>` a router
-                    created and one the markup declared reach this surface through the same door, and a
-                    `<head>` whose first `<script src>` runs before the parser reaches the `<link>` below it
-                    mints that link POST-program. Each emitted ROW carries both, so the pair is answerable per
-                    address and these totals are the check on that rather than the only statement of it. */
+                 /* …and which mechanism composed each emitted address: a partition of `epEmitted`, asserted at the
+                    composer (solver/endpoint.c) over the record array and re-checked over the emitted document by
+                    engine/build.mjs's `censusHistRows` and extension/bridge.js's histogram contract.
+                    The door is which mechanism and `epPreProgram` is when; neither implies the other (a router's
+                    `<link>` and a markup one share a door, and a `<link>` after a `<script src>` is minted
+                    post-program). Each emitted row carries both. */
                  "\"epDoors\":%s,"
-                 /* …AND WHICH OF THOSE MECHANISMS A MARKUP PARSE OF THE SERVED DOCUMENT WOULD HAVE REACHED,
-                    stated rather than left to a reader who knows solver/endpoint.h's door taxonomy by heart.
-                    THIS OPENING READ THAT THE ROW IS CLAUDE.md §What-the-tool-produces' RAZOR STATED, AND IT IS
-                    REWRITTEN RATHER THAN DELETED BECAUSE A READER HOLDING A ROW NAMED `beyond` RE-DERIVES
-                    EXACTLY IT. solver/endpoint.h records that sentence as retired: the bar became a COLUMN,
-                    composed by `endpoint_razor_class_of` out of `addressClass` and the door list's FOURTH
-                    column, and this row is keyed on the THIRD. That section names BY HAND a literal chunk URL
-                    through `module-import` as `beyond` and as scoring ZERO on the bar, so no count of doors
-                    answers it at any grain and this row is a DIAGNOSTIC of the markup question alone.
-                    THE COST OF LEAVING IT WAS NOT A READING: engine/build.mjs's `endpointReachReading` takes
-                    this row and returns a line beginning `@H razor:`, and extension/popup.js reads it into a
-                    row labelled `razor` — so BOTH emitters that show a person a razor figure off this census
-                    compose it out of a DOOR COUNT, which is the assembly CLAUDE.md's own retirement clause for
-                    that record asks to be made impossible.
-                    RETIREMENT: this record goes when this line publishes the COMPOSED bar beside this row,
-                    because a reader holding `beyond` then has the bar itself in the same document and has
-                    nothing left to re-derive it from.
-                    The row above is THIS ROW'S RAW MATERIAL: it
-                    says WHICH mechanism composed each address and is silent about whether a `<script src>`
-                    scan gets that address for free, so a reader holding `epDoors: {document-script: 28,
-                    link-element: 17}` and nothing else still has to supply the map before they can say that
-                    the MARKUP REACH read ZERO on that document — which is what a coordinator driving a real app had
-                    to do by hand, off the emitted @H array, with every histogram in this tree already
-                    published.
-                    THREE CLASSES BECAUSE TWO WOULD HAVE TO GUESS. `link-element`, `image-element` and
-                    `form-submit` are reached by a parser-inserted element and by a script-created one alike
-                    and the door does not record which, so `either` is the population NO door decides and
-                    `beyond` is a FLOOR under the MARKUP question rather than its value. Folding `either` into
-                    `markup` under-credits a router-built `<link>`; folding it into `beyond` over-credits a
-                    `<head>`, which is the exact over-credit `epEmitted - epPreProgram` is retired for and in
-                    the same flattering direction.
-                    IT IS ENTAILED BY THE ROW ABOVE AND SAYS SO, because a reader counting zeroes across this
-                    line must be able to see that from the output: each class is the sum of the door counts of
-                    that class, so these three numbers and those twelve are ONE observation and never two
-                    (CLAUDE.md §EVIDENCE-INFLATION). What is NOT entailed — and is the reason it is published
-                    at all — is the MAP, which no consumer of this document can re-derive and which lived as
-                    incomplete prose in engine/build.mjs's verdict line and in testing/static_surface.mjs.
-                    A DIAGNOSTIC AND NEVER A TARGET, on §netdiff's own terms: `beyond` 0 against a nonzero
-                    `epEmitted` is a REFUSAL TO CLAIM the capability on this document rather than a smaller
-                    version of it, and optimising toward it optimises the instrument. It is an IDENTITY read
-                    WITHIN one run and is not comparable across two runs of a wall-denominated quantum.
-                    ITS DENOMINATOR IS `epEmitted` THREE ROWS UP AND TRAVELS ON THIS LINE, which is what makes
-                    a share read off it a share of the population it partitions; solver/endpoint.c asserts the
-                    sum where both halves are in one hand and engine/build.mjs re-checks it against the
-                    EMITTED document, which is the genuinely independent half. */
+                 /* …and which of those mechanisms a markup parse of the served document would have reached, keyed
+                    on the door list's third column: `markup`, `either` (a parser-inserted or script-created
+                    `link-element`, `image-element` or `form-submit`, which the door does not distinguish) and
+                    `beyond`, a floor under the markup question. This is a diagnostic, not the razor: a literal
+                    chunk URL through `module-import` is `beyond` yet scores zero at the bar, which is
+                    `epRazorClass` below (composed by `endpoint_razor_class_of`); build.mjs renders this as the
+                    markup diagnostic and `endpointRazorClassReading` as the bar.
+                    Entailed by the door row (each class sums its doors), so the two are one observation; what
+                    this adds is the map. Never a target: `beyond` 0 against nonzero `epEmitted` is a refusal to
+                    claim, and the row is an identity within one run, not comparable across wall-denominated
+                    runs. Its denominator `epEmitted` travels on this line; endpoint.c asserts the sum and
+                    build.mjs re-checks it against the emitted document. */
                  "\"epReach\":%s,"
-                 /* …AND THE ONE ROW CLAUDE.md §What-the-tool-produces' HARD BAR CAN BE SCORED OFF, which the
-                    two above cannot reach at any grain. That bar is "an address, a key or a value that NO
-                    PARSE of the served bytes can state, because it exists only at run time", and it is a
-                    property of the ADDRESS rather than of the mechanism: a literal chunk URL delivered
-                    through `module-import` is `beyond` a markup parse and clears NOTHING here, while
-                    `/api/{location.hash}` through `fetch` clears it outright. Two addresses through ONE door
-                    differ on exactly this, so no count of doors ever answers it — which is why a 19-site
-                    census could close with a full `epDoors` table and leave the product's own bar
-                    unscorable.
-                    IT IS A SECOND OBSERVATION AND NOT A THIRD GRAIN. `epReach` says so of itself — it is
-                    `epDoors` summed by class — and this is read off the address VALUE's own concolic
-                    provenance at solver/endpoint.c's door, which no door implies in either direction. So a
-                    reader holding all three of these rows holds TWO observations and not three, which is
-                    said here because here is where the numbers are (CLAUDE.md §EVIDENCE-INFLATION).
-                    IT IS A FLOOR AND NOT A VERDICT, AND THE HALF IT CANNOT SEE IS NAMED AT THE PRODUCER.
-                    `unknown` is a POSITIVE statement that the run reached that address holding a value it had
-                    not determined AND resting on an unknown somebody OUTSIDE the engine supplied, so such a
-                    row DEFINITELY clears the bar. (It named only the first half, and the correction is kept
-                    rather than swallowed because that half is what a reader re-derives from the word: an
-                    undetermined address standing on a hole the engine minted for its own drive is a class
-                    the engine REFUSES, so `not determined` alone was never this bar's operand.) `concrete`
-                    claims nothing whatever about a parse, because whether a static reader could have stated an address is
-                    not decidable by anybody — a bundler's chunk manifest needs a scope pass to resolve. What
-                    `concrete` hides is enumerated at solver/endpoint.h's list: a determined address can be a
-                    literal, the document's own address, or a source this flow PINNED and re-read, and the
-                    third really did derive from an unknown.
-                    A DIAGNOSTIC AND NEVER A TARGET, on §netdiff's own terms: `unknown` 0 against a nonzero
-                    `epEmitted` is a REFUSAL TO CLAIM the hard bar on this document rather than a smaller
-                    version of it. Its denominator is `epEmitted` four rows up and travels on this line, and
-                    solver/endpoint.c asserts the sum where both halves are in one hand. */
+                 /* …and the address's own class, read off the address value's concolic provenance at endpoint.c's
+                    door: the bar is a property of the address, not the mechanism (`/api/{location.hash}` through
+                    `fetch` clears it; a literal chunk URL through `module-import` does not). A second
+                    observation beside `epDoors`/`epReach`, which are one.
+                    A floor, not a verdict: `unknown` is a positive statement that the address rested on an
+                    unknown supplied from outside the engine (one resting on a hole the engine minted for its own
+                    drive is refused), so it clears the bar. `concrete` claims nothing about a parse; what it
+                    hides is listed at solver/endpoint.h (a literal, the document's own address, or a pinned
+                    source re-read). Never a target. Its denominator `epEmitted` travels on this line;
+                    endpoint.c asserts the sum. */
                  "\"epAddressClass\":%s,"
-                 /* …AND THE BAR ITSELF, WHICH IS THE ONE ROW ON THIS LINE THAT IS NOT ONE OF ITS OPERANDS.
-                    `epDoors`, `epReach` and `epAddressClass` are what the bar is COMPOSED FROM and a census
-                    reader holding them had to compose it — which is not a coarsening anybody can perform,
-                    because a union is a statement about per-row MEMBERSHIP and two marginals carry no overlap
-                    between them. The nearest thing to the bar a reader could reach for was keyed on the DOOR,
-                    and a literal chunk URL through `module-import` is `beyond` a markup parse and scores ZERO
-                    at this bar — so the assembly available was not a weaker answer but a different question.
-                    IT IS A CROSS-CHECK AGAINST THE EMITTED ARRAY'S `razorClass` AND NEVER A SUM WITH IT. Both
-                    come off `endpoint_razor_class_of`, so they are ONE observation at two grains (CLAUDE.md
-                    §EVIDENCE-INFLATION), and they are worth holding together only because they are taken at
-                    two INSTANTS over a GAUGE: `epEmitted` FALLS when an asset verdict lands between this
-                    census and the emission, so a disagreement names which records each document was
-                    describing and is a finding rather than an error in either. Added together they
-                    double-count the whole surface.
-                    A FLOOR AND A DIAGNOSTIC, in the words the two rows above carry: `runtime-only` 0 against a
-                    nonzero `epEmitted` is a REFUSAL TO CLAIM the bar on this document, and `unproven` claims
-                    nothing whatever about a parse. Its denominator is `epEmitted` five rows up and travels on
-                    this line; solver/endpoint.c asserts the sum where both halves are in one hand. */
+                 /* …and the bar itself, which no reader can compose from its operands: a union is a statement
+                    about per-row membership, and the marginals above carry no overlap. A cross-check against the
+                    emitted array's `razorClass`, never a sum with it: both come off `endpoint_razor_class_of`,
+                    taken at two instants over a gauge (`epEmitted` falls when an asset verdict lands between
+                    them), so a disagreement names which records each document described. `runtime-only` 0
+                    against nonzero `epEmitted` is a refusal to claim; `unproven` claims nothing about a parse.
+                    Its denominator `epEmitted` travels on this line; endpoint.c asserts the sum. */
                  "\"epRazorClass\":%s,"
-                 /* …AND THE NECESSARY CONDITION UNDER THAT BAR, BESIDE IT AND NEVER INSIDE IT. The bar is a
-                    FLOOR composed of two POSITIVE statements; this is a MAY, and solver/endpoint.h states why
-                    folding a necessary condition into a floor turns it into an OVER-claim.
-                    WHAT THE PAIR SAYS, WHICH IS THE WHOLE REASON THIS ROW EXISTS. `unproven` holds a
-                    population whose bytes THIS ENGINE CHOSE — an address composed out of a source this flow
-                    PINNED and re-read, which `addressClass` calls `concrete` because the pin arm hands a
-                    re-read back as a BARE primitive. This row BOUNDS that population: `unproven` beside
-                    `may-rest-on` 0 is a run on which no address was composed by a path that had pinned
-                    anything, so there is no chosen-bytes population under this run's surface at all; a
-                    nonzero `may-rest-on` is the population whose addresses may not reproduce for a real
-                    session, and the next diff belongs to the PIN. Those are opposite diffs and no figure
-                    published before this row could tell them apart.
-                    IT IS NOT A BOUND ON THE BAR'S SLACK, AND THAT CLAUSE IS RETIRED RATHER THAN DELETED
-                    BECAUSE IT IS WHAT A READER RE-DERIVES FROM "the taint is gone". It read that the pinned
-                    population "really is past every parse", so a nonzero `may-rest-on` was "the population
-                    the bar's zero does not account for" and a zero made the bar's zero "the run having
-                    genuinely proved nothing". solver/endpoint.h measured the claim and retired it: a pin's
-                    bytes are the equality's OTHER operand, which solver/concolic.c spells only where that
-                    operand is NOT concolic, so they are a literal the page's own text spells and the address
-                    does not exist only at run time. `unproven` holds that population CORRECTLY, and what the
-                    bar's zero accounts for is unchanged by this row in either direction.
-                    `unasked` IS NOT A SMALL `no-witness`. It is the question not having been asked, because no
-                    flow stood when the record was minted; a nonzero row there is a door composing a request
-                    outside the scheduler, which is a finding about that door. Its denominator is `epEmitted`
-                    six rows up and travels on this line; solver/endpoint.c asserts the sum where both halves
-                    are in one hand. */
+                 /* …and the necessary condition under that bar, beside it and never inside it: the bar is a floor
+                    of positive statements, and this is a "may" (solver/endpoint.h). `may-rest-on` bounds the
+                    addresses composed by a path that had pinned a source, which `addressClass` calls
+                    `concrete` because the pin arm re-reads a bare primitive: 0 means no chosen-bytes population
+                    under this surface, nonzero means addresses that may not reproduce for a real session and
+                    the next diff is the pin. It is not a bound on the bar's slack — a pin's bytes are a literal
+                    the page's own text spells (solver/concolic.c), so `unproven` holds them correctly.
+                    `unasked` is no flow standing when the record was minted: a door composing a request outside
+                    the scheduler. Its denominator `epEmitted` travels on this line; endpoint.c asserts the sum. */
                  "\"epWitnessClass\":%s,"
                  "\"epAsks\":%ld,\"epAskPreProgram\":%ld,\"epAskSuppressed\":%ld,"
-                 /* AND THE ONE CUT INSIDE THE MERGED ARM — endpoint.h states what it is and what its four-state
-                    zero can mean. It is NOT summed with the three arms beside it: they partition the door's
-                    exits and this selects inside one of them on a fact about the RECORD, so a reader adding it
-                    to them counts one ask twice. What it says when it is NONZERO is the single sentence this
-                    whole line exists for: running code composed an address the document's own markup had
-                    already named, which is a run that reached a network call site and learned nothing — and
-                    which leaves every other figure here byte-identical to a run that reached none. */
+                 /* …and the one cut inside the merged arm (endpoint.h). Not summed with the three arms beside it:
+                    they partition the door's exits and this selects inside one. Nonzero means running code
+                    composed an address the markup had already named — a network call site reached and nothing
+                    learned. */
                  "\"epAskMerged\":%ld,\"epAskMinted\":%ld,\"epAskMergedPreProgram\":%ld"
-                 /* …AND THE HOST EDGE'S OWN ENTRY, WHICH THE SIX ROWS ABOVE STRUCTURALLY CANNOT SEE. They are
-                    counted at endpoint_record's door, so a `fetch()` the page CALLED and the engine threw out
-                    of — or parked inside and never resumed — is a network call site reached and is in none of
-                    them: core/fetch's machine records at `FETCH_CALL`, its SIXTH stage, with five stages of
-                    spec TypeErrors and two page-code park points in front. These rows are that door's
-                    upstream, counted on the machine's own states at its capture and at its teardown and
-                    partitioned by the stage each torn-down construction was standing at, so `epAsks ==
-                    epAskPreProgram` stops being a total that cannot say whether the page called a
-                    request-composing API at all.
-                    A BARE `%s` AND NOT A NAMED ROW, because the rows carry their own names and their own
-                    leading comma: the ABSENT form is the EMPTY STRING — a host that installs no fetch runs no
-                    fetch machine and has no population, which §Testing's absent-is-not-zero rule says may not
-                    be published as five zeroes. solver/endpoint.h holds the contract. */
-                 /* …AND THE OTHER HOST EDGE'S, BESIDE IT AND NEVER SUMMED WITH IT. core/xhr constructs its
-                    request in `send()` — its OWN declared member, seven stages with four page-code park
-                    points — and records from the LIFECYCLE machine that member mints, so the two edges count
-                    states of two machines whose stages are their own and one number over both would be the
-                    averaged population §a-coverage-figure-states-what-it-is-a-fraction-of names. A SECOND
-                    bare `%s` for the same reason as the first: the rows carry their own names and their own
-                    leading comma, and the ABSENT form is the EMPTY STRING, because a host that installs no
-                    XMLHttpRequest runs no send machine and has no population. solver/endpoint.h holds the
-                    contract and the refutation of the clause that had this census built over the wrong
-                    machine. */
-                 /* …AND THE INVOKER RUNGS' DENOMINATOR, spliced rather than a row each for the reason the two
-                    edges above are: which rungs HAVE one is the declaring components' fact, so the key set
-                    itself says which arms of `stepUnitRuns` can be read as a fraction and an arm with no
-                    component installed has no row rather than a zero. */
+                 /* …and the host edge's own entry, which the rows above cannot see: they count at endpoint_record,
+                    so a `fetch()` the engine threw out of or parked inside before core/fetch's `FETCH_CALL` (its
+                    sixth stage) is in none of them. These count that machine's states at capture and teardown,
+                    partitioned by the stage each torn-down construction reached. A bare `%s` because the rows
+                    carry their own names and leading comma; the absent form is the empty string, since a host
+                    with no fetch has no population (solver/endpoint.h). */
+                 /* …and the other host edge's, beside it and never summed with it: core/xhr records from the
+                    lifecycle machine its `send()` mints, whose seven stages are its own. A second bare `%s`,
+                    absent as the empty string for a host with no XMLHttpRequest (solver/endpoint.h). */
+                 /* …and the invoker rungs' denominator, spliced: which rungs have one is the declaring components'
+                    fact, so an arm with no component installed has no row rather than a zero. */
                  "%s%s%s}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.finished_flows, e.finished_cands,
@@ -4012,76 +2081,33 @@ char *result_cold_json(void) {
     return out;
 }
 
-/* WHAT THE RUNTIME AND THE C ALLOCATOR UNDER IT HOLD — quickjs's own JS_ComputeMemoryUsage walk, the child
-   realms navigable.c built, and mallinfo. See result.h for why it composes here.
-
-   "IT GREW" NAMES NOTHING TO FIX, which is why the kinds are here and not just a total. A climbing
-   `allocations` with a flat `objects` is memory no GC object owns — an atom, a string, a property table, a
-   bytecode function — and each of those has a different owner and a different place the owner forgot to let go.
-
-   `miscBytes`/`miscParts` ARE NAMED AFTER WHAT THEY COUNT AND WERE NOT. They were emitted as
-   `realmBytes`/`realmParts` on the claim that quickjs's `memory_used_*` is a walk of the CONTEXT LIST, so a
-   reader asking "is the growth child realms?" read them and got an answer about something else:
-   JS_ComputeMemoryUsage adds two entries per realm and then adds EVERY object's property array, every fast
-   array's element vector, every var_ref, bound function, C-closure record and module entry to the same pair.
-   It is the MISCELLANEOUS bucket. The realm question is answered by the component that knows —
-   `navigable_realm_count`, which is the working set §A-CAPABILITY-MATERIALIZED-PER-FLOW names as a ceiling and
-   which navigable.c's own OOM CHECK sends its reader to by name.
-
-   AND `childRealms` ALONE ANSWERS TWO QUESTIONS WITH ONE NUMBER, which is why `childRealmsMade` and
-   `childRealmsPeak` ride beside it. The live count is small for a run that built no child realm and small for
-   a run that built a great many and reclaimed every one — opposite facts about the ceiling, and the second is
-   what HTML §7.5.10 "Destroying documents" step 7's reference drop exists to produce. `made` is monotone and
-   `peak` is the high-water live, so `made == peak` says every realm this run built was live at one instant and
-   NOT ONE was reclaimed, while `made > peak` says the reclamation ran. An absent count and a zero count are
-   different facts; so are a zero that means "none built" and a zero that means "all given back".
-
-   `unattributed` IS ONE SUBTRACTION AND NOT A SUM OF ROWS. JS_ComputeMemoryUsage's last statements add atoms,
-   strings, objects, properties, shapes, function bytecode and pc2line INTO `memory_used_size`, and every fast
-   array's elements were already added to it in the object walk — so summing those rows again beside it counts
-   the named heap TWICE and subtracts it twice from malloc_size, leaving a residual that reads healthy while
-   the named part of the heap is the thing growing. The residual is: what the allocator holds, minus everything
-   the runtime can name. `stepMachines` and `trampFrames` are what decompose it — a suspended continuation-
-   holding builtin and a heap call frame are the two largest things quickjs cannot name, and a frontier of
-   parked flows holds one of each per parked call and per suspended activation.
-
-   THE KINDS, PER ROW. Everything JS_ComputeMemoryUsage answers is a GAUGE of what the runtime holds NOW —
-   `allocations` included, which reads as a lifetime count and is not: quickjs raises `malloc_count` on every
-   allocation and LOWERS it on every free, so it is the live allocation population and may fall. So may
-   `childRealms` (navigable.c's `g_realms_n`), `stepMachines`, `trampFrames` and the two mallinfo rows, which
-   are readings of the C allocator at the instant of the census. `unattributed` is a SUBTRACTION of two gauges
-   taken in one reading and is a gauge for that reason.
-   THE TWO EXCEPTIONS ARE NAMED IN THEIR KEYS AND ARE THE ONLY ONES: `childRealmsMade` is the LIFETIME COUNT
-   (`g_realms_made`) and is the only row here a reader may difference, and `childRealmsPeak` is a HIGH-WATER
-   MARK (`g_realms_peak`) — monotone, a count of nothing, and not differenceable either. That is exactly why
-   the paragraph above can read `made == peak` as "not one realm was reclaimed": it is a comparison between a
-   lifetime total and a high-water live, WITHIN one sample, and it holds of no pair taken at two moments.
-
-   NO BYTE COUNT — see solver/compose.h's `composef`. */
+/* What the runtime and the C allocator under it hold: QuickJS's JS_ComputeMemoryUsage walk, the child realms
+   navigable.c built, and mallinfo (see result.h). Rows are split by kind because a climbing `allocations` with
+   a flat `objects` is memory no GC object owns (atom, string, property table, bytecode), each with its own owner.
+   `miscBytes`/`miscParts` are QuickJS's `memory_used_*` bucket: two entries per realm plus every property
+   array, fast-array element vector, var_ref, bound function, C-closure record and module entry. The realm
+   count is navigable.c's. `childRealmsMade` (lifetime) and `childRealmsPeak` (high-water) ride beside the live
+   `childRealms`: `made == peak` within one sample says no realm was reclaimed (HTML §7.5.10 "Destroying
+   documents" step 7's reference drop), `made > peak` says reclamation ran.
+   `unattributed` is malloc_size minus `memory_used_size`, one subtraction: the named rows are already summed
+   into `memory_used_size`, so adding them again would count the named heap twice. `stepMachines` and
+   `trampFrames` decompose it, being the two largest things QuickJS cannot name.
+   Kinds: every row is a gauge (`allocations` is QuickJS's live `malloc_count`, lowered on free) except
+   `childRealmsMade`, a lifetime count and the only row that may be differenced, and `childRealmsPeak`, a
+   high-water mark. Sized by composef (solver/compose.h). */
 char *result_heap_json(JSContext *ctx) {
     JSMemoryUsage mem;
     JSRuntime *rt;
     long long attributed;
-    /* WHO HOLDS THE CHILD REALMS, taken in ONE call beside the three counts it explains — see navigable.h.
-       GAUGES, like `childRealms` and unlike `childRealmsMade`: they state what is true at this instant, so the
-       rule the banner above gives applies to them exactly — the identity holds WITHIN one sample and of no
-       pair taken at two moments, and none of the three may be differenced across samples.
-       -1 FOR min AND max IS THE EMPTY SET, which a live realm's refcount cannot be, so a run that built no
-       child realm says so positively here rather than reading as a realm nobody holds. */
+    /* Who holds the child realms, taken in one call beside the three counts it explains (see navigable.h).
+       Gauges: the identity holds within one sample and none may be differenced. -1 for min and max is the
+       empty set, which a live realm's refcount cannot be. */
     int rmin = -1, rmax = -1;
     long rtotal = 0;
-    /* AND WHICH EDGES THOSE ARE — the same instant, broken down by the FUNCTION that took each reference. The
-       three numbers above say a realm is held and by how many; this says by WHOM, which is the difference
-       between a repair that can be aimed and one that cannot. See core/frame/navigable.h.
-       A MAP KEYED BY ORIGIN, WHOSE KEYS ARE DATA AND NOT FIELD NAMES. The origins are whatever take sites the
-       engine contains — discovered, never declared — so they cannot be literals in a format string, and each
-       one's value is the `[min, max, total]` the line above already names once for the whole census rather
-       than three key names repeated per row. A positional triple is safe here for the one reason a position
-       is ever safe: the set is fixed at its definition and is this file's own, so nothing can renumber it.
-       THE ROWS ARE COMPOSED SEPARATELY AND SPLICED, because their NUMBER is not known to a format string
-       either. It is a bounded handful, so composing one row and carrying the accumulation forward costs a
-       handful of measured allocations — and the alternative is a second buffer-sizing scheme of exactly the
-       kind solver/compose.h exists to end. */
+    /* …and which function took each reference, at the same instant (see core/frame/navigable.h). A map
+       keyed by origin, whose keys are discovered data and so cannot be format literals; each value is the
+       positional `[min, max, total]`, safe because that triple is fixed here. The rows are composed one at a
+       time and spliced, since their number is not known to a format string. */
     NavigableRealmRefSite rsites[NAVIGABLE_REALM_REF_SITES_MAX];
     long rreleased = 0;
     int  rsites_n, ri;
@@ -4093,16 +2119,12 @@ char *result_heap_json(JSContext *ctx) {
     JS_ComputeMemoryUsage(rt, &mem);
     navigable_realm_refs(NULL, &rmin, &rmax, &rtotal);   /* `live` is navigable_realm_count() one line down */
     rsites_n = navigable_realm_ref_sites(rsites, NAVIGABLE_REALM_REF_SITES_MAX, &rreleased);
-    /* `null` FOR A BUILD THAT WATCHES NO REFERENCES, never `[]`. An empty array is what a run holding no live
-       realm produces, and "this build does not attribute" and "there is nothing to attribute" are opposite
-       facts about the same row — the absence-and-zero-read-alike defect in the one field whose whole job is to
-       name holders. */
+    /* `null` for a build that watches no references, never `[]`: an empty array is a run holding no live
+       realm, the opposite fact. */
     rsites_json = composef("%s", rsites_n < 0 ? "null" : "{");
     for (ri = 0; ri < rsites_n; ri++) {
         char *next;
-        /* THE ORIGIN IS A C IDENTIFIER AND IS EMITTED UNESCAPED, which is an assertion rather than an
-           assumption: it comes from the engine's own `__func__`, so a byte JSON would have to escape means
-           the row was composed from something else and this census line stops being parseable at it. */
+        /* The origin is the engine's own `__func__`, emitted unescaped; the DCHECK makes that an assertion. */
         DCHECK(rsites[ri].site != NULL && strcspn(rsites[ri].site, "\"\\") == strlen(rsites[ri].site),
                "a realm's reference origin is not a plain identifier — the origins are the engine's own "
                "function names, so a quotation mark or a backslash here is a row that came from somewhere "
@@ -4119,9 +2141,7 @@ char *result_heap_json(JSContext *ctx) {
         rsites_json = closed;
     }
     attributed = (long long)mem.memory_used_size;
-    /* THE SPLICED ROWS ARE THIS FUNCTION'S OWN AND DIE HERE. composef measures and allocates, so the
-       accumulation above is a chain of exact buffers and the last one is the only survivor; the census it is
-       spliced into is a fresh allocation and the caller's. */
+    /* The spliced rows are this function's and die here; the census composef returns is the caller's. */
     heap = composef(
                  "{\"allocations\":%lld,\"atoms\":%lld,\"strings\":%lld,\"objects\":%lld,"
                  "\"shapes\":%lld,\"props\":%lld,\"funcs\":%lld,\"funcCode\":%lld,\"arrays\":%lld,"
@@ -4151,57 +2171,40 @@ char *result_heap_json(JSContext *ctx) {
 }
 
 /* The composition, and nothing else. Each surface serializes itself — endpoint.c walks its deduped endpoints,
-   solve.c its fire-verified sinks — and this only decides that they are ONE document and what it is called.
-   Keeping that decision in one place is the point: a second caller that wanted "just the endpoints" is how a
-   host ends up assembling structure again. */
+   solve.c its fire-verified sinks — and this only decides that they are one document and what it is called,
+   so no host assembles structure again. */
 char *result_json(JSContext *ctx) {
     char *eps = endpoint_json_array();
     char *sinks = solve_json_array(ctx);
     char *errs = errs_json_array(ERRS_STANDING);
-    /* AND THE ONES THIS ENGINE TOOK BACK — see errs_json_array. Composed beside `pageErrors` and never
-       folded into it: a run in which the page raised nothing and a run in which it raised errors and handled
-       every one of them are two different pages, and one empty array was the evidence for both. */
+    /* …and the ones this engine took back (see errs_json_array). Kept apart from `pageErrors`: a page that
+       raised nothing and one that handled everything it raised are different pages. */
     char *errsRetracted = errs_json_array(ERRS_RETRACTED);
-    /* AND THE ONES THIS ENGINE MINTED ITSELF — ORTHOGONAL to those two rather than a third state of them, so a
-       message here is also in exactly one of them. errs_json_array states the three facts and why a consumer
-       reading only `pageErrors` was being shown an error the page did not have. */
+    /* …and the ones this engine minted itself: orthogonal to those two, so a message here is also in exactly
+       one of them. errs_json_array states the three facts. */
     char *errsExplored = errs_json_array(ERRS_EXPLORED);
-    /* THE ORDERING, ON THE ONE SURFACE THAT CROSSES THE ABI — see result.h. Composed here rather than by a
-       host, because the host that had it is a driver the production entry does not call. */
+    /* The ordering, on the one surface that crosses the ABI — see result.h. Composed here rather than by a host
+       so the production entry carries it. */
     char *wfq = result_wfq_json();
-    /* AND THE THREE CENSUSES THAT RODE NOTHING AT ALL, for the same reason and on the same surface: what the
-       FRONTIER is made of, what the RUNTIME holds, and what a context SWITCH costs. result.h states the
-       argument; `decide.c`'s table joins them because "which predicate is growing the frontier" is the same
-       question one level down and had the same single unreachable emission site. */
+    /* …and what the frontier is made of, what the runtime holds, and what a context switch costs (see
+       result.h); `decide.c`'s table joins them as the same question one level down — which predicate grows
+       the frontier. */
     char *cold = result_cold_json();
     char *heap = result_heap_json(ctx);
     char *swap = result_swap_json();
     char *forkAt = decide_fork_json();
-    /* AND WHAT THE DOCUMENT ASKED A STANDARD FOR THAT THIS REALM DID NOT ANSWER — the census whose whole
-       subject is a reading that is otherwise INVISIBLE rather than merely unpublished, which is what makes it
-       different from the four above. Those were computed on every run and printed only by the smoke driver's
-       loop; this one was never computed at all, because the arm it measures is a `goto done` whose entire
-       observable effect is that a guard takes its false arm. An unbuilt API a page CONSTRUCTS throws and the
-       throw rides `pageErrors`; an unbuilt API a page FEATURE-DETECTS answers `undefined`, and every endpoint
-       and sink behind that guard is unreachable with nothing anywhere saying so — so a run that learned
-       nothing for that reason is indistinguishable, on this document, from a page that had nothing to learn.
-       IT IS NOT CONDITIONED ON THERE BEING ANYTHING TO REPORT, which is the whole point and is
-       CLAUDE.md §A-DIAGNOSTIC-GATED-ON-A-FINDING: the run that emits nothing is the run whose reasons are
-       wanted, so this composer emits its members on every document including the ones with no rows at all.
-       solver/absent.c states the population, its denominator, the kind of every row and the identity they
-       close over. */
+    /* …and what the document asked a standard for that this realm did not answer. An unbuilt API a page
+       feature-detects answers `undefined`, so every endpoint and sink behind that guard is unreachable with
+       nothing else saying so. Emitted on every document, including ones with no rows, because the run that
+       finds nothing is the one whose reasons are wanted. solver/absent.c states the population, denominator,
+       kinds and identity. */
     char *absent = absent_json();
-    /* AND WHAT THE ORDER THOSE FIVE SIT UNDER WAS DENOMINATED IN — solver/quantum.h's composer, not a sixth
-       one of ours. It is the only field on this document that is neither a total over the run nor a reading of
-       an instant: it is a property of the HOST, and it is here because without it two `_wfq` orderings taken
-       from one revision on one page are not comparable and nothing on either document says so. result.h states
-       the argument in full. */
+    /* …and what the order was denominated in: solver/quantum.h's composer, a property of the host, without
+       which two `_wfq` orderings are not comparable (see result.h). */
     char *quantum = quantum_json();
-    /* NO `probeResults` SURFACE. It carried the schemas an API's own REJECTION described, and a rejection is
-       the answer to a DELIBERATELY MALFORMED REQUEST — one this engine cannot make, since its only network
-       edge is the pending register and the host performs a GET through safeFetch. The reader on this side was
-       filing whatever rejection a GET happened to provoke under the identity of an endpoint nobody probed.
-       It is extension/lib/req2proto.js, which issues the probe as the page and writes straight into
+    /* No `probeResults` surface: a probe answer is the reply to a deliberately malformed request, which this
+       engine cannot make (its only network edge is the pending register, and the host performs a GET through
+       safeFetch). extension/lib/req2proto.js issues the probe as the page and writes
        `globalStore.probeResults`; nothing about it crosses this seam. */
     char *out;
 
@@ -4211,100 +2214,47 @@ char *result_json(JSContext *ctx) {
         free(cold); free(heap); free(swap); free(forkAt); free(quantum); free(absent);
         return NULL;
     }
-    /* NO SLACK, NO COUNT, NO MARGIN — see solver/compose.h's `composef`, which this composer is the reason
-       for. The
-       arithmetic that used to stand here was the one this file's history is about: it said "467 with its
-       conversion specifiers and 407 without" and "nineteen counters … 335" against a format string measuring
-       508/442 over twenty-one counters at 375, so the stated worst case of 742 sat comfortably inside a buffer
-       whose real worst case (818) did not fit — five numbers wrong, every one of them in the safe-looking
-       direction, because the count had been ADJUSTED to the new field rather than re-done from the string.
-       The instruction under it ("RE-DO THE ARITHMETIC WHEN YOU ADD A FIELD") was correct, was followed wrong,
-       and is now unnecessary: a field added below costs nothing here.
-       THE MARGIN'S OWN ARGUMENT IS RETIRED RATHER THAN DELETED, because it was a good argument about the
-       arrangement it defended and a reader would otherwise re-derive it. It said the slack must be RAISED
-       rather than spent because the fit assert is a DCHECK, compiled out at `-DAPICLIENT_DEV=0`, leaving a
-       release build with the arithmetic and nothing else between it and a lost closing brace. That was
-       insurance against the arithmetic being WRONG, and it is exactly what let both of the misses above sit
-       unnoticed — a margin large enough to protect a bad count is large enough to hide one. With the length
-       MEASURED there is nothing to insure: the measurement runs in every build, on the same argument list, in
-       the same function, so the release build's buffer is right for the same reason the dev build's is. */
-    /* THE PARK DOCUMENT RIDES THE RESULT, because it IS a result: it is what this engine has left to say about
-       a page it did not finish, and the host already does one JSON.parse of one document. "[]" — the ordinary
-       case — tells the host this engine drained rather than paged out, which is what DELETES the origin's cold
-       entry instead of leaving a stale residue that would be resumed forever. */
+    /* Sized by composef (solver/compose.h), so a field added below needs no count, slack or margin. The fit is
+       measured in every build, on the same argument list, so release is right for the same reason dev is. */
+    /* The park document rides the result, since it is what this engine has left to say about a page it did not
+       finish. "[]" — the ordinary case — says this engine drained rather than paged out, which is what makes
+       the host delete the origin's cold entry instead of resuming a stale residue. */
     {
-        /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
-           times as long grew its frontier or grew the work inside each flow, and those need opposite fixes.
-           AND WHAT THE CROSS-INSTANCE SEAM DID. A delivery arriving says nothing about whether the ancestry it
-           carried was ever used, and a mechanism nobody can see run is one that has never run. */
-        /* HELD AND MADE ARE TWO NUMBERS AND THIS EMITTED ONE OF THEM UNDER THE OTHER'S NAME. `_worldSegments`
-           carried `world_segment_stats`'s materialized count — a CUMULATIVE history that only
-           world_segment_counts_reset lowers — while every reader's prose described the LIVE table (route.mjs:
-           "how many foreign worlds hold a segment here"). They agree exactly until world_release runs, which is
-           the one event the number exists to make visible, so the field was at its most wrong precisely when it
-           mattered — and world_release now has a caller on every sender's flow death, so the two diverge in
-           every run with a peer in it rather than in none. cold.c's park hook had already worked this out and
-           prints both, in the words this comment owes it: "held alone cannot say: with made beside it, held=0
-           is impossible to reach, held=4/made=4 is a live peer, and a held that is far below made is a seam
-           that materialized and released". So both cross the seam, each named for the number it is, and
-           `world_segments_held`'s own DCHECK (a table larger than its history was grown by something that is
-           not world.c) rides along with them. */
+        /* The three cost numbers together: a switch count alone cannot say whether a slower run grew its frontier
+           or the work inside each flow, which need opposite fixes. And what the cross-instance seam did. */
+        /* Held and made are two numbers. `_worldSegmentsHeld` is the live table (`world_segments_held`, lowered
+           by world_release on a sender's flow death); `_worldSegmentsMade` is `world_segment_stats`' cumulative
+           history, lowered only by world_segment_counts_reset. Together, as cold.c's park hook also prints them:
+           held far below made is a seam that materialized and released. `world_segments_held`'s own DCHECK (a
+           table larger than its history) rides along. */
         int held = world_segments_held(), made = 0, segf = 0;
-        /* AND WHY THE SECURITY ARRAY IS THE LENGTH IT IS, WHICH AN EMPTY ONE CANNOT SAY. `securitySinks: []`
-           has four readings that take opposite actions — no attacker source was ever read, none reached a
-           sink, sinks ran and only the page's own strings arrived, or taint arrived and the search was
-           declined because the check on it was unforgeable — and the last of those is the engine's STRONGEST
-           negative result rendered as the same nothing as never having looked. These four numbers are the
-           split; solver/solve.h and solver/concolic.h state which is which. They ride the result document
-           rather than a log for the reason every other count here does: the renderer does not tee its stdout,
-           so a number a console scrape would have to find is a number nobody reads. */
+        /* …and why the security array is the length it is. `securitySinks: []` has four readings — no attacker
+           source read, none reached a sink, only the page's own strings arrived, or taint arrived and the search
+           was declined because the check on it was unforgeable — and these four numbers split them
+           (solver/solve.h and solver/concolic.h). On the document because the renderer does not tee stdout. */
         long srcReads = concolic_source_reads(), sinkReached = 0, sinkTainted = 0, sinkSuppressed = 0;
-        /* AND WHAT THIS INSTANCE DID WITH THE RECORDS A PEER SENT IT — see engine.h for why the pair travels
-           together and why a host's own routed count is not comparable to a page's handler invocations. It
-           rides the result document for the reason the four above it do: a zone reading this from a log would
-           be reading a stream the renderer deliberately does not tee. */
+        /* …and what this instance did with the records a peer sent it — see engine.h for why the pair travels
+           together and why a host's routed count is not comparable to a page's handler invocations. */
         long routedDelivered = 0, routedRefused = 0, routedZeroDelivery = 0;
-        /* AND WHETHER THE HEADLINE SURFACE RAN AT ALL — solver/engine.h's orphan census, which is the ORPHAN
-           side of the four numbers above it. `_orphansDriven` existed and reached only the heap/progress line,
-           which §Testing says nobody can read; `_orphansAsked` is what tells "this bundle ships no uncalled
-           code" from "no flow ever reached the end of its own work". They ride the result document for the
-           same reason every count here does.
-           THOSE ARE TWO OF FOUR READINGS AND THE SENTENCE ABOVE IS THE ONE EVERY DOWNSTREAM CONSUMER LEARNS
-           THEM FROM, which is why the correction belongs here rather than at any of them. solver/engine.c's
-           own note at the ask records the other two: the walk can have found nothing, and — the one that is
-           invisible in the pair — a session declared NON-FORKING returns at the ask's gate BEFORE the counter
-           moves, so its zero is guaranteed by policy and is byte-identical to "no flow reached the end of its
-           own work". The distinguishing fact is public and is not in this pair (engine_session_forks).
-           IT IS NOT A DEFECT IN THIS DOCUMENT TODAY, AND THAT IS A FACT ABOUT A CALL ARGUMENT RATHER THAN
-           ABOUT THIS FILE: the only host that composes this document begins its sessions forking, so the
-           fourth reading cannot arise here. It is written down because the argument is two files away, a
-           consumer of this document cannot check it, and an under-claim is the one kind of wrong sentence
-           nobody discovers by acting on it — a reader told the pair separates two states does not go looking
-           for a third. A host that begins non-forking and composes this document owes the regime beside the
-           pair, exactly as the stdout census now carries it. */
+        /* …and whether the uncalled-code surface ran at all: solver/engine.h's orphan census. `_orphansAsked`
+           tells "this bundle ships no uncalled code" from "no flow reached the end of its own work". A zero has
+           two more readings: the walk found nothing, or the session is non-forking and returns at the ask's
+           gate before the counter moves (engine_session_forks tells it apart). The only host composing this
+           document begins its sessions forking, so that reading cannot arise here; a host that begins
+           non-forking owes the regime beside the pair. */
         long orphansDriven = 0, orphansAsked = 0;
-        /* AND WHICH EXIT EACH OF THOSE ASKS TOOK, read into a local at the same instant as the pair above for
-           `place`'s reason exactly: the four terms of one equality may not come from two moments. The three
-           have existed, correct and asserted, in statics nothing emitted — so `orphansAsked` large with
-           `orphansDriven` small has had no row anywhere that could say whether the walks happened at all. See
-           solver/engine.h's `EngineOrphanExits` for the two opposite repairs it decides between. */
+        /* …and which exit each ask took, read at the same instant as the pair, since the four terms of one
+           equality may not come from two moments. See solver/engine.h's `EngineOrphanExits`. */
         EngineOrphanExits orphanExits;
         JSOrphanWalkCost orphanWalk;
-        /* AND WHAT BECAME OF THE TASKS THOSE DELIVERIES QUEUED. `_routedDelivered` alone is the shape §@S
-           forbids in a search and forbids here for the same reason: a page whose listener ran fewer times than
-           the engine delivered has ONE number covering "the spec declined it" (§9.3.3 step 8.1), "there was no
-           Document left to fire at" (§7.5.10 step 5) and "the scheduler lost the task", and only the last is a
-           defect. All four ride the document rather than a log, for the reason the counts above them do. */
+        /* …and what became of the tasks those deliveries queued: a listener running fewer times than delivered
+           covers "the spec declined it" (§9.3.3 step 8.1), "no Document left to fire at" (§7.5.10 step 5) and
+           "the scheduler lost the task", and only the last is a defect. */
         long routedEnds[ROUTED_TASK_END_N];
-        /* THE RENDER'S GEOMETRY CENSUS, taken at the same instant as every other row here: it is read once,
-           into a local, rather than five accessor calls spread down the argument list, so the three rows a
-           reader divides cannot come from three moments. */
+        /* The render's geometry census, read once into a local so the rows a reader divides share one moment. */
         FlowPlacementCensus place;
-        /* AND WHAT THE RUN SPENT ON THE CASCADE, read at the same instant and into a local for `place`'s
-           reason: four rows a reader divides must not come from four moments. This is the FIRST reader these
-           counters have ever had on a path the product takes — core/css/css_cascade_pass.h states what each
-           row is a count of and why the only other reader, an identity assert inside a close, never runs
-           here. */
+        /* …and what the run spent on the cascade, into a local for the same reason. This is these counters' only
+           reader on a path the product takes; core/css/css_cascade_pass.h states each row. */
         CssCascadePassCensus casc;
 
         flow_placement_census(&place);
@@ -4315,25 +2265,17 @@ char *result_json(JSContext *ctx) {
         engine_orphan_census(&orphansDriven, &orphansAsked);
         orphanExits = engine_orphan_exits();
         orphanWalk = JS_OrphanWalkCost(JS_GetRuntime(ctx));
-        /* THE PARTITION, ASSERTED HERE BECAUSE HERE IS WHERE ALL FOUR TERMS ARE IN ONE HAND. solver/engine.c
-           asserts the same equality at engine_step_unit_runs; this is the one point in THIS composer where the
-           total and its three parts have been read together, and a document that published three parts not
-           summing to the total it prints beside them would be the enumeration-without-its-total defect
-           §AND-AN-ENUMERATION-EMITTED-IN-THIS-TREE names. The four share one lifetime by construction (all are
-           released at engine_session_close), which is why this is an EQUALITY and not a floor. */
+        /* The orphan exits partition the asks; asserted here, where all four terms are in one hand (engine.c
+           asserts it again at engine_step_unit_runs). An equality because all four are released together at
+           engine_session_close. */
         DCHECK(orphanExits.memo + orphanExits.empty + orphanExits.took == orphansAsked,
                "the orphan surface's exits do not account for every ask this document is about to publish — "
                "the total is raised at engine_orphan_seed's entry past the forking gate and each part at "
                "exactly one of its exits, so a difference is an exit that records nothing and the residue a "
                "reader computes from these rows has silently stopped being the memo and the empty walk");
-        /* AND ONE WALK PER ASK THAT WALKED, WHICH IS THE WITNESS FOR THE ENUMERATION COUNT AND NOT A SECOND
-           SPELLING OF THE PARTITION ABOVE. `JS_OrphanTakeOne` enumerates the object list EXACTLY ONCE per
-           call and is called once per ask the generation memo did not answer, so the walk count is the memo's
-           complement. It is asserted here for the reason the partition is: this is the one point where the
-           quickjs-side count and the host's two exit counts are in one hand, and the equality is what a reader
-           would otherwise have to take on trust from two files. A shape that read the list four times per take
-           — which this function had — reads about four times this, so the assert is also the one durable
-           statement that the four-enumeration form is gone. */
+        /* One walk per ask that walked: `JS_OrphanTakeOne` enumerates the object list exactly once per call and is
+           called once per ask the generation memo did not answer, so the walk count is the memo's complement.
+           Asserted here, where the QuickJS-side count and the host's exit counts are in one hand. */
         DCHECK(orphanWalk.walks == (uint64_t)(orphanExits.empty + orphanExits.took),
                "the orphan walk count does not equal the asks that walked — one take is one enumeration of the "
                "object list and the memo answers the rest, so a difference means either a call enumerated the "
@@ -4341,269 +2283,112 @@ char *result_json(JSContext *ctx) {
                "document publishes per walk is then over the wrong denominator");
         engine_routed_task_census(routedEnds);
         out = composef("{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
-                             /* THE ONES THIS ENGINE NAMED AND THEN TOOK BACK — beside `pageErrors` because
-                                the two are read together and disjoint: neither array can say on its own
-                                whether an empty console means the page raised nothing or handled everything
-                                it raised. errs_json_array states the three facts they keep apart. */
+                             /* The ones this engine named and then took back — beside `pageErrors` because the two
+                                are disjoint and read together; errs_json_array states the three facts they keep
+                                apart. */
                              "\"pageErrorsRetracted\":%s,"
-                             /* AND THE ONES THIS ENGINE MINTED — ORTHOGONAL to the pair above rather than a
-                                third state of it, so a message here is ALSO in exactly one of them and a
-                                consumer renders it ONCE, under the context this array decides. Without it an
-                                extension popup lists an engine-minted exploration TypeError among the page's
-                                own errors, which is a person being shown an error their page did not have. */
+                             /* …and the ones this engine minted: orthogonal to the pair above, so a message here
+                                is also in exactly one of them and a consumer renders it once, under the context
+                                this array decides. */
                              "\"pageErrorsExplored\":%s,"
-                             /* `_switches` IS NOT `_unitsDone`'S DENOMINATOR, AND THE TWO SIT ON ADJACENT
-                                LINES OF THIS STRING WITH NOTHING SAYING SO. A switch is counted only where
-                                the pick returns a DIFFERENT member (engine.c, beside flow_credit_pick); a
-                                dispatch is counted at every entry into flow_step. A member that holds the
-                                thread across many steps is one switch and many dispatches, so `_unitsDone /
-                                _switches` is units per SWITCH and can legitimately exceed 1 — which reads as
-                                a subset larger than its population, the one arithmetic tell this project
-                                treats as free, fired here by a quotient that is not one.
-                                MEASURED ON THE SURVIVING CENSUS CORPUS rather than feared: of 63 rows
-                                carrying both, 27 have `_unitsDone > _switches`, one of them 25 against 1.
-                                Every one is a correct pair of counters and a division nobody may make.
-                                THE DENOMINATOR EXISTS AND IS NAMED HERE BECAUSE IT IS IN THE OTHER OBJECT:
-                                `steps` in result_cold_json's `engine_step_unit_runs` block, over the same
-                                instance-wide scope as these rows and reset by nothing, is what `_unitsDone`
-                                is a share of — and it is the total solver/engine.h's `unit_mid_program`
-                                partition is asserted against. It is deliberately not re-emitted beside this
-                                row: a second spelling of one number in one document is the drift the
-                                record-field gate exists to catch, so the pointer is the fix and a copy
-                                would be the defect. */
+                             /* `_switches` is not `_unitsDone`'s denominator. A switch is counted only where the
+                                pick returns a different member (engine.c, beside flow_credit_pick); a unit at
+                                every entry into flow_step, so `_unitsDone / _switches` can exceed 1. The
+                                denominator is `steps` in result_cold_json's `engine_step_unit_runs` block, the
+                                total solver/engine.h's `unit_mid_program` partition is asserted against; it is not
+                                re-emitted here, because one number spelled twice in one document drifts. */
                              "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
                              "\"_jobsQueued\":%ld,\"_jobsRun\":%ld,\"_unitsDone\":%ld,"
                              "\"_worldSegmentsHeld\":%d,\"_worldSegmentsMade\":%d,"
                              "\"_worldSegmentsForked\":%d,"
                              "\"_routedDelivered\":%ld,\"_routedRefused\":%ld,"
-                             /* AND THE ONE OF THE THREE THAT IS ABOUT A RECORD RATHER THAN AN ATTACHMENT —
-                                see solver/engine.h. It is emitted with them and never without them: the pair
-                                alone lets a host compare its own routed count against a sum of attachments,
-                                which is a claim that the receiver has exactly one timeline.
-                                IT IS A GAUGE AND ITS TWO NEIGHBOURS ARE NOT, which is why it is called out
-                                here rather than left to the grouping paragraph below — that paragraph names
-                                `_worldSegmentsHeld` as the one exception among these siblings, and this is
-                                the second. It RISES on arrival and FALLS when some timeline admits the
-                                record, so it is a backlog until the receiver is drained to a stall and a LOSS
-                                only after that; differencing two samples of it is arithmetic on nothing. */
+                             /* …and the one of the three about a record rather than an attachment — see
+                                solver/engine.h. Emitted only with the pair: alone, the pair invites comparing a
+                                host's routed count with a sum of attachments, which assumes the receiver has one
+                                timeline. A gauge: it rises on arrival and falls when a timeline admits the record,
+                                so it is a backlog until the receiver drains to a stall, and a loss only after. */
                              "\"_routedZeroDelivery\":%ld,"
                              "\"_routedTasksFired\":%ld,\"_routedTasksTargetOrigin\":%ld,"
                              "\"_routedTasksTargetGone\":%ld,\"_routedTasksThrew\":%ld,"
                              "\"_sourceReads\":%ld,\"_sinkReached\":%ld,\"_sinkTainted\":%ld,"
                              "\"_sinkSuppressed\":%ld,"
-                             /* AND THE ORDER THE FRONTIER WAS IN WHEN THIS DOCUMENT WAS COMPOSED — result.h
-                                says why it rides here and what its two shapes mean. It is ONE nested object
-                                and not twenty-three more `_`-prefixed siblings because its rows are mostly
-                                readings of an INSTANT and the siblings above are mostly totals, and a
-                                consumer that mixed them into one row would show an instantaneous spread
-                                beside a cumulative switch count and call both "so far".
-                                MOSTLY, AND THE WORD IS LOAD-BEARING: THE NESTING SEPARATES SUBSYSTEMS AND
-                                NEVER KINDS, AND A BLANKET SENTENCE HERE SAID OTHERWISE FOR AS LONG AS IT
-                                STOOD. It read "Every counter above is a TOTAL over the run", and
-                                `_worldSegmentsHeld` is directly above it and is `world_segments_held()` —
-                                world.c's `g_segs_n`, the LIVE table, which `world_release` LOWERS and which
-                                the paragraph composing it twenty lines down calls the live table in those
-                                words. So this document already carried a gauge among the siblings the
-                                sentence promised were totals, and the derivation a reader takes from that
-                                promise — `_`-prefixed scalar ⇒ lifetime total ⇒ safe to difference — is
-                                wrong for exactly that row and right for every other one, which is the shape
-                                CLAUDE.md names: a gauge and a lifetime counter printed side by side under one
-                                key vocabulary WILL be summed, and the sum is of nothing. It is not renamed
-                                here because its key is asserted by four consumers this file cannot land with
-                                (extension/bridge.js, extension/popup.js, engine/solvergate.mjs,
-                                engine/route.mjs, testing/live-run.js), and a rename that ships in the
-                                interpreted half before the built half is the half-deployed state; what is
-                                fixed is the CLAIM, per row, at the row.
-                                SO THE RULE FOR THIS BLOCK, STATED AS A GROUPING RATHER THAN AS A PROMISE:
-                                every `_`-prefixed sibling above is a LIFETIME COUNT OF EVENTS — monotone
-                                within one document's session and differenceable across two samples of it —
-                                EXCEPT `_worldSegmentsHeld` and `_routedZeroDelivery`, which are GAUGES
-                                and may fall. `_worldSegmentsHeld`'s pair is `_worldSegmentsMade` beside it,
-                                which is the lifetime half and the one to difference; `_routedZeroDelivery`
-                                has no lifetime half at all and is read at a drained receiver or not read.
-                                AND "LIFETIME" MEANS THIS AGENT'S, NEVER A DOCUMENT'S. The sentence here
-                                said these rows fall "at a document boundary and only there" on a host that
-                                runs several documents in one process, naming the native WPT runner, and that
-                                was FALSE AT BIRTH rather than stale: that host calls `solve_init` nowhere and
-                                composes this document nowhere, and its several-documents case is
-                                `wpt_child_realm`, which calls no `_init` at all. The boundary is read off
-                                CALLS and never off a host — solve_init zeroes `_candidates` and the three
-                                `_sink*` rows, concolic_init `_sourceReads`, world_registry_free's
-                                world_segment_counts_reset the two `_worldSegments` totals, solver_agent_free
-                                `_orphansDriven`/`_orphansAsked` and `_absent`'s rows — and every one of those
-                                runs EXACTLY ONCE in an agent's life, at its bring-up or its release, on all
-                                three hosts, while `_switches`, `_flows`, `_jobsQueued`, `_jobsRun`,
-                                `_unitsDone` and the routed rows are reset by nothing at all. So the whole
-                                block has ONE boundary and no arithmetic across it is wrong.
-                                WHICH MAKES THESE TOTALS THE CLUSTER'S AND NOT THE PAGE'S, the fact a consumer
-                                needs and the one the retired sentence denied: the single host that composes
-                                this document takes a SECOND DOCUMENT through `qjs_join`, which calls none of
-                                those inits (main.c holds `g_joined_ctx`/`g_joined_dom` for exactly those
-                                documents), so a same-origin frame's reads are summed into the root's. That is
-                                correct — an instance IS an origin-keyed agent cluster and this document is
-                                the instance's, composed per ASK by `qjs_result` — and it is the opposite of
-                                what a reader told "per document" would compute.
-                                RETIRED BY a second call site for any of those inits within one agent, or a
-                                host that brings up two agents in one process; both are one grep
-                                (`git grep -n 'solve_init\|concolic_init' -- engine/host`), and either would
-                                show here as a row FALLING between two `qjs_result` calls of one instance. */
+                             /* …and the frontier's order at composition — result.h says why it rides here and what
+                                its two shapes mean. One nested object, because its rows are mostly readings of an
+                                instant. The nesting separates subsystems, never kinds. Every `_`-prefixed sibling
+                                above is a lifetime count of events except `_worldSegmentsHeld` and
+                                `_routedZeroDelivery`, which are gauges; `_worldSegmentsMade` is the former's
+                                lifetime half, and the latter is read only at a drained receiver. The key is not
+                                renamed because five consumers assert it (extension/bridge.js,
+                                extension/popup.js, engine/solvergate.mjs, engine/route.mjs, testing/live-run.js).
+                                "Lifetime" means this agent's: solve_init, concolic_init, world_registry_free and
+                                solver_agent_free, which zero the resettable rows, each run once per agent on
+                                every host, and the rest are reset by nothing. So the totals are the agent
+                                cluster's: a second document taken through `qjs_join` calls none of those inits,
+                                and a same-origin frame's reads sum into the root's. A second call site of
+                                those inits within one agent would show as a row falling between two
+                                `qjs_result` calls of one instance. */
                              "\"_orphansDriven\":%ld,\"_orphansAsked\":%ld,"
-                             /* …AND WHICH EXIT EACH OF THOSE ASKS TOOK, which the pair cannot say.
-                                `_orphanAskMemo` is an ask the generation cache answered with NO walk;
-                                `_orphanAskEmpty` is a walk that ran and found nothing, which
-                                engine_orphan_seed's residual states is a fact about the HEAP and not about the
-                                bundle. They sum to `_orphansAsked` and that is asserted above, where all four
-                                were read together. See solver/engine.h's `EngineOrphanExits`.
-                                THE FORK THIS COMMENT USED TO STATE IS REFUTED BY MEASUREMENT AND IS KEPT IN ITS
-                                OWN WORDS BECAUSE IT IS THE ONE A READER RE-DERIVES FROM `memo` ALONE. It read:
-                                memo high says the cache absorbs and the walks that happen are few, so the cost
-                                is PER WALK; LOW says the cost is PER ASK "and the repair is the cache or the
-                                rung's placement". The first half holds. The second does NOT, and the row that
-                                refutes it is the one printed beside it: over two 90 s drives of one release
-                                artifact on app.gitpod.io, `memo` read ZERO of 87 asks and ZERO of 228 while
-                                `took` read 86 and 227 and `empty` read 1 and 1. Essentially every ask is a
-                                PRODUCTIVE walk, and no cache can skip a walk that succeeds — ONE ask per run is
-                                the entire population a memo could ever have helped. So a low `memo` names the
-                                WALK as the repair, which is what the four rows below price. */
+                             /* …and which exit each ask took. `_orphanAskMemo` is an ask the generation cache
+                                answered with no walk; `_orphanAskEmpty` a walk that found nothing, a fact about
+                                the heap rather than the bundle (engine_orphan_seed's residual). They sum with
+                                `_orphanAskTook` to `_orphansAsked`, asserted above. A low `memo` with a high
+                                `took` names the walk, not the cache, as the cost to repair: no cache skips a walk
+                                that succeeds. */
                              "\"_orphanAskMemo\":%ld,\"_orphanAskEmpty\":%ld,\"_orphanAskTook\":%ld,"
-                             /* …AND WHAT THOSE WALKS COST, WITH BOTH OF THEIR DENOMINATORS. `_orphanWalkEntries`
-                                over `_orphanWalks` is the mean object-list length one take reads, which is the
-                                figure every further repair of this seam has to be weighed against: a candidate
-                                list pays only if candidates are far fewer than entries. `_orphanWalkFullCandidates`
-                                over `_orphanWalksFull` is the mean candidate population, and its denominator is
-                                NOT the first one — the take exits early on a preferred candidate at the lowest
-                                quota, so such a walk has seen a FLOOR of the set and is deliberately left out.
-                                A `_orphanWalksFull` of 0 beside a nonzero `_orphanWalks` is the positive
-                                statement that every take was decided early, which is the preference working.
-                                THAT POPULATION IS THE COUNT engine_orphan_seed's residual NAMES as the one
-                                thing nothing in this tree could take — "how many live, never-entered,
-                                non-program JSFunctionBytecode exist at ask time" — and the reason it names it
-                                is that it separates the TWO READINGS of a `_orphansDriven` 0: a page that ships
-                                no uncalled code, and a frontier that never reached the question. */
+                             /* …and what those walks cost, with both denominators. `_orphanWalkEntries /
+                                _orphanWalks` is the mean object-list length one take reads.
+                                `_orphanWalkFullCandidates / _orphanWalksFull` is the mean candidate population
+                                over walks not cut short by a preferred candidate at the lowest quota, which see
+                                only a floor of the set; zero full walks beside nonzero walks says every take was
+                                decided early. That population is what separates the two readings of
+                                `_orphansDriven: 0` — no uncalled code shipped, or a frontier that never reached
+                                the question (engine_orphan_seed's residual). */
                              "\"_orphanWalks\":%llu,\"_orphanWalkEntries\":%llu,"
                              "\"_orphanWalksFull\":%llu,\"_orphanWalkFullCandidates\":%llu,"
                              "\"_wfq\":%s,"
-                             /* THE THREE SUBSYSTEM CENSUSES, EACH ONE NESTED OBJECT, for the reason `_wfq`
-                                is one: spreading them into siblings would put a cumulative switch count
-                                beside a momentary byte figure and call both "so far". Three objects and not
-                                one, because a reader compares WITHIN a census and never across — see
-                                result.h.
-                                WHAT THE NESTING DOES NOT SAY IS THE KIND OF ANY ROW, and the sentence that
-                                stood here said it did — "every row inside these is a READING OF AN INSTANT".
-                                That is true of `_swap`'s four segment rows and of most of `_heap`, and it is
-                                FALSE of the larger half of `_cold`, whose `finished`, `sold`, `forks`,
-                                `steps`, `stepUs`, `stepUnitRuns`, `replay*`, `host*`, `reply*`, `paged*` and
-                                `orphanClaims*` rows are lifetime counts — as this file's own composer says of
-                                them in those words two hundred lines up, so the two statements contradicted
-                                each other on one document. A consumer had already acted on the wrong one.
-                                EACH COMPOSER STATES ITS OWN GROUPING, at the composer, because that is the
-                                only place the accessor that decides it is in view: see result_cold_json,
-                                result_heap_json and result_swap_json. */
+                             /* The subsystem censuses, each one nested object for `_wfq`'s reason; a reader
+                                compares within a census, never across (result.h). The nesting does not state any
+                                row's kind — `_cold` carries many lifetime counts — so each composer states its own
+                                grouping: see result_cold_json, result_heap_json and result_swap_json. */
                              "\"_cold\":%s,\"_heap\":%s,\"_swap\":%s,\"_forkAt\":%s,"
-                             /* AND THE NAMES A STANDARD OWNS THAT THIS REALM ANSWERED WITH SILENCE — a fifth
-                                nested object, beside the four for the reason they are four: a reader compares
-                                WITHIN a census and never across. Its rows are LIFETIME COUNTS zeroed with the
-                                published-namespace registry at the agent's release, which is `_orphansDriven`'s
-                                boundary and not `_switches`'s; solver/absent.c states that at the composer,
-                                which is where the accessor that decides it is in view. */
+                             /* …and the names a standard owns that this realm answered with silence, a fifth
+                                nested object. Lifetime counts zeroed with the published-namespace registry at the
+                                agent's release; solver/absent.c states that at its composer. */
                              "\"_absent\":%s,"
-                             /* …AND WHAT THE RENDER SPENT ON GEOMETRY, which is neither a solver row nor a
-                                reading of an instant: five LIFETIME counters of this agent, every one
-                                differenceable, published together because two of them are a SHARE OF the
-                                third and a reader who takes one without the other has a numerator with no
-                                denominator. `childTopAsks` is how many times CSS 2.1 §9.4.1 "Block formatting
-                                contexts"' position of a box was asked for, `childTopServed` how many of those
-                                core/layout/flow_placement.h answered out of a whole-tree pass's record and
-                                `childTopWalks` how many ran §9.4.1's walk; the three close by construction and
-                                that component asserts it, so a reader may divide.
-                                `childTopWalks` IS THE ROW THIS BLOCK EXISTS FOR. §9.4.1's walk is over a
-                                container's WHOLE child list, so a render in which that number grows with the
-                                SQUARE of a container's children is a render running one layout per box — the
-                                shape that is invisible in every other row of this document, because the
-                                scheduler's counters are byte-identical for a document of one box and a
-                                document of forty. `placements` is how many positions those walks reported
-                                into the record and `passes` how many whole-tree spans opened; `placements /
-                                childTopWalks` is what one walk now pays for.
-                                AND THE SECOND PAIR IS CSS 2 §8.1 "Box dimensions"' BORDER-BOX ORIGIN, WHOSE
-                                SHORTFALL IS A DERIVATION AND NOT
-                                A WALK — which is why the row is `originDerived` and not `originWalks`.
-                                §10.1's second case derives a box's border-box origin from its CONTAINING
-                                BLOCK's, so an unanswered ask climbs the ancestor chain; `originDerived` is
-                                how many points this run derived — IN OR OUT of a render, because a page
-                                reading CSSOM VIEW §6's members between two paints derives one per ask and
-                                stores nothing — and over a rendered tree of N boxes that is O(N) while the
-                                climb it replaces was the sum of every ask's own DEPTH. So
-                                `childTopWalks` is the row to read against a container's CHILD COUNT and
-                                `originDerived` the row to read against a document's DEPTH — real pages are
-                                deep, and the two multipliers are separate facts that no single row states.
-                                `originAsks == originServed + originDerived` closes and is asserted.
-                                AND THE THIRD PAIR IS CSS 2.1 §10.6.3's — what a box CONTRIBUTES to its
-                                parent's stack, which for a box sized by its content means walking that
-                                box's own children. `boxDerived` is how many contributions this run
-                                computed; growing with the square of a document's DEPTH is a render
-                                computing one box's contribution once per ancestor that asks. It is taken
-                                over the ONE baseline pass the record serves, because §10.8.1's baseline is
-                                the only fact of a contribution that depends on which pass asked.
-                                AND THE FOURTH PAIR IS CSS 2.1 §10.1 "Definition of 'containing block'"'
-                                WIDTH, WHICH IS THE ORIGIN'S SHAPE OVER THE ORIGIN'S OWN SECTION. §10.1's
-                                fourth case makes a box's containing block the CONTENT EDGE of an ancestor,
-                                so an unanswered ask climbs that ancestor's own used width and its
-                                ancestor's after it; `cbWidthDerived` is how many widths this run derived —
-                                IN OR OUT of a render, for `originDerived`'s reason — and over a rendered
-                                tree of N boxes that is O(N) while the climb it replaces was the sum of
-                                every ask's own DEPTH. It is the SECOND row here to read against a
-                                document's depth and it is not the same fact as `originDerived`: those two
-                                are §10.1 answering for a POINT and for an EXTENT, through two chains that
-                                take the same shape and share no arm, so one of them falling says nothing
-                                about the other. `cbWidthAsks == cbWidthServed + cbWidthDerived` closes and
-                                is asserted. */
+                             /* …and what the render spent on geometry: lifetime counters of this agent, every one
+                                differenceable. `childTopAsks` counts asks for a box's position under CSS 2.1
+                                §9.4.1 "Block formatting contexts", `childTopServed` those
+                                core/layout/flow_placement.h served from a whole-tree pass's record,
+                                `childTopWalks` those that ran §9.4.1's walk over the container's whole child list;
+                                the three close, asserted there. A `childTopWalks` growing with the square of a
+                                container's children is one layout per box. `placements / childTopWalks` is what
+                                one walk pays for; `passes` counts whole-tree spans. `origin*` is CSS 2 §8.1 "Box
+                                dimensions"' border-box origin, derived from the containing block's (§10.1 second
+                                case), in or out of a render; read `originDerived` against a document's depth.
+                                `box*` is CSS 2.1 §10.6.3's contribution to a parent, taken over the one baseline
+                                pass the record serves (§10.8.1). `cbWidth*` is CSS 2.1 §10.1 "Definition of
+                                'containing block'"'s width (fourth case), the extent to `origin*`'s point through
+                                a separate chain. Each `*Asks == *Served + *Derived` closes and is asserted. */
                              "\"_layout\":{\"childTopAsks\":%lld,\"childTopServed\":%lld,"
                              "\"childTopWalks\":%lld,\"placements\":%lld,\"passes\":%lld,"
                              "\"originAsks\":%lld,\"originServed\":%lld,\"originDerived\":%lld,"
                              "\"boxAsks\":%lld,\"boxServed\":%lld,\"boxDerived\":%lld,"
                              "\"cbWidthAsks\":%lld,\"cbWidthServed\":%lld,\"cbWidthDerived\":%lld},"
-                             /* WHAT THE RUN SPENT ON css-cascade-5 §4.2 "Cascaded Values", WHICH IS THE
-                                MULTIPLIER THE BLOCK ABOVE MEASURES ONE LAYER DOWN. core/css/css_cascade_pass.h
-                                states the two shapes that compound — css-cascade-5 §7.2's inheritance makes a read of an
-                                inherited property CLIMB, and css-logical-1 §4 makes two inherited properties a
-                                PREREQUISITE of every margin, padding, border and inset cascade — so `asksLife`
-                                is how many times this run asked for one answer that is a function of the
-                                ELEMENT and the PROPERTY and of nothing about who asked.
-                                EVERY ROW IS A LIFETIME COUNT AND EVERY NAME SAYS SO, which is engine/build.mjs's
-                                @WFQ convention and is used here because a consumer reads the key and never the
-                                comment — this document already carries `_routedZeroDelivery`, a GAUGE, between
-                                two lifetime counts with only prose to say so, and that is the confusion the
-                                suffix removes. So all four may be differenced across two samples, and the
-                                record's LIVE size is deliberately not among them because it is the one
-                                quantity here that could not be.
-                                `asksLife == servedLife + resolvedLife` closes and css_cascade_pass_census
-                                asserts it BEFORE copying a byte, so a reader may divide. That assert is half
-                                the reason this block exists: the identical equality is asserted at the pass's
-                                CLOSE too, and the close runs only under a paint — which core/css/
-                                css_cascade_pass.h's residual records that nothing outside this process asks
-                                for — so until this call existed the check had a reader that never ran.
-                                `passesLife` IS WHAT MAKES `servedLife` READABLE AND IS NOT A REPEAT OF
-                                `_layout`'s `passes`. A zero in `servedLife` means either that no pass was ever
-                                opened, so this record was never consulted and what is missing is a CALLER, or
-                                that a pass opened and every ask was a genuine first ask, so the keys do not
-                                repeat and the record buys nothing — and those ask for opposite work. One
-                                function opens both passes today, so the two rows agree; that is a fact about
-                                one caller and not about either component, and the open question
-                                css_cascade_pass.h records is whether a second, non-paint opener belongs to the
-                                cascade alone. The day one lands the rows legitimately differ, and a reader who
-                                had been inferring this one from `_layout`'s would be reading the other
-                                component's spans.
-                                BY CONSTRUCTION AND NOT FROM A MEASUREMENT, stated as what was READ:
-                                css_cascade_pass_open has exactly one caller, core/paint/document_paint.c, so
-                                `passesLife` is 0 and `servedLife` is 0 and `asksLife == resolvedLife` on every
-                                path that does not paint — which is every path the shipped extension takes.
-                                Nobody may read a nonzero `servedLife` here as evidence about the product
-                                without saying which driver painted. */
+                             /* What the run spent on css-cascade-5 §4.2 "Cascaded Values".
+                                core/css/css_cascade_pass.h states the two shapes that compound: §7.2 inheritance
+                                makes an inherited read climb, and css-logical-1 §4 makes two inherited properties
+                                a prerequisite of every box-side cascade. All four are lifetime counts, so the
+                                suffix says so; the record's live size is not among them because it could not be.
+                                `asksLife == servedLife + resolvedLife` is asserted by css_cascade_pass_census
+                                before copying. `passesLife` tells a never-consulted record (no caller) from one
+                                whose keys never repeat. css_cascade_pass_open has one caller,
+                                core/paint/document_paint.c, so off a paint — every path the shipped extension
+                                takes — `passesLife` and `servedLife` are 0; a nonzero `servedLife` is quoted with
+                                the driver that painted. */
                              "\"_cascade\":{\"asksLife\":%lld,\"servedLife\":%lld,"
                              "\"resolvedLife\":%lld,\"passesLife\":%lld},"
-                             /* AND WHAT ALL OF THE ABOVE WERE DENOMINATED IN — the one nested object here that
-                                is neither a total nor a reading of an instant, but a property of the HOST that
-                                decides whether two of these documents may be compared at all. result.h and
+                             /* …and what all of the above was denominated in: a property of the host that decides
+                                whether two of these documents may be compared at all. result.h and
                                 solver/quantum.h state the argument; nothing in this file composes it. */
                              "\"_quantum\":%s,\"_park\":%s}",
                      eps, sinks, errs, errsRetracted, errsExplored,
