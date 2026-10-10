@@ -1332,8 +1332,9 @@ bool idl_global_names_are_window(unsigned global_names);
 typedef enum { IDL_ACCESSOR_GET, IDL_ACCESSOR_SET } IdlAccessorKind;
 const char *idl_accessor_name(char *buf, size_t cap, const char *id, IdlAccessorKind kind);
 
-/* AN ATTRIBUTE THAT STATES ITS IDL'S EXPOSURE. This is the general form; the plain `idl_install_accessor`
-   below is the same install for a member whose IDL carries no exposure condition, which is most of them. */
+/* Install a declared attribute that states its IDL's exposure (IdlExposure). `getter` may be NULL for a
+   write-only attribute and `setter_stepid` is -1 for a readonly one. The plain form below is the same install
+   for a member with no exposure condition. */
 void idl_install_accessor_exposed_at(JSContext *ctx, JSValueConst target, const char *name,
                                      IdlGetter getter, int getter_magic, int setter_stepid,
                                      IdlExposure exposure, const char *at_file, int at_line);
@@ -1346,132 +1347,62 @@ void idl_install_accessor_at(JSContext *ctx, JSValueConst target, const char *na
 #define idl_install_accessor(ctx, target, name, getter, magic, setter) \
     idl_install_accessor_at((ctx), (target), (name), (getter), (magic), (setter), IDL_SITE)
 
-/* AN INTERFACE OBJECT THAT STATES ITS IDL'S EXPOSURE — the same IdlExposure and the same one gate the two
- * member installers ask, applied to the OTHER half of what Web IDL §3.3.13 [SecureContext] removes.
+/* An interface object that states its IDL's exposure, through the same gate as the member installers: Web IDL
+ * §3.3.13 [SecureContext] removes the interface's property on the global as well as its members ("there will
+ * be no \"HeartbeatSensor\" property on Window"). When not exposed nothing is minted or defined, so
+ * `"X" in globalThis` is false. The interface object is minted over a throwing constructor, so this is for an
+ * interface declaring none.
  *
- * §3.3.13's own example says both halves in one breath, of an interface-level annotation: "HeartbeatSensor will
- * not be exposed in a non-secure context, nor will its members. In such a context, there will be no
- * \"HeartbeatSensor\" property on Window." The members half is what `idl_install_accessor_exposed` and
- * `idl_install_method_exposed` already perform; this is the property on the global, and §3.7 Interfaces is what
- * makes it the same question — "For every interface that is exposed in a given realm … a corresponding property
- * exists on the realm's global object", so an interface that is NOT exposed has no such property to have.
- *
- * NOTHING IS MINTED WHEN IT IS NOT EXPOSED, exactly as the attribute form states: the interface object is not
- * built, the property is not defined, and `"X" in globalThis` is false. Absent, undefined and throwing are three
- * different branches of a page's feature detection and only the first is what §3.3.13 asks for.
- *
- * `proto` is BORROWED — this installs a reference to an object the caller still owns and still frees, which is
- * how every call site already holds a prototype it goes on to use. The interface object it builds is handed to
- * `target`, which owns it from then on. */
+ * `proto` is borrowed; the interface object built is owned by `target`. */
 void idl_install_interface_object_exposed(JSContext *ctx, JSValueConst target, const char *name,
                                           JSValueConst proto, IdlExposure exposure);
 
-/* THE SAME DOOR FOR AN INTERFACE THAT DECLARES A CONSTRUCTOR **AND** CARRIES A §3.3.7 CONDITIONAL ATTRIBUTE —
- * the one combination neither of the two entries above can serve, and the reason is a property of each rather
- * than an oversight in either. `idl_install_interface_object_exposed` asks the condition and MINTS over
- * `idl_illegal_ctor`, so routing a constructor-declaring interface through it would answer `new X()` with a
- * TypeError; `idl_define_global_property_reference` takes the object the component minted and asks step 1
- * alone, because a conditional attribute is a fact only the component knows it carries. So an interface that
- * is both — `[Exposed=Window, SecureContext] interface CookieChangeEvent : Event { constructor(…); }` is the
- * first in this engine — had no door at all.
+/* The door for an interface that declares a constructor and carries a §3.3.7 conditional attribute
+ * (`[SecureContext] interface CookieChangeEvent : Event { constructor(…); }`), which neither entry above
+ * serves: idl_install_interface_object_exposed mints a throwing constructor, and
+ * idl_define_global_property_reference asks only step 1. A caller-side `if (idl_exposed(…))` would build the
+ * prototype and record no §3.8 ask for the interface, which realm_assert_interface_objects_asked fires on; the
+ * gate must sit where the ask is recorded.
  *
- * AND THE SHAPE A CALLER REACHES FOR INSTEAD ABORTS THE DEV BUILD, which is why this is a door and not advice.
- * `if (idl_exposed(ctx, IDL_SECURE_CONTEXT)) { … define … }` is the per-site conditional idl_exposed's own
- * contract forbids, and it is not merely style here: the ask is recorded INSIDE the define, so a realm that
- * took the false arm would have built this realm's `X.prototype` and recorded no §3.8 ask for `X` — which is
- * exactly the disagreement `realm_assert_interface_objects_asked` fires on, naming the interface. The gate has
- * to sit where the ask can be recorded before it.
- *
- * TAKES OWNERSHIP of `object` on EVERY path, the refusal included, exactly as the entry above does — a caller
- * that could get it back would have two shapes to write instead of one. `global` is BORROWED. */
+ * Takes ownership of `object` on every path, the refusal included; `global` is borrowed. */
 void idl_define_global_property_reference_exposed(JSContext *ctx, JSValueConst global, const char *id,
                                                  JSValue object, IdlExposure exposure);
 
-/* THE SAME ATTRIBUTE, WITH ITS GETTER DECLARING THAT ITS BODY RUNS NONE OF THE PAGE'S CODE.
+/* An attribute whose plain C getter declares that it runs none of the page's code. An accessor read from C
+ * would call the page's getter (ECMAScript §10.1.8.1 OrdinaryGet step 7) from an activation that cannot park,
+ * so a C reader reaching an undeclared accessor aborts naming the site; for a getter that reaches no page
+ * code that abort is meaningless, and this declaration exempts it.
  *
- * WHY THERE IS ANYTHING TO DECLARE. A property read that lands on an accessor may not invoke it from C:
- * §10.1.8.1 OrdinaryGet ( obj, propertyKey, receiver ) step 7 is `Return ? Call(getter, receiver)`, and a C
- * activation has no flow base under it, so a loop in the page's getter would drive to completion instead of
- * parking. The engine therefore routes every accessor read through the trampoline and a C reader that reaches
- * one ABORTS naming the site. All of that is about a body that RUNS THE PAGE, and it is vacuous for a C getter
- * that runs none: nothing to suspend, no continuation to hold, and the routed path reaching the same C body
- * through the same dispatch. Such a getter was aborting on a non-problem, which costs real aborts and teaches
- * the next reader to distrust the crashes that mean something.
+ * The claim is enforced: while the getter runs, entering any bytecode body aborts naming this member, so a
+ * helper that later gains a [[Get]], coercion or callback crashes rather than keeping the exemption.
  *
- * THE DECLARATION IS A CLAIM, AND A FALSE ONE FIRES. Say nothing and the member is undeclared, which means "a C
- * reader of this must be routed, and it crashes" — that stays the default for every attribute in the engine.
- * Say this and the engine holds you to it: while the getter runs, entry into ANY bytecode body aborts naming
- * this member, because bytecode is the one door the page's code comes through. So the day a helper three calls
- * down gains a [[Get]] on an object whose prototype a page can extend, a coercion of a value a page can make an
- * object, or a callback, the claim CRASHES instead of silently keeping an exemption it stopped deserving.
- *
- * IT IS NOT THE ANSWER TO A LONG GETTER. The claim is about what the body REACHES, never about how much work it
- * does — a walk over every child of a large tree reaches no page code and still holds the scheduler for the
- * length of the walk, and the answer to that one is `idl_install_accessor_step` below, whose getter is a machine
- * that yields. The two are different questions and a member can need both answers at different times. */
+ * It is not the answer to a long getter: a walk over a large tree reaches no page code and still holds the
+ * scheduler; that getter is a machine (idl_install_accessor_step). */
 void idl_install_accessor_no_user_code_at(JSContext *ctx, JSValueConst target, const char *name,
                                           IdlGetter getter, int getter_magic, int setter_stepid,
                                           const char *at_file, int at_line);
 #define idl_install_accessor_no_user_code(ctx, target, name, getter, magic, setter) \
     idl_install_accessor_no_user_code_at((ctx), (target), (name), (getter), (magic), (setter), IDL_SITE)
 
-/* WEB IDL §3.4.10's [LegacyUnforgeable] ATTRIBUTE — the OTHER of the two places §3.7.6 puts an attribute, and
- * a different member of the platform rather than a different way of writing the same one.
- *
- * §3.4.10: "the property will be non-configurable and will exist as an own property on the object itself rather
- * than on its prototype", and §3.7.6 states the descriptor exactly — the same getter and setter, [[Enumerable]]
- * true, and [[Configurable]] FALSE where the ordinary form's is true. §3.7.6's "define the regular attributes"
- * REMOVES the unforgeable ones from what goes on the interface prototype object, so an interface whose members
- * are all unforgeable has a prototype carrying only §3.7.3's `constructor` and @@toStringTag — which is exactly
- * what `Object.getOwnPropertyNames(Location.prototype)` reports in a browser.
- *
- * SO THE CALLER PASSES THE INSTANCE, not the prototype, and the two facts arrive together: a member defined
- * configurable and locked down afterwards is a member that was forgeable for the length of one install, and a
- * member on a prototype is one a page can shadow with an own property of its own. HTML §7.2.4 marks every
- * member of Location unforgeable for that reason and says so — "required by legacy code that consulted the
- * Location interface, or stringified it, to determine the document URL, and then used it in a
- * security-sensitive way" — so `foo[location] = bar` and `location + ""` cannot be misdirected. */
-/* WEB IDL §3.7 Interfaces' implementation-check an object, step 3 — "If object does not implement interface,
- * then throw a TypeError." — as a NAMED TYPE. It is the same predicate `idl_this_iface` takes one screen up,
- * spelled once so the two entries that take it agree by construction rather than by two parameter lists being
- * kept in step.
- * IT IS A TYPEDEF AND NOT A RAW `bool (*)(JSValueConst)` FOR A SECOND REASON, WHICH IS THAT THE AUDIT COULD
- * NOT READ THE RAW FORM. engine/idl_installed.mjs finds a function by matching its parameter list, and a
- * parameter that is itself a parenthesised function type defeats that match — so a definition spelling the
- * predicate raw is invisible to the reader, its own forwarding install is reported UNRESOLVED, and every
- * member it places goes uncounted. Measured on the first form written here: one unresolved construct in
- * core/idl_args.c, and both of its functions missing from the reader's index. `idl_this_iface` above spells it
- * raw and is in exactly that state today — a NAMED OBSERVATION rather than a claim it does not matter: it
- * DECLARES rather than installs, so no member is lost through it, and converting it is a separate diff. */
+/* Web IDL §3.7 Interfaces' implementation-check an object, step 3 ("If object does not implement interface,
+   then throw a TypeError"), as a named predicate type shared by the entries that take one. It is a typedef
+   because engine/idl_installed.mjs matches functions by parameter list and cannot read a parenthesised
+   function-type parameter: a definition spelling it raw is invisible to the audit and its installs go
+   uncounted. idl_this_iface still spells it raw; it declares rather than installs, so no member is lost. */
 typedef bool (*IdlThisIs)(JSValueConst v);
 
-/* WEB IDL §3.4.2 [LegacyLenientSetter] — the same readonly attribute as the plain form above, PLUS §3.7.6
- * Attributes' no-op setter. §3.4.2: "If the [LegacyLenientSetter] extended attribute appears on a read only
- * regular attribute, it indicates that a no-op setter will be generated for the attribute's accessor property.
- * This results in erroneous assignments to the property in strict mode to be ignored rather than causing an
- * exception to be thrown."
+/* Web IDL §3.4.2 [LegacyLenientSetter]: a readonly attribute plus §3.7.6's no-op setter. "This results in
+ * erroneous assignments to the property in strict mode to be ignored rather than causing an exception to be
+ * thrown." The difference is observable only in strict mode, where no setter is a TypeError.
  *
- * THE OBSERVABLE IS STRICT MODE AND NOTHING ELSE. A readonly accessor with no setter and one with a no-op
- * setter answer an ordinary `d.fullscreen = 1` identically — silently — because sloppy mode ignores a write to
- * an accessor with no setter. `"use strict"` is where they part: no setter is a TypeError, a no-op setter is
- * ignored. §3.4.2 says in its own words why that matters enough to be in the standard at all: "Pages have been
- * observed where authors have attempted to polyfill an IDL attribute by assigning to the property … Without
- * [LegacyLenientSetter], this could prevent a browser from shipping the feature."
+ * `this_is` is the interface the receiver must implement, the component's `…_is` predicate, because §3.7.6's
+ * setter throws for a foreign receiver before §3.4.2's arm; per install, since a DocumentOrShadowRoot mixin
+ * member lands on Document and ShadowRoot and brands differently on each. `iface` is the identifier the
+ * TypeError names, a static.
  *
- * `this_is` IS THE INTERFACE THE RECEIVER MUST IMPLEMENT — the component's own `…_is` predicate, exactly as
- * idl_this_iface takes, because §3.7.6's setter throws a TypeError for a foreign receiver BEFORE it reaches
- * §3.4.2's arm. It is per INSTALL rather than per member: the corpus's population includes a
- * DocumentOrShadowRoot mixin member, which lands on Document and on ShadowRoot and brands differently on each.
- *
- * NOTHING HERE STATES WHICH MEMBERS CARRY THE EXTENDED ATTRIBUTE, and that is the difference between one
- * mechanism for the platform and N copies that drift: engine/idlgen.mjs reads it off the real .idl through
- * webidl2 and checks BOTH directions — a member the corpus annotates that some component installs through the
- * plain form, and a member installed through this one that the corpus does not annotate. §3.4.2 makes the
- * second an error rather than a preference ("It must not be used on anything other than a read only regular
- * attribute", and never together with [PutForwards] or [Replaceable]).
- *
- * IT IS NOT `js_noop` AND THE BAN DOES NOT REACH IT — see core/idl_args.c for the two sentences of the
- * standard that make this §NO STUBS' documented exception rather than an instance of what it forbids. */
+ * Nothing here lists which members carry the attribute: engine/idlgen.mjs reads it off the .idl and checks
+ * both directions (an annotated member installed through the plain form, and an install through this form the
+ * corpus does not annotate). It is not `js_noop`; see idl_args.c for why it is not a stub. */
 void idl_install_accessor_lenient_setter_at(JSContext *ctx, JSValueConst target, const char *name,
                                             IdlGetter getter, int getter_magic,
                                             IdlThisIs this_is, const char *iface,
@@ -1480,40 +1411,18 @@ void idl_install_accessor_lenient_setter_at(JSContext *ctx, JSValueConst target,
     idl_install_accessor_lenient_setter_at((ctx), (target), (name), (getter), (magic), (this_is), (iface), \
                                            IDL_SITE)
 
-/* WEB IDL §3.7.6 "Attributes"' RECEIVER TEST, FOR AN ATTRIBUTE WHOSE GETTER IS A PLAIN C FUNCTION — the same
- * install as the plain form above, PLUS the interface the receiver must implement.
+/* §3.7.6 Attributes' receiver test for an attribute whose getter is a plain C function: the plain install
+ * plus the interface the receiver must implement ("If jsValue does not implement target, then: … Otherwise,
+ * throw a TypeError."). A member with a pool entry gets this from idl_implementation_check via
+ * idl_this_iface; a plain getter has no pool entry, so it is declared here.
  *
- * WHY THE PLAIN FORM CANNOT ASK IT. §3.7.6's create an attribute getter refuses a foreign receiver before the
- * member's own steps run — Web IDL §3.7.6 "Attributes": "If jsValue does not implement target, then:", and its
- * second arm, Web IDL §3.7.6 "Attributes": "Otherwise, throw a TypeError." A member with a POOL ENTRY has that
- * performed for it at one place, idl_implementation_check, off the interface idl_this_iface states at its
- * DECLARATION. A plain getter has no pool entry, so it converges on nothing that could ask, and the receiver
- * reaches the body as the page wrote it. This is the declaration for that member.
+ * A body testing its own receiver goes wrong two ways: answering undefined, null or 0 where the standard
+ * throws, or asserting on page-supplied input (in release dereferencing the NULL the assert stood on).
  *
- * IT IS THE DECLARATION SIDE AND THAT IS THE WHOLE POINT. A body that tests its own receiver answers LATE —
- * after Web IDL §3.6 "Overload resolution algorithm" has converted arguments, so a page's own `valueOf` has
- * already run where a browser throws with none of it having run. An attribute takes no arguments, so that
- * ordering is not what a getter is wrong about; what a getter is wrong about is that a body-side test is
- * WRITTEN N TIMES, and the two ways it gets written wrong are both live. ANSWERING is one: a body that reads
- * its receiver's record and returns undefined, null or 0 when there is none reports a member's value where the
- * standard reports a TypeError, and a page branches on the difference. ASSERTING is the other and is worse: a
- * receiver is PAGE-SUPPLIED INPUT, so a DCHECK on it is an abort switch a page holds, and in release, where the
- * DCHECK is compiled out, the body dereferences the NULL the assert was standing on — which is what
- * `DocumentType.prototype.name` did, through `doc_type->node.owner_document->attrs`.
- *
- * `this_is` IS THE COMPONENT'S OWN PREDICATE, NAMED AND NOT RESTATED, and it is the SAME function
- * idl_this_iface takes for the same sentence of §3.7 — so an interface that owns operations and attributes
- * brands both out of one answer, and converting its getters cannot make them disagree with its operations. It
- * cannot be a class comparison for the reason idl_this_iface states: a member declared on Document is reached
- * on an XMLDocument, and a mixin member is reached on every interface that includes the mixin. It is therefore
- * per INSTALL and not per member.
- *
- * `iface` IS THE IDENTIFIER STEP 1.1.2.3.2's TypeError NAMES, a static the caller owns, exactly as
- * idl_install_accessor_lenient_setter_at's is.
- *
- * WHAT IT DOES NOT ADD IS §3.5's SECURITY CHECK, which is the state every plain-C getter on an interface
- * prototype is already in — core/idl_args.c's idl_implementation_check block names that residual and this
- * NARROWS it rather than retiring it. */
+ * `this_is` is the component's own predicate, the same one idl_this_iface takes, so operations and attributes
+ * brand from one answer; per install, because a mixin member is reached on every including interface. `iface`
+ * is the identifier the TypeError names, a static. It does not add §3.5 Security's check, which
+ * idl_implementation_check's residual in idl_args.c names. */
 void idl_install_accessor_this_at(JSContext *ctx, JSValueConst target, const char *name,
                                   IdlGetter getter, int getter_magic, int setter_stepid,
                                   IdlThisIs this_is, const char *iface,
@@ -1522,230 +1431,157 @@ void idl_install_accessor_this_at(JSContext *ctx, JSValueConst target, const cha
     idl_install_accessor_this_at((ctx), (target), (name), (getter), (magic), (setter), (this_is), (iface), \
                                  IDL_SITE)
 
+/* Web IDL §3.4.10 [LegacyUnforgeable] attribute: "the property will be non-configurable and will exist as an
+ * own property on the object itself rather than on its prototype". The caller passes the instance, and the
+ * property is defined non-configurable in one step, never locked down afterwards. §3.7.6 removes unforgeable
+ * attributes from the prototype, so `Object.getOwnPropertyNames(Location.prototype)` shows only `constructor`
+ * and @@toStringTag. */
 void idl_install_accessor_unforgeable_at(JSContext *ctx, JSValueConst target, const char *name,
                                          IdlGetter getter, int getter_magic, int setter_stepid,
                                          const char *at_file, int at_line);
 #define idl_install_accessor_unforgeable(ctx, target, name, getter, magic, setter) \
     idl_install_accessor_unforgeable_at((ctx), (target), (name), (getter), (magic), (setter), IDL_SITE)
 
-/* WEB IDL §3.7.3 "Interface prototype object"'s CONDITIONAL, ASKED AT AN INSTALL — the object a member goes
- * on in THIS realm, given the realm's global. OWNED: the caller frees.
+/* Web IDL §3.7.3 "Interface prototype object"'s [Global] conditional, asked at an install: the object a
+ * member goes on in this realm, given the realm's global. Owned; the caller frees.
  *
- * A COMPONENT THAT OWNS A MIXIN MEMBER MUST ASK IT AND MUST NOT ANSWER IT. §2.3 "Interface mixins" makes a
- * mixin's members the INCLUDING interface's own — "all objects implementing an interface I ... must
- * additionally include the members of interface mixin M" — so HTML §8.2's WindowOrWorkerGlobalScope member
- * is a `Window` member in a Window realm and a `WorkerGlobalScope` member in a worker one, and §3.7.3's
- * [Global] conditional then sends it to two different objects. This call is that conditional; asking the
- * REALM KIND instead is a hand-picked list of the realms an engine happens to build, and it installs onto the
- * global in every other one. idl_args.c states the derivation and the residual over the implementation.
+ * A component owning a mixin member must ask this rather than answer it: §2.3 "Interface mixins" makes the
+ * member the including interface's own, so HTML's WindowOrWorkerGlobalScope members go on a Window itself but
+ * on WorkerGlobalScope.prototype in a worker. Testing the realm kind instead would be a list of the realms this
+ * engine happens to build.
  *
- * IT IS NOT §3.3.7 STEP 1 AND DOES NOT REPLACE IT. A member this realm does not expose is answered with the
- * GLOBAL here and refused by the install entry, which is where that step is asked and asserted. So a caller
- * installs onto whatever this returns and the entry decides whether the member is placed at all. */
+ * It is not §3.3.7 step 1: a member this realm does not expose is answered with the global here and refused by
+ * the install entry, so a caller installs onto whatever this returns. */
 JSValue idl_global_member_target_at(JSContext *ctx, JSValueConst global, const char *name,
                                     const char *at_file, int at_line);
 #define idl_global_member_target(ctx, global, name) \
     idl_global_member_target_at((ctx), (global), (name), IDL_SITE)
 
-/* §3.7.3's not-[Global] arm's OBJECT, as data the component that builds it states — AGENT-SCOPED, registered
- * at that component's declaration and cleared at its release. `proto_of_realm` is REALM-AWARE and answers
- * JS_UNDEFINED (OWNED, the caller frees) in a realm that has no such object; `iface` is the interface whose
- * §3.7.3 prototype it returns, and it is load-bearing rather than decorative — it is what the
- * second-claimant abort names. Passing (NULL, NULL) clears. */
+/* §3.7.3's not-[Global] arm's object, stated by the component that builds it: agent-scoped, registered at
+   that component's declaration and cleared at its release. `proto_of_realm` answers JS_UNDEFINED (owned) in a
+   realm with no such object; `iface` names the interface and is what the second-claimant abort reports.
+   Passing (NULL, NULL) clears. */
 void idl_set_global_ancestor_terms(JSValue (*proto_of_realm)(JSContext *ctx), IdlThisIs this_is,
                                    const char *iface);
 
-/* A [Replaceable] ATTRIBUTE WHOSE DECLARING INTERFACE IS THE REALM'S — the two entries above this one, asked
- * as ONE call because the object and the brand are one fact. §3.7.3's conditional decides the object; on the
- * not-[Global] arm §3.7.6's create an attribute setter step 1.1.2.3 then asks whether the receiver implements
- * `target`, and `target` there is the DECLARING interface, so a caller that resolved the object would still
- * have to state a brand it does not own. Both come from the registration, so a component owning a mixin
- * member writes one line and names no realm kind and no interface but its own member's. */
+/* A [Replaceable] attribute whose declaring interface is the realm's: the object (from
+   idl_global_member_target) and §3.7.6's setter brand (the declaring interface) both come from the
+   registration, so a component owning a mixin member names no realm kind and no interface but its member. */
 void idl_install_replaceable_member_at(JSContext *ctx, JSValueConst global, const char *name,
                                        IdlGetter getter, int getter_magic,
                                        const char *at_file, int at_line);
 #define idl_install_replaceable_member(ctx, global, name, getter, magic) \
     idl_install_replaceable_member_at((ctx), (global), (name), (getter), (magic), IDL_SITE)
 
-/* WEB IDL §3.7.6's [Replaceable] ATTRIBUTE. It is READONLY, and yet assigning to it works: the setter DEFINES
-   an ordinary data property on the receiver, which replaces the accessor outright. So `window.length` is an
-   accessor until a page writes to it and a `{writable:true}` data property afterwards, and the corpus reads
-   the descriptor on both sides of that line. It cannot be modelled as a plain writable data property — that is
-   an accessor the whole time it should be one and never has a getter — nor as a readonly accessor, which
-   silently drops the write. Every replaceable member shares one setter; the property NAME rides on the
-   function as its data, so there is one implementation and no per-member setter to forget.
-   `idl_install_replaceable_value` is the form for an attribute whose value is FIXED for the realm (§7.2.2.5's
-   BarProps, `frames`, `origin`): the getter answers the value it was given. `value` is CONSUMED.
-
-   THE RECEIVER IS §3.7.6's, RESOLVED BY THE MINT AND NOT BY THE MEMBER — "the this value, if it is not null or
-   undefined, or realm's global object otherwise", then a TypeError when it does not implement the interface.
-   So `desc.set.call(null, v)` replaces the member on the GLOBAL rather than defining a property on `null`, and
-   `Object.create(globalThis).origin = x` throws instead of quietly shadowing the accessor on an unrelated
-   object.
-   WHICH INTERFACE IS BRANDED AGAINST IS THE ARM'S, AND THIS ONCE SAID IT WAS ALWAYS Window. It read `the
-   interface branded against is Window, and that is ASSERTED at the install rather than assumed at the read:
-   target must be the realm's global object`, which is exactly right about THIS entry and false of the pair:
-   the sentence is rewritten rather than dropped because a reader who re-derives it from this form alone will
-   re-introduce it. This form is §3.8 "Platform objects implementing interfaces"' [Global] arm, where §3.7.6's
-   `target` is the instance's own [[PrimaryInterface]] — the REALM's to state — so the install asserts only
-   that the target IS the realm's global and the READ asks which [Global] interface that realm has.
-   `idl_install_replaceable_on` below is §3.7.3's not-[Global] arm, where the same member lands on the
-   interface prototype object of the interface that DECLARES it and `target` is the INSTALL's to state.
-   THE `IdlGetter` FORM'S GETTER STEPS STILL SEE AN UNRESOLVED RECEIVER, because §3.7.6's check belongs to the
-   mint and a raw C getter cannot be wrapped without carrying a function pointer through the closure's data —
-   which JSCFunctionType must never hold. Those getters answer per-realm and so answer correctly; what they do
-   not do is THROW for a receiver that implements nothing. See the note on the resolution in idl_args.c. */
+/* Web IDL §3.3.11 [Replaceable] on the realm's global (§3.8's [Global] arm). The attribute is readonly, but its
+   setter performs CreateDataPropertyOrThrow on the receiver, replacing the accessor with a writable data
+   property; every replaceable member shares one setter, carrying the property name as its function data.
+   `idl_install_replaceable_value` is the form for a value fixed for the realm (BarProps, `frames`, `origin`);
+   it consumes `value`.
+   The setter's receiver is §3.7.6's, resolved by the mint: "the this value, if it is not null or undefined,
+   or realm's global object otherwise", then a TypeError if it does not implement the interface, which on this
+   arm is the realm's [Global] interface; the install asserts `target` is the realm's global.
+   The IdlGetter's own steps still see the unresolved receiver: wrapping a raw C getter would need a function
+   pointer in JSCFunctionType's data, which it must not hold. Those getters answer per realm but do not throw
+   for a receiver implementing nothing. */
 void idl_install_replaceable_at(JSContext *ctx, JSValueConst target, const char *name,
                                 IdlGetter getter, int getter_magic, const char *at_file, int at_line);
 #define idl_install_replaceable(ctx, target, name, getter, magic) \
     idl_install_replaceable_at((ctx), (target), (name), (getter), (magic), IDL_SITE)
-/* THE SAME [Replaceable] ATTRIBUTE ON A §3.7.3 INTERFACE PROTOTYPE OBJECT — Web IDL §3.7.3 "Interface
-   prototype object": "If interface is not declared with the [Global] extended attribute, then: Define the
-   regular attributes of interface on interfaceProtoObj, given realm".
-   WHEN A COMPONENT TAKES THIS ARM RATHER THAN THE ONE ABOVE IS NOT A PREFERENCE AND NOT A REALM TEST: it is
-   WHICH INTERFACE DECLARES THE MEMBER IN THIS REALM. A mixin included by a [Global] interface and by a
-   non-[Global] one lands on two different objects for that reason and for no other — HTML §8.2 "The
-   WindowOrWorkerGlobalScope mixin" is included by `Window`, which IS [Global], and by `WorkerGlobalScope`,
-   which is NOT, so HR-TIME's `performance` is an own property of a Window and an own property of
-   `WorkerGlobalScope.prototype` in a worker. browser/idl_exposure.h's IDL_GLOBALS band is what states the
-   split, and BOTH arms assert it: this one that the realm's [Global] interface does NOT declare the member,
-   the one above (through idl_global_member_refused) that it DOES.
-   `this_is`/`iface` ARE §3.7.6's `target`, the declaring interface's own predicate and identifier, exactly as
-   idl_install_accessor_lenient_setter_at takes them and for the same sentence of §3.7.6. They are the
-   INSTALL's to state here because a realm holds several §3.7.3 prototypes and only the object being installed
-   onto says which one this is.
-   THE GETTER STEPS STILL SEE AN UNRESOLVED RECEIVER, exactly as on the form above and for the same reason —
-   a plain-C getter on anything but the realm's global is minted raw. What this arm adds is the SETTER's
-   preamble, which is where a [Replaceable] member's receiver was being checked against Window in a realm that
-   has none. */
+/* The same [Replaceable] attribute on a §3.7.3 interface prototype object (the not-[Global] arm: "Define the
+   regular attributes of interface on interfaceProtoObj"). Which arm applies is which interface declares the
+   member in this realm: HR-TIME's `performance` is an own property of a Window but of
+   WorkerGlobalScope.prototype in a worker. browser/idl_exposure.h's IDL_GLOBALS band states the split and
+   both arms assert it (this one that the realm's [Global] interface does not declare the member, the one
+   above, through idl_global_member_refused, that it does).
+   `this_is`/`iface` are §3.7.6's `target`, the declaring interface's predicate and identifier, stated by the
+   install because a realm holds several prototypes. The getter's receiver is unresolved, as above. */
 void idl_install_replaceable_on_at(JSContext *ctx, JSValueConst target, const char *name,
                                    IdlGetter getter, int getter_magic, IdlThisIs this_is, const char *iface,
                                    const char *at_file, int at_line);
 #define idl_install_replaceable_on(ctx, target, name, getter, magic, this_is, iface) \
     idl_install_replaceable_on_at((ctx), (target), (name), (getter), (magic), (this_is), (iface), IDL_SITE)
-/* The half of that setter a member with its OWN setter steps still needs: Web IDL's
-   CreateDataPropertyOrThrow(receiver, name, V), which REPLACES the accessor on that object. HTML §7.2.5's
-   `opener` setter ends in exactly this operation for a non-null value, so it is one implementation reached from
-   two declarations rather than two that can drift. Returns <0 with an exception pending, like every define. */
+/* The half of that setter a member with its own setter steps still needs: CreateDataPropertyOrThrow(receiver,
+   name, V), replacing the accessor on that object (HTML's `opener` setter ends in it for a non-null value).
+   Returns <0 with an exception pending, like every define. */
 int  idl_replace_with_value(JSContext *ctx, JSValueConst obj, const char *name, JSValueConst v);
 void idl_install_replaceable_value_at(JSContext *ctx, JSValueConst target, const char *name, JSValue value,
                                       const char *at_file, int at_line);
 #define idl_install_replaceable_value(ctx, target, name, value) \
     idl_install_replaceable_value_at((ctx), (target), (name), (value), IDL_SITE)
 
-/* AN ACCESSOR WHOSE GETTER IS A MACHINE. A getter takes no arguments, so it has nothing to CONVERT — and that
-   is why it was a plain C function, which was the wrong conclusion: it may still have work of the PAGE'S size
-   to do. `innerHTML` serialises the whole document, `outerHTML` the same, `childNodes.length` counts every
-   child; none of it can reach the page's code and all of it held the scheduler for as long as the tree was big.
-   A getter declared this way is a function object of exactly the kind the SETTER already is, called the same
-   way by the property machinery, so it can yield at every step of its walk.
-   The plain-C form above is what remains to be converted, not a second way of doing this. */
+/* An accessor whose getter is a step machine. A getter converts nothing but may still do work of the page's
+   size (`innerHTML` serialises a subtree, `childNodes.length` counts children), so it is a function object of
+   the same kind as a step setter and yields at every step of its walk. The plain-C form above is what remains
+   to be converted, not a second way of doing this. */
 int  idl_getter_id_step(JSContext *ctx, const IdlStepDecl *decl, int magic);
 void idl_install_accessor_step_at(JSContext *ctx, JSValueConst target, const char *name,
                                   int getter_stepid, int setter_stepid, const char *at_file, int at_line);
 #define idl_install_accessor_step(ctx, target, name, getter_stepid, setter_stepid) \
     idl_install_accessor_step_at((ctx), (target), (name), (getter_stepid), (setter_stepid), IDL_SITE)
 
-/* Install a declared member on `target`. The coercion is a request, so a page's `toString` — loop, await and
-   all — suspends and resumes at the exact argument it was on.
-   THERE IS NO `length` TO PASS, AND THAT IS THE POINT. Web IDL §3.7.7 Operations' length is "the length of the
-   shortest argument list in the entries in S" over the effective overload set at argument count 0, which is a
-   function of the DECLARATION alone — min(first optional, declared positions) — so this pool computes it and
-   an install has nothing to remember. It used to be a parameter, and the seven installs of DOM §4.2.6 Mixin
-   ParentNode's and §4.2.8 Mixin ChildNode's members, all reaching ONE declaration, DISAGREED WITH EACH OTHER
-   about it: five said 1 and two said 0 for the identical arity, so `Element.prototype.append.length` was a
-   number no reading of the IDL produces. `new Event()`'s interface object had the same defect one section over,
-   carrying the declared arity 2 where §3.7.1 Interface object computes 1. See idl_member_length_of. */
+/* Install a declared member on `target`. A coercion is a request, so a page's `toString` suspends and resumes
+   at the argument it was on. There is no `length` parameter: §3.7.7 Operations' length is "the length of the
+   shortest argument list in the entries in S" at argument count 0, a function of the declaration alone, so
+   the pool computes it (idl_member_length_of) and installs of one declaration cannot disagree. */
 void idl_install_method_at(JSContext *ctx, JSValueConst target, const char *name, int stepid,
                            const char *at_file, int at_line);
 #define idl_install_method(ctx, target, name, stepid) \
     idl_install_method_at((ctx), (target), (name), (stepid), IDL_SITE)
-/* §3.4.10's [LegacyUnforgeable] FOR AN OPERATION — the twin of idl_install_accessor_unforgeable, and it goes
-   through §3.7.7's own descriptor: on the INSTANCE the caller passes rather than on a prototype, and
+/* §3.4.10 [LegacyUnforgeable] for an operation: on the instance the caller passes, with §3.7.7's
    {[[Writable]]: false, [[Enumerable]]: true, [[Configurable]]: false}. Two installers because §3.7.7 states
-   two, not because a caller may pick. */
+   two descriptors, not because a caller may pick. */
 void idl_install_method_unforgeable_at(JSContext *ctx, JSValueConst target, const char *name, int stepid,
                                        const char *at_file, int at_line);
 #define idl_install_method_unforgeable(ctx, target, name, stepid) \
     idl_install_method_unforgeable_at((ctx), (target), (name), (stepid), IDL_SITE)
-/* THE SAME INSTALL FOR A METHOD THAT STATES ITS IDL'S EXPOSURE — §3.3.13's [SecureContext] REMOVES the member,
-   for an operation exactly as for an attribute, and this is that one rule asked in the one place. */
+/* The same install for a method that states its IDL's exposure; §3.3.13 [SecureContext] removes an operation
+   exactly as it removes an attribute, through the one gate. */
 void idl_install_method_exposed_at(JSContext *ctx, JSValueConst target, const char *name, int stepid,
                                    IdlExposure exposure, const char *at_file, int at_line);
 #define idl_install_method_exposed(ctx, target, name, stepid, exposure) \
     idl_install_method_exposed_at((ctx), (target), (name), (stepid), (exposure), IDL_SITE)
-/* The installer for a method whose algorithm is a step machine of its OWN (its own JSTrampStepDef) rather than
-   a member of the args machine — `click` and `dispatchEvent` today. Separate from idl_install_method because
-   they are separate things, and each asserts it was handed its own kind. */
+/* The installer for a method whose algorithm is its own step machine (its own JSTrampStepDef) rather than a
+   member of the args machine, such as `click` and `dispatchEvent`. Each installer asserts it was handed its
+   own kind. */
 void idl_install_step_method_at(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid,
                                 const char *at_file, int at_line);
 #define idl_install_step_method(ctx, target, name, length, stepid) \
     idl_install_step_method_at((ctx), (target), (name), (length), (stepid), IDL_SITE)
 
-/* THE MEMBERS THIS USER AGENT MUST NOT HAVE — the other half of an install, and the one the IDL cannot state.
-   A member whose existence the spec makes CONDITIONAL in prose (HTML §8.10.1.1's `taintEnabled()` and `oscpu`,
-   which a user agent supports only "if the navigator compatibility mode is Gecko") reaches the published .idl
-   with the condition stripped, so an absent one is indistinguishable from an unbuilt one — by the gap auditor
-   and by the next person reading the prototype. Declaring it here says which it is, ASSERTS per realm that the
-   prototype indeed lacks each name, and hands the auditor the same list to check against the live corpus.
-   `why` is the spec sentence, not a label. See idl_args.c. */
+/* The members this user agent must not have. A member the spec makes conditional in prose (HTML §8.10.1.1's
+   `taintEnabled()` and `oscpu`, supported only "if the navigator compatibility mode is Gecko") reaches the
+   .idl without the condition, so absent and unbuilt look the same. Declaring it here says which, asserts per
+   realm that the prototype lacks each name, and gives the gap auditor the same list. `why` is the spec
+   sentence. See idl_args.c. */
 void idl_members_excluded(JSContext *ctx, JSValueConst proto, const char *iface,
                           const char *const *names, int n, const char *why);
 
-/* THE NAMES A ROW-FILTERED INSTALL LOOP COVERS — the second thing the gap auditor cannot read off a loop, and
-   the mirror of the exclusion above: that one says a name is NOT there, this one says a whole column IS.
-   A loop that installs `TBL[i].member` and drops rows with a `continue` installs an unknown SUBSET as far as
-   any static reader is concerned, so the auditor REFUSES the site rather than crediting the column — crediting
-   a name the loop drops is a false COMPLETE, the one error it cannot catch from the other side, because the
-   member it hides never prints as anything. Teaching it to recognise the filter's TEXT is not the repair: a
-   `continue` is C rather than a declaration, and a reader that matches one shape of it silently mis-reads the
-   next — a parameter-free filter (`if (!TBL[i].enabled) continue;`) drops names while looking like a dedup.
-   So the engine states the RESULT instead of the filter: once this returns, `target` carries every name the
-   column holds. That is a claim about an OBJECT, not about source text, which is what makes it checkable where
-   claims about objects are checked — here, per realm, as an OWN-property lookup of each name, the very lookup
-   the page would do. A filter that removed a name, a column the loop never walked, a target it wrote somewhere
-   else: each fires at the origin, naming the member the audit would otherwise have credited.
-   The auditor reads the SAME call and credits the column at the install site it MATCHES — matched by the
-   install's own arguments (same column, same target, same function), so a declaration no install in its
-   function answers to is an error rather than a line nobody revisits, and an install that needs one and lacks
-   one stays refused. Those two sides are the whole difference between this and handing the auditor a number.
-   `why` is the sentence that says why the loop's filter cannot remove a NAME. See idl_args.c. */
+/* The names a row-filtered install loop covers. A loop that skips rows with `continue` installs an unknown
+   subset to a static reader, so the auditor refuses the site rather than crediting the column; matching the
+   filter's text would misread the next filter shape. Instead the engine states the result: once this returns,
+   `target` carries every name in the column, checked per realm as an own-property lookup of each, so a
+   dropped name, an unwalked column or a wrong target fires at the origin.
+   The auditor reads the same call and credits the column at the install it matches by column, target and
+   function; a declaration no install answers is an error, and an install needing one stays refused. `why`
+   says why the filter cannot remove a name. See idl_args.c. */
 void idl_install_covers_column(JSContext *ctx, JSValueConst target, const char *const *column,
                                int n, size_t stride, const char *why);
-/* The column's address, its length and its stride from ONE spelling of the table and ONE of the field, so the
-   three cannot drift apart — and the auditor reads the same two identifiers the compiler does. */
+/* The column's address, length and stride from one spelling of the table and field, so they cannot drift and
+   the auditor reads the identifiers the compiler does. */
 #define IDL_NAME_COLUMN(tbl, field) \
     ((const char *const *)&(tbl)[0].field), (int)(sizeof(tbl) / sizeof((tbl)[0])), sizeof((tbl)[0])
 
-/* THE SAME COLUMN'S CONSTRUCTOR AXIS — the counterpart of the coverage declaration above, and the OTHER thing a
-   row-filtered loop hides. The two are different questions and the one above answers only the first:
-   Web IDL §3.7 Interfaces puts a property on the realm's global object for every exposed interface, and
-   Web IDL §3.7.1 Interface object gives that object construct steps only where the interface declares a
-   constructor operation — "Interface objects whose interfaces are not declared with a constructor operation
-   will throw when called, both as a function and as a constructor". So an interface object that CONSTRUCTS and
-   one carrying that throw are the SAME answer to idl_install_covers_column and OPPOSITE answers to `new`, and a
-   loop minting its column's interface objects through a shared helper leaves the second question unsaid. A
-   reader of the source cannot recover it for the same reason it cannot recover the first: the `continue`
-   deciding which cells reach the mint is C rather than a declaration.
-   SO THE ENGINE STATES THIS RESULT TOO, AND IT IS A PARTITION RATHER THAN A CLAIM ABOUT ALL OF THEM: every name
-   the column holds reached §3.7.1's declared constructor mint, EXCEPT the ones `refuses` names, which carry the
-   throw instead. A uniform column passes NULL and 0, which is the ordinary case and not a weaker declaration.
-   `JS_IsConstructor` IS NOT THE DISCRIMINATOR AND MUST NOT BE REACHED FOR: both populations are minted with a
-   constructing cproto, so it answers true for the interface object that runs an algorithm and for the one whose
-   whole body is §3.7.1's TypeError. What separates them is WHICH MINT the identifier went through, which is a
-   fact about this engine and not a property anything can ask the finished object — so that is what is recorded
-   and that is what is checked. THE RECEIVER OF `new` IS NEVER ASSERTED ON, here or anywhere near here: a page
-   supplies it, §3.7.1 answers it with a TypeError, and an abort would hand a page a switch on this engine.
-   THE TWO SIDES ARE COMPUTED BY DIFFERENT CODE, which is what makes it a check rather than a restatement. This
-   declaration is a static claim about a column; the other side is the set of identifiers idl_step_constructor
-   was actually handed. A filter that STOPS minting a name therefore fires here naming that name — the direction
-   nothing else can see, because a mint's own precondition guard catches a name that ARRIVES and is silent about
-   one that stops arriving, and because that is exactly the direction in which a credited column becomes a false
-   COMPLETE: the audit reports an interface constructible and the page gets a TypeError.
-   AND `refuses` IS CHECKED BACK AGAINST THE COLUMN, so a refusal naming a name the column no longer holds is an
-   error rather than a line nobody revisits — the two-sidedness idl_members_excluded has, for the same reason.
-   `why` is the sentence that says why the loop's filter cannot move a name across that partition unseen. See
-   idl_args.c. */
+/* The same column's constructor axis. Web IDL §3.7.1 Interface object gives construct steps only to an
+   interface declaring a constructor operation ("Interface objects whose interfaces are not declared with a
+   constructor operation will throw when called"), so a constructing interface object and a throwing one answer
+   idl_install_covers_column alike and `new` oppositely. This states a partition: every name in the column
+   went through idl_step_constructor's mint, except those `refuses` names, which carry the throw. A uniform
+   column passes NULL and 0.
+   JS_IsConstructor cannot tell them apart (both are minted constructible); the recorded mint is the fact. The
+   other side is the set of identifiers idl_step_constructor was handed, so a filter that stops minting a name
+   fires here. `refuses` is checked back against the column. The receiver of `new` is page input and is never
+   asserted on. `why` says why the filter cannot move a name across the partition. See idl_args.c. */
 void idl_install_constructs_column(JSContext *ctx, JSValueConst target, const char *const *column,
                                    int n, size_t stride, const char *const *refuses, int n_refuses,
                                    const char *why);
