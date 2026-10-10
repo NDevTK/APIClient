@@ -469,19 +469,15 @@ static char *errs_json_array(ErrsArray which) {
    same range, and result_json composes the two adjacently, so the assert could not fail — and a second
    census would raise `g_scan_runs[FLOW_SCAN_CENSUS]`. `framed == members - memUnframed` likewise. It becomes
    assertable when cold_census stops reaching its total that way. */
-/* The kind of every row this composer publishes, read by testing/census_rows.js from source; the four kinds
-   and the rules the reader enforces are stated above result_cold_json. Rows folded by this census's own walk
-   are gauges at one instant; each free function beside them (scan pair, preempt ask, rival-miss partition,
-   member-key and index checks, epoch pair, starvation and plateau counters, arrivals and departures, credit
-   triple, work total, rank changes) states lifetime at its declaration.
-   `vt` is a high-water mark: flow.c keeps the larger value, asserting it is the maximum coordinate any account
-   stands at, so it plateaus and is not a ceiling.
-   Keys spelling `Life` on the branch rows are gauges: the suffix names the horizon of the per-bucket quantity,
-   but the row is an extremum or sum over whichever buckets the walk reached, so it may fall (solver/flow.h).
-   The burn split follows the asserted identity `brUsLifeSum + brRetiredUsLife == chargedUsLife`: a bucket whose
-   subtree wholly departs is freed and its receipt folded into the retired total, so `chargedUsLife` and
-   `brRetiredUsLife` only grow, while `brUsLifeSum`, `brHeldUsLife` and `brEmptyUsLife` fall by a departed
-   bucket's receipt; a live arm's share is taken against `brHeldUsLife`.
+/* The kind of every row this composer publishes, read by testing/census_rows.js from source; the kinds and
+   the reader's rules are stated above result_cold_json. Rows folded by this census's walk are gauges at one
+   instant; each free function beside them states lifetime at its declaration. `vt` is a high-water mark
+   (flow.c keeps the larger value), so it plateaus and is not a ceiling. `Life` in a branch row's key names
+   the horizon of the per-bucket quantity, but the row is an extremum or sum over the buckets the walk
+   reached, so it is a gauge and may fall (solver/flow.h). Burn: `brUsLifeSum + brRetiredUsLife ==
+   chargedUsLife` is asserted; a wholly departed bucket's receipt folds into the retired total, so
+   `chargedUsLife` and `brRetiredUsLife` only grow while the `brUs*` gauges fall; a live arm's share is
+   taken against `brHeldUsLife`.
 
    @kinds-of wfq
    @kind gauge: members jobsReady jobsFramed jobsOwed jobWGap jobsReadyTask jobsReadyMicro memUnframed visZero
@@ -499,8 +495,7 @@ static char *errs_json_array(ErrsArray which) {
    @kind gauge: cands candUnrun candSvcMax candDecMax decMax distMax wTop wMin candWMax
    @kind gauge: delivReady delivFramed delivOwed delivWGap delivWGapVis wTopVis
    @kind gauge: curDeep curDeepLive curDeepWGap epochAwayLive epochAwayWalk
-   @kind lifetime: brRetiredUsLife chargedUsLife
-   @kind lifetime: scanNextRuns scanNextWeights scanRivalRuns scanRivalWeights
+   @kind lifetime: brRetiredUsLife chargedUsLife scanNextRuns scanNextWeights scanRivalRuns scanRivalWeights
    @kind lifetime: scanOtherRuns scanOtherWeights scanCensusRuns scanCensusWeights
    @kind lifetime: preemptAsksLifetime rivalMissGen rivalMissCur rivalMissBoth
    @kind lifetime: keyArmedLifetime keyStaleGenLifetime keyFirstSeenLifetime keyRunningLifetime
