@@ -350,7 +350,7 @@ typedef struct Flow {
     uint32_t *dyn_doc;
     /* Each row's name: the one fact about a row that a shift cannot change. §4.12.1.1's immediate execution
        interposes rows below the cursor and §7.5.10's destroy removes them, so anything outside this table names
-       a row by this id, never by position (flow_dyn_row_index searches by value). Minted from one global clock
+       a row by this id, never by position (flow_dyn_row_by_id searches by value). Minted from one global clock
        and never reused, because sibling arms mint independently and a register entry a fork shares
        (solver/pending.h) must resolve to the same row in each. A fork copies it. Not parked: a resumed flow
        replays its document and its rows take fresh names. Ids of one flow's rows are not contiguous. The row's
@@ -417,215 +417,85 @@ typedef struct Flow {
                               forked sibling references the parent's O(N) DOM delta in O(1). NULL until a fork. */
     void *dec_blob;        /* suspended decision state while paused (decide_suspend) */
     void *pin_blob;        /* suspended pin state while paused (concolic_pins_suspend) */
-    /* ASYNC-AS-FLOW: this flow's OWN queued microtasks AND tasks, run under its live COW so a reaction runs in
-       the timeline that enqueued it. A MICROTASK runs at the checkpoint HTML §8.1.4.4 "Calling scripts" owes
-       once the program that queued it has left the stack — which is BEFORE the flow's next program, not after
-       its last one — and a TASK runs on any step that does not START a program of the sequence. One array
-       keeps both in a single arrival order — which is what a task source needs among its own tasks — and the
-       pick (flow_job_take) applies the checkpoint rule.
-       THE FUNCTION THIS NAMED FOR THE TASK RULE WAS flow_checkpoint_due, WHICH IS THE MICROTASK ARM. A reader
-       following it landed on the predicate for the sentence one clause above and found nothing about tasks
-       there at all; the task rule is the `else if (flow_job_pending(f) > 0)` arm of flow_step.
-       THAT RULE USED TO READ `when the sequence is EXHAUSTED`, AND IT WAS AN `else` ON THE SEQUENCE TEST —
-       which read as a design and stated a defect, because a flow's sequence is a set the page's own programs
-       EXTEND, so the condition was one page code could hold false and this queue's tasks were excluded while
-       it did. The arm now binds to `seq_compiles`, which is `a program of the sequence STARTS on this step`,
-       so the exclusion lasts exactly the step that runs one — HTML §8.1.7.3 "Processing model" step 2's one
-       task per iteration — and a flow parked on an external script row runs this queue instead of standing
-       still. What is NOT repaired is the ORDER between the two carriers, and that is not repairable by
-       reordering those two arms —
-       §8.1.7.1 "Definitions" requires each task source to be in ONE queue and the TIMER task source is in both
-       of a flow's (a Function handler here through JS_EnqueueCallTask, a STRING handler in `dyn` through
-       core/timing/timer.c's script sink), so the two queues partition by CARRIER where the spec partitions by
-       SOURCE. The derivation, and what closes it, are at that arm in engine.c and are not restated here.
-       A JS ARRAY OF IMMUTABLE JOB RECORDS, and it was the LAST malloc'd platform queue on a Flow — a
-       `FlowJob *` grown by realloc, each entry holding a malloc'd `JSValue *argv` beside two raw pointers.
-       The three reasons pending.h gives for the register below it are the same three here and every one of
-       them was live: the runtime's leak walk cannot see a `JSValue *argv` (the values in it are GC objects the
-       walk reaches only through a root it has, and a bare malloc is not one), a per-job malloc crossed neither
-       a park nor a fork, and the FORK deep-copied every entry — a malloc per job plus a dup per argument —
-       where an Array naming the parent's entries costs one refcount each. It also had FOUR hand-maintained
-       sites (the enqueue, the fork's field-by-field copy, §7.5.10's drop and the release's free loop), the
-       middle one of which carried a comment saying in as many words that a field added to the struct was an
-       obligation nothing but that comment enforced. There is no struct left to add a field to.
-       JS_UNDEFINED for a flow that has never been enqueued one, which keeps flow_job_pending a tag test —
-       asked at every suspend point the interpreter offers, exactly as the register below it is. */
+    /* This flow's own queued microtasks and tasks, run under its live COW so a reaction runs in the timeline that
+       enqueued it. A microtask runs at the checkpoint HTML §8.1.4.4 "Calling scripts" owes once the program that
+       queued it has left the stack, which is before the flow's next program. A task runs on any step that does
+       not start a program of the sequence (flow_step's `else if (flow_job_pending(f) > 0)` arm, bound to
+       `seq_compiles`), so a flow parked on an external script row runs this queue: §8.1.7.3 "Processing model"
+       step 2's one task per iteration. One array keeps both in arrival order and flow_job_take applies the
+       checkpoint rule (flow_checkpoint_due is the microtask arm).
+       Not covered: §8.1.7.1 "Definitions" puts each task source in one queue, but the timer source is in both
+       of a flow's carriers (a Function handler here via JS_EnqueueCallTask, a string handler in `dyn` via
+       core/timing/timer.c), so the order between them partitions by carrier; engine.c's arm states the rest.
+       A JS Array of immutable job records, so the leak walk sees the values, it parks and forks, and a fork
+       shares entries at one refcount each. JS_UNDEFINED until the first enqueue, which keeps flow_job_pending a
+       tag test at every suspend point. */
     JSValue jobs;
-    /* FETCH-AWAIT: this flow's OWN live (pending) fetches and the synchronous requests it is blocked on,
-       resolved when the flow's scripts+microtasks stall (the network completing). A JS ARRAY of plain records
-       (solver/pending.h) rather than a malloc'd list, because CLAUDE.md §State-isolation says so in as many
-       words: it must park to the cold tier, resume byte-identically and fork per-flow, and a `char *` does
-       none of the three. JS_UNDEFINED for a flow that has never parked on anything, which is most of them. */
+    /* This flow's own live fetches and the synchronous requests it is blocked on, resolved when its scripts and
+       microtasks stall. A JS Array of plain records (solver/pending.h), because it must park to the cold tier,
+       resume byte-identically and fork per flow. JS_UNDEFINED for a flow that never parked on anything. */
     JSValue pending;
-    /* THE PARKED CONTINUATIONS, swapped with everything else on a context switch. A forced preempt inside
-       job-driven code parks a suspended async activation on the runtime's pump queue; those activations belong
-       to THIS flow's timeline and resume under THIS flow's delta, so leaving them in the runtime while a
-       sibling runs would either resume them against the wrong heap or drop them outright. NULL for a flow with
-       nothing parked, which is every flow that has not preempted inside a reaction.
-       IT IS THE WHOLE SET AND ONE OPAQUE HANDLE, not four fields naming one park. A step reaches as many bases
-       as it reaches — a settle nested inside a reaction parks two, and an async body completing while the
-       reaction that resumed it is still on the C stack parks two — and each park's record lives on the base it
-       suspends (quickjs's JSAsyncFunctionState), so what crosses the switch is their ORDER. Four fields could
-       only ever carry one, which is why they are gone rather than multiplied.
-       THE EXAMPLE THAT USED TO STAND HERE — "a host drain settling two fetch replies in a row parks two" — IS
-       GONE BECAUSE THE DRAIN IS. flow_deliver_one_reply delivers ONE answered entry and the step ends, so two
-       replies can no longer be settled inside one step and the second can no longer park behind the first;
-       that walk was reordering the page's microtasks, and one-per-step is the fix. The FIFO is unaffected: it
-       is required by the NESTED cases above, which a cadence cannot remove.
-       IT IS A REFERENCE THE FLOW OWNS, not one it merely remembers: each continuation is kept alive by a
-       reference its park took and only its resume gives back, so a flow that is torn down or PAGED OUT — where
-       a recipe replays the work and frees none of the memory — gives them back itself, through
-       JS_FreeParkedFlows at flow_release. */
+    /* The parked continuations, swapped with everything else on a context switch. A forced preempt inside
+       job-driven code parks a suspended async activation on the runtime's pump queue; it belongs to this flow's
+       timeline and must resume under this flow's delta. NULL for a flow with nothing parked.
+       One opaque handle for the whole set, because a step can park several bases (a settle nested inside a
+       reaction; an async body completing while the reaction that resumed it is on the C stack) and each park's
+       record lives on its base (quickjs's JSAsyncFunctionState), so what crosses the switch is their FIFO order.
+       The flow owns the references: each continuation is kept alive by a reference its park took and only its
+       resume returns, so a flow torn down or paged out returns them via JS_FreeParkedFlows at flow_release. */
     void *parked;
-    /* THE ROUTED CROSS-DOCUMENT DELIVERIES THIS TIMELINE HAS BEEN HANDED AND NOT YET MADE — each the record
-       the trusted zone routed here, paired with the SENDER's origin, which only that zone may stamp
-       (SECURITY.md: an origin the untrusted engine computed for a foreign message is a forgery every
-       `event.origin` check in every bundle would then trust). A delivery is a WORK ITEM ON THE ONE FRONTIER
-       and this is how it is carried. It is attached to EVERY live flow of the receiving document, because a
-       document's state IS its flows: the page's `message` listener was registered by a script, so it lives in
-       the delta of the flow that ran it, and a delivery made anywhere else arrives at a document where nothing
-       is listening. Each flow makes its own delivery when it next steps, under its own delta, and the task
-       that step enqueues lands on that flow's own queue — which is why the queue is per-flow.
-       IT IS A FIFO AND NOT A SLOT, for the reason the operation queue below it is one and for a stronger one:
-       HTML §9.3.3 "Posting messages" ends the window post message steps by QUEUEING A GLOBAL TASK on the
-       posted message task source, and §8.1.7.1 "Definitions" gives a task a SOURCE precisely to "group and
-       serialize related tasks" — so two posts from one sender are two tasks the page observes IN ORDER, not
-       two alternatives one of which may overwrite the other. A slot made the second post an abort, and it is
-       on the shortest path there is: one sender posting twice. Only senders whose worlds CONTRADICT may not
-       share a timeline, and that is a FORK rather than a queue entry — asserted at the arrival, where both
-       vectors are in one hand (engine_route).
-       A JS ARRAY OF IMMUTABLE [record, senderOrigin] PAIRS, for the three reasons pending.h gives for the
-       register beside it and CLAUDE.md §State-isolation states in as many words: the runtime's leak walk
-       cannot see a `char *`, a pair of raw pointers crosses neither a park nor an instance while text does,
-       and a fork that shares the pairs by reference costs one refcount each instead of strdup'ing every byte.
-       The pairs are what let this queue PARK: a flow holding one had no legal move under RAM pressure while it
-       was two malloc'd strings the cold tier could not write (cold.c's park writes them as 'm' records now).
-       JS_UNDEFINED on a flow with nothing to deliver, which is nearly all of them, so the common case stays a
-       tag test. */
+    /* Routed cross-document deliveries this timeline has been handed and not yet made: each the record the
+       trusted zone routed here, paired with the sender's origin, which only that zone may stamp (SECURITY.md).
+       A delivery is a work item on the one frontier, attached to every live flow of the receiving document,
+       because the page's `message` listener lives in the delta of the flow that registered it; each flow
+       delivers under its own delta when it next steps, onto its own task queue.
+       A FIFO, not a slot: HTML §9.3.3 "Posting messages" queues a global task on the posted message task source,
+       so two posts from one sender are two tasks observed in order. Senders whose worlds contradict may not
+       share a timeline; that is a fork, asserted at the arrival (engine_route).
+       A JS Array of immutable [record, senderOrigin] pairs, so it parks (cold.c writes 'm' records) and a fork
+       shares the pairs at one refcount each. JS_UNDEFINED on a flow with nothing to deliver. */
     JSValue deliver_q;
-    /* WHICH SENDING TIMELINES THIS RECEIVING TIMELINE IS IN — the other half of what a routed delivery's world
-       means, and the field that makes the queue above a QUEUE rather than a merge.
-       A cross-document message carries the SENDING FLOW'S WORLD (CLAUDE.md §Security), and a delivery seeds
-       work whose world is receiver-baseline ∧ that vector. Two arms of one sender branch carry two vectors
-       that CONTRADICT (world_vec_relate), and a timeline that received both would be one neither sender was
-       ever in. Which arm a timeline is in is therefore a fact ABOUT THE TIMELINE and has to be written down:
-       without it the very same pair is refused when both are queued at once and accepted when the first is
-       delivered before the second arrives, which is the schedule-dependent finding §Testing's differential
-       exists to catch.
-       EACH ENTRY IS AN IMMUTABLE [vector, taken, arm] TRIPLE. The flag is which of the two kinds it is:
-         - taken = 1: a world this timeline RECEIVED. Nothing that CONTRADICTS it may be received here.
-         - taken = 0: a world subtree this timeline FORECLOSED — the arm's half of a delivery-time fork. It is
-           the sibling minted where its parent took `vector`, so nothing at or under `vector` is this
-           timeline's; that message is the parent's and is delivered there.
-       …AND `arm` IS WHAT MAKES EITHER REFUSAL SAFE TO MAKE (FlowCommitArm below): both kinds refuse a record
-       by deferring to a flow on the other side of the branch this row names, so a row whose other side does
-       not exist is a refusal that loses the message outright. That is a fact about the MECHANISM that minted
-       the row, known only to the producer and at the instant it pushes, so it is written down rather than
-       inferred downstream from the vector's shape.
-       A JS ARRAY OF PAIRS for the three reasons the two queues above are: the runtime's leak walk cannot see a
-       `char *`, TEXT crosses a park and an instance where a pointer does not, and a fork hands each arm its own
-       Array naming the parent's entries at one refcount each. It is NOT a work item and is never on the list a
-       release refuses to drop — it is this flow's IDENTITY as a receiver, so it is carried across the fork and
-       the cold tier ('r' records) exactly as the path is. JS_UNDEFINED until the first cross-document message
-       reaches this document, which is nearly every flow there has ever been. */
+    /* Which sending timelines this receiving timeline is in. A cross-document message carries the sending flow's
+       world, and two arms of one sender branch carry contradicting vectors (world_vec_relate), so a timeline
+       that received both would be one neither sender was in. Recording it on the timeline makes the verdict
+       independent of whether the two arrive together or one after the other.
+       Each entry is an immutable [vector, taken, arm] triple:
+         - taken = 1: a world this timeline received; nothing contradicting it may be received here.
+         - taken = 0: a world subtree this timeline foreclosed: it is the sibling minted where its parent took
+           `vector`, so a message at or under `vector` is the parent's.
+       `arm` (FlowCommitArm) says which mechanism minted the flow on the other side, which is what makes either
+       refusal safe; only the producer knows it, at the push. Not a work item: it is this flow's identity as a
+       receiver, carried by a fork and by the cold tier ('r' records). JS_UNDEFINED until a message arrives. */
     JSValue deliver_world_q;
-    /* A CROSS-AGENT OPERATION THIS INSTANCE WAS ASKED TO PERFORM — the record the asking instance wrote
-       (core/frame/remote_op.h) and the trusted zone's rendezvous TOKEN for the flow that is waiting on it.
-       IT IS THE SAME SHAPE AS THE DELIVERY ABOVE AND FOR THE SAME REASON, with one thing added: a delivery is
-       one-way and this one owes an ANSWER. A document's state IS its flows, so `otherW.length` has N answers
-       for N timelines — the record is attached to every live flow exactly as a delivery is, and each of them
-       answers under its own delta. A channel that carried one answer would silently pick a timeline.
-       IT IS A FIFO AND NOT A SLOT, because the operations are SEQUENTIAL rather than alternative: the asking
-       side parks on each in turn, so a second one arriving before the first has started is an ordinary second
-       question and not two contradictory askers (which would need a fork, not a queue). A slot made that an
-       abort, and it is on the shortest path there is — route.mjs phase 3 withholds one answer and asks again,
-       and the two records differ only in the asking WORLD.
-       AN ENTRY IS CONSUMED WHEN THE FLOW TURNS IT INTO A PROGRAM: the record has nothing left to say and the
-       token MOVES onto that program's row (`dyn_token` above), because from then on the question and the
-       program are one thing. Which document the operation names is the row's too — `dyn_doc` already says where
-       a queued program is compiled, and a second copy on the flow was a copy that could be behind.
-       A JS ARRAY OF IMMUTABLE [record, token] PAIRS, for the three reasons pending.h gives for the register
-       beside it: the runtime's leak walk cannot see a `char *`, a pair of raw pointers crosses neither a park
-       nor an instance while text does, and a fork that shares the pairs by reference costs one refcount each
-       instead of strdup'ing every byte. The ARRAY is per-flow and must be — each arm starts its own copy of a
-       pending operation and each answers under its own delta, which is the multiplicity §7.2.1 has when a
-       document's state is its flows. JS_UNDEFINED on a flow with nothing outstanding, which is nearly all of
-       them, so the common case stays a tag test. */
+    /* Cross-agent operations this instance was asked to perform: the record the asking instance wrote
+       (core/frame/remote_op.h) and the trusted zone's rendezvous token for the waiting flow. Shaped like
+       `deliver_q`, plus an answer: a document's state is its flows, so the record is attached to every live
+       flow and each answers under its own delta. A FIFO, because the asking side parks on each operation in
+       turn, so a second arriving before the first started is an ordinary second question.
+       An entry is consumed when the flow turns it into a program: the token moves to that row (`dyn_token`) and
+       the document is the row's `dyn_doc`. A JS Array of immutable [record, token] pairs, per flow because each
+       arm answers its own copy. JS_UNDEFINED on a flow with nothing outstanding. */
     JSValue perform_q;
 
-    /* WHAT THIS MEMBER'S OWN HALF OF THE WFQ'S WEIGHT READ THE LAST TIME A SCAN WEIGHED IT, AND AT WHICH
-       FRONTIER GENERATION — the operands of the one assertion the whole sub-linear-ordering question rests
-       on. flow_weight is `the family's coordinate + this member's + a carry bit`; the family's half is read
-       through ONE pointer by every arm of it, so it is a COMMON OFFSET that orders nothing within a family,
-       and flow.c's flow_silence_phase decomposes the carry out. What is left is flow_member_key, and the
-       claim every index, heap or cached maximum anybody proposes here is derived from is that it CANNOT MOVE
-       for a member that is not holding the thread while the generation stands still.
-       IT IS STAMPED IN THE WALK RATHER THAN AT THE WRITERS, because the walk is already holding every member
-       and the pointer and the key, and because the writers are nine functions that would each have to
-       remember. The scan is where the invariant is spent, so it is where it is asked.
-       DEV-ONLY IN BOTH BUILDS' SENSE — the fields as well as the check. engine.c's rival snapshot is written
-       in every build and read in none but dev, for a reason that does not reach here: it is FOUR STATICS and
-       this is three fields on EVERY MEMBER of a frontier that grows because forking is the point, and the
-       stamp is not a load but a call to flow_member_key, whose four terms are an integer division and three
-       divides. Paying that per member per scan in the build the product ships, for a check that build does
-       not make, would be an instrument changing the run it samples — which is the one thing solver/flow.h's
-       FLOW_SCANS banner says a census may not do.
-       `key_stamped` AND NOT A SENTINEL GENERATION, because `g_gen` starts at zero and flow_registry_init
-       RESETS it, so any value a fresh member could be born holding is one a live generation can reach. A flow
-       that has never been weighed and one weighed at generation zero are two different states and only one of
-       them has anything to compare against. */
-    /* …AND THE ONE PER-MEMBER QUANTITY THE KEY ABOVE DOES NOT COVER, WHICH IS THE KEY AN INDEX IS ACTUALLY
-       BUILT ON. flow_member_key reads flow_service_notch, which is `own_silence / FLOW_SERVICE_US` — a FLOOR
-       — so every value of `own_silence` inside one quantum produces the SAME key and the check above passes
-       for all of them. flow_silence_phase is `own_silence % FLOW_SERVICE_US`, the REMAINDER that floor throws
-       away, and flow.c's decomposition makes it the bucket key: `notch = k + K + (p + R >= S)`, the carry
-       flips in descending order of `p` as the common threshold `S - R` sweeps down, and the maximum an index
-       returns is the larger of two CONTIGUOUS RANGES OF `p`. So an index keyed on the phase rests on the
-       phase standing still for a non-running member between two generations, and the key check asserts a
-       STRICTLY WEAKER consequence of that — a writer moving `own_silence` by less than a whole quantum
-       leaves `own_silence / S` untouched, leaves `key_last` agreeing, and SILENTLY RE-BUCKETS the member.
-       IT IS NOT A THEOREM AND THAT IS WHY IT IS ASSERTED. `own_silence` has two writers: flow_age_running,
-       which charges only the member holding the thread and re-stamps both fields on the same statement, and
-       flow_credit_emit, which zeroes it through the account's generation and therefore raises `g_gen`. Both
-       are correct today BY CONVENTION, and flow.c already records two neighbouring writers that are
-       "correct by adjacency rather than by construction"; this makes the phase's half true by construction
-       instead, at the one seam that is already holding every member.
-       FOLDED INTO THE SAME COMPARISON AND THE SAME COUNTER as the key rather than given its own, because
-       `key_checks_total()` is asserted equal to the weighings one loop performed — a second bucket would
-       make that partition disagree with the counter it is a partition of, which is the defect that check
-       exists to catch. One arming, one bucket, two operands.
-       DEV-ONLY FOR `key_last`'s REASON EXACTLY: it is a fourth field on every member of a frontier that grows
-       because forking is the point, and its stamp is a call, so paying it in the build the product ships
-       would be an instrument changing the run it samples. */
-    /* …AND THE PER-MEMBER HALF OF THAT KEY WITHOUT THE BUCKET TERM, WHICH IS THE QUANTITY AN INDEX IS
-       KEYED ON AND WHICH THE SUM ABOVE DOES NOT ASSERT. flow.c states the composition in two functions over
-       ONE sum and says why: "what must STAND STILL between two generations is THIS, the bucket term
-       included, or flow_pick's walk goes blind to a fork re-ranking a whole arm at once; what an index may
-       be KEYED on is flow_index_key, the bucket term EXCLUDED, or that index pays O(live members of the
-       bucket) per fork". `key_last` stamps the FIRST of those two. Nothing stamped the second, so the
-       precondition every candidate set in this engine rests on was asserted only as a CONSEQUENCE of a
-       stronger-looking claim about a different quantity.
-       WHAT THE SUM CANNOT SEE, EXACTLY: `member_key = index_key + branch_bonus`, so any move that shifts
-       the two halves by equal and opposite amounts leaves `key_last` agreeing. The bucket term is
-       `1.0 / sub_born` over the arm's bucket and a fork's join raises `sub_born` for every live member of
-       that arm AT ONCE, with no generation bump of its own — flow.c calls that writer "correct only by
-       adjacency and the ONE writer here that is". So the one term in the sum that moves for MANY members
-       without a bump is precisely the one an index excludes, and the check that was supposed to cover the
-       index's key was covering it only while that compensation did not occur.
-       IT IS NOT A SECOND SPELLING OF `key_last` AND THE TWO ARE FOLDED INTO ONE COMPARISON. They are two
-       operands of one condition raising one bucket, for `phase_last`'s reason exactly: `key_checks_total()`
-       is asserted equal to the weighings one loop performed, so a second arming bucket would make that
-       partition disagree with the counter it is a partition of. One arming, one bucket, three operands.
-       THE PRICE, NAMED RATHER THAN LEFT TO BE REDISCOVERED: it is a fifth field on every member of a
-       frontier that grows because forking is the point, and its stamp is a CALL — one integer division and
-       two term reads — paid once per member per scan in the build that makes the check and in no other.
-       flow.c's own stamp block already prices the member half being evaluated twice there; this is a third
-       evaluation in the same class and it is the cheapest of the three, because flow_index_key is the
-       subexpression the other two are built from rather than a re-association of them.
-       DEV-ONLY FOR `key_last`'s REASON EXACTLY, in the field as in the check.
-       RETIREMENT: this field goes when flow_weight is composed so its member half is a SUBEXPRESSION of it
-       rather than a re-association — at which point the index's key is the order's own subexpression, one
-       stamp covers both claims by construction, and there is no second composition left to disagree. */
+    /* Dev-only stamps for the assertion sub-linear ordering rests on: a member not holding the thread cannot
+       change its own half of the weight while the frontier generation stands still. flow_weight is the family's
+       coordinate plus this member's plus a carry bit; the family's half is a common offset within a family, and
+       flow.c's flow_silence_phase decomposes the carry out, leaving flow_member_key.
+       The walk stamps each member it weighs (it already holds the member and the key), and flow_age_running
+       re-stamps the member it charges. Three operands are compared as one condition into one counter bucket,
+       because key_checks_total() is asserted equal to the weighings one loop performed:
+         - `key_last`: flow_member_key, the sum that must stand still or flow_pick goes blind to a fork
+           re-ranking a whole arm;
+         - `phase_last`: flow_silence_phase, `own_silence % FLOW_SERVICE_US`, which the key's floor discards and
+           which is the bucket key; a sub-quantum writer would re-bucket a member without moving `key_last`;
+         - `ikey_last`: flow_index_key, the key without the bucket term, which an index is keyed on; a fork's
+           join raises `sub_born` for a whole arm with no generation bump, which the sum alone cannot see.
+       `key_stamped` rather than a sentinel generation, because `g_gen` starts at zero and flow_registry_init
+       resets it. Dev-only in field and check, since stamping is a call per member per scan. */
+    /* Named residual. Not covered: `ikey_last` is a third evaluation because flow_weight re-associates its
+       member half rather than containing it. Next diff builds: flow_weight composed with the member half as a
+       subexpression, so one stamp covers both claims and this field is deleted. Absence shows as: a key check
+       that passes while the index's key moved by an amount the bucket term compensated. */
 #if APICLIENT_DEV
     double   key_last;
     unsigned key_gen;
@@ -635,142 +505,89 @@ typedef struct Flow {
 #endif
 } Flow;
 
-/* `doc_name` is THIS INSTANCE'S DOCUMENT identity, and it is a parameter rather than a separate init call so a
-   frontier cannot exist without one: every flow is minted a world named by it, and two instances that shared a
-   name would hand each other's flows the same segment. The host names the ROOT document, because the host is
-   what knows there is more than one; every document below it is named by the one that created it. */
+/* `doc_name` is this instance's document identity, a parameter so a frontier cannot exist without one: every
+   flow's world is named by it, and two instances sharing a name would hand each other's flows one segment. The
+   host names the root document; every document below it is named by the one that created it. */
 void  flow_registry_init(const char *doc_name);
 void  flow_registry_free(JSContext *ctx);
 
-/* Add a flow to the frontier, standing on nothing: an empty decision vector, which is what a from-baseline flow
-   IS. A flow with a recorded path gets it by having its `dec_blob` installed after the add — by the fork that
-   prepared it, or by the cold tier that rebuilt it — because that path is a reference on a SHARED chain and
-   never an array this call could take ownership of. Dups `fn`. Returns the stored Flow* (stable until removed).
-   Never fails (OOM aborts via CHECK — a dropped flow corrupts the frontier).
-   The flow is SEEDED with this agent's root document's programs as rows of its own queue, because that is what
-   a fresh timeline of this document IS — see flow_set_seed_hook. A creator whose flow must NOT start there
-   (the fork, which inherits its parent's rows; a joined document's boot flow, which is seeded with that
-   document's) says so by name through flow_add_unseeded. */
+/* Add a from-baseline flow to the frontier, with an empty decision vector. A flow with a recorded path has its
+   `dec_blob` installed after the add (by the fork or the cold tier), because that path is a reference on a
+   shared chain. Dups `fn`. Returns the stored Flow* (stable until removed). Never fails: OOM aborts via CHECK.
+   flow_add seeds the flow with this agent's root document's programs as rows of its own queue
+   (flow_set_seed_hook). flow_add_unseeded is for a creator whose flow must not start there: the fork, which
+   inherits its parent's rows, and a joined document's boot flow, seeded with that document's programs. */
 Flow *flow_add(JSContext *ctx, JSValueConst fn, WorldId parent);
 Flow *flow_add_unseeded(JSContext *ctx, JSValueConst fn, WorldId parent);
-/* WHAT A NEW FLOW'S PROGRAM SEQUENCE IS, answered by the component that owns the document's script inventory
-   (solver/engine.c) and asked at the ONE place a flow is created. Installed when a session opens and removed
-   when it closes, for the reason every other scheduler hook is: this layer owns the frontier and may not
-   depend on what a document's programs are. */
+/* Install the hook that gives a new flow its program sequence (solver/engine.c owns the document's script
+   inventory). Installed when a session opens and removed when it closes, so this layer does not depend on what a
+   document's programs are. */
 void flow_set_seed_hook(void (*fn)(Flow *f));
-/* How many flows this document ever created — the other half of the switch count. A run whose cost jumped needs
-   to say WHICH grew: the frontier, or the work per flow. */
+/* Lifetime count of flows this document created; beside the switch count it says whether the frontier or the
+   work per flow grew. */
 long flow_created_count(void);
 
-/* IS THIS FLOW BLOCKED ON THE HOST? True while it holds an unanswered synchronous request. A blocked flow
-   cannot make progress, so the preempt hook always yields it and a mid-frame yield reports it host-owed rather
-   than runnable — otherwise the scheduler re-enters it immediately and it spins on an answer that cannot
-   arrive while it holds the thread. */
+/* Is this flow blocked on the host, holding an unanswered synchronous request? The preempt hook always yields
+   it and a mid-frame yield reports it host-owed, so the scheduler does not re-enter it to spin on an answer that
+   cannot arrive while it holds the thread. */
 int flow_blocked(const Flow *f);
 
-/* IS THIS FLOW'S JAVASCRIPT EXECUTION CONTEXT STACK EMPTY? — HTML §8.1.4.4 "Calling scripts", clean up after
+/* Is this flow's JavaScript execution context stack empty? HTML §8.1.4.4 "Calling scripts", clean up after
    running script step 3: "If the JavaScript execution context stack is now empty, perform a microtask
-   checkpoint." That sentence is the precondition of a MICROTASK checkpoint and of a TASK alike, so it is what
-   both the checkpoint arm and the reply-delivery arm of the scheduler's ladder are guarded on, and the full
-   derivation of its two halves is at the definition in flow.c.
-   IT IS EXPORTED BECAUSE IT HAS TWO CONSUMERS AND ONE OF THEM IS THE CENSUS. `framed` answers only the first
-   half — a live frame — so the number of members that can take a task is NOT `flows - framed`, and a run that
-   reads the second for the first cannot tell a frontier whose members are all mid-program from one whose
-   delivery arm is unreachable for some other reason. Restated in the census it would be a second spelling of
-   one spec sentence, which is the drift solver/pending.h refuses for the word "owed": what may differ between
-   readers is what they DO, never what the question means. */
+   checkpoint." It guards both the checkpoint arm and the reply-delivery arm of the scheduler's ladder; the
+   derivation is at the definition in flow.c. Exported for the census too: `framed` answers only the live-frame
+   half, so the members that can take a task are not `flows - framed`. */
 int flow_stack_empty(const Flow *f);
 
-/* HOW MANY ROUTED CROSS-DOCUMENT DELIVERIES THIS FLOW IS HOLDING — the length of `deliver_q`, asked here
-   rather than read at the call sites so the queue's shape has ONE reader (the twin below says what a second
-   reader costs: it is always the one missing the tag assert). 0 for the JS_UNDEFINED an untouched flow
-   carries, which is nearly all of them. */
+/* How many routed cross-document deliveries this flow holds: the length of `deliver_q`, with one reader of the
+   queue's shape. 0 for an untouched flow's JS_UNDEFINED. */
 int flow_deliver_pending(const Flow *f);
 
-/* …AND THE THREE THINGS THAT EVER HAPPEN TO THAT QUEUE, WHICH LIVE HERE BECAUSE THE FIELD DOES. An entry is
- * never edited after it is pushed, so there are exactly three: APPEND at arrival, TAKE from the front at the
- * delivery, and a FORK that gives an arm its own Array naming the same entries. They are declared beside the
- * field rather than kept private to the scheduler because the queue has MORE THAN ONE client — engine.c
- * routes and delivers, cold.c writes it out and reads it back — and a second client writing the Array is the
- * two-readers-of-one-shape defect this file names one paragraph down: the second is always the one missing
- * the assert. Every mutation runs inside cow_engine_write_begin/end, because this is the SCHEDULER's record
- * about a flow, written from outside any flow's delta (engine_route walks every flow) — a delta that captured
- * it would put a delivered message back on the queue the moment a sibling switched in.
- * `flow_deliver_take` and `flow_deliver_entry` hand back an entry the CALLER owns and frees. */
+/* The three operations on `deliver_q`: append at arrival, take from the front at delivery, and a fork that gives
+ * an arm its own Array naming the same entries (entries are never edited). Declared here because engine.c routes
+ * and delivers while cold.c writes and reads it back, and one owner keeps the shape assert. Every mutation runs
+ * inside cow_engine_write_begin/end: this is the scheduler's record about a flow, written from outside any
+ * flow's delta (engine_route walks every flow), and a delta that captured it would restore a delivered message
+ * when a sibling switched in. flow_deliver_take and flow_deliver_entry return an entry the caller owns. */
 void    flow_deliver_push(JSContext *ctx, Flow *f, const char *record, const char *sender_origin);
 JSValue flow_deliver_take(JSContext *ctx, Flow *f);
 JSValue flow_deliver_entry(const Flow *f, int i);
 JSValue flow_deliver_fork(JSContext *ctx, const Flow *parent);
 
-/* …AND THE SAME FOUR OVER THE COMMITMENT RECORD BESIDE IT (`deliver_world_q` above), which is a separate list
- * because it answers a different question and outlives every entry of the queue: the queue is what this
- * timeline still has to DO, this is what it has already BECOME.
- * The triple is [vector, taken, arm] — the sending world's wire vector, whether this timeline received it (1)
- * or foreclosed it (0), and which mechanism minted the flow on the other side of the branch (FlowCommitArm).
- * Entries are never edited after they are pushed, which is what lets a fork share them; the
- * ARRAY is per-flow because each arm adds its own commitments from the branch onward.
- * `flow_world_commit_at` hands back an entry the CALLER owns and frees, exactly as the delivery queue's does.
- * WHAT A COMMITMENT MEANS is engine.c's (it is the one component that holds both a record's vector and the
- * receiving flow); what lives here is the FIELD and the four things that happen to it, for the reason the
- * queue's four live here: a second writer of the Array is always the one missing the shape assert. */
-/* WHICH MECHANISM MINTED THE FLOW ON THE OTHER SIDE OF THE BRANCH A COMMITMENT NAMES — the third element of
- * every row, and the reason a refusal made out of one is not a lost message.
+/* The same operations over the commitment record `deliver_world_q`, a separate list because it outlives every
+ * queue entry: the queue is what this timeline still has to do, this is what it has become. Each entry is
+ * [vector, taken, arm]: the sending world's wire vector, whether this timeline received (1) or foreclosed (0)
+ * it, and the FlowCommitArm below. Entries are never edited, so a fork shares them; the Array is per flow.
+ * flow_world_commit_at returns an entry the caller owns. What a commitment means is engine.c's. */
+/* Which mechanism minted the flow on the other side of the branch a commitment names. Both refusal kinds defer:
+ * a received row leaves a contradicting record to the sibling arm minted where this timeline took that world,
+ * and a foreclosed row leaves one at or under its subtree to the parent. Whether that flow exists is a fact
+ * about the producing mechanism, stated at the push; a reader cannot re-derive it from the vector. A reader
+ * that meets a value it has no arm for crashes.
  *
- * BOTH REFUSAL KINDS DEFER, AND NEITHER CAN CHECK ITS OWN DEFERRAL. A RECEIVED row refuses a contradicting
- * record and leaves it to the SIBLING ARM minted where this timeline took that world; a FORECLOSED row refuses
- * one at or under its subtree and leaves it to the PARENT that took it. Both of those flows are minted by the
- * mechanism that pushed the row, at the instant it pushed it — so whether one exists is a fact about that
- * mechanism, and it is the producer's to state. A reader cannot re-derive it: the row's own vector says
- * whether the SENDING world came through a branch, which is a different question that happens to have the same
- * answer for the one producer this file has today (solver/engine.c's delivery-time fork), and silently does
- * not for the next one.
- *
- * SO THE VALUES ARE MECHANISMS AND NOT SHAPES, and the vocabulary is this engine's own — a producer names a
- * member or it does not compile, and a reader that meets one it has no arm for CRASHES rather than filing it
- * under whichever it tested first. That is the same closure `taken` has and for the same reason.
- *
- * NAMED RESIDUAL — AN OWED ARM IS RECORDED AND NOTHING ANYWHERE ASKS WHETHER IT WAS EVER MINTED.
- *   WHAT IS NOT COVERED: `FLOW_COMMIT_ARM_ANSWER_OWED` states an OBLIGATION that solver/engine.c's
- *   flow_answer_fork discharges when the peer's NEXT answer arrives, and a peer that answers ONCE never
- *   arrives — so the row is indistinguishable, for the whole life of the flow, from one whose arm was minted
- *   the next step. The refusal such a row makes is therefore either a message the arm holds or a message no
- *   timeline of this document receives, and the row cannot say which.
- *   WHAT THE NEXT DIFF BUILDS: the release criterion solver/engine.c's engine_host_take residual already
- *   names — the peer's own statement that every timeline holding a token has answered — at which point an
- *   owed arm either exists or is known never to be coming, and this member splits into the two that already
- *   exist rather than needing a fourth.
- *   HOW ITS ABSENCE WOULD SHOW: a receiving timeline refusing a routed delivery on an answer commitment, with
- *   the exhaustion assert over `_routedZeroDelivery` firing at the end of the session because no other
- *   timeline admitted that record — an obligation that was recorded and never discharged, observed at the one
- *   line that can see a record no timeline took. */
+ * Named residual. Not covered: FLOW_COMMIT_ARM_ANSWER_OWED is an obligation flow_answer_fork discharges at the
+ * peer's next answer, and a peer that answers once never discharges it, so the row cannot say whether its
+ * refusal is held by an arm or lost. Next diff builds: the release criterion engine_host_take's residual names
+ * (the peer stating every timeline holding a token has answered), splitting this member into the other two.
+ * Absence shows as: the exhaustion assert over `_routedZeroDelivery` firing at session end after a timeline
+ * refused a routed delivery on an answer commitment. */
 typedef enum {
-    /* NO FLOW IS ON THE OTHER SIDE. The refusal a row like this makes is a message no timeline of this
-       document receives, which is why deliver_admits aborts on one rather than answering. */
+    /* No flow is on the other side; such a row's refusal is a message no timeline receives, so deliver_admits
+       aborts on one. */
     FLOW_COMMIT_ARM_NONE = 0,
-    /* THE DELIVERY-TIME FORK (solver/engine.c's deliver_fork_arm) minted it, and it inherited this flow's
-       delivery queue at that instant — so it was handed every record this flow consumes from there on. */
+    /* The delivery-time fork (solver/engine.c's deliver_fork_arm) minted it, inheriting this flow's delivery
+       queue at that instant, so it holds every record this flow consumes from there on. */
     FLOW_COMMIT_ARM_DELIVERY_FORK = 1,
-    /* AN ARM IS OWED BY ANOTHER MECHANISM, LATER — the member both of those cannot state, and the reason it
-       is an OBLIGATION rather than an outcome. The two above are decided AT the push; a cross-instance ANSWER
-       is not. solver/engine.c's flow_answer_fork mints the arm for an answer commitment when the peer's NEXT
-       answer arrives, which is after the row is pushed and is not guaranteed at all — a peer holding ONE
-       timeline has nothing further to answer from. So the producer states what it knows, which is that an arm
-       is owed, and never which of its neighbours turned out to be true.
-       A READER MAY NOT FILE IT UNDER EITHER NEIGHBOUR, and the two mistakes are opposite. Read as
-       DELIVERY_FORK it asserts an arm that may not exist, which is the claim the whole vocabulary was built
-       to stop a row making. Read as NONE it ABORTS — on a peer that answered exactly once, which is a peer
-       behaving correctly. The refusal it produces is counted on its own census row (solver/step_unit.h), and
-       if that refusal really was a lost message the exhaustion assert over `_routedZeroDelivery` is what
-       says so: it is the only line that can see a record no timeline of this document admitted. */
+    /* An arm is owed by another mechanism, later: flow_answer_fork mints it at the peer's next answer, which is
+       not guaranteed. A reader may file it under neither neighbour: read as DELIVERY_FORK it asserts an arm that
+       may not exist, read as NONE it aborts on a peer behaving correctly. Its refusals have their own census
+       row (solver/step_unit.h). */
     FLOW_COMMIT_ARM_ANSWER_OWED = 2
 } FlowCommitArm;
 
-/* IS THIS A MEMBER? — beside the enum and not at the one assert that asks, because a closed enumeration
-   spelled as a list of member names is the drift CLAUDE.md names: a member added here and not there is
-   admitted by a check whose whole job is to refuse it. One edit adds a member and nothing else names the set.
-   IT IS NOT A SECOND COPY OF THE VOCABULARY, it is the vocabulary's only statement of its own membership —
-   the values themselves are the wire digits solver/cold.c's park grammar writes, and their ORDER carries no
-   meaning at all, which is why nothing may test a member with a comparison. */
+/* Is `a` a member of FlowCommitArm? The enum's only statement of its membership, kept beside it so adding a
+   member is one edit. The values are solver/cold.c's park wire digits and their order means nothing, so never
+   test a member with a comparison. */
 static inline int flow_commit_arm_is_member(FlowCommitArm a) {
     return a == FLOW_COMMIT_ARM_NONE || a == FLOW_COMMIT_ARM_DELIVERY_FORK ||
            a == FLOW_COMMIT_ARM_ANSWER_OWED;
@@ -778,38 +595,21 @@ static inline int flow_commit_arm_is_member(FlowCommitArm a) {
 
 int     flow_world_commits(const Flow *f);
 JSValue flow_world_commit_at(const Flow *f, int i);
-/* THE SITE TRAVELS WITH THE PUSH, because the one coherence check inside this entry is asserted for FOUR
-   producers and a DCHECK stamps the line it is WRITTEN at — so every one of them reported the SAME line of
-   solver/flow.c, and the crash's own remedy could do no better than tell its reader to go and grep for the
-   caller. That is CLAUDE.md's assert-that-names-a-remedy-but-not-a-site exactly, and the cure is its: a
-   __FILE__/__LINE__ pair captured AT THE CALLER and threaded to the check, never derived at the helper and
-   never captured at an intermediate that would name one forwarding function for the whole tree.
-   THE MACRO IS WHAT MAKES IT UNFORGEABLE — it expands at each call site, so a producer added later cannot
-   omit its own address and there is no sentinel for one that has nothing to say. It is not a wrapper
-   introduced to share a check: the check is where it always was, and only the ADDRESS is new.
-   THE NAME THE CALLERS SPELL IS DELIBERATELY UNCHANGED. `flow_world_commit_push(` is the grep the abort
-   names and the string solver/cold.c's row census cites by hand, so a rename would have emptied both at
-   once — a population that answers zero while every member is still there. */
+/* Append a commitment. The macro captures the caller's __FILE__/__LINE__ and threads it to the coherence check
+   inside, so a failure names the producer rather than one line of flow.c; it expands at each call site, so a
+   new producer cannot omit its address. The spelling `flow_world_commit_push(` is kept because the abort and
+   solver/cold.c's row census cite it. */
 void    flow_world_commit_push_at(JSContext *ctx, Flow *f, const char *vector, int taken, FlowCommitArm arm,
                                   const char *file, int line);
 #define flow_world_commit_push(ctx, f, vector, taken, arm) \
     flow_world_commit_push_at((ctx), (f), (vector), (taken), (arm), __FILE__, __LINE__)
 JSValue flow_world_commit_fork(JSContext *ctx, const Flow *parent);
 
-/* HOW MANY ROWS HAVE BEEN APPENDED TO ANY FLOW'S LEDGER SINCE THE FRONTIER CAME UP — a LIFETIME COUNT OF
- * EVENTS and never a reading of the frontier, so it cannot fall and two of them may be differenced. It is the
- * one question the per-flow accessor above structurally cannot answer: `flow_world_commits` is a GAUGE over a
- * flow that is STILL A MEMBER, so a row written onto a flow that has since finished is invisible to every walk
- * of the registry, and a walk that finds none cannot tell a document where no timeline ever received from one
- * where the receivers have departed. Those take opposite work — the first wants the producer routed, the
- * second is a commitment leaving the frontier — so they may not share a number (solver/cold.h says the same
- * thing one level up about the ASK beside the OUTCOME).
- * RAISED AT THE APPEND AND NOWHERE ELSE, which is what makes it the ledger's own count rather than a second
- * opinion about it: a fork SHARES its parent's rows and writes none, so it raises nothing and the number stays
- * a count of rows that were STATED rather than of rows that exist.
- * IT DIES WITH THE FRONTIER, in flow_registry_free and beside the very call that resets the ask census it is
- * read against — so the two lifetimes are one BY CONSTRUCTION and a reader comparing them is never comparing a
- * previous document's rows against this one's asks. */
+/* Lifetime count of rows appended to any flow's commitment record since the frontier came up; it cannot fall,
+ * so two readings may be differenced. flow_world_commits is a gauge over current members, so this is what
+ * tells a document where no timeline ever received from one whose receivers departed. Raised only at the
+ * append (a fork shares rows and raises nothing). Reset in flow_registry_free beside the ask census it is read
+ * against, so the two always cover one document. */
 long    flow_world_commit_rows_written(void);
 
 /* THIS FLOW'S JOB QUEUE, AND EVERYTHING THAT EVER HAPPENS TO IT — declared beside the field for the reason the
