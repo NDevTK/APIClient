@@ -237,8 +237,8 @@ static lxb_dom_element_t *hint_container_frame_element(const lxb_dom_node_t *doc
               "than an oversight — \"a page can change the margins of another page (including one from another "
               "origin)\" — and answering 8px here is a REAL NUMBER for a page whose embedder wrote "
               "`<iframe marginheight=20>`, with nothing to say the attribute was never read. BUILD the "
-              "SUSPEND-AT-THE-BOUNDARY read (CLAUDE.md §Security: a synchronous cross-instance read is a "
-              "suspend point) and ask the peer for the container's attribute");
+              "suspend-at-the-boundary read (a synchronous cross-instance read is a suspend point) and ask the "
+              "peer for the container's attribute");
         return NULL;
     }
     n = node_of(container);

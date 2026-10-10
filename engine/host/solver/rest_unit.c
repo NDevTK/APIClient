@@ -66,8 +66,7 @@ size_t rest_unit_items(RestUnitKind kind)
     DCHECKF(n >= 1,
             "the rest-point granularity for kind %d is %zu — a unit of zero items is a step that performs no "
             "work and a driver that never ends, and a unit is at least one BY ARCHITECTURE: what this policy "
-            "may tune is how often a span offers to rest, never whether it can rest at all (CLAUDE.md §NO "
-            "BOUNDS). Either this kind has no entry in rest_unit.c's switch or something cast an integer that "
+            "may tune is how often a span offers to rest, never whether it can rest at all. Either this kind has no entry in rest_unit.c's switch or something cast an integer that "
             "is not a RestUnitKind",
             (int)kind, n);
     return n;

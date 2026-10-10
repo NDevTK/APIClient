@@ -225,8 +225,8 @@ const char *endpoint_address_class_token(int cls) {
                 "ENDPOINT_ADDRESS_CLASSES — every value comes off `address_class_of`, which returns a member "
                 "of that list on every one of its arms, so this is a field nothing in this file wrote and the "
                 "word "
-                "about to be published is a claim about CLAUDE.md §What-the-tool-produces' hard bar that no "
-                "measurement made",
+                "about to be published is a claim about the product's runtime-only bar that no measurement "
+                "made",
                 cls);
 }
 
@@ -262,8 +262,8 @@ const char *endpoint_razor_class_token(int cls) {
     CHECK_FAILF("endpoint: an @H record states the razor class %d, which is none of endpoint.h's "
                 "ENDPOINT_RAZOR_CLASSES — every value comes off `endpoint_razor_class_of`, which returns one "
                 "of exactly two members of that list, so this is a value nothing in this file composed and the "
-                "word about to be published is this engine's answer to CLAUDE.md §What-the-tool-produces' hard "
-                "bar with no measurement under it",
+                "word about to be published is this engine's answer to the product's runtime-only bar with no "
+                "measurement under it",
                 cls);
 }
 
