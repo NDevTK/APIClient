@@ -46,8 +46,8 @@
  * whose WHAT-THE-NEXT-DIFF-BUILDS clause is "a build stage that CALLS this reader rather than re-deriving its
  * rule", and whose HOW-ITS-ABSENCE-SHOWS clause is that an undeclared row "rides green through every build it
  * is present for and refuses the first driver run afterwards, so the diff that meets the refusal is reliably
- * not the diff that introduced it". `censusKinds()` THROWS when a composer's published set and its declared
- * `@kind` set disagree in either direction, so this stage buys that refusal's TEMPO for free — which is
+ * not the diff that introduced it". `censusKinds()` THROWS on a declaration row it cannot read, an unknown
+ * kind or a key declared twice, so this stage buys that refusal's TEMPO for free — which is
  * exactly what the residual says such a stage buys and all it says it buys. VERIFIED rather than assumed:
  * `grep -cF census_rows engine/build.mjs` answered 0 before this landed, against `fieldgate` 2, `idlgen` 4,
  * `mdgate` 1, `jscommentgate` 1 and `argaudit` 2 as the armed control.

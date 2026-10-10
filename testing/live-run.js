@@ -454,7 +454,7 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
    FROM THESE LISTS' SHAPE. It said `These lists declare KIND — which rows may be DIFFERENCED — and no artifact
    in this tree states a @COLD row's kind at all`, with a retirement naming the diff that would change it:
    result.c stating each row's kind beside it, after which a consumer derives instead of listing. BOTH HALVES OF
-   THAT ARE MET — result.c carries an `@kinds-of cold` block, rung_entry.c and endpoint.c carry their own, and
+   THAT ARE MET — every composer's rows and kinds are declared in solver/metrics/<family>.def, and
    `kindsOf` refuses an undeclared row outright — so a reader who finds the old sentence and concludes a kind
    list is still owed here would be re-adding the second copy that mechanism ended.
    WHAT IS STILL HAND-KEPT IS THE CURATION, WHICH IS THIS DRIVER'S OWN FACT AND MAY NOT BE DERIVED: `census()`
@@ -516,7 +516,7 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
    THEY ARE NUMBERS ON A LIST WHOSE OTHER TWO MEMBERS ARE HISTOGRAMS, which is safe because nothing spreads it:
    `census()` copies every member of COLD_ROWS with one uniform `k in c` read. Their KIND is not this list's
    statement and is no longer guessed from the `Life` suffix — `census_rows.js` reads it off each producer's own
-   `@kinds-of` declaration, and this driver's header line prints what the producer says. */
+   declaration file, and this driver's header line prints what the producer says. */
 const COLD_STEP_UNITS = ["stepNamedRenderingLife", "stepNamedRenderingTypeofLife", "stepNamedRenderingPropLife",
                          "stepNamedTimerLife", "stepNamedTimerTypeofLife", "stepNamedTimerPropLife",
                          "stepNamedIdleLife", "stepNamedIdleTypeofLife", "stepNamedIdlePropLife",
@@ -565,8 +565,8 @@ const COLD_STEP_UNITS = ["stepNamedRenderingLife", "stepNamedRenderingTypeofLife
    merely PROBES for a name is not merged into the population read as uses. The pair IS the discriminator, so
    either half alone re-merges exactly what the split was built to separate.
    MEASURED, AND THE DECLARATION IS GREEN THE DAY IT LANDS, which is what makes it a forcing function rather
-   than a red gate: the derivation is `testing/census_rows.js`'s own `composerRowsFromText` over each
-   composer's emission, and reconciled against this driver's `COLD_ROWS` it answers 8 of 8 for `fetchEdge` and
+   than a red gate: the derivation is `testing/census_rows.js`'s own row reader over each
+   composer's declaration, and reconciled against this driver's `COLD_ROWS` it answers 8 of 8 for `fetchEdge` and
    9 of 9 for `xhrEdge`, carried, with nothing published-and-missing in either direction. The controls were
    run and SPOKE, because a check that has never refused anything is not a check: `cold` and `wfq` declared
    whole each throw with the rows they publish and this driver curates away, a composer name that does not
@@ -580,7 +580,7 @@ const COLD_STEP_UNITS = ["stepNamedRenderingLife", "stepNamedRenderingTypeofLife
    §THE-COROLLARY-IS-THE-MORE-USEFUL-HALF: one added total covers every future spelling of the question
    where a rewritten reader covers only the one somebody happened to find.
    RETIREMENT: this note goes when a composer declares its own rows ONE READING at the emitter — a machine-read
-   line beside `@kinds-of` saying which of its rows no consumer may take in part — because the three keys below
+   line in its declaration file saying which of its rows no consumer may take in part — because the three keys below
    are then derived from the producers that know, and which composer is whole stops being a fact a consumer
    states about itself. */
 const COLD_WHOLE = ["rungEntry", "fetchEdge", "xhrEdge"];
@@ -675,7 +675,7 @@ const COLD_WHOLE = ["rungEntry", "fetchEdge", "xhrEdge"];
    because "the first is the park's re-execution COST … a pager pays for a member whichever population it
    belongs to, so a split would be a row no consumer could state anything new from." An artifact older than it
    prints `null`, this driver's absent-versus-zero rule. */
-/* AND THE THREE ROWS OF THIS SAME @kind DECLARATION THAT NO LIVE DRIVER ASKED FOR, which is why the one
+/* AND THE THREE ROWS OF THIS SAME KIND DECLARATION THAT NO LIVE DRIVER ASKED FOR, which is why the one
    question a real-page drive keeps arriving at could not be answered from a drive. `programsAhead` below is
    carried; `dynBodies`, `dynKiB` and `sharedKiB` are declared on the SAME line of solver/result.c and were
    carried by nothing in testing/ — read only by engine/build.mjs, which reports on a FIXTURE. So the rows were
@@ -938,7 +938,7 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      duration, so the per-arm SPAN this file once attributed from `overrunStepUsAtLeast` was a pooled mean over
      every arm — withdrawn at that field's own banner, where the only bound left was one quantum to the whole
      accumulator, a thirteen-hundred-fold range.
-     IT IS A MAXIMUM AND IS DECLARED AS ONE, which `solver/result.c` states in its own `@kind maximum:` line.
+     IT IS A MAXIMUM AND IS DECLARED AS ONE, which solver/metrics/cold.def states on its row.
      A maximum is monotone so it may be differenced, and it SATURATES, so a plateau in it is not a ceiling and
      the series length is part of quoting it — the same caution this driver already carries for `deepest` and
      its siblings, and the reason it must not be filed under LIFETIME.
@@ -987,7 +987,7 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      ("`g_slices` IS THEIR DENOMINATOR"), and solver/engine.h says `loop_us / slices` is what a slice costs.
      (iii) result.c, which this clause CITES, says at that group that `slices` is the denominator NEITHER SPAN
      would otherwise have — the two spans being `loopUs` and `betweenSlicesUs`, which is the group it is
-     emitted with (`@kind lifetime: instanceUs loopUs betweenSlicesUs slices`). The cited line is real and is
+     emitted with (`instanceUs`, `loopUs`, `betweenSlicesUs`, `slices`, LIFETIME in solver/metrics/cold.def). The cited line is real and is
      about a different operand, which is the mis-aimed citation CLAUDE.md rates as surviving every check a
      reader makes of it. And the banner sixty lines up is the correction that already said all of this, landed
      2026-09-23 under a subject naming it, where this clause landed 2026-10-04 — the same wrong division
@@ -1153,7 +1153,7 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      is what makes a FOURTH door visible in this output; the engine asserts only the direction that cannot be
      innocent, an arm ABOVE the total.
      ALL FIVE ARE LIFETIME COUNTS AND THE PRODUCER STATES IT — `Life` is spelled into the name for a reader
-     and the kind is declared at result.c's `@kinds-of cold` block for this driver, which composes its header
+     and the kind is declared in solver/metrics/cold.def for this driver, which composes its header
      from that declaration rather than from a list here. An artifact older than these rows prints `-` for all
      five, which is this driver's absent-versus-zero rule and is the honest answer: the run did not state
      them. */
@@ -1183,7 +1183,7 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      are GAUGES: `endpoint_mark_asset` MARKS RATHER THAN DELETES and its verdict arrives with the REPLY while
      the record was minted at the REQUEST, so a census taken between those two instants counts the record and
      the next one does not — `epEmitted` FALLS by one with nothing wrong, and `epPreProgram` is raised inside
-     that same emitted arm. solver/result.c states the split and the reason at its own `@kinds-of` block, and
+     that same emitted arm. solver/metrics/cold.def states the split and the reason, and
      the header line above is composed from that declaration, so this driver prints the correction without
      being told it. `epMinted` and `epAssets` are the monotone halves and stay lifetime.
      THE TELL GENERALISES AND IS FREE: `epEmitted = epMinted - epAssets` with BOTH terms rising, and a
@@ -1626,7 +1626,7 @@ const SCAN_ENTRIES = scanRowShape();
    COMMON OFFSET, nothing reorders, and a single cached maximum is exact. BOTH ARE GAUGES and `silCarry` may
    FALL between samples — the threshold sweeps downward as the family burns and resets every member at once —
    so neither may be differenced and `census` nulls both on an empty frontier through the producer's own
-   `@kind` line rather than through any list here.
+   declared kind rather than through any list here.
    `picksLifetime` IS CARRIED FOR THESE TWO AND FOR NOTHING ELSE. solver/flow.h names the reading: a member that
    has never held the thread carries the phase it was FORKED with, so `silPhases` far below the dispatch count
    says the residues are INHERITED rather than EARNED — which is a different finding from a frontier that has
@@ -1643,7 +1643,7 @@ const WFQ_ROWS = ["members"].concat(WFQ_JOB_SPLIT, WFQ_PICKS, WFQ_LADDER, WFQ_SC
 const OUT_NAME = { members: "wfqMembers" };
 /* WHICH `wfq` ROWS ARE LIFETIME COUNTS, TAKEN FROM THE PRODUCER AND NEVER LISTED HERE — the set `census` gates
    on. A hand-kept list of which rows survive an empty frontier would be a second copy of a fact only the
-   composer's `@kind` line states, which is the drift `kindsOf` exists to end. */
+   composer's declaration states, which is the drift `kindsOf` exists to end. */
 const WFQ_LIFETIME = new Set(kindsOf(WFQ_ROWS).byKind.lifetime);
 
 /* WHERE THE FRONTIER STOOD, WHAT ITS STEPS DID, AND WHAT GREW IT — read off the row bridge.js wrote, never

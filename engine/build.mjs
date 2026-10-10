@@ -360,14 +360,13 @@ const loadNow = () => {
    MEMOIZED BECAUSE IT IS A FILE READ AND THE ANSWER CANNOT CHANGE UNDER ONE BUILD — and never evaluated at
    module load, for `wfqFields`' reason: `HOST` is a `const` far below this line, so a top-level derivation
    here would reach it in its temporal dead zone and `node --check` would pass on it. */
-const coldFields = sourceFact(() => censusRowSet(
-  "solver/result.c", "char *result_cold_json(void)", "\n}\n",
+const coldFields = sourceFact(() => censusDefRowSet(["cold"],
   ["stepUnits", "stepUnitRuns", "stepUnitOverruns", "stepUnitOverrunSeamlessArms",
    "stepUnitOverrunAskArms", "stepUnitOverrunGapArms",
    "outOfProgramsAtTheLadderUnits", "programCursors",
    "programsAhead", "epDoors", "epReach", "epAddressClass", "epRazorClass", "epWitnessClass"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
-  "composer rather than from a list beside it"));
+  "composer's declaration rather than from a list beside it"));
 /* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason
    `stepUnitReading` checks its histogram against `live`: two rows that are supposed to be the whole of a third
    are two numbers that can drift, and drifted they are WORSE than the one number they replaced, because each
@@ -1230,11 +1229,20 @@ function censusDefFields(families, why) {
    `censusHistRows` when the reading runs, but only if that reading is reached, whereas this fires while the
    row set is being taken and names the composer. One throw, at the seam, for a set that is one line long. */
 function censusRowSet(file, from, to, objects, why) {
-  const d = censusComposerFields(file, from, to, why);
+  return censusObjectsChecked(censusComposerFields(file, from, to, why),
+                              `the composer at ${JSON.stringify(from)} in engine/host/${file}`, objects, why);
+}
+/* The same check over a census composed through the registry, whose rows are its declaration files'. */
+function censusDefRowSet(families, objects, why) {
+  return censusObjectsChecked(censusDefFields(families, why),
+                              `the census declared by ${families.map((f) => `solver/metrics/${f}.def`).join(", ")}`,
+                              objects, why);
+}
+function censusObjectsChecked(d, where, objects, why) {
   const extra = d.object.filter((k) => !objects.includes(k));
   const gone = objects.filter((k) => !d.object.includes(k));
   if (extra.length || gone.length)
-    throw new Error(`[build] the composer at ${JSON.stringify(from)} in engine/host/${file} splices ` +
+    throw new Error(`[build] ${where} splices ` +
                     `[${d.object.join(", ")}] as objects and this reader validates [${objects.join(", ")}] — ` +
                     `${why}. ` +
                     (extra.length
@@ -2719,8 +2727,8 @@ function censusHistRows(b, name, totalName, extent) {
    IT RETURNS THE ROWS AND NOT THE MAXIMUM, for `censusHistRows`' reason: the caller wants the arms, and a
    helper that answered the fold it just checked would hand its caller the number it is about to compose a
    sentence out of while hiding the row that carries it.
-   RETIREMENT: this goes when the FOLD a per-arm row is checked under is selected from the composer's own
-   `@kind` declaration rather than from which function a reader happens to call, because a row declared
+   RETIREMENT: this goes when the FOLD a per-arm row is checked under is selected from the row's declared kind
+   (solver/metrics/*.def) rather than from which function a reader happens to call, because a row declared
    `maximum` could then not be handed to the sum reader at all and the two would be one mechanism keyed on the
    producer instead of two keyed on the consumer's memory. MEASURED ABSENT with the command rather than
    asserted, so the condition is not born met: `grep -cE 'kindsOf\([^)]*\)[^;]*(maximum|lifetime)|foldFor|
@@ -3405,8 +3413,8 @@ function stepCostReading(a, b, q) {
      run of 13043 turns at 638eb345, one interleaving, FOUR windows of 46 held a turn at or past the slice and
      the other forty-two ran at 0.1 to 1.5 ms — so this fraction is normally SMALL, and a small fraction here
      is not a quiet result, it is a short list of turns to go and look at. The mean over that same run was
-     56 ms, which is near none of them. It is READ AND NOT DEFAULTED: the row is in result_cold_json's own
-     format string, so censusRowSet requires it and an artifact without it fails loudly here rather than
+     56 ms, which is near none of them. It is READ AND NOT DEFAULTED: the row is in the @COLD declaration
+     (solver/metrics/cold.def), so coldFields() requires it and an artifact without it fails loudly here rather than
      reading as a run that never overran. */
   const overFrac = b.sliceOverruns / b.steps;
   /* AND WHETHER THE PAGE'S OWN CODE WAS RUNNING IN THOSE TURNS, WHICH IS THE HALF THE ARM HISTOGRAM'S
@@ -3416,7 +3424,7 @@ function stepCostReading(a, b, q) {
      `sliceOverrunSeamless` is how many of those turns offered NOT ONE suspend point and `sliceOverrunAsks` is
      how many the rest offered between them; the pair is the reading, because a sum alone can be carried by a
      single chatty turn. READ AND NOT DEFAULTED, for the reason directly above: both rows are in
-     result_cold_json's own format string, so `coldFields()` requires them and an artifact without them fails
+     solver/metrics/cold.def, so `coldFields()` requires them and an artifact without them fails
      loudly here rather than reading as a run whose overruns offered nothing. */
   const seam =
     b.sliceOverruns === 0
@@ -3588,7 +3596,7 @@ function programCursorReading(b) {
      hold such a member are not rungs: it was never handed the thread, or it is suspended in a live frame and
      the whole ladder sits under `if (!f->frame)`.
      PRESENCE IS NOT RE-CHECKED HERE, for the reason the `deepest`/`completed` note above gives: the three are
-     `%ld` conversions in `result_cold_json`, so the DERIVED @COLD row set already requires them numeric by
+     integer rows of solver/metrics/cold.def, so the DERIVED @COLD row set already requires them numeric by
      the time this runs, and a second presence check would be the second place a renamed row has to be
      renamed. The SUM is a different question and no derivation can make it — it is a claim about the
      population, which is what `coldPartition` is for.
@@ -9520,9 +9528,9 @@ STAGES.push(onHost(runProgram("concolic-crossing argument audit", [join(ENGINE, 
    `census_rows.js` carries a named residual whose next-diff clause is "a build stage that CALLS this reader
    rather than re-deriving its rule" and whose absence clause is that an undeclared row "rides green through
    every build it is present for and refuses the first driver run afterwards", so the reader who meets it is
-   reliably not its author. This stage calls `censusKinds()`, which THROWS when a composer's published rows and
-   its `@kinds-of` block disagree in either direction — verified rather than asserted: deleting one name from
-   `result.c`'s declaration makes that call throw, naming the row and the block. VERIFIED THE OTHER WAY TOO:
+   reliably not its author. This stage calls `censusKinds()`, which THROWS on a declaration row it cannot read, a kind outside
+   solver/metrics.h's, or a key declared twice; the declared and emitted sets are one set by construction,
+   asserted at composition by solver/metrics.c. VERIFIED THE OTHER WAY TOO:
    `grep -cF census_rows engine/build.mjs` answered 0 before this landed, against `fieldgate` 2, `idlgen` 4,
    `mdgate` 1, `jscommentgate` 1 and `argaudit` 2 as the armed control, so the residual's own claim held.
    ITS EXIT CODE IS THE FINDINGS AND NOTHING ELSE, and its control is measured on every invocation rather than
@@ -9545,8 +9553,8 @@ STAGES.push(onHost(runProgram("census numeric-gated family audit", [join(ENGINE,
                        "allowlist. This stage prints its FINDINGS, its DECISIONS and its BLIND SPOTS as three " +
                        "verdicts and only the findings carry the exit code, and it FAILS if its own control did " +
                        "not arm. It can also throw from `testing/census_rows.js`, which it CALLS rather than " +
-                       "re-implements: that throw is a composer row with no `@kind` declaration, or a " +
-                       "declaration for a row no composer publishes, and the repair is at the producer."),
+                       "re-implements: that throw is a declaration-file row it cannot parse, a kind outside " +
+                       "the registry's, or a key declared twice, and the repair is at the producer."),
                    STAGE_HOST.SOURCE));
 report(STAGES, FINDINGS);
 

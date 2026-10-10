@@ -1149,7 +1149,7 @@ const epFact = (k) => !counted.length ? null
 const REPLY_DOOR_SUM = ['replyAsked', 'replyAnswered', 'replyDeclined', 'replyDropped', 'replyOutstanding'];
 /* THE DELIVERY ARM'S OWN GUARD AND THE DEBT IT IS THE DENOMINATOR OF, AS ONE LIST AND IN THE PRODUCER'S
    CONTAINMENT ORDER — `canDeliver <= stackEmpty <= live`, which solver/result.c asserts and whose top term this
-   row already carries through `frontierPrograms`. All four are GAUGES by the producer's own `@kind` statement,
+   row already carries through `frontierPrograms`. All four are GAUGES by the producer's own declared kind,
    so they are a statement about the instant the census was composed and are never differenced against the
    LIFETIME step counts beside them. */
 const DELIVER_GUARD_ROWS = ['pend', 'pendReady', 'stackEmpty', 'canDeliver'];
@@ -1159,7 +1159,7 @@ const DELIVER_GUARD_ROWS = ['pend', 'pendReady', 'stackEmpty', 'canDeliver'];
    and `slices` is "THE DENOMINATOR NEITHER SPAN WOULD OTHERWISE HAVE". `stepUs` is the fourth because the
    producer's reading is a PAIR: "`loopUs` small says the engine was barely GIVEN the thread and the next
    question is the DRIVER; `loopUs` large with `stepUs` small says it had the thread and spent it outside a turn,
-   and the next question is this scheduler". All five are LIFETIME counts by the producer's own `@kind`.
+   and the next question is this scheduler". All five are LIFETIME counts by the producer's own declared kind.
    THAT FORK HAS A THIRD ARM, AND THIS BANNER USED TO WITHHOLD EXACTLY THE ROWS THAT READ IT. It said: "THE
    OVERRUN ROWS ARE DELIBERATELY NOT HERE AND BECOME THE QUESTION ONLY IF THIS FORK SAYS SCHEDULER …  Carrying
    them now would make this row a second copy of testing/live-run.js's census rather than this driver's curated
@@ -1194,7 +1194,7 @@ const WALL_SPAN_ROWS = ['instanceUs', 'loopUs', 'betweenSlicesUs', 'slices', 'st
    page and not about this engine."
    `stepUs` IS IN BOTH LISTS DELIBERATELY: it is the fork's fourth term above and this partition's total here,
    and one row serving two readings cannot drift the way two rows can. ALL OF THEM ARE LIFETIME COUNTS by the
-   producer's own `@kind` line and all are taken off the SAME entry, so every identity below holds at one
+   producer's own declared kind and all are taken off the SAME entry, so every identity below holds at one
    instant. ABSENT STAYS ABSENT in both lists: a `0` in `sliceOverruns` is the POSITIVE statement that not one
    turn overran its slice, and an artifact predating the row has said nothing whatever. */
 const TURN_PHASE_SUM = ['stepUs', 'sliceUs', 'schedUs'];
@@ -1319,7 +1319,7 @@ const row = {
      `git show <artifact head>:engine/host/solver/endpoint.h | grep -c EPA_SOURCE_DETERMINED`, which is an
      ARCHAEOLOGY over fifteen heads standing in for a field.
      THE TWO MAY NOT BE DIFFERENCED, WHICH IS WHY NO VERDICT IS COMPOSED HERE AND WHY THIS IS A SECOND ROW
-     RATHER THAN A REPAIR OF THE FIRST. solver/result.c declares this one `@kind gauge` -- it is the
+     RATHER THAN A REPAIR OF THE FIRST. solver/metrics declares this one GAUGE -- it is the
      partition at ONE CENSUS INSTANT -- and bridge.js's is over the whole emitted array at the end of the
      run. They are two moments, so they are free to disagree and a reader subtracting them is asking an
      identity neither producer asserts (CLAUDE.md §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE). The
@@ -2011,7 +2011,7 @@ const row = {
      row nonzero with `replyDeclined` at 0 is a refusal that never reached the engine — and it is still not a
      subtraction anything here may perform.
      THREE OF THE FOUR ENDS ARE LIFETIME COUNTS AND `replyOutstanding` IS A GAUGE, which is the producer's own
-     statement at `@kind` and not this file's guess, and it is why the identity is asked of ONE ENTRY: it holds
+     statement in its declaration and not this file's guess, and it is why the identity is asked of ONE ENTRY: it holds
      "at the moment all five are in one hand and at no other" (solver/result.c, citing
      CLAUDE.md §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE). Taken off `counted[last]` like every other
      counter on this row, so `countersFrom` keeps naming the one entry they all came from — and NEVER off
@@ -2138,7 +2138,7 @@ const row = {
      quotients it makes are in the slice's own measure and therefore comparable against the `@QUANTUM` line a run
      prints. `steps` is the other denominator and this row has carried it all along — so `slices` against `steps`
      is the producer's own next question, "the slices that dispatched nobody", and both terms are now present.
-     ALL FIVE ARE LIFETIME COUNTS by the producer's `@kind` statement, so they may be differenced across samples
+     ALL FIVE ARE LIFETIME COUNTS by the producer's declared kind, so they may be differenced across samples
      — unlike the delivery guard above, which is four GAUGES — and they are taken off the SAME entry as every
      other counter so the identity holds at one instant. ABSENT STAYS ABSENT: a `0` here would read as a drive
      that was given no thread at all, which is one of the two states the fork exists to separate. */

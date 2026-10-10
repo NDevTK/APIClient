@@ -42,6 +42,9 @@ static const MetricRow ROWS[METRIC_ROW_N] = {
 #define METRICS_DEF_FAMILY METRIC_FAMILY_WFQ_FRONTIER
 #include "solver/metrics/wfq_frontier.def"
 #undef METRICS_DEF_FAMILY
+#define METRICS_DEF_FAMILY METRIC_FAMILY_COLD
+#include "solver/metrics/cold.def"
+#undef METRICS_DEF_FAMILY
 };
 #undef METRIC
 #undef IDENTITY_LE
@@ -57,6 +60,7 @@ static const MetricIdentity IDENTITIES[] = {
 #include "solver/metrics/xhr_edge.def"
 #include "solver/metrics/wfq.def"
 #include "solver/metrics/wfq_frontier.def"
+#include "solver/metrics/cold.def"
 };
 #undef IDENTITY_LE
 #undef METRIC
@@ -141,6 +145,11 @@ static void wfq_frontier_members(JsonBuf *b)
     const char *sep = "";
 #include "solver/metrics/wfq_frontier.def"
 }
+static void cold_members(JsonBuf *b)
+{
+    const char *sep = "";
+#include "solver/metrics/cold.def"
+}
 #undef METRIC
 #undef IDENTITY_LE
 
@@ -155,6 +164,7 @@ static const struct {
     [METRIC_FAMILY_XHR_EDGE]   = { "xhr_edge",   xhr_edge_members },
     [METRIC_FAMILY_WFQ]        = { "wfq",        wfq_members },
     [METRIC_FAMILY_WFQ_FRONTIER] = { "wfq_frontier", wfq_frontier_members },
+    [METRIC_FAMILY_COLD]       = { "cold",       cold_members },
 };
 
 static const char *kind_name(MetricKind k)

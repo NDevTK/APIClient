@@ -963,68 +963,9 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
     return out;
 }
 
-/* The kind of every row this composer publishes, in a form testing/census_rows.js reads from source: a
-   quantity whose kind a reader cannot name from its output may not be used in arithmetic. The kinds:
-     lifetime  raised and never lowered — may be differenced across two samples of one instance.
-     gauge     a walk at one instant — may fall, so differencing one reads a level as a rate.
-     constant  written once at a seed — neither differenced nor read as a level.
-     maximum   a high-water mark — may be differenced, but a plateau is not a ceiling, so unlike `lifetime`
-               it may not be compared across runs of different length.
-   Declared at the emitter because whoever adds a row knows its kind. The reader enforces set equality both
-   ways (a declared row no longer published, a published row with no kind) and refuses a second declaration
-   for one composer or a row stated twice. Comment text changes no emitted byte, so a reader of the source is
-   right about an artifact of any age. Histograms carry kinds like scalars.
-   Kinds come from the filling accessor, never the name. `cold_census` is a walk, so its rows are gauges
-   (including the out-of-programs rows, keyed on the per-member `script_i == dyn_n`, and `live`, declared so
-   `live - outOfPrograms` is one walk); EngineFrontierCensus admits no gauge (solver/engine.h), so its rows are
-   lifetime, maxima or seed constants; ColdPreviewCensus only accumulates; ColdResumed is the session's at
-   most one rebuild, so constant. Exceptions: `owed` is its own walk whose marks age out (a gauge), and
-   `orphanClaims` comes from the rebuild (constant) while `orphanClaimsMet`/`Unmet` are lifetime. The @H
-   surface splits: `endpoint_mark_asset` marks a record already in `g_eps` when the reply lands, so
-   `epEmitted = epMinted - epAssets` falls with nothing wrong, and it, `epPreProgram` and the histograms
-   partitioning it are gauges while `epMinted` and `epAssets` are lifetime.
-
-   @kinds-of cold
-   @kind gauge: stepUnits programCursors replyOutstanding rowsAwaitingBytes
-   @kind gauge: live outOfPrograms outOfProgramsUnrun outOfProgramsFramed outOfProgramsAtTheLadder
-   @kind gauge: outOfProgramsAtTheLadderUnits
-   @kind lifetime: stepUnitRuns stepUnitOverruns stepUnitOverrunSeamlessArms stepUnitOverrunAskArms
-   @kind lifetime: hostAsked hostAnswered replyAsked replyAnswered replyDeclined replyDropped
-   @kind lifetime: replayHits replayLeft replayLeftArms
-   @kind lifetime: branchAsked branchRefined
-   @kind lifetime: forkOverPinned
-   @kind lifetime: steps sliceUs sliceOverruns sliceOverrunAsks sliceOverrunSeamless stepUs schedUs
-   @kind lifetime: unitMidProgram unitParked unitCheckpointOwed unframedStepsLifetime
-   @kind lifetime: stepReachedRenderingLife stepReachedTimerLife stepReachedIdleLife
-   @kind lifetime: clockAdvanceAskedLife clockAdvanceDeclinedLife
-   @kind lifetime: classicCompiles classicCompileOverruns finished
-   @kind lifetime: classicCompileAgain classicCompileAgainBytes classicCompileOwnDecode
-   @kind lifetime: classicCompileResumed classicParseShared
-   @kind lifetime: epMinted epAssets
-   @kind gauge: epEmitted epPreProgram epDoors epReach epAddressClass epRazorClass epWitnessClass
-   @kind lifetime: epAsks epAskPreProgram epAskSuppressed epAskMerged epAskMinted epAskMergedPreProgram
-   @kind lifetime: netProgQueuedLife netProgFetchAsksLife netProgFetchQueuedLife
-   @kind lifetime: netProgXhrAsksLife netProgXhrQueuedLife
-   @kind constant: rootPrograms rootProgramsHeldAtSeed rootProgramsAwaitedAtSeed
-   @kind maximum: deepest completed deepestLeft sliceOverrunGapUs stepUnitOverrunGapArms
-   @kind gauge: framed blocked owed
-   @kind gauge: decEntries decKiB headEntries headKiB domHeadEntries domHeadKiB pendKiB miscKiB perFlowKiB
-   @kind gauge: jobs pend pendReady stackEmpty canDeliver
-   @kind gauge: segKiB domSegKiB pinSegs pinSegEntries pinSegKiB decSegs decSegEntries decSegKiB
-   @kind gauge: dynBodies dynKiB sharedKiB programsAhead
-   @kind lifetime: finishedFlows finishedCands progStarts progStartsCand progStartsOther progQueuedCand
-   @kind lifetime: sold soldFlows soldCands forks orphanClaimsMet orphanClaimsUnmet orphanPreferred orphanScripts
-   @kind lifetime: hostAnswersExtra hostAnswersLate hostTerminated
-   @kind lifetime: pagedReqs pagedAsks pagedUnarmed pagedFloor
-   @kind lifetime: previewAsks previewAsksRefusing previewAsksEmpty previewAsksWritable
-   @kind lifetime: previewAsksWithFlows previewAsksWithCands previewAsksWithDeep previewAsksWithDeepCands
-   @kind lifetime: previewAsksWithWorlds previewAsksWithOrphans previewAsksWithCommits previewAsksWithDelivers
-   @kind lifetime: previewAsksAfterCommit previewCommitRowsWritten
-   @kind lifetime: instanceUs loopUs betweenSlicesUs slices
-   @kind constant: resumed resumedSegs resumedFlows resumedCands resumedWorlds orphanClaims
-*/
 char *result_cold_json(void) {
     ColdCensus c;
+    JsonBuf b = { 0 };
     /* The step-unit histograms, each composed into its own buffer and spliced as one `%s`. Their width
        STEP_UNITS_JSON_MAX is derived from solver/step_unit.h's list, so an arm added there widens them all.
        `hist` is the members standing in each arm now; `runs` the steps this instance ran in each arm — neither
@@ -1385,447 +1326,167 @@ char *result_cold_json(void) {
         cold_census_release(&c);
         return NULL;
     }
-    out = composef(
-                 /* `live` is the frontier's current size; the created total is `_flows` on the document. A
-                    stalled frontier has retired (`finished`) or paged (`sold`) its members. `live` is not split
-                    by candidate (`_wfq.cands` carries that half), and `framed` (the park's re-execution cost)
-                    and `blocked` (what the host owes) stay whole. `owed` counts flows that told the scheduler
-                    they cannot progress, which the pick reads; `blocked` asks each register whether the host
-                    owes it anything; the gap between them is marks cleared faster than the sweep lays them. */
-                 "{\"live\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
-                 /* `finished` and `sold` carry their two populations: an exploration flow retiring is coverage
-                    gained, a candidate member retiring is search spent on a payload that did not fire.
-                    `*Cands` count members, not sessions — engine_sibling_assemble copies the candidate identity
-                    to every sibling, and `_candidates` is the per-session count (solver/engine.h). The parts are
-                    rows rather than a subtraction so they can be checked; engine_frontier_census asserts the
-                    identity. The keys are not renamed: the composer ships in `qjs.wasm` while build.mjs reads
-                    the tree live. */
-                 "\"finished\":%ld,\"finishedFlows\":%ld,\"finishedCands\":%ld,"
-                 /* `deepest` (deepest program started) and `completed` are global high-water marks set by one
-                    member; `deepestLeft` is the deepest row any member left. */
-                 "\"deepest\":%d,\"completed\":%d,\"deepestLeft\":%d,"
-                 /* …and the number those two maxima are read against: the root document's own <script> count, not
-                    any flow's sequence length (which continues with chunks, injections and candidates).
-                    solver/engine.h states why no inequality between them holds. */
-                 "\"rootPrograms\":%d,"
-                 /* …and its two arms. `rootProgramsAwaitedAtSeed` is the reply-door openings this document owes
-                    for its own bundle, so `replyAsked` equal to it is a run that issued no page `fetch()`, XHR or
-                    dynamic `import()`. A partition, asserted at engine_frontier_census. */
-                 "\"rootProgramsHeldAtSeed\":%d,\"rootProgramsAwaitedAtSeed\":%d,"
-                 /* …and the live half of that pair: a gauge, where `…AwaitedAtSeed` is a constant written once at
-                    the seed. It counts program rows of the live frontier standing on an address now: `17` beside
-                    `0` is a bundle that arrived whole (read `programCursors`), `17` beside `17` a bundle whose
-                    bytes never came (the fetch path). Summed per member, so a fork raises it and a sale lowers it
-                    and no inequality against the seed's arm holds; its relation to `pend` is asserted at the head
-                    of this composer. */
-                 "\"rowsAwaitingBytes\":%ld,"
-                 /* The @S search's own numerator and denominator (solver/engine.h has the full reading).
-                    `progStartsCand` 0 is either no breakout queued or N queued and none started;
-                    `progQueuedCand` tells them apart, and `progStarts` 0 says nothing either way. The parts are
-                    rows rather than a subtraction so the identity engine.c asserts in dev is checkable off a
-                    release log. A fork copies unstarted rows, so `progStartsCand` may exceed `progQueuedCand`.
-                    `cand*` on the @WFQ line counts members carrying a payload substitution, a different
-                    population from these programs. */
-                 "\"progStarts\":%ld,\"progStartsCand\":%ld,\"progStartsOther\":%ld,"
-                 "\"progQueuedCand\":%ld,"
-                 /* …and whether a reply became a program — the "fetched JS is always executed" surface. Two doors
-                    build it, solver/engine.c's FLOW_PENDING_RESOLVE delivery and core/xhr/xml_http_request.c's
-                    `xhr_take_reply`; both end in `engine_queue_fetched_script`, which queues a DYN_PAGE_SCRIPT,
-                    so `progStartsOther` cannot separate them from the page's own bundle.
-                    Each door is an ask/queued pair: `…Asks` is raised where the door holds a reply record,
-                    upstream of the type gate, so `0/0` is a door never reached and `0/N` one reached that
-                    queued nothing (correctly, for a non-JavaScript type). Both asks count reply records.
-                    `netProgQueuedLife` is raised inside `engine_queue_fetched_script` itself, and test_forced.c's
-                    `loadScript` host edge is a third caller, so `fetch + xhr <= total` (asserted in the engine);
-                    the residue is zero in the shipped program. A door crediting a program the compile entry
-                    never saw would break it. The two doors are independent (axios's browser adapter is XHR). */
-                 "\"netProgQueuedLife\":%ld,"
-                 "\"netProgFetchAsksLife\":%ld,\"netProgFetchQueuedLife\":%ld,"
-                 "\"netProgXhrAsksLife\":%ld,\"netProgXhrQueuedLife\":%ld,"
-                 /* `sold` and `resumed` are outcome censuses over gates with legitimate declining arms.
-                    `sold` is gated on the allocator's refusal, so 0 is the RAM floor never met; its ask side is
-                    `pagedAsks` with `pagedFloor` and `pagedUnarmed`. `resumed` is gated in the trusted zone on a
-                    key of the document's address plus bundle id that no document publishes, so 0 is no residue
-                    written, a key miss (the design working on a changed bundle), or a rebuild that produced
-                    nothing — only the last a defect, and separating them is a trusted-zone diff.
-                    The capability is checkable on a tracked fixture (a live page's rolling deploy makes a miss
-                    correct): serve testing/fixtures and drive one document twice,
-                      node testing/harness.js restart      <port>
-                      node testing/live-run.js 1 'http://127.0.0.1:<p>/wjp_absent.html?__forcepark=1'
-                      node testing/harness.js restart-keep <port>     # preserves IndexedDB
-                      node testing/live-run.js 1 'http://127.0.0.1:<p>/wjp_absent.html?__forcepark=1'
-                    and the second must report `resumed > 0` and `park` 0 (the forced park arms only when no
-                    prior recipes exist). `?__forcepark=1` is a test hook; a visit parks only under Level-1 RAM
-                    pressure, which is why these rows read 0 on an ordinary visit. */
-                 "\"sold\":%ld,\"soldFlows\":%ld,\"soldCands\":%ld,\"forks\":%ld,"
-                 /* `resumed` is the positive statement that a rebuild ran, always present: `resumed: 0` says
-                    no residue was handed over, so zeroes beside it are not a verdict. `resumedSegs`/`Flows`/
-                    `Cands`/`Worlds` decompose it into which arms of the residue grammar ran (cold.h). No
-                    `resumedOrphans` row: `orphanClaims` is that number. */
-                 "\"resumed\":%d,\"resumedSegs\":%ld,\"resumedFlows\":%ld,\"resumedCands\":%ld,"
-                 "\"resumedWorlds\":%ld,"
-                 /* The path half's verdict rows, lifetime counts. Units differ: `replayHits` and `replayLeftArms`
-                    are arms (decision-vector slots), `replayLeft` is divergence events; their identity is asserted
-                    above. They say what the `resumed*` rows cannot: whether a rebuilt session followed its
-                    recorded path. A divergence is permitted (a replay runs against today's code and replies);
-                    decide.h names the residual. `resumed: 0` beside nonzero `replayLeft` attributes it to
-                    siblings. */
-                 "\"replayHits\":%ld,\"replayLeft\":%ld,\"replayLeftArms\":%ld,"
-                 /* The third of decide_arm's three arms. A spellable decision is refined (no slot, no member),
-                    replayed (`replayHits`) or new (`_forkAt`'s predicate rows). The unit is decisions, not
-                    `replayHits`' arms, so the two ledgers may not be summed. `branchAsked` is the reachability
-                    witness: zero `branchRefined` beside zero `branchAsked` is no spellable question reached
-                    (decide.c's fork_site_name residual). Read as a fraction or not at all. */
-                 "\"branchAsked\":%ld,\"branchRefined\":%ld,"
-                 /* …and of the new decisions, how many forked over a subject this flow had already proved. The two
-                    pin mint arms hand back a bare primitive that never reaches a branch hook, but a source the
-                    page materialized before its gate keeps its record (`concolic_example`), so a second predicate
-                    over it forks with a singleton domain. A population size, not a defect count. Its
-                    denominator `forks` comes from the same call (solver/decide.h), so `forkOverPinned <= forks`
-                    holds within one moment. */
-                 "\"forkOverPinned\":%ld,"
-                 /* The orphan walk's preferred takes, over `_orphansDriven` on this document; the containment is
-                    asserted where both are in one hand. */
-                 "\"orphanPreferred\":%ld,"
-                 /* …and over how many distinct scripts the same drives were spread, independent of the preferred
-                    count: one script against a hundred drives is a monopoly. `orphanScripts <= orphansDriven` is
-                    asserted where both are in one hand. */
-                 "\"orphanScripts\":%ld,"
-                 /* The cold round trip's verdict: `orphanClaims` is the inherited drives a resume rebuilt,
-                    `orphanClaimsMet` the waits a take satisfied, `orphanClaimsUnmet` the waiting flows that
-                    finished never handed a body — the loss, zero when the bytes did not change. Met may exceed
-                    claims (a drive's arms are one drive). Read only under `resumed: 1`. No `orphans` row:
-                    `_orphansDriven` is that number. */
-                 "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
-                 /* `hostAsked`/`hostAnswered` are minted at engine.c's `mint_req` for FLOW_PENDING_HOSTREQ: the
-                    four cross-instance reads and XMLHttpRequest, whose async and sync (§3.5.6) arms share that
-                    rendezvous. The reply door (fetch, injected `<script src>`, the document's script slots,
-                    dynamic `import()`) is the `reply*` pair below. `hostAnswersExtra` is not part of
-                    `hostAnswered`: only a rendezvous's first answer settles it, the rest fork arms. */
-                 "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersExtra\":%ld,"
-                 "\"hostAnswersLate\":%ld,\"hostTerminated\":%ld,"
-                 /* The four ends of the reply door, together because the asked/answered gap means nothing without
-                    the other two: a gap may be refusals of the page's own requests, where the door owes nothing.
-                    `replyOutstanding` is the gauge (is the host behind); the other three are lifetime counts
-                    (solver/pending_index.h). */
-                 "\"replyAsked\":%ld,\"replyAnswered\":%ld,"
-                 "\"replyDeclined\":%ld,\"replyDropped\":%ld,\"replyOutstanding\":%ld,"
-                 "\"pagedReqs\":%ld,"
-                 "\"pagedAsks\":%ld,\"pagedUnarmed\":%ld,\"pagedFloor\":%ld,"
-                 /* …and why a park that never happened did not. These are the host asking the cold tier what a
-                    park would write; `previewAsks: 0` is no host consulting it, and every row below is then
-                    meaningless. A moment is a conjunction, so the rows split it: a row that never rose wants its
-                    producer built, rows that rose and never coincided want a different moment. The partition is
-                    the tier's own verdict — refusing (would abort), empty (writes no bytes), writable (writes a
-                    residue) — and the rest derive from ColdPreview's struct. */
-                 "\"previewAsks\":%ld,"
-                 "\"previewAsksRefusing\":%ld,\"previewAsksEmpty\":%ld,"
-                 "\"previewAsksWritable\":%ld,"
-                 /* The eight `previewAsksWith*` rows are contained in `previewAsks` and partition nothing, since
-                    several conjuncts may stand at once. `previewAsksAfterCommit` counts asks after the commitment
-                    ledger was written, differing from `previewAsksWithCommits` by commitments that departed with
-                    their flows; `previewCommitRowsWritten` counts ledger rows (solver/flow.h), not asks. Read the
-                    three together (cold.h). */
-                 "\"previewAsksWithFlows\":%ld,\"previewAsksWithCands\":%ld,"
-                 "\"previewAsksWithDeep\":%ld,\"previewAsksWithDeepCands\":%ld,"
-                 "\"previewAsksWithWorlds\":%ld,\"previewAsksWithOrphans\":%ld,"
-                 "\"previewAsksWithCommits\":%ld,\"previewAsksWithDelivers\":%ld,"
-                 "\"previewAsksAfterCommit\":%ld,\"previewCommitRowsWritten\":%ld,"
-                 "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
-                 "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendReady\":%ld,"
-                 "\"stackEmpty\":%ld,\"canDeliver\":%ld,"
-                 "\"pendKiB\":%ld,"
-                 "\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
-                 "\"segKiB\":%ld,\"domSegKiB\":%ld,\"pinSegs\":%ld,\"pinSegEntries\":%ld,"
-                 "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
-                 "\"dynBodies\":%ld,\"dynKiB\":%ld,\"sharedKiB\":%ld,"
-                 /* `steps` and `stepUnitRuns` are lifetime counts of steps run through each arm, and `stepUnits` a
-                    gauge of members standing in each arm now: with the gauge alone, an arm never entered and one
-                    entered and left before every census read alike. `stepUs` is `steps`' denominator — the thread
-                    time the loop's turns consumed, in the slice's own measure — so a turn costing a whole slice
-                    makes one choice per slice by construction, while cheap turns mean little thread time was
-                    given. Read `stepUs / steps` as a ratio within one run, never a total across runs; calling it
-                    CPU needs the @QUANTUM line. `%lld` because on wasm32 a `long` of microseconds saturates in
-                    35.8 minutes (solver/engine.h's `step_us`; engine.c asserts the width). */
-                 "\"steps\":%ld,\"stepUs\":%lld,"
-                 /* …and what that total is a share of: the thread measure this instance consumed since its
-                    dispatch loop first ran. `stepUs` counts only turns taken, so a small `stepUs/steps` is a cheap
-                    loop or one barely entered. Both sides are one clock, `quantum_thread_us()` (named on
-                    @QUANTUM), so the ratio survives a wall-only host. `stepUs <= instanceUs` is asserted at
-                    engine_step_unit_runs; solver/engine.h's `instance_us` holds the residual. */
-                 "\"instanceUs\":%lld,"
-                 /* …and its two halves. `loopUs` is the engine's thread inside its dispatch bracket outside a turn
-                    and `betweenSlicesUs` the host's between slices; they partition `instanceUs` exactly (the open
-                    tail closes into `betweenSlicesUs` from the same clock reading), asserted at
-                    engine_step_unit_runs. `loopUs` small points at the driver; large with `stepUs` small points
-                    at this scheduler, starting with `slices` against `steps`. `slices` is `%ld` because it is a
-                    count (solver/engine.h's `loop_us`). */
-                 "\"loopUs\":%lld,\"betweenSlicesUs\":%lld,\"slices\":%ld,"
-                 /* The two phases `stepUs` sums: a step overrunning the slice is the quantum with no asynchronous
-                    source to expire it, a dominant pick-and-swap is the ordering costing more than the work.
-                    `schedUs` is everything in the turn that is not the step, including the previous iteration's
-                    tail (the charge telescopes; solver/engine.h); identity asserted at engine_frontier_census. */
-                 /* …and `sliceOverruns`, because `stepUs/steps` is a mean no turn is near: raised once per turn
-                    from the readings `sliceUs` accumulates, containment asserted at engine_step_unit_runs
-                    (solver/engine.h's `slice_overruns`). */
-                 "\"sliceUs\":%lld,\"schedUs\":%lld,\"sliceOverruns\":%lld,\"stepUnitRuns\":%s,"
-                 /* …and which arm each overrunning turn was in: `stepUnitRuns` restricted to `sliceOverruns`'
-                    turns. An arm whose two counts are equal is a step that cannot rest (solver/engine.h's
-                    `over_arms`). */
-                 "\"stepUnitOverruns\":%s,"
-                 /* …and which of those turns offered no suspend point, per arm: against the arm's overruns it says
-                    whether the thread was inside C that declares no step boundary, which decides between a
-                    step-machine conversion and a page's own stretch (solver/engine.h's `over_seamless_arms`). */
-                 "\"stepUnitOverrunSeamlessArms\":%s,"
-                 /* …and how many suspend points each arm's other overrunning turns offered. The denominator is the
-                    arm's overruns minus its seamless turns, which contribute zero by construction; the scalar
-                    `sliceOverrunAsks / sliceOverruns` averages arms that answer differently (solver/engine.h's
-                    `over_ask_arms`). */
-                 "\"stepUnitOverrunAskArms\":%s,"
-                 /* …and the widest no-offer stretch of one such turn, in the slice's own measure. The preempt
-                    policy's only false arm is the budget test, monotone within a slice, and the first true parks
-                    the flow, so every consultation sits within ENGINE_QUANTUM_MS of the slice's opening and this
-                    row is the worst turn's span to within one budget (`stepUnitOverruns` is only a count). A 0 is
-                    no non-seamless overrunning turn or gaps under a microsecond; `stepUnitOverruns` minus
-                    `stepUnitOverrunSeamlessArms` tells them apart (solver/engine.h's `over_gap_arms`). */
-                 "\"stepUnitOverrunGapArms\":%s,"
-                 /* …and whether the page's own code ran in those turns: an arm is where a step ended, and the time
-                    may be the page's bytecode between its raise points or one native call that never returned.
-                    `sliceOverrunAsks` is the suspend points those turns offered and `sliceOverrunSeamless` how
-                    many offered none; all-seamless asks for a step-machine conversion, a large sum is a question
-                    about the page (solver/engine.h's `slice_overrun_asks`). */
-                 "\"sliceOverrunAsks\":%llu,\"sliceOverrunSeamless\":%ld,"
-                 /* …and the worst no-offer stretch over every arm at once, so `max(arms) == this` makes the
-                    per-arm row checkable as whole. A high-water mark: read against ENGINE_QUANTUM_MS, never
-                    another run's figure; its evidence is bounded by `stepUnitOverruns` minus
-                    `stepUnitOverrunSeamlessArms`. */
-                 "\"sliceOverrunGapUs\":%lld,"
-                 /* …and which phase of a start step spent the time. A start compiles then executes; the compile
-                    rests (JS_FlowCompileStep hands the parse back part way), so one program parses over one or
-                    more stints. `classicCompiles` is one per program, `classicCompileOverruns` one per stint that
-                    met the slice, so they are not a ratio; the stint population is `classicCompiles +
-                    stepUnitRuns[compile-handed-the-thread-back]`, against which the containment is asserted.
-                    `classicCompiles` counts every flow, timeline and appended row (chunks, injected scripts,
-                    `javascript:` URLs, peer operations, value dumps), so it far exceeds `rootPrograms` on a
-                    healthy app page. `classicCompileAgain` states repeats directly (bytes some flow already
-                    parsed to completion), priced by `classicCompileAgainBytes` and bounded by
-                    `classicCompileOwnDecode`, since a reply is decoded per delivery. The two subsets partition
-                    differently and may not be added (solver/engine.h's `classic_compiles`). */
-                 "\"classicCompiles\":%ld,\"classicCompileOverruns\":%ld,"
-                 "\"classicCompileAgain\":%ld,\"classicCompileAgainBytes\":%lld,"
-                 "\"classicCompileOwnDecode\":%ld,"
-                 /* …and programs started from a parse another timeline already finished, which parse no bytes and
-                    raise none of the four rows above: `classicCompiles + classicParseShared` is the classic
-                    programs that obtained a closure at all. `classicCompileAgain` staying nonzero is not sharing
-                    failing (a flow mid-parse of a row someone finished resumes its own parse). See
-                    solver/engine.h's `classic_parse_shared` and solver/dyn_body.h. */
-                 "\"classicParseShared\":%ld,"
-                 /* …and whether a parse handed back was carried forward:
-                    `stepUnitRuns[compile-handed-the-thread-back]` minus this is the parses begun and not ended.
-                    Not a subset of `classicCompiles`, and not a rate against it: one is raised per continued
-                    stint, the other per ended parse (solver/engine.h's `classic_compile_resumed`). */
-                 "\"classicCompileResumed\":%ld,"
-                 /* …and why each turn that ended no unit of work did not. `_unitsDone` is a gated count, so low is
-                    either a thread that did nothing or one advancing programs it never finished. With the credited
-                    arm (`_unitsDone`, in the other object) the four sum to `steps`, asserted in the engine
-                    (solver/engine.h's `unit_mid_program`). */
-                 "\"unitMidProgram\":%ld,\"unitParked\":%ld,\"unitCheckpointOwed\":%ld,"
-                 /* …and how many steps descended flow_step's work ladder: every arm of it (deliveries, checkpoint,
-                    reply, sequence, task, lifecycle, orphan rungs, clock sources, resting arms) sits inside one
-                    `if (!f->frame)`. A lifetime count of passes through that block, so not comparable with
-                    `steps` (the loop body iterates) but with `_orphansAsked`, raised on the same basis, the
-                    containment asserted in the engine. 0 puts the cause upstream of the ladder; large, with
-                    `_orphansAsked == 0`, says an arm above the orphan rung took every descent (`stepUnitRuns`).
-                    The `outOfProgramsAtTheLadder` family cannot stand in: it selects on `script_i == dyn_n`,
-                    while the rung binds to `seq_compiles` (solver/engine.h's `unframed_steps`). */
-                 "\"unframedStepsLifetime\":%ld,"
-                 /* …and how far down the ladder the descents got. The three clock arms of `stepUnitRuns` are
-                    raised only when their hook takes the step, so a 0 there is "nothing due" or "never asked";
-                    these count the ask, at the arm ahead of each gate. The three rungs are consecutive arms of one
-                    `else if` chain, so these are suffix sums: `stepReachedRenderingLife` is every descent reaching
-                    the chain, the next two those the rendering, then the timer, rung did not take. Unlike a 0 in
-                    the partition, the lowest 0 here localises. `finished` 0 with `stepReachedRenderingLife` 0
-                    means retirement was never asked; with it large, one of the ten arms above `finished` took
-                    every descent. No sum is published beside them; the identities with `stepUnitRuns` and
-                    containment in `unframedStepsLifetime` are asserted at engine_step_unit_runs. Lifetime
-                    counts per instance (solver/engine.h's `clock_render_asks`). */
-                 "\"stepReachedRenderingLife\":%ld,\"stepReachedTimerLife\":%ld,"
-                 "\"stepReachedIdleLife\":%ld,"
-                 /* …and which of two reasons the timer rung declined for: no source became due, or one was due and
-                    core/timing/event_loop.h's licence refused to manufacture its dueness (that header's
-                    residual). The pair partitions rather than restates `stepReachedIdleLife`, and its ask half
-                    spans both refusing rungs (timer and rendering). Lifetime counts; `Declined <= Asked` is
-                    asserted where both are in one hand. */
-                 "\"clockAdvanceAskedLife\":%ld,\"clockAdvanceDeclinedLife\":%ld,"
-                 /* `outOfPrograms` separates a member inside its last program from one past the last row, which
-                    a cursor value cannot: only the latter reaches engine.c's orphan arm. Its three parts also
-                    name members never dispatched or suspended in a live frame (the ladder sits below
-                    `if (!f->frame)`). solver/cold.h owns the ladder's list; do not enumerate its rungs here. */
-                 "\"outOfPrograms\":%ld,"
-                 "\"outOfProgramsUnrun\":%ld,\"outOfProgramsFramed\":%ld,"
-                 "\"outOfProgramsAtTheLadder\":%ld,"
-                 "\"outOfProgramsAtTheLadderUnits\":%s,"
-                 /* `programCursors` is the per-member companion to the maxima: `deepest 11` is as true of one
-                    member at 11 as of two thousand. Buckets are cursors (closed at `dyn_n`); a cursor one past
-                    the deepest row left is `deepestLeft + 1`, the bound asserted above. A failed external script
-                    is left without being started, so the mass may run ahead of `deepest`. A top bucket says where
-                    the mass reached, never that the sequence ends (engine_seed_scripts queues the whole table);
-                    `outOfPrograms` says who has no row left. */
-                 "\"stepUnits\":%s,\"programCursors\":%s,"
-                 /* …and how far each standing member is from having nothing left to run (solver/cold.h;
-                    `outOfPrograms` is its bucket 0). The cursor histogram is a position, this a distance. */
-                 "\"programsAhead\":%s,"
-                 /* The @H surface's own denominator — endpoint.h states why its length is three states: small
-                    `epEmitted` with large `epAssets` learned little because the addresses were files.
-                    `epAssets` counts the flag `endpoint_mark_asset` set, an outcome over a classifier with a
-                    declining arm, so 0 under a large `epMinted` is: no reply reached the classifier; one
-                    arrived with an empty `computedType` (the chokepoint's refusal record); or the type was good
-                    and `is_asset` answered false (e.g. a `.woff2` served `application/octet-stream` with
-                    `nosniff`), the design working. Widening the predicate by URL suffix would be matching, not
-                    running.
-                    Named residual. Not covered: the ask — replies reaching the classifier with a type that
-                    parsed — so the first state cannot be told from the others (`hostAsked`/`hostAnswered` only
-                    bound it). Next diff: that count, raised in solver/reply_decode.c where the type parses,
-                    published beside this one. Absence shows as a 0 here reported as a reply-path defect on a
-                    run whose classifier declined correctly. */
-                 /* …and how many emitted rows were minted before this instance started a program: `epEmitted -
-                    epPreProgram` bounds what forced execution contributed, and equal values learned nothing the
-                    markup did not state (a surface can be the `<head>`'s own `<script src>` and `<link>` rows
-                    counted back). endpoint.h holds the contract, the ceiling reading and the resumed-timeline
-                    residual. */
-                 "\"epMinted\":%ld,\"epAssets\":%ld,\"epEmitted\":%ld,\"epPreProgram\":%ld,"
-                 /* …and which mechanism composed each emitted address: a partition of `epEmitted`, asserted at the
-                    composer (solver/endpoint.c) over the record array and re-checked over the emitted document by
-                    engine/build.mjs's `censusHistRows` and extension/bridge.js's histogram contract.
-                    The door is which mechanism and `epPreProgram` is when; neither implies the other (a router's
-                    `<link>` and a markup one share a door, and a `<link>` after a `<script src>` is minted
-                    post-program). Each emitted row carries both. */
-                 "\"epDoors\":%s,"
-                 /* …and which of those mechanisms a markup parse of the served document would have reached, keyed
-                    on the door list's third column: `markup`, `either` (a parser-inserted or script-created
-                    `link-element`, `image-element` or `form-submit`, which the door does not distinguish) and
-                    `beyond`, a floor under the markup question. This is a diagnostic, not the razor: a literal
-                    chunk URL through `module-import` is `beyond` yet scores zero at the bar, which is
-                    `epRazorClass` below (composed by `endpoint_razor_class_of`); build.mjs renders this as the
-                    markup diagnostic and `endpointRazorClassReading` as the bar.
-                    Entailed by the door row (each class sums its doors), so the two are one observation; what
-                    this adds is the map. Never a target: `beyond` 0 against nonzero `epEmitted` is a refusal to
-                    claim, and the row is an identity within one run, not comparable across wall-denominated
-                    runs. Its denominator `epEmitted` travels on this line; endpoint.c asserts the sum and
-                    build.mjs re-checks it against the emitted document. */
-                 "\"epReach\":%s,"
-                 /* …and the address's own class, read off the address value's concolic provenance at endpoint.c's
-                    door: the bar is a property of the address, not the mechanism (`/api/{location.hash}` through
-                    `fetch` clears it; a literal chunk URL through `module-import` does not). A second
-                    observation beside `epDoors`/`epReach`, which are one.
-                    A floor, not a verdict: `unknown` is a positive statement that the address rested on an
-                    unknown supplied from outside the engine (one resting on a hole the engine minted for its own
-                    drive is refused), so it clears the bar. `concrete` claims nothing about a parse; what it
-                    hides is listed at solver/endpoint.h (a literal, the document's own address, or a pinned
-                    source re-read). Never a target. Its denominator `epEmitted` travels on this line;
-                    endpoint.c asserts the sum. */
-                 "\"epAddressClass\":%s,"
-                 /* …and the bar itself, which no reader can compose from its operands: a union is a statement
-                    about per-row membership, and the marginals above carry no overlap. A cross-check against the
-                    emitted array's `razorClass`, never a sum with it: both come off `endpoint_razor_class_of`,
-                    taken at two instants over a gauge (`epEmitted` falls when an asset verdict lands between
-                    them), so a disagreement names which records each document described. `runtime-only` 0
-                    against nonzero `epEmitted` is a refusal to claim; `unproven` claims nothing about a parse.
-                    Its denominator `epEmitted` travels on this line; endpoint.c asserts the sum. */
-                 "\"epRazorClass\":%s,"
-                 /* …and the necessary condition under that bar, beside it and never inside it: the bar is a floor
-                    of positive statements, and this is a "may" (solver/endpoint.h). `may-rest-on` bounds the
-                    addresses composed by a path that had pinned a source, which `addressClass` calls
-                    `concrete` because the pin arm re-reads a bare primitive: 0 means no chosen-bytes population
-                    under this surface, nonzero means addresses that may not reproduce for a real session and
-                    the next diff is the pin. It is not a bound on the bar's slack — a pin's bytes are a literal
-                    the page's own text spells (solver/concolic.c), so `unproven` holds them correctly.
-                    `unasked` is no flow standing when the record was minted: a door composing a request outside
-                    the scheduler. Its denominator `epEmitted` travels on this line; endpoint.c asserts the sum. */
-                 "\"epWitnessClass\":%s,"
-                 "\"epAsks\":%ld,\"epAskPreProgram\":%ld,\"epAskSuppressed\":%ld,"
-                 /* …and the one cut inside the merged arm (endpoint.h). Not summed with the three arms beside it:
-                    they partition the door's exits and this selects inside one. Nonzero means running code
-                    composed an address the markup had already named — a network call site reached and nothing
-                    learned. */
-                 "\"epAskMerged\":%ld,\"epAskMinted\":%ld,\"epAskMergedPreProgram\":%ld"
-                 /* …and the host edge's own entry, which the rows above cannot see: they count at endpoint_record,
-                    so a `fetch()` the engine threw out of or parked inside before core/fetch's `FETCH_CALL` (its
-                    sixth stage) is in none of them. These count that machine's states at capture and teardown,
-                    partitioned by the stage each torn-down construction reached. A bare `%s` because the rows
-                    carry their own names and leading comma; the absent form is the empty string, since a host
-                    with no fetch has no population (solver/endpoint.h). */
-                 /* …and the other host edge's, beside it and never summed with it: core/xhr records from the
-                    lifecycle machine its `send()` mints, whose seven stages are its own. A second bare `%s`,
-                    absent as the empty string for a host with no XMLHttpRequest (solver/endpoint.h). */
-                 /* …and the invoker rungs' denominator, spliced: which rungs have one is the declaring components'
-                    fact, so an arm with no component installed has no row rather than a zero. */
-                 "%s%s%s}",
-                 c.flows, c.framed, c.blocked, flow_host_owed_count(),
-                 e.finished, e.finished_flows, e.finished_cands,
-                 e.deepest, e.completed, e.deepest_left,
-                 e.root_programs,
-                 e.root_programs_held_at_seed, e.root_programs_awaited_at_seed,
-                 awaiting_rows,
-                 e.prog_starts, e.prog_starts_cand, e.prog_starts_other, e.prog_queued_cand,
-                 e.net_prog_queued,
-                 e.net_prog_fetch_asks, e.net_prog_fetch_queued,
-                 e.net_prog_xhr_asks, e.net_prog_xhr_queued,
-                 e.sold, e.sold_flows, e.sold_cands, e.forks,
-                 ran, resumed.segs, resumed.flows, resumed.cands, resumed.worlds,
-                 rp_hits, rp_left, rp_left_arms,
-                 rf_asked, rf_refined,
-                 fk_pinned,
-                 orph_pref,
-                 orph_scripts,
-                 resumed.orphans, e.claims_met, e.claims_unmet,
-                 e.host_asked, e.host_answered, e.host_answers_extra, e.host_answers_late, e.host_terminated,
-                 pending_index_asked_total(), pending_index_answered_total(),
-                 pending_index_declined_total(), pending_index_dropped_total(),
-                 pending_index_keyed_now(),
-                 e.paged_reqs,
-                 e.paged_asks, e.paged_unarmed, e.paged_floor,
-                 pv.asks,
-                 pv.asks_refusing, pv.asks_empty, pv.asks_writable,
-                 pv.asks_with_flows, pv.asks_with_cands,
-                 pv.asks_with_deep, pv.asks_with_deepcands,
-                 pv.asks_with_worlds, pv.asks_with_orphans,
-                 pv.asks_with_commits, pv.asks_with_delivers,
-                 pv.asks_after_commit, pv.commit_rows_written,
-                 c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
-                 c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count, c.pend_ready,
-                 c.stack_empty, c.can_deliver,
-                 c.pend_bytes / 1024, c.misc_bytes / 1024,
-                 (c.dec_bytes + c.head_bytes + c.dom_head_bytes + c.pend_bytes + c.misc_bytes) / 1024,
-                 c.seg_bytes / 1024, c.dom_seg_bytes / 1024,
-                 c.pin_seg_count, c.pin_seg_entries, c.pin_seg_bytes / 1024,
-                 c.dec_seg_count, c.dec_seg_entries, c.dec_seg_bytes / 1024,
-                 c.dyn_count, c.dyn_bytes / 1024,
-                 (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024,
-                 r.steps, (long long)r.step_us,
-                 (long long)r.instance_us,
-                 (long long)r.loop_us, (long long)r.between_slices_us, r.slices,
-                 (long long)r.slice_us, (long long)r.sched_us, (long long)r.slice_overruns, runs, over,
-                 seam,
-                 oask,
-                 ogap,
-                 (unsigned long long)r.slice_overrun_asks, r.slice_overrun_seamless,
-                 (long long)r.slice_overrun_gap_us,
-                 r.classic_compiles, r.classic_compile_overruns,
-                 r.classic_compile_again, (long long)r.classic_compile_again_bytes,
-                 r.classic_compile_own_decode,
-                 r.classic_parse_shared,
-                 r.classic_compile_resumed,
-                 r.unit_mid_program, r.unit_parked, r.unit_checkpoint_owed,
-                 r.unframed_steps,
-                 r.clock_render_asks, r.clock_timer_asks, r.clock_idle_asks,
-                 adv_asked, adv_declined,
-                 c.out_of_programs,
-                 c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
-                 ladder, hist, cursors, ahead,
-                 ep_minted, ep_assets, ep_emitted, ep_pre_program, doors, reach, acls, razor, witness,
-                 ep_asks, ep_ask_pre, ep_ask_sup, ep_ask_merged, ep_ask_minted, ep_ask_merged_pre,
-                 edge, xedge, rungs);
+    METRIC_SET(live, c.flows);
+    METRIC_SET(framed, c.framed);
+    METRIC_SET(blocked, c.blocked);
+    METRIC_SET(owed, flow_host_owed_count());
+    METRIC_SET(finished, e.finished);
+    METRIC_SET(finished_flows, e.finished_flows);
+    METRIC_SET(finished_cands, e.finished_cands);
+    METRIC_SET(deepest, e.deepest);
+    METRIC_SET(completed, e.completed);
+    METRIC_SET(deepest_left, e.deepest_left);
+    METRIC_SET(root_programs, e.root_programs);
+    METRIC_SET(root_programs_held_at_seed, e.root_programs_held_at_seed);
+    METRIC_SET(root_programs_awaited_at_seed, e.root_programs_awaited_at_seed);
+    METRIC_SET(rows_awaiting_bytes, awaiting_rows);
+    METRIC_SET(prog_starts, e.prog_starts);
+    METRIC_SET(prog_starts_cand, e.prog_starts_cand);
+    METRIC_SET(prog_starts_other, e.prog_starts_other);
+    METRIC_SET(prog_queued_cand, e.prog_queued_cand);
+    METRIC_SET(net_prog_queued_life, e.net_prog_queued);
+    METRIC_SET(net_prog_fetch_asks_life, e.net_prog_fetch_asks);
+    METRIC_SET(net_prog_fetch_queued_life, e.net_prog_fetch_queued);
+    METRIC_SET(net_prog_xhr_asks_life, e.net_prog_xhr_asks);
+    METRIC_SET(net_prog_xhr_queued_life, e.net_prog_xhr_queued);
+    METRIC_SET(sold, e.sold);
+    METRIC_SET(sold_flows, e.sold_flows);
+    METRIC_SET(sold_cands, e.sold_cands);
+    METRIC_SET(forks, e.forks);
+    METRIC_SET(resumed, ran);
+    METRIC_SET(resumed_segs, resumed.segs);
+    METRIC_SET(resumed_flows, resumed.flows);
+    METRIC_SET(resumed_cands, resumed.cands);
+    METRIC_SET(resumed_worlds, resumed.worlds);
+    METRIC_SET(replay_hits, rp_hits);
+    METRIC_SET(replay_left, rp_left);
+    METRIC_SET(replay_left_arms, rp_left_arms);
+    METRIC_SET(branch_asked, rf_asked);
+    METRIC_SET(branch_refined, rf_refined);
+    METRIC_SET(fork_over_pinned, fk_pinned);
+    METRIC_SET(orphan_preferred, orph_pref);
+    METRIC_SET(orphan_scripts, orph_scripts);
+    METRIC_SET(orphan_claims, resumed.orphans);
+    METRIC_SET(orphan_claims_met, e.claims_met);
+    METRIC_SET(orphan_claims_unmet, e.claims_unmet);
+    METRIC_SET(host_asked, e.host_asked);
+    METRIC_SET(host_answered, e.host_answered);
+    METRIC_SET(host_answers_extra, e.host_answers_extra);
+    METRIC_SET(host_answers_late, e.host_answers_late);
+    METRIC_SET(host_terminated, e.host_terminated);
+    METRIC_SET(reply_asked, pending_index_asked_total());
+    METRIC_SET(reply_answered, pending_index_answered_total());
+    METRIC_SET(reply_declined, pending_index_declined_total());
+    METRIC_SET(reply_dropped, pending_index_dropped_total());
+    METRIC_SET(reply_outstanding, pending_index_keyed_now());
+    METRIC_SET(paged_reqs, e.paged_reqs);
+    METRIC_SET(paged_asks, e.paged_asks);
+    METRIC_SET(paged_unarmed, e.paged_unarmed);
+    METRIC_SET(paged_floor, e.paged_floor);
+    METRIC_SET(preview_asks, pv.asks);
+    METRIC_SET(preview_asks_refusing, pv.asks_refusing);
+    METRIC_SET(preview_asks_empty, pv.asks_empty);
+    METRIC_SET(preview_asks_writable, pv.asks_writable);
+    METRIC_SET(preview_asks_with_flows, pv.asks_with_flows);
+    METRIC_SET(preview_asks_with_cands, pv.asks_with_cands);
+    METRIC_SET(preview_asks_with_deep, pv.asks_with_deep);
+    METRIC_SET(preview_asks_with_deep_cands, pv.asks_with_deepcands);
+    METRIC_SET(preview_asks_with_worlds, pv.asks_with_worlds);
+    METRIC_SET(preview_asks_with_orphans, pv.asks_with_orphans);
+    METRIC_SET(preview_asks_with_commits, pv.asks_with_commits);
+    METRIC_SET(preview_asks_with_delivers, pv.asks_with_delivers);
+    METRIC_SET(preview_asks_after_commit, pv.asks_after_commit);
+    METRIC_SET(preview_commit_rows_written, pv.commit_rows_written);
+    METRIC_SET(dec_entries, c.dec_entries);
+    METRIC_SET(dec_kib, c.dec_bytes / 1024);
+    METRIC_SET(head_entries, c.head_entries);
+    METRIC_SET(head_kib, c.head_bytes / 1024);
+    METRIC_SET(dom_head_entries, c.dom_head_entries);
+    METRIC_SET(dom_head_kib, c.dom_head_bytes / 1024);
+    METRIC_SET(jobs, c.job_count);
+    METRIC_SET(pend, c.pend_count);
+    METRIC_SET(pend_ready, c.pend_ready);
+    METRIC_SET(stack_empty, c.stack_empty);
+    METRIC_SET(can_deliver, c.can_deliver);
+    METRIC_SET(pend_kib, c.pend_bytes / 1024);
+    METRIC_SET(misc_kib, c.misc_bytes / 1024);
+    METRIC_SET(per_flow_kib, (c.dec_bytes + c.head_bytes + c.dom_head_bytes + c.pend_bytes + c.misc_bytes) / 1024);
+    METRIC_SET(seg_kib, c.seg_bytes / 1024);
+    METRIC_SET(dom_seg_kib, c.dom_seg_bytes / 1024);
+    METRIC_SET(pin_segs, c.pin_seg_count);
+    METRIC_SET(pin_seg_entries, c.pin_seg_entries);
+    METRIC_SET(pin_seg_kib, c.pin_seg_bytes / 1024);
+    METRIC_SET(dec_segs, c.dec_seg_count);
+    METRIC_SET(dec_seg_entries, c.dec_seg_entries);
+    METRIC_SET(dec_seg_kib, c.dec_seg_bytes / 1024);
+    METRIC_SET(dyn_bodies, c.dyn_count);
+    METRIC_SET(dyn_kib, c.dyn_bytes / 1024);
+    METRIC_SET(shared_kib, (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024);
+    METRIC_SET(steps, r.steps);
+    METRIC_SET(step_us, r.step_us);
+    METRIC_SET(instance_us, r.instance_us);
+    METRIC_SET(loop_us, r.loop_us);
+    METRIC_SET(between_slices_us, r.between_slices_us);
+    METRIC_SET(slices, r.slices);
+    METRIC_SET(slice_us, r.slice_us);
+    METRIC_SET(sched_us, r.sched_us);
+    METRIC_SET(slice_overruns, r.slice_overruns);
+    METRIC_SET_OBJECT(step_unit_runs, runs);
+    METRIC_SET_OBJECT(step_unit_overruns, over);
+    METRIC_SET_OBJECT(step_unit_overrun_seamless_arms, seam);
+    METRIC_SET_OBJECT(step_unit_overrun_ask_arms, oask);
+    METRIC_SET_OBJECT(step_unit_overrun_gap_arms, ogap);
+    METRIC_SET(slice_overrun_asks, r.slice_overrun_asks);
+    METRIC_SET(slice_overrun_seamless, r.slice_overrun_seamless);
+    METRIC_SET(slice_overrun_gap_us, r.slice_overrun_gap_us);
+    METRIC_SET(classic_compiles, r.classic_compiles);
+    METRIC_SET(classic_compile_overruns, r.classic_compile_overruns);
+    METRIC_SET(classic_compile_again, r.classic_compile_again);
+    METRIC_SET(classic_compile_again_bytes, r.classic_compile_again_bytes);
+    METRIC_SET(classic_compile_own_decode, r.classic_compile_own_decode);
+    METRIC_SET(classic_parse_shared, r.classic_parse_shared);
+    METRIC_SET(classic_compile_resumed, r.classic_compile_resumed);
+    METRIC_SET(unit_mid_program, r.unit_mid_program);
+    METRIC_SET(unit_parked, r.unit_parked);
+    METRIC_SET(unit_checkpoint_owed, r.unit_checkpoint_owed);
+    METRIC_SET(unframed_steps_lifetime, r.unframed_steps);
+    METRIC_SET(step_reached_rendering_life, r.clock_render_asks);
+    METRIC_SET(step_reached_timer_life, r.clock_timer_asks);
+    METRIC_SET(step_reached_idle_life, r.clock_idle_asks);
+    METRIC_SET(clock_advance_asked_life, adv_asked);
+    METRIC_SET(clock_advance_declined_life, adv_declined);
+    METRIC_SET(out_of_programs, c.out_of_programs);
+    METRIC_SET(out_of_programs_unrun, c.out_of_programs_unrun);
+    METRIC_SET(out_of_programs_framed, c.out_of_programs_framed);
+    METRIC_SET(out_of_programs_at_the_ladder, c.out_of_programs_at_the_ladder);
+    METRIC_SET_OBJECT(out_of_programs_at_the_ladder_units, ladder);
+    METRIC_SET_OBJECT(step_units, hist);
+    METRIC_SET_OBJECT(program_cursors, cursors);
+    METRIC_SET_OBJECT(programs_ahead, ahead);
+    METRIC_SET(ep_minted, ep_minted);
+    METRIC_SET(ep_assets, ep_assets);
+    METRIC_SET(ep_emitted, ep_emitted);
+    METRIC_SET(ep_pre_program, ep_pre_program);
+    METRIC_SET_OBJECT(ep_doors, doors);
+    METRIC_SET_OBJECT(ep_reach, reach);
+    METRIC_SET_OBJECT(ep_address_class, acls);
+    METRIC_SET_OBJECT(ep_razor_class, razor);
+    METRIC_SET_OBJECT(ep_witness_class, witness);
+    METRIC_SET(ep_asks, ep_asks);
+    METRIC_SET(ep_ask_pre_program, ep_ask_pre);
+    METRIC_SET(ep_ask_suppressed, ep_ask_sup);
+    METRIC_SET(ep_ask_merged, ep_ask_merged);
+    METRIC_SET(ep_ask_minted, ep_ask_minted);
+    METRIC_SET(ep_ask_merged_pre_program, ep_ask_merged_pre);
+    /* The edges' and the rungs' rows are spliced after this family's: each text carries its own leading
+       comma, and the empty string is a host with no population (solver/endpoint.h, solver/rung_entry.h). */
+    json_buf_raw(&b, "{");
+    metrics_family_members_json(METRIC_FAMILY_COLD, &b);
+    json_buf_raw(&b, edge);
+    json_buf_raw(&b, xedge);
+    json_buf_raw(&b, rungs);
+    json_buf_raw(&b, "}");
+    out = json_buf_take(&b);
     free(cursors);
     free(ahead);
     free(edge);

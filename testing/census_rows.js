@@ -13,11 +13,6 @@
  * `requireWhole` and `requireFrom`. The row counts per composer:
  *     node -e 'const {censusKinds}=require("./testing/census_rows.js"), a=censusKinds();
  *              for (const k of Object.keys(a)) console.log(k, Object.keys(a[k].kindOf).length)' */
-/* Named residual. Not covered: `cold` still states its kinds in an `@kinds-of` comment block beside
-   solver/result.c's format string, read by the comment path below. Next diff: its family in
-   solver/metrics/cold.def, composed through the registry, and this path deleted. Absence shows as: a row added
-   to that composer whose kind is a comment line no compiler or composition reads. */
-
 "use strict";
 
 const { readFileSync } = require("fs");
@@ -32,11 +27,9 @@ const KIND_TOKENS = { LIFETIME: "lifetime", GAUGE: "gauge", CONSTANT: "constant"
 /* solver/metrics.h's MetricRepr; an OBJECT row is a nested composer's object, every other row a number. */
 const REPRS = ["INT", "FIXED1", "FIXED3", "OBJECT"];
 
-/* The composers, each with the declaration files of the families it composes, in emission order; a `format`
-   composer is one whose kinds are still comment text beside its format string (the residual above). */
+/* The composers, each with the declaration files of the families it composes, in emission order. */
 const COMPOSERS = {
-  cold:      { file: "engine/host/solver/result.c",
-               from: "char *result_cold_json(void)", to: "\n}\n", shape: "format" },
+  cold:      { defs: ["engine/host/solver/metrics/cold.def"] },
   /* `members` alone on an empty frontier, the second family's rows after it while a member stands. */
   wfq:       { defs: ["engine/host/solver/metrics/wfq.def", "engine/host/solver/metrics/wfq_frontier.def"] },
   fetchEdge: { defs: ["engine/host/solver/metrics/fetch_edge.def"] },
@@ -95,74 +88,6 @@ function composerRowsFromDefs(defs, read, key) {
   return { key, kindOf, numeric, object };
 }
 
-/* The comment path, for `format` composers only (the residual above). The rows are the key/conversion
-   pairs of the composer's format string, split on the object conversion as engine/build.mjs splits them. */
-function composerRowsFromText(src, spec, label) {
-  const open = src.indexOf(spec.from);
-  if (open < 0)
-    throw new Error(label + ": no composer " + JSON.stringify(spec.from) + " — a renamed composer is a change " +
-                    "to be told about, not one to guess a remembered list past.");
-  if (src.indexOf(spec.from, open + 1) >= 0)
-    throw new Error(label + ": " + JSON.stringify(spec.from) + " occurs twice, and this reader cannot say " +
-                    "which body it is meant to read.");
-  const close = src.indexOf(spec.to, open);
-  if (close < 0)
-    throw new Error(label + ": the composer " + JSON.stringify(spec.from) + " is unterminated — an " +
-                    "unterminated region yields a short row set.");
-  const body = src.slice(open, close).replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^[ \t]*\/\/.*$/gm, " ");
-  const numeric = [], object = [];
-  for (const m of body.matchAll(/\\"([A-Za-z_][A-Za-z0-9_]*)\\":%([-0-9.]*)([a-zA-Z]+)/g)) {
-    const to = m[3] === "s" ? object : numeric;
-    if (!numeric.includes(m[1]) && !object.includes(m[1])) to.push(m[1]);
-  }
-  if (!numeric.length && !object.length)
-    throw new Error(label + ": the composer " + JSON.stringify(spec.from) + " names no row at all.");
-  return { numeric, object };
-}
-
-/* A `format` composer's `@kinds-of <composer>` block: one `@kind <kind>: rows…` line per kind, inside one
-   comment. A second block for one composer, a row stated twice and a kind outside KINDS are refused. */
-function kindDeclarationFromText(src, composer, label) {
-  const hits = [...src.matchAll(new RegExp("@kinds-of[ \\t]+" + composer + "\\b", "g"))];
-  if (hits.length !== 1)
-    throw new Error(label + ": " + hits.length + " kind declarations for the composer `" + composer + "` — " +
-                    "this reader will not guess a kind from a name, nor pick one of two declarations.");
-  const end = src.indexOf("*/", hits[0].index);
-  if (end < 0) throw new Error(label + ": the kind declaration for `" + composer + "` is unterminated.");
-  const kindOf = Object.create(null);
-  let lines = 0;
-  for (const m of src.slice(hits[0].index, end).matchAll(/@kind[ \t]+([a-z]+)[ \t]*:([^\n]*)/g)) {
-    lines++;
-    if (!KINDS.includes(m[1]))
-      throw new Error(label + ": the kind declaration for `" + composer + "` states the kind " +
-                      JSON.stringify(m[1]) + ", which is not one of " + KINDS.join(", ") + ".");
-    for (const name of m[2].split(/[\s,]+/).filter(Boolean)) {
-      if (name in kindOf)
-        throw new Error(label + ": the kind declaration for `" + composer + "` states `" + name + "` twice.");
-      kindOf[name] = m[1];
-    }
-  }
-  if (!lines) throw new Error(label + ": the kind declaration for `" + composer + "` states no kind line.");
-  return kindOf;
-}
-
-/* The comment path's join: the declared and published sets are one set, refused in both directions. */
-function commentKindsFromText(src, key, spec, label) {
-  const rows = composerRowsFromText(src, spec, label);
-  const published = new Set([...rows.numeric, ...rows.object]);
-  const kindOf = kindDeclarationFromText(src, key, label);
-  const gone = Object.keys(kindOf).filter((n) => !published.has(n));
-  if (gone.length)
-    throw new Error(label + ": the kind declaration for `" + key + "` states a kind for [" + gone.join(", ") +
-                    "], which " + JSON.stringify(spec.from) + " no longer publishes.");
-  const undeclared = [...published].filter((n) => !(n in kindOf));
-  if (undeclared.length)
-    throw new Error(label + ": " + JSON.stringify(spec.from) + " publishes [" + undeclared.join(", ") + "] " +
-                    "with no kind stated. State it, determined from the site that raises the row and never " +
-                    "from its name: a wrong kind licenses the arithmetic a missing one fails to authorise.");
-  return { key, kindOf, numeric: rows.numeric, object: rows.object };
-}
-
 let memo = null;
 function censusKinds() {
   if (memo) return memo;
@@ -173,8 +98,7 @@ function censusKinds() {
   };
   const out = Object.create(null);
   for (const [key, spec] of Object.entries(COMPOSERS))
-    out[key] = spec.defs ? composerRowsFromDefs(spec.defs, read, key)
-                         : commentKindsFromText(read(spec.file), key, spec, spec.file);
+    out[key] = composerRowsFromDefs(spec.defs, read, key);
   return (memo = out);
 }
 

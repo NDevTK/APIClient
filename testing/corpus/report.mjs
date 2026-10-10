@@ -1822,7 +1822,7 @@ const rzRows = table.map((t) => {
      no key. It had to be answered by `git show <head>:engine/host/solver/endpoint.h | grep -c
      EPA_SOURCE_DETERMINED` over fifteen artifact heads, which is an archaeology standing in for a field.
      THE MEMBER SET AND NEVER THE COUNTS, and at the BAR'S OWN PASS for §A-CONSERVATION-IDENTITY's reason
-     exactly as `wAtBest` is: site.mjs relays this from solver/result.c's `@kind gauge` row, which is the
+     exactly as `wAtBest` is: site.mjs relays this from solver/metrics' GAUGE row, which is the
      partition at ONE CENSUS INSTANT while the bar is over the whole emitted array, so the two are two
      moments and nothing here differences them. What a gauge at any instant still proves is which keys the
      build DECLARES, and that is all this reads. */

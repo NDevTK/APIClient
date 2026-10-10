@@ -1,0 +1,452 @@
+/* The frontier census (`@COLD`, `_cold`), composed by solver/result.c's result_cold_json. A row's kind comes
+   from the accessor that fills it, never from its name: cold_census is a walk, so its rows are gauges;
+   EngineFrontierCensus admits no gauge (solver/engine.h), so its rows are lifetime counts, maxima or seed
+   constants; ColdPreviewCensus only accumulates; ColdResumed is the session's at most one rebuild, so
+   constant. `owed` is its own walk (a gauge), and `orphanClaims` comes from the rebuild while
+   `orphanClaimsMet`/`Unmet` accumulate. `epEmitted = epMinted - epAssets` falls with nothing wrong, since
+   endpoint_mark_asset marks a record already held when its reply lands, so it, `epPreProgram` and the
+   histograms partitioning it are gauges while `epMinted` and `epAssets` are lifetime. Histograms carry kinds
+   like scalars. The engine.c, pending_index.c and event_loop.c counters are never reset, so they span the
+   process; the rest end with the agent. The comments state readings that span rows. */
+/* `live` is the frontier's current size; the created total is `_flows` on the document. A
+   stalled frontier has retired (`finished`) or paged (`sold`) its members. `live` is not split
+   by candidate (`_wfq.cands` carries that half), and `framed` (the park's re-execution cost)
+   and `blocked` (what the host owes) stay whole. `owed` counts flows that told the scheduler
+   they cannot progress, which the pick reads; `blocked` asks each register whether the host
+   owes it anything; the gap between them is marks cleared faster than the sweep lays them. */
+METRIC(live, "live", GAUGE, "member", AGENT, "solver/cold.c", INT)
+METRIC(framed, "framed", GAUGE, "member", AGENT, "solver/cold.c", INT)
+METRIC(blocked, "blocked", GAUGE, "member", AGENT, "solver/cold.c", INT)
+METRIC(owed, "owed", GAUGE, "member", AGENT, "solver/flow.c", INT)
+/* `finished` and `sold` carry their two populations: an exploration flow retiring is coverage
+   gained, a candidate member retiring is search spent on a payload that did not fire.
+   `*Cands` count members, not sessions — engine_sibling_assemble copies the candidate identity
+   to every sibling, and `_candidates` is the per-session count (solver/engine.h). The parts are
+   rows rather than a subtraction so they can be checked; engine_frontier_census asserts the
+   identity. The keys are not renamed: the composer ships in `qjs.wasm` while build.mjs reads
+   the tree live. */
+METRIC(finished, "finished", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
+METRIC(finished_flows, "finishedFlows", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
+METRIC(finished_cands, "finishedCands", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
+/* `deepest` (deepest program started) and `completed` are global high-water marks set by one
+   member; `deepestLeft` is the deepest row any member left. */
+METRIC(deepest, "deepest", MAXIMUM, "row", PROCESS, "solver/engine.c", INT)
+METRIC(completed, "completed", MAXIMUM, "row", PROCESS, "solver/engine.c", INT)
+METRIC(deepest_left, "deepestLeft", MAXIMUM, "row", PROCESS, "solver/engine.c", INT)
+/* …and the number those two maxima are read against: the root document's own <script> count, not
+   any flow's sequence length (which continues with chunks, injections and candidates).
+   solver/engine.h states why no inequality between them holds. */
+METRIC(root_programs, "rootPrograms", CONSTANT, "program", AGENT, "solver/engine.c", INT)
+/* …and its two arms. `rootProgramsAwaitedAtSeed` is the reply-door openings this document owes
+   for its own bundle, so `replyAsked` equal to it is a run that issued no page `fetch()`, XHR or
+   dynamic `import()`. A partition, asserted at engine_frontier_census. */
+METRIC(root_programs_held_at_seed, "rootProgramsHeldAtSeed", CONSTANT, "program", AGENT, "solver/engine.c", INT)
+METRIC(root_programs_awaited_at_seed, "rootProgramsAwaitedAtSeed", CONSTANT, "program", AGENT, "solver/engine.c", INT)
+/* …and the live half of that pair: a gauge, where `…AwaitedAtSeed` is a constant written once at
+   the seed. It counts program rows of the live frontier standing on an address now: `17` beside
+   `0` is a bundle that arrived whole (read `programCursors`), `17` beside `17` a bundle whose
+   bytes never came (the fetch path). Summed per member, so a fork raises it and a sale lowers it
+   and no inequality against the seed's arm holds; its relation to `pend` is asserted at the head
+   of result_cold_json. */
+METRIC(rows_awaiting_bytes, "rowsAwaitingBytes", GAUGE, "row", AGENT, "solver/engine.c", INT)
+/* The @S search's own numerator and denominator (solver/engine.h has the full reading).
+   `progStartsCand` 0 is either no breakout queued or N queued and none started;
+   `progQueuedCand` tells them apart, and `progStarts` 0 says nothing either way. The parts are
+   rows rather than a subtraction so the identity engine.c asserts in dev is checkable off a
+   release log. A fork copies unstarted rows, so `progStartsCand` may exceed `progQueuedCand`.
+   `cand*` on the @WFQ line counts members carrying a payload substitution, a different
+   population from these programs. */
+METRIC(prog_starts, "progStarts", LIFETIME, "program", PROCESS, "solver/engine.c", INT)
+METRIC(prog_starts_cand, "progStartsCand", LIFETIME, "program", PROCESS, "solver/engine.c", INT)
+METRIC(prog_starts_other, "progStartsOther", LIFETIME, "program", PROCESS, "solver/engine.c", INT)
+METRIC(prog_queued_cand, "progQueuedCand", LIFETIME, "program", PROCESS, "solver/engine.c", INT)
+/* …and whether a reply became a program — the "fetched JS is always executed" surface. Two doors
+   build it, solver/engine.c's FLOW_PENDING_RESOLVE delivery and core/xhr/xml_http_request.c's
+   `xhr_take_reply`; both end in `engine_queue_fetched_script`, which queues a DYN_PAGE_SCRIPT,
+   so `progStartsOther` cannot separate them from the page's own bundle.
+   Each door is an ask/queued pair: `…Asks` is raised where the door holds a reply record,
+   upstream of the type gate, so `0/0` is a door never reached and `0/N` one reached that
+   queued nothing (correctly, for a non-JavaScript type). Both asks count reply records.
+   `netProgQueuedLife` is raised inside `engine_queue_fetched_script` itself, and test_forced.c's
+   `loadScript` host edge is a third caller, so `fetch + xhr <= total` (asserted in the engine);
+   the residue is zero in the shipped program. A door crediting a program the compile entry
+   never saw would break it. The two doors are independent (axios's browser adapter is XHR). */
+METRIC(net_prog_queued_life, "netProgQueuedLife", LIFETIME, "program", PROCESS, "solver/engine.c", INT)
+METRIC(net_prog_fetch_asks_life, "netProgFetchAsksLife", LIFETIME, "reply", PROCESS, "solver/engine.c", INT)
+METRIC(net_prog_fetch_queued_life, "netProgFetchQueuedLife", LIFETIME, "program", PROCESS, "solver/engine.c", INT)
+METRIC(net_prog_xhr_asks_life, "netProgXhrAsksLife", LIFETIME, "reply", PROCESS, "solver/engine.c", INT)
+METRIC(net_prog_xhr_queued_life, "netProgXhrQueuedLife", LIFETIME, "program", PROCESS, "solver/engine.c", INT)
+/* `sold` and `resumed` are outcome censuses over gates with legitimate declining arms.
+   `sold` is gated on the allocator's refusal, so 0 is the RAM floor never met; its ask side is
+   `pagedAsks` with `pagedFloor` and `pagedUnarmed`. `resumed` is gated in the trusted zone on a
+   key of the document's address plus bundle id that no document publishes, so 0 is no residue
+   written, a key miss (the design working on a changed bundle), or a rebuild that produced
+   nothing — only the last a defect, and separating them is a trusted-zone diff.
+   The capability is checkable on a tracked fixture (a live page's rolling deploy makes a miss
+   correct): serve testing/fixtures and drive one document twice,
+     node testing/harness.js restart      <port>
+     node testing/live-run.js 1 'http://127.0.0.1:<p>/wjp_absent.html?__forcepark=1'
+     node testing/harness.js restart-keep <port>     # preserves IndexedDB
+     node testing/live-run.js 1 'http://127.0.0.1:<p>/wjp_absent.html?__forcepark=1'
+   and the second must report `resumed > 0` and `park` 0 (the forced park arms only when no
+   prior recipes exist). `?__forcepark=1` is a test hook; a visit parks only under Level-1 RAM
+   pressure, which is why these rows read 0 on an ordinary visit. */
+METRIC(sold, "sold", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
+METRIC(sold_flows, "soldFlows", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
+METRIC(sold_cands, "soldCands", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
+METRIC(forks, "forks", LIFETIME, "fork", AGENT, "solver/engine.c", INT)
+/* `resumed` is the positive statement that a rebuild ran, always present: `resumed: 0` says
+   no residue was handed over, so zeroes beside it are not a verdict. `resumedSegs`/`Flows`/
+   `Cands`/`Worlds` decompose it into which arms of the residue grammar ran (cold.h). No
+   `resumedOrphans` row: `orphanClaims` is that number. */
+METRIC(resumed, "resumed", CONSTANT, "rebuild", AGENT, "solver/cold.c", INT)
+METRIC(resumed_segs, "resumedSegs", CONSTANT, "segment", AGENT, "solver/cold.c", INT)
+METRIC(resumed_flows, "resumedFlows", CONSTANT, "member", AGENT, "solver/cold.c", INT)
+METRIC(resumed_cands, "resumedCands", CONSTANT, "member", AGENT, "solver/cold.c", INT)
+METRIC(resumed_worlds, "resumedWorlds", CONSTANT, "world", AGENT, "solver/cold.c", INT)
+/* The path half's verdict rows, lifetime counts. Units differ: `replayHits` and `replayLeftArms`
+   are arms (decision-vector slots), `replayLeft` is divergence events; their identity is asserted
+   in result_cold_json. They say what the `resumed*` rows cannot: whether a rebuilt session followed its
+   recorded path. A divergence is permitted (a replay runs against today's code and replies);
+   decide.h names the residual. `resumed: 0` beside nonzero `replayLeft` attributes it to
+   siblings. */
+METRIC(replay_hits, "replayHits", LIFETIME, "decision", AGENT, "solver/decide.c", INT)
+METRIC(replay_left, "replayLeft", LIFETIME, "divergence", AGENT, "solver/decide.c", INT)
+METRIC(replay_left_arms, "replayLeftArms", LIFETIME, "arm", AGENT, "solver/decide.c", INT)
+/* The third of decide_arm's three arms. A spellable decision is refined (no slot, no member),
+   replayed (`replayHits`) or new (`_forkAt`'s predicate rows). The unit is decisions, not
+   `replayHits`' arms, so the two ledgers may not be summed. `branchAsked` is the reachability
+   witness: zero `branchRefined` beside zero `branchAsked` is no spellable question reached
+   (decide.c's fork_site_name residual). Read as a fraction or not at all. */
+METRIC(branch_asked, "branchAsked", LIFETIME, "decision", AGENT, "solver/decide.c", INT)
+METRIC(branch_refined, "branchRefined", LIFETIME, "decision", AGENT, "solver/decide.c", INT)
+/* …and of the new decisions, how many forked over a subject this flow had already proved. The two
+   pin mint arms hand back a bare primitive that never reaches a branch hook, but a source the
+   page materialized before its gate keeps its record (`concolic_example`), so a second predicate
+   over it forks with a singleton domain. A population size, not a defect count. Its
+   denominator `forks` comes from the same call (solver/decide.h), so `forkOverPinned <= forks`
+   holds within one moment. */
+METRIC(fork_over_pinned, "forkOverPinned", LIFETIME, "fork", AGENT, "solver/decide.c", INT)
+/* The orphan walk's preferred takes, over `_orphansDriven` on this document; the containment is
+   asserted where both are in one hand. */
+METRIC(orphan_preferred, "orphanPreferred", LIFETIME, "drive", AGENT, "solver/engine.c", INT)
+/* …and over how many distinct scripts the same drives were spread, independent of the preferred
+   count: one script against a hundred drives is a monopoly. `orphanScripts <= orphansDriven` is
+   asserted where both are in one hand. */
+METRIC(orphan_scripts, "orphanScripts", LIFETIME, "script", AGENT, "solver/engine.c", INT)
+/* The cold round trip's verdict: `orphanClaims` is the inherited drives a resume rebuilt,
+   `orphanClaimsMet` the waits a take satisfied, `orphanClaimsUnmet` the waiting flows that
+   finished never handed a body — the loss, zero when the bytes did not change. Met may exceed
+   claims (a drive's arms are one drive). Read only under `resumed: 1`. No `orphans` row:
+   `_orphansDriven` is that number. */
+METRIC(orphan_claims, "orphanClaims", CONSTANT, "claim", AGENT, "solver/cold.c", INT)
+METRIC(orphan_claims_met, "orphanClaimsMet", LIFETIME, "claim", AGENT, "solver/engine.c", INT)
+METRIC(orphan_claims_unmet, "orphanClaimsUnmet", LIFETIME, "claim", AGENT, "solver/engine.c", INT)
+/* `hostAsked`/`hostAnswered` are minted at engine.c's `mint_req` for FLOW_PENDING_HOSTREQ: the
+   four cross-instance reads and XMLHttpRequest, whose async and sync (§3.5.6) arms share that
+   rendezvous. The reply door (fetch, injected `<script src>`, the document's script slots,
+   dynamic `import()`) is the `reply*` pair below. `hostAnswersExtra` is not part of
+   `hostAnswered`: only a rendezvous's first answer settles it, the rest fork arms. */
+METRIC(host_asked, "hostAsked", LIFETIME, "rendezvous", PROCESS, "solver/engine.c", INT)
+METRIC(host_answered, "hostAnswered", LIFETIME, "rendezvous", PROCESS, "solver/engine.c", INT)
+METRIC(host_answers_extra, "hostAnswersExtra", LIFETIME, "answer", PROCESS, "solver/engine.c", INT)
+METRIC(host_answers_late, "hostAnswersLate", LIFETIME, "answer", PROCESS, "solver/engine.c", INT)
+METRIC(host_terminated, "hostTerminated", LIFETIME, "rendezvous", PROCESS, "solver/engine.c", INT)
+/* The four ends of the reply door, together because the asked/answered gap means nothing without
+   the other two: a gap may be refusals of the page's own requests, where the door owes nothing.
+   `replyOutstanding` is the gauge (is the host behind); the other three are lifetime counts
+   (solver/pending_index.h). */
+METRIC(reply_asked, "replyAsked", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
+METRIC(reply_answered, "replyAnswered", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
+METRIC(reply_declined, "replyDeclined", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
+METRIC(reply_dropped, "replyDropped", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
+METRIC(reply_outstanding, "replyOutstanding", GAUGE, "record", AGENT, "solver/pending_index.c", INT)
+METRIC(paged_reqs, "pagedReqs", LIFETIME, "request", PROCESS, "solver/engine.c", INT)
+METRIC(paged_asks, "pagedAsks", LIFETIME, "ask", PROCESS, "solver/engine.c", INT)
+METRIC(paged_unarmed, "pagedUnarmed", LIFETIME, "ask", PROCESS, "solver/engine.c", INT)
+METRIC(paged_floor, "pagedFloor", LIFETIME, "ask", PROCESS, "solver/engine.c", INT)
+/* …and why a park that never happened did not. These are the host asking the cold tier what a
+   park would write; `previewAsks: 0` is no host consulting it, and every row below is then
+   meaningless. A moment is a conjunction, so the rows split it: a row that never rose wants its
+   producer built, rows that rose and never coincided want a different moment. The partition is
+   the tier's own verdict — refusing (would abort), empty (writes no bytes), writable (writes a
+   residue) — and the rest derive from ColdPreview's struct. */
+METRIC(preview_asks, "previewAsks", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
+METRIC(preview_asks_refusing, "previewAsksRefusing", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
+METRIC(preview_asks_empty, "previewAsksEmpty", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
+METRIC(preview_asks_writable, "previewAsksWritable", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
+/* The eight `previewAsksWith*` rows are contained in `previewAsks` and partition nothing, since
+   several conjuncts may stand at once. `previewAsksAfterCommit` counts asks after the commitment
+   ledger was written, differing from `previewAsksWithCommits` by commitments that departed with
+   their flows; `previewCommitRowsWritten` counts ledger rows (solver/flow.h), not asks. Read the
+   three together (cold.h). */
+METRIC(preview_asks_with_flows, "previewAsksWithFlows", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
+METRIC(preview_asks_with_cands, "previewAsksWithCands", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
+METRIC(preview_asks_with_deep, "previewAsksWithDeep", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
+METRIC(preview_asks_with_deep_cands, "previewAsksWithDeepCands", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
+METRIC(preview_asks_with_worlds, "previewAsksWithWorlds", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
+METRIC(preview_asks_with_orphans, "previewAsksWithOrphans", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
+METRIC(preview_asks_with_commits, "previewAsksWithCommits", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
+METRIC(preview_asks_with_delivers, "previewAsksWithDelivers", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
+METRIC(preview_asks_after_commit, "previewAsksAfterCommit", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
+METRIC(preview_commit_rows_written, "previewCommitRowsWritten", LIFETIME, "row", AGENT, "solver/cold.c", INT)
+METRIC(dec_entries, "decEntries", GAUGE, "entry", AGENT, "solver/cold.c", INT)
+METRIC(dec_kib, "decKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
+METRIC(head_entries, "headEntries", GAUGE, "entry", AGENT, "solver/cold.c", INT)
+METRIC(head_kib, "headKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
+METRIC(dom_head_entries, "domHeadEntries", GAUGE, "entry", AGENT, "solver/cold.c", INT)
+METRIC(dom_head_kib, "domHeadKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
+METRIC(jobs, "jobs", GAUGE, "job", AGENT, "solver/cold.c", INT)
+METRIC(pend, "pend", GAUGE, "entry", AGENT, "solver/cold.c", INT)
+METRIC(pend_ready, "pendReady", GAUGE, "entry", AGENT, "solver/cold.c", INT)
+METRIC(stack_empty, "stackEmpty", GAUGE, "member", AGENT, "solver/cold.c", INT)
+METRIC(can_deliver, "canDeliver", GAUGE, "member", AGENT, "solver/cold.c", INT)
+METRIC(pend_kib, "pendKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
+METRIC(misc_kib, "miscKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
+METRIC(per_flow_kib, "perFlowKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
+METRIC(seg_kib, "segKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
+METRIC(dom_seg_kib, "domSegKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
+METRIC(pin_segs, "pinSegs", GAUGE, "segment", AGENT, "solver/cold.c", INT)
+METRIC(pin_seg_entries, "pinSegEntries", GAUGE, "entry", AGENT, "solver/cold.c", INT)
+METRIC(pin_seg_kib, "pinSegKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
+METRIC(dec_segs, "decSegs", GAUGE, "segment", AGENT, "solver/cold.c", INT)
+METRIC(dec_seg_entries, "decSegEntries", GAUGE, "entry", AGENT, "solver/cold.c", INT)
+METRIC(dec_seg_kib, "decSegKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
+METRIC(dyn_bodies, "dynBodies", GAUGE, "body", AGENT, "solver/cold.c", INT)
+METRIC(dyn_kib, "dynKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
+METRIC(shared_kib, "sharedKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
+/* `steps` and `stepUnitRuns` are lifetime counts of steps run through each arm, and `stepUnits` a
+   gauge of members standing in each arm now: with the gauge alone, an arm never entered and one
+   entered and left before every census read alike. `stepUs` is `steps`' denominator — the thread
+   time the loop's turns consumed, in the slice's own measure — so a turn costing a whole slice
+   makes one choice per slice by construction, while cheap turns mean little thread time was
+   given. Read `stepUs / steps` as a ratio within one run, never a total across runs; calling it
+   CPU needs the @QUANTUM line. 64-bit because on wasm32 a `long` of microseconds saturates in
+   35.8 minutes (solver/engine.h's `step_us`; engine.c asserts the width). */
+METRIC(steps, "steps", LIFETIME, "step", PROCESS, "solver/engine.c", INT)
+METRIC(step_us, "stepUs", LIFETIME, "us", PROCESS, "solver/engine.c", INT)
+/* …and what that total is a share of: the thread measure this instance consumed since its
+   dispatch loop first ran. `stepUs` counts only turns taken, so a small `stepUs/steps` is a cheap
+   loop or one barely entered. Both sides are one clock, `quantum_thread_us()` (named on
+   @QUANTUM), so the ratio survives a wall-only host. `stepUs <= instanceUs` is asserted at
+   engine_step_unit_runs; solver/engine.h's `instance_us` holds the residual. */
+METRIC(instance_us, "instanceUs", LIFETIME, "us", PROCESS, "solver/engine.c", INT)
+/* …and its two halves. `loopUs` is the engine's thread inside its dispatch bracket outside a turn
+   and `betweenSlicesUs` the host's between slices; they partition `instanceUs` exactly (the open
+   tail closes into `betweenSlicesUs` from the same clock reading), asserted at
+   engine_step_unit_runs. `loopUs` small points at the driver; large with `stepUs` small points
+   at this scheduler, starting with `slices` against `steps` (solver/engine.h's `loop_us`). */
+METRIC(loop_us, "loopUs", LIFETIME, "us", PROCESS, "solver/engine.c", INT)
+METRIC(between_slices_us, "betweenSlicesUs", LIFETIME, "us", PROCESS, "solver/engine.c", INT)
+METRIC(slices, "slices", LIFETIME, "slice", PROCESS, "solver/engine.c", INT)
+/* The two phases `stepUs` sums: a step overrunning the slice is the quantum with no asynchronous
+   source to expire it, a dominant pick-and-swap is the ordering costing more than the work.
+   `schedUs` is everything in the turn that is not the step, including the previous iteration's
+   tail (the charge telescopes; solver/engine.h); identity asserted at engine_frontier_census. */
+/* …and `sliceOverruns`, because `stepUs/steps` is a mean no turn is near: raised once per turn
+   from the readings `sliceUs` accumulates, containment asserted at engine_step_unit_runs
+   (solver/engine.h's `slice_overruns`). */
+METRIC(slice_us, "sliceUs", LIFETIME, "us", PROCESS, "solver/engine.c", INT)
+METRIC(sched_us, "schedUs", LIFETIME, "us", PROCESS, "solver/engine.c", INT)
+METRIC(slice_overruns, "sliceOverruns", LIFETIME, "turn", PROCESS, "solver/engine.c", INT)
+METRIC(step_unit_runs, "stepUnitRuns", LIFETIME, "step", PROCESS, "solver/engine.c", OBJECT)
+/* …and which arm each overrunning turn was in: `stepUnitRuns` restricted to `sliceOverruns`'
+   turns. An arm whose two counts are equal is a step that cannot rest (solver/engine.h's
+   `over_arms`). */
+METRIC(step_unit_overruns, "stepUnitOverruns", LIFETIME, "turn", PROCESS, "solver/engine.c", OBJECT)
+/* …and which of those turns offered no suspend point, per arm: against the arm's overruns it says
+   whether the thread was inside C that declares no step boundary, which decides between a
+   step-machine conversion and a page's own stretch (solver/engine.h's `over_seamless_arms`). */
+METRIC(step_unit_overrun_seamless_arms, "stepUnitOverrunSeamlessArms", LIFETIME, "turn", PROCESS, "solver/engine.c", OBJECT)
+/* …and how many suspend points each arm's other overrunning turns offered. The denominator is the
+   arm's overruns minus its seamless turns, which contribute zero by construction; the scalar
+   `sliceOverrunAsks / sliceOverruns` averages arms that answer differently (solver/engine.h's
+   `over_ask_arms`). */
+METRIC(step_unit_overrun_ask_arms, "stepUnitOverrunAskArms", LIFETIME, "point", PROCESS, "solver/engine.c", OBJECT)
+/* …and the widest no-offer stretch of one such turn, in the slice's own measure. The preempt
+   policy's only false arm is the budget test, monotone within a slice, and the first true parks
+   the flow, so every consultation sits within ENGINE_QUANTUM_MS of the slice's opening and this
+   row is the worst turn's span to within one budget (`stepUnitOverruns` is only a count). A 0 is
+   no non-seamless overrunning turn or gaps under a microsecond; `stepUnitOverruns` minus
+   `stepUnitOverrunSeamlessArms` tells them apart (solver/engine.h's `over_gap_arms`). */
+METRIC(step_unit_overrun_gap_arms, "stepUnitOverrunGapArms", MAXIMUM, "us", PROCESS, "solver/engine.c", OBJECT)
+/* …and whether the page's own code ran in those turns: an arm is where a step ended, and the time
+   may be the page's bytecode between its raise points or one native call that never returned.
+   `sliceOverrunAsks` is the suspend points those turns offered and `sliceOverrunSeamless` how
+   many offered none; all-seamless asks for a step-machine conversion, a large sum is a question
+   about the page (solver/engine.h's `slice_overrun_asks`). */
+METRIC(slice_overrun_asks, "sliceOverrunAsks", LIFETIME, "point", PROCESS, "solver/engine.c", INT)
+METRIC(slice_overrun_seamless, "sliceOverrunSeamless", LIFETIME, "turn", PROCESS, "solver/engine.c", INT)
+/* …and the worst no-offer stretch over every arm at once, so `max(arms) == this` makes the
+   per-arm row checkable as whole. A high-water mark: read against ENGINE_QUANTUM_MS, never
+   another run's figure; its evidence is bounded by `stepUnitOverruns` minus
+   `stepUnitOverrunSeamlessArms`. */
+METRIC(slice_overrun_gap_us, "sliceOverrunGapUs", MAXIMUM, "us", PROCESS, "solver/engine.c", INT)
+/* …and which phase of a start step spent the time. A start compiles then executes; the compile
+   rests (JS_FlowCompileStep hands the parse back part way), so one program parses over one or
+   more stints. `classicCompiles` is one per program, `classicCompileOverruns` one per stint that
+   met the slice, so they are not a ratio; the stint population is `classicCompiles +
+   stepUnitRuns[compile-handed-the-thread-back]`, against which the containment is asserted.
+   `classicCompiles` counts every flow, timeline and appended row (chunks, injected scripts,
+   `javascript:` URLs, peer operations, value dumps), so it far exceeds `rootPrograms` on a
+   healthy app page. `classicCompileAgain` states repeats directly (bytes some flow already
+   parsed to completion), priced by `classicCompileAgainBytes` and bounded by
+   `classicCompileOwnDecode`, since a reply is decoded per delivery. The two subsets partition
+   differently and may not be added (solver/engine.h's `classic_compiles`). */
+METRIC(classic_compiles, "classicCompiles", LIFETIME, "compile", PROCESS, "solver/engine.c", INT)
+METRIC(classic_compile_overruns, "classicCompileOverruns", LIFETIME, "compile", PROCESS, "solver/engine.c", INT)
+METRIC(classic_compile_again, "classicCompileAgain", LIFETIME, "compile", PROCESS, "solver/engine.c", INT)
+METRIC(classic_compile_again_bytes, "classicCompileAgainBytes", LIFETIME, "byte", PROCESS, "solver/engine.c", INT)
+METRIC(classic_compile_own_decode, "classicCompileOwnDecode", LIFETIME, "compile", PROCESS, "solver/engine.c", INT)
+/* …and programs started from a parse another timeline already finished, which parse no bytes and
+   raise none of the four rows above: `classicCompiles + classicParseShared` is the classic
+   programs that obtained a closure at all. `classicCompileAgain` staying nonzero is not sharing
+   failing (a flow mid-parse of a row someone finished resumes its own parse). See
+   solver/engine.h's `classic_parse_shared` and solver/dyn_body.h. */
+METRIC(classic_parse_shared, "classicParseShared", LIFETIME, "parse", PROCESS, "solver/engine.c", INT)
+/* …and whether a parse handed back was carried forward:
+   `stepUnitRuns[compile-handed-the-thread-back]` minus this is the parses begun and not ended.
+   Not a subset of `classicCompiles`, and not a rate against it: one is raised per continued
+   stint, the other per ended parse (solver/engine.h's `classic_compile_resumed`). */
+METRIC(classic_compile_resumed, "classicCompileResumed", LIFETIME, "compile", PROCESS, "solver/engine.c", INT)
+/* …and why each turn that ended no unit of work did not. `_unitsDone` is a gated count, so low is
+   either a thread that did nothing or one advancing programs it never finished. With the credited
+   arm (`_unitsDone`, in the other object) the four sum to `steps`, asserted in the engine
+   (solver/engine.h's `unit_mid_program`). */
+METRIC(unit_mid_program, "unitMidProgram", LIFETIME, "step", PROCESS, "solver/engine.c", INT)
+METRIC(unit_parked, "unitParked", LIFETIME, "step", PROCESS, "solver/engine.c", INT)
+METRIC(unit_checkpoint_owed, "unitCheckpointOwed", LIFETIME, "step", PROCESS, "solver/engine.c", INT)
+/* …and how many steps descended flow_step's work ladder: every arm of it (deliveries, checkpoint,
+   reply, sequence, task, lifecycle, orphan rungs, clock sources, resting arms) sits inside one
+   `if (!f->frame)`. A lifetime count of passes through that block, so not comparable with
+   `steps` (the loop body iterates) but with `_orphansAsked`, raised on the same basis, the
+   containment asserted in the engine. 0 puts the cause upstream of the ladder; large, with
+   `_orphansAsked == 0`, says an arm above the orphan rung took every descent (`stepUnitRuns`).
+   The `outOfProgramsAtTheLadder` family cannot stand in: it selects on `script_i == dyn_n`,
+   while the rung binds to `seq_compiles` (solver/engine.h's `unframed_steps`). */
+METRIC(unframed_steps_lifetime, "unframedStepsLifetime", LIFETIME, "step", PROCESS, "solver/engine.c", INT)
+/* …and how far down the ladder the descents got. The three clock arms of `stepUnitRuns` are
+   raised only when their hook takes the step, so a 0 there is "nothing due" or "never asked";
+   these count the ask, at the arm ahead of each gate. The three rungs are consecutive arms of one
+   `else if` chain, so these are suffix sums: `stepReachedRenderingLife` is every descent reaching
+   the chain, the next two those the rendering, then the timer, rung did not take. Unlike a 0 in
+   the partition, the lowest 0 here localises. `finished` 0 with `stepReachedRenderingLife` 0
+   means retirement was never asked; with it large, one of the ten arms above `finished` took
+   every descent. No sum is published beside them; the identities with `stepUnitRuns` and
+   containment in `unframedStepsLifetime` are asserted at engine_step_unit_runs. Lifetime
+   counts per instance (solver/engine.h's `clock_render_asks`). */
+METRIC(step_reached_rendering_life, "stepReachedRenderingLife", LIFETIME, "ask", PROCESS, "solver/engine.c", INT)
+METRIC(step_reached_timer_life, "stepReachedTimerLife", LIFETIME, "ask", PROCESS, "solver/engine.c", INT)
+METRIC(step_reached_idle_life, "stepReachedIdleLife", LIFETIME, "ask", PROCESS, "solver/engine.c", INT)
+/* …and which of two reasons the timer rung declined for: no source became due, or one was due and
+   core/timing/event_loop.h's licence refused to manufacture its dueness (that header's
+   residual). The pair partitions rather than restates `stepReachedIdleLife`, and its ask half
+   spans both refusing rungs (timer and rendering). Lifetime counts; `Declined <= Asked` is
+   asserted where both are in one hand. */
+METRIC(clock_advance_asked_life, "clockAdvanceAskedLife", LIFETIME, "ask", PROCESS, "core/timing/event_loop.c", INT)
+METRIC(clock_advance_declined_life, "clockAdvanceDeclinedLife", LIFETIME, "ask", PROCESS, "core/timing/event_loop.c", INT)
+/* `outOfPrograms` separates a member inside its last program from one past the last row, which
+   a cursor value cannot: only the latter reaches engine.c's orphan arm. Its three parts also
+   name members never dispatched or suspended in a live frame (the ladder sits below
+   `if (!f->frame)`). solver/cold.h owns the ladder's list; do not enumerate its rungs here. */
+METRIC(out_of_programs, "outOfPrograms", GAUGE, "member", AGENT, "solver/cold.c", INT)
+METRIC(out_of_programs_unrun, "outOfProgramsUnrun", GAUGE, "member", AGENT, "solver/cold.c", INT)
+METRIC(out_of_programs_framed, "outOfProgramsFramed", GAUGE, "member", AGENT, "solver/cold.c", INT)
+METRIC(out_of_programs_at_the_ladder, "outOfProgramsAtTheLadder", GAUGE, "member", AGENT, "solver/cold.c", INT)
+METRIC(out_of_programs_at_the_ladder_units, "outOfProgramsAtTheLadderUnits", GAUGE, "member", AGENT, "solver/cold.c", OBJECT)
+/* `programCursors` is the per-member companion to the maxima: `deepest 11` is as true of one
+   member at 11 as of two thousand. Buckets are cursors (closed at `dyn_n`); a cursor one past
+   the deepest row left is `deepestLeft + 1`, the bound asserted in result_cold_json. A failed external script
+   is left without being started, so the mass may run ahead of `deepest`. A top bucket says where
+   the mass reached, never that the sequence ends (engine_seed_scripts queues the whole table);
+   `outOfPrograms` says who has no row left. */
+METRIC(step_units, "stepUnits", GAUGE, "member", AGENT, "solver/cold.c", OBJECT)
+METRIC(program_cursors, "programCursors", GAUGE, "member", AGENT, "solver/cold.c", OBJECT)
+/* …and how far each standing member is from having nothing left to run (solver/cold.h;
+   `outOfPrograms` is its bucket 0). The cursor histogram is a position, this a distance. */
+METRIC(programs_ahead, "programsAhead", GAUGE, "member", AGENT, "solver/cold.c", OBJECT)
+/* The @H surface's own denominator — endpoint.h states why its length is three states: small
+   `epEmitted` with large `epAssets` learned little because the addresses were files.
+   `epAssets` counts the flag `endpoint_mark_asset` set, an outcome over a classifier with a
+   declining arm, so 0 under a large `epMinted` is: no reply reached the classifier; one
+   arrived with an empty `computedType` (the chokepoint's refusal record); or the type was good
+   and `is_asset` answered false (e.g. a `.woff2` served `application/octet-stream` with
+   `nosniff`), the design working. Widening the predicate by URL suffix would be matching, not
+   running.
+   Named residual. Not covered: the ask — replies reaching the classifier with a type that
+   parsed — so the first state cannot be told from the others (`hostAsked`/`hostAnswered` only
+   bound it). Next diff: that count, raised in solver/reply_decode.c where the type parses,
+   published beside this one. Absence shows as a 0 here reported as a reply-path defect on a
+   run whose classifier declined correctly. */
+/* …and how many emitted rows were minted before this instance started a program: `epEmitted -
+   epPreProgram` bounds what forced execution contributed, and equal values learned nothing the
+   markup did not state (a surface can be the `<head>`'s own `<script src>` and `<link>` rows
+   counted back). endpoint.h holds the contract, the ceiling reading and the resumed-timeline
+   residual. */
+METRIC(ep_minted, "epMinted", LIFETIME, "address", AGENT, "solver/endpoint.c", INT)
+METRIC(ep_assets, "epAssets", LIFETIME, "address", AGENT, "solver/endpoint.c", INT)
+METRIC(ep_emitted, "epEmitted", GAUGE, "address", AGENT, "solver/endpoint.c", INT)
+METRIC(ep_pre_program, "epPreProgram", GAUGE, "address", AGENT, "solver/endpoint.c", INT)
+/* …and which mechanism composed each emitted address: a partition of `epEmitted`, asserted at the
+   composer (solver/endpoint.c) over the record array and re-checked over the emitted document by
+   engine/build.mjs's `censusHistRows` and extension/bridge.js's histogram contract.
+   The door is which mechanism and `epPreProgram` is when; neither implies the other (a router's
+   `<link>` and a markup one share a door, and a `<link>` after a `<script src>` is minted
+   post-program). Each emitted row carries both. */
+METRIC(ep_doors, "epDoors", GAUGE, "address", AGENT, "solver/endpoint.c", OBJECT)
+/* …and which of those mechanisms a markup parse of the served document would have reached, keyed
+   on the door list's third column: `markup`, `either` (a parser-inserted or script-created
+   `link-element`, `image-element` or `form-submit`, which the door does not distinguish) and
+   `beyond`, a floor under the markup question. This is a diagnostic, not the razor: a literal
+   chunk URL through `module-import` is `beyond` yet scores zero at the bar, which is
+   `epRazorClass` below (composed by `endpoint_razor_class_of`); build.mjs renders this as the
+   markup diagnostic and `endpointRazorClassReading` as the bar.
+   Entailed by the door row (each class sums its doors), so the two are one observation; what
+   this adds is the map. Never a target: `beyond` 0 against nonzero `epEmitted` is a refusal to
+   claim, and the row is an identity within one run, not comparable across wall-denominated
+   runs. Its denominator `epEmitted` travels on this line; endpoint.c asserts the sum and
+   build.mjs re-checks it against the emitted document. */
+METRIC(ep_reach, "epReach", GAUGE, "address", AGENT, "solver/endpoint.c", OBJECT)
+/* …and the address's own class, read off the address value's concolic provenance at endpoint.c's
+   door: the bar is a property of the address, not the mechanism (`/api/{location.hash}` through
+   `fetch` clears it; a literal chunk URL through `module-import` does not). A second
+   observation beside `epDoors`/`epReach`, which are one.
+   A floor, not a verdict: `unknown` is a positive statement that the address rested on an
+   unknown supplied from outside the engine (one resting on a hole the engine minted for its own
+   drive is refused), so it clears the bar. `concrete` claims nothing about a parse; what it
+   hides is listed at solver/endpoint.h (a literal, the document's own address, or a pinned
+   source re-read). Never a target. Its denominator `epEmitted` travels on this line;
+   endpoint.c asserts the sum. */
+METRIC(ep_address_class, "epAddressClass", GAUGE, "address", AGENT, "solver/endpoint.c", OBJECT)
+/* …and the bar itself, which no reader can compose from its operands: a union is a statement
+   about per-row membership, and the marginals above carry no overlap. A cross-check against the
+   emitted array's `razorClass`, never a sum with it: both come off `endpoint_razor_class_of`,
+   taken at two instants over a gauge (`epEmitted` falls when an asset verdict lands between
+   them), so a disagreement names which records each document described. `runtime-only` 0
+   against nonzero `epEmitted` is a refusal to claim; `unproven` claims nothing about a parse.
+   Its denominator `epEmitted` travels on this line; endpoint.c asserts the sum. */
+METRIC(ep_razor_class, "epRazorClass", GAUGE, "address", AGENT, "solver/endpoint.c", OBJECT)
+/* …and the necessary condition under that bar, beside it and never inside it: the bar is a floor
+   of positive statements, and this is a "may" (solver/endpoint.h). `may-rest-on` bounds the
+   addresses composed by a path that had pinned a source, which `addressClass` calls
+   `concrete` because the pin arm re-reads a bare primitive: 0 means no chosen-bytes population
+   under this surface, nonzero means addresses that may not reproduce for a real session and
+   the next diff is the pin. It is not a bound on the bar's slack — a pin's bytes are a literal
+   the page's own text spells (solver/concolic.c), so `unproven` holds them correctly.
+   `unasked` is no flow standing when the record was minted: a door composing a request outside
+   the scheduler. Its denominator `epEmitted` travels on this line; endpoint.c asserts the sum. */
+METRIC(ep_witness_class, "epWitnessClass", GAUGE, "address", AGENT, "solver/endpoint.c", OBJECT)
+METRIC(ep_asks, "epAsks", LIFETIME, "ask", AGENT, "solver/endpoint.c", INT)
+METRIC(ep_ask_pre_program, "epAskPreProgram", LIFETIME, "ask", AGENT, "solver/endpoint.c", INT)
+METRIC(ep_ask_suppressed, "epAskSuppressed", LIFETIME, "ask", AGENT, "solver/endpoint.c", INT)
+/* …and the one cut inside the merged arm (endpoint.h). Not summed with the three arms beside it:
+   they partition the door's exits and this selects inside one. Nonzero means running code
+   composed an address the markup had already named — a network call site reached and nothing
+   learned. */
+METRIC(ep_ask_merged, "epAskMerged", LIFETIME, "ask", AGENT, "solver/endpoint.c", INT)
+METRIC(ep_ask_minted, "epAskMinted", LIFETIME, "ask", AGENT, "solver/endpoint.c", INT)
+METRIC(ep_ask_merged_pre_program, "epAskMergedPreProgram", LIFETIME, "ask", AGENT, "solver/endpoint.c", INT)
+/* The fetch edge's, the XHR edge's and the invoker rungs' rows follow these in `_cold`, from their own
+   families (solver/metrics/fetch_edge.def, xhr_edge.def, rung_entry.def). The fetch edge's are the
+   host edge's own entry, which `epAsks` cannot see: a `fetch()` thrown out of or parked inside before
+   core/fetch's `FETCH_CALL` is in none of the rows above. */
