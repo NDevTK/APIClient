@@ -1380,7 +1380,7 @@ static int html_fire_walk(Cand *e, lxb_dom_node_t *node) {
     for (n = node; n; n = node_next_in(n, node)) {
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
             lxb_dom_element_t *el = lxb_dom_interface_element(n);
-            static const char *H[] = { "onload", "onerror", NULL };   /* auto-firing only; onmouseover needs interaction */
+            static const char *H[] = { "onload", "onerror", NULL };   /* auto-firing; onmouseover needs interaction */
             for (int h = 0; H[h]; h++) {
                 size_t vl = 0;
                 const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)H[h], strlen(H[h]), &vl);
@@ -1495,31 +1495,12 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
     detect_sink(arg, SINK_HTML);
 }
 
-/* Fire-verify every pending source: SEARCH the candidate breakouts — inject each at the source, re-run the
-   REAL program as a flow, and the FIRST that makes X9 fire is the replay-verified PoC (re-execution is the
-   oracle, so no static context detection is needed). The re-run is a FLOW on the one frontier,
-   the same path the scheduler uses — there is no separate boot re-runner. */
-/* SEED the candidate flows: one per (detected sink, breakout), each an ordinary member of the ONE frontier.
-   The scheduler runs them preemptibly and parkably like every other flow, which is what §solver requires — a
-   driver that runs a candidate start-to-finish cannot park an unbounded loop inside it. */
-/* Seed a candidate flow per (sink, breakout) for every sink NOT YET SEEDED, and answer how many were added.
-   Idempotent by construction, so the scheduler can ask again every time the frontier drains — which is what a
-   sink found by code that only loaded after the first drain needs. */
-/* THE ROOT OF THE SEARCH A LIVE CANDIDATE BELONGS TO — the park's read half, asked by cold.c at the moment it
-   writes that candidate's recipe.
-   IT IS A FACT ABOUT THE SEARCH AND NOT ABOUT THE FLOW, which is why the flow does not carry one. The N
-   candidates of one sink have ONE root between them BECAUSE cand_learn_root REFUSES a second — which used to be
-   a structural fact and is now that assert's job, since a derivation unions its operands' roots and one
-   injection identity can reach a sink carrying one root or two. Holding a copy on each Flow would be N owned
-   strings that exist only to be asserted equal — plus a dup obligation at every clone, park and free site,
-   which is exactly the shape
-   §Architecture warns produces a field somebody forgets. The park DOCUMENT still writes one copy per record,
-   and that is not the same duplication: a record is rebuilt on its own, by a session that has nothing else,
-   so it has to be whole.
-   THE SEARCH IS ALWAYS THERE TO ASK. A candidate flow exists only because detection opened its search
-   (solve_flow_begin asserts the same thing on every switch-in) and a cold-resumed one re-registers before it
-   runs an opcode, so an absent entry is a search dropped under a live flow rather than a question this file
-   cannot answer. */
+/* The delivery root of the search a live candidate belongs to, asked by cold.c when it parks the candidate's
+   recipe. It is a fact about the search, not the flow: a search has one root (cand_learn_root refuses a
+   second), so a copy on each Flow would be N owned strings to keep equal and to dup at every clone, park and
+   free. The park document still writes one per record, because a record is rebuilt alone by a session that
+   has nothing else. The search is always there: a candidate exists only because its search was opened, and a
+   cold-resumed one re-registers before it runs an opcode. */
 const char *solve_candidate_root(const char *src, const char *sink_name) {
     Cand *e;
 
@@ -1538,17 +1519,15 @@ const char *solve_candidate_root(const char *src, const char *sink_name) {
     return e->root;
 }
 
-/* A PARKED CANDIDATE COMING BACK — see solve.h for why the re-binding, the bookkeeping and the REFUSAL are ONE
-   call. */
+/* A parked candidate coming back: rebind its sink class by name, raise the search's bookkeeping, and refuse a
+   payload this build's carrier contradicts, as one call (solve.h says why). Answers this table's own name
+   pointer for the class, or NULL for a withdrawn record. */
 const char *solve_resume_candidate(const char *src, const char *root, const char *sink_name,
                                    const char *payload) {
     int i, cls = -1;
 
-    /* THE ROOT IS PART OF THE IDENTITY THAT CROSSES, and it was the part that did not. A resumed candidate
-       opens its search here rather than at a detection — a verifying flow does not detect — so with no root
-       in the record the entry stood at NULL and every emit of it hit emit_delivery's assert: in dev the whole
-       report aborted, and in release the envelope rendered the silence that MEANS "no component carries these
-       bytes" over a payload whose delivery the ended session knew exactly. */
+    /* The root is part of the identity that crosses: a resumed candidate opens its search here rather than at a
+       detection, so a record without one would emit an envelope saying no component carries these bytes. */
     DCHECK(src && *src && root && *root && sink_name && *sink_name && payload && *payload,
            "a parked @S candidate was rebuilt without a source, without a delivery root, without a sink class "
            "or without its payload — its identity IS the substitution it carries and the route those bytes "
@@ -1566,116 +1545,64 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
               "record; resuming it as an ordinary flow would report a search that never ran");
         return NULL;
     }
-    /* PENDING, then the count on the entry the same call handed back. NOT `add_pending`: that OPENS a search
-       (the class's written-down vectors, or its context probe), and this sink's search is already open — the
-       flow being rebuilt is one of its candidates. Opening it again would seed the whole search a second time,
-       which is precisely what the park's write-once assert exists to prevent, arriving through the other door.
-       It dedups, so a session that resumes five candidates for one sink registers it once and raises `tried`
-       once per candidate it ACCEPTS — exactly the number of candidate runs that sink's search has had, and
-       exactly what the parked-search entry reports. Five records are not therefore five runs: the refusal
-       below can withdraw any of them, and `tried` counts runs rather than records precisely so that the two
-       stay distinguishable when they differ. */
+    /* Find-or-create, not add_pending: an earlier session opened this search and the flow being rebuilt is one of
+       its candidates, so opening it again would seed the whole search a second time. `tried` rises once per
+       record accepted, one candidate run each; a refused record raises `resumed_withdrawn` instead. */
     {
         int created = 0;
         Cand *e = sink_search(src, cls, &created);
-        /* AND THE ROOT GOES ON BEFORE THE ENTRY IS VISIBLE TO ANY READER, which is what makes this the second
-           of the search's two doors rather than a hole beside the first. On the fifth resumed candidate of one
-           sink this is cand_learn_root's equality assert over what the fourth wrote, which is the only thing
-           that can say a park document's records still agree with each other. */
+        /* The root goes on before the entry is visible to any reader. On a later record for the same sink this
+           is cand_learn_root's equality assert, the one check that a park document's records agree. */
         cand_learn_root(e, root);
-        /* …AND THE SAME DOOR THAT LEARNS THE ROOT IS WHERE THE PAYLOAD IS REFUSED, because learning the root
-           IS what makes the refusal answerable: cand_learn_root seeds this table's carrier half from the
-           declaration, so the line above is the first instant in this session at which these bytes can be
-           asked about at all. Asked with solve_delivered_ok — the SAME predicate solve_seed_candidates asks of
-           a freshly derived escape — so the two doors onto a candidate flow share one refusal rather than
-           spelling two that can drift apart.
-           WHAT FALSIFIES THE RECORD'S PREMISE, stated plainly because §NO BOUNDS requires it of every
-           narrowing: a parked candidate asserts that these bytes reach this sink as themselves, and the root's
-           carrier declaration says one of them never enters the page's program IN ANY FORM — RFC 6265 §4.1.1's
-           cookie-octet excludes it and the plant does not percent-encode it either. That is a positive
-           contradiction and not a fact merely consistent with the premise: no page-side transform recovers a
-           byte that was never carried, so no run can widen this half of the table and no later observation can
-           reinstate the record. It is the same pruning solve_seed_candidates performs on a contradicted
-           spelling, and it is not a cap — there is no count here, no age, no retry limit and no seen-set, and
-           the WORLD the record named is not deleted with it: the recipe outlives the bytes. The flow keeps its
-           decision segment and comes back as an ORDINARY exploration flow (cold.c drops the four candidate
-           fields), so it replays the path that reached this sink, DETECTS there, and re-opens the search — and
-           the search then derives its escapes against the table this very call has already narrowed. The
-           contradicted spelling is what is refused; the search that would construct a deliverable one is
-           re-derived rather than lost.
-           IT CANNOT WITHDRAW AN INSTRUMENT, WHICH IS THE ONE THING THE SEED DOOR NEEDS ITS `kind` FOR AND THIS
-           ONE HAS NO WAY TO ASK. A resumed payload has no row in `pl` (cand_kind_of returns 0 for it by
-           construction — see its note), so probe-versus-escape is not a question this door can answer; it does
-           not have to be. Both instruments are printable US-ASCII BY CONSTRUCTION — the context probe is
-           ASCII alphanumeric so it cannot change the parse it reads, and the delivery probe is a token plus a
-           decimal digit plus a DECLARED byte (bytes_probe) — while the refusal covers exactly the bytes
-           OUTSIDE printable US-ASCII (carrier_shared_byte), and cand_learn_root's own two-sided assert holds
-           the declared and refused sets disjoint. So no probe this file builds can be refused here, and the
-           seed door's `kind == CAND_PROBE` exemption has nothing to guard against on this path.
-           NOTHING IS COUNTED FOR A WITHDRAWAL. `tried` and `resumed` are counts of candidate RUNS and this
-           record produces none, so raising either would report a run the search never had; `g_cands_seeded` is
-           the cost of a document re-run and no re-run is spent. What IS raised is the withdrawal itself, which
-           is the third state the pair above cannot express and the evidence add_pending reads. */
+        /* And the payload is refused here, at the first instant it can be asked, because cand_learn_root has just
+           seeded the carrier half of the table. It is asked with solve_delivered_ok, the predicate
+           solve_seed_candidates asks of a derived escape, so both doors share one refusal. The premise this
+           falsifies is that these bytes reach the sink as themselves: the root's carrier says one of them never
+           enters the program in any form (for a cookie, RFC 6265 §4.1.1's cookie-octet excludes it), so no run
+           can widen it. It is pruning, not a cap: there is no count, age or seen-set, and the world survives,
+           since cold.c drops the candidate fields and the flow comes back as an exploration flow that replays to
+           this sink, detects, and re-derives against the narrowed table. No probe can be refused here: both
+           probes are printable US-ASCII by construction, the refusal covers only bytes outside it, and
+           cand_learn_root holds the declared and refused sets disjoint. Only the withdrawal is counted, because
+           no run is spent. */
         if (!solve_delivered_ok(&e->deliv, payload)) {
             e->resumed_withdrawn++;
             return NULL;
         }
         e->tried++;
-        /* …AND WHICH OF THOSE RUNS THIS IS, because `tried` alone cannot say. A reader holding `tried:6` beside
-           an empty `payloads` list is looking at either a cross-session search whose every run came back from
-           a park document, or a producer that dropped the payload field — solve.h's arithmetic names the two
-           terms and only one of them was ever a number. This is the other one. */
+        /* And which of those runs this is: the term of solve.h's `tried` arithmetic that has no row in `pl`. */
         e->resumed++;
     }
-    /* IT COSTS WHAT A FRESH ONE COSTS, so it counts as one. This number is what says whether a run got slower
-       because there were more searches or because each search grew, and a resumed candidate re-runs the whole
-       page exactly as a newly-seeded one does. */
+    /* A resumed candidate re-runs the whole page as a fresh one does, so it counts as one. */
     g_cands_seeded++;
     return SINKS[cls].name;
 }
 
-/* THE CURSOR IS WHAT MAKES A DERIVED BREAKOUT REACHABLE. The old test was `if (tried) continue` — a sink was
-   seeded once, out of a list its class knew before the page ever ran, and never looked at again. A derived
-   context is not known then: the probe flow has to RUN first, and it appends what it constructs to a search
-   that has already been seeded once. Taking everything past the cursor says both things at once — nothing is
-   seeded twice, and nothing appended later is missed. */
+/* Seed a candidate flow for every candidate past each search's cursor, and answer how many were added. Each is
+   an ordinary member of the one frontier: the candidate is injected at the source, the real program re-runs
+   as a flow the scheduler preempts and parks like any other, and the marker firing is the replay-verified
+   PoC. Idempotent, so the scheduler asks again whenever the frontier drains: a derived breakout is appended
+   after its probe has run and a sink in late-loaded code is found after the first drain, and the cursor
+   picks both up without seeding anything twice. */
 int solve_seed_candidates(JSContext *ctx) {
     int added = 0;
     for (int i = 0; i < g_pending_n; i++) {
         Cand *e = &g_pending[i];
-        /* THE SAME QUESTION THE DERIVATION ASKS, ASKED AGAIN HERE BECAUSE THE TWO ARE NOT THE SAME MOMENT. A
-           breakout appended by one candidate flow is seeded at the NEXT drain, and between those two points a
-           different candidate of the same search can fire — which closes the search and releases the path the
-           install below reads. Declining the append alone would leave that window open. */
+        /* Asked again at every drain, because between a breakout's append and its seeding another candidate of
+           the same search can fire, close it, and release the path the install below reads. */
         if (!search_seeds(e)) continue;
         for (; e->seeded < e->npl; e->seeded++) {
             Flow *f;
-            /* WITHDRAWN — the search's OWN measurement has since contradicted this spelling, so it does not
-               become a flow. queue_derived asks solve_delivered_ok at PUSH time and the table narrows
-               afterwards (observe_delivery, on a token the delivery probe put in front of the byte), so a
-               breakout constructed while everything still delivered stays in `pl` while the constraint that
-               permitted it is gone. Left alone it is seeded a WHOLE DOCUMENT RE-RUN whose only possible
-               outcome is the candidate arriving transformed — the exact cost queue_derived's own assert says
-               it exists to prevent, arriving one moment later through a door that never re-asked.
-               IT IS PRUNING A CONTRADICTED ARM, WHICH §Solver-half LICENSES, AND IT IS NOT A BOUND. There is
-               no count, no age, no retry limit and no seen-set here: the ONE question is whether something
-               POSITIVE contradicts these bytes arriving — this search's own delivery run, or the refusal its
-               root's carrier declares (cand_learn_root), which are two facts of different kinds and one
-               instruction here. The table narrows only on evidence (a token that never showed up says nothing
-               about its byte, so uncertainty keeps the arm) and it never widens, so a withdrawal is permanent
-               and the cursor stays a cursor — nothing is re-examined, nothing is seeded twice, and a spelling
-               the tightened table still permits is seeded exactly as before.
-               THE ENTRY STAYS IN `pl`, AND THAT IS THE REPORT'S HALF OF THE SAME FACT. A search that
-               CONSTRUCTED an escape and withdrew it is not a search that constructed none — `probes ==
-               payloads` means the second, and compacting the list would say it. `withdrawn` (solve_json_array)
-               is what tells the two apart per entry, and it is also what keeps `tried` and `payloads`
-               readable together now that they legitimately differ.
-               PROBES ARE NOT ESCAPES AND ARE NEVER WITHDRAWN. solve_filter.c's own header says the question is
-               asked of "a constructed escape"; the DELIVERY probe is built OUT OF the very bytes in question,
-               so a table it narrowed would contradict the instrument that measured it, and the CONTEXT probe
-               is ASCII alphanumeric precisely so it cannot change the parse it reads. Both are measurements,
-               not attacks, and the entry's own KIND is where that line is — asked of the candidate about to
-               become a flow rather than of its position in the list. */
+            /* Withdrawn: this search's own measurement has since contradicted this spelling, so it does not
+               become a flow. queue_derived asks deliverability at push time and the table narrows afterwards
+               (observe_delivery), so an escape built while everything delivered can stay in `pl` after its
+               permission is gone; seeded, it would cost a whole document re-run that can only arrive
+               transformed. This prunes a contradicted arm and is not a bound: the one question is whether
+               something positive (a delivery run, or the root's carrier declaration) contradicts these bytes
+               arriving, and the table never widens, so a withdrawal is permanent and the cursor stays a cursor.
+               The entry stays in `pl`, so the report can say an escape was built and withdrawn (`withdrawn`).
+               Probes are never withdrawn: the delivery probe is built from the very bytes in question and the
+               context probe is ASCII alphanumeric, so both are measurements rather than attacks. */
             if (e->pl[e->seeded].kind == CAND_ESCAPE &&
                 !solve_delivered_ok(&e->deliv, e->pl[e->seeded].bytes)) continue;
             f = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* a candidate session runs from the baseline */
@@ -1683,34 +1610,21 @@ int solve_seed_candidates(JSContext *ctx) {
             f->cand_payload = strdup(e->pl[e->seeded].bytes);
             f->cand_sink    = sink_name(e->sink);
             CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
-            /* THE OTHER SIDE OF THE WITHDRAWAL, ASSERTED WHERE THE COST IS TAKEN RATHER THAN WHERE THE
-               DECISION IS MADE. This line is the moment a payload becomes a document re-run, so it is the one
-               place at which "a contradicted candidate is still queued" stops being a list state and starts
-               costing a traversal — and the push-time check being the ONLY check is exactly what let that
-               happen once. A route into flow creation that does not pass the skip above crashes here instead
-               of quietly spending the run and the rung. */
+            /* The other side of the withdrawal, asserted where the cost is taken: this is where a payload becomes
+               a document re-run, so a route into flow creation that skips the check above crashes here instead
+               of quietly spending the run. */
             DCHECK(e->pl[e->seeded].kind == CAND_PROBE || solve_delivered_ok(&e->deliv, f->cand_payload),
                    "a candidate flow was created for a payload this search has OBSERVED cannot reach its sink — "
                    "the delivery table narrows after a breakout is queued, so deliverability asked once at the "
                    "derivation is a constraint that has expired by the time the flow is made, and this run can "
                    "only end with the candidate arriving transformed at its own sink");
-            /* …AND ON THE PATH THE DETECTION ALREADY PROVED REACHES THIS SINK. The flow still re-runs the
-               document from the baseline — the payload enters at the source read and there is no earlier point
-               to start from — but it CONSUMES the recorded arms at each branch it re-reaches instead of forking
-               over them, so it walks the one arm that arrives rather than searching a tree as deep as the
-               document's gate sequence for it. `decide_blob_new` takes its own reference on the frozen segment
-               and replays at cursor 0, forking normally the moment the cursor runs past what the detecting flow
-               knew — which is where this candidate's own exploration begins.
-               UNCONDITIONAL, AND THE `if (e->reinject)` THAT STOOD HERE IS DELETED WITH ITS REASON. It said a
-               search with no re-injection point "is not a fallback, it is the other algorithm: a single-context
-               class has no probe, so there is no path to replay and its written-down vectors are seeded at
-               DETECTION, when this problem does not arise" — and that last clause is the part measurement
-               contradicts. A vector seeded at detection re-forks the document's whole gate tree exactly as a
-               probe does (see the field's own note for the numbers); what a single-context class lacks is a
-               DERIVATION, never a path. cand_learn_path takes the path for every search at the moments a flow
-               stands at the sink — a detection, and this search's own context probe coming back — so there is
-               nothing left to select between and a NULL here is a search opened by a door this file does not
-               have. */
+            /* And the flow stands on the path the detection proved reaches this sink. It still re-runs the
+               document from the baseline (the payload enters at the source read), but it consumes the recorded
+               arms at each branch it re-reaches instead of forking over them. decide_blob_new takes its own
+               reference on the frozen segment and replays at cursor 0, forking normally once the cursor runs past
+               what the detecting flow knew, which is where this candidate's own exploration begins. It is
+               unconditional: every class needs a path, and both doors onto a search take one before anything can
+               be queued against it. */
             {
                 DCHECK(e->reinject != NULL,
                        "a candidate is being seeded for a search that holds no re-injection point — both "
@@ -1721,24 +1635,13 @@ int solve_seed_candidates(JSContext *ctx) {
                        "a freshly added flow already carries decision state — the re-injection install below "
                        "would overwrite it and drop that segment's reference, and the flow would replay a path "
                        "that is not the one it was given");
-                /* THE TRIPLE, AND IT IS ONE THING RATHER THAN THREE ASSIGNMENTS. A flow standing on a
-                   RECORDED path is `started` — flow_switch_in routes on exactly that bit, and a flow that has
-                   never run takes decide_enter, which replays from NOTHING and never looks at `dec_blob`.
-                   Setting the blob alone therefore does not merely fail to work, it fails SILENTLY IN BOTH
-                   DIRECTIONS: the path is ignored, and the pointer is still live at the flow's first suspend,
-                   where engine.c does `f->dec_blob = decide_suspend()` and overwrites it — leaking the blob
-                   AND its reference on the frozen segment, which keeps the whole prefix under it alive. That
-                   is the exact ceiling this field's own comment says is released here, defeated by the two
-                   assignments it did not make. Measured: two derived searches whose breakouts read
-                   `survivedBy:[16,0]` after the re-injection landed, because it had never once been read.
-                   THE EMPTY PIN BLOB IS THE THIRD MEMBER AND NOT A COURTESY. flow_switch_in's resume branch
-                   calls concolic_pins_resume beside decide_resume, so a flow marked started with no pin blob
-                   hands it NULL; cold.c pairs the two for this reason and says so ("the empty pin blob is what
-                   makes the second half of that true"). A replaying flow re-derives every pin from the gates
-                   it replays, so EMPTY is the correct content and not a placeholder.
-                   cold.c's 'f' and 'c' arms are the other installer of this triple, and they are the reason it
-                   is known to work: a cold-resumed candidate IS a candidate flow standing on a path it did not
-                   itself run. */
+                /* The triple is one install. A flow on a recorded path must be `started`, because flow_switch_in
+                   routes on that bit and a never-run flow takes decide_enter, which replays from nothing and never
+                   reads `dec_blob`; the blob alone would be ignored, then leaked with its segment reference when
+                   engine.c overwrites `dec_blob` at the first suspend. The empty pin blob is the third member
+                   because flow_switch_in's resume branch calls concolic_pins_resume beside decide_resume, and a
+                   replaying flow re-derives every pin from the gates it replays. cold.c's 'f' and 'c' arms install
+                   the same triple for a cold-resumed candidate. */
                 f->started  = 1;
                 f->dec_blob = decide_blob_new((void *)decide_blob_seg(e->reinject));
                 f->pin_blob = concolic_pins_blob_empty();
@@ -1754,36 +1657,13 @@ int solve_seed_candidates(JSContext *ctx) {
     return added;
 }
 
-/* THE SUBSTITUTION MIRRORS THE RUNNING FLOW — it is not a bracket someone opens and closes.
-   Written as a bracket it was WRONG, and silently: the entry returned early for a flow with no candidate, so
-   switching from a candidate flow to an ordinary one left the previous candidate's payload installed and
-   endpoint recording suppressed. The exploring flow then read the attacker's concrete string where its concolic
-   source belonged — so it stopped forking at the gates that value feeds, its sinks stopped being detected (a
-   concrete value is not a concolic one), and every endpoint it learned was dropped. The comment that used to
-   sit here asserted the opposite ("an ordinary flow scheduled in between is unaffected"), which is exactly the
-   sort of claim that survives because nothing tests it.
-   The scheduler calls this on EVERY switch-in, so the fix is for it to install the incoming flow's state
-   unconditionally — a flow with no candidate installs "no candidate", which is the clearing that was missing.
-   There is then no close to forget, and no ordering between two calls to get wrong. */
-/* THIS SEARCH'S BYTES JUST ENTERED THE PAGE'S OWN PROGRAM — the REPORT's bottom rung, written from the one
-   site that can state it. §@S(i) requires every rung to have an observation site strictly before the thing it
-   is a distance to, and every other number on a parked entry reports AT a sink; this one reports at the SOURCE
-   READ, which is the only observation available on the runway that is not a claim about where the bytes have
-   got to (that would need a taint tracker, which §Re-execution bans).
-   IT IS THE REPORT'S COPY OF THE EVENT flow_observe_rung RECORDS AS FLOW_RUNG_DELIVERED, and the two are
-   deliberately separate quantities at separate accounting units — §@S(ii). The flow's rung is the COMPARATOR:
-   monotone, per flow, re-earned across a park, read at the pick, and it orders live candidates. This is a
-   COUNT on the SEARCH: it never orders anything, it survives the flows that produced it, and it is the only
-   one of the two a reader ever sees. Neither can be derived from the other — a search whose every candidate
-   has been paged out still reports what its runs did, and a flow's rung says nothing about how many runs there
-   were.
-   NOT A CREDIT AND NOT A CROSSING. Nothing here calls flow_credit_emit, latches a rung or moves the frontier
-   generation, so the WFQ cannot see this write at all. Recorded as a ledger quantity it would be a 0->1
-   crossing paid to the first candidate of the search to reach its own source read and to none of the rest,
-   which is §@S(ii)'s defect exactly — the second delivery teaches the search nothing the first did not.
-   THE TRIPLE IS `CHECK`ED AND NOT ONLY `DCHECK`ED because both halves of it are dereferenced immediately:
-   solve.c states the same rule about filter_survived's own three, and a flow carrying half a substitution is
-   an assembly that went round the seeder and the cold tier's rebuild rather than a recoverable state. */
+/* This search's bytes just entered the page's own program: the report's bottom rung, written from the one site
+   that can state it, the source read, which is strictly before every sink. It is the report's copy of the
+   event flow_observe_rung records as FLOW_RUNG_DELIVERED, and the two are separate quantities: the flow's rung
+   is the comparator (monotone, per flow, re-earned across a park), while this is a count on the search that
+   orders nothing and outlives its flows. No credit and no crossing: paid as a ledger quantity it would reward
+   only a search's first delivery, which teaches nothing the second does not. CHECKs, because the flow's
+   source and sink are dereferenced immediately. */
 void solve_observe_substitution(Flow *f) {
     Cand *e;
 
@@ -1796,18 +1676,10 @@ void solve_observe_substitution(Flow *f) {
           "solve: an @S substitution was performed for a search this session has no entry for — a candidate "
           "exists only because detection opened one and a cold-resumed one re-registers before it runs an "
           "opcode, so an absent entry is a search dropped under a live flow");
-    /* …AND THE LINK BENEATH IT, WHICH IS THE ONE RUNG OF THE LADDER NOTHING ASKED FOR. The chain this file
-       already asserts runs DOWNWARD from the top — breakout_arrived and filter_survived each demand
-       `substituted > 0`, learn_witness demands `turns > 0` — so every link is guarded except the one between
-       those two, and that is exactly the link a report reading `tried:N,turns:0,substituted:0` stands on. A
-       substitution is performed by a candidate flow AT ITS OWN SOURCE READ, and a flow reaches a source read
-       only while it HOLDS THE THREAD, which is the switch-in solve_flow_begin counts; so `substituted:D` over
-       `turns:0` is not a search that ran unscheduled, it is `turns` counting something other than the flows
-       that do this search's work — and the whole reading of `turns:0` as WFQ starvation rests on it not being
-       that. Unasserted, the two states are one number, which is the tell §@S names.
-       IT IS learn_witness's INVARIANT TWO RUNGS LOWER AND IS WRITTEN OUT RATHER THAN SHARED WITH IT: a DCHECK
-       stamps the line it is written at, so one helper for both would report one line for two different events
-       and its remedy would name an action with no object. */
+    /* The link below `substituted`: a substitution happens at a candidate's own source read, which a flow reaches
+       only while it holds the thread, the switch-in solve_flow_begin counts. So `substituted:D` over `turns:0` is
+       `turns` counting something other than this search's flows. Written out rather than shared with
+       learn_witness's identical assert, because a DCHECK stamps the line it is written at. */
     DCHECK(e->turns > 0,
            "an @S candidate performed its substitution for a search the scheduler reports it has never given "
            "a turn to — solve_flow_begin raises `turns` at every switch-in of a candidate flow, and a flow "
@@ -1816,23 +1688,16 @@ void solve_observe_substitution(Flow *f) {
     e->substituted++;
 }
 
-/* THE RUNWAY READING, TAKEN AT THE TWO MOMENTS THIS FILE HAS AND NOT AT A THIRD IT WOULD HAVE TO INVENT.
-   `Flow.cand_replay` moves inside dec_replay, arm by arm, in a component this file does not call and cannot
-   be called back by; what solve.c holds are the two seams engine.c already routes through it — the switch-IN
-   (solve_flow_begin, which is where `turns` is counted) and the FINISH (solve_flow_end). So the reading is
-   taken there, and the ratchet is what makes two sparse samples add up to the search's furthest: a per-flow
-   value that only ever rises, sampled at every switch-in of every candidate and once more when one ends.
-   THE RESIDUAL IS NAMED BECAUSE IT IS REAL AND SMALL. A candidate that takes the thread, walks part of its
-   runway and is then PARKED or is still live when the document is emitted contributes only what its last
-   switch-in saw — engine.c has no solve-side switch-OUT seam, and inventing one to close this would be a
-   second door into the candidate state for a report counter's benefit. It shows as a `runwayPerMille` that
-   under-reads a search whose flows are long-lived and rarely switched; it can never over-read, because every
-   value sampled is one this flow had already reached. The next diff that needs the tighter number takes the
-   reading where flow.c already has it — flow_observe_replay's signature is `(Flow *, long consumed, long
-   total)`, so the numerator and denominator the pair form is available at that site and at no other.
-   READ THROUGH THE FIELD AND NOT THROUGH flow_distance, deliberately: flow_distance is the whole comparator
-   (`(cand_replay + cand_surv + cand_rung) / FLOW_RUNGS_N`) and taking the runway out of it would be this file
-   re-deriving another component's arithmetic — the thing an auditor is forbidden to do, one level down. */
+/* Take the runway reading at the two seams this file has: the switch-in (solve_flow_begin, where `turns` is
+   counted) and the finish (solve_flow_end). Flow.cand_replay moves inside dec_replay arm by arm, which this
+   file neither calls nor is called back from; the ratchet makes sparse samples add up to the search's furthest,
+   since the per-flow value only rises. It reads the field and not flow_distance, which is the whole comparator,
+   so this file does not re-derive another component's arithmetic.
+   Named residual: not covered — the runway a candidate walks after its last switch-in when it is then parked or
+   still live at emission, since engine.c routes no solve-side switch-out seam; next diff — take the reading
+   where flow.c already has it, flow_observe_replay(Flow *, long consumed, long total); absence shows as a
+   `runwayPerMille` that under-reads a search whose flows are long-lived and rarely switched, never one that
+   over-reads. */
 static void observe_runway(Cand *e, const Flow *f) {
     int pm;
 
@@ -1843,13 +1708,10 @@ static void observe_runway(Cand *e, const Flow *f) {
            "than the fraction this record is about to publish as one");
     pm = (int)(f->cand_replay * 1000.0 + 0.5);
     if (pm > e->replay_pm) e->replay_pm = pm;
-    /* AND THE PAIR, RATCHETED ON ITSELF. It cannot be derived from the line above and it cannot ride that
-       line's condition: `pm` is the rounded value, so a best fraction of 3/8000 leaves it at 0, never exceeds
-       a stored 0, and the sample that is the whole reason this pair exists is the one that would be dropped.
-       CROSS-MULTIPLIED AND NOT DIVIDED, so the comparison is exact and no float is stored: with both
-       denominators positive, `a/b > c/d` is `a*d > c*b`. `of == 0` is this search's word for "no reading yet"
-       on the left and this flow's on the right, so each is tested rather than allowed to make a product of
-       zero decide anything. */
+    /* And the pair, ratcheted on itself: `pm` is rounded, so riding its condition would drop a best of 3/8000.
+       Cross-multiplied, so the comparison is exact and no float is stored: with both denominators positive,
+       a/b > c/d is a*d > c*b. `of == 0` means no reading yet on either side, and is tested rather than left to
+       make a product of zero decide. */
     DCHECK(f->cand_replay_of >= 0 && f->cand_replay_arms >= 0 &&
            f->cand_replay_arms <= f->cand_replay_of,
            "an @S candidate's runway pair is not a position on its own path — flow_observe_replay writes the "
@@ -1871,101 +1733,55 @@ static void observe_runway(Cand *e, const Flow *f) {
     }
 }
 
+/* Install the incoming flow's candidate state on every switch-in, unconditionally: a flow with no candidate
+   installs "no candidate". The substitution mirrors the running flow rather than being a bracket someone opens
+   and closes, so a candidate's payload and endpoint suppression cannot leak into an ordinary flow scheduled
+   after it, which would read the attacker's concrete string where its concolic source belongs. */
 void solve_flow_begin(Flow *f) {
     concolic_set_candidate(f ? f->cand_src : NULL, f ? f->cand_payload : NULL);
     endpoint_suppress(f && f->cand_src ? 1 : 0);
     if (f && f->cand_src) {
         f->cand_verifying = 1;
-        /* AND THE SEARCH IS GIVEN A TURN — counted HERE because this is the one point at which a candidate of
-           it is about to execute, and because `reached:0` cannot otherwise be read. `tried` says candidates
-           were SEEDED and `reached` says a breakout ARRIVED at the sink; with both of those a search reporting
-           `tried:2,reached:0` is either a search whose flows the WFQ has never once given the thread to, or one
-           whose flows have run and have not got as far as the sink. Those take opposite actions — the first is
-           a scheduling question, the second a distance-through-the-document one — and the pair could not tell
-           them apart. Measured on this fixture: the @S sinks sit 866 statements into a script whose START is
-           where every lane appends, while --min's sit 3 statements in and arrive; which of the two explains it
-           is exactly what this number decides.
-           IT IS SWITCH-INS AND NOT DISTINCT FLOWS, which is what makes it a scheduling fact rather than a
-           second copy of `tried`: a candidate preempted and resumed twenty times has been given twenty turns,
-           and that is the thing being asked about. */
+        /* The search is given a turn, counted at the one point a candidate of it is about to execute. Beside
+           `tried` (seeded) and `reached` (arrived) it separates a search the WFQ has never served from one whose
+           flows ran and fell short of the sink. It counts switch-ins, not distinct flows: a candidate preempted
+           and resumed twenty times has had twenty turns. */
         Cand *e = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
         DCHECK(e != NULL,
                "a candidate flow was switched in for a sink search this session has no entry for — a candidate "
                "exists only because detection opened one, and a cold-resumed one re-registers before it runs "
                "(solve_resume_candidate), so an absent entry means the search was dropped under a live flow");
-        /* …AND THE LINK BENEATH THIS RUNG, for the reason solve_observe_substitution states about the one
-           beneath IT. Both doors raise `tried` before the flow can ever be picked — solve_seed_candidates at
-           the creation itself, solve_resume_candidate during the cold rebuild and before the flow runs an
-           opcode — so a switch-in standing over `tried:0` is a THIRD door, and the card would report turns
-           with no seeded candidate behind them. It is the pair `s-*-seeded` and `s-*-ran` are read as, stated
-           where the second of them is written.
-           A WITHDRAWN RECORD IS NOT A COUNTEREXAMPLE TO THAT, and the reason is worth stating because the two
-           doors no longer raise `tried` unconditionally. solve_resume_candidate can refuse a parked candidate
-           whose payload the root's carrier contradicts, and it raises `resumed_withdrawn` instead — but the
-           same refusal makes cold.c drop `cand_src`, and `cand_src` is the whole of what the branch above
-           tests, so a withdrawn record never reaches this line as a candidate at all. The claim here is about
-           every flow that DOES reach it, and it is still exactly true of all of them. */
+        /* The link below this rung: both doors raise `tried` before a flow can be picked (solve_seed_candidates at
+           creation, solve_resume_candidate during the cold rebuild), so a switch-in over `tried:0` is a third door.
+           A withdrawn record is no exception: the same refusal makes cold.c drop `cand_src`, so it never reaches
+           here as a candidate. */
         DCHECK(!e || e->tried > 0,
                "an @S candidate flow was switched in for a search that reports no candidate seeded — both "
                "doors into a candidate raise `tried` before the flow is reachable by the pick, so a turn "
                "standing over `tried:0` is a candidate assembled outside them and the parked card is about "
                "to report turns with nothing behind them");
         if (e) e->turns++;
-        /* AND THE RUNWAY THIS CANDIDATE HAD ALREADY WALKED WHEN IT LAST HELD THE THREAD — taken at the same
-           moment `turns` is raised because they are the two halves of one reading: `turns` says the WFQ gave
-           this search the thread and this says how far the thread got it.
-           AND THAT PAIRING IS WHAT SAYS WHETHER A ZERO RUNWAY MEANS ANYTHING, which is the one question this
-           sampling cannot otherwise answer and which nothing else in the document can. The reading is taken
-           HERE and at the finish and nowhere between, so a flow that consumes arms and is then switched out
-           and never picked again contributes only what its FIRST switch-in saw — which is zero, because a
-           flow that has not run has replayed nothing. `tried` counts the candidate FLOWS this search seeded
-           and `turns` counts their switch-ins, so `turns > tried` means some flow was switched in twice and
-           was therefore sampled AFTER a whole turn of holding the thread: a zero runway beside it is a real
-           refusal at the flow's first arm. `turns == tried` means every flow was sampled exactly once, before
-           it ran, and the zero is the sampling and not the engine. The two take opposite work and the pair is
-           already emitted, so this is a reading a consumer performs rather than a field anyone owes.
-           AND THE READING HAS BEEN PERFORMED, WHICH IS WHY THIS IS A NOTE AND NOT AN OPEN QUESTION — but the
-           framing above is a DICHOTOMY and the pair has THREE states, which is the half worth keeping. Over
-           the terminal `@S` list of every log in the corpus, `turns < tried` is a large minority: more
-           candidate flows were seeded than switch-ins were ever counted, so some seeded candidate was never
-           handed the thread at all. That is NEITHER branch — such a record mixes samples from flows that ran
-           with flows that did not, so a zero over it is not a refusal and is not the sampling either. It does
-           not bite here, and that is a measurement rather than a hope: every record carrying a walked of 0
-           falls in the `turns > tried` bucket and none falls in `turns == tried`, so the refusal reading is
-           the one that holds and the seam this note was written to price is NOT owed. The derivation is
-           handed over as a command and not as a count, because the counts move: take the LAST `@S` line of
-           each log — never every line, since a census series mixes one candidate before it ran with the same
-           candidate after, which is the gauge-versus-lifetime error one directory up — bucket its records by
-           `turns` against `tried`, and read `runwayWalked` within each bucket. THE PART THAT DOES NOT MOVE:
-           a two-branch pigeonhole over two counters is exhaustive only where one counter cannot exceed the
-           other, and nothing here guarantees that.
-           IT IS PER-SEARCH AND THAT IS WHY IT IS THE RIGHT ONE. The frontier census's `distMax` looks like it
-           answers the same question and cannot: it is a MAX over every member, so one search that walks its
-           whole path pins it and no value the others take can move it. Measured on a run reading `distMax`
-           0.200 — with FLOW_RUNGS_N at 5 that is a rung sum of exactly 1.0, and a nonzero survival rung needs
-           a delivered one which would carry the sum past 2.0, so the only decomposition is a single flow at a
-           full replay, which that run had. A frontier-wide max cannot see a per-search under-read. Sampled BEFORE the quantum rather
-           than after it, which is what makes it a fact about runs that have finished rather than a promise
-           about the one about to start. */
+        /* And the runway this candidate had walked when it last held the thread, taken with `turns` because the two
+           are one reading: `turns` says the WFQ gave this search the thread, this says how far it got. Samples are
+           taken here and at the finish only, so a flow switched in once contributes the zero it had before it ran.
+           Read the zero against `turns` and `tried` (both emitted), on a log's last @S line rather than on every
+           census line: `turns > tried` means some flow was sampled after a whole turn, so a zero beside it is a
+           refusal at the first arm; `turns == tried` means every flow was sampled before it ran; `turns < tried`
+           means some seeded candidate never ran, and that mix is neither. The frontier census's `distMax` cannot
+           answer this: it is a max over every member, so one search at a full replay pins it. Sampled before the
+           quantum, so it states runs that have happened. */
         if (e) observe_runway(e, f);
     }
 }
 
-/* FINISHING IS A DIFFERENT EVENT FROM SWITCHING OUT, AND IT RECORDS NOTHING. It used to be where a fired
-   candidate became a finding, and that is deleted: the fire is recorded at the marker (js_x9), because that
-   is where the proof happens and because a flow owes nobody completion. The globals are deliberately NOT
-   cleared here: the next switch-in installs the next flow's state, and clearing in two places is how the
-   asymmetry above got in.
-   WHAT IS LEFT DEAD BY THAT AND IS NOT THIS FILE'S TO REMOVE: `Flow.cand_fired` (solver/flow.h) is now
-   written by nothing, so engine.c's sibling copy of it and cold.c's deliberate drop of it are both statements
-   about a field that no longer carries anything. They go with the call to this function, and this function
-   with them. */
+/* A candidate flow finished. The fire is recorded at the marker (js_x9), where the proof happens, and not here,
+   because a flow owes nobody completion. The globals are not cleared: the next switch-in installs the next
+   flow's state, and clearing in two places is how an asymmetry gets in. This file no longer sets
+   Flow.cand_fired, so engine.c's sibling copy of it and cold.c's drop of it carry nothing. */
 void solve_flow_end(Flow *f) {
     if (!f || !f->cand_src) return;
-    /* THE LAST RUNWAY READING THIS CANDIDATE WILL EVER OFFER, and the one the switch-in sampling structurally
-       cannot take: a flow that holds the thread from its final switch-in to its own end contributes nothing
-       through solve_flow_begin, and that is exactly the candidate that walked furthest. Taken before
-       `cand_verifying` is cleared so the two statements about this flow are made in one place. */
+    /* The last runway reading this candidate will offer, which switch-in sampling cannot take for a flow that
+       holds the thread from its final switch-in to its end. Taken before `cand_verifying` is cleared. */
     Cand *e = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
     DCHECK(e != NULL,
            "a candidate flow ended for a sink search this session has no entry for — a candidate exists only "
@@ -1974,48 +1790,14 @@ void solve_flow_end(Flow *f) {
            "the runway this candidate walked is about to be lost with it");
     if (e) {
         observe_runway(e, f);
-        /* AND THE FINISH ITSELF, COUNTED HERE BECAUSE THIS IS THE SITE AND THERE IS NO OTHER. `tried` is the
-           ASK — candidates SEEDED, raised before one can be picked — and `substituted` is the OUTCOME at the
-           source read; this is the third fact neither can carry, and without it a reader cannot tell a
-           candidate the path turned away from one still on its way. It is raised at the FINISH and not at the
-           switch-out for the reason observe_runway gives about its own sampling: engine.c routes no solve-side
-           switch-out seam, and inventing one for a report counter's benefit would be a second door into the
-           candidate state.
-           THE CHECK HERE USED TO BE `e->ends < e->tried` AND IT WAS A CATEGORY ERROR, WHICH IS RECORDED AT
-           LENGTH AT THE FIELD'S DECLARATION AND IN SHORT HERE BECAUSE THIS IS WHERE IT FIRED. `tried` counts
-           SEEDS and `ends` counts FLOW FINISHES, and a candidate session is a TREE of flows: engine.c's fork
-           copies the whole candidate identity to every sibling, and solve_seed_candidates says a candidate
-           forks normally past its recorded cursor because that is where its own exploration begins. So N arms
-           of ONE seed each reach this line, and the implication is false at the SECOND arm — by design, not by
-           accident.
-           ITS ENUMERATION WAS SHORT TWICE, AND THAT IS THE PART TO CARRY RATHER THAN THE ARITHMETIC. It named
-           an end that was never seeded and one flow finishing twice. The first miss was its own left-hand
-           OPERAND, unwritten at sink_search, which made the check unfalsifiable — six emitted rows carried
-           `candEnds` above `tried` while this message occurred 0 times in that run, because the check is HERE
-           and the garbage is read at the EMIT. The second miss is a FORKED ARM, which is neither named member:
-           two distinct flows each finishing once, both belonging to one seed. An enumeration of the ways an
-           assert can fail is not complete until it has asked where each operand comes from AND how many
-           objects can produce the event it counts — and the second question is the one a per-flow seam cannot
-           answer from the flow in front of it.
-           SO WHAT IS ASSERTED IS THE HALF THAT LIVES IN ONE UNIT. Every arm's ancestor was seeded on this same
-           entry — both doors raise `tried` before a flow can be picked, and a withdrawn record never reaches
-           this line at all because the same refusal drops `cand_src` — so a raise against a search with NO
-           seed is the unseeded arrival the old message named first, and it remains impossible. Nothing
-           comparing the two counts is assertable here, and the field's declaration says what that costs the
-           report.
-           AND IT IS A DCHECKF SO A FIRE NAMES ITS OWN ARM, which is what the retired check could not do: the
-           values are what separate an unseeded arrival from a search whose seeds are all accounted for, and a
-           reader meeting a bare `@WHY` at this line had to guess between them from a log that had not got far
-           enough to emit a row. `cand_verifying` is in the list because solve_flow_begin sets it on every
-           switch-in and this function clears it, so a 0 here is a flow that has already been through this
-           seam — the double-finish arm, separated from the others for free and with no new state.
-           THE NUMBERS COME FIRST AND THE PAGE'S OWN STRING LAST, WHICH IS THE ORDER AND NOT A STYLE. The
-           composer truncates at a bounded body and appends a marker, and `src` is a SOURCE IDENTITY derived
-           from the analysed document — its length is the page's to choose and not this file's to bound. With
-           the string first, a long enough source identity would push the diagnostic values off the end of the
-           record and the assert would print everything except the reason it exists; with them first, a
-           truncation can only ever eat the page's bytes. An unbounded operand goes at the END of any composed
-           record whose fixed part is the part being read. */
+        /* And the finish itself, counted here because this is the only site: `tried` is the ask and `substituted`
+           the outcome at the source read, and only this tells a candidate the path turned away from one still on
+           its way. `ends` counts flow finishes and `tried` counts seeds, and a candidate session is a tree of
+           flows whose arms each finish here, so no comparison of the two is assertable; what is asserted is the
+           one-unit half, that a seed exists. A withdrawn record never reaches this line, because the same refusal
+           drops `cand_src`. It is a DCHECKF so a failure names its arm: `cand_verifying` 0 is a flow that already
+           passed this seam, a double finish. The numbers come first and the page-chosen source identity last,
+           because the composer truncates a bounded body and only the page's bytes may be lost. */
         DCHECKF(e->tried > 0,
                 "an @S candidate flow ended for a search that has seeded none — `tried` is raised by both "
                 "doors BEFORE a flow can be picked (solve_seed_candidates at the creation, "
@@ -2031,42 +1813,19 @@ void solve_flow_end(Flow *f) {
     f->cand_verifying = 0;
 }
 
-/* ── @S JSON emit (C-native) ── the writer is core/json_buf.h's, which this file and endpoint.c each used to
-   carry a private copy of. */
+/* ── @S JSON emit, written with core/json_buf.h ── Does (class, source) have a fire-verified finding? The
+   parked emit skips those. */
 static int solved(int cls, const char *src) {
     for (int i = 0; i < g_sinks_n; i++)
         if (g_sinks[i].cls == cls && !strcmp(g_sinks[i].source, src)) return 1;
     return 0;
 }
 
-/* THE SOURCE'S DECLARED BROWSER DELIVERY, written identically into BOTH entry shapes because it is ONE
-   declaration and the two entries need different halves of it: `sourceEncodes` is what a BREAKOUT had to
-   survive (the parked entry's constraint), and the mechanism plus its address component are what a
-   REPRODUCTION has to perform (§S(d)'s envelope). Splitting them across two writers is how one of them went
-   missing before.
-   AN UNDECLARED SOURCE WRITES NOTHING, and that silence is the fact that there IS no declaration — server-
-   injected page state is written by the attacker directly, no component carries or transforms it, and a
-   consumer must say exactly that rather than invent a vector. The vocabulary is the engine's: the delivery
-   layer switches on these tokens and states its own inability to perform one, but it never decides which
-   source uses which — the component that owns the source already did. */
-/* IT IS ASKED WITH THE ROOT AND NOT WITH THE INJECTION IDENTITY, and the difference is a whole finding. The
-   registry is an exact strcmp over the declared rows: `location.hash` matches and `{location.hash}.slice()` —
-   what `location.hash.slice(1)` composes, and what a page that strips its own `#` therefore reports as — does
-   not, so both halves of the declaration went missing for the derivations real code is written in. See the
-   record above for what the popup then printed.
-   AN ABSENT ROOT IS NOT AN UNDECLARED SOURCE. Undeclared is a FACT (server-injected page state is written by
-   the attacker directly and no component carries it), and it is what silence here means; a record that never
-   learned its root is a record this session cannot answer for, and rendering the two the same way is exactly
-   the lie this change removes. The assert below is now an INVARIANT rather than a work item: both doors into
-   g_pending state the root, so a NULL naming neither of them is a third door. */
-/* WHICH OF THE DECLARED BYTES A RUN ACTUALLY SAW ARRIVE — the MEASURED half of the constraint, beside the
-   DECLARED one. `sourceEncodes` says what the browser does on the way in; this says what the page's own code
-   left of it, and the two are different facts whose difference IS the finding: equal sets mean the page decodes
-   its own fragment and every §13.2.5 escape is on the table, an empty set beside a full declaration means the
-   search's whole failure is the source's transform and no re-derivation can help.
-   ANSWERS NULL WHERE THERE IS NOTHING TO SAY, and both silences are positive: a source that declares no
-   percent-encode set has no byte in question, and a search whose delivery probe has not run has taken no
-   measurement — which is why the permissive initial table is never emitted as one. */
+/* Which declared bytes a run actually saw arrive: the measured half of the constraint, beside the declared one.
+   Equal sets mean the page decodes its own fragment and every escape is open; an empty set beside a full
+   declaration means the source's transform is the whole failure. Answers NULL where there is nothing to say: a
+   source with no percent-encode set has no byte in question, and a search whose delivery probe has found no
+   token has taken no measurement, so the permissive initial table is never emitted as one. */
 static const char *cand_delivers(const Cand *e, char *buf, size_t n) {
     const char *enc = e->root ? concolic_source_encodes(e->root) : NULL;
     size_t o = 0, i;
@@ -2081,10 +1840,12 @@ static const char *cand_delivers(const Cand *e, char *buf, size_t n) {
     return buf;
 }
 
-/* THE SEARCH IS PASSED AS WELL AS ITS ROOT, because the delivery has a half that is a fact about the PATH and
-   not about the source: what that path demanded of an attacker's PRINCIPAL. `root` and `delivers` are both
-   statements about the source's own carrier and are read off the registry and off the measured table; the gates
-   are read off the entry, so the entry comes too. */
+/* The source's declared browser delivery, written the same way into both entry shapes: `sourceEncodes` is what a
+   breakout had to survive and `sourceDelivers` what a run measured, while `delivery` and `deliveryPrefix` are
+   what a reproduction must perform. Asked with the root, not the injection identity, because the registry
+   matches only declared sources. An undeclared source writes nothing, and that silence is a fact
+   (server-injected page state is written by the attacker directly); a missing root is not that fact, which is
+   why it is asserted. The search comes too, for what its path demanded of an attacker's principal. */
 static void emit_delivery(JsonBuf *b, const Cand *e, const char *root, const char *delivers) {
     const char *enc, *kind = NULL;
     char prefix = 0;
@@ -2099,8 +1860,7 @@ static void emit_delivery(JsonBuf *b, const Cand *e, const char *root, const cha
     enc = concolic_source_encodes(root);
 
     if (enc) { json_buf_raw(b, ","); json_buf_key(b, "sourceEncodes"); json_buf_str(b, enc); }
-    /* IMMEDIATELY AFTER THE DECLARATION IT IS A SUBSET OF, because the pair is one statement and a reader has
-       to be able to hold the two against each other. */
+    /* Immediately after the declaration it is a subset of, so the pair reads as one statement. */
     if (delivers) {
         DCHECK(enc != NULL,
                "a measured delivery set is being emitted for a source that declares no percent-encode set — "
@@ -2115,28 +1875,15 @@ static void emit_delivery(JsonBuf *b, const Cand *e, const char *root, const cha
             json_buf_raw(b, ","); json_buf_key(b, "deliveryPrefix"); json_buf_str(b, p);
         }
     }
-    /* …AND WHAT THE REPLAYED PATH DEMANDED OF AN ATTACKER'S PRINCIPAL — §Attacker-sources' FORGEABLE half,
-       which is the OTHER thing a delivery layer needs and the one it could not previously ask for. `delivery`
-       says HOW an attacker puts bytes in this source; this says WHOSE IDENTITY they must hold while doing it,
-       and for a `cross-document-message` those are two independent requirements: the post is performable by
-       anything that holds a handle, and the victim's handler reads `event.origin` before it reads `event.data`.
-       THE VERDICT IS THE FIELD A CONSUMER BRANCHES ON AND IT IS EMITTED FIRST; THESE ROWS ARE ITS EVIDENCE.
-       The pair §Attacker-sources states has three examined arms and a fourth state that is not one of them —
-       see the `PrincipalDemand` enum for why an ABSENCE here may never be read as "demanded nothing", and for
-       the half-deployed artifact that reading would break.
-       IT STAYS A SHAPE, exactly as endpoint.c's `predicates` does and in that same grammar so there is ONE
-       spelling of a call predicate in this engine's output: the METHOD the page named, the ARGUMENTS it passed,
-       and the ARM this run took. Nothing here picks an origin that would satisfy it — §@H forbids inventing `6`
-       for `x > 5` and this is the same invention one source kind over — and §@S is where a firing input is
-       solved for, by the layer that performs the delivery and can fire-verify what it chose.
-       `holds:false` IS A FACT AND NOT A MODIFIER. Forced multi-path runs both arms, so a path that PROVED
-       `origin.startsWith("https://admin.")` false is a path whose identity must NOT match it — a constraint on
-       the attacker's identity exactly as the true arm is, and the arm the shipped page did not take. */
+    /* What the replayed path demanded of an attacker's principal. `delivery` says how an attacker puts bytes in
+       this source; this says whose identity they must hold while doing it. For a cross-document message the post
+       is performable by anything holding a handle, and the victim's handler reads `event.origin` before
+       `event.data`. The verdict is emitted first and the rows are its evidence (see PrincipalDemand). The rows
+       stay a shape, in endpoint.c's `predicates` grammar: method, arguments, and the arm this run took. Nothing
+       here picks an origin that satisfies them; the delivery layer solves for one and fire-verifies it.
+       `holds:false` is a fact: a path that proved the predicate false demands an identity that fails it. */
     if (e && e->pg_demand != PG_UNEXAMINED) {
-        /* THE VERDICT FIRST AND UNCONDITIONALLY ON EVERY EXAMINED ENTRY, because it is the field a delivery
-           layer BRANCHES on and the one whose absence has to mean "this engine does not state it" rather than
-           any answer at all — see the `PrincipalDemand` enum for the half-deployed state that turns on. The
-           gates below are its EVIDENCE and are emitted only where there are any. */
+        /* The verdict on every examined entry, unconditionally, because its absence must mean "not stated". */
         json_buf_raw(b, ","); json_buf_key(b, "principalDemand");
         json_buf_str(b, e->pg_demand == PG_NONE       ? "none"
                       : e->pg_demand == PG_FORGEABLE  ? "forgeable"
@@ -2182,16 +1929,12 @@ static void emit_delivery(JsonBuf *b, const Cand *e, const char *root, const cha
     }
 }
 
-/* EVERY DETECTED SINK IS REPORTED — the ones with a fire-verified PoC, AND the ones whose search has not solved.
-   Emitting only the solved ones made the report say nothing at all about a sink an attacker source demonstrably
-   REACHES, and a reader cannot tell that silence apart from "no attacker input gets here" — which is the
-   "safe"/"verified:false" verdict solve.h forbids, arrived at by omission instead of by claim. A sink without a
-   PoC is a PARKED SEARCH: reached, searched this far, not broken out of YET.
-   It carries the two facts that make it actionable rather than a shrug: how many candidate runs it has had, and
-   the bytes the source's own component percent-encodes — the constraint every candidate had to survive. For
-   `innerHTML` fed from `location.hash` that set contains `<`, which is why no HTML-context candidate can fire
-   and why the same source's JS-context sink does; the entry states the constraint, it does not claim the sink
-   is safe, because an app that percent-DECODES its fragment would break out with the same candidate. */
+/* Every detected sink is reported: the fire-verified PoCs, and every search that has not solved, as a parked
+   search (reached, searched this far, not broken out of yet). Omitting the unsolved ones would read as "no
+   attacker input gets here", the safe verdict solve.h forbids, arrived at by omission. A parked entry carries
+   how far its search got and the constraint every candidate had to survive; for `innerHTML` fed from
+   `location.hash` the fragment set contains `<`, which is a constraint and not a claim that the sink is safe,
+   since a page that decodes its fragment breaks out with the same candidate. */
 char *solve_json_array(JSContext *ctx) {
     JsonBuf b = { 0 };
     int n = 0;
@@ -2204,27 +1947,19 @@ char *solve_json_array(JSContext *ctx) {
         json_buf_raw(&b, "{"); json_buf_key(&b, "sink"); json_buf_str(&b, sc->name);
         json_buf_raw(&b, ","); json_buf_key(&b, "source"); json_buf_str(&b, g_sinks[i].source);
         json_buf_raw(&b, ","); json_buf_key(&b, "poc"); json_buf_str(&b, g_sinks[i].poc);
-        /* §S(d): EVERY PoC CARRIES ITS REPRODUCTION ENVELOPE. What makes it RUN is the first thing a reader
-           needs and the last thing this record carried — the vector was decided one line below, for the CSP
-           question, and thrown away. It comes off the sink's own fire oracle (see the table). */
+        /* Every PoC carries its reproduction envelope, starting with what makes it run, from the sink's own fire
+           oracle (see SINKS). */
         json_buf_raw(&b, ","); json_buf_key(&b, "firesOn"); json_buf_str(&b, sc->fires_on);
-        /* §S: A FIRING BREAKOUT IN THE MODEL IS NOT YET A WORKING EXPLOIT. The PoC has to run under the page's
-           ACTUAL policy, and an inline `onerror` is dead under `script-src 'self'`. Reporting a bare XSS there
-           is a false positive a reader cannot tell from a real one; reporting nothing would hide a sink that IS
-           real. So the finding stays, and it CARRIES what blocks it — "sink REAL, CSP blocks", which is the
-           standard's own distinction and the only one that survives being read by someone else. */
-        /* THE PoC IS THE `source` §6.7.3.3 IS ASKED ABOUT, and the ELEMENT IS NULL because this breakout has
-           been inserted nowhere — the same shape §4.2.4 uses when it runs the inline check "upon null" for a
-           javascript: navigation. That NULL is what keeps the nonce arm out of the answer, which is correct:
-           attacker markup cannot carry a nonce the page's own policy lists. */
+        /* A firing breakout in the model is not yet a working exploit: it must run under the page's actual policy,
+           and an inline `onerror` is dead under `script-src 'self'`. The finding stays and carries what blocks it
+           ("sink real, CSP blocks"). The PoC is the `source` §6.7.3.3 is asked about, with a NULL element because
+           the breakout is inserted nowhere, the shape §4.2.4 uses for a javascript: navigation; that keeps the
+           nonce arm out, as attacker markup cannot carry a nonce the page's policy lists. */
         {
             const char *poc = g_sinks[i].poc;
-            /* NO REPORTER, AND THAT IS THE CLAIM RATHER THAN A CONVENIENCE. §4.2.3 and §4.4.1 report a
-               violation for content the PAGE ran; this asks the same algorithms about a breakout THIS ENGINE
-               composed and has inserted nowhere, to decide whether the finding carries "CSP blocks". No
-               content was refused, so there is no violation to report and no document whose listeners should
-               see one — firing here would put an event in the page's timeline that names an attack the page
-               never suffered. csp_reporter_none is that statement; see core/frame/csp_violation.h. */
+            /* No reporter: §4.2.3 and §4.4.1 report a violation for content the page ran, and this asks them about
+               a breakout this engine composed and inserted nowhere, so no event belongs in the page's timeline
+               (csp_reporter_none; see core/frame/csp_violation.h). */
             CspReporter no_report = csp_reporter_none();
             int allowed = sc->policy < 0
                               ? policy_allows_string_compilation(no_report, pc)
@@ -2236,31 +1971,19 @@ char *solve_json_array(JSContext *ctx) {
                 json_buf_str(&b, policy_container_csp(pc));
             }
         }
-        /* AND THE SAME RULE ONE ALGORITHM EARLIER. Under `require-trusted-types-for 'script'` an innerHTML
-           assignment THROWS before the markup is ever parsed, so the model's breakout is real and the write
-           that carries it never happens on the real page. trusted_types.c has answered this question all
-           along and nothing asked it. The emitted value is the SINK GROUP the CSP names, because that is what
-           the directive is written in terms of and what a reader has to add a policy for. */
+        /* The same rule one algorithm earlier: under `require-trusted-types-for 'script'` an innerHTML assignment
+           throws before the markup is parsed. The value is the sink group the CSP names, which is what a reader
+           adds a policy for. */
         if (sc->tt >= 0 && trusted_types_required(ctx, (TrustedTypeKind)sc->tt)) {
             json_buf_raw(&b, ","); json_buf_key(&b, "trustedTypes");
             json_buf_str(&b, "script");
         }
-        /* THE DELIVERY — including whether this is §S(b)'s TWO-STAGE plant-then-load PoC. There is deliberately
-           no separate `stored` boolean: "is it stored" is not a second fact beside the mechanism, it IS the
-           mechanism (a `plant` delivery is two-stage and every other one is a single load), and two fields for
-           one fact is precisely the drift that made five names on this record mean nothing. */
-        /* WHAT THE SOLVE COST, because success is the one event that destroys the record of it. A search that
-           fires stops emitting the parked shape — `solved()` skips it below — so `tried`, `turns`, `survived`
-           and `escaped` all vanish at the instant they become a fact about a REAL exploit rather than about a
-           search in progress. A reader then cannot tell a PoC that fell out of the first written-down vector
-           from one that took forty candidate runs and a derivation, which is the difference between a sink
-           anyone would have found and a sink only this tool finds.
-           IT IS THE COUNT AND NOT A FLAG, and one number rather than four: `tried` is the whole search's cost
-           in document re-runs, which is what the other three are each a component of, and the parked shape
-           already states all four for every search that has not solved. A fired entry needs the total, not the
-           breakdown of a question that is now answered.
-           ABSENT IS IMPOSSIBLE HERE, which is what makes it a positive statement: record_sink CHECKs that a
-           finding's twin is on the pending list, so a fired entry always has a search behind it to ask. */
+        /* The delivery, including whether this is a two-stage plant-then-load PoC: a `plant` delivery is two-stage
+           and every other is a single load, so no separate `stored` field states the same fact twice.
+           And what the solve cost, because a fired search stops emitting the parked shape and its counts vanish
+           the moment they describe a real exploit. `searched` is `tried`, the whole search's cost in document
+           re-runs, which tells a PoC from the first written-down vector from one that took forty runs and a
+           derivation. A twin always exists, because record_sink CHECKs it at the store. */
         {
             const Cand *tw = search_of(g_sinks[i].source, g_sinks[i].cls);
             char t[32], dv[64];
@@ -2270,9 +1993,8 @@ char *solve_json_array(JSContext *ctx) {
                   "list was rewritten under a finding and the report is about to state a cost it cannot read");
             json_buf_raw(&b, ","); json_buf_key(&b, "searched");
             snprintf(t, sizeof t, "%d", tw->tried); json_buf_raw(&b, t);
-            /* AND THE MEASURED CONSTRAINT THE PoC WAS BUILT UNDER, from the same search. On a FIRED entry it
-               is what says which bytes the exploit is allowed to contain, so a reader reproducing it by hand
-               knows which of them the browser would have eaten — a fact the payload alone does not carry. */
+            /* And the measured constraint the PoC was built under, which tells anyone reproducing it by hand which
+               bytes the browser would have eaten. */
             emit_delivery(&b, tw, g_sinks[i].root, cand_delivers(tw, dv, sizeof dv));
         }
         json_buf_raw(&b, "}");
@@ -2286,199 +2008,88 @@ char *solve_json_array(JSContext *ctx) {
         json_buf_raw(&b, ","); json_buf_key(&b, "search"); json_buf_str(&b, "parked");
         json_buf_raw(&b, ","); json_buf_key(&b, "tried");
         snprintf(t, sizeof t, "%d", g_pending[i].tried); json_buf_raw(&b, t);
-        /* …AND HOW MANY OF THOSE RUNS CAME BACK FROM A PREVIOUS SESSION, which is the term solve.h's own
-           arithmetic for `tried` names and which no field carried. `tried` is the entries not marked
-           `withdrawn` PLUS the candidates resumed out of the cold tier, and a reader given only the first term
-           cannot perform it: `tried:6` beside `payloads:[]` reads identically as a cross-session search whose
-           every run was rebuilt from a park record and as a producer that dropped a field.
-           IT IS ALSO THE ONE FACT THAT MAKES `reached` READABLE BESIDE A PROBES-ONLY LIST, which is why it is
-           emitted here rather than left as prose. "A search holding nothing but probes cannot have had a
-           breakout ARRIVE" is true of a search whose every run is a row in that list and false the moment one
-           of them is a resumed candidate — its marker-carrying bytes ride the FLOW and are in no row. The
-           consumer states that from this number instead of inferring it from `tried` against `payloads` and
-           `withdrawn`, which would be a view re-deriving a producer fact it cannot check.
-           UNCONDITIONAL, AND 0 IS THE LOAD-BEARING VALUE: it is the positive statement that every run this
-           search has had is one of the rows below, which is what licenses every implication read off them. */
+        /* `resumed`: how many of those runs came back from a previous session, the term of solve.h's `tried`
+           arithmetic that has no row in `payloads`. It is what makes `reached` readable beside a probes-only
+           list, so the consumer states it from this number instead of re-deriving it. Unconditional; 0 says every
+           run this search has had is a row below. */
         json_buf_raw(&b, ","); json_buf_key(&b, "resumed");
         snprintf(t, sizeof t, "%d", g_pending[i].resumed); json_buf_raw(&b, t);
-        /* …AND HOW MANY CAME BACK AND WERE REFUSED BEFORE THEY COULD RUN, which is the state the pair above
-           cannot express. A parked record carries bytes an EARLIER session derived, and this build narrows the
-           delivery table from the root's carrier declaration the moment the root arrives, so a record written
-           before that narrowing names a payload this build positively contradicts and never runs
-           (solve_resume_candidate). Neither `tried` nor `resumed` moves for it — both count RUNS — so without
-           this number a search whose every parked candidate was refused reports `tried:0,resumed:0` exactly as
-           a search nothing was ever parked for, and that reading is the positive statement (solve.h) that
-           every run this search has had is a row in `payloads`. The two take opposite actions: the first says
-           this build's carrier rules have moved past a stored recipe, the second says the frontier never
-           reached here. UNCONDITIONAL, and 0 is the load-bearing value: it is what says the residue and this
-           build still agree about what the source can carry. */
+        /* `resumedWithdrawn`: how many came back and were refused before they could run, because this build's
+           carrier declaration contradicts their payload (solve_resume_candidate). Neither `tried` nor `resumed`
+           moves for them, so without this a search whose every parked candidate was refused reads like one that
+           nothing was parked for. Unconditional; 0 says the residue and this build agree about the source. */
         json_buf_raw(&b, ","); json_buf_key(&b, "resumedWithdrawn");
         snprintf(t, sizeof t, "%d", g_pending[i].resumed_withdrawn); json_buf_raw(&b, t);
-        /* …AND HOW MANY OF THOSE RUNS GOT HERE, which is the half `tried` cannot state (see the field). The
-           two together are the only thing that tells a document nobody has explored far enough apart from a
-           breakout that arrived and did not work — `reached:0` is the first, anything else is the second. */
+        /* `reached`: how many runs got here, which `tried` cannot state; `reached:0` is a document not explored
+           far enough, anything else a breakout that arrived and did not work. */
         json_buf_raw(&b, ","); json_buf_key(&b, "reached");
         snprintf(t, sizeof t, "%d", g_pending[i].reached); json_buf_raw(&b, t);
-        /* …AND HOW MANY TURNS THE SCHEDULER HAS GIVEN IT, which is what makes `reached:0` readable: with
-           `turns:0` this search's candidates have never once held the thread, and with `turns:N` they have run
-           and have not got as far as the sink. One is a WFQ question and the other is a distance question. */
+        /* `turns`: at `turns:0` this search's candidates have never held the thread, and at `turns:N` they ran and
+           did not reach the sink, a WFQ question against a distance question. */
         json_buf_raw(&b, ","); json_buf_key(&b, "turns");
         snprintf(t, sizeof t, "%d", g_pending[i].turns); json_buf_raw(&b, t);
-        /* …AND HOW MANY OF THEM HAVE ENDED, WHICH IS WHAT MAKES EVERY ZERO BELOW READABLE AS A QUESTION ABOUT
-           A PATH OR ABOUT THE SCHEDULE. `tried` is the ASK and `turns` is the service; this is the only fact
-           here about a candidate's own TERMINATION, and the three are read together:
-             `candEnds:0`   beside any zero below — NO FLOW of this search has ended, so nothing it has run
-                            got there and nothing in front of the source has been shown to turn anything
-                            away. The work is thread rather than a gate to find. This arm is sound and is the
-                            load-bearing one.
-             `candEnds:N`   at least one flow of this search ended without reaching that point, AND NOTHING
-                            MORE. The clause that stood here read `beside tried:N — every candidate this
-                            search has ever had ran to its own end`, and it is kept as the reading a reader
-                            re-derives because the arithmetic invites it and it is FALSE: this counts FLOW
-                            FINISHES and `tried` counts SEEDS, a candidate session is a TREE of flows
-                            (engine.c's fork copies the whole candidate identity), so N ends against N seeds
-                            can be one candidate that forked N times with every other seed's arms still
-                            running. Reading it as `all ended` sends a reader to hunt a gate in front of a
-                            source that nothing has been turned away from, which is the confident-wrong
-                            direction this whole entry exists to remove.
-                            RESIDUAL — WHAT IS NOT COVERED: no reading here can say that a search's candidates
-                            are ALL finished, because the pair carries no count of what is still LIVE. WHAT
-                            THE NEXT DIFF BUILDS: a per-search live-arm count, raised where the fork copies
-                            the candidate identity and lowered at this seam, which with `candEnds` gives
-                            `live == 0` as the arm the retired clause was reaching for. HOW ITS ABSENCE SHOWS:
-                            a reader holding `candEnds` equal to `tried` cannot distinguish a search whose
-                            every candidate is done from one candidate that forked as many times as the search
-                            has seeds, and the report renders those two identically.
-           UNCONDITIONAL, AND 0 IS THE LOAD-BEARING VALUE: it is the state this engine is in, so an omission
-           here would be the defect rather than a statement. Not a rung and not a credit — nothing about the
-           WFQ moves at the write.
-           AND `it is the state this engine is in` WAS A CLAIM ABOUT ALLOCATOR MEMORY UNTIL THE FIELD WAS
-           WRITTEN AT ITS CREATE, which is kept rather than cut because the sentence is right about the DESIGN
-           and was wrong about the TREE, and a reader who checks the design finds it sound. sink_search stated
-           thirty-four of Cand's thirty-five fields and not this one, so before that repair the `candEnds:0`
-           and `candEnds:N` arms above were told apart by whatever the realloc'd slot held: MEASURED in a
-           dev-asserts run, 12 of 18 emitted values read 0 and SIX read 3, with six of the eighteen rows
-           reading `candEnds` above `tried` outright. The `candEnds:N` arm is the one that would have cost
-           something — it tells a reader the readings below are about a PATH, so a garbage value landing on
-           `tried` would have sent them to hunt a gate in front of a source nothing had been turned away from.
-           AND THE CLAUSE THAT STOOD HERE TOLD A READER TO CHECK THE WRONG THING, WHICH IS RECORDED BECAUSE IT
-           IS THE CHEAP CHECK ANYBODY WOULD REACH FOR. It read `candEnds may not exceed tried … the same
-           implication the assert at the raise makes`, and BOTH halves went: the assert no longer makes it, and
-           it is not true — `candEnds` counts FLOW FINISHES and `tried` counts SEEDS, so a candidate that forks
-           legitimately drives this above `tried` and a row doing so is a statement about the SEARCH and not
-           about this file. It was a sound reading only while `ends` was garbage, which is the one era in which
-           an excess really did mean a defect, and it is exactly the era it was written in.
-           WHAT A READER CAN STILL CHECK FOR NOTHING IS ONE-SIDED: a NONZERO `candEnds` beside `tried:0` is
-           impossible, because both doors raise `tried` before a flow can be picked and every arm's ancestor
-           came through one of them — that is the implication the assert at the raise makes now, in one unit. */
+        /* `candEnds`: how many of this search's flows have ended, which makes every zero below readable as a
+           question about a path or about the schedule. `candEnds:0` beside a zero below means no flow has ended,
+           so nothing was shown to be turned away and the work is thread. `candEnds:N` means at least one flow
+           ended short of that point, and no more: it counts flow finishes while `tried` counts seeds, so N ends
+           against N seeds can be one candidate that forked N times. Only `candEnds > 0` beside `tried:0` is
+           impossible. Unconditional; 0 is the load-bearing value. Not a rung and not a credit.
+           Named residual: not covered — whether all of a search's candidates have finished, since nothing
+           counts what is still live; next diff — a per-search live-arm count raised where the fork copies the
+           candidate identity and lowered at solve_flow_end, so `live == 0` gives that reading; absence shows as
+           `candEnds` equal to `tried` reading the same for a finished search and for one candidate that forked
+           as often as the search has seeds. */
         json_buf_raw(&b, ","); json_buf_key(&b, "candEnds");
         snprintf(t, sizeof t, "%d", g_pending[i].ends); json_buf_raw(&b, t);
-        /* …AND THE TWO OBSERVATION COUNTS, WHICH ARE WHAT SPLIT `turns:N,reached:0,survived:0` INTO THE THREE
-           STATES IT HAS ALWAYS BEEN. `turns` made `reached:0` readable by separating a search the WFQ has
-           never served from one whose flows have run; these separate the second of those into the three things
-           it was still saying at once, each taking different work:
-             `substituted:0`                      — no run reached its own SOURCE READ. READ WITH `candEnds`,
-                                                    which is what says whether they ENDED short of it (a
-                                                    question about the PATH, something in front of the source)
-                                                    or are still live and have not arrived (a question about
-                                                    the SCHEDULE). This clause asserted the first outright and
-                                                    is corrected rather than dropped: it is the reading a
-                                                    count of arrivals invites, and it names the wrong work.
-             `substituted:D, sinkStrings:0`       — the bytes entered the program and no code-execution sink
-                                                    ran at all while they were live. The distance question.
-             `sinkStrings:S, survived:0`          — S sinks EXECUTED and not one byte of the candidate was in
-                                                    any of the strings they were handed. A question about the
-                                                    PAYLOAD's own transform or routing, which is the opposite
-                                                    instruction to the line above it.
-           BOTH ARE UNCONDITIONAL AND 0 IS A REAL VALUE EACH MUST BE ABLE TO SAY — the zero is the load-bearing
-           reading in both cases, so there is no absence here to read positively and an omission would be the
-           defect rather than a statement. Neither is a rung: nothing about the WFQ moves at either write, and
-           §@S(ii)'s ledger and the flow's comparator are untouched by both.
-           `sinkStrings` COUNTS STRINGS AND NOT ARRIVALS, which is the difference between it and `reached`:
-           `reached` is a BREAKOUT of this search turning up at its OWN sink, and this counts every string any
-           code-execution sink was handed while this search's substitution was live, whether or not a byte of
-           the candidate was in it. A reader that took one for the other would read `sinkStrings:400` as four
-           hundred arrivals. */
+        /* `substituted` and `sinkStrings` split `turns:N,reached:0,survived:0` into the states it was saying at
+           once:
+             `substituted:0`                — no run reached its own source read; `candEnds` says whether they
+                                              ended short of it (a path question) or are still live (a schedule
+                                              question);
+             `substituted:D, sinkStrings:0` — the bytes entered the program and no code-execution sink ran while
+                                              they were live: the distance question;
+             `sinkStrings:S, survived:0`    — S sinks ran and none of the payload was in their strings: the
+                                              payload's own transform or routing.
+           Both are unconditional, 0 being a real value. `sinkStrings` counts strings handed to any sink, not
+           arrivals: `sinkStrings:400` is not four hundred arrivals. */
         json_buf_raw(&b, ","); json_buf_key(&b, "substituted");
         snprintf(t, sizeof t, "%d", g_pending[i].substituted); json_buf_raw(&b, t);
         json_buf_raw(&b, ","); json_buf_key(&b, "sinkStrings");
         snprintf(t, sizeof t, "%d", g_pending[i].sink_strings); json_buf_raw(&b, t);
-        /* …AND THE RUNG BENEATH BOTH OF THEM, WHICH IS THE ONE `substituted:0` COULD NOT SAY ANYTHING ABOUT.
-           The three states above all begin at or past the source read; this one is the approach to it, and
-           it is what splits `substituted:0` — a positive statement that these runs ended before their own
-           source read — into the two things it has been saying at once:
-             `runwayPerMille:0`     — the candidates were given the thread and consumed NONE of their own
-                                      recorded path. A question about what turns a replay back at its first
-                                      arm, and nothing about the distance to the source.
-             `runwayPerMille:~1000` — they consumed the whole of it and the source read is still ahead. The
-                                      distance question, and a statement that the fitness rung below
-                                      FLOW_RUNG_DELIVERED is SATURATED and is directing nothing further.
-           THOUSANDTHS, WITH THE UNIT IN THE KEY, for the reason the field's own declaration gives: every
-           other number on this entry is a count, and a bare `runway` would be read as one.
-           UNCONDITIONAL AND 0 IS THE LOAD-BEARING READING, exactly as for the two above — a search whose
-           candidates have never been switched in reports 0 here beside `turns:0`, and one whose candidates
-           ran and replayed nothing reports 0 beside `turns:N`. Those are told apart by `turns`, which is why
-           this field is emitted next to it and not instead of it.
-           AND THE THIRD READING OF THE SAME 0 IS TOLD APART BY `runwayArms` BELOW, which is emitted with it
-           and never without it: `turns` says whether the candidates RAN, and only the arm count says whether
-           there was anything for them to replay when they did. A 0 here over `runwayArms:0` is a search whose
-           detection decided no branch at all, and the number is then a tautology rather than a measurement —
-           a reader who acts on it hunts a gate that refuses an arm for a search that was never offered one. */
+        /* `runwayPerMille` splits `substituted:0` by the approach to the source read: 0 means the candidates
+           consumed none of their recorded path (what turns a replay back at its first arm), ~1000 that they
+           consumed all of it and the source read is still ahead (the distance question, with the fitness rung
+           below FLOW_RUNG_DELIVERED saturated). Thousandths, unit in the key. Unconditional: a 0 beside `turns:0`
+           is candidates never switched in, beside `turns:N` candidates that replayed nothing, and beside
+           `runwayArms:0` a detection that decided no branch, a tautology. */
         json_buf_raw(&b, ","); json_buf_key(&b, "runwayPerMille");
         snprintf(t, sizeof t, "%d", g_pending[i].replay_pm); json_buf_raw(&b, t);
-        /* THE ARM COUNT THE FRACTION ABOVE IS SILENT ABOUT — see the field for what each of its two readings
-           means and why it is NOT that fraction's denominator. Emitted IMMEDIATELY beside it, because the
-           whole of what it adds is a joint reading and a consumer that finds one without the other is back to
-           the merged zero this pair exists to split. */
+        /* `runwayArms`, emitted beside the fraction because its value is the joint reading (see the field); it is
+           not the fraction's denominator. */
         json_buf_raw(&b, ","); json_buf_key(&b, "runwayArms");
         snprintf(t, sizeof t, "%d", g_pending[i].reinject_len); json_buf_raw(&b, t);
-        /* AND THE POSITION AS ITS TWO HALVES, WHICH IS WHAT THE THOUSANDTHS ABOVE ROUND AWAY. `runwayWalked:0`
-           beside `runwayPerMille:0` is a replay that consumed no arm; `runwayWalked:3` beside the same 0 is
-           three arms out of a path long enough that one part in a thousand does not resolve them. `runwayOf`
-           is the denominator of THAT reading — `dec_total()` when it was taken — and is not `runwayArms`,
-           which is the frozen path every candidate starts on; below the delivery
-           `runwayPerMille == round(runwayWalked/runwayOf*1000)` and past it the two diverge because the
-           thousandths carry flow_observe_rung's pin and the pair never does. */
+        /* `runwayWalked`/`runwayOf`: the position as its two halves, which the thousandths round away.
+           `runwayOf` is dec_total() when the reading was taken, not `runwayArms`. Below the delivery
+           runwayPerMille == round(runwayWalked/runwayOf*1000); past it the thousandths carry flow_observe_rung's
+           pin and the pair never does. */
         json_buf_raw(&b, ","); json_buf_key(&b, "runwayWalked");
         snprintf(t, sizeof t, "%ld", g_pending[i].replay_arms); json_buf_raw(&b, t);
         json_buf_raw(&b, ","); json_buf_key(&b, "runwayOf");
         snprintf(t, sizeof t, "%ld", g_pending[i].replay_of); json_buf_raw(&b, t);
-        /* …AND THE TWO MIDDLE RUNGS, WHICH IS WHAT SPLITS `reached:0` AND `reached:N` INTO THE FOUR STATES THEY
-           REALLY ARE. `survived`/`survivedOf` is the FURTHEST any candidate of this search has got its own
-           bytes through the page's own transforms to ANY sink, so `turns:900,reached:0,survived:11,
-           survivedOf:14` is a FILTER eating the candidate eleven-fourteenths of the way in — the same report
-           before, opposite work.
-           `survived:0` IS NOT "A DOCUMENT NOBODY HAS EXPLORED FAR ENOUGH", WHICH IS WHAT THIS PARAGRAPH USED
-           TO SAY AND WHAT THE PAIR ABOVE NOW REFUTES. A best-so-far is silent about how many times it looked,
-           so a zero here is read WITH `substituted` and `sinkStrings` or not at all: `substituted:0` is a path
-           that never reached the source read, `sinkStrings:0` is the distance reading this sentence claimed
-           for all three, and `sinkStrings:X,survived:0` is X sinks that executed carrying none of the payload
-           — a question about the payload, and the opposite instruction.
-           `escaped` is how many arrivals reached an EXECUTABLE position, which `reached` could not say and
-           which `fires` only approximates: `fires` counts every auto-firing handler in the parse INCLUDING the
-           page's own markup, so a card reading it alone stated "none reached an executable position" as a fact
-           about the payload on evidence that was partly about the template around it.
-           BOTH ARE UNCONDITIONAL, and 0 is a real value each of them must be able to say (nothing of any
-           candidate has been seen at any sink; nothing has got out of its context). `survivedOf:0` beside
-           `survived:0` is the same statement said once — no observation has been recorded — and not a length
-           this file failed to write. */
+        /* `survived`/`survivedOf`: the furthest any candidate of this search has got its own bytes through the
+           page's transforms to any sink, so `turns:900,reached:0,survived:11,survivedOf:14` is a filter eating the
+           candidate eleven-fourteenths of the way in. A best-so-far is silent about how often it looked, so a 0 is
+           read with `substituted` and `sinkStrings`. `escaped` is how many arrivals reached an executable
+           position, which `fires` only approximates, since `fires` also counts the page's own handlers. Both are
+           unconditional; `survivedOf:0` beside `survived:0` says once that nothing was observed. */
         json_buf_raw(&b, ","); json_buf_key(&b, "survived");
         snprintf(t, sizeof t, "%d", g_pending[i].surv_run); json_buf_raw(&b, t);
         json_buf_raw(&b, ","); json_buf_key(&b, "survivedOf");
         snprintf(t, sizeof t, "%d", g_pending[i].surv_len); json_buf_raw(&b, t);
-        /* WHICH SEGMENT LIVED AND WHERE IT LANDED — the two facts the pair above measures and cannot state,
-           and the ones §@S(2) names as the input to the mutation that follows a near miss ("which bytes
-           survive to which positions", "which segment died and where the rest landed"). `survivedAt` is the
-           offset into the CANDIDATE where the recorded run begins; `survivedTo` is where that run was found in
-           the string the sink was handed.
-           IT SPLITS ONE READING INTO TWO OPPOSITE INSTRUCTIONS. `survived:11,survivedOf:14,survivedAt:0` is a
-           payload whose TAIL the page cut — the escape opened and its terminator never arrived — and
-           `survived:11,survivedOf:14,survivedAt:3` is one whose HEAD it ate, so the escape never opened at
-           all. Same three-byte gap, opposite mutations of opposite segments, and until now one report.
-           ABSENT WHEN NO RUN HAS BEEN RECORDED, decided on the RUN rather than on the offset, because 0 is a
-           real and common offset: emitting it for a search that has observed nothing would state that a run
-           nobody has seen begins at the candidate's first byte. Same shape and same reason as `fires` and
-           `witnessed` — the absence is the positive statement, never a zero standing in for one. */
+        /* `survivedAt`/`survivedTo`: which segment lived and where it landed, the input to a near-miss mutation.
+           `survivedAt` is the run's offset into the candidate and `survivedTo` its offset in the sink's string;
+           a run at offset 0 is a payload whose tail the page cut, a later offset one whose head it ate. Absent
+           when no run is recorded, decided on the run, because 0 is a real and common offset. */
         if (g_pending[i].surv_run > 0) {
             json_buf_raw(&b, ","); json_buf_key(&b, "survivedAt");
             snprintf(t, sizeof t, "%d", g_pending[i].surv_at); json_buf_raw(&b, t);
@@ -2487,69 +2098,31 @@ char *solve_json_array(JSContext *ctx) {
         }
         json_buf_raw(&b, ","); json_buf_key(&b, "escaped");
         snprintf(t, sizeof t, "%d", g_pending[i].escaped); json_buf_raw(&b, t);
-        /* AND WHAT WAS ACTUALLY TRIED, which three counts cannot say. `tried` is how many runs, `reached` how
-           many arrived and `turns` how many turns the scheduler gave them — all quantities, and the state this
-           search is most often in wants a STRING: a breakout that ARRIVED and did not fire is a question about
-           the bytes, and the reader has to see them to answer it. Without this the report says a search ran
-           five candidates and never says what any of them was, which is the same silence `parked, tried 5`
-           carried before the derivations replaced the fixed lists.
-           ENTRY 0 OF A DERIVED CLASS IS THE INERT CONTEXT PROBE and is emitted like the rest, because it IS
-           one of the runs `tried` counts and hiding it would make the list disagree with the count. What tells
-           it apart is that it carries no marker: a probe cannot fire, by construction.
-           These are the payloads as the SEARCH built them, never as the browser delivers them — the source's
-           own transform is already stated once, beside this, as `sourceEncodes` and `deliveryPrefix`, and
-           writing the delivered form here as well would be the same fact in two places, free to disagree. */
-        /* AND WHETHER A FIRE WAS EVER QUEUED — for the classes that queue one, which is where the number can
-           mean anything. ARRIVING at a sink is not reaching an EXECUTABLE position: html_fire parses the
-           DELIVERED bytes and queues a program only if the parse put the marker in an auto-firing handler,
-           and url_fire only if the delivered address survived as a `javascript:` URL. So `reached:1,fires:0`
-           says the source's own transform defeated this breakout — the fragment set encodes `<`, the markup
-           parses as text, and there is nothing executable to run — while `reached:1,fires:1` says the program
-           EXISTS and has not been run yet, which belongs to the flow's sequence and not to this file. Those
-           take opposite work and were one report.
-           ABSENT FOR AN EVAL SINK, and the absence is the positive statement this record's other optional
-           fields already use: that class's sink evaluates its own argument, so there is no queue to count and
-           a `0` there would read as "nothing executable" when it means "nothing to queue". */
+        /* `fires`, for the classes that queue one. Arriving is not reaching an executable position: html_fire
+           queues a program only if the parse put the marker in an auto-firing handler, and url_fire only for a
+           surviving javascript: URL. So `reached:1,fires:0` says the source's transform defeated this breakout,
+           and `reached:1,fires:1` that a program exists and has not run yet, which belongs to the flow's
+           sequence. Absent for an eval sink, which evaluates its own argument and queues nothing. */
         if (sink_class(g_pending[i].sink)->queues_fire) {
             json_buf_raw(&b, ","); json_buf_key(&b, "fires");
             snprintf(t, sizeof t, "%d", g_pending[i].fires); json_buf_raw(&b, t);
         }
-        /* WHETHER THE CONTEXT PROBE EVER GOT THERE — the producer fact that splits `probes == payloads` into
-           the two opposite things it has been saying at once, and the last of `reached:0`'s readings with no
-           number behind it.
-           A DERIVED CLASS BUILDS NOTHING UNTIL ITS PROBE ARRIVES, because the state is read off the string a
-           REAL run handed the sink and there is no other observation to read one off. So `probes == payloads`
-           is TWO facts: the probe has not reached the sink yet (a distance-through-the-document question, the
-           same one `turns` and `survived` are asked for), or it reached it and the derivation constructed no
-           escape — which for a percent-encoded source is the CORRECT and final answer and is the whole point of
-           solving the three observations jointly. Those take opposite work and read identically, which is
-           precisely the state §@S forbids an instrument to leave a reader in — and the tell it names, a rung
-           whose ABSENCE and whose ZERO read alike, was exact here: this quantity was computed on every search
-           (`nwit`), read by the re-derivation, and emitted nowhere at all.
-           IT COUNTS DISTINCT SINK WRITES AND NOT RUNS, because that is what the search holds: a page that
-           writes the source into a sink from two templates is two contexts and two derivations, and a page that
-           writes the same template twice is one (learn_witness dedups by text). So `witnessed:2` beside
-           `payloads` of length 2 says two contexts were read and neither could be left.
-           ABSENT FOR A SINGLE-CONTEXT CLASS, on the column that decides it rather than on a count: that class
-           states its vectors at detection and runs no context probe at all, so a `0` there would read as "the
-           probe never arrived" about a search that has none. Same shape and same reason as `fires`. */
+        /* `witnessed`: how many distinct sink writes the context probe reached. A derived class builds nothing
+           until its probe arrives, so `probes == payloads` is either a probe that has not reached the sink (a
+           distance question) or one that did, in a state no escape could be constructed from, which for a
+           percent-encoded source is the correct final answer. It counts distinct writes (learn_witness dedups
+           by text), so `witnessed:2` is two contexts read. Absent for a single-context class, which runs no
+           probe. */
         if (sink_class(g_pending[i].sink)->derive != SINK_DERIVE_NONE) {
             json_buf_raw(&b, ","); json_buf_key(&b, "witnessed");
             snprintf(t, sizeof t, "%d", g_pending[i].nwit); json_buf_raw(&b, t);
         }
-        /* …AND THE OTHER PROBE'S ARRIVAL COUNT, BESIDE IT, BECAUSE THE PAIR IS THE SAME QUESTION ASKED OF THE
-           SEARCH'S TWO INSTRUMENTS. `witnessed` says the CONTEXT probe reached the sink; this says the DELIVERY
-           probe did. Without it `sourceDelivers` carried two opposite states under one absence: the probe has
-           not run (wait for the scheduler), and the probe RAN, ARRIVED, and the page destroyed every token it
-           was made of (stop deriving — the source's own transform is the whole answer, and it is the strongest
-           thing a parked search can report). Those take opposite work, and the smoke's own `s-park-nodeliver`
-           and `s-attr-nodeliver` rows read 0 for both.
-           IT DOES NOT MOVE `sourceDelivers`' GATE, which stays on `deliv_seen`, because a table narrowed by
-           nothing IS the permissive one: emitting it after a run that observed no byte would state that every
-           declared byte arrives, which is the defaulted-field defect in the direction that fabricates. Two
-           facts, two fields — the run happened, and something was learned from it.
-           ASKED OF THE ENTRIES THE SEARCH HOLDS (cand_has_delivery_probe), so a search with no delivery probe
-           is ABSENT here rather than zero, for the reason `witnessed` is absent for a single-context class. */
+        /* `deliveryProbed`: how many times the delivery probe reached a sink. Without it an absent `sourceDelivers`
+           says both "the probe has not run" (wait for the scheduler) and "it ran and the page destroyed every
+           token" (stop deriving: the strongest thing a parked search can report). It does not move
+           `sourceDelivers`' gate, which stays on `deliv_seen`, because a table narrowed by nothing is the
+           permissive one and would claim every declared byte arrives. Absent for a search with no delivery probe
+           (cand_has_delivery_probe). */
         if (cand_has_delivery_probe(&g_pending[i])) {
             DCHECK(!g_pending[i].deliv_seen || g_pending[i].deliv_runs > 0,
                    "an @S search reports a delivered byte observed while its delivery probe has never reached "
@@ -2559,28 +2132,15 @@ char *solve_json_array(JSContext *ctx) {
             json_buf_raw(&b, ","); json_buf_key(&b, "deliveryProbed");
             snprintf(t, sizeof t, "%d", g_pending[i].deliv_runs); json_buf_raw(&b, t);
         }
-        /* HOW MANY OF `payloads`' ENTRIES ARE PROBES — counted off the entries' own labels, which is the
-           producer fact that splits `reached:0` one more time and the one state of this search the report
-           could not say at all. `payloads.length > probes` is exactly "this search has constructed an escape",
-           the question `cand_has_escape` answers and queue_derived's hand-off asserts; it was never emitted,
-           so a reader had the two halves of the question and not the question.
-           IT IS NO LONGER A LEADING COUNT, and the emitted number is unchanged by that: probes are pushed when
-           detection opens the search and nothing else pushes one, so they still occupy the leading positions —
-           what changed is that the report now states what the entries ARE rather than where they sit, and a
-           producer that ever pushed out of that order would be reported correctly instead of silently
-           relabelling everything after it.
-           The consumer must not re-derive it: the probe is told apart by carrying no marker,
-           the marker vocabulary is this engine's, and deciding it from POSITION would be a view restating a
-           producer fact it cannot check — which is why popup-security.js declines to, twice, in its own words.
-           WITHOUT IT A MEASURED PAGE IS DESCRIBED WRONG, not merely described thinly. An `innerHTML` sink fed
-           the RAW fragment seeds two probes and NO escape, because the fragment percent-encode set holds the
-           bytes every escape needs and the delivery probe measures that none arrives — the correct answer, and
-           the derivation's whole point. The card computed from `turns>0, reached:0, survived:14/14` then told
-           the reader the breakout had "not re-traversed the document yet" or "was cut down by the page's own
-           FILTER": two questions, both false, and the true one — nothing was ever built to arrive — absent.
-           EMITTED UNCONDITIONALLY, because 0 is a real value it must be able to say: a single-context class
-           states its written-down vectors at detection and has no probe at all, so `probes:0` beside a
-           non-empty list is the positive statement that every entry is an attack. */
+        /* `probes`: how many of `payloads`' entries are probes, from their labels. `payloads.length > probes` is
+           "this search has constructed an escape" (cand_has_escape); the consumer must not re-derive it, since the
+           marker vocabulary is this engine's. Without it an `innerHTML` sink fed the raw fragment, which seeds two
+           probes and no escape because no escape byte arrives, would be described as a breakout that has not
+           traversed the document or was filtered. Unconditional: `probes:0` beside a non-empty list says every
+           entry is an attack.
+           `payloads` is what was tried, as the search built it and never as the browser delivers it (the source's
+           transform is stated once, as `sourceEncodes` and `deliveryPrefix`). A derived class's probes are listed
+           like the rest, because they are runs `tried` counts; they carry no marker and cannot fire. */
         json_buf_raw(&b, ","); json_buf_key(&b, "probes");
         snprintf(t, sizeof t, "%d", cand_probes(&g_pending[i])); json_buf_raw(&b, t);
         json_buf_raw(&b, ","); json_buf_key(&b, "payloads"); json_buf_raw(&b, "[");
@@ -2589,39 +2149,21 @@ char *solve_json_array(JSContext *ctx) {
             json_buf_str(&b, g_pending[i].pl[c].bytes);
         }
         json_buf_raw(&b, "]");
-        /* …AND HOW FAR EACH OF THOSE PAYLOADS GOT, one entry per `payloads` entry and in the same order, so a
-           reader lines the two up by index rather than by guessing. It is the column `survived` cannot have:
-           the ratchet saturates the moment ANY candidate lands intact, so `survived:16 survivedOf:16` beside
-           `reached:0` says a full-length run of SOMETHING arrived and nothing about WHICH — and for a derived
-           class the two candidates differ in nothing except these bytes, so that is the entire question.
-           `[14,0]` says the inert probe's bytes reached a sink and the breakout built from them never did;
-           `[14,9]` says the breakout travelled too and something after arrival is the problem. Those take
-           opposite work and `survived` alone reports them identically. */
+        /* `survivedBy`: how far each payload got, index-aligned with `payloads`. `survived` saturates once any
+           candidate lands intact, so only this says which: `[14,0]` is a probe whose bytes reached a sink and a
+           breakout that never did, `[14,9]` one where the breakout travelled too and something after arrival is
+           the problem. */
         json_buf_raw(&b, ","); json_buf_key(&b, "survivedBy"); json_buf_raw(&b, "[");
         for (int c = 0; c < g_pending[i].npl; c++) {
             if (c) json_buf_raw(&b, ",");
             snprintf(t, sizeof t, "%d", g_pending[i].pl[c].surv); json_buf_raw(&b, t);
         }
         json_buf_raw(&b, "]");
-        /* …AND WHICH OF THEM THE SEARCH'S OWN MEASUREMENT HAS SINCE WITHDRAWN, one entry per `payloads` entry
-           and in the same order as the two lists above it.
-           IT EXISTS BECAUSE THE WITHDRAWAL WOULD OTHERWISE BE A SILENT DROP, and a silent drop on this record
-           reads as the opposite of what happened. A withdrawn entry is never seeded, so it never raises
-           `tried` and its `survivedBy` column stays 0 — which is byte-for-byte the report of a breakout that
-           WAS run and got nowhere. Those are opposite verdicts: one says the page's code ate the candidate and
-           the search should keep looking, the other says the SOURCE cannot carry these bytes at all and the
-           search correctly declined to spend a document re-run on them. §@S names that tell exactly — a rung
-           whose absence and whose zero read alike — and it applies to a payload's row as much as to a count.
-           IT IS ALSO WHAT KEEPS `tried` AND `payloads` READABLE TOGETHER. solve.h says the probes are listed
-           because omitting them "would make the list disagree with the count"; a withdrawal makes them
-           disagree in the other direction, and this column is the arithmetic that reconciles it — `tried` is
-           the entries not marked here (plus any candidate this session resumed out of the cold tier, whose
-           bytes ride the flow and have no row).
-           THE PRODUCER STATES IT AND THE CONSUMER MAY NOT RE-DERIVE IT, for the reason `probes` gives one
-           field up: the constraint is a MEASURED table held on this search, a reader has no access to it, and
-           reading a withdrawal off the payload's SHAPE would be a view restating a producer fact it cannot
-           check. A `1` is a positive statement about the SOURCE's transform; `0` is a positive statement that
-           this spelling is still on the table. */
+        /* `withdrawn`: which payloads the search's own measurement has since withdrawn, index-aligned. A withdrawn
+           entry is never seeded, so it never raises `tried` and its `survivedBy` stays 0, which would otherwise
+           read exactly like a breakout that ran and got nowhere, the opposite verdict. It also reconciles `tried`
+           with `payloads` in solve.h's arithmetic. The producer states it because the table is held on the
+           search, out of the consumer's reach. */
         json_buf_raw(&b, ","); json_buf_key(&b, "withdrawn"); json_buf_raw(&b, "[");
         for (int c = 0; c < g_pending[i].npl; c++) {
             if (c) json_buf_raw(&b, ",");
@@ -2629,10 +2171,9 @@ char *solve_json_array(JSContext *ctx) {
                                !solve_delivered_ok(&g_pending[i].deliv, g_pending[i].pl[c].bytes)) ? "1" : "0");
         }
         json_buf_raw(&b, "]");
-        /* The parked entry carries the DECLARATION, not the envelope: a search that has not solved has no
-           vector to state and no PoC to reproduce, so `firesOn`/`cspBlocks`/`trustedTypes` would be claims
-           about a PoC that does not exist. What it does carry is the whole source declaration — the bytes a
-           candidate must survive AND how the attacker would have to reach the victim if one ever fires. */
+        /* A parked entry carries the declaration, not the envelope: an unsolved search has no PoC for `firesOn`,
+           `cspBlocks` or `trustedTypes` to describe. It carries the bytes a candidate must survive and how an
+           attacker would reach the victim if one fires. */
         {
             char dv[64];
             emit_delivery(&b, &g_pending[i], g_pending[i].root, cand_delivers(&g_pending[i], dv, sizeof dv));
@@ -2646,26 +2187,20 @@ char *solve_json_array(JSContext *ctx) {
 int solve_count(void) { return g_sinks_n; }
 
 void solve_free(void) {
-    /* THE SEAM IS GIVEN BACK FIRST, and it is an ownership fix rather than tidiness: the engine announces every
-       program evaluation for as long as a hook is installed, and everything below this line frees the store
-       add_pending writes into. A page that evals after the agent's release would be detected into freed
-       memory. NULL is the registration's own word for "no host is listening", which is exactly what this host
-       becomes here. */
+    /* The eval seam is given back first: the engine announces every evaluation while a hook is installed, and
+       everything below frees the store add_pending writes into, so a later eval would detect into freed memory.
+       NULL is the registration's word for "no host is listening". */
     JS_SetEvalSinkHook(NULL);
     for (int i = 0; i < g_pending_n; i++) {
         for (int c = 0; c < g_pending[i].npl; c++) free(g_pending[i].pl[c].bytes);
         free(g_pending[i].pl);
-        /* THE CONTEXT WITNESSES — one owned copy per distinct sink write, kept for the re-derivation a changed
-           delivery observation performs, so they live exactly as long as the search does. */
+        /* The context witnesses: one owned copy per distinct sink write, living as long as the search. */
         for (int c = 0; c < g_pending[i].nwit; c++) free(g_pending[i].wit[c]);
         free(g_pending[i].wit);
-        /* THE SEGMENT REFERENCE THE SEARCH STILL HOLDS — a search that never solved still has its probe's
-           re-injection blob, and the frozen chain under it is freed only when the last reference goes. */
+        /* The segment reference an unsolved search still holds; the frozen chain goes with its last reference. */
         if (g_pending[i].reinject) decide_blob_free(g_pending[i].reinject);
-        /* THE DEMANDS THAT PATH MADE OF AN ATTACKER'S PRINCIPAL — one owned name and one owned row array per
-           principal the path tested, captured beside the path and released with it. The ROWS' own strings are
-           concolic.c's to free (gate_pred_free routes to concolic_pred_release); the NAME and the array are
-           this file's. */
+        /* The principal demands: this file owns each name and row array, and the rows' strings are concolic.c's
+           (gate_pred_free routes to concolic_pred_release). */
         for (int c = 0; c < g_pending[i].npg; c++) {
             free(g_pending[i].pg[c].src);
             gate_pred_free(g_pending[i].pg[c].pred, g_pending[i].pg[c].npred);
