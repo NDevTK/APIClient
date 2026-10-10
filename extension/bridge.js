@@ -1,108 +1,57 @@
-/* bridge.js — the v2 HOST BRIDGE, the ONLY irreducible trusted-zone JS (SECURITY.md).
+/* bridge.js — the host bridge, the trusted-zone JS edge of the engine (SECURITY.md).
  *
- * Extracted OUT of offscreen-brain.js so the bridge and the (to-be-deleted) analysis logic are no
- * longer in one file. This is the platform edge the lexbor+quickjs engine CANNOT be, because the engine
- * is the UNTRUSTED WASM: it drives the qjs_step protocol, safe-fetches replies/chunks (the safeFetch
- * chokepoint the untrusted bundle must never bypass), persists the cross-session frontier to IndexedDB,
- * and JSON.parses the engine's ONE @RESULT. It installs self.astDispatch (+ self.kickHostPool) for the
- * offscreen to call. NO analysis LOGIC here — the C engine owns identity/dedup/detection; this is only
- * the network/IDB/renderer edges.
+ * The engine is the untrusted WASM, so this file is what it cannot be: it drives the qjs_step protocol,
+ * fetches replies and chunks through the safeFetch chokepoint, persists the cross-session frontier to
+ * IndexedDB, and JSON.parses the engine's one @RESULT document. It installs self.astDispatch and
+ * self.kickHostPool for the offscreen document. It holds no analysis logic: identity, dedup and detection
+ * belong to the C engine.
  *
- * NO ENGINE LIVES IN THIS REALM. This file used to `import("./lib/qjs/qjs.mjs")` and build every instance
- * with `createQJS()` right here, which made SECURITY.md's "confined to the WASM sandbox + a fixed set of host
- * edges" a convention rather than a boundary: the offscreen held the `Module` handle, `M.HEAPU8` was an
- * exported view of an untrusted instance's whole linear memory, and two instances in one realm were a
- * NAMESPACE. Every instance is now a RENDERER — renderer-host.js provisions it in an
- * `<iframe sandbox="allow-scripts">` whose unique opaque origin is cross-origin to the extension origin, which
- * is what lets Site Isolation put it in its own renderer process — and every qjs_* call is an `await`ed method
- * of `content.mojom.Renderer`, a mojom interface whose every parameter is declared and validated at both ends
- * of a MessagePort. The in-realm path is DELETED rather than kept beside it: while both
- * existed the sandboxed one served nothing and the boundary was a claim about a path production did not take.
- * The consequence to hold on to is that EVERY ABI call is now a suspension point at which another engine's
- * round can interleave, so anything that was atomic because it was two ccalls in a row is atomic here only if
- * it is written to be. */
-// The ROOT DOCUMENT NAME for each engine this offscreen owns — see the qjs_init call below. Only the roots are
-// named here: a document an engine CREATES (an iframe's child navigable, a popup) names itself "<parent>.<n>",
-// which is what lets HTML 4.8.5 create a child navigable inside the insertion steps without asking this zone.
+ * No engine lives in this realm. Each instance is a renderer that renderer-host.js provisions in an
+ * `<iframe sandbox="allow-scripts">` with a unique opaque origin, and every qjs_* call is an awaited method of
+ * `content.mojom.Renderer`, validated at both ends of a MessagePort. Every ABI call is therefore a suspension
+ * point at which another engine's round can interleave: two calls in a row are atomic only if written to be. */
+// The root document name for each engine this offscreen owns (see qjs_init below). A document an engine
+// creates (a child navigable, a popup) names itself "<parent>.<n>", so HTML §4.8.5 The iframe element can
+// create a child navigable inside the insertion steps without asking this zone.
 let nextDocumentId = 0;
-/* THE RUN LOG AND THE CRASH COUNT, DECLARED HERE SO THEIR ABSENCE IS THIS FILE NOT BEING LOADED and their
-   emptiness is no engine having finalized / no engine having aborted. crashBanner counts every abort path, and
-   rendererPoolProbe reads both (the log also answers the popup's GET_ENGINE_RUNS). The log holds page
-   ADDRESSES, so hostClear empties it and the crash count stays — see the Clear path for why those two differ.
-   ONE ROW PER RUN, AND A RUN IS AN INSTANCE, NOT A REPORT ABOUT ONE. Every record `linesToAnalysis` builds was
-   pushed here, and streamPartial builds one every 750 ms — so ONE engine on ONE page wrote a new row every
-   cadence, each carrying that instant's accumulated totals and each indistinguishable from a run that had
-   ENDED. Measured on a local fixture: 77 rows for one page, of which the popup rendered the last 8 as eight
-   separate runs of one URL that had each learned ~198 endpoints. The counts were real and the thing they were
-   counts OF did not exist. A run therefore owns exactly one row (`eng._log`), a partial WRITES that row rather
-   than appending beside it, and `run` on the record says which of the three states the row is reporting — so
-   a snapshot of a run in progress can never be read as a run that finished. */
+/* The run log and the crash count, declared at load so that their absence means this file did not load, an
+   empty log means no engine finalized, and a zero means no engine aborted. crashBanner counts every abort
+   path; rendererPoolProbe reads both, and the log also answers the popup's GET_ENGINE_RUNS. The log holds page
+   addresses, so hostClear empties it; the crash count holds none and survives a clear.
+   One row per run: a run owns exactly one row (`eng._log`), a partial snapshot overwrites that row rather than
+   appending, and the record's `run` field says which state the row reports, so a snapshot of a run in
+   progress is never read as a finished run. */
 self._engineLog = [];
 self._engineCrashOccurred = 0;
-/* AND THE LEVEL-1 ORDER ITSELF — the reading `_level1Record` writes at the end of every scheduler round, and
-   the first observable this zone has ever had of the order it composes. §scheduler's Level-1 ("the host orders
-   live per-page engines by best-flow weight… ranked by a `frontierWeight` estimator") is composed ENTIRELY
-   here: no engine can see another engine, so no result document can carry it and the engine's own `_wfq`
-   census — which is Level-2, within one document — is silent about it by construction. Both Level-1 ranking
-   defects this session were found by READING this file rather than by reading a number, because there was no
-   number: `frontierWeight(FRONTIER_UNSERVED)` was frozen at the constant 1.0 for every waiting document, and
-   the cold walk DELETED the weight of every row whose address a live document held. A rank frozen at a
-   constant is invisible from the winner alone — it is the SPREAD across the ranked set that says it, which is
-   why this record carries extrema and populations rather than the pick.
-   DECLARED AT LOAD, LIKE THE LOG ABOVE AND FOR THE SAME THREE-WAY REASON. `undefined` is this file not having
-   loaded in this document (the relay broken); `null` is the honest statement that no scheduler round has
-   completed in this session; an object is a reading. Filling it on first use would collapse the first two, and
-   a zeroed skeleton would collapse all three into an order that looks taken and was not.
-   A CLEAR DOES NOT TOUCH IT, WHICH IS THE SAME SPLIT `_engineCrashOccurred` IS ON. The run log goes because it
-   is a list of page ADDRESSES; this record holds no address and no identity at all — populations, a 0/1 state
-   and weights — so there is nothing in it a wipe is about. It also corrects itself without being cleared: the
-   Clear empties the pool, the loop breaks, and that round's own `finally` records the emptied pool. */
+/* The Level-1 order: the reading `_level1Record` writes at the end of every scheduler round. Level 1 (the host
+   ordering live per-page engines by best-flow weight) is composed entirely in this zone, since no engine can
+   see another, so no result document can carry it. The record carries extrema and populations across the
+   ranked set rather than only the pick, because a rank frozen at a constant is visible only in the spread.
+   Declared at load for three states: `undefined` is this file not loaded, `null` is no round completed this
+   session, an object is a reading. A clear does not touch it: it holds no address or identity, and the
+   round after a clear records the emptied pool. */
 self._level1 = null;
 
-/* A URL with an opaque HOLE is not concretely fetchable (used to gate reply/chunk fetch). Asked in
-   lib/callsite-url.js, in endpoint.c's own hole grammar: the `/\{[a-z]*\}/` that stood here answered NO for
-   every shape this engine emits (a digit, a dot or a paren in the name defeated it), so the gate matched `{}`
-   and `{id}` and let `{orphan3.arg0.replace()}` through to safeFetch as a percent-encoded literal path against
-   the page's own origin — a request for an address the page's code never determined.
-   Endpoint IDENTITY (hole-normalization, shape/concrete collapse) is the ENGINE's now — the host's
-   normHoles/SEG_HOLE/pathSegs/mergeCallsites/dedupShapeConcrete were DELETED. */
+/* Whether a URL has an opaque hole, so it is not concretely fetchable (gates reply and chunk fetch). Asked
+   through lib/callsite-url.js in endpoint.c's own hole grammar, so every hole shape the engine emits is
+   recognised. Endpoint identity (hole normalization, shape/concrete collapse) belongs to the engine. */
 const hasHole = (s) => astAddressHasHole(s || "");
 
-/* Map the engine's ONE structured `@RESULT <json>` line -> the analysis object the brain consumes.
-   The ENGINE builds + DEDUPS the whole result (endpoints/params/headers/body, @S sinks, page errors,
-   park recipes) and JSON.stringifies it; the host does ONE JSON.parse and relays — NO per-line
-   @H/@Q/@HDR/@BODY parsing, NO host identity/dedup (all DELETED, the engine owns it like a browser).
-   @E lines (host-side protocol errors) are still surfaced so a zero-result never fails silently.
-
-   `outcome` IS THE CONTRACT, STATED BY THE CALLER, AND IT TRAVELS ON THE RESULT AS `_run`. It used to be the
-   boolean `expectResult` — "must there be a result document?" — and one bit was answering two different
-   questions, which is how both of them came out wrong. A finalize and a partial snapshot both READ the one
-   result document the engine builds, so its absence there is a broken engine↔JS contract; a CRASH record and
-   a document with nothing to run have none by construction, and those two are NOT the same thing. Inferring
-   the label from "is there a document" made a page with no scripts log as an ENGINE CRASH, and made a crash
-   that happened to leave an unconsumed partial behind log as a COMPLETE run with counters. So the caller says
-   which of the four it is, once, and every consumer downstream reads the same word:
-
-     "partial"        — a mid-run snapshot (qjs_emit_partial). A document is required. The findings are REAL
-                        observations of the running page; the run has not ended.
-     "complete"       — the run ended and the engine answered with its result document. A document is required.
-     "crashed"        — the instance aborted. There is usually no document; there IS one when the abort landed
-                        after a partial was printed and before this zone consumed it, and that document is
-                        still result.c's composition and is asserted like any other.
-     "nothing-to-run" — no HTML and no code, so no engine ran. No document, and NOT a crash.
-
-   WHAT A CRASH INVALIDATES IS THE RUN, NOT THE OBSERVATIONS. The findings this function carries were composed
-   by the engine BEFORE the abort, out of an already-deduped record, and they are already in the cumulative
-   moat (streamPartial merges every snapshot as it takes it — see `_engineCrashed`'s deletion at engineFinalize
-   for what the old "we discard them all" comment was claiming while that ran). Deleting them here does not
-   un-observe them; it only hides them from the DOCUMENT that learned them, which is a false clean bill on the
-   one surface a user reads. What the crash does invalidate is every claim of COMPLETENESS: the cost counters
-   (which is why the log record still carries none), the park residue, and this run's right to overwrite the
-   cross-session frontier entry. Those are gated on `_run`, at their own sites. */
-/* WHAT THE ENGINE GUARANTEES IN THAT DOCUMENT — solver/result.c's composition, field for field. Asserted at
-   the seam rather than trusted, because every one of these is read below and a missing one becomes an EMPTY
-   FINDING SET reported to the user as a clean page. The sibling fields the brain reads that the engine does
-   NOT emit are host-side empties (see the map) and are not part of this. */
+/* Map the engine's one `@RESULT <json>` line to the analysis object the offscreen consumes. The engine builds
+   and dedups the whole result (endpoints, params, headers, bodies, @S sinks, page errors, park recipes); this
+   zone does one JSON.parse and relays. @E lines (host-side protocol errors) are surfaced so a zero result
+   never fails silently.
+   `outcome` is the caller's statement of what this record is, and travels on the result as `_run`:
+     "partial"        — a mid-run snapshot (qjs_emit_partial); a document is required.
+     "complete"       — the run ended and the engine answered with its result document; a document is required.
+     "crashed"        — the instance aborted; usually no document, but one is present when the abort landed
+                        after a partial was printed and before this zone consumed it, and it is asserted as usual.
+     "nothing-to-run" — no HTML and no code, so no engine ran; no document, and not a crash.
+   A crash invalidates the run's claims of completeness, not its observations: findings composed before the
+   abort are already merged into the cumulative record and are still relayed. The cost counters, the park
+   residue and the right to overwrite the cross-session frontier entry are gated on `_run` at their sites. */
+/* The contract solver/result.c composes, asserted at the seam because every field is read below and a missing
+   one would become an empty finding set reported as a clean page. */
 function assertResultDocument(r) {
   DCHECK(r && typeof r === "object" && !Array.isArray(r),
          "the engine's @RESULT line is not a JSON object — result_json emits one document per session");
@@ -115,66 +64,31 @@ function assertResultDocument(r) {
   DCHECK(Array.isArray(r.pageErrors),
          "the engine's result document carries no pageErrors array — it is the engine's own record of what " +
          "went wrong while running the page, and the analysis reports it as the run's resolverErrors");
-  /* THE OTHER HALF OF THAT RECORD, AND IT IS WHAT MAKES AN EMPTY `pageErrors` READABLE. result.c emits both
-     arrays from the SAME snprintf and they are disjoint: a message that still stands anywhere is in
-     `pageErrors`, a message this engine reported and then took back — HTML §8.1.6.4
-     "HostPromiseRejectionTracker(promise, operation)" step 7.4, a bundle attaching `.catch` in a later task —
-     is in this one, and a message in neither was never recorded. Without it, "the page raised nothing" and
-     "the page raised errors and handled every one of them" are the same empty array, which is §Testing's
-     absent-count-versus-zero-count with names instead of numbers. Asserted rather than defaulted for the
-     reason every field on this seam is: a `|| []` here would make the engine's retraction edge going silent
-     look exactly like a page that never retracted anything. */
+  /* `pageErrorsRetracted` is disjoint from `pageErrors` (one snprintf emits both): a message the engine
+     reported and then took back — HTML §8.1.6.4 HostPromiseRejectionTracker(promise, operation), a handler
+     attached in a later task — is here, and a message in neither was never recorded. It is what tells "the page
+     raised nothing" from "the page handled every error it raised", so it is asserted, never defaulted. */
   DCHECK(Array.isArray(r.pageErrorsRetracted),
          "the engine's result document carries no pageErrorsRetracted array — result.c composes it beside " +
          "pageErrors in the same snprintf, so its absence is that composition changed under this reader and " +
          "a page whose rejections were all handled would be indistinguishable from one that raised nothing");
-  /* AND WHOSE THROW EACH MESSAGE WAS — ORTHOGONAL to the pair above rather than a third state of it, so a
-     message in this array is ALSO in exactly one of them. A browser component that forks N feasible
-     completions over unknown external input reaches, on one of them, a spec step whose answer IS a throw
-     (Web IDL §3.2.15 Interface types ends "Throw a TypeError."); that throw is correct, is a world this engine
-     CHOSE to run, and is EVIDENCE — but it is not a page error of the kind `pageErrors` exists for, and until
-     this array the document could not say so. What that cost is what this relay does next: an engine-minted
-     exploration TypeError was rendered to a person as one of their own page's errors.
-     ASSERTED RATHER THAN DEFAULTED, like every field on this seam. A `|| []` here would make an engine that
-     stopped declaring its own throws look exactly like a page all of whose errors were its own — which is the
-     defect this array exists to end, restored one layer up. */
+  /* `pageErrorsExplored` is orthogonal to the pair above: each message in it is also in exactly one of them.
+     It marks throws the engine itself chose to explore — a forked completion over unknown input whose spec
+     step answers with a throw (Web IDL §3.2.15 Interface types: "Throw a TypeError.") — so they are not shown
+     to a person as their page's own errors. Asserted, never defaulted. */
   DCHECK(Array.isArray(r.pageErrorsExplored),
          "the engine's result document carries no pageErrorsExplored array — result.c composes it beside " +
          "pageErrors and pageErrorsRetracted in the same composition, so its absence is that composition " +
          "changed under this reader and every engine-minted exploration throw would be reported to a person " +
          "as an error their own page raised");
-  /* THE COST COUNTERS ARE ONE FIELD, because result.c writes them in ONE snprintf — there is no arm in
-     which five arrive and three do not. So the contract is all-of-them, and asserting a subset of a set that
-     is emitted atomically is not a weaker check, it is a check on the wrong thing: it passes for exactly the
-     document shapes it was meant to reject. `_switches` alone was asserted here while the other six were read
-     below with a `|| 0` beside each, which is the file's own recorded defect (see `_orphans` at the return)
-     re-spelt: a name the engine stops writing becomes a zero the diagnostic reports forever. The seam's live
-     table and its cumulative history are two of them and NOT one field named twice — result.c says why.
-     AND THE LAST FOUR ARE NOT COSTS, WHICH IS WHY THEY ARE HERE RATHER THAN MERELY WELCOME. They are what
-     makes an EMPTY securitySinks array readable: whether this run ever acquired attacker input at all, whether
-     a code-execution sink ever ran, whether anything tainted arrived at one, and whether an arrival was
-     DECLINED because the check standing on it was unforgeable. Those are four different pages and one empty
-     array was the evidence for each. A missing one here is the whole split gone, so it is asserted with the
-     rest and never defaulted — the same rule that put the other eight in this loop.
-     AND THE SIX CROSS-INSTANCE ONES ARE IN IT BECAUSE THE RULE ABOVE IS NOT A RULE ABOUT WHAT THIS ZONE
-     HAPPENS TO READ. This loop asserted thirteen of the nineteen counters result.c writes in that one
-     snprintf, and the six it left out — the routed-delivery pair and §9.3.3 step 8's four task ends — are
-     precisely the newest, i.e. the ones the composition most recently changed to add. That is the "check on
-     the wrong thing" this comment already names, arriving by omission instead of by design: a subset that
-     tracks the fields somebody thought of asserts the document as it was, and the next field added to
-     result.c joins the unchecked half by default. `engine/route.mjs` reads all six and asserts them, so
-     nothing here is asserting a name with no writer; what this adds is that the EXTENSION — the consumer
-     that runs in production, where route.mjs never runs — notices the same break.
-     AND THIS LIST'S TWO HALVES SHIP AT DIFFERENT TIMES, WHICH IS A SHAPE THE PRODUCER/CONSUMER RULE DOES NOT
-     COVER AND WHICH NOTHING ELSE IN THE TREE STATES. §Architecture's rule — a consumer never defaults a
-     producer's field, it asserts it — assumes both halves arrive together. Here they do not: this file is
-     JavaScript and is live the moment it is pushed, while the field it asserts exists only in a wasm somebody
-     has to BUILD. So adding a counter to result.c and to this list in one commit makes the extension hard-fail
-     against every artifact that already exists, until the next build. The assert is still right and softening
-     it would be the defect; what was missing is that its MESSAGE named only the other cause, so a reader hit
-     it and went looking for a change to result.c that was already there. The message now names both and says
-     which to check first. A JS reader landed ahead of its C writer is not a broken contract, it is a
-     SCHEDULED one — and the only thing that makes it dangerous is a crash that describes it as the other. */
+  /* The cost counters and the @S arrival census are emitted by result.c in one snprintf, so the contract is all
+     of them and a subset check would pass the very shapes it should reject. The @S group (`_sourceReads`,
+     `_sinkReached`, `_sinkTainted`, `_sinkSuppressed`) is what makes an empty securitySinks readable: whether
+     attacker input was acquired, whether a sink ran, whether tainted data arrived, and whether an arrival was
+     declined by an unforgeable check.
+     This JS ships when pushed while its C writer ships only when built, so a counter added to both in one
+     commit fails here against every older artifact until the next build. The message names that cause first;
+     the assert stays, since a default would turn a name the engine stops writing into a permanent zero. */
   for (const k of ["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun", "_unitsDone",
                    "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked",
                    "_routedDelivered", "_routedRefused", "_routedTasksFired",
@@ -200,27 +114,12 @@ function assertResultDocument(r) {
            "OBSERVABLE that the single BFS context-switches, forks and pumps jobs rather than running its " +
            "flows FIFO, and the only thing that tells an empty finding set from a run that never looked");
   }
-  /* THE ORDER THE FRONTIER WAS IN — solver/result.h's `_wfq`, and the FIRST scheduler-ordering number this
-     zone has ever been handed. It was emitted only by `run_scheduler`, the smoke driver's loop, which
-     `qjs_step` does not call: so every ordering measurement this project has quoted came from the one host
-     that can never hold more than one document, and a Level-1 rank frozen at a constant had no row anywhere
-     that could have shown it. Two of those defects were found by reading the code, which is what happens when
-     the instrument is not on the shipped path.
-     THE SHAPE IS ASSERTED AND THE NAMES ARE NOT, WHICH IS A DELIBERATE DIFFERENCE FROM THE LOOP ABOVE. That
-     loop lists twenty-one names because this zone READS each of them onto the run record one field at a time;
-     this object is relayed WHOLE (see the record below and popup.js, which renders whatever rows it carries),
-     so this zone has no name that could be broken and a hand-copied list here would be a third copy of
-     solver/flow.h's field list to keep in step — the hand-picked list §Browser-half warns about. What this
-     consumer depends on is exactly what is checked: it is an object, every value in it is a finite number, and
-     it carries `members`.
-     AND `members` IS THE ONE ROW THAT IS ALWAYS THERE, BECAUSE IT IS WHAT SEPARATES THREE FACTS THAT WOULD
-     OTHERWISE BE THE SAME ZEROES. A census over an EMPTY frontier — which is what `qjs_result` composes, since
-     a session answers DONE by draining or by parking and neither leaves members standing — carries `members: 0`
-     and NO term rows at all, because rendering `valMin: 0, wTop: 0` there would fabricate readings of an order
-     that does not exist and a reader would be told "no term orders this frontier" about a run that drained.
-     So: no `_wfq` is a BROKEN CONTRACT, `{members: 0}` is an EMPTY FRONTIER, and a full object is a READING.
-     The biconditional is asserted rather than described, because the absence of the rows is a POSITIVE
-     statement and the only thing that makes it one is that nothing may omit them for any other reason. */
+  /* `_wfq` (solver/result.h) is the order the frontier was in. Its shape is asserted and its names are not:
+     the object is relayed whole and popup.js renders whatever rows it carries, so a name list here would be a
+     third copy of solver/flow.h's fields. `members` is always present: `{members: 0}` with no term rows is an
+     empty frontier (a session ends by draining or parking, leaving no members), a full object is a reading,
+     and no `_wfq` is a broken contract. The rows-iff-members biconditional is asserted so the absence of rows
+     stays a positive statement. */
   DCHECK(r._wfq && typeof r._wfq === "object" && !Array.isArray(r._wfq),
          "the engine's result document carries no _wfq census — solver/result.c composes the WFQ's own " +
          "ordering (solver/flow.h's WfqCensus) into that field on every document it builds, partials " +
@@ -243,52 +142,17 @@ function assertResultDocument(r) {
            "the engine's WFQ census carries a non-finite `" + k + "` — every row of it is a count, a service " +
            "notch or a weight, and a NaN reaching a reader makes every comparison against it false, which is " +
            "the same silent failure §engineRecordFacts asserts one level up for the Level-1 weight");
-  /* AND WHAT THAT ORDER WAS DENOMINATED IN — solver/quantum.h's `_quantum`, and it is asserted HERE, between
-     the order and the four censuses, because that is what it qualifies rather than a place in a list.
-     IT IS NOT A CENSUS AND MUST NOT JOIN THEIR LOOP, WHICH IS THE WHOLE REASON IT IS THREE NAMED ASSERTS. Every
-     row of `_wfq`, `_cold`, `_heap`, `_swap`, `_forkAt` and `_absent` is a FINITE NUMBER and is checked by one
-     generic pass that asks exactly that and nothing about its KIND — most of them read an instant, `_absent`
-     and the larger half of `_cold` are lifetime counts, and each composer states which at the composer
-     because that is the only place the accessor deciding it is in view. The generic pass is right for all of
-     them and would be the defect here: `_quantum` is a
-     constant property of the HOST and the BUILD, its `measure` is a STRING and its `isCpu` is a BOOLEAN, and a
-     loop that only knows how to say "number" would either reject the object or force the producer to spell a
-     yes/no as 0/1 — at which point it silently becomes a sixth census and the one fact it carries is gone.
-     WHY THIS ZONE NEEDS IT AT ALL, WHICH IS NOT DIAGNOSTIC POLISH. On a host with no CPU clock — and the
-     engine's own realm is exactly that host — the cooperative slice AND solver/engine.c's `flow_age_running`
-     charge are billed in WALL TIME.
-     THE REASON THIS CLAUSE USED TO GIVE IS RETIRED BY THIS EXTENSION'S OWN CONFIGURATION, AND IS KEPT IN ITS
-     OWN WORDS BECAUSE THE DataCloneError A READER MEETS INVITES IT AGAIN. It read: "an opaque origin, which is
-     neither the extension origin nor ever isolated, and a shared-memory transfer needs one of those two, so no
-     watchdog thread can be handed the memory it would need". `manifest.json` now ships COOP `same-origin`
-     beside COEP `require-corp` and `renderer-host.js` delegates `allow="cross-origin-isolated"` to the engine's
-     frame, so that realm IS isolated — renderer.html PERFORMS the serialization once and aborts if a realm
-     that STATES the capability is refused it, which is the measurement rather than this sentence. AND THE
-     WALL DENOMINATION IS UNCHANGED, WHICH IS THE PART THAT MATTERS HERE: a grant is not a clock, this link
-     carries no shared memory for a thread to store through, and solver/quantum.c records that the population
-     such a thread would close was already closed by `133f190`'s dispatch-periodic raise while the one still
-     open answers no poll however the request is raised. So the caveat below stands on `isCpu` and on nothing
-     about isolation. That charge is a comparison BETWEEN flows, so a
-     descheduling the OS chose lands on whichever flow was running, moves its rank alone and re-picks: two runs
-     of ONE build over ONE page take different frontier orders, and every census under that order differs with
-     nothing about the tree differing. A person comparing two runs in the popup would read that as a change in
-     the engine. §NO BOUNDS and §scheduler's razor forbid both cures (drop the quantum and it drives to
-     completion; bound the slice in steps and it is a cap), so the variance stays and the document NAMES it.
-     THE CAUSE IS THE LINK AND NOT THE REALM, and this caveat has now rested on two wrong steps in turn, both
-     kept because the browser's own DataCloneError names isolation and invites them. It rested first on the
-     flag alone — `never crossOriginIsolated, so it cannot hand a watchdog thread the shared memory` — and
-     then on the origin: `an extension-origin document transfers shared memory while reading
-     crossOriginIsolated === false, so isolation is one of TWO routes; this realm has neither`. The first
-     measurement is real and the second conclusion is now false: the engine's frame holds the capability by
-     BOTH halves of HTML §7.2.2.6 "Script settings for Window objects"' conjunction. What is true is smaller
-     and is about the BUILD — `engine/build.mjs` links no `-pthread`, so this engine's linear memory is an
-     ordinary ArrayBuffer and there is no second thread anywhere in the picture. A capability is confirmed by
-     ATTEMPTING THE ACT rather than by reading either getter, and renderer.html is where that act is performed.
-     THREE FIELDS AND ALL THREE ASSERTED, because each answers a question the other two cannot: `isCpu` is
-     whether the caveat applies at all, `measure` is what it was billed in instead, and `sliceMs` is how coarse
-     the slicing was. Never defaulted — `quantum_json` reads nothing but compile-time constants of its own
-     branch, so there is no instant and no host at which it is legitimately absent, and a missing one has the
-     same two causes in the same order as a missing counter above. */
+  /* `_quantum` (solver/quantum.h) says what the `_wfq` order was billed in, so it is asserted here between the
+     order and the censuses it qualifies. It is not a census: `measure` is a string and `isCpu` a boolean, so
+     the generic finite-number pass below would reject it or force a 0/1 encoding; hence three named asserts.
+     On a host with no CPU clock (the engine's realm) the cooperative slice and solver/engine.c's
+     `flow_age_running` charge are billed in wall time, so an OS descheduling moves one flow's rank and two runs
+     of one build over one page can take different frontier orders; bounding the slice in steps would be a cap,
+     so the variance stays and the document names it. The cause is the build, not isolation:
+     engine/build.mjs links no `-pthread`, so linear memory is an ordinary ArrayBuffer with no second thread,
+     even though the engine's frame is cross-origin isolated (renderer.html verifies that by attempting it).
+     `isCpu` says whether the caveat applies, `measure` what was billed instead, `sliceMs` how coarse the
+     slicing was. `quantum_json` reads only compile-time constants, so none is ever legitimately absent. */
   DCHECK(r._quantum && typeof r._quantum === "object" && !Array.isArray(r._quantum),
          "the engine's result document carries no _quantum — solver/quantum.c's quantum_json composes it into " +
          "every document result.c builds, partials included, and it is what says whether the `_wfq` ordering " +
@@ -310,35 +174,15 @@ function assertResultDocument(r) {
          "the engine's _quantum carries no positive `sliceMs` — it is solver/engine.h's ENGINE_QUANTUM_MS, a " +
          "compile-time constant of the artifact, so a zero or a NaN is the composer having lost it rather " +
          "than a host that shares its thread infinitely finely");
-  /* THE THREE SUBSYSTEM CENSUSES, THE FRONTIER'S PROVENANCE, AND THE SILENCE — solver/result.h's `_cold`,
-     `_heap`, `_swap`, solver/decide.h's `_forkAt` and solver/absent.h's `_absent`. The first four arrive for
-     the reason `_wfq` did and it is the same defect at four
-     times the size: every one of them was printed ONLY by `run_scheduler`, the smoke driver's loop, which
-     `qjs_step` does not call — so what the frontier is made of, what the runtime and the C allocator under it
-     hold, what a context switch costs, and which predicate is growing the frontier were computed on every
-     census of every production run and readable off NONE of them. Sixty-nine numbers, and the subsystems they
-     measure are precisely the ones that only do their real work HERE: the pager pages under RAM pressure in
-     the extension, the realm ceiling is reached on real pages, a delta chain accumulates over a real frontier.
-     THE FIFTH IS A DIFFERENT DEFECT AND IS THE REASON IT IS IN THIS LOOP RATHER THAN BESIDE IT. `_absent` was
-     not computed-and-unprinted; it was NOT COMPUTED AT ALL, because what it measures is an arm of
-     solver/absent.c whose whole observable effect is that a page's `if (window.EventSource)` takes its false
-     arm. An unbuilt web API a page CONSTRUCTS throws, and the throw reaches a person through `pageErrors`;
-     one a page FEATURE-DETECTS answers `undefined`, and every endpoint and every sink behind that guard is
-     unreachable with nothing anywhere saying so. So this row is what tells a run that learned nothing because
-     the page had nothing to learn from a run that learned nothing because this engine answered its questions
-     with silence, and those were one document until it existed.
-     ONE LOOP AND NO NAME LIST, WHICH IS THE SAME SPLIT `_wfq` MAKES ONE BLOCK UP. The counters above are named
-     because this zone READS each of them onto the run record one field at a time; these are relayed WHOLE and
-     rendered generically by popup.js, so a row added to a census reaches a human with nothing edited here and
-     a hand-copied list would be a second copy of solver/result.c's format string to keep in step. What this
-     consumer depends on is exactly what is checked: it is an object and every value in it is a finite number.
-     AND THE EMPTY SHAPE IS A DIFFERENT FACT FOR THE FOURTH THAN FOR THE FIRST THREE, so it is asked
-     separately rather than waived. `_cold`, `_heap` and `_swap` read the frontier, the runtime and the
-     allocator — all of which exist at every instant a document can be composed at — so EVERY row is always
-     present and an empty object is a broken contract with no second reading. `_forkAt` is a table of the
-     predicates that actually forked, so `{}` is the positive statement THIS DOCUMENT NEVER FORKED, which is a
-     real and loud answer on a page whose bundle should have branched on opaque input. Collapsing those two
-     into one check would make the loudest finding in this block indistinguishable from a relay that broke. */
+  /* The subsystem censuses: solver/result.h's `_cold`, `_heap`, `_swap`, solver/decide.h's `_forkAt` and
+     solver/absent.h's `_absent`. `_absent` counts standard-owned globals the page feature-detected and this
+     engine answered with `undefined` (solver/absent.c); it separates a page with nothing to learn from one whose
+     guards took their false arm because an API is unbuilt.
+     One loop and no name list, as for `_wfq`: these are relayed whole and rendered generically by popup.js, so
+     what this consumer checks is that each is an object whose values are finite numbers or histograms.
+     The empty shape differs: `_cold`, `_heap`, `_swap` and `_absent` read state that exists at every instant, so
+     `{}` is a broken contract (asserted after this loop); `_forkAt` lists predicates that forked, so `{}` is
+     the positive statement that this document never forked. */
   for (const k of ["_cold", "_heap", "_swap", "_forkAt", "_absent"]) {
     DCHECK(r[k] && typeof r[k] === "object" && !Array.isArray(r[k]),
            "the engine's result document carries no " + k + " census — solver/result.c composes it into " +
@@ -347,90 +191,20 @@ function assertResultDocument(r) {
            "(extension/lib/qjs/qjs.mjs.build.json's `head`), then whether result_json's composition changed " +
            "under this seam. NEVER SOFTEN IT INTO A DEFAULT — these are the only readings this zone has ever " +
            "been handed of what the pager, the heap and the delta chains are doing on a real page");
-    /* A ROW IS A NUMBER OR A HISTOGRAM, AND THE SECOND SHAPE IS NOT A RELAXATION — it is a shape the engine
-       already emits and this check did not know about. `_cold` carries per-arm histograms of solver/step_unit.h's
-       ladder (`stepUnits`, the members standing in each arm; `stepUnitRuns`, the steps this instance has run
-       through each), and a histogram is exactly what a bucket-per-arm reading has to be: a flat number could
-       only carry one arm, and one row per arm would put solver/step_unit.h's list into this file, which is the
-       second copy the "ONE LOOP AND NO NAME LIST" paragraph above refuses. So the contract is stated for both
-       shapes and NEITHER is defaulted: a histogram's own values are asserted finite one level down, so a NaN
-       inside one is caught exactly as a NaN beside one is.
-       IT IS ASSERTED AND NOT WAIVED because the failure it prevents already happened in the other direction:
-       the engine gained the first of these rows and this loop, which knew only about numbers, would have
-       aborted the trusted zone on EVERY document the moment a build shipped it — a cross-boundary diff whose
-       JS half is live on write and whose C half is live only after a build (CLAUDE.md §A-CROSS-BOUNDARY-DIFF).
-       AN EMPTY HISTOGRAM IS NO LONGER REFUSED HERE AT ALL, AND THE ARGUMENT FOR REFUSING ONE IS KEPT RATHER
-       THAN DELETED BECAUSE IT IS SOUND AND A READER WILL RE-DERIVE IT. It read: where a table's arms are an
-       `X()`-macro expansion every arm is emitted including the zeroes, so `{}` is the composer having stopped
-       listing them — true of `_cold`'s five over solver/step_unit.h's STEP_UNITS, of the `cowStateAsks`/
-       `cowStateMade` pair over solver/cow.h's COW_STATE_KINDS, and of solver/absent.c's members; false of
-       `_heap`'s `childRealmRefSites`, whose keys browser/core/frame/navigable.h states are DERIVED and whose
-       `{}` is that census's positive statement THIS RUN HOLDS NO LIVE CHILD REALM. The refusal was therefore
-       written with an EXEMPTION keyed on the census name, and a hand enumeration of which tables are
-       macro-keyed as its justification.
-       THE ENUMERATION IS WHAT ROTTED, AND IT ROTTED IN THE SAME PREDICATE, AT THE ROW IT DID NOT COVER —
-       which is this paragraph's own NAMED RESIDUAL arriving a SECOND time rather than a fresh defect. The
-       clause above counted `_swap`'s TWO histograms and `seven of the eight tables on this document`, and
-       solver/result.c's `result_swap_json` now splices THREE: `cowHostRecAsksBySite` landed as "the third half
-       taken one level further down on the one row where the aggregate ran out of answers", and it is keyed on
-       CALL SITES rather than on any macro list. Its composer says so in its own words — "A SITE THAT HAS NEVER
-       BEEN REACHED IS ABSENT RATHER THAN 0, because this is a census of asks and a zero row would be a claim
-       about a call site's reachability that an ask count is not entitled to make; `{}` is the positive
-       statement that no component record was reached under a running flow at all."
-       WHAT IT COST, MEASURED, and it is the same cost as the first time because it is the same predicate: this
-       DCHECK runs inside assertResultDocument, which every partial goes through, so the trusted zone
-       DESTROYED THE RESULT DOCUMENT OF EVERY PAGE THAT NEVER REACHED A `hostRec` CAPTURE SITE UNDER A RUNNING
-       FLOW. Observed at an installed artifact against this file at `origin/main`: the scheduler read
-       `alive:false driving:false kicksRefused:3` with `diedOf` a @WHY naming an EMPTY `cowHostRecAsksBySite`,
-       after the renderer had been reserved and rooted for the document — so the page was seated and the zone
-       killed the run at its first census. It is a DEV-ONLY abort (extension/check.js gates DCHECK on
-       APICLIENT_DEV), which makes it worse for this project rather than better: §Testing makes the DCHECKs the
-       gate, so what it destroys is every dev measurement of every page while release proceeds in silence.
-       SO THE REFUSAL GOES INSTEAD OF BEING NARROWED, AND THE REASON IS THAT IT WAS ALWAYS THE THIRD COPY OF A
-       QUESTION TWO BETTER INSTRUMENTS ALREADY ASK WITH BOTH HALVES IN ONE HAND. Narrowing it means naming the
-       derived-key rows here, which is a second copy of a PRODUCER fact and is exactly how the enumeration
-       above came to be wrong twice. The two that survive take their field set FROM THE COMPOSER'S OWN FORMAT
-       STRING and therefore cannot rot the way a hand list does: engine/build.mjs's `cowHostRecSiteReading`
-       checks the empty object AS A CLAIM — "`{}` … is correct exactly when `cowStateAsks.hostRec` is 0, which
-       the same sum check decides, with no separate arm to get wrong" — which is strictly stronger than an
-       emptiness demand and cannot fire on a correct `{}`; its sibling `cowStateReading` requires the
-       macro-keyed pair's two key sets be IDENTICAL; `coldFields()` throws on either `_cold` arm going absent;
-       and solver/cow.c's `cow_host_rec_sites` DCHECKs the same partition over the COUNTERS. build.mjs's half
-       is also the one that survives a release build, where both C asserts are compiled out. A zone that
-       cannot see a producer's key-set rule may not be the place that enforces it, and the copy that ABORTS on
-       the producer's documented answer is the copy to remove — CLAUDE.md §THE-COROLLARY-IS-THE-MORE-USEFUL-
-       HALF, where the diff to prefer is the invariant that makes a silent failure loud rather than the
-       predicate rewritten at one site.
-       AND `PRESENT THREE TIMES` IS AN OVER-CLAIM, WHICH THE COMMIT THAT REMOVED THE REFUSAL MADE AND WHICH IS
-       CORRECTED HERE RATHER THAN IN A REPORT, because the sentence above is the one a reader checks and an
-       absolute takes the true part of its paragraph down with the false. It is true of `_cold` and of both
-       `_swap` rows, named one paragraph up and each verified. It is NOT true of `_absent`:
-       `git grep -n '@ABSENT' -- engine/build.mjs` answers NOTHING, so that census has no document-side reader
-       at all, and solver/absent.c's own guards — its `_Static_assert` over the bucket names and its per-row
-       `reads`-equals-the-sum identity — are COUNTER-side and are compiled out in release exactly as cow.c's
-       are. So the removal is narrower than what stood here and the gap is named rather than papered over.
-       NAMED RESIDUAL — WHAT IS NOT COVERED: `_absent`'s per-member bucket tables (solver/absent.c's
-       `KEY_ENTRY`, whose four arms are a fixed list and whose count that file asserts at COMPILE time) no
-       longer have any check on this document that they are non-empty, in any build. Nothing is claimed about
-       whether one can BE empty: a member is on that census because it was read, so every route that puts a
-       row there raises a bucket, and the state may well be unreachable — which is a statement about
-       absent.c's own arms and not one this zone is entitled to make on a hand list of producer facts. WHAT
-       THE NEXT DIFF BUILDS: an `@ABSENT` reader in engine/build.mjs, taking its required row set from
-       `absent_json`'s own format string through `censusRowSet` exactly as `coldFields`, `heapFields` and
-       `swapFields` do, and stating the per-member partition identity the composer already computes. That is
-       where the other three live, it is the half that survives a release build, and a field set derived from
-       the composer cannot rot the way the enumeration above rotted. HOW ITS ABSENCE WOULD SHOW: a build's
-       @ABSENT line reports a member whose bucket table is `{}` while the member is on the census because a
-       read of it was recorded — two halves of one row disagreeing, with no reader anywhere joining them.
-       WHAT REMAINS ASSERTED ON A HISTOGRAM IS EVERY VALUE IN IT, one level down, because those are numbers
-       this zone HOLDS rather than a rule about keys only the producer knows.
-       NAMED RESIDUAL — WHAT IS NOT COVERED: the shape check above still refuses `null`, which navigable.h
-       documents as `childRealmRefSites`' answer for a build that carries no attribution. It is unreachable
-       only because that is a release engine and a release packaging sets APICLIENT_DEV=false so this DCHECK
-       does not run, so a DEV extension loading a RELEASE wasm aborts here. WHAT THE NEXT DIFF BUILDS: the
-       shape check admitting `null` for that one row, taken from the producer rather than from a name here.
-       HOW ITS ABSENCE WOULD SHOW: a zone driving a release artifact reports no runs and no endpoints for
-       every page, and the @WHY names a row whose null the producer's header calls an answer. */
+    /* A row is a finite number or a per-arm histogram (e.g. `_cold`'s `stepUnits` and `stepUnitRuns` over
+       solver/step_unit.h's ladder); a histogram's values are asserted one level down, so a NaN inside one is
+       caught like a NaN beside one. An empty histogram is not refused: some tables are keyed on derived keys
+       (`_heap`'s `childRealmRefSites`, `_swap`'s `cowHostRecAsksBySite`) whose `{}` is a positive statement, and
+       engine/build.mjs's census readers (`cowHostRecSiteReading`, `cowStateReading`, `coldFields`) check key
+       sets from the composer's own format string, which a hand list here cannot do.
+       Named residual: `_absent`'s per-member bucket tables have no non-empty check on the document in any
+       build. Next diff builds an `@ABSENT` reader in engine/build.mjs deriving its row set from `absent_json`'s
+       format string through `censusRowSet`. Absence shows as an @ABSENT member with `{}` buckets while the
+       member is on the census because a read was recorded.
+       Named residual: the shape check refuses `null`, which navigable.h documents as `childRealmRefSites`'
+       answer in a build without attribution, so a dev extension loading a release wasm aborts here. Next diff
+       admits `null` for that row, taken from the producer. Absence shows as a dev zone driving a release
+       artifact reporting no runs, with the @WHY naming that row. */
     for (const f of Object.keys(r[k])) {
       const v = r[k][f];
       const hist = v !== null && typeof v === "object" && !Array.isArray(v);
@@ -440,29 +214,10 @@ function assertResultDocument(r) {
              "table keyed on solver/step_unit.h's arms, and a NaN reaching a reader makes every comparison " +
              "against it false, which is the same silent failure asserted for the WFQ census one block up");
       if (!hist) continue;
-      /* A HISTOGRAM ARM IS A FINITE NUMBER OR A POSITIONAL TUPLE OF THEM, AND THE SECOND SHAPE IS THE
-         PRODUCER'S OWN AND WAS NOT ADMITTED HERE. The paragraph above says "a histogram's own values are
-         asserted finite one level down, so a NaN inside one is caught exactly as a NaN beside one is", and
-         that is true of a NUMBER-valued table and false of a TUPLE-valued one: solver/result.c's
-         `childRealmRefSites` composes each arm as `[min, max, total]` — documented at the composer as "a
-         positional triple … the set is fixed at its definition and is this file's own, so nothing can
-         renumber it" — so `typeof v[a] === "number"` is false for every arm of it and this DCHECK refused the
-         census the moment that table held a row.
-         IT IS A DEAD PATH THAT CAME ALIVE, WHICH IS WHY NO RUN HAD EVER MET IT: the same paragraph records
-         `{}` as that row's positive statement THIS RUN HOLDS NO LIVE CHILD REALM, and an empty object makes
-         this inner loop run zero times — so the consumer disagreed with the producer for as long as the
-         producer had nothing to say, and the first run that held a child realm aborted the trusted zone at
-         its census. MEASURED on two dev drives of app.gitpod.io at 042c336, whose ordering fix is what first
-         kept a child realm referenced: both read `@WHY … non-finite \`childRealmRefSites.JS_NewCFunction3\``
-         with `crashesFlag: 1`, while the run itself had already learned 198 addresses — so what the abort
-         destroyed was the CENSUS of a run that had worked.
-         THE RULE IS A SHAPE AND NOT A NAME LIST, which is the one thing the paragraph above forbids by name
-         after its own hand enumeration of macro-keyed tables rotted twice in this predicate. An arm is a
-         number, or it is a tuple every element of which is a number; a NaN anywhere inside either is still
-         caught, which is the whole property this check exists for.
-         RETIREMENT: this record goes when the arm shape is taken from the producer's own declaration rather
-         than from a shape test here — `navigable.h`'s `NavigableRealmRefSite` states the triple's three
-         members by name, and a census that NAMED them would need no tuple arm at all. */
+      /* A histogram arm is a finite number or a positional tuple of them: solver/result.c composes each
+         `childRealmRefSites` arm as `[min, max, total]`. The rule is a shape, not a name list, and a NaN
+         anywhere inside either is still caught. It would become a name check if the census named the triple's
+         members, which navigable.h's `NavigableRealmRefSite` declares. */
       for (const a of Object.keys(v)) {
         const arm = v[a];
         const tuple = Array.isArray(arm);
@@ -487,16 +242,8 @@ function assertResultDocument(r) {
            "allocator or the population of global reads, and all four exist at every instant a document can " +
            "be composed at. There is no reading in which it has no rows, so an empty object is the composer " +
            "having stopped composing");
-  /* AND `_absent` IS IN THAT LIST AND NOT IN `_forkAt`'S, WHICH IS THE SAME SPLIT ONE ROW DOWN AND IS WHY IT
-     IS WORTH SAYING TWICE. `_forkAt` may legitimately be `{}` — the positive statement that this document
-     never forked. `_absent` may not: solver/absent.c emits its MEMBERS on every census, zeroes included,
-     precisely so that the clean day prints too. A run in which this engine answered every standard-owned name
-     the page asked for is `owed 0 of N global reads`, which is a reading; `{}` would be that composer having
-     stopped composing, and the two must not arrive looking alike. The distinction matters more here than
-     anywhere else in this block because THIS census is the one whose subject is a silence — a page that
-     feature-detects an API this engine has not built takes the guard's false arm and loses every endpoint
-     behind it with nothing else anywhere saying so, so a census that could read `{}` for two different
-     reasons would reproduce the defect it exists to report. */
+  /* `_absent` is in that list and `_forkAt` is not: solver/absent.c emits its members on every census, zeroes
+     included, so `{}` is the composer having stopped, while `_forkAt`'s `{}` means the document never forked. */
   DCHECK(Array.isArray(r._park),
          "the engine's result document carries no _park array — that is the PARKED RESIDUE (solver/cold.h), " +
          "the recipes this zone writes to IndexedDB and hands back to qjs_begin next session. An absent one " +
@@ -504,17 +251,13 @@ function assertResultDocument(r) {
          "here and the cross-session frontier would silently restart from the boot flow on every visit");
 }
 const RUN_OUTCOMES = ["partial", "complete", "crashed", "nothing-to-run"];
-/* THE ROW THIS RUN OWNS. `eng` is the run's identity — one instance, one row — and it is absent for the two
-   records that belong to no instance: a document with nothing to run (which logs nothing at all) and a boot
-   that aborted before the reservation had an instance, whose record is built PER WAITING CALLER and so cannot
-   share a row with the others. A record that has a run writes that run's row IN PLACE, keeping the array
-   position the run STARTED at (which is the order a list of runs is read in) and keeping the row correct under
-   the log's own truncation: a row that has already been shifted out is no longer displayed and writing to it
-   is a no-op, where an index would have addressed somebody else's run.
-   THE FIELDS ARE REPLACED, NOT MERGED. A crashed run carries no counters at all — bridge's own rule, because
-   seven zeroes read as a run that explored nothing — so a terminal crash record landing on a row a partial had
-   filled must LEAVE it with no counters, and `Object.assign` alone would have left the last snapshot's numbers
-   underneath a row labelled crashed. */
+/* Writes the run's own log row. `eng` is the run's identity and is absent for records that belong to no
+   instance: nothing to run (which logs nothing) and a boot that aborted before the reservation had an
+   instance, whose record is built per waiting caller. A row is written in place, keeping the position the run
+   started at; a row already shifted out of the log is no longer displayed, so writing it is a harmless no-op
+   where an index would have addressed another run.
+   Fields are replaced, not merged: a crash record carries no counters, and `Object.assign` alone would leave
+   a partial's numbers under a row labelled crashed. */
 function engineLogWrite(eng, m) {
   const row = eng ? eng._log : null;
   if (!row) {
@@ -526,12 +269,9 @@ function engineLogWrite(eng, m) {
   for (const k of Object.keys(row)) delete row[k];
   Object.assign(row, m);
 }
-/* THE ONE READER OF `_resumed`, SO THE THREE STATES CANNOT BECOME TWO AT ONE CALLER. A record with no engine
-   at all (`nothing-to-run`: no instance was ever built) has nothing to report and says so; an engine that has
-   one reports it; and an engine whose boot died before `begin` carries the `null` its reservation declared,
-   which travels unchanged. The DCHECK is what keeps `undefined` from joining them — a field added to the
-   reservation and not to this shape would arrive here as a fourth state that every consumer renders as the
-   absence, which is the reading that is wrong exactly when the count matters most. */
+/* The one reader of `_resumed`, keeping its three states apart: `null` engine (nothing-to-run) reports null; an
+   engine reports the count `begin` wrote; an engine whose boot died before `begin` carries its reservation's
+   `null`. The DCHECK keeps `undefined` from becoming a fourth state rendered as absence. */
 function engineResumed(eng) {
   if (eng === null) return null;
   DCHECK(eng && typeof eng === "object",
@@ -546,15 +286,11 @@ function engineResumed(eng) {
          "number of parked flows that came back");
   return eng._resumed;
 }
-/* THE ONE READER OF THE COLD-TIER LOOKUP, FOR `engineResumed`'S REASON AND ON `engineResumed`'S SHAPE. A
-   record with no engine at all reports the stated absence; an engine that reached its frontier read reports
-   what that read met; an engine whose boot died before it carries the nulls its reservation declared, and
-   those travel unchanged rather than being rendered as a miss by whichever consumer met them first.
-   THE THREE ARE RETURNED TOGETHER BECAUSE THEY ARE READ TOGETHER OR MIS-READ. `other-bundle` with no count is
-   a claim with its evidence removed, and a count with no word is a number nobody can act on; and the bundle id
-   is the half of the frontier key that is not already on the row as `url`, which is what makes two drives of
-   one address COMPARABLE — reading (b) is the two runs reporting different bundle ids, and nothing else this
-   zone emits can state it. */
+/* The one reader of the cold-tier lookup, on `engineResumed`'s shape: no engine reports the stated absence, an
+   engine that reached its frontier read reports what it met, and one whose boot died first carries its
+   reservation's nulls unchanged. The three fields are returned together because each is unreadable without
+   the others: the bundle id is the half of the frontier key not already on the row as `url`, which is what
+   makes two drives of one address comparable. */
 function engineColdLookup(eng) {
   if (eng === null) return { lookup: null, other: null, bundle: null };
   DCHECK(eng && typeof eng === "object",
@@ -565,9 +301,7 @@ function engineColdLookup(eng) {
          "an engine record carries a cold-tier lookup this seam does not speak (`" + String(eng._coldLookup) +
          "`) — engineReserve declares it null and engineRoot writes one of a closed set of words once, so " +
          "anything else is a second writer, and the reader is shown a reason for a miss that nothing decided");
-  /* THE TWO NULLS ARE WRITTEN ON ONE LINE AND MUST STAY ONE FACT. An instance that never reached its frontier
-     read has neither a word nor a key; one that did has both. They come apart only if a second writer touched
-     one of them, and the symptom would be a row naming a bundle id for a lookup that never happened. */
+  /* The two nulls are written on one line by engineRoot and must stay one fact. */
   DCHECK((eng._bundleId === null) === (eng._coldLookup === null),
          "an engine record states a bundle id (`" + String(eng._bundleId) + "`) and a cold-tier lookup (`" +
          String(eng._coldLookup) + "`) that disagree about whether the frontier was ever read — engineRoot " +
@@ -576,9 +310,8 @@ function engineColdLookup(eng) {
          "an engine record carries a bundle id that is neither a base-36 identifier nor the stated absence " +
          "(`" + String(eng._bundleId) + "`) — it is half the frontier key, and the half a reader needs to " +
          "tell a redeployed bundle from a cold tier that lost an entry");
-  /* AND THE COUNT IS A COUNT EXACTLY WHERE SOMETHING COUNTED. `not-asked` and `unreadable` are the two arms
-     that looked at no keys, so a zero there would be the positive claim that this address holds no other
-     entries — which is the reading `unvisited` is FOR, and the one those two arms are not entitled to make. */
+  /* The count is present exactly where keys were read: `not-asked` and `unreadable` read none, so a zero from
+     them would falsely claim this address holds no other entries (which is what `unvisited` says). */
   const counted = eng._coldLookup !== null && eng._coldLookup !== "not-asked" && eng._coldLookup !== "unreadable";
   DCHECK(counted === (eng._coldOther !== null),
          "an engine record reports a cold-tier lookup of `" + String(eng._coldLookup) + "` with a sibling " +
@@ -592,50 +325,22 @@ function engineColdLookup(eng) {
          "OTHER bundle ids, which is the evidence under the word beside it");
   return { lookup: eng._coldLookup, other: eng._coldOther, bundle: eng._bundleId };
 }
-/* THE EMITTED SURFACE PARTITIONED BY A FACT EACH ROW STATES ABOUT ITSELF, over the @H array `endpoints` on the
-   run record is the LENGTH of — so the partition and the number it partitions are ONE POPULATION read at ONE
-   MOMENT, which is the whole reason it is composed here and not off a census taken elsewhere.
-   WHY THERE IS A READER AT ALL. CLAUDE.md §What-the-tool-produces states this product's razor as
-   `epEmitted - epPreProgram` — the most addresses FORCED EXECUTION can have contributed to a surface whose
-   other rows a markup parser reaches for free — and names its own retirement: the emitted surface carrying
-   each row's own door, so a reader partitions it without a subtraction. solver/endpoint.c has written `door`
-   and `mintedAt` on every row since, and NOTHING in this zone read either: the partition was carried and
-   nothing rendered it, so the only statement available about forced execution's contribution stayed a
-   difference of two totals that names none of the addresses it counts.
-   AND THE RESIDUAL THAT DEFERRED IT NAMED THE WRONG FILE, WHICH IS RECORDED AT THAT SITE AND NOT ONLY HERE.
-   It named lib/merge.js's call-site loop. That loop `continue`s past a structural @T candidate (`url == null`)
-   and past every `data:`/`blob:`/`about:`/`javascript:` address before it registers anything, and it folds
-   several @H rows onto one `method+host+path` key — so a histogram built there partitions a SMALLER, DEDUPED
-   population than the `endpoints` figure a reader holds beside it, and could be asserted to sum to nothing.
-   The engine's door is ALSO a per-SIGHTING fact its own header refuses to fold ("two doors reaching one
-   address is one endpoint two mechanisms can reach"), so a per-ADDRESS record would have needed a fold rule
-   the producer deliberately declined to invent. This array is the emitted surface itself and needs neither.
-   THE ABSENT KEY IS ITS OWN BUCKET AND IS NEVER FOLDED INTO A VALUE. This zone is deployed on WRITE and the
-   engine is live only after a build, so a row from an artifact that predates these keys is the ORDINARY case
-   and states NOTHING — which is a third fact and not a quiet member of either vocabulary, exactly as
-   lib/learn.js's `_mergeValueClass` treats an absent `valueClass` one record down. It is spelled with
-   parentheses so it can never collide with a token the producer adds: `ENDPOINT_DOORS` are hyphenated
-   lowercase words and a C identifier cannot make one of these.
-   AND THE TOKEN IS NOT CHECKED AGAINST A COPIED VOCABULARY, WHICH IS WHERE THIS PARTS FROM THE `provenance`
-   CHECK lib/merge.js MAKES AND THE REASON IS THE SHAPE OF THE TWO LISTS. `provenance` is THREE words that are
-   exhaustive over the ways this engine can come to know an address, so a fourth is two halves having parted
-   and crashing is right. A DOOR LIST GROWS — solver/endpoint.h derives it from endpoint_record's own call
-   sites — so a door landed in the engine and INSTALLED before a copy here was widened would abort the trusted
-   zone, which is live on write, on every endpoint of every document, for an engine doing exactly what the
-   design asks. The bucket key is therefore the token the producer wrote, a new door arrives as a new row with
-   nothing edited on this path, and what is asserted is only what this zone owns: that the value is a non-empty
-   string, and (at the composition below) that the histogram PARTITIONS the array it was built from.
-   A NULL-PROTOTYPE MAP IN AND A PLAIN ONE OUT, for `egressDeclined`'s reason and with a sharper one: the keys
-   are strings the ENGINE chose, so a door spelled `constructor` or `__proto__` would read a function off
-   `Object.prototype` and turn its count into `NaN` on a plain object. */
+/* The emitted surface partitioned by a fact each @H row states about itself, over the same `fetchCallSites`
+   array whose length is `endpoints` on the run record, so partition and total are one population at one
+   moment. solver/endpoint.c writes `door`, `mintedAt` and the other class keys per row; the histogram is taken
+   here, not in lib/merge.js, because that loop skips structural and non-network rows and folds rows by
+   `method+host+path`, while a door is a per-sighting fact the producer refuses to fold.
+   An absent key is its own bucket, `(unstated)`: an artifact predating the key is ordinary because this JS
+   ships before the engine is rebuilt. The parentheses keep it from colliding with producer tokens.
+   Values are not checked against a copied vocabulary: the door list grows with endpoint_record's call sites,
+   so a copy here would abort the trusted zone on a correct new door. Only a non-empty string is asserted.
+   A null-prototype map is used so an engine key spelled `constructor` or `__proto__` cannot read
+   `Object.prototype`. */
 const ENDPOINT_FACT_UNSTATED = "(unstated)";
 function endpointFactHistogram(rows, key) {
   const h = Object.create(null);
   for (let i = 0; i < rows.length; i++) {
-    /* `in` AND NEVER A `||`, because the two things it separates take opposite work: an absent key is an
-       artifact older than the key and is a fact about the BUILD, while every present one is a fact about the
-       ADDRESS, and a default would render a `<head>`'s own `<link>` and a lazy chunk with identical bytes —
-       which is the whole thing this pair exists to separate. */
+    /* `in`, never `||`: an absent key is a fact about the build, a present one a fact about the address. */
     let v;
     if (!(key in rows[i])) v = ENDPOINT_FACT_UNSTATED;
     else {
@@ -650,25 +355,13 @@ function endpointFactHistogram(rows, key) {
   }
   return Object.assign({}, h);
 }
-/* THE SAME PARTITION OVER THE ONE EMITTED COLUMN THE READER ABOVE CANNOT TAKE, AND IT IS A SECOND READER
-   RATHER THAN A WIDENING OF THAT ONE FOR TWO INDEPENDENT REASONS.
-   (1) THE COLUMN'S DOMAIN IS THREE JSON TYPES AND NOT A TOKEN. solver/endpoint.c emits `addressRoot` as
-   `null` where the record's class says no sighting held a concolic address, `false` where one did and its
-   bytes entered through nothing the engine minted as a source, and a STRING naming the sources otherwise —
-   three POSITIVE statements, spelled as types because `concolic_root_c`'s own NULL is two facts and because a
-   reserved in-band word would be a word a DOCUMENT could spell (solver/absent.c mints an injected global's
-   source name out of the property the page read). The reader above asserts a non-empty string, which is
-   exactly right for the four columns it serves and refuses two of these three by construction.
-   (2) THE STRING IS PAGE-INFLUENCED, SO IT MAY NOT BE A HISTOGRAM KEY HERE. The reader above says why its
-   keys are safe — "the keys are strings the ENGINE chose, so a door spelled `constructor` or `__proto__`
-   would read a function off `Object.prototype`" — and a root composed out of a page's own property name is
-   the case that argument does not cover: `Object.assign({}, h)` copies with [[Set]], so a key spelled
-   `__proto__` would set a prototype rather than a count. The NAMES stay on the emitted ROW, which is where
-   `address_class_of`'s residual makes its observation; what this zone counts is the four-way STATE, whose
-   every key is one of the four parenthesised words below and none of which any document can choose.
-   IT IS A DIAGNOSTIC AND NOT AN OPERAND OF THE BAR, for the reason the engine gives at the emit: whose
-   unknown a root names is not decidable from the string, so no consumer composes a verdict out of this and
-   the one that would is named at that residual rather than invented here. */
+/* The same partition over `addressRoot`, as a separate reader for two reasons. Its domain is three JSON types,
+   not a token: solver/endpoint.c emits `null` where no sighting held a concolic address, `false` where one did
+   and its bytes entered through no engine-minted source, and a non-empty string naming the sources otherwise.
+   And the string is page-influenced (solver/absent.c mints source names from page property names), so it may
+   not be a histogram key: `Object.assign({}, h)` copies with [[Set]] and a `__proto__` key would set a
+   prototype. The names stay on the row; this counts the four-way state under fixed parenthesised keys.
+   It is a diagnostic, not an operand of the bar: whose unknown a root names is not decidable from the string. */
 const ENDPOINT_ROOT_NAMED = "(named)";
 const ENDPOINT_ROOT_UNATTRIBUTED = "(unattributed)";
 const ENDPOINT_ROOT_NO_CONCOLIC = "(no-concolic)";
@@ -695,20 +388,9 @@ function linesToAnalysis(lines, msg, outcome, eng) {
   DCHECK(RUN_OUTCOMES.indexOf(outcome) >= 0,
          "a run outcome this seam does not speak: `" + outcome + "` — every consumer of an analysis branches " +
          "on `_run`, so a word none of them knows is a run whose completeness nothing can judge");
-  /* THE DOCUMENT THIS ANALYSIS IS ABOUT. `sourceUrl: (msg && msg.sourceUrl) || ""` stood in the literal below
-     and wrote an EMPTY ADDRESS onto the one field every consumer identifies the analysis by: lib/merge.js
-     resolves relative call-site addresses against it and keys each security finding on it — so a message that
-     had gone silent would have produced findings filed under a made-up name beside real ones, which is the
-     FABRICATED half of the defaulted-field defect rather than the concealed half. (This paragraph used to say
-     lib/merge.js files a falsy one under `"unknown_" + i`, and that was TRUE OF THAT FILE WHEN IT WAS
-     WRITTEN: it and lib/serialize.js each carried their own `|| ("unknown_" + i)` over this field, with two
-     different ordinals, so one finding would have reached the popup under two keys. Both are gone — the key is
-     the source address and the record is asserted through lib/store-record.js's one shape — which leaves the
-     assert below as the only thing standing between a silent message and a fabricated one.)
-     `engineRoot` has always DCHECKed this same `msg.sourceUrl` non-empty (§4.4's document
-     address is what the engine derives this document's principal from) and asserts `eng.msg === msg` where
-     the instance is rooted; both callers of this function pass `eng.msg`. There is nothing here for a `||` to
-     have been standing in for. */
+  /* The document this analysis is about. lib/merge.js resolves relative call-site addresses against
+     `sourceUrl` and keys each security finding on it, so it is asserted, never defaulted. engineRoot asserts the
+     same field non-empty and `eng.msg === msg` where the instance is rooted; both callers pass `eng.msg`. */
   DCHECK(!!msg && typeof msg.sourceUrl === "string" && msg.sourceUrl !== "",
          "an analysis is being built for a document with no address (`" + (msg && msg.sourceUrl) + "`) — " +
          "engineRoot asserts this same field non-empty before the instance runs, so its absence here is that " +
@@ -716,67 +398,42 @@ function linesToAnalysis(lines, msg, outcome, eng) {
          "empty string and land in the moat under a fabricated name");
   let result = null;
   const extraErrors = [];
-  /* THE RESUME COUNT IS NOT READ OFF `lines`, AND THAT IS THE WHOLE OF THE FIX. It used to be, and `lines` is
-     precisely the argument this seam's callers disagree about: `finish` hands the run's WHOLE output,
-     `streamPartial` hands exactly ONE element of it (the @RESULT it just found, spliced out immediately
-     after), and `crashRecord` hands a one-line array it composed itself. `@RESUMED` is printed once, at
-     `begin`, so it is present in the first of those and absent from the other two — and the count was
-     therefore not a property of the session but of which slice its reader held. Every still-running session
-     reported `0 resumed` for that reason alone, and the `parseInt(…) || 0` that stood here is what made an
-     absent line arrive as a plausible zero instead of as the missing datum it was.
-     IT IS A FACT ABOUT THE SESSION, so it is taken from the record that IS the session. `eng._resumed` is
-     written once by `engineRoot`, at the `begin` whose reply carries the line, and is `null` on a record for a
-     session that never reached one — which is the state this function cannot itself distinguish and must
-     therefore not invent, since `crashRecord`'s synthetic lines are byte-identical whether the boot died
-     before `begin` or after it. */
+  /* The resume count is a fact about the session, read off the record (`eng._resumed`, written once by
+     engineRoot at `begin`), never off `lines`: callers pass different slices of output (`finish` the whole run,
+     `streamPartial` one @RESULT, `crashRecord` a synthetic line), and only the first holds `@RESUMED`. A
+     session that never reached `begin` carries `null`, which this function cannot distinguish itself. */
   const resumed = engineResumed(eng);
-  /* AND WHAT THE COLD TIER ANSWERED, ON BOTH RECORD SHAPES FOR THE SAME REASON `resumed` IS ON BOTH: it is a
-     fact about how the session BEGAN, so a run that crashed afterwards is exactly the run whose reader most
-     needs it — the cold-tier rebuild is the suspect they are trying to rule in or out, and `resumed: 0` alone
-     cannot tell a first visit from a redeployed bundle from a residue the store would not hand over. */
+  /* The cold-tier lookup is also a fact about how the session began, so it is reported on both record shapes;
+     a crashed run's reader needs it most. */
   const cold = engineColdLookup(eng);
-  /* THE CAUSE OF A CRASH, READ OFF THE SAME LINES EVERY OTHER FACT ABOUT THE RUN IS READ FROM. Both producers
-     of a crashed record put an `@E {"phase":"engine-crash",…,"err":…}` line in `lines` before calling here —
-     engineCrash for a live instance (with the ROOT @WHY appended) and crashRecord for a boot that never got
-     one — so this is not a new channel, it is the existing one being read where the RUN LOG is composed. */
+  /* The cause of a crash. Both producers of a crashed record (engineCrash, with the root @WHY appended, and
+     crashRecord for a boot that never got an instance) put an `@E {"phase":"engine-crash",…,"err":…}` line in
+     `lines` before calling here. */
   let crashErr = "";
   for (const raw of lines) {
     const ln = String(raw);
     if (ln.startsWith("@RESULT ")) {
       try { result = JSON.parse(ln.slice(8)); }
       catch (e) {
-        /* result.c ASSERTS its own document against buffer truncation before handing it over, so text that
-           will not parse here is the engine's output being wrong — not a page that did something unusual.
-           Dev aborts; release keeps the parse error in the run's errors, because in release there is no
-           document to read and a zero-result must still say why. */
+        /* result.c asserts its own document against truncation, so unparseable text is an engine defect. Dev
+           aborts; release records the parse error so a zero result still says why. */
         DFAIL("the engine emitted an @RESULT line that is not JSON: " + String(e && e.message || e));
         extraErrors.push({ context: "result-parse", message: String(e && e.message || e) });
       }
     } else if (ln.startsWith("@E ")) {
       extraErrors.push({ context: "engine", message: ln.slice(3) });
-      /* A `@E` LINE IS TEXT UNTIL SOMEBODY PARSES IT, AND EXACTLY ONE SHAPE OF IT IS THE RUN'S OWN DEATH.
-         Parsed here rather than string-matched: the phase is the field the two producers write, so a shape
-         that stops carrying it stops being read as a crash instead of matching a substring of a page's own
-         error text. A non-JSON `@E` is the engine's other diagnostics, which have their own entry above. */
+      /* Parsed, not substring-matched: the `phase` field identifies the crash line, so a page's own error
+         text cannot be mistaken for it. Non-JSON `@E` lines are other diagnostics, recorded above. */
       try {
         const o = JSON.parse(ln.slice(3));
         if (o && o.phase === "engine-crash" && typeof o.err === "string") crashErr = o.err;
       } catch (_) { /* not the crash line; it is already recorded as an engine error above */ }
     } else if (ln.startsWith("@WHY ")) {
-      /* An engine diagnostic for a zero-result/resource path — surfaced so an OOM or aborted flow never fails
-         SILENTLY (CLAUDE.md: every zero-result path emits @WHY). TWO PRODUCERS WRITE THIS TAG AND THE PARSE
-         IS THE ROUTING BETWEEN THEM, not a swallow: `engine/host/check.h` emits a JSON record carrying
-         phase/cond/at/reason, and `engine/qjs/quickjs-check.h` cannot include the host header, so the
-         submodule — the interpreter, the trampoline, every step machine and libregexp — emits a PLAIN line
-         whose whole text is the message. A shape that is not JSON is therefore the second producer, and the
-         line itself is the message it wrote.
-         NEITHER FIELD IS DEFAULTED ON THE JSON ARM. `o.phase || "why"` and `o.reason || ln.slice(5)` stood
-         here, and `reason` is the ONE field a @WHY carries that names what to build — so a record that
-         stopped carrying it would have rendered as the raw line and read exactly like the plain-line
-         producer, which is the two shapes becoming indistinguishable in the act of hiding the defect. The
-         same defaults were how nobody noticed that check.h's emitter interpolated its message into JSON
-         UNESCAPED, so every reason quoting the spec it cites — which is every good one — failed to parse
-         here and left through the catch. check.h escapes at the emitter now; this asserts what it writes. */
+      /* An engine diagnostic for a zero-result or resource path, surfaced so no flow fails silently. Two
+         producers: engine/host/check.h emits a JSON record (phase/cond/at/reason, escaped at the emitter), and
+         engine/qjs/quickjs-check.h, which cannot include the host header, emits a plain line whose text is the
+         message. Non-JSON is therefore the second producer, not a parse failure. On the JSON arm `phase` and
+         `reason` are asserted, never defaulted: `reason` is the field naming what to build. */
       let o = null;
       try { o = JSON.parse(ln.slice(5)); } catch (_) { o = null; }
       if (o === null) { extraErrors.push({ context: "why", message: ln.slice(5) }); continue; }
@@ -787,49 +444,25 @@ function linesToAnalysis(lines, msg, outcome, eng) {
       extraErrors.push({ context: o.phase, message: o.reason });
     }
   }
-  /* THE DOCUMENT IS EITHER THERE OR THIS CALLER SAID IT WOULD NOT BE. `result || {}` on its own is the exact
-     shape the rule forbids: a malformed (here, ABSENT) engine answer defaulted into a plausible one, and the
-     plausible one is "this page has no API surface and no XSS" — a wrong FINDING shown to the user rather than
-     a crash. The default survives only as the release path under the assert. */
+  /* A partial or complete run must carry its document; reporting its absence as an empty page would be a false
+     clean bill. */
   const mustHaveDocument = (outcome === "partial" || outcome === "complete");
   DCHECK(!mustHaveDocument || result !== null,
          "an engine session produced no @RESULT document at all — the one result document is what every " +
          "finding for this page travels in, and reporting its absence as an empty page is a false clean bill");
-  /* AND A DOCUMENT THAT IS THERE IS CHECKED WHETHER OR NOT ONE WAS REQUIRED. This asked `expectResult &&
-     result`, so the one document that arrives on a path that did not demand it — a crashed instance's
-     unconsumed partial — was the only one relayed unasserted, and its fields were then read below. The
-     question "must there be one" is the caller's; the question "is this one result.c's composition" is the
-     document's own and has one answer. */
+  /* A document that is present is asserted whether or not one was required, including a crashed instance's
+     unconsumed partial, whose fields are read below. */
   if (result) assertResultDocument(result);
-  /* AND THE ONE THING A COMPLETE RUN'S DOCUMENT CLAIMS ABOUT ITS OWN FRONTIER, ASSERTED HERE BECAUSE THE HOST
-     ACTS ON IT BY DELETING THIS ORIGIN'S CROSS-SESSION RESIDUE. `finish` composes `recipes: result._park.join(";")`
-     and `frontierWrite` DELETES the entry when that string is empty — which is the HONEST report for a frontier
-     that DRAINED (solver/cold.h: "that emptiness is the POSITIVE answer engine_sched_begin reads as `no residue,
-     seed a boot flow` (a document that drained deletes its cold entry rather than storing one)") and is an
-     ERASURE of a previous session's parked flows for a frontier that did not. Nothing in this zone could tell
-     those two apart: an empty `_park` is the same empty array either way, and the delete is the same delete.
-     THE ENGINE ALREADY GUARANTEES IT AND THE GUARANTEE IS DEV-ONLY AND IN ANOTHER COMPONENT, which is the whole
-     reason this line exists rather than a comment pointing at it. solver/engine.c's session close asserts
-     `flow_count() == 0 || engine_frontier_paged()` — "the session closed over LIVE members whose recipes were
-     never written ... A resting member is deprioritized and PAGED, never dropped" — and that is a `DCHECK`,
-     compiled out in release, while THIS zone's delete runs in every build. A release engine that closed over
-     members without parking, or a new session-closing exit that does not take the park above it, reaches here
-     and erases a residue nobody in this session measured, with nothing anywhere naming the loss.
-     IT IS ONE-DIRECTIONAL ON PURPOSE. `_park` NONEMPTY with `live` at 0 is an honest state and is not asserted
-     against: solver/cold.h names two ways to reach it (a peer holding a reference keeps the session live past
-     its own last flow, and an engine that met the RAM floor may have SOLD every flow it had), and
-     engine_park_frontier does not free what it writes — "the flows themselves are released by the teardown the
-     host takes after this returns" — so a park taken over a standing frontier reports both nonzero. The state
-     with no reading is the other one.
-     SCOPED TO `complete` BECAUSE ONLY THAT OUTCOME MEANS THE SESSION CLOSED. `engineFinalize` is reached only
-     from `finish`, which runs only on ENGINE_STEP_DONE, which is the engine returning from one of its own two
-     session-closing exits. A `partial` snapshot is composed MID-RUN by qjs_emit_partial, where a live frontier
-     and an empty `_park` are what a healthy document looks like, so asserting it there would fire on every page.
-     AND `live` IS READ AS A PRESENT FIELD RATHER THAN DEFAULTED. `assertResultDocument` requires every `_cold`
-     row to be a finite number and the census to be non-empty; it does not require THIS row, whose presence is
-     guaranteed by build.mjs's `coldFields()` derivation against result_cold_json's own format string. An absent
-     one read through `=== 0` would be `undefined`, which fails this comparison and would accuse a healthy run —
-     so the shape is asserted on its own line and the invariant is asserted on the value. */
+  /* A complete run with an empty `_park` must have no live members. `finish` joins `_park` into the recipe
+     string and frontierWrite deletes the origin's cross-session entry when it is empty, which is right for a
+     drained frontier (solver/cold.h) and an erasure of earlier parked flows otherwise. solver/engine.c asserts
+     `flow_count() == 0 || engine_frontier_paged()` at session close, but only in dev, while this delete runs
+     in every build.
+     One-directional: a non-empty `_park` with `live` 0 is legitimate (a peer reference can keep a session
+     live, a RAM-floor engine may have sold every flow, and a park does not free the flows it writes).
+     Scoped to `complete`, the only outcome meaning the session closed (`finish` runs on ENGINE_STEP_DONE); a
+     partial snapshot is mid-run, where a live frontier with no park is normal. `live` is asserted present on
+     its own line because assertResultDocument does not name that row. */
   if (result && outcome === "complete") {
     DCHECK(typeof result._cold.live === "number" && Number.isFinite(result._cold.live),
            "a complete run's `_cold` census carries no `live` member count (`" + String(result._cold.live) +
@@ -846,342 +479,147 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            "of whatever a PREVIOUS session parked at this address. solver/engine.c asserts the engine half of " +
            "this at its session close; that assert is dev-only and this delete is not");
   }
-  /* THE TWO CASES ARE WRITTEN AS TWO CASES. `result = result || {}` merged them into one, and everything after
-     it then had to read a document that might not be there — which is where each `|| 0` and `|| []` below came
-     from, one per field, each individually reasonable and collectively the defaulting the rule forbids. With
-     the absent case handled ONCE, on its own arm, every read on the present arm is a read off a document
-     `assertResultDocument` has already checked field for field, so a default beside it can only ever hide that
-     assert being wrong. There are none left. */
-  /* THE COUNTERS ARM READS `eng._egress`, SO IT ASSERTS THE RECORD IS THERE RATHER THAN READING THROUGH A
-     NULL. Two callers reach that arm — the terminal `complete` record and `qjs_emit_partial`'s snapshot — and
-     both hold the instance whose rounds did the asking. The two that may pass `eng` as null are `crashRecord`
-     (built PER WAITING CALLER for an instance that never booted) and the `nothing-to-run` arm, and neither
-     takes this branch: the first is `crashed` and the second writes no row at all. So a null here is that
-     split having moved, and the symptom without this line is a TypeError naming a property instead of the
-     contract that changed. */
+  /* The absent-document case is handled once on its own arm, so every read on the present arm is off a
+     document assertResultDocument has checked, and none is defaulted. */
+  /* The counters arm reads `eng._egress`. The two callers that may pass a null `eng` (crashRecord and the
+     nothing-to-run arm) never take this branch, so a null here means that split moved. */
   DCHECK(!(outcome !== "crashed" && result) || (eng && eng._egress),
          "a run reached the counters arm with no egress census on its instance — `_egress` is declared in the " +
          "`eng` literal beside `_cold`, so an instance without one was built somewhere else, and the row would " +
          "report this zone's own refusals as absent for a run that had them");
-  /* AND THE SAME ARM READS THE INSTANCE'S WORKING SET OFF `eng`, SO ITS PRESENCE IS ASSERTED FOR THE REASON THE
-     LINE ABOVE ASSERTS `_egress` AND WITH THE SAME INVARIANT BEHIND IT. engineRecordFacts writes
-     `eng.residentBytes` BEFORE the reservation leaves the `booting` state — its own comment calls that ordering
-     the thing that makes "an engine the ranking has never heard from" a state that cannot occur rather than a
-     case to default — and this arm is reached only by an instance that has stepped. So an absent number here is
-     that ordering having moved, which is the identical sentence the pool probe asserts one level up, and the
-     symptom without this line is a row carrying `undefined` through a structured clone that DROPS the key: the
-     reader would then spell it as the absence of a producer rather than as a producer that stopped stating it. */
+  /* The counters arm also reads `eng.residentBytes`, which engineRecordFacts writes before the reservation
+     leaves `booting`; only an instance that has stepped reaches here. An absent value would be dropped by the
+     structured clone and read as a producer that never existed. */
   DCHECK(!(outcome !== "crashed" && result) || (eng && typeof eng.residentBytes === "number"),
          "a run reached the counters arm with no reported working set on its instance — engineRecordFacts " +
          "states it at the end of every round and before the reservation becomes hot, so its absence is that " +
          "ordering having moved, and the one byte figure on this row that can answer what share of the wasm32 " +
          "address space this instance has taken would be missing from a run that had it");
   const m = (outcome !== "crashed" && result)
-    /* THE SCHEDULER'S OWN COUNTERS, so fairness/deep-preemption is OBSERVABLE (a real signal that the single
-       BFS context-switches rather than running FIFO) — and they are the fields solver/result.c ACTUALLY emits.
-       NOT wrapped in a swallowing try/catch: every value here is a number off a document asserted above. */
+    /* The scheduler's own counters, so context switching, forking and preemption are observable. Every value
+       is a number off the document asserted above. */
     ? { run: outcome,
         switches: result._switches, flows: result._flows, candidates: result._candidates,
         jobsQueued: result._jobsQueued, jobsRun: result._jobsRun,
-        /* THE PRECONDITION FOR RUNNING A JOB, beside the count of jobs run, because one of those numbers alone
-           has two opposite readings — see solver/engine.c's g_units_done. A run whose reactions never fire and
-           a run whose flows never reach the between-units boundary at all need opposite fixes. */
+        /* The precondition for running a job, beside the job count: reactions that never fire and flows that
+           never reach the between-units boundary need opposite fixes (see solver/engine.c's g_units_done). */
         unitsDone: result._unitsDone,
         worldSegmentsHeld: result._worldSegmentsHeld, worldSegmentsMade: result._worldSegmentsMade,
         worldSegmentsForked: result._worldSegmentsForked,
-        /* …AND WHY THE SECURITY SURFACE IS THE SIZE IT IS. Every counter above is about how much work the run
-           did; these four are about what the work MET, and they are the only thing that distinguishes an
-           analysed page with nothing to find from a page nobody got to. Forwarded rather than left in the
-           result document because the probe watching this seam cannot reach into the moat, and "no findings"
-           is the one answer it must never take at face value. */
+        /* What the work met, which is what tells a page with nothing to find from a page nobody reached. Carried
+           on the record because the probe watching this seam cannot read the cumulative store. */
         sourceReads: result._sourceReads, sinkReached: result._sinkReached,
         sinkTainted: result._sinkTainted, sinkSuppressed: result._sinkSuppressed,
-        /* THE HEADLINE SURFACE'S OWN PAIR — §What-the-tool-produces is "what the bundle CAN do but didn't",
-           and until these crossed, whether this engine ever drove a function the page never called could only
-           be read off a stdout the renderer does not tee. `driven` alone cannot say whether the frontier
-           reached the question; `asked` is what separates a page that ships no uncalled code from a scheduler
-           that never got to it. */
+        /* Uncalled-code driving: `driven` alone cannot tell a page that ships no uncalled code from a scheduler
+           that never reached the question; `asked` can. */
         orphansDriven: result._orphansDriven, orphansAsked: result._orphansAsked,
-        /* AND WHICH EXIT EACH OF THOSE ASKS TOOK, which the pair cannot say and which decides between two
-           OPPOSITE repairs. `memo` is an ask the generation cache answered with NO walk at all, so a high
-           `memo` says the cache absorbs and the cost is PER WALK; a low one says the orphan generation moves as
-           fast as flows run out of work and nearly every ask enumerates `rt->gc_obj_list`. THE SECOND HALF OF
-           THAT SENTENCE READ `so the cost is PER ASK and the repair is the cache or the rung's placement`, AND
-           THE ROW BESIDE IT REFUTED IT — kept in its own words because it is what a reader re-derives from
-           `memo` alone. Measured over two 90 s drives of one release artifact, `memo` read ZERO of 87 asks and
-           ZERO of 228 while `took` read 86 and 227: essentially every ask is a PRODUCTIVE walk, and no cache
-           can skip a walk that succeeds, so ONE ask per run was the whole population a memo could have helped.
-           A low `memo` names the WALK, which is what `orphanWalks` and its three siblings price. `empty` is a walk that ran and found
-           nothing, which solver/engine.c's residual at the take states is a fact about the HEAP and not about
-           the bundle — the walk can only see a body with a live function object of its own. They sum to
-           `asked`, which solver/result.c asserts where all four were read together, so a consumer may check
-           the partition rather than trust it. All three are asserted field-for-field above and there is
-           nothing to default. */
+        /* Which exit each ask took. `memo` is an ask the generation cache answered with no walk; `empty` a walk
+           that found nothing (a fact about the heap: the walk sees only bodies with a live function object);
+           `took` a productive walk. A low `memo` points at walk cost, which `orphanWalks` and its siblings
+           price. The three sum to `asked`, which solver/result.c asserts. */
         orphanAskMemo: result._orphanAskMemo, orphanAskEmpty: result._orphanAskEmpty,
         orphanAskTook: result._orphanAskTook,
-        /* …AND WHAT THOSE WALKS COST, WITH BOTH OF THEIR DENOMINATORS CARRIED. `entries / walks` is the mean
-           object-list length one take reads; `fullCandidates / walksFull` is the mean candidate population over
-           the walks that ran to the END of the list, and its denominator is NOT the first one — the take exits
-           early on a preferred candidate at the lowest quota, so such a walk has seen a FLOOR of the set and is
-           left out of the population rows on purpose. A `walksFull` of 0 beside a nonzero `walks` is the
-           positive statement that every take was decided early. `walks` is also the witness that one take is
-           ONE enumeration: solver/result.c asserts `walks == empty + took` where all three are in one hand, and
-           the four-enumeration shape that function used to have would read about four times it. */
+        /* Walk cost with both denominators. `entries / walks` is the mean object-list length one take reads;
+           `fullCandidates / walksFull` is the mean candidate population over walks that reached the end of the
+           list, since an early exit on a preferred candidate sees only a floor of the set. `walksFull` 0 with
+           `walks` nonzero means every take was decided early. solver/result.c asserts
+           `walks == empty + took`. */
         orphanWalks: result._orphanWalks, orphanWalkEntries: result._orphanWalkEntries,
         orphanWalksFull: result._orphanWalksFull,
         orphanWalkFullCandidates: result._orphanWalkFullCandidates,
-        /* WHAT THE RUN ACTUALLY LEARNED, beside what it cost. The counters above say the BFS switched, forked
-           and pumped jobs; these two say it produced something, which is the only question a probe watching an
-           engine that now lives behind a frame boundary can ask without reaching into the moat. Both arrays are
-           asserted field-for-field above, so there is nothing to default; the crash arm carries neither,
-           because a run with no result document has no surface to have found and a zero there would read as a
-           page that was analysed and was clean. */
-        /* AND WHAT THE ONE BFS WAS ORDERING ITS FLOWS BY AT THE INSTANT THIS DOCUMENT WAS COMPOSED. Every
-           other field on this record is a TOTAL over the run; this one is a reading of an instant, which is
-           why it stays one nested object instead of being spread into siblings — a `switches` and a `wTop` in
-           one row would be a cumulative count and a momentary spread rendered as the same kind of number.
-           IT CROSSES WHOLE, deliberately, and it is the only field here that does: this zone reads no row of
-           it, so naming the rows would be a hand-copied copy of solver/flow.h's list living in a relay. A row
-           added to the census reaches the popup with no edit on this path, which is the property the census
-           has to have — it is the surface that failed by having a row nobody printed and a row nobody read.
-           A PARTIAL'S CENSUS IS THE VALUABLE ONE. main.c's qjs_emit_partial composes a document every
-           PARTIAL_MS while the frontier is LIVE, so those carry a real ordering; the finalize's document is
-           composed after the frontier drained or parked and carries `{members: 0}`, which is the true reading
-           of that instant and not a reading of the run. */
+        /* What the run learned (`endpoints`, `sinks` below), beside what it cost. The crash arm carries
+           neither: a zero there would read as an analysed, clean page. */
+        /* The WFQ census at the instant the document was composed. It is a reading of an instant, not a
+           total, so it stays one nested object. It crosses whole: this zone reads no row of it, so a row added
+           to the census reaches the popup unedited. A partial's census is the informative one (qjs_emit_partial
+           composes one every PARTIAL_MS over a live frontier); a finalize's is composed after drain or park and
+           reads `{members: 0}`. */
         wfq: result._wfq,
-        /* AND THE THREE SUBSYSTEM CENSUSES BESIDE IT, CROSSING WHOLE FOR THE IDENTICAL REASON. What the
-           FRONTIER is made of, what the RUNTIME and the C allocator hold, what a context SWITCH costs, and
-           which PREDICATE is growing the frontier — four objects, and this zone
-           reads no row of any of them. Until they rode this document they were printed only by the smoke
-           driver's loop, so every one of these numbers had been quoted about one fixture and never once about
-           a real page; a row added to any of them now reaches the popup with nothing edited on this path.
-           THEY STAY SEPARATE OBJECTS AND ARE NOT FOLDED INTO ONE, because a reader compares WITHIN a census
-           and never across: a byte figure beside a switch count beside a realm count is three different
-           questions and folding them invites exactly the comparison none of them supports. */
+        /* The subsystem censuses, crossing whole for the same reason. They stay separate objects because a
+           reader compares within a census, never across. */
         cold: result._cold, heap: result._heap, swap: result._swap, forkAt: result._forkAt,
-        /* AND THE FIFTH, WHICH IS NOT A READING OF AN INSTANT AND IS NOT A SUBSYSTEM: the names a STANDARD
-           owns that this document read and this realm did not answer, with the population of global reads
-           they are drawn from. It crosses for a reason the other four do not share — they were computed and
-           printed nowhere a person runs, and this one was never computed at all, because what it measures is
-           an arm whose entire observable effect is that a page's `if (window.X)` takes its false arm. */
+        /* Standard-owned names the document read and this realm did not answer, with the population of global
+           reads they are drawn from. */
         absent: result._absent,
-        /* AND WHAT THE ORDER ABOVE WAS DENOMINATED IN — solver/quantum.h's `_quantum`, relayed whole beside
-           the readings it qualifies. It is the ONE field on this record that is neither a total over the run
-           nor a reading of an instant: it is a property of the HOST, constant for the session, and it is here
-           because without it the `wfq` order and every census under it are two numbers a reader cannot
-           compare. On the host this extension actually runs — a wasm link carrying no `-pthread`, so this
-           engine's linear memory is an ordinary ArrayBuffer and no second thread can raise the yield request
-           from outside the flow's instruction stream — the WFQ's aging charge is
-           billed in WALL TIME, and that charge is a comparison BETWEEN flows, so the OS's descheduling decides
-           part of the frontier's order. Two runs of one build over one page then differ with nothing about the
-           tree differing, and the popup renders this beside the order so nobody reads that as a change.
-           THE REASON THIS CLAUSE USED TO GIVE WAS THE REALM AND IT IS RETIRED, kept in its own words because
-           the browser's own DataCloneError invites it: `an opaque origin, which is neither the extension
-           origin nor ever isolated, and a shared-memory transfer needs one of those two, so the engine can
-           never be handed a watchdog thread`. That realm IS isolated now — manifest COOP `same-origin`, COEP
-           `require-corp`, and renderer-host.js's `allow="cross-origin-isolated"` — and renderer.html aborts
-           if a realm that STATES the capability is refused it. The denomination did not move with it, because
-           a grant is not a clock and this LINK is what has no shared memory; solver/quantum.c's #error is
-           what keeps those two facts from drifting apart. */
+        /* What the order above was denominated in, relayed whole. It is a property of the host and build,
+           constant for the session. With no `-pthread` in the link, linear memory is an ordinary ArrayBuffer
+           and no second thread can raise the yield request, so the aging charge is billed in wall time and the
+           OS's descheduling decides part of the order; two runs of one build can differ, and the popup renders
+           this beside the order so that is not read as an engine change. solver/quantum.c's #error keeps the
+           link and this denomination in step. */
         quantum: result._quantum,
-        /* AND WHAT THIS ZONE'S OWN EGRESS POLICY DID, WHICH EVERY COUNTER ABOVE IS STRUCTURALLY SILENT ABOUT.
-           `endpoints` below is a REACH figure — distinct addresses the run learned — and it has already been
-           quoted as an API-surface figure off a real SPA whose whole list was the app's own module graph. The
-           reading that row could not be given is the one a person acts on: a page with no API surface is
-           either a page this engine never derived those requests for, or a page whose requests THIS TOOL
-           REFUSED, and those take opposite work — improve the driving, or widen the origin.
-           THE PAIR IS WHAT MAKES IT READABLE AND NEITHER HALF IS QUOTABLE ALONE. `egressAsked` is the
-           denominator: `egressDeclined: {}` under a nonzero one says the policy refused nothing, and under a
-           zero one says this loop never ran. It is a DIFFERENT DENOMINATOR from the engine's own
-           `cold.replyDeclined`, and the two must not be read as one number — a decline names a (method, url)
-           PAIR and `engine_decline` marks every parked RECORD keyed on it, so one refusal here can raise that
-           counter several times. They are a CROSS-CHECK rather than a duplicate: this row nonzero with
-           `replyDeclined` at 0 is a refusal that never reached the engine, which no single column reports.
-           IT IS THE RULE AND NOT THE SIGNAL NAME, deliberately. `blocked-signal:witness=pinned` names the ROW
-           OF A PERSON'S OWN CONTROL that holds the request and would make it fire if they widened it;
-           `blocked-destructive:logout` names a refusal nothing reopens. Collapsing those to one count is the
-           several-states-behind-one-answer shape at the one place a person has to act on it.
-           THE HISTOGRAM IS COPIED AND THE COUNT BESIDE IT IS A NUMBER, SO THE TWO ARE ONE MOMENT. `asked` is
-           copied by value because it is one; the map is not, and relaying the live one would put a reference
-           on a row whose siblings are all snapshots — so `qjs_emit_partial`'s record would go on CHANGING
-           after it was composed, and its `egressAsked` would then be a reading of an earlier instant than the
-           map beside it. That is the two-moments defect this file already had to publish two indices to
-           refuse, arriving through an aliased object rather than through a second read, and the containment
-           asserted below would be checked against a population the row does not hold.
-           A NULL-PROTOTYPE MAP IN, A PLAIN ONE OUT, AND BOTH HALVES ARE DELIBERATE. The counter is
-           `Object.create(null)` so its `in` test is exact rather than answering true for `toString`; the row
-           carries a plain object because every other census on it arrived through `JSON.parse` and is one,
-           and a row is SERIALIZED out of this realm by whoever reads it. */
+        /* What this zone's egress policy did, which the engine's counters cannot say: a page with no API
+           surface is either one the engine never derived requests for or one whose requests this tool refused,
+           and the two need opposite work (improve driving, or widen the origin).
+           `egressAsked` is the denominator; `egressDeclined` is keyed on the rule, not the signal name, since
+           rules differ in whether a person can reopen them. It is a different denominator from the engine's
+           `cold.replyDeclined` (one decline of a (method, url) pair marks every parked record on it); this row
+           nonzero with `replyDeclined` 0 is a refusal that never reached the engine.
+           The map is copied so the row is one moment: a live reference would keep changing after the partial
+           was composed, out of step with `egressAsked`. Null-prototype in (exact `in`), plain object out, like
+           every other census on the row. */
         egressAsked: eng._egress.asked, egressDeclined: Object.assign({}, eng._egress.declined),
-        /* AND WHAT THE INSTANCE'S WHOLE LINEAR MEMORY MEASURED, WHICH IS THE ONE BYTE FIGURE ON THIS ROW THAT IS
-           NOT THE ENGINE'S CENSUS OF ITSELF. `heap` above is result.c's reading of the quickjs runtime and the C
-           allocator; this is `M.HEAPU8.length` as renderer.html stated it on the reply engineRecordFacts last
-           awaited, which is the view over the ENTIRE memory — the allocator's arena plus the stack plus static
-           data — so it is the only field here that can answer what share of the wasm32 address space this
-           instance has taken. `arenaKiB / -sMAXIMUM_MEMORY` is what a reader had instead, and testing/live-wfq.js
-           printed it under its own banner as a FLOOR for exactly that reason: the arena is a SUBSET of this.
-           IT IS A SEPARATE FIELD AND IS NOT FOLDED INTO `heap`, WHICH IS NOT TIDINESS. That census's rows are
-           DERIVED from result_heap_json's own composer text by its reader, which THROWS when the set it names
-           disagrees — so a field the engine does not emit, made to look like one it does, would be a row with no
-           producer in the one place the producer is checked. It is also a different OBSERVER (this zone, off a
-           reply) at a different MOMENT (the end of the last round, where the census is the instant
-           qjs_emit_partial composed it), and the four censuses above are separate objects precisely because a
-           reader compares WITHIN one and never across. A quotient of this against `heap.arenaKiB` is therefore a
-           two-moments figure and is composed nowhere; what IS sound is this over the LINK'S OWN ceiling, which
-           is a constant.
-           IT IS MONOTONE, SO ITS LATEST VALUE IS ITS HIGH-WATER AND A CEILING SHARE OVER IT IS A HIGH-WATER
-           QUESTION. This file's own `_atRamFloor` states the mechanism — "a wasm Memory never shrinks" — and
-           engine.c says the same of the arena inside it, "which in wasm is LINEAR MEMORY AND ONLY EVER GROWS".
-           That is what makes this a distance-to-a-limit a reader may ask: every row of `heap` but `arenaKiB` is a
-           gauge that FALLS, and a share of a ceiling asked of one of those would publish whatever the allocator
-           happened to be holding at an instant as a distance to a limit the run may already have been nearer to.
-           AND THE DENOMINATOR IT IS A SHARE OF IS THE INSTANCE'S AND NOT THE POOL'S. `_residentBytes` sums this
-           same number across every live engine against a DEVICE RAM floor; the wasm32 ceiling is per MODULE, so
-           the two are two questions and the sum is a fraction of the wrong denominator.
-           THE WHOLE-WASM-PAGE CHECK IS NOT RESTATED HERE. engineRecordFacts asserts it on the one line that
-           reads it off the reply, which is where the value enters this zone; a second copy of that shape would
-           be the restated rule this tree refuses, and what this arm owes is PRESENCE, asserted above. */
+        /* The instance's whole linear memory, `M.HEAPU8.length` as renderer.html stated it on the reply
+           engineRecordFacts last awaited: arena plus stack plus static data, so it is the only figure here that
+           answers what share of the wasm32 address space the instance has taken (`heap.arenaKiB` is a subset).
+           It is separate from `heap`, whose rows build.mjs derives from result_heap_json's format string, and
+           it is a different observer at a different moment, so no quotient against `heap` is composed. A wasm
+           Memory never shrinks, so the latest value is the high-water mark and a share of the per-module ceiling
+           is sound; `_residentBytes` sums it across engines against a device RAM floor, a different question.
+           engineRecordFacts asserts the whole-wasm-page shape where the value enters this zone. */
         workingSetBytes: eng.residentBytes,
         endpoints: result.fetchCallSites.length, sinks: result.securitySinks.length,
-        /* AND WHAT COMPOSED EACH OF THOSE ADDRESSES, AND WHETHER THE PAGE'S CODE HAD RUN WHEN IT DID — the
-           two facts `endpoints` cannot state and the pair CLAUDE.md's razor is a SUBTRACTION OF TWO TOTALS
-           over. `endpoints` is a REACH figure, and solver/result.c records what such a number has already been
-           quoted as: "every row of a 43-row surface was one of that document's own `<script src>`,
-           `<link rel=stylesheet>` or `<link rel=preload>` elements, so the number a person reads as a learned
-           API surface was the `<head>` counted back". These two say WHICH rows those were, per address, so the
-           reading is available without subtracting one total from another and without naming any of them.
-           TWO HISTOGRAMS AND NOT ONE KEYED ON THE PAIR. solver/endpoint.c states why they are two facts and
-           never two spellings of one — "`link-element` alone cannot say whether the `<link>` was in the markup
-           or one the router created, and `pre-program` alone cannot say what composed the address" — and a
-           cross-product is a table of mostly zeroes whose two MARGINS are the thing a reader reads. Each
-           partitions the same array, each therefore sums to `endpoints`, and neither is quotable alone. */
+        /* What composed each address (`door`) and whether the page's own code had run when it did
+           (`mintedAt`), per row, so the share of the surface owed to forced execution is read off the rows
+           rather than by subtracting two totals. Two histograms, not one keyed on the pair: solver/endpoint.c
+           states they are two facts, and a reader reads the margins. Each sums to `endpoints`. */
         endpointDoors: endpointFactHistogram(result.fetchCallSites, "door"),
         endpointMintedAt: endpointFactHistogram(result.fetchCallSites, "mintedAt"),
-        /* AND THE THIRD, WHICH IS THE ONLY ONE OF THE THREE THAT ANSWERS CLAUDE.md
-           §What-the-tool-produces' HARD BAR. The owner's statement of the razor is "an address, a key or a
-           value that NO PARSE of the served bytes can state, because it exists only at run time", and
-           NEITHER of the two rows above can be coarsened into it: a literal chunk URL delivered through
-           `module-import` is beyond a MARKUP parse and clears nothing at this bar, while
-           `/api/{location.hash}` through `fetch` clears it outright — two addresses through ONE door,
-           differing on exactly this. So the three histograms are TWO observations and not three, which is
-           said here because here is where the numbers are (CLAUDE.md §EVIDENCE-INFLATION).
-           IT IS A FLOOR AND THIS ZONE MAY NOT READ IT AS A VERDICT. `unknown` is the engine's positive
-           statement that the run reached that address holding a value it had not determined AND resting on
-           an unknown somebody OUTSIDE the engine supplied, so those rows DEFINITELY clear the bar. (That
-           sentence named only the first half, and it is corrected rather than deleted because the half it
-           named is what a reader re-derives from the word: an undetermined address standing on a hole the
-           engine minted for its own drive is a DIFFERENT class the engine refuses, and `not determined`
-           alone was never this bar's operand.) `concrete` claims nothing whatever about a parse, because
-           whether a
-           static reader could have stated an address is not decidable — a bundler's chunk manifest needs a
-           scope pass to resolve. solver/endpoint.h enumerates what `concrete` hides (a literal, the
-           document's own address, a source a flow PINNED and re-read) and this zone holds no copy of that
-           reasoning for the same reason it holds no copy of the door-to-reach map: a classification that
-           grows in the engine and is duplicated here would abort a zone that is live on WRITE the day the
-           engine ships one more class.
-           RENDERED AND ASSERTED GENERICALLY, so a class added to `ENDPOINT_ADDRESS_CLASSES` reaches this
-           reader unedited, and a row from a wasm older than the key lands in the `(unstated)` bucket — a
-           fact about the BUILD and never about an address, which is the ordinary case in a zone deployed on
-           write beside an engine that is live only after a build. */
+        /* The address class, the one of these that answers the product's bar (an address no parse of the served
+           bytes can state). Doors cannot be coarsened into it: a literal chunk URL via `module-import` is beyond a
+           markup parse yet clears nothing, while `/api/{location.hash}` via `fetch` clears it.
+           It is a floor, not a verdict: `unknown` means the run reached the address holding a value it had not
+           determined and resting on an unknown supplied from outside the engine, so those rows clear the bar;
+           `concrete` claims nothing about a parse (solver/endpoint.h enumerates what it hides). This zone holds
+           no copy of that classification, so a class added to `ENDPOINT_ADDRESS_CLASSES` reaches it unedited, and
+           a row from an older wasm lands in `(unstated)`. */
         endpointAddressClass: endpointFactHistogram(result.fetchCallSites, "addressClass"),
-        /* AND THE FOURTH, WHICH IS THE UNION OF TWO OF THE THREE ABOVE AND IS THE ONE FIGURE A PERSON MAY
-           READ AS CLAUDE.md §What-the-tool-produces' HARD BAR. That bar's own retirement condition is "the
-           emitter that states a razor figure composes that union ITSELF, so a door count cannot be assembled
-           into one at all", and this row is it arriving ALREADY COMPOSED: solver/endpoint.c unions the
-           address class's `unknown` rows with the rows whose DOOR handed it bytes that were never in the
-           served document, per row, at the one line where both facts are in hand.
-           SO THIS ZONE STILL HOLDS NO MAP, WHICH IS WHY THE UNION IS COMPOSED THERE AND NOT HERE. The
-           argument is the one the row above makes and one class wider: a classification that grows in the
-           engine and is duplicated in a zone live on WRITE would abort that zone the day the engine ships one
-           more door. Unioning `endpointDoors` with `endpointAddressClass` here would be exactly that copy,
-           and the operand a reader assembles by hand is the one three prose sites in the engine had WRONG —
-           `EPR_BEYOND` is what a MARKUP parse cannot reach, and `fetch`, `xhr` and `module-import` are all in
-           it, so a union assembled that way is the figure CLAUDE.md demoted rather than the one it chose.
-           IT IS A FLOOR AND NOT A VERDICT, AND THE THREE HISTOGRAMS ARE STILL TWO OBSERVATIONS AND NOT FOUR.
-           This is DERIVED from `door` and `addressClass` and adds no observation to them: `unproven` is not
-           the claim that a parse could state the address — a source a flow PINNED and re-read lands there and
-           really is past every parse, which solver/endpoint.h enumerates and which no field on the row can
-           say (CLAUDE.md §EVIDENCE-INFLATION, said here because here is where the numbers are).
-           RENDERED AND ASSERTED GENERICALLY for the row above's reason, so a class added to
-           `ENDPOINT_RAZOR_CLASSES` reaches this reader unedited and a row from a wasm older than the key
-           lands in the `(unstated)` bucket — a fact about the BUILD and never about an address. */
+        /* The razor class, the figure a person may read as the bar: solver/endpoint.c unions the address
+           class's `unknown` rows with the rows whose door handed it bytes never in the served document, per row,
+           where both facts are in hand. The union is composed there, not here, so this zone holds no door map
+           that would abort it when the engine adds a door (and `EPR_BEYOND`, the markup-parse class, is not the
+           operand). It derives from `door` and `addressClass` and adds no observation: `unproven` is not a claim
+           that a parse could state the address. Rendered and asserted generically, like the rows above. */
         endpointRazorClass: endpointFactHistogram(result.fetchCallSites, "razorClass"),
-        /* …AND THE BOUND ON THE ONE POPULATION THE ROW ABOVE NAMES AND CANNOT SIZE. Its own paragraph ends
-           "a source a flow PINNED and re-read lands there and really is past every parse, which
-           solver/endpoint.h enumerates and WHICH NO FIELD ON THE ROW CAN SAY" — and that last clause was a
-           statement about the engine's emitted row, which now carries `witnessClass`. The sentence stays where
-           it is because it is the ARGUMENT a reader needs (the bar is a floor, not a complement over parses);
-           this is the quantity it was missing.
-           IT IS NOT UNIONED INTO THE BAR HERE OR ANYWHERE, which is the same refusal the row above makes
-           about `endpointDoors` and for a sharper reason: that one would be a SECOND COPY of a union the
-           engine already composes, and this would be a THIRD OPERAND the engine deliberately does not —
-           `may-rest-on` is a MAY (the pin is a fact about the PATH, not about this address's bytes), so
-           folding it in turns a floor into an over-claim. The two columns are rendered side by side and a
-           person reads the pair.
-           RENDERED AND ASSERTED GENERICALLY for the three rows above's reason, so a class added to
-           `ENDPOINT_WITNESS_CLASSES` reaches this reader unedited. */
+        /* The witness class, sizing the population `unproven` hides (a source a flow pinned and re-read). It is
+           never unioned into the bar: `may-rest-on` is a fact about the path, not this address's bytes, so
+           folding it in would turn a floor into an over-claim. The columns are read side by side. Rendered
+           and asserted generically. */
         endpointWitnessClass: endpointFactHistogram(result.fetchCallSites, "witnessClass"),
-        /* …AND THE OPERAND THE ADDRESS CLASS IS DERIVED FROM, WHICH NONE OF THE FOUR ROWS ABOVE PUBLISHES AND
-           WHICH IS THE ONE THE HARD BAR'S OWN OPEN QUESTION IS ABOUT. `endpointAddressClass` is read off the
-           address VALUE's concolic provenance, so a person meeting `unknown` beside `runtime-only` knows the
-           run held an unknown and cannot know WHOSE: solver/endpoint.c's `address_class_of` carries the
-           residual, and its one population is a hole `engine_orphan_call` minted so a drive of a never-called
-           function could happen at all — which answers `unknown`, clears the bar, and teaches nothing, because
-           the hole is the instrument's. This row is the count a reader needs to size that population.
-           IT IS NOT A FIFTH OBSERVATION AND IT IS NOT AN OPERAND (CLAUDE.md §EVIDENCE-INFLATION, said here
-           because here is where the numbers are). The four above are TWO observations; this is a THIRD, about
-           the same array, and it may not be unioned into or subtracted from any of them — `(named)` is not a
-           claim that the bytes are the page's and `(unattributed)` is not a claim that they are ours. What
-           decides that is a fact the mint does not yet state, which is what that residual is for.
-           THE NAMES ARE DELIBERATELY NOT HERE. They are on the emitted ROW, where the residual's own
-           observation is made; the reader above says why a page-influenced string may not be a key in this
-           zone, and the four buckets are words no document can spell. */
+        /* The delivery-root state the address class derives from, sizing the population whose `unknown` is a
+           hole `engine_orphan_call` minted for its own drive (solver/endpoint.c's `address_class_of` residual).
+           It is a third observation about the same array and is not unioned into or subtracted from the others:
+           `(named)` does not claim the bytes are the page's, nor `(unattributed)` that they are the engine's.
+           The names stay on the emitted row, since a page-influenced string may not be a key here. */
         endpointAddressRoot: endpointAddressRootHistogram(result.fetchCallSites),
         park: result._park.length, resumed: resumed,
         coldLookup: cold.lookup, coldOther: cold.other, bundleId: cold.bundle,
         url: (msg && msg.sourceUrl) || "" }
-    /* A CRASHED RUN REPORTS NO COUNTERS, and the honest report of that is the ABSENCE, not seven zeroes.
-       Zeroes here read as "the engine ran and did nothing" — indistinguishable in the log from a real run that
-       explored nothing, which is a finding. `run` is the field that keeps the two apart, and the counters
-       are simply not present: nothing may compute a rate, a delta or a total out of a run that never reported
-       one. IT IS `run` AND NOT `crashed:true`, AND THE BOOLEAN IS DELETED RATHER THAN KEPT BESIDE IT: the
-       record now has to speak THREE states (a snapshot of a run still going, a run that ended, a run that
-       died) and a flag that can only say one of them would have made the other two the same value — a partial
-       reading in the log exactly as a completed run does, which is the defect this record is being fixed for.
-       THE ARM IS CHOSEN BY THE OUTCOME AND NOT BY WHETHER A DOCUMENT ARRIVED, which is the same
-       distinction one level down: a crash that left an unconsumed partial behind used to take the arm ABOVE
-       and log as a complete run with a full set of counters, because the only question asked was "is there a
-       document". Its findings still travel (they are on the returned analysis, labelled `_run:"crashed"`);
-       what does not travel is a COST record for a run that did not finish. */
-    /* …AND IT REPORTS ITS CAUSE, WHICH IS NOT A COUNTER AND IS THE ONE THING THE ROW OWED A READER. The rule
-       one paragraph up is about COST counters: seven zeroes claim a run explored nothing, so a crashed run
-       carries none. `err` claims nothing about how much was explored — it says WHY the run ended — and its
-       absence here was the crash announcing itself in a place nobody reads while the record every consumer
-       DOES read (the popup's GET_ENGINE_RUNS, testing/live-run.js) could say only the word "crashed". The
-       banner has carried the ROOT @WHY since engineCrash was written; this is the same string, on the row.
-       A crash whose cause lives only in a console the renderer does not tee is a crash that names no
-       capability, which is the whole value a live site has. */
+    /* A crashed run reports no cost counters: zeroes would read as a run that explored nothing. `run` keeps the
+       three states (partial, ended, died) apart. The arm is chosen by the outcome, not by whether a document
+       arrived, so a crash that left an unconsumed partial logs as crashed; its findings still travel on the
+       returned analysis labelled `_run:"crashed"`. */
+    /* It does carry its cause, `err`, the same root @WHY string engineCrash puts on the banner, so the row
+       the popup's GET_ENGINE_RUNS and testing/live-run.js read names the capability that failed. */
     : { run: outcome, resumed: resumed,
         coldLookup: cold.lookup, coldOther: cold.other, bundleId: cold.bundle,
         url: (msg && msg.sourceUrl) || "", err: crashErr };
-  /* AND THE CAUSE IS ASSERTED, NOT HOPED FOR. There are exactly two producers of a crashed record and each
-     one writes the `engine-crash` line into `lines` before it calls here, so an empty `err` on this arm is
-     that composition having changed under this seam — a third crash path, or a producer that stopped writing
-     the line — and the symptom would be a row that says "crashed" and nothing else, which is the state this
-     field exists to end. It is not defaulted for the same reason no other field on this record is. */
-  /* THE CONTAINMENT, ASSERTED WHERE BOTH HALVES ARE IN ONE HAND. CLAUDE.md §AND-THE-DENOMINATOR-CAN-BE-THE-
-     RIGHT-KIND is the rule and it is exact: a count offered as a share of another is raised at the SAME event
-     the denominator counts, and the containment is the one thing about a quotient a reader can check without
-     re-deriving the whole mechanism. Both are raised in engineServiceFetch's one loop — `asked` once per
-     iteration, a decline at most once in the same iteration — so a histogram summing past its denominator is
-     a second raiser of one of the two, which is precisely how `egressDeclined/egressAsked` would start
-     reading above 1 with nothing anywhere saying so. It is asserted rather than left to a reader because a
-     sum that cannot be true is the cheapest finding this pair has. */
+  /* Both crash producers write the `engine-crash` line before calling here, so an empty `err` (asserted below)
+     is a third crash path or a producer that stopped writing it. */
+  /* The egress containment: `asked` and each decline are raised in engineServiceFetch's one loop (one ask per
+     iteration, at most one decline in it), so a histogram summing past its denominator is a second raiser. */
   if (outcome !== "crashed" && result) {
-    /* READ OFF `m` AND NOT OFF `eng`, WHICH IS WHAT MAKES THIS AN ASSERTION ABOUT THE ROW. The map on the
-       record is a COPY taken at composition, so checking the live one would be checking a population the row
-       does not carry — and the moment this is about is the moment the row states, not the moment the assert
-       runs. */
+    /* Read off the row's copy, not `eng`, so it is an assertion about what the row states. */
     let _sum = 0;
     for (const k of Object.keys(m.egressDeclined)) _sum += m.egressDeclined[k];
     DCHECK(_sum <= m.egressAsked,
@@ -1189,24 +627,11 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            "request(s) asked of it — the two are raised in one loop, one `asked` per delivered pending line " +
            "and at most one refusal inside that same iteration, so a sum above the denominator is a second " +
            "site raising one of them and every share read off this pair is over a population that never ran");
-    /* AND THE ENDPOINT PARTITIONS ARE PARTITIONS, ASSERTED WHERE EVERY SIDE IS IN ONE HAND. Two claims,
-       and only the second can fail against today's producer. (a) Each histogram SUMS to `endpoints` — one row,
-       one bucket, one array — which is asserted for the reason the egress containment above is: the edit that
-       breaks it is precisely the one the residual this landing retires proposed, a histogram built over a
-       FILTERED or DEDUPED walk of these rows, and a partition that does not sum is the cheapest finding this
-       pair has. (b) The unstated bucket is ALL OR NOTHING, and this one has two sides that really can
-       disagree: one instance emits one document shape, so a run stating a door for some rows and not others
-       is that emit having become conditional — and a half-unstated histogram says "this artifact predates the
-       key" about part of one array, which is true of no build. */
-    /* THE LIST IS THE ONLY PLACE ITS OWN LENGTH IS WRITTEN, AND THE NUMBER IS GONE RATHER THAN RAISED: both
-       claims below are about a histogram over ONE array, so the set they are asked of is whatever this literal
-       holds and a row added to the composer above without a line here is a partition nothing checks. It said
-       FIVE NOW RATHER THAN FOUR for as long as there were five, and a count in a comment beside the list it
-       counts is the one that goes stale the next time this literal grows (CLAUDE.md
-       §AND-WHERE-A-SENTENCE-CARRIES-BOTH-A-COUNT-AND-THE-LIST-IT-COUNTS).
-       `endpointAddressRoot` IS IN IT AND IS BUILT BY A DIFFERENT READER, which neither claim depends on: both
-       are about a map whose counts sum over the rows of ONE array, and the reader that produced it is the
-       composer's business rather than this check's. */
+    /* The endpoint partitions are partitions: (a) each histogram sums to `endpoints`, which fails if one is
+       built over a filtered or deduped walk; (b) the `(unstated)` bucket is all or nothing, since one instance
+       emits one document shape and a key stated for some rows only is a conditional emit. */
+    /* This list is the only statement of which partitions are checked, so a histogram added above needs a line
+       here. `endpointAddressRoot` is built by a different reader; both claims hold regardless. */
     for (const _p of [["endpointDoors", m.endpointDoors], ["endpointMintedAt", m.endpointMintedAt],
                       ["endpointAddressClass", m.endpointAddressClass],
                       ["endpointRazorClass", m.endpointRazorClass],
@@ -1228,68 +653,19 @@ function linesToAnalysis(lines, msg, outcome, eng) {
              "bucket that means 'this artifact predates the key' would be read as a property of some " +
              "addresses");
     }
-    /* AND THE TWO READERS AGREE ABOUT THE ONE ROW BOTH CAN SEE, ASKED ONLY WHERE BOTH OF THEM HAVE A ROW TO
-       READ. solver/endpoint.c emits `addressRoot` as `null` on EXACTLY the rows whose `addressClass` is
-       `concrete` — the class is the discriminator, because `concolic_root_c` answers NULL both for a value that
-       is not a concolic and for one whose bytes entered through nothing the engine minted — so these two counts
-       are one fact read by two readers of one array at one moment, and a difference is the two having parted.
-       IT IS A CHECK AND NOT THE NON-CHECK §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE FORBIDS, AND THE GATE
-       DOES NOT WEAKEN IT. The operands come from TWO lines of a DIFFERENT file: one writes the class token
-       through a generated switch, the other chooses a JSON TYPE off `e->addr_class`. An edit to either alone
-       makes this fail, which is the whole reason it is worth a line — the pair is what lets a reader read
-       `(no-concolic)` as a statement about addresses rather than as a count of a spelling. With both keys
-       stated the comparison below is byte-for-byte the one that stood here, and `(unstated)` is 0 or ALL by the
-       claim in the loop above, so the gate admits no partial state to be silent about.
-       THE RETIRED CLAUSE BELOW SAID THE GATE WAS UNNECESSARY AND IT WAS WRONG ABOUT THE ONE ARTIFACT THIS ZONE
-       IS ALWAYS ENTITLED TO BE NEWER THAN. It read: "AN ARTIFACT OLDER THAN EITHER KEY SATISFIES IT RATHER THAN
-       EVADING IT: both sides are then `(unstated)`, both lookups are absent, and the comparison is 0 against 0.
-       A run with ONE of the two keys is already refused by the all-or-nothing claim above, per key, so there is
-       no mixed state left for this to be silent about." The first sentence is the INTENT and is right. The
-       second is a claim about the loop above and is FALSE: that claim refuses a key stated for SOME rows
-       (`_u === 0 || _u === m.endpoints`), and a key the artifact does not emit AT ALL satisfies it on its RIGHT
-       arm — so a run whose artifact states `addressClass` and not `addressRoot` passes every per-key claim and
-       arrives here with `_nc` 0 against a real `_cc`, and the intent in the first sentence was never
-       implemented. It is kept in its own words because a reader who re-derives the exemption from that loop
-       will write it again: the loop really does refuse a mixed key, and a reader who checks only that half
-       stops where this one did.
-       THE ASYMMETRY IT MISSED IS PERMANENT RATHER THAN A TRANSITION, WHICH IS WHY THE GATE IS NOT SCAFFOLDING.
-       CLAUDE.md §A-CROSS-BOUNDARY-DIFF: this zone's JavaScript is INTERPRETED FROM THE TREE and is therefore
-       deployed on WRITE, while the engine's C is live only after somebody BUILDS — so this zone is routinely
-       newer than the wasm beside it, every engine-side key lands before the artifact that states it, and a
-       zone-side assert that cannot read an artifact one commit older than itself breaks the product on every
-       engine-side landing until a build happens. popup.js already states exactly that rule for the four
-       partitions it asserts, in its own words — an older wasm "makes one BUCKET read `(unstated)`, which is the
-       handled case and a fact about the build" — and cites the same section for it. This was the one reader of
-       these keys that did not honour it, which is why the repair is here and at no sibling: `addressRoot`
-       occurs nowhere in popup.js, and this is the only cross-key comparison among these partitions.
-       MEASURED, AND WHAT IT COST WAS THE WHOLE PRODUCT RATHER THAN ONE PAGE. Three passes over one real app
-       page through the installed artifact answered `runsTotal 0` with NO result document at all — the zone
-       aborting here rather than the engine aborting anywhere — at `_nc` 0 against `_cc` 2 in 3 of 3 with zero
-       spread across the three. The artifact states `"addressClass"`, `"razorClass"` and `"witnessClass"` and
-       does NOT state `"addressRoot"`: a fixed-string count over the installed `extension/lib/qjs/qjs.wasm`,
-       with those three as armed controls answering nonzero and an invented token as the negative control
-       answering zero. AND THE POPULATION IS NOT THAT PAGE, which is the part a reader must not take for an
-       anecdote: `concrete` is `ENDPOINT_ADDRESS_CLASSES`' conservative member and therefore the class an
-       ordinary address gets, so every census row that carries `endpointAddressClass` carries `concrete > 0`.
-       The derivation rather than the figure, because the archive grows: walk `testing/corpus/census-*.jsonl`,
-       count the rows whose `endpointAddressClass.concrete` is nonzero against the rows carrying that key at
-       all, and read the two against each other — they were equal, over every site id in the archive including
-       the controls, and no archived row carried `endpointAddressRoot` at all.
-       RETIREMENT: this record goes when a cross-key claim over these partitions cannot be WRITTEN without the
-       stated-ness of both of its operands in the same expression — a helper taking two partition names that
-       REFUSES a comparison either of whose keys the artifact did not state — because the gate is then
-       structural and the retired clause is no longer re-derivable from the loop above. MEASURED ABSENT with
-       the command, so this condition is not born met: over `extension/bridge.js`, `endpointPartitionPair`,
-       `crossKeyWhereStated` and `bothStatedOrSkip` each answer 0 against `endpointAddressRootHistogram`
-       answering nonzero as the armed control. */
+    /* The two readers agree on the row both can see: solver/endpoint.c emits `addressRoot: null` on exactly the
+       rows whose `addressClass` is `concrete`, from two different emit lines, so a difference is those emits
+       having parted.
+       The check is gated on both keys being stated. This JS is live when written while the engine is live only
+       after a build, so it is routinely newer than the wasm, and an artifact that emits `addressClass` but not
+       `addressRoot` passes the per-key all-or-nothing claim above (fully unstated) yet would compare 0 against
+       a real `concrete` count. popup.js follows the same rule for its partitions. */
     const _rootUnstated = m.endpointAddressRoot[ENDPOINT_FACT_UNSTATED] === undefined
                           ? 0 : m.endpointAddressRoot[ENDPOINT_FACT_UNSTATED];
     const _clsUnstated = m.endpointAddressClass[ENDPOINT_FACT_UNSTATED] === undefined
                          ? 0 : m.endpointAddressClass[ENDPOINT_FACT_UNSTATED];
-    /* BOTH OPERANDS AND NOT ONLY THE NEWER ONE, BECAUSE THE PRECONDITION OF A TWO-OPERAND COMPARISON IS
-       TWO-SIDED. Gating on `addressRoot` alone would be one bit answering a question about two keys — the
-       §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS shape — and would read as a claim that this zone knows which of
-       the two is the newer, which is a fact about a build order and not about either partition. */
+    /* Both operands are gated, since the precondition of a two-operand comparison is two-sided; gating one
+       would claim knowledge of which key is newer. */
     const _bothStated = _rootUnstated === 0 && _clsUnstated === 0;
     const _nc = m.endpointAddressRoot[ENDPOINT_ROOT_NO_CONCOLIC] === undefined
                 ? 0 : m.endpointAddressRoot[ENDPOINT_ROOT_NO_CONCOLIC];
@@ -1305,85 +681,25 @@ function linesToAnalysis(lines, msg, outcome, eng) {
          "a crashed run reached the run log with no `engine-crash` line among its output — every crash path " +
          "writes one (engineCrash appends the ROOT @WHY to it, crashRecord constructs it), so a crash with " +
          "no cause here is a producer that stopped announcing itself and a row a reader cannot act on");
-  // A per-run LOG (not a single overwritten global): concurrent cold-kick engines each report here, so the
-  // full park->persist->rehydrate->resume SEQUENCE across all engines is observable, not just the last one.
-  /* AND THERE IS NO `self._engineMeta` BESIDE IT. It held the LAST record — a page URL and its counters — in a
-     global nothing has ever read: not this file, not the popup's GET_ENGINE_RUNS, not rendererPoolProbe, not
-     testing/. A single overwritten global is the shape the line above says the log replaced, and it survived
-     underneath it, holding one page's address for the life of the offscreen with no surface to show it on. */
-  /* THE ARRAY IS DECLARED AT LOAD (top of this file), not created on first use: `self._engineLog = self._engineLog || []`
-     is the defaulting shape, and here it defaulted the one thing a reader wants to distinguish — an empty log
-     because nothing has run from an absent log because this file never loaded. */
-  /* AND A DOCUMENT WITH NOTHING TO RUN PRODUCES NO RECORD, because no engine ran. It used to produce a
-     `crashed:true` row — the popup rendered "the engine crashed" for a page whose only fault was carrying no
-     script — which is the mirror of the defect this seam is being fixed for: a false statement about a run
-     in the one place a reader looks for what the runs did. An absent row and a row of zeroes are different
-     facts, and so are an absent row and a crash row. */
+  // A per-run log, not a single overwritten global: concurrent engines each report here, so the whole
+  // park, persist, rehydrate, resume sequence across engines is observable.
+  /* A document with nothing to run produces no record, because no engine ran: an absent row, a row of zeroes
+     and a crash row are three different facts. */
   if (outcome !== "nothing-to-run") engineLogWrite(eng, m);
-  /* A RUN WITH NO ENGINE DOCUMENT SAYS SO BY NOT CARRYING ONE, AND THAT IS THE WHOLE OF WHAT IT MAY SAY.
-     `result || { fetchCallSites: [], securitySinks: [], pageErrors: [], _park: [] }` stood here — the defect
-     §Architecture opens its list with, grown into its most developed form. The substitute literal had reached
-     the document's FULL shape, so it no longer read as a default at all: it fabricated a well-formed result
-     in which the engine looked at the page and learned nothing, and "no document arrived" and "the page was
-     analysed and is clean" became the same four empty arrays travelling under the same field names. Calling
-     them "the host's own empties" (which the comment that stood here did) does not make them the host's to
-     state — `fetchCallSites` means THE ENDPOINTS THE ENGINE LEARNED, and this zone does not know that number
-     for a page whose engine never answered. It is not a host-side empty, it is a measurement nobody made.
-     SO THE THREE ENGINE-OWNED FIELDS ARE PRESENT-OR-ABSENT, NEVER EMPTY-AS-A-SUBSTITUTE. Their PRESENCE is
-     the positive statement "an @RESULT document arrived and assertResultDocument checked it field for
-     field", and every consumer reads that presence rather than a length: lib/merge.js's two passes,
-     offscreen-brain's incremental merge and its terminal replace-or-keep, and the frontier write below.
-     `resolverErrors` is NOT one of them and stays on both arms — it is the HOST's record of what went wrong,
-     of which the engine's `pageErrors` are one contributor, and on this arm it carries the `@E engine-crash`
-     row that says why there is no document. `_run` is the other half of the same statement: WHICH absence
-     this is (an instance that died, or a document with nothing to run). */
-  /* THIS DOCUMENT IS EXACTLY WHAT THE BRAIN READS, AND IT USED TO CARRY FIFTEEN MORE FIELDS THAT NOTHING DID.
-     A "sibling fields the brain reads unconditionally, present + empty so it never throws" block held
-     protoEnums/protoFieldMaps/dangerousPatterns/esmImportUrls/inRunModuleUrls/domEndpoints/sourceMapTypes/
-     sourceMapsByUrl/traceMapsByUrl/valueConstraints/sourceMapUrl/sourceMap, beside `chunkUrls`, `_replyWant`
-     and `_switches` — every one of them a constant the ENGINE has never written. The merge passes that read
-     them were deleted (lib/merge.js records four of them by name), and the writers outlived the readers, which
-     is the §FIELD-A-CONSUMER-DEFAULTS defect with the arrow reversed: `dangerousPatterns` crossed two
-     boundaries into `tab._securityFindings`, and a `.length` of 0 there is indistinguishable from "no
-     dangerous patterns found". A constant `[]` is not a measurement of a page, so it is not shipped as one.
-     (`domEndpoints` is the one of them worth naming as WORK rather than as rot: the href/src/action/data-*
-     scan it stood for is an ENGINE capability nobody has built, and the place to build it is the Lexbor tree
-     where the attribute values are. The drivers that read dangerousPatterns/valueConstraints/protoEnums/
-     protoFieldMaps/sourceMapUrl off the analysis with `|| []` are gone with the batch pipeline they belonged
-     to: their input was a report field no writer in this tree produced, so the whole analyzer was composed of
-     absences, and this paragraph's own naming of them was the last thing pointing a reader at it.) */
+  /* The engine-owned fields `fetchCallSites`, `securitySinks` and `_park` are present or absent, never empty
+     substitutes: their presence states that an @RESULT document arrived and was asserted, and every consumer
+     reads that presence (lib/merge.js, offscreen-brain's merges, the frontier write). An empty substitute would
+     make "no document arrived" and "analysed and clean" identical. `resolverErrors` is the host's record and is
+     on both arms; on the no-document arm it carries the `@E engine-crash` row. `_run` says which absence.
+     The object carries only what the offscreen reads; a constant `[]` is not a measurement and is not shipped. */
   const analysis = {
-    /* THE ENGINE'S OWN PAGE ERRORS, WHICH IT CALLS `pageErrors`. This line read `resolverErrors` — a name
-       nothing on the engine side has ever written — so every error the engine recorded while running the page
-       was dropped here, and the `|| []` beside it is precisely what made the drop invisible: the field the
-       brain reads existed, held the host's own errors, and looked complete.
-       A ROW IS {context, message}, TWO NON-EMPTY STRINGS, AND NOTHING ELSE. It carried `snippet` and
-       `replyExample` as constant `null`s: offscreen-brain dropped `replyExample` on the way through, no
-       renderer ever read either, and the engine has no source-text or reply to state for a page error in the
-       first place (result.c's pageErrors are strings). Three comments — here, in lib/serialize.js and in
-       popup.js — named `snippet` as part of the contract the popup reads; it was read nowhere.
-       AND THE ONES THE ENGINE TOOK BACK, ON THE SAME RELAY UNDER THEIR OWN `context`. They are not findings
-       about the page — the page handled the rejection, which is what §8.1.6.4 step 7.4 told the engine — but
-       they are still the engine's record of a capability the page REACHED FOR, and that is the whole value of
-       this list: "Element.matches is not a function" names something unbuilt whether or not the bundle caught
-       the rejection it arrived in. A separate array would have needed its own path through the brain, the
-       serializer and the popup to reach the one surface a reviewer reads, and would have arrived saying
-       exactly what a `context` says. `page-retracted` is a single token like every other value on this axis
-       ("page", "engine", "why", "result-parse"), so nothing downstream has to learn a new shape.
-       AND WHOSE THROW IT WAS IS THE SECOND AXIS, WHICH IS WHY IT SUFFIXES THE TOKEN RATHER THAN CONCATENATING
-       A THIRD LIST. `pageErrorsExplored` is ORTHOGONAL to the pair above — a message in it is ALSO in exactly
-       one of them — so concatenating it would render one message TWICE, once as the page's own error and once
-       as the engine's, which is the contradiction-on-one-screen solver/result.c refuses for the disjoint pair
-       and refuses here for the same reason. Two independent facts get two independent halves of one token:
-       the standing/retracted axis chooses the base, the explored axis appends `-explored`, and the result is a
-       closed 2x2 over a row that is still {context, message} and two strings — nothing added, nothing for the
-       brain, the serializer or the popup to learn, since popup.js renders `context + ": " + message` verbatim.
-       WHAT THIS FIXES IS A PERSON BEING SHOWN AN ERROR THEIR PAGE DID NOT HAVE. `options.signal does not
-       implement AbortSignal (on the forced arm …)` is the engine forcing a branch a real session would not
-       have taken, and the throw on that arm is the exploration WORKING — it is evidence, and it is not a defect
-       in the page. It was listed under "page" with nothing to distinguish it. A Set is built once rather than
-       an `indexOf` per row so a document with many messages does not go quadratic on the one seam every page
-       crosses. */
+    /* The engine's page errors as `{context, message}` rows of two strings. `context` is a closed 2x2: the
+       base is `page` (standing) or `page-retracted` (taken back, HTML §8.1.6.4
+       HostPromiseRejectionTracker(promise, operation), still worth showing because it names a capability the
+       page reached for), and `-explored` is appended where the throw was engine-minted exploration, since
+       `pageErrorsExplored` overlaps the other two and concatenating it would show one message twice. popup.js
+       renders `context + ": " + message` verbatim, so nothing downstream learns a new shape. A Set keeps the
+       lookup linear. */
     resolverErrors: (function () {
       if (!result) return [].concat(extraErrors);
       const explored = new Set(result.pageErrorsExplored.map((e) => String(e)));
@@ -1395,24 +711,15 @@ function linesToAnalysis(lines, msg, outcome, eng) {
           .concat(result.pageErrorsRetracted.map(row("page-retracted")))
           .concat(extraErrors);
     })(),
-    /* NO probeResults ON THIS SEAM. The engine issues no request, so it receives no rejection and has no
-       error-derived schema to relay; the record the Send panel reads is written by the two systems that DO
-       probe — lib/req2proto.js (driven by lib/discovery-probe.js and lib/response-decode.js) — straight into
-       `globalStore.probeResults`, which never crossed this boundary. */
+    /* No probeResults on this seam: the engine issues no requests. lib/req2proto.js (driven by
+       lib/discovery-probe.js and lib/response-decode.js) writes `globalStore.probeResults` directly. */
     // The document this analysis is about, asserted at the top of this function rather than defaulted here.
     sourceUrl: msg.sourceUrl,
-    /* WHAT THIS ANALYSIS IS A RECORD OF, CARRIED WITH IT. Every consumer of an analysis has to be able to tell
-       a snapshot of a running page from a finished run, and both of those from a run that died — and until
-       this field there was nothing on the object that said so. `_engineCrashed` was set on the crash arm and
-       READ NOWHERE, which is the §FIELD-A-CONSUMER-DEFAULTS defect pointed the other way: the writer looked
-       live, so the discard it announced looked enforced. Written on EVERY arm, never absent, so a consumer
-       asserts it rather than defaulting a missing one to "fine". */
+    /* What this analysis is a record of (see `outcome` above); written on every arm, so consumers assert it. */
     _run: outcome,
   };
-  /* THE THREE FIELDS THAT ARE THE ENGINE'S TO STATE, ADDED ONLY WHERE THE ENGINE STATED THEM. Read straight
-     off `result` rather than through a second name, so there is no object in this function that a document
-     could be defaulted INTO — the shape that let the substitute literal survive four hardenings of the
-     surrounding code. */
+  /* The engine-owned fields, added only where the engine stated them, read straight off `result` so no object
+     here exists for a document to be defaulted into. */
   if (result) {
     analysis.fetchCallSites = result.fetchCallSites;
     analysis.securitySinks = result.securitySinks;
@@ -1420,12 +727,9 @@ function linesToAnalysis(lines, msg, outcome, eng) {
   }
   return analysis;
 }
-/* THE ONE QUESTION EVERY CONSUMER OF AN ANALYSIS ASKS BEFORE IT READS A FINDING ARRAY, asked in one place so
-   the three fields cannot drift apart at four call sites. It is a POSITIVE read of an absence, not a guard
-   against one: a true answer means an @RESULT document arrived and `assertResultDocument` checked it, and a
-   false answer means this run produced no document at all and `_run` says which absence it is. The DCHECK is
-   what keeps the two states from silently becoming three — a record carrying one of the trio and not the
-   others is `linesToAnalysis` broken, and would read here as a document. */
+/* Whether an analysis carries an engine document, asked in one place so the three fields cannot drift apart
+   across consumers. True means an @RESULT arrived and was asserted; false means none did and `_run` says which
+   absence. A record with some but not all of the trio is linesToAnalysis broken. */
 function analysisHasDocument(a) {
   DCHECK(a && typeof a === "object", "an analysis record is not an object — every producer of one is in this file");
   const n = (a.fetchCallSites !== undefined) + (a.securitySinks !== undefined) + (a._park !== undefined);
@@ -1442,65 +746,27 @@ function analysisHasDocument(a) {
 }
 self.analysisHasDocument = analysisHasDocument;   // read by offscreen-brain.js and lib/merge.js across the zone's one realm
 
-/* Run one page through a fresh v2 engine instance, capturing @H/@CHUNK stdout. The ENGINE parses the
-   page HTML with its in-wasm Lexbor DOM and runs the document's scripts in order (against the real
-   DOM) — the bridge no longer scrapes scripts, and `html` is the whole of what qjs_init takes for a
-   document. `code` is carried here for the AST_ANALYZE consumer below and is NOT handed to the engine:
-   it used to be, and the engine cast it away, so a caller that put extra scripts in it was silently
-   running none of them. */
+/* The origin of a URL, or "" when it does not parse. */
 function originOf(u) { try { return new URL(u).origin; } catch (_) { return ""; } }
-/* THE ORIGIN A DELIVERED MESSAGE IS STAMPED WITH, serialized the way HTML serializes one. SECURITY.md:
-   "identity may be minted by the untrusted side because it is only a name, but ROUTING and the ORIGIN
-   STAMPED ON A DELIVERED MESSAGE are the trusted zone's alone. A forgeable `event.origin` would defeat
-   every origin check in every bundle the engine analyses — it would report exploits that are not real and
-   miss ones that are."
-   The value this zone HOLDS for an opaque document is `_senderOrigin`'s per-document uniqueness token
-   ("null:<uuid>"), which exists so two opaque documents never compare same-origin. That token is an
-   internal identity and must never reach a page: HTML §7.5 serializes an opaque origin as the literal
-   "null", which is what a real browser puts in `event.origin`, and a bundle testing `e.origin === "null"`
-   (the ordinary "accept my sandboxed widget" check) would otherwise never match. So the comparison value
-   stays internal and the DELIVERED value is the serialization. */
+/* The origin stamped on a delivered message, serialized as HTML does. SECURITY.md: routing and the origin
+   stamped on a delivered message belong to the trusted zone alone, since a forgeable `event.origin` defeats
+   every origin check in the analysed bundle. This zone holds `_senderOrigin`'s per-document "null:<uuid>"
+   token for an opaque document, so two opaque documents never compare same-origin; that token is internal,
+   and HTML §7.1.1 Origins serializes an opaque origin as "null", which is what pages compare against. */
 function stampOrigin(o) { return _isRealOrigin(o) ? o : "null"; }
-/* THE AGENT CLUSTER AN INSTANCE IS — SECURITY.md's `(browsing-context group, origin)` — computed HERE because
-   both halves are BROWSER-STATED and the untrusted engine may state neither.
-
-   IT REPLACES A PER-DOCUMENT KEY, AND THAT IS NOT A LOOSENING. `admit` used to ask "does an instance already
-   hold this exact documentId?", so a page and its SAME-ORIGIN iframe — one similar-origin window agent, which
-   HTML puts in ONE heap and then RELIES on it — were handed two WASM instances and two heaps. In that split
-   `iframe.contentDocument.body.appendChild(x)` cannot be what §4.5 says it is: adopt-then-insert leaves
-   `x.parentNode` a node belonging to the OTHER document while the wrapper stays the same object, and
-   `frame.contentWindow.onunload = fn` hands that document this agent's live CLOSURE to call. Neither is a
-   property read that could suspend across an instance boundary — they are one object graph, and passing them
-   by name is an unbounded bidirectional export table whose `===` answers wrong. The engine has always modelled
-   this correctly (navigable.c's `child_in_this_agent` builds a same-origin child as a second REALM in the same
-   JSRuntime and only a CROSS-origin one as a peer instance); it was this zone that split what the engine joins.
-   The security invariant is untouched, because it was never keyed on the document: one instance still holds
-   exactly one ORIGIN, so a fetch out of it still has exactly one principal.
-
-   THE GROUP HALF IS `sender.tab.id`. No extension API exposes a browsing-context group; a TAB is exactly one
-   top-level traversable and every nested navigable under it is in that traversable's group, so the tab id is
-   the browser-stated fact closest to the group, and — the direction that matters — it never JOINS two documents
-   that are in different groups, which is what would put two principals behind one instance. RESIDUAL, named
-   because it is a NARROWING and narrowing is the wrong direction: an auxiliary browsing context opened by
-   `window.open()` without `noopener` is in the SAME group as its opener and lands in ANOTHER tab, so this key
-   splits that pair. Closing it needs `openerTabId`, which `MessageSender` does not carry. (An auxiliary the
-   ENGINE opens never travels this path — it is provisioned from the create notice below, which takes its
-   CREATOR's group precisely so that this residual does not reach the case the engine can see.)
-
-   THE ORIGIN HALF IS `_senderOrigin`'S, AND IT IS ALREADY OPAQUE-UNIQUE. SECURITY.md: "An opaque origin is
-   unique per spec → never same-origin with anything (the `"null"==="null"` collision is closed)." The offscreen
-   hands over the browser's `MessageSender.origin` for a tuple origin and a STABLE per-document `"null:<uuid>"`
-   token for an opaque one, so two sandboxed iframes of one page land in two clusters and two instances — the
-   case a naive `origin === origin` gets wrong, and it costs nothing here because the value that arrives is
-   already the right one. It is also why this key is never `originOf(sourceUrl)`: a sandboxed document's address
-   parses to a tuple origin the browser refused to give it.
-
-   AN EMPTY ORIGIN HALF BELONGS TO A REHYDRATED COLD RECIPE, which has no live browser document and therefore no
-   browser-stated principal to resume with. Its GROUP is its frontier key (`cold:<origin>|<bundle>`), unique per
-   recipe and never equal to a tab id, so an empty origin there cannot collide with anything — it is a cluster
-   of one, which is the truth about a resumed frontier rather than a default.
-
-   A NUL SEPARATOR, because neither half can contain one. */
+/* The agent cluster an instance is, SECURITY.md's (browsing-context group, origin), computed here because
+   both halves are browser-stated and the engine may state neither. Same-origin documents of one group share
+   one similar-origin window agent and therefore one heap (navigable.c's `child_in_this_agent` builds a
+   same-origin child as a second realm in one JSRuntime); one instance still holds exactly one origin, so a
+   fetch out of it has one principal.
+   The group half is `sender.tab.id`: no API exposes a browsing-context group, and a tab never joins documents
+   from different groups. Named residual: an auxiliary context opened without `noopener` shares its opener's
+   group but lands in another tab; next diff joins it to its opener's group from a browser-stated opener fact;
+   absence shows as an opener and its popup in two instances. Engine-opened auxiliaries take their creator's group.
+   The origin half is `_senderOrigin`'s, opaque-unique, never `originOf(sourceUrl)` (a sandboxed document's
+   address parses to a tuple origin the browser refused it). An empty origin belongs to a rehydrated cold
+   recipe, whose group is its unique frontier key `cold:<origin>|<bundle>`. A NUL separator, because neither
+   half can contain one. */
 function clusterKeyOf(msg) {
   DCHECK(msg && msg.groupId != null && msg.groupId !== "",
          "a document reached the pool naming no browsing-context group — an instance IS its (group, origin) " +
