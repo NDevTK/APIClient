@@ -188,534 +188,165 @@ typedef enum {
    list, since a release fallthrough would answer the product's bar for a mechanism nothing named. */
 int         endpoint_door_bytes(int door);
 
-/* WHETHER THE RUN COMPOSED THIS ADDRESS OUT OF A VALUE IT HAD NOT DETERMINED, AND WHOSE UNKNOWN THAT VALUE
-   RESTS ON — the fourth fact about a sighting, and the one CLAUDE.md §What-the-tool-produces' HARD BAR is a
-   claim about. The second clause is not a second fact: it is what makes the first one a claim the bar may
-   read, and both are answered by ONE stored member (see the two questions below). That bar is "an
-   address, a key or a value that NO PARSE of the served bytes can state, because it exists only at run
-   time", and the three facts already on a record cannot answer it at any grain: `door` is WHICH MECHANISM,
-   `mintedAt` is WHEN, and `EPR_BEYOND` is a property of the DOOR — so a literal chunk URL delivered through
-   `module-import` is `beyond` and clears NOTHING at this bar, while `/api/{location.hash}` through `fetch`
-   clears it outright. Two addresses through ONE door differ on exactly this, and no count of doors can ever
-   say which.
-   IT IS READ OFF THE ADDRESS VALUE'S OWN CONCOLIC PROVENANCE AND NOTHING ELSE. §Every-value-is-CONCOLIC: the
-   triple RIDES the value the interpreter computed, so the fact is standing in `endpoint_record`'s own `url`
-   argument and needs no producer to carry it, no parser to be consulted, and no second implementation of
-   `what a static reader could reach` — which is the auditor CLAUDE.md §AN-AUDITOR-DERIVES-THE-RULE forbids
-   and which would additionally be a JS-layer dependency §Architecture forbids the engine having.
-   SO IT IS THE ONLY ONE OF THE FOUR WITH NO `UNSTATED` MEMBER, for `ENDPOINT_REACHES`' reason exactly: a
-   door and a grade are stated BY A PRODUCER and a producer can forget, while this is DERIVED at the one door
-   every HTTP-shaped edge passes through, so there is nobody to forget and nothing for a zero to mean.
-   IT IS A FLOOR AND IT IS NOT A BOOLEAN ABOUT PARSES, which is the whole of its honesty and the half a
-   reader must not drop. `unknown` is a POSITIVE statement — the run reached this address holding a value it
-   had not determined AND SOME ROOT OF THAT VALUE IS ONE A DOCUMENT, A SERVER, AN ATTACKER OR THE ENVIRONMENT
-   SUPPLIED (core/frame/location.c's fragment, an absent server-injected global, a reply field, a device
-   reading) — so the bytes are in no served byte and such a row DEFINITELY clears the hard bar. `concrete`
-   claims nothing whatever about a parse: the run had determined this address by the time it recorded it.
-   THE CONJUNCT IS NEW AND THE SENTENCE WITHOUT IT IS RETIRED RATHER THAN DELETED, BECAUSE IT IS WHAT A
-   READER RE-DERIVES FROM THE WORD `unknown`. It read: the value "entered the program at a source
-   (core/frame/location.c's fragment, an absent server-injected global, a reply field, a device reading, A
-   DRIVEN ORPHAN'S OWN ARGUMENT) and which is therefore in no served byte". EVERY CLAUSE IS TRUE AND THE LAST
-   STEP DOES NOT FOLLOW, and the enumeration names its own counterexample: a driven orphan's argument is a
-   hole THIS ENGINE minted, so the row is in no served byte and nothing was LEARNED from it — the bar is true
-   of the address and the product's claim is false of it. The population that entered at a source whose bytes
-   the SERVED DOCUMENT spells fails the bar's sentence outright. Both are `unknown-unproven` now. WHETHER A PARSE COULD HAVE STATED IT IS NOT DECIDABLE BY ANYBODY — a bundler's chunk
-   manifest needs a scope pass to resolve, so what a static reader reaches is a moving frontier rather than a
-   property — and this list deliberately does not pretend otherwise. Neither word may be read as its
-   complement over parses.
-   IT IS ONE FACT AND TWO PREDICATES OVER IT, WHICH IS WHY IT IS A LIST AND NOT A BIT. The field was answering
-   TWO questions with one bit and the two differ for one population, which is
-   §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS in a declared list. The questions:
-     Q1 — DID THE RUN DETERMINE THIS ADDRESS?  `cls <= EPA_SOURCE_DETERMINED`.
-     Q2 — DOES THIS ROW CLEAR THE HARD BAR?    `cls == EPA_UNKNOWN`, which is what `endpoint_razor_class_of`
-       already keys on, BYTE-IDENTICALLY, and is why that line has not changed at either widening.
-   They are two QUESTIONS asked of ONE stored member rather than two members, so they cannot disagree about a
-   row and there is no second field for a merge to get wrong. Where Q1 and Q2 both answer "proves nothing" the
-   member is `EPA_CONCRETE`; where Q1 answers DETERMINED and Q2 PROVES NOTHING it is `EPA_SOURCE_DETERMINED`;
-   where Q1 answers NOT DETERMINED and Q2 STILL PROVES NOTHING it is `EPA_UNKNOWN_UNPROVEN`; where Q1 answers
-   NOT DETERMINED it is `EPA_UNKNOWN` and Q2 clears.
-   Q1 WAS SPELLED `cls != EPA_UNKNOWN` AND THAT IS RETIRED RATHER THAN DELETED, because it is what a reader
-   re-derives from "the two tests are one test negated" — which they were while every undetermined address
-   was one member. They are not each other's complement now and were never obliged to be: what makes this one
-   member rather than two FIELDS is that both are functions of the SAME stored value, not that one is the
-   other's negation. Q1 IS A THRESHOLD AND THE DETERMINED MEMBERS ARE A PREFIX OF THE ORDER, which is the one
-   thing that spelling needs and which `EPA_COUNT` asserts: a determined member added ABOVE an undetermined
-   one would make `cls <= EPA_SOURCE_DETERMINED` silently wrong while every count still summed.
-   THE POPULATION THAT FORCED THE SPLIT IS THE ONE Q1 WAS WRONG ABOUT, AND THE RAZOR WAS OVER-CLAIMING ON IT.
-   `concolic_is` is TRUE for a source value a flow has pinned and is STILL HOLDING — concolic.h's pin arm
-   re-mints a source on a RE-READ and hands back a bare primitive, but a value the page materialised into a
-   variable before its own gate stays this engine's own concolic, and `concolic_example_state` answers
-   DETERMINED for it. `var u = cfg.url; if (u === '/api/v2/items') fetch(u);` is the shape. Before this member
-   that row read `unknown` and the bar read `runtime-only` for an address whose bytes are a STRING LITERAL
-   STANDING IN THE BUNDLE, which is an over-claim on the one number CLAUDE.md §What-the-tool-produces judges
-   this product by. It now reads `source-determined` and the bar reads `unproven`.
-   AND THIS FILE USED TO ASSERT THE OPPOSITE AT THREE SITES — that a PINNED AND RE-READ source "really is past
-   every parse" — WHICH IS THE SAME OVER-CLAIM IN THE OTHER DIRECTION AND IS RETIRED RATHER THAN DELETED,
-   because a reader who re-derives it from "the taint is gone" will write it again. It read: the third
-   population "really did derive from an unknown and this cannot say so, which is why the field is a floor",
-   over the worked example `if (s.tier === 'silver') fetch('/api/' + s.tier)`. THE DERIVATION IS TRUE AND THE
-   CONCLUSION DOES NOT FOLLOW. A pin's bytes are `literal_tok` of the equality's OTHER operand, and
-   solver/concolic.c spells that operand ONLY where it is not itself concolic — so the bytes are a value the
-   page's own text determined, which in the dominant case is a literal the bundle spells. BOTH of that
-   example's segments (`'/api/'` and `'silver'`) stand in the served bytes, so `/api/silver` does NOT "exist
-   only at run time", which is the clause the bar's own sentence turns on. CLAUDE.md
-   §the-static-instrument-is-the-competitor forbids banking the difference: a parse that refines an unknown
-   under its own guard is one anybody can write, `testing/static_surface.mjs`' own banner says a real
-   extractor "would fold MORE", and a diff that teaches the parse to fold RAISES the bar rather than
-   regressing this engine's score. What a pin proves is WHICH WORLD the run explored — a reachability finding,
-   and a real one — and never that the bytes are absent from the document.
-   SO WHAT `concrete` STILL HIDES IS TWO POPULATIONS AND NOT THREE, and `url_display`'s banner enumerates
-   them: an address composed OF LITERALS (a bundler's module graph, the whole surface of a run that reached no
-   API code), and one composed of THE DOCUMENT'S OWN ADDRESS, which is concrete for the document this engine
-   loaded. Neither clears the bar and neither ever did. The third has its own member, and the half of it this
-   list still cannot reach is a NAMED RESIDUAL at `address_class_of`.
-   AND THE SECOND THING IT CANNOT ANSWER IS AN ADDRESS WHOSE RUNTIME-NESS THE *DOOR* CARRIES. `reply-chunk`
-   is the sharpest: solver/reply_decode.c hands this surface a plain string it read out of a REPLY, so the
-   value is `concrete` while no parse of the DOCUMENT reaches that address at all. THAT SET IS NOW THE FOURTH
-   COLUMN OF `ENDPOINT_DOORS` (`ENDPOINT_DOOR_BYTES`) AND IS NO LONGER NAMED HERE, and the enumeration that
-   stood in this paragraph is recorded rather than deleted because it is the one a reader re-derives from "a
-   park's URL is what the reply seam is keyed on". It read: "`batch-part` and the three program doors are the
-   same shape — each records an address already resolved to a `char *`". EVERY CLAUSE OF THAT IS TRUE AND THE
-   CONCLUSION DOES NOT FOLLOW, because an address being a resolved `char *` is a fact about the ENGINE'S OWN
-   PLUMBING and the bar is a question about the SERVED BYTES. The three program doors carry addresses the
-   document's markup or its own scripts SPELL — `document-script` is `EPR_MARKUP` by this file's own third
-   column, so one header was giving two answers about one door, and `module-import` is the address CLAUDE.md
-   §What-the-tool-produces names by hand as "a literal chunk URL delivered through `module-import` is `beyond`
-   and scores ZERO here". `batch-part`'s sub-request address is written into a body the page composed, whose
-   literal segments stand in the bundle. So the floor is the UNION of this column's `unknown` rows and the rows
-   whose door is `EPB_OFF_DOCUMENT`, and `endpoint_razor_class_of` composes exactly that, per row, at the one
-   line where both facts are in hand.
-   ITS MERGE IS A MAX OVER THE ORDER, which is the two-member UNION it always was spelled for a longer list,
-   and it holds for that union's reason: this is a fact about what SOME observed path proved about the
-   address, which a later sighting that proved LESS cannot take back. Every step is that one rule:
-   `concrete` ∨ `source-determined` is `source-determined`, because a sighting that saw the address enter at a
-   source is not taken back by a later one composed of literals; `source-determined` ∨ `unknown-unproven` is
-   `unknown-unproven`, because a path that did NOT determine it is not taken back by one that did — which is
-   the union's own sentence verbatim; and `unknown-unproven` ∨ `unknown` is `unknown`, because a sighting that
-   composed the address out of an unknown somebody OUTSIDE this engine supplied is not taken back by one that
-   composed it out of a hole this engine minted. That last step is concolic.h's `_any` at the grain of a
-   RECORD rather than of a value, and it is why the record needs no second field and no second merge rule for
-   the whose fact: the ORDER carries the disjunction. Intersecting at any step would answer a lower member for
-   an address one path already proved more about, and at the last step would make the bar's floor read LOWER
-   than what the run established. It is deliberately NOT the door's never-re-armed rule: the door asks which mechanism composed
-   the record's FIRST sighting, and this asks what any sighting proved about the address.
-   THE ORDER IS THEREFORE LOAD-BEARING AT BOTH ENDS and is asserted at the census walk rather than argued
-   here — see `EPA_COUNT`. `valueClass` is still the same rule one grain out and is still spelled as a
-   two-member union, because a param's value has no pinned-and-still-held population to carve out of it.
-   A LIST AND NOT TWO `#define`s, for `ENDPOINT_DOORS`' reason: the enum, the token table and the census over
-   it are ONE list, so a class added to the enum and not to the table cannot come off the end of a name
-   array. THE FIRST MEMBER IS THE CONSERVATIVE ONE AND ITS VALUE IS ZERO BY CONSTRUCTION — the mint writes
-   this field unconditionally one line after `door`, so nothing depends on the memset, and the ordering is
-   what makes a field some later diff forgot read as the claim that PROVES NOTHING rather than as the claim
-   that clears the product's own bar. */
+/* What the address value's own concolic provenance proves about it, derived by `address_class_of` from
+   endpoint_record's `url` alone; no producer states it, so there is no unstated member. It answers two
+   questions from one stored member, so they cannot disagree about a row:
+     Q1, did the run determine this address:   `cls <= EPA_SOURCE_DETERMINED`;
+     Q2, does the address side clear the bar:  `cls == EPA_UNKNOWN` (read by `endpoint_razor_class_of`).
+   The order is load-bearing and asserted at `endpoint_address_hist_json`: `EPA_CONCRETE` is zero (the
+   memset's identity and the class that proves nothing), the determined members are a prefix (Q1 is a
+   threshold), and `EPA_UNKNOWN` is the top. A record's merge is a MAX over the order, because what one
+   sighting proved about the address is not taken back by a later sighting that proved less. No member says
+   whether a parse could state the address; what a static reader reaches is a moving frontier. `concrete`
+   also covers an address composed of literals and the document's own address; a reply-carried address is
+   concrete too, and the door's bytes column catches it. */
 #define ENDPOINT_ADDRESS_CLASSES(X)                                                                          \
-    /* the run had DETERMINED this address and this surface holds no evidence that any segment of it         \
-       entered the program at a source. It claims nothing about a parse, for the reason the banner gives,    \
-       and it is the member a later diff that forgot to write this field reads as. */                        \
+    /* the run determined this address and holds no evidence that any segment of it entered the program at   \
+       a source (`concolic_is` is false). It claims nothing about a parse. */                                \
     X(EPA_CONCRETE, "concrete")                                                                              \
-    /* …and the run DETERMINED it OUT OF a value that entered at a source: the address is this engine's own  \
-       concolic, its own `src` names it, and THIS FLOW'S equality pinned that path — concolic.h's            \
-       CONCOLIC_EX_DETERMINED, which is the one answer of that accessor's four that is a PROOF.              \
-       IT IS THE MEMBER AT WHICH THE TWO QUESTIONS PART, and it answers them differently: Q1 DETERMINED, Q2  \
-       PROVES NOTHING. A pin's bytes are the equality's OTHER operand, which solver/concolic.c spells only   \
-       where that operand is NOT concolic, so they are bytes the page's own text determined — in the         \
-       dominant case a string literal standing in the bundle. The engine proved WHICH WORLD it explored; it  \
-       did not prove the address's bytes are absent from the served document, and the bar is keyed on the    \
-       bytes. So this row does NOT clear it. */                                                              \
+    /* the address is this engine's own concolic and this flow's equality pinned it: concolic.h's           \
+       CONCOLIC_EX_DETERMINED, as in `var u = cfg.url; if (u === '/api/v2/items') fetch(u);`. Q1 answers   \
+       determined and Q2 no: a pin's bytes are the equality's other operand, which solver/concolic.c spells \
+       only where that operand is not concolic, so they are bytes the page's own text holds (usually a      \
+       literal in the bundle). The run proved which world it explored, not that the bytes are absent from  \
+       the served document. */                                                                               \
     X(EPA_SOURCE_DETERMINED, "source-determined")                                                            \
-    /* …and the run did NOT determine it, and NO root of the value is one anybody outside this engine        \
-       supplied — `concolic_root_whose_any(url, CONCOLIC_WHOSE_WORLD)` answers NO. Three populations reach   \
-       here and ONE predicate separates all three from the member below, which is why they are one member    \
-       and not three: a hole THIS ENGINE minted so that a drive could happen at all (a driven orphan's own   \
-       argument, which stood in no byte anywhere because it was never in any byte); a value whose bytes      \
-       STAND IN THE SERVED DOCUMENT and which is minted unknown anyway so that a gate over it FORKS rather   \
-       than being decided for the whole run (§4.12.1's data block, an injected global an inline script       \
-       wrote); and one no mint could speak for at all (concolic.h's `UNSTATED`, and the value with no root   \
-       at all, whose mask is empty so `_any` answers NO for every member).                                   \
-       SO THIS ROW DOES NOT CLEAR THE BAR, AND THAT IS A REFUSAL RATHER THAN A SMALLER CLAIM. The bar is     \
-       "no parse of the served bytes can state this address, because it exists only at run time": the first  \
-       population makes that sentence TRUE of the row while the PRODUCT'S claim is false of it (nothing was  \
-       LEARNED, because the hole is ours), the second makes the sentence itself false, and the third proves  \
-       nothing either way. All three answer `unproven`, which is not a weaker version of clearing the bar —  \
-       an unproven claim is not a true one.                                                                  \
-       IT IS WHY Q1 AND Q2 STOPPED BEING ONE TEST NEGATED, and it is the member every row of this engine's   \
-       own instrument holes moved INTO — see `address_class_of`, whose two residuals it retires. */          \
+    /* the run did not determine it, and no root of the value is one anybody outside this engine supplied   \
+       (`concolic_root_whose_any(url, CONCOLIC_WHOSE_WORLD)` answers no). It holds a hole this engine minted \
+       to drive code (a driven orphan's own argument), a value whose bytes stand in the served document but  \
+       is minted unknown so a gate over it forks (a data block, a global an inline script wrote), and a      \
+       value no mint could attribute (concolic.h's `UNSTATED`, or no root at all). None clears the bar. */   \
     X(EPA_UNKNOWN_UNPROVEN, "unknown-unproven")                                                              \
-    /* …and the run reached this address holding a value it had NOT determined AND SOME ROOT OF IT IS ONE    \
-       A DOCUMENT, A SERVER, AN ATTACKER OR THE ENVIRONMENT SUPPLIED (concolic.h's `WORLD`), so the bytes    \
-       stand in no served byte and this row clears the hard bar.                                             \
-       ONE WORLD ROOT IS ENOUGH, WHICH IS A DISJUNCTION AND NOT A LOOSE READING: an address whose root set   \
-       MIXES a page unknown with holes this engine minted genuinely rests on something no parse can state,   \
-       so `_any` and never `_all` is the question — concolic.h's own sentence, and the same rule the         \
-       record's merge below is a MAX for, one grain out.                                                     \
-       IT USED TO INCLUDE THE VALUE THIS ENGINE COULD NOT ATTRIBUTE TO A SOURCE AT ALL, AND THAT CLAUSE IS   \
-       RETIRED RATHER THAN DELETED because a reader who re-derives it from "an unknown is an unknown         \
-       wherever it came from" will write it again. It read: "It includes the value this engine could not     \
-       attribute to a source at all (concolic.h's NULL root), which is a weaker claim about WHERE the bytes  \
-       came from and the same claim about the run not having determined them." BOTH CLAUSES ARE TRUE AND     \
-       THE CONCLUSION DOES NOT FOLLOW: this bar is a claim about WHERE THE BYTES CAME FROM, so a weaker      \
-       claim about exactly that is not one it may read. That population is `unknown-unproven` above.         \
-       IT IS THE TOP MEMBER AND THE MERGE IS A MAX, so this is the one member a reordering could silently    \
-       lower a record OUT of; `endpoint_address_hist_json` asserts both ends of the order. */                \
+    /* the run did not determine it, and some root is one a document, a server, an attacker or the            \
+       environment supplied (concolic.h's `WORLD`: the location fragment, an absent server-injected global,  \
+       a reply field, a device reading). One such root suffices (`_any`, not `_all`). This row clears the    \
+       bar; it is the top member, so a reordering is what could lower a record out of it. */               \
     X(EPA_UNKNOWN,  "unknown")
 
 typedef enum {
 #define ENDPOINT_ADDRESS_CLASS_MEMBER(id, token) id,
     ENDPOINT_ADDRESS_CLASSES(ENDPOINT_ADDRESS_CLASS_MEMBER)
 #undef ENDPOINT_ADDRESS_CLASS_MEMBER
-    EPA_COUNT           /* the list's own end — dense by construction, for `EPR_COUNT`'s reason, and ORDERED,
-                           which this list is not free to be arbitrary about for `EPW_COUNT`'s reason exactly:
-                           the record's merge is a MAX over it. BOTH ENDS ARE LOAD-BEARING AND BOTH ARE
-                           ASSERTED at `endpoint_address_hist_json` — `EPA_CONCRETE` is the identity element
-                           the `memset` leaves behind, and `EPA_UNKNOWN` is the member the bar reads, so a
-                           reordering that moved it off the top would let a MAX carry a record out of the one
-                           class `endpoint_razor_class_of` keys on and the bar would stop claiming an address
-                           a path had proved.
-                           AND THE DETERMINED MEMBERS ARE A PREFIX OF IT, WHICH IS A THIRD LOAD-BEARING FACT
-                           ABOUT THE ORDER AND IS ASSERTED AT THE SAME WALK. Q1 is spelled as a THRESHOLD
-                           (`cls <= EPA_SOURCE_DETERMINED`), which it has to be once the undetermined
-                           addresses are more than one member — so a determined member added ABOVE an
-                           undetermined one makes that reading silently wrong while every count still sums
-                           and both ends above still hold */
+    EPA_COUNT           /* list end, dense and ordered; the banner states the order the walk asserts */
 } EndpointAddressClass;
 
-/* THE ONE WIRE SPELLING OF AN ADDRESS CLASS, and `endpoint_reach_token`'s severity for its reason: it runs
-   once per emitted ROW and once per census row in EVERY build, so a release build falling through would put
-   whatever the register held into a JSON string and publish a class name nothing decided. */
+/* The one wire token of an address class, emitted once per row and once per census row; a CHECK on a value
+   outside the list, for endpoint_door_token's reason. */
 const char *endpoint_address_class_token(int cls);
 
-/* WHETHER THIS RUN PROVED THE ADDRESS EXISTS ONLY AT RUN TIME — CLAUDE.md §What-the-tool-produces' HARD BAR
-   AS ONE WORD PER ROW, and the thing that bar's own retirement condition asks for: "the emitter that states a
-   razor figure composes that union ITSELF, so a door count cannot be assembled into one at all". Until this
-   list there was no such word anywhere: `door`, `mintedAt` and `addressClass` are three facts a consumer had
-   to UNION by hand, the union's second operand was named in prose at three sites with three different sets
-   (see `ENDPOINT_DOOR_BYTES`), and a reader who assembled it out of `EPR_BEYOND` got the figure CLAUDE.md
-   demoted rather than the one it chose.
-   IT IS THE UNION OF TWO POSITIVE STATEMENTS AND IT IS A FLOOR IN BOTH DIRECTIONS. A row clears the bar if
-   the run reached the address holding a value it had NOT DETERMINED AND SOME ROOT OF THAT VALUE IS ONE
-   SOMEBODY OUTSIDE THIS ENGINE SUPPLIED (`EPA_UNKNOWN`, which is exactly that conjunction — see that
-   member), or if the door handed this surface bytes that were never in the served document at all
-   (`EPB_OFF_DOCUMENT`). Neither implies the other and each alone is sound, which is what makes the union a
-   floor rather than a guess: `reply-chunk` is `concrete` every time and clears the bar every time, and
-   `/api/{location.hash}` through `fetch` is `EPB_DOCUMENT` and clears it every time.
-   THE ADDRESS-SIDE OPERAND USED TO BE `NOT DETERMINED` ALONE, AND THAT IS RETIRED RATHER THAN DELETED
-   because it is what a reader re-derives from the word `unknown`. It read: "the run reached the address
-   holding a value it had NOT DETERMINED (`EPA_UNKNOWN` — some segment entered at a source, so it stands in
-   no served byte)". THE PARENTHETICAL IS THE STEP THAT DOES NOT FOLLOW: a segment entering "at a source"
-   says a MINT happened and says nothing about WHOSE unknown it was, and the two populations that part there
-   are the ones the bar is about — a hole THIS ENGINE minted for a drive, and a value whose bytes stand in
-   the served document and which is minted unknown anyway so a gate over it forks. Measured over the
-   committed corpus at the time, SIX of seven real sites cleared the bar ZERO times and the seventh's whole
-   figure was this engine's own orphan arguments, so the retired operand's claim was paid for entirely by
-   the engine talking to itself. The DERIVATION rather than the figures, because the censuses are untracked
-   by design: `testing/corpus/holewhose.mjs`, run BARE.
-   ITS TWO OPERANDS HAVE DIFFERENT MERGE RULES AND THE UNION IS SOUND UNDER BOTH, which a reader must be told
-   because it looks like a defect. `addr_class` is UNIONED on a merge and `door` is the FIRST sighting's and is
-   never re-armed. Both directions hold: if ANY sighting composed the address out of an undetermined value
-   resting on an unknown somebody outside this engine supplied then the address exists only at run time and a
-   later determined sighting cannot take that back, and if the FIRST
-   sighting read the address out of a reply's payload then those bytes were in no served document and a later
-   sighting of the same address through `fetch` does not put them there. So the verdict is computed at the
-   EMITTER from the two fields rather than stored, and there is no third merge rule to get wrong — which the
-   whose fact did not change, because it rides the ADDRESS CLASS's own member and its own MAX rather than
-   arriving as a third field or a third operand here.
-   WHAT `unproven` DOES NOT SAY IS THE WHOLE OF ITS HONESTY, and it is `EPA_CONCRETE`'s rule one grain out: it
-   is NOT the claim that a parse could have stated the address. Whether a static reader could have stated one
-   is a MOVING FRONTIER rather than a property — a bundler's chunk manifest needs a scope pass to resolve —
-   and this list deliberately does not pretend otherwise in either direction.
-   THIS PARAGRAPH USED TO NAME A POPULATION OF `unproven` THAT "really is past every parse" — a source this
-   flow PINNED and re-read — AND THAT WAS AN OVER-CLAIM, retired rather than deleted because it is what a
-   reader re-derives from "the taint is gone by the time the address is composed". It went on: "That half is
-   bounded by solver/flow.h's `path_pinned` and is NOT folded in here, deliberately". The BOUNDING half
-   stands and `EPW_MAY_REST_ON` is still never unioned in; the claim that the population is past every parse
-   does not. A pin's bytes are the equality's OTHER operand, which solver/concolic.c spells only where that
-   operand is NOT concolic, so they are bytes the page's own text determined — a literal the bundle spells, in
-   the dominant case. `ENDPOINT_ADDRESS_CLASSES`' banner carries the derivation and the measurement; the
-   consequence HERE is that the pinned population is a population `unproven` holds CORRECTLY, and the honest
-   reading of this word is one floor rather than one floor plus an unquantified excuse.
-   SO THE ONE POPULATION STILL UNACCOUNTED FOR IS NARROWER THAN THE RETIRED SENTENCE CLAIMED, and it is not
-   about pins at all: a pin whose other operand was a non-concolic value that reached this engine from
-   OFF-DOCUMENT bytes. Those bytes stand in no served document, so such an address does clear the bar and is
-   not claimed here — and this engine cannot see it, because a non-concolic operand carries no provenance BY
-   CONSTRUCTION. `address_class_of` records that as a named residual; `EPB_OFF_DOCUMENT` catches the reply
-   DOOR independently, which is why the unseen half is a thin residue rather than the floor's main slack.
-   A LIST AND NOT TWO `#define`s, and THE CONSERVATIVE MEMBER IS FIRST AND ZERO BY CONSTRUCTION, for
-   `ENDPOINT_ADDRESS_CLASSES`' reasons exactly. */
+/* The product's bar per row: whether this run proved the address exists only at run time. It is the union of
+   two positive statements, each sound alone, so it is a floor: the address side is `EPA_UNKNOWN`
+   (undetermined, resting on an unknown supplied from outside this engine) and the door side is
+   `EPB_OFF_DOCUMENT` (bytes never in the served document). `reply-chunk` is `concrete` and clears it;
+   `/api/{location.hash}` through `fetch` is `EPB_DOCUMENT` and clears it. It is computed at the emitter from
+   `door` and `addr_class` and never stored; it is sound under both fields' merges (`addr_class` is a MAX over
+   sightings and `door` is the first sighting's) because no later sighting retracts either statement.
+   `unproven` is not the claim that a parse could state the address, and `EPW_MAY_REST_ON` is never unioned
+   in: it is a may, and folding it would turn the floor into an over-claim.
+   Named residual. Not covered: an address determined by a pin whose other operand was a non-concolic value
+   taken from off-document bytes exists only at run time but reads `unproven`, because a non-concolic operand
+   carries no provenance. Next diff: the pin records whose bytes its other operand came from, beside the bytes
+   it already copies, and `address_class_of` reads that. Absence shows as: a `source-determined`, `unproven`
+   row whose pinning literal stands in no served byte. */
 #define ENDPOINT_RAZOR_CLASSES(X)                                                                   \
-    /* this run proved nothing about whether a parse of the served bytes could state this          \
-       address. It is not the complement of the member below over parses — what a static           \
-       reader reaches is a moving frontier — and it is NOT a hole with a population inside it      \
-       either: see the banner for why the pinned population it holds is held CORRECTLY, and        \
-       `address_class_of` for the one thin residue that is still unaccounted for. IT NOW ALSO      \
-       HOLDS EVERY `unknown-unproven` ROW, which is the population this word exists to be honest   \
-       about rather than a hole it grew: an undetermined address resting on no unknown anybody      \
-       outside this engine supplied is one this run proved nothing about. */                       \
+    /* this run proved nothing about whether a parse of the served bytes could state the address:  \
+       every `concrete`, `source-determined` or `unknown-unproven` row through a door whose bytes  \
+       were in the served document. It is not the complement of the member below over parses. */   \
     X(EPZ_UNPROVEN,     "unproven")                                                                 \
-    /* …and this run PROVED the address exists only at run time: it reached it holding a value it   \
-       had not determined WHICH RESTS ON AN UNKNOWN SOMEBODY OUTSIDE THIS ENGINE SUPPLIED, or the   \
-       door handed it bytes that were never in the served document. The conjunct is not a           \
-       narrowing of this word, it is the whole of why it is a CLAIM: an undetermined address        \
-       standing on a hole this engine minted for its own drive exists only at run time and          \
-       nothing was learned from it. */                                                              \
+    /* this run proved the address exists only at run time: it reached it holding an undetermined  \
+       value resting on an unknown supplied from outside this engine, or the door handed it bytes  \
+       that were never in the served document. */                                                  \
     X(EPZ_RUNTIME_ONLY, "runtime-only")
 
 typedef enum {
 #define ENDPOINT_RAZOR_CLASS_MEMBER(id, token) id,
     ENDPOINT_RAZOR_CLASSES(ENDPOINT_RAZOR_CLASS_MEMBER)
 #undef ENDPOINT_RAZOR_CLASS_MEMBER
-    EPZ_COUNT           /* the list's own end — dense by construction, and with NO unstated member for
-                           `ENDPOINT_ADDRESS_CLASSES`' reason twice over: this is DERIVED from two fields that
-                           are themselves written unconditionally, so there is no producer at all, let alone
-                           one who could forget. */
+    EPZ_COUNT           /* list end, dense; derived from two fields written unconditionally, so there is no
+                           producer and no unstated member */
 } EndpointRazorClass;
 
-/* THE ONE WIRE SPELLING OF A RAZOR CLASS, and `endpoint_address_class_token`'s severity for its reason: it
-   runs once per emitted ROW in EVERY build, so a release build falling through would publish a word nothing
-   decided as this engine's answer to the product's own bar. */
+/* The one wire token of a razor class; a CHECK on a value outside the list, for endpoint_door_token's
+   reason. */
 const char *endpoint_razor_class_token(int cls);
 
-/* WHETHER THIS ADDRESS MAY REST ON A WITNESS THIS ENGINE CHOSE — the NECESSARY CONDITION under the one
-   population `EPZ_UNPROVEN` holds whose BYTES THIS ENGINE CHOSE RATHER THAN A SERVER SENT, published as its
-   own word per row because nothing anywhere published it.
-   THAT PURPOSE CLAUSE USED TO READ "the one population `EPZ_UNPROVEN` holds that really is past every parse",
-   and it is re-aimed rather than deleted for the reason `ENDPOINT_ADDRESS_CLASSES`' banner gives at length: a
-   pin's bytes are a literal the page's own predicate spelled, so that population is NOT past a parse and this
-   class was never a bound on the bar's slack. WHAT IT BOUNDS IS REPRODUCIBILITY, which is what its own member
-   comment below already says and is a first-class §@H fact: an address resting on bytes THIS ENGINE chose is
-   one a real session may never see, so a reader who takes such a row for an observation is taking the
-   invention §@H forbids. The class, its order, its MAX merge and its refusal to be unioned into the bar are
-   all unchanged — only the sentence saying what the population IS.
-   IT IS NOT THE BAR AND IS NEVER UNIONED INTO IT, which is the whole reason it is a third list rather than a
-   third operand of `endpoint_razor_class_of`. The razor's own banner states the hazard and the reason, and
-   this is that reason obeyed rather than repeated: `may-rest-on` is a MAY, so folding it in would turn a FLOOR
-   into an OVER-claim — the same defect as unioning over `EPR_BEYOND` one operand back, which CLAUDE.md
-   §a-widening-in-the-coverage-gaining-direction prices in both directions.
-   WHAT IT IS FOR, AND IT IS A DECISION BETWEEN TWO OPPOSITE WORK PROGRAMMES RATHER THAN A COLUMN. The razor
-   reads `unproven` for every address a run DETERMINED, and `address_class_of` asks `concolic_is`, which
-   CONCRETIZE-ON-PIN makes answer FALSE for a source this flow pinned and re-read — `pin_mint` hands a pinned
-   read back as a BARE primitive, so the taint is gone by the time the address is composed. A surface of
-   `concrete` rows is therefore consistent with an engine that genuinely computed every address (in which case
-   the SOLVER must keep more values unknown) AND with one whose pin erased a taint the bar should have seen (in
-   which case the pin owes the address a provenance it can still carry). Those take opposite diffs, and no
-   figure published before this list could tell them apart.
-   THE CONSERVATIVE MEMBER IS FIRST AND IS ZERO BY CONSTRUCTION, for `ENDPOINT_DOOR_BYTES`' reason exactly —
-   and here the member that proves nothing is the one for THE QUESTION NOT HAVING BEEN ASKED, because the
-   accessor that answers it is only answerable while a flow stands. A mint that forgets to ask reads as having
-   asked nothing, which is the direction CLAUDE.md §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT rates as the
-   invisible one.
-   THE ORDER ENCODES HOW MUCH IS CLAIMED, AND THAT IS WHAT MAKES THE MERGE A `MAX`. A record merges sightings,
-   and the two directions are not alike: a sighting that ASKED outranks one that could not (a real reading
-   beats a hole), and a sighting whose path HAD chosen a witness cannot be taken back by a later one that had
-   not — which is `addr_class`' own union rule stated over a list of its own length. So the merge is
-   `if (new > old) old = new` and the list's order is load-bearing; it is asserted at the walk. */
+/* Whether the address may rest on a witness this engine chose (bytes the engine picked rather than a server
+   sent), published per row as `witnessClass`. It bounds reproducibility, not the bar: a row resting on chosen
+   bytes is one a real session may never see, and it is never unioned into the razor. It separates two
+   opposite remedies for a surface of `concrete` rows: the solver keeps too few values unknown, or a pin
+   erased a taint (concolic.c's `pin_mint` hands a pinned re-read back as a bare primitive). The order encodes
+   how much is claimed and the record's merge is a MAX: a sighting that asked outranks one that could not, and
+   one whose path chose a witness is not taken back by one whose path did not. `EPW_UNASKED` is zero (asserted
+   at `endpoint_witness_hist_json`), so a mint that forgets to ask reads as having asked nothing. The question
+   is asked only while a flow stands, since `engine_pinned_of_running_path` requires one. */
 #define ENDPOINT_WITNESS_CLASSES(X)                                                                 \
-    /* no flow stood when this address was recorded, so the question was not asked. It proves        \
-       NOTHING either way and is zero on any run whose every record is minted inside a flow — a      \
-       nonzero row here is a door composing a request outside the scheduler, which is a finding      \
-       about that door and not about the address. */                                                 \
+    /* no flow stood when this address was recorded (a record minted before any program started is  \
+       the ordinary case), so the question was not asked. It proves nothing either way. */          \
     X(EPW_UNASKED,     "unasked")                                                                   \
     /* a flow stood and its path had chosen no witness: nothing this run pinned can be under this    \
        address, so `unproven` here really is the run having proved nothing. */                       \
     X(EPW_NO_WITNESS,  "no-witness")                                                                \
-    /* a flow stood whose path HAD determined a source's value on an arm its own concrete example    \
-       contradicted (solver/flow.h's `path_pinned`). The address MAY rest on bytes this engine        \
-       chose rather than on bytes a server sent — a MAY and never a bar, because the pin is a fact   \
-       about the PATH and this row does not say the address read that source at all. */              \
+    /* a flow stood whose path had determined a source's value on an arm its own concrete example    \
+       contradicted (solver/flow.h's `path_pinned`). The address may rest on bytes this engine       \
+       chose rather than bytes a server sent; a may, because the pin is a fact about the path and    \
+       this row does not say the address read that source. */                                       \
     X(EPW_MAY_REST_ON, "may-rest-on")
 
 typedef enum {
 #define ENDPOINT_WITNESS_CLASS_MEMBER(id, token) id,
     ENDPOINT_WITNESS_CLASSES(ENDPOINT_WITNESS_CLASS_MEMBER)
 #undef ENDPOINT_WITNESS_CLASS_MEMBER
-    EPW_COUNT           /* the list's own end — dense by construction, for `EPR_COUNT`'s reason, and ORDERED,
-                           which this one is not free to be arbitrary about: the merge is a MAX over it. */
+    EPW_COUNT           /* list end, dense and ordered: the merge is a MAX over it */
 } EndpointWitnessClass;
 
-/* THE ONE WIRE SPELLING OF A WITNESS CLASS, and `endpoint_address_class_token`'s severity for its reason: it
-   runs once per emitted ROW and once per census row in EVERY build, so a release build falling through would
-   put whatever the register held into a JSON string. */
+/* The one wire token of a witness class; a CHECK on a value outside the list, for endpoint_door_token's
+   reason. */
 const char *endpoint_witness_class_token(int cls);
 
-/* THE EMITTED SURFACE PARTITIONED BY IT, as a malloc'd JSON OBJECT (caller frees) — one row per member,
-   zeroes included, summing to the same `emitted` figure the other three walks sum to, for the reason stated
-   at `endpoint_address_hist_json`: an `unasked` that is ABSENT and one that read 0 are the two facts a reader
-   most needs kept apart, the first being an instrument that stopped writing the field. */
+/* The emitted surface partitioned by witness class, as a malloc'd JSON object (caller frees): one row per
+   member, zeroes included, summing to endpoint_surface_census's `emitted` (asserted). */
 char *endpoint_witness_hist_json(void);
 
-/* …AND THE UNION ITSELF, COMPOSED WHERE BOTH FACTS ARE IN ONE HAND. It takes the two fields rather than a
-   record because that is what makes it a function of exactly what the wire carries: a consumer holding a row
-   can check this answer against the row's own `door` and `addressClass`, which is the one property of a
-   derived verdict a reader can verify without re-deriving the mechanism. */
+/* The bar for one row: `EPZ_RUNTIME_ONLY` when `addr_class` is `EPA_UNKNOWN` or `door`'s bytes are
+   `EPB_OFF_DOCUMENT`, else `EPZ_UNPROVEN`. It takes the two wire fields rather than a record, so a consumer
+   can check a row's `razorClass` against that row's own `door` and `addressClass`. */
 int         endpoint_razor_class_of(int door, int addr_class);
 
-/* THE EMITTED SURFACE PARTITIONED BY THAT CLASS, as a malloc'd JSON OBJECT (caller frees) — one row per
-   member of `ENDPOINT_ADDRESS_CLASSES`, zeroes included, summing to the same `emitted` figure
-   endpoint_surface_census reports, with the identity asserted at the composer where both sides are in one
-   hand.
-   THIS IS THE ONE ROW THE HARD BAR CAN BE SCORED OFF, and it is a SECOND OBSERVATION rather than a
-   coarsening of either histogram beside it — which `endpoint_reach_hist_json` is not, and says so. The
-   door and the reach classes are one fact at two grains; this is keyed on a property of the ADDRESS VALUE
-   that no door implies in either direction, so a reader holding all three holds two observations and not
-   three (CLAUDE.md §EVIDENCE-INFLATION, and the reason the derivation is named here rather than left to be
-   noticed).
-   IT IS A DIAGNOSTIC AND NEVER A TARGET, on §netdiff's terms and in the words `endpoint_reach_hist_json`
-   already carries: `unknown` 0 against a nonzero `emitted` is a REFUSAL TO CLAIM the hard bar on this
-   document, not a smaller version of it, and it is an identity read WITHIN one run rather than across two of
-   a wall-denominated quantum. Its DENOMINATOR is `epEmitted` on the same census line and is not this row's
-   to omit. */
+/* The emitted surface partitioned by address class, as a malloc'd JSON object (caller frees): one row per
+   member of ENDPOINT_ADDRESS_CLASSES, zeroes included, summing to endpoint_surface_census's `emitted`
+   (asserted here, with the class order). It is keyed on the address value, an observation independent of the
+   door histograms. A diagnostic, read within one run against `epEmitted` on the same census line: `unknown`
+   at 0 is a refusal to claim the bar on this document, not a smaller version of it. */
 char   *endpoint_address_hist_json(void);
 
-/* THE EMITTED SURFACE PARTITIONED BY DOOR, as a malloc'd JSON OBJECT (caller frees) — one row per member of
-   `ENDPOINT_DOORS`, zeroes included, summing to the `emitted` figure endpoint_surface_census reports. It is
-   what makes CLAUDE.md §What-the-tool-produces' razor a PARTITION rather than a subtraction of two totals;
-   the identity that says so is asserted at the composer, where both sides are in one hand. */
+/* The emitted surface partitioned by door, as a malloc'd JSON object (caller frees): one row per member of
+   ENDPOINT_DOORS, zeroes included, summing to endpoint_surface_census's `emitted` (asserted). */
 char   *endpoint_door_hist_json(void);
 
-/* …AND THE SAME SURFACE PARTITIONED BY WHAT A PARSE OF THE DOCUMENT WOULD HAVE REACHED, as a malloc'd JSON
-   OBJECT (caller frees) — one row per member of `ENDPOINT_REACHES`, zeroes included, summing to the same
-   `emitted` figure. IT IS THE PARTITION CLAUDE.md §What-the-tool-produces DEMOTED AND IT IS NOT THAT
-   SECTION'S BAR — this line read "CLAUDE.md §What-the-tool-produces' razor STATED" until the bar became a
-   column, and the retired sentence is kept because a reader holding a row named `beyond` re-derives it. The
-   bar is "AN ADDRESS, A KEY OR A VALUE NO PARSE OF THE SERVED BYTES CAN STATE", and `endpoint_razor_class_of`
-   composes it PER ROW out of `addressClass` and the door list's FOURTH column; this row is keyed on the THIRD,
-   which is what a MARKUP parse reaches — so `beyond` holds a literal chunk URL through `module-import`, which
-   that same section names by hand as scoring ZERO on the bar. ONE HEADER WAS GIVING TWO ANSWERS ABOUT WHICH
-   ROW IS THE RAZOR, which is the defect it already records one door over, and the cost was not a reading: the
-   residual below inherited the wrong answer and priced its own gap against the bar rather than against this
-   diagnostic. `endpoint_door_hist_json` is the raw material this row is computed from, and NEITHER OF THEM IS
-   THE BAR.
-   IT IS ONE FACT AT TWO GRAINS AND NOT TWO FACTS, WHICH A READER COUNTING ZEROES MUST BE TOLD. Every count
-   here is the sum of `endpoint_door_hist_json`'s counts for the doors of that class, so the two histograms do
-   not corroborate each other and a reader holding both holds ONE observation — CLAUDE.md
-   §EVIDENCE-INFLATION, and the reason the derivation is named here rather than left to be noticed. What it CARRIES that the door row does not is the map: which
-   doors a markup parse reaches, which is stated in exactly one place (the third column of `ENDPOINT_DOORS`)
-   and which no consumer of the emitted surface can re-derive.
-   IT IS A DIAGNOSTIC AND NEVER A TARGET, on §netdiff's own terms and in CLAUDE.md's own words: a zero in
-   `beyond` is a REFUSAL TO CLAIM the capability on this document, not a smaller version of it. Optimising
-   toward it optimises the instrument. It is an IDENTITY read WITHIN one run — `beyond` 0 against a nonzero
-   `emitted` is the whole finding — and it is not comparable across two runs of a wall-denominated quantum.
-   THE DENOMINATOR TRAVELS WITH IT AND IS NOT THIS ROW'S TO OMIT: `epEmitted` is on the same census line and
-   the sum identity is asserted at the composer, so a share read off this row is over the population the row
-   is a partition of. A bare `beyond` count is the defect
-   CLAUDE.md §a-coverage-figure-states-what-it-is-a-fraction-of is about.
-   NOT A RESIDUAL BUT A DECISION, AND THE RESIDUAL THAT STOOD HERE IS RECORDED RATHER THAN DELETED BECAUSE
-   ITS REASONING IS WHAT A READER RE-DERIVES. `EPR_EITHER` says the three doors it holds are reached by a
-   parser-inserted element AND by a script-created one and that the door records neither, so every row through
-   them lands in `either`. THAT MUCH IS TRUE AND IS THE RIGHT ANSWER. What was wrong was the remedy the record
-   went on to name: "WHAT THE NEXT DIFF BUILDS: the element's own insertion recorded ON THE RECORD at the mint,
-   the way `pre_program` already is, so `endpoint_door_reach` becomes a function of the door AND that flag",
-   on the ground that "It is a fact the three markup recorders have in hand and do not carry".
-   THE MECHANISM HALF WAS FALSE AND ITS OWN TWO CITATIONS REFUTE IT IN THE SAME SENTENCE — it cited
-   core/html/html_form.c as saying "this engine has no parser-inserted association to" unset and
-   core/html/html_link.c as carrying no record of how the element arrived, which is a pair of recorders NOT
-   having the fact, offered as evidence that they have it. The SPEC reasoning above it was sound, which is the
-   split CLAUDE.md rates worst, so what a later reader must not inherit is the METHOD: the clause was reasoned
-   from WHAT THE RECORDERS PARSE rather than from what any algorithm WRITES, and reasoning that way produces
-   the same clause again.
-   AND THE FACT IT NAMED DOES NOT EXIST FOR TWO OF THE THREE DOORS, WHICH IS A QUESTION ABOUT THE STANDARD
-   AND NOT ABOUT THIS TREE. HTML §13.2.6.1 "Creating and inserting nodes"' create an element for a token
-   sets exactly two marks of this kind and neither is an element-insertion record: the FORM one, only where it
-   "associate[s] element with the form element pointed to by the form element pointer and set[s] element's
-   parser inserted flag", which §4.10.18.3 "Association of controls and forms" declares as "A
-   form-associated element has an associated parser inserted flag" — a flag on form-associated CONTROLS about
-   FORM OWNERSHIP, which `EPD_FORM_SUBMIT` (the `<form action>`) is not keyed on at all; and the SCRIPT one,
-   §4.12.1.1 "Processing model"'s "A script element has a parser document, which is either null or a
-   Document, initially null. It is set by the HTML parser and the XML parser on script elements they insert",
-   whose non-null case "script elements with non-null parser documents are known as parser-inserted" is the
-   mark core/html/html_script.h already carries. §4.2.4.3 "Fetching and processing a resource from a link
-   element"'s page and §4.8.4.3.5 "Updating the image data"'s page carry the phrase ZERO times each
-   (positive controls 37 and 30 on the same fetched bytes). So for `link-element` and `image-element` the clause
-   asked for a flag no standard defines, and building it would put an INVENTED datum under the one row that
-   states this product's own bar.
-   AND IT WOULD HAVE BEEN THE WRONG OPERAND EVEN IF IT EXISTED, WHICH IS THE SAME MISTAKE endpoint.c'S RETIRED
-   RESIDUAL ALREADY RECORDS ONE STEP LATER. `endpoint_razor_class_of` is the bar and reads `addressClass` and
-   `endpoint_door_bytes`; it does not read `endpoint_door_reach` at ALL, so narrowing `either` narrows the
-   DIAGNOSTIC this banner is about and moves the bar by nothing. The record priced its gap as "the razor is
-   published as a FLOOR with a ceiling" because the banner above it called this row the razor, which it no
-   longer does.
-   AND PARSER-INSERTED IS NOT WHAT THE BAR ASKS ANYWAY, WHICH THIS HEADER ALREADY SAYS ONE DOOR OVER:
-   `EPD_DOCUMENT_SCRIPT` records that "a `<script src>` a `document.write` put in the tree is parser-inserted
-   and is NOT in the served bytes", and §13.2.6.1 confirms the shape from the standard's side — the mark is
-   set on elements the parser INSERTS, which is why §4.12.1.1's flag needed a Fragment carve-out and why a
-   fragment-parsed element would read parser-inserted too. The mark is therefore decisive in ONE direction only
-   (stated NOT-parser-inserted proves beyond a parse) and undecidable in the other, so it could never have made
-   `either` a value.
-   AND THE LOSS THE RECORD CLAIMED IS ALREADY ABSENT AT TWO OF THE THREE DOORS. Its worked example was that "a
-   router-built `<link>` really is beyond a parse and this cannot say so", and core/html/html_link.c records
-   the `href`'s TAINT as the address where one exists — its own comment says "Lexbor would have ToString'd the
-   taint away" — so `address_class_of` answers `EPA_UNKNOWN` and the bar answers `runtime-only` for that row
-   today, with core/html/html_image.c doing the same for its undecided source set. The ambiguity `either` names
-   is real and is bounded to a diagnostic CLAUDE.md §netdiff says is never a target.
-   NAMED RESIDUAL, ON THE AXIS THE BAR ACTUALLY READS AND AT THE ONE DOOR WHERE IT IS OPEN. NOT COVERED: a
-   `<form action>` this run proved was composed out of an unknown reaches the bar as `concrete`.
-   core/html/html_form.c reads that attribute's taint at §4.10.22.3 "Form submission algorithm" step 12 and
-   spends it on the @S sink alone (`solve_url_sink`), then `form_record_request` records `url_serialize`'d
-   bytes — so the two sibling doors carry an unknown into `addressClass` and this one does not.
-   WHERE THE UNKNOWN GOES, WHICH IS A DATA-FLOW FACT AND WAS READ RATHER THAN INFERRED: core/dom/element.c's
-   `el_attr_value` writes a concolic attribute value's SHAPE into Lexbor and the concolic into the taint
-   shadow ("NEVER ToString a concolic to get bytes"), so the unknown survives into the tree AS BRACE TEXT; a
-   braced path or query is ordinary URL text, so step 14's `url_parse` SUCCEEDS and `parsed` carries the
-   braces; and the taint itself is read into a local at step 12 and stored on no step state, so it is gone by
-   the recorder. NEITHER HALF DIES AT THE PARSE — the shape survives it and the taint never reaches it.
-   AND THE REMEDY THIS RECORD FIRST NAMED WAS A REGRESSION, KEPT HERE BECAUSE IT IS WHAT A READER RE-DERIVES
-   FROM THE SIBLING DOOR. It said: "WHAT THE NEXT DIFF BUILDS: the taint recorded as the address at
-   core/html/html_form.c's submission recorder where the action carries one, which is what
-   core/html/html_link.c already does at its own door and needs no new field here." BOTH HALVES ARE FALSE.
-   §4.10.22.3's cells MUTATE the parsed action — `CELL_MUTATE_ACTION_URL` and `CELL_ENTITY_BODY` REPLACE its
-   query with the serialized entry list — so recording the bare taint would discard the PARAMETERS, which is
-   what an @H record is for and is strictly worse than the class it would buy. For a `<link>` the `href` IS
-   the address, and a form's address is the action PLUS its entries; the analogy was the whole error, and it
-   is the shape CLAUDE.md names as reasoning from where the code SITS rather than from what it COSTS. The
-   second half is false because `endpoint_record` has no parameter by which a caller can state the class:
-   `addr_class` is derived once, from the url alone, by `address_class_of`.
-   AND THE NEXT REMEDY A READER REACHES FOR IS UNSOUND, WHICH IS WHY IT IS NAMED HERE RATHER THAN LEFT TO BE
-   TRIED. This record already publishes, PER PARAM, the fact the address row lacks: `valueClass` is
-   `has_hole`, merged as a union, and the razor banner above calls that merge "`valueClass`'s rule one grain
-   out" — so one row can carry `valueClass` `unknown` beside `addressClass` `concrete` about the same
-   address, which is this header's two-answers defect arriving in DATA instead of in prose. Unioning them
-   would OVER-CLAIM the floor: `concolic_hole_key` is `if (!shape || !strchr(shape, '{')) return NULL`, a bare
-   brace test that answers for a literal `{"a":1}` a page composed out of constants, and a FLOOR may not be
-   wrong in the direction that credits the bar. The same argument rules out reading braces off the address.
-   SO WHAT IS OWED IS A DECOMPOSITION AND NOT A LINE, AND IT IS NAMED RATHER THAN ATTEMPTED: the recorded
-   address would have to BE a concolic composed from the action's taint and the entries, and the composition
-   runs through `url_parse` and `url_serialize` over `const char *`, outside the concolic machinery entirely.
-   HOW ITS ABSENCE SHOWS: a document whose forms submit to script-composed actions publishes `form-submit`
-   rows whose `razorClass` is `unproven` beside their own `valueClass` `unknown`, while the same document's
-   `link-element` rows prove `runtime-only` — an under-claim on the bar, which is the direction nobody
-   discovers by acting on it. RETIREMENT: this record goes when an address composed out of a value this run
-   did not determine cannot be recorded as a plain string, because the door has then no arm left in which to
-   lose the class. */
+/* The emitted surface partitioned by ENDPOINT_REACHES, as a malloc'd JSON object (caller frees), one row per
+   member, summing to `emitted` (asserted). Each count is the door histogram's counts summed over that reach's
+   doors, so the two are one observation at two grains; what this adds is the door-to-reach map, which only
+   the door list states. It is a diagnostic and not the bar: `beyond` holds a literal chunk URL through
+   `module-import`, and a share read off it is over `epEmitted`. `either` is a decision rather than a gap: the
+   standard sets a parser-inserted mark only on scripts and on form-associated controls, so no flag exists that
+   could split the link and image doors, and the bar does not read the reach. */
+/* Named residual, on the axis the bar reads. Not covered: a `<form action>` composed from an unknown reaches
+   the bar as `concrete`. core/html/html_form.c reads the action's taint at HTML §4.10.22.3 "Form submission
+   algorithm" step 12 and spends it on the @S sink alone, then `form_record_request` records the
+   `url_serialize`d bytes, while the link and image doors record the taint itself. Recording the bare taint
+   would drop the entries the submission writes into the action's query, and unioning `valueClass` into the
+   address would over-claim, because `concolic_hole_key` is a bare brace test. Next diff: the recorded address
+   composed as a concolic from the action's taint and the entries, which needs `url_parse`/`url_serialize` to
+   carry concolics. Absence shows as: `form-submit` rows reading `unproven` beside their own `valueClass`
+   `unknown` while the same document's `link-element` rows read `runtime-only`. */
 char   *endpoint_reach_hist_json(void);
 
-/* …AND THE SAME SURFACE PARTITIONED BY THE BAR ITSELF, as a malloc'd JSON OBJECT (caller frees) — one row per
-   member of `ENDPOINT_RAZOR_CLASSES`, zeroes included, summing to the same `emitted` figure
-   endpoint_surface_census reports, with the identity asserted at the composer where both sides are in one
-   hand. Every value comes off `endpoint_razor_class_of`, which is the UNION CLAUDE.md
-   §What-the-tool-produces' bar names, so this is the one census row that states the bar rather than one of
-   its operands.
-   IT EXISTS BECAUSE THE TWO ROWS ABOVE ARE MARGINALS AND A UNION IS A STATEMENT ABOUT PER-ROW MEMBERSHIP.
-   `endpoint_address_hist_json` counts addresses by whether the run had determined them and whose unknown
-   they rest on, and `endpoint_reach_hist_json` counts what a MARKUP parse reaches, and NEITHER carries the other's fact for any row — so a census reader
-   holding both had no way to reach the bar and the nearest thing to one was keyed on the DOOR. That is not a
-   coarsening anybody could perform afterwards: a row is `runtime-only` if EITHER operand says so, and a
-   marginal tells you how many rows each operand accounts for and nothing about their overlap.
-   IT IS A FOURTH WALK OVER `g_eps` AND NOT A SUM OF THE TWO TABLES, for the reason endpoint.c gives for the
-   third — the walks carry the SAME `is_asset` skip precisely so that one of them drifting is a LOUD identity
-   failure, and a table summed from another is true by construction of it and blind to the walk it is
-   supposed to be checking. A sum would additionally be ARITHMETICALLY WRONG here rather than merely weak,
-   because the two operands OVERLAP: a `reply-chunk` row whose address the run had not determined is counted
-   by both marginals and is ONE row of this partition.
-   IT IS A CROSS-CHECK AGAINST THE PER-ROW COLUMN AND NEVER A SUM WITH IT. The emitted @H array carries
-   `razorClass` on every row from the same `endpoint_razor_class_of`, and this census is the same union at the
-   population grain — so a reader holding both holds ONE observation twice (CLAUDE.md §EVIDENCE-INFLATION),
-   and the two are worth having because they are taken at two INSTANTS over a GAUGE: `epEmitted` falls when an
-   asset verdict lands between two censuses, so a disagreement is a real finding about which records each
-   document was describing rather than an error in either.
-   IT IS A FLOOR AND A DIAGNOSTIC, in the words both rows above already carry: `runtime-only` is 0 by
-   construction on a document that composed every address out of constants, and that 0 is a REFUSAL TO CLAIM
-   the bar rather than a smaller version of it; `unproven` claims nothing whatever about a parse, for the
-   reason `endpoint_address_hist_json`'s `concrete` does not. Its DENOMINATOR is `epEmitted` on the same
-   census line and is not this row's to omit. */
+/* The emitted surface partitioned by ENDPOINT_RAZOR_CLASSES, as a malloc'd JSON object (caller frees), summing
+   to `emitted` (asserted): the one census row that states the bar. It is its own walk with the emit's asset
+   skip, never a sum of other rows: those are marginals, and the bar's two operands can both hold for one row.
+   It restates the per-row `razorClass` at the population grain; the two can be read at different instants,
+   and `epEmitted` falls when an asset verdict lands between them. It is a floor and a diagnostic:
+   `runtime-only` at 0 is a refusal to claim, and its denominator is `epEmitted` on the same census line. */
 char   *endpoint_razor_hist_json(void);
 
 /* Record one learned endpoint (deduped by method+url). `url` may be concolic (shape) or concrete. Headers are
