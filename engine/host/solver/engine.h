@@ -250,8 +250,8 @@ uint64_t engine_preempt_asks(void);
    struct and one call so the three are one sample. Lifetime counts, raised in every build like the total they
    partition; no policy reads them. */
 typedef struct {
-    uint64_t gen;    /* the frontier GENERATION had moved and the incumbent had not */
-    uint64_t cur;    /* the INCUMBENT had changed and the generation had not */
+    uint64_t gen;    /* the frontier generation had moved and the incumbent had not */
+    uint64_t cur;    /* the incumbent had changed and the generation had not */
     uint64_t both;   /* both had moved in one interval — neither invalidator alone explains this walk */
 } EngineRivalMiss;
 EngineRivalMiss engine_rival_miss(void);
@@ -923,256 +923,95 @@ typedef struct {
 } EngineLadderTaskCensus;
 void engine_ladder_task_census(EngineLadderTaskCensus *out);
 
-/* ---- THE FRONTIER'S OWN NUMBERS, AS ONE READING ----------------------------------------------------------
- *
- * Every row here is a static of engine.c that had EXACTLY ONE consumer — the `@COLD`/`@PROGRESS` printfs in
- * `run_scheduler` — and `run_scheduler` is reached only through `engine_run`, which the smoke fixture calls and
- * nothing else does. The extension's ABI drives `engine_sched_step` directly and never enters that loop, so
- * the pager's own accounting, the host-payment pair and the frontier's retirement count were computed on every
- * census of every production run and printed on none of them. That is §Testing's "measure what the shipped
- * path writes" with the writer on the wrong side of it: not a wrong number, a number about a host nobody runs.
- *
- * IT IS A FILLED STRUCT AND NOT TWELVE GETTERS FOR THE REASON `WfqCensus` IS ONE: the rows are a READING OF AN
- * INSTANT and must be taken together, so a caller that assembles them from separate calls is a caller that can
- * assemble them from two instants. solver/result.c renders it; this component decides what it holds. The
- * accessors above stay accessors because each of them is a TOTAL that any caller may ask for on its own.
- *
- * WHAT IS DELIBERATELY NOT HERE: the count of orphan drives (`engine_orphan_census`, which the document
- * already carries under its own name — a second spelling of one number in one document is the drift the
- * record-field gate exists to catch) and the RUNNING flow's cursor (a sample of one flow, which `deepest` and
- * `completed` answer as facts about the DOCUMENT). */
+/* The frontier's own numbers as one reading, filled in one call so no caller assembles them from two instants;
+ * solver/result.c renders it onto the result document, so every host sees it, not only run_scheduler's line.
+ * Rows are lifetime counts of this instance unless stated. Deliberately absent: the orphan drive count
+ * (engine_orphan_census already carries it, and one number gets one spelling) and the running flow's cursor (a
+ * sample of one flow; `deepest` and `completed` answer for the document). */
 typedef struct {
-    /* ─── THE TWO RETIREMENT TOTALS, EACH BESIDE THE TWO POPULATIONS IT IS THE SUM OF ────────────────────
-     *
-     * A FRONTIER HOLDS TWO POPULATIONS AND ONE COUNTER CANNOT REPORT ON EITHER. `finished` and `sold` are
-     * over every member, and a member is one of two things: an EXPLORATION flow (a boot fork, a branch arm, a
-     * loop arm, an orphan drive) or an @S CANDIDATE SESSION — solve.c's re-fire of one derived breakout,
-     * which is a flow on the ONE frontier exactly as CLAUDE.md §THERE-IS-NO-GRIND requires and is NOT a
-     * second executor. The two retire for OPPOSITE reasons and take OPPOSITE work: an exploration flow that
-     * ran to its end is coverage this document actually gained, while a candidate MEMBER that ran to its end
-     * is search this document spent on a derived payload that did not fire.
-     * Summed, "the engine retired 47 flows" and "the search spent itself 47 times over" are one number, and
-     * the reader cannot tell which it is holding.
-     *
-     * THE LABEL IS `Flow.cand_src` AND IT IS A BINARY PARTITION BY CONSTRUCTION. One field, set at birth
-     * (solve.c's seed, engine_sibling_assemble's copy, cold.c's 'c' record), never cleared, freed only at
-     * flow_release — so every member is on exactly one side of it at every instant of its life, and the two
-     * arms below cannot overlap or leave a member out. That is why this is TWO rows and not three: being a
-     * DRIVEN ORPHAN (`Flow.orphan`) is a separate field, and a drive seeded from a candidate parent inherits
-     * the substitution AND gets the mark, so a candidate/orphan/plain split would not be a partition at all
-     * and its "sum" would over-count the members that are both.
-     *
-     * BOTH ARMS COUNT MEMBERS AND NEITHER COUNTS SESSIONS, AND THE ROWS BELOW USED TO SAY OTHERWISE — kept
-     * in their own words there because a reader who re-derives ONE ROW PER CANDIDATE from the word CANDIDATE
-     * will write it again. `finished_cands` read "the @S candidate sessions: derived payloads that ran and did
-     * not fire" and `sold_cands` "the candidate sessions", and each is raised ONCE PER MEMBER: flow_finish is
-     * the one line a member ever completes on, engine_reclaim_tail the one line a member is ever sold on, and
-     * both read `Flow.cand_src` off the member in front of them. A CANDIDATE SESSION IS A TREE OF MEMBERS.
-     * engine_sibling_assemble copies `cand_src`, `cand_payload`, `cand_sink`, `cand_fired` and `cand_resumed`
-     * to every sibling of a parent that has them, with its own assert making a sixth field an obligation
-     * there; the copy is gated on the parent HAVING a substitution and on nothing else, so no arm of a
-     * candidate is refused a fork or leaves one without the label — and N arms of ONE seed therefore each
-     * reach flow_finish and each raise this count once. solver/solve.c records the same category error
-     * being removed from an assert one component over, where `Cand.ends` counted flow finishes and
-     * `Cand.tried` counted seeds; this is that unit wearing the other name in the EMITTED census, where a
-     * reader holding one document has nothing to read it against.
-     *
-     * THE PER-SESSION COUNT IS ALREADY EMITTED AND IS `_candidates` — solve.c's `g_cands_seeded`, raised once
-     * per candidate RUN seeded and zeroed by `solve_init`, which solver/result.c's own record establishes runs
-     * EXACTLY ONCE IN AN AGENT'S LIFE on all three hosts, read off the CALL and never off a host. These rows
-     * are lifetime totals of the same instance (neither is on engine_sched_begin's reset path), so the two
-     * span the same thing and may be read against each other. WHAT MUST NOT BE WRITTEN IS AN
-     * INEQUALITY BETWEEN THEM: arms legitimately outnumber seeds, so `finished_cands <= _candidates` is the
-     * wrong-unit implication solve.c has just finished deleting and a dev build would die on it at the first
-     * candidate's second arm. Read the other way it is an OBSERVATION and not an assert — a session cannot
-     * finish more times than it was seeded, so `finished_cands` standing ABOVE `_candidates` in one document
-     * is the excess being arms and can be nothing else.
-     *
-     * THE EMITTED KEY IS NOT RENAMED, AND THAT IS A CROSS-BOUNDARY DECISION RATHER THAN A PREFERENCE.
-     * `finishedCands` is composed by solver/result.c's result_cold_json into `qjs.wasm` and read by
-     * engine/build.mjs, which is INTERPRETED FROM THE TREE and therefore live on write; `coldFields()` derives
-     * its required set from that composer's own format string, so a rename leaves the reader demanding a key
-     * the shipped artifact does not emit and every run against an artifact older than the commit throws.
-     * CLAUDE.md §A-CROSS-BOUNDARY-DIFF: the halves land together or not at all, and the C half needs a build.
-     * It would also re-point every archived-log query at once. So the unit is stated at the declaration, at
-     * the raise, and in the consumer's own English, and the key is renamed by whoever lands the row below with
-     * a build behind it.
-     *
-     * WHAT IS NOT COVERED: no row anywhere says how many candidate SESSIONS have ended, which is the question
-     * `_candidates` is the denominator of and the one a reader asking "how many payloads were discarded" has.
-     * It is derivable from neither arm — a session ends when its LAST member ends, and nothing counts a seed's
-     * live members. THE NEXT DIFF builds that where the members are known, which is solve.c's per-`Cand`
-     * accounting and not this census: a live-member count per seed, decremented at the seam that already
-     * reaches `Cand.ends`, and the seed credited when it reaches zero. HOW ITS ABSENCE SHOWS: a reader holding
-     * a census can state how much search was spent in members and cannot state how many payloads were
-     * discarded, so every sentence a consumer composes about payloads discarded is a sentence about members.
-     * RETIREMENT: this record goes when that row is emitted beside `_candidates`, because the unit is then
-     * readable off the document rather than argued here.
-     *
-     * THE TOTAL STAYS, AND THE PARTITION IS ASSERTED AGAINST IT — the same discipline solver/cold.h's
-     * `step_units` keeps against `flows`. Each arm is incremented beside its total at the one site that
-     * total is written at, so the identity is what a retirement path added later without a label breaks;
-     * engine_frontier_census is where all three are read together and is where it fires. */
-    long finished;          /* flows that ran to their end — `finished_flows + finished_cands`, asserted */
-    long finished_flows;    /* …the EXPLORATION flows among them: coverage this document gained */
-    long finished_cands;    /* …and the @S candidate MEMBERS among them: search spent on payloads that did
-                               not fire. MEMBERS AND NOT SESSIONS — see above; `_candidates` is the sessions */
-    long sold;              /* flows this instance PAGED OUT — `sold_flows + sold_cands`, asserted; see
+    /* Retirement totals, each partitioned by `Flow.cand_src`, which is set at birth (solve.c's seed,
+     * engine_sibling_assemble's copy, cold.c's 'c' record) and never cleared, so every member is on exactly one
+     * side: an exploration flow ending is coverage gained, an @S candidate member ending is search spent on a
+     * payload that did not fire. Each arm is raised beside its total and the partitions are asserted at
+     * engine_frontier_census. Both candidate arms count members, not sessions: a candidate session is a tree of
+     * members (engine_sibling_assemble copies the candidate fields to every sibling), so N arms of one seed
+     * finish N times. `_candidates` (solve.c's `g_cands_seeded`) counts sessions; no inequality between the two
+     * may be asserted, since arms outnumber seeds. The emitted key `finishedCands` is read by engine/build.mjs,
+     * so renaming it must land with a build.
+     *   Named residual: no row counts candidate sessions that have ended; the next diff keeps a live-member count
+     * per seed in solve.c's `Cand` accounting and credits the seed at zero; its absence shows as every
+     * statement about payloads discarded being a statement about members. */
+    long finished;          /* flows that ran to their end: `finished_flows + finished_cands`, asserted */
+    long finished_flows;    /* …the exploration flows among them: coverage this document gained */
+    long finished_cands;    /* …and the @S candidate members among them: search spent on payloads that did
+                               not fire. Members, not sessions; `_candidates` is the sessions */
+    long sold;              /* flows this instance paged out: `sold_flows + sold_cands`, asserted; see
                                g_flows_sold */
     long sold_flows;        /* …the exploration flows among them */
-    long sold_cands;        /* …and the candidate MEMBERS — not sessions, see above — which is the sharper
-                               half of the pair: a parked candidate comes back WITHOUT its ladder
-                               (solver/flow.h — `cand_surv` and `cand_rung` are readings of a re-execution and
-                               deliberately do not cross the tier), so paging one costs the search the
-                               distance it had measured. */
+    long sold_cands;        /* …and the candidate members. A paged candidate comes back without its ladder
+                               (solver/flow.h's `cand_surv` and `cand_rung` do not cross the tier), so paging
+                               one costs the search the distance it had measured */
     long forks;             /* decide.c's fork total: how many times the decision seam split a flow */
-    /* THESE TWO ARE OVER THE SAME MIXED POPULATION AND ARE DELIBERATELY NOT SPLIT, which is a different
-       answer from the one above and rests on a different fact. They are MAXIMA, not sums, and a candidate
-       session "runs from the baseline" and "re-runs the document from the baseline" (solve.c) — it compiles
-       and completes this document's own programs, consuming the detecting flow's recorded arms. So a program
-       index reached only by a candidate is still a program THIS DOCUMENT reached, and the row is true of the
-       document whichever population set it. Splitting them would answer "which population got there first",
-       which is a question about the schedule and not about the document's coverage. */
-    int  deepest;           /* highest program this document has STARTED */
-    int  completed;         /* highest program it has run to its END */
-    /* AND THE ROW THE CURSOR HISTOGRAM IS ONE PAST, WHICH IS NEITHER OF THOSE TWO. `deepest` is the deepest
-     * program STARTED and this is the deepest ROW any flow has LEFT, started or not. The gap between them is
-     * the one thing the three rows together can say and no two of them can: `deepest -1 / deepestLeft 0`
-     * is a document that reached its first <script> and ran nothing at it, which on a page whose external
-     * scripts 404 is the ordinary state and not an error. HTML §4.12.1.1 "Processing model"'s "execute the
-     * script element" step 4 is that arm — "If el's result is null, then fire an event named error at el,
-     * and return" — a row the cursor passes and the compile never sees, so the two numbers COME APART by
-     * design and a reader who took `deepest` for how far the document got was reading past every skip.
-     * IT IS WHAT THE `programCursors` IDENTITY IS ASSERTED AGAINST, in solver/result.c, and it is the only
-     * one of the three that can be: the cursor moves for a row LEFT and `deepest` moves for a program
-     * STARTED, so asserting the histogram against `deepest` charged every correct skip as a defect. See
-     * solver/cold.h, which declares the identity, and engine.c's g_deepest_left for why merging the two
-     * costs a diagnosis in whichever direction it is merged. */
-    int  deepest_left;      /* highest row of its sequence any flow has LEFT — started or skipped */
-    /* AND THE DENOMINATOR THOSE TWO ARE READ AGAINST, WHICH IS THE ONE NUMBER NEITHER CARRIES AND NOTHING
-     * ELSE ON THIS LINE SUPPLIES. `deepest 7` says some flow started the eighth program; whether that is the
-     * WHOLE of a document or a third of it is not derivable from any other row. The cursor histogram's extent
-     * is taken from the LIVE MEMBERS rather than from the document, `progStarts` counts STARTS across
-     * timelines rather than rows, and a fork COPIES a sequence rather than extending it. So "the document's
-     * own scripts all ran" and "most of them were never reached" read identically — and they take opposite
-     * work, the first sending a reader to the chunk-discovery path and the second to the order.
-     * MEASURED AS A DEFECT RATHER THAN A HAZARD: a landed analysis of a real 4.5 MB bundle read `progStarts`
-     * as the document's script count and reported `24 - 8 = 16` scripts that never start. The subtraction was
-     * of two different things, and the sentence it produced was quoted into briefs.
-     * IT IS THE SEED LENGTH AND NOT THE SEQUENCE LENGTH, which is the one thing it must not be read as. A
-     * flow's sequence is these rows FOLLOWED BY every program the run queued into it — a lazy chunk, an
-     * injected <script>, an @S candidate — so `deepest` may legitimately exceed `rootPrograms - 1` and may
-     * legitimately fall short of it. No inequality holds in either direction, which is why there is
-     * deliberately no assert between them: one would fire on a healthy run that reached a queued chunk.
-     * ZERO IS A STATEMENT AND NOT A HOLE. A census taken outside a live session reads 0 because the seed
-     * table is given back when a session closes (engine_session_close), and a document with no executable
-     * <script> element reads 0 for the reason the seed's own type assert gives. */
-    int  root_programs;     /* rows the ROOT DOCUMENT'S OWN <script> elements seeded into every flow of it */
-    /* …AND THE PARTITION OF IT THAT SAYS WHETHER THIS RUN EVER LEARNED AN ENDPOINT. A seeded row either
-     * already holds its source text or its bytes are still owed by the reply door, and the second kind is
-     * what the bundle itself costs in reply-door openings. `replyAsked` has never had a denominator, so
-     * `replyAsked == rootProgramsAwaitedAtSeed` — the run asked for exactly its own bundle and nothing else, so no
-     * page `fetch()`, no XHR and no dynamic `import()` was ever reached — was a reading taken by counting a
-     * document's `<script src>` elements by hand. Both arms are written at the one line the total is. */
-    int  root_programs_held_at_seed;    /* …whose source text this instance HAD WHEN THE ROWS WERE SEEDED:
-                                   inline, or external and already fetched, both of which the seed makes a
-                                   DYN_PAGE_SCRIPT. Past tense on purpose — see solver/engine.c, where both
-                                   arms are written at one line and never again */
-    int  root_programs_awaited_at_seed; /* …and whose bytes the reply door owed AT THAT MOMENT — the seed makes each of these a
-                                   DYN_SCRIPT_SRC that parks its flow, so this is the bundle's own share of
-                                   `replyAsked` and everything above it is something the RUN reached */
-    /* ─── AND THE COUNTS THOSE TWO MAXIMA CANNOT CARRY, WITH THE ASK THE CANDIDATE ARM IS MEASURED AGAINST ──
-     *
-     * `deepest` and `completed` are MAXIMA and answer how FAR, so neither can answer how MANY, or WHOSE.
-     * A run reading `deepest: 12` may have started twelve programs or twelve thousand, and nothing above says
-     * whether ONE of them was an @S candidate — which is the question §@S's only-firing rule turns into
-     * the whole standard of proof for a security finding, since a constructed PoC that is never STARTED cannot
-     * fire and reports exactly as one that ran and did not.
-     *
-     * THE PAIR THAT ANSWERS IT IS `progQueuedCand` AND `progStartsCand`, AND NEITHER IS READABLE ALONE. The
-     * queue side is the solver's ASK, raised where the row is created and therefore upstream of the pick, the
-     * compile and the destroyed-document walk — every one of which may decline a candidate for a good reason
-     * (a breakout that does not fit its sink's context correctly never parses). The start side is the same
-     * question asked of the scheduler. `0/0` says no breakout ever reached an executable position, so there
-     * was nothing to run; `0/N` says N were constructed and queued and the frontier never handed a member the
-     * thread at one of their rows. Those take opposite work — the first is solve_html.c's derivation and the
-     * second is the WFQ — and until both rows existed they were one silence.
-     *
-     * `progStarts` IS THE THIRD DISCRIMINATOR AND IT IS THE ONE FOR THE RUN RATHER THAN THE SEARCH. A run that
-     * started NO program of any kind has said nothing about candidates, and it reads identically to one that
-     * started thousands with no candidate among them.
-     *
-     * `progStartsCand` MAY EXCEED `progQueuedCand`. A fork copies the whole queue, so one ask can stand
-     * unstarted in N timelines and be started once by each — the same program on N paths, which is what a fork
-     * is. There is deliberately no assertion between the two sides; the one that holds is the partition, over
-     * a single event, and it is asserted at engine_frontier_census like the two above it. */
-    long prog_starts;       /* programs STARTED — `prog_starts_cand + prog_starts_other`, asserted */
+    /* Maxima over both populations, deliberately not split: a candidate session re-runs this document's own
+       programs from the baseline, so a program index it reached is one this document reached. */
+    int  deepest;           /* highest program this document has started */
+    int  completed;         /* highest program it has run to its end */
+    /* The highest row any flow has left, started or skipped. It differs from `deepest` by design: HTML
+     * §4.12.1.1 "Processing model"'s "execute the script element" step 4 ("If el's result is null, then fire an
+     * event named error at el, and return") passes a row without a compile, so a page whose external scripts
+     * fail reads `deepest -1 / deepestLeft 0`. solver/result.c asserts the `programCursors` identity against
+     * this row, not `deepest` (solver/cold.h declares the identity; see engine.c's g_deepest_left). */
+    int  deepest_left;      /* highest row of its sequence any flow has left: started or skipped */
+    /* The seed length those maxima are read against: rows the root document's own `<script>` elements seeded
+     * into every flow. It is not the sequence length, since lazy chunks, injected scripts and candidates are
+     * appended, so `deepest` may exceed or fall short of `root_programs - 1` and no assert relates them. It
+     * reads 0 outside a live session (engine_session_close gives the seed table back) and for a document with
+     * no executable script. Nor is `progStarts` a script count: it counts starts across timelines.
+     * The two at-seed rows partition it (asserted) and are written at one line, when the rows are seeded:
+     * `replyAsked == rootProgramsAwaitedAtSeed` means the run asked for its own bundle and nothing else. */
+    int  root_programs;     /* rows the root document's own <script> elements seeded into every flow of it */
+    int  root_programs_held_at_seed;    /* …whose source text this instance had when the rows were seeded:
+                                   inline, or external and already fetched; both are DYN_PAGE_SCRIPT rows */
+    int  root_programs_awaited_at_seed; /* …and whose bytes the reply door owed then: DYN_SCRIPT_SRC rows
+                                   that park their flow, the bundle's own share of `replyAsked` */
+    /* Counts the two maxima cannot carry. `prog_starts` is partitioned into candidate and other starts
+     * (asserted), and `prog_queued_cand` is the solver's ask, raised where the row is created, upstream of the
+     * pick, the compile and the destroyed-document walk, each of which may legitimately decline. `0/0` says no
+     * breakout reached an executable position (solve_html.c's derivation); `0/N` says N were queued and never
+     * handed the thread (the WFQ). `prog_starts_cand` may exceed `prog_queued_cand`, because a fork copies the
+     * queue, so no assert relates them. Only firing proves a PoC, so an unstarted candidate is not a verdict.
+     *   The host rows count rendezvous: minted, settled once (`answered <= asked`, asserted), extra answers on an
+     * already-settled request (one per extra peer timeline; each forks an arm and unblocks nothing), refused
+     * after the session closed, and withdrawn (engine_host_terminate), so `asked - answered - terminated` is
+     * what is outstanding. */
+    long prog_starts;       /* programs started: `prog_starts_cand + prog_starts_other`, asserted */
     long prog_starts_cand;  /* …the @S candidate programs among them: a constructed PoC that got its chance */
     long prog_starts_other; /* …and every other kind: the document's own coverage */
-    long prog_queued_cand;  /* candidate programs the search ASKED to have run — the denominator of the above */
+    long prog_queued_cand;  /* candidate programs the search asked to have run: the denominator of the above */
     long claims_met;        /* an inherited orphan drive whose body a take handed over */
-    long claims_unmet;      /* …and one that FINISHED never having been handed one — the round trip's verdict */
-    long host_asked;         /* rendezvous ids this instance MINTED — every one the host is shown and must pay */
-    long host_answered;      /* …and the ONE delivery that SETTLED each: `answered <= asked` is asserted */
-    long host_answers_extra; /* answers landing on an ALREADY-settled request — one per extra peer TIMELINE,
-                              * each of which forks an arm. Not a payment: it unblocks nothing, and adding it
-                              * into `host_answered` is what made one ask read as four. */
+    long claims_unmet;      /* …and one that finished never having been handed one: the round trip's verdict */
+    long host_asked;         /* rendezvous ids this instance minted: every one the host is shown and must pay */
+    long host_answered;      /* …and the one delivery that settled each: `answered <= asked` is asserted */
+    long host_answers_extra; /* answers landing on an already-settled request, one per extra peer timeline;
+                              * not a payment, so never added into `host_answered` */
     long host_answers_late;  /* answers refused because the session had already closed */
-    /* …AND ASKS THIS INSTANCE WITHDREW (engine_host_terminate), WHICH IS THE ONE POPULATION THE PAYMENT RATE
-     * CANNOT SEE. `asked` counts mints and `answered` counts settlements, so a terminated id is an ask that
-     * will never be paid and a widening gap is the rate's own signature for "the host is not paying" — the
-     * diagnosis that pair exists to make in a glance, read backwards. A terminate is the engine RETRACTING the
-     * question, so it belongs beside the two rather than inside either: `hostAsked - hostAnswered -
-     * hostTerminated` is what is genuinely outstanding. */
-    long host_terminated;    /* rendezvous ids WITHDRAWN — Fetch §2 Infrastructure's terminate-a-fetch-controller */
+    long host_terminated;    /* rendezvous ids withdrawn: Fetch §2 Infrastructure's terminate-a-fetch-controller */
     long paged_reqs;         /* synchronous requests a sale took with it */
-    /* …AND WHETHER THE ALLOCATOR'S REFUSAL EDGE WAS ASKED AT ALL, WHICH `sold` CANNOT STATE. A zero `sold` is
-     * three runs at once — the frontier fitted and nothing refused, a refusal arrived where the safepoint is
-     * not armed, or the pager was asked at the floor and held nothing but the running flow — and they take
-     * opposite work. This is `host_asked`'s service to `host_answered` performed for the pager, and the four
-     * rows are an exact partition (`unarmed + floor + sold == asks`), asserted at engine_frontier_census. */
+    /* Whether the allocator's refusal edge reached the pager at all, which a zero `sold` cannot say:
+       `paged_unarmed + paged_floor + sold == paged_asks`, asserted at engine_frontier_census. */
     long paged_asks;         /* times the allocator's refusal edge reached this engine (engine_reclaim_tail) */
     long paged_unarmed;      /* …declined because the reclaim safepoint was not armed (outside the flow step) */
     long paged_floor;        /* …answered at the frontier's floor: no member but the flow that is running */
-    /* ─── AND WHETHER A REPLY EVER BECAME A PROGRAM, PER DOOR, WITH THE DENOMINATOR EACH ONE IS A SHARE OF ──
-     *
-     * WHAT THE RUN COULD NOT SAY BEFORE. Two components turn a fetched reply into a program — solver/engine.c's
-     * FLOW_PENDING_RESOLVE delivery and core/xhr/xml_http_request.c's `xhr_take_reply` — and both end in
-     * `engine_queue_fetched_script`, which queues a DYN_PAGE_SCRIPT. The kind of the row is therefore the same
-     * kind the document's own seeded `<script>` rows carry, so `progStartsOther` sums a chunk that arrived
-     * over the network with the page's own bundle and NO ROW ANYWHERE SAID A PROGRAM HAD BEEN QUEUED FROM A
-     * REPLY AT ALL. CLAUDE.md §Learning-from-replies makes "a fetch whose body is JAVASCRIPT is ALWAYS fetched
-     * + EXECUTED" the headline moat surface, and the two doors that build it had no witness of their own.
-     *
-     * THE ASK IS RECORDED AT THE CALL AND NOT AT THE OUTCOME (CLAUDE.md §AN-INVARIANT-OVER-A-GATED-OPERATION).
-     * Both doors LEGITIMATELY decline: a reply whose computed type is not JavaScript is not a program, and a
-     * preload, a modulepreload and an image decode park a kind of their own PRECISELY so a JavaScript-typed
-     * reply is not compiled (see engine_pending_resource_url above). A census of what LANDED cannot tell a
-     * door that was never reached from one that correctly refused every reply it was shown, so each `…_asks`
-     * row is raised where the door HOLDS A REPLY RECORD, upstream of the type gate and of the address guard,
-     * and each `…_queued` row beside the queue call. `0/0` is a door the run never reached — for the fetch
-     * door that is a page that issued no `fetch()`, for the XHR door a page that sent no XMLHttpRequest;
-     * `0/N` is a door reached N times that queued nothing, which is either N correct refusals or the arm
-     * failing and is a question about the replies rather than about whether the door exists.
-     *
-     * THE TWO DENOMINATORS COUNT ONE POPULATION, WHICH IS THE PART THAT HAD TO BE MADE TRUE RATHER THAN
-     * ASSUMED (CLAUDE.md §AND-THE-DENOMINATOR-CAN-BE-THE-RIGHT-KIND). `xhr_take_reply` returns before its
-     * program block for a network error — a reply with no body — so the fetch door's raise is guarded on the
-     * reply being a RECORD for exactly that reason and not for a defensive one. Both rows are therefore
-     * "reply records this door examined for a program", and neither counts a network error.
-     *
-     * `net_prog_queued` IS RAISED AT THE ONE ENTRY AND IS NOT THE SUM OF THE TWO ARMS. It is written inside
-     * `engine_queue_fetched_script`, so every caller moves it, and the two door arms are written by the two
-     * doors. The relation is `fetch_queued + xhr_queued <= net_prog_queued` and it is asserted; it is an
-     * INEQUALITY rather than a partition because a third caller exists and is deliberate — `test_forced.c`'s
-     * `loadScript` host edge stands in for a `<script src>`-shaped door and says at its own site that it is
-     * the door which CANNOT exercise the delivery arm. So in the shipped program the residue is ZERO and a
-     * reader can check that from the rows; in that fixture it is the fixture's own edge. WHAT THE ASSERT
-     * CATCHES is the hazard CLAUDE.md §A-superseded-system-is-DELETED names: a door raising a queued arm
-     * WITHOUT going through the one compile entry, which is a second compile door wearing an observation.
-     *
-     * A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing reads them and no arm branches on one. */
-    long net_prog_queued;       /* programs queued at engine_queue_fetched_script — EVERY caller */
+    /* Whether a reply ever became a program, per door. The `fetch()` reply (FLOW_PENDING_RESOLVE delivery) and
+     * core/xhr/xml_http_request.c's `xhr_take_reply` both end in engine_queue_fetched_script, so without these
+     * a network chunk is indistinguishable from the page's own bundle in `progStartsOther`. Each `…_asks` is
+     * raised where the door holds a reply record, before the type gate (a network error, which has no body, is
+     * in neither door's count); each `…_queued` beside the queue call. `0/0` is a door never reached, `0/N` a
+     * door that queued nothing from N replies. `net_prog_queued` is raised inside engine_queue_fetched_script
+     * for every caller, so `fetch_queued + xhr_queued <= net_prog_queued` (asserted) is an inequality:
+     * test_forced.c's `loadScript` edge is a third caller. A door raising its queued count without the one
+     * compile entry fails that assert. */
+    long net_prog_queued;       /* programs queued at engine_queue_fetched_script, by every caller */
     long net_prog_fetch_asks;   /* reply records the `fetch()` reply door examined for a program */
     long net_prog_fetch_queued; /* …and how many of them it queued: `queued <= asks` is asserted */
     long net_prog_xhr_asks;     /* reply records the XMLHttpRequest reply door examined for a program */
@@ -1180,256 +1019,88 @@ typedef struct {
 } EngineFrontierCensus;
 void engine_frontier_census(EngineFrontierCensus *out);
 
-/* HOW MANY PROGRAM ROWS OF THE LIVE FRONTIER ARE STANDING ON AN ADDRESS WHOSE BYTES HAVE NOT ARRIVED — the
- * GAUGE that `rootProgramsAwaitedAtSeed` is the CONSTANT half of, and the reason it is a free function rather
- * than a field of the record above. That record is documented at its emitter (solver/result.c) as LIFETIME
- * COUNTS, and the grouping there is MECHANICAL — a row inherits its kind from the accessor that filled it —
- * so a gauge inside it would make that contract wrong about a row for the first time. `flow_host_owed_count`
- * is the existing member of this shape and this stands beside it on the census line for its reason.
- * WHAT THE PAIR SEPARATES, which is the whole of why it exists: `…AwaitedAtSeed` says what the document OWED
- * the reply door when its rows were laid down and cannot say whether those bytes ever came, so `17` beside a
- * `rowsAwaitingBytes` of 0 is a bundle that arrived WHOLE — a run that never reached its later programs is
- * then the ORDER failing — and `17` beside `17` is a bundle whose bytes never arrived, which is the fetch
- * path. Those take opposite work and no row on that line separated them.
- * IT IS SUMMED PER MEMBER AND THE FAN-OUT IS THE ANSWER. A fork copies its parent's rows, so one document row
- * awaited by N members counts N times: each of them stops at that position until its own delivery pays it. No
- * inequality against `…AwaitedAtSeed` holds in either direction — forking drives it above, a sale drives it
- * below — which is why there is no assert between the two. */
+/* How many program rows of the live frontier stand on an address whose bytes have not arrived: a gauge, which
+ * is why it is not a field of the lifetime census above. Beside `rootProgramsAwaitedAtSeed` it separates a
+ * bundle that arrived whole (this 0) from one whose bytes never came. It is summed per member, since a fork
+ * copies its parent's rows, so no inequality against the at-seed row holds in either direction (forks raise
+ * it, sales lower it) and none is asserted. */
 long engine_rows_awaiting_bytes(void);
 
-/* HAS ANY PROGRAM STARTED IN THIS INSTANCE AT ALL — one bit, monotone, read by the @H surface to say which of
- * its records were minted before the page's own code had run a line.
- * WHY THE @H SURFACE NEEDS IT AND CANNOT COMPOSE IT. An endpoint record carries a PROVENANCE, and that field
- * answers what a request is EVIDENCE OF — whether a real load makes it, whether a forced arm is under it —
- * which is the firing policy's question and is the right question for the firing policy. It is not the
- * REPORTING question, and the two came apart on every real page measured: `engine_prov_of_running_path`
- * states in its own declaration above that it can never answer `observed`, so every subresource a PARSER
- * inserted and a browser algorithm recorded is graded `derived` — and `derived`'s own definition, the code
- * COMPUTED this address from real inputs, is the product's headline claim. A document whose whole surface is
- * its own markup therefore reports a surface of `derived` rows, and a reader counting them counts addresses
- * forced execution never composed. §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS is the shape exactly: one field,
- * two questions, decided by the stricter one, with the cost landing silently on the other. The cure that rule
- * prescribes is TWO predicates over ONE fact rather than a second field free to disagree, and the fact this
- * one is asked of is `g_prog_starts` — written at the single line a program starts, beside the two arms that
- * partition it.
- * IT IS A COUNT CROSSING ZERO AND NOT A HIGH-WATER MARK, DELIBERATELY. `g_deepest` would answer the same
- * question today and its own declaration is a paragraph about how it has been misread — it SATURATES, reads
- * flat, and was dispatched as a ceiling into three briefs. A reader who follows this call reaches a monotone
- * count whose zero means one thing.
- * A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on it, no request is refused because of it, and
- * the surface it feeds is a census row. */
+/* Whether any program has started in this instance: one monotone bit (`g_prog_starts` crossing zero), read by
+ * the @H surface to mark records minted before the page's own code ran a line. Provenance answers the firing
+ * question, and engine_prov_of_running_path never answers `observed`, so markup-only addresses grade
+ * `derived`; this is the second predicate over the same start fact, for reporting. A count crossing zero,
+ * not `g_deepest`, which is a high-water mark. Nothing branches on it. */
 int engine_any_program_started(void);
 
-/* THE FOUR NOTES THE TWO REPLY DOORS WRITE — see EngineFrontierCensus's `net_prog_*` block for what they are
- * FOR; this states why they are four entries and not one with a door argument.
- *
- * ONE ENTRY PER DOOR PER SIDE, WHICH IS THE SHAPE core/xhr AND core/fetch ALREADY REACH THIS HOST THROUGH
- * (solver/endpoint.h's `endpoint_xhr_edge_began`/`…_placed`/`…_offered`). A single entry taking a door and a
- * did-it-queue flag would be CLAUDE.md §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS written as an argument list:
- * one call answering which door and whether the gate passed, decided at one site, with a caller free to state
- * the first and forget the second. Four named statements cannot be half-made.
- *
- * AND THE DOOR IS NOT A PARAMETER OF `engine_queue_fetched_script`, WHICH IS THE SHAPE A READER REACHES FOR
- * FIRST. That entry's own declaration says its task source and its script type are stated AT THE DEFINITION
- * rather than taken as parameters because "this entry is one spec step, and a caller that reached it has a
- * response in hand" — which transport carried those bytes is not a fact of that step, and a census-only
- * argument on it would be the first parameter it holds that the row it builds does not carry. The cost of
- * that choice is stated rather than hidden: the partition over the doors is an INEQUALITY against the entry's
- * own total rather than an equality, and the residue is a published row.
- *
- * THE ASK IS RAISED WHERE THE DOOR HOLDS A REPLY RECORD AND BEFORE ANY TYPE IS READ, which is the whole of
- * what makes the pair readable — a raise after the type gate would count only the replies that passed it and
- * the denominator would be the numerator. A caller that raises `…_queued` without having raised `…_asks` on
- * the same reply is caught at engine_frontier_census, where both are in one hand.
- *
- * THEY ARE VOID AND READ NOTHING BACK (§NO BOUNDS): a door's behaviour does not depend on having been counted. */
+/* The four notes the two reply doors write (see EngineFrontierCensus's `net_prog_*` rows): one entry per door
+ * per side, so a caller cannot state the door and forget whether the gate passed. The door is not a parameter
+ * of engine_queue_fetched_script, because the transport is not a fact of that spec step; the cost is that the
+ * door partition is an inequality against that entry's total. The ask is raised where the door holds a reply
+ * record and before any type is read; engine_frontier_census catches a queued note without its ask. */
 void engine_note_net_prog_fetch_ask(void);
 void engine_note_net_prog_fetch_queued(void);
 void engine_note_net_prog_xhr_ask(void);
 void engine_note_net_prog_xhr_queued(void);
 
-/* THE ALLOCATOR UNDER THE JS HEAP, which is the one number quickjs's own accounting structurally cannot give.
- * `JS_ComputeMemoryUsage` walks the RUNTIME; Lexbor's document arenas, the per-flow COW deltas and every other
- * `malloc` in this host are invisible to it, so a run whose RSS is sixteen times its JS heap has nothing in
- * that census to say what the other fifteen sixteenths are. `live` is what the C allocator currently has handed
- * out (quickjs's bytes INCLUDED, since js_malloc routes to malloc), and `arena` is the address space it has
- * ever needed. IN WASM THE TWO DIFFER PERMANENTLY AND THAT DIFFERENCE IS THE DIAGNOSIS: linear memory only
- * grows, so a page handed back stays mapped and `arena` is a HIGH-WATER MARK that RSS follows. A run whose
- * `live` is flat while `arena` climbs is FRAGMENTING and not leaking, and the two have different fixes. */
+/* The C allocator under the JS heap, which JS_ComputeMemoryUsage cannot see (Lexbor arenas, COW deltas, every
+ * other `malloc`). `live` is what the allocator has handed out now, quickjs's bytes included, since js_malloc
+ * routes to malloc; `arena` is the address space it has ever needed. In wasm linear memory only grows, so
+ * `arena` is a high-water mark that RSS follows, and a flat `live` with a climbing `arena` is fragmentation,
+ * not a leak. */
 size_t engine_c_alloc_live(void);
 size_t engine_c_alloc_arena(void);
 
-/* WHAT THIS INSTANCE'S TIMELINES DID WITH THE ROUTED RECORDS HANDED TO IT — how many they DELIVERED (each one
-   became §9.3.3 step 8's one global task at the receiving Window) and how many they CONSUMED as not theirs (a
-   message belonging to the other side of a sender branch this timeline has taken a side at).
-   BOTH OR NEITHER, because either alone is uninterpretable and the pair is what makes a delivery count mean
-   anything at all. A routed record is attached to EVERY live flow of the receiving document (engine_route says
-   why: a document's state IS its flows, and a delivery seeded from the baseline arrives at a document where
-   the page's own listener was never registered), so the number of times a page's `message` handler runs is the
-   number of TIMELINES that admitted the record — never the number of records the zone routed. A host that
-   compares its own routed count against the handler's invocations is asserting that the receiver has exactly
-   one timeline, which is true only of a receiver whose other timelines the scheduler never reached: it passes
-   while they are starved and fails the moment they run, which is the schedule-dependent answer §Testing's
-   differential exists to catch. These two numbers are what such a host compares against instead — `delivered`
-   is exactly how many TASKS the engine queued, and `refused` is what says the rest of the frontier saw the
-   record and correctly declined it rather than never having been offered it.
-   `delivered` IS NOT A HANDLER-INVOCATION COUNT AND THIS LINE USED TO SAY IT WAS. A queued task has FOUR ends
-   and only one of them runs a listener — see engine_routed_task_census below, which is the half that was
-   missing and which a host had no choice but to guess at.
-   AND NEITHER OF THEM IS ABOUT A RECORD, WHICH IS THE THIRD NUMBER AND THE REASON THE PAIR BECAME A TRIPLE.
-   Both counts above are per (record, TIMELINE) attachment; "was this record admitted by any timeline at all"
-   is per RECORD, so no arithmetic over the pair recovers it — one record admitted by N timelines pays for N-1
-   records admitted by none, and a shortfall of `delivered` below a host's own routed count therefore names a
-   loss when it fires and establishes nothing when it does not. `zero_delivery` is that question answered where
-   the fact lives: how many routed records NO timeline of this instance has admitted.
-   IT IS A GAUGE AND THE OTHER TWO ARE LIFETIME COUNTS, so it may FALL and they may not — a record still in
-   flight is indistinguishable here from a record that is lost, and only a receiver DRAINED to a stall makes
-   this number a loss rather than a backlog. A host that reads it says that it drained; a host that differences
-   two samples of it is doing arithmetic on nothing. The raise site states how it is keyed and what the one
-   named residual is.
-   ALL THREE OR NONE, for engine_routed_task_census's reason exactly: a delivery count with no refusal count
-   cannot tell "the frontier declined this" from "the frontier never saw it", and neither of them with no
-   zero-delivery count beside it can tell either of those from "no timeline of this document ever received it",
-   which is the one a page cannot distinguish from a message that was never sent. */
+/* What this instance's timelines did with the routed records handed to it. `delivered` counts tasks queued
+   (each is HTML §9.3.3 step 8's one global task at the receiving Window; engine_routed_task_census says how
+   each ended), and `refused` counts records a timeline consumed as not its own (the other side of a sender
+   branch it has taken a side at). Both are lifetime counts per (record, timeline) attachment: a routed
+   record is attached to every live flow of the receiving document (engine_route), so a handler's invocation
+   count is a count of timelines, never of records routed. `zero_delivery` is a gauge of routed records no
+   timeline has admitted: it may fall, a record in flight looks like a lost one, and it is a loss only on a
+   receiver drained to a stall. All three are read together. */
 void engine_routed_census(long *delivered, long *refused, long *zero_delivery);
 
-/* THE ORPHAN SURFACE'S CENSUS — how many drives of a function the page shipped and never called this session
- * SEEDED, and how many times a flow got as far as asking for one.
- *
- * `driven` COUNTS SEEDS AND NOT RUNS, WHICH IS WHERE ITS FIRST READER WENT WRONG. The count is raised the
- * instant a take succeeds, immediately before engine_sibling_assemble puts the drive on the frontier — so it
- * says a flow was CREATED for that body, never that the flow was picked, ran, or reached the call. Whether it
- * ran is answered by the drive's own FINDING (the endpoint it records), not by this number, and a reader who
- * takes `driven > 0` for "the uncalled code executed" is reading a seed as a result.
- *
- * IT IS TWO NUMBERS FOR THE REASON engine_routed_census IS, AND THE PAIR SEPARATES TWO STATES OF THREE — the
- * third needs the finding beside it, and saying so here is the whole of what stops the pair being over-read.
- * On a FRESH session (no residue, so the routing arm that consumes a take without seeding cannot fire):
- *     asked == 0                      no flow ever ran out of its own work, so the question was never
- *                                     reached — a scheduling result, and the one worth acting on. WHAT THAT
- *                                     CONDITION IS, NAMED so the row is checkable: flow_step asks the seed
- *                                     BELOW the three clock-driven sources, so "ran out of its own work" is
- *                                     "has no program, job, delivery, checkpoint or lifecycle stage due, AND
- *                                     no rendering opportunity, no due timer and no idle work" — and NOT "has
- *                                     no frame, timer or reply left", which is the exit that declares a
- *                                     timeline OVER.
- *                                     THIS SAID "THE LAST MOMENT BEFORE THE CLOCK MAY MOVE", AND THAT IS THE
- *                                     HALF THE OWNER'S ORDERING RETIRED. The reason it gave is intact and is
- *                                     why the clock now runs first: a rendering opportunity is generated for
- *                                     ever on a document that has one, so a row asked BELOW it is a fact
- *                                     about the DOCUMENT'S shape rather than about the frontier — which is
- *                                     exactly as true of this row now as it was of the exit then, and is the
- *                                     PRICE of serving the page's own arranged work first rather than an
- *                                     oversight. A zero here is therefore no longer "no flow ran out of its
- *                                     own work": it is that, OR every flow that did had a frame or a timer
- *                                     due, and solver/engine.c's clock-arrival counters are what separate
- *                                     them. A run in which it reads 0 while `live`
- *                                     climbs is now a statement about the five conditions above the rung —
- *                                     frame, sequence, job, block, lifecycle — PLUS the three clock rungs,
- *                                     and, AHEAD OF ALL EIGHT, about
- *                                     whether the members were DISPATCHED at all: every one of those is asked
- *                                     inside flow_step, so a member the pick never reaches asks nothing and
- *                                     appears in none of them. Read solver/cold.h's `stepUnits` `none` row
- *                                     (solver/step_unit.h's NONE, paired with @WFQ's `unrun`) FIRST, then
- *                                     `framed`, `outOfPrograms`
- *                                     and `blocked` for which arm holds the rest. Reasoning over the eight
- *                                     without asking the zeroth is how this row gets read as a ladder defect
- *                                     when it is a pick-order one.
- *     asked > 0, driven == 0          the walk ran and the heap held no uncalled function — a fact about the
- *                                     PAGE. It is NOT evidence about pick order, and reading it as such is
- *                                     reading "there was nothing to drive" as "something was starved".
- *     driven > 0, finding ABSENT      the drive was seeded and did not get far enough to record what it
- *                                     would have — THIS is the pick-order reading, and it needs the finding.
- * On a RESUMED session a take can ROUTE to a flow already waiting for that body without raising `driven`, so
- * the middle row is ambiguous there and the pair must be read on a fresh one.
- *
- * AND THERE IS A FOURTH STATE THIS PAIR CANNOT REACH, WHICH IS SAID HERE BECAUSE THE OBVIOUS WAYS TO REACH IT
- * ARE ALL WRONG. The third row above — seeded, finding absent — is one word for two different defects, and
- * they take opposite fixes: a drive NEVER GIVEN THE THREAD is a pick-order problem (a weight), and one PICKED
- * AND CUT SHORT before it reached its call is a dwell or preemption-granularity problem. Separating them wants
- * "was this seeded drive ever switched in", and every field that looks like it answers that is INHERITED BY
- * FORKS and therefore describes the drive's whole FAMILY rather than the seeded root: `orphan` is copied at
- * the fork (engine_sibling_assemble), `fn` is passed to the child, and `visits` is a WFQ term that §scheduler
- * REQUIRES a fork to carry, since a term a fork does not carry is a way for a flow to change its own rank by
- * branching. So a "was it picked" bit hung on `orphan` flows counts descendants, and a frontier walk over them
- * counts a family that grew. What the fourth state needs is a marker the seed sets and a fork does NOT copy,
- * raised once at the scheduler's switch-in, with `picked <= driven` asserted at this accessor — and it needs
- * the park's half too, or a resumed drive re-counts. That is a real diff on the hottest struct and the pick
- * path, and its failure mode is a WRONG NUMBER rather than a crash, which is the one outcome this census
- * exists to prevent. Until it is built, `driven > 0` with the finding absent says DISPLACEMENT and does not
- * say which kind.
- *
- * `driven` ALREADY EXISTED AND WAS UNREADABLE. It reached the heap/progress line and nothing else, and
- * §Testing says the renderer deliberately does not tee its stdout, so the number that says whether the
- * headline surface of this tool did anything at all could not be read off a run. Both cross in the result
- * document now, beside the @S arrival census they are the orphan-side twin of. */
+/* The orphan surface's census, per session: `driven` counts drives seeded (a take succeeded and
+ * engine_sibling_assemble put the drive on the frontier), never runs; whether a drive ran is answered by its
+ * own finding. `asked` counts flows that reached the orphan rung, which flow_step asks below the three
+ * clock-driven sources, so it means no program, job, delivery, checkpoint or lifecycle stage was due and no
+ * rendering opportunity, timer or idle work either. Read on a fresh session (on a resumed one a take can route
+ * to a waiting flow without raising `driven`):
+ *     asked == 0                  no flow reached the rung: read solver/cold.h's `stepUnits` `none` row (with
+ *                                 @WFQ's `unrun`) first, then `framed`, `outOfPrograms` and `blocked`, and
+ *                                 the clock-arrival counters
+ *     asked > 0, driven == 0      the walk found no uncalled function: a fact about the page
+ *     driven > 0, finding absent  the drive did not get far enough: displacement
+ * The last row cannot say whether the drive was never picked or was cut short; telling them apart needs a
+ * picked marker a fork does not copy, since `orphan`, `fn` and `visits` are all inherited. */
 void engine_orphan_census(long *driven, long *asked);
-/* …AND WHICH EXIT EACH OF THOSE ASKS TOOK, WHICH IS A PARTITION THE ENGINE ALREADY ASSERTS AND HAS NEVER
- * PUBLISHED. `asked` above is raised at engine_orphan_seed's entry past the forking gate and exactly one of
- * these three is raised at each of its exits; engine_step_unit_runs asserts the equality. So the residue a
- * reader needs has existed, correct and checked, in three statics nothing emits — the write-with-no-reader
- * defect on the partition that decides which of two opposite repairs the orphan surface owes.
- * WHAT IT SEPARATES, AND THE TWO READINGS TAKE OPPOSITE WORK, which is the whole reason it is three rows and
- * not one. `took` is a walk that handed a body over. `empty` is a walk that ran and found nothing — a fact
- * about the HEAP, which engine_orphan_seed's residual states is NOT the same finding as "the bundle ships no
- * uncalled code", because the walk can only see a body with a LIVE FUNCTION OBJECT OF ITS OWN. And `memo` is
- * an ask the generation cache answered WITHOUT WALKING AT ALL — so `memo` high says the cache absorbs and the
- * walks that do happen are few, while `memo` low says the orphan generation moves as fast as flows run out of
- * work and essentially every ask is a full enumeration of `rt->gc_obj_list`. The first makes the cost PER WALK
- * and the repair is inside the walk; the second makes it PER ASK and the repair is the cache or the rung's
- * placement. No count of asks, drives or step arms can tell those apart.
- * MEASURED, WHICH IS WHY THIS IS A ROW: over three drives of one release artifact on one real app,
- * `seed-one-orphan-flow` overran the cooperative slice in 36 of 55, 100 of 121 and 122 of 140 of its own runs
- * — 51%, 72% and 76% of ALL overrunning turns in the run — while `deliver-one-reply` overran 2.9%, 3.9% and
- * 3.0% of its own and `resume-program` 0%, 5% and 2.4%. One arm carries three quarters of the overruns, its
- * walk is an enumeration of the whole GC object list with no step boundary in it, and nothing published says
- * how often that walk is actually performed.
- * ONE STRUCT AND ONE CALL, for engine_rival_miss's reason exactly: a partition read through three accessors is
- * three moments, and §Testing's rule is that a conservation identity holds WITHIN ONE SAMPLE and nowhere else.
- * PER SESSION, not per instance — solver/engine.c releases all four with the agent, which is why the equality
- * is an EQUALITY and not a floor, and which a reader comparing them against a per-instance row must know.
- * THEY DECIDE NOTHING AND BOUND NOTHING (§NO BOUNDS): no arm of any verdict branches on them, and "how often
- * did the orphan walk find nothing" is precisely what a stop-looking heuristic would be built from.
- * HOW THEIR ABSENCE SHOWS, as an observation and not an instance: a reader holding a large `orphansAsked`, a
- * small `orphansDriven` and an orphan arm carrying most of the slice overruns states whether the cost is the
- * walk or the asking — with no row in the artifact that could contradict them either way.
- * RETIREMENT: these go when the walk no longer enumerates the heap — when a body's orphan state is reachable
- * without a pass over `rt->gc_obj_list` — because `memo` then prices a cache over a cheap question and the
- * partition has nothing left to decide between. */
+/* Which exit each orphan ask took, one struct so the partition is one sample: `memo` (the generation cache
+ * answered without walking), `empty` (the walk found no takeable body; the walk sees only bodies with a live
+ * function object) and `took`. `asked == memo + empty + took` is asserted at engine_step_unit_runs. A high
+ * `memo` puts the cost in each walk; a low one means nearly every ask enumerates `rt->gc_obj_list`. Per
+ * session, like `asked`; nothing branches on them. */
 typedef struct {
-    long memo;    /* the generation cache answered and NO walk was performed */
+    long memo;    /* the generation cache answered and no walk was performed */
     long empty;   /* the walk ran and the heap held no takeable body */
     long took;    /* the walk handed a body over */
 } EngineOrphanExits;
 EngineOrphanExits engine_orphan_exits(void);
-/* …AND HOW MANY OF THOSE DRIVES CAME FROM THE WALK'S PREFERRED PASS — see the definition for why the pair is a
-   row rather than an inference, and quickjs.h's JS_OrphanPreferredTakes for what the preference is. */
+/* How many drives came from the walk's preferred pass (quickjs.h's JS_OrphanPreferredTakes); see the
+   definition. */
 long engine_orphan_preferred(void);
-/* …AND OVER HOW MANY DISTINCT SCRIPTS THE DRIVES WERE SPREAD — see the definition for why this and the
-   preference count are two independent facts about one walk, and quickjs.h's JS_OrphanScriptsDrawn for why a
-   drive count alone cannot tell a spread run from a monopolised one. */
+/* Over how many distinct scripts the drives were spread (quickjs.h's JS_OrphanScriptsDrawn), a fact independent
+   of the preference count, since a drive count cannot tell a spread run from a monopolised one. */
 long engine_orphan_scripts(void);
 
-/* ---- THE FOUR ENDS OF §9.3.3 STEP 8'S TASK, AND WHY ONE NUMBER COULD NOT SAY WHICH ---------------------
- *
- * `engine_routed_census`'s `delivered` counts tasks QUEUED. Nothing counted what became of them, so a host
- * looking at a page that ran its `message` listener fewer times than the engine delivered had exactly one
- * number for THREE different facts, each taking a different action: the task ran and the page saw the message;
- * the task ran and HTML §9.3.3 "Posting messages" step 8.1 declined it (the target's origin is not the one the
- * sender asked for); the task ran, or was taken off the queue before it could, and there was no Document left
- * to fire at (HTML §7.5.10 "Destroying documents" step 5 — reachable both ways, because engine.c's flow_deliver
- * enqueues a ROUTED delivery in the RECEIVING document's realm, which is exactly the realm step 5's removal
- * walk keys on); or the task never ran at all, which is a work item the ONE frontier dropped and is the only
- * one of the four that is a defect.
- * That is §@S's rule about a search that cannot be directed at a gap it reports with the same number as two
- * other gaps, one layer down and about deliveries instead of candidates — and it is what a driver measured
- * instead by counting the receiving page's own fetches, which cannot work: engine_pending_fetches dedups over
- * the (method, URL) pair, and N timelines of one document run the SAME listener and therefore issue byte-
- * identical requests, so the host's view of the fetch register collapses them by construction.
- * SUM ≥ `delivered`, NEVER `==`, and the inequality is not slack: a fork gives the arm its own Array naming
- * the parent's job RECORDS (flow.c's flow_job_fork), so a timeline that branches between the enqueue and the
- * run delivers the message once in each arm — two timelines, two deliveries, one queued task. A sum BELOW
- * `delivered` is the defect, and it is a task that was queued and never ran. */
+/* The four ends of HTML §9.3.3 "Posting messages" step 8's task, so a handler that ran fewer times than the
+ * engine delivered can be explained: the event fired; step 8.1 declined it (the target is not same origin with
+ * the requested origin); the target's Document was destroyed (HTML §7.5.10 "Destroying documents" step 5);
+ * or the task went abrupt. A task that never ran is a dropped work item, the one defect. Counting the
+ * receiver's fetches cannot answer this, because engine_pending_fetches dedups identical requests from N
+ * timelines. The sum of ends is at least `delivered`, never necessarily equal: a fork gives each arm its own
+ * job array over the parent's records (flow.c's flow_job_fork), so one queued task can be delivered once per
+ * arm. A sum below `delivered` is a task queued and never run. */
 enum {
     ROUTED_TASK_FIRED = 0,        /* §9.3.3 step 8.7: the event was fired at the target Window */
     ROUTED_TASK_TARGET_ORIGIN,    /* §9.3.3 step 8.1: the target is not same origin with the requested origin */
@@ -1437,89 +1108,45 @@ enum {
     ROUTED_TASK_THREW,            /* the task itself went abrupt before it could fire anything */
     ROUTED_TASK_END_N
 };
-/* REPORTED AT THE LINE THAT IS THAT END, and TARGET_GONE has two such lines because §7.5.10 step 5 is reachable
- * at two moments and is ONE fact either way. core/frame/window_message.c reports it when the task RUNS and
- * finds the navigable destroyed; solver/flow.c's flow_job_drop_realm reports it when step 5's own removal walk
- * takes the still-queued task off a destroyed document's queue ("without running those tasks"), which is the
- * path that used to leave no trace at all — and a delivery that vanished there is indistinguishable from one
- * the scheduler lost, which is the whole distinction this census exists to make.
- * ONCE PER TASK on the running side: the task records which end it reached, so a machine that is re-entered
- * cannot count its delivery twice. */
+/* Report the end a routed task reached, at the line that is that end. TARGET_GONE has two such lines because
+ * §7.5.10 step 5 is reachable at two moments: core/frame/window_message.c when the task runs and finds the
+ * navigable destroyed, and solver/flow.c's flow_job_drop_realm when step 5's removal walk takes the queued task
+ * off a destroyed document's queue. Once per task: the task records which end it reached, so a re-entered
+ * machine cannot count twice. */
 void engine_routed_task_end(int end);
-/* ALL FOUR OR NONE, for engine_routed_census's reason exactly — a fired count with no declined count beside it
-   cannot say whether the rest of the deliveries were refused by the spec or lost by the scheduler. */
+/* The four end counts, filled into `ends[ROUTED_TASK_END_N]`; read together, like engine_routed_census. */
 void engine_routed_task_census(long *ends);
 
-/* THE ORPHAN ROUND TRIP'S TWO NUMBERS — how many waits for a parked drive's function a TAKE satisfied this
-   session, and how many waiting drives FINISHED never having been handed one. The third, how many were rebuilt,
-   belongs to the cold tier and is asked of it (ColdResumed's `orphans`).
-   THE SECOND IS THE VERDICT. A recipe for a driven orphan carries a cross-session NAME for the function, and a
-   name that round-trips as text while naming nothing produces a frontier of drives that call nothing — which
-   emits no findings, crashes nowhere, and is indistinguishable from a document with no uncalled code in it.
-   Zero unmet on a document whose bytes did not change is the whole of the claim this feature makes.
-   `met` MAY EXCEED THE RECORDS and that is not a fault: a waiting drive forks arms while it replays the
-   document, and every arm of it is the same drive of the same body. */
+/* The orphan round trip's two numbers this session: waits for a parked drive's function that a take satisfied,
+   and waiting drives that finished never having been handed one (the cold tier counts rebuilds, ColdResumed's
+   `orphans`). `unmet` is the verdict: a cross-session function name that round-trips as text while naming
+   nothing yields drives that call nothing and report nothing, so zero unmet on unchanged bytes is the
+   feature's claim. `met` may exceed the records, since a waiting drive forks arms while it replays. */
 void engine_orphan_claims(long *met, long *unmet);
 
-/* WHO COUNTS THE DOM'S WRAPPERS. The scheduler's diagnostic line reports the identity map's size, and that map
-   is the DOM's — so the DOM registers the counter rather than the solver naming node.h and dragging lexbor in
-   behind it. */
+/* The DOM registers the wrapper identity map's counter for the scheduler's diagnostic line, so the solver does
+   not include node.h and pull in Lexbor. */
 void engine_set_wrap_stats(void (*fn)(long *n, long *cap));
 
-/* THE SOLVER'S AGENT-LIFETIME STATE, RELEASED IN ONE CALL — core/platform.h's release column, for this half.
- *
- * The browser half's teardown is a LIST every host goes through so that a host cannot express an omission. The
- * solver half had no such call and its teardown was six lines written by hand into three hosts, which had
- * drifted exactly the way that list drifted before it had one: `solve_free` and `endpoint_free` were in main.c
- * and test_forced.c and in NEITHER of the WPT runner's, and `attr_shadow_free` was in test_forced.c alone, so the two hosts that lack it leak §@S's (element, slot) -> opaque map — every
- * entry a dup'd JSValue — whenever a flow stores a source in a DOM string slot.
- *
- * AND THIS CLASS CANNOT BE FOUND BY A DETECTOR, which is why the answer is a column and not a better walk. The
- * three emission tables are plain `malloc` holding no JSValue and no atom: the runtime's gc_obj_list walk
- * cannot see them (not GC objects), the atom walk cannot see them (not atoms), and even JS_DUMP_LEAKS's
- * `malloc_count` cannot (it counts `js_malloc_rt`, not `malloc`). Nothing quickjs has will ever report one.
- * The taint shadow is the mirror case: its entries ARE GC objects, so the gc_obj_list DCHECK would name them —
- * but only on a run where a flow actually stored a source in an attribute, which is the product entry under
- * real solver input, and no gate runs that entry. Both halves of the divergence were therefore invisible for
- * the same structural reason and not by luck.
- *
- * ORDER IS REVERSE DEPENDENCY, like the column it mirrors. The frontier goes first because everything under it
- * is reached through it (flow_registry_free already cascades the world registry, the decision chain, the path
- * constraint's pins, the cold tier and the pending register — it is this column in miniature and says so at
- * each line); the taint shadow next, because a shadow exists only because some flow wrote one; the emission
- * tables last, since they are read out of the result document long before any teardown runs.
- *
- * AND THE FRONTIER IS NOT ON THIS CALL, BECAUSE IT DOES NOT BELONG ON THIS SIDE OF THE BROWSER'S OWN COLUMN —
- * see solver_frontier_free below. */
+/* Release the solver's agent-lifetime state in one call: this half's entry in core/platform.h's release
+ * column, so no host can omit a table. The emission tables are plain `malloc` with no JSValue or atom, so no
+ * quickjs leak walk can ever report them, and the taint shadow (attr_shadow) holds GC objects only on runs
+ * where a flow stored a source in an attribute; a missed free is invisible either way. Order is reverse
+ * dependency: the taint shadow before the emission tables, which the result document has already read. The
+ * frontier is not released here (see solver_frontier_free). */
 void solver_agent_free(JSContext *ctx);
 
-/* THE FRONTIER, RELEASED WHILE THE BROWSER IS STILL STANDING — the FIRST thing a host's teardown does, before
- * core/platform.h's release column and therefore before this half's own.
- *
- * A SUSPENDED FLOW IS A LIVE ACTIVATION OF THE BROWSER, and that one sentence is the whole of the ordering. A
- * flow's snapshot is its COW delta plus its suspended heap-frame chain, and that chain holds the STEP MACHINES
- * of every continuation-holding builtin and every browser algorithm it is stopped inside — a §2.9 dispatch, a
- * custom-element reaction, an IntersectionObserver delivery, HTML §8.1.4.6 Runtime script errors' report. Tearing one down runs each machine's
- * `fini`, which is that COMPONENT's code reading that component's agent state. So releasing the browser half
- * first is releasing a component while activations of it are still live, and the flows are then torn down
- * against a platform that has already been given back.
- *
- * IT WAS MEASURED AS ONE ABORT AND IT IS A CLASS. §8.1.4.6 step 6.1 sets the global's in error reporting mode
- * (HTML §8.1.3.3 Realms, settings objects, and global objects gives the flag to the GLOBAL, so the engine keeps it on the global under a
- * private Symbol the AGENT owns); a flow parked inside the `error` event's own dispatch owes that flag back,
- * and its `fini` is what gives it. With the platform released first, the Symbol is gone by then and the give-
- * back asks for a key that no longer exists — an abort whose message named the OTHER state that leaves that
- * component undeclared, "before report_exception_init ran", because `!ready` had two causes and one sentence.
- * Every other component whose step machine's `fini` touches agent state is the same defect with no assert
- * sharp enough to have said so.
- *
- * WHAT STAYS ON THE OTHER SIDE, AND WHY THE TWO CALLS ARE NOT ONE. The browser half CLAIMS slots in this half —
- * §8.1.7's timer step, §8.1.7.3's in-parallel half, §13.2.7's document-load step, the wrapper census, the
- * source registry's per-source encode sets — and a claimant releases at its own release, which is that column.
- * So this half's own state must go AFTER the platform and the frontier must go BEFORE it: the browser's column
- * sits between them, and neither end of this half can be moved to join the other. Each end asserts the other
- * ran (solver_agent_free reads a latch this sets; core/platform.c asks the runtime's own step-machine census),
- * so a host that collapses them back into one call aborts at the teardown naming which line to move. */
+/* Release the frontier while the browser is still standing: the first step of a host's teardown, before
+ * core/platform.h's release column and so before solver_agent_free. A suspended flow's heap-frame chain holds
+ * the step machines of every builtin and browser algorithm it is stopped inside (a dispatch, a custom-element
+ * reaction, HTML §8.1.4.6 Runtime script errors' report), and tearing one down runs its `fini`, which reads
+ * that component's agent state; so the flows must go while the platform exists. For example, a flow parked
+ * inside an `error` dispatch gives back the global's in-error-reporting-mode flag, kept under a private Symbol
+ * the agent owns.
+ *   The two calls stay separate because the browser half claims slots in this half (the timer step, the
+ * rendering step, the document-load step, the wrapper census, the source registry's encode sets) and releases
+ * them in its own column, between the two. Each end asserts the other ran (solver_agent_free reads a latch
+ * this sets; core/platform.c asks the runtime's step-machine census), so collapsing them aborts. */
 void solver_frontier_free(JSContext *ctx);
 
 #endif
