@@ -38,15 +38,10 @@ typedef enum {
     SCROLL_LOGICAL_NEAREST
 } ScrollLogicalPosition;
 
-/* The four keywords, in this enum's order — exported so the ONE list is the declaration's `values` array AND
-   the mapping below, rather than two lists that can disagree about an order nothing else states.
-   THE EXTENT IS DELIBERATELY UNWRITTEN, and it used to say `[5]`. A hand-written extent on an `extern` array is
-   a SECOND COPY of the list's length, and the direction it drifts in is the silent one: a definition supplying
-   MORE entries than the extern declares is TRUNCATED to the declared size with only a warning, and the entry
-   truncation drops is the LAST one — which for a sentinel-terminated list is the TERMINATOR. The bound written
-   to make the scan safe is then exactly what makes it run off the end. Nothing outside this component needs the
-   extent (the mapping below scans for the terminator, and the IDL declaration takes a pointer), so leaving the
-   type incomplete means no second copy of the length exists to go stale. */
+/* The four keywords, in this enum's order: the one list both the declaration's `values` array and the
+   mapping below read. The extent is left unwritten because a hand-written extent on an `extern` array is a
+   second copy of the length, and a definition with more entries is truncated to it with only a warning,
+   dropping the sentinel the mapping scans for. */
 extern const char *const SCROLL_LOGICAL_POSITIONS[];
 ScrollLogicalPosition element_scrolling_logical_position(const char *keyword);
 
@@ -108,66 +103,23 @@ void element_scrolling_into_view_begin(ElementScrollingIntoView *w, lxb_dom_elem
                                        lxb_dom_element_t *container);
 bool element_scrolling_into_view_next(ElementScrollingIntoView *w, const char *behavior);
 
-/* CAN A SCROLLING BOX IN THIS REALM'S DOCUMENT BE AT A POSITION OTHER THAN THE ONE THIS ENGINE DERIVES —
- * CSSOM VIEW §3.1 "Scrolling"'s PERFORM A SCROLL ("when a user agent is to perform a scroll of a scrolling box
- * box, to a given position position"), asked as the CAPABILITY it is and answered by the component that owns
- * the algorithm.
+/* Can a scrolling box in this realm's document be at a position other than the one this engine derives:
+ * CSSOM VIEW §3.1 "Scrolling"'s perform a scroll ("when a user agent is to perform a scroll of a scrolling box
+ * box, to a given position position"), asked as a capability of the component that owns the algorithm. Its
+ * readers are steps that carry or restore what a scroll produces: HTML §6.6.6 "Focus management APIs"'
+ * `focus()` step 4 and HTML §7.4.6.5 "Persisted history entry state"'s scroll position data.
  *
- * WHAT ASKS IT, AND WHY THE QUESTION IS WORTH EXPORTING. Steps in other standards carry or restore what a
- * scroll produces, and each has to know whether a box in this build can be anywhere but the origin: HTML
- * §6.6.6 "Focus management APIs"' `focus()` step 4, which scrolls its target into view, and HTML §7.4.6.5
- * "Persisted history entry state"'s scroll position data. One fact, two readers, one derivation.
- * A THIRD READER IS GONE BECAUSE ITS STEP WAS BUILT, which is this question doing its job rather than losing
- * a caller: HTML §8.1.7.3 "Processing model" update-the-rendering step 9 asked it while CSSOM VIEW §13.2
- * "Scrolling"'s list had no drain, the assert fired, and core/dom/scroll_events.c plus that step are what it
- * named. A reader that BUILDS what the crash asked for and then stops asking is the mechanism working; a
- * reader that stops asking without building is the failure it exists to prevent.
- *
- * WHY IT IS NOT `realm_awaits(ctx, "scrollTo", …)`, WHICH IS WHAT THOSE READERS ASKED. A [[HasProperty]] on the
- * global answers whether a MEMBER IS INSTALLED, and no member is this capability — the two are not even
- * correlated. `Element.prototype.scrollTo` WAS installed in this build (core/dom/element_view.c) while it
- * could move nothing; CSSOM VIEW §4's `scroll`/`scrollTo`/`scrollBy` on the Window would have moved nothing
- * either at the time the probe was written, because their whole body is §4's argument questions and a call to
- * `viewport_scroll`, which could not MOVE a viewport at all. THAT CLAUSE HAS BEEN WRONG TWICE AND BOTH
- * RETIREMENTS ARE RESTATED IN CAPITALS: first ITS CLAMP LANDS ON THE POSITION THE VIEWPORT ALREADY HAS (which
- * §2's viewport row retired), then ITS STEPS 12-13 ARE UNWRITTEN AND ITS STEP 10 CRASHES RATHER THAN
- * PRETENDING (which §3.1 did). §4's THREE WINDOW MEMBERS ARE NOW INSTALLED (core/frame/viewport.c) AND THEY
- * MOVE THE VIEWPORT, and they are still not the capability, because the capability is the ALGORITHM and a
- * member is a spelling of a caller. So the name test was neither necessary nor sufficient, and its failure was
- * PRE-LOADED rather than latent: this said installing §4's three members WOULD satisfy it, and the diff that
- * installed them is what turned that prediction into a fact — every reader still asking the name would now
- * fire, and the earliest of them would have fired announcing a capability that had not yet arrived. A probe
- * that reports a capability as PRESENT is worse than no probe, because the next reader builds on it.
- * core/timing/hr_time.c records the identical defect over
- * `crossOriginIsolated` and states the cure this follows: it is a component's answer and not a probe of the
- * global. A producer that is an INTERNAL ALGORITHM has no name on the global to probe for, so `realm_awaits`
- * is the wrong instrument for it by construction — core/realm.h says so at the mechanism.
- *
- * THE ANSWER IS DERIVED ON BOTH HALVES AND NEITHER HALF IS A STORED FLAG.
- *   THE VIEWPORT half is derived LIVE, from the clamp's own two operands: §4's `scroll()` steps 7 and 8 clamp a
- *   request into §2's scrolling area of the viewport, and whichever of each step's two arms the OVERFLOW
- *   DIRECTION selects, the range the clamp has to land in is empty exactly when that area equals the viewport —
- *   max(0, min(v, slack)) and min(0, max(v, -slack)) are both the origin at slack 0 and both reach past it at
- *   any larger slack. So the comparison below is the direction-independent half of the clamp and needs no
- *   direction of its own. It reads the clamp's own two functions, so a layout that extends the area past the
- *   initial containing block makes this answer true with nobody having to remember it — which is what happened:
- *   this used to argue that THE ICB IS THE VIEWPORT, SO THE CLAMP HAS NOWHERE TO LAND BUT THE POSITION THE
- *   VIEWPORT ALREADY HAS, and §2's viewport row retired that premise. It is an UPPER BOUND and is meant to be:
- *   it says a box in this document COULD be somewhere other than the origin, not that one IS, which is what
- *   makes each reader's assert fire at the arrival of the possibility rather than at the first page that
- *   happens to exercise it.
- *   THE ELEMENT half is derived FROM THE CRASH, which has MOVED rather than gone: core/dom/perform_scroll.c's
- *   instant scroll is the one site for AN ELEMENT CANNOT HOLD A SCROLL POSITION and it DFAILs rather than
- *   moving one, so no element in this engine has ever been anywhere but the origin core/dom/element_view.c's
- *   `scrollTop` getter step 8 derives. That DFAIL names this function, so the diff that deletes it is the diff
- *   that turns this half into a walk of the document's scroll containers.
- *
- * §3.1's ARRIVAL DID NOT RETIRE THIS QUESTION, AND IT READS AS THOUGH IT SHOULD HAVE — which is why the point
- * is made here rather than left to be re-derived. CAN A BOX BE SOMEWHERE ELSE is not DOES A PERFORM-A-SCROLL
- * EXIST: the viewport half above is a comparison of two EXTENTS, and where they are equal every arm of every
- * clamp in this standard lands on the origin, so no algorithm can move a box in that document. §3.1 changed
- * which of the two reasons is doing the work — the comparison used to sit in front of AND NOTHING REACHES §3.1
- * ANYWAY and is now the whole answer — and a question that becomes load-bearing has not been retired. */
+ * It is not `realm_awaits(ctx, "scrollTo", …)`: whether a member is installed on the global says nothing about
+ * whether the algorithm can move a box, and an internal algorithm has no name there to probe (core/realm.h;
+ * core/timing/hr_time.c's `crossOriginIsolated` is the same case). */
+
+/* Both halves are derived, neither is a flag. The viewport half compares the two extents §4's `scroll()`
+ * steps 7 and 8 clamp between: max(0, min(v, slack)) and min(0, max(v, -slack)) both land on the origin at
+ * slack 0 and both reach past it at any larger slack, so the comparison needs no overflow direction. It is an
+ * upper bound by design: it says a box could be elsewhere, so a reader's assert fires when the possibility
+ * arrives. The element half follows from core/dom/perform_scroll.c's instant scroll, which DFAILs for an
+ * element's box, so every element is at the origin core/dom/element_view.c's `scrollTop` getter step 8
+ * derives; the diff that removes that DFAIL turns this half into a walk of the document's scroll containers. */
 bool element_scrolling_box_can_move(JSContext *ctx);
 
 #endif
