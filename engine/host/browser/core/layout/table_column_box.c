@@ -1,6 +1,5 @@
 /* CSS 2.1 §17.5 Visual layout of table contents' rules 3 and 4 over one table's child list. See
-   table_column_box.h for the contract, for why the walk is a component rather than a lookup at each of the
-   three algorithms that need it, and for why `direction` is not read here. */
+   table_column_box.h. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -16,29 +15,16 @@
 #include "core/layout/table_box.h"
 #include "core/layout/table_column_box.h"
 
-/* HTML §4.9.12.1 Forming a table's clamp, stated once in each of its two column arms and identical in both:
-   "If span is greater than 1000, let it be 1000 instead." It is the section's own step and not a bound in
-   CLAUDE.md's sense — a page may write any digits it likes and this is what the algorithm does with them. */
+/* HTML §4.9.12.1 Forming a table's clamp, identical in both column arms: "If span is greater than 1000, let
+   it be 1000 instead." It is the section's own step, not an engine bound. */
 #define TCB_SPAN_MAX ((size_t) 1000)
 
-/* THE ONE PLACE THIS FILE READS A COMPUTED `display`, WHICH IS NO LONGER WHERE A BOX-TREE-SHAPE ASSUMPTION
-   LIVES: the four walks below iterate core/layout/box_tree.h's sequence, which is css-display-3 §2.5 "Box
-   Generation: the none and contents keywords"' splice, so a `contents` child is invisible to this file and the
-   assert below is its contract held rather than this component's own gap.
-   THE DEFECT SHAPE THIS REPLACES IS THE PART WORTH KEEPING, because a reader who re-derives it will re-add a
-   local descent. The walks stepped `->next` and this mapping skipped a `contents` child as though §2.5 had
-   elided it: `none` is "The element and its descendants generate no boxes or text sequences", so skipping one
-   is rules 3 and 4 running, and `contents` is the opposite sentence — "The element itself does not generate any
-   boxes, but its children and pseudo-elements still generate boxes and text sequences as normal" — so the boxes
-   those rules must count were INSIDE the skipped child. That undercounted `noccupied` and left a grid column
-   mapped to no box at all, and it was invisible for table_column_box.h's own reason: three algorithms read a
-   different property off this mapping, and a disagreement between them "is invisible, because every answer is a
-   real box of the real document". A WALK THAT CANNOT EXPRESS THE SPLICE MUST REFUSE A SPLICED CHILD RATHER THAN
-   STEP PAST IT — a step past is a plausible box tree and a refusal is a named gap — and the refusal that stood
-   here was that rule, discharged now by a walk that CAN express it instead of by a crash.
-   THE REFUSAL IS STILL IN THIS FUNCTION AND NOT AT THE FOUR WALKS, for the reason the two passes are written to
-   share a branch at all: the banner over pass one says they "take the identical branch on the identical child
-   list", and a test written four times is that invariant held by hand. */
+/* The one place this file reads a computed `display`. The four walks below iterate core/layout/box_tree.h's
+   sequence, which applies css-display-3 §2.5 "Box Generation: the none and contents keywords"' splice, so a
+   `contents` child never reaches here; the assert holds that contract. A local `->next` walk that skipped a
+   `contents` child would lose the column boxes inside it ("its children and pseudo-elements still generate
+   boxes and text sequences as normal") and undercount `noccupied`. The check is here once rather than at each
+   walk because both passes must take the identical branch on the identical child list. */
 static TableBoxKind tcb_kind_of(lxb_dom_element_t *el)
 {
     char *display = css_computed_value(el, "display");
@@ -69,17 +55,11 @@ static bool tcb_html_local_name_is(lxb_dom_element_t *el, const char *name)
     return ln != NULL && strlen(name) == len && memcmp(ln, name, len) == 0;
 }
 
-/* HOW MANY GRID COLUMNS ONE COLUMN OR COLUMN-GROUP BOX OCCUPIES — HTML §4.9.12.1 Forming a table's `span`
-   steps, which both arms of that section state in the same shape.
-   ZERO IS THE FALLBACK AND NOT THE VALUE, which is the one place these steps differ from the `colspan` steps
-   core/layout/table_grid.c runs: §4.9.12.1 writes the column arms as "Otherwise, if the col element has no
-   span attribute, or if trying to parse the attribute's value resulted in an error or zero, then let span be
-   1", so `<col span="0">` occupies ONE column. Reading it as zero would delete the box from the mapping
-   entirely and every property the three consuming algorithms take off it with it.
-   THE OVERFLOW ARM IS THE CLAMP AND NOT AN ERROR, for core/html/integer_microsyntax.h's stated reason: a digit
-   run too large for a `long long` has PARSED, to something above any ceiling here, and §4.9.12.1 answers that
-   with 1000. Treating it as a parse failure would give `span="99999999999999999999"` the value 1.
-   THE ATTRIBUTE IS READ FROM AN HTML `col` OR `colgroup` AND FROM NOTHING ELSE — see the header. */
+/* How many grid columns one column or column-group box occupies: HTML §4.9.12.1 Forming a table's `span`
+   steps, shared by both arms. Unlike `colspan` (core/layout/table_grid.c), zero falls back: "if the col element
+   has no span attribute, or if trying to parse the attribute's value resulted in an error or zero, then let
+   span be 1". An overflowing digit run has parsed (core/html/integer_microsyntax.h) and clamps to 1000.
+   Read only from an HTML `col` or `colgroup`; see the header. */
 static size_t tcb_span_attr(lxb_dom_element_t *box)
 {
     size_t len = 0;
@@ -96,9 +76,8 @@ static size_t tcb_span_attr(lxb_dom_element_t *box)
 }
 
 /* Records that `column` and `group` occupy the `span` grid columns starting at `*x`, and advances `*x`.
-   THE WRITE IS CLIPPED TO THE ARRAY AND THE COUNT IS NOT, which is the whole of how the header's two counts
-   stay apart: `noccupied` must report what the boxes OCCUPY even where the grid has fewer columns, because a
-   consumer cannot state an invariant about an overrun it was never shown. */
+   The write is clipped to the array and the count is not, so `noccupied` reports what the boxes occupy even
+   past the grid's column count. */
 static void tcb_occupy(TableColumnBoxMap *map, size_t *x, size_t span,
                        lxb_dom_element_t *column, lxb_dom_element_t *group)
 {
@@ -108,9 +87,7 @@ static void tcb_occupy(TableColumnBoxMap *map, size_t *x, size_t span,
         size_t c = *x + i;
 
         if (c < map->ncols) {
-            /* Rule 3 places column boxes "next to each other in the order they occur" and rule 4 gives a group
-               "the same grid cells as the columns it contains", so no grid column is reached twice by this
-               walk. A second write would mean the two rules had been made to disagree about one index. */
+            /* Rules 3 and 4 move the index forward only, so no grid column is written twice. */
             DCHECK(map->cols[c].column == NULL && map->cols[c].column_group == NULL,
                    "CSS 2.1 §17.5 Visual layout of table contents' rules 3 and 4 assigned TWO column or "
                    "column-group boxes to one grid column. Rule 3 places column boxes \"next to each other in "
@@ -138,10 +115,9 @@ void table_column_boxes_build(lxb_dom_element_t *table, size_t ngrid, TableColum
     out->ncols = 0;
     out->noccupied = 0;
 
-    /* ---- PASS ONE: how many grid columns the boxes occupy -------------------------------------------------
-       The array cannot be sized until `noccupied` is known and `noccupied` is not a function of the grid, so
-       the child list is walked twice rather than grown — the two passes take the identical branch on the
-       identical child list, which is why the spans are re-read rather than stashed. */
+    /* ---- Pass one: how many grid columns the boxes occupy ------------------------------------------------
+       The array cannot be sized until `noccupied` is known, so the child list is walked twice; both passes take
+       the identical branch on it, so the spans are re-read rather than stashed. */
     for (tc = box_tree_first_child(table); box_tree_child_exists(tc); tc = box_tree_next_sibling(table, tc)) {
         lxb_dom_node_t *c = box_tree_child_node(tc);
         lxb_dom_element_t *el;
@@ -176,7 +152,7 @@ void table_column_boxes_build(lxb_dom_element_t *table, size_t ngrid, TableColum
           "CSS 2.1 §17.5's rules 3 and 4 could not allocate one column-box pair per grid column of the table "
           "being laid out");
 
-    /* ---- PASS TWO: which boxes occupy which columns ------------------------------------------------------ */
+    /* ---- Pass two: which boxes occupy which columns ------------------------------------------------------ */
     for (tc = box_tree_first_child(table); box_tree_child_exists(tc); tc = box_tree_next_sibling(table, tc)) {
         lxb_dom_node_t *c = box_tree_child_node(tc);
         lxb_dom_element_t *el;
@@ -186,11 +162,9 @@ void table_column_boxes_build(lxb_dom_element_t *table, size_t ngrid, TableColum
         el = lxb_dom_interface_element(c);
         kind = tcb_kind_of(el);
         if (kind == TABLE_BOX_COLUMN) {
-            /* A column box that is a direct child of the table box. HTML's tree construction never leaves a
-               `col` there — it implies a `colgroup` around it — so this is CSS's own case: an element whose
-               computed `display` is `table-column` outside any column group, which §17.2.1 Anonymous table
-               objects does NOT wrap (its rules generate missing table, row-group, row and cell boxes and no
-               column group), so the box occupies its columns with no group over them. */
+            /* A column box directly in the table box. HTML's tree construction always implies a `colgroup`, so
+               this is a `display: table-column` element outside any group, which §17.2.1 Anonymous table
+               objects does not wrap; it occupies its columns with no group over them. */
             tcb_occupy(out, &x, tcb_span_attr(el), el, NULL);
         } else if (kind == TABLE_BOX_COLUMN_GROUP) {
             BoxTreeChild mc;

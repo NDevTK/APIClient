@@ -1,5 +1,4 @@
-/* HTML §15.4 "Replaced elements" over css-images-3 §4.1 "Object-Sizing Terminology". See replaced_element.h
-   for why this is a component of its own and for what the predicate it replaced got wrong. */
+/* HTML §15.4 "Replaced elements" over css-images-3 §4.1 "Object-Sizing Terminology". See replaced_element.h. */
 #include <math.h>
 #include <stdbool.h>
 #include <string.h>
@@ -15,8 +14,7 @@
 #include "core/html/html_image.h"
 #include "core/layout/replaced_element.h"
 
-/* NOT A REPLACED ELEMENT — every field zeroed, which replaced_element.h makes the contract: a caller reading a
-   dimension off this is asking §10.3.2 about a box §10.3.3 owns. */
+/* Not a replaced element: every field zeroed, per replaced_element.h's contract. */
 static ReplacedElement rep_not(void)
 {
     ReplacedElement r;
@@ -27,9 +25,8 @@ static ReplacedElement rep_not(void)
     return r;
 }
 
-/* A REPLACED ELEMENT WITH NO NATURAL DIMENSIONS AT ALL — css-images-3 §4.1's own example ("embedded documents,
-   such as the iframe element in HTML"), and the answer §15.4.2's second rule gives an `img` whose image is not
-   available. CSS 2.1 §10.3.2's last arm is what turns it into a box. */
+/* A replaced element with no natural dimensions at all: css-images-3 §4.1's iframe example, and §15.4.2's
+   second rule for an `img` whose image is not available. CSS 2.1 §10.3.2's last arm sizes the box. */
 static ReplacedElement rep_bare(void)
 {
     ReplacedElement r = rep_not();
@@ -38,13 +35,10 @@ static ReplacedElement rep_bare(void)
     return r;
 }
 
-/* A REPLACED ELEMENT WITH BOTH NATURAL SIZES AND THEREFORE, NORMALLY, A RATIO — css-images-3 §4.1: "many
-   objects, such as most images, cannot have only two natural dimensions, as any two automatically define the
-   third". The exception is §4.1's very next sentence and it is the one this build actually reaches: "if an
-   object has a DEGENERATE natural aspect ratio (at least one part being zero or infinity), it is treated as
-   having NO natural aspect ratio" — so §15.4.2's fourth rule, whose natural dimensions are 0 by 0, produces an
-   object with two natural sizes and no ratio, and the arms of §10.3.2 that multiply by a ratio must not see
-   one. Deriving the ratio HERE rather than at each caller is what makes that impossible to forget. */
+/* A replaced element with both natural sizes. css-images-3 §4.1: "if an object has a degenerate natural aspect
+   ratio (at least one part being zero or infinity), it is treated as having no natural aspect ratio", so a 0
+   by 0 object (§15.4.2's fourth rule) has two sizes and no ratio. The ratio is derived here so no §10.3.2 arm
+   multiplies by a degenerate one. */
 static ReplacedElement rep_sized(double w, double h)
 {
     ReplacedElement r = rep_bare();
@@ -67,20 +61,18 @@ static ReplacedElement rep_sized(double w, double h)
     return r;
 }
 
-/* ---- HTML §4.8.3 "The img element": WHAT AN img ELEMENT REPRESENTS -----------------------------------------
-   §15.4.2's first-applicable-rule list is written entirely in terms of this, so it is derived once and named
-   the way the standard names it. "What an img element represents depends on the src attribute and the alt
-   attribute", and the five cases below are §4.8.3's own five, in its order. */
+/* ---- HTML §4.8.3 "The img element": what an img element represents ---------------------------------------
+   §15.4.2's rule list is written in these terms. "What an img element represents depends on the src attribute
+   and the alt attribute"; the cases below follow §4.8.3's order. */
 typedef enum {
     IMG_REPRESENTS_IMAGE = 0,   /* "the element represents the element's image data" */
     IMG_REPRESENTS_TEXT,        /* "the element represents the text given by the alt attribute" */
     IMG_REPRESENTS_NOTHING      /* "the element represents nothing" */
 } ImgRepresents;
 
-/* Attribute PRESENCE and attribute EMPTINESS are two questions and §4.8.3 asks both — its cases split on "the
-   alt attribute is set to the empty string" versus "the alt attribute is NOT set", and §15.4.2's second rule
-   asks presence alone. Lexbor's `get_attribute` answers NULL for both, which is why presence goes through
-   `has_attribute` — the same split core/html/html_image.c's `complete` draws for `src`. */
+/* Attribute presence and emptiness are two questions §4.8.3 asks separately ("set to the empty string" versus
+   "not set"). Lexbor's `get_attribute` answers NULL for both, so presence goes through `has_attribute`, as
+   core/html/html_image.c's `complete` does for `src`. */
 static bool rep_attr_present(lxb_dom_element_t *el, const char *name)
 {
     return lxb_dom_element_has_attribute(el, (const lxb_char_t *)name, strlen(name));
@@ -98,10 +90,9 @@ static ImgRepresents rep_img_represents(lxb_dom_element_t *el, HtmlImageState st
     bool has_src = rep_attr_present(el, "src");
     bool has_alt = rep_attr_present(el, "alt");
     bool alt_text = rep_attr_nonempty(el, "alt");
-    /* "If the image is AVAILABLE and the user agent is configured to display that image, then the element
-       represents the element's image data." This user agent IS configured to display images — it makes the
-       request and runs the whole state machine (html_image.h) — so the conjunct that decides this is
-       availability, which §4.8.4.3 defines as partially or completely available. */
+    /* "If the image is available and the user agent is configured to display that image, then the element
+       represents the element's image data." This agent is configured to display images (it runs html_image.h's
+       state machine), so availability decides: §4.8.4.3's partially or completely available. */
     bool available = state == HTML_IMAGE_PARTIALLY_AVAILABLE || state == HTML_IMAGE_COMPLETELY_AVAILABLE;
 
     if (has_src) {
@@ -112,13 +103,9 @@ static ImgRepresents rep_img_represents(lxb_dom_element_t *el, HtmlImageState st
         /* "If the src attribute is set and the alt attribute is set to a value that isn't empty … Otherwise,
            the element represents the text given by the alt attribute." */
         if (alt_text) return IMG_REPRESENTS_TEXT;
-        /* "If the src attribute is set and the alt attribute is not … If the image has a src attribute whose
-           value is the empty string, then the element represents nothing." The remaining arm of that case
-           gives the element no "represents" at all — it says the user agent "should display some sort of
-           indicator that there is an image that is not being rendered" — and §15.4.2 does not need one: its
-           second rule catches this element by "the element has no alt attribute" before any question about
-           what it represents is asked. NOTHING is the honest answer to a question §4.8.3 declines to answer,
-           and it is not load-bearing here. */
+        /* "If the src attribute is set and the alt attribute is not …": that case gives the element no
+           "represents" except for an empty `src` ("represents nothing"). §15.4.2's second rule catches such an
+           element by "the element has no alt attribute" before asking, so this answer is not load-bearing. */
         return IMG_REPRESENTS_NOTHING;
     }
     /* "If the src attribute is not set and either the alt attribute is set to the empty string or the alt
@@ -127,45 +114,29 @@ static ImgRepresents rep_img_represents(lxb_dom_element_t *el, HtmlImageState st
     return alt_text ? IMG_REPRESENTS_TEXT : IMG_REPRESENTS_NOTHING;
 }
 
-/* ---- HTML §15.4.2 "Images", THE `img` HALF -----------------------------------------------------------------
+/* ---- HTML §15.4.2 "Images", the `img` half ---------------------------------------------------------------
    "User agents are expected to render img elements and input elements whose type attributes are in the Image
-   Button state, according to the first applicable rules from the following list" — so the order below is the
-   standard's and the arms are not independent tests.
-   THE LIST HAS FIVE RULES AND GOVERNS TWO ELEMENTS, which is why this function is the `img` half and named for
-   it rather than for the section. Rules 1 and 2 are written over "the element" and reach both; rules 3 and 4
-   open "If the element is an img element" and reach only this one; rule 5 opens "If the element is an input
-   element" and cannot reach it at all. So the four arms below ARE §15.4.2 for an `img`, and the missing fifth
-   is not a skipped step — it is a rule whose antecedent this element fails by its tag. `replaced_element_of`'s
-   `input` arm is where the other three-arm walk over the same list belongs, and it crashes there for the image
-   request both of its first two rules turn on. */
+   Button state, according to the first applicable rules from the following list", so the arms are ordered.
+   Rules 1 and 2 apply to both elements, rules 3 and 4 open "If the element is an img element", and rule 5 opens
+   "If the element is an input element"; so the four arms below are the whole list for an `img`. The `input`
+   half is `replaced_element_of`'s `input` arm. */
 static ReplacedElement rep_img(JSContext *ctx, lxb_dom_element_t *el)
 {
     bool complete = false;
     HtmlImageState state = html_image_current_request_state(ctx, el, &complete);
     ImgRepresents represents = rep_img_represents(el, state);
 
-    /* RULE 1: "If the element represents an image — the user agent is expected to treat the element as a
+    /* Rule 1: "If the element represents an image — the user agent is expected to treat the element as a
        replaced element and render the image according to the rules for doing so defined in CSS."
-       ITS NATURAL DIMENSIONS ARE READ, NOT DECODED, and the crash that stood here is why that sentence is
-       worth writing out: it said they "come from a DECODER this agent does not have" and that
-       "core/html/html_image.h states outright that every reply lands in the not-a-supported-file-format arm",
-       so "nothing in this build can reach this line". The second clause was an accurate quotation of a file
-       that has since changed and the first was never what §4.8.4.3.5 asks for — its supported-format arm
-       turns on the agent being "able to determine image request's image's WIDTH AND HEIGHT", which a PNG, a
-       GIF and a JPEG each state in their own header (core/image/image_header.h).
-       THE NUMBERS ARE ASKED OF core/html/html_image.h AND DERIVED THERE, not recomputed here: §4.8.4.3's
-       density-corrected natural width and height divide by the request's current pixel density, and a second
-       derivation in this file would be the same two-answers-to-one-question this component's own header
-       objects to for the four-state enumeration. */
+       The natural dimensions are read from the image header, not decoded: §4.8.4.3.5's supported-format arm
+       needs only to "determine image request's image's width and height" (core/image/image_header.h). They are
+       asked of core/html/html_image.h, which applies §4.8.4.3's pixel-density correction; not re-derived here. */
     if (represents == IMG_REPRESENTS_IMAGE) {
         double w = 0.0, h = 0.0;
         bool have = html_image_natural_dimensions(ctx, el, &w, &h);
 
-        /* THE TWO COMPONENTS MUST AGREE ABOUT AVAILABILITY, and this is where they are compared. §15.4.2's
-           first rule is reached exactly when rep_img_represents saw an AVAILABLE state, and these dimensions
-           exist exactly when html_image.c saw one — two reads of one record through two components, which is
-           precisely the pair the image-request enumeration is shared to keep in step. A disagreement is that
-           sharing having come apart, not an image without a size. */
+        /* Rule 1 is reached when rep_img_represents saw an available state, and the dimensions exist when
+           html_image.c saw one: two reads of one record, asserted to agree. */
         DCHECK(have,
                "HTML §15.4.2's first rule reached an `img` that REPRESENTS AN IMAGE and whose current request "
                "reports NO density-corrected natural width and height — §4.8.4.3 defines the two available "
@@ -174,61 +145,27 @@ static ReplacedElement rep_img(JSContext *ctx, lxb_dom_element_t *el)
         return rep_sized(w, h);
     }
 
-    /* RULE 2: "If the element does not represent an image and either: the user agent has reason to believe the
-       image will become available and be rendered in due course, OR the element has no alt attribute, OR the
+    /* Rule 2: "If the element does not represent an image and either: the user agent has reason to believe the
+       image will become available and be rendered in due course, or the element has no alt attribute, or the
        Document is in quirks mode and the element already has natural dimensions … the user agent is expected
-       to treat the element as a REPLACED ELEMENT whose content is the text that the element represents, if
-       any." The rule gives that replaced element NO natural dimensions, so CSS 2.1 §10.3.2's last arm sizes
-       it — 300 x 150.
-       THE FIRST ARM IS A QUESTION ABOUT THIS MOMENT AND IT IS ANSWERED FROM THE REQUEST, not from what this
-       agent knows about its own decoder. While the fetch is outstanding the user agent has not yet learned
-       that it cannot decode the reply, and that is the same position a real browser is in — html_image.h says
-       so in as many words about the whole state machine ("the same one a real browser gives for an image it
-       cannot decode"). The moment the reply lands the state is BROKEN and this arm stops being true, which is
-       exactly when a real browser stops reserving the box.
-       "HAS NOT SETTLED" IS §4.8.3's `complete`, NOT A PROXY FOR IT. An `<img>` with no `src` sits in the SAME
-       initial `unavailable` state as a fetch in flight, so the state alone cannot tell them apart — and the
-       obvious proxy, whether the current request has a non-empty CURRENT URL, is WRONG at the moment that
-       matters most: §4.8.4.3.5 writes that URL after a microtask, so a layout in the same task as
-       `img.src = u` would see nothing outstanding and classify a LOADING image as a broken one. That is the
-       `sizes="auto"` case exactly — the image is measured while its own request is being set up — so the
-       predicate is §4.8.3's `complete` getter's own four conditions, computed by the one function in
-       core/html/html_image.c that the member itself uses.
-       THE THIRD ARM IS UNBUILT RATHER THAN FALSE, AND THE RETIRED SENTENCE IS RESTATED BECAUSE A READER WHO
-       RE-DERIVES IT WILL RE-INTRODUCE IT. It said the arm was FALSE IN THIS BUILD: that HTML §15.4.2's own
-       "already has natural dimensions (e.g., from the dimension attributes or CSS rules)" needs §15.4.3
-       "Attributes for embedded content and images" to map a `width`/`height` content attribute to a
-       presentational hint, that core/css/css_presentational_hints.c carried no such row, and that
-       `the day that row exists this arm is written beside it`. THE ROW EXISTS — §15.4.3: "The width and
-       height attributes on an img element's dimension attribute source map to the dimension properties
-       'width' and 'height' on the img element respectively" — so the reason this arm was skipped is retired.
-       ITS NEXT-DIFF CLAUSE WAS WRONG AND THAT IS THE HALF WORTH KEEPING: the row makes the arm REACHABLE and
-       not DECIDABLE, because a hint declares a CSS PROPERTY where this arm asks about NATURAL DIMENSIONS.
-       css-images-3 §4.1 "Object-Sizing Terminology": "These natural dimensions represent the preferred sizing
-       intrinsic to the object itself; that is, they are not a function of the context in which the object is
-       used." A `width` from the dimension attributes is a function of the element's context, and so is one
-       from "CSS rules" — so HTML's parenthetical names two sources its own linked term excludes. Under §4.1's
-       sentence the arm is VACUOUS here, since rules 2 to 4 are reached only when the element does NOT
-       represent an image and rule 1's DCHECK above records that representing an image and having natural
-       dimensions are one fact in this engine. Under the parenthetical it is LIVE for any quirks-mode `img`
-       whose dimension attribute source carries either attribute, and that is the reading under which the arm
-       is not dead prose: it is the whole of what makes a broken image with an `alt` a box of the attribute's
-       size in quirks mode and its text's size outside one. WHICH READING GOVERNS IS THE DECISION THE NEXT
-       DIFF MAKES, and it was never the row. */
+       to treat the element as a replaced element whose content is the text that the element represents, if
+       any." With no natural dimensions, CSS 2.1 §10.3.2's last arm sizes it 300 x 150.
+       The first disjunct is answered from the request at this moment, as a real browser does while a fetch is
+       outstanding; it turns false when the reply lands broken. It is §4.8.3's `complete` getter (computed by
+       core/html/html_image.c), not "the current URL is non-empty": §4.8.4.3.5 sets that URL after a microtask,
+       so a layout in the same task as `img.src = u` (the `sizes="auto"` case) would misread a loading image.
+       The third disjunct needs a decision: HTML's parenthetical counts dimension attributes and CSS rules as
+       natural dimensions, but css-images-3 §4.1 says natural dimensions "are not a function of the context in
+       which the object is used". Under §4.1 the disjunct is vacuous here (rule 1's assert makes representing an
+       image and having natural dimensions one fact); under HTML it is live for quirks-mode images. */
     if (!complete) return rep_bare();
     if (!rep_attr_present(el, "alt")) return rep_bare();
 
-    /* RULE 2's THIRD DISJUNCT IS WHERE THIS LINE STANDS AND IT IS NOT ASKED, so every quirks-mode `img`
-       reaching here takes rule 3's or rule 4's classification without the disjunct that would outrank them
-       having been evaluated. That is a capability this engine has not built rather than an arm that is merely
-       narrow: the answer is RIGHT for the elements carrying no `width`/`height` and no CSS width, and nothing
-       here established which ones those are. BUILD the disjunct — it needs HTML §4.8.3 "The img element"'s
-       DIMENSION ATTRIBUTE SOURCE shared rather than re-derived (core/css/css_presentational_hints.c holds the
-       only walk of §4.8.4.3.9 step 5.9 and it is `static` there), and the reading above settled. THE CASCADE
-       HALF IS REACHABLE WITHOUT A CYCLE, which is worth recording because the obvious fear is the wrong one:
-       core/css/css_property_applies.c does call `replaced_element_of`, but it is reached from
-       `css_resolved_value` and NOT from `css_computed_value`, so a computed `width` read from here does not
-       come back round. */
+    /* Rule 2's third disjunct belongs here and is not asked, so the quirks-mode case is asserted unreachable.
+       Building it needs HTML §4.8.3 "The img element"'s dimension attribute source shared (it is `static` in
+       core/css/css_presentational_hints.c, the only walk of §4.8.4.3.9 step 5.9) and the reading above settled.
+       Reading a computed `width` from here does not cycle: core/css/css_property_applies.c calls
+       `replaced_element_of` from `css_resolved_value`, not from `css_computed_value`. */
     DCHECK(lxb_dom_interface_node(el)->owner_document->compat_mode != LXB_DOM_DOCUMENT_CMODE_QUIRKS,
            "HTML §15.4.2 \"Images\"' second rule reached a QUIRKS-MODE `img` and this engine cannot ask that "
            "rule's THIRD DISJUNCT — \"the Document is in quirks mode, and the element already has natural "
@@ -239,17 +176,15 @@ static ReplacedElement rep_img(JSContext *ctx, lxb_dom_element_t *el)
            "\"all elements but non-replaced inline elements\" — where rule 3 makes it a NON-REPLACED phrasing "
            "element whose `width` does not apply and rule 4 gives it natural dimensions of 0. BUILD it here");
 
-    /* RULE 3: "If the element is an img element that represents some text and the user agent does not expect
-       this to change — the user agent is expected to treat the element as a NON-REPLACED PHRASING ELEMENT
-       whose content is the text." This is the one arm in which an `img` is not a replaced element, and it is
-       reachable and common: a broken image with an `alt`. CSS 2.1 §10.2's "Applies to: all elements but
-       non-replaced inline elements" then makes `width` not apply to it, so CSSOM §9 resolves it to the
-       computed `auto` — core/css/css_property_applies.c is what asks. */
+    /* Rule 3: "If the element is an img element that represents some text and the user agent does not expect
+       this to change — the user agent is expected to treat the element as a non-replaced phrasing element
+       whose content is the text." A broken image with an `alt` is the common case. `width` then does not
+       apply (CSS 2.1 §10.2), so CSSOM §9 resolves it to the computed `auto` (core/css/css_property_applies.c). */
     if (represents == IMG_REPRESENTS_TEXT) return rep_not();
 
-    /* RULE 4: "If the element is an img element that represents nothing and the user agent does not expect
-       this to change — the user agent is expected to treat the element as a replaced element whose NATURAL
-       DIMENSIONS ARE 0. (In the absence of further styles, this will cause the element to essentially not be
+    /* Rule 4: "If the element is an img element that represents nothing and the user agent does not expect
+       this to change — the user agent is expected to treat the element as a replaced element whose natural
+       dimensions are 0. (In the absence of further styles, this will cause the element to essentially not be
        rendered.)" */
     DCHECK(represents == IMG_REPRESENTS_NOTHING,
            "HTML §15.4.2's fourth rule was reached for an `img` that represents something other than nothing "
@@ -258,24 +193,16 @@ static ReplacedElement rep_img(JSContext *ctx, lxb_dom_element_t *el)
     return rep_sized(0.0, 0.0);
 }
 
-/* ---- HTML §4.12.5 "The canvas element": ONE DIMENSION OF THE ELEMENT'S BITMAP ------------------------------
-   §4.12.5 states the bitmap of a canvas whose CONTEXT MODE IS NONE in terms of these two content attributes —
-   "its bitmap must be transparent black with a natural width equal to the numeric value of the element's width
-   attribute and a natural height equal to the numeric value of the element's height attribute, those values
-   being interpreted in CSS pixels" — and states what that numeric value is in the same section: "These
-   attributes, when specified, must have values that are valid non-negative integers. The rules for parsing
-   non-negative integers must be used to obtain their numeric values. If an attribute is missing, or if parsing
-   its value returns an error, then the default value must be used instead. The width attribute defaults to 300,
+/* ---- HTML §4.12.5 "The canvas element": one dimension of the element's bitmap ------------------------------
+   A canvas whose context mode is none has a bitmap "with a natural width equal to the numeric value of the
+   element's width attribute and a natural height equal to the numeric value of the element's height
+   attribute", parsed by the rules for non-negative integers, "If an attribute is missing, or if parsing its
+   value returns an error, then the default value must be used instead. The width attribute defaults to 300,
    and the height attribute defaults to 150."
-   THE RANGE IS NOT INVENTED HERE AND IS NOT WRITTEN HERE. §2.3.4.2 "Non-negative integers" has no upper bound
-   at all, so `width="99999999999"` denotes a number no platform maximum admits and core/html/
-   integer_microsyntax.h reports it as an OVERFLOW rather than as a number — deliberately, because every bound
-   belongs to the CONSUMER. This consumer's bound is the one §4.12.5's own IDL declares for the very same pair
-   (`[CEReactions] attribute unsigned long width`), so the selection is HTML §2.6.1 "Reflecting content
-   attributes in IDL attributes"' and it is ASKED of core/dom/element.h's one implementation of §2.6.1 rather
-   than restated. That is what keeps `canvas.width` and the natural width of the box it sizes ONE number.
-   LEXBOR'S `get_attribute` ANSWERS NULL FOR ABSENT AND FOR EMPTY ALIKE, which needs no split here for once:
-   §4.12.5 sends a missing attribute and a value the rules reject to the same place, the default. */
+   The range is the IDL's (`[CEReactions] attribute unsigned long width`), so the value is asked of
+   core/dom/element.h's HTML §2.6.1 "Reflecting content attributes in IDL attributes" implementation; that keeps
+   `canvas.width` and the box's natural width one number. Lexbor answering NULL for absent and empty is fine
+   here: §4.12.5 sends both to the default. */
 static double rep_canvas_dimension(lxb_dom_element_t *el, const char *name, long long dflt)
 {
     size_t n = 0;
@@ -284,17 +211,11 @@ static double rep_canvas_dimension(lxb_dom_element_t *el, const char *name, long
     return (double)element_reflect_ulong_value((const char *)v, n, dflt, true, 0, 0, false);
 }
 
-/* HTML §8.1.3.4 "Enabling and disabling scripting"'s question, asked of a NODE: "Scripting is disabled for a
-   platform object object if any of the following are true: … The object implements Node, and object's node
-   document's BROWSING CONTEXT IS NULL." §4.12.5 turns a canvas's whole rendering classification on it, and
-   §15.4.2's rules are asked only of an element some navigable is rendering, so both readers below want the one
-   fact and it is derived once.
-   `document_active_realm_of` IS THAT FACT IN THIS ENGINE, and its own header says which documents answer NULL:
-   a `DOMParser` parse, a `createHTMLDocument`, an XHR `responseXML`, a `<template>`'s contents owner, the
-   document of a destroyed navigable. Every one of those has a null browsing context, so scripting is disabled
-   for the nodes in it. It is the ELEMENT'S OWN DOCUMENT'S realm and never the running one, for the reason
-   core/layout/used_value.c gives about the initial containing block: a classification is a fact about the
-   document the element is in. */
+/* HTML §8.1.3.4 "Enabling and disabling scripting"'s question asked of a node: "The object implements Node,
+   and object's node document's browsing context is null." `document_active_realm_of` answers NULL for exactly
+   those documents (a `DOMParser` parse, `createHTMLDocument`, an XHR `responseXML`, a `<template>`'s contents
+   owner, a destroyed navigable's document). The canvas and img arms both need it. It is the element's own
+   document's realm, never the running one: a classification is a fact about the element's document. */
 static JSContext *rep_scripting_realm(lxb_dom_node_t *n)
 {
     DCHECK(n != NULL && n->owner_document != NULL,
@@ -311,12 +232,8 @@ ReplacedElement replaced_element_of(lxb_dom_element_t *el)
     DCHECK(el != NULL, "HTML §15.4's replaced-element question was asked about no element");
     n = lxb_dom_interface_node(el);
     /* HTML §15.4 "Replaced elements", first sentence: "The following elements can be replaced elements: audio,
-       canvas, embed, iframe, img, input, object, and video." EVERY OTHER ELEMENT IS NOT ONE, which is a real
-       answer and the half `css_element_may_be_replaced` got wrong — css-display Appendix B's list also carries
-       `br`, `wbr`, `frame`, `frameset`, `meter`, `progress`, `select` and `textarea`, and none of those is on
-       this one. A `<select>` is a WIDGET (§15.5 "Widgets"), which is a different rendering mechanism with a
-       different sizing rule, and answering it as replaced sent its `width` through an algorithm that does not
-       apply to it. */
+       canvas, embed, iframe, img, input, object, and video." Every other element is not one; a `<select>` is a
+       §15.5 "Widgets" box with its own sizing rule. */
     if (!lxb_html_tree_node_is(n, LXB_TAG_IMG) && !lxb_html_tree_node_is(n, LXB_TAG_IFRAME) &&
         !lxb_html_tree_node_is(n, LXB_TAG_EMBED) && !lxb_html_tree_node_is(n, LXB_TAG_VIDEO) &&
         !lxb_html_tree_node_is(n, LXB_TAG_AUDIO) && !lxb_html_tree_node_is(n, LXB_TAG_CANVAS) &&
@@ -324,249 +241,99 @@ ReplacedElement replaced_element_of(lxb_dom_element_t *el)
         return rep_not();
 
     /* §15.4.1 "Embedded content", first sentence: "The embed, iframe, and video elements are expected to be
-       treated as REPLACED ELEMENTS." Unconditionally — there is no state to consult and no rule list to walk.
-       What differs between the three is only their NATURAL DIMENSIONS, and css-images-3 §4.1 answers one of
-       them outright: an embedded document, "such as the iframe element in HTML", is "an example of an object
-       with NO NATURAL DIMENSIONS AT ALL". So an `iframe` is complete here with no child layout — its box is
-       CSS 2.1 §10.3.2's 300 x 150, which is the number core/frame/viewport.c derives a child navigable's
-       viewport from, and the two are one statement now rather than two constants. */
+       treated as replaced elements." An embedded document, "such as the iframe element in HTML", is "an example
+       of an object with no natural dimensions at all" (css-images-3 §4.1), so its box is CSS 2.1 §10.3.2's 300 x
+       150, the number core/frame/viewport.c derives a child navigable's viewport from. */
     if (lxb_html_tree_node_is(n, LXB_TAG_IFRAME)) return rep_bare();
-    /* AN `embed` IS A REPLACED ELEMENT WITH NO NATURAL DIMENSIONS, AND THERE IS NO CONDITION LEFT TO TEST.
-       §15.4.1 makes it replaced unconditionally, so the only question is css-images-3 §4.1's natural
-       dimensions — and in a user agent with NO PLUGINS every route through HTML §4.8.6 "The embed element"
-       ends at the same representation, which is why the two-condition predicate that stood here is DELETED
-       rather than kept beside this answer.
-       ROUTE ONE — THE ELEMENT IS NOT POTENTIALLY ACTIVE. §4.8.6: "While any of the following conditions are
-       occurring, any plugin instantiated for the element must be removed, and the embed element represents
-       nothing", over an element with neither a `src` nor a `type` attribute, one with a media element
-       ancestor, and one with "an ancestor object element that is not showing its fallback content". That third
-       condition used to be the one this file called genuinely unanswerable; it is ANSWERED by the `object` arm
-       below, which derives that every `object` in this build IS showing its fallback content, so it is simply
-       always false.
-       ROUTE TWO — IT IS POTENTIALLY ACTIVE, so §4.8.6's EMBED ELEMENT SETUP STEPS run and their switch is on
-       "determining the type of the content", whose every non-null arm is conditioned on A PLUGIN ("a type that
-       a plugin supports", "a pattern that a plugin supports", "a type that a plugin supports") and whose last
-       step is "Return null". HTML §2.1.6 "Plugins": "Indeed, this specification doesn't require user agents to
-       support plugins at all", and this one supports none — so the type is null, the switch takes "Display no
-       plugin for element", and that algorithm's last step is "element now represents nothing".
-       AN ELEMENT THAT REPRESENTS NOTHING HAS NO NATURAL DIMENSIONS, which css-images-3 §4.1 "Object-Sizing
-       Terminology" makes short work of: "These natural dimensions represent the preferred sizing intrinsic to
-       the object itself; that is, they are not a function of the context in which the object is used", and
-       there is no object for a preferred size to be intrinsic to. Nothing in HTML supplies one either, and the
-       one rule that looks as though it might is written for other elements: HTML §15.4.2 "Images"' fourth rule
-       gives natural dimensions of 0 to an element that represents nothing, and its list governs "img elements
-       and input elements whose type attributes are in the Image Button state", which this is not. CSS 2.1
-       §10.3.2 "Inline, replaced elements"' LAST ARM then sizes the box — "Otherwise, if 'width' has a computed
-       value of 'auto', but none of the conditions above are met, then the used value of 'width' becomes 300px"
-       — and §10.6.2's last arm gives 150. IT IS THE `iframe`'s PAIR OF NUMBERS AND NOT THE `iframe`'s
-       DERIVATION, which is why this is a second call to `rep_bare` rather than a shared arm: an embedded
-       document has no natural dimensions because §4.1 names it as an object that has none, and this element
-       has none because there is no object. The box is not empty of CONTENT either, which is the other half of
-       why 0 by 0 would be wrong here: §4.8.6's display-no-plugin steps say "Display an indication that no
-       plugin could be found for element, as the contents of element", so the rectangle is one something is
-       drawn in.
-       NAMED RESIDUAL — §4.8.6's EMBED ELEMENT SETUP STEPS are not built, and this arm is RIGHT rather than
-       unfinished because their outcome for a plugin-less agent is the answer above whether they run or not.
-       What their absence costs is more than a box size: the request they issue — "URL is url, client is
-       element's node document's relevant settings object, destination is \"embed\", credentials mode is
-       \"include\", mode is \"navigate\", initiator type is \"embed\"" — is an ENDPOINT this tool exists to
-       find. THE NEXT DIFF BUILDS those steps on the embed task source, with the `load` event they fire on a
-       network error and the delay they put on the document's load event. ITS ABSENCE WOULD SHOW as an
-       `<embed src=…>`'s address never reaching the @H endpoint surface for any page. */
+    /* An `embed` is a replaced element with no natural dimensions, on every route through HTML §4.8.6 "The
+       embed element" in an agent without plugins. Not potentially active: "the embed element represents
+       nothing" (its third condition, an ancestor `object` "not showing its fallback content", is always false
+       because the `object` arm below always shows fallback). Potentially active: every non-null arm of
+       "determining the type of the content" needs a plugin, HTML §2.1.6 "Plugins" lets an agent have none, and
+       "Display no plugin for element" ends "element now represents nothing".
+       Representing nothing, it has no object to have natural dimensions, and §15.4.2's zero-size rule governs
+       only `img` and Image Button `input`; so CSS 2.1 §10.3.2's last arm gives 300px and §10.6.2's 150. The box
+       holds "an indication that no plugin could be found", so 0 by 0 would also be wrong.
+       Named residual: §4.8.6's embed element setup steps are not built. Their outcome here is the answer above
+       either way, but their request (destination "embed", mode "navigate") is an endpoint. Next: build them on
+       the embed task source with their `load` event and load-event delay. Absence shows as an `<embed src=…>`'s
+       address never reaching the @H endpoint surface. */
     if (lxb_html_tree_node_is(n, LXB_TAG_EMBED)) return rep_bare();
 
-    /* A `video` IS A REPLACED ELEMENT WITH NO NATURAL DIMENSIONS, DERIVED AND NOT SHRUGGED. §15.4.1 makes it
-       replaced unconditionally, and HTML §4.8.8 "The video element" answers both dimensions for this build
-       without a decoder: "The natural width of a video element's playback area is the natural width of the
-       poster frame, if that is available and the element currently represents its poster frame; otherwise, it
-       is the natural width of the video resource, if that is available; OTHERWISE THE NATURAL WIDTH IS
-       MISSING", and the same sentence again for the height.
-       NEITHER SOURCE IS AVAILABLE HERE, and that is two derived facts rather than one absence. The POSTER
-       FRAME is a decoded image: `poster` is a reflection and nothing fetches it, and core/html/html_image.h
-       states that every reply of this agent lands in the not-a-supported-file-format arm, so no poster frame
-       exists to have a natural width. The VIDEO RESOURCE's dimensions are §4.8.8's `videoWidth`/`videoHeight`
-       — "These attributes return the natural dimensions of the video, or 0 if the dimensions are not known" —
-       and the MOCK DEVICE core/html/media_element.h models states a duration, a seekable range and a buffered
-       range and NO FRAME SIZE, so they are not known at any ready state this build reaches. This is NOT the
-       claim that the ready state never advances: §4.8.11.5's media data processing steps do walk it to
-       HAVE_ENOUGH_DATA here, and a video at HAVE_ENOUGH_DATA whose frame size nobody stated still has no
-       natural width.
-       SO A `video` IS css-images-3 §4.1's OBJECT WITH NO NATURAL DIMENSIONS AT ALL, exactly as an `iframe` is,
-       and CSS 2.1 §10.3.2's last arm sizes it — which §4.8.8 states as the same pair from the other side: "The
-       default object size is a width of 300 CSS pixels and a height of 150 CSS pixels. [CSSIMAGES]".
-       NAMED RESIDUAL — a video whose natural dimensions ARE known is not covered, and this arm is RIGHT rather
-       than unfinished for every video this build can produce. THE NEXT DIFF BUILDS §4.8.8's `videoWidth` and
-       `videoHeight` over a frame size the mock device states beside its duration, and this arm becomes a
-       `rep_sized` of them. ITS ABSENCE WOULD SHOW as `<video src=… style="width:100px">` laying out 150 CSS
-       pixels tall — §10.3.2's default height, with no ratio to carry the width across — where a browser that
-       knows the resource's ratio gives it the frame's. */
+    /* A `video` is a replaced element with no natural dimensions. HTML §4.8.8 "The video element": the natural
+       width is the poster frame's, "otherwise, it is the natural width of the video resource, if that is
+       available; otherwise the natural width is missing", and likewise the height. No poster frame exists
+       (`poster` is a reflection and nothing fetches it), and `videoWidth`/`videoHeight` ("0 if the dimensions
+       are not known") are unknown at every ready state: the mock device in core/html/media_element.h states a
+       duration and ranges but no frame size. §4.8.8's own default object size is 300 by 150.
+       Named residual: a video whose natural dimensions are known is not covered. Next: `videoWidth` and
+       `videoHeight` over a frame size the mock device states, making this arm a `rep_sized`. Absence shows as
+       a `<video>` with a set width laying out 150 CSS pixels tall with no ratio. */
     if (lxb_html_tree_node_is(n, LXB_TAG_VIDEO)) return rep_bare();
 
-    /* A `canvas` IS ANSWERED IN FULL AND NEITHER HALF NEEDS A DECODER OR A PAINT. §15.4.1: "A canvas element
-       that REPRESENTS EMBEDDED CONTENT is expected to be treated as a replaced element; the contents of such
-       elements are the element's bitmap, if any, or else a transparent black bitmap with the same natural
-       dimensions as the element. OTHER canvas elements are expected to be treated as ORDINARY elements in the
-       rendering model."
-       WHICH CANVAS REPRESENTS EMBEDDED CONTENT IS §4.12.5 "The canvas element"'s OWN SENTENCE: "In interactive
-       visual media, if scripting is enabled for the canvas element, and if support for canvas elements has
-       been enabled, then the canvas element represents embedded content consisting of a dynamically created
-       image, the element's bitmap", against "In non-visual media, and in visual media if scripting is disabled
-       for the canvas element or if support for canvas elements has been disabled, the canvas element
-       represents its fallback content instead."
-       SCRIPTING IS §8.1.3.4's, ASKED OF THE NODE, and it is the one conjunct that varies per element here — a
-       canvas in a document no navigable presents represents its fallback content and is an ORDINARY element,
-       which is a real answer and not a refusal.
-       SUPPORT FOR CANVAS ELEMENTS IS ENABLED IN THIS AGENT, and that is the same kind of statement
-       `rep_img_represents` above makes about being configured to display images. This agent has §4.12.5's
-       element, parses it, reflects both of its content attributes with the section's own defaults, and models
-       the bitmap §4.12.5 gives a canvas whose context mode is NONE. `getContext` being absent is a missing
-       MEMBER, not a disabled element: §4.12.5 defines that bitmap for a canvas that never had a rendering
-       context, which is what the arm below reads.
-       AND THE NATURAL DIMENSIONS ARE THAT BITMAP'S. §4.12.5: "The natural dimensions of the canvas element
-       when it represents embedded content are equal to the dimensions of the element's bitmap", and "When its
-       canvas context mode is NONE, a canvas element has no rendering context, and its bitmap must be
-       transparent black with a natural width equal to the numeric value of the element's width attribute and a
-       natural height equal to the numeric value of the element's height attribute, those values being
-       interpreted in CSS pixels, and being updated as the attributes are set, changed, or removed." Every
-       canvas in this build is in context mode none, because the only algorithms §4.12.5 gives for leaving it
-       are `getContext` and `transferControlToOffscreen` and this agent has neither.
-       A ZERO IS A REAL NATURAL DIMENSION HERE — `<canvas width=0>` has a natural width of 0 and a natural
-       height of 150 — and css-images-3 §4.1's DEGENERATE rule then leaves it with no ratio, which `rep_sized`
-       derives rather than this arm restating.
-       THE RESIDUAL THAT STOOD HERE IS RETIRED AND ITS PREDICTION HELD, which is recorded rather than deleted
-       because the prediction is the part worth keeping. It said the next diff was ONE LANDING and not
-       `getContext` alone — §4.12.5's table gives the other context ids a supports-condition and the `"2d"` row
-       none, so a conformant `getContext("2d")` has no null arm and must run the 2D context creation algorithm,
-       and core/rendering/rendering.c's `realm_awaits` on that interface's §3.8 name meant update-the-rendering
-       STEP 13 had to land with it. All of that happened: core/canvas/canvas_rendering_context_2d.c is
-       §4.12.5.1, core/html/html_canvas_element.c is §4.12.5's `getContext` and bitmap, and that `realm_awaits`
-       is gone. A canvas in this build can now be in context mode 2d.
-       AND THIS READ DOES NOT MOVE, WHICH THE RETIRED CLAUSE ALSO SAID AND WHICH THE LANDING CONFIRMED. §4.12.5's set bitmap
-       dimensions writes canvas's `width` and `height` content attributes back to match the bitmap, and the
-       creation algorithm sets those dimensions FROM the same two attributes — so under context mode 2d the
-       two are kept equal and `rep_canvas_dimension` stays the natural dimension. What moves this read is
-       `placeholder`: `transferControlToOffscreen` hands the canvas an OffscreenCanvas's bitmap, and setting
-       either attribute then throws an "InvalidStateError" DOMException instead.
-       WHAT IS STILL NOT COVERED IS `placeholder`, and it is a real gap rather than the retired one: only
-       `transferControlToOffscreen` enters that mode and this agent has neither that member nor
-       `OffscreenCanvas`, so no canvas reaches it and this arm is right for every canvas this build produces.
-       ITS ABSENCE WOULD SHOW as a canvas whose bitmap an OffscreenCanvas owns reporting the ELEMENT's two
-       content attributes as its natural dimensions, where §4.12.5 makes setting either of them throw an
-       "InvalidStateError" DOMException instead. */
+    /* A `canvas`. §15.4.1: "A canvas element that represents embedded content is expected to be treated as a
+       replaced element … Other canvas elements are expected to be treated as ordinary elements in the
+       rendering model." Per §4.12.5 "The canvas element", it represents embedded content "if scripting is
+       enabled for the canvas element, and if support for canvas elements has been enabled"; support is enabled
+       in this agent, so scripting (§8.1.3.4, per node) is the conjunct that varies.
+       "The natural dimensions of the canvas element when it represents embedded content are equal to the
+       dimensions of the element's bitmap". In context mode none that bitmap's size is the two attributes; in
+       context mode 2d (core/html/html_canvas_element.c's `getContext`), §4.12.5's set bitmap dimensions writes
+       the attributes back to match, so the attributes remain the natural dimensions. A zero is a real natural
+       dimension, and `rep_sized` drops the degenerate ratio.
+       Named residual: context mode placeholder is not covered; only `transferControlToOffscreen`, which this
+       agent lacks with `OffscreenCanvas`, enters it. Next: build those, and read the OffscreenCanvas's bitmap
+       here. Absence would show as such a canvas reporting its content attributes as natural dimensions. */
     if (lxb_html_tree_node_is(n, LXB_TAG_CANVAS)) {
         if (rep_scripting_realm(n) == NULL) return rep_not();
         return rep_sized(rep_canvas_dimension(el, "width", 300), rep_canvas_dimension(el, "height", 150));
     }
 
-    /* AN `object` REPRESENTS ITS FALLBACK CONTENT IN THIS BUILD, WHICH IS ONE OF §4.8.7's OWN OUTCOMES AND NOT
-       A REFUSAL TO RUN IT. §15.4.1: "An `object` element that REPRESENTS AN IMAGE, PLUGIN, OR ITS CONTENT
-       NAVIGABLE is expected to be treated as a replaced element. Other object elements are expected to be
-       treated as ORDINARY elements in the rendering model." Which of those an `object` is is HTML §4.8.7 "The
-       object element"'s (re)determine-what-it-represents algorithm, and TWO of that algorithm's own jumps send
-       every `object` here to the same label.
-       Its situation step sends to fallback an element that "is not in a document whose browsing context is
-       non-null", is "not fully active", or "is not being rendered". Its `data` step sends to fallback whenever
-       "the resource is not yet available (e.g. because the resource was not available in the cache, so that
-       loading the resource required making a request over the network) … The task that is queued by the
-       networking task source once the resource is available must restart this algorithm from this step" —
-       NOTHING IN THIS ENGINE QUEUES THAT FETCH, so the resource is never available and the algorithm never
-       restarts past that jump. An `object` with no `data` attribute, which §4.8.7 says "must be present", falls
-       out of that step altogether and reaches the same label. §4.8.7 is explicit about the result: "Fallback:
-       The object element represents THE ELEMENT'S CHILDREN. This is the element's FALLBACK CONTENT."
-       An element representing its fallback content is none of §15.4.1's three, so §15.4.1's own second sentence
-       answers it — an ORDINARY element, `rep_not`, with no natural dimension invented for a resource nobody
-       read. It is also what makes §4.8.6's third represents-nothing condition answerable for the `embed` arm
-       above.
-       NAMED RESIDUAL — §4.8.7's FETCH is not built, and this arm is RIGHT rather than unfinished because the
-       algorithm's own not-yet-available jump is what an agent that has not fetched takes. What the absence
-       costs is more than a box size: the request — "URL is url, client is the element's node document's
-       relevant settings object, destination is \"object\", credentials mode is \"include\", mode is
-       \"navigate\", initiator type is \"object\"" — is an ENDPOINT this tool exists to find. THE NEXT DIFF
-       BUILDS §4.8.7's steps on the DOM manipulation task source, with the `error` and `load` element tasks and
-       the delay they put on the document's load event. ITS ABSENCE WOULD SHOW as an `<object data=…>`'s address
-       never reaching the @H endpoint surface, and as this arm still answering `rep_not` for an object whose
-       resource a browser would be showing. */
+    /* An `object` represents its fallback content here, one of HTML §4.8.7 "The object element"'s own
+       outcomes. §15.4.1: "An object element that represents an image, plugin, or its content navigable is
+       expected to be treated as a replaced element. Other object elements are expected to be treated as
+       ordinary elements in the rendering model." §4.8.7 jumps to fallback when the element is not rendered or
+       its document has no browsing context, and when "the resource is not yet available"; nothing here queues
+       that fetch, so it never restarts. An `object` without `data` reaches the same label: "Fallback: The
+       object element represents the element's children."
+       Named residual: §4.8.7's fetch is not built; an agent that has not fetched takes this jump, so the arm
+       is right. Its request (destination "object", mode "navigate") is an endpoint. Next: build §4.8.7's steps
+       on the DOM manipulation task source with `error`/`load` tasks and the load-event delay. Absence shows as
+       an `<object data=…>`'s address never reaching the @H endpoint surface. */
     if (lxb_html_tree_node_is(n, LXB_TAG_OBJECT)) return rep_not();
 
-    /* NO `audio` IN THIS BUILD IS A REPLACED ELEMENT, WHICH IS HTML §15.4.1 "Embedded content"'s SENTENCE
-       READ RATHER THAN A SHRUG. HTML §15.4.1 "Embedded content" says: "The `audio` element, WHEN IT IS
-       EXPOSING A USER INTERFACE, is expected to be treated as a replaced element about one line high, as wide
-       as is necessary to expose the user agent's user interface features. When an audio element is NOT
-       exposing a user interface, the user agent is expected to force its `display` property to compute to
-       `none`, irrespective of CSS rules." The element is replaced in the first branch only.
-       THIS AGENT EXPOSES NO USER INTERFACE FOR ANY MEDIA ELEMENT, and that is the agent's own statement to
-       make rather than a fact about the element: HTML §4.8.11.13 "User interface" leaves it open in both
-       directions — a user agent "may implement this simply by exposing a user interface to the user as
-       described above (as if the controls attribute was present)" even with the attribute absent. This one has
-       no user, no control strip, and no §15.5.1 "Native appearance" for one, so it exposes none — for a
-       `<audio controls>` as much as for a bare `<audio>`, which is why the `controls` attribute is not read
-       here. Answering anything else would be inventing a width for a user interface that does not exist, which
-       is the second branch of §15.4.1 read as though it were the first.
-       NAMED RESIDUAL — §15.4.1's FORCED `display: none` is not covered, and this arm is RIGHT rather than
-       unfinished because a §15.4 classification is not a computed value: `replaced_element_of` answers whether
-       the element is replaced, and `display` is core/css/css_computed_value.c's, where every other UA-imposed
-       value lives. THE NEXT DIFF BUILDS that forcing there — §15.4.1 says "irrespective of CSS rules", so it
-       overrides the cascade rather than joining it as a UA-stylesheet row. ITS ABSENCE WOULD SHOW as
-       `getComputedStyle(audio).display` answering `inline` where every browser answers `none`, and as an
-       `<audio>` taking part in core/layout/line_box.c's line box instead of generating no box at all. */
+    /* No `audio` is a replaced element here. HTML §15.4.1 "Embedded content": "The audio element, when it is
+       exposing a user interface, is expected to be treated as a replaced element about one line high … When an
+       audio element is not exposing a user interface, the user agent is expected to force its display property
+       to compute to none, irrespective of CSS rules." This agent exposes no media user interface (HTML
+       §4.8.11.13 "User interface" leaves that to the agent), with or without `controls`, so `controls` is not
+       read.
+       Named residual: §15.4.1's forced `display: none` is not covered; a classification is not a computed
+       value. Next: core/css/css_computed_value.c forces it, overriding the cascade. Absence shows as
+       `getComputedStyle(audio).display` answering `inline` and the `<audio>` taking part in a line box. */
     if (lxb_html_tree_node_is(n, LXB_TAG_AUDIO)) return rep_not();
-    /* AN `input` IS GOVERNED BY EXACTLY ONE OF §15's TWO RENDERING MECHANISMS AND ITS `type` DECIDES WHICH.
-       §15.4 lists `input` among the elements that CAN be replaced; §15.4.2 "Images"' list is what makes one
-       actually replaced, and its subject is not every `input` — the section opens "User agents are expected to
-       render img elements and input elements whose type attributes are in the Image Button state, according to
-       the first applicable rules from the following list". That is ONE of §4.10.5.1 "States of the type
-       attribute"'s states, and `html_form_input_state` (core/html/html_form.h) resolves that section's whole
-       keyword table — ASCII case-insensitively, with both of its missing- and invalid-value defaults — where
-       `INPUT_STATE_IMAGE` IS the Image Button state.
-       EVERY OTHER STATE IS §15.5 "Widgets" AND IS THEREFORE NOT A REPLACED ELEMENT, which is a COMPUTED answer
-       and not a shrug: §15.5.1 "Native appearance" names the whole class — "The following elements can have a
-       native appearance for the purpose of the CSS 'appearance' property", over `button`, `input`, `meter`,
-       `progress`, `select` and `textarea` — and this component already answers `rep_not` for the other five,
-       through §15.4's list not naming them. An `input` is the ONE member of §15.5.1's list that §15.4's list
-       also names, so it is the one that has to be split here rather than at the guard. §15.5's own per-state
-       sections are what a widget's box IS: §15.5.10 "The input element as a checkbox and radio button widgets"
-       gives the Checkbox state "a non-devolvable widget expected to render as an 'inline-block' box containing
-       a single checkbox control, with no label", and §15.5.12 "The input element as a button" sends the Submit
-       Button, Reset Button and Button states to §15.5.3 "Button layout". NONE of those is a replaced element,
-       and answering one as replaced is the defect the `select` note above records — it sends the widget's
-       `width` through CSS 2.1 §10.3.2, an algorithm that does not apply to it.
-       NAMED RESIDUAL — §15.5.3 "Button layout"'s TWO as-if clauses are not covered by this `false`, and they
-       are as-if rather than a classification, which is why this arm is right and narrower rather than wrong.
-       §15.5.3 says "If the element is absolutely-positioned, then for the purpose of the CSS visual formatting
-       model, act as if the element is a replaced element." and "For the purpose of the 'normal' keyword of the
-       'align-self' property, act as if the element is a replaced element." — each scoped to one purpose, so
-       neither makes `replaced_element_of` answer true, whose subject is css-images-3 §4.1's natural
-       dimensions. THE NEXT DIFF BUILDS a per-purpose replaced question in core/layout/used_value.c: §15.5.3's
-       first clause is an operand of CSS 2.1 §10.3.7 versus §10.3.8 (absolutely positioned, non-replaced versus
-       replaced), so it belongs where that choice is made and not here. ITS ABSENCE SHOWS as an absolutely
-       positioned `<input type=submit>` with `auto` on `left`, `width` and `right` taking §10.3.7's shrink-to-
-       fit instead of §10.3.8's step 1, which is a different used `width` that `getBoundingClientRect` reports.
-       §15.5.3's third clause, "If the computed value of 'inline-size' is 'auto', then the used value is the
-       fit-content inline size", is the same file's question and not this one's either. */
+    /* An `input` is governed by one of §15's two rendering mechanisms, chosen by its `type`. §15.4.2's list
+       covers only "input elements whose type attributes are in the Image Button state" (`INPUT_STATE_IMAGE`
+       from core/html/html_form.h's `html_form_input_state`). Every other state is a §15.5 "Widgets" box (e.g.
+       §15.5.10's checkbox "inline-block" box, §15.5.12's buttons via §15.5.3 "Button layout"), not replaced.
+       Named residual: §15.5.3's as-if clauses ("If the element is absolutely-positioned, then for the purpose
+       of the CSS visual formatting model, act as if the element is a replaced element.", and the same for
+       `align-self: normal`) are per purpose, not a classification. Next: a per-purpose replaced question in
+       core/layout/used_value.c where CSS 2.1 §10.3.7 versus §10.3.8 is chosen. Absence shows as an absolutely
+       positioned `<input type=submit>` with `auto` left, width and right taking §10.3.7's shrink-to-fit width. */
     if (lxb_html_tree_node_is(n, LXB_TAG_INPUT)) {
         HtmlInputState state = html_form_input_state(n);
 
-        /* `INPUT_STATE_NONE` is that function's answer to "is this an `input` at all", which the tag dispatch
-           above has already answered yes to — so the two asking it differently is the two having come apart,
-           and it is asserted rather than folded into the state test below, where it would silently take the
-           §15.5 arm and report a widget for an element that is not one. */
+        /* `INPUT_STATE_NONE` answers "not an `input`", which the tag dispatch already excluded; asserted rather
+           than folded into the state test, where it would silently take the widget arm. */
         DCHECK(state != INPUT_STATE_NONE,
                "§4.10.5.1 \"States of the type attribute\"'s state was read as NONE for an element HTML §15.4's "
                "own list matched as an `input` — NONE is not one of that section's states but the answer to "
                "whether the element is an `input`, so this is the tag dispatch here and the tag test in "
                "core/html/html_form.c disagreeing about one element");
         if (state != INPUT_STATE_IMAGE) return rep_not();
-        /* ALWAYS FATAL, AND THE PROMOTION IS PART OF THE ARM RATHER THAN A SWEEP. `DFAIL` is `((void)0)` at
-           `-DAPICLIENT_DEV=0`, so what stood here did not stop a `<input type=image>` in release — it fell out
-           of this block, past a `DCHECK` that the element is an `img` which is compiled out in the same build,
-           and into `rep_img`, whose FIRST act is to ask core/html/html_image.c for this element's §4.8.4.3
-           image request. That function's own brand check is a `DCHECK` too, so in release BOTH guards are gone
-           at once and an `input`'s wrapper is read for a record only an `img` can hold: the answer that comes
-           back is §4.8.3's five-case `represents` computed off an `input`'s `src` and `alt`, and it leaves this
-           function as a natural dimension that then feeds CSS 2.1 §10.3.2's arithmetic and `getBoundingClient-
-           Rect`. That is a DATA-INTEGRITY failure and not a fidelity gap, which is the line check.h draws
-           between the two macros — and release cannot build the capability the message names, so refusing is
-           the only honest arm left there. */
+        /* Always fatal: past a compiled-out assert, release would read an `img` image request off an `input`'s
+           wrapper and feed the result into §10.3.2. That is a data-integrity failure (check.h's `CHECK`). */
         CHECK_FAIL("HTML §15.4.2 \"Images\"' rules were reached for an `input` in §4.10.5.1.19 \"Image Button state "
               "(type=image)\"'s state, and every one of them turns on what the element REPRESENTS — which for "
               "this element is §4.10.5.1.19's own two-case sentence and NOT §4.8.3's five-case one that "
@@ -606,29 +373,17 @@ ReplacedElement replaced_element_of(lxb_dom_element_t *el)
               "label needs too and is the reason it belongs in that component rather than here");
     }
 
-    /* EVERY OTHER TAG ON §15.4's LIST HAS LEFT THIS FUNCTION BY NOW, IN BOTH BUILDS, which is what makes this
-       a `DCHECK` about the engine's own logic rather than the last thing standing between a non-`img` and
-       `rep_img`. Each arm above either RETURNS a derived classification or is always fatal; none of them is an
-       `if (tag) DFAIL(…)`, which is a statement that does nothing at all at `-DAPICLIENT_DEV=0` and let five
-       element kinds walk into §15.4.2's `img` rules with this assert compiled out to meet them. */
+    /* Every other tag on §15.4's list has returned or failed fatally by now in both builds, so this is a
+       `DCHECK` about the dispatch's own logic. */
     DCHECK(lxb_html_tree_node_is(n, LXB_TAG_IMG),
            "the element dispatch above admitted an element §15.4's list does not name — the guard and this "
            "chain are one list and they have come apart");
-    /* §15.4.2's rules are a fact about the IMAGE REQUEST, which lives on the element's own wrapper and is
-       therefore per flow. The realm is the ELEMENT'S OWN DOCUMENT'S, never the running one, for the reason
-       core/layout/used_value.c gives about the initial containing block: a classification is a fact about the
-       document the element is in — the same fact, from the same function, that decides whether a `canvas`
-       above represents embedded content. */
+    /* §15.4.2's rules read the image request, which lives on the element's wrapper and is per flow; the realm
+       is the element's own document's, from the function the canvas arm uses. */
     dctx = rep_scripting_realm(n);
     if (dctx == NULL)
-        /* ALWAYS FATAL, FOR THE ONE REASON THAT IS NOT ABOUT FIDELITY AT ALL: at `-DAPICLIENT_DEV=0` this was
-           `((void)0)`, so the next line ran `rep_img(NULL, el)` and core/html/html_image.c dereferenced that
-           NULL realm to read an own slot off the element's wrapper. A dev abort traded for a release segfault
-           is exactly what check.h's CHECK column exists to stop, and the capability the message names cannot
-           be built in a release build in any case. IT IS NOT THE SAME QUESTION THE `canvas` ARM ANSWERS with a
-           `rep_not`: §4.12.5 states an outcome for a canvas whose scripting is disabled, and §15.4.2 states
-           none for an `img` that nothing is rendering — inventing one here would be a classification for an
-           element the section declines to classify. */
+        /* Always fatal: release would otherwise pass a NULL realm to core/html/html_image.c. Unlike the
+           canvas arm, §15.4.2 states no outcome for an `img` nothing renders, so no classification is made. */
         CHECK_FAIL("HTML §15.4.2 \"Images\"' rules were asked about an `img` in a document NO NAVIGABLE PRESENTS — "
               "a DOMParser document, an XHR `responseXML`, a `<template>`'s contents owner, or the document of "
               "a destroyed navigable. The rules are stated over the element's IMAGE REQUEST, which §4.8.4.3 "

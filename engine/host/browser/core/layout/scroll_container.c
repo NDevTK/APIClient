@@ -1,6 +1,5 @@
-/* CSSOM VIEW §2 "Terminology"'s SCROLLING BOX, joined to css-overflow-3 §3.1 "Managing Overflow: the
-   overflow-x, overflow-y, and overflow properties"' SCROLL CONTAINER. See scroll_container.h for why the term
-   needs a component at all and for why §2's own note about a non-overflowing `auto` box changes no answer. */
+/* CSSOM View §2 "Terminology"'s scrolling box, joined to css-overflow-3 §3.1 "Managing Overflow: the
+   overflow-x, overflow-y, and overflow properties"' scroll container. See scroll_container.h. */
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,19 +13,12 @@
 #include "core/dom/element_view.h"
 #include "core/layout/scroll_container.h"
 
-/* THERE IS NO SIXTH KEYWORD — §3.1's `Value:` line is `visible | hidden | clip | scroll | auto` — so a value
-   outside the five is a cascade that produced something css-overflow does not define, and it crashes rather
-   than being read as non-clipping. `overlay` is a LEGACY ALIAS of `auto` ("User agents must also support the
-   overlay keyword as a legacy value alias of auto") and is therefore a value the COMPUTED value can never be:
-   an alias is resolved at parse time, which lexbor's own value table does, so meeting one here is that
-   resolution having been skipped rather than a sixth keyword to model. */
-/* THE COMPUTED KEYWORD ON ONE AXIS, CLASSIFIED ONCE. Two different questions are asked of this one fact and
-   they do NOT have the same answer, which is why the read and the keyword table are here and each predicate
-   below is a question over the result rather than its own `strcmp`. `clip` is the whole of the difference:
-   §3.1 puts it among the NON-scrollable values, so a `clip` box is not a scroll container — and it clips its
-   content to the padding edge, which is exactly what CSSOM VIEW's CONTENT CLIP is. A component that reads one
-   bit for both questions answers one of them wrongly for the one value css-overflow added so that an author
-   could clip WITHOUT a scroll container. */
+/* §3.1's `Value:` line is `visible | hidden | clip | scroll | auto`; any other computed value crashes rather
+   than reading as non-clipping. `overlay` is "a legacy value alias of auto", resolved at parse time by Lexbor's
+   value table, so it never reaches a computed value. */
+/* The computed keyword on one axis, classified once. The scroll-container and content-clip questions differ
+   only at `clip`, which is non-scrollable but clips to the padding edge, so both read this one classification
+   rather than one bit. */
 typedef enum { SC_OVERFLOW_VISIBLE = 0, SC_OVERFLOW_CLIP, SC_OVERFLOW_SCROLLABLE } ScOverflow;
 
 static ScOverflow sc_axis_overflow(lxb_dom_element_t *el, bool vertical)
@@ -52,24 +44,21 @@ static ScOverflow sc_axis_overflow(lxb_dom_element_t *el, bool vertical)
     return k;
 }
 
-/* §3.1's SCROLLABLE VALUES, as the spec lists them: "The scroll, auto, and hidden values are known as the
-   scrollable values of overflow." `visible` and `clip` are its "non-scrollable values". */
+/* §3.1's scrollable values: "The scroll, auto, and hidden values are known as the scrollable values of
+   overflow." `visible` and `clip` are its "non-scrollable values". */
 static bool sc_axis_value_is_scrollable(lxb_dom_element_t *el, bool vertical)
 {
     return sc_axis_overflow(el, vertical) == SC_OVERFLOW_SCROLLABLE;
 }
 
-/* CSSOM VIEW's CONTENT CLIP on one axis — every keyword except `visible`, because every one of the other four
-   clips the box's content to its padding edge and `visible` is the only one that does not. */
+/* CSSOM View's content clip on one axis: every keyword but `visible` clips to the padding edge. */
 static bool sc_axis_value_clips(lxb_dom_element_t *el, bool vertical)
 {
     return sc_axis_overflow(el, vertical) != SC_OVERFLOW_VISIBLE;
 }
 
-/* §3.1's `Applies to:` line — "block containers [CSS2], flex containers [CSS-FLEXBOX-1], grid containers
-   [CSS-GRID-1], and table grid boxes [CSS-TABLES-3]". It is asked ONCE per element rather than per axis: the
-   line is the property's and both longhands carry it, so an element the line excludes is not a scroll
-   container in either axis. */
+/* §3.1's `Applies to:` line, "block containers [CSS2], flex containers [CSS-FLEXBOX-1], grid containers
+   [CSS-GRID-1], and table grid boxes [CSS-TABLES-3]", asked once per element: both longhands carry it. */
 static bool sc_overflow_applies(lxb_dom_element_t *el)
 {
     return css_property_applies(el, "overflow-x");
@@ -86,25 +75,14 @@ static bool sc_computed_is(lxb_dom_element_t *el, const char *name, const char *
     return same;
 }
 
-/* css-overflow-3 §3.1.4 "Overflow Viewport Propagation" — the ONE element per document whose `overflow` does
- * not make its own box a scroll container, because the value was taken away from it and given to the viewport.
- * See scroll_container.h for why this is an EXPORTED entry with three callers rather than a file-local one
- * with two, and for why the used value it reports may not be folded into the cascade.
- * §3.1.4: "UAs must apply the overflow values set on the ROOT ELEMENT to the viewport when the root element's
- * display value is not none. However, when the root element is an [HTML] html element … whose overflow value is
- * VISIBLE (in both axes), and that element has as a child a BODY element whose display value is also not none,
- * user agents must instead apply the overflow values of the first such child element to the viewport. THE
- * ELEMENT FROM WHICH THE VALUE IS PROPAGATED MUST THEN HAVE A USED OVERFLOW VALUE OF VISIBLE."
- * THAT LAST SENTENCE IS THE WHOLE OF WHY THIS FUNCTION EXISTS, and it is a USED value where everything else
- * here is a computed one — which is exactly the case a component reading the computed value alone gets wrong.
- * `<html style="overflow:auto">` computes `auto` on the root and §3.1 would call its box a scroll container, so
- * CSSOM VIEW §6.1's ancestor walk would visit the root AND the viewport and align the same target against two
- * boxes that are the same scrolling box. §3.1.4 says the root's used value is `visible` instead: there is one
- * box, it is the viewport's, and the walk visits it once.
- * THE `html`-AND-`body` ARM IS NOT AN EXTRA CASE FOR THE ROOT, and reading it as one is the trap: when the body
- * is the propagator the root's own overflow was `visible` in both axes to begin with, so the root is not a
- * scroll container by §3.1's own sentence and needs no help from this one. The arm's only effect is on the
- * BODY. */
+/* css-overflow-3 §3.1.4 "Overflow Viewport Propagation": "UAs must apply the overflow values set on the root
+ * element to the viewport when the root element's display value is not none. However, when the root element is
+ * an [HTML] html element … whose overflow value is visible (in both axes), and that element has as a child a
+ * body element whose display value is also not none, user agents must instead apply the overflow values of the
+ * first such child element to the viewport. The element from which the value is propagated must then have a
+ * used overflow value of visible." See scroll_container.h for the callers and why this is not in the cascade.
+ * The `html`-and-`body` arm affects only the body: when the body propagates, the root's overflow is already
+ * `visible` in both axes. */
 bool scroll_container_propagates_overflow_to_viewport(lxb_dom_element_t *el)
 {
     lxb_dom_node_t *n, *root;
@@ -117,19 +95,14 @@ bool scroll_container_propagates_overflow_to_viewport(lxb_dom_element_t *el)
     DCHECK(n->owner_document != NULL, "an element with no owner document reached §3.1.4's propagation test");
     root = document_document_element_of(lxb_dom_interface_node(n->owner_document));
     if (root == NULL) return false;
-    /* NEITHER CANDIDATE, ASKED FIRST because it is the answer for every element in the document but two and it
-       costs two pointer comparisons, where §3.1.4's own conditions below each read a cascade. */
+    /* Neither candidate: the answer for all but two elements, asked first because it reads no cascade. */
     if (n != root && n != document_body_of(lxb_dom_interface_node(n->owner_document))) return false;
-    /* §3.1.4's FIRST sentence carries its own condition — "UAs must apply the overflow values set on the root
-       element to the viewport when the root element's display value is not none" — and it is asked HERE rather
-       than left to the caller, because the ROOT is not the element the caller asked about on the body arm
-       below and no caller's own box check reaches it. */
+    /* §3.1.4's first sentence: "when the root element's display value is not none". Asked here because on
+       the body arm the root is not the element the caller checked. */
     if (!element_view_has_box(root)) return false;
     if (n == root) return true;
-    /* §3.1.4's SECOND sentence, over the ROOT: an `html` element in the HTML namespace, whose computed
-       `overflow` is `visible` in both axes. Its body half — "and that element has as a child a body element
-       whose display value is also not none" — is this element, asked here for the same reason, so that this
-       entry answers §3.1.4 whole rather than answering the part its first two callers had already tested. */
+    /* §3.1.4's second sentence: the root is an HTML-namespace `html` element whose computed `overflow` is
+       `visible` in both axes, and this body element's "display value is also not none". */
     if (!element_view_has_box(n)) return false;
     rel = lxb_dom_interface_element(root);
     tag = lxb_dom_element_local_name(rel, &taglen);
@@ -140,31 +113,25 @@ bool scroll_container_propagates_overflow_to_viewport(lxb_dom_element_t *el)
 bool scroll_container_is(lxb_dom_element_t *el)
 {
     DCHECK(el != NULL, "css-overflow-3 §3.1's scroll-container question was asked with no element");
-    /* A SCROLL CONTAINER IS A BOX. An element that generates none has no principal box for §3.1's sentence to
-       be about, so it establishes no scrolling box whatever its `overflow` computed to. */
+    /* A scroll container is a box; an element that generates none establishes no scrolling box. */
     if (!element_view_has_box(lxb_dom_interface_node(el))) return false;
-    /* §3.1.4's USED value comes before §3.1's computed one, because it is what §3.1 is then applied to. */
+    /* §3.1.4's used value comes first, because it is what §3.1 is applied to. */
     if (scroll_container_propagates_overflow_to_viewport(el)) return false;
     if (!sc_overflow_applies(el)) return false;
-    /* "If neither axis computes to a scrollable value, the box is not a scroll container" — so ONE is enough,
-       and §3.1's own single-axis case ("If only one axis computes to a scrollable value … the box is a
-       single-axis scroll container") is why this is a disjunction rather than a conjunction. */
+    /* "If neither axis computes to a scrollable value, the box is not a scroll container", so one axis is
+       enough (§3.1's single-axis scroll container). */
     return sc_axis_value_is_scrollable(el, false) || sc_axis_value_is_scrollable(el, true);
 }
 
-/* CSSOM VIEW's CONTENT CLIP. See scroll_container.h — the same three preconditions as the scroll-container
-   question above, over the same computed keyword, differing in exactly one value. */
+/* CSSOM View's content clip; see scroll_container.h. Same preconditions as above, differing at `clip`. */
 bool scroll_container_content_clip_is(lxb_dom_element_t *el)
 {
     DCHECK(el != NULL, "CSSOM VIEW's content-clip question was asked with no element");
-    /* A CONTENT CLIP IS A BOX'S. An element that generates none has no padding edge for its content to be
-       clipped to, so it clips nothing whatever its `overflow` computed to. */
+    /* A content clip is a box's; an element that generates none clips nothing. */
     if (!element_view_has_box(lxb_dom_interface_node(el))) return false;
-    /* §3.1.4 AGAIN, AND IT IS THE HALF A CALLER READING THE COMPUTED VALUE ALONE GETS WRONG — the element the
-       value was propagated FROM "must then have a used overflow value of visible", so it clips nothing and the
-       VIEWPORT does the clipping in its place. `<html style="overflow-x:hidden">` and the `<body>` spelling of
-       the same thing are the two commonest overflow declarations on the web, and a component that read the
-       computed value would report a content clip on the root or the body of a large fraction of all pages. */
+    /* §3.1.4: the propagating element "must then have a used overflow value of visible", so it clips nothing
+       and the viewport clips instead. `overflow-x: hidden` on `html` or `body` is common, and reading the
+       computed value would report a clip on the root or body of those pages. */
     if (scroll_container_propagates_overflow_to_viewport(el)) return false;
     if (!sc_overflow_applies(el)) return false;
     return sc_axis_value_clips(el, false) || sc_axis_value_clips(el, true);
