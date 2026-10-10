@@ -31531,6 +31531,42 @@ static JSIterConsume *js_iter_consume_new(JSContext *ctx)
     ITERCONS_OWNED(ITERCONS_INIT_ONE)
     return s;
 }
+/* The two roles one JSIterConsume is a link in. 8 is the machine waiting on a read, write or call it issued
+   while consuming; 51 is GetIterator step 5.b's `Get(iterator, "next")`, which do_consume_have_next stores into
+   a record that does not hold a nextMethod yet. */
+#define ITERCONS_ROLE_AGREES(st_, kind_)                                                                \
+    DCHECK((kind_) == CONT_ITER_CONSUME                                                                \
+           || ((kind_) == CONT_CONSUME_NEXT_GET && JS_IsUndefined(((const JSIterConsume *)(st_))->next)), \
+           "a JSIterConsume link's kind disagrees with its record: 51 is the nextMethod read and the "    \
+           "record holds no nextMethod until that read lands")
+/* A sibling's own copy of a consumer, for every walk that forks one: the generator-drive frame arm and the
+   requester walk. The result and the iterator stay shared objects, isolated per flow by the COW delta; every
+   field the release frees is taken again, the owned argument list included. `outer` still names the
+   original's requester, and tramp_cont_relink_outer binds it. NULL on OOM. */
+static JSIterConsume *js_iter_consume_clone(JSContext *ctx, const JSIterConsume *os)
+{
+    JSIterConsume *ns = js_malloc(ctx, sizeof(*ns));
+    uint32_t i;
+
+    if (unlikely(!ns)) return NULL;
+    *ns = *os;
+    #define ITERCONS_DUP_ONE(f) ns->f = js_dup(os->f);
+    ITERCONS_OWNED(ITERCONS_DUP_ONE)
+    #undef ITERCONS_DUP_ONE
+    if (os->args_own) {
+        ns->args_own = js_malloc(ctx, sizeof(JSValue) * (size_t)(os->args_own_n > 0 ? os->args_own_n : 1));
+        if (unlikely(!ns->args_own)) {
+            ns->args_own_n = 0;
+            ns->outer = NULL; ns->outer_kind = CONT_NONE;
+            js_iter_consume_end(ctx, ns);
+            js_free(ctx, ns);
+            return NULL;
+        }
+        for (i = 0; i < (uint32_t)os->args_own_n; i++)
+            ns->args_own[i] = js_dup(os->args_own[i]);
+    }
+    return ns;
+}
 /* Set-record primitives — ITERCONS_SETOP folds setlike.keys() straight into the result's [[SetData]] (the spec
    forbids calling the observable .add), so the consume step needs them before their definitions. */
 static JSValue map_normalize_key(JSContext *ctx, JSValue key);
@@ -53241,7 +53277,10 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_CONSTRUCT:
         *out_kind = ((struct JSConstruct *)st)->outer_kind;
         return ((struct JSConstruct *)st)->outer;
-    case CONT_ITER_CONSUME:
+    case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET:
+        /* BOTH ROLES OF ONE RECORD: a consumer waiting on a read, write or call it issued (8), or on GetIterator
+           step 5.b's nextMethod read (51). What waits on it is whoever asked for the consume either way. */
+        ITERCONS_ROLE_AGREES(st, kind);
         *out_kind = ((struct JSIterConsume *)st)->outer_kind;
         return ((struct JSIterConsume *)st)->outer;
     case CONT_ASYNC_SETTLE: case CONT_ASYNC_AWAIT:
@@ -53313,7 +53352,8 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
         ((JSPromiseExec *)st)->outer = outer; ((JSPromiseExec *)st)->outer_kind = outer_kind; return;
     case CONT_CONSTRUCT:
         ((struct JSConstruct *)st)->outer = outer; ((struct JSConstruct *)st)->outer_kind = outer_kind; return;
-    case CONT_ITER_CONSUME:
+    case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET:
+        ITERCONS_ROLE_AGREES(st, kind);
         ((struct JSIterConsume *)st)->outer = outer; ((struct JSIterConsume *)st)->outer_kind = outer_kind; return;
     case CONT_ASYNC_SETTLE: case CONT_ASYNC_AWAIT:
         ((JSAsyncSettle *)st)->cont = outer; ((JSAsyncSettle *)st)->cont_kind = outer_kind; return;
@@ -53373,8 +53413,16 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
            LINK under it. The same record is a frame's own cont_state when the callee is a bytecode accessor or
            trap, which is why one clone serves both walks. */
         return js_getprop_clone(ctx, (const JSGetProp *)st);
+    if (kind == CONT_ITER_CONSUME || kind == CONT_CONSUME_NEXT_GET) {
+        /* A CONSUMER UNDER THE KEYED OPERATION IT ISSUED — `[...src]`, `new Uint8Array(src)`, `new Map(src)`
+           whose iterator's `next` is a getter (51), or whose result's `done`/`value`, entry element or
+           set-record member is (8). A branch inside that getter forks with the consume mid-loop, so the
+           sibling needs its own cursor and its own result count. */
+        ITERCONS_ROLE_AGREES(st, kind);
+        return js_iter_consume_clone(ctx, (const JSIterConsume *)st);
+    }
     {
-#define CONT_CLONE_FMT                                                                                       \
+#define CONT_CLONE_FMT                                                                                      \
     "tramp_cont_clone_one: a REQUESTER of kind %d is waiting on a forked continuation and this walk has no "  \
     "arm for it. Give THAT record its arm "                                                                  \
     "here (dup every field its release frees) and in tramp_cont_free together: the sibling must not share a "  \
@@ -53704,18 +53752,8 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
                    object mutation — each arm's DefinePropertyValueInt64 is captured on its own delta). iter is the
                    SHARED generator object (== genobj), COW-gendata-isolated by the gen_fork above. k/orig are copied
                    by the struct assignment. */
-                JSIterConsume *os = (JSIterConsume *)otf->cont_state;
-                JSIterConsume *ns = js_malloc(ctx, sizeof(*ns));
+                JSIterConsume *ns = js_iter_consume_clone(ctx, (const JSIterConsume *)otf->cont_state);
                 if (!ns) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
-                /* The struct copy SHARES every field, so each OWNED JSValue must be re-dup'd. That list lives in ONE
-                   place (ITERCONS_OWNED) which js_iter_consume_end also frees, so a new field cannot be dup'd here
-                   and left unfreed there (or vice versa) — the omission that co-owned `next` across two flows and
-                   underflowed its refcount. r is the SHARED result (COW-isolated per flow); iter is the SHARED
-                   generator (gen-COW-isolated above); k/orig are copied by the assignment. */
-                *ns = *os;
-                #define ITERCONS_DUP_ONE(f) ns->f = js_dup(os->f);
-                ITERCONS_OWNED(ITERCONS_DUP_ONE)
-                #undef ITERCONS_DUP_ONE
                 ct->cont_state = ns;
             } else if (otf->cont_kind == CONT_ASYNC_FROM_SYNC) {
                 /* `for await (x of syncGen)` forked mid-syncGen.next(): each .next() is INDEPENDENT (no cross-element
@@ -53978,6 +54016,16 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
                 if (!ngp) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
                 ct->cont_state = ngp;
                 CLONE_ARG_BUF_NOT_IN_RECORD(ct, ogp);
+            } else if (otf->cont_kind == CONT_ITER_CONSUME) {
+                /* A BRANCH INSIDE A PLAIN ITERATOR'S `next`, OR A MAPFN OR ADDER, DRIVEN BY A CONSUMER — the
+                   consume's .next() or callback is this bytecode frame, with the consumer as its continuation.
+                   The field list lives at js_iter_consume_clone, which the requester walk shares. */
+                JSIterConsume *ocs = (JSIterConsume *)otf->cont_state;
+                JSIterConsume *ncs = js_iter_consume_clone(ctx, ocs);
+
+                if (!ncs) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
+                ct->cont_state = ncs;
+                CLONE_ARG_BUF_NOT_IN_RECORD(ct, ocs);
             } else {
                 /* The KIND is the one fact needed to act on this, so it is in the message. A DFAIL that says
                    "some other continuation" sends the reader back to a bisection to learn what it already knew. */
@@ -54382,16 +54430,15 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         tramp_cont_free(ctx, rest, left);
         return;
     }
-    if (kind == CONT_ITER_CONSUME) {
-        /* AND WHOEVER WAS WAITING ON IT — `Reflect.construct(Map, entries)` puts a machine under a consume, and
-           the record's `outer` was read by nothing here, so that machine was dropped with the flow. Taken
-           BEFORE the free, because the free is what makes the record unreadable. The clone takes the second
-           reference to this same link (tramp_cont_relink_outer); this releases the first. */
-        void *co = ((struct JSIterConsume *)st)->outer;
-        uint8_t ck = ((struct JSIterConsume *)st)->outer_kind;
+    if (kind == CONT_ITER_CONSUME || kind == CONT_CONSUME_NEXT_GET) {
+        /* BOTH ROLES OF ONE RECORD, AND WHOEVER WAS WAITING ON IT — `Reflect.construct(Map, entries)` puts a
+           machine under a consume. js_iter_consume_end releases that requester exactly once, through
+           js_construct_requester_abandon, which owns the list of kinds a consume's requester can be; a second
+           release here would free it twice. Each flow holds its own copy of the link, because the clone bound
+           the sibling's in tramp_cont_relink_outer. */
+        ITERCONS_ROLE_AGREES(st, kind);
         js_iter_consume_end(ctx, (struct JSIterConsume *)st);
         js_free_rt(rt, st);
-        tramp_cont_free(ctx, co, ck);
         return;
     }
     if (kind == CONT_PROMISE_ALL) {
