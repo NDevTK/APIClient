@@ -8,6 +8,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
+#include "core/css/css_cascade_pass.h"   /* the layout job's record of computed values */
 #include "core/css/css_color.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_defaulting.h"
@@ -1989,7 +1990,7 @@ static char *computed_list_style_image(char *spec)
     return spec;
 }
 
-char *css_computed_value(lxb_dom_element_t *el, const char *name)
+static char *css_cv_computed(lxb_dom_element_t *el, const char *name)
 {
     char *spec;
 
@@ -2204,6 +2205,18 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
            "as specified` line to justify it — css_computed_models and this switch are one list and have come "
            "apart");
     return spec;
+}
+
+/* The layout job's record answers a pair it already computed, which ends §7.2's inheritance climb at the
+   first answered ancestor (core/css/css_cascade_pass.h). The answer is owned by the caller either way. */
+char *css_computed_value(lxb_dom_element_t *el, const char *name)
+{
+    char *v;
+
+    if (css_cascade_pass_computed_ask(el, name, &v)) return v;
+    v = css_cv_computed(el, name);
+    css_cascade_pass_computed_record(el, name, v);
+    return v;
 }
 
 /* ---- CSSOM §9's resolved value ---------------------------------------------------------------------------- */

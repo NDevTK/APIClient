@@ -18,11 +18,12 @@
  * It does not re-derive an answer at a hit, because that is re-running the cascade it exists to skip; the
  * shared probe is what keeps a slot answering only its own pair. */
 
-/* NAMED RESIDUAL, the computed value. Not covered: this is the cascaded value, so css-cascade-5 §7's
- * defaulting still runs per ask and §7.2's inheritance still climbs once per descendant, each frame now a
- * probe instead of a sheet walk. Next: the computed value beside it under the same key, which ends the climb
- * at the first answered ancestor. How its absence shows: layout_cost.mjs's per-ancestor frame count staying
- * superlinear in the deep shape.
+/* The computed value (css_computed_value's text answer) is held beside the cascaded one under the same key,
+ * which ends css-cascade-5 §7.2 "Inheritance"'s climb at the first answered ancestor. The length-, line-height-
+ * and border-spacing-shaped entries of core/css/css_computed_value.h are not held: each answers a `CssPx`
+ * carrying an environment fact a string cannot. NAMED RESIDUAL, those entries. Not covered: their climbs still
+ * run per ask. Next: a `CssPx`-valued fact under the same key. How its absence shows: css_computed_length
+ * counts per descendant that grow with the document's depth.
  * NAMED RESIDUAL, undriven asks. Not covered: outside a driven job the record is held only while the
  * synchronous job has a drive open, so most asks of a layout entry that drives no job resolve the cascade.
  * Next: those entries driving a job (layout_job.h's synchronous-job residual). How its absence shows:
@@ -60,13 +61,22 @@ bool css_cascade_pass_ask(lxb_dom_element_t *el, const char *name, char **out);
    `value` is borrowed; the record copies it. Counted whether or not a record is held. */
 void css_cascade_pass_record(lxb_dom_element_t *el, const char *name, const char *value);
 
+/* The same pair for css_computed_value's answer: `ask` answers an owned copy or false, and its one caller
+   computes and reports with `record` on the false arm. Both are counted whether or not a record is held. */
+bool css_cascade_pass_computed_ask(lxb_dom_element_t *el, const char *name, char **out);
+void css_cascade_pass_computed_record(lxb_dom_element_t *el, const char *name, const char *value);
+
 /* The census, in solver/result.c's vocabulary. Every field is a lifetime counter of this agent and says so
    in its name. `asks_life` counts cascaded values asked for, `served_life` those the record answered and
-   `resolved_life` those that ran the cascade; `asks_life == served_life + resolved_life` is asserted. */
+   `resolved_life` those that ran the cascade; `asks_life == served_life + resolved_life` is asserted. The
+   `computed_*` rows are the same three for the computed value and close the same way. */
 typedef struct {
     long long asks_life;
     long long served_life;
     long long resolved_life;
+    long long computed_asks_life;
+    long long computed_served_life;
+    long long computed_resolved_life;
 } CssCascadePassCensus;
 void css_cascade_pass_census(CssCascadePassCensus *out);
 
