@@ -989,6 +989,10 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rejection.h"
 #include "fixture/navigator.h"
 #include "fixture/abort.h"
+#include "fixture/statesinks.h"
+#include "fixture/navigation.h"
+#include "fixture/idlindex.h"
+#include "fixture/fetchreply.h"
 
 /* the "page": a real 2-<script> HTML document. Script 1 reads injected `state` into a config; script 2 (sharing
    globals) branches on it + does a baseline mutation (globalThis.n) first. Exercises: real Lexbor boot,
@@ -3329,17 +3333,6 @@ static const char HTML[] =
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
     "fetch('/api/flag?v=' + rx.flag);"   /* ACCESSOR READ-BACK: rx.flag reads rx._f (per-flow). WITHOUT the accessor-skip fix, cow_unapply would JS_SetProperty(rx.flag, undefined) -> re-invoke the setter -> corrupt _f -> v=undefined */
     "if (state.region === 'us-east-1') { fetch('/api/region/' + state.region); }"   /* EQ gate: true arm PINS region -> real @H value /api/region/us-east-1 */
-    "eval(\"'\" + state.code + \"'\");"   /* @S JS: source lands INSIDE a §12.9.4 SingleStringCharacters state -> solve_js.c derives that state's own exit, `';X9()//` */
-    /* @S JS, A SECOND §12 STATE, and the one that says the derivation is a derivation. The hole lands in a
-       §12.4 SingleLineComment, which NONE of the five deleted CANDS_JS payloads could fit: every one of them
-       continued the comment it was already inside, so this sink was unsolvable BY CONSTRUCTION and reported
-       `parked, tried 5` without ever naming what it had failed to escape. solve_js.c scans the argument the
-       probe run produced, names the state, and emits that state's own exit — §12.4 puts the LineTerminator
-       OUTSIDE the comment and §12.10 rule 1 inserts the semicolon across it, so the whole escape is one
-       newline and the call. */
-    "eval('//' + state.note);"
-    "setInnerHTML('<div>' + state.html + '</div>');"   /* @S HTML: source in HTML text -> breakout an auto-firing element */
-    "setLocation(state.next);"   /* @S URL: attacker controls the whole URL -> breakout javascript:X9() */
     "Promise.resolve(cfg.admin ? 'thenADMIN' : 'thenPUBLIC').then(function(v){ fetch('/api/then?v=' + v); });"   /* ASYNC-AS-FLOW: a microtask reaction fires as part of THIS flow, under its COW -> admin flow reads thenADMIN, public thenPUBLIC (per-flow reaction isolation) */
     "(async function(){ var w = await Promise.resolve(cfg.admin ? 'awADMIN' : 'awPUBLIC'); fetch('/api/await?w=' + w); })();"   /* ASYNC FUNCTION + await: suspend at await, resume the continuation with the settled value under THIS flow's COW */
     "(async function(){ function h(f){ return f ? 'acADMIN' : 'acPUBLIC'; } fetch('/api/asynccall?w=' + h(cfg.admin)); })();"   /* ASYNC body calls a HELPER whose concolic branch forks DEEP (chain base->async->helper): the async frame is a CALLER, not the deepest — exercises clone_deep_flow's async-as-caller buffer sourcing (tramp_buf_base/tramp_live_sf) -> both acADMIN and acPUBLIC */
@@ -3460,231 +3453,6 @@ static const char HTML[] =
        measured before the gate existed. `SyntaxError` would be a third — a compile of bytes that did not parse —
        and is why the control's body parses. */
     "(async function(){ fetch('/api/modtypeask?w=mtASK'); try { var bad = await import('/chunk/mdbad.js'); fetch('/api/modtype?w=' + (bad ? 'mtLOADED' : 'mtEMPTY')); } catch (e) { fetch('/api/modtype?w=' + e.name); } })();"
-    "(async function(){ var c = await (await fetch('/api/config')).json(); fetch('/api/user?region=' + c.region); })();"   /* FETCH-AWAIT-RESULT: await a safe GET, then §6.4.3 json() over the host's bytes — the parsed body's field flows into a later endpoint as a concrete example */
-    /* THE SAME REPLY THROUGH THE OTHER SPELLING, AND THE ROW IS THE SECOND REACTION. Every statement above
-       reaches the reply with `await`, which is §27.5.4.7.1 PromiseResolve ( ctor, resolution ) inside Await;
-       this is `.then(r => r.json()).then(…)`, which is how essentially every shipped bundle reads a config and
-       is a DIFFERENT arrangement of the same two settlements — the reaction's derived promise is resolved with
-       json()'s promise (an ordinary Promise), and json()'s own promise is separately resolved with the parsed
-       record. Only the second of those can go wrong, and when it does the FIRST reaction still runs: the tell
-       is a run in which `chain1` is present and `chain2` is absent, with no page error, nothing parked and a
-       frontier reporting that it drained. Both tags ride ONE address so that the two are one comparison rather
-       than two rows that could each be missing for their own reason, and the region rides with them because a
-       second reaction that runs without its value is a third outcome again. */
-    "fetch('/api/config').then(function(r){ fetch('/api/chain?at=chain1');"
-      " return r.json(); }).then(function(c){ fetch('/api/chain?at=chain2-' + c.region); });"
-    /* §6.4 clone(), which is how a caching or interceptor layer is written: copy the reply, read the copy, and
-       still hand the original on. Both halves of the spec are asserted because both are the reason it exists —
-       the clone reads INDEPENDENTLY (its own body-used latch, or the copy would be dead the moment the original
-       was read), and cloning does NOT consume the original (or the layer would have nothing to pass along).
-       The throw is SYNCHRONOUS on an already-read body, not a rejected promise, so a page's try/catch sees it
-       where it was written. */
-    "(async function(){ var r = await fetch('/api/config'); var c = r.clone();"
-      " var a = await c.json(); var b = await r.json();"
-      " var thrown = 'no'; try { r.clone(); } catch (e) { thrown = 'sync'; }"
-      " fetch('/api/clonebody?copy=' + a.region + '&orig=' + b.region + '&used=' + thrown); })();"
-    /* §6.4.1 arrayBuffer() / §6.4.2 bytes(): the reply as the BYTE SEQUENCE it is. They read the same reply two
-       ways and report the SAME length and the SAME first byte ('{'), which is what says the two are one body and
-       not two decodings of it — and a length that survives says the record carries one rather than recovering it
-       with a strlen. Two clones, because reading is single-use. */
-    "(async function(){ var r = await fetch('/api/config');"
-      " var ab = await r.clone().arrayBuffer(); var by = await r.clone().bytes();"
-      " fetch('/api/bodybytes?len=' + ab.byteLength + '&n=' + by.length + '&b0=' + by[0]"
-      "   + '&kind=' + (ab instanceof ArrayBuffer) + (by instanceof Uint8Array)); })();"
-    /* THE BODY-USED LATCH TIME-TRAVELS. The Response is awaited BEFORE the concolic branch, so ONE reply object
-       is shared by both arms — and each then reads it. The latch is C state in the class opaque, which no
-       property hook can see, so without a COW capture the first arm to read left the reply consumed for the
-       other and the sibling's own first read threw. Both bodyADMIN and bodyPUBLIC present ⇒ each arm saw its own
-       unread reply, which is the same isolation every shared JS slot already had. */
-    "(async function(){ var r = await fetch('/api/config');"
-      " var tag = cfg.admin ? 'bodyADMIN' : 'bodyPUBLIC';"   /* THE FORK — before either arm has read `r` */
-      " var v = (await r.json()).region + '-' + tag;"        /* both arms read the SAME reply */
-      " fetch('/api/bodyiso?v=' + v); })();"
-    /* A BYTE BODY WHOSE BYTES CAME FROM AN UNKNOWN, which is the ONE shape ECMAScript §10.4.5.18
-       TypedArraySetElement's span store exists for and the one NOTHING in this fixture constructed. The lane
-       that built the span-naming half said so in its own report and named this as what would settle it:
-       greping this tree for a typed-array request body answered ZERO, so the new path's prediction ("no new
-       DCHECK fires") was satisfiable by a run that never took it -- an absent abort meaning only that the
-       code was never reached, which is the shape §AN-ABSENT-CRASH-IS-NOT-A-CORRECT-VALUE names.
-       `screen.width` AND NOT `num`, because the `num` mint one screen up records that it is SYNTHETIC and
-       duplicates a real source now that concolic_new asserts the brace -- and it names collapsing rows onto
-       `screen.width` as the follow-through. A new row may as well start there.
-       THE UNKNOWN IS AT INDEX 1 AND THE NEIGHBOURS ARE CONCRETE, deliberately: a span over the WHOLE body
-       would be satisfied by an implementation that recorded one span per write with no offset arithmetic at
-       all, so the row could not tell a correct store from a store that says "somewhere in here". Bracketing
-       it makes the offset the claim.
-       POST, WHICH IS NEVER FIRED AND IS THE POINT. RFC 9110 §9.2.1's safe set does not contain it, so
-       §Attacker-sources forbids sending it to learn and its values come only from the local forced-exec
-       path -- which is exactly the surface a byte body is interesting on, and it means this row asserts about
-       a DERIVED record rather than about anything that reached a server. */
-    "(function(){ var u8 = new Uint8Array(4);"
-      " u8[0] = 65; u8[1] = screen.width; u8[2] = 66; u8[3] = 67;"
-      " fetch('/api/bodyspan', { method: 'POST', body: u8 }); })();"
-    /* TWO METHODS, ONE ADDRESS — the request's IDENTITY, and the one thing no other probe here can see. The
-       reply seam listed URLs and matched on URLs, so this page's two requests were ONE line on the join (the
-       dedup dropped the POST) and ONE delivery filling BOTH entries: the POST's promise settled with the GET's
-       reply and the page read a body the server produced for a request it never made. Every @H value and every
-       @S verdict behind such a line came from that. `g=GET&p=POST` is what the pair-keyed seam produces and
-       `p=GET` is what the URL-keyed one produced, so the two are told apart by the emitted record itself. */
-    "(async function(){ var g = await fetch('/api/echo');"
-      " var p = await fetch('/api/echo', { method: 'POST', body: 'x' });"
-      " fetch('/api/verb?g=v' + g.headers.get('x-echo-method') + '&p=v' + p.headers.get('x-echo-method')); })();"
-    /* A REPLY WHOSE BYTES ARE JAVASCRIPT IS A PROGRAM, AND THESE TWO STATEMENTS NEVER HAND EITHER BODY TO
-       ANYTHING. §Solver's trust boundary: "a fetch whose body is JAVASCRIPT is ALWAYS fetched + EXECUTED (a
-       lazy chunk reveals real endpoints — the headline moat surface)". THE POPULATION THAT SENTENCE IS ABOUT
-       is exactly this shape — a `fetch()` whose body the page does not itself `eval` and does not append as a
-       `<script>` — because anything the page runs FOR ITSELF would have run before the delivery arm existed,
-       so a statement that ran either way could not say which of the two ran it. Neither reaction here touches
-       the body: each reads ONE header and reports it, which is a statement about what ARRIVED and never about
-       what it contained.
-       THE `.then` IS WHAT MAKES THE STATEMENT REACH THE ARM AT ALL, and it is not a stylistic choice. The arm
-       sits at the DELIVERY; a fire-and-forget `fetch(...)` emits its endpoint record at the REQUEST, so it is
-       satisfied whatever becomes of the reply — this host's own paragraph above `HTML` says so in as many
-       words, and names that pair as the thing that tells `never issued` from `issued and not consumed`. A
-       reaction keeps the flow parked on the reply, so the delivery happens and the arm is asked.
-       THE MARKERS ARE CONSTANTS. §A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE-UNKNOWN: a
-       payload composed from something this engine COMPUTED can itself be concolic, and then the request is not
-       a concrete string, no record is emitted, and a run in which everything worked reads exactly like a run
-       in which nothing did. Every marker PATH here is a literal — in the document and in the two served
-       programs alike. The one derived value is the header readback, and it rides a QUERY PARAM of a constant
-       path, so a shape there costs the param's value and never the record. */
-    "(function(){"
-      " fetch('/chunk/replyprog.js').then(function(r){"
-      "  fetch('/api/progseen?ct=' + r.headers.get('content-type')); });"
-      " fetch('/chunk/replyctl.js').then(function(r){"
-      "  fetch('/api/ctlseen?ct=' + r.headers.get('content-type')); }); })();"
-    /* §5 Headers. The RECORD fill is the conversion `fetch(u, {headers: {...}})` performs, so it is exercised
-       through the interface that states it: a record init, then the members that read it back. The list keeps
-       PAIRS — two `set-cookie` appends stay two entries and getSetCookie reads both — while `get` combines them
-       per §2.2.2 Headers, which is the whole difference between a header list and a map. A name is lowercased on the
-       way in, an absent header is null rather than "", and `set` replaces every entry with that name. */
-    "(function(){ var h = new Headers({'X-Api-Key': 'k1', 'Accept': 'application/json'});"
-      " h.append('Set-Cookie', 'a=1'); h.append('Set-Cookie', 'b=2');"
-      " var sc = h.getSetCookie();"
-      " h.append('X-Api-Key', 'k2');"                       /* append KEEPS both -> get joins them */
-      " var joined = h.get('x-api-key');"                   /* case-insensitive: normalized on the way in */
-      " h.set('X-Api-Key', 'k3');"                          /* set REPLACES every entry with that name */
-      " fetch('/api/hdrs?acc=' + h.get('Accept') + '&sc=' + sc.length + ':' + sc[0] + ':' + sc[1]"
-      "   + '&join=' + joined + '&set=' + h.get('X-Api-Key')"
-      "   + '&has=' + h.has('accept') + h.has('nope') + '&miss=' + h.get('nope')); })();"
-    /* THE INIT'S ARM IS DECIDED BY @@iterator, which is a READ of the page's object and not a type test. A
-       plain bag with a PROXY in front of it still converts as a record — its `ownKeys` and its `get` are the
-       page's code, driven as requests — and the proxied reads are what the record arm is made of. If the read
-       of @@iterator were not part of the algorithm this would still pass; what it proves is that a trap-bearing
-       init survives the conversion with its headers intact. */
-    "(function(){ var seen = '';"
-      " var p = new Proxy({'X-Trap': 'tv'}, { get: function(t, k){ seen = 'trapped'; return t[k]; } });"
-      " var h2 = new Headers(p);"
-      " fetch('/api/hdrproxy?v=' + h2.get('x-trap') + '&t=' + seen); })();"
-    /* §5.2's iterable<>. Iteration is NOT the raw list: it SORTS by name and COMBINES each name's values, so
-       two `x-a` appends are ONE entry — while `set-cookie` stays one entry per value, which is the whole reason
-       the list keeps pairs. forEach hands the page (value, key) in that order, and its callback is the page's
-       code driven as a request. `for...of` over the Headers itself is `entries`, per §3.7.9 Iterable
-       declarations' PAIR-ITERATOR arm, which defines @@iterator and `entries` as the SAME function object.
-       Not §3.7.10 Asynchronous iterable declarations: Headers writes `iterable<>`, not `async iterable<>`. */
-    "(function(){ var h = new Headers({'x-b': '2'});"
-      " h.append('x-a', '1'); h.append('x-a', '9');"
-      " h.append('Set-Cookie', 'c1'); h.append('Set-Cookie', 'c2');"
-      " var ks = Array.from(h.keys()).join('|');"
-      " var vs = Array.from(h.values()).join('|');"
-      " var es = ''; for (var e of h) { es += e[0] + '=' + e[1] + ';'; }"
-      " var fe = ''; h.forEach(function(v, k, t){ fe += k + ':' + v + ';'; if (t !== h) fe += 'BADTHIS'; });"
-      " fetch('/api/hdriter?k=' + ks + '&v=' + vs + '&e=' + es + '&f=' + fe); })();"
-    /* WEB IDL §3.7.9.1 "Default iterator objects"' ITERATOR IN A CYCLE WITH THE OBJECT IT ITERATES,
-       WHICH IS THE ONLY SHAPE THIS CLASS'S gc_mark IS OBSERVABLE THROUGH. The record behind the iterator's
-       class opaque holds ONE owned value, `target`, and that reference lives nowhere the collector can walk unless
-       the class declares a mark — not a property, not a slot, only the malloc'd record. A class declaring the FREE
-       and not the WALK does not merely under-report: mark_children reads `rt->class_array[p->class_id].gc_mark`, a
-       NULL one is not called, `gc_decref` never subtracts the internal reference, `gc_scan` then reads `target` as
-       rooted from OUTSIDE the heap, and NEITHER object is ever collected. `h.it = h.entries()` is the whole of it,
-       because §3.7.9 "Iterable declarations"' iterator is reachable from the very object it holds; the IIFE is what
-       DROPS the pair, so once it returns the cycle is the only thing keeping either of them alive.
-       NOTHING IN THE RESULT DOCUMENT CAN STATE THE LEAK AND THE ROW OVER THIS STATEMENT DOES NOT CLAIM TO. A
-       probe reads the emitted document and a leak is not in it, so `iter-cycle` is a REACHABILITY WITNESS on
-       `weak-reach`'s terms and says so at its own computation. What names the leak is JS_FreeRuntime's
-       gc_obj_list walk at this host's own teardown — main's `JS_RunGC(rt)` and then `JS_FreeRuntime(rt)` — and
-       it is LOUD rather than a column: a non-empty list prints the `[gcleak]` census, subtracts every
-       reference the heap makes of itself, prints `[gcroot]` and dumps each object still held from outside it,
-       and then aborts on `DCHECK(list_empty(&rt->gc_obj_list))`. An unmarked cycle is exactly what that
-       subtraction cannot reduce, so both objects land in the `[gcroot]` dump. It stays silent when there is
-       nothing to say, which is why the statement above has to exist for its silence to mean anything, and it
-       arrives a whole run later pointing at no component at all.
-       THAT IS WHY THE STATEMENT IS WORTH HAVING WITH NO ROW ABLE TO SCORE IT. Before it this fixture built no
-       cycle through a pair iterator anywhere — every other iterating statement here drops the iterator into an
-       `Array.from` or a `for...of` and keeps no reference back — so the walk was asked NOTHING, and a clean
-       leak report over a document that never built one is the absent crash that is not a correct value.
-       THE `c` PARAM IS THE CYCLE ITSELF AND NOT DECORATION. If a Headers instance did not take the expando the
-       assignment would be silent, there would be no cycle at all, the walk would again be asked nothing, and
-       every other clause of the row would still answer — so the round-trip is read back and emitted, and it is
-       the clause that fails first. */
-    "(function(){ var h = new Headers({'x-cyc': 'cv'});"
-      " var it0 = h.entries(); h.it = it0;"
-      " var e = it0.next();"
-      " fetch('/api/itercycle?v=' + e.value[0] + '&w=' + e.value[1]"
-      "   + '&c=' + (h.it === it0 ? 'cyc' : 'nocyc')"
-      "   + '&d=' + (it0.next().done ? 'done' : 'more')); })();"
-    /* §5.1's SEQUENCE arm, which Web IDL picks because the init is ITERABLE. It is the iterator protocol twice
-       over — once for the pairs, once for each pair's two items — so a GENERATOR init proves it is the protocol
-       and not an array walk, and a MAP proves the same for the shape that is iterable without being an array.
-       A pair that is not exactly two items is a TypeError, and null is not "no init": HeadersInit is a union of
-       object types that Web IDL does not make nullable. */
-    "(function(){"
-      " function* g(){ yield ['x-gen', 'g1']; yield ['x-gen', 'g2']; }"
-      " var a = new Headers(g()).get('x-gen');"
-      " var b = new Headers(new Map([['x-map', 'm1']])).get('x-map');"
-      " var c = new Headers([['x-arr', 'a1']]).get('x-arr');"
-      " var bad = 'no'; try { new Headers([['only-one']]); } catch (e) { bad = 'threw'; }"
-      " var nul = 'no'; try { new Headers(null); } catch (e) { nul = 'threw'; }"
-      " fetch('/api/hdrseq?g=' + a + '&m=' + b + '&a=' + c + '&bad=' + bad + '&nul=' + nul); })();"
-    /* THE RECORD'S DEDUP IS A DIFFERENT EQUIVALENCE THAN THE HEADER LIST'S, and that is the whole statement.
-       Web IDL §3.2.23 converts `record<ByteString, ByteString>` with "Let typedKey be key converted to an IDL
-       value of type K … Set result[typedKey] to typedValue" — K is ByteString, which does not case-fold, so
-       `X-Rec` and `x-rec` are TWO entries of the record and the fill sees both. §5.1's fill then "append(key,
-       value) to headers" for each, and Fetch §2.2.2 Headers' get returns "the values of all headers … separated
-       from each other by 0x2C 0x20": "r1, r2", over ONE name in the list. A replace loop matching the LOWERCASED name
-       stood in the fill and answered "r2" — one pair silently discarded, which for this tool is a header the
-       report would not carry. */
-    "(function(){ var h = new Headers({'X-Rec': 'r1', 'x-rec': 'r2'});"
-      " fetch('/api/hdrrec?v=' + h.get('x-rec') + '&k=' + Array.from(h.keys()).join('|')); })();"
-    /* HTML §4.10.22.8's ESCAPE, on the one input that shows it: a field name is written INSIDE QUOTES in the
-       part's Content-Disposition, so "the result of the encoding … must be escaped by replacing any 0x0A (LF)
-       bytes with the byte sequence `%0A`, 0x0D (CR) with `%0D` and 0x22 (") with `%22`. The user agent must
-       not perform any other escapes." Unescaped, `a"\r\nb` closes the quoted name and opens a second header
-       line — the part boundary forged from inside the body — so BOTH halves are asserted: the escaped spelling
-       is present AND the raw `a"` is absent, because a serializer that wrote the name twice would satisfy the
-       first alone. The name already carries a CRLF pair, which is exactly what step 1's newline normalization
-       leaves alone, so this statement is about the escape and nothing else. */
-    "(function(){ var fd = new FormData(); fd.append('a\"\\r\\nb', 'v');"
-      " new Response(fd).text().then(function(t){"
-      "   fetch('/api/mpesc?esc=' + (t.indexOf('name=\"a%22%0D%0Ab\"') >= 0)"
-      "     + '&raw=' + (t.indexOf('a\"') >= 0)); }); })();"
-    /* THE TRANSPORT REQUIREMENT REACHES THE SURFACE. `init.headers` is read and converted, and the endpoint
-       carries what the request needs — which is the half of "usable" the @H surface never had. The
-       Authorization value is built out of `state`, so it is a CONCOLIC and reports its SHAPE: the `{hole}` is
-       what tells a reviewer this one is a runtime value to supply, while the two literal headers are the real
-       strings the code computed. Inventing a token for the first would be a fabricated observation. */
-    "fetch('/api/needsauth', { method: 'POST', headers: {"
-      " 'Authorization': 'Bearer ' + state.token,"
-      " 'X-Api-Version': '2024-11-01',"
-      " 'Content-Type': 'application/json' } });"
-    /* THE OTHER TWO PLACES A REQUEST CARRIES A VALUE — the PATH and the BODY. The surface named only the query
-       string, so a templated address was one opaque row and a POST's payload was nothing at all; every
-       consumer branched on a `location` field no producer wrote, which is why the path-parameter registration
-       and the whole request-body schema had never run.
-       This row's path hole is SYMBOLIC (server-injected `state`), so the param is named and carries NO example
-       — the record says the code did not compute one rather than inventing a number for it. Its body is real
-       JSON, so `title` and `count` arrive as body params with the literals the code computed. */
-    "fetch('/v1/users/' + state.id + '/posts', { method: 'POST',"
-      " headers: { 'Content-Type': 'application/json' },"
-      " body: JSON.stringify({ title: 'firstPost', count: 3 }) });"
-    /* AND THE ALIGNED EXAMPLE, which is the half a shape alone cannot show. HTML §6.2 "Page visibility"'s
-       state is CONCOLIC (a branch on it still forks both worlds) AND carries the value this document has,
-       so the URL's shape and its computed example line up segment for segment and the path param gets
-       `visible` — a value the code determined, never a solve. The query param beside it proves the three
-       kinds coexist on one record. */
-    "fetch('/v1/vis/' + document.visibilityState + '/reports?deep=1');"
-    "(async function(){ var p = new Promise(function(res){ Promise.resolve().then(function(){ res('lazyRegion'); }); }); var c = await p; fetch('/api/lazy?r=' + c); })();"   /* PENDING await: the promise resolves LATER via a microtask (stands in for the network) -> park + resume */
-    "var _spr; var _sp = new Promise(function(r){ _spr = r; }); _sp.then(function(v){ fetch('/api/shared?v=' + v); }); _spr(state.beta ? 'shBETA' : 'shSTABLE');"   /* PROBE: _sp created BEFORE the state.beta snapshot fork -> shared; settled per-flow. If promise state is NOT per-flow COW, only ONE value survives (contamination) */
     "if (state.gamma) { delete delObj.k; } fetch('/api/tok?t=' + (delObj.k ? delObj.k : 'wasDeleted'));"   /* DELETE time-travel: the gamma-true flow deletes delObj.k; the gamma-false flow must STILL see keepVAL (the delete is per-flow) */
     /* THE SAME DELETE ON THE GLOBAL, WHICH IS A DIFFERENT OBJECT KIND AND WAS THE ONE THIS DOCUMENT NEVER MADE.
        Every `delete` above is on an ordinary object; the global is EXOTIC (the Window class's supported-index
@@ -3865,485 +3633,7 @@ static const char HTML[] =
     "function* gcf(){ if (cfg.admin) { yield 'gcA'; } else { yield 'gcP'; } } var gci=gcf(); fetch('/api/gcallfork?v=' + gci.next.call(gci).value);"   /* generator .next() driven via .call BYPASS: gci.next.call(gci) reshapes at do_forward_call to the [this=gen, f=next] shape and is now routed onto do_generator_tramp (not the js_generator_next drive-to-completion). The body branches -> both gcA and gcP, never a DFAIL */
     "function* gapf(){ if (cfg.admin) { yield 'gapA'; } else { yield 'gapP'; } } var gapi=gapf(); fetch('/api/gapplyfork?v=' + gapi.next.apply(gapi, []).value);"   /* generator .next() via Function.prototype.apply BYPASS: reshaped at OP_call_method to [this=gen, next, arg0] and routed onto do_generator_tramp -> both gapA and gapP, never drive-to-completion */
     "function* graf(){ if (cfg.admin) { yield 'graA'; } else { yield 'graP'; } } var grai=graf(); fetch('/api/grefapplyfork?v=' + Reflect.apply(grai.next, grai, []).value);"   /* generator .next() via Reflect.apply BYPASS: [Reflect,apply,target,this,argsList] reshaped to [this=gen, next, arg0] and routed onto do_generator_tramp -> both graA and graP */
-    /* A SYNCHRONOUS READ THE HOST MUST ANSWER — the shape `iframe.contentWindow.document.body` has. The value
-       arrives at the CALL SITE, on the next line, with no promise anywhere: between the two the flow suspended,
-       the scheduler ran other flows, the host answered, and this flow resumed. Inside a LOOP so it happens
-       repeatedly, and the concatenation is what proves each answer reached the call that asked for it rather
-       than an earlier or later one. */
-    "var _hr=''; for (var _i=0;_i<3;_i++) { _hr += hostRead('hr'+_i); } fetch('/api/hostreq?v=' + _hr);"
-    /* AND ONE ON EACH SIDE OF A FORK. A blocked flow that forks must RE-ISSUE its request under the sibling's
-       own world — sharing the id would deliver one answer into two call sites in two contradictory worlds. */
-    "fetch('/api/hostreqfork?v=' + hostRead(cfg.admin ? 'hrA' : 'hrP'));"
-    /* §7.4: a child navigable. `open()` hands back a WindowProxy for a document in ANOTHER instance AT ITS OWN
-       CALL SITE — the child's name is minted here, so there is nothing to ask and nothing to suspend for. */
-    "var _w = open(); fetch('/api/navopen?v=' + (_w ? 'proxy' : 'null'));"
-    /* §7.2.5.1's SAME-ORIGIN CHECK. A popup at ANOTHER origin exposes the fixed cross-origin list and nothing
-       else: `closed` answers, `name` is a SecurityError. Both halves are the assertion — a filter that threw
-       for everything would pass a test that only checked the throw. */
-    "var _x = open('https://other.test/p'), _sop = '';"
-    "try { _x.name; _sop += 'LEAKED'; } catch (e) { _sop += e.name; }"
-    "fetch('/api/sop?v=' + _sop + ':' + (_x.closed === false ? 'closedok' : 'wrong'));"
-    /* §7.2.5.1 ACROSS INSTANCES: the child's document lives in another instance, so this read SUSPENDS the
-       flow, the peer answers, and the flow resumes with the value AT THE CALL SITE — `false`, not undefined. */
-    /* The TYPES matter as much as the values: an answer that came back as the string "false" would satisfy a
-       loose check and prove only that bytes moved. `=== false` and `=== 0` say the peer's value arrived as
-       itself. */
-    /* §4.8.5: INSERTING an <iframe> creates a child navigable IN THE INSERTION STEPS, so `contentWindow`
-       answers ON THE LINE AFTER THE APPEND — no task, no microtask, no await. The read is deliberately in the
-       same statement sequence as the append: a create that had to ask the host could not satisfy it, which is
-       exactly the shape the spec files assert (`document.body.appendChild(frame).contentWindow`). Reading
-       THROUGH the proxy is what suspends, and the peer answers, so `closed` arrives as a real boolean. */
-    /* AND THE NAVIGABLE'S OWN STATE IS ANSWERED HERE, not by the peer: self/window/frames are this navigable's
-       proxy by definition, `parent`/`top` are the creator, `opener` is null for a nested one, and `name` is the
-       element's `name` ATTRIBUTE — which the removal below then empties while leaving the attribute alone. */
-    "var _if = document.createElement('iframe'); _if.setAttribute('name','fr');"
-    "document.body.appendChild(_if); var _cw = _if.contentWindow;"
-    "var _ifok = !!_cw && _cw.self === _cw && _cw.window === _cw && _cw.frames === _cw &&"
-    " _cw.globalThis === _cw && _cw.parent === window && _cw.top === window && _cw.opener === null &&"
-    " _cw.closed === false && _cw.name === 'fr';"
-    /* AND ONE READ THAT REACHES THE ACTIVE DOCUMENT, which is what makes the removal below a RECLAMATION probe
-       rather than a flag probe. Every member above is answered from the navigable's own record, so none of them
-       builds anything: without this line the srcless child stays unmaterialized for the whole fixture and the
-       destroy has no realm to let go of. `document` forwards to the child's Window, so the initial about:blank
-       Document and its realm exist from here on — ONE PER FLOW, which is the shape the ceiling is made of. */
-    "_ifok = _ifok && !!_cw.document && _cw.document !== document;"
-    /* §4.8.5's REMOVING STEPS: the element loses its navigable, and the proxy the page still holds stays the
-       same object while reporting a destroyed one. */
-    "document.body.removeChild(_if);"
-    "_ifok = _ifok && _if.contentWindow === null && _cw.closed === true && _cw.name === '' &&"
-    " _cw.self === _cw && _if.getAttribute('name') === 'fr';"
-    /* AND THE PROXY THE PAGE IS STILL HOLDING HAS NO ACTIVE DOCUMENT — HTML §7.5.10's own note ("even after
-       destruction, the Document object itself might still be accessible to script, in the case where we are
-       destroying a child navigable") is about a reference the PAGE kept, and `_cw` is exactly that reference.
-       Step 9 nulled the navigable's active document, so this read must not reach one AND must not build one:
-       a proxy whose realm slot is empty because it was released reads identically to one that has never been
-       materialized, and only the destroyed flag tells them apart (window_proxy.c's proxy_realm asserts it).
-       The `undefined` is §7.2.3's own surface answering a name it does not carry, which is this engine's
-       pre-existing answer for every through-read on a closed navigable and not a value this probe chose. */
-    "_ifok = _ifok && _cw.document === undefined;"
-    "fetch('/api/iframenav?v=' + (_ifok ? 'ifnav' : 'wrong'));"
-
-    /* HTML §7.4.4 "Non-fragment synchronous \"navigations\""' URL AND HISTORY UPDATE STEPS, reached the way
-       every client-side router reaches them: §7.2.5 "The History interface"'s `pushState` with a url. THIS IS
-       THE ONE STATEMENT IN THIS FIXTURE THAT MAKES A DOCUMENT NOTHING NAVIGATES TO. Everything else here that
-       produces a second document does so because the page NAVIGATED — `open()`, an inserted `<iframe>` — and
-       forced execution follows those because the code walks there. A router that merely SAYS "this address is
-       a page of mine" walks nowhere, and until solver/route_seed.c that address became an @H finding and never
-       a Document anything explored.
-       THE ROUTE IS COMPUTED OUT OF A REPLY AND EXISTS IN NO SOURCE TEXT, which is what makes the row a test of
-       §RUN-DON'T-MATCH rather than of a string: `us-west-2` is a field of the JSON this fixture's own host
-       SERVES, so `/routes/us-west-2/admin` appears nowhere in this file's program and nothing that matched
-       source could ever produce it. The engine has it because it RAN the concatenation.
-       BOTH ENDS ARE READ, and they are different facts. `location.pathname` is §7.4.4 STEP 8 having moved THIS
-       Document's address to the computed route — which is what makes the declaration a fact about a page
-       rather than an argument that was passed — and the C side reads the NOTICE the same run emitted and
-       checks the ADDRESS it carries and the PROVENANCE it states (see `g_seed_route_derived`).
-       AND IT PUTS THE ADDRESS BACK, with §7.2.5's other caller of the same steps. That is not tidying: this
-       document's §8.1.3.2 "Environment settings objects" API base URL is its address (§4.4 stood here and
-       is "Grouping content"), so a route left in place would resolve every later
-       reference in this flow against `/routes/us-west-2/`, and a probe that failed for that reason would be
-       reporting this statement's side effect as its own defect. The replace declares the original address in
-       its turn, which is correct and costs nothing — that address is the document the frontier is already
-       exploring, and the trusted zone's order excludes an address a live instance holds. */
-    "(async function(){ var _rr = (await (await fetch('/api/config')).json()).region;"
-    " var _route = '/routes/' + _rr + '/admin';"
-    " history.pushState(null, '', _route);"
-    " fetch('/api/routeseed?v=' + (location.pathname === _route ? 'seeded' : 'wrong'));"
-    " history.replaceState(null, '', '/p'); })();"
-    /* §7.2.5 "The History interface"'s `pushState` AND §7.2.6.6's `updateCurrentEntry`, each handed a value
-       that CONTAINS AN UNKNOWN -- which is the one shape core/structured_clone.c refused BY NAME until
-       §7.4.1.1's entry grew a second slot for the triples beside the bytes. Everything else in this fixture
-       that serializes unknown input does it WITHIN ONE TURN (`structuredClone`, a same-turn `postMessage`),
-       where the value is deserialized in the same heap and the concolic can be THE SAME OBJECT; a session
-       history entry is the opposite case and is why the slot had to exist at all -- §Security says a live
-       JSValue crosses neither a park nor a session, so the triple rides AS DATA or the arriving value stands
-       for its EXAMPLE alone and a branch on it is DECIDED where this flow forked.
-       THE WITNESS IS A FORK AND NOT AN ABSENT ABORT. A crash that stops firing is confirmed identically by a
-       correct fix and by a path nobody took, so each half emits TWO endpoints out of the two arms of a
-       comparison made on the value AFTER its round trip: `?v=fork` can only be learned if the arriving value
-       carried its DOMAIN, and `?v=other` is learned under either reading, which makes it the ARMED CONTROL
-       whose absence says the statement never ran rather than that the triple was lost.
-       WHY `.slice(1)` AND NOT `location.hash` ITSELF, WHICH IS THIS FIXTURE'S USUAL UNKNOWN: a non-empty hash
-       ALWAYS begins with `#`, so `location.hash === 'admin'` is infeasible and the engine would prune that arm
-       CORRECTLY -- the witness would then read absent for a SPEC reason rather than for a defect, which is an
-       unarmed control wearing a measurement. `location.hash.slice(1)` composes `{location.hash}.slice(1)` and
-       is this fixture's own derived-source idiom, for the same reason the attribute-value search uses it.
-       THE URL IS THIS DOCUMENT'S OWN ADDRESS, so §7.4.4 step 8 moves nothing. A route left in place would
-       resolve every later reference in this flow against it -- the §7.2.5 row above puts its own back for
-       exactly that reason -- and nothing in this fixture reads `history.length` or traverses, so the entry
-       this push adds is observable to no other row.
-       THE CONTAINMENT IS THE NEIGHBOURING ROW'S SHAPE AND IS NOT A SWALLOW. `history.state` is null until
-       §7.4.4 step 7 has run and `navigation.currentEntry` is null while §7.2.6.3's entries and events are
-       disabled, so a defect in either half is a TypeError that would end THIS ONE PROGRAM and take every
-       statement below it with it. The async form runs its whole body synchronously -- there is no `await` in
-       it -- so it changes no tempo and contains the throw, and the ladder's bottom rung is what reports it
-       rather than a `catch`. */
-    "(async function(){"
-    " history.pushState({t: location.hash.slice(1)}, '', '/p');"
-    " if (history.state.t === 'admin') fetch('/api/hstate?v=fork');"
-    " else fetch('/api/hstate?v=other');"
-    " navigation.updateCurrentEntry({state: location.hash.slice(1)});"
-    " if (navigation.currentEntry.getState() === 'admin') fetch('/api/navstate?v=fork');"
-    " else fetch('/api/navstate?v=other'); })();"
-
-    /* WHAT IS NOT PROBED HERE, AND WHY IT IS NOT A CHOICE: an iframe with a REAL `src`. It would exercise the
-       whole of §7.4 step 14 — the load job asks the host for the address, PARKS, resumes with the response and
-       runs the child's own scripts — and about:blank reaches none of that, because it has no response to fetch.
-       IT IS NOT WHAT MAKES THE REALM COUNT CLIMB, though, and that distinction is what the two lines added
-       above are for. A srcless navigable that something READS THROUGH is materialized exactly as a src'd one
-       is, so the probe now costs ONE CHILD REALM PER FLOW with no load in it — the ceiling's shape, isolated
-       from the fetch. What the removal then exercises is §7.5.10 step 7: the navigable lets go of the Document,
-       which is the one counted reference this engine holds to a child realm, and the realm is garbage as soon
-       as no world still names it (core/frame/window_proxy.h). WHETHER IT COMES BACK IS THE `realm-reclaim`
-       ROW, and it is a row rather than the instruction that used to stand here. This note said "READ
-       `childRealms` ON THE @HEAP LINE … a count equal to the flow count says a world is still holding one",
-       which asked a reader to compare a LIVE realm count against a FLOW count — two different quantities, and
-       nothing emitted the one that would have made the comparison mean anything. The comparison that does is
-       `childRealmsMade` against `childRealmsPeak`, both published now, and the row performs it.
-       The src'd path is not unexercised meanwhile: `node engine/wpt.mjs html/browsers` runs hundreds of src'd
-       iframes at flow counts a realm-per-flow can still pay for. */
-
-    /* ONE UNKNOWN `unsigned long index` THROUGH TWO MEMBERS OF core/idl_index_arg.c's FAMILY, WHICH IS THE ONE
-       SHAPE THAT ASKS WHETHER A FORK KEY NAMES THE PREDICATE OR THE SITE.
-       Each `item(index)` decomposes into the elimination chain `index == 0`, `index == 1`, … over the value's
-       own identity, so a flow that has answered those questions at ONE member must answer them the SAME way at
-       the next: the fact established is about the NUMBER and carries no collection in it. While the member's
-       own name was the prefix of the operation string, the second member's keys were new, it re-asked every
-       position, and each sibling it minted stood on a decision vector saying `index == 0` AND `index == 3` at
-       once — one value, two positions, one world.
-       THE ASSERTION IS THE ONE FACT NO CONSISTENT WORLD CAN CARRY, and it is built out of the past-the-end
-       boundary rather than out of markers, so it needs nothing from either collection but its length. The
-       NodeList is constructed two longer than `document.styleSheets`, so `index` past the end of the SHORT one
-       is past the end of the long one in every world that exists — `split` is unreachable by arithmetic, for
-       any `index` whatever, and reaching it at all is a flow contradicting itself rather than a length this
-       fixture guessed wrong. `state.ix` carries no example, so every link is asked with the machine stating
-       nothing and the parent walks the short chain to exhaustion while one sibling per position carries a
-       pinned index — which is exactly the population the second member has to agree with.
-       IT IS THE KEY AND NOT THE COLLECTIONS THAT IS PROBED: two members with DIFFERENT algorithm names are
-       required (CSSOM §6.2.2's StyleSheetList and DOM §4.2.10's NodeList), because two reads of one interface
-       already shared a key and would have passed while the defect stood. */
-    "var _ixL = document.styleSheets.length;"
-    "var _ixh = document.createElement('div');"
-    "for (var _ixj = 0; _ixj < _ixL + 2; _ixj++) { _ixh.appendChild(document.createElement('p')); }"
-    "document.body.appendChild(_ixh);"
-    "var _ixn = _ixh.querySelectorAll('p');"
-    /* ONE READ AND ONE VALUE. Two `state.ix` reads would be two operands of whatever identity the exotic get
-       composes, and the assertion is about ONE unknown answered twice — a second read is the one way this
-       statement could pass while saying nothing. */
-    "var _ixi = state.ix;"
-    "var _ixa = document.styleSheets.item(_ixi);"
-    "var _ixb = _ixn.item(_ixi);"
-    "fetch('/api/idxkey?v=' + (_ixa && !_ixb ? 'split' : 'agree'));"
-
-    /* THE SAME TWO MEMBERS OVER AN INDEX THAT CARRIES AN EXAMPLE, WHICH IS THE OTHER HALF OF THE FORK KEY AND
-       A DIFFERENT QUESTION FROM THE ONE ABOVE. `state.ix` carries none, so every link of both chains is asked
-       with the machine stating nothing and the key composes completion "0" throughout — the statement above
-       cannot reach the completion half of the key at all. An index with an example does: solver/decide.c's
-       walk asks about the machine's REAL completion FIRST, so at n == 2 the completion IN THE KEY *IS* the
-       example, and the one link whose position the example names files "is it completion 1" where every other
-       flow over the same operand and operation files "is it completion 0" — a predicate and its negation under
-       two keys.
-       THE SECOND FLOW IS NOT A COINCIDENCE, IT IS MINTED BY THE SEAM AT THAT VERY LINK. An outcome sibling is
-       by construction the flow standing on the arm its operand's example does not name, so decide.c's
-       decide_note_forced_arm contradicts that example as the sibling replays — the index then answers with NO
-       example on that path, and its NEXT member asks the same position under the other spelling, finds
-       nothing, and re-forks a fact the flow already holds. The arm minted there answers "the index IS e" while
-       the fact it inherited says it is not.
-       THE ASSERTION IS AGAIN THE ONE FACT NO CONSISTENT WORLD CAN CARRY AND AGAIN IT IS ARITHMETIC. Both
-       collections are built EXACTLY EIGHT long, so `!_pka && _pkb` claims one index is past the end of an
-       eight-element NodeList and at a position inside an eight-rule CSSRuleList — impossible for any index
-       whatever, so `split` cannot be a length this fixture guessed wrong. The ORDER matters and is the mirror
-       of the statement above: the contradicting flow is the one whose FIRST member exhausted, so the first
-       member must be the one the claim says was past the end.
-       `screen.width & 3` IS THIS FIXTURE'S EXISTING SPELLING FOR "UNKNOWN, WITH AN EXAMPLE, BOUNDED" —
-       ECMAScript §6.1.6.1.16 NumberBitwiseOp runs on the concolic's real example and the result stays unknown,
-       so the mask puts the example in [0, 3] without excluding anything from the domain the chain walks. It
-       must land strictly below eight or the link the example names is past the end of both collections and
-       there is no collision to have. `location.hash` is wrong here for the reason the ReadableStream statement
-       below already gives: it is an @S source, so a candidate session substitutes payload bytes at the read
-       and the world token would be satisfied by the wrong mechanism.
-       TWO MEMBERS AND ONE VALUE, for the statement above's reasons exactly. DOM §4.2.10 Old-style collections:
-       NodeList and HTMLCollection and CSSOM §6.4.1 The CSSRuleList Interface are two algorithms asking one
-       predicate, and both are CALLERS of core/idl_index_arg.c's chain — which is the property that matters and
-       is the one to check at the call site rather than in that file's banner. This line used to add that the
-       banner names DOMTokenList among the family while DOMTokenList reaches no chain, and that had been true:
-       three of the members it names refused an unknown index by name instead of forking it, which is what cost
-       this fixture a rewrite. They are converted, so the banner's list and the call sites now agree — but the
-       reason to read the call sites is unchanged, because a name in a banner is a claim about the standards
-       and only a caller is a claim about this tree. ONE read of `screen.width & 3` is one operand — a second
-       read would be a second identity and the statement would assert nothing. */
-    "var _pks = document.createElement('style');"
-    "var _pkt = ''; for (var _pkj = 0; _pkj < 8; _pkj++) { _pkt += '.pk' + _pkj + ' { color: red }'; }"
-    "_pks.textContent = _pkt;"
-    "var _pkh = document.createElement('div');"
-    "for (var _pkq = 0; _pkq < 8; _pkq++) { _pkh.appendChild(document.createElement('b')); }"
-    "document.body.appendChild(_pks); document.body.appendChild(_pkh);"
-    "var _pkn = _pkh.querySelectorAll('b');"
-    "var _pkr = _pks.sheet.cssRules;"
-    "var _pki = screen.width & 3;"
-    "var _pka = _pkn.item(_pki);"
-    "var _pkb = _pkr.item(_pki);"
-    "fetch('/api/pkkey?v=' + (!_pka && _pkb ? 'split' : 'agree')"
-    " + '&n=' + _pkn.length + '&c=' + _pkr.length);"
-
-    /* THE TWO MEMBERS OF THAT FAMILY WHOSE COLLECTIONS HANG OFF ONE ELEMENT — DOM §7.1 Interface DOMTokenList
-       and DOM §4.9.1 Interface NamedNodeMap — over ONE unknown index. Both REFUSED an unknown index by name
-       until they became step machines, so before that this statement did not emit a wrong verdict: it took the
-       whole document down at whichever of the two DCHECKs the flow reached first, and every row after it read
-       NOT REACHED.
-       IT IS A FRESH UNKNOWN AND NOT `state.ix`, and that is load-bearing rather than tidy. The constraint key
-       these chains file under is the PREDICATE over the VALUE's own identity, so a chain drawn over an operand
-       another statement has already walked would find its questions ANSWERED and fork nothing — the statement
-       would pass by reading a record instead of by asking, which is the one way it could look right while
-       exercising none of this. One read into `_nmi`, for the `_ix` statement's reason exactly.
-       THE ASSERTION IS AN ARITHMETIC IMPOSSIBILITY AND THE PREMISE IS EMITTED. The token set is built TWO long
-       and the attribute list FIVE (`class` and four `data-*`), so `split` claims one index is INSIDE a
-       two-token set and PAST THE END of a five-attribute map at once — false for every index there is, so
-       reaching it is a flow contradicting itself and never a length this fixture guessed. Both lengths ride
-       the record so the row can refuse to read the verdict at all when they are not 2 and 5. */
-    "var _nmh = document.createElement('u');"
-    "_nmh.className = 'nm0 nm1';"
-    "_nmh.setAttribute('data-a', '1'); _nmh.setAttribute('data-b', '2');"
-    "_nmh.setAttribute('data-c', '3'); _nmh.setAttribute('data-d', '4');"
-    "document.body.appendChild(_nmh);"
-    "var _nmi = state.nmix;"
-    "var _nma = _nmh.classList.item(_nmi);"
-    "var _nmb = _nmh.attributes.item(_nmi);"
-    "fetch('/api/nnmkey?v=' + (_nma !== null && _nmb === null ? 'split' : 'agree')"
-    " + '&t=' + _nmh.classList.length + '&a=' + _nmh.attributes.length);"
-
-    /* CSSOM §6.6.1 The CSSStyleDeclaration Interface's `item(index)` OVER AN UNKNOWN INDEX — the one member of
-       that family whose past-the-end world is not null, and therefore the one whose TERMINAL is worth a row of
-       its own. §6.6.1: "If there is no indexth object in the collection, then the method must return the empty
-       string", where every `item(index)` beside it answers null.
-       THE STATEMENT MAKES NO VERDICT AND EMITS THE ANSWER ITSELF, which is why no length can make it lie. A
-       two-declaration block asked with an example-free index emits `color` from the world that answered
-       `index == 0`, `display` from the world that answered `index == 1`, and `past` from the parent that
-       eliminated both — three values from ONE line, which a single-world engine cannot produce whatever the
-       block's length turns out to be. A WRONG TERMINAL IS VISIBLE RATHER THAN SILENT: `_cdv === ''` is false
-       for null, so a member answering null past the end emits the four characters `null` instead of `past`,
-       and the row below refuses that spelling by name.
-       `&n=` CARRIES THE BLOCK'S OWN LENGTH so the emitted set can be read against the collection it came from
-       rather than against this comment. */
-    "var _cdh = document.createElement('q');"
-    "_cdh.setAttribute('style', 'color: red; display: block');"
-    "document.body.appendChild(_cdh);"
-    "var _cdi = state.cdix;"
-    "var _cdv = _cdh.style.item(_cdi);"
-    "fetch('/api/cssditem?v=' + (_cdv === '' ? 'past' : _cdv) + '&n=' + _cdh.style.length);"
-
-    /* DOM §4.11 Interface Text's `splitText` AND DOM §4.10 Interface CharacterData's `substringData` OVER ONE
-       UNKNOWN OFFSET, ON TWO Text NODES OF KNOWN DIFFERENT LENGTHS. Both members REFUSED an unknown
-       `unsigned long` by name until they became step machines, so before that this statement emitted no wrong
-       verdict at all: it took the whole document down at whichever DFAIL the flow reached first, and every row
-       after it read NOT REACHED.
-       IT IS A FRESH UNKNOWN, for the reason the `/api/nnmkey` statement above gives: a chain drawn over an
-       operand another statement has already walked would find its questions ANSWERED and fork nothing, so the
-       row would pass by reading a record instead of by asking. One read into `_cxo`.
-       THE ASSERTION IS AN ARITHMETIC IMPOSSIBILITY AND THE PREMISE IS EMITTED. §4.11's split a Text node step 2
-       and §4.10's substring data step 2 are the same sentence — "If offset is greater than length, then throw
-       an "IndexSizeError" DOMException" — so `split` claims one offset is WITHIN a two-unit node and PAST THE
-       END of a nine-unit one at once, false for every offset there is. The other direction is perfectly
-       ordinary (offset 5 throws on the short node and not on the long one) and is exactly why the verdict is
-       written this way round. Both lengths are captured BEFORE the calls and ride the record, because
-       `splitText` TRUNCATES the node it splits and a length read afterwards would describe a different node
-       than the one the question was asked of. */
-    "var _cxp = document.createElement('p'); _cxp.appendChild(document.createTextNode('ab'));"
-    "var _cxq = document.createElement('p'); _cxq.appendChild(document.createTextNode('abcdefghi'));"
-    "document.body.appendChild(_cxp); document.body.appendChild(_cxq);"
-    "var _cxa = _cxp.firstChild, _cxb = _cxq.firstChild;"
-    "var _cxal = _cxa.length, _cxbl = _cxb.length;"
-    "var _cxo = state.cxoff;"
-    "var _cxr = 'ok'; try { _cxa.splitText(_cxo); } catch (_cxe) { _cxr = 'throw'; }"
-    "var _cxs = 'ok'; try { _cxb.substringData(_cxo, 0); } catch (_cxe2) { _cxs = 'throw'; }"
-    "fetch('/api/cdsplit?v=' + (_cxr === 'ok' && _cxs === 'throw' ? 'split' : 'agree')"
-    " + '&a=' + _cxal + '&b=' + _cxbl);"
-
-    /* DOM §4.10's `substringData(offset, count)` WITH BOTH OPERANDS UNKNOWN — the row for the SECOND chain,
-       which is the operand that names no position in anything and is therefore the one a reader is most
-       likely to think the family does not cover.
-       THE STATEMENT MAKES NO VERDICT AND EMITS THE ANSWER ITSELF, so no length can make it lie: it sends the
-       LENGTH OF THE RETURNED STRING, which substring data steps 3-4 make exactly `min(count, length - offset)`.
-       Over a three-unit node that is `1` only from a world that answered `count == 1` (offset 0, 1 or 2), and
-       `2` only from `count == 2` (offset 0 or 1) — neither is reachable from the offset chain alone, whose
-       worlds with `count` unasked would all carry the clamp. So `2` among the emitted values is the count
-       chain having run, and `throw` among them is the offset chain having reached step 2's IndexSizeError at
-       exhaustion. `&n=` carries the node's own length so the set can be read against the node it came from
-       rather than against this comment. */
-    "var _cun = document.createElement('b'); _cun.appendChild(document.createTextNode('xyz'));"
-    "document.body.appendChild(_cun);"
-    "var _cut = _cun.firstChild, _cutl = _cut.length;"
-    "var _cuo = state.cuoff, _cuc = state.cucnt;"
-    "var _cuv; try { _cuv = '' + _cut.substringData(_cuo, _cuc).length; } catch (_cue) { _cuv = 'throw'; }"
-    "fetch('/api/cdsub?v=' + _cuv + '&n=' + _cutl);"
-
-    /* THE SAME READ FROM INSIDE A JOB. A `.then` handler is a queued reaction, and a cross-document read
-       SUSPENDS — so this exercises a step machine that parks on the host while it is the root of a job rather
-       than reached from a bytecode frame. Without the scheduler reporting that flow host-owed, it resumes and
-       parks forever while every turn looks like progress, the host is never asked, and the run livelocks. */
-    "Promise.resolve().then(function(){"
-    " fetch('/api/xdocjob?v=' + (_w.closed === false ? 'jobread' : 'wrong')); });"
-    "fetch('/api/xdocread?v=' + (_w.closed === false && _w.length === 0 &&"
-    " typeof _w.closed === 'boolean' && typeof _w.length === 'number' ? 'xread' : 'wrong'));"
     "</script>"
-    /* THE FRAME CONTROL, AND IT IS A CONTROL RATHER THAN A PROBE — its whole content is that it is
-       SHORT and that it is its OWN <script>. The five reply-consuming rows all issue their fetch
-       from the ~248 KB script above, and `flow_deliver_one_reply` is gated twice on `f->frame`:
-       structurally, by the `if (!f->frame)` that encloses the whole task ladder, and again by
-       `flow_stack_empty`, whose first line returns 0 for a framed flow. A frame is released only
-       when the program RUNS TO COMPLETION, so a reply asked for at the top of a quarter-megabyte
-       row cannot be taken until that same flow has executed the rest of it. This row asks for the
-       same reply from a program that ENDS in the step that starts it.
-       SO THE TWO ROWS TOGETHER ARE THE EXPERIMENT AND NEITHER IS ALONE: this one reading 1 while
-       the five read 0 says the gate is the frame and not the queue, the rank or the reply path.
-       This one reading 0 says the frame is NOT the mechanism and the account above is wrong.
-       IT READ 0 AND THAT SETTLES NOTHING, BECAUSE THIS ROW'S OWN PROGRAM NEVER RAN. The retraction is
-       recorded here rather than the paragraph deleted, because the mistake is worth more than the row:
-       a control WAS run and it DID arm, and it was a control for the wrong proposition. `pending`
-       reading 1 proves the await machinery works; it says nothing about whether THIS program was
-       reached, and reachability is the one thing a newly-added row has not got. The census that would
-       have said so was already being printed.
-       AND THAT RETRACTION WAS RIGHT ABOUT THE CONCLUSION AND WRONG ABOUT EVERY COORDINATE IT REACHED IT
-       BY, WHICH IS THE WORSE HALF — a correct answer from a wrong argument points the next reader at the
-       wrong instrument, and this one inverted what its instrument's number MEANS. It said this <script>
-       is the tenth of the document's fourteen and that `programCursors` topping out at 6 is what shows
-       the statement was never executed. The document has THIRTEEN static programs: `dynBodies` reads 13
-       at the first census of every run, before any chunk or injection has added a row, and enumerating
-       the fixture's own `<script>` openers gives the same 13. This is the SEVENTH of them, at index 6.
-       So cursor 6 is not a point SHORT of this program — IT IS THIS PROGRAM'S OWN DOOR. solver/cold.h
-       states the domain: `script_i` runs over [0, dyn_n] CLOSED, one wider than the program indices, and
-       a cursor of `c` above zero means the member LEFT the program at `c - 1`. Members at 6 have finished
-       the quarter-megabyte row above and none of them has started this one.
-       AND `UNFRAMED, WAITING TO BE HANDED THE THREAD` IS WHAT THAT SENTENCE FIRST SAID, WHICH IS AN
-       OVER-CLAIM THE SAME CENSUS REFUTES ONE FIELD OVER — recorded rather than quietly narrowed, because
-       the arithmetic that catches it is free and nobody ran it. A cursor says which program a member has
-       LEFT and is silent about what it is inside NOW: a member can stand at 6 and hold a frame that is not
-       a document program at all — a reaction job, an orphan drive, a task — and `deepest` at 5 forbids only
-       the program reading. `live - framed` is the bound, and in the longest run it BITES: 172 members at
-       cursor 6 against 108 unframed in the WHOLE frontier, so at least 64 of them are inside a frame of the
-       other kind. So the cursor bucket names a population that has finished the row above; it does NOT name
-       an idle one, and the two questions need the two rows read together.
-       THE ROW THAT ACTUALLY DECIDES IT IS `deepest`, AND IT IS A DIFFERENT ROW THAT WAS BEING PRINTED ON
-       THE SAME LINE. It is the highest program index this DOCUMENT has ever COMPILED across every flow —
-       engine.c raises it at the one line a program is started — so `deepest` at 5 says program 6 was
-       never started by anybody, which is the claim, stated directly instead of inferred from a cursor.
-       cold.h's own identity binds the two: every live member's cursor is at most `deepest + 1`, so
-       `deepest` 5 with a bucket at 6 is ONE statement and not two. Measured at the artifact stamped
-       1d666bda, three runs: `deepest` 5 at every census of all three, with 6, 172 and 0 members standing
-       at cursor 6 — a hundred and seventy-two members at this program's door in the longest of them, and
-       not one of them ever dispatched to start it.
-       SO THE READING TO CARRY IS NOT `the row did not run` BUT `the row is where the members are stuck`,
-       and those are different findings: the first says the fixture cannot reach its own statement, the
-       second says the scheduler is not handing the thread to members that have nothing left to do but
-       take it. Only the second is actionable, and only `deepest` beside `programCursors` distinguishes
-       them. What follows is kept as the reasoning that was WRONG:
-       IT READ 0, SO THE FRAME ACCOUNT IS REFUTED AND THE PARAGRAPH ABOVE IS KEPT AS THE THING THAT WAS
-       WRONG. Three runs of one artifact, `pending` — the microtask-settled await, which shares every
-       part of this path except what settles the promise — reading 1 in all three, so the control armed
-       and the zero is about the subject. `hdrs` 1, jobs in the thousands, and `deliver-one-reply` 0 in
-       all three: a program that ends its own frame in the step that starts it does not get its reply
-       either. A FOURTH RUN IS WHY THE CONTROL IS QUOTED RATHER THAN ASSUMED — it read `pending` 0 and
-       `frame-ctl` 0 together, which is unscored and not a refutation, and reading it as one would have
-       confirmed this row's own message by luck.
-       WHAT SURVIVES OF THE ACCOUNT IS THE DOUBLE GATE ITSELF, which is real and verified at both sites;
-       what does not is that releasing the frame is SUFFICIENT.
-       AND THE SENTENCE THAT SURVIVED THE FIRST RETRACTION DOES NOT SURVIVE THE SECOND, WHICH IS WHY IT IS
-       QUOTED HERE RATHER THAN EDITED AWAY. It read, in these words: resume-ended-its-frame is nonzero
-       while deliver-one-reply stays 0, so frames are released and the arm still never runs, and the next
-       reader starts from the other conjunct rather than from the frame. THE ARM RUNS. At the artifact
-       stamped 1d666bda — the first that carries engine.c's fix for a continued pass renaming the step it
-       performed, without which a delivery whose turn continued left under `resume-parked-continuation`'s
-       name — `deliver-one-reply` reads 0, 9, 9, 9, 57, 101, 101 across one run's seven censuses, 110
-       across another's fifteen, and 11 across a third's six. A row that reported 0 for a reason with
-       nothing to do with the mechanism anyone was hunting is what three readings were built on, this
-       comment's included, and the whole of what it took to see that was making the row a measurement.
-       SO THE QUESTION MOVED DOWNSTREAM OF THE DELIVERY RATHER THAN UPSTREAM OF IT: replies ARE delivered,
-       and no reply-consuming row answers. What this row still cannot say is whether ANY of those
-       deliveries was a `fetch()` reply — NAMED RESIDUAL. Not covered: the census pair `replyAsked` /
-       `replyAnswered` counts RECORDS with no partition by kind, and solver/result.c names the four that
-       share it (a fetch, an injected `<script src>`, the document's own script slots, a dynamic
-       `import()`), so a run in which every delivery served a script slot and a run in which every one
-       served a fetch print the identical pair. What the next diff builds: the same pair split by kind —
-       the record already CARRIES one (solver/pending.h's `KIND` entry) and `pending_count_kind` already
-       reads it, so this is a census row over an existing field and not a new mechanism. How its absence
-       shows: a reader holding a non-zero `deliver-one-reply` beside six zeroed reply-consuming rows and
-       no way to tell a delivery that could have answered them from one that never could.
-       AND TWO OF THOSE FOUR ARE EXCLUDED BY THIS DOCUMENT'S OWN SOURCE, WHICH NARROWS THE RESIDUAL WITHOUT
-       BUILDING ANYTHING. Every one of the static programs above was INLINE when this was written, so THIS
-       document's own script slots could not produce a reply record, and it holds no dynamic `import()`, so
-       that kind cannot arise either. THE COUNT IS A DERIVATION AND NOT A NUMBER, because this document gains
-       statements and any figure written here is one a later lane spends without meaning to: the run's own
-       `@COLD` line publishes `rootPrograms`, which is what the document actually ships, and the `<script`
-       openers of this literal minus the data blocks is the same set read off the source.
-       What is left is FLOW_PENDING_RESOLVE
-       (a `fetch()`, of which this document holds hundreds of call sites) and FLOW_PENDING_SCRIPT (an INJECTED
-       `<script src>`).
-       AND THAT SECOND HALF IS FALSE, SO THE RESIDUE IS ONE KIND AND NOT TWO: THE ENUMERATION NAMED INPUTS
-       AND NEITHER INPUT REACHES THE PRODUCER. `FLOW_PENDING_SCRIPT` has exactly one, and it is reached from
-       HTML §4.12.1.1 "Processing model"'s `prepare the script element` over an element carrying a `src`
-       (solver/engine.c's only `pending_push` of that kind, which asserts it was given that element). The
-       four `loadScript` sites are THIS FILE'S OWN HOST EDGE, whose `engine_queue_fetched_script` appends a
-       program row and pushes no pending record at all — TF_SERVED's banner above already says it in as many
-       words, that the edge "parks no request and takes no reply". The one `.src` assignment is
-       `isc.src = '/chunk/iface.js'`, on an element this document CREATES AND NEVER INSERTS: §4.12.1.1 states
-       "The HTML element post-connection steps only run when the inserted element is still connected", and
-       core/html/html_script.c's `script_post_connection` returns on exactly that test, so no prepare runs
-       and no park is taken. `/chunk/iface.js` is in neither serving table either, so the site could not have
-       been answered had it prepared.
-       THE CLAUSE WAS CHECKED AGAINST THE PARK AND NOT AGAINST THE PIPELINE, which is the whole of what a
-       NOT-COVERED clause naming INPUTS owes: ask which step FIRST sees each input, and the connectedness
-       gate is a step EARLIER than the park. This one clause has now been wrong in both directions — too
-       narrow before, too wide here — and both readings were taken by surveying this document's TEXT for a
-       shape instead of asking which producer that shape reaches.
-       WHAT THE NEXT DIFF BUILT, AND IT IS LANDED: a CONNECTED `<script src>` in this document — created, its
-       `src` set, APPENDED so it is connected, and its address served by TF_SERVED — which is the door every
-       webpack runtime in a real corpus uses to load a chunk and the only shape that reaches that producer
-       from page code. See the `injhost` statement at the tail of this literal and the `injected-script`
-       row pair. It also buys the one thing the host edge structurally cannot: a chunk program with an
-       ELEMENT behind it, so §3.1.7's `currentScript` is that element while the chunk runs rather than null,
-       which is what a bundler's own public-path preamble reads.
-       RETIREMENT — MET, AND THE RECORD IS REWRITTEN RATHER THAN DELETED BECAUSE WHAT A READER RE-DERIVES IS
-       THE METHOD AND NOT THE ENUMERATION. The stated condition was that this document hold a connected
-       `<script src>`, and it does. What must not be re-derived is the way BOTH wrong readings were reached:
-       by surveying this document's TEXT for a shape instead of asking which producer that shape reaches, and
-       by checking a NOT-COVERED clause against the PARK rather than against the PIPELINE. Delete the record
-       and the next reader re-enumerates `<script src>`-shaped statements and re-reaches one of the two.
-       AND THE ENUMERATION IS STILL NOT A COUNT, WHICH IS THE PART THAT SURVIVES THE LANDING. `loadScript`'s
-       sites and the detached `isc.src` assignment reach no producer TODAY for exactly the reasons above, and
-       a later lane that connects `isc` or that parks from the host edge changes that without touching this
-       comment — so the population is derived from the door (grep `engine_pending_script_url`'s callers) and
-       never surveyed off this literal.
-       AND ONE PRODUCER-SIDE DOOR IS STILL UNEXERCISED FROM PAGE CODE — NAMED RESIDUAL. Not covered:
-       §4.12.1.1's `src` ATTRIBUTE CHANGE STEPS — "If localName is src, value is not null, and element is
-       connected, then run the script HTML element post-connection steps, given element" — which is the
-       `appendChild(s); s.src = u` idiom core/html/html_script.c's own banner names as the second of the two
-       lazy-loader shapes it wired. The `injhost` statement takes the INSERTION door instead (its `src` is set
-       while the element is detached, so the attribute-change steps return at their own connectedness test and
-       the append is what prepares), which is the real-world order and the one a bundler writes. What the next
-       diff builds: a second statement in this document appending FIRST and assigning `src` afterwards, whose
-       arrival is its own address in TF_SERVED — not a param on `injsrc.js`, because two doors sharing one
-       address would let one door's record answer the other's row. How its absence shows: a reader who repairs
-       the insertion door and sees every injected-script row go green while the attribute-change door is
-       reached by nothing, so a regression in it moves no row of this fixture at all.
-       THE NARROWING IS THIS DOCUMENT'S AND NOT THE FIXTURE'S, WHICH IS A CORRECTION AND NOT A HEDGE. The
-       clause here read ``the fixture ships no `<script src>` at all`` — true of every document in this file
-       when it was written, and false of one since: HTML_COLD ends in a parser-inserted external script,
-       appended for `park-remoteop`'s first half, so the two COLD sessions DO reach the document-script
-       kind and this file now holds all four of the sharing kinds rather than two.
-       A RESIDUAL NARROWED BY A SURVEY OF THE FIXTURE GOES STALE THE FIRST TIME ANY DOCUMENT GAINS THE
-       SHAPE IT SURVEYED FOR, and one narrowed by THIS document's own inline programs cannot —
-       which is the only reason the sentence above survives the change rather than going with it. The two
-       readings were indistinguishable while every document agreed; the diff that ended that agreement is
-       what told them apart, and it was found by grepping for the ARGUMENT retired rather than for the
-       symbol changed. The census pair is per RUN, so a reader comparing a cold session's against this
-       document's must read which document the session drove.
-       THAT IS A NARROWING AND NOT AN ANSWER, and the per-flow register is why: a fork COPIES its parent's
-       undelivered backlog, so ONE injected-chunk record is named by every member that inherits it and can
-       be delivered once per member. A hundred deliveries therefore do not imply a hundred records and no
-       count follows from five sites. It also says nothing about a CHILD navigable's document, whose own
-       script slots would be the excluded kind the day one ships a `src`. */
-    "<script>fetch('/api/config').then(function(r){ return r.json(); })"
-            ".then(function(c){ fetch('/api/framectl?r=' + c.region); });</script>"
     /* THE LAST <script> OF THE DOCUMENT, and it exists only to REPORT — see the injection in script 1. It has
        to be a document script rather than a task, because what is being proved is that a program injected from
        a NON-FINAL <script> took a position ahead of the document's remaining ones. */
@@ -5238,6 +4528,10 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "rejection", HTML_REJECTION },
     { "navigator", HTML_NAVIGATOR },
     { "abort", HTML_ABORT },
+    { "statesinks", HTML_STATESINKS },
+    { "navigation", HTML_NAVIGATION },
+    { "idlindex", HTML_IDLINDEX },
+    { "fetchreply", HTML_FETCHREPLY },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -18528,7 +17822,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            emits nothing: `cfg.admin` is what a reader greps for to find the gate it is about. It stands
            FIRST of this family for `td-reach`'s reason — it is the row that says whether the six below it
            are about the schedule, the delta, or a fork that never happened. */
-        { "boot-fork", bootfork_tt, "cfg.admin", SESS_EXPLORE, bootfork_why },
+        { "boot-fork", bootfork_tt, "/api/data?role=", SESS_EXPLORE, bootfork_why },
         { "role-admin", role_admin, "/api/data?role=", SESS_EXPLORE },
         { "path-param", path_param, "/v1/users/", SESS_EXPLORE, path_param_why },
         { "body-param", body_param, "firstPost", SESS_EXPLORE, body_param_why },
@@ -18703,7 +17997,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "mfd-top", mfdtop_tt, "/api/mfdtop", SESS_EXPLORE, mfdtop_why },
         { "mfd-nest", mfdnest_tt, "/api/mfdnest", SESS_EXPLORE, mfdnest_why },
         { "frame-ctl", frame_ctl, "/api/framectl", SESS_EXPLORE, frame_ctl_why },
-        { "fetch", fetch_await, "/api/config", SESS_EXPLORE, fetch_await_why },
+        { "fetch", fetch_await, "/api/user?region=", SESS_EXPLORE, fetch_await_why },
         { "then-chain", then_chain, "at=chain1", SESS_EXPLORE },
         { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE, clone_body_why },
         { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE, body_bytes_why },
@@ -18932,7 +18226,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "css-nesting-group-rule", cssnestmedia_tt, "/api/cssnestmedia", SESS_EXPLORE },
         { "s-eval", s_eval, "state.code", SESS_EXPLORE },
         { "s-evalc", s_evalc, "state.note", SESS_EXPLORE },
-        { "s-html", s_html, "state.html", SESS_EXPLORE },
+        { "s-html", s_html, "setInnerHTML('<div>' + state.html + '</div>')", SESS_EXPLORE },
         { "s-url", s_url, "state.next", SESS_EXPLORE },
         { "s-loc", s_loc, "eval(\"'\" + location.hash + \"'\")", SESS_EXPLORE },
         { "s-park", s_park, "lhHost.innerHTML = location.hash", SESS_EXPLORE, s_park_why },
@@ -18998,14 +18292,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "s-evalc-witnessed", s_evalc_wit, "state.note", SESS_EXPLORE },
         { "s-evalc-derived", s_evalc_built, "state.note", SESS_EXPLORE },
         { "s-evalc-atsink", st_evalc >= S_ARRIVED, "state.note", SESS_EXPLORE },
-        { "s-html-seen", st_html >= S_SEEN, "state.html", SESS_EXPLORE },
-        { "s-html-ran", st_html >= S_RAN, "state.html", SESS_EXPLORE },
-        { "s-html-runway", s_html_way, "state.html", SESS_EXPLORE },
-        { "s-html-substituted", s_html_sub, "state.html", SESS_EXPLORE },
-        { "s-html-sinkstrings", s_html_str, "state.html", SESS_EXPLORE },
-        { "s-html-witnessed", s_html_wit, "state.html", SESS_EXPLORE },
-        { "s-html-derived", s_html_built, "state.html", SESS_EXPLORE },
-        { "s-html-atsink", st_html >= S_ARRIVED, "state.html", SESS_EXPLORE },
+        { "s-html-seen", st_html >= S_SEEN, "setInnerHTML('<div>' + state.html + '</div>')", SESS_EXPLORE },
+        { "s-html-ran", st_html >= S_RAN, "setInnerHTML('<div>' + state.html + '</div>')", SESS_EXPLORE },
+        { "s-html-runway", s_html_way, "setInnerHTML('<div>' + state.html + '</div>')", SESS_EXPLORE },
+        { "s-html-substituted", s_html_sub, "setInnerHTML('<div>' + state.html + '</div>')", SESS_EXPLORE },
+        { "s-html-sinkstrings", s_html_str, "setInnerHTML('<div>' + state.html + '</div>')", SESS_EXPLORE },
+        { "s-html-witnessed", s_html_wit, "setInnerHTML('<div>' + state.html + '</div>')", SESS_EXPLORE },
+        { "s-html-derived", s_html_built, "setInnerHTML('<div>' + state.html + '</div>')", SESS_EXPLORE },
+        { "s-html-atsink", st_html >= S_ARRIVED, "setInnerHTML('<div>' + state.html + '</div>')", SESS_EXPLORE },
         { "s-url-seen", st_url >= S_SEEN, "state.next", SESS_EXPLORE },
         { "s-url-ran", st_url >= S_RAN, "state.next", SESS_EXPLORE },
         /* AND THE URL SEARCH HAS BOTH, WHICH IS THE ASYMMETRY WORTH READING. It declares SINK_DERIVE_NONE, so it
