@@ -31539,6 +31539,13 @@ static JSIterConsume *js_iter_consume_new(JSContext *ctx)
            || ((kind_) == CONT_CONSUME_NEXT_GET && JS_IsUndefined(((const JSIterConsume *)(st_))->next)), \
            "a JSIterConsume link's kind disagrees with its record: 51 is the nextMethod read and the "    \
            "record holds no nextMethod until that read lands")
+/* new TypedArray(source)'s view between §23.2.5.1 step 6.a.i's AllocateTypedArray and its buffer attach: the
+   iterable collect (ta_phase 0) or the array-like LengthOfArrayLike (4). Both attach sites assert it. */
+static bool js_ta_view_unattached(const JSIterConsume *s)
+{
+    return s->ta_classid != 0 && !s->ta_isfrom && !JS_IsUndefined(s->ta_target)
+        && (s->ta_phase == 0 || s->ta_phase == 4);
+}
 /* A sibling's own copy of a consumer, for every walk that forks one: the generator-drive frame arm and the
    requester walk. The result and the iterator stay shared objects, isolated per flow by the COW delta; every
    field the release frees is taken again, the owned argument list included. `outer` still names the
@@ -31569,7 +31576,7 @@ static JSIterConsume *js_iter_consume_clone(JSContext *ctx, const JSIterConsume 
        until the finish returns it, so the sibling gets its own object of the same class over the same
        prototype, which no page code can tell apart. Sharing it would have both flows attach a buffer to one
        record (js_typed_array_alloc_len), and that record is not captured per flow. */
-    if (!JS_IsUndefined(os->ta_target) && !os->ta_isfrom && os->ta_phase == 0) {
+    if (js_ta_view_unattached(os)) {
         JSObject *vp = JS_VALUE_GET_OBJ(os->ta_target);
         JSValueConst proto = vp->shape->proto ? JS_MKPTR(JS_TAG_OBJECT, vp->shape->proto) : JS_NULL;
 
@@ -87556,8 +87563,9 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
             if (s->ta_isfrom) { s->ta_phase = 1; return 4; }   /* -> step 7's TypedArrayCreateFromConstructor */
             /* new TypedArray(arrayLike), 23.2.5.1 step 5.c.ii InitializeTypedArrayFromArrayLike: the object was
                allocated at step 6.a.i, so only its buffer is sized — no user constructor is involved. */
-            DCHECK(s->ta_classid != 0 && !JS_IsUndefined(s->ta_target),
-                   "the TypedArray was not allocated before its source was read");
+            DCHECK(js_ta_view_unattached(s),
+                   "the TypedArray was not allocated before its source was read, or it stands in a phase "
+                   "js_ta_view_unattached does not name, so a fork here would share the view");
             if (js_typed_array_alloc_len(ctx, s->ta_target, s->ta_classid, s->k) < 0) return -1;
             s->ta_phase = 3;
             goto ta_map_loop;
@@ -87741,7 +87749,9 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                    phase-3 loop, because that write's ToNumber is the page's code either way. This used to hand the
                    collected list to js_typed_array_constructor_obj at the finish, which re-entered the ITERATION
                    protocol on the list it had just been given and then set every element from C. */
-                DCHECK(!JS_IsUndefined(s->ta_target), "the TypedArray was not allocated before its source was read");
+                DCHECK(js_ta_view_unattached(s),
+                       "the TypedArray was not allocated before its source was read, or it stands in a phase "
+                       "js_ta_view_unattached does not name, so a fork here would share the view");
                 if (js_typed_array_alloc_len(ctx, s->ta_target, s->ta_classid, s->k) < 0) return -1;
                 s->ta_phase = 3; s->ta_k = 0;
                 goto ta_map_loop;
