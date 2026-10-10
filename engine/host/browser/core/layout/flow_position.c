@@ -137,14 +137,12 @@ static CssPx fp_left_offset(lxb_dom_element_t *el, CssPx cb_width)
  * edges of cells. (And thus, in this model, there may be gaps between the rows, columns, row groups or column
  * groups, corresponding to the 'border-spacing' property.)" §17.6.1: "The distance between the table border
  * and the borders of the cells on the edge of the table is the table's padding for that side, plus the
- * relevant border spacing distance", so from the table box's content edge the first cell border is one spacing
- * in on each axis.
- *
- * Spacings come from core/layout/table_width.h's and table_height.h's answers, never the property, and are
- * zero under §17.6.2, where edges "coincide with the hypothetical grid lines on which the borders of the cells
- * are centered"; one arithmetic serves both models. The table box's origin is the wrapper's: §17.4 gives the wrapper the element's margins and initial border
- * and padding, and the table box the reverse, so with no caption the table box's border edge is the wrapper's
- * content edge (asserted below). A caption breaks that and is refused. */
+ * relevant border spacing distance", so the first cell border is one spacing in from the content edge.
+ * Spacings come from table_width.h's and table_height.h's answers, never the property, and are zero under
+ * §17.6.2, where edges "coincide with the hypothetical grid lines on which the borders of the cells are
+ * centered"; one arithmetic serves both models. The table box's origin is the wrapper's: §17.4 gives the
+ * wrapper the element's margins and initial border and padding, and the table box the reverse, so with no
+ * caption the table box's border edge is the wrapper's content edge (asserted below); a caption is refused. */
 
 /* The one table layout every table placement reads, gathered once so columns (§17.5.2 Table width algorithms:
    the 'table-layout' property) and rows (§17.5.3 Table height algorithms) are built over the grid the rectangle
