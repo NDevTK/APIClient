@@ -55,6 +55,16 @@ function createParamStats() {
    VALUE FREQUENCY AND NUMERIC RANGE STILL SEE EVERY OCCURRENCE, deliberately: `?a=1&a=2` genuinely
    observed two values and the enum and range facts are about VALUES, not about requests. Only the
    per-request count moved. */
+/* The finite Number an observed value spells, or null. ECMAScript's StringToNumber maps the empty string
+   and an all-whitespace string to 0, which is no numeral the request carried: `?sku=` would otherwise be
+   typed a number and offered back as the example 0. */
+function observedNumeral(value) {
+  const s = String(value);
+  if (s.trim() === "") return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
 function updateParamStats(stats, value, seenThisRequest) {
   if (!seenThisRequest || !seenThisRequest.has(stats)) {
     stats.observedCount++;
@@ -68,8 +78,8 @@ function updateParamStats(stats, value, seenThisRequest) {
   }
 
   // Numeric range
-  const num = Number(value);
-  if (!isNaN(num) && isFinite(num)) {
+  const num = observedNumeral(value);
+  if (num !== null) {
     if (!stats.numericRange) {
       stats.numericRange = { min: num, max: num };
     } else {
@@ -355,8 +365,8 @@ function _coerceToFieldType(value, type) {
       type === "sint32" || type === "sint64" || type === "double" || type === "float" ||
       type === "fixed32" || type === "fixed64" || type === "sfixed32" || type === "sfixed64") {
     if (typeof value === "number") return value;
-    const n = Number(value);
-    return Number.isNaN(n) ? value : n;
+    const n = observedNumeral(value);
+    return n === null ? value : n;
   }
   return value;
 }

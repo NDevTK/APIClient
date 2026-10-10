@@ -1335,7 +1335,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
       if (name === "$ct") return;
       if (!m.parameters[name]) {
         m.parameters[name] = {
-          type: isNaN(value) ? "string" : "number",
+          type: observedNumeral(value) === null ? "string" : "number",
           location: "query",
           description: "Learned from request",
         };
