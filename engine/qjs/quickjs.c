@@ -31565,6 +31565,26 @@ static JSIterConsume *js_iter_consume_clone(JSContext *ctx, const JSIterConsume 
         for (i = 0; i < (uint32_t)os->args_own_n; i++)
             ns->args_own[i] = js_dup(os->args_own[i]);
     }
+    /* §23.2.5.1 step 6.a.i's view, allocated but not yet given its buffer: nothing but this machine holds it
+       until the finish returns it, so the sibling gets its own object of the same class over the same
+       prototype, which no page code can tell apart. Sharing it would have both flows attach a buffer to one
+       record (js_typed_array_alloc_len), and that record is not captured per flow. */
+    if (!JS_IsUndefined(os->ta_target) && !os->ta_isfrom && os->ta_phase == 0) {
+        JSObject *vp = JS_VALUE_GET_OBJ(os->ta_target);
+        JSValueConst proto = vp->shape->proto ? JS_MKPTR(JS_TAG_OBJECT, vp->shape->proto) : JS_NULL;
+
+        DCHECK(os->ta_classid == vp->class_id,
+               "an unattached TypedArray view whose class is not the one its consume will attach a buffer for");
+        JS_FreeValue(ctx, ns->ta_target);
+        ns->ta_target = JS_NewObjectProtoClass(ctx, proto, vp->class_id);
+        if (unlikely(JS_IsException(ns->ta_target))) {
+            ns->ta_target = JS_UNDEFINED;
+            ns->outer = NULL; ns->outer_kind = CONT_NONE;
+            js_iter_consume_end(ctx, ns);
+            js_free(ctx, ns);
+            return NULL;
+        }
+    }
     return ns;
 }
 /* Set-record primitives — ITERCONS_SETOP folds setlike.keys() straight into the result's [[SetData]] (the spec
@@ -123188,13 +123208,11 @@ static int js_typed_array_alloc_len(JSContext *ctx, JSValueConst obj, int classi
     JSValue buffer;
 
     /* typed_array_init writes the view's own JSObject record (u.typed_array, u.array) and links it into the
-       buffer's array_list, and no capture takes that record per flow. A view created before this flow's last
-       fork — a fork inside the collect of `new Uint8Array(iterable)` — is shared with its sibling, and two
-       attaches to one record leak the first buffer and leave the sibling viewing the other's bytes. */
-    DCHECK(!JS_IsFlowShared(obj),
-           "AllocateTypedArrayBuffer on a typed array shared with a forked sibling — the late buffer attach "
-           "writes the view's own record, which no capture isolates; build that record's per-flow capture "
-           "(the gen_fork-style swap the generator data has) before attaching");
+       buffer's array_list, and no capture takes that record per flow. That is sound because the view is held
+       by its consume machine alone until this attach: js_iter_consume_clone gives a forked sibling its own. */
+    DCHECK(JS_REF_COUNT(JS_VALUE_GET_OBJ(obj)) == 1,
+           "AllocateTypedArrayBuffer on a view something besides its consume machine holds — a fork that "
+           "shares the unattached view has both flows attach a buffer to one uncaptured record");
     buffer = js_array_buffer_constructor1(ctx, len << typed_array_size_log2(classid), NULL);
     if (JS_IsException(buffer))
         return -1;
