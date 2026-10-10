@@ -9,7 +9,7 @@
 
 static const char HTML_CSS[] =
     "<!doctype html><html><head>"
-    /* The rule `HTML`'s first sheet carries, under which these trees were written: the rows ask the cascade
+    /* The rule `HTML_PLATFORM`'s first sheet carries, under which these trees were written: the rows ask the cascade
        and CSSOM, and a displayed `.nstmedia` grid box is laid out by the selftests' paint, where css-grid's
        intrinsic sizes are unbuilt (core/layout/intrinsic_size.c says so by name). */
     "<style>div { display: none }</style>"

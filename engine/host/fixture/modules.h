@@ -77,8 +77,19 @@ static const char HTML_MODULES[] =
        and is why the control's body parses. */
     "(async function(){ fetch('/api/modtypeask?w=mtASK'); try { var bad = await import('/chunk/mdbad.js'); fetch('/api/modtype?w=' + (bad ? 'mtLOADED' : 'mtEMPTY')); } catch (e) { fetch('/api/modtype?w=' + e.name); } })();"
     "</script>"
+    /* §8.1.4.4 "Calling scripts"' module entry, read by `module-entry` and `module-tla`. The top-level `await`
+       makes the records proof: ECMAScript §16.2.1.6 ParseModule accepts it and §16.1.6 ParseScript does not,
+       so this source compiles only through the module entry.
+       The records are entailed, so the lowest 0 localises: the first, before the await, says the body began
+       (a 0 is the loader's classification); the second, after it, says the body parked into the slot
+       JS_ResumeParkedFlow drains and resumed with its continuation intact (a 0 is the park seam).
+       NAMED RESIDUAL. Not covered: `import.meta.url` — quickjs's `JS_GetImportMeta` allocates a bare
+       null-prototype object for the host to populate and this host names no meta callback, so it is
+       `undefined` here. The next diff builds a module-name-to-URL answer at the meta callback. Its absence
+       shows as a module resolving a nested relative specifier against nothing. */
     "<script type=module>"
     " fetch('/api/modreach?d=ok');"
+    " await Promise.resolve('r');"
     " fetch('/api/modtla?w=resumed');"
     "</script>"
     /* WEB CRYPTOGRAPHY §29.4.5 AES-GCM EXPORT KEY — `generateKey` then `exportKey` in three formats, the

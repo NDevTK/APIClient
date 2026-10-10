@@ -581,15 +581,6 @@ static const char HTML_DOM[] =
     "var fo = document.createElement('form'); fo.action = '/api/didsubmit';"
     "var foi = document.createElement('input'); foi.name = 'ok'; fo.appendChild(foi);"
     "document.body.appendChild(fo); foi.value = 'rs'; fo.requestSubmit();"
-    /* §4.13.3 attributeChangedCallback. It runs only for a name the class declared as OBSERVED, which is why
-       observedAttributes is read at DEFINE time — and reading it is the page's code (a static getter whose
-       entries are themselves coerced), so the read and every entry's ToString are requests the declaration's
-       step body parks on. The unwatched attribute proves the filter: only an ABSENCE can. */
-    "class XAttr extends HTMLElement {"
-    " static get observedAttributes(){ var n = 0; for (var i = 0; i < 30; i++) n += i;"
-    "  return [{ toString: function(){ return n === 435 ? 'data-w' : 'bad'; } }]; }"
-    " attributeChangedCallback(nm, ov, nv){ fetch('/api/ceattr?n=' + nm + '&o=' + ov + '&v=' + nv); } }"
-    "customElements.define('x-attr', XAttr);"
     /* Web IDL §3.7.6 Attributes: an enumeration attribute's setter ignores a string outside the enumeration —
        no TypeError, and the attribute keeps its value. An argument position still throws; ceext above is one. */
     "var scrign = 'wrong';"
@@ -597,7 +588,23 @@ static const char HTML_DOM[] =
     " scrign = history.scrollRestoration === 'manual' ? 'isignored' : 'changed'; } catch (e) { scrign = 'threw'; }"
     "fetch('/api/scrign?v=' + scrign);"
     "</script>"
+    /* §4.2.4 getElementById OVER AN ELEMENT WHOSE `id` THIS FLOW HAS NOT DETERMINED — the statement that
+       reaches core/dom/node.c's attribute value seam; every other getElementById here asks a concrete id over a
+       tree in which no `id` is a source.
+       `bidu` is a derived source (`{location.hash}.slice(1)`), so after the write `#bidseed`'s `id` is
+       undetermined and the comparison against `bidwant` has two feasible answers: the IS arm returns the
+       element and the IS NOT arm advances past it, §4.2.4's own two answers.
+       `arm=isnot` IS THE REACHABILITY WITNESS AND `arm=is` THE SUBJECT: `isnot` is outcome 0, the arm a run
+       with no forking takes, and also what a build without the seam answers (element.c stores the display
+       shape for a concolic attribute write, so the comparison against `{location.hash}.slice(1)` is false).
+       The payloads are literals, so neither address can become unknown, and `#bidwant` is named by nothing
+       else in this document, so the IS arm cannot be answered concretely by a second element.
+       IT IS LAST: it leaves an undetermined `id` in the tree, so every later getElementById would fork there. */
+    "<span id=bidseed></span>"
     "<script>"
+    "var bidu = location.hash.slice(1);"
+    "var bidel = document.getElementById('bidseed');"
+    "bidel.setAttribute('id', bidu);"
     "fetch('/api/byidseam?arm=' + (document.getElementById('bidwant') ? 'is' : 'isnot'));"
     "</script>"
     TF_CANVAS_INK
