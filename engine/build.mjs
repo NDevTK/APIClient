@@ -3413,9 +3413,9 @@ function stepCostReading(a, b, q) {
      run of 13043 turns at 638eb345, one interleaving, FOUR windows of 46 held a turn at or past the slice and
      the other forty-two ran at 0.1 to 1.5 ms — so this fraction is normally SMALL, and a small fraction here
      is not a quiet result, it is a short list of turns to go and look at. The mean over that same run was
-     56 ms, which is near none of them. It is READ AND NOT DEFAULTED: the row is in the @COLD declaration
-     (solver/metrics/cold.def), so coldFields() requires it and an artifact without it fails loudly here rather than
-     reading as a run that never overran. */
+     56 ms, which is near none of them. It is READ AND NOT DEFAULTED: the row is in solver/metrics/cold.def,
+     so coldFields() requires it and an artifact without it fails loudly here rather than reading as a run
+     that never overran. */
   const overFrac = b.sliceOverruns / b.steps;
   /* AND WHETHER THE PAGE'S OWN CODE WAS RUNNING IN THOSE TURNS, WHICH IS THE HALF THE ARM HISTOGRAM'S
      CONCLUSION RESTS ON AND CANNOT MEASURE. `stepUnitOverruns` names the arm a turn ENDED in, and the two
@@ -9528,9 +9528,9 @@ STAGES.push(onHost(runProgram("concolic-crossing argument audit", [join(ENGINE, 
    `census_rows.js` carries a named residual whose next-diff clause is "a build stage that CALLS this reader
    rather than re-deriving its rule" and whose absence clause is that an undeclared row "rides green through
    every build it is present for and refuses the first driver run afterwards", so the reader who meets it is
-   reliably not its author. This stage calls `censusKinds()`, which THROWS on a declaration row it cannot read, a kind outside
-   solver/metrics.h's, or a key declared twice; the declared and emitted sets are one set by construction,
-   asserted at composition by solver/metrics.c. VERIFIED THE OTHER WAY TOO:
+   reliably not its author. This stage calls `censusKinds()`, which THROWS on a declaration row it cannot
+   read, a kind outside solver/metrics.h's or a key declared twice; the declared and emitted sets are one set
+   by construction, asserted at composition by solver/metrics.c. VERIFIED THE OTHER WAY TOO:
    `grep -cF census_rows engine/build.mjs` answered 0 before this landed, against `fieldgate` 2, `idlgen` 4,
    `mdgate` 1, `jscommentgate` 1 and `argaudit` 2 as the armed control, so the residual's own claim held.
    ITS EXIT CODE IS THE FINDINGS AND NOTHING ELSE, and its control is measured on every invocation rather than

@@ -2011,7 +2011,7 @@ const row = {
      row nonzero with `replyDeclined` at 0 is a refusal that never reached the engine — and it is still not a
      subtraction anything here may perform.
      THREE OF THE FOUR ENDS ARE LIFETIME COUNTS AND `replyOutstanding` IS A GAUGE, which is the producer's own
-     statement in its declaration and not this file's guess, and it is why the identity is asked of ONE ENTRY: it holds
+     statement in its .def and not this file's guess, and it is why the identity is asked of ONE ENTRY: it holds
      "at the moment all five are in one hand and at no other" (solver/result.c, citing
      CLAUDE.md §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE). Taken off `counted[last]` like every other
      counter on this row, so `countersFrom` keeps naming the one entry they all came from — and NEVER off

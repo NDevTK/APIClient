@@ -580,7 +580,7 @@ const COLD_STEP_UNITS = ["stepNamedRenderingLife", "stepNamedRenderingTypeofLife
    §THE-COROLLARY-IS-THE-MORE-USEFUL-HALF: one added total covers every future spelling of the question
    where a rewritten reader covers only the one somebody happened to find.
    RETIREMENT: this note goes when a composer declares its own rows ONE READING at the emitter — a machine-read
-   line in its declaration file saying which of its rows no consumer may take in part — because the three keys below
+   line in its .def saying which of its rows no consumer may take in part — because the three keys below
    are then derived from the producers that know, and which composer is whole stops being a fact a consumer
    states about itself. */
 const COLD_WHOLE = ["rungEntry", "fetchEdge", "xhrEdge"];
@@ -987,7 +987,7 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      ("`g_slices` IS THEIR DENOMINATOR"), and solver/engine.h says `loop_us / slices` is what a slice costs.
      (iii) result.c, which this clause CITES, says at that group that `slices` is the denominator NEITHER SPAN
      would otherwise have — the two spans being `loopUs` and `betweenSlicesUs`, which is the group it is
-     emitted with (`instanceUs`, `loopUs`, `betweenSlicesUs`, `slices`, LIFETIME in solver/metrics/cold.def). The cited line is real and is
+     emitted with (lifetime rows `instanceUs loopUs betweenSlicesUs slices`). The cited line is real and is
      about a different operand, which is the mis-aimed citation CLAUDE.md rates as surviving every check a
      reader makes of it. And the banner sixty lines up is the correction that already said all of this, landed
      2026-09-23 under a subject naming it, where this clause landed 2026-10-04 — the same wrong division
