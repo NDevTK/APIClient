@@ -44,6 +44,7 @@ Several agents share one working tree, one index and one machine. These rules ar
 - An untracked `.c` under `engine/host/` is compiled. Put scratch copies in the scratchpad.
 - Address processes by PID, never by `pkill -f`/`pgrep -f` pattern. Attribute a process by its parent chain. Gate any destructive step on a check's exit status (`if check; then destroy; fi`), never `check; destroy`. Probe liveness by PID, not by output side effects.
 - A backgrounded job's completion notice is about its wrapper. Wait on the PID, then read the job's own artifact and terminal line. A pipeline's status is its last stage's. A turn must not end with a backgrounded process as its only outstanding item.
+- A lane commits work in progress early in its own worktree; work that lives only in a process or an uncommitted file is lost when the container restarts.
 - After any rejected or interrupted tool call, verify what the tree actually contains before claiming anything about it.
 - Writable disk is a per-session allowance; on ENOSPC delete large stale artifacts (dead snapshots are found by marker and liveness, not by name).
 
@@ -144,6 +145,7 @@ A comment is read by every agent that opens the file, so its cost is paid on eve
 - A component's own C record time-travels via `cow_capture_host_record` in its accessor, whose layout matches its finalizer. Raw byte capture is for POD latches only.
 - Platform data a flow queues is a JS value, never malloc'd C.
 - Only shared baseline state is captured; flow-local creations are skipped. Iterations over opaque input fork per iteration. Large shared accumulation is a chain of per-iteration flows. Async state rides the delta.
+- A derived cache is legitimate when its lifetime cannot see a write that would invalidate it — scoped to a job that holds the thread, or captured per flow. A re-derivable cache is shed on fork and cold park, never copied.
 
 ## The C stack is not a limit — trampolining and hooking
 
@@ -188,7 +190,7 @@ A comment is read by every agent that opens the file, so its cost is paid on eve
 
 - `node engine/build.mjs` is a compile: it resolves the revision, compiles, links, stamps and installs. A compile/link red blocks; nothing else does.
 - The gate suite (`node engine/build.mjs gates`) is a separate, slow ask. A red gate blocks nothing: it is an accepted risk carried as a work queue with a target of zero. Never wait on a test; ask for it, keep working, and read the result when it arrives. A gate run does not hold the builder slot.
-- The main agent owns every build; a newer build supersedes an older one (stop the old one by PID). Subagents never build or run gate `.mjs` files (including `wpt.mjs`, which compiles everything). Subagents may read, grep, `curl`, run `clang -fsyntax-only`/`node --check`/`engine/prosediff.mjs`, and drive an already-built artifact with a bounded command. A subagent reports what needs building and at which revision.
+- The main agent owns publishing and every build in the shared checkout; a newer build supersedes an older one (stop the old one by PID). A lane may build its own commit in a lane-named frozen snapshot (`engine/frozen_snapshot.sh <sha> <lane> node engine/build.mjs`) and drive the native fixture or another built artifact against it with a bounded command; it never builds in the shared checkout and never runs the gate suite. A lane reports the snapshot revision every reading came from.
 - The DCHECKs are the gate; corpora exercise code so the asserts can fire. test262 runs with features always on, under forced time travel, and reports engagement and coverage with their denominators. Uncollected or uncheckout-ed tests are excluded tests. Use `test_forced.c` for targeted testing. Delete one-off regression tests after use.
 - Verify on the real thing only when ready: `testing/harness.js restart` and `testing/live-run.js <runs> <url>`, one browser per case with storage cleared. Read what the shipped path writes, not harness prints.
 - Measure CPU or work, never wall time; a wall-clock budget is a backstop with a distinct signal. A loaded box (including the build's own load and finished agents' leftover processes) corrupts measurements; quote load with them and do not start a load under a lane you told to measure.
