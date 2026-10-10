@@ -1,6 +1,4 @@
-/* css-sizing-3 §5.1's intrinsic inline sizes over a box's own content. See intrinsic_size.h for why §5.1 is a
-   definition and CSS 2.2 §10.3.5 is the operation, for the split with core/layout/text_run.h, and for which box
-   this walk is the algorithm of. */
+/* css-sizing-3 §5.1's intrinsic inline sizes over a box's own content. See intrinsic_size.h. */
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,55 +39,26 @@ static bool is_computed_is(lxb_dom_element_t *el, const char *name, const char *
     return same;
 }
 
-/* ---- ONE SIDE OF AN INLINE BOX: ONE FACT, TWO QUESTIONS ---------------------------------------------------
-   THE FACT IS WHICH THREE PROPERTIES ONE SIDE IS, and it is written once. CSS 2 §8.1 "Box dimensions" nests
-   them around the content — padding, then border, then margin — and both of the sections that put an inline
-   box's own edge somewhere are stated over the same three: css-sizing-3 §2.2 "Intrinsic Size Contributions"'
-   outer size ("based on the outer size of the box; for this purpose auto margins are treated as zero") and CSS
-   2.2 §9.4.2 "Inline formatting contexts"' line ("horizontal margins, borders, and padding are respected
-   between these boxes"). A second copy of these six names is the one way the line's idea of which lengths
-   bracket a box could drift from the contribution's, so there is one table and the two entries below are
-   QUESTIONS asked of it rather than two derivations standing beside each other.
-   THE TWO QUESTIONS DIFFER ON EXACTLY ONE INPUT — A PERCENTAGE — AND css-sizing-3 §5.2.1 "Intrinsic
-   Contributions of Percentage-Sized Boxes" ANSWERS BOTH, in that one section. A percentage on any of the six
-   resolves against the containing block's width (CSS 2.1 §8.3 "Margin properties" and §8.4 "Padding
-   properties", which resolve against that width on BOTH axes). While an INTRINSIC contribution is being
-   measured that width is the number the measurement produces, which is §5.2.1's own opening — "creating a
-   cyclic dependency" — and its rule for these properties is one sentence: "For the min size properties, as
-   well as for margins and paddings (and gutters), a cyclic percentage is resolved against zero for determining
-   intrinsic size contributions." Its NEXT paragraph is the other question, "when calculating the used sizes
-   and positions of the containing block's contents" — "Otherwise, the percentage is resolved against the
-   containing block's size" — which is core/layout/line_box.c's fill, because a line box is filled at a width
-   its containing block has already determined and the percentage is not cyclic there at all. §5.2.1's own note
-   says these two rules are what "specify the previously-undefined behavior of this cyclic case" that CSS 2.1
-   §8.4 leaves "undefined in CSS 2.1".
-   WHAT STOOD HERE WAS ONE ENTRY REFUSING BOTH, and it refused the line's question with the contribution's
-   reason — a crash whose stated cause (the width is this walk's own output) is FALSE of the caller that meets
-   it most often. Its remedy clause was wrong as well as its scope: it said this function had FOUR call sites,
-   two of them line_box.c's, and it had SIX — the two edges bracketing an inline box's descent AND the two
-   inside `is_atomic_replaced`, both of which are this file's and neither of which the clause counted. Building
-   §5.2.1's zero into the one shared entry, as that clause instructed, would have mis-laid-out every
-   percentage-margined inline box on a real line, silently.
-   NEITHER ENTRY ASKS WHETHER THE PERCENTAGE IS CYCLIC, and that is a derivation rather than an omission. Every
-   box this walk reaches has the box being measured as its containing block — §9.4.2's inline formatting
-   context is established by that block container, `is_child` returns before an out-of-flow child (whose
-   containing block is another box) is ever measured, and the walk is run only to produce that box's own
-   intrinsic inline size — so a percentage here is cyclic by construction. §5.2.1's OTHER "otherwise" bullet is
-   unreachable through either entry for the same kind of reason: it is conditioned on a cyclic dependency
-   "introduced due to a block-axis size other than a minimum size on the containing block", and all six of
-   these resolve against the containing block's WIDTH, which is the INLINE axis. */
-/* THE FOUR SIDES, INDEXED BY PHYSICAL AXIS AND THEN BY SIDE. `IntrinsicAxis` is the first index and is the
-   caller's answer rather than this file's question — see intrinsic_size.h for why it is named physically. The
-   SECOND index is `trailing`, which on the vertical axis is the BOTTOM: css-writing-modes-4 §6.4
-   "Abstract-to-Physical Mappings" is what makes top/bottom the vertical pair, and nothing here depends on
-   WHICH of the two a flow-relative start maps to, because every consumer below SUMS the pair.
-   THE VERTICAL ROW IS NOT A NEW DERIVATION, which is the whole reason it is a table row and not a function:
-   every rule the three helpers below apply — §8.3's `auto` margin becoming zero, §5.2.1's cyclic percentage
-   resolved against zero, §8.4's clamp of a padding at zero, §3.3's subtraction of the padding and border from
-   a `border-box` length — is stated of the PROPERTY and not of the axis, so an axis is four names and the
-   arithmetic is one copy. A second family of functions over `margin-top`/`margin-bottom` would be a second
-   answer free to drift from this one, which is the reason `is_intrinsic_pad_border_px` states at its own site
-   for having been split out of the edge rather than written twice. */
+/* ---- One side of an inline box: one property table, two questions ----------------------------------------
+   The three properties of one side are written once (CSS 2 §8.1 "Box dimensions": padding, border, margin),
+   for both css-sizing-3 §2.2 "Intrinsic Size Contributions"' outer size ("auto margins are treated as zero")
+   and CSS 2.2 §9.4.2 "Inline formatting contexts"' line ("horizontal margins, borders, and padding are
+   respected between these boxes").
+   The questions differ on a percentage, which css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized
+   Boxes" answers both ways: in an intrinsic contribution the containing block's width is the output ("a cyclic
+   percentage is resolved against zero for determining intrinsic size contributions"); for a line box, filled
+   at a determined width, "Otherwise, the percentage is resolved against the containing block's size". Its note
+   says these rules "specify the previously-undefined behavior of this cyclic case" CSS 2.1 §8.4 leaves
+   undefined.
+   Neither entry asks whether the percentage is cyclic: every box this walk reaches has the measured box as its
+   containing block (`is_child` returns before an out-of-flow child), and §5.2.1's other "otherwise" bullet
+   ("introduced due to a block-axis size other than a minimum size on the containing block") cannot apply to
+   these width-relative properties. */
+/* The four sides, indexed by physical axis (`IntrinsicAxis`, the caller's answer; see intrinsic_size.h) and
+   then by `trailing` (bottom on the vertical axis). Consumers sum each pair, so which flow-relative start maps
+   to which side does not matter here. The vertical row reuses the same arithmetic: every rule below (§8.3's
+   `auto` margin, §5.2.1's zero basis, §8.4's padding clamp, §3.3's `border-box` subtraction) is stated of the
+   property, not the axis. */
 static const char *const IS_EDGE[2][2][3] = {
     { { "margin-left",  "padding-left",  "border-left-width"   },
       { "margin-right", "padding-right", "border-right-width"  } },
@@ -98,10 +67,9 @@ static const char *const IS_EDGE[2][2][3] = {
 };
 enum { IS_EDGE_MARGIN, IS_EDGE_PADDING, IS_EDGE_BORDER };
 
-/* THE BORDER WIDTH IS THE TERM WITH NO QUESTION IN IT, so it is one function both entries call rather than an
-   arm of each: css-backgrounds-3 §3.3 "Line Thickness: the border-width properties"' `Computed value:` line is
-   "absolute length, snapped as a border width", so there is no percentage for §5.2.1 to resolve and no `auto`
-   for §2.2 to zero — the computed value IS the used one on both sides of the split. */
+/* The border width is the same on both sides of the split: css-backgrounds-3 §3.3 "Line Thickness: the
+   border-width properties"' computed value is "absolute length, snapped as a border width", with no percentage
+   or `auto`. */
 static CssPx is_edge_border_px(lxb_dom_element_t *el, const char *name)
 {
     CssLength len = css_computed_length(el, name);
@@ -116,24 +84,18 @@ static CssPx is_edge_border_px(lxb_dom_element_t *el, const char *name)
     return len.px;
 }
 
-/* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' SURROUND AT ONE SIDE — the padding
-   and the border width, at §5.2.1's ZERO basis, WITHOUT the margin. It is split out of the edge below rather
-   than written a second time beside it because two sections read the identical pair for two different reasons
-   and a second derivation is a second answer that can drift from this one: §2.2's OUTER size ADDS the margin
-   to it, and §3.3's `border-box` arm SUBTRACTS it from a declared length. §3.3 names these two terms and not
-   the margin because its own sentence is that the padding and border are "laid out and drawn inside the used
-   width and height" while the margins are not — "the padding and border of the box, but not its margins".
-   THE SUBTRACTION ITSELF IS CITED AND NOT QUOTED, and that is core/layout/table_column_width.c's decision at
-   the same sentence rather than a style: it records that the two Editor's Draft editions of §3.3 word the
-   flooring differently — one as a clause of the subtraction sentence, one as a sentence of its own — so a
-   one-line quotation is a quotation of ONE edition. Do not "restore" one here. */
+/* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"'s surround at one side: padding and border
+   width at §5.2.1's zero basis, without the margin. Shared by §2.2's outer size (which adds the margin) and
+   §3.3's `border-box` conversion (which subtracts this: "the padding and border of the box, but not its
+   margins"). The subtraction is cited, not quoted, as in core/layout/table_column_width.c: the editions word
+   the floor differently. */
 static CssPx is_intrinsic_pad_border_px(lxb_dom_element_t *el, IntrinsicAxis axis, bool trailing)
 {
     const char *const *side = IS_EDGE[axis][trailing ? 1 : 0];
     CssLength padding = css_computed_length(el, side[IS_EDGE_PADDING]);
     CssPx pad;
 
-    /* §8.4's <padding-width> has no `auto` and no keyword at all, so the split is two-way rather than three. */
+    /* §8.4's <padding-width> has no keyword, so the split is two-way. */
     if (padding.kind == CSS_LENGTH_ABSOLUTE) {
         pad = padding.px;
     } else {
@@ -143,37 +105,27 @@ static CssPx is_intrinsic_pad_border_px(lxb_dom_element_t *el, IntrinsicAxis axi
                 side[IS_EDGE_PADDING]);
         pad = css_length_resolve_pct(padding, css_px(0.0));
     }
-    /* THE FLOOR IS THE PROPERTY'S RANGE AND IT IS REACHED ONLY THROUGH A MATH FUNCTION. CSS 2.1 §8.4 says
-       outright that "Unlike margin properties, values for padding values cannot be negative", and §5.1's range
-       restriction drops a negative LITERAL — but css-values-4 §9.1 "Numeric Functions" exempts a math function
-       from that check and moves it to the result: "numeric functions returning out-of-range values never cause
-       a declaration to become invalid", and instead "the value of a numeric function is clamped to the range
-       allowed in the context it is used at computed value time if possible, and at used value time otherwise".
-       §5.2.1's ZERO BASIS is precisely what makes `calc(50% - 10px)` land out of range HERE and in range at a
-       real width, so this clamp belongs at this resolution and could not have run at the cascade. IT IS OVER
-       BOTH ARMS AND NOT OVER THE RESOLUTION ALONE: a math function whose Sum kept no percentage term
-       (`calc(10px - 20px)`) is an ABSOLUTE computed value that §9.1 exempted from §5.1's parse-time check just
-       the same, so the arm that never sees a basis is out of range for the same reason and by the same
-       sentence. `css_px_max` and not an `if`, so the clamped-away operand's environment facts stay in the
-       domain — core/layout/used_value.c's own padding arm states that reason in full, splits its two arms the
-       same way, and clamps their one result exactly here. A MARGIN IS NOT CLAMPED, which is §8.3's "negative
-       values for margin properties are allowed". */
+    /* The floor is the property's range ("values for padding values cannot be negative"), reachable only
+       through a math function: css-values-4 §9.1 "Numeric Functions" says "numeric functions returning
+       out-of-range values never cause a declaration to become invalid" and clamps "at used value time
+       otherwise". §5.2.1's zero basis is what makes `calc(50% - 10px)` negative here, and `calc(10px - 20px)`
+       arrives absolute, so the clamp covers both arms. `css_px_max` keeps the environment facts, as in
+       core/layout/used_value.c's padding arm. Margins are not clamped ("negative values for margin properties
+       are allowed"). */
     return css_px_add(css_px_max(pad, css_px(0.0)), is_edge_border_px(el, side[IS_EDGE_BORDER]));
 }
 
-/* QUESTION ONE — css-sizing-3 §5.2.1's INTRINSIC CONTRIBUTION at one side, where a percentage is CYCLIC and
-   resolves against ZERO. It is `static` on purpose and that is the structural half of this split: it has no
-   caller outside this file, and being unreachable from anywhere else is what stops it being asked at a
-   used-value site, where its zero would be a wrong answer no assert could see. */
+/* Question one: css-sizing-3 §5.2.1's intrinsic contribution at one side, where a percentage is cyclic and
+   resolves against zero. `static`, so no used-value site can reach its zero. */
 static CssPx is_intrinsic_edge_px(lxb_dom_element_t *el, IntrinsicAxis axis, bool trailing)
 {
     const char *const *side = IS_EDGE[axis][trailing ? 1 : 0];
     CssLength margin = css_computed_length(el, side[IS_EDGE_MARGIN]);
     CssPx sum;
 
-    /* §2.2's own sentence, which CSS 2.1 §10.3.1 "Inline, non-replaced elements" states again for the used
-       value ("A computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of '0'"). It
-       is the only keyword §8.3's <margin-width> grammar admits. */
+    /* §2.2's `auto` margin as zero, as CSS 2.1 §10.3.1 "Inline, non-replaced elements" does for the used value
+       ("A computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of '0'"); the only
+       keyword §8.3's <margin-width> admits. */
     if (margin.kind == CSS_LENGTH_KEYWORD) {
         DCHECKF(strcmp(margin.keyword, "auto") == 0,
                 "`%s` computed to the keyword `%s`. CSS 2.1 §8.3 \"Margin properties\"' <margin-width> grammar "
@@ -182,44 +134,32 @@ static CssPx is_intrinsic_edge_px(lxb_dom_element_t *el, IntrinsicAxis axis, boo
                 side[IS_EDGE_MARGIN], margin.keyword);
         sum = css_px(0.0);
     } else if (margin.kind == CSS_LENGTH_ABSOLUTE) {
-        /* AN ABSOLUTE LENGTH IS ALREADY §5.2.1's ANSWER AND HAS NO BASIS IN IT. §5.2.1's rule is stated of "a
-           cyclic percentage", so a value carrying none is not a thing the section resolves — the computed
-           length IS the contribution, at this basis and at every other. It is a separate arm and not a zero
-           handed to the resolution entry because `css_length_resolve_pct` is css-values-4 §10.11 "Computed
-           Value"'s USED-VALUE-TIME SIMPLIFICATION, whose subject is the two kinds that carry a percentage:
-           routing an absolute length through it asks a percentage question of a value that has none, which is
-           the dispatch its own assert refuses. core/layout/used_value.c and core/layout/table_width.c split
-           the identical three-shape grammar the same way at every one of their sites. */
+        /* An absolute length carries no percentage, so it is the contribution as is. It does not go through
+           `css_length_resolve_pct`, css-values-4 §10.11 "Computed Value"'s used-time simplification for the
+           two percentage-carrying kinds, which refuses an absolute length (used_value.c and table_width.c
+           split the same way). */
         sum = margin.px;
     } else {
         DCHECKF(margin.kind == CSS_LENGTH_PERCENTAGE || margin.kind == CSS_LENGTH_CALCULATED,
                 "`%s` computed to none of the three shapes CSS 2.1 §8.3 \"Margin properties\" admits",
                 side[IS_EDGE_MARGIN]);
-        /* §5.2.1 resolves the PERCENTAGE against zero and not the whole value, which is the contrast the same
-           section draws one paragraph up: a cyclic max or preferred size on a non-replaced box is "treated …
-           as that property's initial value", while a margin's cyclic percentage "is resolved against zero". So
-           `margin-left: calc(10px + 50%)` contributes 10px, and ONE BASIS COVERS THE TWO KINDS THAT CARRY A
-           PERCENTAGE — not the three the grammar admits — because css-values-4 §10.11 "Computed Value" left
-           the percentage inside the math function and §5.6 "Mixing Percentages and Dimensions" adds the pair's
-           two terms in one step. */
+        /* §5.2.1 resolves the percentage against zero, not the whole value (a cyclic preferred size is instead
+           "treated … as that property's initial value"), so `margin-left: calc(10px + 50%)` contributes 10px.
+           One basis serves both percentage-carrying kinds (css-values-4 §10.11; §5.6 "Mixing Percentages and
+           Dimensions"). */
         sum = css_length_resolve_pct(margin, css_px(0.0));
     }
     return css_px_add(sum, is_intrinsic_pad_border_px(el, axis, trailing));
 }
 
-/* QUESTION TWO — §5.2.1's "Otherwise, the percentage is resolved against the containing block's size", which is
-   CSS 2.1 §8.3's and §8.4's ordinary basis and therefore core/layout/used_value.h's answer rather than a
-   second one written here. `used_value_px` owns §10.3's per-box-type rules for a margin (an inline box's
-   `auto` is §10.3.1's 0), §8.4's percentage basis and its clamp for a padding, and §10.1's chain that produces
-   the basis — every one of which this file would otherwise be re-deriving with nothing to keep the two
-   agreeing. THE BASIS EXISTS AT THE MOMENT OF THE CALL because used_value.h derives every used value PER READ
-   from the flow's own tree, so "the containing block has already determined its width" is a statement about
-   derivability and not about an ordering this file has to arrange. */
+/* Question two: §5.2.1's "Otherwise, the percentage is resolved against the containing block's size", which
+   is CSS 2.1 §8.3's and §8.4's ordinary basis and so core/layout/used_value.h's `used_value_px` (§10.3's
+   per-box margin rules, §8.4's basis and clamp, §10.1's chain). The basis exists at the call: used values are
+   derived per read from the flow's own tree. */
 CssPx used_inline_box_edge_px(lxb_dom_element_t *el, bool trailing)
 {
-    /* THE HORIZONTAL ROW, NAMED RATHER THAN DEFAULTED: this entry is a LINE BOX's question (see the split
-       above) and a line box runs along the inline axis, which in the one writing mode this engine lays out is
-       the horizontal one. It takes no axis parameter because it has no second axis to be asked about. */
+    /* The horizontal row, named: this is a line box's question, and a line runs along the inline axis, horizontal
+       in the one writing mode laid out here. */
     const char *const *side = IS_EDGE[INTRINSIC_AXIS_HORIZONTAL][trailing ? 1 : 0];
     CssPx sum;
 
@@ -229,17 +169,11 @@ CssPx used_inline_box_edge_px(lxb_dom_element_t *el, bool trailing)
     return css_px_add(sum, is_edge_border_px(el, side[IS_EDGE_BORDER]));
 }
 
-/* css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes"' CYCLIC PERCENTAGE SIZE on ONE
-   property of the box being contributed, REFUSED. The section's own subject is a percentage that resolves
-   against a size in the same axis as the contribution being calculated, which is exactly what every one of
-   these resolves against: CSS 2.1 §10.2 "Content width: the 'width' property", §10.4 "Minimum and maximum
-   widths: 'min-width' and 'max-width'" and §8.4 give all of them the containing block's WIDTH as their basis,
-   and the containing block of a child measured by this walk is the box whose width this walk produces.
-   THE PROPERTY NAME IS THE ADDRESS AND IT IS PASSED IN, because the crash below is written once and reached
-   from a loop: a `DFAIL` stamps the line it is written at, so a message that named only the derivation would
-   report one line for five different properties and ask its reader to route a read with no object. This is
-   core/layout/used_value.c's own convention for the same reason — its box-type crashes name the computed
-   `display` and nothing else. */
+/* css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes"' cyclic percentage on one property of
+   a replaced child, refused: CSS 2.1 §10.2 "Content width: the 'width' property", §10.4 "Minimum and maximum
+   widths: 'min-width' and 'max-width'" and §8.4 resolve it against the containing block's width, which is this
+   walk's output. The property name is passed in so the message, written once and reached from a loop, names
+   it (as used_value.c's crashes name the `display`). */
 static void is_require_acyclic(lxb_dom_element_t *el, const char *name)
 {
     CssLength len = css_computed_length(el, name);
@@ -283,35 +217,22 @@ static void is_require_acyclic(lxb_dom_element_t *el, const char *name)
            name);
 }
 
-/* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes"' ATOMIC INLINE-LEVEL BOX, as ONE ITEM of this run.
-   The section is why there is one item and not a bracketed descent: an atomic inline-level box is so called
-   "because they participate in their inline formatting context as a single opaque box", and css-text-3 §5.5
-   "Line Breaking Details" is why the item is the run's business at all — it puts "a soft wrap opportunity
-   before and after each replaced element or other atomic inline", which cuts the min-content segment there.
-   THE SIZE IS THE MARGIN BOX'S, DERIVED HERE AND NOT READ WHOLE, and that is the one thing this arm may not
-   share with core/layout/line_box.c's walk over the same children. That walk hands the item
-   `used_value_margin_edge_px`, which resolves a PERCENTAGE margin or padding against the containing block's
-   width — correct there, because a line box is filled at a width its containing block already determined, and
-   self-referential here. So the same number is composed out of the three terms CSS 2 §8.1 "Box dimensions"
-   nests it from, each taken from the entry that refuses the input that would make it cyclic:
-     - `is_intrinsic_edge_px` for the two horizontal edges (margin, border and padding per side), which is
-       css-sizing-3 §2.2's outer size under §5.2.1's cyclic-percentage resolution — the ZERO basis, which is
-       exactly the half `used_inline_box_edge_px` answers differently for a real line;
-     - `used_value_content_px` for CSS 2.1 §10.3.2 "Inline, replaced elements"' used CONTENT width over
-       core/layout/replaced_element.h's natural dimensions, guarded by the five refusals above.
-   THE EDGES ARE COMPUTED BEFORE THE CONTENT AND THAT IS AN ORDER AND NOT A STYLE: `used_value_content_px`
-   reaches `padding-left` and `padding-right` itself (css-sizing-3 §3.3's conversion needs them under
-   `box-sizing: border-box`, and the surround is computed either way), so it is the two edge calls that have
-   already established those two are absolute lengths by the time it runs. */
+/* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes"' atomic inline-level box, as one item of this run:
+   such boxes "participate in their inline formatting context as a single opaque box", with "a soft wrap
+   opportunity before and after each replaced element or other atomic inline" (css-text-3 §5.5 "Line Breaking
+   Details").
+   The size is the margin box, composed here rather than read whole: core/layout/line_box.c's walk uses
+   `used_value_margin_edge_px`, whose percentage basis is cyclic here. So it is `is_intrinsic_edge_px` for the
+   horizontal edges (§2.2 outer size at §5.2.1's zero basis) plus `used_value_content_px` for CSS 2.1 §10.3.2
+   "Inline, replaced elements"' content width, guarded by the refusals below. The edges are computed first:
+   `used_value_content_px` reads `padding-left`/`padding-right` itself, and the edge calls have already
+   checked they are absolute. */
 static void is_atomic_replaced(TextRunMeasure *m, lxb_dom_element_t *el)
 {
-    /* THE FIVE PROPERTIES CSS 2.1 §10.3.2's derivation READS THAT RESOLVE AGAINST THE CONTAINING BLOCK'S
-       WIDTH, and the list is over that derivation rather than over §8.3's whole width-relative set: the
-       HORIZONTAL margins, paddings and border widths are the edge entry's six and are refused there, while
-       `margin-top` and `margin-bottom` — which §8.3 resolves against the width too, and says so in its own
-       sentence — are read by no arm of §10.3.2 or §10.4 at all, so refusing one would crash a document this
-       arm measures correctly. `padding-top` and `padding-bottom` ARE here, because §10.3.2's intrinsic-ratio
-       arm reads the used HEIGHT and the surround that read computes is the vertical pair. */
+    /* The five properties §10.3.2's derivation reads that resolve against the containing block's width. The
+       horizontal edges are the edge entry's; `margin-top`/`margin-bottom` are width-relative too but read by
+       no arm of §10.3.2 or §10.4. `padding-top`/`padding-bottom` are here because the intrinsic-ratio arm
+       reads the used height and its vertical surround. */
     static const char *const CYCLIC[] = { "width", "min-width", "max-width", "padding-top", "padding-bottom" };
     CssPx lead, trail, outer;
     size_t i;
@@ -320,42 +241,25 @@ static void is_atomic_replaced(TextRunMeasure *m, lxb_dom_element_t *el)
     lead = is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, false);
     trail = is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, true);
     outer = css_px_add(css_px_add(lead, used_value_content_px(el, false)), trail);
-    /* ONE NUMBER STATED AS BOTH OF css-sizing-3 §2.1's CONTRIBUTIONS, WHICH IS A DERIVATION AND NOT A MEMBER
-       LEFT UNFILLED — and the derivation is `is_replaced_sizes`' own, in full at its site: §5.1 separates the
-       pair by ONE input, the containing block being hypothetically zero-sized or infinitely-sized IN THAT
-       AXIS, and no arm of CSS 2.2 §10.3.2 "Inline, replaced elements" reads the containing block's INLINE
-       size at all. So both hypotheticals leave every operand of §10.3.2 unchanged and the two numbers are
-       equal, which is also why a replaced box has no soft wrap opportunity inside it to take or leave — the
-       one thing css-sizing-3 §2.1 says the pair otherwise differs over.
-       THE EDGES DO NOT BREAK IT EITHER: `is_intrinsic_edge_px` resolves a cyclic percentage against zero under
-       css-sizing-3 §5.2.1, which that section gives as ONE answer for both contributions ("For the min size
-       properties, as well as for margins and paddings (and gutters), a cyclic percentage is resolved against
-       zero for determining intrinsic size contributions"), so the same sum brackets both. WHAT WOULD MAKE THEM
-       DIFFER IS §5.2.1's REPLACED rule for a cyclic `width` or `max-width`, and `is_require_acyclic` above
-       refuses exactly that case rather than reporting one of its two answers as both. */
+    /* One number as both of css-sizing-3 §2.1's contributions: §5.1 separates them only by a zero or
+       infinite containing block in that axis, and no arm of CSS 2.2 §10.3.2 "Inline, replaced elements" reads
+       the containing block's inline size (see `is_replaced_sizes`). The edges resolve cyclic percentages to
+       zero, one answer for both ("For the min size properties, as well as for margins and paddings (and
+       gutters), a cyclic percentage is resolved against zero for determining intrinsic size contributions").
+       §5.2.1's replaced rule for a cyclic `width`/`max-width` would differ, and is refused above. */
     text_run_measure_add_atomic(m, el, outer, outer);
 }
 
-/* ONE CHILD NODE of the box whose intrinsic sizes are being measured. The shape mirrors core/layout/
-   line_box.c's own child walk deliberately: both are iterating the SAME inline formatting context, and the two
-   answering differently about which children are in it would be one classification with two copies. */
-/* THE ORIGIN OF THE CHILD USED TO BE A PARAMETER, and it is gone with the second crash it existed to name.
-   It distinguished a child of the MEASURED box — whose whole list CSS 2.2 §9.2.1 "Block-level elements and
-   block boxes"' dispatch had classified — from a child of a `display: inline` box this walk descended into,
-   about which that dispatch said nothing, so that a BLOCK-LEVEL child could be refused as §9.2.1.1's
-   block-in-inline in the second case and as a came-apart classification in the first. THAT ASYMMETRY IS
-   RETIRED: core/layout/block_flow.h enumerates §9.2.1.1's box list in CONTENT order, so a block-level box
-   reached through an inline box is a box on §9.4.1's stack exactly like a direct child, and the run this walk
-   measures ENDS at it either way. A block-level box is therefore unreachable from both origins for the same
-   reason, and one assertion states it once. */
+/* One child node of the box being measured. The shape mirrors core/layout/line_box.c's child walk: both
+   iterate the same inline formatting context and must agree on which children are in it. */
+/* A block-level child is unreachable from either origin (a direct child of the measured box, or reached through
+   a `display: inline` box): core/layout/block_flow.h enumerates CSS 2.2 §9.2.1.1's box list in content order,
+   so a run ends at a block-level box at any depth. One assertion states it in `is_child`. */
 
-/* ONE RUN BEING MEASURED, WHICH IS MORE THAN THE ACCUMULATOR: the run's END is a node the walk may meet at ANY
-   DEPTH, because §9.2.1.1 breaks an inline box around a block-level box inside it, so `end` cannot be tested
-   by the child loop that started the walk. `past_end` is what carries that answer back OUT of the descent —
-   and it is read as well as written, because §9.2.1.1's next sentence makes the difference observable: "if a
-   border had been set on the P element in the above example, the border would be drawn around C1 (open at the
-   end of the line) and C2 (open at the start of the line)". An inline box the run ends INSIDE is open at the
-   end, so its TRAILING edge is not emitted — which is exactly the `past_end` test after the descent. */
+/* One run being measured. Its `end` can be met at any depth (§9.2.1.1 breaks an inline box around a block-level
+   box inside it), so `past_end` carries that out of the descent. It also suppresses the trailing edge of an
+   inline box the run ends inside, per §9.2.1.1: "the border would be drawn around C1 (open at the end of the
+   line) and C2 (open at the start of the line)". */
 typedef struct {
     TextRunMeasure *m;
     lxb_dom_node_t *end;   /* EXCLUSIVE, and reachable at any depth; NULL runs to the end of the content */
@@ -363,21 +267,17 @@ typedef struct {
 } IsRun;
 
 static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c);
-/* css-sizing-3 §5.2's declared-size step, DECLARED HERE AND DEFINED WITH §9.4.1's STACK, because §9.4.2's walk
-   above needs the SAME three steps for an atomic inline-level box that the stack applies to a block-level one.
-   A second composition written up here is the one way those two could start disagreeing about what a child
-   with `width: 500px` contributes. */
+/* css-sizing-3 §5.2's declared-size step, defined with §9.4.1's stack: §9.4.2's walk applies the same steps
+   to an atomic inline-level box, and one definition keeps them agreeing. */
 static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, IntrinsicInlineSizes measured);
 
 static void is_walk(IsRun *r, lxb_dom_element_t *el)
 {
     BoxTreeChild c;
 
-    /* THE ONLY CALLER IS THE INLINE-BOX DESCENT BELOW, so every child this reaches is inside one.
-       THE SEQUENCE IS THE BOX TREE'S AND NOT THE DOM'S, which is core/layout/box_tree.h's contract and is what
-       keeps `is_child`'s own classification assert true: css-display-3 §2.5 "Box Generation: the none and
-       contents keywords" puts a `contents` child's children in THIS box's content, and this sequence never
-       yields the `contents` element itself — so no arm below has to know about it. */
+    /* Called only for the inline-box descent below. The sequence is core/layout/box_tree.h's, which applies
+       css-display-3 §2.5 "Box Generation: the none and contents keywords"' splice and never yields a
+       `contents` element. */
     for (c = box_tree_first_child(el); box_tree_child_exists(c) && !r->past_end;
          c = box_tree_next_sibling(el, c))
         is_child(r, el, c);
@@ -390,15 +290,13 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
     char *d;
     bool inline_box;
 
-    /* THE RUN'S END, TESTED AT EVERY DEPTH AND BEFORE ANYTHING ELSE. It is CSS 2.2 §9.2.1.1's block-level box
-       — the one that "becomes a sibling of those anonymous boxes" — so it is not content of this run at any
-       depth, and the walk stops rather than returning: every node after it in content order belongs to a
-       LATER box on §9.4.1's stack. */
+    /* The run's end, tested first at every depth: it is §9.2.1.1's block-level box that "becomes a sibling of
+       those anonymous boxes", and everything after it belongs to a later box on §9.4.1's stack. */
     if (r->past_end) return;
     if (box_tree_child_is_node(c, r->end)) { r->past_end = true; return; }
     /* css-lists-3 §3.5's outside marker box "is placed outside the principal block box", so it contributes
-       nothing to the list item's content's css-sizing-3 §5.1 "Intrinsic Sizes" — the same arm
-       core/layout/line_box.c's fill takes, which is what keeps the measurement and the fill one context. */
+       nothing to the content's css-sizing-3 §5.1 "Intrinsic Sizes", as core/layout/line_box.c's fill skips
+       it. */
     if (box_tree_child_is_pseudo(c)) {
         DCHECK(block_flow_child_kind(parent, c) == BLOCK_FLOW_CHILD_OUTSIDE_MARKER,
                "a pseudo-element member of a list item's inline formatting context was classified as something "
@@ -409,17 +307,14 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
     n = c.node;
     switch (n->type) {
     case LXB_DOM_NODE_TYPE_TEXT:
-        /* CSS 2.2 §9.2.2.1 "Anonymous inline boxes" first: a run of white space this element's `white-space`
-           collapses away "does not generate any anonymous inline boxes", so it is not content and contributes
-           nothing. core/layout/block_flow.h answers that for every walk over a block container's children, and
-           asking it here rather than re-deriving it is what keeps this walk and §9.4.1's agreeing about what a
-           document's white space is. */
+        /* CSS 2.2 §9.2.2.1 "Anonymous inline boxes": collapsible white space "does not generate any anonymous
+           inline boxes". core/layout/block_flow.h answers that for every walk. */
         if (block_flow_text_child_generates_box(n)) text_run_measure_add_text(r->m, parent, n);
         return;
     case LXB_DOM_NODE_TYPE_COMMENT:
     case LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION:
     case LXB_DOM_NODE_TYPE_DOCUMENT_TYPE:
-        /* CSS 2.2 §9.2 generates boxes for elements and for text, and for neither of these three. */
+        /* CSS 2.2 §9.2 generates boxes for elements and text only. */
         return;
     case LXB_DOM_NODE_TYPE_ELEMENT:
         break;
@@ -431,18 +326,12 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
         return;
     }
     el = lxb_dom_interface_element(n);
-    /* css-display-3 §2.5 "Box Generation: the none and contents keywords" on `display: none`: "The element and
-       its descendants generate no boxes or text sequences." So there is no box to contribute. This is the one
-       element case that is nothing rather than something unbuilt, which is why it is not a crash.
-       WHAT STOOD HERE cited §3 "Box Generation" and quoted `none` as turning "off the display of an element so
-       that it has no effect on layout at all" — a sentence that appears NOWHERE in css-display-3, beside a
-       number that is "Display Order: the order property". Box generation is §2.5 and always has been. */
+    /* css-display-3 §2.5 "Box Generation: the none and contents keywords": with `display: none`, "The element
+       and its descendants generate no boxes or text sequences." */
     if (is_computed_is(el, "display", "none")) return;
-    /* OUT OF FLOW CONTRIBUTES NOTHING, and css-text-3 §5.5 confirms it introduces no break either ("out-of-flow
-       boxes and inline box boundaries do not introduce a forced line break or soft wrap opportunity in the
-       flow"). CSS 2.2 §9.3.1 takes an absolutely positioned box out of normal flow, so it is not on the line
-       whose size is being measured and its own text is not in this run. core/layout/line_box.c returns at the
-       same test for the same reason, which is why the two walks still agree about what is in the context. */
+    /* Out of flow contributes nothing and introduces no break ("out-of-flow boxes and inline box boundaries do
+       not introduce a forced line break or soft wrap opportunity in the flow"): CSS 2.2 §9.3.1 takes it out of
+       normal flow, as core/layout/line_box.c also skips it. */
     if (is_computed_is(el, "position", "absolute") || is_computed_is(el, "position", "fixed")) return;
     if (!is_computed_is(el, "float", "none"))
         DFAIL("CSS 2.2 §9.5 \"Floats\" takes this child out of the line, and css-sizing-3 §5.2 \"Intrinsic "
@@ -454,38 +343,24 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
               "this walk's sum along the line nor a maximum over it, and there is no arm here that is right by "
               "default. BUILD §9.5.1's float placement, which core/layout/line_box.c and "
               "core/layout/flow_position.c both name as the same absent capability");
-    /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes" MAKES A REPLACED ELEMENT AN ATOMIC INLINE-LEVEL
-       BOX WHEREVER ITS `display` PUTS IT, and this test used to sit inside the `inline` arm below — where the
-       comment beside it said exactly this sentence and the code applied it to ONE `display` value. CSS 2.2
-       §9.2.2's own list is "replaced inline-level elements, inline-block elements, and inline-table elements", three
-       populations of which the FIRST is stated over the element's nature: "a non-replaced element with a
-       `display` value of `inline` generates an inline box", so `display` decides the box only for a
-       NON-replaced one. A replaced `<img style="display:inline-block">` therefore took neither arm and fell to
-       the crash at the end of this function.
-       IT IS HOISTED RATHER THAN COPIED INTO THE SECOND ARM because the alternative is two derivations of one
-       box's contribution: `is_atomic_replaced` below composes CSS 2.1 §10.3.2 "Inline, replaced elements"' used
-       content width, and the atomic arm at the end of this function composes css-sizing-3 §5.1's pair — and
-       CSS 2.1 §10.3.10 "'Inline-block', replaced elements in normal flow" is one sentence saying they are the
-       same question ("Exactly as inline replaced elements."), so two answers to it could only ever drift.
-       IT IS STILL ASKED AFTER §9.7's THREE QUESTIONS ABOVE, which is the order CSS 2.2 §9.7 "Relationships
-       between 'display', 'position', and 'float'" states and core/layout/block_flow.c asks them in: an
-       out-of-flow or floated replaced box is not on this line at all, so classifying it as atomic first would
-       put an `<img style="float:left">` in a run §9.5 takes out of it. */
+    /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes" makes a replaced element an atomic inline-level box
+       whatever its `display` ("a non-replaced element with a `display` value of `inline` generates an inline
+       box"), so a replaced `inline-block` is answered here too, once. CSS 2.1 §10.3.10 "'Inline-block', replaced
+       elements in normal flow" is "Exactly as inline replaced elements.", so one derivation serves both.
+       It is asked after the out-of-flow and float tests, CSS 2.2 §9.7 "Relationships between 'display',
+       'position', and 'float'"' order as in core/layout/block_flow.c, so a floated `img` is not put in the
+       run. */
     if (replaced_element_of(el).replaced) { is_atomic_replaced(r->m, el); return; }
     d = is_computed(el, "display");
     inline_box = strcmp(d, "inline") == 0;
-    /* FREED BEFORE EITHER CRASH AND READ AGAIN BY NEITHER, for the reason `tr_wraps` states: a DFAIL is
-       compiled out in release and control falls through it, so a `free` on each side of one is a double free
-       that only the release build reaches. */
+    /* Freed before either crash: a `DFAIL` compiles out in release and control falls through, so a `free` on
+       each side would double free (see `tr_wraps`). */
     free(d);
     if (inline_box) {
-        /* HTML §15.3.4 "Phrasing content" FIRST, because what it declares changes the PARTITION and not a term
-           in the sum. css-sizing-3 §2.1's max-content inline size is what CSS 2.2 §10.3.5 "Floating,
-           non-replaced elements" computes "by formatting the content without breaking lines other than where
-           explicit line breaks occur", so a `br` this walk did not see would not be a small error in the
-           answer — it would report a whole paragraph's width as the width of
-           its longest line. core/layout/line_box.c's walk over the same children asks the same component the
-           same question, which is what keeps the two from disagreeing about how many lines a run has. */
+        /* HTML §15.3.4 "Phrasing content" first: a `br` changes the partition, not a term. The max-content size
+           formats content "without breaking lines other than where explicit line breaks occur" (CSS 2.2
+           §10.3.5 "Floating, non-replaced elements"), so a missed `br` reports a paragraph's width as its
+           longest line. core/layout/line_box.c asks the same component. */
         switch (phrasing_break_of(el)) {
         case PHRASING_BREAK_FORCED:
             text_run_measure_add_forced_break(r->m, el);
@@ -509,61 +384,32 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
         case PHRASING_BREAK_NONE:
             break;
         }
-        /* A REPLACED ELEMENT HAS ALREADY LEFT, above the `display` read — see there for why the question is
-           asked of the element's NATURE before its `display` and not inside this arm. What reaches here is
-           CSS 2.2 §9.2.2's "non-replaced element with a `display` value of `inline`", which is the one box the
-           section calls an INLINE BOX rather than an atomic one, and the descent below is its content.
-           THE ORDER MATTERS AND IS NOT ALPHABETICAL: an atomic inline has no text of THIS run inside it to
-           descend to, so the question has to be settled before the two edges bracket anything. */
+        /* Replaced elements left above, so this is CSS 2.2 §9.2.2's "non-replaced element with a `display` value of
+           `inline`", an inline box whose content is the descent below (an atomic inline has no text of this run
+           inside it, so that is settled before the edges). */
         /* §5.5: "inline box boundaries do not introduce a forced line break or soft wrap opportunity in the
-           flow", and css-text-3 §4.1.1's collapsing crosses the boundary too ("even one outside the boundary
-           of the inline containing that space, provided both spaces are within the same inline formatting
-           context"). So an inline box's text is not a second run beside this one — it IS this run, and the
-           descent adds it in document order exactly as a text child of `parent` would be. Each character
-           carries its OWN element as its style, which is what makes css-text-3 §5.5's per-element questions
-           (the advance measure, and the `white-space` at a boundary) answerable per character afterwards. */
-        /* THE TWO EDGES BRACKET THE DESCENT, which is the whole of §2.2's placement: emitted in call order, so
-           the opening edge precedes the box's content in the run and the closing edge follows it, and the
-           run's own break-position mapping is what then puts each on the line its fragment is on. They are
-           emitted even when both are ZERO, because an edge occupies a POSITION and that position is what says
-           which line an otherwise-empty inline box sits on. */
+           flow", and css-text-3 §4.1.1's collapsing crosses them ("even one outside the boundary of the inline
+           containing that space, provided both spaces are within the same inline formatting context"). So the
+           inline box's text is this run, added in document order, each character styled by its own element. */
+        /* The two edges bracket the descent in call order, and the run's break mapping puts each on its
+           fragment's line. They are emitted even when zero: an edge's position says which line an empty
+           inline box is on. */
         text_run_measure_add_box_edge(r->m, el, is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, false));
         is_walk(r, el);
-        /* §9.2.1.1's "open at the end of the line": the run ended INSIDE this inline box, so this fragment
-           has no closing edge and the next anonymous block box's fragment of the same box has no opening
-           one. The leading edge above was emitted because the run did NOT start inside it — the entry that
-           resumes a run mid-tree never calls this arm for an already-open ancestor. */
+        /* §9.2.1.1's "open at the end of the line": the run ended inside this box, so no closing edge here and
+           no opening edge on the next fragment. A run resumed mid-tree never calls this arm for an already-open
+           ancestor, so its leading edge is withheld too. */
         if (r->past_end) return;
         text_run_measure_add_box_edge(r->m, el, is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, true));
         return;
     }
-    /* THE LEVEL OF EVERY CHILD THIS WALK REACHES, ASSERTED ONCE FOR BOTH ORIGINS. Two different sections
-       guarantee it and they now guarantee the same thing. For a child of the MEASURED box it is CSS 2.2 §9.2.1
-       "Block-level elements and block boxes"' dispatch, asked over the whole list before this walk ran ("A
-       block container box either contains only block-level boxes or establishes an inline formatting context
-       and thus contains only inline-level boxes"), plus §9.2.1.1's run delimitation, which ends a run AT a
-       block-level box rather than inside it. For a child of a `display: inline` box this walk descended into
-       it is §9.2.1.1's SECOND paragraph, RUN: an inline box containing an in-flow block-level box is broken
-       around it and the block-level box "becomes a sibling of those anonymous boxes", so a container holding
-       one is not §9.4.2's context at all and core/layout/block_flow.c's classification sends it down §9.4.1's
-       stack — where the run delimitation refuses the split it cannot yet express, one call before this walk
-       would meet it.
-       THE OTHER TWO KINDS CANNOT REACH THIS LINE EITHER, and by this function's own tests rather than by
-       anyone else's: §9.2's non-generating nodes and §9.3.1's out-of-flow box each returned above, and §9.5's
-       float crashed above under §9.4.2's own reason. The assert is what keeps all four derivations honest if
-       any of those tests is ever moved.
-       WHAT THIS LINE USED TO SAY, AND WHY THE CHANGE IS NOT A NARROWING: a `DFAILF` stood on the block-level
-       arm telling its reader to build §9.2.1.1's breaking, and it named the right file and the right function
-       for HALF the work — the classification, which descends now. Its second half said "this file's §9.4.1 arm
-       below maximises over the three boxes it produced, with no arm needed here at all", AND THAT HALF IS NOW
-       SIMPLY TRUE: the box list is enumerated over the container's CONTENT, so §9.2.1.1's ONE child node
-       yielding THREE boxes is a run, a break and a run in `block_flow_next_block_box`'s own sequence, and
-       `is_block_context` below maximises over exactly that.
-       THE ARGUMENT THIS PARAGRAPH USED TO CARRY IS RETIRED AND IS REWRITTEN RATHER THAN DELETED, because it
-       is the one a reader re-deriving this walk would reach for again: it said there is "no run for
-       `is_block_context` to maximise over until that boundary becomes a position in content order", naming a
-       sibling-stepping entry that RETURNED A SIBLING. The boundary is such a position now and that entry is
-       gone; the enumeration is `block_flow_next_block_box`, and both of its consumers take the run whole. */
+    /* Every child reaching here is inline-level. For a direct child, CSS 2.2 §9.2.1 "Block-level elements and
+       block boxes"' dispatch ("A block container box either contains only block-level boxes or establishes an
+       inline formatting context and thus contains only inline-level boxes") plus §9.2.1.1's run delimitation
+       guarantee it. For a child inside a `display: inline` box, §9.2.1.1's second paragraph makes an in-flow
+       block-level box "a sibling of those anonymous boxes" on the container's stack, enumerated by
+       `block_flow_next_block_box`, so the run ends before it. Non-generating nodes, out-of-flow boxes and
+       floats returned or crashed above; the assert keeps those tests honest. */
     DCHECK(block_flow_child_kind(parent, c) == BLOCK_FLOW_CHILD_INLINE,
            "a child of a box whose inline formatting context is being measured is not INLINE-LEVEL after this "
            "walk's own tests for a non-generating node, for §9.3.1's out-of-flow box and for §9.5's float have "
@@ -573,62 +419,21 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
            "sibling of the anonymous boxes, whether it is a direct child or is reached through an inline box "
            "it breaks — so no run this walk is ever handed may contain one, and whichever of "
            "`bf_content_kind` and `block_flow_next_block_box` stopped agreeing with the other is the fix");
-    /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes"' ATOMIC INLINE-LEVEL BOX THAT IS NOT REPLACED,
-       CONTRIBUTED AS ONE ITEM OF THIS RUN. §9.2.2 is what makes it one item rather than a bracketed descent —
-       such a box participates in its inline formatting context "as a single opaque box" — and css-text-3 §5.5
-       "Line Breaking Details" is why the item is this run's business at all, putting "a soft wrap opportunity
-       before and after each replaced element or other atomic inline" so the min-content partition cuts there.
-       WHICH BOXES REACH THIS LINE IS A CLOSED LIST AND CSS 2.2 §9.2.2 IS NOT WHAT CLOSES IT, which the crash
-       that stood here got wrong and is worth recording because the number and the title were both exactly
-       right. CSS 2.2 §9.2.2's own `display` list is THREE values — "the following values of the 'display' property
-       make an element inline-level: 'inline', 'inline-table', and 'inline-block'" — and its atomic examples
-       are introduced with "such as", which is illustrative by construction. The FOUR-value closure is
-       css-display-3 §2.6 "Precomposed Inline-level Display Values" (`inline-block`, `inline-table`,
-       `inline-flex`, `inline-grid`) and, in THIS tree, core/layout/block_flow.c's `bf_element_child`, whose
-       `inline_level` test is those four plus `inline`. The same crash also said `replaced_element_of` had
-       answered NO on this path and that call had not run at all — it sat inside the `inline` arm — which is
-       what left a replaced `inline-block` falling to a message asserting it was not replaced. It is asked
-       above the `display` read now.
-       CSS 2.2 §9.2.1's DISPATCH AND THE ASSERT ABOVE ARE WHAT MAKE THIS CHILD INLINE-LEVEL EITHER WAY: the measured
-       box "either contains only block-level boxes or establishes an inline formatting context and thus
-       contains only inline-level boxes" and this walk is the second arm, and a child reached THROUGH an inline
-       box is covered by the assert directly above. So this box failed the `display: inline` test, is not
-       replaced, and is inline-level — which leaves exactly the four, and each of them is sized by the module
-       that owns it one level down rather than by an arm here: `intrinsic_inline_sizes` sends an `inline-block`
-       to §9.4's own two formatting contexts, an `inline-table` to CSS 2.1 §17.5.2.2 Automatic table layout, an
-       `inline-flex` to css-flexbox-1 §9.9 "Intrinsic Sizes", and an `inline-grid` to a crash naming css-grid-2
-       §5.2 "Sizing Grid Containers". A `switch` here would be a second classification of one box.
-       THE THREE STEPS ARE css-sizing-3 §5.2 "Intrinsic Contributions"' AND THEY ARE THE SAME THREE §9.4.1's
-       STACK APPLIES TO A BLOCK-LEVEL CHILD — §5.1's measurement of the box's own content, then the box's own
-       `width`/`min-width`/`max-width` over it, then §2.2's OUTER size ("Intrinsic size contributions are based
-       on the outer size of the box; for this purpose, auto margins are treated as zero"). css-sizing-3 §5.2
-       states the
-       contribution as "the size of the content box of a hypothetical auto-sized float that contains only that
-       box", which says nothing whatever about the box's own outer display type, so the composition is `is_-
-       block_context`'s verbatim and is CALLED rather than repeated: two spellings of it would be one document
-       with two ideas of what a child declaring `width: 500px` contributes.
-       THE PAIR IS WHY THE ITEM NOW CARRIES TWO SIZES. css-sizing-3 §2.1 "Auto Box Sizes" separates the two by
-       which soft wrap opportunities are taken, and the opportunities inside THIS box are not this run's to
-       take — they are that box's answer to the same question — so under the run's max-content partition this
-       box stands at its max-content contribution and under the min-content partition at its min-content one.
-       A REPLACED box is the one atomic inline for which one number would have sufficed, and that is a fact
-       about REPLACED elements (css-sizing-3 §5.1 gives it two equal numbers, because no arm of CSS 2.2 §10.3.2
-       "Inline, replaced elements" reads the containing block's inline size) rather than about atomic inlines.
-       THIS ARM CANNOT RE-ENTER THE MEASUREMENT IT IS PART OF, ESTABLISHED BY READING THE CALL PATH AND NOT BY
-       A GUARD. `intrinsic_inline_sizes` is stated by css-sizing-3 §5.1 over hypothetical containing blocks, so
-       it reads no real one; `el` is a strict DESCENDANT of the box being measured and every call this arm makes
-       descends further, so the recursion is bounded by the depth of a tree that has no cycles. The two
-       dispatches that leave this component keep that property and say so at their own sites —
-       core/layout/table_width.h records in full that `table_intrinsic_inline_sizes` is the containing-block-free
-       entry and that `table_widths` is NOT, precisely because a table inside a float or an inline-block returns
-       through CSS 2.2 §10.3.5's shrink-to-fit into `intrinsic_inline_sizes` for the ANCESTOR and recurses until
-       the C stack ends. So the hazard is real, it is one entry away, and this arm is on the safe side of it:
-       `<span style="display:inline-block"><table>` reaches `table_intrinsic_inline_sizes` and never
-       `table_widths`. `is_require_acyclic` above guards a DIFFERENT cycle — a PERCENTAGE resolving against the
-       width this walk is producing — and it is not owed here, because css-sizing-3 §5.2.1 "Intrinsic
-       Contributions of Percentage-Sized Boxes" substitutes every cyclic percentage on this box away before it
-       is read: `intrinsic_declared_sizing_px` answers false for one and `is_intrinsic_edge_px` resolves one
-       against zero. */
+    /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes"' atomic inline-level box that is not replaced, one
+       item of this run ("as a single opaque box"; css-text-3 §5.5 "Line Breaking Details": "a soft wrap
+       opportunity before and after each replaced element or other atomic inline").
+       What reaches here is inline-level, non-replaced and not `display: inline`, which leaves css-display-3
+       §2.6 "Precomposed Inline-level Display Values" (`inline-block`, `inline-table`, `inline-flex`,
+       `inline-grid`; core/layout/block_flow.c's `bf_element_child` tests those plus `inline`). Each is sized by
+       its own module through `intrinsic_inline_sizes` (§9.4, CSS 2.1 §17.5.2.2 Automatic table layout,
+       css-flexbox-1 §9.9 "Intrinsic Sizes", or a crash naming css-grid-2 §5.2 "Sizing Grid Containers").
+       The steps are css-sizing-3 §5.2 "Intrinsic Contributions"', as §9.4.1's stack applies them: §5.1's
+       measurement, the box's `width`/`min-width`/`max-width` (`is_declared_inline_sizes`), then §2.2's outer
+       size, regardless of outer display type. The item carries both sizes: the box's own wrap opportunities are
+       its answer, not this run's.
+       No re-entry: `intrinsic_inline_sizes` reads no real containing block and descends a cycle-free tree, and
+       an inline-block table reaches `table_intrinsic_inline_sizes`, never `table_widths` (table_width.h).
+       Cyclic percentages are already substituted, so `is_require_acyclic` is not owed. */
     {
         IntrinsicInlineSizes inner = is_declared_inline_sizes(el, intrinsic_inline_sizes(el));
         IntrinsicInlineSizes outer = intrinsic_outer_contribution(el, inner);
@@ -637,23 +442,15 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
     }
 }
 
-/* CSS 2.2 §9.4.2's INLINE FORMATTING CONTEXT, MEASURED, over ONE RUN of `el`'s CONTENT. The run is given as
-   the inline box that is OPEN where it starts, the first node inside that box to measure, and the node it ends
-   BEFORE — a shape the ENTRY below composes out of core/layout/block_flow.h's `BlockFlowRun`, which names a
-   run by the two breaks that bracket it. It is private because those three are not independent: the open box
-   and the first node are derived from one break, and a caller free to pair them itself could open a fragment
-   the run does not start in.
-   THE RUN CLOSES ITS OPEN ANCESTORS ON THE WAY OUT, WHICH IS §9.2.1.1's OWN SENTENCE: "if a border had been
-   set on the P element in the above example, the border would be drawn around C1 (open at the end of the line)
-   and C2 (open at the start of the line)". A fragment the run STARTS inside is open at the start — no leading
-   edge, and this loop never calls `is_child` on the ancestor itself, which is what withholds it — and it is
-   closed here when the walk leaves it. A fragment the run ENDS inside is open at the end, which `is_child`
-   answers with `past_end` at its own site.
-   THE STEP OUT IS TO THE ANCESTOR'S NEXT SIBLING AND NEVER TO THE ANCESTOR, which sounds like a detail and is
-   the defect this loop was first written with: resuming at the ancestor re-enters the whole fragment that was
-   just closed, so a container's LAST run walked its own content a second time and its maximum came back at
-   nearly twice the width. `at` is allowed to be NULL — an ancestor with nothing after it inside its own parent
-   still has a closing edge to emit, which is exactly the "even if either side is empty" half of the split. */
+/* CSS 2.2 §9.4.2's inline formatting context, measured over one run of `el`'s content, given as the inline box
+   open where it starts, the first node to measure, and the node it ends before. The entry below composes these
+   from core/layout/block_flow.h's `BlockFlowRun`; private because the open box and first node derive from one
+   break.
+   Open ancestors are closed on the way out, per §9.2.1.1 ("the border would be drawn around C1 (open at the end
+   of the line) and C2 (open at the start of the line)"): a fragment the run starts inside gets no leading edge
+   (this loop never calls `is_child` on it) and its trailing edge here; one it ends inside gets `past_end`.
+   The step out goes to the ancestor's next sibling, never back to the ancestor, which would re-walk the closed
+   fragment. `at` may be absent: an ancestor with nothing after it still gets its closing edge. */
 static IntrinsicInlineSizes is_run_sizes(lxb_dom_element_t *el, lxb_dom_element_t *open, BoxTreeChild at,
                                          lxb_dom_node_t *end)
 {
@@ -678,10 +475,8 @@ static IntrinsicInlineSizes is_run_sizes(lxb_dom_element_t *el, lxb_dom_element_
         box = lxb_dom_interface_node(open);
         if (box == root) break;
         text_run_measure_add_box_edge(&m, open, is_intrinsic_edge_px(open, INTRINSIC_AXIS_HORIZONTAL, true));
-        /* THE STEP OUT IS OVER THE BOX TREE IN BOTH HALVES — which box this fragment is inside, and where its
-           content continues after it. css-display-3 §2.5's splice makes neither of those a DOM pointer: a
-           `contents` element between this inline box and its box parent is not a box to step out INTO, and the
-           position after this box is outside every such element. */
+        /* The step out is over the box tree (box parent, then next box sibling): under css-display-3 §2.5's
+           splice neither is a DOM pointer. */
         up = box_tree_parent(box_tree_child_of_node(box));
         DCHECK(up != NULL,
                "CSS 2.2 §9.2.1.1's run was inside a box with no BOX parent, so the walk cannot leave it — the "
@@ -690,17 +485,13 @@ static IntrinsicInlineSizes is_run_sizes(lxb_dom_element_t *el, lxb_dom_element_
         at = box_tree_next_sibling(up, box_tree_child_of_node(box));
         open = up;
     }
-    /* THE MEASUREMENT DOES NOT EXIST UNTIL THIS RUNS, and that is [UAX14]'s doing rather than a lifecycle
-       anybody chose: its rules read forward past the boundary they decide (LB25's `PO × OP IS NU` by three
-       characters) and LB9 puts an unbounded run of combining marks between the two, so no per-character state
-       can settle a break as the character arrives. core/layout/text_run.h states it in full. It RETAINS what
-       the walk collected — CSS 2.2 §9.4.2's fill is a third partition over the same [UAX14] pass — so the
-       release below is this function's to make and the two numbers are read between them. */
+    /* The measurement exists only after this: [UAX14]'s rules read forward past the boundary they decide (LB25 by
+       three characters, LB9 across any number of marks); see core/layout/text_run.h. It retains the items, so
+       this function releases them after reading the two numbers. */
     text_run_measure_finish(&m);
     out.min_content = text_run_measure_min_content(&m);
     out.max_content = text_run_measure_max_content(&m);
-    /* §5.1's answer is a PAIR OF NUMBERS and not a view onto the run, so the measurement ends here: this
-       component asks §9.4.2 nothing, and a caller of it holds no items to be handed. */
+    /* §5.1's answer is two numbers, so the measurement ends here. */
     text_run_measure_release(&m);
     return out;
 }
@@ -710,29 +501,19 @@ IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, BlockFlow
     BlockFlowRunStart start;
 
     DCHECK(el != NULL, "CSS 2.2 §9.4.2's context was measured with no block container to style it");
-    /* WHERE THE RUN BEGINS IS THE RUN TYPE'S OWN ANSWER AND IS NO LONGER COMPOSED HERE. This site used to read
-       `after`'s NEXT SIBLING inside `after`'s PARENT — one of three copies of that pair — and
-       core/layout/block_flow.h states why the copies had to go: css-display-3 §2.5 "Box Generation: the none
-       and contents keywords"' splice makes a DOM next sibling the wrong position, so the walk that FILLS this
-       run and the walk that MEASURES it would each have had to be taught the same rule. `open` is the element
-       whose fragment the run continues and whose style its content carries. */
+    /* Where the run begins is `block_flow_run_start`'s answer (core/layout/block_flow.h), shared with the fill so
+       css-display-3 §2.5's splice is handled once. `open` is the element whose fragment the run continues. */
     start = block_flow_run_start(el, run);
     return is_run_sizes(el, start.open, start.at, run.end);
 }
 
-/* css-sizing-3 §5.2's CONTRIBUTION OF ONE BOX ON THE STACK, out of the box's own two INNER sizes and its two
-   edges — §2.2 "Intrinsic Size Contributions": "Intrinsic size contributions are based on the outer size of the
-   box; for this purpose, auto margins are treated as zero."
-   §2.2's FLOOR IS THE SECOND SENTENCE OF THAT PARAGRAPH AND IT IS LIVE HERE, not a formality: "if the ideal
-   max-content contribution would be smaller than the min-content contribution (e.g. due to the use of negative
-   margins), the effective max-content contribution is floored by the min-content contribution." One box's two
-   contributions share ONE edge sum, so a negative margin ON THIS BOX cannot invert them — what can is a
-   negative margin on an inline box INSIDE it, because CSS 2.1 §8.3 "Margin properties" allows one ("negative
-   values for margin properties are allowed") and §2.1's two readings of the run add it a different number of
-   times: the max-content size sums the whole line once, the min-content size takes the widest SEGMENT, and a
-   negative margin subtracts from the first without touching the second. So the floor is arithmetic that fires
-   on a real document, and asserting the order instead of applying it would be a crash on a page CSS 2.1
-   permits. */
+/* css-sizing-3 §5.2's contribution of one box from its two inner sizes and edges (§2.2 "Intrinsic Size
+   Contributions": "based on the outer size of the box; for this purpose, auto margins are treated as zero").
+   §2.2's floor ("if the ideal max-content contribution would be smaller than the min-content contribution (e.g.
+   due to the use of negative margins), the effective max-content contribution is floored by the min-content
+   contribution") is live: a negative margin on an inline box inside the run (allowed by CSS 2.1 §8.3 "Margin
+   properties") lowers the max-content line sum but not the widest min-content segment. So it is applied, not
+   asserted. */
 static IntrinsicInlineSizes is_contribution(IntrinsicInlineSizes inner, CssPx edge)
 {
     IntrinsicInlineSizes out;
@@ -744,20 +525,10 @@ static IntrinsicInlineSizes is_contribution(IntrinsicInlineSizes inner, CssPx ed
 
 IntrinsicInlineSizes intrinsic_outer_contribution(lxb_dom_element_t *el, IntrinsicInlineSizes inner)
 {
-    /* THE INNER PAIR IS NOT ASSERTED IN EITHER DIRECTION, and both refusals were written here and deleted,
-       which is worth keeping because each looked like an invariant this codebase owes. An ORDER between them
-       is exactly what §2.2's own floor exists to repair — "if the ideal max-content contribution would be
-       smaller than the min-content contribution (e.g. due to the use of negative margins), the effective
-       max-content contribution is floored by the min-content contribution" — so asserting it would crash on a
-       page CSS 2.1 §8.3 "Margin properties" permits ("negative values for margin properties are allowed"),
-       which is the reason `is_contribution` states in full at its own site. NON-NEGATIVITY is the same
-       sentence one term earlier: the operand that inverts the pair is a negative margin on a box INSIDE the
-       run, and nothing stops it driving a max-content sum below zero before this floor sees it.
-       WHAT IS ASSERTED IS THE SHAPE, at `intrinsic_inline_sizes`'s own boundary, where the pair leaves the
-       walk that produced it — a value this codebase computed. Here the pair is the CALLER's arithmetic, and
-       §2.2's floor is a rule about it rather than a check on it.
-       NULL is CSS 2.2 §9.2.1.1's and css-flexbox-1 §4's ANONYMOUS box — see intrinsic_size.h — whose edge sum
-       is zero because neither section gives it any declaration to compute one from. */
+    /* The inner pair is not asserted: an inversion is what §2.2's floor repairs (see `is_contribution`), and a
+       negative inline-box margin inside the run can make a max-content sum negative. The shape is asserted at
+       `intrinsic_inline_sizes`' boundary, where this codebase computed the pair. NULL is an anonymous box with
+       zero edges (see intrinsic_size.h). */
     if (el == NULL) return is_contribution(inner, css_px(0.0));
     return is_contribution(inner, css_px_add(is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, false),
                                             is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, true)));
@@ -765,61 +536,27 @@ IntrinsicInlineSizes intrinsic_outer_contribution(lxb_dom_element_t *el, Intrins
 
 CssPx intrinsic_outer_block_contribution(lxb_dom_element_t *el, CssPx inner)
 {
-    /* §2.2's OUTER SIZE OVER ONE NUMBER, WHICH IS WHY THIS IS A SECOND ENTRY AND NOT AN AXIS PARAMETER ON THE
-       PAIR ABOVE. The two differ in exactly one operation and it is §2.2's FLOOR: "if the ideal max-content
-       contribution would be smaller than the min-content contribution (e.g. due to the use of negative
-       margins), the effective max-content contribution is floored by the min-content contribution." That is a
-       rule about a PAIR THAT CAN INVERT, and css-sizing-3 §3.2 gives a box's block size ONE intrinsic size —
-       both keywords are sent to "its automatic size" in the section's own words — so there is no second member
-       for it to invert against and applying it here would be a comparison of a number with itself.
-       THE EDGE ARITHMETIC IS SHARED AND ONLY THE COMPOSITION IS NOT, which is the same split
-       `is_intrinsic_pad_border_px` states at its own site: every rule in it is stated of a PROPERTY and not of
-       an axis, so `IS_EDGE`'s vertical row plus one call is the whole of the difference. A second derivation of
-       the margin's `auto`, the cyclic percentage's zero basis and the padding's clamp would be a second answer
-       free to drift from this one. */
+    /* §2.2's outer size over one number: a block size has one intrinsic size (css-sizing-3 §3.2: both keywords
+       mean "its automatic size"), so there is no pair for §2.2's floor. The edge arithmetic is the shared table's
+       vertical row. */
     if (el == NULL) return inner;
     return css_px_add(inner, css_px_add(is_intrinsic_edge_px(el, INTRINSIC_AXIS_VERTICAL, false),
                                        is_intrinsic_edge_px(el, INTRINSIC_AXIS_VERTICAL, true)));
 }
 
-/* ONE DECLARED SIZING VALUE of `ch` in the INLINE axis, as a CONTENT-box width, for css-sizing-3 §5.2
-   "Intrinsic Contributions" — true when the property states a size this walk must apply, false when it states
-   none. THE FALSE ARM IS TWO DIFFERENT SECTIONS AGREEING ON ONE ANSWER and they are kept apart because they
-   are stated of different properties:
-     - THE KEYWORD, which for each of the three is its own initial value and which css-sizing-3 §3.2 "Sizing
-       Values: the <length-percentage [0,∞]>, auto | none, stretch, min-content, max-content, and fit-content
-       values" gives no size at all — `auto` on a preferred size "specifies an automatic size", `none` on a max
-       size is "no limit on the size of the box", and `auto` on a min size "resolves to a used value of 0 for
-       backwards-compatibility" whose "resolved value of this keyword is zero for boxes of all CSS2 display
-       types (block and inline boxes, inline blocks, and all table display types)". The first two leave the
-       measured pair exactly where the walk put it; the THIRD is a real floor and is applied at the caller,
-       where the zero is one `css_px_max` rather than a second arm here. §3.2's own "unless otherwise defined
-       by the relevant layout module" is what css-flexbox-1 §4.5 "Automatic Minimum Size of Flex Items"
-       overrides, and no child this walk reaches is a flex item: §9.4.1's stack is what put it here.
-     - A PERCENTAGE OR A CALCULATION CARRYING ONE, which is CYCLIC by construction — the containing block of a
-       child measured by this walk is the box whose inline size this walk is being run to produce — and which
-       §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes" resolves for BOTH by two rules that are not
-       the same rule. For `width` and `max-width` it substitutes the whole value: "the entire value of any max
-       size property or preferred size property (width, max-width, height, max-height) specified as an
-       expression containing a percentage … that is cyclic is treated, for the purpose of calculating the box's
-       intrinsic size contributions only, as that property's initial value". For `min-width` the substitution is
-       not stated at all and a different sentence is: "For the min size properties, as well as for margins and
-       paddings (and gutters), a cyclic percentage is resolved against zero for determining intrinsic size
-       contributions." Both land on the same answer — this property states no size for the walk to apply —
-       which is why one `return false` serves them — but writing it as one RULE would be wrong about
-       `min-width`, whose initial value is `auto` and whose §5.2.1 answer is a NUMBER.
-   THE KEYWORD IS STILL ASSERTED, and the assertion is the one this file has always made: §3.2's level-3
-   additions (`stretch`, `min-content`, `max-content`, `fit-content`, `calc-size()`) are values this engine
-   records no computed-value rule for, so one arriving here is a value the cascade produced and no section of
-   it defines — core/layout/used_value.c asserts the same thing about the same grammar.
-   IT IS EXPORTED BECAUSE §5.2 IS NOT ITS ONLY CONSUMER: css-flexbox-1 §9.9.3 "Flex Item Intrinsic Size
-   Contributions" reads the same three properties of a FLEX ITEM for the same reason — a flex item's
-   percentage main size resolves against its flex container's inner main size, which is the number
-   core/layout/flex_intrinsic_size.h is being run to produce, so §5.2.1's cyclic case is the same case there.
-   WHAT IS NOT SHARED IS THE COMPOSITION, and that is the whole reason this is the per-property half and not
-   `is_declared_inline_sizes`: §5.2 makes a declared size REPLACE the measurement and §9.9.3 takes the LARGER
-   of the two. Handing a flex item the composed entry would report one section's answer under the other's
-   name. */
+/* One declared sizing value of `ch` on `axis`, as a content-box extent, for css-sizing-3 §5.2 "Intrinsic
+   Contributions": true when it states a size to apply. False has two sources:
+     - the initial keyword, which css-sizing-3 §3.2 "Sizing Values: the <length-percentage [0,∞]>, auto | none,
+       stretch, min-content, max-content, and fit-content values" gives no size (`auto` "specifies an automatic
+       size", `none` is "no limit"; a min size's `auto` "resolves to a used value of 0", applied by the caller
+       since css-flexbox-1 §4.5 "Automatic Minimum Size of Flex Items" overrides it for flex items);
+     - a percentage, cyclic in an intrinsic pass. §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes"
+       treats a cyclic preferred or max size "as that property's initial value", and resolves a min size's
+       "against zero"; both mean no size to apply here, though `min-width`'s is a number (zero).
+   §3.2's level-3 keywords have no computed-value rule here, so any other keyword is asserted away (as in
+   core/layout/used_value.c). Exported for css-flexbox-1 §9.9.3 "Flex Item Intrinsic Size Contributions",
+   whose item percentages are cyclic against the container's main size too; the composition is not shared
+   (§5.2 replaces the measurement, §9.9.3 takes the larger). */
 bool intrinsic_declared_sizing_px(lxb_dom_element_t *ch, IntrinsicAxis axis, const char *name,
                                  const char *initial, CssPx *out)
 {
@@ -847,23 +584,12 @@ bool intrinsic_declared_sizing_px(lxb_dom_element_t *ch, IntrinsicAxis axis, con
                 name);
         return false;
     }
-    /* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' CONVERSION. Under `border-box` the
-       declared length is the BORDER box's, so the content box is that length less this box's two paddings and
-       two border widths, floored at zero because an inner size cannot be negative.
-       THE TWO SIDES ARE THE ONES `axis` NAMES AND THAT IS THE WHOLE OF §3.3's DIMENSIONALITY. The section's own
-       sentence is "the specified padding and border widths of the box are subtracted from that size", and a
-       `height` is bounded by the TOP and BOTTOM pair exactly as a `width` is by the left and right one —
-       css-writing-modes-4 §7.2 "Dimensional Mapping" is what pins each property triple to its physical extent.
-       Reading the horizontal pair for a declared `height` would subtract one dimension's surround from the
-       other's length, which is a wrong number for any box with asymmetric padding and is what this parameter
-       exists to make unspellable. IT IS CITED AND NOT QUOTED
-       for the reason core/layout/table_column_width.c records at the same sentence: the two Editor's Draft
-       editions word the flooring differently, so a one-line quotation is a quotation of ONE edition.
-       THE SURROUND IS THE INTRINSIC ONE AND NOT THE USED ONE, which is this file's own split and not a
-       shortcut: a percentage padding here resolves against the number this walk is producing, and §5.2.1
-       resolves exactly that against ZERO. `used_value.h`'s surround answers the other question — the one a
-       line box asks, where the containing block's width is already determined — and reaching for it here
-       would make the conversion self-referential. */
+    /* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' conversion: under `border-box` the
+       content box is the length less the two paddings and border widths `axis` names, floored at zero ("the
+       specified padding and border widths of the box are subtracted from that size"; a `height` takes the top
+       and bottom pair, css-writing-modes-4 §7.2 "Dimensional Mapping"). Cited, not quoted (editions differ; see
+       core/layout/table_column_width.c). The surround is the intrinsic one (§5.2.1's zero basis), not
+       used_value.h's, which answers the determined-width question. */
     declared = len.px;
     box_sizing = css_computed_value(ch, "box-sizing");
     DCHECK(box_sizing != NULL,
@@ -881,31 +607,16 @@ bool intrinsic_declared_sizing_px(lxb_dom_element_t *ch, IntrinsicAxis axis, con
     return true;
 }
 
-/* css-sizing-3 §5.2 "Intrinsic Contributions"' CONTRIBUTION OF A CHILD THAT DECLARES ITS OWN INLINE SIZE, as
-   CONTENT-box widths. core/layout/intrinsic_size.h used to say this walk did NOT do it; that sentence is
-   rewritten there rather than deleted, because the reason it gave for refusing is exactly the reason this
-   exists and a reader who re-derives it would re-introduce the refusal.
-   §5.2 STATES THE CONTRIBUTION AS A HYPOTHETICAL FLOAT AND THAT IS WHY A DECLARATION REPLACES THE MEASUREMENT
-   RATHER THAN BEING MAXED WITH IT: "a box's min-content contribution/max-content contribution in each axis is
-   the size of the content box of a hypothetical auto-sized float that contains only that box". A float
-   containing one `width: 500px` box is 500px wide whether that box's text measures ten pixels or a thousand —
-   the box overflows the float in the second case and does not widen it — so `<div style="width:500px">x</div>`
-   inside a float contributes 500px and not one glyph. THE MEASURED PAIR IS §5.1's SIZE AND IS A DIFFERENT
-   QUESTION, which is why it is an operand here and not the answer: §5.1 "Intrinsic Sizes" defines both sizes
-   of a box as the size it would have "given an auto preferred size in that axis and no minimum or maximum size
-   in that axis", so §5.1 is stated with these three properties REMOVED and §5.2 is where they are applied.
-   BOTH HALVES TAKE THE SAME DECLARATION, and that is the section rather than a saving: a declared `width` is
-   one number, so the float is that wide under a zero-sized containing block and under an infinite one alike,
-   and the pair collapses. Only the MEASURED pair can differ between them.
-   THE ORDER IS §10.4's AND IT IS NOT COMMUTATIVE. CSS 2.1 §10.4 "Minimum and maximum widths: 'min-width' and
-   'max-width'" runs the tentative width against `max-width` FIRST and then against `min-width`, so a box with
-   `min-width: 300px; max-width: 100px` is 300px and not 100px — the minimum wins, which is what taking the
-   maximum LAST expresses. §10.4's own mechanism is a second pass rather than a clamp on the number, and that
-   difference is invisible HERE for a reason worth stating: its substitution re-solves whichever MARGIN was
-   `auto`, and css-sizing-3 §2.2 "Intrinsic Size Contributions" has already fixed every margin on this path —
-   "for this purpose, auto margins are treated as zero" — so no term the second pass would re-solve is still
-   unknown, and the clamp and the pass agree. core/layout/used_value.c runs the real second pass, where a
-   `margin: 0 auto` box's centring depends on it. */
+/* css-sizing-3 §5.2 "Intrinsic Contributions"' contribution of a child that declares its own inline size, as
+   content-box widths. "the size of the content box of a hypothetical auto-sized float that contains only that
+   box": a float around a `width: 500px` box is 500px whatever its text measures, so a declaration replaces the
+   measurement rather than being maxed with it. The measured pair is §5.1's ("given an auto preferred size in
+   that axis and no minimum or maximum size in that axis"), the operand here.
+   Both halves take the same declaration (one number under either containing block). The order is CSS 2.1
+   §10.4 "Minimum and maximum widths: 'min-width' and 'max-width'"'s, max then min, so `min-width: 300px;
+   max-width: 100px` gives 300px. §10.4's second pass re-solves an `auto` margin, already zero under §2.2
+   ("auto margins are treated as zero"), so a clamp is equivalent here; core/layout/used_value.c runs the real
+   pass. */
 static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, IntrinsicInlineSizes measured)
 {
     IntrinsicInlineSizes out = measured;
@@ -919,52 +630,26 @@ static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, Intr
         out.min_content = css_px_min(out.min_content, v);
         out.max_content = css_px_min(out.max_content, v);
     }
-    /* §3.2's `auto` MINIMUM IS A NUMBER AND NOT AN ABSENCE, so the floor runs on both arms of the call above:
-       the keyword resolves to a used 0 for every display type this walk reaches, and §5.2.1 resolves a cyclic
-       percentage min size against zero — one value, reached two ways, and the only reason this is not written
-       as a third `if`. THE FLOOR IS ON THE CONTENT BOX AND NOT ON THE CONTRIBUTION, which is what keeps
-       `is_contribution`'s own recorded reasoning true: a negative MARGIN on this child is added after this
-       returns and can still drive the outer pair below zero, so the non-negativity that function declines to
-       assert is still not assertable. */
+    /* §3.2's `auto` minimum is a used 0, and §5.2.1 resolves a cyclic min size against zero, so the floor runs
+       on both arms. It is on the content box, before a possibly negative margin is added by the caller. */
     if (!intrinsic_declared_sizing_px(ch, INTRINSIC_AXIS_HORIZONTAL, "min-width", "auto", &v)) v = css_px(0.0);
     out.min_content = css_px_max(out.min_content, v);
     out.max_content = css_px_max(out.max_content, v);
     return out;
 }
 
-/* CSS 2.2 §9.4.1 "Block formatting contexts"' CONTEXT, whose intrinsic inline sizes are a MAXIMUM AND NOT A
-   SUM, and the section says why in one sentence: "in a block formatting context, each box's left outer edge
-   touches the left edge of the containing block". The children therefore OVERLAP in the inline axis instead of
-   sharing it, so css-sizing-3 §5.2 "Intrinsic Contributions"' hypothetical float — "a box's min-content
-   contribution / max-content contribution in each axis is the size of the content box of a hypothetical
-   auto-sized float that contains only that box" — must be as wide as the WIDEST of them and no wider. That is
-   the whole of the difference from §9.4.2's walk above, and it is why the two share no step.
-   THE LIST IS NEITHER THE CHILD NODES NOR A PARTITION OF THEM, AND THAT IS §9.2.1.1's DOING TWICE OVER. Its
-   first paragraph forces a mixed container "to have only block-level boxes inside it", so each maximal run of
-   inline-level content becomes one ANONYMOUS BLOCK BOX; its second breaks an inline box around an in-flow
-   block-level box inside it, so ONE child node can yield THREE boxes — "a block box representing the BODY,
-   containing an anonymous block box around C1, the SPAN block box, and another anonymous block box around C2".
-   BOTH are core/layout/block_flow.h's enumeration and neither is re-derived here, because two answers to "what
-   boxes does this container have" is one document with two box trees.
-   THE ENUMERATION IS A LOOP OVER BREAKS AND NOT A SWITCH OVER CHILDREN, and what that retires is worth
-   naming: this walk used to classify each child itself and carry an arm for each `BlockFlowChildKind`. §9.5's
-   FLOAT was one of those arms, and its refusal is not lost — a float is inside some run now, and the run walk
-   crashes on it naming BOTH consequences in one message (the sum along a line and the maximum over the stack,
-   since §9.4.2's "line boxes may vary in width if available horizontal space is reduced due to floats" is what
-   makes a float change its NEIGHBOURS' operands rather than contribute one). The `-Wswitch` forcing function
-   moved with the classification, into the enumeration behind `block_flow_next_block_box`, which is now the
-   one place a fifth kind of box would have to be answered for.
-   THE ANONYMOUS BOX'S EDGES ARE ZERO AND THAT IS A DERIVATION, not an omission. §9.2.1.1: "the properties of
-   anonymous boxes are inherited from the enclosing non-anonymous box …. Non-inherited properties have their
-   initial value … the margins will be 0", so its margin box, its border box and its content box are one
-   rectangle and §2.2's outer size is its inner size unchanged. Its STYLE for the run inside it is `el`'s, by
-   the same sentence.
-   AN EMPTY RUN IS A REAL ANSWER AND NOT A CASE TO SKIP: a maximum over no boxes is zero, which is the same
-   number §9.4.2's walk returns for the same document, so the range before the first block-level box and the
-   one after the last are measured like any other and contribute nothing when they hold nothing. That is also
-   why routing CSS 2.2 §9.2.1's third state — a block container with no in-flow child at all — to this arm
-   rather than to that one costs nothing and keeps the dispatch a single question. An empty `<td>` is the
-   common shape and core/layout/table_column_width.c asks for one on every table. */
+/* CSS 2.2 §9.4.1 "Block formatting contexts"' context, whose intrinsic inline sizes are a maximum: "each box's
+   left outer edge touches the left edge of the containing block", so children overlap in the inline axis and
+   css-sizing-3 §5.2's hypothetical float is as wide as the widest.
+   The list is §9.2.1.1's boxes, from core/layout/block_flow.h: one anonymous block box per maximal inline run,
+   and an inline box broken around a block-level box yields three ("a block box representing the BODY,
+   containing an anonymous block box around C1, the SPAN block box, and another anonymous block box around
+   C2"). The loop is over `block_flow_next_block_box`'s breaks, where `-Wswitch` over box kinds lives; a float
+   sits inside a run and the run walk refuses it (§9.4.2: "line boxes may vary in width if available horizontal
+   space is reduced due to floats").
+   Anonymous boxes have zero edges ("Non-inherited properties have their initial value … the margins will be
+   0") and `el`'s style. An empty range contributes nothing, so a container with no in-flow child (an empty
+   `<td>`, which core/layout/table_column_width.c asks about constantly) takes this arm at no cost. */
 static IntrinsicInlineSizes is_block_context(lxb_dom_element_t *el)
 {
     lxb_dom_node_t *prev = NULL;
@@ -976,18 +661,15 @@ static IntrinsicInlineSizes is_block_context(lxb_dom_element_t *el)
         lxb_dom_node_t *brk = block_flow_next_block_box(el, prev);
         IntrinsicInlineSizes one;
 
-        /* §9.2.1.1's ANONYMOUS BLOCK BOX: everything strictly between the previous break and this one. */
+        /* §9.2.1.1's anonymous block box: everything strictly between the previous break and this one. */
         {
             BlockFlowRun run;
 
             run.after = prev;
             run.end = brk;
-            /* §9.2.1.1's ANONYMOUS BLOCK BOX, WHERE THE SECTION GENERATES ONE. A run holding no inline-level
-               content is not a box — "we assume that there is an anonymous block box around 'Some text'" — and
-               `<div><p></p></div>` has ONE box on its stack, not three. A maximum would not notice the empty
-               ones, which is exactly why the test is here: skipping them by the SAME predicate §9.4.1's
-               placement skips them by is what keeps the two walking one box list rather than two that agree
-               only by arithmetic. */
+            /* Only where the section generates one: a run with no inline-level content is not a box ("we assume that
+               there is an anonymous block box around 'Some text'"), so `<div><p></p></div>` has one box. The same
+               predicate §9.4.1's placement uses keeps the two on one box list. */
             if (!block_flow_run_generates_box(el, run)) one = out;
             else one = intrinsic_outer_contribution(NULL, intrinsic_inline_run_sizes(el, run));
         }
@@ -997,52 +679,29 @@ static IntrinsicInlineSizes is_block_context(lxb_dom_element_t *el)
         {
             lxb_dom_element_t *ch = lxb_dom_interface_element(brk);
 
-            /* §5.2's CONTRIBUTION IS TWO STEPS AND THE ORDER IS THE SECTION'S: §5.1's measurement of the
-               child's own content, then the child's own `width`/`min-width`/`max-width` over it, then §2.2's
-               OUTER size. A declaration applied after the outer step would be clamping a MARGIN BOX by a
-               property CSS 2.1 §10.2 states of the content box. */
+            /* §5.2's order: §5.1's measurement, then the child's `width`/`min-width`/`max-width`, then §2.2's
+               outer size; a declaration applied after the outer step would clamp a margin box by a content-box
+               property. */
             one = intrinsic_outer_contribution(ch, is_declared_inline_sizes(ch, intrinsic_inline_sizes(ch)));
         }
         out.min_content = css_px_max(out.min_content, one.min_content);
         out.max_content = css_px_max(out.max_content, one.max_content);
-        /* STRICTLY FORWARD, which is what makes this terminate: the enumeration is seeded with the box it just
-           returned and is exclusive of it, so no content position is visited twice and the whole loop costs
-           one pass over the content however many boxes §9.2.1.1 produced. */
+        /* Strictly forward: the enumeration is exclusive of the box it is seeded with, so the loop is one pass. */
         prev = brk;
     }
 }
 
-/* css-sizing-3 §5.1 "Intrinsic Sizes" FOR A REPLACED BOX — the dispatch below states why this walk is not its
-   algorithm; this is what is.
-   css-sizing-3 §5.1 IS TWO RULES AND WHICH ONE APPLIES IS A FACT ABOUT THE NATURAL DIMENSIONS, NOT ABOUT THE
-   BOX TYPE. Its closing paragraph hands the general case straight back to CSS 2 — css-sizing-3 §5.1: "since a
+/* css-sizing-3 §5.1 "Intrinsic Sizes" for a replaced box. Which rule applies depends on natural dimensions: "a
    block-level or inline-level replaced element whose height or width behaves as auto is effectively defined to
-   use its max-content size (CSS2§10.3.2), this specification applies the rules above to the undefined case of
-   a replaced element whose height and width both behave as auto" — and states its own rules only for the
-   population its own sentence names, css-sizing-3 §5.1 again: "the intrinsic sizes of replaced elements
-   WITHOUT NATURAL SIZES are defined below". So an element that HAS a natural size takes CSS 2.2 §10.3.2
-   "Inline, replaced elements", and one that has none takes css-sizing-3 §5.1's own two arms below.
-   THE §10.3.2 ARMS ARE NOT COPIED HERE. They are core/layout/used_value.h's `used_value_replaced_auto_width_px`
-   — the same five arms the used-value dispatch runs, in the same order, over the same `ReplacedElement` — and a
-   second copy would be one replaced box with two widths that are free to disagree. That header spells the
-   section CSS 2.1 §10.3.2 because that is its file's edition; the number and the title are IDENTICAL in both
-   (`engine/specindex/css21.json` and `css22.json` each give §10.3.2 the title "Inline, replaced elements"), so
-   the two sites name one algorithm and a reader grepping either edition finds it.
-   BOTH NUMBERS ARE THE SAME NUMBER AND THAT IS A DERIVATION RATHER THAN A SHORTCUT. css-sizing-3 §5.1
-   separates the pair by ONE input — the min-content size is what the box would be "if its containing block was
-   ZERO-sized IN THAT AXIS" and the max-content size "if its containing block was INFINITELY-sized in that
-   axis" — and no arm of CSS 2.2 §10.3.2 reads the containing block's INLINE size at all: four of the five are
-   a natural dimension or a constant, and the fifth multiplies the used HEIGHT by the ratio, which resolves
-   against the containing block's BLOCK size. That hypothetical touches only the considered axis (css-sizing-3
-   §5.1 writes "in that axis" twice), so both hypotheticals leave every operand CSS 2.2 §10.3.2 reads unchanged
-   and the two sizes are equal. Reporting one measurement twice is therefore the answer and not an
-   approximation of it — which is also why a replaced box never has a soft wrap opportunity to take or leave,
-   the one thing css-sizing-3 §2.1 "Auto Box Sizes" says the pair otherwise differs over.
-   THE BOX TYPE IS NOT ASKED, AND css-sizing-3 §5.1 IS WHAT MAKES THAT SOUND: its definition is the size the
-   box would have "if it was a float", and CSS 2.2 §10.3.6 "Floating, replaced elements" answers a float in one
-   sentence — "the used value of 'width' is determined as for inline replaced elements". So a replaced flex item, a
-   replaced float and a replaced inline all have the same intrinsic inline size and the dispatch below reaches
-   none of the box-type branches in used_value.c's `uv_replaced_size`, which are about a USED width. */
+   use its max-content size (CSS2§10.3.2)", while "the intrinsic sizes of replaced elements without natural
+   sizes are defined below". So a box with a natural size takes CSS 2.2 §10.3.2 "Inline, replaced elements",
+   via core/layout/used_value.h's `used_value_replaced_auto_width_px` (the same arms the used value runs; that
+   header's CSS 2.1 §10.3.2 has the same number and title in both corpora), and one without takes §5.1's arms.
+   Both sizes are one number: §5.1 varies only the containing block "in that axis", and no arm of §10.3.2 reads
+   the containing block's inline size (four arms are a natural dimension or constant; the fifth multiplies the
+   used height by the ratio). The box type is not asked: §5.1 sizes it "if it was a float", and CSS 2.2 §10.3.6
+   "Floating, replaced elements" says "the used value of 'width' is determined as for inline replaced
+   elements". */
 static IntrinsicInlineSizes is_replaced_sizes(lxb_dom_element_t *el, const ReplacedElement *rep)
 {
     IntrinsicInlineSizes out;
@@ -1053,28 +712,16 @@ static IntrinsicInlineSizes is_replaced_sizes(lxb_dom_element_t *el, const Repla
            "does not classify as one — core/layout/replaced_element.h makes every other field of a "
            "non-replaced answer meaningless and zeroed, so reading a natural dimension off it would size a box "
            "CSS 2.2 §10.3.3 owns from dimensions it does not have");
-    /* css-sizing-3 §5.1's OWN RULES, over the population its own sentence names: "the intrinsic sizes of
-       replaced elements WITHOUT NATURAL SIZES are defined below". css-images-3 §4.1 "Object-Sizing
-       Terminology" is where those dimensions are defined and it is explicit that each "may or may not exist",
-       so "without natural sizes" is the absence of BOTH — an object with a natural height and no natural width
-       still has one, and CSS 2.2 §10.3.2's second arm is written for exactly it. */
+    /* §5.1's own rules: "without natural sizes" is the absence of both (css-images-3 §4.1 "Object-Sizing
+       Terminology": each "may or may not exist"); an object with only a natural height takes §10.3.2's
+       second arm. */
     if (!rep->has_width && !rep->has_height) {
-        /* css-sizing-3 §5.1's FIRST ARM, "if it has a preferred aspect ratio". css-sizing-3 §2.3 "Intrinsic
-           Size Constraints" is what makes the preferred ratio the natural one here: "unless otherwise
-           specified, a box's preferred aspect ratio is its natural aspect ratio if it has one", and the only
-           thing that could specify otherwise is css-sizing-4's `aspect-ratio` PROPERTY, which lexbor's CSS
-           property registry does not carry at all (`grep -ril aspect engine/lexbor/source/lexbor/css/` answers
-           nothing) — so no cascade in this build can state one and `rep->ratio` is the whole of the answer.
-           THE ARM'S WORDING IS THE COMMITTED CORPUS'S AND THE LIVE DRAFT HAS SINCE GAINED A QUALIFIER, which
-           is recorded rather than silently adopted: `engine/specindex/csssizing3.json` is stamped
-           `specUpdated: 1 September 2026` and holds "if it has a preferred aspect ratio", while the Editor's
-           Draft at that entry's own `base` is stamped 6 September 2026 and reads "non-degenerate preferred
-           aspect ratio". Writing the LIVE text would leave this one line red until somebody regenerates the
-           corpus; writing the corpus's leaves the whole family to move together when one does. THE TWO AGREE
-           IN SUBSTANCE AND THAT IS WHY NO CODE CHANGES EITHER WAY: css-images-3 §4.1 "Object-Sizing
-           Terminology" already says an object with a degenerate ratio "is treated as having no natural aspect
-           ratio", and core/layout/replaced_element.c applies exactly that test before setting `has_ratio`, so
-           a degenerate one never reaches this line under either wording. */
+        /* §5.1's first arm, "if it has a preferred aspect ratio". css-sizing-3 §2.3 "Intrinsic Size Constraints":
+           "unless otherwise specified, a box's preferred aspect ratio is its natural aspect ratio if it has
+           one"; Lexbor's registry has no `aspect-ratio` property, so `rep->ratio` is the answer. The wording is
+           the committed corpus's (`engine/specindex/csssizing3.json`); the live draft now says
+           "non-degenerate preferred aspect ratio", the same in substance because core/layout/replaced_element.c
+           never sets `has_ratio` for a degenerate ratio (css-images-3 §4.1 "Object-Sizing Terminology"). */
         if (rep->has_ratio)
             DFAIL("css-sizing-3 §5.1 \"Intrinsic Sizes\"' FIRST replaced arm — a replaced element with a "
                   "NON-DEGENERATE PREFERRED ASPECT RATIO and NEITHER natural size, which is the case CSS 2.2 "
@@ -1109,24 +756,15 @@ static IntrinsicInlineSizes is_replaced_sizes(lxb_dom_element_t *el, const Repla
                   "wrong answer, identical on both sides of the seam, so a release build lays such a box out "
                   "at the default replaced size rather than leaving the intrinsic pass and the used-value "
                   "pass disagreeing about one element");
-        /* css-sizing-3 §5.1's SECOND ARM, "if it has no preferred aspect ratio": "for both the min-content
-           size and max-content size: if the box has a <length> as its computed minimum size
-           (min-width/min-height) in that dimension, use that size … otherwise, use 300px for the width and/or
-           150px for the height as needed." The dimension here is the INLINE one, so the property is
-           `min-width` and the fallback is the 300.
-           IT CONSULTS A MIN SIZE THAT css-sizing-3 §5.1's OWN DEFINITION REMOVES, AND THAT IS THE SECTION'S
-           DOING RATHER THAN THIS FILE'S. css-sizing-3 §5.1 defines the pair "given an auto preferred size in
-           that axis AND NO MINIMUM OR MAXIMUM SIZE in that axis", which is why intrinsic_size.h says the three
-           properties are removed and css-sizing-3 §5.2 "Intrinsic Contributions" is where they are applied —
-           and this fallback names `min-width` anyway, deliberately, with its own Note saying so: "this
-           author-controllable behavior is made possible by the new auto value for the min size properties".
-           Applying it twice costs nothing, because §5.2's step floors by the same number this arm returned.
-           THE FALLBACK IS `used_value_default_replaced_size` AND NOT A LITERAL 300. css-sizing-3 §5.1 writes
-           the bare number and CSS 2.2 §10.3.2's own last arm qualifies it — "if 300px is too wide to fit the device,
-           UAs should use the width of the largest rectangle that has a 2:1 ratio and fits the device instead"
-           — and that entry is the one place in this tree that owns the qualified answer. Writing the literal
-           would give one box an intrinsic width and a used width that disagree on a narrow device, which is a
-           worse failure than either rule alone. */
+        /* §5.1's second arm, "if it has no preferred aspect ratio": "for both the min-content size and max-content
+           size: if the box has a <length> as its computed minimum size (min-width/min-height) in that
+           dimension, use that size … otherwise, use 300px for the width and/or 150px for the height as needed."
+           It consults `min-width` although §5.1 removes min sizes; its Note intends that ("this
+           author-controllable behavior is made possible by the new auto value for the min size properties"),
+           and §5.2's later floor by the same number is harmless.
+           The fallback is `used_value_default_replaced_size`, not a literal 300: CSS 2.2 §10.3.2 qualifies it
+           ("if 300px is too wide to fit the device, UAs should use the width of the largest rectangle that has
+           a 2:1 ratio and fits the device instead"), so intrinsic and used widths agree. */
         if (!intrinsic_declared_sizing_px(el, INTRINSIC_AXIS_HORIZONTAL, "min-width", "auto", &size))
             size = used_value_default_replaced_size(false);
     } else {
@@ -1143,12 +781,9 @@ static IntrinsicInlineSizes is_replaced_sizes(lxb_dom_element_t *el, const Repla
     return out;
 }
 
-/* CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property's BOX, WHOSE MODULE OWNS IT — the same
-   route core/layout/used_value.c's `uv_table_used_width` takes for the USED width, over the same grid, so one
-   table's two numbers are answered by one component out of one structure.
-   THE GRID IS BUILT PER CALL AND NOT CACHED, for core/layout/block_flow.h's reason and used_value.c's: a
-   layout is per-flow state, so a cached grid is shared state solver/dom_cow.h's delta does not swap and a
-   stale one is another flow's document. */
+/* CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property's box, sized by its own module over the
+   same grid core/layout/used_value.c's `uv_table_used_width` uses. The grid is built per call (per-flow
+   state solver/dom_cow.h does not swap). */
 static IntrinsicInlineSizes is_table_sizes(lxb_dom_element_t *el)
 {
     TableGrid grid;
@@ -1165,23 +800,17 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
     IntrinsicInlineSizes out;
 
     DCHECK(el != NULL, "css-sizing-3 §5.1's intrinsic inline sizes were asked for with no element");
-    /* THE REPLACED QUESTION IS ASKED FIRST, exactly as CSS 2.2 §10.3 asks it before the box type: a replaced
-       element's intrinsic sizes come from its NATURAL DIMENSIONS and not from its children, which for most of
-       them it has none of in the DOM at all. Answering it from this walk would report an `img` as being as wide
-       as the text of its `alt` attribute is not. */
+    /* The replaced question first, as CSS 2.2 §10.3 asks it before the box type: a replaced element is sized
+       by natural dimensions, not children (an `img` is not as wide as its `alt`). */
     {
         ReplacedElement rep = replaced_element_of(el);
 
-        /* THE CLASSIFICATION IS READ ONCE AND HANDED OVER, not asked again inside. HTML §15.4.2 "Images"
-           decides what an `img` is FROM ITS IMAGE REQUEST, which core/layout/replaced_element.h says
-           "CHANGES under the running flow as a reply lands" — so a second `replaced_element_of` beneath this
-           test could answer about a different moment, and the arms below read dimensions off exactly the
-           answer that said the element was replaced. */
+        /* Read once and handed over: HTML §15.4.2 "Images" decides from the image request, which changes as a
+           reply lands, so a second `replaced_element_of` could answer about a different moment. */
         if (rep.replaced) return is_replaced_sizes(el, &rep);
     }
-    /* §9.4.2's OWN CONDITION, asked before anything is measured: "an inline formatting context is established "
-       by a block container box that CONTAINS NO BLOCK-LEVEL BOXES". A box that is not a block container at all
-       does not establish either of CSS 2.2's two formatting contexts, so neither algorithm applies to it. */
+    /* §9.4.2's condition ("an inline formatting context is established by a block container box that contains
+       no block-level boxes") applies only to block containers; other boxes are dispatched to their modules. */
     {
         char *d = is_computed(el, "display");
         bool container = block_flow_display_is_block_container(d);
@@ -1189,19 +818,11 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
         bool table = table_box_kind_generates_table_box(table_box_kind(d));
 
         free(d);
-        /* css-flexbox-1 §3 "Flex Containers: the flex and inline-flex display values"' box, WHOSE MODULE
-           OWNS IT — the first of the two dispatches the crash below RECORDS rather than asks for. §9.9's
-           answer is the same PAIR in the same box as this function's, so a consumer never learns which module
-           produced its number. THIS CLAUSE USED TO CALL FLEX "the one `display` that now has a component" and
-           the arm beneath this one made that false in the same diff that added it — which is why the count is
-           gone rather than corrected: the next `display` to gain a module falsifies any number written here. */
+        /* css-flexbox-1 §3 "Flex Containers: the flex and inline-flex display values"' box: css-flexbox-1 §9.9's
+           answer is the same pair in the same box. */
         if (flex) return flex_intrinsic_inline_sizes(el);
-        /* CSS 2.1 §17.2 The CSS table model's `table` and `inline-table`, WHOSE MODULE OWNS THEM — the second
-           dispatch the crash below RECORDS, taken rather than asked for. §17.5.2.2 Automatic table layout's
-           answer is the same PAIR in the same box as this function's, so a consumer never learns which module
-           produced its number. THE TWO `display` VALUES TAKE ONE ARM because nothing in §17.5.2 tells them
-           apart: they differ only in the outer display type §17.4 Tables in the visual formatting model gives
-           the wrapper, which is the CALLER's question and not this one's. */
+        /* CSS 2.1 §17.2 The CSS table model's `table` and `inline-table`: §17.5.2.2 Automatic table layout's pair
+           in the same box; one arm because only §17.4's wrapper (the caller's question) tells them apart. */
         if (table) return is_table_sizes(el);
         if (!container)
             DFAIL("css-sizing-3 §5.1's intrinsic inline sizes were asked of a box that is NOT A BLOCK CONTAINER, "
@@ -1256,45 +877,27 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
                   "crash pointed. That arm needs its own box tree and its own track list first and is "
                   "not this walk with a different accumulator");
     }
-    /* CSS 2.2 §9.2.1 "Block-level elements and block boxes"' ALTERNATIVE, ASKED ONCE OVER THE WHOLE CHILD LIST
-       AND BEFORE EITHER ALGORITHM RUNS: "A block container box either contains only block-level boxes or
-       establishes an inline formatting context and thus contains only inline-level boxes." The two are
-       different algorithms sharing no step — §9.4.2's sum along a line and §9.4.1's maximum down a stack — so
-       which one this box gets is a fact about its CHILD LIST and never a case discovered part-way through a
-       measurement. A walk that classified as it accumulated had already begun summing an inline run before it
-       met the block-level child that made the sum the wrong operation.
-       IT IS core/layout/block_flow.h's PREDICATE AND NOT A SECOND COPY OF §9.4.2's CONDITION, which is the
-       reason that predicate is exported: core/layout/block_flow.c's own stack chooses between the same two
-       sections over the same child list, and two answers to one question is one document with two box trees,
-       free to disagree about whether a run of white space is content.
-       ITS CLASSIFICATION REFUSES MORE THAN THIS FILE'S DOES, and that is a consequence to know rather than a
-       defect to work around: a `display: contents` child, a misparented table-internal box and an unmodelled
-       `display` each abort inside that classification, naming block_flow.c's own reason — which is sharper
-       than what this file said, because all three are the same BOX TREE this list is not yet, and building it
-       there fixes every walk at once. A FLOAT IS NO LONGER ONE OF THEM AND USED TO BE: that classification
-       answered it with §9.4.1's clearance, which is the placement walk's consequence and not an intrinsic
-       size's, so a reader arriving from a shrink-to-fit width was handed the wrong half of one absence. The
-       classification now reports the float as a FACT and each caller states its own section's consequence at
-       its own line — this file's is in `is_block_context`, over §9.4.2's shortened line box. */
+    /* CSS 2.2 §9.2.1 "Block-level elements and block boxes"' alternative, asked once over the whole child list
+       before either algorithm: "A block container box either contains only block-level boxes or establishes an
+       inline formatting context and thus contains only inline-level boxes." It is core/layout/block_flow.h's
+       predicate, shared with that file's stack.
+       That classification refuses some boxes itself (a misparented table-internal box, an unmodelled
+       `display`), naming block_flow.c's reason. A float is reported as a fact and refused by this file's run
+       walk over §9.4.2's shortened line box. */
     if (block_flow_establishes_inline_context(el)) {
         BlockFlowRun whole;
 
-        /* §9.4.2's context with an ELEMENT to name it is the WHOLE of `el`'s content, which is the run with no
-           break on either side of it — the same shape `is_block_context` would reach for a container with no
-           block-level box at all, stated here rather than discovered. */
+        /* The whole of `el`'s content as one run, with no break on either side. */
         whole.after = NULL;
         whole.end = NULL;
         out = intrinsic_inline_run_sizes(el, whole);
     } else {
         out = is_block_context(el);
     }
-    /* THE TWO ARE NON-NEGATIVE because every advance summed into them is, and a negative intrinsic size would
-       make CSS 2.2 §10.3.5's formula produce a negative used width for a box with content in it — which
-       css-sizing-3 §3.1 "Sizing Properties"' "the inner size is always floored at zero" would then hide
-       rather than the derivation being fixed. §3.1 AND NOT §3.3, whose floor is a step of the `border-box`
-       conversion that §10.3.5 does not perform; core/layout/used_value.h argues the two apart. Asserted
-       here, at the boundary where the two numbers leave this component, so a caller never has to floor
-       them. */
+    /* Asserted at the boundary where the pair leaves this component, so callers need not floor it: a negative
+       size would give CSS 2.2 §10.3.5's formula a negative used width that css-sizing-3 §3.1 "Sizing
+       Properties"' "the inner size is always floored at zero" would hide (§3.1, not §3.3, whose floor is a
+       step of the `border-box` conversion). */
     DCHECK(out.min_content.px >= 0.0 && out.max_content.px >= 0.0,
            "css-sizing-3 §5.1's intrinsic inline sizes came out NEGATIVE. Each is a sum of advance measures, "
            "every one of which is a non-negative OpenType 'hmtx' advanceWidth times a non-negative computed "
