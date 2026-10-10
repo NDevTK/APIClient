@@ -352,63 +352,29 @@ typedef enum {
     IDL_ULONG_OR_DICT_BY_ENTRY,
 } IdlArgType;
 
-/* WHAT A DECLARED TYPE ASKS OF UNKNOWN EXTERNAL INPUT — ONE statement of it, because it was TWO and they
-   DISAGREED. The conversion stated it once as a pass-through's `t != … && t != … && t != …` chain and once as
-   the ASSERT guarding §3.2.25's arm block, which restated it as "no concolic reaches here at all". Those are
-   different sets: the chain lists the types the pass-through does NOT answer for, and three of them are types
-   at which a concolic legitimately arrives — so the assert fired for every `any`-typed argument that was
-   handed unknown external input (Indexed Database §4.5 The IDBObjectStore interface writes
-   `IDBRequest put(any value, optional any key)`, which is two of them on one line) and named a union arm that
-   value could not have reached, because the arms it names are all types the chain crossed.
-   A hand-maintained mirror of a hand-maintained list is the defect, not either list; both readers ask THIS.
-   The three answers are the three things a conversion can do to a value whose bytes it does not know. */
+/* What a declared type's conversion does to unknown external input, stated once: the argument conversion's
+   pass-through and the assert over §3.2.25's arm block both read idl_concolic_rule, so they cannot disagree. */
 typedef enum {
-    /* NOTHING IS ASKED AND NOTHING IS COERCED, so unknown external input is already what the body receives:
-       `any` (no conversion at all by declaration — including every position past a non-variadic member's
-       declared arity), §3.2.17's dictionary (not a value that crosses at all, but a bag of member READS, each
-       a request like any other and each yielding another unknown), and §3.2.15's interface brand (whose only
-       answer for a value that is not a platform object is a TypeError, and a TypeError de-taints nothing). */
+    /* Nothing is coerced, so unknown input is already what the body receives: `any` (including every position
+       past a non-variadic member's declared arity), a dictionary (a bag of member reads, each a request
+       yielding another unknown), and an interface brand (whose only answer for a non-platform object is a
+       TypeError). */
     IDL_CONCOLIC_UNASKED = 0,
-    /* THE CONVERSION COERCES — ToString, ToNumber, ToBoolean, §3.2.18's enumeration check. Opacity has to
-       SURVIVE a coercion or the value stops forking control flow and stops being solvable at a sink, so the
-       value CROSSES AS ITSELF and the body asks it for what it needs (concolic_shape_c for the bytes a Text
-       node carries, the attribute taint shadow for a value parked in the DOM). It is the answer
-       JSON.stringify gives an opaque field: yield the opaque, never a de-tainting placeholder. */
+    /* The conversion coerces (ToString, ToNumber). Opacity must survive the coercion, so the value crosses as
+       itself and the body asks it for what it needs (concolic_shape_c for bytes, the attribute taint shadow
+       for a value parked in the DOM), as JSON.stringify yields an opaque field rather than a placeholder. */
     IDL_CONCOLIC_CROSSES,
-    /* THE CONVERSION'S ANSWER OVER UNKNOWN INPUT IS A SET OF FEASIBLE WORLDS THE MEMBER'S ALGORITHM TELLS
-       APART — so it is neither crossed nor picked but FORKED, asked at the type's own resolution site so both
-       worlds run. A type is only ever this when the SITE that resolves it asks that fork — the two assert
-       against each other.
-       TWO SHAPES REACH IT, THEY ARE NOT THE SAME QUESTION, AND THEY ASK DIFFERENT SEAMS — which is why this
-       row is stated as the ANSWER and no longer as a §3.2.25 arm alone:
-         - A UNION ARM THAT IS A TEST OF THE VALUE — Web IDL §3.2.25 Union types step 11 "If V is an Object"
-           against step 12 "If V is a Boolean" and step 18 "If types includes boolean". No `if` a page writes
-           asks that, so it is the machine asking which of its OWN completions it reaches: the OUTCOME seam,
-           quickjs-step.h's step_fork_run, numbered by that site.
-           AND NOT EVERY UNION WHOSE ARM TESTS THE VALUE IS ONE, WHICH IS THE HALF THIS SENTENCE DID NOT SAY
-           AND WHICH A READER APPLIED AS WRITTEN. Taken literally it also covers `(DOMString or Function)`,
-           `(Node or DOMString)` and `(object or DOMString)`, and those three are deliberately CROSSES with a
-           paragraph each saying so — a criterion that does not separate the rows it governs from the rows it
-           does not is a criterion nobody can check. THE DISCRIMINATOR IS WHETHER ONE PLACED VALUE CAN STAND
-           FOR BOTH ARMS. Those three place the value ITSELF whichever arm is taken, so crossing an unknown
-           loses nothing that was ever going to be computed here and the member's own algorithm still decides
-           what to make of it — which is a fact about the member and not about the value, and is why the body
-           is the only place that can. A union with a DICTIONARY arm cannot be crossed on those terms: step
-           11.4 "If types includes a dictionary type, then return the result of converting V to that
-           dictionary type" runs §3.2.17 Dictionary types' member WALK, and step 15 "If types includes a
-           string type, then return the result of converting V to that type" runs no walk at all — so the two
-           arms differ in what the conversion PERFORMS, and a value placed in the slot is already on exactly
-           one of them. Cross it and the arm is still decided, just later and by whichever `JS_IsString` the
-           body reaches first, from the SOLVER's value class rather than from the page's value.
-         - Web IDL §3.2.3 boolean ITSELF, whose one step is ToBoolean and whose answer for a concolic is
-           decided by ECMAScript §7.1.2 ToBoolean ( arg )'s last step ("Return true") rather than by anything
-           about the page's value. That is the SAME PREDICATE `if (p)` asks, so it is the BRANCH seam —
-           step_tobool_run — and `if (cfg.on)` and a member taking `cfg.on` are ONE gate with one constraint
-           entry, one pin and one domain. Nothing is numbered, because a truth value has two completions and
-           the branch seam computes which one a real session takes from the value's own example.
-       Written as an ARM that is a test of the value, this row read as being about unions alone, and the
-       boolean type sat under `default:` at CROSSES for as long as that wording stood — a type whose conversion
-       DECIDES a world, filed with the types whose conversion merely coerces bytes a body still holds. */
+    /* The conversion's answer over unknown input is a set of feasible worlds the member's algorithm tells
+       apart, so both run. A type answers this only if the site that resolves it asks the fork; the two assert
+       against each other. Two shapes reach it, at two seams:
+         - a union or overload arm that tests the value and whose arms differ in what the conversion performs
+           (a dictionary arm runs §3.2.17's member walk; a string arm does not), so no single placed value
+           stands for both. Asked at the outcome seam, step_fork_run, numbered by the site. A union whose arms
+           all place the value itself (`(DOMString or Function)`, `(Node or DOMString)`, `(object or
+           DOMString)`) loses nothing by crossing and stays at CROSSES.
+         - a conversion whose own domain is finite: §3.2.3 boolean, asked at the branch seam
+           (step_tobool_run) so `if (cfg.on)` and a member taking `cfg.on` are one gate, and §3.2.18
+           enumerations, asked at the outcome seam through idl_enum_fork. */
     IDL_CONCOLIC_FORKS,
 } IdlConcolicRule;
 
@@ -417,199 +383,61 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
     switch (t) {
     case IDL_ANY:
     case IDL_DICT:
-    /* `D?` asks the value the same nothing `D` does — §3.2.20's null test reads no property and §3.2.17 is a
-       bag of member READS, each a request like any other and each yielding another unknown. It is filed with
-       IDL_DICT and never with the unions above, whose ARM is a test of the value. */
+    /* §3.2.20's null test reads no property and §3.2.17 is a bag of member reads, as for IDL_DICT. */
     case IDL_DICT_NULLABLE:
-    /* A §3.6 LENGTH-DIFFERING SPLIT WHOSE TWO ENTRIES NEVER COEXIST AT ONE ARITY resolves from the argument
-       count alone, so the conversion has already rewritten this position to the longer entry's number before
-       any rule is asked — the only value the row itself describes is the dictionary at the shorter arity, and a
-       dictionary asks the value nothing. See IDL_UNRESTRICTED_DOUBLE_OR_DICT. */
+    /* The never-coexisting §3.6 splits: by the time the rule is asked the argument count has rewritten the
+       position to one entry's own type, so the only value the row describes is a dictionary or a callable. */
     case IDL_UNRESTRICTED_DOUBLE_OR_DICT:
-    /* THE SAME ANSWER FOR THE SAME REASON WITH A USVString LONGER ARM — see IDL_USVSTRING_OR_DICT_BY_ARITY,
-       whose two entries never coexist at one arity either, so the argument count has already rewritten this
-       position before any rule is asked. It is NOT filed with IDL_USVSTRING_OR_DICT, whose entries DO meet and
-       whose arm is therefore a test of the value. */
     case IDL_USVSTRING_OR_DICT_BY_ARITY:
-    /* THE SAME ANSWER FOR THE SAME REASON, with the dictionary on the other entry: the arity has rewritten this
-       position to one entry's own type before any rule is asked, so the pair is never the type of a value. */
     case IDL_CALLBACK_OR_DICT:
-    /* A POSITION BEHIND THE DISTINGUISHING INDEX resolves from the RECORD of the entry that survived, which
-       was settled before this position was reached — so the conversion has already rewritten this position to
-       that entry's own type before any rule is asked, and what is left is a number (CROSSES on its own row) or
-       a dictionary (a bag of member READS, each yielding another unknown). It is filed here for exactly
-       IDL_UNRESTRICTED_DOUBLE_OR_DICT's reason and never with the unions above, whose ARM is a test of the
-       value: this row tests nothing, and a FORKS rule here would be a second ask at a site with no second
-       question — which the resolution site and this rule assert against each other. */
+    /* Resolved from the entry the distinguishing index already settled, so this row tests nothing and a fork
+       here would be a second ask with no question behind it. */
     case IDL_ULONG_OR_DICT_BY_ENTRY:
-    /* A RECORD IS FILED WITH THE DICTIONARY ABOVE AND FOR THE SENTENCE ALREADY WRITTEN THERE: it is not a
-       value that crosses at all but a bag of READS — §3.2.23's *convert a JavaScript value to record* step 3
-       asks [[OwnPropertyKeys]], its step 4.1 asks each key's descriptor and its step 4.2.2 asks `Get(O, key)`
-       — and each of those is a request like any other, each yielding another unknown. What separates it from a
-       dictionary is only WHERE the key list comes from, which is not a question about the value's type.
-       THE UNKNOWN-KEY-SET FORK IS NOT THIS TYPE'S AND MUST NOT BE DECLARED HERE. An enumeration of unknown
-       external input forks over whether it holds an own member at all and then walks a per-position chain,
-       each position asking whether there is a member beyond the ones already named; that ask belongs to
-       step_ownkeys_run, which states the question in its own words there and which owns
-       `keys_pred` and `keys_probe` for it, and it is asked once for every consumer of the request rather than
-       once per declared type. Declaring FORKS here would be this conversion asking a second time, at a site
-       with no second question to ask — and a type is only ever FORKS when the site that resolves it asks that
-       fork, which the two assert against each other. */
+    /* A record is a bag of reads ([[OwnPropertyKeys]], each key's descriptor, each Get), each a request
+       yielding another unknown. The unknown-key-set fork belongs to step_ownkeys_run (`keys_pred`,
+       `keys_probe`), which asks it once for every consumer; declaring FORKS here would ask it twice. */
     case IDL_RECORD_USVSTRING_STRING_OR_SEQUENCE:
     case IDL_INTERFACE:
         return IDL_CONCOLIC_UNASKED;
-    /* `(AddEventListenerOptions or boolean)` — the one union of this shape in the DOM. Its arm decides
-       whether DOM §2.7 "Interface EventTarget"'s flatten more options READS `once`, `passive` and `signal`
-       off the value or leaves them at false, null and null, and a null `passive` is the whole of what makes a
-       wheel listener on a Window passive by default — so the two arms differ in what the algorithm observes
-       and neither may be picked for a value nothing is known about. */
+    /* `(AddEventListenerOptions or boolean)`: the dictionary arm makes DOM's flatten more options read `once`,
+       `passive` and `signal`, the boolean arm leaves them at their defaults (a null `passive` is what makes a
+       wheel listener on a Window passive by default). */
     case IDL_DICT_OR_BOOL_FIRST:
-    /* `(boolean or ScrollIntoViewOptions)` — the same fork for the same reason one row down: CSSOM VIEW §6's
-       `scrollIntoView` step 6 makes the boolean arm's `false` set `block` to "end" where the dictionary arm
-       leaves it at "start", and those are two different scroll positions rather than two spellings of one, so
-       neither arm may be picked for a value nothing is known about. */
+    /* `(boolean or ScrollIntoViewOptions)`: the boolean `false` scrolls to "end" where the dictionary stays at
+       "start". */
     case IDL_BOOL_OR_DICT:
-    /* `(DOMString or D)` where D is a DICTIONARY — the same union one arm over, and it sat under `default:`
-       at CROSSES for exactly as long as the row above did and for the same reason. §3.2.25 step 11 "If V is
-       an Object" sends every Object down the dictionary arm and step 15 sends everything else to the string
-       one; a concolic wears an ordinary Object, so the arm was DECIDED for every unknown external input by a
-       fact about this engine's own value class.
-       CROSSING IS NOT THE CURE HERE, WHICH IS WHAT SEPARATES THIS UNION FROM THE THREE THAT STAY AT CROSSES:
-       the dictionary arm RUNS §3.2.17's member walk and the string arm does not, so the placed value is on
-       one arm whatever a body asks of it next. What crossing actually bought was a concolic in the slot that
-       every body of this type tests with `JS_IsString`, and a concolic fails that test by construction — so
-       `new Sanitizer(cfg.preset)` reached HTML §8.6.2 The Sanitizer interface's `configure` and was
-       canonicalized as a CONFIGURATION, and `document.createElement("div", cfg.opts)` reached DOM §4.5
-       Interface Document's create-element step 3 as an options dictionary. Neither is a wrong test in its
-       body; both are the arm being chosen where the arm is not knowable.
-       BOTH ARMS ARE FEASIBLE AND THE ALGORITHMS TELL THEM APART: a preset name is Web IDL §3.2.18
-       Enumeration types' check against `SanitizerPresets` and a configuration is a nine-member walk, and
-       §4.5's `is` is read on one arm and not on the other. So neither may be picked for a value nothing is
-       known about.
-       OUTCOME 0 IS THE DICTIONARY ARM, per step_fork_run's one rule on the numbering — outcome 0 is what a
-       run with no forking policy takes, and it is also the arm §3.2.25 gives the Object an unknown is
-       represented BY, so a no-policy run answers exactly as it did and the STRING world is the one the fork
-       adds. §3.2.25 step 4 "If V is null or undefined" is not part of the fork: null and undefined are real
-       values a concolic is not, and they take the dictionary arm as they always did. */
+    /* `(DOMString or D)`: step 11 sends every Object, and so every concolic, down the dictionary arm. A
+       preset name and a configuration are different algorithms (HTML Sanitizer), as are a string and an
+       options bag for `createElement`. Outcome 0 is the dictionary arm (what a no-policy run takes, since a
+       concolic is an Object); the string world is what the fork adds. Real null and undefined are not part of
+       the fork; they take step 4's dictionary arm. */
     case IDL_STRING_OR_DICT:
-    /* THE §3.6 SPLIT ONE ROW OVER, at the arity where step 4 removed NEITHER entry — the same two conversions
-       the union above chooses between, chosen by a different algorithm. Web IDL §3.6 Overload resolution
-       algorithm step 12.11 ("Otherwise: if V is an Object and there is an entry in S that has one of the
-       following types at position i of its type list, a callback interface type a dictionary type a record
-       type object … then remove from S all other entries") names the dictionary entry for ANY Object and step
-       12.15 sends everything else to the string one, so a concolic — which wears an ordinary Object in this
-       engine — had the entry chosen for it by a fact about the SOLVER's value class.
-       IT IS THE SAME DISCRIMINATOR AND NOT A SECOND POLICY: the surviving entry decides which conversion RUNS
-       — §3.2.17 Dictionary types' member walk against §3.2.12 USVString's scalar value conversion — so no
-       single placed value is on both, and crossing merely moved the choice into whichever `JS_IsString` the
-       body reached first. THE ARITY IS WHAT SCOPES IT. Where the longer entry SURVIVED, §3.6 steps 3-4 have
-       already rewritten this position to that entry's USVString before any rule is asked (see
-       idl_split_longer_type), so this row describes only the arity at which both entries stand and the value
-       is what tells them apart — which is exactly the arity IDL_UNRESTRICTED_DOUBLE_OR_DICT never has, and
-       why that row is UNASKED where this one forks.
-       OUTCOME 0 IS THE DICTIONARY ENTRY, per step_fork_run's rule that outcome 0 is what a run with no forking
-       policy takes — it is the entry step 12.11 gives the Object an unknown is represented BY, so a no-policy
-       run answers exactly as it did and the USVString world is the one the fork ADDS. */
+    /* The §3.6 split at the arity where both entries stand: step 12.11 names the dictionary entry for any
+       Object and step 12.15 the USVString entry otherwise, and the entry decides which conversion runs. At the
+       longer arity steps 3-4 have already rewritten the position (idl_split_longer_type). Outcome 0 is the
+       dictionary entry. */
     case IDL_USVSTRING_OR_DICT:
-    /* THE §3.6 SPLIT WHOSE TWO ENTRIES ARE THE SAME LENGTH, so step 4 removes neither at any arity and the
-       whole decision is step 12's clause chain reading the value. It is the row above's answer over a THIRD
-       feasible world: neither entry declares a string, numeric, boolean, bigint or `any` type at the split
-       position, so no clause between step 12.11's dictionary and the end of the chain names an entry and step
-       12.20's "Otherwise: throw a TypeError" is a world the standard reaches — `port.postMessage(m, "x")`
-       throws where the same call on a Window names a target origin.
-       THE THROW IS THE WORLD A TWO-ARMED FORK DROPS SILENTLY, because unknown external input wears an ordinary
-       Object in this engine and every test at the resolution site is written over that Object. Its outcomes are
-       (0) the dictionary entry, (1) the `sequence<object>` entry, (2) step 12.20's TypeError — see the site,
-       which is where the ask is, and which is what makes the sequence world's own §3.2.21-over-unknown gap a
-       named crash rather than an arm nobody chose. */
+    /* The same-length §3.6 split: outcomes are (0) the dictionary entry, (1) the `sequence<object>` entry and
+       (2) step 12.20's TypeError, which a two-armed fork would drop because a concolic is an Object. */
     case IDL_SEQUENCE_OBJECT_OR_DICT:
-    /* `(BufferSource or D)` — §3.2.25 over Web Cryptography API §14.3.9 "The importKey method"'s `keyData`,
-       and the union whose arms are furthest apart in what the conversion PERFORMS: the dictionary arm runs
-       §3.2.17's whole member walk and the buffer arm reads no property at all. A concolic wears an ordinary
-       Object in this engine, so step 11 "If V is an Object" claimed EVERY unknown external input for the
-       dictionary — the arm decided by a fact about this engine's value class rather than by the page's value,
-       which is the collapse the three unions above are here to prevent.
-       THREE WORLDS AND NOT TWO, which is what separates this row from `(dictionary or boolean)` one line up.
-       That union has a boolean arm and step 12 catches every non-object, so its clause chain never runs out;
-       this one names no string, numeric, boolean or bigint type, so a real primitive that is not null or
-       undefined reaches §3.2.25's OWN step 20 "Throw a TypeError" — `importKey("jwk", "abc", …)` throws where
-       `importKey("jwk", {…}, …)` converts. A two-armed fork would drop that world silently.
-       ITS OUTCOMES ARE (0) the dictionary arm, (1) the buffer-source arm, (2) step 20's TypeError. Outcome 0
-       is the dictionary per step_fork_run's one rule on the numbering — it is the arm §3.2.25 gives the Object
-       an unknown is represented BY, so a run with no forking policy answers exactly as it did and the other
-       two worlds are what the fork ADDS. Outcome 1 is a world this engine cannot yet execute and says so at
-       the site with a named crash rather than being quietly not chosen: §3.2.26 Buffer source types' "get a
-       copy of the bytes held by the buffer source" has no answer over an unknown, because an unknown has no
-       bytes. */
+    /* `(BufferSource or D)`: outcomes are (0) the dictionary arm, (1) the buffer-source arm and (2) step 20's
+       TypeError, reached by a real primitive since this union names no string, numeric, boolean or bigint
+       type. Outcome 1 is a named crash at the site: an unknown has no bytes for §3.2.26 to copy. */
     case IDL_BUFFERSOURCE_OR_DICT:
-    /* Web IDL §3.2.3 boolean — the type whose CONVERSION is the fork, where the two rows above are unions
-       whose ARM is. ECMAScript §7.1.2 ToBoolean ( arg )'s last step is "Return true" and a concolic wears an
-       ordinary Object, so a crossing
-       boolean is not an unconverted value a body still holds: it is a value every `JS_ToBool` in every body
-       answers `true` for, which is the collapse crossing exists to prevent, arriving one type below the union
-       that had it. Both truth values are feasible and the algorithms behind this boundary observe different
-       worlds for them — `cloneNode(deep)` copies a subtree or does not, `open(m, u, async)` is a synchronous
-       XHR or an asynchronous one, `toggle(t, force)` adds a class or removes it — so neither may be picked.
-       BOTH BOUNDARIES ANSWER IT AND THEY ANSWER IT AT THE SAME SEAM, which is why this is one row. §3.2.3 is
-       reached from two places — an ARGUMENT position and a §3.2.17 dictionary MEMBER — and for a while only
-       the first of them forked: the member loop crossed every unknown member as itself, so the pin merely
-       MOVED from the conversion into whatever `JS_ToBool` the body used, and idl_dict_bool had to refuse the
-       value to stop it. Crossing is not the cure for this type at either boundary, for the reason the
-       paragraph above gives: a boolean's only consumer is control flow, so a crossed one has nowhere to go.
-       Both sites ask step_tobool_run — the BRANCH seam — so a page that writes `if (cfg.on)`, passes `cfg.on`
-       to a member and writes `{on: cfg.on}` files ONE constraint entry rather than three that can contradict
-       each other.
-       IDL_BOOLEAN_NO_DEFAULT IS THE SAME TYPE ASKING THE SAME QUESTION, and is here for that reason alone: it
-       differs from IDL_BOOLEAN in what an ABSENT member means (see its declaration), which is a fact about
-       `undefined` and says nothing about what §3.2.3 does with a value that is present and unknown. It sat
-       under `default:` at CROSSES while IDL_BOOLEAN was already here — so on one dictionary
-       (MutationObserverInit) four members were pinned to `true` by the readers the other two had stopped
-       being pinned by. */
+    /* §3.2.3 boolean, at both boundaries (an argument and a §3.2.17 member), through the branch seam
+       step_tobool_run, so `if (cfg.on)`, a member taking `cfg.on` and `{on: cfg.on}` file one constraint
+       entry. A crossed boolean would answer `true` in every body's JS_ToBool. IDL_BOOLEAN_NO_DEFAULT differs
+       only in what an absent member means, not in what §3.2.3 does with a present unknown. */
     case IDL_BOOLEAN:
     case IDL_BOOLEAN_NO_DEFAULT:
-    /* Web IDL §3.2.18 Enumeration types — the SECOND type whose own conversion is the fork, and it is here for
-       the boolean's reason reached by a different route. §3.2.3 forks because ToBoolean has two completions and
-       a representation decides them; Web IDL §3.2.18 Enumeration types forks because its DOMAIN IS FINITE AND
-       DECLARED: "If S is not one of E's enumeration values, then throw a TypeError" is the whole of what a
-       value may be, so the worlds an unknown stands for are the N strings the IDL wrote plus that one refusal —
-       N+1 completions, enumerable from the declaration alone.
-       CROSSING IS NOT THE CURE, AND THAT IS WHAT MOVED THIS ROW. A crossed DOMSTRING reaches a body that asks
-       it for its bytes and carries the taint to a sink; a crossed ENUMERATION reaches a body that was promised
-       one of N strings and got an ordinary Object, so it either aborts on it or answers from this engine's
-       value class — the collapse merely relocated, exactly as it was for the boolean. This type sat under
-       `default:` at CROSSES for as long as that reading of the row above it stood, and the reading was that
-       FORKS is about a union whose ARM is a test of the value: an enumeration has no arms in that sense, so
-       nothing here named it.
-       THE ARMS ARE ITS MEMBERS AS THE PAGE CAN TELL THEM APART, PLUS THE REFUSAL — never one per non-member
-       string. §3.2.18 has ONE throw, and the strings that reach it differ in nothing the algorithm behind this
-       boundary observes; two arms a page cannot tell apart are one world twice. The members themselves ARE told
-       apart, and by the part of this project that most depends on it: Fetch's `credentials` is
-       "omit" / "same-origin" / "include", and picking one for an unknown decides whether a request carries the
-       person's cookies. OUTCOME 0 IS THE FIRST VALUE THE DECLARATION LISTS, per step_fork_run's one rule on the
-       numbering — it is an ORDINARY completion of §3.2.18 rather than its throw, which is what that rule is
-       about, and WHICH member it is comes from the IDL's own list order and from no ranking made here. An
-       algorithm that then refuses the string it got (Fetch §5.4 step 17 refuses a "navigate" mode) is that
-       algorithm's step and not this conversion's exceptional arm.
-       BOTH BOUNDARIES ANSWER IT AND THEY ANSWER IT AT THE SAME SEAM, exactly as §3.2.3's two do — an ARGUMENT
-       position and a §3.2.17 dictionary MEMBER, one statement in idl_enum_fork. It is the OUTCOME seam and not
-       the branch seam: which of the conversion's OWN completions this position reaches is not a predicate any
-       `if` the page writes asks, which is the discriminator quickjs-step.h states at both.
-       ITS NULLABLE TWIN IS NOT HERE, and that is a stated residual rather than an oversight: `E?` has one world
-       more (§3.2.20's null) and therefore a different ask — see IDL_ENUM_NULLABLE, which names what its absence
-       shows. */
+    /* §3.2.18: N+1 completions, the N declared values as the page can tell them apart plus the one refusal
+       (non-member strings are one world, not many). Outcome 0 is the first value the declaration lists, an
+       ordinary completion rather than the throw. Both boundaries ask it at the outcome seam through
+       idl_enum_fork. IDL_ENUM_NULLABLE has one world more and is a residual at its row. */
     case IDL_ENUM:
-    /* §3.6's surviving OVERLOAD ENTRY at a distinguishing index whose two types are a NUMBER and a TYPED ARRAY
-       — the same fork the two `…_OR_DICT` rows above ask, at the one position where the entries differ before
-       the shorter one ends. Crossing is not the cure for the reason it is not theirs: the entry decides which
-       CONVERSION runs at every later position of the call, so no single crossed value is on both, and the
-       choice would merely move into whichever `JS_GetTypedArrayType` the resolution reached first — which
-       answers "not a typed array" for a concolic by construction, so the numeric entry was being picked for
-       every unknown by a fact about this engine's value class rather than by the page's value.
-       TWO OUTCOMES AND NOT THREE, which is the row's own paragraph: step 12.20's TypeError is unreachable
-       here because the chain's numeric fallback always names the shorter entry. Both worlds are real and the
-       algorithms behind them observe different things — one reads `sw`/`sh` and allocates transparent black,
-       the other takes the page's own buffer as the bitmap — so neither may be picked for a value nothing is
-       known about. */
+    /* §3.6's surviving entry at ImageData's distinguishing index: a typed array or a number. Two outcomes,
+       since the numeric fallback always names the shorter entry; one entry allocates transparent black from
+       `sw`/`sh`, the other takes the page's buffer. */
     case IDL_ULONG_OR_IMAGE_DATA_ARRAY:
         return IDL_CONCOLIC_FORKS;
     default:
@@ -617,20 +445,10 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
     }
 }
 
-/* WHICH DECLARED TYPES ASK FOR Web IDL §3.2.15 Interface types' BRAND — "If V implements I, then return … Throw
- * a TypeError", whose `I` a declaration has to state or there is nothing to test against.
- *
- * IT IS ONE STATEMENT BECAUSE IT WAS FIVE. The set lived as the `t ==` chain of each conversion arm that reads
- * a brand plus the DCHECK standing over each of them, and a set written once per reader is the second copy
- * CLAUDE.md names — the one that drifts is the copy nobody runs against reality, and idl_concolic_rule directly
- * above is here for exactly that reason and in exactly this shape. Every reader asks THIS: the three conversion
- * arms, idl_arg_iface's position check, and the seal's sweep over the whole platform, so a type added to the
- * enum that needs a brand is a type all five learn about at once.
- *
- * IDL_INTERFACE_NULLABLE and IDL_SEQUENCE_INTERFACE_NULLABLE are here even though §3.2.20's null rule collapses
- * them to their un-nullable type before any brand is read: the DECLARATION is what the seal and idl_arg_iface
- * see, and a `T?` position whose brand was never stated is a position whose non-null values reach §3.2.15 with
- * nothing to test. The `?` decides whether null is admitted, never whether an interface was named. */
+/* Which declared types need §3.2.15's `I` stated — "If V implements I, then return …; throw a TypeError".
+   One predicate read by the conversion arms, idl_arg_iface's position check and the seal's sweep, so a new
+   branding type is learned by all of them at once. The nullable rows are here because the declaration, not
+   the null rule, is what must name the interface. */
 static inline bool idl_type_brands_interface(IdlArgType t)
 {
     switch (t) {
@@ -638,12 +456,9 @@ static inline bool idl_type_brands_interface(IdlArgType t)
     case IDL_INTERFACE_NULLABLE:
     case IDL_SEQUENCE_INTERFACE:
     case IDL_SEQUENCE_INTERFACE_NULLABLE:
-    /* The union's ARM is the brand test itself — `(Node or DOMString)` picks the object arm exactly when the
-       value implements the interface — so a declaration with no brand cannot even choose an arm. */
+    /* The union's arm is the brand test, so without a brand no arm can be chosen. */
     case IDL_STRING_UNLESS_IFACE:
-    /* `(double or T)`, for the same sentence: §3.2.25's interface clause IS this union's arm, so a declaration
-       with no brand has nothing to ask and every value would take the numeric arm — including the
-       CSSNumericValue the member exists to receive. */
+    /* Likewise: without a brand every value, the CSSNumericValue included, would take the numeric arm. */
     case IDL_DOUBLE_UNLESS_IFACE:
         return true;
     default:
@@ -651,31 +466,10 @@ static inline bool idl_type_brands_interface(IdlArgType t)
     }
 }
 
-/* WHICH DECLARED TYPES ASK FOR Web IDL §3.2.18 Enumeration types' VALUE LIST — "If S is not one of E's
- * enumeration values, then throw a TypeError", whose `E` a declaration has to state or there is nothing to
- * test against. It is the same sentence idl_type_brands_interface directly above answers for §3.2.15's `I`,
- * one axis over, and it is ONE statement here for the same reason that one is: the set lived as each
- * conversion arm's `t ==` chain plus the DCHECK standing over it, and a set written once per reader is the
- * second copy CLAUDE.md names.
- *
- * Every reader asks THIS: idl_arg_enum's position check, the seal's sweep over every declared argument
- * position, and the seal's sweep over every declared DICTIONARY MEMBER — of both roads a member list is
- * recorded by, a member's anonymous dictionary argument and the intern table of named declarations — so a type
- * added to the enum that needs a value list is a type all of them learn about at once.
- *
- * THE CONVERSIONS ARE NOT AMONG THEM AND THAT IS DELIBERATE. An arm converting a value has already resolved
- * the position to ONE type and asks for that type by name (`t == IDL_SEQUENCE_ENUM`), because what it needs to
- * know is which element conversion to run and not whether some type in a set would want a list. Asking this
- * predicate there would collapse the three rows onto one arm, and they are three different conversions: a bare
- * `E` tests the member's own string, an `E?` admits null first, and a `sequence<E>` tests each element inside
- * §3.2.21.1's repeat loop. The predicate answers a DECLARATION-TIME question — was the type given the `E` it
- * needs — and that is the only question with one answer for all three.
- *
- * IDL_ENUM_NULLABLE is here even though §3.2.20's null rule collapses it to IDL_ENUM before any membership
- * test is reached, for idl_type_brands_interface's own reason: the DECLARATION is what the seal and
- * idl_arg_enum see, and a `E?` position whose values were never stated is a position whose non-null values
- * reach §3.2.18 step 2 with nothing to be one of. The `?` decides whether null is admitted, never whether an
- * enumeration was named. */
+/* Which declared types need §3.2.18's value list `E` stated. Read by idl_arg_enum's position check and the
+   seal's sweeps over every argument position and dictionary member, never by a conversion: a conversion has
+   already resolved one type and asks for it by name, because `E`, `E?` and `sequence<E>` are three different
+   conversions. This answers the declaration-time question only. */
 static inline bool idl_type_admits_enumeration(IdlArgType t)
 {
     switch (t) {
@@ -688,49 +482,26 @@ static inline bool idl_type_admits_enumeration(IdlArgType t)
     }
 }
 
-/* WHICH DECLARED MEMBER TYPES PUSH A LEVEL onto §3.2.17's conversion stack — the ONE statement of it, because
- * it is read by TWO things that must agree or the conversion crashes on a budget nobody was wrong about.
- *
- * The DEPTH (idl_members_depth) is what a host sizes its IdlConvFrame block from, and idl_dict_walk_start
- * asserts the block against it; the member LOOP is what actually pushes. A type counted and not pushed wastes a
- * frame, which nothing notices — and a type PUSHED and not COUNTED is a `CHECK` failure on the first push, of a
- * budget the declaration computed as zero. That is exactly what a nested plain dictionary would have hit: the
- * count was written for `sequence<(DOMString or D)>` alone and the loop grew a second pushing type, so the two
- * lists would have drifted the moment either moved. Both readers ask THIS.
- *
- * Each of these names its dictionary beside the member (IdlDictMember::dict) — the union's second arm for the
- * sequence, the member's own type for the other two — which is what makes the count a walk of the DECLARED type
- * tree rather than of the page's data: the tree is finite and ends at its own leaves, so page data nesting
- * deeper does not make the conversion deeper. */
-/* DOES THIS TYPE PUSH A FRAME THAT READS NO DICTIONARY — the SECOND of the two questions
-   `idl_type_pushes_level` used to answer alone, split out here because a `record<K, V>` is exactly where the
-   two diverge and one bit answering two questions is decided by the stricter one.
-   THE TWO QUESTIONS. idl_seal_check_dict_members pairs "pushes a level" with "names a dictionary" in BOTH
-   directions — a member whose type pushes one must name a member list for it, and one that names a list must
-   push. A record pushes a FRAME and names no dictionary at all: its keys come from the page's own object, so
-   there is no declared member list and never could be. Left in the predicate above it would have failed that
-   seal at the declaration; left out of the DEPTH count it would have failed idl_conv_push's capacity CHECK at
-   the first page that used one. So the depth counter asks BOTH predicates and the seal asks only the first.
-   A RECORD COSTS EXACTLY ONE FRAME AND NOTHING UNDER IT, which is why this needs no recursion beside
-   idl_members_depth's: the frame holds the key cursor and the value's sequence, and a record's VALUE type
-   names no further conversion that pushes. A record whose value were itself a record or a dictionary would
-   change that — and would be a new row here, which is where the depth would have to be counted. */
+/* Does this member type push a frame that names no dictionary? A record pushes one frame (its keys come from
+   the page's object, so there is no declared member list) and nothing under it, because its value type pushes
+   nothing. It is a second predicate because the seal pairs idl_type_pushes_level with IdlDictMember::dict in
+   both directions; idl_members_depth counts both. A record whose value pushes would need a row here. */
 static inline bool idl_type_pushes_record(IdlArgType t)
 {
     return t == IDL_RECORD_USVSTRING_STRING_OR_SEQUENCE;
 }
 
+/* Which member types push a §3.2.17 level, each naming its dictionary in IdlDictMember::dict. One predicate
+   read by idl_members_depth (which sizes a host's IdlConvFrame block, asserted by idl_dict_walk_start) and by
+   the member loop that pushes, so a type cannot be pushed against a budget that did not count it. The count
+   walks the declared type tree, which is finite, so page data cannot deepen it. The seal requires a type here
+   to name a dictionary and a member naming one to have a type here. */
 static inline bool idl_type_pushes_level(IdlArgType t)
 {
     switch (t) {
     case IDL_DICT:
     case IDL_DICT_NULLABLE:
     case IDL_SEQUENCE_STRING_OR_DICT:
-    /* `sequence<D>` nests one for the same reason its union sibling above does, and for a reason the seal
-       states from the other side: a member whose type pushes a level MUST name its dictionary and a member
-       that names one MUST push a level. Leaving this out would have made every `sequence<D>` member fail that
-       pair — it names `dict` and would push nothing — which is the seal doing its job and is why this is one
-       predicate and not a list at each reader. */
     case IDL_SEQUENCE_DICT:
         return true;
     default:
@@ -738,207 +509,95 @@ static inline bool idl_type_pushes_level(IdlArgType t)
     }
 }
 
-/* A DICTIONARY MEMBER, as its IDL declares it: the name, the type of its value, and whether the IDL marks it
-   `required` (an absent required member is a TypeError, and for a dictionary `undefined` IS absent). A member
-   with no `required` written is optional, which is what leaving the field off an initialiser gives. */
-/* `values` is the NULL-terminated §3.2.18 value list of a member whose type NAMES AN ENUMERATION — which is
-   every type idl_type_admits_enumeration answers true for and no other, so it is the dictionary-member half of
-   what idl_arg_enum states beside an argument position. It is what §3.2.18 step 2's membership test is against,
-   whether the member is a bare `E` / `E?` or a `sequence<E>` whose ELEMENT conversion runs that same step, and
-   the seal asserts both directions of the pair over every declared member list at once — so a list stated at a
-   type that reads none, or a type that reads one and states none, is a crash at the seal rather than on
-   whichever call first reaches the member.
-   `level` is WHICH DICTIONARY IN THE INHERITANCE CHAIN declares the member — 0 for the LEAST DERIVED
-   dictionary in the chain, counting UP to D itself, which therefore holds the HIGHEST level. §3.2.17 step 3
-   is "in order from least to most derived", so ascending level IS that order; step 4 sorts each dictionary's
-   own members lexicographically among themselves. `FilePropertyBag : BlobPropertyBag` reads endings, type,
-   then lastModified — an order no single sorted list produces, because `lastModified` sorts before `type`.
-   Stating the level is what lets the declaration express that AND still be checkable.
-   THE COUNT IS FROM THE ROOT AND NOT FROM D, and the difference is not pedantic in this tree: this line used
-   to say "0 for the most-derived one's BASE", which names D's IMMEDIATE base and is the same number only for
-   a two-deep chain. `KeyboardEventInit : EventModifierInit : UIEventInit : EventInit` is four deep and is
-   declared here (core/events/ui_event.h splices levels 0-2 and each derived dictionary appends its own at 3),
-   so read the retired sentence literally and EventModifierInit's members take level 0 — which would place
-   them before EventInit's and read the chain inside out.
-   A LEVEL IS NEVER LEFT AT ZERO FOR "the members this dictionary happens to list": a table whose members come
-   from two dictionaries and states one level for all of them PASSES idl_dict_order_check whenever the two
-   orders coincide, which they do for most *EventInit — so the fact is encoded here or it is not encoded at
-   all, and the day a member is added that sorts before an inherited one, the abort names a row order that was
-   never the problem. */
-/* §3.2.17 step 4.1.5's DEFAULT VALUE, which is a THIRD state beside "the page wrote it" and "it is absent": a
-   member whose IDL writes `= …` EXISTS on the converted dictionary even when the page wrote nothing, carrying
-   that value. HTML §8.6.3 is where the difference bites — `SanitizerElementNamespace`'s namespace defaults to
-   the HTML namespace and `SanitizerAttributeNamespace`'s to null, and §8.6.2's canonicalize a sanitizer name
-   ASSERTS both members exist because of it, so `allowElement({name:"p"})` allows an HTML <p> and
-   `allowAttribute({name:"href"})` allows a null-namespace href. Only the two forms the platform declares are
-   here; a member whose IDL writes a different one names its own arm rather than being squeezed into a string. */
+/* §3.2.17 step 4.1.5's default value: a member whose IDL writes `= …` exists on the converted dictionary even
+   when the page wrote nothing (HTML Sanitizer canonicalization asserts SanitizerElementNamespace's namespace
+   exists for that reason). Declaring it means the conversion places it and no reader invents it. Only the
+   forms the platform declares are rows. */
 typedef enum {
     IDL_DEFAULT_NONE = 0,   /* the IDL writes no `= …`: an absent member does not exist */
     IDL_DEFAULT_NULL,       /* `= null` */
     IDL_DEFAULT_STRING,     /* `= "…"`, the string `dflt_str` holds */
-    /* `= 0`. Indexed Database §4.2's IDBVersionChangeEventInit writes it for `oldVersion`, and the difference
-       from IDL_DEFAULT_NONE is the same one this enum's own comment draws: an absent member does not exist, so
-       the reader would have to invent the zero — which is precisely the consumer-side default that cannot be
-       told apart from a measurement. Declared, the conversion places it and the reader asserts it is there. */
-    IDL_DEFAULT_ZERO,
-    /* `= false`. The Console Standard §1.1.1's `assert(optional boolean condition = false, any... data)` writes
-       it, and it is a row here for the same reason IDL_DEFAULT_ZERO is: ToBoolean(undefined) is false, so a
-       member that let the absence stand would be indistinguishable from one whose default was declared — until
-       the day the position's type changes and the two stop agreeing. Declared, the conversion PLACES a real
-       `false` and a body reading argv[0] is reading the IDL's value rather than inventing it. */
-    IDL_DEFAULT_FALSE,
-    /* `= true`. HTML §4.12.5.1.2's `CanvasRenderingContext2DSettings` writes `boolean alpha = true`, and it is
-       a row here rather than an absence the reader fills for the reason IDL_DEFAULT_FALSE is one: ToBoolean of
-       an absent member is FALSE, which is the OPPOSITE of this default, so a member that let the absence stand
-       would answer `getContextAttributes()["alpha"]` false for every `getContext("2d")` called with no
-       options — the majority of them. Declared, §3.2.17 step 4.1.5 places a real `true` and the body reads the
-       IDL's value rather than inventing it. */
+    IDL_DEFAULT_ZERO,       /* `= 0` (IDBVersionChangeEventInit's `oldVersion`) */
+    IDL_DEFAULT_FALSE,      /* `= false` (Console's `assert(optional boolean condition = false, …)`) */
+    /* `= true` (CanvasRenderingContext2DSettings' `alpha`): ToBoolean of an absent member is the opposite. */
     IDL_DEFAULT_TRUE,
-    /* `= 1`. Streams §4.5.1 Interface definition's `ReadableStreamBYOBReaderReadOptions` writes
-       `[EnforceRange] unsigned long long min = 1`, and it is a row here for the reason IDL_DEFAULT_ZERO is
-       one rather than being folded into it: the two are different VALUES, and this member's whole algorithm
-       branches on the difference — §4.5's read(view, options) step 4 is "If options["min"] is 0, return a
-       promise rejected with a TypeError", so a zero placed where the IDL writes one turns every
-       `reader.read(v)` into a rejection. An absent member does not exist at all, so a reader that filled the
-       absence itself would be inventing the number; declared, §3.2.17 step 4.1.5 PLACES it and the reader
-       asserts it is there. */
+    /* `= 1` (Streams' `[EnforceRange] unsigned long long min = 1`): `read(view)` rejects a min of 0. */
     IDL_DEFAULT_ONE,
 } IdlDictDefault;
 
 struct IdlDictDecl;
 
+/* A dictionary member as its IDL declares it.
+   `required`: an absent required member is a TypeError, and for a dictionary `undefined` is absent; omitting
+   the field gives optional.
+   `values`: the NULL-terminated §3.2.18 list of a member whose type idl_type_admits_enumeration answers true
+   for, and of no other; the seal asserts both directions over every member list.
+   `level`: which dictionary of the inheritance chain declares the member, 0 for the least derived (the root),
+   counting up to D itself. §3.2.17 step 3 reads dictionaries from least to most derived and step 4.1 sorts
+   each one's members, so ascending level is the read order (`FilePropertyBag : BlobPropertyBag` reads
+   endings, type, lastModified). Every member states its true level, or idl_dict_order_check passes only while
+   the orders happen to coincide.
+   `dflt`/`dflt_str`: §3.2.17 step 4.1.5's default value. */
 typedef struct {
     const char *name;
     IdlArgType  type;
     bool        required;
     const char *const *values;
     uint8_t     level;
-    /* THE DICTIONARY ARM of an IDL_SEQUENCE_STRING_OR_DICT / IDL_STRING_OR_DICT member's union — half of what
-       that type states, the way idl_iface_brand's class is half of an interface arm. NULL for every other. */
+    /* The dictionary this member's conversion builds or walks: non-NULL exactly for the types
+       idl_type_pushes_level answers true for, which the seal asserts. */
     const struct IdlDictDecl *dict;
     IdlDictDefault dflt;
     const char *dflt_str;
-    /* THIS MEMBER'S OWN §3.2.15 INTERFACE CLASS, for a dictionary that declares MORE THAN ONE interface type.
-       `idl_iface_brand` states ONE class per DECLARATION, which is everything a dictionary whose interface-typed
-       members are all the same interface needs — StaticRangeInit's two are both Nodes, FormDataEventInit's one
-       is a FormData — and it is exactly what HTML §7.2.6.10.1's NavigateEventInit walks past: its four are a
-       NavigationDestination, an AbortSignal, a FormData and an Element, so one class per declaration would have
-       branded `signal` against NavigationDestination and refused every correct construction.
-       ZERO IS A STATEMENT AND NOT A HOLE: it says this dictionary states its interface once, at the declaration,
-       and the conversion asserts that one of the two was stated rather than reading past a missing class. It is
-       therefore not the `x || 0` §Consumer-defaults forbids — there is no producer that could have written it. */
+    /* This member's own §3.2.15 class, for a dictionary declaring more than one interface (NavigateEventInit's
+       NavigationDestination, AbortSignal, FormData and Element). Zero means the declaration's idl_iface_brand
+       states it, and the conversion asserts one of the two did. */
     JSClassID   iface;
-    /* AND THE NARROWING THAT CLASS CANNOT EXPRESS, ON THE SAME MEMBER — the per-member half of
-       idl_iface_narrow, which the class alone made unreachable. `idl_member_iface` takes BOTH from the member
-       when the member states its class, so a member stating its own class no longer silently loses the
-       DECLARATION's narrowing along with the declaration's class: those are two statements and taking one
-       could only ever have dropped the other. Every DOM node wrapper is ONE class, so `iface` set to
-       `node_class_id()` says "a Node" and can say no more, while HTML §7.2.6.10.1 The NavigateEvent
-       interface's `Element? sourceElement` says Element — and without this a Text node or a Document crossed
-       as one. NULL is a STATEMENT, exactly as `iface`'s zero is: the class names the interface exactly, which
-       is true of `FormData? formData` on that same dictionary and of every member whose interface is one
-       class. It is read by the two arms that read `iface` and by nothing else. */
+    /* The narrowing a class cannot express, on the same member (`Element? sourceElement` against the one Node
+       class). Taken together with `iface` by idl_member_iface, so a member stating its class does not inherit
+       the declaration's narrowing. NULL means the class names the interface exactly. */
     bool      (*iface_narrow)(JSValueConst v);
-    /* §3.2.15's `I` STATED AS A PREDICATE INSTEAD OF AS A CLASS — the DICTIONARY counterpart of idl_arg_iface,
-       which states the same thing at an argument POSITION and has the same two halves (the test, and the
-       identifier the TypeError names). The pair above and this one are TWO SPELLINGS OF ONE FACT and never two
-       facts: a member states §3.2.15's `I` exactly once, which idl_seal_check_dict_members asserts over every
-       declared member list at once, and idl_member_implements is the ONE resolution both spellings are read
-       through — so there is no site at which they could answer differently.
-       WHY THE SECOND SPELLING HAS TO EXIST, in the three shapes that reach it, because ONE of them looks like
-       an accident of this engine and the other two are properties of the standards:
-         - AN INTERFACE NO CLASS ID NAMES BECAUSE MANY CLASSES IMPLEMENT IT. `EventTarget` is implemented by
-           every node wrapper, by a Window and by an XMLHttpRequest, so no class comparison and no narrowing of
-           one class can be its brand — the test is a prototype-chain walk against the REALM's
-           EventTarget.prototype, and a realm is a JSContext.
-         - AN INTERFACE WHOSE INSTANCE IS THE REALM'S OWN GLOBAL. `Window` is what `window` hands a page, and
-           asking whether a value IS this realm's global is a question about the realm.
-         - AN INTERFACE WHOSE CLASS IS SHARED BY CONSTRUCTION. Every indexed interface in this platform is one
-           core/idl_indexed.c object, so `JS_GetClassID` cannot tell a MediaList from a CSSRuleList; each such
-           component brands on the private-Symbol own slot that HOLDS its collection (core/css/media_list.c),
-           and reading an own slot takes a JSContext.
-       A NARROWING CANNOT SERVE ANY OF THE THREE, which is why this is a field and not a wider `iface_narrow`:
-       §3.2.15's test would still begin with a class comparison, and the first two shapes have no one class to
-       compare against while the third's class is shared with every interface it must be told apart from.
-       `iface_name` is the interface's IDL IDENTIFIER and is the SUBJECT of the TypeError §3.2.15 throws — the
-       same half idl_arg_iface's second argument is, for the same reason: a page told only that "the declared
-       interface" was not implemented learns nothing it did not already know. It must outlive the declaration,
-       so every member passes a static. NULL for a member that states its class instead, where the phrase the
-       message falls back to is idl_member_iface_subject's. */
+    /* §3.2.15's `I` stated as a realm-aware predicate instead of a class — the dictionary counterpart of
+       idl_arg_iface — for an interface many classes implement (`EventTarget`), whose instance is the realm's
+       global (`Window`), or whose class is shared by construction (core/idl_indexed.c's indexed interfaces,
+       branded by an own slot). A member states `I` exactly once, by class or by this, which the seal asserts;
+       idl_member_implements reads both. `iface_name` is the IDL identifier the TypeError names, a static; NULL
+       for a member that states its class, whose message uses idl_member_iface_subject. */
     bool      (*iface_is)(JSContext *ctx, JSValueConst v);
     const char *iface_name;
 } IdlDictMember;
 
-/* A DECLARATION OF THIS STRUCT NAMES ITS §3.2.15 TAIL, and that is a rule rather than a style: the struct has
-   gained fields more than once, so a POSITIONAL initializer that runs to the end silently re-aims every value
-   after the next field added — and where the two neighbours are both pointers (as `iface_narrow` and
-   `iface_is` are), it re-aims them with no diagnostic at all. A list that STOPS short of the tail is fine, and
-   is what most declarations do; what must not happen is a list that reaches the tail positionally. */
+/* An initializer of IdlDictMember names its fields from `iface` on: a positional list reaching the tail would
+   silently re-aim values when a field is added, and the adjacent function pointers would convert without a
+   diagnostic. A positional list that stops before the tail is fine. */
 
-/* A DICTIONARY, DECLARED — its member list in §3.2.17's read order, and the identifier its IDL gives it. A
-   member's OWN dictionary argument is declared as the bare list (idl_method_id_dict); a NESTED one needs that
-   list NAMED, because the type that reaches it is stated on the member that holds it and a conversion
-   diagnostic has to be able to say which dictionary refused a value. */
+/* A named dictionary: its members in §3.2.17 read order and its IDL identifier, used when it is reached as a
+   member's nested type so a diagnostic can say which dictionary refused a value. A member's own dictionary
+   argument is declared as the bare list (idl_method_id_dict). */
 typedef struct IdlDictDecl {
     const char          *name;
     const IdlDictMember *members;
     int                  n;
 } IdlDictDecl;
 
-/* ---- WEB IDL §3.2.17 Dictionary types, AS AN EMBEDDABLE WALK --------------------------------------------
+/* ---- Web IDL §3.2.17 Dictionary types, as an embeddable walk ---------------------------------------------
  *
- * ONE MACHINE, TWO ENTRIES — never two machines. §3.2.17 Dictionary types' ES-to-IDL conversion (the FIRST of
- * that section's two sibling ordered lists; the second converts an IDL dictionary back to an Object, and a bare
- * sub-number here would name a step in either) is reached two ways in this engine, and the pair is the whole
- * reason this declaration exists rather than a second copy of the loop:
+ * One walk serves both entries to §3.2.17's ES-to-IDL conversion: a declared IDL_DICT argument converted at
+ * the argument boundary, and an algorithm converting a value it holds (IndexedDB's getAll decides only at its
+ * step 8 whether its `any` argument is an IDBGetAllOptions). Every member [[Get]] and every coercing member
+ * conversion is the page's code, so a second copy would drift in required-member, default and coercion rules.
  *
- *   - AS A DECLARED ARGUMENT TYPE. `optional D options = {}` is an IDL_DICT position, and the argument machine
- *     converts it at the argument boundary before the member's own algorithm starts.
- *   - INSIDE AN ALGORITHM, where the spec converts a value it is HOLDING rather than one Web IDL handed it.
- *     Indexed Database §5.12 creating a request to retrieve multiple items is the first: `getAll` and
- *     `getAllKeys` declare their first argument `any`, and step 8's "is a potentially valid key range" branch is
- *     what decides whether step 9 reads it as an IDBGetAllOptions at all — so the conversion cannot happen at
- *     the boundary, because the boundary does not yet know it is a dictionary.
- *
- * A SECOND COPY IS THE DUAL SYSTEM this engine forbids by name, and the seam between two copies is where the
- * bugs would be: a member's [[Get]] is §3.2.17 (ES-to-IDL list) step 4.1.3.1's `? Get(jsDict, key)` — a getter
- * or a Proxy trap, so the page's code — and step 4.1.4.1's "converting jsMemberValue to an IDL value whose type
- * is the type member is declared to be of" is the page's code AGAIN, once per member type that coerces
- * (§3.2.4.6 unsigned long's ToNumber is a `valueOf`, §3.2.18 Enumeration types' is a ToString). An algorithm
- * that hand-rolled a trio of step_getprop_run calls would be a dictionary machine whose required-member rule,
- * whose §3.2.17 step 4.1.5 defaults and whose per-member coercions could each drift from this one's.
- *
- * SO THE WALK IS THE ARGUMENT MACHINE'S OWN CURSOR, LIFTED OUT OF IT. The argument machine embeds exactly one
- * and drives it through the same idl_dict_walk_run an algorithm calls; there is no argument-only path left for
- * the two to disagree across.
- *
- * IT NEEDS NO STAGE OF ITS OWN, which is what makes it embeddable in an algorithm at all. Every rest point it
- * has is a REQUEST (step_getprop_run, step_tostring_run, step_todouble_run, iter_cursor_run), and a request
- * parks and resumes AT ITS OWN CALL SITE with the hosting machine's stage unmoved — so an embedder adds a field
- * and a re-entry, never a stage block the way core/indexeddb/idb_key_range.h's walk needs one.
- *
- * THE HOST'S HEADER IS A PARAMETER AND NOT A FIELD, because the walk is a sub-algorithm of whichever machine
- * embeds it: the requests are issued through the HOST's JSStepHdr, and a walk holding one of its own would be a
- * second machine with a second identity for the driver to assert about. */
+ * Every rest point is a request (step_getprop_run, step_tostring_run, step_todouble_run, iter_cursor_run),
+ * which parks and resumes at its own call site with the host's stage unmoved, so an embedder adds a field and
+ * a re-entry, never a stage. Requests are issued through the host's JSStepHdr, passed as a parameter, so the
+ * walk has no identity of its own for the driver to assert about. */
 
-/* ---- ONE LEVEL OF §3.2.17, AND THE STACK OF THEM ----------------------------------------------------------
+/* ---- One level of §3.2.17, and the stack of them ---------------------------------------------------------
  *
- * §3.2.17 CONVERTS A MEMBER BY ITS OWN DECLARED TYPE — step 4.1.4.1 is "Let idlMemberValue be the result of
- * converting jsMemberValue to an IDL value whose type is the type member is declared to be of" — and that type
- * may be ANOTHER DICTIONARY, at which point the same section runs again over a different member list while the
- * outer one is still standing on the member that named it. So the conversion is a STACK OF LEVELS, and a level
- * is everything the member loop reads: which list, where in it, and what is in flight on the member it is on.
- *
- * IT IS A LEVEL AND NOT A RECURSION because every rest point in it is the PAGE'S CODE — step 4.1.3.1's
- * `? Get(jsDict, key)` is one accessor or Proxy trap away from a page loop, and so is each member's own
- * coercion — and a park has to be a RETURN. C recursion would put the outer level's members in a C activation
- * no snapshot can carry.
- *
- * THE LEVELS OF ONE WALK ARE ONE LOOP. This used to be two: idl_dict_walk_run's member loop and a SECOND,
- * WEAKER one inside the sequence frames, whose arms were DOMString, DOMString? and another such sequence and
- * which aborted on everything else — so `DOMRectInit`'s four `unrestricted double` members converted through
- * one road and refused through the other. Two copies of one section is the dual system this engine forbids by
- * name, and the seam between them is where its bugs were; there is one loop now and a level is what it runs on.
+ * Step 4.1.4.1 converts a member by its declared type, which may be another dictionary or a sequence of them,
+ * so the conversion is a stack of levels. A level is everything the member loop reads: which list, where in
+ * it, and what is in flight on the current member. It is a level and not C recursion because every rest point
+ * is the page's code and a park must be a return. All levels run one member loop.
  */
 typedef struct {
     JSValue   src;      /* jsDict — step 4.1.3.1 reads from it; undefined or null is step 4.1.2's "no object" */
@@ -947,120 +606,80 @@ typedef struct {
     const JSAtom        *atoms;   /* their names, interned when the dictionary was declared */
     const char *name;   /* the dictionary's IDL identifier, for a diagnostic; NULL for an anonymous one */
     int       n;
-    /* §3.2.15 Interface types' BRAND for this level's interface-typed members, and the narrowing a class id
-       cannot express — see idl_iface_brand / idl_iface_narrow. A member carrying its own (IdlDictMember::iface)
-       overrides BOTH, taking its narrowing from IdlDictMember::iface_narrow: the class and the narrowing are
-       two statements about one member, so a member that states its class states its narrowing too rather than
-       inheriting a narrowing written for a different interface. Zero and NULL for a level with no
-       interface-typed member, AND for every PUSHED level: a nested dictionary is reached through a member and
-       not through a declaration, so it has no declaration-wide class to state and each of its interface-typed
-       members names its own. The conversion asserts that rather than reading past a missing one. */
+    /* The declaration-wide §3.2.15 class and narrowing (idl_iface_brand / idl_iface_narrow). A member carrying
+       its own IdlDictMember::iface overrides both. Zero and NULL for a level with no interface-typed member and
+       for every pushed level, whose interface-typed members each name their own; the conversion asserts it. */
     JSClassID iface;
     bool    (*narrow)(JSValueConst v);
-    int       mi;       /* THE RESUME POINT: the member being read */
-    /* 0 = read the member (step 4.1.3.1), 3 = decide whether it is THERE (step 4.1.4's "If jsMemberValue is
-       not undefined"), 1 = convert what was read (step 4.1.4.1), 2 = place it. `2` is what a PUSHED level
-       returns to: its own step 5 hands this level the converted dictionary, and the member must then be
-       placed without re-running the read or the conversion.
-       `3` RUNS BETWEEN 0 AND 1 AND IS NUMBERED LAST BECAUSE 2 IS THE ONE A PUSHED LEVEL NAMES: a decision
-       vector and a pushed frame both record what they were standing on, so renumbering the settled phases to
-       put this one in sequence would give an old record a new meaning. It is a phase of its own rather than a
-       tail of phase 0 because the presence question can FORK, and a resume from that fork must re-enter after
-       the read (which would otherwise run the page's getter twice) and before any conversion that can park
-       (whose outstanding answer the ask would release). */
+    int       mi;       /* the resume point: the member being read */
+    /* 0 = read the member (step 4.1.3.1), 3 = decide whether it is present (step 4.1.4), 1 = convert it
+       (step 4.1.4.1), 2 = place it. A pushed level returns to 2 with the converted dictionary. 3 runs between
+       0 and 1 but is numbered last so recorded phases keep their meaning; it is its own phase because the
+       presence question can fork, and the resume must not re-run the getter or release a parked conversion. */
     uint8_t   mphase;
     JSValue   mv;       /* the member's value between those phases (owned) */
-    /* §3.2.21 Sequences' cursor and the list it fills, for a member whose type is one. It is ALSO what the
-       argument machine uses for a sequence at an ARGUMENT position: Web IDL converts arguments strictly left to
-       right, so an argument's sequence and a dictionary member's are never in flight at once, and one cursor is
-       what makes that structural instead of a comment two copies could drift across. It is PER LEVEL because
-       two levels genuinely can have one in flight at the same time — an outer member's sequence is what pushed
-       the level whose own member is a second sequence. */
+    /* §3.2.21's cursor and the list it fills, for a sequence-typed member, and also for a sequence at an
+       argument position: arguments convert strictly left to right, so the two are never in flight at once.
+       Per level because an outer member's sequence and an inner level's can be. */
     IterCursor seq;
     JSValue    seq_list;
     uint32_t   seq_n;
-    /* 0 = NOT STARTED, 1 = pull the next element, 2 = convert the one just pulled. "Not started" is a phase of
-       its own rather than a null list, because a zeroed state's JSValue is the INTEGER 0 and not JS_UNDEFINED —
-       JS_TAG_INT is 0 — so "have I built the list yet" read off the value is always "yes". */
+    /* 0 = not started, 1 = pull the next element, 2 = convert the one just pulled. Not started is a phase,
+       not a null list, because a zeroed JSValue is the integer 0 (JS_TAG_INT is 0), not JS_UNDEFINED. */
     uint8_t    seq_phase;
-    /* §3.2.25 Union types' arm for a `(DOMString or sequence<DOMString>)` member or argument, which is a resume
-       point because the decision is `? GetMethod(V, %Symbol.iterator%)` — the page's code. */
+    /* §3.2.25's resolved arm for an @@iterator union member or argument; a resume point because the decision
+       is `? GetMethod(V, %Symbol.iterator%)`, the page's code. */
     uint8_t    uni_phase;
 } IdlDictLevel;
 
-/* WHAT KIND OF THING A PUSHED FRAME IS CONVERTING — the two shapes a member's declared type can name that need
-   a level of their own, and the ONLY thing that differs between them is what happens when that level's step 5
-   is reached. A DICTIONARY frame's result is the member's value one level down; a SEQUENCE frame's result is
-   ONE ELEMENT, which joins the list and is followed by the cursor's next pull. */
+/* What a pushed frame converts. A dictionary frame's result is the member's value one level down; a sequence
+   frame's result is one element, which joins the list before the next pull; a record frame's is one key and
+   value pair. */
 enum { IDL_FRAME_DICT = 0, IDL_FRAME_SEQUENCE, IDL_FRAME_RECORD };
 
-/* ONE PUSHED LEVEL. For IDL_FRAME_DICT that is the whole of it — `lvl` is the nested dictionary being read.
- * For IDL_FRAME_SEQUENCE it is a `sequence<(DOMString or D)>`'s own iterator PLUS the D-dictionary the element
- * it is standing on is being converted as, which is `lvl` again: §3.2.21.1 Creating a sequence from an iterable
- * puts the element conversion INSIDE the repeat loop, so the element's own §3.2.17 is a level like any other
- * and the frame parks at the element it is on AT WHATEVER DEPTH. */
+/* One pushed level. For IDL_FRAME_DICT, `lvl` is the nested dictionary. For IDL_FRAME_SEQUENCE it is the
+ * sequence's iterator plus the element being converted as a dictionary in `lvl`: §3.2.21.1 converts inside the
+ * repeat loop, so the element's §3.2.17 is a level like any other and parks at any depth. */
 typedef struct {
     IdlDictLevel lvl;       /* the dictionary this frame is converting — its own, or the element it stands on */
     IterCursor  cur;        /* SEQUENCE only: the sequence's iterator, over `src` */
     JSValue     src;        /* SEQUENCE only: the value being iterated (owned) */
     JSValue     list;       /* SEQUENCE only: the elements converted so far (owned) */
     const IdlDictDecl *d;   /* SEQUENCE only: the element type's dictionary arm */
-    /* SEQUENCE only: THE ELEMENT'S DECLARED TYPE, which is what decides whether the pull has an arm to take at
-       all — `sequence<(DOMString or D)>` asks §3.2.25's clause chain of every element and `sequence<D>` asks
-       nothing, because §3.2.17 is the whole of its element conversion. It is the TYPE and not a bit meaning
-       "no union": a bit would answer one question and this answers the one question a third element type
-       would also need answered, which is what the element IS. */
+    /* SEQUENCE only: the element's declared type, which decides whether a pulled element has an arm to
+       resolve (`sequence<(DOMString or D)>`) or is §3.2.17 outright (`sequence<D>`). */
     IdlArgType  elem;
-    /* RECORD only: §3.2.23's *convert a JavaScript value to record* AS A CURSOR, which is core/idl_iter.c's
-       and is the SAME one Headers and URLSearchParams drive from their own step machines. It is held here
-       rather than re-implemented because that algorithm is the standard's once: step 3's [[OwnPropertyKeys]],
-       step 4.1's [[GetOwnProperty]] and step 4.2's enumerable test, and step 4.2.2's `Get(O, key)` are all
-       requests, so the frame parks at whichever key it stands on at whatever depth. `lvl` carries the VALUE's
-       own conversion beside it — §3.2.25's arm in `lvl.uni_phase` and the sequence arm in `lvl.seq*` — which
-       is what a per-level cursor is for and is why no second frame is pushed for the value. */
+    /* RECORD only: §3.2.23 as core/idl_iter.c's RecordCursor, the same one Headers and URLSearchParams drive;
+       every key list, descriptor and Get is a request, so the frame parks at the key it stands on. The value's
+       own conversion uses `lvl.uni_phase` and `lvl.seq*`, so no second frame is pushed for it. */
     RecordCursor rec;
     uint32_t    n;          /* SEQUENCE: how many elements `list` holds. RECORD: how many PAIRS it holds */
     uint8_t     kind;       /* IDL_FRAME_DICT / IDL_FRAME_SEQUENCE / IDL_FRAME_RECORD */
     uint8_t     phase;      /* SEQUENCE and RECORD */
 } IdlConvFrame;
 
-/* §3.2.17 IN FLIGHT — the whole of what a park has to carry, and nothing the host can re-derive.
+/* §3.2.17 in flight: everything a park must carry that the host cannot re-derive.
  *
- * THE FRAMES ARE NOT IN HERE AND THAT IS THE POINT. A deep fork BYTE-COPIES the hosting state and re-takes only
- * what its `visit` names, so a pointer stored here into that same block would survive the copy STILL AIMED AT
- * THE ORIGINAL — two flows converting into one frame stack, which is the defect the argument machine's own tail
- * comment names one level up. They are passed to every entry instead, so the host re-derives them from its own
- * layout on each re-entry and there is nothing stored to go stale. An inline array would be worse still: its
- * size would be a CEILING on how deeply the PLATFORM's declared types may nest.
+ * The frames are not stored here. A deep fork byte-copies the hosting state and re-takes only what its
+ * `visit` names, so a pointer into that block would survive the copy aimed at the original; the host passes
+ * the frames to every entry from its own layout instead. An inline array would cap how deeply declared types
+ * may nest.
  *
- * `members`/`atoms`/`iface`/`narrow` are borrowed and must outlive the walk, which every caller satisfies by
- * passing statics — a member's declaration owns its list for the life of the pool, and an algorithm's is a file
- * static. They are re-stated on the walk rather than re-read from a declaration because an ALGORITHM's
- * dictionary has no declaration to read from; that is the whole difference between the two entries. */
+ * `members`/`atoms`/`iface`/`narrow` are borrowed statics that outlive the walk. They are stated on the walk
+ * because an algorithm's dictionary has no member declaration to read them from. */
 typedef struct {
-    /* LEVEL ZERO — the dictionary the host asked for. It is a field and not a special case: the member loop
-       runs on whichever level is on top, and this is the one at the bottom. */
+    /* Level zero: the dictionary the host asked for; the member loop runs on whichever level is on top. */
     IdlDictLevel lvl;
     uint8_t    conv_sp;   /* how many IdlConvFrame frames are live; 0 = level zero is the one in flight */
     uint8_t    started;   /* the walk has a `src` and an `out`; 0 = nothing in flight, so a resume may start it */
-    /* THE NAME OF THE FORK THIS CONVERSION IS ASKING — step_fork_run's `op` for §3.2.17 step 4.1.4's PRESENCE
-       question over a member minted off an unknown source, step_tobool_run's for a §3.2.3 boolean member over
-       unknown external input, and step_fork_run's again for a §3.2.18 enumeration over one. It is HERE and not
-       a C local because the driver reads `JSStepHdr::fork_op` AFTER the machine has returned JS_STEP_FORK, by
-       which time a local of the member loop is gone; and it is this struct's rather than the header's shared
-       `len_op` because that buffer belongs to the length probe and two mechanisms sharing one scratch space is
-       how one overwrites the other's outstanding question.
-       ONE BUFFER IS ENOUGH FOR THE THREE ASKS BECAUSE ONE FORK IS IN FLIGHT: step_fork_ask refuses a second ask
-       while the first one's operands are still on the header, and they are sequential — the presence question
-       is settled at `mphase` 3 before the boolean arm at `mphase` 1 is reached, and an ARGUMENT position's
-       enumeration ask cannot overlap a member's at all, because Web IDL converts arguments strictly left to
-       right and this walk lives inside the argument machine's own state (which is why `seq` and `uni_phase` are
-       shared the same way, and for the same reason). WHAT KEEPS THEM APART IS NOT THIS BUFFER BUT THE NAME EACH
-       COMPOSES INTO IT: JSStepHdr::fork_ask_key is a content hash of the string, so the ask strings begin with
-       different spec steps and name the member or the position they stand at, and no one answer can be consumed
-       at another's call site. It is SCRATCH and carries nothing across a park — each ask is re-composed from the
-       declaration on every entry, and the key is what survives to match the answer to the question, so a
-       byte-copied clone that never reads this buffer's stale contents is correct by construction. */
+    /* The name of the fork this conversion is asking: step_fork_run's `op` for step 4.1.4's presence question
+       over an unknown source, step_tobool_run's for a boolean member, step_fork_run's for an enumeration. It
+       is a field, not a local, because the driver reads JSStepHdr::fork_op after the machine returned
+       JS_STEP_FORK; it is not the header's `len_op`, which belongs to the length probe.
+       One buffer serves all three because one fork is in flight at a time (step_fork_ask refuses a second
+       ask), and the asks are sequential. JSStepHdr::fork_ask_key hashes the string, and each ask names its spec
+       step and member or position, so an answer cannot be consumed at another ask's site. Scratch: re-composed
+       from the declaration on every entry, so a byte-copied clone never reads stale contents. */
     char       ask[160];
 } IdlDictWalk;
 
