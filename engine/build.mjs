@@ -24,7 +24,8 @@ import { stampArtifact, gateRevision, revisionLines, revisionMoved } from "./gat
 import { probeTables } from "./probe_rows.mjs";
 import { lexborSourceId, lexborNativeArchive } from "./lexbor_source.mjs";
 import { objStore, toolIdentity } from "./obj_store.mjs";
-import { childCpuSeconds, childCpuDelta, cpuText } from "./gate_cpu.mjs";
+import { cpuText } from "./gate_cpu.mjs";
+import { spawnBudgeted, BUDGET_NOT_INSTALLED } from "./child_run.mjs";
 
 /* THE INSTANT A SOURCE-DERIVED FACT IS TAKEN AT, AND WHY IT IS THE REVISION'S AND NOT THE READER'S.
  *
@@ -170,15 +171,6 @@ const RUN_CPU_BUDGET_S = 15 * 60;
    an orderly SIGXCPU death and short enough that the runaway case is still bounded. */
 const RUN_CPU_HARD_S = RUN_CPU_BUDGET_S + 60;
 const RUN_DEADLOCK_MS = 4 * RUN_CPU_BUDGET_S * 1000;
-/* THE BUDGET IS INSTALLED BY THE ONE PROGRAM THAT CAN INSTALL IT — node has no setrlimit — and the child is
-   `exec`'d so the shell is REPLACED rather than left as a layer between this reporter and the signal it
-   reads. A budget that silently failed to install would be the defaulted-field defect wearing a rlimit: the
-   run would look measured and be unmeasured, so the failure to set it is a LOUD marker and a distinct exit
-   code, never a silent continuation. `$0` is the wrapper's name, `$1`/`$2` the two limits, `$3` the program. */
-const CPU_BUDGET_SH =
-  'ulimit -H -t "$1" 2>/dev/null; ulimit -S -t "$2" || { echo "@BUDGET-NOT-INSTALLED"; exit 125; }; ' +
-  'p="$3"; shift 3; exec "$p" "$@"';
-const BUDGET_NOT_INSTALLED = "@BUDGET-NOT-INSTALLED";
 
 /* THE QUIET LIST IS DECLARED AT MODULE SCOPE, ABOVE EVERY READER, and both halves of that matter.
    It must be ABOVE the `native` target, which reads it during module evaluation — a `const` below that
@@ -5525,36 +5517,22 @@ function hungCause(out) {
    interleaved, and the numbers were unanswerable. A stable name is kept as a SYMLINK so `— live at` stays
    tailable and so the last run of a label is still findable by hand; the bytes this parent reads are only
    ever the ones its own child wrote. */
-function runChild(label, prog, args, hint) {
+/* THE LOG PATHS OF ONE RUN: the per-pid file the child writes, and the stable symlink to the last one. */
+function runLogs(label) {
   const slug = label.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  const log = join(OUT, `run-${slug}.${process.pid}.log`);
-  const stable = join(OUT, `run-${slug}.log`);
   mkdirSync(OUT, { recursive: true });
-  console.log(`[build] ${label} — live at ${log}`);
-  const fd = openSync(log, "w");
-  let t;
-  /* THE TWO MEASURES ARE READ AROUND THE SPAWN AND BOTH ARE CARRIED OUT, because a verdict that names one of
-     them must be able to print the other beside it. The CPU meter is the kernel's; the wall clock is this
-     process's and is CONTEXT — it is the number that six builds' worth of readers mistook for a budget. */
-  const cpuBefore = childCpuSeconds();
-  const wallBefore = Date.now();
-  try {
-    t = spawnSync("/bin/sh",
-                  ["-c", CPU_BUDGET_SH, `apiclient-build:${slug}`,
-                   String(RUN_CPU_HARD_S), String(RUN_CPU_BUDGET_S), prog, ...args],
-                  { stdio: ["inherit", fd, fd], shell: false, timeout: RUN_DEADLOCK_MS });
-  }
-  finally { closeSync(fd); }
-  const cpuAfter = childCpuSeconds();
-  /* THE SUBTRACTION IS THE METER'S, NOT THIS FILE'S — `childCpuDelta` exists because "JavaScript will do it
-     wrong for free" (`null - null` is 0, `after - null` is `after`), and solvergate, features, test262 and wpt
-     all route to it while this one driver open-coded the same null check. Two right answers to one question is
-     the shape that drifts, and the copy that drifts is the one nobody re-derives. */
-  t.cpuSeconds = childCpuDelta(cpuBefore, cpuAfter);
-  t.wallSeconds = (Date.now() - wallBefore) / 1000;
+  return { slug, log: join(OUT, `run-${slug}.${process.pid}.log`), stable: join(OUT, `run-${slug}.log`) };
+}
+/* THE SPAWN'S SPEC, ONE PLACE FOR THE THREE LIMITS: the CPU budget's soft and hard rlimit, and the wall-clock
+   deadlock backstop. The CPU meter is the kernel's; the wall clock is CONTEXT — the number that six builds'
+   worth of readers mistook for a budget. */
+const budgetedSpec = (slug, prog, args, log) =>
+  ({ slug, prog, args, log, hardS: RUN_CPU_HARD_S, softS: RUN_CPU_BUDGET_S, deadlockMs: RUN_DEADLOCK_MS });
+/* THE OUTCOME OF A FINISHED RUN, its bytes written to this process's stdout whole and in order. */
+function finishChild(label, t, logs, hint) {
   /* Best-effort convenience only: a failure here must never change the verdict below. */
-  try { rmSync(stable, { force: true }); symlinkSync(log, stable); } catch { /* not fatal */ }
-  t.captured = readFileSync(log, "utf8");
+  try { rmSync(logs.stable, { force: true }); symlinkSync(logs.log, logs.stable); } catch { /* not fatal */ }
+  t.captured = readFileSync(logs.log, "utf8");
   process.stdout.write(t.captured);
   /* THE BYTES TRAVEL WITH THE OUTCOME, because a stage whose verdict spans TWO runs cannot be reached from
      inside either one. The cold round trip is exactly that shape — session ONE writes a residue and session
@@ -5562,12 +5540,73 @@ function runChild(label, prog, args, hint) {
      children's output that nothing but the caller holds both halves of. */
   /* AND THE PATH TRAVELS BESIDE THEM, BECAUSE A READER OF A RUN WANTS THE RUN AND NOT A COPY OF ITS BYTES.
      `captured` is this process's string; a stage that reads a run reports it BY PATH — engine/fixturereach.mjs
-     says so in its own header, on CLAUDE.md §AND-A-SCRATCH-DIRECTORY-HOLDS-RUNS-OF-SEVERAL-SUBJECTS' ground
-     that a value quoted out of a directory belongs to a document nobody is discussing. The alternative is a
-     caller recomputing `slug` and the pid to name the file, which is the second copy of the identity rule the
-     paragraph above states — and the copy that drifts is the one nobody re-derives. It is the PER-PID path and
-     never the stable symlink: two names for one inode is what CLAUDE.md measured an abort count double on. */
-  return Object.assign(runOutcome(label, t, hint), { captured: t.captured, log });
+     says so in its own header. It is the PER-PID path and never the stable symlink: two names for one inode
+     is what CLAUDE.md measured an abort count double on. */
+  return Object.assign(runOutcome(label, t, hint), { captured: t.captured, log: logs.log });
+}
+function runChild(label, prog, args, hint) {
+  const logs = runLogs(label);
+  console.log(`[build] ${label} — live at ${logs.log}`);
+  return finishChild(label, spawnBudgeted(budgetedSpec(logs.slug, prog, args, logs.log)), logs, hint);
+}
+/* SEVERAL CHILDREN AT ONCE, at most one per core, each judged exactly as `runChild` judges one. Each child is
+   spawned through engine/child_run.mjs, so its CPU is measured by a reaper of its own — this process reaps
+   several children at once and its own cutime delta would mix them. Outcomes return in `jobs` order; each
+   run's bytes are printed whole when it finishes. */
+async function runChildren(jobs) {
+  const out = new Array(jobs.length);
+  let next = 0;
+  const one = async () => {
+    for (let i = next++; i < jobs.length; i = next++) {
+      const { label, prog, args, hint } = jobs[i];
+      const logs = runLogs(label);
+      console.log(`[build] ${label} — live at ${logs.log}`);
+      const t = await new Promise((done, fail) => {
+        let text = "";
+        const c = spawn(process.execPath, [join(ENGINE, "child_run.mjs"),
+                                           JSON.stringify(budgetedSpec(logs.slug, prog, args, logs.log))],
+                        { stdio: ["ignore", "pipe", "inherit"] });
+        c.stdout.on("data", (d) => { text += d; });
+        c.on("error", fail);
+        c.on("close", (code, sig) => code === 0 ? done(JSON.parse(text))
+          : fail(new Error(`[build] ${label}: engine/child_run.mjs itself exited ${code ?? sig} — it reports the ` +
+                           `child's outcome and has no failure of its own to report, so this is the driver`)));
+      });
+      out[i] = finishChild(label, t, logs, hint);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(jobs.length, cpus().length) }, one));
+  return out;
+}
+/* THE FIXTURE AS ITS DOCUMENTS, EACH ITS OWN PROCESS — test_forced.c lists them (`--list-docs`) and a run
+   answers one (`--doc <name>`), so an abort or a spent budget costs that document's rows only. One stage per
+   document, each tagged with `doc`; under `min` the one minimal document. The listing is a stage of its own
+   only when it fails, so a program that cannot say what it holds is a named stage and never a silent zero. */
+async function runDocuments(label, prog, pre, hint) {
+  if (MIN) return [Object.assign(runChild(label + " (minimal document)", prog, [...pre, "--min"], hint), { doc: "min" })];
+  const list = runChild(label + " (document list)", prog, [...pre, "--list-docs"], hint);
+  const names = list.code === 0 ? list.captured.split("\n").filter(Boolean) : [];
+  if (!names.length || names.some((n) => !/^[a-z0-9-]+$/.test(n)))
+    return [list.code === 0 ? Object.assign(list, { code: 1, kind: STAGE_KIND.DEFECT,
+      verdict: `LISTED NO DOCUMENTS — \`--list-docs\` printed ${JSON.stringify(list.captured.slice(0, 200))}, ` +
+               `and a fixture whose documents cannot be named has no run to make` }) : list];
+  const runs = await runChildren(names.map((d) => ({ label: `${label} (${d})`, prog, args: [...pre, "--doc", d], hint })));
+  return runs.map((r, i) => Object.assign(r, { doc: names[i] }));
+}
+/* THE DOCUMENTS' ROWS, SUMMED ONCE — a reading that decides nothing: each document's own stage carries its
+   verdict. A document that printed no table is named as such and never counted as rows answered or asked. */
+function documentRowsText(host, stages) {
+  const read = stages.filter((s) => s.doc)
+                     .map((s) => ({ doc: s.doc, stand: "captured" in s ? probeStanding(s.captured) : null }));
+  if (!read.length) return `[build] FIXTURE ROWS (${host}) — NOT ASKED: no document ran on this host.`;
+  const tabled = read.filter((r) => r.stand !== null);
+  const answered = tabled.reduce((n, r) => n + r.stand.answered, 0);
+  const asked = tabled.reduce((n, r) => n + r.stand.asked, 0);
+  const none = read.filter((r) => r.stand === null).map((r) => r.doc);
+  return `[build] FIXTURE ROWS (${host}) — ${answered} of ${asked} answered over the ${tabled.length} of ` +
+         `${read.length} document(s) that printed a table` + (none.length ? `; NO TABLE: ${none.join(" ")}` : ``) +
+         ` — per document: ` +
+         read.map((r) => r.stand ? `${r.doc} ${r.stand.answered}/${r.stand.asked}` : `${r.doc} -`).join(", ");
 }
 
 /* BOTH NUMBERS, AT EVERY OUTCOME, WITH THE VERDICT NAMING WHICH ONE DECIDED — CLAUDE.md §Testing, and the
@@ -8447,11 +8486,11 @@ if (NATIVE) {
   stages.push(...coldRoundTripStages(bin, kind));
   /* AND IT IS RUN, because a target that is only built is the excluded test one layer down: the whole point is
      the stream it prints and the report it ends with, and nothing else in the tree produces either. */
-  stages.push(onHost(bin === null
-    ? skipped("the native run (" + kind + ")", "the native program did not link")
-    : runChild("the native run (" + kind + (MIN ? ", minimal document" : "") + ")", bin, MIN ? ["--min"] : [],
-               "a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault"),
-    STAGE_HOST.NATIVE));
+  stages.push(...(bin === null
+    ? [skipped("the native run (" + kind + ")", "the native program did not link")]
+    : await runDocuments("the native run (" + kind + ")", bin, [],
+                         "a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault"))
+    .map((s) => onHost(s, STAGE_HOST.NATIVE)));
   /* NO VEHICLE RAN IN THIS TARGET AND THEREFORE NO AGREEMENT LINE. `report()` says so in its own words rather
      than printing nothing, because a silent vehicle line reads as agreement. */
   report(stages, []);
@@ -9063,14 +9102,14 @@ console.log("[build] DO NOT WAIT FOR THIS. Asking was the whole of your involvem
           + "deliberately, and error-free is still the standing target.");
 
 const NATIVE_SMOKE = NATIVE_BUILT.bin === null
-  ? skipped("native smoke test", "the native program did not link")
-  : runChild("native smoke test" + (MIN ? " (minimal document)" : ""),
-             NATIVE_BUILT.bin, MIN ? ["--min"] : [],
+  ? [skipped("native smoke test", "the native program did not link")]
+  : await runDocuments("native smoke test", NATIVE_BUILT.bin, [],
              "THIS IS THE VERDICT RUN. Its cooperative slice is thread-CPU (solver/quantum.c's timer_create " +
              "CLOCK_THREAD_CPUTIME_ID arm), so every microsecond the WFQ's aging charge bills is one a flow " +
              "HELD THE THREAD for. The @H row printed 0 above names a statement engine/host/test_forced.c's " +
              "probe table declares and this run did not answer.");
-STAGES.push(onHost(NATIVE_SMOKE, STAGE_HOST.NATIVE));
+STAGES.push(...NATIVE_SMOKE.map((s) => onHost(s, STAGE_HOST.NATIVE)));
+FINDINGS.push(documentRowsText(STAGE_HOST.NATIVE.tag, NATIVE_SMOKE));
 
 /* AND THE CROSS-SESSION ROUND TRIP, ON THE BUILD CLAUDE.md NAMES AS THE BUILD. The `native` target runs it
    too, and that is not where it mattered: `node engine/build.mjs` is the command the file names, so a stage
@@ -9087,18 +9126,25 @@ STAGES.push(...COLD_STAGES);
    is CPU-denominated; where the native program did not link there is no second reading, this one is all there
    is, and it must therefore decide. `report()` refuses the other combination rather than trusting this line. */
 const WASM_SMOKE = SMOKE_LINK.code
-  ? skipped("smoke test", "the smoke program did not link")
-  : runProgram("smoke test" + (MIN ? " (minimal document)" : ""),
-               [join(OUT, "qjs.js"), ...(MIN ? ["--min"] : [])],
+  ? [skipped("smoke test", "the smoke program did not link")]
+  : await runDocuments("smoke test", process.execPath, [join(OUT, "qjs.js")],
                "the @H row printed 0 above names the statement the fixture document makes and this run did " +
                "not answer — engine/host/test_forced.c's probe table is where that row is declared. This is " +
                "the VEHICLE's run: its slice is wall-denominated, so how far it got is a fact about the box " +
                "and the hour, and what it is entitled to state is a DISAGREEMENT with the native run above.");
-STAGES.push(onHost(WASM_SMOKE,
-                   NATIVE_BUILT.bin === null ? STAGE_HOST.WASM : STAGE_HOST.VEHICLE));
+const WASM_HOST = NATIVE_BUILT.bin === null ? STAGE_HOST.WASM : STAGE_HOST.VEHICLE;
+STAGES.push(...WASM_SMOKE.map((s) => onHost(s, WASM_HOST)));
+FINDINGS.push(documentRowsText(WASM_HOST.tag, WASM_SMOKE));
 /* ONE LINE, ITS OWN VERDICT, SUMMED INTO NOTHING — see `vehicleAgreement`. It is composed here, where both
    records are in one hand, and PRINTED by `report()` beside the verdict, where a reader is looking. */
-FINDINGS.push(vehicleAgreement(NATIVE_SMOKE, WASM_SMOKE));
+/* PER DOCUMENT, paired by name: the two hosts' readings of one document are the only comparable pair. */
+{
+  const byDoc = (xs) => new Map(xs.filter((s) => s.doc).map((s) => [s.doc, s]));
+  const nd = byDoc(NATIVE_SMOKE), wd = byDoc(WASM_SMOKE);
+  const docs = [...new Set([...nd.keys(), ...wd.keys()])];
+  if (!docs.length) FINDINGS.push(vehicleAgreement(null, null));
+  for (const d of docs) FINDINGS.push(vehicleAgreement(nd.get(d) || null, wd.get(d) || null));
+}
 /* AND THE REACHABILITY LADDER OVER THE TWO RUNS ABOVE, WHICH IS THE READER THOSE @ MARKERS WERE WRITTEN FOR.
    engine/host/test_forced.c prints a marker at the head of every selftest row it answers, and engine/
    fixturereach.mjs derives main()'s call order from the producer's own bytes and reads which of them a captured
@@ -9134,9 +9180,9 @@ FINDINGS.push(vehicleAgreement(NATIVE_SMOKE, WASM_SMOKE));
    not produce (it was skipped, or session ONE aborted so session TWO had no residue) is simply absent from the
    list; the reader is handed only paths that exist. */
 for (const [logs, artifact, host, why] of [
-      [[NATIVE_SMOKE, ...COLD_STAGES].map((v) => v && v.log).filter(Boolean),
+      [[...NATIVE_SMOKE, ...COLD_STAGES].map((v) => v && v.log).filter(Boolean),
        NATIVE_BUILT.bin, STAGE_HOST.NATIVE, "the native program did not link, so there is no run to read"],
-      [[WASM_SMOKE].map((v) => v && v.log).filter(Boolean),
+      [[...WASM_SMOKE].map((v) => v && v.log).filter(Boolean),
        join(OUT, "qjs.wasm"), NATIVE_BUILT.bin === null ? STAGE_HOST.WASM : STAGE_HOST.VEHICLE,
        "the smoke program did not link, so there is no run to read"]]) {
   const label = `fixture reachability (${host.tag})`;

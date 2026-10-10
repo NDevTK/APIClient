@@ -935,10 +935,10 @@ static int fixture_provide(JSContext *ctx) {
    order"'s step 1 had never laid a mark over a document with a VIEWPORT under it: the walk ran, the region
    was never asked for, and `bp_canvas_background` took its own alpha-of-zero return every time.
 
-   ONE CONSTANT AND NOT FOUR EDITS, because `box_paint_selftest` runs over WHICHEVER of the four documents
-   this invocation selected — `main` picks one, and that one is the only document in the run with a realm and
-   a navigable over it. A fact asserted there has to hold for all four or the assertion is about whichever
-   document the runner happened to pick, and four independent declarations are four chances to land three.
+   ONE CONSTANT AND NOT ONE EDIT PER DOCUMENT, because `box_paint_selftest` runs over WHICHEVER document this
+   invocation selected — `main` picks one, and that one is the only document in the run with a realm and a
+   navigable over it. A fact asserted there has to hold for every document or the assertion is about
+   whichever one the runner happened to pick.
 
    APPENDED IN FRONT OF `</body></html>` IN EACH AND NEVER INSERTED, for the reason the three operand-shape
    statements near the end of `HTML` state: each of these documents is ONE LINE, so a `@WHY` frame's COLUMN is
@@ -949,7 +949,7 @@ static int fixture_provide(JSContext *ctx) {
    background properties of the ROOT — or, by its second sentence, of the root's first `body` element child — onto the canvas, and
    both of those start tags are at the TOP of every one of these documents, so an attribute IS the insertion
    the rule above forbids. A sheet is the only declaration that reaches the root from the END of the body, and
-   `<style id=nstsheet>` already stands in `HTML`'s body with its rules asserted to apply.
+   `<style id=nstsheet>` already stands in `HTML_CSS`'s body with its rules asserted to apply.
 
    IT DECLARES THE ROOT AND NOT THE `body` BECAUSE §14.2's FIRST SENTENCE IS THE SUBPROBLEM ITS SECOND IS
    BUILT ON. The root arm is settled by `bp_canvas_background_element`'s first conjunct — an alpha that is not
@@ -957,16 +957,15 @@ static int fixture_provide(JSContext *ctx) {
    `none`, which is a second component's answer and a second claim. THE COLOUR DIFFERS FROM THE `#0000ff` THE
    TWO SCRATCH DOCUMENTS BELOW DECLARE so that a mark laid on this road cannot be read as one laid on theirs.
 
-   WHAT IT COSTS THE FAMILIES READING THESE DOCUMENTS, stated rather than assumed, because `HTML` is four of
-   them. `document.styleSheets` gains one member AT THE END, and neither reader of that collection moves:
-   `/api/cssprop` names index 1 and this sheet is last in document order, and the `/api/idxkey` statement
-   reads the length into `_ixL` and builds a NodeList of `_ixL + 2`, so its claim — past the end of the short
+   WHAT IT COSTS THE FAMILIES READING THESE DOCUMENTS, stated rather than assumed. `document.styleSheets`
+   gains one member AT THE END, and no reader of that collection moves: `/api/cssprop` finds its sheet by id,
+   and the `/api/idxkey` statement reads the length into `_ixL` and builds a NodeList of `_ixL + 2`, so its claim — past the end of the short
    one is past the end of the long one — is DERIVED from the length and holds for any value of it. What does
    move is the LENGTH of that statement's elimination chain, by one link per member, which is more forks and
    not a different answer. `body` gains one element child, which HTML §15.3.1 "Hidden elements"'
    fourteen-element rule computes `display: none` for — so it generates no box, core/paint/paint_order.c skips
-   it WITH its subtree, and the `offers` floor `box_paint_selftest` asserts does not move. No probe in any of
-   the four counts `body`'s children or selects `style`; every element-count statement in `HTML` is scoped to
+   it WITH its subtree, and the `offers` floor `box_paint_selftest` asserts does not move. No probe in any
+   document counts `body`'s children or selects `style`; every element-count statement in `HTML` is scoped to
    an element its own script created. `HTML_MIN`, `HTML_COLD` and `HTML_POPOVER` read no collection and count
    no elements at all, and `HTML_MIN` is the ASan gate, whose own paragraph asks for no added BRANCH — which a
    declaration is not.
@@ -975,17 +974,15 @@ static int fixture_provide(JSContext *ctx) {
    ink states its own and no assertion in this file is about "whichever document this run selected". */
 #define TF_CANVAS_INK "<style>html { background-color: #00ff00 }</style>"
 
-/* the "page": a real 2-<script> HTML document. Script 1 reads injected `state` into a config; script 2 (sharing
-   globals) branches on it + does a baseline mutation (globalThis.n) first. Exercises: real Lexbor boot,
-   cross-script concolic flow (fork on cfg.admin set by script 1), the moat (gated /api/admin), AND per-flow COW
-   (both arms see n==1). */
-static const char *HTML =
+/* THE CSS DOCUMENT: author sheets whose CSSOM answers each row reads, with no state and no fork. */
+static const char HTML_CSS[] =
     "<!doctype html><html><head>"
-    /* Author CSS whose SPECIFICITY and DOCUMENT ORDER disagree: the id rule is written FIRST and must still
-       win. Order-only cascading answers `none` here, and every page puts its general rules last. */
-    "<style>#cs1 { display: block; color: rgb(1, 2, 3) } div { display: none }</style>"
-    /* CSS Properties and Values API 1 §3's `@property`, in a SHEET OF ITS OWN so its rules sit at fixed
-       indices and the sheet above keeps index 0. Five bodies, because §3 decides five different things about
+    /* The rule `HTML`'s first sheet carries, under which these trees were written: the rows ask the cascade
+       and CSSOM, and a displayed `.nstmedia` grid box is laid out by the selftests' paint, where css-grid's
+       intrinsic sizes are unbuilt (core/layout/intrinsic_size.c says so by name). */
+    "<style>div { display: none }</style>"
+    /* CSS Properties and Values API 1 §3's `@property`, in a SHEET OF ITS OWN (found by its id) so its
+       rules sit at fixed indices. Five bodies, because §3 decides five different things about
        one: every descriptor declared; NONE, which is what exercises §3.1's initial `"*"`, §3.2's initial `true`
        and §3.3's initial (the guaranteed-invalid value, i.e. a null `initialValue`); only an UNKNOWN
        descriptor, which §3 says is "invalid and ignored, but do not invalidate the @property rule" — so the
@@ -995,7 +992,7 @@ static const char *HTML =
        actually declares — developer.mozilla.org ships
        `@property --switch-position{syntax:"<percentage>";inherits:false;initial-value:0}`, and it is the rule
        that used to abort the whole document at stage `create` with zero flows run. */
-    "<style>"
+    "<style id=propsheet>"
     "@property --pfull { syntax: \"<percentage>\"; inherits: false; initial-value: 0% }"
     "@property --pbare { }"
     "@property --podd { not-a-descriptor: 3 }"
@@ -1010,7 +1007,7 @@ static const char *HTML =
        makes it parse — so the two differ by one byte and must differ in `initialValue`. */
     "@property --pmiss { syntax: \"<percentage>\"; inherits: false; initial-value: 0 }"
     "</style>"
-    "</head><body><div id=cs1 style=\"margin-top: 4px\"></div><h1 id=dh>doch</h1>"
+    "</head><body>"
     /* ---- CSS Nesting Module Level 1 §3 "Nesting Style Rules" .. §6 "CSSOM" — ONE CONTIGUOUS BLOCK -------
        The sheet, the tree it selects and the three claims about it. A style rule with a nested rule in it used
        to ABORT the author cascade outright — the `@WHY` there said so in as many words — so the first claim is
@@ -1110,6 +1107,280 @@ static const char *HTML =
     "fetch('/api/csswkkfText?v=' + (kt === '@-webkit-keyframes spin { \\n  0% { opacity: 0; }\\n"
     "  100% { opacity: 1; }\\n}~@keyframes spin2 { \\n  0%, 50% { opacity: 0; }\\n}'"
     " ? 'WKKFTEXTOK' : 'WKKFTEXTBAD:' + kt));</script>"
+    /* §6.1's FOUR ATTRIBUTES AND ITS SERIALIZATION, READ FROM THE PAGE. They are IDL getters, so the read is
+       page code on the trampolined chain (a C activation has no flow base, and `JS_GetPropertyInternal`
+       refuses to run a getter from one); `document.styleSheets`, `cssRules`, the indexed getter and the rule
+       objects are the whole route, so a member missing from §6.1's prototype fails here.
+       ONLY A TOKEN CROSSES THE URL: the query percent-encode set encodes space, `"`, `<` and `>`, so a syntax
+       string shipped as a value is an assertion about the encoder. The expected bytes are JS literals, and the
+       failing arm carries the actual value.
+       TWO FETCHES, TWO CLAIMS — what the attributes ANSWER and what §6.1's serialization EMITS.
+       NO FORK: every value is concrete. The joined string leads with the rule COUNT, because §3 says neither
+       an unknown descriptor nor an unreadable syntax invalidates the rule (all five are in `cssRules`), and it
+       ends with the two syntaxes that reach §3.1's initial by two routes. `type` is 0 because §6.4.2's table
+       is frozen and this interface is not in it. */
+    "<script>var pss = document.getElementById('propsheet').sheet.cssRules;"
+    "var pv = pss.length + '|' + pss[0].name + '|' + pss[0].syntax + '|' + pss[0].inherits + '|' +"
+    " pss[0].initialValue + '|' + pss[0].type + '|' + pss[1].syntax + '|' + pss[1].inherits + '|' +"
+    " pss[1].initialValue + '|' + pss[2].syntax + '|' + pss[3].syntax + '|' + pss[4].initialValue;"
+    "fetch('/api/cssprop?v=' + (pv === '5|--pfull|<percentage>|false|0%|0|*|true|null|*|*|null'"
+    " ? 'CSSPROPOK' : 'CSSPROPBAD:' + pv));"
+    "var pt = pss[0].cssText + '~' + pss[1].cssText;"
+    "fetch('/api/csspropText?v=' + (pt === '@property --pfull { syntax: \"<percentage>\"; inherits: false;"
+    " initial-value: 0%; }~@property --pbare { syntax: \"*\"; inherits: true; }'"
+    " ? 'CSSTEXTOK' : 'CSSTEXTBAD:' + pt));</script>"
+    TF_CANVAS_INK
+    "</body></html>";
+
+/* THE TIMERS DOCUMENT: HTML §8.7 "Timers" and its ordering against microtasks, one program. */
+static const char HTML_TIMERS[] =
+    "<!doctype html><html><body><script>"
+    /* HTML §8.7 Timers's TASK SOURCE, and §8.1.7's ordering around it — neither of which this fixture exercised
+       at all, so `setTimeout` had no probe in the engine's own test despite being how a great deal of real code
+       reaches the event loop. The ORDER is the assertion: a microtask checkpoint runs before the next task, so
+       the `.then` continuation must observe its marker BEFORE the timer callback runs, and two timers with the
+       same delay run in the order they were set. */
+    "var _tk = '';"
+    "setTimeout(function(){ _tk += 'B'; }, 0);"
+    "setTimeout(function(){ _tk += 'C'; fetch('/api/timerfire?v=' + _tk); }, 0);"
+    "Promise.resolve().then(function(){ _tk += 'A'; });"
+
+    /* §8.7's STRING HANDLER, AND STEP 2's IDENTIFIER ACROSS THE TWO SPELLINGS OF THE HANDLER UNION. The three
+       rows above all pass a Function, so the arm of the timer initialization steps whose handler is compiled
+       as a classic script ran in no test in this tree. `strran` is that program having actually run; `next` is
+       the two spellings drawing from ONE per-global counter, which is what makes a handle name at most one
+       timer. A second counter, or a path that forgets to bump, gives two live timers one identifier and
+       `clearTimeout` then clears the wrong one — a defect with no other symptom, since both calls still return
+       a plausible number. (That the string form makes a map ENTRY at all is what the two rows below are for:
+       it did not, and `next` was true anyway, because a minted-and-discarded handle counts the same.) */
+    "var _tsh1 = setTimeout(\"fetch('/api/timerstr?v=strran');\", 0);"
+    "var _tsh2 = setTimeout(function(){ fetch('/api/timerhandle?h=' +"
+    " (_tsh2 === _tsh1 + 1 ? 'next' : 'reused')); }, 0);"
+
+    /* §8.7's STRING HANDLER IS A TIMER, WHICH IS THE HALF THE ROW ABOVE CANNOT SEE: `strran` says the program
+       RAN and nothing about WHEN. A timer is a `timeout` that orders it and a map entry `clearTimeout` removes,
+       and neither has any other symptom when missing.
+       `cleared` IS THE CANCELLATION: a string-handled timer cleared before it fires leaves no record, so
+       `notcleared` appearing is `clearTimeout` looking up an identifier that names nothing.
+       `ba` IS THE `timeout`: §8.7 orders the timer task source by expiry, so the 0-delay handler runs before
+       the 100-delay one and the later handler reads both letters; queued at the set, both run in SOURCE order.
+       The spec's own worked example (`setTimeout({toString(){ setTimeout("logger('ONE')", 100); return
+       "logger('TWO')" }}, 100)`) logs "ONE TWO" under either placement, so it is not the discriminator.
+       IT NEEDS THE VIRTUAL CLOCK TO MOVE FORWARD — every other timer here is 0-delay — so a 0 on `timerdelay`
+       is two claims at once (core/timing/event_loop.c's event_loop_may_advance among them), and its
+       NOT-REACHED text says so. */
+    "var _tso = '';"
+    "var _tsc = setTimeout(\"fetch('/api/timerclr?v=notcleared');\", 0);"
+    "clearTimeout(_tsc);"
+    "setTimeout(\"_tso += 'a'; fetch('/api/timerdelay?v=' + _tso);\", 100);"
+    "setTimeout(\"_tso += 'b'; fetch('/api/timerclr?v=cleared');\", 0);"
+
+    /* §8.7 STEP 4 OVER AN UNKNOWN `timeout` — "if timeout is less than 0, then set timeout to 0" asked about
+       a value nothing computed, which is a question with two real answers and therefore a FORK.
+       IT IS THE FORK AND NOT THE TIMER THAT IS PROBED, and the `clearTimeout` is what keeps it that way. The
+       arm that keeps the unknown writes an expiry no double can express, and FIRING one moves the event
+       loop's virtual clock to a moment no arm has decided — a capability core/timing/event_loop.c does not
+       have and whose absence timer_run_due names in full. Cleared, both arms reach the same end and what the
+       row asserts is the thing that was missing: that a fork asked from inside §8.7's own algorithm has
+       somewhere to put its sibling. As a plain JSCFunction it had none — the seam crashed at the fork, naming
+       the predicate, so this ONE LINE took the whole document down before any of it ran. `unkdelay` is
+       therefore a row that reads 0 when the members stop being step machines, and it reads 0 by ABORTING. */
+    "var _t4 = setTimeout(function(){ fetch('/api/unkdelay/fired'); }, state.d);"
+    "clearTimeout(_t4);"
+    "fetch('/api/unkdelay?v=' + (typeof _t4 === 'number' ? 'forked' : 'nohandle'));"
+    "</script>"
+    TF_CANVAS_INK
+    "</body></html>";
+
+/* THE INDEXED DATABASE DOCUMENT: two databases opened from the page's own door, one program. */
+static const char HTML_IDB[] =
+    "<!doctype html><html><body><script>"
+    /* INDEXED DATABASE FROM THE PAGE'S OWN DOOR — `indexedDB.open` through to `success`, and every part of
+       the marker is a different sentence of the standard.
+       `0:1` is §4.2's IDBVersionChangeEvent carrying §5.7 step 7's OLD VERSION and the version being opened,
+       which is what every migration in every bundle branches on. `versionchange` is §4.10's mode getter over
+       the transaction §5.7 step 2 created and §2.8.1's "the transaction of an open request is null unless an
+       upgradeneeded event has been fired" made reachable. `pending` is §4.1's readyState while the `get`'s
+       done flag is false — the request is returned BEFORE its operation runs, which is the whole of what
+       "asynchronously execute" means. `99:done` is the value §6.1 stored under key 2 and §6.2 read back,
+       delivered by §5.9's fire-a-success-event with the flag already set by
+       IndexedDB §5.6 "Asynchronously executing a request" step 5.6.2.
+       AND THE ORDER IS THE PROOF: `success` at the open request fires only after the upgrade transaction has
+       FINISHED (§4.3's note says so, and §5.7 step 10 is what waits), and nothing calls `commit()` — §5.9
+       step 9.3 found the request list empty once the `get` handler returned. `_r.result.version` is §4.4's
+       version getter over the CONNECTION, which §5.1 step 9 set to the version that was opened. */
+    /* AND §2.5's LIST KEY PATH, whose whole observable surface is the `keyPath` getter. `a+b` is §4.5's
+       conversion of the list, and Web IDL §3.2.21 makes it "a new Array object created as if by the expression
+       []" — `plain`: not a FrozenArray, which neither `readonly attribute any keyPath` nor §4.5 names. `same`
+       is §4.5's note ("it returns the same object instance every time it is inspected"), which §3.2.21 alone
+       does not give. `perhandle` is the other half of that note over a second handle opened after the upgrade,
+       and the `a+b` before it says the `push` into the first reached no store ("Changing the properties of the
+       object has no effect on the object store"). `transaction('kp')` takes §3.2.25's STRING arm: a primitive
+       is not an Object, so step 11.2's GetMethod is never reached and the name is not iterated.
+       AND §7.1's IN-LINE KEYS — a `put` with no key, the store's key path read out of the value. `7:u-9` is the
+       record found under a key nothing passed, read back off `.id.v`, so the key was extracted rather than
+       moved. `DataError` is §7.1's `failure` arm reported where §4.5 puts it, SYNCHRONOUSLY out of `put` where
+       the page's try/catch sees it, for a value with nothing at the key path and no key generator. */
+    /* AND THE ROUND TRIP ITSELF, WHICH USED TO BE AN IN-C FIXTURE. §6.1 is a step machine now (its step 5
+       drives §7.1 and therefore §7.4's array arm), so there is no C entry for it and these four claims run
+       where a page runs them — which is strictly more than the C fixture asserted, because each goes through
+       IndexedDB §5.6's request and §5.9/§5.10's event rather than calling the operation directly.
+       `ConstraintError` is §6.1 step 2's no-overwrite refusal — what tells `add` from `put` — delivered as an
+       `error` event that `preventDefault()` keeps from aborting the transaction (§5.10 step 9.3, which is the
+       reason that event is cancelable at all). `first1` is §2.2's ordering read through §6.2: the records
+       arrive 3, 1, 2 and the first in an unbounded-below range is the SMALLEST key, not the one that arrived
+       first. `over21` is §6.1 step 3: a second put under one key REPLACES the record rather than filing a
+       second one. `undoneAD` is §5.5 step 2 over the two RECORD changes, reached through a real `abort()`:
+       the record the transaction ADDED is gone and the record it REMOVED is back with its own value.
+       AND THE TAINT, which is the half a browser's own test suite cannot have: `location.hash` goes into a
+       store and has to come back out still concolic, because a page keeps its session in here and reads it
+       into gated code. §Attacker-sources names IndexedDB as a source; a store that de-tainted on the way in
+       would answer with a plausible datum and delete the fork the read should produce. */
+    "var _r = indexedDB.open('fixture', 1); var _idb = ''; var _k; var _rec = ''; var _tv; var _ix = '';"
+    "_r.onupgradeneeded = function(e){"
+    " var _s = _r.result.createObjectStore('s');"
+    " _s.put(99, 2); var _g = _s.get(2);"
+    " _idb += e.oldVersion + ':' + e.newVersion + ':' + _r.transaction.mode + ':' + _g.readyState;"
+    " _g.onsuccess = function(){ _idb += ':' + _g.result + ':' + _g.readyState; };"
+    " _k = _r.result.createObjectStore('kp', { keyPath: ['a', 'b'] });"
+    " _idb += ':' + (Array.isArray(_k.keyPath) ? _k.keyPath.join('+') : 'notalist')"
+    "       + ':' + (_k.keyPath === _k.keyPath ? 'same' : 'fresh')"
+    "       + ':' + (Object.isFrozen(_k.keyPath) ? 'frozen' : 'plain');"
+    " _k.keyPath.push('c');"
+    " var _i = _r.result.createObjectStore('in', { keyPath: 'id.v' });"
+    " _i.put({ id: { v: 'u-9' }, n: 7 });"
+    " try { _i.put({ q: 1 }); _idb += ':nothrow'; } catch (_e) { _idb += ':' + _e.name; }"
+    " var _ig = _i.get('u-9');"
+    " _ig.onsuccess = function(){ _idb += ':' + _ig.result.n + ':' + _ig.result.id.v; };"
+    /* THE ORDER OF THESE HANDLERS IS IndexedDB §5.6 STEP 5.1's, not this statement's: a transaction's
+       requests are
+       executed in the order they were placed, so the tokens accumulate in placement order. */
+    " var _o = _r.result.createObjectStore('ord');"
+    " _o.put(30, 3); _o.put(10, 1); _o.put(20, 2); _o.put(21, 2);"
+    " var _oa = _o.add(11, 1);"
+    " _oa.onerror = function(ev){ ev.preventDefault(); _rec += _oa.error.name; };"
+    " var _ok = _o.getKey(IDBKeyRange.lowerBound(0));"
+    " _ok.onsuccess = function(){ _rec += ':first' + _ok.result; };"
+    " var _o2 = _o.get(2);"
+    " _o2.onsuccess = function(){ _rec += ':over' + _o2.result; };"
+    " var _t = _r.result.createObjectStore('t'); _t.put(location.hash, 1);"
+    " var _tg = _t.get(1); _tg.onsuccess = function(){ _tv = _tg.result; };"
+    /* §2.6's INDEX, created into an EMPTY store — the arm where the population request finds nothing to walk.
+       The two indexes are the two arms of §6.1 step 5: `by_name` files ONE record whose key is the index key, and
+       `by_tag` is multiEntry, so an ARRAY key files one record PER SUBKEY — which is what makes `multi2`
+       load-bearing, both records carrying tag 'b'. `ref` is §6.3's retrieve-a-referenced-value (the index
+       record's value is a store key, and the answer is the record THAT key names), `pk` is §6.3's
+       retrieve-a-value (the store key itself), and `meta` is §4.6's attributes over the index handle. */
+    " var _n = _r.result.createObjectStore('idx');"
+    " var _x = _n.createIndex('by_name', 'name');"
+    " var _mx = _n.createIndex('by_tag', 'tags', { multiEntry: true });"
+    " _ix += _x.name + ':' + _x.keyPath + ':' + (_x.unique ? 'u' : 'nu')"
+    "      + ':' + (_mx.multiEntry ? 'me' : 'nome')"
+    "      + ':' + (_x.objectStore === _n ? 'own' : 'other')"
+    "      + ':' + (_n.index('by_name') === _x ? 'same' : 'fresh');"
+    " _n.put({ name: 'alice', tags: ['a', 'b'] }, 1);"
+    " _n.put({ name: 'bob', tags: ['b', 'c'] }, 2);"
+    " var _xg = _x.get('bob'); _xg.onsuccess = function(){ _ix += ':ref' + _xg.result.name; };"
+    " var _xk = _x.getKey('bob'); _xk.onsuccess = function(){ _ix += ':pk' + _xk.result; };"
+    /* AND §4.5's NOTE, THE HALF THAT IS NOT A FAILURE — the records go in FIRST and the index is created over
+       a store that already holds them, so the only thing that can make these two retrievals answer is the
+       POPULATION REQUEST walking the store's records through §6.1 step 5. `popben` is §6.3's
+       retrieve-a-referenced-value over a record no `put` ever filed an index entry for, and `back2` is the
+       multiEntry arm doing the same thing — one index record per subkey of a key extracted from a value the
+       store was already holding, both records carrying tag 'x'. Created eagerly, as this file used to, both
+       would answer with an empty index. */
+    " var _pp = _r.result.createObjectStore('pop');"
+    " _pp.put({ name: 'ann', tags: ['x'] }, 1);"
+    " _pp.put({ name: 'ben', tags: ['x', 'y'] }, 2);"
+    " var _px = _pp.createIndex('by_name', 'name');"
+    " var _pm = _pp.createIndex('by_tag', 'tags', { multiEntry: true });"
+    " var _pg = _px.get('ben'); _pg.onsuccess = function(){ _ix += ':pop' + _pg.result.name; };"
+    " var _pc = _pm.count('x'); _pc.onsuccess = function(){ _ix += ':back' + _pc.result; };"
+    /* §5.12 Creating a request to retrieve multiple items' `count`, ASKED OF A VALUE NOBODY KNOWS — the
+       question a browser's own corpus cannot ask, having no unknown. §4.5 declares `getAll(optional any
+       queryOrOptions, optional [EnforceRange] unsigned long count)` and Web IDL passes unknown input through a
+       declared type AS ITSELF, so §6.2's retrieve-multiple-items opens with the honest arm — "If count is not
+       given or is 0 (zero), let count be infinity" — a SUPERSET a later example can only narrow.
+       `k` IS THE CONTROL: a `getAll` that ignored its count would answer all three records for the unknown and
+       satisfy `u`; two records for a count of two says the not-given arm was CHOSEN.
+       AND THE THIRD FACT IS AN ORDER. `count` is `[EnforceRange] unsigned long` in `IDBGetAllOptions` too, and
+       Web IDL §3.2.17 Dictionary types converts members "in lexicographical order" (step 4.1.4.1), so `count`
+       is refused before `direction` is read and the page's `toString` never runs. `e` and `d` are two rows
+       because a TypeError raised after `direction` was read is a different defect from none at all. */
+    " var _ga = _r.result.createObjectStore('ga');"
+    " _ga.put('g1', 1); _ga.put('g2', 2); _ga.put('g3', 3);"
+    " var _gr = IDBKeyRange.lowerBound(0), _gs = '', _gd = 0, _ge = 'nothrow';"
+    " var _gu = _ga.getAll(_gr, location.hash.length);"
+    " var _gk = _ga.getAll(_gr, 2);"
+    " _gu.onsuccess = function(){ _gs = _gu.result.join(''); };"
+    " try { _ga.getAllRecords({ count: -1,"
+    "  direction: { toString: function(){ _gd = 1; return 'next'; } } }); }"
+    " catch (_gx) { _ge = _gx.name; }"
+    " _gk.onsuccess = function(){ fetch('/api/idbcount?u=' + _gs + '&k=' + _gk.result.join('')"
+    "  + '&e=' + _ge + '&d=' + (_gd ? 'READ' : 'unread')); };"
+    " var _xc = _mx.count('b');"
+    " _xc.onsuccess = function(){ fetch('/api/idbidx?v=' + _ix + ':multi' + _xc.result); }; };"
+    "_r.onsuccess = function(){"
+    " var _k2 = _r.result.transaction('kp').objectStore('kp');"
+    " _idb += ':' + _k2.keyPath.join('+') + ':' + (_k2.keyPath === _k.keyPath ? 'shared' : 'perhandle');"
+    " fetch('/api/idbopen?v=' + _idb + ':' + _r.result.version + ':' + _r.result.name);"
+    /* §5.5 STEP 2 THROUGH §5.5 ITSELF. One record is added under a key the store has none for and one the
+       store does hold is deleted, and the abort has to undo BOTH — which is also the pair whose inverses are
+       a removal and a re-file, run backwards. The verification is a second transaction, because the aborted
+       one is FINISHED and every member of §4.5 refuses one. */
+    " var _at = _r.result.transaction('ord', 'readwrite'), _as = _at.objectStore('ord');"
+    " _as.put(77, 9); _as.delete(1);"
+    " var _m9 = _as.get(9), _m1 = _as.get(1);"
+    /* THE ABORT RUNS FROM A HANDLER, NOT FROM THIS TASK. `abort()` called here would reach §5.5 step 6 before
+       any of the four requests had executed — the operations would never run, there would be nothing to
+       revert, and both `undone` terms would read TRUE for a transaction that had changed nothing. So the two
+       writes are read back first, and `made77gone` is what makes the claim below about a real state. */
+    " _m1.onsuccess = function(){"
+    "  _rec += ':made' + _m9.result + (_m1.result === undefined ? 'gone' : 'LEFT'); _at.abort(); };"
+    " _at.onabort = function(){"
+    "  var _vs = _r.result.transaction('ord').objectStore('ord');"
+    "  var _v9 = _vs.get(9), _v1 = _vs.get(1);"
+    "  _v1.onsuccess = function(){"
+    /* `h` IS THE CONTROL FOR `t`, ON THE SAME FETCH so that one endpoint record carries both. `t` is
+       `location.hash` after a round trip through an object store; `h` is the SAME source reaching the SAME
+       param list without one. Without it a `t` that does not read `{hash}` cannot say whether the STORE
+       de-tainted the value or whether this source never reaches an @H param as a shape at all — two unrelated
+       mechanisms under one 0, which is the defect the row above was just split to remove. */
+    "   fetch('/api/idbrec?v=' + _rec + ':undone' + (_v9.result === undefined ? 'A' : 'LEAKA')"
+    "        + (_v1.result === 10 ? 'D' : 'LEAKD') + '&t=' + _tv + '&h=' + location.hash); }; }; };"
+
+    /* §4.5's WORKED EXAMPLE, IN ITS OWN DATABASE because its whole point is that the UPGRADE TRANSACTION dies:
+       two records queued under one name, then a UNIQUE index over that name. The standard's own words are that
+       "the index's uniqueness constraint does not cause the second request to fail. Instead, the transaction
+       will be aborted when the index is created and the constraint fails." So `ConstraintError` is the
+       TRANSACTION's error (§4.10's getter over what §5.10 step 9.3 aborted with) and NOT any request's — the
+       second `put` succeeded — and the `AbortError` beside it is §5.1 step 10.8's, which is what a page's own
+       `open` reports for an upgrade that aborted. Both halves are load-bearing: the first says the failure was
+       the index creation's, and the second says the open FAILED rather than handing the page a connection to a
+       half-migrated database. */
+    "var _u = indexedDB.open('uniqfix', 1); var _uq = 'NOABORT';"
+    "_u.onupgradeneeded = function(){"
+    " var _us = _u.result.createObjectStore('u');"
+    " _us.put({ name: 'betty' }, 1);"
+    " _us.put({ name: 'betty' }, 2);"
+    " _us.createIndex('by_name', 'name', { unique: true });"
+    " var _ut = _u.transaction;"
+    " _ut.onabort = function(){ _uq = _ut.error.name; }; };"
+    "_u.onerror = function(){ fetch('/api/idbuniq?v=' + _uq + ':' + _u.error.name); };"
+    "</script>"
+    TF_CANVAS_INK
+    "</body></html>";
+
+/* the "page": a real 2-<script> HTML document. Script 1 reads injected `state` into a config; script 2 (sharing
+   globals) branches on it + does a baseline mutation (globalThis.n) first. Exercises: real Lexbor boot,
+   cross-script concolic flow (fork on cfg.admin set by script 1), the moat (gated /api/admin), AND per-flow COW
+   (both arms see n==1). */
+static const char HTML[] =
+    "<!doctype html><html><head>"
+    /* Author CSS whose SPECIFICITY and DOCUMENT ORDER disagree: the id rule is written FIRST and must still
+       win. Order-only cascading answers `none` here, and every page puts its general rules last. */
+    "<style>#cs1 { display: block; color: rgb(1, 2, 3) } div { display: none }</style>"
+    "</head><body><div id=cs1 style=\"margin-top: 4px\"></div><h1 id=dh>doch</h1>"
     /* ---- CSS Conditional 5 §9.1 "The CSSContainerRule interface" -------------------------------------------
        THE SHEET IS BUILT AND DISABLED IN ONE SCRIPT, AND THAT IS THE PROBE'S DESIGN RATHER THAN A DODGE. This
        build has the `@container` CSSOM OBJECT and does NOT have its cascaded effect: §5.4's condition is
@@ -1346,9 +1617,9 @@ static const char *HTML =
        WHAT THE ROWS ASSERT IS THEREFORE `NOT inherited` AND NOT `ownaddr`, because `initial` is a legitimate
        outcome of a slower schedule and a row that refused it would be red for a reason that is not a defect.
        The SYNC read is emitted unconditionally and is that frame's own reachability witness; the TIMER read
-       is the subject, and it is a TIMER rather than a `load` handler because this document already
-       establishes that its timers fire (`/api/timerfire`) and an absent `load` would be a silence where an
-       arm can be a value. */
+       is the subject, and it is a TIMER rather than a `load` handler because the timers document
+       establishes that timers fire (`/api/timerfire`) and an absent `load` would be a silence where an arm
+       can be a value. */
     "<iframe id=sdf srcdoc=\"<base href='/api/'>"
     "<script>"
     "fetch('https://x.test/api/sdrun?v=ran');"
@@ -1480,36 +1751,6 @@ static const char *HTML =
     "soEl.textContent = \"__so += 'X';\";"
     "document.body.appendChild(soEl);"
     "__so += 'B';</script>"
-    /* §6.1's FOUR ATTRIBUTES AND ITS SERIALIZATION, READ FROM THE PAGE. They are IDL getters, so the read has
-       to be page code on the trampolined chain — a C activation has no flow base under it, and
-       `JS_GetPropertyInternal` refuses to run a getter from one outright. Reading them here is also what a real
-       page does, which is worth more than a C read would have been: `document.styleSheets`, §6.1.1's
-       `cssRules`, §6.1.2's indexed getter and the rule objects are the whole route, and a member that is not on
-       §6.1's prototype fails here rather than being read out of the record behind it.
-       THE COMPARISON IS IN THE PAGE AND ONLY A TOKEN CROSSES THE URL, which is not a style choice: a fetch URL
-       goes through the WHATWG query percent-encode set, which encodes SPACE, `"`, `<` and `>` — so a syntax
-       string shipped as a query value arrives as `%3Cpercentage%3E`, and an assertion over that is an assertion
-       about the encoder. The expected bytes are JS literals here, where nothing rewrites them, and the failing
-       arm still carries the actual value for whoever has to read it.
-       TWO FETCHES BECAUSE THEY ARE TWO INDEPENDENT CLAIMS — what the attributes ANSWER, and what §6.1's own
-       serialization arm EMITS. A build could get the four right and the arm's order or spacing wrong, and one
-       token over both would say only that one of two unrelated things is broken.
-       NO FORK: every value is concrete (the CSSOM computed it), so each `===` runs rather than forking, and
-       this adds two endpoint records and no arms. The joined string leads with the rule COUNT because an
-       unknown descriptor and an unreadable syntax string are DESCRIPTOR failures and §3 says neither
-       invalidates the rule — all four must be in `cssRules` — and it ends with the two syntaxes that reach
-       §3.1's initial by two different routes. `type` is in it because §6.4.2's table is frozen and this
-       interface is not in it, so the answer is 0, the same answer the two `@layer` rules give. */
-    "<script>var pss = document.styleSheets[1].cssRules;"
-    "var pv = pss.length + '|' + pss[0].name + '|' + pss[0].syntax + '|' + pss[0].inherits + '|' +"
-    " pss[0].initialValue + '|' + pss[0].type + '|' + pss[1].syntax + '|' + pss[1].inherits + '|' +"
-    " pss[1].initialValue + '|' + pss[2].syntax + '|' + pss[3].syntax + '|' + pss[4].initialValue;"
-    "fetch('/api/cssprop?v=' + (pv === '5|--pfull|<percentage>|false|0%|0|*|true|null|*|*|null'"
-    " ? 'CSSPROPOK' : 'CSSPROPBAD:' + pv));"
-    "var pt = pss[0].cssText + '~' + pss[1].cssText;"
-    "fetch('/api/csspropText?v=' + (pt === '@property --pfull { syntax: \"<percentage>\"; inherits: false;"
-    " initial-value: 0%; }~@property --pbare { syntax: \"*\"; inherits: true; }'"
-    " ? 'CSSTEXTOK' : 'CSSTEXTBAD:' + pt));</script>"
     /* HTML §4.12.1 "The script element"'s DATA BLOCK, WHOSE BYTES ARE A QUERY — the one source this
        document can hold whose EXAMPLE carries a `&` while its DISPLAY SHAPE cannot, which is exactly the
        population `query_align` was widened for and the one the widening landed without a witness for.
@@ -4930,65 +5171,6 @@ static const char *HTML =
        The src'd path is not unexercised meanwhile: `node engine/wpt.mjs html/browsers` runs hundreds of src'd
        iframes at flow counts a realm-per-flow can still pay for. */
 
-    /* HTML §8.7 Timers's TASK SOURCE, and §8.1.7's ordering around it — neither of which this fixture exercised
-       at all, so `setTimeout` had no probe in the engine's own test despite being how a great deal of real code
-       reaches the event loop. The ORDER is the assertion: a microtask checkpoint runs before the next task, so
-       the `.then` continuation must observe its marker BEFORE the timer callback runs, and two timers with the
-       same delay run in the order they were set. */
-    "var _tk = '';"
-    "setTimeout(function(){ _tk += 'B'; }, 0);"
-    "setTimeout(function(){ _tk += 'C'; fetch('/api/timerfire?v=' + _tk); }, 0);"
-    "Promise.resolve().then(function(){ _tk += 'A'; });"
-
-    /* §8.7's STRING HANDLER, AND STEP 2's IDENTIFIER ACROSS THE TWO SPELLINGS OF THE HANDLER UNION. The three
-       rows above all pass a Function, so the arm of the timer initialization steps whose handler is compiled
-       as a classic script ran in no test in this tree. `strran` is that program having actually run; `next` is
-       the two spellings drawing from ONE per-global counter, which is what makes a handle name at most one
-       timer. A second counter, or a path that forgets to bump, gives two live timers one identifier and
-       `clearTimeout` then clears the wrong one — a defect with no other symptom, since both calls still return
-       a plausible number. (That the string form makes a map ENTRY at all is what the two rows below are for:
-       it did not, and `next` was true anyway, because a minted-and-discarded handle counts the same.) */
-    "var _tsh1 = setTimeout(\"fetch('/api/timerstr?v=strran');\", 0);"
-    "var _tsh2 = setTimeout(function(){ fetch('/api/timerhandle?h=' +"
-    " (_tsh2 === _tsh1 + 1 ? 'next' : 'reused')); }, 0);"
-
-    /* §8.7's STRING HANDLER IS A TIMER, WHICH IS THE HALF THE ROW ABOVE CANNOT SEE. `strran` says the program
-       RAN; it says nothing about WHEN, and the two things a timer is — a `timeout` that orders it and a map
-       entry `clearTimeout` removes — were both absent while the string arm queued its script at the SET.
-       Neither has any other symptom: the call still returns a plausible handle and the program still runs.
-       `cleared` IS THE CANCELLATION. A string-handled timer that is cleared before it fires must leave no
-       record at all, so `notcleared` appearing is the whole defect in one token — `clearTimeout` looking up an
-       identifier that names nothing, and the program running anyway.
-       `ba` IS THE `timeout`. §8.7 orders the timer task source by expiry, so the 0-delay row runs before the
-       100-delay one and the later handler reads both letters; queued at the set instead, both went onto the
-       flow's program sequence in SOURCE order and the reading handler saw only its own. The two delays are the
-       discriminator the spec's own worked example is not: `setTimeout({toString(){ setTimeout("logger('ONE')",
-       100); return "logger('TWO')" }}, 100)` logs "ONE TWO" under either placement, because argument
-       conversion runs the inner call first and both timeouts are equal.
-       IT NEEDS THE VIRTUAL CLOCK TO MOVE FORWARD, which no other statement in this fixture asks for: every
-       other timer here is 0-delay, so `timerdelay` is also the first probe of core/timing/event_loop.c's
-       event_loop_may_advance under a document with live requests. A 0 on that row is therefore two claims at
-       once and its NOT-REACHED text says so. */
-    "var _tso = '';"
-    "var _tsc = setTimeout(\"fetch('/api/timerclr?v=notcleared');\", 0);"
-    "clearTimeout(_tsc);"
-    "setTimeout(\"_tso += 'a'; fetch('/api/timerdelay?v=' + _tso);\", 100);"
-    "setTimeout(\"_tso += 'b'; fetch('/api/timerclr?v=cleared');\", 0);"
-
-    /* §8.7 STEP 4 OVER AN UNKNOWN `timeout` — "if timeout is less than 0, then set timeout to 0" asked about
-       a value nothing computed, which is a question with two real answers and therefore a FORK.
-       IT IS THE FORK AND NOT THE TIMER THAT IS PROBED, and the `clearTimeout` is what keeps it that way. The
-       arm that keeps the unknown writes an expiry no double can express, and FIRING one moves the event
-       loop's virtual clock to a moment no arm has decided — a capability core/timing/event_loop.c does not
-       have and whose absence timer_run_due names in full. Cleared, both arms reach the same end and what the
-       row asserts is the thing that was missing: that a fork asked from inside §8.7's own algorithm has
-       somewhere to put its sibling. As a plain JSCFunction it had none — the seam crashed at the fork, naming
-       the predicate, so this ONE LINE took the whole document down before any of it ran. `unkdelay` is
-       therefore a row that reads 0 when the members stop being step machines, and it reads 0 by ABORTING. */
-    "var _t4 = setTimeout(function(){ fetch('/api/unkdelay/fired'); }, state.d);"
-    "clearTimeout(_t4);"
-    "fetch('/api/unkdelay?v=' + (typeof _t4 === 'number' ? 'forked' : 'nohandle'));"
-
     /* ONE UNKNOWN `unsigned long index` THROUGH TWO MEMBERS OF core/idl_index_arg.c's FAMILY, WHICH IS THE ONE
        SHAPE THAT ASKS WHETHER A FORK KEY NAMES THE PREDICATE OR THE SITE.
        Each `item(index)` decomposes into the elimination chain `index == 0`, `index == 1`, … over the value's
@@ -5171,195 +5353,6 @@ static const char *HTML =
     " fetch('/api/xdocjob?v=' + (_w.closed === false ? 'jobread' : 'wrong')); });"
     "fetch('/api/xdocread?v=' + (_w.closed === false && _w.length === 0 &&"
     " typeof _w.closed === 'boolean' && typeof _w.length === 'number' ? 'xread' : 'wrong'));"
-
-    /* INDEXED DATABASE FROM THE PAGE'S OWN DOOR — `indexedDB.open` through to `success`, and every part of
-       the marker is a different sentence of the standard.
-       `0:1` is §4.2's IDBVersionChangeEvent carrying §5.7 step 7's OLD VERSION and the version being opened,
-       which is what every migration in every bundle branches on. `versionchange` is §4.10's mode getter over
-       the transaction §5.7 step 2 created and §2.8.1's "the transaction of an open request is null unless an
-       upgradeneeded event has been fired" made reachable. `pending` is §4.1's readyState while the `get`'s
-       done flag is false — the request is returned BEFORE its operation runs, which is the whole of what
-       "asynchronously execute" means. `99:done` is the value §6.1 stored under key 2 and §6.2 read back,
-       delivered by §5.9's fire-a-success-event with the flag already set by
-       IndexedDB §5.6 "Asynchronously executing a request" step 5.6.2.
-       AND THE ORDER IS THE PROOF: `success` at the open request fires only after the upgrade transaction has
-       FINISHED (§4.3's note says so, and §5.7 step 10 is what waits), and nothing calls `commit()` — §5.9
-       step 9.3 found the request list empty once the `get` handler returned. `_r.result.version` is §4.4's
-       version getter over the CONNECTION, which §5.1 step 9 set to the version that was opened. */
-    /* AND §2.5's LIST KEY PATH, whose whole observable surface is the `keyPath` getter. `a+b` is §4.5's
-       conversion of the store's list — Web IDL §3.2.21 makes it "a new Array object created as if by the
-       expression []", so `plain` is the assertion that it is NOT a frozen array: `FrozenArray<T>` is a
-       different parameterized type that neither the attribute's declaration (`readonly attribute any keyPath`)
-       nor §4.5's prose names. `same` is Indexed Database §4.5's note's identity ("it returns the same object
-       instance every time it is inspected"), which Web IDL §3.2.21 alone does not give since its own steps
-       mint a new Array per conversion. And the SECOND handle, over a transaction the page opens after the
-       upgrade, is the other half of that note: `perhandle` says two handles for one store answer with two
-       Arrays, and the `a+b` that precedes it says the `push` into the first one reached no object store —
-       §4.5's "Changing the properties of the object has no effect on the object store." `transaction('kp')`
-       is also the first time §3.2.25's union
-       takes its STRING arm from a page: a primitive string is not an Object, so §3.2.25 step 11.2's GetMethod
-       is never reached and the store name is not iterated into 'k','p'.
-       AND §7.1's IN-LINE KEYS, which is a `put` WITH NO KEY AT ALL — the store named it, and §7.1's walk reads
-       it out of the value. `7:u-9` is the record coming back out under a key nothing passed: the value went in
-       under `id.v`, the `get('u-9')` found it, and reading `.id.v` off the answer says the key was extracted
-       from the value rather than moved out of it. `DataError` is §7.1's `failure` arm reported where §4.5 puts
-       it — SYNCHRONOUSLY, out of `put` itself, where the page's own try/catch sees it, and not as a request
-       that later fires an `error` event — for a value with nothing at the key path in a store with no key
-       generator. Both are the shape every bundle that keeps records by id writes. */
-    /* AND THE ROUND TRIP ITSELF, WHICH USED TO BE AN IN-C FIXTURE. §6.1 is a step machine now (its step 5
-       drives §7.1 and therefore §7.4's array arm), so there is no C entry for it and these four claims run
-       where a page runs them — which is strictly more than the C fixture asserted, because each goes through
-       IndexedDB §5.6's request and §5.9/§5.10's event rather than calling the operation directly.
-       `ConstraintError` is §6.1 step 2's no-overwrite refusal — what tells `add` from `put` — delivered as an
-       `error` event that `preventDefault()` keeps from aborting the transaction (§5.10 step 9.3, which is the
-       reason that event is cancelable at all). `first1` is §2.2's ordering read through §6.2: the records
-       arrive 3, 1, 2 and the first in an unbounded-below range is the SMALLEST key, not the one that arrived
-       first. `over21` is §6.1 step 3: a second put under one key REPLACES the record rather than filing a
-       second one. `undoneAD` is §5.5 step 2 over the two RECORD changes, reached through a real `abort()`:
-       the record the transaction ADDED is gone and the record it REMOVED is back with its own value.
-       AND THE TAINT, which is the half a browser's own test suite cannot have: `location.hash` goes into a
-       store and has to come back out still concolic, because a page keeps its session in here and reads it
-       into gated code. §Attacker-sources names IndexedDB as a source; a store that de-tainted on the way in
-       would answer with a plausible datum and delete the fork the read should produce. */
-    "var _r = indexedDB.open('fixture', 1); var _idb = ''; var _k; var _rec = ''; var _tv; var _ix = '';"
-    "_r.onupgradeneeded = function(e){"
-    " var _s = _r.result.createObjectStore('s');"
-    " _s.put(99, 2); var _g = _s.get(2);"
-    " _idb += e.oldVersion + ':' + e.newVersion + ':' + _r.transaction.mode + ':' + _g.readyState;"
-    " _g.onsuccess = function(){ _idb += ':' + _g.result + ':' + _g.readyState; };"
-    " _k = _r.result.createObjectStore('kp', { keyPath: ['a', 'b'] });"
-    " _idb += ':' + (Array.isArray(_k.keyPath) ? _k.keyPath.join('+') : 'notalist')"
-    "       + ':' + (_k.keyPath === _k.keyPath ? 'same' : 'fresh')"
-    "       + ':' + (Object.isFrozen(_k.keyPath) ? 'frozen' : 'plain');"
-    " _k.keyPath.push('c');"
-    " var _i = _r.result.createObjectStore('in', { keyPath: 'id.v' });"
-    " _i.put({ id: { v: 'u-9' }, n: 7 });"
-    " try { _i.put({ q: 1 }); _idb += ':nothrow'; } catch (_e) { _idb += ':' + _e.name; }"
-    " var _ig = _i.get('u-9');"
-    " _ig.onsuccess = function(){ _idb += ':' + _ig.result.n + ':' + _ig.result.id.v; };"
-    /* THE ORDER OF THESE HANDLERS IS IndexedDB §5.6 STEP 5.1's, not this statement's: a transaction's
-       requests are
-       executed in the order they were placed, so the tokens accumulate in placement order. */
-    " var _o = _r.result.createObjectStore('ord');"
-    " _o.put(30, 3); _o.put(10, 1); _o.put(20, 2); _o.put(21, 2);"
-    " var _oa = _o.add(11, 1);"
-    " _oa.onerror = function(ev){ ev.preventDefault(); _rec += _oa.error.name; };"
-    " var _ok = _o.getKey(IDBKeyRange.lowerBound(0));"
-    " _ok.onsuccess = function(){ _rec += ':first' + _ok.result; };"
-    " var _o2 = _o.get(2);"
-    " _o2.onsuccess = function(){ _rec += ':over' + _o2.result; };"
-    " var _t = _r.result.createObjectStore('t'); _t.put(location.hash, 1);"
-    " var _tg = _t.get(1); _tg.onsuccess = function(){ _tv = _tg.result; };"
-    /* §2.6's INDEX, created into an EMPTY store — the arm where the population request finds nothing to walk.
-       The two indexes are the two arms of §6.1 step 5: `by_name` files ONE record whose key is the index key, and
-       `by_tag` is multiEntry, so an ARRAY key files one record PER SUBKEY — which is what makes `multi2`
-       load-bearing, both records carrying tag 'b'. `ref` is §6.3's retrieve-a-referenced-value (the index
-       record's value is a store key, and the answer is the record THAT key names), `pk` is §6.3's
-       retrieve-a-value (the store key itself), and `meta` is §4.6's attributes over the index handle. */
-    " var _n = _r.result.createObjectStore('idx');"
-    " var _x = _n.createIndex('by_name', 'name');"
-    " var _mx = _n.createIndex('by_tag', 'tags', { multiEntry: true });"
-    " _ix += _x.name + ':' + _x.keyPath + ':' + (_x.unique ? 'u' : 'nu')"
-    "      + ':' + (_mx.multiEntry ? 'me' : 'nome')"
-    "      + ':' + (_x.objectStore === _n ? 'own' : 'other')"
-    "      + ':' + (_n.index('by_name') === _x ? 'same' : 'fresh');"
-    " _n.put({ name: 'alice', tags: ['a', 'b'] }, 1);"
-    " _n.put({ name: 'bob', tags: ['b', 'c'] }, 2);"
-    " var _xg = _x.get('bob'); _xg.onsuccess = function(){ _ix += ':ref' + _xg.result.name; };"
-    " var _xk = _x.getKey('bob'); _xk.onsuccess = function(){ _ix += ':pk' + _xk.result; };"
-    /* AND §4.5's NOTE, THE HALF THAT IS NOT A FAILURE — the records go in FIRST and the index is created over
-       a store that already holds them, so the only thing that can make these two retrievals answer is the
-       POPULATION REQUEST walking the store's records through §6.1 step 5. `popben` is §6.3's
-       retrieve-a-referenced-value over a record no `put` ever filed an index entry for, and `back2` is the
-       multiEntry arm doing the same thing — one index record per subkey of a key extracted from a value the
-       store was already holding, both records carrying tag 'x'. Created eagerly, as this file used to, both
-       would answer with an empty index. */
-    " var _pp = _r.result.createObjectStore('pop');"
-    " _pp.put({ name: 'ann', tags: ['x'] }, 1);"
-    " _pp.put({ name: 'ben', tags: ['x', 'y'] }, 2);"
-    " var _px = _pp.createIndex('by_name', 'name');"
-    " var _pm = _pp.createIndex('by_tag', 'tags', { multiEntry: true });"
-    " var _pg = _px.get('ben'); _pg.onsuccess = function(){ _ix += ':pop' + _pg.result.name; };"
-    " var _pc = _pm.count('x'); _pc.onsuccess = function(){ _ix += ':back' + _pc.result; };"
-    /* §5.12 Creating a request to retrieve multiple items' `count`, ASKED OF A VALUE NOBODY KNOWS — the one
-       question about this member a browser's own corpus structurally cannot ask, because it has no unknown to
-       ask it with. §4.5's declaration is `getAll(optional any queryOrOptions, optional [EnforceRange] unsigned
-       long count)`, and Web IDL passes unknown external input through a declared type AS ITSELF, so the number
-       §5.12 hands its operation does not exist. §6.2 Object store retrieval operations' retrieve multiple
-       items from an object store opens with the arm that is the honest answer — "If count is not given or is 0
-       (zero), let count be infinity" — and that is a SUPERSET a later example can only narrow, which is what
-       makes it explored rather than decided.
-       `k` IS THE CONTROL AND IT IS NOT OPTIONAL, because `u` alone cannot fail: a `getAll` that ignored its
-       count entirely would answer all three records for the unknown AND satisfy the row. Two records for a
-       count of two is that member honouring a count it HAS, on the same store in the same transaction, so the
-       pair says the not-given arm was CHOSEN rather than being the only arm there is.
-       AND THE THIRD FACT IS AN ORDER, not a value. `count` is `[EnforceRange] unsigned long` in
-       `IDBGetAllOptions` too, and Web IDL §3.2.17 Dictionary types reads members "in lexicographical order"
-       (step 4.1) and converts each at step 4.1.4.1 — so `count` is refused BEFORE `direction` is even read off
-       the object, and the page's `toString` never runs. Deferred to the consumer instead, the refusal lands
-       after every member the standard orders behind `count`, and a page observes the difference through its
-       own side effects. `e` and `d` are two rows because a TypeError raised after `direction` was read is a
-       different defect from no TypeError at all, and one boolean over them names neither. */
-    " var _ga = _r.result.createObjectStore('ga');"
-    " _ga.put('g1', 1); _ga.put('g2', 2); _ga.put('g3', 3);"
-    " var _gr = IDBKeyRange.lowerBound(0), _gs = '', _gd = 0, _ge = 'nothrow';"
-    " var _gu = _ga.getAll(_gr, location.hash.length);"
-    " var _gk = _ga.getAll(_gr, 2);"
-    " _gu.onsuccess = function(){ _gs = _gu.result.join(''); };"
-    " try { _ga.getAllRecords({ count: -1,"
-    "  direction: { toString: function(){ _gd = 1; return 'next'; } } }); }"
-    " catch (_gx) { _ge = _gx.name; }"
-    " _gk.onsuccess = function(){ fetch('/api/idbcount?u=' + _gs + '&k=' + _gk.result.join('')"
-    "  + '&e=' + _ge + '&d=' + (_gd ? 'READ' : 'unread')); };"
-    " var _xc = _mx.count('b');"
-    " _xc.onsuccess = function(){ fetch('/api/idbidx?v=' + _ix + ':multi' + _xc.result); }; };"
-    "_r.onsuccess = function(){"
-    " var _k2 = _r.result.transaction('kp').objectStore('kp');"
-    " _idb += ':' + _k2.keyPath.join('+') + ':' + (_k2.keyPath === _k.keyPath ? 'shared' : 'perhandle');"
-    " fetch('/api/idbopen?v=' + _idb + ':' + _r.result.version + ':' + _r.result.name);"
-    /* §5.5 STEP 2 THROUGH §5.5 ITSELF. One record is added under a key the store has none for and one the
-       store does hold is deleted, and the abort has to undo BOTH — which is also the pair whose inverses are
-       a removal and a re-file, run backwards. The verification is a second transaction, because the aborted
-       one is FINISHED and every member of §4.5 refuses one. */
-    " var _at = _r.result.transaction('ord', 'readwrite'), _as = _at.objectStore('ord');"
-    " _as.put(77, 9); _as.delete(1);"
-    " var _m9 = _as.get(9), _m1 = _as.get(1);"
-    /* THE ABORT RUNS FROM A HANDLER, NOT FROM THIS TASK. `abort()` called here would reach §5.5 step 6 before
-       any of the four requests had executed — the operations would never run, there would be nothing to
-       revert, and both `undone` terms would read TRUE for a transaction that had changed nothing. So the two
-       writes are read back first, and `made77gone` is what makes the claim below about a real state. */
-    " _m1.onsuccess = function(){"
-    "  _rec += ':made' + _m9.result + (_m1.result === undefined ? 'gone' : 'LEFT'); _at.abort(); };"
-    " _at.onabort = function(){"
-    "  var _vs = _r.result.transaction('ord').objectStore('ord');"
-    "  var _v9 = _vs.get(9), _v1 = _vs.get(1);"
-    "  _v1.onsuccess = function(){"
-    /* `h` IS THE CONTROL FOR `t`, ON THE SAME FETCH so that one endpoint record carries both. `t` is
-       `location.hash` after a round trip through an object store; `h` is the SAME source reaching the SAME
-       param list without one. Without it a `t` that does not read `{hash}` cannot say whether the STORE
-       de-tainted the value or whether this source never reaches an @H param as a shape at all — two unrelated
-       mechanisms under one 0, which is the defect the row above was just split to remove. */
-    "   fetch('/api/idbrec?v=' + _rec + ':undone' + (_v9.result === undefined ? 'A' : 'LEAKA')"
-    "        + (_v1.result === 10 ? 'D' : 'LEAKD') + '&t=' + _tv + '&h=' + location.hash); }; }; };"
-
-    /* §4.5's WORKED EXAMPLE, IN ITS OWN DATABASE because its whole point is that the UPGRADE TRANSACTION dies:
-       two records queued under one name, then a UNIQUE index over that name. The standard's own words are that
-       "the index's uniqueness constraint does not cause the second request to fail. Instead, the transaction
-       will be aborted when the index is created and the constraint fails." So `ConstraintError` is the
-       TRANSACTION's error (§4.10's getter over what §5.10 step 9.3 aborted with) and NOT any request's — the
-       second `put` succeeded — and the `AbortError` beside it is §5.1 step 10.8's, which is what a page's own
-       `open` reports for an upgrade that aborted. Both halves are load-bearing: the first says the failure was
-       the index creation's, and the second says the open FAILED rather than handing the page a connection to a
-       half-migrated database. */
-    "var _u = indexedDB.open('uniqfix', 1); var _uq = 'NOABORT';"
-    "_u.onupgradeneeded = function(){"
-    " var _us = _u.result.createObjectStore('u');"
-    " _us.put({ name: 'betty' }, 1);"
-    " _us.put({ name: 'betty' }, 2);"
-    " _us.createIndex('by_name', 'name', { unique: true });"
-    " var _ut = _u.transaction;"
-    " _ut.onabort = function(){ _uq = _ut.error.name; }; };"
-    "_u.onerror = function(){ fetch('/api/idbuniq?v=' + _uq + ':' + _u.error.name); };"
     "</script>"
     /* THE FRAME CONTROL, AND IT IS A CONTROL RATHER THAN A PROBE — its whole content is that it is
        SHORT and that it is its OWN <script>. The five reply-consuming rows all issue their fetch
@@ -6284,7 +6277,7 @@ static const char *HTML_COLD =
        -time custom-element candidacy is safe by construction: it asks `node_wrap_peek` and answers no for a
        hyphenless tag. The `<span>` this adds counts against nothing: §Testing's shared page-ink declaration
        records that `HTML_MIN`, `HTML_COLD` and `HTML_POPOVER` "read no collection and count no elements at
-       all", and no probe in any of the four counts `body`'s children.
+       all", and no probe in any document counts `body`'s children.
 
        HOW ITS ABSENCE WOULD SHOW, as an observation rather than as an instance: an arm reads back an expando
        it never wrote, on a platform object it did not create, in a world no statement ever assigned it in —
@@ -6441,6 +6434,54 @@ static const char *HTML_POPOVER =
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
+
+/* THE EXPLORING SESSION'S DOCUMENTS, ONE PER INVOCATION (`--doc <name>`; `--list-docs` prints the names).
+   Each runs as its own process, so an abort or an exhausted budget costs that document's rows and no others,
+   and the set runs in parallel. A row belongs to the one document whose source contains its key: probes_eval
+   asserts that no two of these do, and that a row's gate and reach stand in its document beside it.
+   HTML_MIN, HTML_COLD and HTML_POPOVER are selected by their own flags and are not members: their rows
+   answer different questions (the ASan gate, the cross-session round trip, a one-flow frontier).
+   NAMED RESIDUAL: `main` is still many families in one document, so one abort in it hides all of its rows.
+   The next diffs move its families into members of their own, grouped by the globals and tree they share,
+   until it is empty and `HTML` is deleted. Its absence shows as a `main` run ending early with most of its
+   rows at 0 while every other member answers. */
+static const struct { const char *name; const char *src; } TF_DOCS[] = {
+    { "main", HTML },
+    { "css", HTML_CSS },
+    { "timers", HTML_TIMERS },
+    { "idb", HTML_IDB },
+};
+
+/* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
+static const char *tf_doc_named(const char *name) {
+    size_t i;
+
+    CHECKF(name != NULL,
+           "the exploring session was given no document — name one with `--doc <name>`; `--list-docs` prints "
+           "the %zu members", COUNTOF(TF_DOCS));
+    for (i = 0; i < COUNTOF(TF_DOCS); i++)
+        if (!strcmp(TF_DOCS[i].name, name)) return TF_DOCS[i].src;
+    CHECK_FAILF("`--doc %s` names no document of this fixture; `--list-docs` prints the members", name);
+    return NULL;
+}
+
+/* How many exploring documents contain `key` — the row-to-document declaration probes_eval asserts. */
+static unsigned tf_doc_members(const char *key) {
+    unsigned n = 0;
+    size_t i;
+
+    for (i = 0; i < COUNTOF(TF_DOCS); i++) n += strstr(TF_DOCS[i].src, key) != NULL;
+    return n;
+}
+
+/* Whether every exploring document containing `key` also contains `other`. Side-effect-free (DCHECK operand). */
+static int tf_doc_beside(const char *key, const char *other) {
+    size_t i;
+
+    for (i = 0; i < COUNTOF(TF_DOCS); i++)
+        if (strstr(TF_DOCS[i].src, key) && !strstr(TF_DOCS[i].src, other)) return 0;
+    return 1;
+}
 
 /* HTML §7.2.6 AND CSP §6.1, in C — the browser half's tests are C tests, and this one has no page to run.
    What it pins is the pair of facts the rest of the platform will build on: what a policy PERMITS, and that a
@@ -15402,9 +15443,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        program issuing it ENDS in the step that starts it, so `f->frame` is released and the
        delivery arm is reachable. See the frame-control <script> for why the pair is the
        experiment and why either row alone answers nothing — AND for why this row has never yet
-       been about the frame at all: its program is index 6 of the document's thirteen and
-       `deepest`, the highest index any flow has ever compiled, reads 5 in every run measured, so
-       the statement has not been executed and the message below says so instead of concluding.
+       been about the frame at all: `deepest`, the highest program index any flow has ever compiled,
+       has stood below this program's own index in every run measured, so the statement has not
+       been executed and the message below says so instead of concluding.
        THE MESSAGE IS WHERE THAT MATTERS RATHER THAN THE COMMENT, because a comment is read by
        whoever opens this file and a row's own text is read by everyone who reads a report. The
        one it replaced ended `and it says the frame is not what gates the delivery`, which is a
@@ -15415,11 +15456,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "NOT REACHED: there is no /api/framectl record — and this row cannot say WHY, because "
              "its own program has not been started. Read `deepest` beside it, on the same @COLD "
              "line: it is the highest program index this document has ever compiled across every "
-             "flow, and this <script> is index 6 of the thirteen the document ships. At `deepest` "
-             "5 this 0 is the row not running and says nothing whatever about the frame, the "
-             "queue, the rank or the reply path; only at 6 or above is it about the subject. The "
-             "cursor bucket at 6 beside it is this program's DOOR and not a point short of it: those "
-             "members have finished the quarter-megabyte row above. Whether any of them is IDLE is a "
+             "flow. Below this <script>'s own index this 0 is the row not running and says nothing "
+             "whatever about the frame, the queue, the rank or the reply path; only at or above it is "
+             "it about the subject. The cursor bucket at that index is this program's DOOR and not a "
+             "point short of it: those members have finished the long row above. Whether any of them is IDLE is a "
              "second question the cursor does not answer — read `live` minus `framed` beside it, which "
              "bounds the idle population of the whole frontier and has been smaller than this bucket");
     fold_row(&frame_ctl, &frame_ctl_why, param_value_is(js, "/api/framectl", "r", "us-west-2"),
@@ -16632,8 +16672,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     const char *sdother_why = NULL; int sdother_tt = 1;
     fold_row(&sdother_tt, &sdother_why, !!strstr(js, "\"/api/sdotherwise\""),
              "there is no /api/sdotherwise record: the timer that re-reads the `about:srcdoc` frame never "
-             "fired. That is the SCHEDULE and not §2.4.3 — /api/timerfire is this document's own witness that "
-             "its timers run at all");
+             "fired. That is the SCHEDULE and not §2.4.3");
     fold_row(&sdother_tt, &sdother_why,
              param_value_is(js, "/api/sdotherwise", "v", "ownaddr") ||
              param_value_is(js, "/api/sdotherwise", "v", "initial"),
@@ -16887,14 +16926,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "request saw)");
 
     /* §6.1's TWO CLAIMS, as the tokens the page's own comparison emitted. The expected bytes are in the
-       document (see `/api/cssprop` in HTML above) because that is where the read happens and where nothing
+       document (see `/api/cssprop` in HTML_CSS above) because that is where the read happens and where nothing
        percent-encodes them; what reaches here is a verdict, and its failing spelling carries the actual value
        so a red row names what answered instead of only that something did.
-       AND THE SECOND ONE COULD NOT FAIL. `CSSTEXTOK` is a SUFFIX of `CQCSSTEXTOK`, which the container-query
-       statement in this same document emits as the PASSING value of `/api/csscontainerText2` — so the row
-       read 1 out of its neighbour's success and said nothing about `@property`'s own `cssText` at all. Both
-       are asked of their own endpoint's own param here, which is what a mint alone never promises: a token is
-       unique until some later statement chooses a longer name that contains it. */
+       BOTH ARE ASKED OF THEIR OWN ENDPOINT'S OWN PARAM, because `CSSTEXTOK` is a SUFFIX of `CQCSSTEXTOK`,
+       the container-query statement's passing value of `/api/csscontainerText2`: a token is unique only until
+       some other statement chooses a longer name that contains it. */
     const char *cssprop_why = NULL; int cssprop_tt = 1;
     fold_row(&cssprop_tt, &cssprop_why, !!strstr(js, "\"/api/cssprop\""),
              "NOT REACHED: there is no /api/cssprop record at all, so this run did not answer the statement");
@@ -17107,8 +17144,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "bwand", "bwzero");
     /* the controller's `abort` listener actually ran, and the timeout's unknown flag forked both ways.
        SCOPED: `fired` is a substring of `/api/unkdelay/fired`, the endpoint the §8.7 unknown-timeout statement
-       learns from its own timer callback in this same document — so the old term read 1 out of THAT record's
-       url and could not tell a listener that ran from one that never did. */
+       learns from its own timer callback — so a bare `fired` term reads 1 out of THAT record's url and cannot
+       tell a listener that ran from one that never did. */
     const char *abortfire_why = NULL; int abortfire_tt = 1;
     fold_row(&abortfire_tt, &abortfire_why, !!strstr(js, "\"/api/aborted\""),
              "NOT REACHED: there is no /api/aborted record at all, so this run did not answer the statement");
@@ -20109,8 +20146,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "s-evalc", s_evalc, "state.note", SESS_EXPLORE },
         { "s-html", s_html, "state.html", SESS_EXPLORE },
         { "s-url", s_url, "state.next", SESS_EXPLORE },
-        { "s-loc", s_loc, "location.hash", SESS_EXPLORE },
-        { "s-park", s_park, "location.hash", SESS_EXPLORE, s_park_why },
+        { "s-loc", s_loc, "eval(\"'\" + location.hash + \"'\")", SESS_EXPLORE },
+        { "s-park", s_park, "lhHost.innerHTML = location.hash", SESS_EXPLORE, s_park_why },
         /* THE MEASURED CONSTRAINT BEHIND THE NEGATIVE, and the POSITIVE it is the counterpart of. */
         /* THE DELIVERY PROBE'S OWN LADDER, LOWEST RUNG FIRST, BENEATH THE ROW THAT WAS STANDING ON ITS ABSENCE.
            `-nodeliver` asks whether the MEASURED set is present AND EMPTY, which is the strongest thing a parked
@@ -20126,15 +20163,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            Presence and emptiness are two facts and were one row: the field is emitted only when a token was
            seen, so its absence is the probe having taught this search nothing yet, and only presence carries
            the monotone link back to the arrival — a NON-empty measured set stands on exactly the same run. */
-        { "s-park-delivprobe", s_park_dprobe >= 0, "location.hash", SESS_EXPLORE },
-        { "s-park-delivran", s_park_dprobe > 0, "location.hash", SESS_EXPLORE },
-        { "s-park-delivmeas", s_park_dmeas, "location.hash", SESS_EXPLORE },
-        { "s-park-nodeliver", s_nodeliver, "location.hash", SESS_EXPLORE },
-        { "s-attr", s_attr, "location.hash", SESS_EXPLORE },
-        { "s-attr-delivprobe", s_attr_dprobe >= 0, "location.hash", SESS_EXPLORE },
-        { "s-attr-delivran", s_attr_dprobe > 0, "location.hash", SESS_EXPLORE },
-        { "s-attr-delivmeas", s_attr_dmeas, "location.hash", SESS_EXPLORE },
-        { "s-attr-nodeliver", s_attrd, "location.hash", SESS_EXPLORE },
+        { "s-park-delivprobe", s_park_dprobe >= 0, "lhHost.innerHTML = location.hash", SESS_EXPLORE },
+        { "s-park-delivran", s_park_dprobe > 0, "lhHost.innerHTML = location.hash", SESS_EXPLORE },
+        { "s-park-delivmeas", s_park_dmeas, "lhHost.innerHTML = location.hash", SESS_EXPLORE },
+        { "s-park-nodeliver", s_nodeliver, "lhHost.innerHTML = location.hash", SESS_EXPLORE },
+        { "s-attr", s_attr, "lhAttr.innerHTML", SESS_EXPLORE },
+        { "s-attr-delivprobe", s_attr_dprobe >= 0, "lhAttr.innerHTML", SESS_EXPLORE },
+        { "s-attr-delivran", s_attr_dprobe > 0, "lhAttr.innerHTML", SESS_EXPLORE },
+        { "s-attr-delivmeas", s_attr_dmeas, "lhAttr.innerHTML", SESS_EXPLORE },
+        { "s-attr-nodeliver", s_attrd, "lhAttr.innerHTML", SESS_EXPLORE },
         /* THE STAGES, so a 0 above names one. Each row carries its parent's key, so selection is unchanged.
            AND THE FOUR DERIVED LADDERS ARE THE SEVEN-RUNG ONE, NOT A THREE-RUNG PREFIX OF IT. `-seen`/`-ran`/
            `-atsink` alone leaves `-atsink=0` standing for four states — never scheduled, scheduled and never
@@ -20193,14 +20230,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "s-url-substituted", s_url_sub, "state.next", SESS_EXPLORE },
         { "s-url-sinkstrings", s_url_str, "state.next", SESS_EXPLORE },
         { "s-url-atsink", st_url >= S_ARRIVED, "state.next", SESS_EXPLORE },
-        { "s-loc-seen", st_loc >= S_SEEN, "location.hash", SESS_EXPLORE },
-        { "s-loc-ran", st_loc >= S_RAN, "location.hash", SESS_EXPLORE },
-        { "s-loc-runway", s_loc_way, "location.hash", SESS_EXPLORE },
-        { "s-loc-substituted", s_loc_sub, "location.hash", SESS_EXPLORE },
-        { "s-loc-sinkstrings", s_loc_str, "location.hash", SESS_EXPLORE },
-        { "s-loc-witnessed", s_loc_wit, "location.hash", SESS_EXPLORE },
-        { "s-loc-derived", s_loc_built, "location.hash", SESS_EXPLORE },
-        { "s-loc-atsink", st_loc >= S_ARRIVED, "location.hash", SESS_EXPLORE },
+        { "s-loc-seen", st_loc >= S_SEEN, "eval(\"'\" + location.hash + \"'\")", SESS_EXPLORE },
+        { "s-loc-ran", st_loc >= S_RAN, "eval(\"'\" + location.hash + \"'\")", SESS_EXPLORE },
+        { "s-loc-runway", s_loc_way, "eval(\"'\" + location.hash + \"'\")", SESS_EXPLORE },
+        { "s-loc-substituted", s_loc_sub, "eval(\"'\" + location.hash + \"'\")", SESS_EXPLORE },
+        { "s-loc-sinkstrings", s_loc_str, "eval(\"'\" + location.hash + \"'\")", SESS_EXPLORE },
+        { "s-loc-witnessed", s_loc_wit, "eval(\"'\" + location.hash + \"'\")", SESS_EXPLORE },
+        { "s-loc-derived", s_loc_built, "eval(\"'\" + location.hash + \"'\")", SESS_EXPLORE },
+        { "s-loc-atsink", st_loc >= S_ARRIVED, "eval(\"'\" + location.hash + \"'\")", SESS_EXPLORE },
         /* AND THE NEGATIVE HALF'S MISSING PREMISE. `s-park` asserts the markup sink fed from `location.hash`
            produces NO PoC and is still REPORTED — but "the sink was reached and the search genuinely failed"
            was never actually asserted, because the only evidence the entry carried was `tried`, which is
@@ -20214,10 +20251,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            be schedule-dependent besides, since whether one is built at all now depends on which of the two
            probes the WFQ runs first. What replaces it as the statement of a genuine failure is
            `s-park-nodeliver`, which is the observation itself. */
-        { "s-park-ran", st_lpark >= S_RAN, "location.hash", SESS_EXPLORE },
-        { "s-park-runway", s_park_way, "location.hash", SESS_EXPLORE },
-        { "s-park-substituted", s_park_sub, "location.hash", SESS_EXPLORE },
-        { "s-park-sinkstrings", s_park_str, "location.hash", SESS_EXPLORE },
+        { "s-park-ran", st_lpark >= S_RAN, "lhHost.innerHTML = location.hash", SESS_EXPLORE },
+        { "s-park-runway", s_park_way, "lhHost.innerHTML = location.hash", SESS_EXPLORE },
+        { "s-park-substituted", s_park_sub, "lhHost.innerHTML = location.hash", SESS_EXPLORE },
+        { "s-park-sinkstrings", s_park_str, "lhHost.innerHTML = location.hash", SESS_EXPLORE },
         /* …AND THE REST OF THAT PREMISE, WHICH `-ran` ALONE DOES NOT MAKE. `s-park` says this search emits no
            PoC and is still reported; `s-park-ran` says its candidates executed. Neither says the sink was ever
            SEEN by one of them, and until it has been, "the fragment percent-encode set defeated the derivation"
@@ -20232,7 +20269,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            `s-park-noescape` (no executable position) because a build is what would have to happen first: a
            spelling constructed out of the data state would show up here before it could ever arrive, escape or
            fire, which makes this the earliest rung at which a regressed transform is visible. */
-        { "s-park-witnessed", s_park_wit, "location.hash", SESS_EXPLORE },
+        { "s-park-witnessed", s_park_wit, "lhHost.innerHTML = location.hash", SESS_EXPLORE },
         /* ITS PREMISE IS `s-park-ran` AND IS DECLARED, because this row is a NEGATIVE and a negative is
            satisfied by its statement not running: `!s_park_built` reads 1 before any flow has been
            dispatched, and that 1 went into the verdict as a statement about a search whose candidates had
@@ -20240,7 +20277,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            smoke, composed at one unit of engine work with ZERO context switches and ZERO jobs run, this row
            and `s-park-noescape` read 1 beside `s-park-ran` at 0. The prose above already names `-ran` as the
            premise of this ladder in words; this is that sentence made a declaration. */
-        { "s-park-nobuild", !s_park_built, "location.hash", SESS_EXPLORE, .reach = "s-park-ran" },
+        { "s-park-nobuild", !s_park_built, "lhHost.innerHTML = location.hash", SESS_EXPLORE, .reach = "s-park-ran" },
         /* AND THE POSITIVE SEARCH'S OWN STAGES, so a 0 on `s-attr` names one — and now names ONE. The three
            rows that stood here read `seen`, `ran` and `atsink`, and the middle one was computed from `tried`,
            which is raised where a candidate FLOW IS CREATED: it said 1 for a search whose flows the scheduler
@@ -20265,24 +20302,24 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            `s-attr` STAYS THE VERDICT and is not one of these: it asserts the payload TEXT, and `-fired`
            asserts only that some payload fired, so the pair reading `fired=1, s-attr=0` is a regressed
            derivation and reading `fired=0` is a search that has not solved. Two facts, two rows. */
-        { "s-attr-seen", st_attr >= S_SEEN, "location.hash", SESS_EXPLORE },
-        { "s-attr-seeded", st_attr >= S_SEEDED, "location.hash", SESS_EXPLORE },
-        { "s-attr-ran", st_attr >= S_RAN, "location.hash", SESS_EXPLORE },
-        { "s-attr-runway", s_attr_way, "location.hash", SESS_EXPLORE },
-        { "s-attr-substituted", s_attr_sub, "location.hash", SESS_EXPLORE },
-        { "s-attr-sinkstrings", s_attr_str, "location.hash", SESS_EXPLORE },
-        { "s-attr-witnessed", s_attr_wit, "location.hash", SESS_EXPLORE },
-        { "s-attr-derived", s_attr_built, "location.hash", SESS_EXPLORE },
-        { "s-attr-atsink", st_attr >= S_ARRIVED, "location.hash", SESS_EXPLORE },
-        { "s-attr-escaped", st_attr >= S_ESCAPED, "location.hash", SESS_EXPLORE },
-        { "s-attr-fired", st_attr >= S_FIRED, "location.hash", SESS_EXPLORE },
+        { "s-attr-seen", st_attr >= S_SEEN, "lhAttr.innerHTML", SESS_EXPLORE },
+        { "s-attr-seeded", st_attr >= S_SEEDED, "lhAttr.innerHTML", SESS_EXPLORE },
+        { "s-attr-ran", st_attr >= S_RAN, "lhAttr.innerHTML", SESS_EXPLORE },
+        { "s-attr-runway", s_attr_way, "lhAttr.innerHTML", SESS_EXPLORE },
+        { "s-attr-substituted", s_attr_sub, "lhAttr.innerHTML", SESS_EXPLORE },
+        { "s-attr-sinkstrings", s_attr_str, "lhAttr.innerHTML", SESS_EXPLORE },
+        { "s-attr-witnessed", s_attr_wit, "lhAttr.innerHTML", SESS_EXPLORE },
+        { "s-attr-derived", s_attr_built, "lhAttr.innerHTML", SESS_EXPLORE },
+        { "s-attr-atsink", st_attr >= S_ARRIVED, "lhAttr.innerHTML", SESS_EXPLORE },
+        { "s-attr-escaped", st_attr >= S_ESCAPED, "lhAttr.innerHTML", SESS_EXPLORE },
+        { "s-attr-fired", st_attr >= S_FIRED, "lhAttr.innerHTML", SESS_EXPLORE },
         /* AND THE NEGATIVE HALF OF THE SAME RUNG, on the sibling that must never solve. The raw-fragment markup
            search writes into §13.2.5.1 "Data state", whose only exit is `<`, and the fragment percent-encode
            set holds it — so nothing of that search may ever reach an executable position. `s-park` already
            asserts it emits no PoC; this asserts the rung BELOW the PoC, which is where a derivation that began
            producing something executable out of the data state would show up first and which a `poc`-shaped
            row cannot see until it has already fired. */
-        { "s-park-noescape", st_lpark < S_ESCAPED, "location.hash", SESS_EXPLORE, .reach = "s-park-ran" },
+        { "s-park-noescape", st_lpark < S_ESCAPED, "lhHost.innerHTML = location.hash", SESS_EXPLORE, .reach = "s-park-ran" },
         /* THE ANCHOR DOOR, LOWEST RUNG FIRST — and the lowest rung here is not an @S stage at all, it is
            whether the statement's own tail ran. Keyed on `lhLink.click()`, which only that statement puts in
            the document, so these two select on it and on nothing else. */
@@ -20439,11 +20476,18 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            being quietly dropped from every run — which is the one failure mode a derived selector introduces and
            the same defect as a corpus file the collector does not collect: the total looks complete. The message
            NAMES the row, and DCHECKF formats it only on the arm that aborts. */
-        DCHECKF(strstr(HTML, probes[pi].key) || strstr(HTML_MIN, probes[pi].key) ||
+        unsigned members = tf_doc_members(probes[pi].key);
+        DCHECKF(members || strstr(HTML_MIN, probes[pi].key) ||
                 strstr(HTML_COLD, probes[pi].key) || strstr(HTML_POPOVER, probes[pi].key),
                 "the probe `%s` names a statement no document in this fixture makes — its key `%s` is in "
-                "none of the four, so the row would be selected by no run and assert nothing, while the "
+                "none of them, so the row would be selected by no run and assert nothing, while the "
                 "table it sits in reads as complete", probes[pi].name, probes[pi].key);
+        /* AND AT MOST ONE EXPLORING DOCUMENT, because the key is the row's declaration of its document: a key
+           two members contain is a row answered twice, and in a member whose statement is not the row's. */
+        DCHECKF(probes[pi].sess != SESS_EXPLORE || members <= 1,
+                "the probe `%s`'s key `%s` is in %u of the exploring documents — a row belongs to one, so its "
+                "key must be text only its own statement puts in a document", probes[pi].name, probes[pi].key,
+                members);
         /* AND A GATE NAMES AN EARLIER ROW OF THIS TABLE IN THE SAME SESSION — one condition, because the
            three things it asserts are the three that make the entailment assertion in probes_report able to
            run at all, and because the repair for every one of them is the same edit. A name no row carries
@@ -20469,6 +20513,20 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                 "value is read where this row's is, so an unresolvable one bands nothing and an out-of-order "
                 "one is a declaration with a cycle in it. Fix the name, or move the reach row above the row "
                 "it is the premise of", probes[pi].name, probes[pi].reach);
+        /* AND BOTH STAND IN THIS ROW'S DOCUMENT: probes_report reads a gate and a reach off the same selection
+           as the row, so a document carrying the row without them aborts there in that document's run only. */
+        DCHECKF(!probes[pi].gate ||
+                    tf_doc_beside(probes[pi].key,
+                                  probes[probe_gate_at(probes, (int)pi, probes[pi].gate, probes[pi].sess)].key),
+                "the probe `%s` is in an exploring document its gate `%s` is not — a gate is read off the same "
+                "selection as the row it gates, so the two statements belong to one document",
+                probes[pi].name, probes[pi].gate);
+        DCHECKF(!probes[pi].reach ||
+                    tf_doc_beside(probes[pi].key,
+                                  probes[probe_gate_at(probes, (int)pi, probes[pi].reach, probes[pi].sess)].key),
+                "the probe `%s` is in an exploring document its reach `%s` is not — a reach is read off the "
+                "same selection as the row it bands, so the two statements belong to one document",
+                probes[pi].name, probes[pi].reach);
         /* AND IT IS NOT THE SAME ROW AS THE GATE, which is the one declaration that cannot be satisfied by
            any value of `ok`. `gate` says this row's 0 is entailed by that row's 0; `reach` says this row's
            answer is no statement while that row reads 0, which for the negative rows this field is for means
@@ -24225,7 +24283,7 @@ static void xml_tree_selftest(void)
  * parking. `JS_GetPropertyInternal` refuses one outright. So the two halves of this interface are tested from
  * the two places that can see them: the GRAMMARS here, where the parsing risk actually is and where one fixture
  * exercises one contract; and the four ATTRIBUTES from the fixture document's own JavaScript, where every other
- * page read in this engine happens (see `/api/cssprop` in HTML above and the two probe rows over it). */
+ * page read in this engine happens (see `/api/cssprop` in HTML_CSS above and the two probe rows over it). */
 static void css_property_grammar_selftest(void)
 {
     static const struct { const char *s; bool valid, universal; const char *why; } SYNTAX[] = {
@@ -33569,6 +33627,11 @@ int main(int argc, char **argv) {
        it is the state SECURITY.md's one-instance-per-cluster rule exists to prevent, with the frontier's own
        registry initialised twice. So this is a return, not a branch. */
     if (arg_has(argc, argv, "--abi")) return abi_main(argc, argv);
+    /* The exploring session's documents, one name per line, for a driver that runs each as its own process. */
+    if (arg_has(argc, argv, "--list-docs")) {
+        for (size_t di = 0; di < COUNTOF(TF_DOCS); di++) printf("%s\n", TF_DOCS[di].name);
+        return 0;
+    }
     css_var_selftest();        /* css-variables-1 §3's substitution — no runtime, no tree, no realm */
     css_pending_selftest();    /* css-values-5's pending-substitution value — the same, one level up */
     trusted_types_selftest();
@@ -33750,7 +33813,12 @@ int main(int argc, char **argv) {
            "the close-request document was asked for together with another — its rows are an arithmetic over "
            "`model-a-potential-close-request`, which counts one scheduler step per flow that reaches "
            "exhaustion, so they are statements about a frontier with exactly the members HTML_POPOVER creates");
-    const char *doc = popover_doc ? HTML_POPOVER : cold_doc ? HTML_COLD : (min_doc ? HTML_MIN : HTML);
+    const char *doc_name = arg_val(argc, argv, "--doc");
+    DCHECK(!(doc_name && (popover_doc || cold_doc || min_doc)),
+           "`--doc` was given beside a flag that selects its own document — one invocation is one document, "
+           "so the probe table would answer for whichever the selection below happened to prefer");
+    const char *doc = popover_doc ? HTML_POPOVER : cold_doc ? HTML_COLD : min_doc ? HTML_MIN
+                    : tf_doc_named(doc_name);
     /* WHAT THIS INVOCATION IS, stated ONCE and read by the probe table — see it for why the document itself is
        what decides which rows this run carries. */
     g_doc = doc;
