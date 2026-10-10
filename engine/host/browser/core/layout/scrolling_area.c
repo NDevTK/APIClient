@@ -14,6 +14,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/flow_position.h"
+#include "core/layout/layout_job.h"
 #include "core/layout/line_box.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/scrolling_area.h"
@@ -744,20 +745,33 @@ CssPx scrolling_area_walk_extent(const ScrollingAreaWalk *w)
    `scrollWidth` or scrolling a viewport cannot rest inside the document walk. Next: those members as step
    machines stepping the walk, as `scrollIntoView` does. How its absence shows: a flow's slice overrun in
    `scrollWidth`/`scrollHeight` or §4's `scroll()` on a large document, with `_layoutJobRests` flat. */
+/* Each walk runs inside one drive, so the current job holds its memo and records across every descendant:
+   without a driven job entered, the synchronous job holds them only while a drive is open. The walk cannot
+   propagate "not yet", so it is a drive's frame. */
 CssPx scrolling_area_extent_px(lxb_dom_element_t *el, bool vertical)
 {
     ScrollingAreaWalk w;
+    LayoutJobDrive d;
+    CssPx extent;
 
+    layout_job_drive_begin(&d);
     scrolling_area_walk_element(&w, el, vertical);
     while (!scrolling_area_walk_done(&w)) scrolling_area_walk_step(&w);
-    return scrolling_area_walk_extent(&w);
+    extent = scrolling_area_walk_extent(&w);
+    layout_job_drive_end(&d);
+    return extent;
 }
 
 CssPx scrolling_area_viewport_extent_px(lxb_dom_node_t *doc, CssPx icb_extent, bool vertical)
 {
     ScrollingAreaWalk w;
+    LayoutJobDrive d;
+    CssPx extent;
 
+    layout_job_drive_begin(&d);
     scrolling_area_walk_viewport(&w, doc, icb_extent, vertical);
     while (!scrolling_area_walk_done(&w)) scrolling_area_walk_step(&w);
-    return scrolling_area_walk_extent(&w);
+    extent = scrolling_area_walk_extent(&w);
+    layout_job_drive_end(&d);
+    return extent;
 }
