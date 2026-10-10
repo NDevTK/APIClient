@@ -2047,48 +2047,24 @@ var _DEFAULT_ARMS = [
          "loading itself one level down rather than a route only this engine ever asked for" }
 ];
 var _EXPLORED = Object.create(null);
-/* HAS A HOST SPOKEN YET. Two questions, two fields — never one value answering both, because the
-   permissive-looking reading of an unstated table is exactly the one that would be wrong. */
+/* `_EXPLORED` is the per-origin egress table, origin → signal → value → true. Whether a host has stated it
+   is a separate field, because an unstated table is empty and an empty one reads as policy. */
 var _EXPLORED_STATED = false;
-/* AND HAS A HOST PROMISED TO SPEAK — THE THIRD STATE, WHICH IS THE ONE THE OFFSCREEN ACTUALLY PASSES
-   THROUGH. A host whose grants are in IndexedDB cannot state the table until a read returns, so between its
-   load and that return the table is neither stated nor absent: it is COMING. A request arriving in that
-   window may not be answered from an empty table — that is the refusal in the policy's own voice this file
-   exists to prevent — and may not be answered by stating one either, since a table stated empty and then
-   filled would refuse a granted origin for exactly as long as the read takes, with the assert that names
-   the harm silenced. The only sound answer is to WAIT, and this is what there is to wait on.
-   IT IS THE HOST'S PROMISE AND NEVER THIS FILE'S, which is what keeps the decision here and the store
-   there. Nothing below reads a preference, opens a database or invents a default; it awaits a promise whose
-   only producer is the host that owns the store, and the host still decides WHAT the table says and WHEN.
-   A HOST THAT REGISTERS NOTHING IS UNCHANGED AND DOES NOT HANG. `null` means no promise was made, so the
-   wait is skipped and the assert below fires exactly as it did — which is what the native host takes (it
-   states synchronously before it reads a flag, so it never has a window) and what a host that forgot both
-   would take. The forcing function survives; what it stops catching is a door, which is not a thing a door
-   can now get wrong. */
+/* A host's promise to state the table. A host whose grants are in IndexedDB cannot state them until a read
+   returns, and a request in that window may be answered neither from the empty table nor by stating one
+   (which the restore would then replace), so `safeFetch` awaits this promise. The promise is the host's:
+   this file reads no store and invents no default. `null` means no promise was made; the native host states
+   synchronously, and a host that does neither still reaches the DCHECK in `_firingRefusal`. */
 var _EXPLORED_STATING = null;
-/* WHETHER AN ORIGIN CAN BE PERMITTED AT ALL, ANSWERING THE REASON IT CANNOT OR `null` FOR YES — ONE FACT
-   ASKED BY TWO CALLERS WITH TWO DIFFERENT OUTCOMES, which is the split that stops a CHECK and a REFUSAL
-   becoming two rules free to disagree about a string. `safeFetchWiden` below asks it and ABORTS, because a
-   caller inside this project handing it an address is that caller broken. A surface where a PERSON is
-   looking at a page asks it and REFUSES WITH THE REASON, because "the document you are looking at has an
-   opaque origin" is an ordinary state of the web and not a broken invariant — and a fatal there would hand
-   any page that sandboxes an iframe an abort switch on the trusted zone.
-   THE VALUE MUST BE THE ORIGIN A URL PARSER WOULD PRODUCE, AND `_isRealOrigin` IS NOT THAT TEST. It asks
-   only whether the string contains "://", which the whole of `https://a.test/some/path` does — so a caller
-   passing an address rather than an origin would have permitted a key no request's `.origin` can ever equal:
-   a permission that was granted, is in the table, reads as granted, and matches nothing for ever. That is
-   the destructive deny list's own failure shape (an entry that looks protective and refuses nothing) pointed
-   the other way, and it is worse here because the silence looks like the conservative default working. So
-   the value is required to be its OWN serialized origin — parsed, re-serialized, compared.
-   THE HTTP(S) ARM IS NOT TIDINESS, AND IT IS NOT REACHED BY THE LINE ABOVE. `ws://a.test`, `wss://a.test`
-   and `ftp://a.test` are SPECIAL schemes whose tuple origins serialize back to themselves, so they pass the
-   comparison and only this arm refuses them — while this file answers any non-http(s) address with
-   `blocked-scheme:` before it reaches the wire. A permission for one is therefore a permission that grants
-   nothing while sitting in the table reading as granted, which is the same failure shape one clause up.
-   AN OPAQUE ORIGIN IS REFUSED BY THE PARSE AND NEEDS NO CLAUSE OF ITS OWN: `null` does not parse as a URL,
-   and every opaque origin is same-origin with nothing (itself included), so there is no address one could
-   ever permit. A full address is refused by the re-serialization, which is exactly the comparison
-   `_firingRefusal` makes against a request URL's own `origin`. */
+/* Whether an origin can be permitted at all, answering the reason it cannot or null. Two callers, two
+   outcomes: `safeFetchPermit` aborts, because a caller inside this project passing a bad origin is broken;
+   a surface with a person in front of it refuses with the reason, because an opaque origin is an ordinary
+   state of the web and a fatal there would give any sandboxed page an abort switch on the trusted zone.
+   The value must be its own serialized origin (parsed, re-serialized, compared), because `_isRealOrigin`
+   only tests for "://" and a full address would be a key no request's `.origin` ever equals: a grant that
+   reads as granted and matches nothing. `ws:`, `wss:` and `ftp:` origins serialize back to themselves, so
+   the http(s) test is what refuses them; this file refuses those schemes before the wire anyway. `null` does
+   not parse, so an opaque origin is refused by the parse. */
 function safeFetchWidenable(origin) {
   var normalized = null;
   try { normalized = new URL(String(origin)).origin; } catch (e) { RETHROW_FATAL(e); normalized = null; }
@@ -2096,9 +2072,8 @@ function safeFetchWidenable(origin) {
   if (origin.indexOf("http://") !== 0 && origin.indexOf("https://") !== 0) return "not-http";
   return null;
 }
-/* WHETHER A SIGNAL NAME AND A VALUE ARE ONES THIS FILE KNOWS, answered as a reason or `null` for yes, for
-   the same two-caller reason `safeFetchWidenable` is split: a surface asks it about what a person clicked
-   and must say why, a caller inside this project asks it and is broken if the answer is no. */
+/* Whether a signal name and value are ones this file knows, as a reason or null, split for the same two
+   callers as `safeFetchWidenable`. */
 function safeFetchSignalUsable(signal, value) {
   var i;
   for (i = 0; i < _SIGNALS.length; i++) {
@@ -2108,23 +2083,17 @@ function safeFetchSignalUsable(signal, value) {
   }
   return "not-a-signal";
 }
-/* THE REGISTRY ITSELF, FOR A SURFACE THAT MUST RENDER ONE ROW PER SIGNAL. A COPY is handed out rather than
-   the array, and the `of` functions are deliberately not on it: a surface that could compute a value for
-   itself would be a second derivation of the thing the walk decides from, and what it needs is the NAME, the
-   GRADE and the VALUE SPACE — which are what a person reads. */
+/* The registry for a surface that renders one row per signal: name, grade and value space, copied. The `of`
+   functions stay here, so a surface cannot compute a value the walk did not decide from. */
 function safeFetchSignals() {
   return _SIGNALS.map(function (s) {
     return { name: s.name, gates: s.gates, certainty: s.certainty, values: s.values.slice() };
   });
 }
-/* A HOST PROMISING THAT IT WILL SPEAK, SO EVERY REQUEST WAITS RATHER THAN ONE DOOR REMEMBERING — see
-   `_EXPLORED_STATING`. It is registered ONCE, at the host's own load, and `safeFetch` awaits it before it
-   asks the firing question, so the guarantee is a property of the CHOKEPOINT rather than of whichever entry
-   a request happened to arrive through. That is the whole difference: a chokepoint is by definition every
-   asker, and a door is a list somebody maintains.
-   IT REGISTERS A PROMISE AND NEVER A TABLE. A host that already holds its answer calls `safeFetchEgressStated`
-   and is done; this is for a host whose answer is behind an asynchronous read, and what it hands over is the
-   READ, not a placeholder for it. */
+/* A host's promise that it will state the table (see `_EXPLORED_STATING`), registered once at the host's
+   load. `safeFetch` awaits it before the firing question, so the guarantee belongs to the chokepoint rather
+   than to whichever door a request came through. A host that already holds its answer calls
+   `safeFetchEgressStated` instead; this hands over the read itself, not a placeholder. */
 function safeFetchEgressStating(promise) {
   CHECK(promise !== null && typeof promise === "object" && typeof promise.then === "function",
         "a host registered something other than a thenable as its promise to state the per-origin egress " +
@@ -2142,29 +2111,23 @@ function safeFetchEgressStating(promise) {
         "happened to win");
   _EXPLORED_STATING = promise;
 }
-/* AND THE DEFAULT ARMS, FOR THE SAME SURFACE AND THE SAME REASON. A person looking at a control that
-   permits nothing is entitled to know why their app's scripts still load, and a surface that explained it in
-   its own words would be a second copy of this list that could stop agreeing with it. */
+/* The default arms, for a surface explaining why an app's scripts load before anything is permitted; a
+   surface that explained it in its own words would be a second copy of the list. */
 function safeFetchDefaultArms() {
   return _DEFAULT_ARMS.map(function (a) {
     return { when: a.when.map(function (c) { return { signal: c.signal, value: c.value }; }), why: a.why };
   });
 }
-/* THE HOST STATES THE TABLE, ONCE, BEFORE ANYTHING MAY ASK IT. A host that persists its grants restores them
-   here; a host that persists none (the native one — a command line is a sentence for one run) states the
-   empty table, and that is the POSITIVE "nobody has permitted anything" rather than the absence above it.
-   IT IS ONCE AND A SECOND CALL ABORTS. A re-statement would replace a table the person has since added to
-   from a surface, which is a grant silently revoked — and the only reason to call this twice is a host that
-   has two startup paths and does not know it. Grants after the statement go through `safeFetchPermit`.
-   THE SHAPE IS `{ origin: { signal: [values] } }`, AND A SHAPE FROM AN EARLIER BUILD IS REFUSED RATHER THAN
-   CARRIED FORWARD. The previous control was a single switch per origin and its store was a LIST OF ORIGIN
-   STRINGS; carrying one of those forward would mean permitting every value of every signal — including the
-   signals that did not exist when the person granted it, which is exactly the widening this whole model
-   exists to stop being silent. So a legacy entry is DROPPED, REPORTED, and the person re-permits per signal.
-   The answer names them so a surface can say so rather than leaving a person to notice a permission gone.
-   A SIGNAL A STORED GRANT DOES NOT NAME IS NOT PERMITTED, which is the same rule the walk below applies and
-   is what makes adding a signal safe: every existing grant NARROWS, the refusal names the new row, and the
-   person widens it again deliberately. A new signal can never silently widen an old permission. */
+/* The host states the table once, before anything may ask it: restored grants, or the empty table as the
+   positive "nobody has permitted anything" (the native host, whose command line is a sentence for one run).
+   A second call aborts, since it would replace grants a surface added since; later grants go through
+   `safeFetchPermit`.
+   The shape is `{ origin: { signal: [values] } }`. An origin whose entry is not an object is a legacy
+   single-switch grant: carrying it forward would permit every value of every signal, including signals that
+   did not exist when it was granted, so it is dropped and named in the answer. An origin with a signal whose
+   values are not an array is named too; the signals walked before it stay permitted and the rest are
+   skipped. A signal a stored grant does not name is not permitted, so adding a signal narrows every existing
+   grant rather than silently widening it. */
 function safeFetchEgressStated(table) {
   var origin, signal, values, why, i, legacy = [];
   CHECK(!_EXPLORED_STATED,
@@ -2198,11 +2161,9 @@ function safeFetchEgressStated(table) {
       values = table[origin][signal];
       if (!Array.isArray(values)) { legacy.push(origin); break; }
       for (i = 0; i < values.length; i++) {
-        /* A STORED VALUE THIS BUILD NO LONGER KNOWS IS DROPPED AND NOT ASSERTED, AND THAT IS THE ONE PLACE
-           THIS FILE READS ITS OWN STORE AS INPUT. A signal renamed or a value retired between builds is an
-           UPGRADE and not a corrupted record, and the direction it must fail in is narrower: an unknown
-           value permits nothing, so the request is refused and the refusal names the row the person must
-           re-permit. Aborting here would brick every profile that had ever granted anything. */
+        /* A stored value this build no longer knows is dropped, not asserted: a renamed signal or a retired
+           value is an upgrade, an unknown value permits nothing, and aborting would brick every profile that
+           ever granted anything. This is the one place this file reads its own store as input. */
         if (safeFetchSignalUsable(signal, values[i]) !== null) continue;
         if (!_EXPLORED[origin]) _EXPLORED[origin] = Object.create(null);
         if (!_EXPLORED[origin][signal]) _EXPLORED[origin][signal] = Object.create(null);
@@ -2213,12 +2174,9 @@ function safeFetchEgressStated(table) {
   _EXPLORED_STATED = true;
   return legacy;
 }
-/* ONE SIGNAL, ONE VALUE, AT ONE ORIGIN — THE DOOR A PER-SIGNAL SURFACE WRITES THROUGH. It is the whole of
-   what a person's click means, and it is deliberately not a batch: a control that set several rows at once
-   would make the answer a person reads back afterwards a summary of an act rather than the table now in
-   force, which is the thing this file says about `safeFetchWidenedOrigins` and about every refusal it
-   writes. `allow` false REMOVES the value, because a permission with no withdrawal is a one-way door and
-   this one spends somebody else's server under the person's own session. */
+/* One signal, one value, at one origin: the door a per-signal surface writes through, deliberately not a
+   batch, so what a person reads back is the table in force. `allow` false removes the value, because a
+   permission with no withdrawal is a one-way door. */
 function safeFetchPermit(origin, signal, value, allow) {
   var why;
   CHECK(_EXPLORED_STATED,
@@ -2246,14 +2204,10 @@ function safeFetchPermit(origin, signal, value, allow) {
   }
   if (_EXPLORED[origin] && _EXPLORED[origin][signal]) delete _EXPLORED[origin][signal][value];
 }
-/* PERMIT EVERY VALUE OF EVERY GATING SIGNAL AT ONE ORIGIN — the coarse sentence, kept because two callers
-   genuinely mean it and neither can say anything finer. `engine/trusted.mjs`'s `--explore <origin>` is a
-   command line, which is a sentence for one run with no surface to tick rows on; and the popup's one-click
-   `Allow` is a person saying "all of it here", which is a real thing to want and is what the previous
-   single switch meant. It is DERIVED FROM THE REGISTRY rather than written out, so a signal added later is
-   included in it without anybody remembering — which is the opposite of the stored-grant rule one function
-   up, and deliberately: a grant made EARLIER cannot have meant a signal that did not exist, and a grant made
-   NOW through a control that says `everything` did. */
+/* Permit every value of every gating signal at one origin: the coarse sentence, meant by
+   `engine/trusted.mjs`'s `--explore <origin>` and by the popup's one-click allow. It is derived from the
+   registry, so a signal added later is included. That is the opposite of the stored-grant rule above, and
+   deliberately: a grant made now through a control that says "everything" does mean the new signal. */
 function safeFetchWiden(origin) {
   var i, j;
   for (i = 0; i < _SIGNALS.length; i++) {
@@ -2262,9 +2216,8 @@ function safeFetchWiden(origin) {
       safeFetchPermit(origin, _SIGNALS[i].name, _SIGNALS[i].values[j], true);
   }
 }
-/* AND THE PERSON TAKES THE WHOLE ORIGIN BACK. It answers WHETHER ANYTHING WAS THERE so the surface can say
-   what it did rather than reporting a success for a revocation of nothing; that is a fact about the table
-   and not a second policy. */
+/* The person takes a whole origin back. Answers whether anything was there, so a surface reports what it
+   did rather than a revocation of nothing. */
 function safeFetchUnwiden(origin) {
   var had = _EXPLORED[origin] !== undefined;
   CHECK(_EXPLORED_STATED,
@@ -2274,9 +2227,7 @@ function safeFetchUnwiden(origin) {
   delete _EXPLORED[origin];
   return had;
 }
-/* WHAT HAS BEEN PERMITTED, FOR A CALLER THAT MUST ASSERT THE ABSENCE OF ANY. Not a report —
-   a PREMISE READER. A zone whose own reasoning rests on "no origin is permitted HERE" holds
-   that premise where it is relied on rather than in a comment that outlives it. */
+/* The permitted origins, for a caller that asserts their absence where its own reasoning relies on it. */
 function safeFetchWidenedOrigins() {
   CHECK(_EXPLORED_STATED,
         "the permitted-origin list was read before this host stated its table — an empty answer would be " +
@@ -2284,9 +2235,8 @@ function safeFetchWidenedOrigins() {
         "surface rendering it would tell a person their standing grants are gone");
   return Object.keys(_EXPLORED);
 }
-/* THE TABLE ITSELF, IN THE SHAPE `safeFetchEgressStated` TAKES, so a host persists what the chokepoint is
-   actually using rather than a second registry that can disagree with it. The round trip is the contract:
-   what this answers is what that accepts. */
+/* The table in the shape `safeFetchEgressStated` takes, so a host persists what the chokepoint uses; the
+   round trip is the contract. */
 function safeFetchEgressTable() {
   var out = Object.create(null), origin, signal;
   CHECK(_EXPLORED_STATED,
@@ -2303,10 +2253,8 @@ function safeFetchEgressTable() {
   }
   return out;
 }
-/* WHAT ONE ORIGIN PERMITS, ROW BY ROW, FOR THE SURFACE THAT RENDERS IT. `false` for a value nobody has
-   permitted rather than an absent key, because the surface renders a checkbox per value and an absent key
-   would render as unchecked-because-missing — which is the same pixel as unchecked-because-denied and a
-   different fact. */
+/* One origin's permissions row by row, with `false` for an unpermitted value rather than an absent key,
+   because a checkbox rendered from a missing key looks like a denial and is a different fact. */
 function safeFetchPermitted(origin) {
   var out = [], i, j, row;
   CHECK(_EXPLORED_STATED,
@@ -2322,79 +2270,38 @@ function safeFetchPermitted(origin) {
   }
   return out;
 }
-/* THE FIRING DECISION, IN ONE FUNCTION, ANSWERING THE SIGNAL THAT REFUSED OR `null` FOR FIRE.
-   IT ANSWERS A SIGNAL AND A VALUE AND NEVER A SCORE, which is the whole of what this control buys: a person
-   reading a frontier that will not drain is told WHICH FACT held it and therefore which row to look at. A
-   collapsed number could not say that, and §THE-MIRROR-OF-THAT-IS-A-LIST-OF-EXAMPLES is why the three
-   certainty grades travel with the rows rather than being averaged into one.
-   THE ORDER OF THE ANSWER IS THE REGISTRY'S ORDER AND NOT A RANKING OF HARM. The first gating signal whose
-   value this origin does not permit is the one named; the others may be unpermitted too, and the surface is
-   where a person sees all of them at once. Naming one is what makes the refusal a SENTENCE; naming the
-   vector is what makes the surface a CONTROL, and both exist rather than one standing in for the other.
-   WHAT MUST NOT FOLLOW is re-keying any signal to make a number move. The provenance stays exactly as the
-   engine stamped it — `forced` still means this reply is evidence about a request no client makes, and every
-   consumer that carries a forced reply out of the observed pool still sees that word. What a permission
-   changes is which ACT may be spent, never what any reply is worth.
-   THE ADDRESS IS STILL DERIVED IN FULL AND REPORTED wherever this refuses, which §Attacker-sources says is
-   not a gap in the report but IS the report — "that surface is what forced execution finds and a sniffer
-   cannot". */
+/* The firing decision, answering "signal=value" for the first gating signal this origin does not permit, or
+   null to fire. A default arm whose every condition matches fires first; otherwise every gating signal's
+   value must be permitted at the request URL's origin.
+   It answers a signal and value, never a score, so a person reading a frontier that will not drain is told
+   which fact held it; the order is the registry's, not a ranking of harm. A permission changes which act may
+   be spent, never what a reply is worth: `forced` still marks a reply as evidence about a request no client
+   makes. Wherever this refuses, the address is still derived in full and reported. */
 function _firingRefusal(facts) {
   var v, i, s;
-  /* THE FACTS ARE REQUIRED BY `_signalVector`, WHICH IS WHY THE VECTOR IS COMPUTED FIRST HERE. This
-     function used to carry its own copy of that CHECK and the copy is DELETED rather than left standing
-     beside the hoisted one: two readers of one contract is the shape that drifts, and the drift had already
-     happened in the only direction it could — the surface reader, which never had a copy, was enforcing
-     nothing. Computing `v` before the nesting CHECK below is what keeps that check's operands validated, so
-     its message names a real grade rather than printing `undefined` back at whoever reads it. */
+  /* `_signalVector` requires the facts, so the vector is computed first and the nesting CHECK below prints
+     validated operands. */
   v = _signalVector(facts);
-  /* THE NESTING, ASSERTED AT THE CONSUMER — solver/flow.h declares `path_pinned` strictly inside
-     `path_forced`, so a park that is not FORCED cannot be carrying a witness this engine chose, and the two
-     halves of that contract are checked by the two parties to it (`pending_pinned_compose` is the other).
-     A pair that disagreed would have this function decide a request the grade beside it refuses. */
+  /* The nesting, asserted at the consumer: solver/flow.h declares `path_pinned` strictly inside
+     `path_forced`, so a request that is not `forced` cannot carry a witness this engine chose
+     (`pending_pinned_compose` asserts the other end). */
   CHECK(facts.provenance === "forced" || facts.pinned !== "pinned",
         "a request states that its address may rest on a witness this engine DETERMINED, while stating a " +
         "provenance of `" + facts.provenance + "` — solver/flow.h declares the witness mark strictly nested " +
         "inside the forced-path bit, so this pair cannot both be true and one of the two producers is wrong");
-  /* AND NO PAIRING OF `provenance` WITH `doc-reach` IS ASSERTED, WHICH IS A DECISION AND NOT AN OMISSION —
-     WRITTEN DOWN BECAUSE THE ASSERT IS THE OBVIOUS THING TO REACH FOR AND IT WOULD FIRE ON THE ONE
-     POPULATION THIS ROW EXISTS TO SEPARATE. The tempting one is `observed` ⇒ not `forced`: a page makes its
-     own requests and this zone forces documents, so surely the two cannot both be true. They can, and that
-     pair IS the hazard — a document this tool chose to open goes on making its own `fetch()`es, and the
-     engine grades every one of them `observed` because the page really made them. An assert there would
-     abort exactly where the conjunction below is doing its work.
-     ALL NINE PAIRS ARE REACHABLE AND EACH IS A DIFFERENT ACT: the request's word is the ENGINE's, about a
-     park inside one document, and the reach grade is THIS ZONE's, about a load performed before that
-     document existed. Neither bounds the other in either direction, which is the whole reason they are two
-     rows — §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS is what one row would have been.
-     THIS IS WHERE THE ARM-LIST DCHECK USED TO STAND AND IT IS RETIRED BY THE FACT ARRIVING. It asserted that
-     no default arm named a provenance other than `observed`, because the `observed` arm's own `why` rested
-     on every document having been reached observably — a property of the OTHER ARMS, which this function
-     could not ask of the request in front of it. It can now: the arm is a CONJUNCTION over `doc-reach`, so
-     the question is asked of the request, and the list is free to grow a `derived` row without silently
-     carrying a second population with it. */
-  /* THE DEFAULTS FIRST, BECAUSE THEY ARE PERMISSIONS AND A PERMISSION CANNOT BE NARROWED BY A TABLE THAT
-     ONLY EVER WIDENS. Reading the table first would make no difference to any answer and would make the
-     order look like a precedence rule somebody could invert. */
+  /* No pairing of `provenance` with `doc-reach` is asserted. `observed` with a `forced` reach is the tempting
+     one to forbid, and it is exactly a page this tool chose to open making its own `fetch()`, which the
+     engine correctly grades `observed`. All nine pairs are reachable and distinct: the request's grade is the
+     engine's, the reach grade is this zone's, and neither bounds the other. */
+  /* Defaults first: they are permissions and the table only widens, so the order changes no answer. */
   for (i = 0; i < _DEFAULT_ARMS.length; i++)
     if (_DEFAULT_ARMS[i].when.every(function (c) { return v[c.signal] === c.value; })) return null;
-  /* AND THE TABLE HAS BEEN STATED, WHICH IS THE ONE PREMISE EVERY ANSWER BELOW RESTS ON. An unstated table
-     is EMPTY, so the walk would refuse a request at an origin the person HAS permitted and the refusal would
-     name a signal in the policy's own voice — indistinguishable from a policy they set. It is conservative,
-     which is why it is a DCHECK and not a CHECK; it is also unreadable, which is why it is asserted at all.
-     THE WINDOW IS CLOSED AT THE CHOKEPOINT AND THIS CHECKS THAT CONSTRUCTION. `safeFetch` awaits
-     `_EXPLORED_STATING` before it asks, so every caller is behind the host's statement without having to
-     know the statement exists — and a host that neither states nor promises still reaches here, which is
-     what keeps this a forcing function rather than a formality.
-     THE ARGUMENT THIS REPLACES IS REWRITTEN RATHER THAN DELETED, BECAUSE IT IS THE ONE A READER RE-DERIVES.
-     It read: the table is only ever READ for a `forced` request, only an ENGINE composes `forced`, and every
-     engine is created behind the host's DOCUMENT door — so stating it there closes the window. The first
-     clause is false. The table is read for every request the DEFAULT ARMS did not admit, and a plain data
-     GET at `provenance` `derived` is one of those and needs no engine at all; the offscreen composes exactly
-     that from its passive-learning arm, which the document door never runs behind. A premise about WHO
-     composes a grade cannot close a window about WHICH requests read the table, and placing a ZONE-lifetime
-     fact at a per-document event is the same error one level up.
-     RETIREMENT: this record goes when `_firingRefusal` has no caller that can reach it without the wait
-     above, at which point the placement it argues against is not merely wrong but unwritable. */
+  /* An unstated table is empty, so the walk would refuse a permitted origin in the policy's own voice. That
+     is conservative, hence a DCHECK, and unreadable, hence asserted at all. `safeFetch` awaits
+     `_EXPLORED_STATING` first, so this checks that construction; a host that neither states nor promises
+     still reaches it. The table is read for every request no default arm admits, including plain data GETs
+     the offscreen composes with no engine, so a statement placed at a per-document door could not close
+     this window. */
   DCHECK(_EXPLORED_STATED,
          "the firing question was asked before this host STATED its per-origin egress table — the table is " +
          "empty until a host speaks, so this refusal would tell a person their own standing permission does " +
@@ -2411,30 +2318,13 @@ function _firingRefusal(facts) {
   }
   return null;
 }
-/* THE SAME ANSWER, ASKED BY A CALLER WHOSE ACT IS NOT A FETCH. One function read twice is
-   not two policies — it is the opposite, and it is why this is exported rather than
-   restated. Two callers need it and each needs a different SHAPE of outcome, which is
-   precisely what they may decide for themselves and the answer is not: `bridge.js`'s
-   route-declaration arm records a WORK ITEM whose load happens rounds later, and enqueuing
-   one this file will refuse would pay an admission slot every round to be told no;
-   `engine/trusted.mjs`'s `navigate` must answer its channel with a DECLINE (no instance is
-   provisioned) rather than with the empty Document a network refusal produces.
-   IT ANSWERS THE SIGNAL THAT REFUSED AND NOT A BOOLEAN, for the reason `_corbDeniesScript`
-   answers a rule: a caller that must tell somebody WHY cannot re-derive it from a `false`,
-   and re-deriving it is how the second copy of a policy gets written. The refusal is the
-   POLICY's; the SENTENCE a host wraps around it is that host's own, because how a person
-   expresses a permission is per-host (`--explore <origin>` is a command line, and the
-   offscreen has no command line) while what a permission MEANS is not.
-   IT TAKES AN ABSOLUTE URL because the caller holds one and the origin comparison is this
-   file's to make; an address that will not parse is not a refusal but a caller's serializer
-   disagreeing with a URL parser, so it THROWS rather than answering a permission question
-   about nothing.
-   IT TAKES A FACTS OBJECT AND NOT A POSITIONAL LIST, and that is the shape rather than a
-   preference: the signal set GROWS, and a positional call is exactly where adding one
-   shifts every operand after it silently. Every field is required and an absent one aborts
-   in `_firingRefusal`, because a caller asking a hypothetical must state the same facts the
-   real request would — a hypothetical answered from fewer facts is a permission question
-   about a different request. */
+/* The same answer for a caller whose act is not a fetch: `bridge.js`'s route-declaration arm, which records a
+   work item loaded rounds later, and `engine/trusted.mjs`'s `navigate`, which must decline rather than
+   produce the empty Document a network refusal would. It answers the signal that refused, so a host can say
+   why without re-deriving the policy; the sentence around it is the host's own. It takes an absolute URL
+   (one that will not parse throws: that is a caller's serializer disagreeing with a URL parser) and a facts
+   object rather than positional arguments, so a new signal is a key and not a shifted operand. Every fact is
+   required, because a hypothetical answered from fewer facts is about a different request. */
 function safeFetchFiringRefusal(facts) {
   CHECK(facts !== null && typeof facts === "object" && typeof facts.url === "string",
         "safeFetchFiringRefusal was asked without an absolute URL — the origin comparison is this file's to " +
@@ -2444,30 +2334,24 @@ function safeFetchFiringRefusal(facts) {
                           actor: facts.actor,
                           credentialed: facts.credentialed, headers: facts.headers });
 }
-/* THE VECTOR FOR A HYPOTHETICAL REQUEST, FOR A SURFACE THAT MUST SHOW A PERSON WHAT THEY ARE DECIDING
-   ABOUT. It is the SAME derivation the firing walk reads, handed out rather than re-computed, for the reason
-   every other pair in this file is one function: two answers to one question is the shape a control surface
-   goes wrong in silently — the rows a person ticks would be about a request the policy never sees. */
+/* The vector for a hypothetical request, for a surface that shows a person what they are deciding about. It
+   is the same derivation the firing walk reads, so the rows a person ticks are about the request the policy
+   sees. */
 function safeFetchSignalVector(facts) {
   CHECK(facts !== null && typeof facts === "object" && typeof facts.url === "string",
         "the signal vector was asked for without an absolute URL — `url-authority` is read off the parsed " +
         "address, so a caller with none would be shown a row about nothing");
-  /* AND `docReach` TRAVELS, WHICH IT DID NOT — A FIELD DROPPED ON A FORWARDING FUNCTION, WHICH IS THE
-     DEFECT THIS WHOLE SURFACE HAS NOW HAD TWICE IN TWO FILES. `_signalVector` reads `f.docReach` for the
-     `doc-reach` row, this forward did not carry it, and the only caller states one — so that row computed
-     `undefined`, which is outside the value space it declares, and `_signalVector`'s own DCHECK fired on it
-     in every dev build that opened this panel. The surface's fault was the loud half; the quiet half is
-     that in release the person's control rendered a row about nothing while reading as a row about their
-     request. It is the same shape as the `permit` field that the popup relay dropped, one function over:
-     a name WRITTEN by a caller and READ nowhere on the path between. */
+  /* Every fact is forwarded, `docReach` included; a field dropped here would compute outside its row's value
+     space and render a row about nothing. */
   return _signalVector({ url: new URL(String(facts.url)), destination: facts.destination,
                          provenance: facts.provenance, pinned: facts.pinned, docReach: facts.docReach,
                          actor: facts.actor,
                          credentialed: facts.credentialed, headers: facts.headers });
 }
 function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
-  // same-origin: the page's own data is its to read, and the only thing refused is
-  // that data reaching a CODE loader — a load that could not have executed anyway.
+  /* CORB for a script-like load, over facts already computed, answering the rule that refused or null, so
+     the status message names which of four rules fired. Same-origin: the page's own data is its to read, and
+     only a protected non-JavaScript type reaching a code loader is refused. */
   if (sameOrigin)
     return _corbProtectedMime(mime) && !_jsMime(mime) ? "same-origin-protected" : null;
   if (_corbProtectedMime(mime)) return "protected-type";      // CORB-protected type
@@ -2476,25 +2360,16 @@ function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
   return null;
 }
 
-// Private/loopback/link-local classification (RFC1918 + loopback + IPv6 ULA/LL)
-// for the origin-relative SSRF rule: a request is blocked ONLY when the TARGET is
-// private but the PAGE origin is not — a public page reaching the intranet.
-// localhost->localhost and any->public are allowed (normal web rules).
+// Private, loopback and link-local classification for the origin-relative SSRF rule: RFC 1918, 127/8,
+// 169.254/16, `0.0.0.0`, `::`, `::1`, IPv6 unique-local (fc00::/7) and `fe80:` link-local, `localhost`,
+// `.local` and `.localhost`. A request is refused only when the target is private and the page principal is
+// not; private to private and anything to public are allowed, as on the web.
 //
-// AN IPv4-MAPPED ADDRESS *IS* AN IPv4 ADDRESS, SO IT IS UNMAPPED BEFORE IT IS CLASSIFIED — never matched a
-// second time as text. Every host that reaches here comes out of the WHATWG URL parser (`parsed.hostname`,
-// `new URL(resp.url).hostname`), so it is already CANONICAL: an IPv4 literal is dotted-quad (the URL
-// Standard's IPv4 parser folds the decimal/octal/hex spellings, which is why `http://2130706433/` cannot
-// slip past `/^127\./`), and an IPv6 literal is the IPv6 SERIALIZER's output — each piece "represented as
-// the shortest possible lowercase hexadecimal number", with no dotted tail anywhere in it.
-// This function carried an `::ffff:(127|10|192\.168|169\.254)` alternative, and that is a spelling the
-// serializer CANNOT produce: `http://[::ffff:127.0.0.1]:8080/` arrives as `[::ffff:7f00:1]`. So the branch
-// was dead, and the address it was written to stop was classified PUBLIC — a public page's bundle naming
-// that URL walked straight through the origin-relative SSRF guard into the user's loopback, and safeFetch
-// handed the response bytes back to the untrusted engine. SECURITY.md's attack table calls that case
-// mitigated; it was not. RFC 4291 §2.5.5.2's IPv4-mapped form and §2.5.5.1's deprecated IPv4-compatible
-// form both DENOTE an IPv4 address and are routed to it by the stack, so both are converted to that address
-// and classified ONCE, by the v4 rules — rather than a growing list of ways to spell the same host.
+// Every host here comes from the WHATWG URL parser, so it is canonical: IPv4 is dotted-quad (the parser folds
+// decimal, octal and hex spellings, so `http://2130706433/` is `127.0.0.1`), and IPv6 is the serializer's
+// shortest lowercase hex with no dotted tail (`[::ffff:127.0.0.1]` arrives as `[::ffff:7f00:1]`). RFC 4291
+// §2.5.5.2's IPv4-mapped and §2.5.5.1's IPv4-compatible forms denote an IPv4 address, so `_v4OfIPv6`
+// converts them and the IPv4 rules classify them once.
 function _v4OfIPv6(h) {
   var m = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
   if (!m) return null;
@@ -2504,10 +2379,8 @@ function _v4OfIPv6(h) {
 function _isPrivateHost(host) {
   if (!host) return false;
   host = String(host).toLowerCase().replace(/^\[|\]$/g, "");
-  /* THE CANONICAL FORM IS THE CONTRACT, so a host that is not in it is an unclassifiable input rather than a
-     public one. A literal holding BOTH a colon and a dot is the dotted IPv4-in-IPv6 text form, which no URL
-     parser ever emits — its arrival means a caller handed this chokepoint a raw string instead of
-     `URL.hostname`, and every rule below is written for the form the parser produces. */
+  /* The canonical form is the contract: a literal with both a colon and a dot is the dotted IPv4-in-IPv6
+     text no URL parser emits, so its caller passed a raw string instead of `URL.hostname`. */
   DCHECK(!(host.indexOf(":") >= 0 && host.indexOf(".") >= 0),
          "a host reached the SSRF classifier as an IPv4-in-IPv6 literal with a dotted tail (" + host + ") — " +
          "the WHATWG IPv6 serializer emits hex pieces only, so this host did not come from URL.hostname and " +
@@ -2520,158 +2393,20 @@ function _isPrivateHost(host) {
     /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
     /^(fe80:|fc[0-9a-f][0-9a-f]:|fd[0-9a-f][0-9a-f]:)/.test(host);
 }
-
-// @security-contract  ENFORCEMENT POINT (the single network chokepoint)
-//   guarantees: cookies omitted by default — or, in opts.credentialed mode, a GET
-//               whose REPLY is gated by safeFetch's OWN SOP/CORS (same-origin
-//               to the principal, else exact-origin ACAO + ACAC == true), since a
-//               host-permission fetch bypasses the browser's same-origin policy;
-//               method GET; http(s) only; origin-relative SSRF (a PRIVATE target is
-//               blocked unless the page principal is itself private) on BOTH the
-//               initial URL and the post-redirect final URL.
-//               EVERY POST-FETCH GATE JUDGES THE POST-REDIRECT URL — the private-host
-//               re-check, the destructive-path re-check, CORB's same-origin exemption
-//               and the credentialed SOP. Fetch §2.2.5 "Requests"' CURRENT URL is the
-//               last in the URL list, and §4.1 "Main fetch" reads a response's
-//               readability off that one.
-//   callers of opts.credentialed: bridge.js's `navigationLoad` and `frontierRederive`,
-//               and ONLY where the address is same-origin with the browser-stated
-//               principal of the document being loaded (`navigationCarriesSession`).
-//               The learned-GET replay path (`fetched`) passes no pageOrigin and
-//               states `credentialed: false` — turning that on is a separate
-//               deliberate decision about the CORB class of a same-origin chunk, not
-//               a side effect of the provenance below.
-//               THAT LINE USED TO SAY IT WAS "still uncredentialed", ASSERTING A
-//               PROPERTY OF ANOTHER FILE THAT HAD STOPPED BEING TRUE. `fetched` read
-//               `!!(msg && msg.credentialed)`, and the seed's AST_ANALYZE writes that
-//               field from `navigationCarriesSession` — true for the ordinary
-//               same-origin seeded page. So cookies WERE attached, with no pageOrigin
-//               beside them, and every such reply was refused
-//               `blocked-cors-credentialed:` after the request had gone out. It is a
-//               literal now. A claim here about who calls this file and how is a claim
-//               to re-grep before it is repeated.
-//   opts.provenance:
-//               CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's OBSERVED / DERIVED /
-//               FORCED, verbatim from the engine (solver/engine.h's
-//               PENDING_PROVENANCE_*) or stated by the zone that originated the act.
-//               It is what a reply is EVIDENCE OF, and it is half of the firing
-//               decision — the other half being the METHOD, which RFC 9110 §9.2.1
-//               "Safe Methods" answers and this file enforces by ABSENCE. See
-//               `_firingRefusal`: the decision is HERE because CLAUDE.md puts it
-//               here ("the engine holds no network policy by construction, so
-//               `safeFetch` decides, from the provenance the request declares beside
-//               its method and credential state"), and because a policy in either
-//               host would be a second copy of it that drifts — which is exactly the
-//               state this parameter ends: `engine/trusted.mjs` declined every
-//               DERIVED and FORCED park while `bridge.js` fired every one of them,
-//               two answers to one question, neither of them the policy.
-//               IT IS NO LONGER THE WHOLE OF THE FIRING DECISION and that is the
-//               correction this parameter's own paragraph above carries: the act a
-//               request IS matters as much as what its reply is WORTH, and Fetch
-//               §2.2.5's DESTINATION is what separates them. See `_firingRefusal`.
-//   opts.pinned:
-//               `pinned` / `unpinned` verbatim from the engine (solver/engine.h's
-//               PENDING_PINNED_*) — off the PENDING LINE for a request that parked, or
-//               off the RECORD for one the page's code made without parking
-//               (`engine_pinned_of_running_path`) — or `unstated` where the act's record
-//               carries no mark at all. It says whether
-//               this request's ADDRESS may rest on a value the parking flow itself
-//               DETERMINED on an arm nothing observed — which is a different question
-//               from what the reply is worth, and the one that decides whether a DATA
-//               request may be spent. It is a MAY-REST-ON: concretize-on-pin answers a
-//               pinned read with a bare primitive, so no address can be asked and the
-//               engine records the fact where those bytes are CHOSEN instead. Strictly
-//               nested inside `forced` (solver/flow.h), and `_firingRefusal` asserts
-//               that pair rather than trusting it.
-//   opts.headers:
-//               THE ONE OPTION THIS FILE READS WHOSE VALUES CROSS FROM THE UNTRUSTED
-//               ZONE — on the XHR path they are the analysed BUNDLE's own list.
-//               Within the model on the request this file issues (an uncredentialed
-//               GET, forbidden header names stripped by the browser, to a host the
-//               page can already reach itself); REFUSED on a credentialed one, by a
-//               CHECK in `_credentialedOf` rather than by the callers happening to be
-//               disjoint. A header list is the other route to a verb
-//               (`X-Http-Method-Override`), so it puts a state-mutating verb back on a
-//               cookie-bearing request past the place the literal `method:"GET"` closed
-//               it — which the `method` signal of the egress policy states as one value.
-//   opts.destination:
-//               Fetch §2.2.5 "Requests"' DESTINATION, verbatim from the request the
-//               engine parked (solver/engine.h puts it on the pending line). A
-//               SCRIPT-LIKE one ("script", "worker", …) -> + CORB (cross-origin must
-//               be JS-typed); every other value, "" included, is data and takes no
-//               CORB. Absent is NOT a synonym for data, and neither is UNRECOGNISED:
-//               both take the `not script-like` arm silently, so `_destinationOf`
-//               refuses anything outside §2.2.5's enumeration with a CHECK — fatal in
-//               release too, because the arm a bad value falls through to is the
-//               permissive one and the value crosses from the untrusted engine.
-//   answers:    computedType — the ONE type decision made about this response, the
-//               same one CORB was decided from, stamped on the record for the
-//               renderer so no downstream zone repeats it.
-//   principal:  opts.pageUrl PER CALL — the analysed DOCUMENT's OWN browser-stated
-//               address (`MessageSender.url`), NEVER `sender.tab.url` — classifies
-//               the SSRF host; opts.pageOrigin (the BROWSER-provided
-//               MessageSender.origin, opaque-unique) is the SAME-ORIGIN principal for
-//               the credentialed SOP — NOT re-parsed from a URL (a sandboxed frame
-//               has a normal URL but an opaque origin). No shared global (concurrent
-//               grinds would contaminate it); unknown principal -> public + opaque
-//               -> private targets and credentialed cross-origin reads blocked.
-// Fetch §2.2.6's URL list as far as script may ever see it: the FIRST item (the URL
-// we requested, which §4.1 clones from the request) and the LAST (resp.url, after
-// redirect:"follow" walked the chain). Both authorities are the browser's own and
-// each answers one question: resp.redirected says whether the list has more than one
-// item, resp.url says what the last one is. Deriving "did it redirect" from
-// resp.url !== requested instead would report a 3xx that lands back on its own
-// address as no redirect at all, which is a chain the list DID grow along.
-/* THE DESTRUCTIVE-PATH DENY LIST — the ONE place this project matches on a name, and
-   it matches only to REFUSE.
-   CLAUDE.md's §RUN-DON'T-MATCH bans matching because a matched name would be ASSERTED
-   as a value, and a name is meaningless in minified code. A deny list asserts NOTHING.
-   It refuses, and the two directions fail in ways that are not comparable: a wrong DENY
-   costs exactly one unfired request, which forced execution still derives and still
-   reports in full, while a wrong ASSERT fabricates a finding that PROPAGATES, since one
-   invented field is the example that shapes the next endpoint. So this list is sound
-   PRECISELY BECAUSE IT IS ALLOWED TO BE WRONG, and being over-broad is its cheap
-   direction rather than its dangerous one.
-   WHAT IT IS FOR. Forced execution builds requests no real client makes, and RFC 9110
-   §9.2.1 Safe Methods says a GET must not be relied on to change state — but it says so
-   by placing the duty on the RESOURCE OWNER ("it is the resource owner's responsibility
-   to ensure that the action is consistent with the request method semantics"), and names
-   the failure it expects: "unfortunate side effects when automated processes perform a
-   GET on every URI reference". This tool is that automated process. A GET that ends the
-   person's session mid-analysis is a CSRF we committed against our own user, and no
-   amount of §9.2.1 correctness makes that acceptable to discover afterwards.
-   WHY ONLY WHEN CREDENTIALED. The harm needs the session: an uncredentialed GET to a
-   logout path destroys nothing, and denying it would cost real learning for no safety.
-   So the gate is scoped to the exact condition under which the harm exists, rather than
-   applied everywhere and called caution.
-   WHAT IT MAY NEVER BE READ AS. A path that does NOT match is not thereby established
-   safe. This list is a FLOOR under the policy and never a substitute for it — the method
-   and the value provenance still decide, and no absence of a match licenses firing
-   anything they refuse.
-   MATCHING IS BY WHOLE TOKEN, NEVER BY SUBSTRING, because substring matching is how a
-   deny list becomes useless: `/catalogue` contains no token `logout`, and `/deleted-items`
-   yields `deleted`, which is not `delete`. Each path segment and query token is tested
-   raw AND with `-`, `_` and `.` removed, so `log-out` and `log_out` reach `logout`
-   without the list having to enumerate spellings.
-   AND IT IS MATCHED PERCENT-DECODED AS WELL AS RAW, because the address this gate is
-   handed is the address a URL PARSER produced and a parser only ever ENCODES. URL
-   Standard §1.3 "Percent-encoded bytes" gives the basic URL parser a percent-ENCODE set
-   per component and no decode step anywhere, so `URL.pathname` hands back whatever
-   triplets its input carried — while RFC 3986 §6.2.2.2 "Percent-Encoding Normalization"
-   says two URIs differing only in those triplets are EQUIVALENT ("normalized by decoding
-   any percent-encoded octet that corresponds to an unreserved character"), which is what
-   the server on the other end acts on. Tokenising only the raw form therefore let the
-   whole list be walked past by spelling one letter as its own hexadecimal: measured, at
-   the revision this paragraph was written, `/log%6Fut` and `/%64elete/account` both
-   answered `""` — no token, request permitted, cookies attached. `%2F` is worse than an
-   escaped letter because it also DELETES a segment boundary the tokeniser splits on, so
-   `/api%2Flogout` was one token `api2flogout` and matched nothing either.
-   THIS IS DELIBERATELY NOT §6.2.2.2's NORMALIZATION, and the difference is the direction.
-   §6.2.2.2 licenses decoding UNRESERVED octets only, because decoding a reserved one
-   (§2.2's `/`) changes what the URI MEANS — so a normalizer must not, and this gate is not
-   normalizing. It is building a SECOND set of tokens to test, and a token that only exists
-   under an over-eager decode can do exactly one thing: refuse one more request. That is the
-   cheap direction this whole list is built on. */
+/* The destructive-path deny list: the one place this project matches on a name, and it matches only to
+   refuse. A wrong deny costs one unfired request that forced execution still derives and reports, while a
+   wrong assert would fabricate a finding that propagates, so over-broad is its cheap direction.
+   Forced execution builds requests no real client makes, and RFC 9110 §9.2.1 "Safe Methods" leaves keeping
+   GET side-effect-free to the resource owner while naming the failure: "unfortunate side effects when
+   automated processes perform a GET on every URI reference". A GET that ends the person's session
+   mid-analysis is a CSRF this tool commits against its own user, so the list applies where the session is
+   spent (credentialed, and not `observed`; see `safeFetch`). A path that does not match is not thereby safe:
+   the list is a floor under the egress policy and under this tool's own autonomy, never a substitute.
+   Matching is by whole token: each path segment and query token is tested raw and with `-`, `_` and `.`
+   removed (`log-out` reaches `logout`; `/deleted-items` does not reach `delete`). Tokens are taken raw and
+   after each percent-decoding pass, because a URL parser only encodes and a server treats `%6F` as `o` (RFC
+   3986 §6.2.2.2 "Percent-Encoding Normalization"). Decoding reserved octets such as `%2F` goes beyond
+   §6.2.2.2's normalization, which is safe here because an extra token can only refuse one more request. */
 var _DESTRUCTIVE = [
   /* ending a session or revoking an authorization */
   "logout", "logoff", "signout", "signoff", "deauth", "deauthorize", "revoke",
@@ -2681,10 +2416,9 @@ var _DESTRUCTIVE = [
   "deactivate", "disable", "terminate", "cancel", "reset",
   "unlink", "unfollow", "unfriend", "deleteaccount", "closeaccount"
 ];
-/* A TOKEN THAT COULD NEVER MATCH IS A SILENT HOLE IN A SECURITY GATE, so the shape the
-   matcher requires is asserted rather than assumed: the comparison is against lowercased,
-   separator-stripped tokens, so an entry carrying an uppercase letter or a `-` would sit
-   in this list looking protective and match nothing, for ever. */
+/* An entry that could never match is a silent hole, so its shape is asserted: the matcher compares
+   lowercased, separator-stripped tokens, and an entry with an uppercase letter or a separator would match
+   nothing. */
 var _DESTRUCTIVE_SET = (function () {
   var m = Object.create(null);
   for (var i = 0; i < _DESTRUCTIVE.length; i++) {
@@ -2697,22 +2431,12 @@ var _DESTRUCTIVE_SET = (function () {
   }
   return m;
 })();
-/* URL STANDARD §1.3 "Percent-encoded bytes"' PERCENT-DECODE, ONE PASS — and it is that
-   algorithm rather than `decodeURIComponent` for the one property a gate needs: IT CANNOT
-   FAIL. §1.3 says of each byte "if byte is 0x25 (%) and the next two bytes after byte in
-   input are not in the ranges 0x30 (0) to 0x39 (9), 0x41 (A) to 0x46 (F), and 0x61 (a) to
-   0x66 (f), all inclusive, append byte to output" — a bare `%` is DATA, not an error.
-   `decodeURIComponent("%")` throws a URIError instead, and so does every ill-formed UTF-8
-   sequence, so reaching for it here would put a `try`/`catch` in front of a security gate
-   whose catch arm is "no token matched" — an absent answer read as a permit, which is the
-   defaulted-read defect standing exactly where a refusal belongs.
-   IT STOPS AT BYTES AND NEVER DECODES THEM TO TEXT. §1.3's output is a BYTE SEQUENCE and
-   nothing here needs characters out of it: the token class below is `[a-z0-9._-]`, so a byte
-   outside ASCII is a SEPARATOR whatever text it would have become, and a UTF-8 decode could
-   only ever turn one separator into another. Each triplet therefore becomes ONE code unit
-   whose value is that byte, which is also what makes the caller's termination argument hold.
-   §2.1's "the uppercase hexadecimal digits 'A' through 'F' are equivalent to the lowercase
-   digits" is why both cases are accepted here rather than lowercased first. */
+/* URL Standard §1.3 "Percent-encoded bytes"' percent-decode, one pass. It is that algorithm rather than
+   `decodeURIComponent` because it cannot fail: a `%` not followed by two hex digits is data, where
+   `decodeURIComponent` throws, and a catch in front of this gate would read "could not evaluate" as "no
+   token matched". It stops at bytes: each triplet becomes one code unit with that byte's value, which is
+   enough because the token class is ASCII and any other byte is a separator. Both hex cases are accepted,
+   as RFC 3986 §2.1 "Percent-Encoding" makes them equivalent. */
 function _percentDecode(s) {
   var out = "";
   for (var i = 0; i < s.length; i++) {
@@ -2723,7 +2447,7 @@ function _percentDecode(s) {
   }
   return out;
 }
-/* ONE FORM'S TOKENS, so the two forms cannot drift into two matchers. */
+/* One form's tokens, so the raw and decoded forms share one matcher. */
 function _destructiveIn(form) {
   var parts = form.toLowerCase().split(/[^a-z0-9._-]+/);
   for (var i = 0; i < parts.length; i++) {
@@ -2735,32 +2459,12 @@ function _destructiveIn(form) {
   }
   return "";
 }
-/* Returns the token that refused this URL, or "" — a POSITIVE statement that nothing in
-   the list matched, never a boolean whose false could also mean "not asked". The token
-   travels into the status message so a refusal is attributable and a reviewer can
-   disagree with THIS entry rather than with the list.
-   THE RAW FORM IS ASKED FIRST so an address that already matched names the SAME token it
-   named before, and only then each successive decoding — a server that decodes once sees
-   the first, one that decodes what its own framework already decoded sees a later one, and
-   this gate does not have to know which kind it is talking to. */
-/* AND THE ARGUMENT IS ASSERTED RATHER THAN GUARDED, BECAUSE THE GUARD'S ARM WAS A PERMIT.
-   This read stood inside `try { … } catch (e) { return ""; }`, and `""` is this function's
-   POSITIVE statement that nothing in the list matched — so the one thing the catch could
-   ever do was turn "the gate could not be evaluated" into "the gate said yes", which is the
-   defaulted-read defect standing exactly where a refusal belongs. It could not even do that
-   much: `u` is a `URL` at both call sites, and URL Standard §6.1 "URL class" gives those two
-   getters no failure step at all — "The pathname getter steps are to return the result of URL
-   path serializing this's URL", and the `search` getter returns either the empty string or
-   `?` followed by the query — so the arm was UNREACHABLE, hiding an assumption not stating it.
-   WHAT IS REACHABLE IS THE SHAPE, AND IT FAILS OPEN IN SILENCE. Hand this a plain object and
-   no exception happens at all: `String(undefined)` is the six characters `undefined`, which
-   match no token, and a credentialed request goes out with the deny list never evaluated.
-   THEREFORE `CHECK` AND NOT `DCHECK`, on the one discriminator that separates them here.
-   §Offensive programming names "a security/authorization boundary" among the invariants that
-   must hold in production, and the tiebreak "when unsure it is a DCHECK" does not apply
-   because the release behaviour is not unknown: with the assert compiled out this composes
-   `"undefined&undefined"` and PERMITS. A gate that fails open in release is what CHECK is
-   for. It is `u && …` so a null argument reaches the assert rather than a TypeError. */
+/* Answers the token that refused this URL, or "" as the positive statement that nothing matched. The token
+   travels in the status message so a reviewer can dispute this entry rather than the list. The raw form is
+   asked first, then each successive decoding, so the gate need not know how many times a server decodes.
+   The argument is CHECKed rather than guarded: a non-URL composes a form that matches nothing and would
+   permit a credentialed request in silence, so release must not proceed through it. URL Standard §6.1 "URL
+   class" gives `pathname` and `search` no failure step, so there is nothing to catch. */
 function _destructiveToken(u) {
   CHECK(!!u && typeof u.pathname === "string" && typeof u.search === "string",
         "the destructive-path deny list was handed something that is not a URL — this gate is the last thing " +
@@ -2772,15 +2476,9 @@ function _destructiveToken(u) {
     var t = _destructiveIn(form);
     if (t) return t;
     var next = _percentDecode(form);
-    /* TERMINATION IS STRUCTURAL AND IS NOT A §NO BOUNDS CAP — there is no counter here and
-       nothing decides that work will not happen. A pass that changed anything replaced at
-       least one three-code-unit triplet with one code unit, so it is strictly SHORTER; a
-       pass that changed nothing returns the identical string. A strictly shrinking string
-       over a finite input cannot loop, and "no shorter" is therefore the positive statement
-       "there is nothing left to decode" rather than a guard against a bad state.
-       ASSERTED BECAUSE THE EXIT RESTS ON IT: a decoder that stopped implementing §1.3 could
-       make those two facts disagree, and the loop is inside the one chokepoint every byte of
-       this extension goes through. */
+    /* Termination is structural, not a cap: a pass that changed anything replaced a three-unit triplet with
+       one unit and is strictly shorter, and a pass that changed nothing returns the same string. Asserted
+       because the exit rests on it. */
     DCHECK(next === form || next.length < form.length,
            "a percent-decoding pass returned a string that differs from its input yet is no shorter — URL " +
            "Standard §1.3 \"Percent-encoded bytes\" replaces a three-code-unit triplet with one byte and " +
@@ -2864,7 +2562,21 @@ async function _readBody(resp, sink, gated) {
   for (i = 0; i < parts.length; i++) { out.set(parts[i], off); off += parts[i].byteLength; }
   return out;
 }
-
+/* @security-contract  ENFORCEMENT POINT (the single network chokepoint)
+   Guarantees: cookies omitted unless `opts.credentialed`, and then the reply passes this file's own SOP/CORS
+   (same-origin with `opts.pageOrigin`, else exact-origin ACAO and ACAC `true`); GET only; http(s) only; no
+   userinfo; origin-relative SSRF on the initial and the landed URL; the destructive-path deny list on
+   credentialed non-`observed` requests, before the wire and after a redirect; the egress policy's firing
+   walk before the wire and on the landed URL; CORB for script-like destinations. Every post-fetch gate
+   judges the landed URL.
+   Principals, per call and never a global: `opts.pageUrl` (the document's `MessageSender.url`) classifies
+   the SSRF target; `opts.pageOrigin` (`MessageSender.origin`, opaque-unique) is the credentialed SOP's
+   principal and is never parsed from a URL. An opaque principal is same-origin with nothing.
+   Credentialed callers: `bridge.js`'s `navigationLoad` and `frontierRederive`, only where the address is
+   same-origin with the browser-stated principal (`navigationCarriesSession`). The learned-GET replay
+   (`fetched`) states `credentialed: false` and no `pageOrigin`. The facts the policy decides from
+   (`destination`, `provenance`, `pinned`, `docReach`, `actor`, `credentialed`, `credentials`) are stated by
+   every caller and asserted at the entry. */
 async function safeFetch(url, opts) {
   opts = opts || {};
   /* The option set this file reads is closed, so a caller's statement it will not read is refused at the
