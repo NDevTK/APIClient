@@ -222,6 +222,16 @@ if (prose.length) {
   say("the prose-only claim HELD ─────────────────────────────────────────────────────────────────────────────");
 }
 
+/* Comment size, over exactly the commits this push publishes (CLAUDE.md "Comments"). Nonzero pushes nothing. */
+{
+  const cg = spawnSync(process.execPath,
+                       [new URL("commentgate.mjs", import.meta.url).pathname, "--base", old, "--head", sha],
+                       { stdio: "inherit" });
+  if (cg.status !== 0)
+    die(1, `REFUSED by engine/commentgate.mjs (exit ${cg.status}) and NOTHING was pushed. Shorten the comment`,
+           "blocks it names; history belongs in the commit message.");
+}
+
 /* EACH PUSH IS ITS OWN SPAWN AND CARRIES NOTHING ELSE. A retry is only ever for a NETWORK failure: a refusal
    is a verdict and retrying one is arguing with it. */
 const moved = [];

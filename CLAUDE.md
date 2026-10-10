@@ -69,6 +69,18 @@ Most wasted work in this project came from believing something that had stopped 
 - Retracting a method means re-running everything that method concluded.
 - Your own measurement goes stale the moment someone fixes what it found. Re-derive it before relaying it.
 
+## Comments
+
+A comment is read by every agent that opens the file, so its cost is paid on every read. Write it for the next engineer changing the code, as a Chromium engineer would.
+
+- A comment describes the code as it is now: what it implements (cite the spec section with its title), the invariant it relies on or establishes, ownership of what it takes and returns, and the reason for a choice a reader would otherwise undo. Present tense, ordinary sentence case.
+- History is not a comment. Incidents, measurements, run results, counts, "this used to…", retired designs, refutations, who found what, and arguments with a previous reader go in the commit message (where `git log -L` and `git blame` find them) or in `docs/claude-record.md`. When a fix retires an argument, delete the argument; the commit records it.
+- A header entry is the contract in a few lines: what the function does, preconditions (which it asserts), what it owns, and the spec step. Design rationale goes once, at the definition, briefly.
+- Keep blocks short. A block longer than the code it describes is a defect; `engine/commentgate.mjs` refuses a new or grown block over its line limit, and `engine/publish.mjs` runs it on every publish. If a block cannot be short, the fact it states probably belongs in an assert or in a smaller function.
+- No emphasis by capital letters and no `CLAUDE.md §` references in code. State the rule's content in a clause, or nothing.
+- A DCHECK message names the violated invariant and, for a missing capability, what to build — one or two sentences.
+- When rewriting comments, keep every fact a reader needs to change the code correctly; compress the prose around it. A comment-only diff is published with `--prose` so `engine/prosediff.mjs` proves the program did not change.
+
 ## Offensive programming — `engine/host/check.h` (JS mirror: `extension/check.js`)
 
 - Every dev-build crash is correct. It is either an unexpected state, to be made impossible at the root, or a missing feature, to be built. Never caught, swallowed, clamped or defaulted past. A page's own uncaught throw aborting boot is intentional.
