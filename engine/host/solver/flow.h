@@ -615,9 +615,8 @@ long    flow_world_commit_rows_written(void);
 /* This flow's job queue and every operation on it, declared beside the field because engine.c enqueues, picks
  * and drops while cold.c counts, and one owner keeps the shape assert. A record is never edited after it is
  * pushed, so a fork shares the entries and hands each arm its own Array. A record holds no pointer:
- *   - the callee, named by an arrival ordinal into a table this file keeps, because a JSJobFunc is a static of
- *     the interpreter (promise_reaction_job, js_dynamic_import_job, host_call_job, …). The ordinal is
- *     session-local, so it is not yet parkable;
+ *   - the callee, as a session-local arrival ordinal into a table this file keeps, because a JSJobFunc is a
+ *     static of the interpreter (promise_reaction_job, js_dynamic_import_job, host_call_job, …);
  *   - the arguments, as ordinary elements. They have no identity outside this session (a reaction's capability
  *     functions, an event init holding a WindowProxy), which is what keeps the queue un-parkable; a replay
  *     regenerates every job whose cause is inside the replayed program (see cold_park_flow for the exception);
@@ -790,860 +789,228 @@ typedef struct {
        A gauge, never differenced. flow_wfq_census asserts `never_picked_at_top <= never_picked`, and that it is
        non-zero exactly when `never_picked_gap` is 0.0. */
     long never_picked_at_top;
-    /* HOW THE DISPATCHES THAT DID HAPPEN WERE DISTRIBUTED, WHICH IS THE OTHER HALF OF THE PAIR ABOVE AND TAKES
-       OPPOSITE WORK FROM IT. `never_picked` says a tail exists and `never_picked_gap` says how far behind it
-       stands, and that pair has ONE answer for THREE states of the scheduler — states whose repairs are
-       different and two of which are not repairs at all. Write M for `members`, P for `members - never_picked`
-       (the live members ever chosen) and T for `picks_live` (the dispatches those members are still holding):
-         T/P ≈ 1                      the thread reached a FRESH member nearly every time. The frontier is
-                                      growing faster than one thread serves it, and that is a THROUGHPUT fact
-                                      about branching and slice length; no term of flow_weight reaches it, and
-                                      a weight change made against this reading fixes nothing and can only make
-                                      the order worse.
-         T/P ≫ 1, picks_max ≈ T/P     a reachable COHORT is being swept repeatedly while the tail waits: the
-                                      order is returning members it has already served ahead of members it has
-                                      never served. That is an ORDERING defect and it is the one the weight
-                                      owns.
-         picks_max ≈ T                ONE member is holding the thread and the switches are it and a single
-                                      rival trading. That is a MONOPOLIZER the aging term is failing to sink —
-                                      §scheduler's own sentence, and a third repair again.
-       AND THE SECOND ROW IS NOT DECIDABLE FROM `T/P` AND `picks_max`, WHICH IS A CORRECTION TO THIS TABLE
-       RATHER THAN A CAVEAT ON IT. `flow_starved_picks` below already says why in as many words — "`picks_live
-       / (members - never_picked)` sums re-dispatches that CONTINUE a program, which are necessary, with
-       re-dispatches that pass over a starved member, which are the defect" — and that sentence is about THIS
-       ratio, written one screen down from the table that goes on offering it as the discriminator. Two sites
-       in one file describing one question and disagreeing; the one that CONSUMES the quantity is right, and
-       this is the site a reader reaches first, because it is the row the census prints.
-       SO THE SECOND ROW IS READ OFF `starved_picks_idle` AND NEVER OFF `T/P`. A framed member re-picked to
-       finish the program it is inside, while an arm it forked stands at its exact weight, raises `T/P` and is
-       the strict comparison doing its job; only the IDLE subset is the order returning a member that has
-       FINISHED its trial ahead of one that has never had a turn. `T/P` well above 1 with that subset near zero
-       is the FIRST row of this table wearing the second row's number, and the repair the second row licenses
-       would then be made against a frontier whose order is returning nobody early.
-       MEASURED, AND THE TWO READINGS DISAGREE BY THREE ORDERS OF MAGNITUDE ON ONE DOCUMENT AT ONE REVISION.
-       Artifact 22605dc4, solvergate `stream`, a fixture of two nested opaque-bounded loops inside a `load`
-       handler — chosen because every live member stands with no row left (`outOfPrograms == members`) and
-       `departures` is 0 at every snapshot of every run, which is the forking shape this table is read on.
-       THREE runs, terminal snapshot of each, in run order:
-         members             4978 / 4600 / 4635     picks_lifetime      9511 / 6957 / 8817
-         T/P                 2.21 / 1.65 / 2.11     picks_max              7 /    5 /    7
-         starved_picks          - /  706 /  612     starved_picks_idle     - /    4 /    4
-       `T/P` at 2.11 reads as "a reachable cohort swept repeatedly while the tail waits". The pair beneath it
-       says the tie-break decided against a never-served member on 612 of 8817 dispatches, and that on 608 of
-       those 612 the member it returned was INSIDE a program — so the residual, and it is an UPPER bound (see
-       the residual at `flow_starved_picks_idle`), is 4 in 8817. The three rows of this table are not shades of
-       one state and `T/P` cannot tell the first two apart.
-       AND `never_picked_at_top` CANNOT CARRY THE CLAIM ALONE AT THIS SPREAD: the same three runs read it
-       656 / 0 / 431, on ONE revision, ONE document and ONE schedule — a gauge whose run-to-run range covers
-       its own population, which is what a gauge does on a frontier being swept while it grows.
-       EVERY NUMBER HERE IS ONE THE BOX MOVES: this host has no CPU clock and the quantum is wall-denominated
-       (solver/quantum.h), so what three runs support is the ORDER of the two readings and not their values,
-       and nothing here is a threshold.
-       AND THE ROW ABOVE IS A GAUGE THAT MOVES, WHICH IS WHAT MAKES THESE NECESSARY RATHER THAN MERELY FULLER.
-       `never_picked` counts the members standing NOW that have never been chosen, and a member that is chosen
-       leaves that population while every member born since joins it — so the number falls as well as rises, and
-       a single reading of it is a fact about one instant that says nothing about a run. Measured on one frozen
-       build's own @WFQ series, in order: 0, 25, 218, 18, 37, 261, 445, while `members` went 1, 153, 347, 369,
-       388, 612, 802. The 218 → 18 step is roughly two hundred members handed the thread between two samples, on
-       a frontier that had grown by twenty-two — so "the tail is not being reached" was FALSE across that
-       interval and true-looking at both ends of it, and the series that flow.h prescribes as the honest reading
-       cannot be differenced either, because differencing a gauge is arithmetic over no quantity. The dispatches
-       are what happened; only a counter can say how many there were.
-       THE PAIR OF KINDS IS THE POINT AND IT IS SPELLED IN THE NAMES. `picks_live` and `picks_max` are GAUGES:
-       they are taken over the members standing NOW, so a member that departs takes its dispatches out of both
-       and either may FALL between two censuses. Differencing them is arithmetic over no quantity — the defect
-       CLAUDE.md records as a gauge read as a lifetime histogram, whose free tell is a series that decreases.
-       `picks_lifetime` is the LIFETIME COUNTER: every dispatch this instance has ever made, held off the flows
-       entirely (flow.c's `g_picks_total`) because a per-member field cannot be one, and reset by nothing for
-       the reason `rank_changes` is reset by nothing. It is the ONLY one of the three a reader may difference.
-       AND THE FALL IS NOT NEUTRAL ACROSS RUNS: `picks_max`'s TOP MEMBER IS THE ONE NEAREST TO DEPARTING, so
-       the gauge is biased against its own maximum and the THIRD ROW of the table above reads ABSENT exactly
-       when it was satisfied. A member retires by exhausting its programs and its queue, which costs
-       dispatches, so `picks` is monotone in progress toward the finish and the retiring member is drawn from
-       the TOP of this distribution — it then leaves and takes its dispatches out of `picks_max`. Comparing
-       the row across two runs therefore compares a scheduler state with an artifact of the OUTCOME, which is
-       CLAUDE.md's stratified-by-outcome defect, and the direction is the flattering one: the run that RETIRED
-       members reads as the run with no monopolizer, so the row is silent about a monopolizer exactly where
-       one finished.
-       MEASURED over sixteen archived smoke runs of one fixture. Every run with `departures` 0 has
-       `picks_live == picks_lifetime` exactly, with `picks_max` 331..747; the two with `departures` 2 have
-       `picks_lifetime - picks_live` of 538 and 545, so a departed member held AT LEAST 269 and 273 against a
-       surviving `picks_max` of 141 and 146. The top member departed in both, and the survivors' maximum fell
-       by roughly a factor of four with nothing about the order having changed.
-       SO THE THIRD ROW IS READ AGAINST `picks_lifetime` AND `departures` AND NEVER OFF `picks_max` ALONE:
-       `(picks_lifetime - picks_live) / departures` is what a departed member held on average and is the half
-       of the distribution this gauge cannot see, and `departures` is the denominator because it counts every
-       member that left by any cause. THE PARTITION HAS THREE TERMS AND NOT TWO — engine_frontier_census
-       asserts `finished + sold + flow_departures_teardown() == flow_departures()` — and this sentence said
-       `finished + sold == departures` until a grep of that assert refuted it. It is corrected rather than
-       deleted because the two-term reading is the one a reader re-derives from the two retirement totals
-       beside each other, and it is exactly right on a run that never tore down (which every run measured here
-       was, teardown 0), so it is a claim that looks confirmed on the evidence nearest to hand. WITHIN one run at one census
-       nothing here applies and the table stands exactly as written; this is about comparing two.
-       RETIREMENT — MET BY A CONSTRUCTION, AND THE RECORD IS REWRITTEN RATHER THAN DELETED BECAUSE WHAT A READER
-       RE-DERIVES IS THE SUBTRACTION. The condition read: this goes when the census PUBLISHES the dispatches
-       departed members took with them as a ROW rather than as that subtraction, so `picks_max` cannot be read as
-       the distribution's maximum. `picks_departed` below is that row, assigned from flow.c's `g_picks_departed`
-       in the same breath as `picks_lifetime` and emitted by result_wfq_json beside the other three, so the
-       partition is checkable OUTSIDE this process on the document where the DCHECK is compiled out. A reader who
-       re-derives the average from `(picksLifetime - picksLive)` is subtracting a GAUGE from a LIFETIME COUNTER
-       and will write that reading again unless this says why it is the wrong one.
-       AND THE ROW ANSWERS A SECOND QUESTION THE RESIDUAL DID NOT NAME, WHICH IS WORTH MORE THAN THE AVERAGE IT
-       DID: IT IS THE RETIRE-VERSUS-SELL DISCRIMINATOR, FROM THE @WFQ DOCUMENT ALONE. `departures` is one number
-       over three causes (engine.c's engine_frontier_census asserts `finished + sold + teardown == departures`),
-       and those three live in a SIBLING object with its own sample index — so a reader holding only this census
-       has had no way to tell a frontier that RETIRED its members from one that SOLD them, which are opposite
-       verdicts. A finish costs a dispatch BY CONSTRUCTION: flow_finish is reached only from engine.c's
-       `FLOW_STEP_DONE` arm, whose subject is the switched-in member, and `cur = best` is assigned inside the one
-       `if (best != cur)` block that calls flow_credit_pick — so every member that has ever held the thread has
-       `picks >= 1`, and `picks_departed >= finished`. THEREFORE `departures > 0` WITH `picks_departed == 0`
-       PROVES `finished == 0`: every departure was a SALE or a teardown, read off two rows of one object.
-       THE CONVERSE IS NOT AVAILABLE AND MUST NOT BE READ: a SOLD member may have been dispatched too, so
-       `picks_departed > 0` does not prove that anything retired. The implication is one-way and the row states
-       the cause only on the zero.
-       THE IDENTITY THAT DEFINES THEM, and it is asserted rather than described — WHICH IT WAS NOT, AND THAT IS
-       RECORDED HERE BECAUSE THE METHOD IS THE FINDING AND THE SENTENCE IS ONLY ITS SYMPTOM. It read: "checked in
-       both directions rather than described: within the census, `picks_live <= picks_lifetime` WITH THE
-       DIFFERENCE BEING EXACTLY WHAT DEPARTED MEMBERS TOOK AWAY (asserted at the end of flow_wfq_census)", and
-       the parenthetical covered the INEQUALITY alone. `live <= lifetime` is true of every distribution of that
-       difference, including one in which no departed member ever held a dispatch and the shortfall is a
-       `Flow.picks` written from somewhere else — so the clause that a reader ACTS on, three paragraphs up, was
-       stated in the register of something checked and was checked by nothing. An identity stated as asserted is
-       the one claim a reader does not re-derive.
-       WHAT STANDS NOW: within the census, `picks_live + <departed> == picks_lifetime` EXACTLY, with the
-       inequality KEPT BESIDE IT rather than subsumed, because the equality holds with a negative departed total
-       and the inequality does not — so the pair separates a lost credit from a fabricated one and each message
-       names a different next diff. Across the document, `picks_lifetime` must EQUAL the result's `_switches`,
-       because flow_credit_pick has exactly one caller and engine.c raises its own switch count on the line
-       beside it. A reader who cannot check a counter's identity is holding a digit, not a measurement. */
+    /* How the dispatches that did happen were distributed. With P = `members - never_picked` (live members ever
+       chosen) and T = `picks_live`:
+         T/P ≈ 1         the thread reached a fresh member nearly every time: the frontier grows faster than
+                         one thread serves it, a throughput fact no weight term reaches;
+         cohort swept    a served cohort re-picked ahead of a never-served tail, an ordering defect. Read it
+                         off `flow_starved_picks_idle`, never off T/P: T/P also counts re-picks that continue
+                         a framed member's program, which the strict comparison requires;
+         picks_max ≈ T   one member holds the thread: a monopolizer the aging term is failing to sink.
+       `picks_live` and `picks_max` are gauges over the members standing now (they fall when a member departs),
+       never differenced. `picks_max` is biased against its own maximum, since the most-dispatched member is
+       nearest to finishing, so compare it across runs only with `picks_departed` and `departures`.
+       `picks_lifetime` is the lifetime counter (flow.c's `g_picks_total`), reset by nothing; it should equal the
+       result's `_switches`, because flow_credit_pick's one caller sits beside engine.c's switch count.
+       flow_wfq_census asserts `picks_live + picks_departed == picks_lifetime` and, separately,
+       `picks_live <= picks_lifetime` (the equality alone admits a negative departed total). */
     int64_t picks_live;       /* GAUGE: dispatches held by the members standing now */
     int64_t picks_max;        /* GAUGE: the most any one of them holds */
     int64_t picks_lifetime;   /* LIFETIME: every dispatch this instance has made, departed members included */
-    /* LIFETIME: the share of the row above that left with the members that departed — the arm that turns
-       `picks_lifetime` from a bare total into a PARTITION, and the one row of the four that is not a reading of
-       the census walk at all (flow.c's `g_picks_departed`, raised at flow_remove on the one line that can still
-       read a departing member's count). It is a LIFETIME counter and may be differenced; the two gauges above
-       may not. The identity `picks_live + picks_departed == picks_lifetime` is asserted at the end of
-       flow_wfq_census over THESE fields rather than over the file-static, so what a reader checks on the
-       document is what the dev build checks in the process. See the banner above for the two readings it
-       supplies and for the one direction the sale implication runs in. */
+    /* LIFETIME: the dispatches departed members took with them (flow.c's `g_picks_departed`, raised at
+       flow_remove), so `picks_lifetime` is a published partition. `departures` partitions into
+       `finished + sold + teardown` (engine_frontier_census asserts it). A finish costs a dispatch (flow_finish is
+       reached only from the switched-in member's FLOW_STEP_DONE arm), so `departures > 0` with
+       `picks_departed == 0` proves nothing finished; the converse does not hold, since a sold member may also
+       have been dispatched. */
     int64_t picks_departed;
-    /* THE FRONTIER'S ARRIVAL AND DEPARTURE PROCESSES — the pair that says whether the ORDER is deciding
-       anything at all, which every other row in this struct presupposes and none of them asks. Each row above
-       describes the SHAPE of an order over the members standing NOW; a comparator is only a scheduler over a
-       set that something CONSUMES, and nothing here says whether this one is being consumed.
-       READ `arrivals / picks_lifetime` — MEMBERS MINTED PER DISPATCH — AND IT DECIDES WHICH OF TWO OPPOSITE
-       DIFFS A `never_picked_at_top` PLATEAU TAKES. Below 1 the frontier drains, the served prefix is most of
-       it, and which member goes first is what flow_weight's terms are for: a plateau is then the ORDER failing
-       to separate members that are actually being reached, and the repair is in the terms. Above 1 it does not
-       drain at any ordering whatever — the served prefix is a vanishing fraction of a set that grows — and a
-       term that separates two members of the untouched remainder has reordered something nothing is
-       consuming. Those are not shades of one state, and this pair is what tells them apart. `never_picked_at_top`
-       one field up says how WIDE the plateau is; this says whether width is the question.
-       IT IS NOT A BOUND AND LICENSES NONE. §NO BOUNDS makes a growing frontier the design working, and
-       nothing here gates, caps, sheds or refuses admission — these are two counters and one identity. What
-       they remove is a reader's ability to attribute a plateau to the comparator without having established
-       that the comparator is what the frontier is waiting on.
-       MEASURED — a 180 s series on ONE fresh instance at artifact c23bfe6a, testing/fixtures/wjp_absent.html,
-       twelve samples at 15 s. `families` 1 and `val_min` = `val_max` = `val_top` = `vt` = 0 at every one, so
-       the reward term was not a common offset on this document but the constant zero; `w_top - w_min` was
-       0.030 or 0.036 at every one, because `svc_min..svc_max` spanned 179..184 and `vis_min..vis_max` spanned
-       5..7 — thirty-four thousand members resolved by six notches and three optimism readings, into four
-       hundredths of a point. `never_picked_at_top` fell 94.6% -> 81.8% with `never_picked_gap` 0.0 throughout,
-       ending at 28072 of 34309 members; `picks_max` was 2, so no member was monopolising and the thread
-       reached a fresh member nearly every time.
-       AND WHY THAT PLATEAU IS NOT BY ITSELF A VERDICT ON THE ORDER, WHICH IS THE READING THIS PAIR EXISTS TO
-       SUPPLY. `members / picks_lifetime` fell 21.0 -> 5.67 monotonically over the same series (12786/609 to
-       34309/6056): the plateau was draining throughout, and the frontier was still holding five to six
-       members for every dispatch the instance had ever made. Left running to 13102 dispatches the same
-       document reported `never_picked_at_top` 43 — 0.1% — at a weight spread of 171. The order separates;
-       what the early samples measure is a frontier still filling.
-       THAT RATIO IS A GAUGE OVER A COUNTER, WHICH IS THE DEFECT THESE TWO ROWS REMOVE. `members` is a gauge,
-       so `members / picks_lifetime` is a HOLDING figure over the whole session: it cannot be differenced into
-       a rate, and read at one instant it is silent about the one fact that decides how the plateau beside it
-       should be read. Read at the SAME `picks_lifetime` it is stable — 14.5, 15.5 and 14.68 across three
-       separate runs at 1299, 1222 and 1294 dispatches — so the entire variance is in WHEN the sample was
-       taken. `arrivals / picks_lifetime` is counter over counter and may be differenced, which is what turns
-       that into a rate over a window; and `arrivals` is not `members`, because a gauge cannot say whether a
-       frontier that is not growing is one nothing arrives at or one whose departures match its arrivals.
-       THE KIND IS IN THIS COMMENT BECAUSE IT IS NOT IN THE NAMES: both are LIFETIME COUNTERS, raised once per
-       event and lowered by nothing, so both may be DIFFERENCED across two samples — which is what turns the
-       ratio above into a RATE over a window rather than an average over a session, and is the one thing the
-       gauges around them cannot give. `members` beside them is a gauge and is neither.
-       AND THEY CARRY THEIR OWN CONSERVATION IDENTITY, WHICH IS WHAT MAKES THEM COUNTERS RATHER THAN NUMBERS:
-       `arrivals - departures == members`, asserted at the end of flow_wfq_census where all three are in one
-       hand, and checkable from outside this process on the published document. Exact, because each has exactly
-       one writer — flow.c's flow_new appends the only member a registry ever gains and flow_remove's
-       swap-remove is the only decrement of the member count that is not the registry coming up.
-       `rank_changes` IS NOT THIS COUNT AND MUST NOT BE READ AS THOUGH IT WERE, which is the reason these
-       exist. Exactly TWO of frontier_rank_changed's callers change the membership; the others are the clock
-       write, three fitness observations, the completed-unit credit and three host-owed transitions. THE LIST
-       IS STATED AND THE COUNT IS NOT, because this sentence carried one and it was wrong: it read NINE
-       callers and SEVEN non-membership ones while the tree held ten and eight, flow_credit_visit being the
-       one both figures missed. On a page that emits nothing, fetches nothing and never moves the clock most
-       of those never fire, so `rank_changes` stood exactly SIX above `members` at all twelve samples of the
-       series above (34315 against 34309 at the last) — correct to four figures on the run a reader is most
-       likely to take it from, and a mixture of every one of those populations on any run that fetches or
-       emits anything. solver/flow.c's frontier_rank_changed carries the list; a reader who wants today's set
-       greps that call rather than counting from here. */
+    /* The frontier's arrival and departure processes: lifetime counters, raised once per event, so they may be
+       differenced. `arrivals / picks_lifetime`, members minted per dispatch, decides what a
+       `never_picked_at_top` plateau means: below 1 the frontier drains and a plateau is the order failing to
+       separate reachable members; above 1 no ordering drains it, and separating two untouched members reorders
+       nothing anyone consumes. `members / picks_lifetime` is a gauge over a counter and is not a rate.
+       It is a report and licenses no bound. flow_wfq_census asserts `arrivals - departures == members`; each has
+       one writer (flow_new's append, flow_remove's swap-remove). `rank_changes` is not this count: most
+       frontier_rank_changed callers are not membership changes (grep that call for today's list). */
     int64_t arrivals;
     int64_t departures;
-    /* HOW MANY FINDINGS WERE OFFERED TO THE ORDER, AND HOW THAT TOTAL SPLIT — the partition `val_top`,
-       `top_forgiven` and `self_emit` each presuppose and none of them can make. All three of those read ZERO
-       for two states that take OPPOSITE work, and this triple is what tells them apart:
-         `credit_calls == 0`                           — no detector ever fired. A REACH question: the run
-                                                          reached no fetch, no XHR, no sink. Nothing about the
-                                                          order is implicated and no weight change can help.
-         `credit_dropped > 0` with `credit_paid == 0`   — findings were made where there was no flow to pay.
-                                                          Every one of them was detected on HOST TIME, which
-                                                          for the root document's markup is correct and
-                                                          expected (flow.c's banner at `g_credit_calls` says
-                                                          why): the `<head>` is what a plain parse gives and no
-                                                          arm discovered it. The reward term is then the
-                                                          CONSTANT ZERO rather than a common offset, and it
-                                                          costs nothing that it is, because there is no member
-                                                          it would have had to be ranked ahead of.
-         `credit_paid > 0` with `val_top` at zero       — impossible: the ledger write and the paid count are
-                                                          one statement. It is the two-writers-apart state
-                                                          flow_wfq_census's `f->val <= acct_family_val(f)`
-                                                          already fires on.
-       WHY THE TRIPLE IS NOT DERIVABLE FROM THE @H SURFACE. The three rows of solver/endpoint.h's surface
-       census partition the ENDPOINT RECORDS and say nothing about the ORDER: a record minted pre-program
-       is one whose address the page's code did not compose, and whether the flow that minted it existed at
-       all is a different question about a different component. A reader holding `epEmitted: 43` beside a
-       reward band pinned at zero has been measured concluding that the ledger was SPENT — the flattering
-       reading, and the opposite of what these rows say happened.
-       LIFETIME COUNTERS, all three, which is the kind and decides the arithmetic: none ever falls, nothing
-       resets them, so each may be DIFFERENCED across two censuses. They are not gauges and are not high-water
-       marks. Their identity is `credit_calls == credit_paid + credit_dropped`, asserted at the end of
-       flow_wfq_census where all three are in one hand and checkable from OUTSIDE this process on the published
-       document.
-       A REPORT AND NEVER A BOUND (§NO BOUNDS): no term of flow_weight reads one and no arm branches on any. */
+    /* Findings offered to the order and how they split. Lifetime counters, never reset, so they may be
+       differenced; flow_wfq_census asserts `credit_calls == credit_paid + credit_dropped`:
+         `credit_calls == 0`                          no detector fired: a reach question, not an ordering one;
+         `credit_dropped > 0`, `credit_paid == 0`     every finding was detected on host time, with no flow to
+                                                      pay (expected for the root document's markup; flow.c's
+                                                      `g_credit_calls` says why), so the reward is zero;
+         `credit_paid > 0` with `val_top` at zero     impossible: flow_wfq_census's `f->val <=
+                                                      acct_family_val(f)` fires on it.
+       solver/endpoint.h's surface census partitions endpoint records and cannot answer this. A report, never a
+       bound: no weight term reads them. */
     int64_t credit_calls;
     int64_t credit_paid;
     int64_t credit_dropped;
     int64_t svc_max;   /* the largest service notch in the frontier — who is actually consuming the thread */
-    /* …AND THE OTHER END OF IT, WHICH IS THE ONLY NUMBER IN THIS STRUCT THAT CAN ANSWER "IS THE AGING TERM
-       MEASURING THIS FLOW OR THE WHOLE FRONTIER". `svc_max` alone reads identically for a single monopolizer on
-       an otherwise-idle frontier and for a frontier every member of which has burned the same thread time, and
-       those take opposite actions: the first is the case the aging term was priced for, the second is one where
-       every member is being charged for work the frontier as a whole did. The FLOOR is what separates them, and
-       `svc_max - svc_min` is the SPREAD of service the ranking is actually made of. This clause used to add
-       that the floor "is also the virtual time a from-baseline flow now arrives at", and that is retired: the
-       arrival copies NO silence at all (flow.c's flow_arrive_at_virtual_time), because frontier_vt() is the
-       serving item's whole queue coordinate with its aging already in it and copying the aging again would
-       charge a newcomer twice for thread time it never consumed. A from-baseline family is born at zero
-       service, so it enters this spread at the FLOOR by construction rather than at whatever the incumbent
-       had burned.
-       THE THREE WEIGHTS BELOW CANNOT ANSWER IT, which is a correction to what this file claimed. It said of
-       `w_top`/`w_min`/`cand_w_max` that "these three numbers are what will show that" — and they cannot, by the
-       arithmetic of the function they are readings of: raise EVERY member's service by the same amount and all
-       three fall by exactly `delta * FLOW_SERVICE_US * FLOW_AGE_RATE`, so every gap among them is unchanged and
-       the triple is blind to precisely the quantity in question. A claim about a measurement that the
-       measurement cannot make is the stale-DFAIL shape wearing a number, so it is replaced by the row that
-       makes it. */
+    /* The floor of the own-silence notch. `svc_max` alone reads the same for one monopolizer on an idle frontier
+       and for a frontier whose members all burned alike; `svc_max - svc_min` is the spread the ranking is made
+       of. A from-baseline family is born at zero service (flow_arrive_at_virtual_time copies no silence), so it
+       enters at the floor. The weight extrema cannot answer this: a uniform rise in service moves `w_top`,
+       `w_min` and `cand_w_max` by the same amount. */
     int64_t svc_min;
-    /* THE OPTIMISM TERM'S OWN COORDINATE, WHICH NO ROW ABOVE CAN STAND IN FOR — completed units of work, the
-       quantity `visits` holds. Every other row here is thread time at one scope or another, and while the bonus
-       was ALSO thread time the census could not distinguish "this frontier is being served fairly" from "no
-       member of this frontier has ever finished anything", which are the two states that produce a busy engine
-       with an empty API surface. `vis_max == 0` on a frontier of thousands is that second state, exactly, and
-       it is the reading that names it: not one member has reached the end of a program, so not one queued job
-       can have run (engine.c's job arms are all under `frame == NULL`). The pair with `vis_min` is the SPREAD,
-       which is what says whether the order is concentrating on one member or handing turns round. */
+    /* The optimism term's coordinate (completed units, `visits`), which no thread-time row can stand in for.
+       `vis_max == 0` on a large frontier means no member has finished a program, so no queued job can have run
+       (engine.c's job arms are all under `frame == NULL`); the pair's spread says whether turns rotate. */
     int64_t vis_min;
     int64_t vis_max;
-    /* THE SERVICE OF THE WHOLE FORK FAMILY, IN THE SAME NOTCHES — and it DECIDES THE ORDER now, which is the
-       correction this row carries. It was added as a diagnostic beside the ranking, to answer whether the
-       reward SCALE was what a run was stuck on: the reward was then copied at every fork while the aging meant
-       to cancel it was charged to whichever arm held the thread, so a family with N live arms presented its
-       reward N times and paid for it N times over. The reading came back 8910 against an `svc_max` of 1124 — a
-       factor of 7.93 — and flow_weight's aging term now reads this quantity instead (flow.c's FlowAcct
-       `fam_us`). THE OTHER HALF OF THAT PRESENTATION IS GONE TOO: the reward is held on the same node
-       (FlowAcct's `val`), so a family presents it ONCE however many arms it wears, and the two terms are
-       finally one account read two ways rather than a credit inflated by N against a debit that is not.
-       SO THE PAIR IS READ THE OTHER WAY ROUND FROM HERE ON. `svc_fam_max` is the AGING's own denominator and
-       `svc_max` is one member's share of it; their ratio is the fork factor of the widest family in the
-       frontier, which is a fact about the DOCUMENT's branching and no longer a defect in the ordering. What
-       would be a defect is `svc_fam_max` sitting far below `svc_max`, which cannot happen while every arm's
-       charge lands on the family — and flow_age_running asserts the invariant that makes it impossible. */
+    /* The family half of the aging in the same notches (flow.c's FlowAcct `fam_us`), which flow_weight reads.
+       The reward lives on the same node, so a family presents it once however many arms it has. The ratio to
+       `svc_max` is the widest family's fork factor, a fact about the document's branching;
+       `svc_fam_max` far below `svc_max` cannot happen while every arm's charge lands on the family, which
+       flow_age_running asserts. */
     int64_t svc_fam_max;
-    /* …AND ITS FLOOR, WHICH IS THE HALF `svc_min` COULD NOT SUPPLY AND WHICH CARRIES 93% OF THE TERM. The row
-       above says `svc_min` is "the only number in this struct that can answer 'is the aging term measuring
-       this flow or the whole frontier'", and that was true of the term the aging USED to read; the term now
-       reads `(cpu + fam_us)` and `svc_min` is the floor of the FIRST summand only. So the answer it gives is
-       the answer for a fraction of the quantity: measured on the smoke fixture's steady state, `svc_fam_max`
-       66580 against `svc_max` 4790 — the family half is 93.3% of the aging, and nothing here reported either
-       end of it. A pair of maxima cannot say whether a term ORDERS anything, only how large it is, and those
-       are the two readings that took opposite actions on that run: an aging term of 856 points on a frontier
-       whose entire weight spread was 0.020.
-       WHAT A UNIFORM FAMILY MEANS IS NOT A DEFECT AND MUST NOT BE READ AS ONE. A frontier that is ONE family —
-       which a real page's is, every flow descending from the boot flow — reads the identical `fam_us` at every
-       member by construction (flow_fork_inherit joins the parent's account), so `svc_fam_max == svc_fam_min` is
-       that term contributing a COMMON OFFSET and ordering nothing, which is exactly what flow_silence_notch's
-       own comment says the own half exists to cover. The reading is worth having precisely because it is the
-       one state the maxima cannot be distinguished from: a genuine multi-family frontier in which one chain is
-       monopolising presents the SAME `svc_fam_max` and a floor far below it. */
+    /* The family half's floor. On a one-family frontier (a real page: every flow descends from boot) every
+       member reads one `fam_us` (flow_fork_inherit joins the parent's account), so `svc_fam_max == svc_fam_min`
+       is a common offset that orders nothing. A multi-family frontier with one chain monopolising shows the
+       same maximum with a floor far below it. */
     int64_t svc_fam_min;
-    /* HOW MANY FAMILIES THERE ARE, WHICH IS THE HALF THE PAIR ABOVE CANNOT SUPPLY AND WAS BEING READ AS IF IT
-       COULD. The paragraph above says `svc_fam_max == svc_fam_min` is "that term contributing a COMMON OFFSET
-       and ordering nothing" — and equality is produced by TWO states that take opposite actions, with nothing
-       in a pair of extrema to separate them. On a frontier that is ONE family the equality is an IDENTITY OF
-       THE STRUCTURE: every member reads one node's `fam_us` through one pointer (flow_fork_inherit joins the
-       parent's account rather than founding a family), so it holds whatever the run does, and the family half
-       can never order that document's frontier at all. On a frontier of SEVERAL families the same equality is
-       a contingent observation about one instant, which the next charge moves — a term that IS ordering and
-       happens to be level. "This term is structurally an offset" and "this term is momentarily level" are
-       different findings and the first of them is the one that says stop looking, so reading one number for
-       both is how a real ordering defect gets closed as a known constant.
-       IT READS EQUAL AT A GENUINE SPLIT TOO, which is why the ambiguity is the ordinary case rather than a
-       corner — though no longer for the reason this paragraph used to give. It said a from-baseline flow
-       "ARRIVES at the running family's service", and the arrival copies no service at all any more: a new
-       family is born at ZERO on both halves, so it reads equal to every other family that has not been charged
-       since its own last emission, which on a frontier whose leader keeps emitting is most of them. They
-       diverge only once one is charged — flow_age_running bills the running flow's family alone,
-       flow_credit_emit zeroes its own alone. A census taken between the split and the first charge is a
-       multi-family frontier reading as a single-family one, exactly.
-       COUNTED BY IDENTITY, NEVER BY VALUE: two families standing at one service are two families, so the count
-       is of distinct family ROOTS reached through the members (flow.c marks each root as the one scan passes
-       it). Read beside the pair, the three numbers say which of the two states a run is in: `families: 1` is
-       the identity and the term is structurally an offset; `families > 1` with the extrema equal is the term
-       level for now; `families > 1` with a floor far below the max is the term ordering, which is the state
-       the family charge was added for. */
+    /* How many families: the count of distinct family roots reached through the members (flow.c marks each
+       root as the scan passes it), by identity, never by value. With the pair above: `families: 1` means the
+       family half is structurally an offset; `families > 1` with equal extrema means level for now (a new
+       family is born at zero on both halves and diverges at its first charge); `families > 1` with a floor far
+       below the maximum means the family term is ordering. */
     long families;
-    /* THE MEMBERS STANDING AWAY FROM THEIR FAMILY'S EPOCH BASE, COUNTED TWO WAYS — two GAUGES and they say so
-       in their keys, because the pair IS the conservation identity and a reader who cannot tell which is
-       maintained and which is walked cannot tell what a difference between them means.
-       WHAT THE POPULATION IS. flow_own_silence is `cpu_gen == family->emit_gen ? cpu : 0`, so a member is at
-       its family's base exactly when that reads zero, and flow_credit_emit sends a whole family there by
-       moving `emit_gen` with NO PER-MEMBER WRITE. An index over flow_index_key is therefore rebuilt only for
-       the members standing AWAY, and these say how many.
-       `epochAwayLive` IS THE MAINTAINED SIDE — four incremental statements at four sites, summed over the
-       frontier's distinct families at the census's own family door. `epochAwayWalk` IS THE WALKED SIDE — this
-       scan asking the accessor of every member. Two maintainers, one instant, so their equality is a CHECK
-       and not a sum compared with its own summands; it is asserted at the end of flow_wfq_census and both are
-       published so it is checkable on the emitted document from outside the process.
-       READ THEM AS A SHAPE AND NEVER AS THE COST, which is the one way this row will be misread. A census
-       lands at an arbitrary point between two emissions, so a gauge of this population reads near zero just
-       after one and at its peak just before — a single sample is a LOTTERY, and differencing two of them
-       measures where the samples fell rather than anything about the design. The quantity that decides
-       whether an index here is a cost or a bar is `epochRebuildLifetime`, which is this gauge summed AT EACH
-       EMISSION, and it is a lifetime counter for exactly that reason. `epochAwayLive / members` is worth
-       reading as how much of the frontier is off its base right now, and nothing else. */
+    /* Members standing away from their family's epoch base, counted two ways. flow_own_silence is
+       `cpu_gen == family->emit_gen ? cpu : 0`, and flow_credit_emit sends a whole family to its base by moving
+       `emit_gen`, so an index over flow_index_key is rebuilt only for the members standing away.
+       `epoch_away_live` is maintained incrementally at four sites, summed over distinct families;
+       `epoch_away_walk` is this scan asking every member. flow_wfq_census asserts they are equal; both are
+       published. Gauges: a sample lands anywhere between two emissions, so read one as how much of the
+       frontier is off its base now. The cost question is `epochRebuildLifetime`, a lifetime counter. */
     long epoch_away_live;
     long epoch_away_walk;
 
-    /* HOW MANY SUB-QUANTUM RESIDUES THE FRONTIER OCCUPIES — the count of DISTINCT values of
-       flow_silence_phase over the members, and the one number that says whether asking the order has to walk
-       it. The aging notch is `(own + fam) / S`, which decomposes EXACTLY into the member's own notch, the
-       family's, and a CARRY BIT whose threshold is the family's residue and is therefore common (flow.c). So
-       between two frontier generations nothing in any member's weight moves except that bit, and the members
-       that flip it together are exactly the ones sharing a phase.
-       `1` IS REACHABLE BY CONSTRUCTION AND HAS NEVER BEEN OBSERVED HERE EXCEPT DEGENERATELY. This sentence
-       read "`1` IS THE STRONGEST READING AND IT IS NOT A DEGENERATE ONE" and is REWRITTEN rather than deleted,
-       because the mechanism under it is CORRECT and a reader who re-derives that mechanism will re-introduce
-       the headline with it. The mechanism, unchanged: every member then crosses at the same instant, the bit
-       is a COMMON OFFSET, no two members reorder between generation bumps at all, and a single cached maximum
-       is exact — a whole class of index cheaper than the sweep a larger reading needs. A fork COPIES its
-       parent's `cpu` and window mark verbatim (flow_fork_inherit) and an emission sends every member of a
-       family to a phase of zero in one statement (flow_credit_emit), so the state is REACHABLE rather than
-       lucky; what refills it is a member being CHARGED, and only the running one ever is.
-       WHAT THE HEADLINE ADDED TO THAT MECHANISM WAS A CLAIM ABOUT THIS TREE, AND MEASUREMENT CONTRADICTS IT.
-       Over every archived census on this machine's disk at the time of writing — 742 samples in 139 files,
-       394 of them carrying this row on a live frontier, one build in flight excluded because its writer had
-       not exited — `sil_phases == 1` occurs 48 times and `members == 1` in ALL FORTY-EIGHT. Zero
-       counterexamples, and none either in the 166-sample corpus left after the duplicate run-log twins and
-       the build transcripts that contain them are removed. Every `1` anybody has ever seen here is the reading
-       the paragraph below already names as the frontier being EMPTY OF THE QUESTION.
-       THE CORPUS IS SCRATCH AND IS NOT IN THIS REPOSITORY, so what is handed over is the DERIVATION and the
-       counterexample count is the whole of the claim — the third number below is the one that must stay zero:
-         grep -ho '@WFQ {.*}' <logs> | python3 -c 'import sys,json
-         d=[json.loads(l[5:]) for l in sys.stdin if "silPhases" in l]
-         print(len(d), sum(1 for x in d if x["silPhases"]==1),
-               sum(1 for x in d if x["silPhases"]==1 and x["members"]>1))'
-       WHAT A REAL FRONTIER READS INSTEAD — ON THE HOST THOSE THREE RUNS WERE TAKEN ON, WHICH THIS PASSAGE DID
-       NOT SAY AND WHICH IS THE WHOLE OF ITS SCOPE. The readings are `3432/6243, 3263/5888 and 3121/5882 —
-       0.53 to 0.55, ABOUT EVERY OTHER MEMBER ITS OWN GROUP`, climbing MONOTONICALLY from 0.16-0.19 at four
-       hundred to those terminal figures at six thousand, with the collapsing emission firing on each run
-       (`top_forgiven` 17) and no sample ever catching the frontier at one group. All of that is kept in its
-       own words because it is true of what it measured and a reader who re-derives it from the same corpus
-       will write it again. WHAT IT LEFT OUT IS THAT ALL THREE CARRY `isCpu: true` — they are NATIVE-host
-       drives, whose slice is thread-CPU, and the conclusion drawn from them ("the reading an index designer
-       actually gets is not 1 and is not small: it is half the frontier and rising") was stated about live
-       pages in general while being about one host.
-       THE VEHICLE READS SOMETHING ELSE ENTIRELY, AND THE VEHICLE IS WHAT SHIPS. MEASURED at artifact
-       `9c2c239d` on codesandbox.io, one fresh browser, 90 s, 58 censuses carrying this row: `sil_phases` is
-       **120** at census 9 and **120** at census 60 while `members` goes 2757 -> 13389 — FLAT across a 4.9x
-       frontier growth, ratio 0.009 and FALLING, which is the opposite direction. Against `picksLifetime`
-       5449 it is the reading the paragraph below already names: the residues are INHERITED rather than
-       earned. That 120 is `FLOW_SERVICE_US / 100` and that a non-isolated `performance.now()` is coarsened to
-       100us were an INFERENCE about the cause and were recorded as one; THE INFERENCE IS NOW CONFIRMED AS THE
-       MECHANISM AND THE CONSTANT IS SPENT, which is the one way this figure could rot and the one nobody had
-       looked for. `flow_silence_phase` is `flow_own_silence(f) % FLOW_SERVICE_US` and `flow_age_running` bills
-       in the quantum clock's own currency, so the count of distinct residues is CAPPED at that span divided by
-       the clock's granularity however large the frontier grows — 120 is that ceiling for a 100us clock and
-       nothing else. MEASURED on a later artifact over SEVEN fresh-browser runs of two documents: the gcd of
-       `instanceUs`, `loopUs`, `betweenSlicesUs`, `sliceUs`, `stepUs` and `schedUs` is exactly 5 in all seven
-       and none is a multiple of 100, so the ceiling is `FLOW_SERVICE_US / 5` and codesandbox read 2056-2322
-       rather than 120 — 97% of the new ceiling, with 71% more picks buying 13% more phases, which is
-       saturation and not a frontier fact. Attributing the 5us to the landed COOP flip is an INFERENCE and is
-       recorded as one, exactly as the 100us was. SO THE CEILING IS READ OFF THE RUN AND NEVER COPIED FROM
-       HERE: take that gcd, divide `FLOW_SERVICE_US` by it, and compare — near the ceiling the figure is about
-       the CLOCK and may price nothing, far below it the figure is about the FRONTIER.
-       AND THE SENTENCE THAT DECLINED TO GENERALISE THIS IS REFUTED, WHICH MATTERS MORE THAN EITHER NUMBER
-       BECAUSE IT WAS THE WHOLE OF THE REASON. It read: *A second vehicle document did not settle it —
-       gitlab.com/explore reaches four members on the vehicle where the native corpus reaches 6243 on the same
-       page — so what is established is ONE document's series and not a host law.* It is REWRITTEN RATHER THAN
-       DELETED because a reader who re-derives the caution from a four-member vehicle run will write it again.
-       The same seven runs read gitlab.com/explore at 5124, 6820, 6843 and 7341 members on the VEHICLE, and
-       THREE OF THE FOUR EXCEED the native corpus's 6243 — so the vehicle/native comparison this passage calls
-       unavailable IS AVAILABLE, and gitlab's `sil_phases` of 891-1837 against the same 2400 ceiling is 77% of
-       it with phases tracking picks linearly. That is the first vehicle reading here that is about the
-       FRONTIER rather than about the clock. WHAT IS NOT ESTABLISHED, AND IS SAID SO RATHER THAN LEFT TO BE
-       INFERRED: no native reading was taken at that later artifact, so the comparison is against the figures
-       recorded above and those are a DIFFERENT artifact; and no run was observed pinned AT 2400, the ceiling
-       being arithmetic plus the saturation evidence rather than an observed wall.
-       SO NEITHER FIGURE MAY PRICE AN INDEX — WHICH HOLDS FOR THE PINNED DOCUMENT AND IS RELAXED FOR THE ONE
-       THAT IS NOT PINNED — AND THE DESIGN IS CHOSEN SO THAT NEITHER HAS TO. A structure
-       that SWEEPS the distinct phases costs `sil_phases` per query and is therefore a 100x win on one host
-       and a 2x win on the other — a design whose value is a fact about a clock. A structure over the FIXED
-       phase domain `[0, FLOW_SERVICE_US)` costs a logarithm of that domain whatever `sil_phases` reads, and
-       the two contiguous ranges the carry splits it into are `[0, S-R)` and `[S-R, S)` however many members
-       stand in them. Prefer the second and the question stops being load-bearing.
-       RETIREMENT (this correction) — MET BY A CONSTRUCTION, AND REWRITTEN RATHER THAN DELETED BECAUSE A
-       READER WHO MEETS TWO LIVE FIGURES IN DIFFERENT DENOMINATIONS RE-DERIVES THE DEMAND. It read: *it goes
-       when a census row in this tree carries the host's slice measure beside it, so a live-page figure cannot
-       be quoted without saying which clock it was denominated in.* `testing/live-run.js` carries
-       `sliceMeasure`, `sliceIsCpu` and `sliceMs`, read off the `_quantum` this engine composes and bridge.js
-       relays, with ABSENT and MALFORMED kept apart and no default — the default a reader reaches for being
-       `isCpu: false`, which is wrong in both directions. THE DEFECT IT CLOSED IS THE ONE THIS PASSAGE CAUSED:
-       the producer and the relay both predated the reader by a long way, so the field that makes these two
-       figures comparable was written with nothing asking for it, on the one quantity whose absence is why the
-       two readings above cannot be held beside each other at all.
-       RETIREMENT: this record goes when the residue CEILING is published as a row beside `sil_phases` rather
-       than derived by a reader from six accumulators' gcd, because a figure near its own ceiling is then a
-       comparison the census makes instead of one a reader must know to make.
-       RETIREMENT: this record goes when a census in this tree reports `sil_phases == 1` with `members > 1` —
-       the one observation that would make the retired headline a statement about this engine rather than
-       about its arithmetic.
-       READ IT AGAINST `members`, NEVER ALONE: `sil_phases` at 1 with `members` at one is the frontier being
-       empty of the question, and at tens of thousands it is the finding. Read it against `picksLifetime` too
-       — a member that has never held the thread carries the phase it was forked with, so a reading far below
-       the dispatch count says the residues are inherited rather than earned.
-       AND THAT ORDER IS BACKWARDS FOR STABILITY, WHICH THE SEVEN RUNS SETTLED AND WHICH IS A PROPERTY OF THE
-       DENOMINATORS RATHER THAN OF ANY DOCUMENT. Over FOUR runs of ONE document in four fresh browsers,
-       `sil_phases / picksLifetime` held inside 0.424-0.538 while `sil_phases / members` swung 0.131-0.359 —
-       more than a factor of two on one page. Only a CHARGED member mints a new residue, so `picksLifetime` is
-       the population that PRODUCES the numerator while `members` is decided by how far a wall-denominated run
-       happened to get before its budget elapsed: one denominator is the numerator's cause and the other is a
-       lottery. So the SECONDARY reading above is the one to quote and the PRIMARY is the one to quote with its
-       run count, which inverts the emphasis these two sentences were written with.
-       A FALLING `picksLifetime` QUOTIENT IS A DIFFERENT FINDING FROM A SWINGING `members` ONE, and conflating
-       them is how the ceiling above gets mistaken for instability: where the picks quotient falls MONOTONICALLY
-       as picks rise, the residue count is SATURATING at the clock ceiling, which is a fact about the clock and
-       not about the frontier. Codesandbox fell 0.331 -> 0.218 that way; gitlab did not. */
+    /* How many sub-quantum residues the frontier occupies: distinct values of flow_silence_phase. The aging notch
+       `(own + fam) / S` decomposes exactly into the member's notch, the family's, and a carry bit whose
+       threshold (the family's residue) is common, so between two frontier generations only that bit moves, and
+       members sharing a phase flip it together. At 1 the bit is a common offset and one cached maximum is
+       exact; that state is reachable (a fork copies `cpu` and `cpu_gen`, an emission zeroes a family's phases)
+       but has been observed only with `members == 1`.
+       The count is capped by the clock: phases are residues of `FLOW_SERVICE_US` in the quantum clock's
+       currency, so a coarse clock bounds them at `FLOW_SERVICE_US` divided by its granularity. Read that
+       ceiling off the run (the gcd of its microsecond accumulators) and never copy it from here: near it the
+       figure is about the clock. A structure over the fixed phase domain `[0, FLOW_SERVICE_US)`, whose carry
+       splits it into `[0, S-R)` and `[S-R, S)`, costs a logarithm whatever this reads, so prefer it.
+       Read it against `picks_lifetime` first (only a charged member mints a residue) and `members` second; a
+       quotient that falls monotonically as picks rise is saturation at the clock ceiling. */
+    /* Named residual. Not covered: the residue ceiling is derived by the reader, not published. Next diff
+       builds: the ceiling as a census row beside `sil_phases`. Absence shows as: a figure near the clock
+       ceiling quoted as a statement about the frontier. */
     long sil_phases;
-    /* …AND HOW MANY MEMBERS ARE STANDING ON THE FAR SIDE OF THAT BOUNDARY RIGHT NOW. It is a GAUGE and may
-       fall between two samples — the threshold sweeps downward as the family burns and RESETS every member at
-       once when the family's residue wraps — so it may not be differenced, and it is published beside
-       `sil_phases` rather than instead of it because the two answer different halves of one question: how many
-       groups there are, and where the boundary between them currently sits.
-       0 OR `members` IS THE BIT CONTRIBUTING NOTHING AT THAT INSTANT, which is an observation about one sample
-       and never the structural claim `sil_phases: 1` makes — the same two-states-one-number distinction
-       `families` above draws against `svc_fam_max == svc_fam_min`, one scope down. */
+    /* How many members stand on the far side of the carry boundary now. A gauge (the threshold sweeps as the
+       family burns and resets when its residue wraps), never differenced. 0 or `members` means the bit
+       contributes nothing at this instant, which is an observation about one sample, not `sil_phases: 1`'s
+       structural claim. */
     long sil_carry;
 
-    /* THE THIRD ACCOUNTING SCOPE — A FORK SUBTREE — AND THE ELEVEN ROWS THAT MAKE "THE TWO SIDES OF THIS
-     * BRANCH RECEIVED X AND Y" A NUMBER INSTEAD OF AN ARGUMENT.
-     *
-     * WHY NEITHER SCOPE ABOVE COULD ANSWER IT. `svc_max`/`svc_min` are the MEMBER's silence and
-     * `svc_fam_max`/`svc_fam_min` are the FAMILY ROOT's, with nothing between them — and the row above says
-     * why the second pair is usually mute: on a page whose flows all descend from boot, `families` is 1 and
-     * the family half is a common offset that orders nothing. So WITHIN a family the branch is invisible and
-     * BETWEEN families there is only one family, which is exactly the pair of blind spots a subtree sits in.
-     * A BUCKET IS A TOP-LEVEL ARM: the node forked directly off a family root, reached from every member of
-     * its subtree in one indirection (flow.c's FlowAcct `branch`). Every branch a ROOT flow takes opens one,
-     * which on a real page is every branch the boot flow itself takes. A branch taken DEEPER is summed into
-     * its top-level arm and its RECEIPT is not separated — the residual at flow.c's FlowAcct `up` states what
-     * is still missing and why a per-node bucket is not the way to get it. WHICH deep fork is minting is a
-     * different question and the `br_fan_*` rows below answer it.
-     *
-     * THE KINDS ARE IN THE NAMES BECAUSE THEY DECIDE WHAT MAY BE DONE WITH THE NUMBERS. `branches`,
-     * `br_live_*` and `br_depth_max` are GAUGES over the buckets standing NOW and may FALL between samples, so
-     * none of them may be differenced. `br_born_*`, `br_us_*`, `br_retired_us` and `charged_us` are LIFETIME
-     * counters, never forgiven and never reset — which is the property that separates them from every `svc*`
-     * row above, all of which are silence SINCE an account's last emission and are sent to zero for a whole
-     * family in one statement. An arm that burned an hour and then emitted did not RECEIVE less, and receipt
-     * is the question these ask.
-     * AND THE KIND IS THE FIELD'S, NOT THE EXTREMUM'S, WHICH IS A DISTINCTION THE LABEL ALONE CANNOT CARRY.
-     * `sub_born` and `sub_us` are per-bucket LIFETIME counters and neither is ever forgiven. A MAXIMUM or a
-     * MINIMUM of one of them across the buckets a census reached is a different quantity: the set of buckets
-     * moves, so `br_born_max` FALLS the moment the bucket that owned it departs whole, and `br_born_min`
-     * falls the moment a fresher arm opens. So the mint pair is read as a RATIO at one instant — against
-     * `members`, or as the term range `1/br_born_min - 1/br_born_max` — and is DIFFERENCED across samples by
-     * nobody, exactly like the live pair beside it. The only rows here a reader may difference are the SUMS,
-     * `br_us_sum`, `br_retired_us` and `charged_us`, whose population is every microsecond ever charged
-     * rather than whichever buckets happened to be standing. MICROSECONDS, not notches: the seven `svc*` rows are quotients whose names do
-     * not say so, and this file records the relay that cost — a notch count read as a dispatch count that
-     * exists nowhere in the program. There is no quotient here to be mis-read.
-     *
-     * HOW TO READ THEM, SO IT IS NOT RE-DERIVED AT EVERY SITE. `br_live_max / members` is how concentrated the
-     * FRONTIER is in one side of one top-level branch. `br_us_max / charged_us` is how concentrated the THREAD
-     * is, and both totals are published rather than only the extrema so the remainder of each is readable.
-     * AND THIS SAID `THOSE TWO TOGETHER ARE THE X AND THE Y`, WHICH BOUND TWO EXTREMA OVER TWO POPULATIONS TO
-     * ONE ARM AND WAS THEREFORE A FALSE CLAIM ON EVERY RUN WITH MORE THAN TWO BUCKETS. A maximum is a fact
-     * about whichever bucket owns it, and the bucket owning the live maximum need not be the bucket owning the
-     * burn maximum: build.mjs measured a run in which the burn maximum was FROZEN across forty-nine censuses
-     * while the live maximum climbed from four to seventy-seven, the frozen one being a DEPARTED family root
-     * that holds no live member at all and keeps boot's whole burn. Read as one arm's pair, the crowd's
-     * receipt was being reported as boot's. THE COINCIDENT TRIPLE BELOW IS WHAT MAKES THE SENTENCE TRUE: it
-     * states the SAME bucket's membership, mint and receipt, so X is that bucket and Y is the remainder of
-     * each published total, and a reader need no longer hope the extrema name one arm.
-     * `br_born_max` beside `br_live_max` separates a bucket that MINTS unboundedly from one that merely HOLDS
-     * a lot at this instant, and those two take opposite diffs. THE MINT PAIR IS ALSO THE ORDER'S OWN RANGE
-     * AT THIS SCOPE and the live pair is not: flow_branch_bonus returns `1.0 / sub_born`, so
-     * `1/br_born_min - 1/br_born_max` is how many points of the one it can lift a member the branch term
-     * actually spans across this frontier, and wfq_accounted_spread reads exactly that. Both ends are folded
-     * over buckets holding at least one LIVE member, which is the same population `br_live_*` take and is
-     * asserted against them in flow_wfq_census — a weight is only ever read for a member that is standing,
-     * so extrema over an empty bucket describe a range nobody spans. That is why the mint pair is guarded
-     * where the `br_us_*` pair deliberately is not: receipt survives a departed subtree and membership does
-     * not. `br_live_min` is 0 or 1 whenever the family
-     * ROOT's own bucket is still standing, because a root's bucket holds exactly one member by construction
-     * (every arm it forks opens a bucket of its own) — so the informative floor is over the ARMS and the root
-     * is the reason the minimum reads low; do not take `br_live_min` for "the other side of the branch".
-     *
-     * TWO CONSERVATION IDENTITIES DEFINE THEM AND BOTH ARE ASSERTED IN flow_wfq_census WHERE EVERY TERM IS IN
-     * ONE HAND. `br_live_sum == members`: the buckets PARTITION the frontier, so a sum below is a member
-     * counted nowhere and a sum above is one counted twice. `br_us_sum + br_retired_us == charged_us`: every
-     * microsecond the scheduler charges lands on exactly one bucket, and a bucket freed once its subtree is
-     * wholly departed folds its total into the retired term rather than losing it. Every term of both is
-     * published, so both are checkable from OUTSIDE the process on the emitted document — which is the only
-     * property of a per-bucket number a reader can check without re-deriving the mechanism behind it.
-     *
-     * WHERE THE INSTRUMENT RUNS AND HOW OFTEN, WHICH IS PART OF WHAT IT REPORTS. Two int64 adds per CHARGE
-     * (flow_age_running, once per slice), about four stores per FORK, one increment per DEPARTURE, three adds
-     * per node FREE, one comparison per trip of acct_compress_dead's existing loop, and inside the census's
-     * EXISTING member walk one pointer load plus a generation compare per member and about eight compares per
-     * distinct bucket. The two RETAINED-BUCKET triples add, to that same walk, one pointer store apiece inside
-     * a condition the walk already evaluates, and six loads once per census after it ends — no charge-time
-     * work, no fork-time work and no walk of any ancestry. The FAN rows below add, to that same member walk and to nothing else, one further
-     * pointer load, one generation compare, one increment on the parent node and two compares per member — no
-     * charge-time work at all, no node retained that the compression would otherwise free, and no walk of any
-     * ancestry. No new walk, nothing per-opcode, and nothing whose cost grows with the fork depth. */
-    /* GAUGE: DISTINCT TOP-LEVEL-ARM BUCKETS THE WALK TOOK, EMPTIES INCLUDED — AND THIS READ "holding at
-       least one live member", WHICH IS A TRUE SENTENCE ABOUT A POPULATION THIS ROW IS NOT. It is rewritten
-       rather than deleted because the wrong reading is the one a reader re-derives from the rows beneath it:
-       every extremum below is folded INSIDE branch_take's `live > 0` guard, so the natural conclusion is that
-       the count above them is over the same set. `branches` is raised BEFORE that guard, and the empty arm
-       exists on purpose — the family-root door takes a root's bucket whenever its own flow has DEPARTED, to
-       keep that root's lifetime burn (boot's, on a real page) inside `br_us_sum + br_retired_us ==
-       charged_us`. So an empty bucket is the ORDINARY state of any frontier whose boot flow has finished, and
-       `branches` exceeds the live-bearing count by one per such family.
-       WHAT IT MAY THEREFORE NOT BE READ AS — the population the four rows below range over. That matters
-       because it is the FOLD WIDTH an order that asked per BUCKET instead of per MEMBER would pay, which is
-       the one quantity this whole scope is priced by, and a reader taking `branches` for it over-counts on
-       every census of a document that has got past boot.
-       NAMED RESIDUAL — THE LIVE-BEARING COUNT IS NOT PUBLISHED AND IS NOT DERIVABLE FROM WHAT IS.
-       `br_empty_us` is nonzero only for an empty bucket that was ever CHARGED, so a departed root that burned
-       nothing is invisible in it, and no other row separates the two sets. WHAT THE NEXT DIFF BUILDS: that
-       count, folded inside branch_take's existing live guard and emitted beside this row — and it is a
-       FOUR-FILE landing rather than three, because `testing/live-wfq.js` derives its row set by READING
-       result.c's composer text and THROWS on a branch-scope row (`^(?:branches|br[A-Z])`) no reader there
-       names. That is deploy-on-write across a C-to-JS seam with no build in it, so the halves land together or
-       the live-page driver stops. HOW ITS ABSENCE SHOWS: a reader pricing a bucket-fold order quotes
-       `branches` against `members` as the narrowing, and the figure is high by the number of families whose
-       root flow has departed — one, on a page whose flows all descend from boot.
-       RETIREMENT: this record goes when the live-bearing bucket count is emitted beside this row, because the
-       fold width is then a published number rather than a sentence here saying which published number is not
-       it. */
+    /* The third accounting scope, a fork subtree, which says what the two sides of a branch received. Within a
+     * family the member and family scopes cannot see a branch, and a real page is one family. A bucket is a
+     * top-level arm: the node forked directly off a family root, reached from every member of its subtree in
+     * one indirection (flow.c's FlowAcct `branch`). A deeper branch is summed into its top-level arm; the
+     * residual at FlowAcct `up` says why there is no per-node bucket, and the `br_fan_*` rows name the deep
+     * minter.
+     * Kinds: `branches`, `br_live_*` and `br_depth_max` are gauges. `sub_born` and `sub_us` are per-bucket
+     * lifetime counters, but an extremum over the buckets moves as buckets open and depart, so `br_born_*`,
+     * `br_us_max/min`, the crowd and minter triples are read as ratios at one instant, never differenced. Only
+     * `br_retired_us` and `charged_us` only grow. Burn is in microseconds of whatever `quantum_measure` answers
+     * (thread CPU or wall, per the run's `@QUANTUM` `isCpu`), so quote a raw total with that line; a quotient of
+     * two burns from one run is host-independent.
+     * Identities asserted in flow_wfq_census, every term published: `br_live_sum == members` (buckets partition
+     * the frontier) and `br_held_us + br_empty_us + br_retired_us == charged_us`, via `br_us_sum`. */
+    /* Reading them: `br_live_max / members` is how concentrated the frontier is on one side of one branch;
+     * `br_us_max / charged_us` is how concentrated the thread is. The extrema can belong to different buckets
+     * (the burn maximum is often a departed family root holding nobody), so a one-arm pair is read off the
+     * crowd or minter triple. The mint pair is the branch term's own range: flow_branch_bonus returns
+     * `1.0 / sub_born`, so `1/br_born_min - 1/br_born_max` is the span wfq_accounted_spread reads. The live and
+     * mint extrema fold only buckets holding a live member (a weight is read only for a standing member); the
+     * `br_us_*` extrema do not, since receipt survives a departed subtree. `br_live_min` is 0 or 1 while a
+     * family root's own bucket stands, since a root's bucket holds exactly that root.
+     * Cost: a few adds per charge, fork, departure and node free, and per-member work inside the census's
+     * existing walk; nothing per opcode and nothing that grows with fork depth. */
+    /* Gauge: distinct top-level-arm buckets the walk took, empties included. branch_take raises it before its
+       `live > 0` guard, and the family-root door takes a root's bucket after its flow departed to keep that
+       burn in the identity, so it exceeds the live-bearing count by one per such family; it is not the fold
+       width a per-bucket order would pay.
+       Named residual. Not covered: the live-bearing bucket count is not published or derivable (`br_empty_us`
+       misses a departed root that burned nothing). Next diff builds: that count, folded inside branch_take's
+       live guard and emitted here, landing with `testing/live-wfq.js`, which throws on an unnamed branch-scope
+       row. Absence shows as: `branches` quoted as a fold width, high by one per family whose root departed. */
     long branches;
     long br_live_max;   /* GAUGE: the most live members in one bucket — the fat side of a branch */
     long br_live_min;   /* GAUGE: the fewest; see above for why the root's bucket usually owns this */
     long br_live_sum;   /* GAUGE: their sum, published because `== members` is the partition identity */
     long br_born_max;   /* LIFETIME: the most members ever MINTED into one live bucket */
     long br_born_min;   /* LIFETIME: the fewest — the two ends of flow_branch_bonus's own denominator */
-    /* THE FATTEST LIVE BUCKET'S OWN THREE NUMBERS, TAKEN FROM ONE BUCKET RATHER THAN AS THREE EXTREMA OVER A
-       POPULATION — which is the one reading every row above is structurally unable to make, and the reading
-       the whole scope was declared for. An extremum answers `what is the largest value any bucket holds';
-       three extrema answer that question three times and never once say whether one arm holds all three. The
-       distinction is not pedantic and it is not rare: it is the ORDINARY state of a real page, where fifty
-       buckets stand and the bucket that received the most thread is routinely a departed family root holding
-       nobody. `br_us_max` is then boot's receipt and `br_live_max` is the crowd's membership, and a reader who
-       divides one by the other has composed a fraction out of two different arms.
-       WHAT THEY SEPARATE, AND IT IS THREE STATES THAT SHARE ONE ANSWER TODAY. Take the crowd's share of the
-       members standing (`br_crowd_live / members`) against its share of the thread the live buckets hold
-       (`br_crowd_us / br_held_us`). AT PAR is a branching arm converting fork factor into thread one for one:
-       it holds half the frontier and receives half the thread while having emitted nothing, which is a term
-       that cannot demote it rather than a member that outran its siblings. NEAR ZERO on the thread side is the
-       opposite finding with the opposite diff — the order IS demoting the crowd, the thread went elsewhere,
-       and what keeps the frontier from draining is retention rather than ordering. ABOVE PAR is an ordinary
-       monopolist, which is exactly the shape the aging charge was written to catch and does. Those three take
-       three different next diffs and read identically in every row above this line.
-       AND THEY MAKE TWO PUBLISHED PAIRS CHECKABLE THAT WERE ONLY EVER CAVEATED. `br_crowd_us == br_us_max`
-       says the crowd IS the hungriest bucket; `br_crowd_born == br_born_max` says the crowd IS the arm that
-       has taken most arms. Below either, the two maxima belong to two arms.
-       AND ONE OF THOSE TWO NOW HAS AN EXIT AND THE OTHER STILL DOES NOT, WHICH IS A DIFFERENCE A READER MUST
-       BE TOLD RATHER THAN LEFT TO DISCOVER. A comment that names a hazard and offers no way out of it does
-       not warn a caller away, it guarantees them into it: below `br_crowd_born == br_born_max` the only thing
-       this line used to offer was the knowledge that the reading was wrong. The MINT half is answered — the
-       minter triple below is that arm's own live count, shed count and receipt, selected by `br_born_max`
-       instead of by `br_live_max` — so the pairing is now a statement about which arm to read and no longer a
-       reason to stop reading. The BURN half is not: below `br_crowd_us == br_us_max` the hungriest bucket is
-       still a bare extremum with no membership and no shed count beside it, and a reader who wants that arm's
-       three numbers has nowhere to go.
-       IT IS DELIBERATELY NOT BUILT AND THE REASON IS THE SELECTOR'S, NOT AN OMISSION: branch_take's own note
-       says the membership pair is the selector and the burn is not, because the crowd is a membership fact.
-       A THIRD retained pointer selected by burn would name the arm `br_us_max` already reports, and on a real
-       page that arm is routinely a DEPARTED family root holding nobody — a triple over it would publish a
-       live count of 0 and a shed count equal to its whole mint, which is a true reading of a bucket no member
-       stands in and therefore about no comparison the order makes. NOT COVERED, NARROWED: what the hungriest
-       arm has MINTED and SHED. WHAT THE NEXT DIFF BUILDS: nothing here until a reading needs it; the case to
-       watch for is a frontier on which the hungriest bucket is LIVE and is neither the crowd nor the minter,
-       because then three arms carry the three maxima and only two of them have numbers. HOW ITS ABSENCE
-       SHOWS: a census in which `br_crowd_us`, `br_minter_us` and `br_us_max` are three different values with
-       `br_us_max` inside `br_held_us` — a live arm holding the most thread that no triple on this line names.
-       AND THE UNIT THEY ARE READ IN IS THE HOST'S, WHICH IS WHY THE READING ABOVE IS A RATIO AND NOT A
-       MICROSECOND FIGURE. Every burn on this line is charged in whatever `quantum_measure` answers — thread
-       CPU where the host has a clock for it, wall where it does not — so ONE name means two different
-       quantities on the two hosts this engine is driven through, and the run says which in its own `@QUANTUM`
-       line's `isCpu`. The share the crowd rows exist for is a quotient of two burns taken in ONE unit on ONE
-       run, so it is the same number under either denomination and the two hosts' figures are comparable
-       without knowing which clock produced them. A RAW microsecond total from this line is not, and is quoted
-       with that line beside it.
-       KINDS, WHICH DECIDE WHAT MAY BE DONE WITH THEM. The live count is a GAUGE. The mint count and the burn
-       are per-bucket LIFETIME counters, and an extremum's rule applies to them for the extremum's reason: the
-       BUCKET SELECTED moves between samples, so neither may be DIFFERENCED and both are read as ratios at one
-       instant, exactly as `br_born_max` and `br_live_max` are. MICROSECONDS and not notches, for `sub_us`'s
-       reason: there is no quotient inside them to be misread.
-       THE IDENTITY THAT TIES THEM TO THE ROW THEY ARE SELECTED BY, asserted in flow_wfq_census and published
-       so a release artifact can be checked from outside the process: `br_crowd_live == br_live_max`. The two
-       sides are written by DIFFERENT writers at DIFFERENT instants — the left by a dereference of the bucket
-       the walk retained, taken once after the walk ends, and the right by a running maximum folded over every
-       live bucket during it — so a fold attached to the wrong comparison, or a retained pointer that stopped
-       tracking the maximum, separates them. It is not the vacuous form: writing all three at the maximum's own
-       statement would have made the check a comparison of one assignment with itself, which is a non-check
-       wearing the syntax of one.
-       A ZERO HERE HAS ONE MEANING AND ITS DISCRIMINATOR IS PUBLISHED BESIDE IT. The three are folded inside
-       the same live guard as `br_live_max`, so a census that reached no live bucket leaves all three at zero
-       — and that state is the one flow_wfq_census already asserts cannot arise with members standing. With
-       `br_crowd_live` above zero, a `br_crowd_us` of zero is not an unobserved bucket, it is the STARVED
-       reading above: the crowd exists, it is standing, and it has never been charged a microsecond. */
+    /* The crowd: the fattest live bucket's own membership, mint and receipt, from one bucket. Its share of the
+       members (`br_crowd_live / members`) against its share of the live buckets' thread
+       (`br_crowd_us / br_held_us`) separates three states: at par, a branching arm converting fork factor into
+       thread; near zero, the order demoting it while retention keeps the frontier from draining; above par, a
+       monopolist. `br_crowd_us == br_us_max` says the crowd is the hungriest bucket; `br_crowd_born ==
+       br_born_max` says it is the minter.
+       flow_wfq_census asserts `br_crowd_live == br_live_max`, written by different writers (a dereference of the
+       retained bucket after the walk; a running maximum during it). Folded inside the live guard: all three are
+       zero only when no live bucket was reached, which cannot happen with members standing; a zero
+       `br_crowd_us` with `br_crowd_live > 0` is a crowd never charged.
+       Named residual. Not covered: what the hungriest bucket minted and shed. Next diff builds: nothing until a
+       reading needs it. Absence shows as: `br_crowd_us`, `br_minter_us` and `br_us_max` all different with
+       `br_us_max` inside `br_held_us`, a live arm holding the most thread that no triple names. */
     long br_crowd_live;    /* GAUGE: live members in the bucket that owns `br_live_max` */
     long br_crowd_born;    /* LIFETIME: that same bucket's own mint count */
     int64_t br_crowd_us;   /* LIFETIME MICROSECONDS: that same bucket's own receipt */
-    /* AND THE SAME THREE NUMBERS FOR THE BUCKET THAT HAS MINTED THE MOST, WHICH IS A DIFFERENT ARM WHENEVER
-       AN ARM HAS SHED WHAT IT MINTED — the one population the triple above is structurally unable to reach.
-       WHY THE CROWD SELECTOR CANNOT ANSWER IT. The crowd is chosen by the LIVE maximum, deliberately and
-       correctly: the crowd is a membership fact, and selecting by BURN instead would name the hungriest
-       bucket, which `br_us_max` already reports. Selecting by MINT is neither of those and is covered by
-       nothing — `br_born_max` is a bare extremum, so the arm that owns it has no live count and no receipt
-       anywhere. The two selectors coincide only while a bucket sheds nothing: `sub_born = live + sub_gone`,
-       so an arm that minted N and shed most of them holds few members, is NOT the crowd, and disappears from
-       every row on this line.
-       THAT IS NOT A CORNER, IT IS THE SHAPE THE WHOLE AGING MECHANISM WAS WRITTEN AGAINST. flow.c's banner at
-       the fork tree states it: a walk over an unknown length forks a `stop at n` arm at EVERY position, each
-       arm runs the rest of the document and then FINISHES. Such an arm mints unboundedly and stands narrow,
-       which is exactly `sub_born` large and `live` small. The crowd rows describe the arm that HOLDS the most
-       and these describe the arm that has TAKEN the most, and on that frontier they are two different arms.
-       IT IS ALSO THE ARM THE ORDER SEPARATES BY. flow_branch_bonus returns `1.0 / sub_born`, so the bucket
-       these rows name is the one carrying the SMALLEST branch bonus in the frontier — the member the branch
-       term demotes hardest. `br_minter_us / br_held_us` against `br_minter_live / members` is therefore the
-       reading that says whether that demotion is reaching the thread: at par the term is not demoting a
-       branching arm at all, near zero it is demoting it and what keeps the frontier from draining is
-       retention rather than ordering, above par it is an ordinary monopolist. Those are the crowd triple's
-       own three states asked of the arm the term actually acts on, and they take three different diffs.
-       `br_minter_gone` IS THE ROW NOTHING ELSE PUBLISHES AND IT IS WHY THESE ARE THREE AND NOT TWO. `sub_gone`
-       is maintained at every departure and is readable nowhere: the live rows publish `sub_born - sub_gone`
-       and the mint rows publish `sub_born`, so a reader can recover a bucket's shed count only where the two
-       maxima happen to name ONE bucket. Published here it separates an arm holding N from an arm that minted
-       ten N and shed nine, which read identically in `br_live_max` and take opposite diffs.
-       KINDS, WHICH DECIDE THE ARITHMETIC. The live count is a GAUGE. The shed count and the burn are per-bucket
-       LIFETIME counters, and an extremum's rule applies to them for the extremum's reason — the BUCKET
-       SELECTED moves between samples, so neither may be DIFFERENCED and both are read as ratios at one
-       instant, exactly as the crowd triple is. MICROSECONDS and not notches, for `sub_us`'s reason, and in
-       whatever unit `quantum_measure` answers, so a RAW total from this line is quoted with the `@QUANTUM`
-       line beside it and only a quotient of two burns from one run is comparable across hosts.
-       THE IDENTITY THAT TIES THEM TO THE ROW THEY ARE SELECTED BY, asserted in flow_wfq_census and published
-       so a release artifact can be checked from outside the process: `br_minter_live + br_minter_gone ==
-       br_born_max`. The two sides are written by DIFFERENT writers at DIFFERENT instants — the left by one
-       dereference of the bucket the walk retained, taken once after the walk ends, and the right by a running
-       maximum folded over every live bucket during it — so a fold attached to the wrong comparison, or a
-       retained pointer that stopped tracking the maximum, separates them. It is not the vacuous form: writing
-       all three at the maximum's own statement would have made the check a comparison of one assignment with
-       itself. And `br_minter_us == br_crowd_us` is then the published statement that the two selectors name
-       ONE arm on this run, which is the caveat that has stood beside `br_born_max` since it was written,
-       turned into a reading a reader can take rather than a warning they must remember.
-       A ZERO HERE HAS ONE MEANING AND ITS DISCRIMINATOR IS PUBLISHED BESIDE IT, for the crowd triple's
-       reason: the three are folded inside the same live guard as `br_born_max`, so a census that reached no
-       live bucket leaves all three at zero — the state flow_wfq_census already asserts cannot arise with
-       members standing. With `br_minter_live` above zero, a `br_minter_us` of zero is not an unobserved
-       bucket, it is the arm that has taken the most arms never having been charged a microsecond. */
+    /* The minter: the same three numbers for the bucket that has minted the most, a different arm whenever an arm
+       shed what it minted (`sub_born = live + sub_gone`). A walk over an unknown length forks a `stop at n` arm
+       at every position and each arm finishes, so the minter stands narrow and is not the crowd. It carries
+       the smallest branch bonus, so `br_minter_us / br_held_us` against `br_minter_live / members` says whether
+       the branch term's demotion reaches the thread (the crowd's three states, asked of this arm).
+       `br_minter_gone` is the shed count, published nowhere else. flow_wfq_census asserts
+       `br_minter_live + br_minter_gone == br_born_max` (different writers, as for the crowd);
+       `br_minter_us == br_crowd_us` says the two selectors name one arm. Zero semantics are the crowd's. */
     long br_minter_live;   /* GAUGE: live members in the bucket that owns `br_born_max` */
     long br_minter_gone;   /* LIFETIME: arms that same bucket has SHED — published nowhere else */
     int64_t br_minter_us;  /* LIFETIME MICROSECONDS: that same bucket's own receipt */
     int64_t br_us_max;  /* LIFETIME MICROSECONDS: the most thread time one bucket's subtree ever received */
     int64_t br_us_min;  /* LIFETIME MICROSECONDS: the least */
     int64_t br_us_sum;  /* LIFETIME MICROSECONDS: their sum — one half of the burn identity */
-    /* AND THAT SUM SPLIT BY WHETHER ANYBODY IS STANDING IN THE BUCKET, which is what gives the triple above a
-       denominator drawn from its own population. `br_us_sum` folds EVERY bucket the walk takes, live or not,
-       deliberately — receipt outlives a departed subtree — so a crowd's share of it is a share of a total
-       that includes thread time no live arm holds, and on a real page the departed root's share of that total
-       is the largest single term in it. A fraction whose numerator is drawn from the live buckets and whose
-       denominator is not is the defect this file names most often, arriving in the row that was supposed to
-       answer it.
-       BOTH HALVES ARE PUBLISHED RATHER THAN ONE AND A SUBTRACTION, so the split is a CHECK and not a
-       definition: they are raised by two separate accumulators in the two arms of one condition, and
-       `br_held_us + br_empty_us == br_us_sum` fails if either arm stops firing or if the guard comes apart
-       from the one the live extrema are folded under. Chained with the burn identity already asserted, every
-       microsecond the scheduler has ever charged lands in exactly one of three published places:
-       `br_held_us + br_empty_us + br_retired_us == charged_us`. That total cannot move without one of its
-       three parts moving, it is checkable on the emitted document, and it is asserted in flow_wfq_census where
-       all four terms are in one hand.
-       NEITHER MAY BE DIFFERENCED, AND THIS SENTENCE USED TO SAY BOTH COULD. It read that "their population is
-       every microsecond ever charged rather than whichever buckets happen to be standing, so unlike every
-       extremum on this line they MAY be differenced across two samples", and the identity directly above
-       refutes it rather than supporting it. A bucket whose subtree WHOLLY DEPARTS is freed in `acct_unref`, its
-       entire receipt is folded into `br_retired_us` AT that free, and it leaves the walk `branch_take` folds
-       these over — so the populations that only ever grow are `br_retired_us` and `charged_us`, while
-       `br_us_sum`, `br_held_us` and `br_empty_us` all FALL by a bucket's whole receipt the moment its last arm
-       departs. That is what keeps `charged_us` monotone while its parts move in both directions, and it is why
-       the identity is a CHECK: the fall on one side and the rise on the other are the same microseconds.
-       THE ARITHMETIC THE OLD SENTENCE WAS FOR IS UNCHANGED, WHICH IS WHY IT READ AS SOUND. A live arm's share
-       may only be taken against a denominator drawn from the LIVE buckets — which is what `br_held_us` is for
-       and what `br_us_sum` is not — so the sentence was right about the denominator and wrong about the one
-       word that decides what a consumer may do with the row. The unit is what invited it: `MICROSECONDS` and
-       `LIFETIME` on the three lines below name the horizon of the PER-BUCKET quantity each row is folded from,
-       and a bucket's own receipt really is a lifetime counter OF THAT BUCKET, while the ROW is a sum over
-       whichever buckets this walk reached. A kind read off the unit is read off the wrong noun.
-       solver/result.c's kind declaration files all three as GAUGES on exactly that ground, and this now agrees
-       with it rather than contradicting it. */
+    /* `br_us_sum` split by whether anyone stands in the bucket, so a live arm's share has a live denominator
+       (`br_held_us`). Two accumulators in two arms of one condition, so `br_held_us + br_empty_us == br_us_sum`
+       is a check; asserted in flow_wfq_census. These rows are gauges despite the per-bucket "lifetime" labels:
+       a bucket whose subtree wholly departs is freed in `acct_unref` and its receipt moves into
+       `br_retired_us`, so `br_us_sum`, `br_held_us` and `br_empty_us` fall then, and only `br_retired_us` and
+       `charged_us` are monotone (solver/result.c files them the same way). */
     int64_t br_held_us;  /* LIFETIME MICROSECONDS: received by buckets holding at least one live member */
     int64_t br_empty_us; /* LIFETIME MICROSECONDS: received by buckets still taken and holding none */
     int64_t br_retired_us; /* LIFETIME MICROSECONDS received by buckets whose subtree has wholly departed */
     int64_t charged_us; /* LIFETIME MICROSECONDS the scheduler has charged at all — the identity's total */
-    /* GAUGE: how deep in the fork tree the deepest LIVE member sits (0 at a root). It ranks nothing and it is
-       not about buckets; it is here because it is the one row that says whether this engine's fork tree is a
-       STAR (one flow forking N arms off one node, so an aggregate maintained by walking to the root costs O(1)
-       amortised) or a CHAIN (each arm forking the next, so the same walk is quadratic). Those two shapes are
-       indistinguishable in every other row of this struct.
-       IT WAS ADDED AS A PRECONDITION AND HAS ANSWERED ONE — STAR, at 5..6 against a frontier of 75113 on a
-       real bundle — which is why the sentence that stood here ("which one it is decides what the per-node
-       generalisation of these buckets may cost") is retired rather than deleted: the answer did NOT license
-       that generalisation. flow.c's residual at FlowAcct `up` records why. A walk is affordable and the cost
-       that binds is RETENTION, which a depth cannot see, so this row states the tree's SHAPE and no longer
-       stands as anybody's precondition. */
+    /* Gauge: how deep in the fork tree the deepest live member sits (0 at a root). It ranks nothing; it says
+       whether the fork tree is a star (a root walk is O(1) amortised) or a chain (quadratic). Real bundles read
+       a star, but the binding cost of a per-node bucket is retention, which depth cannot see (FlowAcct `up`). */
     int br_depth_max;
 
-    /* AND WHICH FORK INSIDE A BUCKET DID THE MINTING — the one sentence the ten rows above cannot say, because
-     * a bucket is a TOP-LEVEL ARM and every fork taken deeper is summed into its ancestor's. An arm forked off
-     * boot which then forks unboundedly, and boot forking unboundedly at one top-level branch, present
-     * IDENTICALLY up there: `branches` small, `br_live_max` at nearly `members`. On a real 4.5 MB bundle that
-     * is the ordinary state and not a corner — fifty buckets, one of them holding 38836 of 75113 members.
-     *
-     * A FAN IS THE LIVE MEMBERS FORKED DIRECTLY OFF ONE NODE, keyed on FlowAcct's `up`, which for a LIVE
-     * member is its true fork parent: `up` is written at flow_fork_inherit and moved only by
-     * acct_compress_dead, which runs on a DEPARTING flow's own node, so no live member's edge is ever
-     * rewritten. The parent may itself have departed and be retained by its children, which is the
-     * informative case rather than a corner — a walker that forked N arms and then finished is exactly the
-     * shape these rows exist to name.
-     *
-     * OVER NON-ROOT PARENTS ONLY, WHICH IS THE POPULATION THE BUCKETS DO NOT COVER RATHER THAN A CONVENIENCE.
-     * A fork off a family ROOT opens a bucket of its own, so `br_live_max`/`br_born_max` already separate it;
-     * a fork off anything else joins its ancestor's bucket and had no row anywhere. The gate is spelled with
-     * the same predicate that decides the bucket (flow_fork_inherit's `parent->acct->up`), so the two cannot
-     * drift into disagreeing about which forks are already covered.
-     *
-     * GAUGES, ALL THREE, and the names carry no `Life` for that reason: a fan is how wide a fork stands AT
-     * THIS INSTANT and the arms it has minted and shed are not in it, so none of them may be differenced.
-     * `br_born_max` at the bucket is the lifetime question and these do not answer it.
-     *
-     * HOW TO READ THEM. `br_fan_max / br_fan_sum` is how concentrated the DEEP forking is — one fork holding
-     * most of the members standing below the top level — and `members - br_fan_sum` is everything the bucket
-     * rows above already describe. `br_fan_depth` is the discriminator and is the whole reason these exist:
-     * the minting fork sits at depth 1 when a top-level arm minted the crowd itself, and at depth D when the
-     * minting is D-1 levels below the arm the bucket rows name. `br_fan_max == 0` says every fork in this
-     * frontier is a top-level one, which is a positive statement that the rows above are complete for this
-     * run and not a hole in these.
-     *
-     * WHAT THEY DO NOT SAY, BECAUSE A GAUGE CANNOT: what a deep fork's two sides RECEIVED. `sub_us`,
-     * `sub_born` and `sub_gone` are maintained only where `branch == self`, and the residual at flow.c's
-     * FlowAcct `up` states why a per-node bucket is not the way to change that — it would pin every dead fork
-     * node with a live descendant, which is the unbounded retention acct_compress_dead exists to prevent, and
-     * it would re-key the `branch` flow_branch_bonus divides by.
-     *
-     * THE INVARIANT THAT TIES THEM TO THE ROWS ABOVE, ASSERTED IN flow_wfq_census WHERE BOTH ARE IN ONE HAND:
-     * `br_fan_max <= br_live_max`. Every member of a fan sits under a non-root parent and therefore in that
-     * parent's bucket, so the widest fork cannot outnumber the fattest bucket — and the two sides are counted
-     * by DIFFERENT writers (the census's member walk against `sub_born - sub_gone` maintained at the fork and
-     * the departure), which is what makes it a check rather than a restatement. It is published, so a reader
-     * can make it on the emitted document where the DCHECK is compiled out. A `br_fan_sum + <root-parented
-     * members> == members` identity is deliberately ABSENT: both terms would be raised once per trip of the
-     * census's own loop, so it would compare a loop counter with itself. */
+    /* Which fork inside a bucket did the minting, which the bucket rows cannot say because a deeper fork sums
+     * into its top-level arm. A fan is the live members forked directly off one node, keyed on FlowAcct's
+     * `up`, which for a live member is its true fork parent: `up` is written at flow_fork_inherit and moved only
+     * by acct_compress_dead on a departing flow's own node. The parent may have departed and be retained by its
+     * children, which is the shape these rows exist to name.
+     * Over non-root parents only, gated by the predicate that decides the bucket (flow_fork_inherit's
+     * `parent->acct->up`), since a fork off a root already has a bucket. Gauges, never differenced.
+     * `br_fan_max / br_fan_sum` is how concentrated deep forking is; `br_fan_depth` locates the minter (1 when
+     * a top-level arm minted the crowd itself); `br_fan_max == 0` says every fork is top-level. They cannot say
+     * what a deep fork's sides received.
+     * flow_wfq_census asserts `br_fan_max <= br_live_max` (a fan lies inside one bucket; the sides come from
+     * different writers). No identity over `br_fan_sum` is asserted, because both terms would count trips of
+     * the same loop. */
     long br_fan_max;    /* GAUGE: the most live members forked directly off ONE non-root node */
     long br_fan_sum;    /* GAUGE: live members forked off a non-root at all — the maximum's denominator */
     int br_fan_depth;   /* GAUGE: the fork-tree depth of the node holding that maximum; 0 when there is none */
 
-    /* THE @S CANDIDATE SESSIONS, ASKED DIRECTLY, because the first reading of this census had to INFER them
-     * and the inference was three fields long: `val_zero` counts members that inherited nothing, `unrun`
-     * counts members never charged, `self_emit == 0` is what rules out a just-emitted flow among them, and
-     * only all three together said "the members that have never had the thread are the candidates". A fact
-     * reached by composing three rows is a fact the next reader composes differently. It is one row now.
-     *
-     * `cand_unrun` IS THE STARVATION QUESTION AND NOTHING ELSE ANSWERS IT. @PROGRESS's `running` names the
-     * INCUMBENT at the sample instant, which for a population that is 2% of the frontier is a 2% coin — it
-     * reads as total starvation and as exact fair share with the same numbers, and it was read as the first.
-     * A candidate that has held the thread has been charged for it (engine.c charges after every step), so
-     * this is how many have never had it, exactly, at the instant it is asked.
-     *
-     * `cand_dec_max` IS THE RUNWAY'S LENGTH AND NOT A DISTANCE ALONG IT — THE DENOMINATOR, REPORTED FOR YEARS
-     * AS THE NUMERATOR. It said it was "how far the best of them has GOT ... how many gates it has replayed",
-     * and it cannot be: it is fed from decide_blob_stats, which returns `seg->below + seg->n` — the CHAIN'S
-     * LENGTH — and never reads the blob's cursor. An @S candidate is seeded with the detecting flow's ENTIRE
-     * chain under a cursor of ZERO (decide_blob_new), so for a candidate this number is FIXED FROM THE INSTANT
-     * IT IS SEEDED and reads identical at every sample of its life. decide.c says so at that accessor, in its
-     * own words — "a caller that wants a DISTANCE TRAVELLED must not take this number: it is the denominator,
-     * it is fixed from the instant the blob is built" — so the two files disagreed and THIS one was wrong.
-     * WHAT THAT COST IS EVERY READING BUILT ON IT, and each is retired here rather than softened. "A candidate
-     * stuck at rung 0 with a GROWING `cand_dec_max`" names a state that cannot occur, because the row cannot
-     * grow for a candidate. "The RATIO is how far through the gates the best candidate has got" is a ratio of
-     * a length to a length. And the three states it claimed to separate — served-and-progressing, never
-     * served, served-but-restarted — it separates NONE of: the first two differ in `cand_unrun` and
-     * `never_picked`, and nothing in this struct can see the third at all.
-     * WHY IT IS STILL PRINTED. It IS the runway's length, exactly, and that is the denominator any distance
-     * along the runway has to be read against — §@S's fitness is "a fraction" and a fraction needs one. Read
-     * with `dec_max` beside it (the deepest vector of ANY member) it says how much of the document's gate
-     * sequence a candidate's recorded path covers, which is a fact about the SEARCH's reach and not about one
-     * candidate's progress.
-     * NAMED RESIDUAL — THE NUMERATOR DOES NOT EXIST YET, AND THAT IS WHY §@S's DISTANCE IS BLIND ON THE
-     * RUNWAY. Not covered: how far along its recorded path a candidate has actually replayed. What the next
-     * diff builds: `decide_blob_cursor(const void *blob)` returning `DecideBlob.c` — the value decide.c ALREADY
-     * asserts in range at that same accessor (`b->c >= 0 && b->c <= n`) — plus a per-flow reading of it
-     * maintained while the flow is RUNNING, since `dec_blob` is NULL exactly then and a term that reads zero
-     * for the incumbent and a cursor for everyone else is not a comparator. Both live outside this file:
-     * the accessor is decide.c's and the running-side writer is at the replay, which is why this is named here
-     * rather than half-built. How its absence shows: identically to today — `substituted: 0` on every sink
-     * whose source read sits deep in a document, with `cand_members` large, `cand_unrun` small, and every
-     * candidate reading a fitness distance of exactly 0.0 for the whole of its runway. */
-    long cand_members;    /* members carrying a payload substitution — a candidate session OR A FORK OF ONE,
+    /* The @S candidate sessions, asked directly (`cand_src` set). `cand_unrun` counts candidates at zero own
+     * silence, the order's quantity (flow_own_silence), so it also counts a candidate of a family that just
+     * emitted. `cand_dec_max` is the furthest replay cursor any candidate stands at, in recorded decisions
+     * (gates, not statements), taken from decide_blob_cursor for a parked candidate and decide_cursor for the
+     * running one, because `dec_blob` is NULL while a flow runs. Read it against `dec_max`, the deepest decision
+     * vector of any member: the share of the document's gate sequence the search has replayed. */
+    long cand_members;    /* members carrying a payload substitution — a candidate session or a fork of one,
                              because engine.c copies the substitution to the sibling: a candidate that branches
-                             is two candidates. So this is the SEARCH's whole live population, and @PROGRESS's
-                             `candidates` (the searches SEEDED) is its root count. The pair is a shape test the
-                             two numbers make together and neither makes alone: cands == roots * 2^cand_dec_max
-                             is a COMPLETE UNIFORM binary tree, which is every candidate stopping at the same
-                             depth, and any other value is a ragged one, which is candidates at different
-                             depths. Measured once at 144 against 9 roots and a depth of 4 — 9 * 2^4 exactly. */
-    long cand_unrun;      /* …of those, how many have NEVER been charged for the thread */
+                             is two candidates. So this is the search's whole live population, and @PROGRESS's
+                             `candidates` (the searches seeded) is its root count. */
+    long cand_unrun;      /* …of those, how many stand at zero own silence */
     int64_t cand_svc_max; /* …and the most service any one of them has consumed */
-    /* THE LONGEST RECORDED PATH AMONG THEM — AND IT COUNTS GATES, NOT STATEMENTS, which was the FIRST
-       correction this row needed and not the last. A flow records a slot only at a branch it had not already
-       decided, so a candidate can execute eight hundred statements and stand on four decisions, or four
-       statements and stand on four; `cand_dec_max: 4` against a runway of 866 statements reads as "the floor"
-       and as "four of the five gates on the path" with the same digit. That correction was right and it left
-       the larger one unmade — the number is not a position at all, it is a LENGTH, and the block above says
-       why and what would have to be built for a position to exist. Read against `dec_max` below it says how
-       much of the document's gate sequence the search's recorded paths cover; it does not say, and cannot say,
-       how far along one a candidate stands. Neither number is worth printing without the other. */
     long cand_dec_max;
     long dec_max;         /* the deepest decision vector of ANY member — the gate sequence's own length, which
                              is what the row above is a fraction of */
