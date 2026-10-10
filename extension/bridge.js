@@ -4186,191 +4186,113 @@ async function hostSchedule(pool, ops) {
            "at the floor going unrecorded, which is the instant it matters most");
     if (ev.cand) { rd.candAsk++; rd.cand = ev.cand; }
     if (ev.evict) { target = ev.evict; await ops.requestPark(ev.evict); }
-    /* THE PARK FLAG AND THE STEP THAT READS IT STAY ORDERED ACROSS THE BOUNDARY, and not by luck: both are
-       calls on ONE renderer's port, which is point-to-point and delivers in order, and this loop makes no other
-       call into that instance in between. The pair was atomic when it was two ccalls; it is sequenced now. */
+    /* The park flag and the step that reads it stay ordered: both are calls on one renderer's point-to-point
+       port, which delivers in order, and this loop makes no other call into that instance between them. */
     const st = await ops.step(target);
-    /* THE STEP CODE IS THREE VALUES AND EVERY ONE OF THEM IS THE ENGINE'S OWN STATEMENT. qjs_step answers
-       ENGINE_STEP_DONE (0), ENGINE_STEP_YIELD (2) or ENGINE_STEP_STALLED (3). It used to answer two — it FOLDED
-       the stall into the yield, "the bridge speaks two values" — and the fold is deleted because a host cannot
-       undo it: a yield asks to be OUTRANKED and a stall asks to be PAID, so one value for both leaves every
-       driver guessing. The one that guessed wrong is engine/route.mjs, whose pump had exactly two terminators
-       and therefore stepped a stalled peer 10.8 million times with no switches, no jobs and no emission.
-       THE ONE BEFORE IT WAS THE SAME DEFECT INVERTED, and it is why this branch is spelled out rather than left
-       as `if/else`: the third arm here once tested for 1, a NEED_FETCH code no version of engine_sched_step has
-       ever returned, and it was the ONLY caller of ops.serviceFetch — so the whole reply path
-       (qjs_pending -> safeFetch -> qjs_provide) was unreachable in the shipped extension, every flow a page's
-       `fetch()` parked stayed parked, and the analysis promise for that document never resolved. A value the
-       engine cannot produce wearing a branch someone had thought about, and a value the engine CAN produce
-       with no branch at all, are the two halves of one rule: the codes are enumerated, never defaulted. */
+    /* The step code is the engine's own statement, one of three: ENGINE_STEP_DONE (0), ENGINE_STEP_YIELD (2)
+       or ENGINE_STEP_STALLED (3). A yield asks to be outranked and a stall asks to be paid, so they are distinct
+       codes. The codes are enumerated, never defaulted: a fourth value is an ABI change. */
     DCHECK(st === 0 || st === 2 || st === 3,
            "qjs_step answered with a code outside {DONE, YIELD, STALLED} — a fourth value is an ABI that " +
            "changed under a host still speaking the old one");
-    // DEV __forcepark: request the park only after N dispatches, so it captures MID-EXPLORATION residue
-    // (recipes with real decvecs + handler-driven async flows), mirroring a production RAM-pressure park.
-    /* AND ONLY WHILE THERE IS A SESSION TO PARK, which is the SAME statement `st !== 0` makes on the line
-       below and for the same reason: DONE means the step DRAINED the frontier and closed the session inside
-       itself, so a park asked after it is asked of an engine that has nothing left to write — and the engine
-       aborts saying exactly that, because storing an empty residue over a real one is the cold-tier corruption
-       the park exists to prevent. It is not a rare race: the counter is 2, and a small dev fixture reaches its
-       last program well inside two dispatches, so the step that decrements to zero is the very step that
-       drained. A DONE engine wants no park; this round's release ends it. */
+    // Dev `__forcepark`: request the park only after N dispatches, so it captures mid-exploration residue
+    // (recipes with real decision vectors and handler-driven async flows), like a production RAM-pressure park.
+    /* Only while there is a session to park: DONE means the step drained the frontier and closed the session,
+       and the engine aborts on a park of nothing (storing an empty residue over a real one is the corruption the
+       park prevents). A small fixture can drain within the two dispatches. */
     if (st !== 0 && target._forceparkSteps > 0 && --target._forceparkSteps === 0) await ops.requestPark(target);
-    // INCREMENTAL MERGE: a lone UNBOUNDED engine never reaches st===0, so without this its already-emitted
-    // breadth surfaces only at finalize. Snapshot + merge on a coarse cadence on every non-final step.
-    /* AWAITED, AND THAT IS A CORRECTNESS REQUIREMENT RATHER THAN TIDINESS. streamPartial asks the engine to
-       PRINT a result document and then finds it by INDEX in the line buffer and splices it out. The print
-       arrives on that call's own reply, so the scan must not run until the call has answered — and the service
-       round started below appends to the same buffer, so an unawaited partial would splice by an index the
-       round had already moved. Fire-and-forget was sound only while the ccall was synchronous. */
+    // Incremental merge: a lone unbounded engine may never reach DONE, so its emitted breadth is snapshotted and
+    // merged on a coarse cadence on every non-final step.
+    /* Awaited, for correctness: streamPartial asks the engine to print a result document, which arrives on that
+       call's reply, then finds it by index in the line buffer and splices it out; the service round below
+       appends to the same buffer, so an unawaited partial would splice at a moved index. */
     if (st !== 0 && ops.streamPartial) await ops.streamPartial(target);
-    /* AN ENGINE THAT LEFT THE POOL MID-ROUND IS NOT CARRIED ANY FURTHER, AND THIS ROUND IS THE ONE THAT OWNS
-       ITS FRAME. Every op above suspends, and the only thing that takes an engine out of the pool while this
-       loop is holding it is a Clear — which cannot take the frame with it (a renderer with a call outstanding
-       may not be destroyed) and so hands that to whoever owns the outstanding call, exactly as the service
-       round is already handed it. Without this the round carried straight on into `finish` on an engine the
-       user had just wiped: the finalize would ask a dead instance for a result and write this origin's residue
-       back into a cross-session frontier that had just been emptied, and the waiters it answers were rejected
-       by the Clear before it got there.
-       IT IS ONE CHECK AND IT IS PLACED LAST, after every op that can suspend, because a drop that lands in
-       `setFloor`, in `step` or inside `streamPartial`'s own await is the same drop and must not need its own
-       site to notice it — the ops above are each safe on a dropped engine (the renderer is still there,
-       because the Clear could not take it) and streamPartial refuses to MERGE one, which is the only thing
-       any of them does that outlives the round.
-       The membership test is the POLICY'S own — `pool` is this function's array — so the pure scheduler stays
-       free of any knowledge of frames; `release` is what turns that into a teardown. */
+    /* An engine that left the pool mid-round goes no further, and this round owns its frame. Only a Clear removes
+       an engine while this loop holds it, and a Clear cannot destroy a renderer with a call outstanding, so it
+       leaves the frame to the owner of that call. One check, placed after every suspending op, catches a drop
+       during any of them (each op is safe on a dropped engine, and streamPartial refuses to merge one); without
+       it `finish` would ask a dead instance for a result and write a residue into a frontier just emptied.
+       The membership test uses this function's own `pool`, so the policy stays free of frames; `release` is the
+       teardown. */
     if (pool.indexOf(target) < 0) { rd.shape = "released"; await ops.release(target); continue; }
-    if (st === 0) {   // fully explored, or self-parked under RAM pressure: finalize (residue -> IDB cold tier)
+    if (st === 0) {   // fully explored, or self-parked under RAM pressure: finalize (residue to the IndexedDB cold tier)
       rd.shape = "finished";
       await ops.finish(target);
-    } else {   // ENGINE_STEP_YIELD (a cooperative quantum) or ENGINE_STEP_STALLED (a bill) — see below.
-      /* PAY EVERYTHING THE ENGINE SAYS IT IS OWED, in ONE round: the replies parked flows wait on, the lazy
-         chunks, the notices this zone must act on and the synchronous requests only it can answer. Servicing
-         only the REQUESTS (which is what this did) left the fetch half of the same owed list unpaid forever.
-         THE TWO CODES TAKE THIS ARM TOGETHER, AND THAT IS A DECIDED ANSWER RATHER THAN A DEFAULT. engine.c
-         states the schedule: this host pays at EVERY slice boundary and not only at a stall, because paying
-         only at a stall makes one flow's reply conditional on every other flow in the document also becoming
-         blocked — a cross-flow coupling that gets worse as exploration succeeds, since every fork adds a
-         member that must also block and re-issues its parent's unanswered request. So the PAYMENT does not
-         differ, and the two codes differ in what they say about RANK, which this loop does not read off a step
-         code at all: engine_top_weight already publishes -Infinity for a frontier whose every member is
-         host-owed, so a stalled engine sorts last through the ordering that exists rather than through a
-         second question asked here. Two answers to one question is the defect, not the shared arm.
-         WHAT WOULD BE A DEFAULT is treating an unknown code this way, which the enumeration above refuses.
-         NON-BLOCKING, the way the unreachable branch was: the engine drops out of the hot set while its round
-         runs, so a slow reply on this document never stalls another's. */
+    } else {   // ENGINE_STEP_YIELD (a cooperative quantum) or ENGINE_STEP_STALLED (a bill), see below
+      /* Pay everything the engine says it is owed in one round: replies parked flows wait on, lazy chunks,
+         notices this zone must act on, and synchronous requests only it can answer.
+         Both codes take this arm by decision: engine.c states the schedule, paying at every slice boundary,
+         because paying only at a stall makes one flow's reply wait for every other flow to block, worse as
+         forks multiply. The codes differ in what they say about rank, and rank is read from engine_top_weight
+         (-Infinity for a frontier whose every member is host-owed), not from the step code. An unknown code is
+         refused above. Non-blocking: the engine leaves the hot set while its round runs, so a slow reply here
+         never stalls another document. */
       rd.shape = "serviced";
-      /* THE ENGINE'S OWN WORD FOR WHICH OF THE TWO THIS ROUND WAS, RELAYED AND NEVER RE-DERIVED. The bench on
-         the next line is the same for both codes and means opposite things for each, so this is the ONE fact
-         that makes `rServiced` readable — see `_level1Serviced`. It is recorded and not branched on. */
+      /* The engine's word for which of the two this round was, recorded for `_level1Serviced` and never branched
+         on. */
       rd.stepCode = st;
       target.state = "fetching";
-      /* ONE FIELD FOR ONE QUESTION, WHICH IS "WHEN DOES THIS ENGINE BECOME RANKABLE AGAIN". It was `_fetchP`,
-         and a boot is not a fetch — naming the reservation's provisioning promise after the reply round would
-         be one name answering two different facts, which is how the wait arm above would come to be read as
-         "wait for a body" by the next person to add a state to it. */
-      /* AND THE ENGINE'S OWN STALL STATEMENT TRAVELS WITH THE ROUND, because the round is the only thing that
-         may wait on bytes and it may do so ONLY when this engine has nothing runnable. ENGINE_STEP_STALLED is
-         that statement — the step above answered it — and it is RELAYED rather than re-derived inside the
-         round, which could only ask the engine a second time and get a second answer. The round with a
-         runnable frontier returns at once, which is the whole of what stops one never-ending reply body from
-         taking a document out of this hot set for the rest of the session. */
+      /* `_readyP` answers one question, when this engine becomes rankable again, for both a boot and a service
+         round. */
+      /* The engine's stall statement travels with the round, because the round may wait on bytes only when the
+         engine has nothing runnable; it is relayed, not re-asked. A round with a runnable frontier returns at
+         once, so one never-ending reply body cannot keep a document out of the hot set. */
       target._readyP = ops.serviceFetch(target, st === 3).then(
         () => { target.state = "hot"; },
         (e) => {
-          /* A THROW OUT OF A SERVICE ROUND IS AN INVARIANT FAILURE — every assert in the reply builders, the
-             notice router and the request loop lands here. It was being discarded into a state reset. */
+          /* A throw out of a service round is an invariant failure (every assert in the reply builders, the
+             notice router and the request loop lands here): bannered, and rethrown in dev. */
           target.state = "hot";
           crashBanner("service", String((e && e.stack) || e));
           if (self.APICLIENT_DEV) throw e;
         });
-      // Then RETURN TO THE EVENT LOOP via a MACROtask so the ONE thread services its message port (evals,
-      // postMessage, timers) before we re-enter and RESUME the byte-identical frontier — the anti-freeze yield.
+      // Then return to the event loop through a macrotask so the one thread services its message port (evals,
+      // postMessage, timers) before re-entering and resuming the byte-identical frontier.
       await macroYield();
     }
     } finally { _level1Record(pool, rd); }
   }
 }
 
-// ---- Engine-bound ops + the live pool ----
-const _pool = [];        // BOOTING/hot/fetching engines — one record per agent cluster, bounded by the RAM floor
-/* documents awaiting a slot: { html, msg, persist, resolve, reject } — NO instance built yet. `code` stood in
-   this list and no writer has ever put one here (the entry that fills it passes the empty string explicitly at
-   the one call site that needs one), and `html` is the field BOTH consumers must read: the admission arm hands
-   it to engineCreate and the navigation arm hands it to engineJoin. The message beside it carries no document
-   — that entry asserts so — so a consumer reaching for `msg.pageHtml` on one of these jobs is reaching for a
-   field this table's own producer is forbidden to write. */
+// ---- Engine-bound ops and the live pool ----
+const _pool = [];        // booting/loading/hot/fetching records; one instance per agent cluster, bounded by the RAM floor
+/* Documents awaiting a slot: { html, msg, persist, resolve, reject }, with no instance built yet. `html` is the
+   field both consumers read (admission hands it to engineCreate, the navigation arm to engineJoin); the message
+   carries no document (its entry asserts so), so `msg.pageHtml` is never read from a job. */
 const _waiting = [];
-/* ADDRESSES AN APPLICATION HAS DECLARED ARE PAGES OF ITSELF, waiting to be loaded — the third kind of Level-1
-   work item, beside a document that has bytes and a parked frontier that has recipes.
-   WHAT PUTS ONE HERE. An engine reached HTML §7.4.4 "Non-fragment synchronous \"navigations\""'s URL and
-   history update steps — `history.pushState`/`replaceState`, which is how every client-side router says "this
-   address is a page of my app" — and announced the address (solver/route_seed.h, the `document.seed` notice).
-   That is the surface §What-the-tool-produces exists for and the one forced execution could not reach: a route
-   the bundle NAMES and no link exposes is not a navigation, so nothing created a navigable for it and nothing
-   ever loaded it.
-   IT HOLDS NO BYTES, AND THAT IS THE WHOLE REASON IT IS ITS OWN REGISTER RATHER THAN A `_waiting` ENTRY. A
-   waiting document was already fetched by whoever produced it; a declared address has not been fetched by
-   anyone, and CLAUDE.md §A-SELF-SEEDED-DOCUMENT puts the fetch under the ORDER: "an outbound request is an
-   EXTERNAL EFFECT and therefore a cost the WFQ carries like any other, so an unproductive document sinks
-   beneath productive work instead of being re-fetched at the same rank for ever". Loading at the notice would
-   spend one request per declaration, unranked, at the instant a router happened to run — which is precisely
-   the shape that sentence refuses. So the load happens at the ADMISSION, exactly where a shed cold entry's
-   re-derivation happens and for the same stated reason ("the order reads two numbers; only the item it PICKS
-   is deserialized").
-   KEYED BY ADDRESS, AND THAT IS NOT A SEEN-SET. §NO BOUNDS names a visited-set, a crawl depth, a page budget
-   and a same-URL check as caps wearing a crawler's vocabulary, and none of them is this: an address declared
-   twice while it is still waiting is ONE work item declared twice, so the second declaration adds nothing to
-   do; an address ADMITTED leaves this map and a later declaration puts it back, so re-fetching an address is
-   permitted exactly as §Time-travel-resume requires. MEMBERSHIP is never refused — what decides whether the
-   fetch is spent now is the weight, which is the address's own demonstrated surface per admission.
-   IT IS IN MEMORY AND THAT IS NOT A LOSS. CLAUDE.md's re-derivable tier is the argument: a declaration's
-   RECIPE outlives its bytes, and here the recipe is the DECLARING DOCUMENT'S OWN RESIDUE — a resumed session
-   replays that document, its router runs again, and the address is declared again. Persisting the set would be
-   storing what a replay reproduces, which is the tier's own definition of what to shed first. */
-const _seeds = new Map();   // absolute address -> { url, principalUrl, principalOrigin, provenance }
+/* Addresses an application declared are pages of itself, waiting to be loaded: the third kind of Level-1 work
+   item. An engine reached HTML §7.4.4 Non-fragment synchronous "navigations"'s URL and history update steps
+   (`history.pushState`/`replaceState`, how a client-side router names a page) and announced the address
+   (solver/route_seed.h, the `document.seed` notice); a route the bundle names and no link exposes is otherwise
+   never loaded.
+   It holds no bytes, so it is its own register: the fetch is an external effect the WFQ carries as a cost, so
+   it happens at admission (as a shed cold entry's re-derivation does), not at the notice.
+   Keyed by address, which is not a seen-set: a route declared twice while waiting is one work item, an
+   admitted address leaves the map and may be declared again, and membership is never refused; the weight
+   decides when the fetch is spent. It is in memory only: the declaring document's residue replays its router,
+   which declares the route again. */
+const _seeds = new Map();   // absolute address -> { url, principalUrl, principalOrigin, provenance, reach }
 let _hostDriving = false;
-/* THE RESERVATION LEDGER, WHICH IS CUMULATIVE BECAUSE THE STATE IT DESCRIBES IS TRANSIENT. A probe that reads
-   the pool after an analysis settles sees an empty array whether the reservation mechanism ran or was never
-   reached — the exact shape renderer-host's provisioned/destroyed counters exist for, one level up. So every
-   reservation is counted where it is made and every exit is counted where it is taken, and the probe asserts
-   the arithmetic: the pool never holds more booting records than there are provisionings still running, which
-   is the statement that no reservation was ever left behind as a phantom holding an agent cluster nothing
-   will ever provision.
-   `joinedBooting` IS THE ONE THAT PROVES THE RACE IS CLOSED. It counts second arrivals for a cluster whose
-   instance was still being provisioned — the window in which the pool used to answer "no instance" and build
-   a second heap for one similar-origin window agent. `joinedRooted` is the pre-existing case beside it (a
-   RESHIP re-delivery, a sub-frame of an instance already running), kept apart so one cannot be read as the
-   other. `peakBooting` is the high-water mark of simultaneous reservations, which is what says whether this
-   run ever had two provisionings in flight at once.
-   `evicted` AND `rehydrated` ARE THE TWO ENDS OF THE RAM FLOOR, counted apart because their DIFFERENCE is the
-   only thing that says whether the floor is doing its job or churning. One eviction that is never rehydrated
-   is a document that gave its memory to a better one; an eviction and a rehydration of the SAME item, round
-   after round, is the Level-1 ratchet solver/flow.h names (a resident engine's weight ages by CPU without
-   bound while a parked item's estimate does not, so a mature document sinks below every page that arrives
-   afterwards and its own cold row then wins it straight back). Nothing here truncates that — it is measured
-   so the primitive flow.h asks for, start-time fair queueing's virtual time applied at LEVEL-1, is built
-   against a number rather than against a suspicion. */
-/* `navigated` IS ITS OWN NUMBER AND NOT A THIRD KIND OF JOIN. A join ADDS a document to an agent; a navigation
-   adds one AND deactivates the one it replaced (HTML §7.4.6.1 "Updating the traversable"), so folding it into
-   `joinedRooted` would make the count that is supposed to say "how many same-origin sub-frames did this
-   session model" answer with the number of link clicks as well. It is also the one number that says continuous
-   browsing is working at all: this used to be the abort that killed the scheduler, so a session with several
-   tab navigations and a zero here is one where every one of them went somewhere else. */
+/* The reservation ledger, cumulative because the state it describes is transient: an empty pool after an
+   analysis looks the same whether reservations ran or not. Each reservation is counted where made and each
+   exit where taken, and the probe asserts the arithmetic (no more booting records than provisionings still
+   running, so no phantom reservation holds a cluster).
+   `joinedBooting` counts second arrivals for a cluster still being provisioned (the race the reservation
+   closes); `joinedRooted` counts arrivals for a running instance (a RESHIP re-delivery, a sub-frame);
+   `peakBooting` is the high-water mark of simultaneous reservations. `evicted` and `rehydrated` are the two
+   ends of the RAM floor: their difference tells a floor doing its job from one churning (the Level-1 ratchet
+   solver/flow.h names, where a resident engine's weight ages by CPU while a parked item's estimate does not). */
+/* `navigated` is its own count, not a kind of join: a navigation adds a document and deactivates the one it
+   replaced (HTML §7.4.6.1 Updating the traversable), and folding it into `joinedRooted` would mix link clicks
+   into the count of same-origin sub-frames. */
 const _reserveStats = { made: 0, rooted: 0, failed: 0, joinedBooting: 0, joinedRooted: 0, peakBooting: 0,
                         evicted: 0, rehydrated: 0, navigated: 0, seeded: 0 };
-/* WHICH LIVE DOCUMENTS THESE FINDINGS BELONG TO. The merge in the trusted zone used to be handed a sourceUrl
-   and nothing else, so it had no document to merge INTO and built a throwaway view instead — a producer whose
-   consumer was an object discarded on return, which is exactly the shape `_emptyDocView`'s own comment
-   forbids. A sourceUrl cannot stand in for the identity: `documentId` is the ONLY document key in this system
-   (a tab holds many documents and a (tab,frame) pair is reused across navigations at a DIFFERENT origin), so
-   the name has to be carried, not re-derived.
-   THE LIST IS THE WAITERS, WHICH IS THE SAME SET THE TERMINAL RESULT IS RESOLVED TO — one instance holds one
-   agent cluster and several browser documents can join it (a same-origin sub-frame, a re-delivery), and every
-   one of them is answered with the same finalized analysis, so a snapshot of the run belongs to all of them
-   too. EMPTY IS A POSITIVE STATEMENT AND NOT AN ABSENCE: a child navigable the engine announced and a
-   rehydrated cold recipe have no live caller by construction (`_cold`), and their findings are the moat's
-   alone. */
+/* Which live documents these findings belong to. `documentId` is the only document key in this system (a tab
+   holds many documents and a (tab, frame) pair is reused across navigations), so the names are carried, not
+   re-derived from a sourceUrl. The list is the waiters, the same set the terminal result is resolved to: every
+   browser document that joined the instance is answered with the same analysis, so a snapshot belongs to all
+   of them. Empty is a positive statement: a child navigable the engine announced and a rehydrated recipe
+   have no live caller by construction (`_cold`), and their findings go to the cumulative store alone. */
 function engineLiveDocumentIds(eng) {
   DCHECK(eng._cold === (eng._resolvers.length === 0),
          "an instance disagrees with itself about whether it has a live caller — `_cold` is declared at " +
@@ -4391,28 +4313,17 @@ function engineLiveDocumentIds(eng) {
     return String(w.msg.documentId);
   });
 }
-/* THE SEAT FOR AN ADMISSION WHOSE DOCUMENT IS STILL ON THE NETWORK — the fourth pool state, and the one thing
-   that keeps a remote body out of the Level-1 round. `ops.admit()` is called at the TOP of every round, so any
-   suspension inside it is a suspension of the whole across-documents loop: while it stands nothing is ranked,
-   nothing is stepped, nothing is serviced and `_level1Record` is not reached, because the round that would have
-   written it has not begun. Two of admission's arms fetched a DOCUMENT there — a declared route's §7.4
-   navigation and a shed residue's re-derivation — and a body a remote party never ends is therefore the one
-   stall in this zone that takes every healthy instance down with it. §NO BOUNDS forbids the deadline that would
-   have hidden it: a deadline could only ever truncate a reply that was merely slow.
-   A SEAT IS NOT A RESERVATION AND IT DELIBERATELY ANSWERS FOR NO DOCUMENT. It carries no cluster and no
-   document id, because neither is known until the response has landed (`clusterKeyOf` reads the message and the
-   message's address is the RESPONSE's after a redirect) — so `hostClusterOf` and `hostHolderOf` cannot match it,
-   which is correct rather than a gap: both kinds mint a group id nothing else can key to, and `admitSeatLand`
-   asserts that where the message finally exists. What it DOES carry is the three fields every pool walk reads
-   without asking the state first (`_resolvers` for a Clear, `joinedDocIds` for the routing walk, `_readyP` for
-   the wait arm), so no walk has to learn about it in order not to crash on it.
-   IT NEVER REJECTS, AND THE ERROR IS RELAYED RATHER THAN SWALLOWED. A throw out of the load is an invariant
-   abort — `navigationLoad` DCHECKs its principal and `safeFetch` asserts its own contract — and today it
-   travels out of `ops.admit()` into `hostSchedule`'s failure arm, which latches `_hostDead` and banners once.
-   Rejecting HERE would reach nobody: the wait arm races this promise only when nothing is rankable, so on every
-   other round it would be an unhandled rejection with the loop still re-kicking, which is the 23,163-abort
-   shape `_hostKick`'s split exists to prevent. So it is stored and re-thrown BY THE ROUND that lands the seat,
-   at which point the failure path is byte-identical to the one the await had. */
+/* The seat for an admission whose document is still on the network, the fourth pool state. `ops.admit()` runs
+   at the top of every round, so a suspension inside it would stall the whole Level-1 loop; a declared route's
+   navigation and a shed residue's re-derivation therefore load on a seat, and the round returns. No deadline
+   is added: it could only truncate a slow reply.
+   A seat answers for no document: its cluster and document id are unknown until the response lands (the
+   message's address is the response's after a redirect), so `hostClusterOf` and `hostHolderOf` cannot match
+   it, and both kinds mint group ids nothing else keys to (`admitSeatLand` asserts that). It carries the fields
+   every pool walk reads without checking state (`_resolvers`, `joinedDocIds`, `_readyP`).
+   It never rejects: a throw out of the load is an invariant abort, stored and rethrown by the round that lands
+   the seat (so it reaches hostSchedule's failure arm as before), since a rejection here would be unhandled on
+   every round that does not wait on it. */
 function admitLoadSeat(what, load) {
   DCHECK(what !== null && typeof what === "object" && (what.kind === "seed" || what.kind === "cold"),
          "an admission seat was taken for a work item this zone has no landing arm for — `admitSeatLand` " +
@@ -4422,10 +4333,8 @@ function admitLoadSeat(what, load) {
          "an admission seat was taken with no load to perform — the seat exists so the round can RETURN while " +
          "a document arrives, so one with nothing arriving is a slot nothing will ever clear");
   const seat = { state: "loading", what: what, landed: null, failed: null, settled: false,
-                 /* ABSENT BY VALUE RATHER THAN OMITTED, so a walk that reads one gets `null` and not a
-                    TypeError: `hostHolderOf` compares `docId` and indexes `joinedDocIds`, `hostClusterOf`
-                    compares `cluster`, `_bestCandidate` reads `msg && msg.sourceUrl`, and hostClear iterates
-                    `_resolvers`. None of them asks the state first, and none of them may match a seat. */
+                 /* Absent by value rather than omitted, so pool walks that do not check state read `null`
+                    and never match a seat (`hostHolderOf`, `hostClusterOf`, `_bestCandidate`, hostClear). */
                  cluster: null, docId: null, topDocId: null, joinedDocIds: [], msg: null, r: null,
                  _resolvers: [], _cold: true, _readyP: null };
   seat._readyP = (async () => {
@@ -4436,14 +4345,10 @@ function admitLoadSeat(what, load) {
   _pool.push(seat);
   return seat;
 }
-/* AND THE LANDING, WHICH IS EVERY DECISION THE AWAIT USED TO MAKE, MADE ON A ROUND. It runs at the top of
-   `admit` ahead of the candidate order, because the seat's fetch is ALREADY SPENT: the order chose this work
-   item, the request went out, and refusing to seat the document now would waste it and re-rank an address whose
-   cost has been paid. That is the same sentence the seed arm's `_seeds.delete` is unconditional for.
-   IT RETURNS `null` FOR THE CENSUS, WHICH IS A STATEMENT AND NOT A MISSING READING. This round spent its
-   advance on the admission and never ASKED the non-resident order, exactly as the navigation-swap arm above it
-   does — so a census of that order would be a reading of a walk that did not run, and `_level1Record` keeps
-   that apart from a walk that ran and found nothing. */
+/* The landing: every decision the load's await used to make, made on a round. It runs at the top of `admit`
+   ahead of the candidate order, because the seat's fetch is already spent (the order chose the item and the
+   request went out), as the seed arm's unconditional `_seeds.delete` reflects. It returns `null` for the
+   census: this round spent its advance on the admission and never asked the non-resident order. */
 async function admitSeatLand(seat) {
   const i = _pool.indexOf(seat);
   DCHECK(i >= 0,
@@ -4451,68 +4356,30 @@ async function admitSeatLand(seat) {
          "what and this is the only thing that takes a seat out of it, so a seat that is not there is one a " +
          "Clear removed and whose document is about to be seated into a session the person asked to forget");
   _pool.splice(i, 1);
-  /* THE SEAT SETTLED EXACTLY ONE WAY, ASSERTED BECAUSE THE TWO OUTCOMES TAKE OPPOSITE ARMS AND `null` IS A
-     LEGITIMATE VALUE OF NEITHER. A seat with both is a load that answered and threw; a seat with neither is
-     one this round is landing before its promise settled, which would read `landed === null` as a document of
-     no bytes and seat a page this zone never fetched. */
+  /* The seat settled exactly one way: both outcomes take opposite arms and `null` is a legitimate value of
+     neither, so a seat with both or neither is asserted. */
   DCHECK(seat.settled && ((seat.landed === null) !== (seat.failed === null)),
          "an admission seat was landed in a state it cannot be in (settled=" + seat.settled + ", landed=" +
          (seat.landed === null ? "absent" : "present") + ", failed=" +
          (seat.failed === null ? "absent" : "present") + ") — the load stores exactly one of the two and the " +
          "round lands the seat only after `settled`, so anything else is a document about to be built out of " +
          "an answer nobody gave");
-  if (seat.failed !== null) throw seat.failed;   // relayed, not swallowed: the round owns this failure (see above)
+  if (seat.failed !== null) throw seat.failed;   // relayed, not swallowed: the round owns this failure (see admitLoadSeat)
   if (seat.what.kind === "seed") {
     const seed = seat.what.seed;
-    /* THE SEED'S OWN §7.4 NAVIGATION, THROUGH THE ONE CHOKEPOINT — the same call a live document's seed and
-       a peer's child navigable both make. The PRIVATE-NETWORK principal and the CREDENTIALED-READ principal
-       are the DECLARING document's, taken when the route was declared and carried on the work item, because
-       §scheduler's "an operation that becomes a work item takes its inputs with it" is exactly the rule a
-       read of the pool here would break: the engine that declared this route may be gone by now. */
-    /* AND SO IS THE PROVENANCE, for the identical sentence: the engine that declared this route stated
-       what its path made the address, and the load is decided from that word and not from the address. */
-    /* THE BYTES, WHICH ARRIVED ON AN EARLIER ROUND AND ARE READ HERE RATHER THAN AWAITED. The residual
-       that stood at the await is RETIRED, and it is rewritten rather than deleted because its reasoning is
-       what a reader re-derives from `engineIssue`'s table: that table answers the three doors INSIDE a
-       service round — the pending-fetch seam, `xhr.send` and `document.fetch` — so an engine no longer
-       leaves the rankable set because a server holds a reply open, and this door was the one left, held one
-       level ABOVE any round by `hostSchedule`'s own `ops.admit()`. Its cost clause was that a declared
-       route whose body never ends froze the LEVEL-1 LOOP rather than one instance.
-       ITS NEXT-DIFF CLAUSE WAS RIGHT ABOUT THE SEAT AND WRONG ABOUT THE FOURTH STATE'S READERS, WHICH IS
-       WORTH KEEPING BECAUSE IT IS THE CLAUSE A LANE WOULD HAVE BUILT. It said the seat had to be read by
-       `_waiting` and by `hostClusterOf`'s "a cluster being provisioned answers exactly as a provisioned one
-       does". Neither: a seat holds no `_waiting` entry (a seed has no job and a cold row is not one either),
-       and it may not answer `hostClusterOf` at all, because the cluster key is not known until the response
-       has landed — `clusterKeyOf` reads the message, and the message's `sourceUrl` is `loaded.url` after a
-       redirect. What the state IS read by is the RAM accounting, the wait arm and the probe, each of which
-       enumerates its states and would have crashed rather than defaulted; and the reason nothing needs a
-       cluster answer is that both kinds mint a group id no other arrival can key to (`seed:` from a
-       counter, `cold:` from the frontier key), which the DCHECK below states as an invariant. */
+    /* The seed's own navigation through the one chokepoint. Both principals and the provenance are the
+       declaring document's, taken when the route was declared and carried on the work item, since the engine
+       that declared it may be gone. */
+    /* The bytes arrived on an earlier round (see admitLoadSeat) and are read here. */
     const loaded = seat.landed;
-    /* AND THE SAME THREE REFUSALS A SEEDED DOCUMENT ALWAYS OWES ITS READER, PLUS THE DECLINE, which is a
-       FOURTH member of exactly this population and never a new decision — this arm is why `navigationLoad` is
-       told `report` for this caller. The three, in the same order and for the same reasons stated at the live
-       seed: the chokepoint's own `unavailable`; a response that landed on ANOTHER ORIGIN (which is a Document
-       of origin B about to be seated in a cluster keyed on origin A, and is also evidence that this server
-       answers this request differently from the one the person's own navigation made); and an EMPTY body,
-       which is a perfectly ordinary Document under §7.4.5 and cannot be the bundle this run exists to
-       explore. Each costs the one fetch and nothing more. A DECLINE costs LESS — no request went out at all —
-       and the pool's answer is the same one, because it is the same state: the seat is already out of `_pool`,
-       `_seeds` was spliced unconditionally when the order picked this address, nothing is provisioned, and
-       the entry is never LOST by leaving, since the declaring document's residue replays its router and
-       declares the route again.
-       IT IS TESTED FIRST AND THE ORDER IS LOAD-BEARING RATHER THAN TIDY. A decline carries `unavailable: null`
-       AND `bytes: null`, so for a same-origin declared route the first three disjuncts are all FALSE — the
-       notice refuses a cross-origin declaration and a refused reply's `urlList` holds the requested href —
-       and `loaded.bytes.length` would then read `length` off `null`. An `unavailable` load short-circuits on
-       its own first disjunct and never reaches that term, which is the whole reason this was not already a
-       live TypeError: the term was unreachable until the decline could arrive.
-       AND THE REASON IS PRINTED VERBATIM RATHER THAN CLASSIFIED, because the two shapes that reach here do
-       not have one remedy. `blocked-signal:<signal>=<value>` names a row of the person's own egress control —
-       it can arrive at all because the notice's `_seedRefusal` pre-screen asks the IDENTICAL vector ROUNDS
-       EARLIER and an origin may be narrowed in between — while `blocked-destructive:<token>` is PERMANENT, no
-       widening reopening that list by safe-fetch.js's own statement. A message promising a control row for
-       both would be wrong about one of them, and `blocked-<rule>:<ground>` is attributable by construction. */
+    /* The refusals a seeded document owes its reader, each costing one fetch at most: a decline (no request
+       made; this caller states `report`), an unavailable load, a response that landed on another origin (a
+       Document of origin B in a cluster keyed on A), and an empty body (an ordinary empty Document, but not a
+       bundle to explore). The seat is already out of the pool and the `_seeds` entry was removed when picked,
+       and the declaring document's residue declares the route again. The decline is tested first: it carries
+       `bytes: null`, so a same-origin declined route would otherwise reach `loaded.bytes.length`. The reason is
+       printed verbatim, since `blocked-signal:` names a row the person can widen while `blocked-destructive:`
+       is permanent. */
     DCHECK(loaded.declined === null || typeof loaded.declined === "string",
            "a declared route's load does not STATE whether it was declined — `loaded.declined` is `" +
            String(loaded.declined) + "`. Every arm of `navigationLoad` states it, and a `||`-shaped read here " +
@@ -4530,39 +4397,20 @@ async function admitSeatLand(seat) {
                     : "the response carried no bytes"));
       return null;
     }
-    /* A CLUSTER OF ONE, WHICH IS THE TRUTH ABOUT IT RATHER THAN A CONVENIENCE. The declared page is not
-       nested in the document that declared it and shares no heap with it: nothing holds a WindowProxy for
-       it, no element presents it, and it is reached the way a person reaches a route — by navigating a tab
-       of the custom browser's own. So it is a TOP-LEVEL TRAVERSABLE in a browsing-context group this zone
-       mints, which is §7.3.2.3's own sentence read for a navigation nobody's opener survives.
-       THE PRINCIPAL IS THE DECLARING DOCUMENT'S AND IS NEVER RE-DERIVED FROM THIS ADDRESS. It is the
-       browser's `MessageSender.origin` for the document whose router declared the route, carried on the
-       work item, and SECURITY.md's credentialed-read principal is exactly that and never `originOf(url)` —
-       a sandboxed document has an ordinary address and an OPAQUE origin, so parsing the address would hand
-       its declared route same-origin access to authenticated bytes the browser refused it. The two
-       ADDRESSES were compared above (which is what HTML §7.2.5's can-have-its-URL-rewritten guarantees and
-       what a redirect could still break); this is the other question and it takes the other fact.
-       `credentialed` IS THEREFORE COMPUTED FROM THAT SAME PRINCIPAL — the identical predicate
-       `navigationLoad` used to decide whether to ask for cookies, so the field STATES the load that
-       happened rather than re-deciding it from the address that came back.
-       `topLevelUrl` IS ITS OWN ADDRESS because a top-level traversable's environment is its own top
-       (§8.1.3.1), and it is `loaded.url` rather than the requested address for §7.5.1's `creationURL`
-       reason: after a redirect the Document is AT where the response came from. */
-    /* AND THE WORD THE DECLARING ENGINE STATED, CARRIED ON INTO THE RESIDUE THIS RUN WILL PARK. It is
-       `seed.provenance` and not a literal for the reason the work item carries it at all: the load above
-       was decided from that word, and an entry whose stored grade disagreed with the load that fetched it
-       would have the cold tier re-fetch under a permission nobody granted. It is `derived` BY
-       CONSTRUCTION only while no origin is widened: at a widened one `_seedRefusal` passes a FORCED
-       declaration, and that entry is exactly what this field exists to keep honest. */
+    /* A cluster of one: the declared page is not nested in the declaring document and nothing holds a
+       WindowProxy for it, so it is a top-level traversable in a group this zone mints. The principal is the
+       declaring document's browser-stated origin carried on the work item, never `originOf(url)` (a sandboxed
+       document's address is ordinary while its origin is opaque); the addresses were compared above.
+       `credentialed` is computed from that principal with navigationLoad's own predicate, so it states the load
+       that happened. `topLevelUrl` is its own address after redirects (HTML §8.1.3.1, §7.5.1's `creationURL`). */
+    /* The provenance carried into the residue this run parks: the load was decided from `seed.provenance`, so
+       the stored grade must agree (at a widened origin a forced declaration passes `_seedRefusal`). */
     const msg = { type: "AST_ANALYZE", sourceUrl: loaded.url, origin: seed.principalOrigin,
                   groupId: "seed:" + (_nextSeedGroup++), responseHeaders: loaded.headers,
                   topLevelUrl: loaded.url,
                   credentialed: navigationCarriesSession(loaded.url, seed.principalOrigin),
-                  /* AND IT IS THE JOIN, FOR THE REASON THE CHILD-NAVIGABLE RECORD STATES: a route only
-                     the bundle names, declared from a document this zone chose to open, is reached under
-                     both. At every setting reachable today the declaring document is `observed` and the
-                     join is the identity, so the stored grade is unchanged — the pairs it separates are
-                     the ones a widening creates. */
+                  /* The join of the declaring document's grade and the declaration's word, as for a child
+                     navigable. */
                   provenance: self.safeFetchReachJoin(seed.reach, seed.provenance),
                   persist: true };
     DCHECK(hostClusterOf(clusterKeyOf(msg)) === null,
@@ -4570,16 +4418,10 @@ async function admitSeatLand(seat) {
            "group id is a fresh counter, so a hit means two seeds were given one id and the second would " +
            "JOIN the heap the first built, which is two documents behind one agent");
     _reserveStats.seeded++;
-    /* NULL: a declared route has NO CREATOR — nothing embedded it and nothing opened it, so HTML §7.1.7 has
-       no container to clone and this Document is judged against its own response alone. `u`/`null`/`none`:
-       §7.3.1.3 gives it no parent and no container element, and §3.1.3's steps 2-3 return the empty list
-       for a Document with no container document — three statements of one fact about a top-level page.
-       `cold: true` — it has no caller. Nothing awaited this document, so its findings MERGE to the moat
-       rather than being returned to a requester, which is the same arm a rehydrated recipe takes.
-       AND NOT REFERENCED, WHICH IS THE SAME SENTENCE THE CLUSTER-OF-ONE PARAGRAPH ABOVE ALREADY MAKES:
-       nothing holds a WindowProxy for a route the bundle merely DECLARED — no element presents it and no
-       page opened it, which is precisely why this zone had to mint its group and its name. Its frontier
-       is entitled to drain, and draining is what produces the findings this arm exists to collect. */
+    /* `null` creator: nothing embedded or opened it, so HTML §7.1.7 has no container to clone. `u`/`null`/
+       `none`: no parent, no container element and no ancestors, one fact about a top-level page. `cold: true`:
+       no caller awaits it, so its findings merge into the cumulative store. Not referenced: nothing holds a
+       WindowProxy for a merely declared route, so its frontier may drain. */
     await engineCreate("", loaded.bytes, msg, true, null, loaded.url, true, null, "u", "null",
                        "none", "none", 0)._readyP;
     return null;
@@ -4589,29 +4431,18 @@ async function admitSeatLand(seat) {
          "refuses any word but the two, so a third here is a kind added at the seat and not at the landing, " +
          "and the document would be dropped with its fetch spent and nothing said");
   {
-    /* THE WHOLE PARKED DOCUMENT COMES BACK THROUGH ONE READER, and the recipe's flows resume inside it.
-       `frontierDoc` is the same shape the park wrote, asserted the same way in the other direction, so
-       the field the tier was missing (`responseHeaders` — the policy container) cannot go missing again
-       from one end only.
-       THE CONTENT IS READ FOR THE PICKED ITEM AND NOT AT THE RANKING, which is the other half of why the cold
-       tier has a ranking VIEW. The order reads two numbers; only the item it PICKS is deserialized — and since
-       the read is a suspension it happens on the SEAT, one round earlier, so this line takes what landed. */
+    /* The whole parked document comes back through frontierDoc, the reader paired with the park's writer, and
+       the recipe's flows resume inside it. Content is read for the picked item only (the ranking view reads two
+       numbers), and since that read suspends it happened on the seat, one round earlier. */
     const stored = seat.landed.stored;
     DCHECK(stored,
            "the cold tier's ranking view named an entry the store does not hold — this zone is the store's " +
            "only writer and frontierPut updates the view on its way through, so a row with no entry is the " +
            "projection and the store having drifted apart");
-    /* A SHED RESIDUE'S DOCUMENT IS ON THE NETWORK RATHER THAN IN THE STORE, so it was fetched back — the
-       same request the shed decision was PROVED against, performed for real. THE ARGUMENT FOR AWAITING IT
-       INSIDE THE ROUND IS RETIRED AND IS KEPT BECAUSE IT IS THE ONE A READER RE-DERIVES: it said this arm
-       "already suspends on the store and then on a whole wasm instantiation, so a fetch ahead of them is the
-       same shape and not a new one". Every clause of that is true about the SHAPE and false about the COST.
-       A store read and a wasm instantiation are LOCAL and settle; a response body's arrival is a remote
-       party's to decide, and this arm sits in `ops.admit()`, one level above every service round — so a shed
-       entry whose server holds the body open froze the LEVEL-1 LOOP and not this admission. "The same shape"
-       is exactly the reasoning that makes an unbounded wait look like a bounded one.
-       A re-derivation that fails strands the entry and this round seats nothing — it is not offered again
-       (see `_bestCandidate`), so the failure costs one fetch in total rather than one per round. */
+    /* A shed residue's document is on the network, so it was fetched back on the seat (the same request the
+       shed was judged against), never awaited inside admission, where a body that never ends would freeze the
+       Level-1 loop. A failed re-derivation strands the entry and seats nothing; a stranded row is not offered
+       again (see `_bestCandidate`), so the failure costs one fetch in total. */
     let doc;
     if (stored.shed) {
       const back = seat.landed.back;
@@ -4624,48 +4455,29 @@ async function admitSeatLand(seat) {
     } else {
       doc = frontierDoc(stored, "came back from the cold tier");
     }
-    /* THE PRINCIPAL RESUMES WITH THE RECIPE. A parked flow's world is only the same world if the
-       document it resumes into is the same PRINCIPAL — and this zone cannot re-derive one from
-       c.sourceUrl without re-fabricating the tuple origin a sandboxed document does not have. The stamp
-       site refuses to deliver a message for an empty one rather than inventing one. */
-    /* A RESUMED RECIPE IS A CLUSTER OF ONE, and its GROUP says so rather than borrowing a tab's. The
-       browsing-context group it parked in is gone — the tab was closed, or the session was — so there is
-       no live document it may share a heap with, and the frontier key (address|bundle, already unique per
-       recipe and never equal to a tab id) is the honest name for the group it resumes into. That is also
-       what lets the origin half stay "" for a recipe whose principal is empty: an empty origin on a key
-       whose group is unique collides with nothing, so nothing is invented. */
+    /* The principal resumes with the recipe: a parked flow resumes into the same world only under the same
+       principal, which cannot be re-derived from the address. The stamp site refuses an empty one. */
+    /* A resumed recipe is a cluster of one: the group it parked in is gone, so its group is `cold:` plus its
+       frontier key (address|bundle, unique per recipe, never a tab id), which also lets an empty principal
+       collide with nothing. */
     const msg = { type: "AST_ANALYZE", pageHtml: doc.html, code: doc.code, sourceUrl: doc.sourceUrl,
                   origin: doc.origin, groupId: "cold:" + seat.what.key,
                   responseHeaders: doc.responseHeaders,
                   topLevelUrl: doc.topLevelUrl, credentialed: stored.credentialed,
-                  /* THE WORD THIS RESIDUE WAS PARKED UNDER, RE-STATED SO THE ENTRY IT PARKS AGAIN KEEPS IT.
-                     A rehydration does not re-decide how the address was first reached; it replays it. */
+                  /* The word this residue was parked under, re-stated so the entry it parks again keeps it. */
                   provenance: frontierProvenance(stored), persist: true };
-    /* THE `try {} catch` AROUND THIS IS GONE WITH THE REPORTING IT DID. A rehydration whose engine ABORTS
-       is now bannered by engineBootFailed, at the reservation, together with the pool slot it releases —
-       one place on every creation path rather than one arm per call site. What was left in the catch was
-       an invariant abort, which `RETHROW_FATAL` was already rethrowing, so the arm could only ever have
-       caught something it immediately gave back. A rehydrated cold recipe always participates in the
-       frontier and never has a caller, which is the `cold` argument. */
-    /* THE STORED DOCUMENT IS PASSED AS IT WAS PARKED. `c.html || ""` stood here and it defeated
-       engineRoot's own assert: an entry carrying no document became a page that parses to nothing, which
-       reads as an origin whose parked flows found nothing rather than one that was never rebuilt. */
+    /* A rehydration whose engine aborts is bannered by engineBootFailed at the reservation, with the pool slot
+       it releases; no catch here. A rehydrated recipe never has a caller (`cold`). */
+    /* The stored document is passed as parked; engineRoot asserts its shape, so a missing document is never
+       read as an empty page. */
     _reserveStats.rehydrated++;
-    /* NULL: a rehydrated cold recipe replays a document that had no creator in this session either. */
-    /* `u`: a rehydrated recipe carries the DOCUMENT its session recorded and no embedder — the frontier
-       key is a document's, and a parked child navigable resumes through the create notice its creator's
-       replay re-emits rather than through this path.
-       `none`: and §3.1.3's list arrives on that same re-emitted notice for the same reason, so what is
-       replayed HERE is a document with no embedder and therefore no ancestors. */
-    /* AND NOT REFERENCED, ON THAT SAME SENTENCE. A resumed recipe is a CLUSTER OF ONE in a group this zone
-       mints from the frontier key: the browsing-context group it parked in is gone, so there is no live
-       instance anywhere holding a WindowProxy for the document being rebuilt. If this document creates a
-       child navigable again, that child arrives as a create notice and is provisioned referenced by the arm
-       above — which is the same route the parked child took the first time.
-       THIS IS THE ONE ARM WITH NO NATIVE COUNTERPART, and it is worth saying why it does not contradict
-       `qjs_set_referenced` surviving a teardown: what survives a teardown is one INSTANCE's statement about
-       itself across a park, and what happens here is a NEW instance for a document whose peers no longer
-       exist. Carrying the old session's `1` forward would hold a frontier open for a proxy nothing holds. */
+    /* `null` creator: a rehydrated recipe's document had no creator in this session. */
+    /* `u` and `none`: the frontier key names a document with no embedder here; a parked child navigable resumes
+       through the create notice its creator's replay re-emits, which carries its parent and ancestors. */
+    /* Not referenced: the recipe's peers are gone, so no instance holds a WindowProxy for the rebuilt document;
+       a child it creates again arrives as a create notice and is provisioned referenced. This differs from
+       `qjs_set_referenced` surviving a teardown, which is one instance's statement about itself across a park;
+       here a new instance replaces one whose peers no longer exist. */
     await engineCreate(doc.code, doc.html, msg, true, null, null, true, null, "u", "null",
                        "none", "none", 0)._readyP;
     return null;
@@ -4673,49 +4485,29 @@ async function admitSeatLand(seat) {
 }
 const _hostOps = {
   weight: engineWeight,
-  /* THE VALUE YIELD FLOOR — run until outranked by the runner-up. The `try {} catch (_) {}` around it is gone
-     with the two below it: a call into the engine either answers or REJECTS, and a rejection is either the WASM
-     instance crashing or this zone's own transport contract breaking. Swallowing either leaves a dead engine in
-     the pool being stepped, ranked and finalized as if it were alive, which is the one outcome engineCrash
-     exists to make impossible. This one is not caught at all — an unranked, unsteppable engine is not a state
-     the pool has a handling for, so it travels to hostSchedule's own failure arm. */
+  /* The value yield floor: run until outranked by the runner-up. Not caught: a rejection is the instance
+     crashing or this zone's transport contract breaking, and an unranked, unsteppable engine has no handling
+     in the pool, so it travels to hostSchedule's failure arm. */
   setFloor: async (eng, floor) => {
     DCHECK(Number.isFinite(floor) || floor === -Infinity,
            "the pool set a yield floor that is not a number — the engine compares its top flow's weight " +
            "against it, and a NaN floor makes every comparison false so the flow never yields");
     await eng.r.renderer.setYieldFloor({ floor });
   },
-  /* WHICH RESIDENT ENGINE MUST GIVE UP ITS RAM, ASKED OF THE ONE ORDER — the third moment of the SAME question
-     `admit` asks and `frontierWeight` answers, and the reason those are no longer three policies. Admission
-     asks it when there is room, this asks it when there is not, and rehydration is not a separate question at
-     all (a parked frontier is simply a candidate that is not resident).
-     THE FLOOR IS THE ONLY GATE, AND IT IS THE FLOOR RATHER THAN `_admissionHasHeadroom`. Those two are
-     different facts and were one before: a RESERVATION in flight also blocks admission, and a boot that has
-     not reported yet is not a reason to evict a running document — it is a reason to wait for the number.
-     STRICTLY GREATER, so a tie leaves the incumbent holding the RAM. That is the identical comparison
-     solver/flow.c's flow_pick makes one level down ("the thread moves only for a flow that is strictly
-     better"), and it is what stops two items of equal weight from paying a park and a rehydration to swap
-     places. It is not a bound: the loser keeps its place, its weight and every flow it holds.
-     WHAT IT CAN STILL DO IS CHURN, NAMED HERE BECAUSE IT IS MEASURED RATHER THAN SUSPECTED (`evicted` and
-     `rehydrated` beside each other in _reserveStats). The two sides of this comparison are not denominated
-     the same way through time: a resident engine's weight AGES by CPU without bound (solver/flow.h: "a
-     document's best flow falls by one point per second of unproductive CPU while a document that boots today
-     enters at 1.0… past it a mature document is outranked by every page that arrives afterwards"), while a
-     parked item's `emit/visits` is a RATE that does not fall — so a productive heavy document can sink below
-     the floor's rivals, park, and win its own slot straight back on the next round. Every such cycle does
-     real work (the replay re-explores) and admission still interleaves the waiting tabs around it, so it is a
-     COST and not a starvation — and the primitive that removes it is the one flow.h already names: start-time
-     fair queueing's virtual time, applied at LEVEL-1 so an item RE-ENTERING the resident set enters at the
-     resident set's virtual time instead of resetting its own clock by leaving. Not invented here, because
-     every substitute for it is a decay constant somebody picked. */
-  /* IT ANSWERS TWO THINGS AND THE SECOND IS NOT A DECISION. `evict` is the engine that must give its memory up,
-     or null; `cand` is the READING of the non-resident order this arm took to decide that, or null where it
-     did not take one. They travel together because this arm is where the Level-1 comparison the whole design
-     is about actually happens — `pick.best.w > engineWeight(worst)`, a non-resident item against the RAM a
-     resident one holds — so a census that only saw admission's ask would be blind exactly at the floor. It is
-     NOT the round's only ask: `admit` asks under the floor and this asks at it, and an admission that seats an
-     instance can be what puts the pool at the floor in the same round, so hostSchedule counts the asks rather
-     than assuming there was one. */
+  /* Which resident engine must give up its RAM, asked of the one order: admission asks it with room, this at
+     the floor, and rehydration is a candidate that is not resident. The gate is the floor, not
+     `_admissionHasHeadroom`: a reservation in flight blocks admission but is no reason to evict.
+     Strictly greater, so a tie leaves the incumbent (solver/flow.c's flow_pick makes the same comparison), and
+     equal items never pay a park and a rehydration to swap places.
+     Named residual: a resident engine's weight ages by CPU without bound while a parked item's `emit/visits`
+     does not fall, so a productive document can park and win its slot straight back, which costs re-work but
+     starves nothing. Next diff applies start-time fair queueing's virtual time at Level 1 (solver/flow.h names
+     it), so a re-entering item enters at the resident set's virtual time. Absence shows as `evicted` and
+     `rehydrated` in _reserveStats rising together for the same items. */
+  /* It answers `evict` (the engine to give up its memory, or null) and `cand` (the reading of the non-resident
+     order it decided against, or null), together, because this is where the Level-1 comparison
+     `pick.best.w > engineWeight(worst)` happens and the census must see it. hostSchedule counts the asks, since
+     admission may also have asked this round. */
   evictee: async (hot) => {
     if (!_atRamFloor()) return { evict: null, cand: null };   // there is room: nothing has to give anything up
     const pick = _bestCandidate(_candPopulation(await frontierIndex()));
@@ -4728,70 +4520,48 @@ const _hostOps = {
     _reserveStats.evicted++;
     return { evict: worst, cand: pick.census };
   },
-  /* THE COLD-TIER PARK. The catch that stood here swallowed the engine's own abort, so the host went on
-     believing it had evicted an engine that never parked. It is the forcing function; it is not caught.
-     THE CAPABILITY IT USED TO NAME AS UNBUILT IS BUILT: this comment said "qjs_request_park is a bare DFAIL
-     naming the serializer to write", and main.c's qjs_request_park DCHECKs `g_begun` and calls
-     engine_request_park, which raises `g_park_req`; engine_sched_slice takes it at the next step boundary,
-     switches the running flow out, writes every member through cold_park and answers ENGINE_STEP_DONE. A
-     comment that names another file's absence is a claim about that file, and this one outlived it. */
+  /* The cold-tier park, not caught: main.c's qjs_request_park DCHECKs `g_begun` and calls engine_request_park,
+     which raises `g_park_req`; engine_sched_slice takes it at the next step boundary, writes every member
+     through cold_park and answers ENGINE_STEP_DONE. */
   requestPark: async (eng) => { await eng.r.renderer.requestPark(); },
-  /* INCREMENTAL MERGE (coarse cadence): snapshot a HOT engine's current findings + merge to the cumulative
-     moat WITHOUT waiting for a finalize that an unbounded engine never reaches. First sight starts the clock,
-     so short analyses (finalize before PARTIAL_MS) never pay for it. qjs_emit_partial appends a fresh @RESULT
-     to eng.lines (teardown-free); we parse just that snapshot, CONSUME the line (bound eng.lines growth — the
-     final teardown re-emits its own @RESULT), and merge via onFrontierAdvance (globalStore, dedup-idempotent). */
+  /* Incremental merge on a coarse cadence: snapshot a hot engine's findings and merge them into the cumulative
+     store without waiting for a finalize an unbounded engine may never reach. First sight starts the clock, so
+     an analysis finishing within PARTIAL_MS never pays for it. qjs_emit_partial appends a fresh @RESULT to
+     eng.lines; this parses that snapshot, consumes the line (finalize asks for its own), and merges through
+     onFrontierAdvance (globalStore, idempotent). */
   streamPartial: async (eng) => {
     const now = Date.now();
     if (!eng._lastPartial) { eng._lastPartial = now; return; }
     if (now - eng._lastPartial < PARTIAL_MS) return;
     eng._lastPartial = now;
-    /* A WASM ABORT IS THE ENGINE CRASHING — it was the only failure this call had while it was a ccall, and it
-       is now one of two: renderer-host's own asserts reject the same way and are this zone's contract, not the
-       instance's. The line scan below only runs once this has answered, because the @RESULT it prints rides
-       that reply. */
+    /* An engine abort is the engine crashing; renderer-host's own asserts reject too and are this zone's
+       contract, hence RETHROW_FATAL. The scan below runs after the call answers, since its @RESULT rides that
+       reply. */
     try { await eng.r.renderer.emitPartial(); }
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "partial", e); return; }
-    /* A CLEAR LANDED WHILE THIS SNAPSHOT WAS IN THE AIR. This is the ONE await in this function, so a dropped
-       engine here is exactly that, and the snapshot below is an observation of a page the user has just asked
-       to have deleted — merging it repopulates the store the Clear emptied, into the cumulative moat AND (since
-       the merge learned to name its documents) into the document itself. It also cannot be merged even if one
-       wanted to: hostClear rejects a live instance's waiters, and `engineLiveDocumentIds` — evaluated as the
-       argument on the very next line — asserts that a live instance still has some, so the merge path for a
-       cleared engine ABORTS the trusted zone rather than reaching the store at all.
-       THE FRAME IS NOT TAKEN HERE. This round has one owner and it is the release step at the bottom of
-       hostSchedule; destroying here would be a second, and the second teardown removes an element that is
-       already gone — which renderer-host reports as a renderer having left the document twice. */
+    /* A Clear landed during the one await: the snapshot is of a page the person asked to forget, and hostClear
+       has rejected its waiters (engineLiveDocumentIds would abort on them), so it is not merged. The frame is
+       not taken here; the release step at the bottom of hostSchedule owns it. */
     if (eng._dropped) return;
     let idx = -1;
     for (let i = eng.lines.length - 1; i >= 0; i--) if (String(eng.lines[i]).startsWith("@RESULT ")) { idx = i; break; }
-    /* qjs_emit_partial PRINTS ONE, unconditionally. No line here means the print sink between the engine and
-       this zone dropped it, and returning quietly would report the engine as having found nothing. */
+    /* qjs_emit_partial prints one result unconditionally; none here is this zone's capture failing. */
     DCHECK(idx >= 0, "qjs_emit_partial produced no @RESULT line — it prints the one result document every time " +
                      "it is called, so its absence is this zone's own capture of the engine's output failing");
     if (idx < 0) return;   // release
     const partial = linesToAnalysis([eng.lines[idx]], eng.msg, "partial", eng);   // parse only the snapshot line
     eng.lines.splice(idx, 1);                                           // consume it
-    // Merge on EITHER surface: an XSS-only page (verified @S PoCs, no endpoints) must surface incrementally
-    // too — gating the merge on fetchCallSites alone dropped every sink from a live/looping engine.
-    /* `securitySinks` IS ASSERTED ON EVERY DOCUMENT THIS SEAM PRODUCES (assertResultDocument), so the
-       `partial.securitySinks &&` that stood beside this one was a defaulted read of a guaranteed field — the
-       shape that turns a producer that stopped writing it into a page with no sinks. A snapshot is BUILT from
-       the one @RESULT line above, so it always has a document; asserted rather than assumed, because "always"
-       here is a claim about the arm `linesToAnalysis` took and the two lengths below are read regardless. */
+    // Merge on any surface: an XSS-only page (verified @S PoCs, no endpoints) must surface incrementally too.
+    /* `securitySinks` is asserted on every document (assertResultDocument), and a snapshot built from the @RESULT
+       line above always has one, which is asserted rather than assumed. */
     DCHECK(analysisHasDocument(partial),
            "an incremental snapshot carried no engine document — it is parsed from the @RESULT line this " +
            "function just found, so its absence is that parse having produced something else entirely and " +
            "every finding in the snapshot is about to be read off a record that has none");
-    /* AND THE THIRD SURFACE, WHICH IS THE ONLY ONE A PAGE THAT LEARNED NOTHING HAS. The two lengths above are
-       what the run FOUND; the engine's page errors are what it could NOT do — HTML §8.1.4.4 "Calling scripts"
-       step 8 REPORTS an uncaught exception rather than propagating it, so each one ENDS a program and names a
-       capability the page reached for. A snapshot gated on the finding arrays alone is therefore discarded
-       for exactly the document whose only output is that diagnosis, and the terminal record which would
-       otherwise carry it is the one a run that never drains its frontier never reaches. It is the same
-       repair the comment above records for `securitySinks`, owed at the sibling and not made.
-       ASSERTED, NOT DEFAULTED: `linesToAnalysis` builds this array on BOTH its arms, so an absent one is that
-       producer changed under this reader and a `||`-past would read it as a page with nothing to say. */
+    /* Page errors are the third surface, the only one a page that learned nothing has: HTML §8.1.4.4 Calling
+       scripts reports an uncaught exception rather than propagating it, so each one ends a program and names a
+       capability the page reached for, and a run that never drains never reaches a terminal record. Asserted,
+       not defaulted: linesToAnalysis builds the array on both arms. */
     DCHECK(Array.isArray(partial.resolverErrors),
            "an incremental snapshot carried no resolverErrors array — linesToAnalysis builds one on every " +
            "arm it has, so its absence is that composition changed under this reader and every uncaught " +
@@ -4799,9 +4569,8 @@ const _hostOps = {
     const hasWork = partial.fetchCallSites.length || partial.securitySinks.length ||
                     partial.resolverErrors.length;
     if (!hasWork) return;
-    /* THE MERGE CALLBACK IS THE OTHER HALF OF THIS EDGE. `typeof … === "function"` guarding the call meant a
-       zone that had not installed it dropped every incremental finding silently; offscreen-brain.js installs
-       it before this file is even loaded, so its absence is a broken load order, not an optional feature. */
+    /* The merge callback is the other half of this edge: offscreen-brain.js installs it before this file
+       loads, so its absence is a broken load order. */
     DCHECK(typeof self.onFrontierAdvance === "function",
            "the trusted zone has no onFrontierAdvance to merge an engine's findings into — every incremental " +
            "finding this engine emits has nowhere to go");
@@ -4810,39 +4579,27 @@ const _hostOps = {
   step: async (eng) => {
     let st;
     try { st = (await eng.r.renderer.step()).code; }
-    catch (e) { RETHROW_FATAL(e); engineCrash(eng, "step", e); return 0; }   // crashed instance -> finalize (loud), don't keep stepping a dead engine
-    /* THE ROUND ENDS HERE, so the re-rank that follows reads what THIS step left behind: the frontier it
-       advanced and the linear memory it grew. A crashed instance is never asked — its memory is the thing that
-       aborted, and the branch above hands it to finish() rather than back to the ranking. */
+    catch (e) { RETHROW_FATAL(e); engineCrash(eng, "step", e); return 0; }   // crashed instance: finalize it (loud) rather than keep stepping a dead engine
+    /* The round ends here, so the re-rank reads what this step left: the frontier it advanced and the memory it
+       grew. A crashed instance is not asked; the branch above hands it to finish(). */
     await engineRecordFacts(eng);
     return st;
   },
-  /* ONE SERVICE ROUND, and there is no second op beside it. `serviceHostRequests` was a separate injected op
-     because the yield branch paid half the owed list; it is a strict subset of this one (engineServiceFetch
-     ends by calling it), so keeping both would be two names for one round with a caller free to pick the
-     half that skips the replies. */
-  /* A SERVICE ROUND IS A ROUND, so it records too — and it is the one that would be missed by recording after
-     steps alone. A delivered reply body is the biggest single thing this zone ever copies into an instance's
-     linear memory (a whole JS bundle), and it is copied with no step in between, so the RAM floor would not see
-     that growth until this engine's NEXT slice — admission running against memory already spent. The weight
-     moves for the same round's other half: a delivered reply resumes the flows parked on it, which is precisely
-     the reply-gated work §Attacker-sources calls the point, and the ranking must see it before it picks again.
-     A round that THREW recorded nothing, which is correct: hostSchedule's rejection arm owns that failure and
-     the last round's numbers are still the last thing this instance actually reported. */
-  /* AND IT IS THE ROUND THAT OWNS A CLEARED ENGINE'S FRAME. hostClear drops the whole pool, and an engine that
-     was mid-round when it did is the one case where the frame cannot go with it: renderer-host refuses to
-     destroy a renderer with a call outstanding, because the caller parked on that answer would never hear
-     anything again. A Clear therefore does not interrupt a round — it marks the engine and the round removes
-     the frame when it lands, on both arms, because a round that THREW has left the same iframe behind. */
+  /* One service round, with no second op: engineServiceFetch ends by servicing host requests, so a separate
+     requests-only op would let a caller skip the replies. */
+  /* A service round records too: a delivered reply body (possibly a whole bundle) grows linear memory with no
+     step in between, and the replies resume parked flows, so the RAM floor and the ranking must see both
+     before the next pick. A round that threw records nothing; hostSchedule's rejection arm owns it. */
+  /* It owns a cleared engine's frame: renderer-host refuses to destroy a renderer with a call outstanding, so
+     hostClear marks the engine and the round removes the frame when it lands, on both arms, since a round that
+     threw leaves the same iframe behind. */
   serviceFetch: async (eng, stalled) => {
     try { await engineServiceFetch(eng, stalled); await engineRecordFacts(eng); }
     finally { if (eng._dropped) eng.r.destroy(); }
   },
-  /* THE ROUND'S HALF OF THE CLEAR, and the only thing it does is give back the frame the Clear could not take.
-     There is NOTHING else to do here on purpose: no result is asked for (the instance is going away and its
-     document would be a page nobody requested), no residue is persisted (the cross-session frontier was
-     emptied by the same Clear), no waiter is answered (hostClear already rejected them all with "cleared",
-     which is the error _dispatchDocument reads to abandon its tail). A `finish` here would have been all four. */
+  /* The round's half of a Clear: give back the frame the Clear could not take, and nothing else. No result is
+     asked for, no residue persisted (the Clear emptied the frontier), and no waiter answered (hostClear
+     rejected them with "cleared", which _dispatchDocument reads to abandon its tail). */
   release: async (eng) => {
     DCHECK(eng._dropped,
            "the scheduler was handed an engine that left the pool without a Clear having dropped it — the pool " +
@@ -4854,94 +4611,50 @@ const _hostOps = {
            "instance the user wiped, and the teardown below would abort inside renderer-host instead");
     eng.r.destroy();
   },
-  /* ADMISSION IS THE ONE ORDER ASKED WHERE THERE IS ROOM — the same question `evictee` asks where there is
-     not. It runs in two parts and they are DIFFERENT KINDS OF QUESTION, which is why the ranked part no
-     longer contains the routing part:
-       (1) ROUTING, WHICH COSTS NO RAM AND IS THEREFORE NOT RANKED AND NOT GATED. A waiting document whose
-           agent cluster already has an instance JOINS it, and a sub-frame waits for its embedder to name it.
-           Both used to sit INSIDE the RAM-gated walk, so a same-origin iframe of a page that was already
-           running could not attach to its own agent while the pool was at the floor — a join blocked by a
-           budget it does not spend.
-       (2) ADMISSION, over the ONE candidate order (_bestCandidate): a waiting document and a parked frontier
-           compete by value, and the only thing that holds an item back is the RAM floor — never a liveness
-           gate saying a cold item may not compete. That gate (`!_waiting.length && !_pool.some(e => !e._cold)`)
-           is deleted: in continuous browsing there is always a live document, so a flow parked last week
-           could never be reached regardless of its value. */
+  /* Admission, the one order asked where there is room (evictee asks it where there is not), in two parts:
+     (1) Routing, which costs no RAM and is neither ranked nor gated: a waiting document whose agent cluster
+         already has an instance joins it, and a sub-frame waits for its embedder to name it.
+     (2) Admission over the one candidate order (_bestCandidate): a waiting document, a declared route and a
+         parked frontier compete by value, and only the RAM floor holds an item back. */
   admit: async () => {
-    /* THE ONE SUSPENSION IN THIS FUNCTION, TAKEN FIRST AND DELIBERATELY. Everything below it — the routing
-       walk, the pick, and the synchronous half of engineCreate that takes the pool slot — then runs in one
-       uninterrupted turn, which is what makes "the pool is the register of who holds what" true at the moment
-       the register is consulted. */
+    /* The one suspension in this function, taken first, so the routing walk, the pick and engineCreate's
+       synchronous slot-taking run in one turn and the pool is an accurate register when consulted. */
     const _coldRanking = await frontierIndex();
-    /* AND A DOCUMENT THAT HAS ALREADY ARRIVED IS SEATED BEFORE ANYTHING ELSE IS CONSIDERED, because its fetch
-       is spent. A `loading` seat whose load has settled is a work item the order already chose and already paid
-       for, so ranking anything against it would be ranking against a cost that cannot be unspent; and taking it
-       FIRST is also what makes the wait arm unable to spin — a settled seat's `_readyP` resolves immediately, so
-       a round that left it in the pool would re-enter that arm at full speed on a condition only this line
-       changes. ONE PER ROUND like every other advance: `admitSeatLand` returns, so the pick below is not reached
-       and the round goes on to rank and step the hot set it already has. */
+    /* A seat whose load has settled is seated before anything else, because its fetch is spent; taking it
+       first also keeps the wait arm from spinning on a `_readyP` that resolves immediately. One per round, like
+       every advance. */
     const _landing = _pool.find((e) => e.state === "loading" && e.settled);
     if (_landing) return admitSeatLand(_landing);
-    /* AN INDEX WALK RATHER THAN A SHIFT, because one waiting document can be legitimately UNSEATABLE YET (the
-       defer below) and a shift would either drop it or spin this loop forever re-reading it. */
+    /* An index walk, not a shift, because one waiting document can be legitimately not yet seatable. */
     let i = 0, swap = null;
     while (i < _waiting.length) {
       const job = _waiting[i];
-      /* ONE INSTANCE PER AGENT CLUSTER, ASKED OF THE POOL — which IS the register of who holds what, so nothing
-         here remembers a document it no longer holds. This asked ONE INSTANCE PER DOCUMENT, by documentId, and
-         that is the split CLAUDE.md calls wrong rather than strict: a page and its same-origin iframe are one
-         similar-origin window agent, HTML puts them in one heap and then relies on it, and two heaps make
-         `iframe.contentDocument.body.appendChild(x)` unrepresentable. */
+      /* One instance per agent cluster, asked of the pool: a page and its same-origin iframe are one
+         similar-origin window agent in one heap. */
       const key = clusterKeyOf(job.msg);
       const cluster = hostClusterOf(key);
       const docId = String(job.msg.documentId);
-      /* BROWSER-SET, LIKE EVERY OTHER HALF OF THIS KEY: frame 0 is the group's top-level traversable. It is not
-         the frame's claim about itself (SECURITY.md's reason for not recording an "isTop" a frame reports —
-         a fenced frame is its own tree's root and would impersonate it); `sender.frameId` comes from the
-         browser process, which is the same provenance as `sender.tab.url`. */
+      /* Browser-set: frame 0 is the group's top-level traversable. `sender.frameId` comes from the browser
+         process (as `sender.tab.url` does), not from a frame's claim about itself (SECURITY.md). */
       const isTop = !job.msg.frameId;
       if (cluster) {
-        /* THE CLUSTER'S INSTANCE ALREADY HOLDS THIS DOCUMENT, and that is a statement about the ENGINE rather
-           than about this table. A same-origin sub-frame is created INSIDE that heap by §4.8.5's insertion
-           steps (navigable.c mints its name, adopts it into this agent, and HTML §7.4.5 "Populating a
-           session history entry" loads its address
-           through this same safeFetch chokepoint), so the instance is already running it as a realm of its own.
-           The caller is therefore answered by that instance's finalize — its findings ARE this document's —
-           which is the same path the RESHIP re-delivery of one document already took. What is deleted is the
-           branch beside it that built a second WASM instance, i.e. a second heap for one agent.
-           AND A RESERVATION ANSWERS THIS QUESTION EXACTLY AS AN INSTANCE DOES. A cluster whose instance is
-           still being PROVISIONED is a cluster that has one — the pool slot was taken before the first await
-           precisely so that this line cannot be reached during the boot and told "no" — so the join below
-           attaches this caller to the record that is going to hold its document, and the boot answering later
-           answers it too. That is the case the counter separates: `joinedBooting` is the window in which this
-           branch used to be skipped and a second heap built for one similar-origin window agent. */
-        /* THE GROUP'S TOP WAS REPLACED — WHICH IS WHAT BROWSING AN SPA IS, AND USED TO BE THE ABORT THAT KILLED
-           THE SCHEDULER FOR THE REST OF THE SESSION. A same-origin link click in one tab reaches a cluster that
-           already has an instance rooted at the document being replaced, and there was nothing to do about it
-           but crash: joining alone would have left the old document's realm, tree and parked flows running and
-           REPORTING inside the same instance — two tops for one traversable, a worse answer than the abort.
-           BOTH HALVES EXIST NOW AND THEY ARE ONE NAVIGATION IN THE STANDARD'S OWN ORDER. HTML §7.4.6.1
-           "Updating the traversable" unloads `displayedDocument` given `targetEntry's document`, so the
-           incoming Document is created FIRST and the outgoing one is deactivated after it — engineJoin then
-           engineUnload, and never the other way round, which would join a top into an agent whose top had
-           already been destroyed. The unload is §7.4.6.1's deactivate-a-document-for-a-cross-document-
-           navigation and NOT §7.3.1.6 "Navigable destruction": a navigation destroys no navigable, it replaces
-           the Document active in one. (§7.3.1.6 is what this abort's own text used to name, after naming §7.4
-           before that, and the section it should have named defines an operation over a different object.)
-           A COOP NAVIGATION THAT SEVERED THE GROUP IS NOT THIS CASE and does not reach here: §7.3.2.3's swap
-           puts the new Document in a NEW browsing-context group, and the group is half of `clusterKeyOf`, so
-           such a document arrives with a cluster key no instance holds and roots one of its own. */
+        /* The cluster's instance already holds this document: a same-origin sub-frame is created inside that
+           heap by HTML §4.8.5's insertion steps (navigable.c names it, and HTML §7.4.5 loads it through the same
+           chokepoint), so its caller is answered by that instance's finalize, as a RESHIP re-delivery is. A
+           reservation answers exactly as an instance does, since the pool slot is taken before the first await;
+           `joinedBooting` counts that case. */
+        /* The group's top was replaced: a same-origin navigation in a tab whose cluster has an instance. Both
+           halves are one navigation in HTML §7.4.6.1 Updating the traversable's order: the incoming Document is
+           created first (engineJoin) and the outgoing one deactivated after (engineUnload). This is not §7.3.1.6
+           Navigable destruction: the navigable survives. A COOP navigation that switched groups (HTML §7.1.3.2)
+           does not reach here; its new group gives it a cluster key no instance holds. */
         if (isTop && cluster.topDocId !== docId) {
-          /* ONE PER ROUND, WHICH IS THE ADMISSION'S SHAPE AND FOR ITS REASON. A join copies a whole document
-             into an instance's linear memory and an unload seeds a task on every one of its timelines, so this
-             is an ADVANCE and hostSchedule is rank-advance-re-rank. The rest stay in `_waiting` and are looked
-             at again next round, which is also what keeps two navigations of one tab in ORDER — the second
-             cannot be taken until the first has moved `topDocId`. */
+          /* One per round, as for admission: a join copies a whole document and an unload seeds a task on every
+             timeline, so it is an advance. Later ones stay in `_waiting`, which also keeps two navigations of
+             one tab in order. */
           if (swap) { i++; continue; }
-          /* RECORDED AND SPLICED SYNCHRONOUSLY, BEFORE ANYTHING SUSPENDS — the whole reason this function takes
-             its one suspension first. `topDocId` is what the next arrival for this cluster consults, so a
-             second navigation landing between this decision and the join below would otherwise read the OLD
-             top and record a second swap out of the same, already-replaced document. */
+          /* Recorded and spliced synchronously, before anything suspends: `topDocId` is what the next arrival
+             consults, so a second navigation cannot record a swap from the already-replaced document. */
           swap = { cluster, job, outgoing: cluster.topDocId, docId };
           cluster.topDocId = docId;
           cluster._resolvers.push(job);
@@ -4949,12 +4662,9 @@ const _hostOps = {
           _reserveStats.navigated++;
           continue;
         }
-        /* AND THE ROUTING INVARIANT THE ABORT WAS PROTECTING IS STILL ASSERTED, over what is left of it: every
-           other arrival for a cluster that has an instance is a document that instance is ALREADY running — a
-           same-origin sub-frame the engine created as a realm of its own, or one document delivered twice. A
-           top that is not the cluster's current top has been taken by the branch above, so reaching here with
-           one is the swap having failed to record it, which would attach this caller to an instance reporting
-           the page the browser replaced. */
+        /* Every other arrival for a cluster with an instance is a document it already runs (a same-origin
+           sub-frame realm, or one document delivered twice); a top that is not the current top was taken above,
+           so reaching here with one is asserted. */
         DCHECK(!isTop || cluster.topDocId === docId,
                "the TOP document of a browsing-context group arrived for a cluster whose instance holds a " +
                "different top (" + cluster.topDocId + " vs " + docId + ") and the navigation branch above did " +
@@ -4966,48 +4676,25 @@ const _hostOps = {
         if (cluster.state === "booting") _reserveStats.joinedBooting++; else _reserveStats.joinedRooted++;
         continue;
       }
-      /* A SUB-FRAME NEVER ROOTS A CLUSTER — ITS EMBEDDER NAMES IT, AND WAITING IS HOW THIS ZONE LETS IT. A
-         nested navigable is CREATED by the document that embeds it: §4.8.5's insertion steps mint its name in
-         the embedder's engine, hand the page a WindowProxy under that name, and load its address through this
-         same safeFetch chokepoint. The engine then either runs it as a REALM in its own heap (same-origin,
-         navigable.c's `child_in_this_agent`, no notice) or announces it, and the announcement is what roots or
-         joins its cluster HERE, under the engine's name.
-         A CONTENT SCRIPT'S ARRIVAL FOR THAT SAME DOCUMENT IS A SECOND ROUTE TO IT, NEVER A SECOND DOCUMENT, so
-         the one thing it may not do is NAME it. It used to, for the cross-origin case: the condition here was
-         additionally `originOf(topLevelUrl) === origin`, so only a same-origin sub-frame waited and a
-         cross-origin one raced its embedder — whichever arrived first named the document, and when the content
-         script won, the embedder's later `navigable.create` for the very same frame found a cluster it could
-         not recognise as holding it (`hostHolderOf` compares engine names) and the create arm aborted. Two
-         names for one document is also unroutable in the direction that has no symptom here at all: the engine
-         interns documents by NAME, so a `windowproxy.post` to `<embedder>.1` would reach an instance that has
-         never heard of it. Naming is therefore ONE zone's job, and the browser's `documentId` is what JOINS the
-         cluster (the branch above) rather than what names its document.
-         `_isRealOrigin` IS WHAT KEEPS THIS OFF THE OPAQUE CASE, and it is the whole of what is left of the old
-         condition: a sandboxed sub-frame's principal is a per-document token no embedder's notice can state
-         (the create arm names that residual — the sandbox flag set is not yet carried on the notice), so such a
-         document is correctly its own cluster of one and roots it here. */
+      /* A sub-frame never roots a cluster: its embedder creates it (HTML §4.8.5's insertion steps name it in
+         the embedder's engine), and the engine either runs it as a realm in its own heap (same-origin,
+         `child_in_this_agent`, no notice) or announces it, and the announcement roots or joins its cluster
+         under the engine's name. A content script's arrival for the same document is a second route to it and
+         may not name it: the engine interns documents by name, so two names for one document are unroutable.
+         The browser's `documentId` joins the cluster (above) instead. `_isRealOrigin` exempts the opaque case: a
+         sandboxed sub-frame's per-document principal is something no embedder's notice can state (the create
+         arm's residual), so it is a cluster of one and roots here. */
       if (!isTop && _isRealOrigin(job.msg.origin)) { i++; continue; }
       i++;
     }
-    /* (1b) THE NAVIGATION, PERFORMED HERE AND NOT IN THE WALK, because it SUSPENDS and the walk may not. The
-       walk's whole property is that it runs in one uninterrupted turn after this function's single await, so
-       that "the pool is the register of who holds what" is true at the moment the register is consulted; an
-       `await` inside it would let a second arrival for the same cluster run against a half-updated register.
-       So the walk DECIDES (synchronously, moving `topDocId` and attaching the caller) and this performs, and
-       it RETURNS afterwards for the same reason the admission arm does: this round's advance is spent.
-       IT IS NOT RAM-GATED, like every other routing decision in this function. A navigation does not create an
-       instance — it puts a second document in one that already exists, and then destroys the one it replaced,
-       which is the direction that RELEASES memory. Gating it would be a cap that made continuous browsing work
-       only while the pool was under the floor, and would leave the replaced document running in the meantime.
-       NULL: the incoming Document of a cross-document navigation has NO CREATOR — HTML §7.1.7 "Policy
-       containers" clones a creator's container only where there is one, and a top-level traversable's new
-       Document is created from its OWN response — so the empty pair is the positive statement, exactly as it
-       is for a root document a content script reported. */
+    /* (1b) The navigation is performed here, outside the walk, because it suspends and the walk must not: the
+       walk decides synchronously (moving `topDocId`, attaching the caller) and this performs, then returns,
+       since this round's advance is spent. It is not RAM-gated: it adds a document to an existing instance and
+       destroys the one it replaced. The incoming Document has no creator (HTML §7.1.7 Policy containers), so the
+       empty container pair is the positive statement, as for a reported root. */
     if (swap) {
-      /* A CLUSTER MAY STILL BE BOOTING WHEN THE TAB NAVIGATES — a fast second click is not exotic — AND THE
-         NAVIGATION WAITS FOR IT, which is the same suspension the create-notice join takes and for the same
-         reason: `qjs_join` needs both `qjs_init` and `qjs_begin` to have run, and a document joined between
-         them is parsed, given a realm and never executes a line. `_readyP` settling is what says both have. */
+      /* A cluster may still be booting when the tab navigates, so the navigation waits for it: `qjs_join` needs
+         `qjs_init` and `qjs_begin` to have run, which `_readyP` settling means. */
       if (swap.cluster.state === "booting") await swap.cluster._readyP;
       DCHECK(swap.cluster.state === "hot" || swap.cluster.state === "fetching",
              "a tab navigated in a cluster whose instance never became one — the reservation holding it failed " +
