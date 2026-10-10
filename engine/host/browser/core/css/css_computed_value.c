@@ -2581,7 +2581,7 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
     return css_resolved_computed(ctx, el, name);
 }
 
-JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *name)
+static JSValue css_resolved_value_held(JSContext *ctx, lxb_dom_element_t *el, const char *name)
 {
     const char *const *lh;
     unsigned nlh;
@@ -2747,4 +2747,17 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
     }
     /* §9's "any other property", and the value every escape above breaks to: the COMPUTED value. */
     return css_resolved_computed(ctx, el, name);
+}
+
+/* One resolved value is one hold: its computed, cascaded and used values share the record its first ask opens,
+   so an undriven getComputedStyle read resolves its element's cascade once. */
+JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *name)
+{
+    CssComputedStyleHold hold;
+    JSValue out;
+
+    css_computed_style_hold_begin(&hold);
+    out = css_resolved_value_held(ctx, el, name);
+    css_computed_style_hold_end(&hold);
+    return out;
 }
