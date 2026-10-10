@@ -1,69 +1,32 @@
-/* CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property — THE USED WIDTH OF A TABLE BOX AND OF
- * EVERY COLUMN IN IT, which is the number §17.4 Tables in the visual formatting model sends the table wrapper
- * box to ("The width of the table wrapper box is the border-edge width of the table box inside it, as described
- * by section 17.5.2") and the number §17.5.3 Table height algorithms measures a cell's content height over.
+/* CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property: the used width of a table box and of
+ * each of its columns. §17.4 sizes the wrapper from it ("the border-edge width of the table box inside it, as
+ * described by section 17.5.2") and §17.5.3 Table height algorithms measures cells over it.
  *
- * WHY IT IS A COMPONENT SEPARATE FROM core/layout/table_column_width.h. That one answers §17.5.2.2 Automatic
- * table layout's four steps and stops at the section's own sentence, "This gives a maximum and minimum width
- * for each column" — a pair of CONSTRAINTS per column, derived from the cells' content, with no table in it.
- * This one is the rest of §17.5.2 and has a different subject at every step: it chooses between the section's
- * TWO ALGORITHMS on `table-layout`, it derives CAPMIN from the CAPTION boxes (which §17.4 puts in the WRAPPER,
- * beside the table box rather than inside it), it adds §17.6.1 The separated borders model's cell spacing, it
- * compares against the table's own `width` and its containing block, and it distributes the answer back over
- * the columns. Only the first piece is a walk over every cell; folding the two together would put that walk in
- * the same function as a two-line comparison, and would give the fixed algorithm — which reads no cell outside
- * the first row — a dependency on a measurement it must not make.
+ * core/layout/table_column_width.h answers §17.5.2.2's per-column pair from the cells' content; this is the
+ * rest: the choice between the two algorithms, CAPMIN from the wrapper's captions, §17.6.1's cell spacing, the
+ * comparison against the table's `width` and containing block, and the distribution back over the columns.
+ * §17.5.2.1 Fixed table layout reads no cell outside the first row, so it must not depend on that measurement.
  *
- * THE TWO ALGORITHMS ARE A DISPATCH AND NOT A MODE, and §17.5.2 makes the difference between them normative in
- * exactly one direction: "user agents may use any algorithm they wish to do so and are free to prefer rendering
- * speed over precision, except when the fixed layout algorithm is selected". So a table whose `table-layout` is
- * `fixed` MUST get §17.5.2.1 Fixed table layout, while §17.5.2.2 is offered as one automatic algorithm among
- * others — its own words are "The remainder of this section is non-normative" and "they can use any other
- * algorithm even if it results in different behavior". EVERY PLACE THAT LICENCE IS TAKEN IS RECORDED AT THE
- * SITE rather than crashed on: a crash where the standard offers a choice refuses a document both readings are
- * conforming for, which is a different failure from a crash where the answer would be WRONG.
- *
- * `table-layout: fixed` WITH `width: auto` TAKES THE AUTOMATIC ALGORITHM, and that is §17.5.2.1's own sentence
- * rather than a fallback this component invented: "A value of 'auto' (for both 'display: table' and 'display:
- * inline-table') means use the automatic table layout algorithm." The section then offers an alternative in the
- * same paragraph — "a UA may (but does not have to) use the algorithm of 10.3.3 to compute a width and apply
- * fixed table layout even if the specified width is 'auto'" — and this component DECLINES it, which the
- * parenthesis explicitly permits. The consequence is worth knowing rather than hidden: a `table-layout: fixed`
- * table with no declared width is laid out from ALL of its cells' content, not from its first row's.
- *
- * WHAT THE NUMBERS ARE MEASURED IN, because §17.5.2 never says and two readers must not answer differently.
- * A COLUMN width here is a BORDER-BOX width of the cells that occupy it — core/layout/table_column_width.h
- * records that choice and its reasons, and the distribution below only ever adds to those numbers, so nothing
- * changes box on the way through. THE TABLE's width is §17.6.1's, in that section's own sentence: "The width of
- * the table is the distance from the left inner padding edge to the right inner padding edge (including the
- * border spacing but excluding padding and border)" — so it is the table box's CONTENT width and it CONTAINS
- * the cell spacing, which is why the spacing is a term of the sum below rather than something a consumer adds.
- *
- * AND THE DECLARED `width` OF AN HTML `<table>` IS A BORDER-BOX NUMBER, WHICH IS §17.6.1's OTHER SENTENCE AND
- * NOT A `box-sizing` THIS ENGINE INVENTS: "However, in HTML and XHTML1, the width of the <table> element is the
- * distance from the left border edge to the right border edge." That rule is about the ELEMENT and not about
- * its `display`, so it covers `inline-table` on a `<table>` and does not cover `display: table` on a `<div>`.
- * It is applied HERE, as a rule of §17.5.2's own, rather than as a UA `box-sizing: border-box` declaration:
- * §17.6.1's note says that spelling is CSS3's ("In CSS3 this peculiar requirement will be defined in terms of
- * UA style sheet rules and the 'box-sizing' property"), and adding the declaration would change what
- * `getComputedStyle(table).boxSizing` reports, which is an observable this section says nothing about.
- *
- * §17.6.2 The collapsing border model IS LAID OUT AND NOT REFUSED, AND IT COSTS THIS COMPONENT TWO TERMS.
- * Under §17.6.2 a cell's used border is not its own computed `border-*-width` — that section centres each
- * border on the grid line between two cells and its own row-width equation charges the two OUTERMOST at half —
- * and `border-spacing` has no meaning there at all. Both changes are made where they belong rather than as a
- * mode of this algorithm: core/layout/table_border_collapse.h owns §17.6.2.1 Border conflict resolution and
- * what a cell is charged by it, core/layout/table_column_width.h's `table_cell_border_edges` takes that arm so
- * the four steps below are stated over the same border box in either model, and the two terms THIS component
- * owns are the SPACING (zero under §17.6.2) and the TABLE BOX'S OWN EDGES (no padding, and §17.6.2's own two
- * half-borders instead of the computed `border-*-width`). Every other line of §17.5.2 is model-independent,
- * which is why there is no second algorithm here and no `if` inside one.
- *
- * NOTHING IS STORED BETWEEN CALLS, for core/layout/block_flow.h's reason: a layout is per-flow state, so a
- * cached table width is shared state solver/dom_cow.h's delta does not swap and a stale one is another flow's
- * document. The array this entry allocates is the CALLER's for the duration of one question. */
+ * Only the fixed algorithm is normative ("except when the fixed layout algorithm is selected"); §17.5.2.2 says
+ * "The remainder of this section is non-normative". Every place that licence is taken is recorded at its site
+ * rather than crashed on. `table-layout: fixed` with `width: auto` takes the automatic algorithm: "A value of
+ * 'auto' (for both 'display: table' and 'display: inline-table') means use the automatic table layout
+ * algorithm." The optional §10.3.3 route the same paragraph offers is declined, so such a table is laid out
+ * from all its cells. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_TABLE_WIDTH_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_TABLE_WIDTH_H
+
+/* Units. A column width is a border-box width of its cells (core/layout/table_column_width.h's choice). The
+   table's width is §17.6.1's "distance from the left inner padding edge to the right inner padding edge
+   (including the border spacing but excluding padding and border)": the table box's content width, spacing
+   included. A declared `width` on an HTML `<table>` element (not a `display: table` div) is a border-box number
+   ("in HTML and XHTML1, the width of the <table> element is the distance from the left border edge to the
+   right border edge"), applied here rather than as a UA `box-sizing`, which would change what
+   `getComputedStyle(table).boxSizing` reports.
+   §17.6.2 The collapsing border model is laid out through two terms this component owns: the spacing (zero)
+   and the table box's own edges (no padding, §17.6.2's two half-borders); cell borders come through
+   `table_cell_border_edges` (core/layout/table_border_collapse.h). Nothing is stored between calls; the
+   allocated array is the caller's for one question. */
 
 #include <stddef.h>
 
@@ -73,148 +36,68 @@
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/table_grid.h"
 
-/* §17.5.2's ANSWER, which is ONE fact in three shapes and never three facts: `content` is the sum of `columns`
-   and `spacing` taken between and around them, and the entry below asserts that at its boundary. They are
-   returned together because a consumer holding one of them cannot derive the others — a caller with the
-   columns alone does not know the spacing term, and a caller with the table width alone cannot place a single
-   cell.
-   `spacing` IS A FIELD RATHER THAN A CONSUMER'S SECOND READ OF `border-spacing`, and the reason is the one
-   case where the arithmetic cannot recover it: a table with NO columns takes no spacing at all, so `content`
-   less the columns is zero there whatever the property says, and a consumer inverting the sum would answer a
-   spacing of zero for a table that declares one. A second read of the property would also be a second place
-   for §17.6.1's `Computed value: two absolute lengths` to be resolved, free to disagree with the one the
-   columns were laid out under. */
+/* §17.5.2's answer: one fact in three shapes. `content` is the sum of `columns` and `spacing` taken between and
+   around them, asserted at the entry's boundary. `spacing` is a field because a table with no columns takes
+   none, so it cannot be recovered from `content`, and a second read of `border-spacing` could disagree with
+   the one the columns were laid out under. */
 typedef struct {
-    /* The USED width of each grid column, in §17.5's own logical column order (core/layout/table_grid.h), as a
-       BORDER-BOX width of the cells that occupy it. `ncols` entries, or NULL when `ncols` is zero. */
+    /* The used width of each grid column, in §17.5's logical column order (core/layout/table_grid.h), as a
+       border-box width of its cells. `ncols` entries, or NULL when `ncols` is zero. */
     CssPx  *columns;
     size_t  ncols;
-    /* §17.6.1's "width of the table": the table BOX's used content width, INCLUDING the border spacing and
-       excluding its own padding and border. This is CSS 2.1's `width` for the table box, so a consumer wanting
-       §17.4's wrapper width adds the table box's own horizontal SURROUND to it — which is what
-       core/layout/used_value.h's border edge already does for every other box.
-       WHAT THAT SURROUND IS DEPENDS ON THE BORDER MODEL, AND A CONSUMER READING THE PROPERTIES DIRECTLY IS
-       WRONG UNDER §17.6.2 The collapsing border model — which is why the conversion goes through
-       core/layout/used_value.h and never through `css_computed_length` at a caller. A collapsed table box has
-       NO padding at all ("Also, in this model, a table does not have padding (but does have margins)") and its
-       border widths are not its computed `border-*-width` but §17.6.2's own halves ("The left border width of
-       the table is half of the first cell's collapsed left border"), which
-       core/layout/table_border_collapse.h's `table_collapsed_table_edges` answers whole.
-       THIS WAS A NAMED RESIDUAL AND IT IS BUILT; the reading is kept rather than deleted so that nobody
-       re-derives the four-property version. core/layout/used_value.c's surround now asks §17.2 The CSS table
-       model which box it is being asked about and takes §17.6.2's halves for a table box in that model, so
-       every border-edge conversion in this tree — the one `used_value_border_edge_px` performs over this
-       field, and the leading pair core/layout/flow_position.c measures a row's origin from — reads the SAME
-       number `tw_table_edges` subtracts a declared border-box width by, one file over. WHAT IT LOOKED LIKE
-       WHILE IT WAS OPEN, since that is the shape a regression would take again: for
-       `<table style="border-collapse:collapse;border:10px solid">` whose cells declare no border of their own,
-       the resolved border at each outermost grid line is 10 and §17.6.2 gives the table box a border width of
-       5 on each side, so its border box is this content width plus 10 — and a consumer reading
-       `border-left-width` and `border-right-width` reported it plus 20. */
+    /* §17.6.1's "width of the table": the table box's used content width, including the border spacing and
+       excluding its own padding and border. §17.4's wrapper width adds the table box's horizontal surround,
+       which depends on the border model, so it goes through core/layout/used_value.h (which takes §17.6.2's
+       halves for a collapsed table: "a table does not have padding (but does have margins)", "The left border
+       width of the table is half of the first cell's collapsed left border"), never through the computed
+       `border-*-width`. For `<table style="border-collapse:collapse;border:10px solid">` with borderless cells
+       the border box is this width plus 10, not plus 20. */
     CssPx   content;
-    /* §17.6.1 The separated borders model's HORIZONTAL `border-spacing`, which that section defines as "The
-       'border-spacing' property specifies the distance between the borders of adjoining cells" and which
-       `content` holds `ncols + 1` of — one between each adjoining pair and one at each end, since §17.6.1
-       also says "The distance between the table border and the borders of the cells on the edge of the table
-       is the table's padding for that side plus the relevant border-spacing distance". The VERTICAL half is
-       §17.5.3 Table height algorithms' and is not here.
-       IT IS THIS ALGORITHM'S TERM AND NOT THE PROPERTY, WHICH IS A DIFFERENCE ONLY §17.6.2 The collapsing
-       border model MAKES: there it is ZERO whatever `border-spacing` computed to, because that model has no
-       distance between adjoining cell borders at all ("Borders are centered on the grid lines between the
-       cells"). A consumer adds this field and never re-reads the property, so a collapsed table adds nothing
-       — and the property still has a computed value, since it is `Inherited: yes` and a descendant table may
-       be in the other model. */
+    /* §17.6.1 The separated borders model's horizontal `border-spacing` ("the distance between the borders of
+       adjoining cells"), which `content` holds `ncols + 1` of, since "The distance between the table border
+       and the borders of the cells on the edge of the table is the table's padding for that side plus the
+       relevant border-spacing distance". The vertical half is §17.5.3's.
+       It is this algorithm's term, not the property: zero under §17.6.2 ("Borders are centered on the grid
+       lines between the cells") whatever `border-spacing` computed to. Consumers add this field. */
     CssPx   spacing;
 } TableUsedWidths;
 
 /* §17.5.2 over `table` and `grid`, which must be that table's own (core/layout/table_grid.h). `table` must
-   generate a TABLE box — `table` or `inline-table` (core/layout/table_box.h's `table_box_kind`) — and a
-   table-internal box crashes rather than being answered, because a CELL's used width is a column's and a ROW's
-   is the table's, which are different questions with different answers.
-   THE RESULT IS THE CALLER'S and is released with `table_widths_release`.
-   A TABLE WITH NO COLUMNS IS A REAL TABLE AND NOT A FAILURE — `<table></table>`, or one whose only child is a
-   caption — and its width is then the greater of its own declared `width`, CAPMIN and zero, which is a number.
-   EVERY INPUT §17.5.2 CANNOT RESOLVE CRASHES BY NAME rather than being dropped from a maximum: every term here
-   is a FLOOR under the table's width, so a term left out reports a table narrower than the document asks for,
-   and that number travels into §17.4's wrapper, into core/layout/flow_position.h's coordinates and out through
-   CSSOM VIEW as a rectangle no reader can distinguish from a measured one. */
+   generate a table box (`table` or `inline-table`, core/layout/table_box.h's `table_box_kind`); a
+   table-internal box crashes, since a cell's width is a column's and a row's is the grid row's.
+   The result is the caller's and is released with `table_widths_release`. A table with no columns is real;
+   its width is the greater of its declared `width`, CAPMIN and zero. An input §17.5.2 cannot resolve crashes
+   by name, since every term is a floor under the table's width. */
 void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidths *out);
 
-/* css-sizing-3 §5.1 "Intrinsic Sizes"' PAIR FOR A TABLE BOX, over `table` and that table's own `grid` — the
-   SECOND PRODUCER of `IntrinsicInlineSizes` beside core/layout/intrinsic_size.h's own §9.4 walk and
-   core/layout/flex_intrinsic_size.h's, for a box neither of CSS 2.2 §9.4's formatting contexts lays out.
-   `table` must generate a TABLE box, exactly as `table_widths` requires and for the same reason.
-
-   IT IS §17.5.2.2's SECOND FINAL RULE EVALUATED AT TWO CONTAINING BLOCKS, NOT A SECOND ALGORITHM.
-   css-sizing-3 §5.1 states both sizes as ONE hypothetical float with two containing blocks — the min-content size is "the
-   size it would have if it was a float given an auto preferred size in that axis (and no minimum or maximum
-   size in that axis) and if its containing block was zero-sized in that axis", the max-content size the same
-   sentence "and if its containing block was infinitely-sized in that axis" — and CSS 2.1 §17.5.2.2 Automatic
-   table layout's `width: auto` rule is a function of that one number: "If the 'table' or 'inline-table'
-   element has 'width: auto', the used width is the greater of the table's containing block width, CAPMIN, and
-   MIN. However, if either CAPMIN or the maximum width required by the columns plus cell spacing or borders
-   (MAX) is less than that of the containing block, use max(MAX, CAPMIN)." At a ZERO containing block the
-   "However" CANNOT fire — CAPMIN and MAX are sums of non-negative terms, so neither is less than zero — and
-   the rule reads max(CAPMIN, MIN). At an INFINITE one it ALWAYS fires, on CAPMIN alone, and the rule reads
-   max(MAX, CAPMIN). So the pair is max(MIN, CAPMIN) and max(MAX, CAPMIN), and CAPMIN is IN BOTH because
-   §17.5.2.2 put it in the rule this is the evaluation of — a producer returning the bare column sums would
-   report a table narrower than a caption its own wrapper has to hold.
-
-   §17.5.2.1 Fixed table layout IS THEREFORE NOT A SECOND PRODUCER AND HAS NO ARM HERE, WHICH IS A DERIVATION
-   AND NOT AN OMISSION. §5.1 removes the PREFERRED SIZE by definition ("given an auto preferred size in that
-   axis"), and §17.5.2.1's own second paragraph hands a table with no declared width back to the other
-   algorithm: "A value of 'auto' (for both 'display: table' and 'display: inline-table') means use the
-   automatic table layout algorithm." `table_widths` dispatches on a CONJUNCTION (`fixed && has_declared`) and
-   §5.1 strikes out its second half, so `table-layout` is not read here at all and a `fixed` table has the same
-   intrinsic sizes as an `auto` one.
-
-   IT IS NOT `table_widths` WITH THE ANSWER READ OUT, AND THAT IS AN UNBOUNDED RECURSION RATHER THAN A
-   PREFERENCE — the one thing to establish before changing this entry. `table_widths` reaches the CONTAINING
-   BLOCK twice: `tw_declared_content_width` resolves a percentage `width` against it, and the rule above
-   compares against it. For a table inside a FLOAT or an INLINE-BLOCK that read returns through
-   CSS 2.2 §10.3.5's shrink-to-fit, which asks `intrinsic_inline_sizes` for THE ANCESTOR, whose §9.4.1 stack asks this
-   table again: `<div style="float:left"><table>…</table></div>` recurses until the C stack ends. Every operand
-   this entry uses is containing-block-free today and none may stop being so — core/layout/table_column_width.c
-   reads none at all (its percentage arms CRASH rather than resolving, which is what keeps it so), and CAPMIN
-   resolves a caption's cyclic percentages to zero under css-sizing-3 §5.2.1 "Intrinsic Contributions of
-   Percentage-Sized Boxes". RETIREMENT: this record goes when a containing-block read is UNSPELLABLE from this
-   entry rather than merely absent from it — which is what an operand set passed in, instead of reached for,
-   would make it.
-
-   THE ANSWER IS THE TABLE BOX'S CONTENT WIDTH IN §17.6.1's SENSE, which is the box `TableUsedWidths.content`
-   is in and the box core/layout/intrinsic_size.h contracts for ("THE ANSWER IS THE CONTENT BOX'S INLINE
-   SIZE"), so the two producers of one table's two numbers answer in ONE box. §17.4 Tables in the visual
-   formatting model's WRAPPER needs no term of its own here: its width is "the border-edge width of the table
-   box inside it", the wrapper carries no border and no padding, and the caller's own css-sizing-3 §3.3
-   conversion over the TABLE BOX's surround is exactly that edge — the same composition
-   `used_value_border_edge_px` already performs over `TableUsedWidths.content`. */
+/* css-sizing-3 §5.1 "Intrinsic Sizes"' pair for a table box over `table` and its own `grid`: a producer of
+   `IntrinsicInlineSizes` beside core/layout/intrinsic_size.h and core/layout/flex_intrinsic_size.h. `table`
+   must generate a table box, as for `table_widths`.
+   It is §17.5.2.2's `width: auto` rule evaluated at §5.1's two containing blocks: "the used width is the
+   greater of the table's containing block width, CAPMIN, and MIN. However, if either CAPMIN or the maximum
+   width required by the columns plus cell spacing or borders (MAX) is less than that of the containing block,
+   use max(MAX, CAPMIN)." At zero the "However" cannot fire, giving max(CAPMIN, MIN); at infinity it always
+   fires, giving max(MAX, CAPMIN). §17.5.2.1 Fixed table layout has no arm: §5.1 assumes "an auto preferred
+   size", and the fixed algorithm hands a `width: auto` table to the automatic one.
+   It must not read the containing block, so it is not `table_widths` read out: inside a float or inline-block,
+   CSS 2.2 §10.3.5's shrink-to-fit asks the ancestor's `intrinsic_inline_sizes`, which asks this table again
+   (`<div style="float:left"><table>…</table></div>` would recurse without end). Its operands stay
+   containing-block-free (table_column_width.c's percentage arms crash; CAPMIN resolves cyclic percentages to
+   zero under css-sizing-3 §5.2.1). The answer is the table box's content width, like `TableUsedWidths.content`;
+   the caller's §3.3 conversion over the table box's surround yields §17.4's wrapper width. */
 IntrinsicInlineSizes table_intrinsic_inline_sizes(lxb_dom_element_t *table, const TableGrid *grid);
 
-/* ONE CELL'S USED BORDER-BOX WIDTH, taken out of the answer above — the number CSS 2.1 §17.5 Visual layout of
-   table contents leaves implicit and every consumer of a cell's geometry needs: "Each cell is thus a
-   rectangular box, one or more grid cells wide and high", so a cell's width is the used width of the columns
-   its rectangle covers. `cell` must be a cell of the grid `widths` was computed over
-   (core/layout/table_grid.h's `table_grid_cell_of`), and the answer is in the same BORDER box the columns are.
-   THE SPANNING CASE IS A CHOICE CSS 2.1 DECLINES TO MAKE AND IT IS RECORDED HERE RATHER THAN CRASHED ON. A
-   cell covering N columns gets those N used widths PLUS N-1 of `spacing`, because §17.6.1 The separated
-   borders model defines `border-spacing` as "the distance between the borders of adjoining cells" and the
-   columns inside one cell's rectangle have no adjoining cell borders between them — the spacing there is
-   inside the cell, not between two of them. §17.5.2.2 Automatic table layout's step 3 states the FLOOR without
-   that term ("For each cell that spans more than one column, increase the minimum widths of the columns it
-   spans so that together they are at least as wide as the cell"), which is what makes this a reading rather
-   than a derivation: under it a spanning cell ends at least as wide as its own minimum and up to N-1 spacings
-   WIDER, never narrower than its content. The other reading — charging the cell only its columns — makes a
-   spanning cell narrower than the row it sits in by exactly those N-1 spacings, so the two disagree about
-   whether the table's own width covers its cells, and only this one keeps §17.6.1's sum whole.
-   UNDER §17.6.2 The collapsing border model THAT TERM IS ZERO AND THE ANSWER IS STILL EXACT, which is the
-   reading rather than a case this falls through. The N-1 grid lines running under a spanning cell are each
-   charged HALF to the column on either side of them (core/layout/table_border_collapse.h), so the N used
-   widths this loop sums already contain every one of those borders whole — which is precisely the length the
-   `border-spacing` term supplies in the other model, arriving through the columns instead of beside them.
-   IT IS NOT A USED `width` IN CSS 2.1's SENSE and a caller must not report it as one: css-sizing-3 §3.3 "Box
-   Edges for Sizing: the box-sizing property" decides which box a used value is exposed in, and under the
-   initial `content-box` that is the content box — this number less the cell's own padding and border, which
-   core/layout/table_column_width.h's `table_cell_border_edges` is the ONE spelling of. */
+/* One cell's used border-box width from the answer above: "Each cell is thus a rectangular box, one or more
+   grid cells wide and high", so it is the used width of the columns it covers. `cell` must be a cell of the
+   grid `widths` was computed over (core/layout/table_grid.h's `table_grid_cell_of`).
+   A cell spanning N columns also gets N-1 of `spacing`, a recorded reading CSS 2.1 leaves open: §17.6.1's
+   spacing is "the distance between the borders of adjoining cells" and there are none inside one cell, and
+   this keeps §17.6.1's sum whole (charging columns only would make the cell narrower than its row). Under
+   §17.6.2 the term is zero and the answer is still exact: each interior grid line's border is charged half to
+   each neighbouring column, so the summed columns hold it whole.
+   It is not a used `width`: css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property" exposes the
+   content box under `content-box`, which is this less core/layout/table_column_width.h's
+   `table_cell_border_edges`. */
 CssPx table_cell_used_border_box(const TableUsedWidths *widths, const TableGridCell *cell);
 
 /* Releases what `table_widths` stored. A zero-column answer holds NULL and is accepted. */

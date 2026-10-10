@@ -1,6 +1,5 @@
 /* CSS 2.1 §17.5.2.2 Automatic table layout's four column-width steps, over core/layout/table_grid.h's grid.
-   See table_column_width.h for the contract, for why the boundary is §17.5.2.2's own "This gives a maximum and
-   minimum width for each column", and for why the numbers are BORDER-BOX widths of the cells. */
+   See table_column_width.h. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -20,41 +19,26 @@
 #include "core/layout/table_column_width.h"
 #include "core/layout/table_grid.h"
 
-/* THE COHERENCE FLOOR, stated once because it is applied at the two places the pair can cross and both are
-   the SAME fact: a maximum below a minimum is not a width the column can ever take. See the header for the two
-   §17.5.2.2 steps that produce the crossing — a declared cell `width` raising a minimum past a max-content,
-   and the two independent widenings over a spanning cell. It is arithmetic and asserts nothing, so it names no
-   site; the invariant it establishes is asserted once, at the boundary where the pair leaves this component. */
+/* The coherence floor: a maximum below a minimum is not a width the column can take (see the header for the
+   two crossings). Arithmetic only; the invariant is asserted where the pair leaves this component. */
 static CssPx tcw_coherent(CssPx min, CssPx max)
 {
     return css_px_max(max, min);
 }
 
-/* ONE CELL'S HORIZONTAL PADDING AND BORDER, in CSS pixels — the difference between the content box
-   core/layout/intrinsic_size.h answers in and the border box a column width is measured in.
+/* One cell's horizontal padding and border; see the header.
  *
- * IT IS NOT core/layout/used_value.c's `uv_surround` AND MUST NOT BECOME A CALL TO IT, which is a division of
- * labour rather than a second copy: that one resolves a PERCENTAGE padding through `used_value_px`, against
- * CSS 2.1 §10.1 Definition of "containing block"'s rectangle — whose width for a cell is the table's content
- * width, which is what §17.5.2.2 is being run to produce. Asking it here would be this algorithm asking for its
- * own output. So the percentage is a CYCLE and crashes, and the two functions answer two different questions
- * over the same four properties.
+ * It is not core/layout/used_value.c's `uv_surround`: that resolves a percentage padding against CSS 2.1 §10.1
+ * Definition of "containing block"'s width, which for a cell is the table's content width this algorithm is
+ * producing. Here a percentage is a cycle and crashes.
  *
- * §10.4 Minimum and maximum widths: 'min-width' and 'max-width' IS NOT READ AND THAT IS THE SECTION'S OWN
- * SENTENCE: "In CSS 2.1, the effect of 'min-width' and 'max-width' on tables, inline tables, table cells,
- * table columns, and column groups is undefined." A clamp applied here would be this engine deciding a case
- * the standard declines to.
+ * §10.4 Minimum and maximum widths: 'min-width' and 'max-width' is not read: "In CSS 2.1, the effect of
+ * 'min-width' and 'max-width' on tables, inline tables, table cells, table columns, and column groups is
+ * undefined."
  *
- * BOTH OF §17.6 Borders' MODELS ARE ANSWERED HERE, AND THE ASK IS THIS FUNCTION'S. Under CSS 2.1 §17.6.1 The
- * separated borders model "each cell has an individual border" and the sum is the cell's own computed
- * `border-*-width`. Under CSS 2.1 §17.6.2 The collapsing border model it is not: that section centres each
- * border on the grid line between two cells ("Borders are centered on the grid lines between the cells"), so
- * the border at an edge is §17.6.2.1 Border conflict resolution's winner among the boxes meeting there and the
- * cell carries HALF of it — core/layout/table_border_collapse.h owns that whole reading, including why a cell
- * at the table's perimeter carries NONE of the border there. The ask is here rather than at the caller because
- * both of §17.5.2's algorithms and core/layout/used_value.c's cell content width read this ONE sum, and a
- * caller-side dispatch would be that routing decision written three times over a difference none of them can
- * see: both answers are a real width of a real box. */
+ * Under §17.6.2 "Borders are centered on the grid lines between the cells", so the cell carries half of the
+ * resolved border at each edge (core/layout/table_border_collapse.h). The dispatch is here because three
+ * consumers read this one sum. */
 CssPx table_cell_border_edges(lxb_dom_element_t *cell)
 {
     static const char *const PADDINGS[2] = { "padding-left", "padding-right" };
@@ -65,18 +49,15 @@ CssPx table_cell_border_edges(lxb_dom_element_t *cell)
     char nbuf[160];
     int i;
 
-    /* css-sizing-3 §2.2 "Intrinsic Size Contributions"' outer size is the box's margins as well, and the
-       header's claim that a cell's outer size IS its border box rests entirely on the margins not applying —
-       so it is ASKED of the component that owns CSS 2.1 §8.3 "Margin properties"' Applies-to line rather than
-       restated here, and a day the two disagree is a day this walk stops rather than under-reporting a
-       column by two margins. */
+    /* The outer size is the border box only because margins do not apply to a cell (CSS 2.1 §8.3 "Margin
+       properties"); asked of the component that owns that line. */
     DCHECK(!css_property_applies(cell, "margin-left") && !css_property_applies(cell, "margin-right"),
            "CSS 2.1 §17.5.2.2 Automatic table layout took a cell's OUTER SIZE to be its border box, and CSS 2.1 "
            "§8.3 \"Margin properties\"' Applies-to line now says the horizontal margins DO apply to this box — "
            "so css-sizing-3 §2.2 \"Intrinsic Size Contributions\"' outer size has a term this walk is not "
            "adding and every column the box occupies is reported narrower than its content");
-    /* §17.6's `border-collapse` is `Inherited: yes` and its Applies-to line is "'table' and 'inline-table'
-       elements", so the model is a fact about the TABLE and one ask covers both of this cell's sides. */
+    /* §17.6's `border-collapse` applies to "'table' and 'inline-table' elements", so the model is the
+       table's and one ask covers both sides. */
     table = table_box_table_of(cell);
     collapsing = table_border_collapse_selected(table);
     for (i = 0; i < 2; i++) {
@@ -103,8 +84,7 @@ CssPx table_cell_border_edges(lxb_dom_element_t *cell)
                    "cascade can hand back",
                    box_subject(cell, nbuf, sizeof nbuf), PADDINGS[i]);
         edges = css_px_add(edges, pad.px);
-        /* §17.6.2 replaces this cell's OWN border with the resolution at the grid line, so the two sides are
-           added together below rather than one per iteration — there is no per-side answer to read here. */
+        /* §17.6.2 replaces the cell's own border with the grid-line resolution, added below for both sides. */
         if (collapsing) continue;
         bor = css_computed_length(cell, BORDERS[i]);
         DCHECK(bor.kind == CSS_LENGTH_ABSOLUTE,
@@ -116,8 +96,8 @@ CssPx table_cell_border_edges(lxb_dom_element_t *cell)
         edges = css_px_add(edges, bor.px);
     }
     if (collapsing) {
-        /* §17.6.2's charge at the two vertical grid lines this cell abuts — half the resolution at each, and
-           zero at one on the table's perimeter, which core/layout/table_border_collapse.h owns whole. */
+        /* §17.6.2's charge at the two vertical grid lines this cell abuts: half the resolution at each, zero on
+           the table's perimeter (core/layout/table_border_collapse.h). */
         TableCollapsedEdges charge = table_collapsed_cell_edges(cell);
 
         edges = css_px_add(edges, css_px_add(charge.left, charge.right));
@@ -131,17 +111,14 @@ CssPx table_cell_border_edges(lxb_dom_element_t *cell)
     return edges;
 }
 
-/* §17.5.2.2's STEP 1, for one cell, in the border box the header records:
+/* §17.5.2.2's step 1 for one cell, in the border box:
      "Calculate the minimum content width (MCW) of each cell: the formatted content may span any number of
       lines but may not overflow the cell box. If the specified 'width' (W) of the cell is greater than MCW, W
       is the minimum cell width. A value of 'auto' means that MCW is the minimum cell width."
      "Also, calculate the \"maximum\" cell width of each cell: formatting the content without breaking lines
       other than where explicit line breaks occur."
-   MCW AND THE MAXIMUM ARE css-sizing-3 §5.1 "Intrinsic Sizes"' PAIR and are not a second measurement: §5.1's
-   own §2.1 "Auto Box Sizes" defines the min-content size as the one taken "if ALL soft wrap opportunities
-   within the box were taken" and the max-content size as the one "if NONE of the soft wrap opportunities
-   within the box were taken", which is the same two sentences CSS 2.1 writes here in its own vocabulary.
-   core/layout/intrinsic_size.h answers both in the CONTENT box, and the caller converts once. */
+   MCW and the maximum are css-sizing-3 §5.1 "Intrinsic Sizes"' pair (§2.1 "Auto Box Sizes": all versus none
+   of the soft wrap opportunities taken). core/layout/intrinsic_size.h answers both in the content box. */
 static TableColumnWidth tcw_cell_widths(lxb_dom_element_t *cell)
 {
     IntrinsicInlineSizes sizes;
@@ -154,19 +131,17 @@ static TableColumnWidth tcw_cell_widths(lxb_dom_element_t *cell)
     edges = table_cell_border_edges(cell);
     sizes = intrinsic_inline_sizes(cell);
     min_content = sizes.min_content;
-    /* §17.5.2.2 says the SPECIFIED `width`, and css-sizing-3 §3.1.1 "Preferred Size Properties: the width and
-       height properties" makes the computed value "as specified, with <length-percentage> values computed" —
-       so the computed value IS the specified one with its lengths absolutized, which is the operand this step
-       wants and the only one the cascade can hand over. */
+    /* The specified `width`: css-sizing-3 §3.1.1 "Preferred Size Properties: the width and height
+       properties" computes it "as specified, with <length-percentage> values computed", the operand this
+       step wants. */
     DCHECK(css_property_applies(cell, "width"),
            "CSS 2.1 §17.5.2.2's step 1 read a `width` on a box that property does not apply to. CSS 2.1 §10.2 "
            "\"Content width: the width property\"' Applies-to line excludes table rows and row groups and no "
            "other table box, so a cell reaching this is a `display` the grid placed as a cell and the cascade "
            "classifies otherwise");
     w = css_computed_length(cell, "width");
-    /* A `calc()` takes this arm and not the one below it: css-values-4 §10.1 "Basic Arithmetic: calc()" lets
-       one mix a length with a percentage, so the value is a percentage as far as WHAT IT RESOLVES AGAINST is
-       concerned, and that basis is this algorithm's own output either way. */
+    /* A `calc()` takes this arm: css-values-4 §10.1 "Basic Arithmetic: calc()" may mix in a percentage, and
+       its basis is this algorithm's own output either way. */
     if (w.kind == CSS_LENGTH_PERCENTAGE || w.kind == CSS_LENGTH_CALCULATED)
         DFAILF("%s: a table cell declares a PERCENTAGE `width`, and CSS 2.1 §17.5.2.2 Automatic table layout "
                "resolves it against a width it has not produced yet. The section states the basis in its own "
@@ -182,9 +157,8 @@ static TableColumnWidth tcw_cell_widths(lxb_dom_element_t *cell)
                "against it and re-run — and record that as the reading, since the section is non-normative "
                "here and names no other",
                box_subject(cell, nbuf, sizeof nbuf));
-    /* EVERY OTHER SHAPE `width` CAN COMPUTE TO CRASHES RATHER THAN BEING TREATED AS `auto`, and the difference
-       is the direction of the error: `auto` means the step's floor is absent, so silently taking one of these
-       for it drops a declaration that RAISES a minimum and reports the column narrower than its content. */
+    /* Every other computed shape crashes rather than reading as `auto`: `auto` drops the step's floor, so
+       misreading a declaration as `auto` reports the column narrower than its content. */
     if (w.kind != CSS_LENGTH_ABSOLUTE &&
         !(w.kind == CSS_LENGTH_KEYWORD && strcmp(w.keyword, "auto") == 0))
         DFAILF("%s: CSS 2.1 §17.5.2.2 Automatic table layout's step 1 compares a cell's minimum content width "
@@ -202,14 +176,10 @@ static TableColumnWidth tcw_cell_widths(lxb_dom_element_t *cell)
         char *box_sizing;
         bool border_box;
 
-        /* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property" — under `border-box` the declared
-           length is the BORDER box's, so the content-box operand §17.5.2.2's comparison is stated in is that
-           length less this box's padding and border, floored at zero because an inner size cannot be negative.
-           IT IS PARAPHRASED AND NOT QUOTED DELIBERATELY: the two Editor's Draft editions of §3.3 word that
-           flooring differently — one as a clause of the subtraction sentence, one as a sentence of its own —
-           so any one-line quotation is a quotation of ONE edition, and engine/citegen.mjs checks quotations
-           against the committed corpus of whichever edition engine/specindex holds. The citation is what is
-           stable across both; do not "restore" a quotation here. */
+        /* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property": under `border-box` the declared
+           length is the border box's, so the content-box operand is that length less padding and border,
+           floored at zero. Paraphrased on purpose: the section's editions word the floor differently, and
+           engine/citegen.mjs checks quotations against one edition's corpus. */
         box_sizing = css_computed_value(cell, "box-sizing");
         DCHECK(box_sizing != NULL,
                "the cascade produced no computed `box-sizing` — css-sizing-3 §3.3 \"Box Edges for Sizing: the "
@@ -223,35 +193,23 @@ static TableColumnWidth tcw_cell_widths(lxb_dom_element_t *cell)
     }
     out.min = css_px_add(min_content, edges);
     out.max = css_px_add(sizes.max_content, edges);
-    /* The first of the two crossings the header records: W raised the minimum and left the maximum where the
-       content put it. */
+    /* First crossing: W raised the minimum and left the maximum where the content put it. */
     out.max = tcw_coherent(out.min, out.max);
     return out;
 }
 
-/* §17.5.2.2's STEPS 2 AND 4 EACH READ A DECLARED `width` OFF A COLUMN OR COLUMN-GROUP BOX, and both are
-   FLOORS. Step 2 takes a column's minimum as "The minimum is that required by the cell with the largest minimum
-   cell width (or the column 'width', whichever is larger)." and its maximum by the matching sentence; step 4 is
-   "For each column group element with a 'width' other than 'auto', increase the minimum widths of the columns
-   it spans, so that together they are at least as wide as the column group's 'width'." Omitting either reports
-   a column NARROWER than the document asks for, and that number travels into a used width and out through
-   CSSOM VIEW as a rectangle no reader can distinguish from a measured one.
-   THE BOX IS core/layout/table_column_box.h's AND THE PROPERTY IS THIS FILE'S — that component answers WHICH
-   box occupies a grid column and reads nothing off it, because §17.5.2.1 Fixed table layout and CSS 2.1
-   §17.6.2.1 Border conflict resolution ask the same walk for different properties of the same boxes.
-   WHICH BOX THE NUMBER IS A WIDTH OF is settled by §17.5's own closing paragraph rather than assumed: "In the
-   separated borders model, the edges coincide with the border edges of cells." A column's edges are therefore
-   its cells' BORDER edges, which is the box `TableColumnWidth` is already measured in (see the header), so the
-   declared width floors the pair directly and needs no conversion.
-   THE COLLAPSING MODEL MOVES THOSE EDGES AND THE FLOOR IS STILL APPLIED AS WRITTEN, WHICH IS RECORDED RATHER
-   THAN DERIVED. The same paragraph's first sentence gives them elsewhere — "The edges of the rows, columns, row
-   groups and column groups in the collapsing borders model coincide with the hypothetical grid lines on which
-   the borders of the cells are centered." — and a cell's border box under CSS 2.1 §17.6.2 The collapsing border
-   model reaches exactly those grid lines at every INTERIOR one, since it carries half of a border centred
-   there. The two differ only at the table's two OUTERMOST lines, by the half-border §17.6.2 gives to the TABLE
-   box ("The left border width of the table is half of the first cell's collapsed left border"), and CSS 2.1
-   states no rule reconciling a declared column width with that half. So the floor is taken on the same pair in
-   both models, and the difference is a length the table box already carries rather than one dropped here. */
+/* §17.5.2.2's steps 2 and 4 read a declared `width` off a column or column-group box, and both are floors.
+   Step 2: "The minimum is that required by the cell with the largest minimum cell width (or the column
+   'width', whichever is larger)." and likewise the maximum. Step 4: "For each column group element with a
+   'width' other than 'auto', increase the minimum widths of the columns it spans, so that together they are at
+   least as wide as the column group's 'width'." core/layout/table_column_box.h finds the box; this file reads
+   the property.
+   The declared width floors the border-box pair directly: "In the separated borders model, the edges coincide
+   with the border edges of cells." In the collapsing model "The edges of the rows, columns, row groups and
+   column groups in the collapsing borders model coincide with the hypothetical grid lines on which the borders
+   of the cells are centered", which a cell's border box reaches at every interior line; the outermost lines
+   differ by the half-border §17.6.2 gives the table box, for which CSS 2.1 states no reconciliation, so the
+   same floor is taken in both models. */
 typedef struct {
     bool  declared;   /* the computed `width` is other than `auto` — step 4's own antecedent */
     CssPx px;         /* meaningless unless `declared` */
@@ -274,16 +232,9 @@ static TcwDeclaredWidth tcw_declared_width(lxb_dom_element_t *box)
            "is a column that is merely narrow");
     w = css_computed_length(box, "width");
     if (w.kind == CSS_LENGTH_KEYWORD && strcmp(w.keyword, "auto") == 0) return out;
-    /* EVERY REFUSAL BELOW LEAVES `declared` FALSE, AND THAT IS THIS DIFF'S LINE RATHER THAN DECORATION.
-       core/layout/used_value.c already routes a table's used width through this component in RELEASE, where a
-       `DFAILF` compiles to nothing — so a refusal that fell through to the assignment at the end would report
-       `declared` with a `px` that is not the width (a `CssLength`'s `px` is the ABSOLUTE arm's field; the
-       percentage arm carries `pct`), and a fabricated column floor is indistinguishable downstream from a
-       measured one. Falling out with `declared` false drops the floor instead, which is the same release
-       behaviour every declared column width had before this walk existed: narrower than the document, and
-       never a number the document does not contain. The header's own note that these sites become CLAUDE.md's
-       data-integrity case once wired is about the SEVERITY of the whole family, padding included, and is not
-       split here for one member of it. */
+    /* Every refusal below leaves `declared` false. core/layout/used_value.c reaches this in release, where
+       `DFAILF` compiles out; falling through would report `px` from the wrong `CssLength` arm (a percentage
+       carries `pct`). Dropping the floor makes the column narrower but never invents a number. */
     if (w.kind == CSS_LENGTH_PERCENTAGE || w.kind == CSS_LENGTH_CALCULATED) {
         DFAILF("%s: a column or column-group box declares a PERCENTAGE `width` and CSS 2.1 §17.5.2.2 Automatic "
                "table layout cannot resolve it. The section refers it to the one number this algorithm is being "
@@ -319,13 +270,9 @@ static TcwDeclaredWidth tcw_declared_width(lxb_dom_element_t *box)
     return out;
 }
 
-/* §17.5.2.2's STEP 4 DEFICIT, and step 3's own sentence is the only guidance either step gives. Step 4 says
-   what the columns must reach and nothing about how they get there; step 3, which is the same shape over a
-   spanning CELL, says "If possible, widen all spanned columns by approximately the same amount." That names a
-   FAMILY of distributions and not one, and §17.5.2.2 is non-normative from "The remainder of this section is
-   non-normative." onward, so an even split is RECORDED as the reading taken rather than crashed on — a crash
-   here would refuse a document every reading is conforming for. It is the same split step 3 above already
-   takes, which is what keeps one table from being widened two ways. */
+/* §17.5.2.2's step 4 deficit. Step 4 says what the columns must reach, not how; step 3's same-shaped rule
+   says "If possible, widen all spanned columns by approximately the same amount." The section is
+   non-normative there, so an even split is the recorded reading, the same one step 3 takes. */
 static void tcw_raise_run_minimum(TableColumnWidth *cols, size_t from, size_t to, CssPx want)
 {
     CssPx sum = css_px(0.0);
@@ -343,13 +290,10 @@ static void tcw_raise_run_minimum(TableColumnWidth *cols, size_t from, size_t to
     }
 }
 
-/* THE COLUMN BOXES A DOCUMENT DECLARES CAN OUTNUMBER THE GRID COLUMNS ITS CELLS FILL, AND THE DIFFERENCE IS
-   NOT THIS COMPONENT'S TO ABSORB. HTML §4.9.12.1 Forming a table increases the table's own x_width by every
-   column group's span before a single row is read, so `<colgroup span="5">` over two-cell rows is a FIVE-column
-   table there, while core/layout/table_grid.h grows `ncols` only to cover the cells it places and reports two.
-   The difference is invisible while every extra column is `width: auto` — such a column floors nothing and
-   contributes nothing to MIN or MAX — and is a WRONG table width the moment one of them declares a width, so
-   that is exactly where this stops. */
+/* Column boxes can outnumber the grid columns cells fill: HTML §4.9.12.1 Forming a table grows x_width by
+   every column group's span, so `<colgroup span="5">` over two-cell rows is five columns wide there, while
+   core/layout/table_grid.h reports two. An extra column with `width: auto` contributes nothing; one declaring
+   a width would make the table width wrong, so that is refused. */
 static void tcw_require_columns_within_grid(const TableColumnBoxMap *map, size_t ngrid)
 {
     size_t i;
@@ -390,17 +334,11 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
            "CSS 2.1 §17.5.2.2 was handed a grid with no cell array and a non-zero cell count — "
            "`table_grid_build` stores NULL only for a table whose rows generate no cell, so the two have been "
            "carried apart since it answered");
-    /* NO BORDER-MODEL ASSERT STANDS HERE ANY LONGER, AND ITS REMOVAL IS THE POINT RATHER THAN A RELAXATION.
-       What stood here refused CSS 2.1 §17.6.2 The collapsing border model on the ground that
-       `table_cell_border_edges` sums each cell's own computed `border-*-width` — and that function now answers
-       BOTH of §17.6 Borders' models at its own site, so these four steps are stated over a border box that is
-       right in either one and there is nothing left for a caller to have got wrong. A predicate kept past the
-       thing it selected against is a fallback with no second arm to fall back to. */
+    /* No border-model assert: `table_cell_border_edges` answers both of §17.6's models, so these steps are
+       right in either. */
     *out = NULL;
-    /* §17.5's rules 3 and 4, BUILT BEFORE THE ZERO-COLUMN RETURN BELOW AND NOT AFTER IT. A table whose rows
-       generate no cell still has the column boxes its own child list declares, and `<table><colgroup span="3"
-       style="width: 100px"></table>` is exactly the shape whose floor the early return would drop in silence —
-       the guard is about columns the GRID does not have, so a grid with none of them is its sharpest case. */
+    /* §17.5's rules 3 and 4 are built before the zero-column return, so a cell-less table's declared column
+       boxes (`<table><colgroup span="3" style="width: 100px"></table>`) still reach the guard. */
     table_column_boxes_build(table, grid->ncols, &boxes);
     tcw_require_columns_within_grid(&boxes, grid->ncols);
     if (grid->ncols == 0) {
@@ -415,19 +353,12 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
         cols[i].min = css_px(0.0);
         cols[i].max = css_px(0.0);
     }
-    /* ---- §17.5.2.2's STEP 2 ---------------------------------------------------------------------------
+    /* ---- §17.5.2.2's step 2 ---------------------------------------------------------------------------
        "For each column, determine a maximum and minimum column width from the cells that span only that
-       column." It is written per COLUMN and run here per CELL over the same set, which is the same reduction
-       with the loops exchanged: every cell is examined once and lands in exactly the column it spans, where a
-       per-column form would re-scan every cell for each column. The column `width` half of the sentence is the
-       loop AFTER this one, and it is after rather than merged into it because the two halves have different
-       operands — this one walks CELLS and that one walks COLUMNS — while `css_px_max` makes their order
-       immaterial to the answer.
-       §17.5's RULE 5 OVERLAP CASE NEEDS NO ARM HERE. core/layout/table_grid.h records `overlaps` for a
-       column-spanning cell that reaches into a row-spanning one and states which of §17.5's two conforming
-       readings it took; under that reading the cell OCCUPIES the columns it covers, so its width is an input
-       to them exactly as any other cell's is, and a second reading would change which columns it covers rather
-       than what it contributes to them. */
+       column." Run per cell rather than per column: each single-column cell lands in its one column. The
+       column `width` half is the next loop; `css_px_max` makes the order immaterial.
+       §17.5's rule 5 overlap needs no arm: under the reading core/layout/table_grid.h records for `overlaps`,
+       the cell occupies the columns it covers and contributes to them like any other. */
     for (k = 0; k < grid->ncells; k++) {
         const TableGridCell *cell = &grid->cells[k];
         TableColumnWidth cw;
@@ -453,15 +384,10 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
         cols[cell->col].min = css_px_max(cols[cell->col].min, cw.min);
         cols[cell->col].max = css_px_max(cols[cell->col].max, cw.max);
     }
-    /* ---- §17.5.2.2's STEP 2, SECOND HALF: THE COLUMN'S OWN `width` -------------------------------------
-       "The minimum is that required by the cell with the largest minimum cell width (or the column 'width',
-       whichever is larger)." and "The maximum is that required by the cell with the largest maximum cell width
-       (or the column 'width', whichever is larger)." The parenthesis is the SAME on both lines, so one declared
-       width floors BOTH ends of the pair — which is what separates it from step 4's group width below, and from
-       a cell's own declared `width`, each of which the section writes over the minimum alone.
-       A COLUMN THE GRID HAS AND NO COLUMN BOX OCCUPIES IS THE ORDINARY CASE and is not asked: a `<col>` styling
-       the first of three columns leaves the other two with a NULL entry, which core/layout/table_column_box.h
-       states is the positive answer "no column box occupies this one" rather than a value to default past. */
+    /* ---- §17.5.2.2's step 2, second half: the column's own `width` -------------------------------------
+       The parenthesis "(or the column 'width', whichever is larger)" is on both the minimum and maximum line,
+       so a column's declared width floors both ends, unlike step 4's group width and a cell's own `width`.
+       A grid column no column box occupies has a NULL entry, the positive answer "none". */
     for (i = 0; i < grid->ncols; i++) {
         TcwDeclaredWidth w;
 
@@ -471,19 +397,13 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
         cols[i].min = css_px_max(cols[i].min, w.px);
         cols[i].max = css_px_max(cols[i].max, w.px);
     }
-    /* ---- §17.5.2.2's STEP 3 ---------------------------------------------------------------------------
+    /* ---- §17.5.2.2's step 3 ---------------------------------------------------------------------------
        "For each cell that spans more than one column, increase the minimum widths of the columns it spans so
        that together, they are at least as wide as the cell. Do the same for the maximum widths. If possible,
        widen all spanned columns by approximately the same amount."
-       THE EQUAL SPLIT IS THE SECTION'S OWN SUGGESTION AND IS RECORDED RATHER THAN CRASHED ON: "approximately
-       the same amount" names a family of distributions and not one, and the section is non-normative from
-       "The remainder of this section is non-normative" onward, so a crash here would refuse a document every
-       reading is conforming for. The deficit is split evenly across the spanned columns.
-       THE ORDER IS THE GRID'S OWN AND IS ALSO A RECORDED CHOICE. Two spanning cells over overlapping column
-       runs do not commute — widening for the first changes the sum the second measures — and §17.5.2.2 says
-       nothing about the order. core/layout/table_grid.h reports cells by grid row and, within a row, in the
-       order the row's cells occur in its child list; this walk takes them in that order, so the answer is a
-       function of the document rather than of an allocation. */
+       The even split and the order are recorded readings (the section is non-normative here). Overlapping
+       spans do not commute, so cells are taken in core/layout/table_grid.h's order (by row, then child-list
+       order), a function of the document. */
     for (k = 0; k < grid->ncells; k++) {
         const TableGridCell *cell = &grid->cells[k];
         TableColumnWidth cw;
@@ -520,20 +440,13 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
                 cols[c].max = css_px_add(cols[c].max, share);
         }
     }
-    /* ---- §17.5.2.2's STEP 4 ---------------------------------------------------------------------------
+    /* ---- §17.5.2.2's step 4 ---------------------------------------------------------------------------
        "For each column group element with a 'width' other than 'auto', increase the minimum widths of the
        columns it spans, so that together they are at least as wide as the column group's 'width'."
-       THE MINIMA ONLY, AND THAT ASYMMETRY IS THE SECTION'S. Step 2 floors both ends from a column's `width` and
-       step 3 widens both from a spanning cell; step 4 names the minimum alone and says nothing of the maximum,
-       so raising the maximum here would be this engine adding a term. The coherence floor below is what then
-       lifts a maximum that the widened minimum crossed, which is the same crossing the header already records
-       for step 3 and is handled in the one place rather than at each step.
-       THE GROUP'S RUN IS READ OFF THE MAPPING RATHER THAN RE-WALKED, which is rule 4 held as a fact instead of
-       restated as a loop: "A column group box occupies the same grid cells as the columns it contains", so the
-       columns a group spans are exactly the consecutive entries naming it and a run scan finds them without
-       asking the DOM a second time. A run truncated by the grid's own column count cannot carry a declared
-       width — `tcw_require_columns_within_grid` stopped this walk above if one did — so a short run here is a
-       group whose `width` is `auto`, which floors nothing. */
+       Minima only, as the section says; the coherence floor below lifts a crossed maximum. A group's run is
+       the consecutive mapping entries naming it (rule 4: "A column group box occupies the same grid cells as
+       the columns it contains"). A run cut short by the grid's count has `width: auto`, since
+       `tcw_require_columns_within_grid` refused any declared one. */
     for (i = 0; i < grid->ncols; ) {
         lxb_dom_element_t *group = boxes.cols[i].column_group;
         size_t end = i + 1;
@@ -547,9 +460,7 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
     }
     /* ---- "This gives a maximum and minimum width for each column." ------------------------------------- */
     for (i = 0; i < grid->ncols; i++) {
-        /* The second of the two crossings the header records: step 3 widens the minima and the maxima over
-           the same columns from two independent sums, so a column can come out of it with a minimum above a
-           maximum that no cell of its own ever raised. */
+        /* Second crossing: steps 3 and 4 widen minima and maxima from independent sums. */
         cols[i].max = tcw_coherent(cols[i].min, cols[i].max);
         DCHECK(cols[i].min.px >= 0.0 && cols[i].max.px >= cols[i].min.px,
                "CSS 2.1 §17.5.2.2's pair left this component INCOHERENT — a negative minimum, or a maximum "

@@ -1,7 +1,5 @@
 /* CSS 2.1 §17.6.2 The collapsing border model and §17.6.2.1 Border conflict resolution.
-   See table_border_collapse.h for the reading of §17.6.2's row-width equation that decides what a cell is
-   charged, for the proof that a used WIDTH needs only rules 1 and 3, and for the derivation of which boxes
-   meet at a grid line. */
+   See table_border_collapse.h. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -19,22 +17,15 @@
 #include "core/layout/table_column_box.h"
 #include "core/layout/table_grid.h"
 
-/* The four sides in the order every four-side rule in CSS states them, which is also the order of
-   `TableCollapsedEdges`' fields — so a side's index names its field and neither list is written twice. */
+/* The four sides in CSS's four-side order, which is also `TableCollapsedEdges`' field order. */
 enum { TBC_TOP = 0, TBC_RIGHT = 1, TBC_BOTTOM = 2, TBC_LEFT = 3 };
 static const char *const TBC_SIDES[4] = { "top", "right", "bottom", "left" };
 
-/* THE BOXES §17.6.2.1's RESOLUTION IS STATED OVER, gathered once for one table box. It is INTERNAL because
-   both entries in the header are ROUTES: a consumer holds an element, not a gathering, and exporting this
-   would export a lifetime with no caller to own it. Every field is an operand of the walk and none is
-   derivable from the others — the grid says which cell occupies which slot, the rows say which row and row
-   GROUP bound each horizontal line, and the column map says which column and column-group box bound each
-   vertical one.
-   `rows` IS NOT A SECOND COPY OF `TableGrid.rows` even though the two name the same elements: that field is
-   §17.5's rule 1 placement and carries the row alone, while a horizontal grid line at the boundary of a row
-   group carries that GROUP's border and `TableBoxRow.group` is the only answer to which group a row is in.
-   The gathering asserts the two agree element by element, so they are one fact read through the record that
-   carries both halves of it. */
+/* The boxes §17.6.2.1's resolution is stated over, gathered once for one table box. Internal: both entries
+   are routes, so no consumer owns a gathering. The grid places cells, the rows give each horizontal line's row
+   and row group, and the column map gives each vertical line's column and column-group box.
+   `rows` is not a second `TableGrid.rows`: only `TableBoxRow.group` says which row group a row is in, and the
+   gathering asserts the two agree element by element. */
 typedef struct {
     lxb_dom_element_t *table;
     const TableGrid   *grid;      /* borrowed */
@@ -64,10 +55,10 @@ bool table_border_collapse_selected(lxb_dom_element_t *table)
     return collapsed;
 }
 
-/* ---- ONE GRID LINE'S CANDIDATES ---------------------------------------------------------------------------
-   §17.6.2.1's set of "borders at every edge of every cell … specified by border properties on a variety of
-   elements that meet at that edge", reduced as the header proves it may be: rule 1's `hidden` as a latch, and
-   rule 3's "narrow borders are discarded in favor of wider ones" as a maximum. */
+/* ---- One grid line's candidates ---------------------------------------------------------------------------
+   §17.6.2.1's "borders at every edge of every cell … specified by border properties on a variety of elements
+   that meet at that edge", reduced as the header shows: rule 1's `hidden` as a latch, rule 3's width as a
+   maximum. */
 typedef struct {
     bool  hidden;   /* rule 1: "Any border with this value suppresses all borders at this location." */
     CssPx width;    /* rule 3's maximum over every candidate, `none` included at its computed width of zero */
@@ -82,10 +73,8 @@ static TbcEdge tbc_edge_empty(void)
     return e;
 }
 
-/* ONE BOX MEETING THE EDGE. A NULL element is a box §17.2.1 Anonymous table objects generated, or a slot no box
-   occupies at all, and both contribute nothing — CSS 2 §9.2.1.1 Anonymous block boxes gives such a box the
-   initial value of every non-inherited property, and `border-style`'s initial `none` computes to a width of
-   zero and can never be the `hidden` rule 1 latches on. */
+/* One box meeting the edge. A NULL element (an anonymous box, or an empty slot) contributes nothing: its
+   `border-style` is the initial `none`, width zero, never `hidden`. */
 static void tbc_meet(TbcEdge *e, lxb_dom_element_t *el, int side)
 {
     char name[32];
@@ -114,23 +103,18 @@ static void tbc_meet(TbcEdge *e, lxb_dom_element_t *el, int side)
     e->width = css_px_max(e->width, w.px);
 }
 
-/* Rules 1 and 3 read off the accumulated set. Rule 2 needs no arm: "Only if the border properties of all the
-   elements meeting at this edge are 'none' will the border be omitted" is the same maximum over zeroes, since
-   CSS 2.1 §8.5.1's `Computed value:` line already makes a `none` border's width 0. */
+/* Rules 1 and 3 over the accumulated set. Rule 2 ("Only if the border properties of all the elements meeting
+   at this edge are 'none' will the border be omitted") is the same maximum over zeroes. */
 static CssPx tbc_used(const TbcEdge *e)
 {
     return e->hidden ? css_px(0.0) : e->width;
 }
 
-/* ---- WHICH BOX OCCUPIES WHAT ------------------------------------------------------------------------------ */
+/* ---- Which box occupies what ------------------------------------------------------------------------------ */
 
-/* The cell box covering grid slot (`row`, `col`), or NULL where no cell reaches it — a real shape, since
-   §17.5's rule 5 places cells into the slots their earlier siblings and any row-spanning cell leave free and
-   never requires the grid to be full.
-   THE FIRST MATCH WINS AND THAT IS §17.5's OWN UNDEFINED CASE, not a choice made here: rule 5 says an
-   overlapping cell may either overlap or be shifted, core/layout/table_grid.h takes the overlapping reading and
-   RECORDS it per cell (`TableGridCell.overlaps`), so the borders of the covering cell this walk reaches first
-   are the borders of the cell that grid says is there. */
+/* The cell box covering grid slot (`row`, `col`), or NULL where none reaches it (§17.5's rule 5 does not
+   require a full grid). The first match wins: for an overlap, core/layout/table_grid.h's recorded reading
+   (`TableGridCell.overlaps`) makes the first-reached cell the one the grid says is there. */
 static lxb_dom_element_t *tbc_cell_at(const TableGrid *g, size_t row, size_t col)
 {
     size_t i;
@@ -151,10 +135,9 @@ static lxb_dom_element_t *tbc_column_at(const TableColumnBoxMap *m, size_t col, 
     return group ? m->cols[col].column_group : m->cols[col].column;
 }
 
-/* Whether grid column `col` is the FIRST (resp. LAST) of the run its column or column-group box occupies —
-   which is where that box has a left (resp. right) border and nowhere else. §17.5's rule 3 places column boxes
-   "next to each other in the order they occur", so a box's run is contiguous and a change of box between two
-   adjacent grid columns IS its boundary. */
+/* Whether grid column `col` is the first (resp. last) of its column or column-group box's run, where that box
+   has a left (resp. right) border. Rule 3 places column boxes "next to each other in the order they occur", so
+   runs are contiguous. */
 static bool tbc_column_starts(const TableColumnBoxMap *m, size_t col, bool group)
 {
     lxb_dom_element_t *here = tbc_column_at(m, col, group);
@@ -169,8 +152,7 @@ static bool tbc_column_ends(const TableColumnBoxMap *m, size_t col, bool group)
     return here != NULL && tbc_column_at(m, col + 1, group) != here;
 }
 
-/* The same two questions for a ROW GROUP over the grid rows, whose runs core/layout/table_box.h reports as the
-   `group` of each row in §17.2's display order. */
+/* The same two questions for a row group over grid rows, from core/layout/table_box.h's per-row `group`. */
 static bool tbc_group_starts(const TbcBoxes *b, size_t row)
 {
     lxb_dom_element_t *here = b->rows[row].group;
@@ -185,10 +167,9 @@ static bool tbc_group_ends(const TbcBoxes *b, size_t row)
     return here != NULL && (row + 1 >= b->nrows || b->rows[row + 1].group != here);
 }
 
-/* ---- THE TWO RESOLUTIONS ---------------------------------------------------------------------------------
-   `line` is a grid LINE and not a grid column or row: it runs from 0 to the count inclusive, so a table `n`
-   columns wide has `n + 1` vertical lines and its two outermost are the table box's own perimeter. See the
-   header for the derivation of the membership below from each box's own extent. */
+/* ---- The two resolutions ---------------------------------------------------------------------------------
+   `line` is a grid line, 0 to the count inclusive: `n` columns have `n + 1` vertical lines, the outermost two
+   on the table's perimeter. See the header for the membership. */
 static CssPx tbc_vertical(const TbcBoxes *b, size_t line, size_t row)
 {
     TbcEdge e = tbc_edge_empty();
@@ -205,7 +186,7 @@ static CssPx tbc_vertical(const TbcBoxes *b, size_t line, size_t row)
         if (line < ncols && tbc_column_starts(&b->columns, line, group))
             tbc_meet(&e, tbc_column_at(&b->columns, line, group), TBC_LEFT);
     }
-    /* A ROW, a ROW GROUP and the TABLE have a vertical border only at the table's own two outermost lines. */
+    /* A row, a row group and the table have a vertical border only at the outermost two lines. */
     if (line == 0 || line == ncols) {
         int side = (line == 0) ? TBC_LEFT : TBC_RIGHT;
 
@@ -225,8 +206,8 @@ static CssPx tbc_horizontal(const TbcBoxes *b, size_t line, size_t col)
 
     if (line > 0) {
         tbc_meet(&e, tbc_cell_at(b->grid, line - 1, col), TBC_BOTTOM);
-        /* §17.5's rule 1 gives each row exactly one grid row, so every horizontal line inside the table is the
-           bottom edge of the row above it and the top edge of the row below. */
+        /* Rule 1 gives each row one grid row, so an interior horizontal line is the bottom of the row above
+           and the top of the row below. */
         tbc_meet(&e, b->rows[line - 1].element, TBC_BOTTOM);
         if (tbc_group_ends(b, line - 1)) tbc_meet(&e, b->rows[line - 1].group, TBC_BOTTOM);
     }
@@ -235,7 +216,7 @@ static CssPx tbc_horizontal(const TbcBoxes *b, size_t line, size_t col)
         tbc_meet(&e, b->rows[line].element, TBC_TOP);
         if (tbc_group_starts(b, line)) tbc_meet(&e, b->rows[line].group, TBC_TOP);
     }
-    /* A COLUMN, a COLUMN GROUP and the TABLE have a horizontal border only at the table's own top and bottom. */
+    /* A column, a column group and the table have a horizontal border only at the top and bottom. */
     if (line == 0 || line == nrows) {
         int side = (line == 0) ? TBC_TOP : TBC_BOTTOM;
 
@@ -246,7 +227,7 @@ static CssPx tbc_horizontal(const TbcBoxes *b, size_t line, size_t col)
     return tbc_used(&e);
 }
 
-/* ---- THE CONTEXT ----------------------------------------------------------------------------------------- */
+/* ---- The context ----------------------------------------------------------------------------------------- */
 
 static void tbc_gather(lxb_dom_element_t *table, const TableGrid *grid, TbcBoxes *out)
 {
@@ -274,12 +255,8 @@ static void tbc_gather(lxb_dom_element_t *table, const TableGrid *grid, TbcBoxes
     out->table = table;
     out->grid = grid;
     out->rows = NULL;
-    /* THE GRID ALREADY PLACES THE ROW ELEMENTS (§17.5's rule 1, `TableGrid.rows`) AND THIS WALK IS STILL
-       NEEDED, for one field: a horizontal grid line at the boundary of a ROW GROUP carries that group's border,
-       and `TableBoxRow.group` is the only answer in the tree to which group a row is in. So the two are asked
-       together and their agreement is ASSERTED rather than assumed — a row index that named one row in the
-       placement and another in the box generation would resolve a border from the wrong box, and every answer
-       would still be a real border width of a real element. */
+    /* The grid places the rows (§17.5's rule 1), but only `table_box_rows` gives each row's group, so both
+       are read and asserted to agree: a mismatch would resolve a border from the wrong, still real, box. */
     out->nrows = table_box_rows(table, &out->rows);
     DCHECK(out->nrows == grid->nrows,
            "CSS 2.1 §17.5 Visual layout of table contents' rule 1 makes the grid's row count the table's own "
@@ -313,7 +290,7 @@ static void tbc_scatter(TbcBoxes *b)
     b->grid = NULL;
 }
 
-/* ---- WHAT THE CONSUMERS READ ------------------------------------------------------------------------------ */
+/* ---- What the consumers read ------------------------------------------------------------------------------ */
 
 static TableCollapsedEdges tbc_cell_charge(const TbcBoxes *b, const TableGridCell *cell)
 {
@@ -340,9 +317,8 @@ static TableCollapsedEdges tbc_cell_charge(const TbcBoxes *b, const TableGridCel
     out.right = css_px(0.0);
     out.bottom = css_px(0.0);
     out.left = css_px(0.0);
-    /* THE PERIMETER LINES ARE CHARGED TO THE TABLE AND NOT TO THIS CELL — the header's reading of §17.6.2's
-       row-width equation, whose two `0.5 * border-width` terms the next paragraph names as the table box's own
-       left and right border widths. A cell at the grid's edge therefore keeps the zero above on that side. */
+    /* Perimeter lines are the table's (the equation's two `0.5 * border-width` terms), so a cell at the grid's
+       edge keeps zero on that side. */
     for (i = cell->row; i < rend; i++) {
         if (cell->col > 0) out.left = css_px_max(out.left, tbc_vertical(b, cell->col, i));
         if (cend < ncols) out.right = css_px_max(out.right, tbc_vertical(b, cend, i));
@@ -351,8 +327,8 @@ static TableCollapsedEdges tbc_cell_charge(const TbcBoxes *b, const TableGridCel
         if (cell->row > 0) out.top = css_px_max(out.top, tbc_horizontal(b, cell->row, i));
         if (rend < b->nrows) out.bottom = css_px_max(out.bottom, tbc_horizontal(b, rend, i));
     }
-    /* "borders are centered on the grid lines between the cells", so each of the two cells meeting at an
-       interior line carries half of it and the two halves sum to the equation's single `border-width_i`. */
+    /* "borders are centered on the grid lines between the cells": each of the two cells at an interior line
+       carries half, and the halves sum to the equation's `border-width_i`. */
     out.top = css_px_scale(out.top, 0.5);
     out.right = css_px_scale(out.right, 0.5);
     out.bottom = css_px_scale(out.bottom, 0.5);
@@ -371,19 +347,16 @@ static TableCollapsedEdges tbc_table_borders(const TbcBoxes *b)
     out.bottom = css_px(0.0);
     out.left = css_px(0.0);
     ncols = b->grid->ncols;
-    /* Each of §17.6.2's four sentences is stated over the CELLS at an edge of the grid, so a table with no
-       rows or no columns has nothing to examine and its four border widths are zero. */
+    /* Each sentence is stated over the cells at a grid edge, so no rows or no columns gives zeroes. */
     if (b->nrows == 0 || ncols == 0) return out;
-    /* "UAs must compute an initial left and right border width for the table by examining the first and last
-       cells in the FIRST ROW of the table" — so both are read at grid row 0 and a wider border in a later row
-       does not widen the table: "If subsequent rows have larger collapsed left and right borders, then any
-       excess spills into the margin area of the table." */
+    /* "by examining the first and last cells in the first row of the table": both read at grid row 0, and
+       "If subsequent rows have larger collapsed left and right borders, then any excess spills into the margin
+       area of the table." */
     out.left = css_px_scale(tbc_vertical(b, 0, 0), 0.5);
     out.right = css_px_scale(tbc_vertical(b, ncols, 0), 0.5);
-    /* "The top border width of the table is computed by examining ALL cells who collapse their top borders
-       with the top border of the table … equal to half of the MAXIMUM collapsed top border", and the same
-       sentence for the bottom. The cells that collapse with the table's top border are exactly the ones the
-       grid's own top line runs along, which is every grid column of line 0. */
+    /* "The top border width of the table is computed by examining all cells who collapse their top borders
+       with the top border of the table … equal to half of the maximum collapsed top border", likewise the
+       bottom: every grid column of line 0 (resp. the last line). */
     for (c = 0; c < ncols; c++) {
         out.top = css_px_max(out.top, tbc_horizontal(b, 0, c));
         out.bottom = css_px_max(out.bottom, tbc_horizontal(b, b->nrows, c));
@@ -393,10 +366,9 @@ static TableCollapsedEdges tbc_table_borders(const TbcBoxes *b)
     return out;
 }
 
-/* ---- THE TWO ROUTES ---------------------------------------------------------------------------------------
-   See the header for what each answers and for why the boxes are gathered per call. Both find the table box
-   the way core/layout/used_value.c's cell route does — by climbing CSS 2.1 §17.2 The CSS table model's own box
-   nesting (core/layout/table_box.h) — so a consumer holding one element needs nothing else. */
+/* ---- The two routes ---------------------------------------------------------------------------------------
+   See the header. Both find the table box by climbing CSS 2.1 §17.2 The CSS table model's nesting
+   (core/layout/table_box.h), as core/layout/used_value.c's cell route does. */
 
 TableCollapsedEdges table_collapsed_cell_edges(lxb_dom_element_t *cell)
 {
