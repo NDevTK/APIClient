@@ -1,5 +1,4 @@
-/* css-flexbox-1 §4 "Flex Items"' box tree, §5.1's main axis and §5.2's line count. See flex_item.h for why
-   this is a different enumeration from core/layout/block_flow.h's rather than a second copy of it. */
+/* css-flexbox-1 §4 "Flex Items"' box tree, §5.1's main axis and §5.2's line count. See flex_item.h. */
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,11 +40,9 @@ bool flex_item_display_is_flex_container(const char *display)
     return strcmp(display, "flex") == 0 || strcmp(display, "inline-flex") == 0;
 }
 
-/* THE CONTAINER'S OWN `display` IS ASSERTED AND NOT ASSUMED, at every entry that reads a property §5 declares
-   `Applies to: flex containers`. A `flex-direction` read off a box that is not one answers the cascade's
-   initial `row` — a real keyword, from a real property, that means nothing about that box — which is the
-   defaulted-field shape with no default in sight: nothing is missing, and the answer is about a question the
-   element was never asked. */
+/* The container's `display` is asserted at every entry reading a property §5 declares `Applies to: flex
+   containers`: off any other box `flex-direction` reads the initial `row`, a real keyword meaning nothing
+   there. */
 static void fi_require_container(lxb_dom_element_t *el, const char *section)
 {
     char *d;
@@ -72,10 +69,9 @@ FlexMainAxis flex_container_main_axis(lxb_dom_element_t *el)
 
     fi_require_container(el, "§5.1 \"Flex Flow Direction: the flex-direction property\"");
     v = fi_computed(el, "flex-direction");
-    /* §5.1's `Value:` line is `row | row-reverse | column | column-reverse` and the mapping is stated per
-       value: `row` takes "the same orientation as the inline axis of the current writing mode", `column` "the
-       block axis of the current writing mode", and each `-reverse` is "Same as" its unreversed value except
-       that main-start and main-end "are swapped" — an ORDER, which this answer deliberately cannot carry. */
+    /* §5.1's `Value:` line is `row | row-reverse | column | column-reverse`: `row` takes "the same orientation as
+       the inline axis of the current writing mode", `column` "the block axis of the current writing mode", and
+       each `-reverse` swaps main-start and main-end, an order this answer cannot carry. */
     if (strcmp(v, "row") == 0 || strcmp(v, "row-reverse") == 0) {
         axis = FLEX_MAIN_AXIS_INLINE;
     } else if (strcmp(v, "column") == 0 || strcmp(v, "column-reverse") == 0) {
@@ -104,13 +100,9 @@ bool flex_container_axis_is_vertical(lxb_dom_element_t *container, FlexAxis axis
            "\"The axis perpendicular to the main axis is called the cross axis\" is the whole of the pair");
     /* §5.1's mapping, which also establishes that `container` is a flex container at all. */
     main_axis = flex_container_main_axis(container);
-    /* §2's perpendicularity — "The axis perpendicular to the main axis is called the cross axis" — read over
-       css-writing-modes-4 §6.1 "Abstract Dimensions"' pair: the two abstract
-       axes ARE the perpendicular pair, so the cross axis is simply the other one of them. It is written as
-       one expression rather than a four-armed switch because the four arms would be four chances to write
-       the same fact differently, and `css_logical_init` already asserts that §6.4's dimension rows send the
-       two abstract axes to two DIFFERENT physical ones — so a cross axis derived this way cannot land on the
-       main axis's own physical dimension. */
+    /* §2: "The axis perpendicular to the main axis is called the cross axis", read over css-writing-modes-4
+       §6.1 "Abstract Dimensions"' pair: the cross axis is the other abstract axis. One expression, not four
+       arms; `css_logical_init` asserts §6.4 sends the two abstract axes to different physical ones. */
     abstract = (main_axis == FLEX_MAIN_AXIS_INLINE) == (axis == FLEX_AXIS_MAIN) ? CSS_LOGICAL_AXIS_INLINE
                                                                                 : CSS_LOGICAL_AXIS_BLOCK;
     return css_logical_axis_is_vertical(container, abstract);
@@ -124,9 +116,8 @@ bool flex_container_is_multi_line(lxb_dom_element_t *el)
 
     fi_require_container(el, "§5.2 \"Flex Line Wrapping: the flex-wrap property\"");
     v = fi_computed(el, "flex-wrap");
-    /* §6 "Flex Lines" is where the two words this answer is in are defined, over §5.2's three keywords: a
-       single-line container is "one with flex-wrap: nowrap", a multi-line one "one with flex-wrap: wrap or
-       flex-wrap: wrap-reverse". */
+    /* §6 "Flex Lines" defines both words over §5.2's keywords: single-line is "one with flex-wrap: nowrap",
+       multi-line "one with flex-wrap: wrap or flex-wrap: wrap-reverse". */
     if (strcmp(v, "nowrap") == 0) {
         multi = false;
     } else if (strcmp(v, "wrap") == 0 || strcmp(v, "wrap-reverse") == 0) {
@@ -142,20 +133,12 @@ bool flex_container_is_multi_line(lxb_dom_element_t *el)
     return multi;
 }
 
-/* css-display-3 §1 "Introduction"' NODES THAT ARE NOT THERE — "for the purposes of CSS, all of these
-   additional types of nodes are ignored, as if they didn't exist" — plus §2.5 "Box Generation: the none and
-   contents keywords"' `none`, whose note states the same fact in the words a text sequence needs: "anonymous
-   box generation rules will ignore the elided elements entirely, as if they did not exist in the box tree".
-   Both are INVISIBLE TO CONTIGUITY, so a comment or a `display: none` element between two text nodes leaves
-   them one sequence. Anything else that generates a box ENDS the sequence.
-   §2.5's OTHER KEYWORD IS NOT A THIRD ANSWER HERE AND IT USED TO LOOK LIKE ONE, which is worth recording
-   because the dilemma is what a reader re-derives from §2.5's note covering both values. Asked of a `contents`
-   element this predicate has no right answer: TRUE joins two runs across a box-generating child of the elided
-   element, and FALSE splits a sequence §4 makes ONE. It dissolves because the walk below no longer enumerates
-   a DOM child list — core/layout/box_tree.h's sequence replaces a `contents` element BY its contents, so the
-   members this predicate is asked about are that element's own children and each is judged on itself: a
-   `contents` element holding a box ENDS the sequence through that box, and an empty one is not a member at all
-   so its neighbours stay contiguous. Two correct answers out of one rule, and no third question. */
+/* Nodes invisible to contiguity: css-display-3 §1 "Introduction"'s "for the purposes of CSS, all of these
+   additional types of nodes are ignored, as if they didn't exist", and §2.5 "Box Generation: the none and
+   contents keywords"' `none` ("anonymous box generation rules will ignore the elided elements entirely, as if
+   they did not exist in the box tree"). Anything else that generates a box ends the sequence. A `contents`
+   element is never asked: core/layout/box_tree.h's sequence replaces it by its children, each judged on
+   itself. */
 static bool fi_invisible_to_a_text_sequence(lxb_dom_node_t *n)
 {
     switch (n->type) {
@@ -170,26 +153,18 @@ static bool fi_invisible_to_a_text_sequence(lxb_dom_node_t *n)
     }
 }
 
-/* THE MAXIMAL CHILD TEXT SEQUENCE CONTAINING `n`, as the pair of TEXT nodes at its two ends. It is walked in
-   BOTH directions because §4's rule is about "the entire text sequence" and this component is asked about ONE
-   node: a caller iterating a child list meets the sequence at its first text node, but the classification has
-   to answer the same way for every member or two walks over one list would disagree about which anonymous
-   item a node is inside.
-   THE LIST IS `container`'s BOX-TREE CHILD SEQUENCE AND NOT ITS DOM CHILD LIST, which is what makes a TEXT
-   SEQUENCE a sequence at all: css-display-3 §1 "Introduction" defines the term in the box tree — "while each
-   text sequence in the box tree likewise represents the corresponding contents of its text nodes" — and
-   css-display-3 §2.5 "Box Generation: the none and contents keywords" puts a `contents` element's children in
-   its own box parent's sequence, so two text nodes on opposite sides of such an element are ONE sequence there
-   and are `->next`-unreachable from each other. The container is a parameter rather than derived here because
-   the caller holds it and has already asserted the relation this walk is stated over; deriving it would be
-   §2.5's ascent written a second time. */
+/* The maximal child text sequence containing `n`, as its two end text nodes. Walked both ways so every member
+   classifies alike ("the entire text sequence"). The list is `container`'s box-tree child sequence:
+   css-display-3 §1 defines text sequences "in the box tree", and §2.5 puts a `contents` element's children in
+   its box parent's sequence, `->next`-unreachable across that element. `container` is a parameter because the
+   caller holds it; deriving it would repeat §2.5's ascent. */
 static void fi_text_sequence(lxb_dom_element_t *container, lxb_dom_node_t *n,
                              lxb_dom_node_t **first, lxb_dom_node_t **last)
 {
     BoxTreeChild m;
 
-    /* A flex container is never a list item — css-display-3 §2.3 "Generating Marker Boxes: the list-item
-       keyword" combines `list-item` with `flow` or `flow-root` only — so every member here is a node. */
+    /* A flex container is never a list item (css-display-3 §2.3 "Generating Marker Boxes: the list-item
+       keyword" pairs `list-item` with `flow` or `flow-root`), so every member is a node. */
     *first = *last = n;
     for (m = box_tree_prev_sibling(container, box_tree_child_of_node(n)); box_tree_child_exists(m);
          m = box_tree_prev_sibling(container, m)) {
@@ -207,12 +182,11 @@ static void fi_text_sequence(lxb_dom_element_t *container, lxb_dom_node_t *n,
     }
 }
 
-/* §4's WHITE-SPACE RULE over a whole sequence: "if the entire text sequences contains only document white
+/* §4's white-space rule over a whole sequence: "if the entire text sequences contains only document white
    space characters (i.e. characters that can be affected by the white-space property) it is instead not
-   rendered (just as if its text nodes were display:none)". The CHARACTER SET is
-   core/layout/block_flow.h's one derivation from css-text-3 §4 "White Space Processing Rules" and is asked
-   rather than restated; the CONDITION is this section's and reads no declaration at all, which is the whole of
-   the difference from CSS 2.2 §9.2.2.1 "Anonymous inline boxes"' rule over the same characters. */
+   rendered (just as if its text nodes were display:none)". The character set is core/layout/block_flow.h's
+   css-text-3 §4 "White Space Processing Rules" derivation; the condition reads no declaration, unlike CSS 2.2
+   §9.2.2.1 "Anonymous inline boxes". */
 static bool fi_sequence_is_all_white_space(lxb_dom_element_t *container, lxb_dom_node_t *first,
                                            lxb_dom_node_t *last)
 {
@@ -221,10 +195,8 @@ static bool fi_sequence_is_all_white_space(lxb_dom_element_t *container, lxb_dom
     for (;;) {
         if (c->type == LXB_DOM_NODE_TYPE_TEXT && !block_flow_text_is_all_document_white_space(c)) return false;
         if (c == last) return true;
-        /* THE SAME SEQUENCE THE TWO ENDS WERE FOUND IN, STEPPED THE SAME WAY — `->next` would leave this walk
-           inside whichever DOM child list `first` happens to sit in, and where css-display-3 §2.5's splice has
-           run that is not the list `last` was found in. The DCHECK below is then not a should-never-happen but
-           the ordinary end of a `contents` element's children, reached with §4's sequence only half read. */
+        /* Stepped through the same box-tree sequence the ends came from; `->next` would stop at the end of a
+           `contents` element's children. */
         c = box_tree_child_node(box_tree_next_sibling(container, box_tree_child_of_node(c)));
         DCHECK(c != NULL,
                "css-flexbox-1 §4's text sequence ran off the end of the box-tree child sequence before "
@@ -289,11 +261,8 @@ FlexItemChildKind flex_item_child_kind(lxb_dom_element_t *container, lxb_dom_nod
         }
         free(d);
         /* §4.1 "Absolutely-Positioned Flex Children": "As it is out-of-flow, an absolutely-positioned child of
-           a flex container does not participate in flex layout." §4's own sentence is over the IN-FLOW
-           children, so this child is not a flex item and contributes to nothing §9 sums.
-           A FLOAT IS NOT ASKED ABOUT HERE AND THAT IS THE SECTION'S DOING, not an omission: §4's example marks
-           a `float: left` child as a flex item and says "floating is ignored", so CSS 2.2 §9.5 "Floats"' own
-           out-of-flow rule does not reach a flex container's child list. */
+           a flex container does not participate in flex layout." A float is not asked about: §4's example
+           marks a `float: left` child a flex item ("floating is ignored"). */
         if (fi_computed_is(el, "position", "absolute") || fi_computed_is(el, "position", "fixed"))
             return FLEX_ITEM_CHILD_NONE;
         return FLEX_ITEM_CHILD_ELEMENT;
@@ -306,7 +275,7 @@ FlexItemChildKind flex_item_child_kind(lxb_dom_element_t *container, lxb_dom_nod
     case LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION:
     case LXB_DOM_NODE_TYPE_DOCUMENT_TYPE:
         /* css-display-3 §1: "for the purposes of CSS, all of these additional types of nodes are ignored, as
-           if they didn't exist" — so none of the three is a child §4's sentence is about. */
+           if they didn't exist". */
         return FLEX_ITEM_CHILD_NONE;
     default:
         DFAIL("a node type css-display-3 §1's box tree does not describe is a CHILD of a flex container being "
@@ -326,16 +295,10 @@ lxb_dom_node_t *flex_item_text_sequence_end(lxb_dom_element_t *container, lxb_do
            "a sequence in an anonymous flex item only where it has content, so a run started anywhere else "
            "would be an EMPTY anonymous item — a box in every sum in §9.9 that no section generates");
     fi_text_sequence(container, first, &a, &b);
-    /* ONE PAST THE LAST TEXT NODE, IN THE CONTAINER'S BOX-TREE CHILD SEQUENCE — which is not the same as one
-       past the last node this sequence swallowed: a comment or an elided element BEFORE that text node is
-       inside the jump and is never revisited, while one AFTER it is left for the caller's own loop to classify
-       as FLEX_ITEM_CHILD_NONE. Ending the run at the last TEXT node rather than at the first non-text node is
-       what keeps those two cases one rule.
-       IT IS A POSITION AND NOT A DOM SIBLING, and both of this answer's uses need it to be: every caller
-       advances its own walk to it, and every caller also hands it to core/layout/block_flow.h's `BlockFlowRun`
-       as the run's `end` — which that type reads as a position in core/layout/box_tree.h's sequence. `b->next`
-       is NULL at the end of a `contents` element's children, so it would both cut the run short and restart
-       the caller's walk from the container's own next child, skipping every later member of the splice. */
+    /* One past the last text node, in the container's box-tree sequence. Nodes skipped before it are inside the
+       jump; one after it is left for the caller to classify as `FLEX_ITEM_CHILD_NONE`. It is a sequence
+       position, because callers advance their walk to it and pass it as core/layout/block_flow.h's
+       `BlockFlowRun` `end`; `b->next` is NULL at the end of a `contents` element's children. */
     return box_tree_child_node(box_tree_next_sibling(container, box_tree_child_of_node(b)));
 }
 
@@ -355,10 +318,8 @@ bool flex_item_is_collapsed(lxb_dom_element_t *item)
     return collapsed;
 }
 
-/* css-flexbox-1 §7.2.1 "The flex-grow property"' and §7.2.2 "The flex-shrink property"' factor — see
-   flex_item.h for why the two consumers make this §4's question rather than either section's. lexbor validated
-   the `Value:` line before the declaration reached the cascade, which is why a parse failure here is a
-   should-never-happen rather than an input error. */
+/* css-flexbox-1 §7.2.1 "The flex-grow property"' and §7.2.2 "The flex-shrink property"' factor; see
+   flex_item.h. Lexbor validated the `Value:` line, so a parse failure here is an engine fault, not input. */
 double flex_item_flexibility_factor(lxb_dom_element_t *item, const char *name)
 {
     char *v;
