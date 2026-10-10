@@ -1,28 +1,22 @@
 /* [UAX14] Unicode Line Breaking Algorithm §6 "Line Breaking Algorithm", rules LB1..LB31, over the Line_Break
-   property core/layout/line_break_class.h carries. See line_break.h for why this is a component of its own and
-   why it takes the whole sequence rather than one character at a time.
+   property core/layout/line_break_class.h carries. See line_break.h.
 
-   THE RULES ARE ORDERED AND THE ORDER IS THE ALGORITHM. UAX14 §6 states them as a sequence and every one of
-   them is written as if the ones above it have already been applied — "Otherwise, do not break before ';', ',',
-   or '.'" is LB15d's own first word, and it is only true because LB15c ran first. So `lb_decide` below is one
-   straight-line chain in the annex's order, each rule returning the moment it matches, and LB31 "Break
-   everywhere else" is the fallthrough at the bottom rather than a default anybody chose. Reordering two of
-   these is a silent wrong answer, which is why each carries its rule number AND the annex's own regular
-   expression: the number alone cannot be checked against the text.
+   The rules are ordered and each assumes the earlier ones applied ("Otherwise, do not break before ';', ',',
+   or '.'" is LB15d's, true only after LB15c), so `lb_decide` is one chain in the annex's order, returning on the
+   first match, with LB31 "Break everywhere else" as the fallthrough. Each rule carries its number and the
+   annex's expression so the order can be checked against the text.
 
-   THERE IS NO PAIR TABLE, and that is not a shortcut. UAX14 §7 was "Pair Table-Based Implementation" and in the
-   revision this file is written against (tr14-55, Unicode 17.0.0) the whole section reads "7 Deleted. Formerly
-   was: Pair Table-Based Implementation." A table indexed by (class, class) cannot express LB25's
-   `PO × OP IS NU`, LB14's `OP SP* ×`, LB30a's regional-indicator parity or LB15b's lookahead past eot, so the
-   rules are the implementation and a pair table would be a lossy cache of some of them. */
+   There is no pair table: in tr14-55 (Unicode 17.0.0) §7 reads "7 Deleted. Formerly was: Pair Table-Based
+   Implementation.", and a (class, class) table cannot express LB25's `PO × OP IS NU`, LB14's `OP SP* ×`, LB30a's
+   regional-indicator parity or LB15b's lookahead past eot. */
 #include <stdbool.h>
 #include <stdlib.h>
 
 #include "check.h"
 #include "core/layout/line_break.h"
 
-/* TWO VALUES THAT ARE NOT CLASSES, kept out of the enum deliberately: a rule can compare a class against them
-   only by naming them, and neither can be produced by the table.
+/* Two values that are not classes, kept out of the enum so a rule can match them only by name and the table
+   can never produce them.
      LB_IGNORED — LB9 "Do not break a combining character sequence" removed this character from the rules
        entirely ("in subsequent rules, any CM or ZWJ characters affected by this rule are ignored").
      LB_NONE — there is no character here at all: sot before the first, eot after the last. */
@@ -98,13 +92,10 @@ static bool lb_is_unassigned_pictographic(uint32_t cp)
 
 /* ---- LB9 and LB10, which are a PASS and not a rule at a boundary --------------------------------------- */
 
-/* ONE LEFT-TO-RIGHT PASS THAT ANSWERS EVERY BACKWARD QUESTION THE RULES ASK, and it is a pass rather than
-   three loops because each of those questions has a RECURRENCE and a scan does not. Three rules are stated
-   over an unbounded run to the left — LB8/LB14/LB15a/LB16/LB17's `SP*`, LB25's `NU ( SY | IS )*`, LB30a's
-   `(RI RI)*` — and answering any of them by walking is QUADRATIC in the length of that run. That is not a
-   theoretical cost here: this engine measures text a page chose, so `"1" + "/".repeat(100000)` inside a
-   shrink-to-fit box is a document, and a scan would spend 10^10 comparisons on it with no bound anywhere to
-   stop it. The recurrences are one line each and they are exact, so the walk is deleted rather than capped. */
+/* One left-to-right pass answering every backward question the rules ask. LB8/LB14/LB15a/LB16/LB17's `SP*`,
+   LB25's `NU ( SY | IS )*` and LB30a's `(RI RI)*` each reach over an unbounded run to the left; answering by
+   walking is quadratic (`"1" + "/".repeat(100000)` in a shrink-to-fit box is a page), while each has an exact
+   one-line recurrence. */
 typedef struct {
     /* The effective class of each character, or LB_IGNORED where LB9 removed it. */
     uint8_t *cls;
@@ -117,21 +108,17 @@ typedef struct {
     uint8_t *odd_ri;
 } LineBreakScan;
 
-/* THE EFFECTIVE CLASS OF EVERY CHARACTER, with LB9's combining marks marked LB_IGNORED and LB10's applied.
+/* The effective class of every character, with LB9's combining marks marked LB_IGNORED and LB10 applied.
      LB9 "Treat X (CM | ZWJ)* as if it were X. … where X is any line break class except BK, CR, LF, NL, SP, or
-       ZW." So a CM or ZWJ takes its BASE's class and is then ignored by every later rule.
+       ZW." So a CM or ZWJ takes its base's class and is then ignored by every later rule.
      LB10 "Treat any remaining CM or ZWJ as if it had the properties of U+0041 A LATIN CAPITAL LETTER A, that
        is, Line_Break=AL" — "this catches the case where a CM is the first character on the line or follows SP,
        BK, CR, LF, NL, or ZW."
-   THE ORDER INSIDE A RUN OF MARKS IS THE SUBTLE PART and getting it wrong is invisible. In `SP CM CM` the
-   FIRST mark is LB10's case (its base would be SP, which LB9 excludes) so it becomes a real AL character — and
-   the SECOND mark's base is then that AL, which LB9 does NOT exclude, so it IS ignored. A pass that skipped
-   left over the whole run of marks to find SP would call both of them AL and hand the rules a character that
-   is not there. This carries the last non-ignored character, which is what makes the two marks differ.
-   AN IGNORED MARK INHERITS ITS BASE'S THREE ANSWERS rather than being left undefined, which is LB9's own
-   sentence ("treat it as if it has the line breaking class of the base character in all of the following
-   rules") and costs nothing: no rule reads them at an ignored index, and a hole there would be a value whose
-   wrongness only a future rule would discover. */
+   Order inside a run of marks matters: in `SP CM CM` the first mark is LB10's case (base SP is excluded) and
+   becomes AL, so the second mark's base is that AL and it is ignored. Carrying the last non-ignored character
+   gives that; skipping left over the whole run to SP would make both AL.
+   An ignored mark inherits its base's three scan answers, per LB9 ("treat it as if it has the line breaking
+   class of the base character in all of the following rules"); no rule reads them there. */
 static void lb_scan(const uint32_t *cps, size_t count, LineBreakScan *s)
 {
     ptrdiff_t last = -1;
@@ -170,10 +157,9 @@ static void lb_scan(const uint32_t *cps, size_t count, LineBreakScan *s)
 
 /* ---- the neighbours the rules are stated over ---------------------------------------------------------- */
 
-/* The nearest character to the LEFT that LB9 did not ignore, or -1 for sot. `cls[0]` is never LB_IGNORED (at
-   the first character LB9's X does not exist, so LB10 applies), which is what terminates the walk. IT IS THE
-   ONE BACKWARD WALK THAT SURVIVES, and it is bounded by the length of a COMBINING CHARACTER SEQUENCE rather
-   than by the length of the text — the walk above already collapsed the three unbounded ones. */
+/* The nearest character to the left that LB9 did not ignore, or -1 for sot. `cls[0]` is never LB_IGNORED (at the
+   first character LB9's X does not exist, so LB10 applies), which terminates the walk. It is the one backward
+   walk left, bounded by a combining character sequence's length, not the text's. */
 static ptrdiff_t lb_prev(const uint8_t *cls, ptrdiff_t i)
 {
     ptrdiff_t j = i - 1;
@@ -182,7 +168,7 @@ static ptrdiff_t lb_prev(const uint8_t *cls, ptrdiff_t i)
     return j;
 }
 
-/* The nearest to the RIGHT, or `count` for eot. */
+/* The nearest to the right, or `count` for eot. */
 static size_t lb_next(const uint8_t *cls, size_t count, size_t i)
 {
     size_t j = i + 1;
@@ -200,7 +186,7 @@ static bool lb_is_ak_like(const uint32_t *cps, const uint8_t *cls, ptrdiff_t i)
 
 /* ---- the ordered rules --------------------------------------------------------------------------------- */
 
-/* THE ACTION AT THE BOUNDARY IMMEDIATELY BEFORE `cps[i]`, for 0 < i < count. LB2's sot and LB3's eot are the
+/* The action at the boundary immediately before `cps[i]`, for 0 < i < count. LB2's sot and LB3's eot are the
    caller's two ends and are not in this chain. */
 static LineBreakAction lb_decide(const uint32_t *cps, const LineBreakScan *s, size_t count, size_t i)
 {
@@ -279,8 +265,7 @@ static LineBreakAction lb_decide(const uint32_t *cps, const LineBreakScan *s, si
             return LINE_BREAK_PROHIBITED;
     }
     /* LB15c `SP ÷ IS NU` — "break before a decimal mark that follows a space, for instance, in 'subtract .5'".
-       IT EXISTS ONLY TO OVERRIDE LB15d, which is why deleting it is not a smaller rule set but a wrong one:
-       without it the `.` of `subtract .5` is `× IS` and the whole string is one unbreakable segment. */
+       It exists to override LB15d; without it `subtract .5` is one unbreakable segment. */
     if (before == LB_CLASS_SP && after == LB_CLASS_IS) {
         n = lb_next(cls, count, i);
         if (n < count && cls[n] == LB_CLASS_NU) return LINE_BREAK_OPPORTUNITY;
@@ -292,9 +277,8 @@ static LineBreakAction lb_decide(const uint32_t *cps, const LineBreakScan *s, si
         return LINE_BREAK_PROHIBITED;
     /* LB17 `B2 SP* × B2`. */
     if (after == LB_CLASS_B2 && k >= 0 && cls[k] == LB_CLASS_B2) return LINE_BREAK_PROHIBITED;
-    /* LB18 `SP ÷` — break after spaces. THE OPPORTUNITY IS AFTER THE SPACE AND NOT BEFORE IT, which is what
-       LB7's `× SP` states on the other side, and it is why css-text-3 §4.1.2's trimming bills a collapsible
-       space to the line that PRECEDES the break. */
+    /* LB18 `SP ÷` — break after spaces. The opportunity is after the space (LB7's `× SP` is the other side),
+       which is why css-text-3 §4.1.2's trimming bills a collapsible space to the line before the break. */
     if (before == LB_CLASS_SP) return LINE_BREAK_OPPORTUNITY;
     /* LB19 `× [ QU - \p{Pi} ]`, `[ QU - \p{Pf} ] ×`. */
     if (after == LB_CLASS_QU && !lb_is_qu_initial(cps[i])) return LINE_BREAK_PROHIBITED;
@@ -439,15 +423,14 @@ void line_break_actions(const uint32_t *cps, size_t count, LineBreakAction *out)
 
     DCHECK(out != NULL, "[UAX14]'s line break actions were asked for with nowhere to write them");
     DCHECK(cps != NULL || count == 0, "a non-empty character sequence was described with a NULL pointer");
-    /* LB2 `sot ×` — never break at the start of text. It is applied BEFORE LB3, so an EMPTY sequence's one
+    /* LB2 `sot ×` — never break at the start of text. It is applied before LB3, so an empty sequence's one
        position is this and not eot's mandatory break. */
     out[0] = LINE_BREAK_PROHIBITED;
     if (count == 0) return;
     DCHECK(count <= 0x7FFFFFFFu, "an inline formatting context of more than two billion characters was handed "
                                  "to [UAX14]. The scan below indexes it with an int32_t, which is a real "
                                  "ceiling and is asserted rather than wrapped");
-    /* ONE ALLOCATION, carved rather than four: the int32 array is first so that its alignment is the block's
-       and nothing has to be padded. */
+    /* One allocation carved into four, int32 array first so its alignment is the block's. */
     block = malloc(count * (sizeof(int32_t) + 3));
     CHECK(block != NULL, "out of memory scanning [UAX14]'s Line_Break classes for a text run. The allocation is "
                          "seven bytes per character of one inline formatting context, so a failure here is the "
