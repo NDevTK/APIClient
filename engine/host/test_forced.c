@@ -16739,6 +16739,19 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "and the table did not -- §7.4.1.1's classic slot pair is the entry's `classicStateSymbols` "
              "beside its `classicHistoryAPIState`, and the writer and the reader must take both from ONE "
              "record (core/frame/history.c step 3 and session_history.c's §7.4.6.2 restore)");
+    /* Web IDL §3.7.6 Attributes: an enumeration attribute's setter ignores a string outside the enumeration.
+       The fixture assigns 'manual' then 'bogus' to `history.scrollRestoration`; each value names one outcome. */
+    int scrign_tt = 1;
+    const char *scrign_why = NULL;
+    fold_row(&scrign_tt, &scrign_why, strstr(js, "\"/api/scrign\"") != NULL,
+             "NOT REACHED: there is no /api/scrign record, so the enumeration setter statement did not run");
+    fold_row(&scrign_tt, &scrign_why, !emitted_record_has(js, "/api/scrign", "threw"),
+             "Web IDL §3.7.6's setter THREW on a string outside the enumeration; an attribute setter ignores "
+             "it and only an operation argument throws");
+    fold_row(&scrign_tt, &scrign_why, !emitted_record_has(js, "/api/scrign", "changed"),
+             "Web IDL §3.7.6's setter STORED a string outside the enumeration; the attribute must keep 'manual'");
+    fold_row(&scrign_tt, &scrign_why, emitted_record_has(js, "/api/scrign", "isignored"),
+             "the /api/scrign record carries no `isignored` value");
     int navstate_tt = 1;
     const char *navstate_why = NULL;
     fold_row(&navstate_tt, &navstate_why, !!strstr(js, "navstate?v=other"),
@@ -17460,7 +17473,6 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "/api/ceuni",      "isuni"   },
         { "/api/ceget",      "isget"   },
         { "/api/ceext",      "isext"   },   /* a DOMString dictionary member, read AND coerced as requests */
-        { "/api/scrign",     "isignored" }, /* §3.7.6 an enumeration setter ignores a non-value */
         { "/api/cedeep",     "isdeep"  },   /* the insertion steps walk the SUBTREE, and insertBefore runs them */
         { "/api/cegone",     "isgone"  },   /* …and the removing steps run disconnectedCallback */
         { "/api/ceattr",     "data-w"  },   /* attributeChangedCallback, for the OBSERVED name only */
@@ -20067,6 +20079,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            says the triple was lost. */
         { "hist-state-symbols", hstate_tt, "hstate?v=other", SESS_EXPLORE, hstate_why },
         { "nav-state-symbols", navstate_tt, "navstate?v=other", SESS_EXPLORE, navstate_why },
+        { "idl-enum-setter-ignores", scrign_tt, "/api/scrign", SESS_EXPLORE, scrign_why },
         /* §7.1's `value` setter, keyed on the control arm for the taint row and on the claim for the other:
            `clsetempty` has ONE arm, so its endpoint IS its claim, while `cltaint` has two and the key names
            the one whose absence means the statement did not run. */
