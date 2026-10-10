@@ -1,4 +1,4 @@
-/* THE WEB IDL ARGUMENT COERCION, as one machine every member shares — see idl_args.c. */
+/* Web IDL argument conversion: one step machine every declared member shares (see idl_args.c). */
 #ifndef ENGINE_HOST_BROWSER_CORE_IDL_ARGS_H
 #define ENGINE_HOST_BROWSER_CORE_IDL_ARGS_H
 #include <stdbool.h>
@@ -7,982 +7,348 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_iter.h"
-#include "solver/concolic.h"   /* IDL_DCHECK_MEMBER asks whether a member CROSSED — see its comment below */
+#include "solver/concolic.h"   /* IDL_DCHECK_MEMBER asks whether a member crossed as unknown input */
 
-/* A member's body, run once its declared arguments are real strings. Same shape as JS_CFUNC_generic_magic, so
-   an existing body becomes one by taking a magic it may ignore. */
+/* A member's body, run once its declared arguments are converted. Same shape as JS_CFUNC_generic_magic, so an
+   existing body becomes one by taking a magic it may ignore. */
 typedef JSValue (*IdlBody)(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
 
-/* THE ARGUMENT'S IDL TYPE — what the spec says to convert it to, one entry per position. A bitmask of "which
-   ones are strings" was a catch-all: setTimeout's `timeout` is a `long` and its `handler` is a
-   `(DOMString or Function)` union, and neither is expressible as "string or not". A member declares the types
-   its IDL actually lists. */
+/* The IDL type a position or dictionary member converts to, one entry per position, stated as the IDL writes
+   it. Each row is one conversion; a row exists wherever two IDL types convert differently in a way a page can
+   observe, so a row is never replaced by a test in a member's body.
+
+   Each row's rule over unknown external input (cross, fork or ask nothing) is idl_concolic_rule's answer, and a
+   row that needs a class, value list, typed-array kind or dictionary names it beside the position or member
+   (idl_iface_brand, idl_arg_iface, idl_arg_enum, idl_typed_array, IdlDictMember::dict). */
 typedef enum {
-    IDL_ANY = 0,          /* passed through unconverted (`any`, an interface type, a callback) */
+    IDL_ANY = 0,          /* `any`: passed through unconverted */
     IDL_DOMSTRING,        /* ToString — the page's toString may run */
-    /* `ByteString`. ToString and then §3.2.11's RANGE: every code point must be 0x00..0xFF, and one above that
-       is a TypeError. That range IS the type — `new Response("", {statusText: "\u0100"})` throws — and it is
-       stated here so no body has to remember it. */
+    /* `ByteString` — Web IDL §3.2.11 ByteString: ToString, then a code point above 0xFF is a TypeError. */
     IDL_BYTESTRING,
-    /* `USVString`. ToString and then §3.2.12's SCALAR VALUE conversion: every unpaired surrogate becomes
-       U+FFFD. That replacement is the whole of what makes the type different from a DOMString, and every
-       member of the URL surface takes one. */
+    /* `USVString` — Web IDL §3.2.12 USVString: ToString, then every unpaired surrogate becomes U+FFFD. */
     IDL_USVSTRING,
-    /* `DOMString?`. Web IDL converts null AND undefined to the IDL value null before ToString is ever reached,
-       so the body receives JS_NULL and never the string "null". textContent is the member that makes this
-       load-bearing: `el.textContent = null` is "replace all with null", which removes the children and adds NO
-       Text node, and stringifying it wrote the four characters `null` into the page's DOM instead. */
+    /* `DOMString?` — Web IDL §3.2.20 Nullable types: null and undefined become the IDL null and the body
+       receives JS_NULL, never the string "null" (`el.textContent = null` removes the children and adds no
+       Text node). */
     IDL_DOMSTRING_NULLABLE,
-    /* `USVString?` — the same null-and-undefined-become-null rule with §3.2.12's scalar value conversion after
-       it. XHR §3.5.1's `optional USVString? username = null` is the member that needs it, and it needs it
-       load-bearingly: `open(m, u, false, null)` must leave the parsed URL's username alone, where a
-       DOMString-nullable would drop the surrogate replacement and a plain USVString would set it to the four
-       characters "null". */
+    /* `USVString?` — §3.2.20's null rule followed by §3.2.12's scalar value conversion. XMLHttpRequest's
+       `optional USVString? username = null` needs it: `open(m, u, false, null)` leaves the URL's username alone. */
     IDL_USVSTRING_NULLABLE,
-    /* THE INTEGER TYPES, each stating its WIDTH and its SIGN — which is all §3.2's conversion needs, and the
-       whole of what tells them apart. Every one of them is ToNumber (the page's valueOf may run) and then the
-       one arithmetic in idl_args.c: sign(x)·floor(|x|) taken MODULO 2^width, folded into range if the type is
-       signed, with a non-finite value becoming 0.
-       IT IS A MODULO AND NOT A CLAMP, for all of them. `new Response("", {status: 65736})` is status 200 in
-       every browser, and `list.item(2**32)` is item 0 — a saturating conversion answers 65736 and 4294967296,
-       and the range check that follows then throws or misses where the spec wraps. */
+    /* The integer types, each stating its width and sign. Each is ToNumber (the page's valueOf may run), then
+       Web IDL §3.2.4.9 Abstract operations' ConvertToInt: sign(x)·floor(|x|) modulo 2^width, folded into range
+       if signed, a non-finite value becoming 0. It is a modulo, not a clamp: `new Response("", {status: 65736})`
+       is status 200 and `list.item(2**32)` is item 0. */
     IDL_LONG,             /* `long` — 32, signed */
     IDL_UNSIGNED_LONG,    /* `unsigned long` — 32, unsigned */
-    /* `[EnforceRange] unsigned long` — §3.3.6 [EnforceRange], whose ARM of §3.2.4.9 Abstract operations'
-       ConvertToInt REPLACES the modulo with a REFUSAL: a non-finite value, or one whose IntegerPart is outside
-       the type's range, is a TypeError instead of a wrap. THE NUMBER HERE WAS §3.2.4.10, WHICH DOES NOT EXIST —
-       §3.2.4 Integer types ends at §3.2.4.9 — and it read as plausible for as long as nobody opened it, then
-       propagated into ten more sites in one diff because they took it from here. The attribute and the steps are
-       two sections and the pair is what makes the claim checkable: §3.3.6 says which types carry it, §3.2.4.9
-       says what it does. It is a separate type and not a flag for the same reason [Clamp] (§3.3.3) is: the
-       extended attribute IS the conversion.
-       Indexed Database §4.9's `advance([EnforceRange] unsigned long count)` is the member that needs it, and
-       the difference is the whole of what a page can observe there — `cursor.advance(-1)` is a TypeError, where
-       the modulo makes it a request to advance 4294967295 records that would walk the store to its end. */
+    /* `[EnforceRange] unsigned long` — Web IDL §3.3.6 [EnforceRange] says which types carry it and §3.2.4.9
+       Abstract operations says what it does: a non-finite value, or an integer part outside the type's range,
+       is a TypeError instead of a wrap. A separate row because the extended attribute is the conversion
+       (IndexedDB's `cursor.advance(-1)` is a TypeError, not a 4294967295-record walk). */
     IDL_UNSIGNED_LONG_ENFORCE,
-    /* `[EnforceRange] long` — §3.3.6 [EnforceRange] over §3.2.4.5 long, and a separate row from IDL_LONG for
-       the reason IDL_UNSIGNED_LONG_ENFORCE is separate from IDL_UNSIGNED_LONG: the extended attribute IS the
-       conversion, replacing §3.2.4.5's modulo with a refusal. HTML §4.12.5.1.16's `getImageData` and
-       `putImageData` write it for every one of their coordinates, and the difference a page sees is the
-       EXCEPTION: `ctx.getImageData(0, 0, Infinity, 1)` is a TypeError at the conversion, where a plain `long`
-       would carry a 0 into the body and raise §4.12.5.1.16's "IndexSizeError" instead. */
+    /* `[EnforceRange] long` — §3.3.6 over Web IDL §3.2.4.5 long. HTML's getImageData/putImageData declare it for
+       every coordinate: `ctx.getImageData(0, 0, Infinity, 1)` is a TypeError at the conversion rather than the
+       body's "IndexSizeError". */
     IDL_LONG_ENFORCE,
     IDL_UNSIGNED_SHORT,   /* `unsigned short` — 16, unsigned */
     IDL_LONG_LONG,        /* `long long` — 64, signed */
-    /* `unsigned long long` — 64, UNSIGNED, and it is a separate type because the sign is observable. File
-       System §2.5's `seek(unsigned long long position)` and `truncate(unsigned long long size)` are the members
-       that need it: `truncate(-1)` is 2**64-1 bytes in a browser (a QuotaExceededError), where the signed
-       conversion answers -1 and hands the algorithm a negative size no step of it is written for. */
+    /* `unsigned long long` — 64, unsigned; a separate row because the sign is observable. File System's
+       `truncate(-1)` is 2**64-1 bytes (a QuotaExceededError), never a negative size. */
     IDL_UNSIGNED_LONG_LONG,
-    /* `[EnforceRange] unsigned long long` — §3.3.6 [EnforceRange] over §3.2.4.8 unsigned long long, and it is
-       a separate row from the one above for the same reason IDL_UNSIGNED_LONG_ENFORCE is separate from
-       IDL_UNSIGNED_LONG: the extended attribute IS the conversion, replacing the modulo with a refusal.
-       ITS UPPER BOUND IS NOT 2**64-1 AND THAT IS §3.2.4.9's OWN FIRST STEP, not a bound chosen here.
-       ConvertToInt(V, bitLength, signedness) opens "If bitLength is 64, then:" and sets upperBound to 2**53-1
-       (the standard writes that as a superscript) — and says why in a note directly beneath it: "this ensures
-       long long types associated with [EnforceRange] or [Clamp] extended attributes are representable in
-       JavaScript's Number type as unambiguous integers". So the attribute NARROWS the type's range rather than
-       merely refusing what falls outside it, and a declaration reusing the plain type's 2**64-1 would accept
-       values a browser rejects.
-       Streams §4.5.1 Interface definition's `ReadableStreamBYOBReaderReadOptions` writes
-       `[EnforceRange] unsigned long long min = 1`, and the difference a page sees is two-sided:
-       `reader.read(v, {min: 2**60})` is a TypeError from the TYPE where the wider bound reaches §4.5's own
-       RangeError, and `reader.read(v, {min: 1.5})` reads with a minimum of 1 because IntegerPart truncates
-       before the bounds are tested — [EnforceRange] refuses a value out of RANGE and never a fractional one. */
+    /* `[EnforceRange] unsigned long long` — §3.3.6 over Web IDL §3.2.4.8 unsigned long long. Its upper bound is
+       2**53-1, not 2**64-1: ConvertToInt's first step narrows a 64-bit type with [EnforceRange] or [Clamp] to
+       what a Number represents exactly. The integer part is taken before the bounds test, so a fractional value
+       truncates and is never refused (Streams' `reader.read(v, {min: 1.5})` reads with min 1, and `{min: 2**60}`
+       is a TypeError). */
     IDL_UNSIGNED_LONG_LONG_ENFORCE,
-    /* `[Clamp] long long`. The extended attribute REPLACES the modulo with §3.2.4.9: clamp to the type's range
-       and round to the NEAREST integer, choosing the even one at a half. Blob's `slice(start, end)` is the
-       member that carries it, and `slice(1.5)` starting at byte 2 rather than byte 1 is the difference. */
+    /* `[Clamp] long long` — §3.2.4.9 clamps to the type's range and rounds to the nearest integer, ties to
+       even, instead of the modulo. Blob's `slice(1.5)` starts at byte 2. */
     IDL_LONG_LONG_CLAMP,
-    /* `unrestricted double` — §3.2.8. ToNumber and nothing else: NaN and the infinities are VALUES of this
-       type, which is exactly why QueuingStrategy's `highWaterMark` is declared with it and why the stream's
-       own RangeError for a NaN mark has to be the STREAM's check rather than the type's. */
+    /* `unrestricted double` — Web IDL §3.2.8 unrestricted double: ToNumber only; NaN and the infinities are
+       values (QueuingStrategy's `highWaterMark`, whose NaN refusal is the stream's own RangeError). */
     IDL_UNRESTRICTED_DOUBLE,
-    /* `double` — §3.2.7, and the RESTRICTION is the whole difference from the type above: ToNumber, and then a
-       NaN or an infinity is a TypeError rather than a value. HTML §4.8.11.6's `attribute double currentTime`
-       is what needs it — `video.currentTime = NaN` throws in every browser, and a member declared
-       unrestricted would hand the seek algorithm a position no step of it is written for. The check belongs to
-       the TYPE and not to the four setters that share it, for the reason every other row here does. */
+    /* `double` — Web IDL §3.2.7 double: ToNumber, then NaN or an infinity is a TypeError
+       (`video.currentTime = NaN` throws). */
     IDL_DOUBLE,
-    /* `float` — Web IDL §3.2.5 "float", which is the RESTRICTED double above plus a ROUNDING the wider type
-       does not perform: "Let y be the number in S that is closest to x, selecting the number with an even
-       significand if there are two equally close values", over a set §3.2.5 builds out of the finite
-       single-precision values. NaN and the infinities are refused exactly as IDL_DOUBLE refuses them, AND a
-       FINITE double outside the single-precision range is refused too — §3.2.5's own step over the two
-       special values it added to S — which IDL_DOUBLE accepts. So a member declared `double` where the IDL
-       writes `float` takes a `1e40` that every browser rejects at the type.
-       THE ROUNDING IS THE OTHER HALF AND IT IS PAGE-VISIBLE. Pointer Events 4 §3.1 "PointerEvent interface"'s
-       `float pressure` answers 0.10000000149011612 for a page that wrote 0.1, because the value the attribute
-       holds is the single-precision one; a `double` member would answer 0.1. That is a number a page can read
-       back and compare, not a rounding nobody sees. */
+    /* `float` — Web IDL §3.2.5 float: §3.2.7's refusals, plus a finite value outside the single-precision range
+       is a TypeError, and the result is rounded to the nearest single-precision value, ties to even. The
+       rounding is page-visible: PointerEvent's `float pressure` reads back 0.10000000149011612 for 0.1. */
     IDL_FLOAT,
-    /* `double?` — §3.2.7 double under §3.2.20 Nullable types' rule, and the FIRST nullable NUMERIC row this
-       file has had: every other `_NULLABLE` here is a string, an enumeration, an object, a sequence or a
-       dictionary. Cookie Store API §3's `CookieInit` is what declares one, as `DOMHighResTimeStamp? expires =
-       null` — HR-TIME §5 The DOMHighResTimeStamp typedef writes `typedef double DOMHighResTimeStamp`, the
-       RESTRICTED type, so a non-finite value is still §3.2.7's TypeError and only NULL is added.
-       IT CANNOT BE IDL_DOUBLE WITH THE NULL READ IN THE BODY, and the reason is the same one IDL_ENUM_NULLABLE
-       states for its own row: ToNumber(null) is 0, which is a DOMHighResTimeStamp the IDL admits — the epoch —
-       so a nullable double declared as IDL_DOUBLE turns the IDL's OWN DEFAULT VALUE into a real timestamp. §7.2
-       "Set a cookie" step 13 branches on "If expires is non-null", and its step 14 reads `maxAge` only on the
-       other arm, so the two worlds are an Expires attribute and a Max-Age one rather than two spellings of one.
-       Nor can it be IDL_ANY with a test in the body: that is the shape the declared types exist to replace, and
-       here it would run ToNumber on the page's value from a plain C body — the `valueOf` this engine aborts on.
-       NAMED RESIDUAL — IT IS A DICTIONARY-MEMBER TYPE AND NOT YET AN ARGUMENT ONE. What is not covered: a
-       `double?` or `long long?` at a POSITIONAL argument, which the conversion's own closing DCHECK refuses by
-       name ("an IDL argument was declared with a type this machine does not convert") rather than converting
-       wrongly. Nothing in the platform declares one, so the arm would be code with no caller — which is why the
-       absence is a loud refusal instead of an arm. What the next diff builds: the `t == IDL_DOMSTRING_NULLABLE
-       || t == IDL_USVSTRING_NULLABLE` rewrite block's numeric twin, beside it in the argument loop, whose null
-       and undefined place JS_NULL and whose survivors take idl_numeric_nullable_inner's answer. How its absence
-       would show: a reader would OBSERVE that abort naming this type at the position that declared it, in a dev
-       build, at the first call — and in release the same position falls to ToString, so the number would cross
-       as a string. */
+    /* `double?` — §3.2.7 under §3.2.20 Nullable types. CookieInit's `DOMHighResTimeStamp? expires = null` needs
+       it: ToNumber(null) is 0, the epoch, so IDL_DOUBLE would turn the IDL's own default into a real timestamp.
+       Named residual: only a dictionary-member type. Not covered: a `double?` or `long long?` argument position,
+       which the argument loop's closing DCHECK refuses as "a type this machine does not convert" (release
+       stringifies it). Next diff: a numeric twin of the DOMString?/USVString? null rewrite in the argument
+       loop, using idl_numeric_nullable_inner. Absence shows as that abort, naming the type, at the first call
+       of a member declaring one. */
     IDL_DOUBLE_NULLABLE,
-    /* `long long?` — §3.2.4.7 long long under §3.2.20's rule, and a SEPARATE ROW from the one above rather than
-       one nullable-number row with a width, for exactly the reason IDL_LONG and IDL_LONG_LONG are separate:
-       the INNER TYPE IS THE CONVERSION. §3.2.4.7 is the modulo-2^64 integer conversion and §3.2.7 is the
-       restricted double's non-finite refusal, and a value like 1e300 is LLONG-wrapped by one and a TypeError
-       under the other. `CookieInit`'s `long long? maxAge = null` is what declares it.
-       ITS NULL IS NOT ITS ZERO, WHICH IS THE WHOLE OF WHY THE ROW IS NEEDED AND IS OBSERVABLE: Cookie Store API
-       §7.3 "Delete a cookie" step 4 passes a maxAge of exactly 0 and §7.2 step 14 reads it as NON-NULL, so 0
-       means `Max-Age: 0` — RFC 6265 §5.2.2's earliest representable date, which is a DELETION — while null
-       means no Max-Age attribute at all and a session cookie. ToNumber(null) is 0, so declaring this IDL_LONG_LONG
-       would make `{maxAge: null}` delete the cookie it was asked to create. The residual at the row above
-       covers this one too: both are dictionary-member types and neither has an argument-position arm. */
+    /* `long long?` — Web IDL §3.2.4.7 long long under §3.2.20; separate from the row above because the inner
+       conversion differs (a modulo, not §3.2.7's refusal). CookieInit's `long long? maxAge = null`: a 0 is
+       `Max-Age: 0`, a deletion, while null is no Max-Age at all. IDL_DOUBLE_NULLABLE's residual covers it. */
     IDL_LONG_LONG_NULLABLE,
-    /* A CALLBACK FUNCTION type — §3.2.19. The conversion is a brand check and nothing more: a callable crosses
-       as itself and anything else is a TypeError. Declared rather than checked in the body because an optional
-       member that is absent must NOT be rejected, and every body that wrote that test by hand is a body that
-       can get it wrong once. */
+    /* A callback function type — Web IDL §3.2.19 Callback function types: a callable crosses as itself and
+       anything else is a TypeError. An absent optional member is not refused. */
     IDL_CALLBACK,
-    /* AN ENUMERATION — Web IDL §3.2.18 Enumeration types. ToString, and then the result must be one of the
-       values the IDL lists or it is a TypeError: `new Blob([], {endings: "bogus"})` throws, and an unrecognised
-       value is never silently the default. The values are declared beside the POSITION (idl_arg_enum) or beside
-       the dictionary MEMBER (IdlDictMember::values), because they are part of the type and a member's IDL may
-       write two.
-       OVER UNKNOWN EXTERNAL INPUT IT IS A FORK, WHICH IS WHY IT IS NOT A CROSSING TYPE — the same answer
-       §3.2.3 boolean gets one type up, for the same reason and by a different arithmetic. The type's DOMAIN IS
-       FINITE and the declaration states it: Web IDL §3.2.18 Enumeration types is "If S is not one of E's
-       enumeration values, then throw a TypeError" followed by "Return the enumeration value of type E that is
-       equal to S", so every world this conversion can complete in is either one of the N strings the IDL wrote
-       or that one refusal. Crossing an
-       unknown here does not defer the choice, it MOVES it: the placed concolic reaches a body that wanted a
-       string and either aborts on it or answers from the SOLVER's value class — which is the collapse the
-       pass-through exists to prevent, arriving at a type whose every world a `char *` already carries.
-       AND THE WORLDS ARE ONES THE ALGORITHMS BEHIND THIS BOUNDARY OBSERVE APART. Fetch's `credentials` is
-       "omit" / "same-origin" / "include", and which of them a request carries is whether it carries the
-       person's cookies; `redirect` is "follow" / "error" / "manual"; `cache` names six. Picking any of them
-       for a value nothing is known about deletes the rest. See idl_concolic_rule, which is where the reason
-       lives, and idl_enum_fork, which is the one statement of the ask both boundaries make. */
+    /* An enumeration — Web IDL §3.2.18 Enumeration types: ToString, then a value the IDL does not list is a
+       TypeError, never silently the default (`new Blob([], {endings: "bogus"})` throws). The value list is
+       part of the type and is declared beside the position (idl_arg_enum) or member (IdlDictMember::values).
+       Over unknown external input it forks rather than crossing: the domain is the N listed strings plus the
+       refusal, and the algorithms behind it tell them apart (Fetch's `credentials` decides whether cookies are
+       sent). See idl_concolic_rule and idl_enum_fork. */
     IDL_ENUM,
-    /* A NULLABLE ENUMERATION — `NavigationType? navigationType = null`, and the difference from IDL_ENUM is
-       the whole reason it exists. §3.2.18's conversion is ToString-then-membership, and null ToStrings to the
-       string "null", which no enumeration lists — so a nullable enumeration declared as IDL_ENUM makes the
-       IDL's OWN default value a TypeError. The alternative was IDL_ANY plus the rule written out in the body,
-       which is the shape the declared types exist to replace and which here would run ToString on the page's
-       value from a plain C body: the getter this engine aborts on, in the one place a page controls. So null
-       and undefined are the IDL null and cross as null; anything else is §3.2.18's conversion exactly.
-       NAMED RESIDUAL — THIS TYPE STILL CROSSES AN UNKNOWN AND IDL_ENUM NO LONGER DOES. What is not covered:
-       a `T?` position handed unknown external input, whose feasible worlds are the N members §3.2.18 lists,
-       §3.2.18's own TypeError, AND THE IDL NULL — Web IDL §3.2.20 Nullable types puts that third world ahead
-       of the inner type's conversion ("Otherwise, if V is null or undefined, then return the IDL nullable type
-       T? value null"), and the test that reaches it is a test of the VALUE, so for a concolic — which wears an
-       ordinary Object — it answers `false` from this engine's own value class rather than from the page's
-       value. That is one world more than IDL_ENUM has and it is not the same ask, which is why this row is
-       stated rather than folded into that one. What the next diff builds: an ask of N+2 completions at the two
-       boundaries IDL_ENUM's arm already stands at, with §3.2.20's null as a completion of its own and the
-       inner type's N+1 behind it. How its absence would show: `new NavigateEvent(t, {navigationType: cfg.k})`
-       places the concolic unconverted where an IDL_ENUM member of the same dictionary now places one of four
-       real strings, so one dictionary answers two ways about the same unknown — which is exactly the split
-       IDL_BOOLEAN_NO_DEFAULT was in while IDL_BOOLEAN forked, recorded at that row. */
+    /* `E?` (`NavigationType? navigationType = null`): null and undefined are the IDL null; anything else is
+       §3.2.18's conversion. IDL_ENUM would make the IDL's own null default a TypeError.
+       Named residual: this row still crosses unknown input. Not covered: the N+2 worlds (the N members,
+       §3.2.18's TypeError, and §3.2.20's null) an unknown `E?` stands for. Next diff: an N+2-outcome ask at
+       the two sites where IDL_ENUM's fork stands. Absence shows as one dictionary placing a real enumeration
+       string for an IDL_ENUM member and an unconverted unknown for an IDL_ENUM_NULLABLE member of the same
+       unknown (`new NavigateEvent(t, {navigationType: cfg.k})`). */
     IDL_ENUM_NULLABLE,
-    /* A `(DOMString or Function)` union, which is TimerHandler and nothing else so far: callable crosses as
-       itself, anything else is a DOMString. Named for the rule rather than for the member, because the rule is
-       what the IDL states. */
+    /* `(DOMString or Function)`, which is TimerHandler: a callable crosses as itself, anything else is a
+       DOMString. Named for the rule, not the member. */
     IDL_STRING_UNLESS_CALLABLE,
-    /* `boolean` — Web IDL §3.2.3 boolean, whose whole algorithm is "Let x be the result of computing
-       ToBoolean(V)" and "Return the IDL boolean value that is the one that represents the same truth value as
-       the JavaScript Boolean value x". The conversion runs none of the page's code (ECMAScript §7.1.2
-       ToBoolean ( arg ) has no ToPrimitive step); the READ that precedes it is the page's.
-       OVER UNKNOWN EXTERNAL INPUT IT IS A FORK, WHICH IS WHY IT IS NOT A CROSSING TYPE. ECMAScript §7.1.2
-       ToBoolean ( arg )'s last step is "Return true", so a concolic — which wears an ordinary Object —
-       coerces to `true` and nothing says so.
-       Crossing does not help here the way it helps a string: a DOMString's bytes are CARRIED to a sink and the
-       body asks the value for them, while a boolean's only consumer is CONTROL FLOW, so a crossed one has
-       nowhere to go but a `JS_ToBool` in some body that answers `true` for every unknown there has ever been.
-       Both truth values are feasible and the member's algorithm observes different worlds for them, so the
-       conversion asks §7.1.2 at the BRANCH seam at its own site, where it is one gate with every `if` the
-       page writes over the same value — see idl_concolic_rule. */
+    /* `boolean` — Web IDL §3.2.3 boolean: ToBoolean, which runs none of the page's code (the read before it
+       may). Over unknown external input it forks at the branch seam rather than crossing, because a concolic
+       is an Object, ToBoolean of it is true, and a boolean's only consumer is control flow. See
+       idl_concolic_rule. */
     IDL_BOOLEAN,
-    /* `object?` — §3.2.16's object type with §3.2.20's nullable wrapper. undefined and null become the IDL
-       value null; an Object crosses as itself; ANYTHING ELSE IS A TypeError, which is the whole content of the
-       type and the reason it cannot be IDL_ANY with a test in the body. The Console Standard §1.1.10's
-       `dir(optional any item, optional object? options)` is what declares one: `console.dir(x, 5)` throws in
-       every browser, and a body reading `5.foo` instead would answer undefined and print a table nobody asked
-       for. Nothing here reads a member, so no page code runs. */
+    /* `object?` — Web IDL §3.2.13 object under §3.2.20: undefined and null become the IDL null, an Object
+       crosses as itself, anything else is a TypeError (Console's `dir(x, 5)` throws). Reads no member. */
     IDL_OBJECT_NULLABLE,
-    /* A `boolean` DICTIONARY MEMBER WITH NO DEFAULT — and the difference from IDL_BOOLEAN is the whole reason
-       it exists. §3.2.17 does not set an absent member at all, so "does not exist" and "exists and is false"
-       are two states a dictionary can be in, and DOM §4.3.1's `observe` branches on which: `observe(t,
-       {attributeFilter:[]})` sets attributes to true and succeeds, while `observe(t, {attributes:false,
-       attributeFilter:[]})` is a TypeError at step 5 — the same filter, the same absence of `true`, opposite
-       answers. ToBoolean(undefined) is false, so IDL_BOOLEAN folds the two together and can express neither
-       step. MutationObserverInit declares four of these (attributes, characterData, attributeOldValue,
-       characterDataOldValue) and the two members that DO carry `= false` (childList, subtree) stay
-       IDL_BOOLEAN, which is the IDL's own distinction and not a convention.
-       WHAT IT DOES NOT DIFFER IN IS THE CONVERSION. A member that is PRESENT is converted by §3.2.3 exactly as
-       IDL_BOOLEAN's is, so unknown external input at either type is the same fork at the same seam — see
-       idl_concolic_rule, which answers IDL_CONCOLIC_FORKS for both. The distinction this type exists for is
-       about `undefined` and about nothing else. */
+    /* A `boolean` dictionary member with no default. Web IDL §3.2.17 Dictionary types leaves an absent member
+       unset, so "absent" and "false" are two states; DOM's `observe` branches on which (`{attributeFilter: []}`
+       succeeds, `{attributes: false, attributeFilter: []}` is a TypeError). MutationObserverInit's four
+       defaultless booleans use this; its `= false` members stay IDL_BOOLEAN. A present value converts exactly
+       as IDL_BOOLEAN, so unknown input forks the same way. */
     IDL_BOOLEAN_NO_DEFAULT,
-    /* `sequence<DOMString>` — §3.2.21's iterator-protocol conversion with DOMString as the element type.
-       DOM §4.3.1's `attributeFilter` is the first, and it is a DICTIONARY MEMBER: the iterator protocol is the
-       page's code at every step, so a member declared this way parks on the element it is on exactly as an
-       argument-position sequence does, rather than being walked from a body after every later member was
-       already read. */
+    /* `sequence<DOMString>` — Web IDL §3.2.21 Sequences — sequence<T>. The iterator protocol is the page's code
+       at every step, so the conversion parks on the element it is on, at an argument position or a dictionary
+       member (DOM's `attributeFilter`). */
     IDL_SEQUENCE_DOMSTRING,
-    /* `sequence<E>` where E is an ENUMERATION — §3.2.21 Sequences' iterator-protocol conversion with §3.2.18
-       Enumeration types as the element conversion. Web Cryptography §14.3.9 The importKey method's
-       `sequence<KeyUsage> keyUsages` is the first.
-       THE ELEMENT CONVERSION IS TWO STEPS AND THE FIRST OF THEM IS THE PAGE'S CODE. §3.2.18 is "Let S be the
-       result of calling ? ToString(V)", then "If S is not one of E's enumeration values, then throw a
-       TypeError" — so an element rests on its ToString exactly as IDL_SEQUENCE_DOMSTRING's does, and the
-       membership test that follows runs none of the page's code and is decided before the cursor's next pull.
-       AND THE PLACE THAT TEST RUNS IS OBSERVABLE, which is the whole reason this is a declared type rather
-       than a walk in a body. §3.2.21.1 Creating a sequence from an iterable puts the element conversion INSIDE
-       the repeat loop — step 3.1 is "Let next be ? IteratorStepValue(iteratorRecord)" and step 3.3 is
-       "Initialize S i to the result of converting next to an IDL value of type T" — so a bogus element at
-       index 0 throws BEFORE index 1 is pulled, and a page whose iterator has side effects per element can tell
-       that apart from a walk that collects the whole list and checks it afterwards. A body cannot get that
-       order back: it runs after §3.6 has converted every position.
-       The value list is declared where the POSITION is: beside an argument position by idl_arg_enum, exactly
-       as an interface type's is (idl_arg_iface) and a typed array's T is (idl_typed_array), and beside a
-       DICTIONARY MEMBER in IdlDictMember::values — the same two roads a bare IDL_ENUM's list takes, because
-       the list belongs to the TYPE and both walks convert the same type. */
+    /* `sequence<E>`, E an enumeration (Web Cryptography's `sequence<KeyUsage> keyUsages`). Each element's
+       ToString is a rest point, and the membership test runs before the next pull — Web IDL §3.2.21.1 Creating
+       a sequence from an iterable converts inside the repeat loop, so a bogus element throws before the next is
+       pulled. The value list is declared as for IDL_ENUM. */
     IDL_SEQUENCE_ENUM,
-    /* `sequence<double>` — §3.2.21 Sequences' iterator-protocol conversion with §3.2.7 `double` as the
-       element type.
-       Intersection Observer §2.4's `threshold` is the first, reached as the arm of the union below.
-       BOTH HALVES RUN THE PAGE'S CODE, which is what makes it a declared type rather than a body's walk: the
-       protocol is the page's at every pull, and §3.2.7's element conversion is ToNumber, which is the page's
-       `valueOf` — so `{threshold: [{valueOf(){ … }}]}` parks TWICE per element, once on the pull and once on
-       the coercion. Both are the same cursor every other sequence uses, so the walk rests on the element it is
-       on at whatever depth it is at.
-       §3.2.7 `double` REJECTS A NON-FINITE VALUE (it is the RESTRICTED type — §3.2.8 is `unrestricted
-       double`), so NaN and the two infinities are a
-       TypeError, and that check belongs to the element type rather than to whichever algorithm reads the list
-       afterwards. (Intersection Observer §3.2.1 step 6's own RangeError for a value outside [0, 1] is that
-       ALGORITHM's and stays there — a different error for a different question.) */
+    /* `sequence<double>` (Intersection Observer's `threshold`, through the union below). The pull and each
+       element's ToNumber are both the page's code and both rest points. §3.2.7 refuses a non-finite element
+       with a TypeError; the algorithm's own [0, 1] RangeError stays in the algorithm. */
     IDL_SEQUENCE_DOUBLE,
-    /* `(DOMString or sequence<DOMString>)` — Web IDL §3.2.25 Union types' union, and the FIRST declared type
-       whose ARM IS CHOSEN BY THE PAGE'S OWN CODE. Every other union in this list is decided by a brand test or
-       by `JS_IsObject`, neither of which reads anything; this one's step 11.2 is
-       `? GetMethod(V, %Symbol.iterator%)` — one accessor or one Proxy `get` trap away from being a page loop —
-       so the position PARKS on that read exactly as it parks on a `toString`, and which arm it resolved to is a
-       resume point of its own.
-       THE ORDER IS THE ALGORITHM'S AND IT IS OBSERVABLE. Steps 4 through 10 name no arm this union has (no
-       dictionary, no interface type, no `object`, no buffer source, no callback function), so the whole
-       decision is step 11.2 against step 15: an Object whose @@iterator is callable takes the SEQUENCE, and
-       EVERYTHING else takes the string arm and is ToString'd — an Object with no @@iterator included, and null,
-       and a number. `db.transaction({})` is therefore the store name "[object Object]" and a "NotFoundError",
-       which is what a browser answers; reading the union as "an object is the sequence" gets that one wrong in
-       the direction of a TypeError the spec does not have. And it is GetMethod and NOT Get: undefined and null
-       mean there is no method, and a @@iterator that is neither of those and not callable is a TypeError.
-       The element type is a DOMString, so §3.2.12's scalar value conversion does NOT run over it — that is the
-       whole of what separates this sequence's elements from `BlobPart`'s. Indexed Database §4.4's
-       `transaction(storeNames, …)` is what declares it. */
+    /* `(DOMString or sequence<DOMString>)` — Web IDL §3.2.25 Union types. The arm is chosen by step 11.2's
+       `? GetMethod(V, %Symbol.iterator%)`, which is the page's code, so the position parks there and the
+       resolved arm is a resume point (`uni_phase`). An Object with a callable @@iterator takes the sequence;
+       everything else, including an Object without one, null and numbers, takes step 15's string arm
+       (`db.transaction({})` is the store name "[object Object]"). A non-callable, non-nullish @@iterator is a
+       TypeError. Elements are DOMStrings, without §3.2.12's replacement. IndexedDB's `transaction` declares it. */
     IDL_DOMSTRING_OR_SEQUENCE,
-    /* `(DOMString or sequence<DOMString>)?` — the same union with §3.2.25 STEP 2 ahead of it: the union
-       INCLUDES a nullable type, so null AND undefined are the IDL null and nothing is read off either. The
-       difference from the row above is the difference between `keyPath: null` meaning "this store has no key
-       path" and meaning the four characters "null", which §2.5 then refuses as an invalid key path.
-       Indexed Database §4.4's `IDBObjectStoreParameters.keyPath` declares it, and declares it as a DICTIONARY
-       MEMBER — the arm-deciding read is the page's code there exactly as it is at an argument position, so the
-       conversion parks on the member it is on rather than being walked from a body after every later member of
-       the same dictionary was already read. */
+    /* The same union, nullable: §3.2.25 step 2 makes null and undefined the IDL null before anything is read
+       (IndexedDB's `keyPath: null` means no key path, not the string "null"). A dictionary member there. */
     IDL_DOMSTRING_OR_SEQUENCE_NULLABLE,
-    /* `(double or sequence<double>)` — §3.2.25 Union types over the union Intersection Observer §2.4's
-       `threshold`
-       declares, and its arm is chosen by exactly the read the two rows above are chosen by: §3.2.25 step 11.2's
-       `? GetMethod(V, %Symbol.iterator%)`. Nothing in this union names a dictionary, an interface, an `object`,
-       a buffer source or a callback, so steps 4 through 10 pass it straight to step 11.2 against step 17 — an
-       Object with a CALLABLE @@iterator takes the sequence, and EVERYTHING else takes the numeric arm and is
-       ToNumber'd — a Number being answered one clause earlier, by step 13.1's "If types includes a numeric
-       type, then return the result of converting V to that numeric type", which is the same type step 17
-       names. An Object with no @@iterator included, and null, and a string:
-       `{threshold: null}` is
-       therefore the number 0 (ToNumber(null)) and passes §3.2.1's range check, while `{threshold: "x"}` is NaN
-       and §3.2.7's restricted `double` refuses it as a TypeError.
-       IT SHARES THE ARM RESOLVER WITH THE STRING UNION rather than restating step 11.2, because the step is the
-       union algorithm's and not the arm list's — a second copy is the second answer that reads @@iterator with
-       a different notion of GetMethod. What each union states is only WHICH TWO TYPES its two outcomes are. */
+    /* `(double or sequence<double>)` — §3.2.25 with the same step 11.2 read. A callable @@iterator takes the
+       sequence; everything else is ToNumber'd by step 13.1 or 17 (`{threshold: null}` is 0, `{threshold: "x"}`
+       is NaN and a TypeError under §3.2.7). The arm resolver is shared with the string union
+       (idl_union_seq_arm), so step 11.2 has one implementation. */
     IDL_DOUBLE_OR_SEQUENCE,
-    /* `sequence<unsigned long>` — §3.2.21's iterator-protocol conversion with §3.2.6 "unsigned long"'s
-       conversion as the element conversion. That is ToNumber (the page's `valueOf`, so each element is a
-       request and its own rest point, exactly as `sequence<double>`'s is) followed by §3.2.6's MODULO: "Set x
-       to ToNumber(V) … If x is NaN, +0, −0, +∞, or −∞, return +0 … Set x to x modulo 2^32". So the type
-       REFUSES NOTHING — `[Infinity]` is 0 and `[-1]` is 4294967295 — which is the whole difference from
-       IDL_SEQUENCE_DOUBLE beside it, whose RESTRICTED `double` makes a non-finite element a TypeError. Getting
-       the two the wrong way round is not a rounding difference: it is a throw where the standard has a value.
-       CSS Fonts 4 §12.2 "The CSSFontFeatureValuesRule interface"'s `CSSFontFeatureValuesMap.set` declares it
-       inside the union below, which is the only way it is reached today; it is a row of its own rather than a
-       clause of that union's because the union's ARM and the element's TYPE are two facts and
-       idl_union_seq_arm takes the sequence type by name. */
+    /* `sequence<unsigned long>` — §3.2.21 with Web IDL §3.2.4.6 unsigned long as the element conversion:
+       ToNumber (a rest point per element) and the modulo, so it refuses nothing (`[Infinity]` is 0, `[-1]` is
+       4294967295), unlike IDL_SEQUENCE_DOUBLE. Reached through the union below. */
     IDL_SEQUENCE_UNSIGNED_LONG,
-    /* `(unsigned long or sequence<unsigned long>)` — §3.2.25 Union types over the union CSS Fonts 4 §12.2
-       declares for `CSSFontFeatureValuesMap.set`'s `values` argument, and its arm is chosen by exactly the read
-       IDL_DOUBLE_OR_SEQUENCE's and IDL_DOMSTRING_OR_SEQUENCE's are: step 11.2's
-       `? GetMethod(V, %Symbol.iterator%)`. Nothing in this union names a dictionary, an interface, an `object`,
-       a buffer source or a callback, so steps 4 through 10 pass the value straight to step 11.2 against the
-       numeric clause — an Object with a CALLABLE @@iterator takes the sequence, and EVERYTHING else takes the
-       `unsigned long` arm, an Object with no @@iterator included, and null, and a string. `map.set("k", null)`
-       is therefore 0 (ToNumber(null), then §3.2.6's +0 arm) and `map.set("k", "x")` is 0 as well (NaN, then the
-       same arm) — neither throws, which is what a browser answers and which is why the arm may not be spelled
-       over `double`.
-       DECLARING THIS POSITION AS IDL_DOUBLE_OR_SEQUENCE IS SPEC-WRONG AND NO AUDIT WOULD SEE IT. The two
-       differ only in the numeric type, engine/idl_typename.mjs answers `null` for a union so the
-       argument-type audit is blind to the position either way, and the divergence is visible only at a value
-       the restricted `double` refuses: `set("di", Infinity)` must store 0 and a `double` arm throws a
-       TypeError. So the row exists to make the numeric half of the union statable, and the sequence half above
-       exists for the same sentence one level down.
-       IT SHARES THE ARM RESOLVER WITH THE TWO UNIONS ABOVE rather than restating step 11.2, because the step is
-       the union algorithm's and not the arm list's — a second copy is the second answer that reads @@iterator
-       with a different notion of GetMethod. What this row states is only WHICH TWO TYPES its two outcomes are.
-       ITS CONCOLIC RULE IS THE SIBLING'S, WHICH IS A DECISION AND NOT AN OMISSION — see idl_concolic_rule,
-       where IDL_DOUBLE_OR_SEQUENCE falls under `default:` at IDL_CONCOLIC_CROSSES. A type is only ever
-       IDL_CONCOLIC_FORKS when the SITE that resolves it asks that fork, and this row's resolution site asks
-       none; declaring FORKS here would be one union of this shape answering differently from the union it is
-       a copy of, at a site with no second question. What a crossed unknown then reaches is the member's own
-       body, which for this one is a store of the value into the map — a list of one unknown feature index,
-       which is exactly what §12.2's own "a single unsigned long value is treated as a sequence of a single
-       value" says of a known one, so the opacity survives the boundary and nothing about it is decided here. */
+    /* `(unsigned long or sequence<unsigned long>)` — §3.2.25, as CSS Fonts' `CSSFontFeatureValuesMap.set`
+       declares. Same step 11.2 arm resolver; the non-sequence arm is `unsigned long`, so `set("k", null)` and
+       `set("k", Infinity)` are 0 and never throw. Declaring IDL_DOUBLE_OR_SEQUENCE here would throw on
+       Infinity, and engine/idl_typename.mjs answers null for a union, so no audit sees that difference.
+       Its concolic rule is the sibling's default CROSSES: the resolution site asks no fork, and the body stores
+       the unknown, matching the spec's "a single unsigned long value is treated as a sequence of a single
+       value". */
     IDL_UNSIGNED_LONG_OR_SEQUENCE,
-    /* `sequence<T>` where T is an INTERFACE type — §3.2.21's iterator-protocol conversion with §3.2.15's brand
-       test as the element conversion. HTML §8.5's `GetHTMLOptions.shadowRoots` is `sequence<ShadowRoot>` and is
-       the first, and it is the same reason IDL_SEQUENCE_DOMSTRING is a declared type rather than a body's walk:
-       the protocol is the PAGE'S code at every step (the @@iterator read, its call, each `next()`, each
-       `done`/`value` read), so the machine parks on the element it is on, and a member driven from a body would
-       run it after every later member of the same dictionary was already read.
-       The element conversion itself runs NONE of the page's code — §3.2.15 is "if V implements I return it,
-       otherwise throw a TypeError" — so it is decided between two pulls of the cursor rather than being a third
-       rest point. The interface is named by idl_iface_brand / idl_iface_narrow, exactly as IDL_INTERFACE's is:
-       one statement of what the type is, whether it appears alone or inside a sequence. */
+    /* `sequence<I>`, I an interface (HTML's `GetHTMLOptions.shadowRoots`). The protocol parks per element; the
+       element conversion is Web IDL §3.2.15 Interface types' brand test, which runs no page code. The interface
+       is named by idl_iface_brand / idl_iface_narrow, as for IDL_INTERFACE. */
     IDL_SEQUENCE_INTERFACE,
-    /* `FrozenArray<T>?` / `sequence<T>?` where T is an INTERFACE — §3.2.27 says a frozen array is CONVERTED
-       FROM the sequence it is built out of, so an attribute whose IDL type is `FrozenArray<Element>?` takes
-       exactly the conversion above under §3.2.20's nullable rule: null and undefined are the IDL null, and an
-       object is §3.2.21's iterator protocol with §3.2.15's brand as the element conversion. WAI-ARIA's seven
-       `ariaLabelledByElements`-shaped members are the first, and their `?` is what CLEARS them. */
+    /* `FrozenArray<I>?` / `sequence<I>?`, I an interface. Web IDL §3.2.27 Frozen arrays — FrozenArray<T> converts
+       from the sequence, so this is the row above under §3.2.20's null rule; the null clears WAI-ARIA's
+       `ariaLabelledByElements`-shaped members. */
     IDL_SEQUENCE_INTERFACE_NULLABLE,
-    /* `sequence<object>` — §3.2.21's iterator-protocol conversion with §3.2.13's `object` as the element type.
-       HTML §9.4.4 Message ports' `StructuredSerializeOptions.transfer` is the first — that dictionary is
-       declared THERE and not in §2.7 Safe passing of structured data, whose §2.7.6 is StructuredDeserialize —
-       and it is what `structuredClone`, `window.postMessage` and `MessagePort.postMessage` all take.
-       IT IS A DECLARED TYPE BECAUSE THE WALK IS THE PAGE'S CODE. structured_clone.c converted it from C with a
-       `length` read and one indexed read per entry, which is not §3.2.21 at all (that is the array-like
-       algorithm) and which runs a getter or a Proxy trap from an activation with no flow base — so
-       `structuredClone(v, {transfer: new Proxy([], …)})` reached the page's `get` trap with nothing under it to
-       park. The cursor is the same one every other sequence uses, so the conversion rests on the element it is
-       on at whatever depth it is at.
-       The element conversion runs NONE of the page's code — §3.2.13's `object` is "an Object crosses as itself,
-       anything else is a TypeError" — so, like the interface arm, it is decided between two pulls of the cursor
-       rather than being a rest point of its own. */
+    /* `sequence<object>` — the element conversion is §3.2.13 object (an Object crosses, anything else is a
+       TypeError), decided between pulls. HTML's `StructuredSerializeOptions.transfer`, taken by
+       structuredClone and both postMessage forms, is a declared type so the walk is the iterator protocol and
+       parks, rather than a C length-and-index read of a value that may be a Proxy. */
     IDL_SEQUENCE_OBJECT,
-    /* `sequence<(DOMString or D)>` where D is a DICTIONARY — §3.2.21's iterator protocol whose ELEMENT type is
-       §3.2.25's union of a string and a dictionary. It is the first declared type whose conversion CONTAINS
-       another one: an element that is an Object is a dictionary of type D, D's members are read one [[Get]] at
-       a time, and one of THOSE members can be a sequence of the same shape again. HTML §8.6.3's SanitizerConfig
-       is what declares it — `sequence<SanitizerElementWithAttributes> elements`, each entry
-       `(DOMString or SanitizerElementNamespaceWithAttributes)`, whose own `attributes` is
-       `sequence<SanitizerAttribute>` — so the conversion is a STACK of cursors, never C recursion: every pull,
-       every `done`/`value` read and every member [[Get]] is the page's code and rests where it is, at whatever
-       depth it is at. The stack's depth is a property of the DECLARED type tree (which is finite and ends at
-       its own leaves), so the pool computes it when the member declares itself and sizes the state for it —
-       page data nesting deeper does not make the conversion deeper.
-       The dictionary arm is named beside the member (IdlDictMember::dict), which is the other half of what this
-       type states, exactly as idl_iface_brand's class is for an interface arm.
-       THIS ROW ANSWERS CROSSES WHILE ITS ELEMENT TYPE FORKS, AND THAT IS TWO POSITIONS AND NOT TWO ANSWERS TO
-       ONE QUESTION — a distinction worth stating here, because the element IS the `(DOMString or D)` union
-       IDL_STRING_OR_DICT declares and a reader who notices that will reach for the rule table. What the rule
-       table is keyed by is the type AT A POSITION, and the value at THIS position is the ITERABLE: its
-       conversion is §3.2.21, which names no arm at all, so there is nothing here for a fork to be over. What
-       an unknown ITERABLE lacks is a LENGTH — §3.2.21.1 Creating a sequence from an iterable repeats until
-       step 3.2's `done`, and over an unknown there is no arm set the spec writes down, only an unknown number
-       of worlds — which is a different missing capability from an undecided arm and is named as one where it
-       is met.
-       THE ELEMENT'S OWN ARM IS FORKED, one level in, at the point §3.2.21.1 step 3.3 converts the value the
-       cursor just pulled: `{elements: [location.hash]}` has a real Array, a real length and one unknown
-       ELEMENT, and that element's union is decided exactly as an argument position's is. See idl_conv_seq_run,
-       which is where that ask lives. */
-    /* `sequence<D>` WHERE D IS A DICTIONARY — §3.2.21 Sequences — sequence<T> whose element type is §3.2.17
-       Dictionary types, with no union over it. It is the row below WITHOUT the arm: every element runs
-       §3.2.17's member walk, unconditionally, so there is nothing about an element to test and nothing to
-       fork. §3.2.17 step 1's own refusal is what an element that is not an Object takes — "If jsDict is not an
-       Object and jsDict is neither undefined nor null, then throw a TypeError" — which admits null and
-       undefined as the all-defaults dictionary exactly as a bare IDL_DICT position does.
-       THE CORPUS POPULATION AND THE POPULATION THIS ENGINE CAN BE HANDED ARE DIFFERENT NUMBERS, and only the
-       second is work. The corpus DECLARES 100 dictionary members of this type (116 once inheritance is
-       flattened, which is what a per-dictionary walk counts) and FIVE argument positions —
-       `CookieStoreManager.subscribe` and `unsubscribe`, `Navigator.requestMediaKeySystemAccess`,
-       `PaymentRequest`'s constructor and `RTCRtpTransceiver.setCodecPreferences` — and until this row existed
-       not one of them could be declared at all. Of that population, exactly THREE sit on a dictionary this
-       engine can actually be handed, and all three are reached at an ARGUMENT position rather than through
-       another dictionary's member: Web Cryptography API §15 "JsonWebKey dictionary"'s
-       `sequence<RsaOtherPrimesInfo> oth`, which is what this row was built for, and File System Access's
-       `OpenFilePickerOptions.types` and `SaveFilePickerOptions.types`, which are ONE unit and are gated on
-       `record<K,V>` — core/file/file_picker.c's own crash names it.
-       THE FIRST OF THOSE NUMBERS WAS WRITTEN HERE AS EIGHTY-FIVE AND WAS WRONG, which is worth the sentence
-       because of HOW it was wrong: the count came from a walk that resolved a member's element dictionary only
-       within the .idl file the member was declared in, so every `sequence<D>` whose D lives in another spec was
-       invisible to it. A count over source text is a count of a SPELLING, and that one was scoped by FILE
-       without saying so. The figures above are re-derived with the corpus resolved WHOLE — loadIdl's dictByName
-       is the set every element type is tested against, not the one .idl file the member was written in — and
-       the reachable count is the audit's own: `node engine/idlgen.mjs` prints it on its §2.7 dictionaries line,
-       where 3 of them are the ones no argument position names directly.
-       THE DICTIONARY IS NAMED BESIDE THE MEMBER (IdlDictMember::dict), the same statement every row of this
-       shape makes — the element type is what `dict` names here, where for the union row below it names the
-       union's dictionary ARM. One field, one meaning: the dictionary this member's conversion can build. */
+    /* `sequence<D>`, D a dictionary, with no union over it: every element runs §3.2.17's member walk, and an
+       element that is not an Object, undefined or null is §3.2.17 step 1's TypeError (null and undefined give
+       the all-defaults dictionary). Web Cryptography's JsonWebKey `sequence<RsaOtherPrimesInfo> oth` is the
+       first. The element dictionary is IdlDictMember::dict. */
     IDL_SEQUENCE_DICT,
+    /* `sequence<(DOMString or D)>`, D a dictionary (HTML's SanitizerConfig `elements`, whose entries' own
+       `attributes` is the same shape again). The conversion is a stack of cursors, never C recursion: every
+       pull, `done`/`value` read and member [[Get]] is the page's code and parks at any depth. The depth is a
+       property of the declared type tree, so it is computed at declaration (idl_members_depth) and page data
+       cannot make it deeper. The dictionary arm is IdlDictMember::dict.
+       The iterable itself crosses unknown input (§3.2.21 names no arm; what an unknown iterable lacks is a
+       length). Each element's union is forked like an argument position's, inside the element conversion
+       (idl_conv_seq_run). */
     IDL_SEQUENCE_STRING_OR_DICT,
-    /* `(DOMString or D)` where D is a DICTIONARY — §3.2.25 over the union HTML §8.6.2's seven name-taking
-       modifiers take (`allowElement(SanitizerElementWithAttributes)` and its six siblings). Its rule is the
-       union algorithm's own
-       ORDER, and the order is observable: null and undefined take the DICTIONARY arm (step 4, which then throws
-       for a `required` member the page did not write), ANY Object takes it too (step 11 — a function and a
-       String object included, since these unions name no callback type and step 10's callback clause therefore
-       names no entry), and everything else falls through to step 15's string arm. Reading it as "an object is
-       the dictionary, a string is the string" agrees on the two ordinary cases and disagrees on
-       `allowElement(null)`, which must be a TypeError from the missing `name` rather than the four characters
-       "null". The dictionary is named beside the member.
-       THE TWO NUMBERS IN THAT SENTENCE WERE 10 AND 12 AND BOTH WERE WRONG, EACH BY A DIFFERENT AMOUNT — step
-       10 is "If IsCallable(V) is true" and step 12 is "If V is a Boolean", so the Object clause and the string
-       clause were each cited as a neighbour that does something else. It read as authoritative in the one file
-       whose whole job is to state a conversion once, and the same pair had been copied into the resolution
-       site in idl_args.c. What finds it is counting the algorithm once with LIST DEPTH TRACKED: every one of
-       §3.2.25's steps 4 through 14 holds a nested list, so a flat item count promotes their sub-items to peers
-       and every number from step 4 onward drifts — which is also why sampling the first number of a cluster
-       proves nothing, the drift starting one step AFTER the first nesting rather than at it.
-       AND ITS ARM IS FORKED FOR UNKNOWN EXTERNAL INPUT — see idl_concolic_rule, which is where the reason
-       lives, and idl_args.c's TWO resolution sites, which is where the fork is asked: the ARGUMENT position,
-       and §3.2.21.1 step 3.3's ELEMENT conversion inside IDL_SEQUENCE_STRING_OR_DICT, whose element type is
-       this union. One type, one rule, and every site that resolves it asks the same fork.
-       NAMED RESIDUAL — A `(D or E)` UNION IS NOT ONE OF THESE, AND THIS ROW USED TO CLAIM THE Sanitizer
-       CONSTRUCTOR'S AS AN INSTANCE. `(SanitizerConfig or SanitizerPresets)`'s other arm is an ENUMERATION, and
-       Web IDL §2.13 Types puts an enumeration among the STRING TYPES outright — "The string types are
-       DOMString, all enumeration types, ByteString and USVString" — so what differs is not the STEP but the
-       type step 15 names: this row converts V to §3.2.10 DOMString where that union owes §3.2.18 Enumeration
-       types. WHAT IS NOT COVERED is therefore a union whose string arm carries a value list. On a value the
-       flow DETERMINED the two agree in what a page can see — a body re-spelling the membership test by hand
-       throws the same TypeError one algorithm step later — and over UNKNOWN EXTERNAL INPUT they do not agree
-       at all: §3.2.10 CROSSES, so the arm fork PLACES THE UNKNOWN ITSELF, where §3.2.18 forks N+1 ways and
-       places one of the declared strings.
-       WHAT THE NEXT DIFF BUILDS IS TWO THINGS, AND THE ROW IS THE SMALLER OF THEM. The row is necessary: an
-       `IDL_ENUM_OR_DICT` whose dictionary arm is this one's and whose other arm is IDL_ENUM, listed by
-       idl_type_has_dict and answering IDL_CONCOLIC_FORKS here, with the value list stated per POSITION by
-       idl_arg_enum exactly as a bare IDL_ENUM's is. IT IS NOT SUFFICIENT, and the reason is at the ARGUMENT
-       SITE rather than in this rule: that site asks the arm fork afresh on every entry to the position,
-       guarded only by the dictionary walk's `started`, because on the string arm NOTHING PARKS — the value is
-       placed and the position is done. AN ENUMERATION ARM PARKS. So the resume that carries §3.2.18's own
-       answer re-enters, re-asks the ARM fork first, and quickjs-step.h's `fork_ask_key` check refuses it: the
-       outstanding answer belongs to the enumeration's question and is being consumed at the union's, which is
-       the one thing that check exists to catch. What closes it is a PER-POSITION RECORD of the resolved arm
-       that survives a park — what `uni_phase` already is for the @@iterator unions, which is why
-       idl_union_seq_arm keeps one and this site does not.
-       HOW ITS ABSENCE WOULD SHOW: a page building a sanitizer out of injected state reaches HTML §8.6.2 The
-       Sanitizer interface's constructor STILL CARRYING the unknown, so the enumeration's worlds have to be
-       asked at the MEMBER's seam by a plain C body that has none — an abort that names a fork at the member
-       where the TYPE is what owes it. */
+    /* `(DOMString or D)`, D a dictionary — §3.2.25 over HTML Sanitizer's `allowElement` and its siblings. The
+       algorithm's order is observable: null and undefined take the dictionary (step 4, then a missing
+       `required` member throws, so `allowElement(null)` is a TypeError), any Object takes it (step 11.4, a
+       function included), and everything else takes step 15's string arm. Unknown input forks at both
+       resolution sites, the argument position and the element of IDL_SEQUENCE_STRING_OR_DICT.
+       Named residual: a `(D or E)` union whose string arm is an enumeration, such as the Sanitizer
+       constructor's `(SanitizerConfig or SanitizerPresets)`, is not covered; this row converts that arm as a
+       DOMString, which crosses an unknown where §3.2.18 forks N+1 ways. Next diff: an IDL_ENUM_OR_DICT row
+       answering IDL_CONCOLIC_FORKS, with a per-position record of the resolved arm that survives a park, since
+       the enumeration arm parks and re-asking the arm fork on resume trips `fork_ask_key`. Absence shows as
+       the Sanitizer constructor reached carrying an unknown preset that no body can fork. */
     IDL_STRING_OR_DICT,
-    /* THE POSITION AT WHICH TWO OVERLOADS SPLIT, one of them ending here and the other continuing — §3.6's
-       resolution algorithm rather than §3.2.25's union, and the difference between the two is why this is its
-       own row and not IDL_STRING_OR_DICT with a USVString arm. HTML §7.2.2 The Window object is where the IDL
-       that declares it is written (the METHOD STEPS are §9.3.3 Posting messages, which is a different
-       section and states no types):
-
-           undefined postMessage(any message, USVString targetOrigin, optional sequence<object> transfer = []);
-           undefined postMessage(any message, optional WindowPostMessageOptions options = {});
-
-       §3.6 steps 3-4 come FIRST and they are decided by the ARGUMENT COUNT alone: argcount is
-       min(maxarg, args), and every entry whose type list is not that long is removed. The dictionary entry's
-       type list ENDS at this position, so a call that passes anything BEYOND it removes that entry outright —
-       `postMessage(m, {}, [])` is the three-argument overload, whose second argument is a required USVString,
-       and the four characters "[object Object]" are then a "SyntaxError" from the URL parser. Which also means
-       this position is REQUIRED at that arity, so its `undefined` is the string "undefined" and not an absent
-       optional: the optionality §3.6 step 15.3 reads ("let optionality be the value at index i in the list of
-       optionality values of the REMAINING entry") belongs to the entry that SURVIVED step 4, never to the
-       declaration as a whole.
-       Only once the longer entry is gone does step 12 choose between the two remaining ones, and there the
-       rule is IDL_STRING_OR_DICT's own order: null and undefined take the dictionary (step 12.3, whose list of
-       qualifying types names "a dictionary type" — and step 12.2 before it for `undefined` alone, since the
-       dictionary entry is the one declaring this position optional; step 12.1 is "Let V be args[i]" and
-       decides nothing), ANY Object takes it (step 12.11's callback-interface/dictionary/record/object clause),
-       and everything else falls through to step 12.15's string clause. `postMessage(m, 123)` is therefore the
-       target origin "123", which is a SyntaxError, and not an options dictionary with no members.
-       The string arm is a USVString (§3.2.12's scalar value conversion), which is what §7.2.2's IDL writes and
-       what every other member of the URL surface takes. The dictionary is named beside the member.
-       AND AT THE ARITY WHERE BOTH ENTRIES STAND, THE SURVIVING ENTRY IS FORKED FOR UNKNOWN EXTERNAL INPUT —
-       see idl_concolic_rule, which is where the reason lives, and idl_args.c's resolution site, which is where
-       the fork is asked. At the LONGER arity there is nothing to fork: steps 3-4 rewrote this position to the
-       USVString before any rule was consulted. */
+    /* The position where two overloads of different length split — Web IDL §3.6 Overload resolution
+       algorithm, not a union. HTML's Window `postMessage(any, USVString targetOrigin, optional
+       sequence<object> transfer = [])` against `postMessage(any, optional WindowPostMessageOptions = {})`.
+       Steps 3-4 decide by argument count first: a call passing a third argument keeps only the longer entry,
+       so this position is a required USVString there (`postMessage(m, {}, [])` stringifies the object). Where
+       both entries stand, step 12 decides: undefined (12.2) and null (12.3) take the dictionary, any Object
+       takes it (12.11), and everything else is step 12.15's USVString (`postMessage(m, 123)` is target origin
+       "123"). Optionality is read from the surviving entry (step 15.3). Unknown input forks at that arity. */
     IDL_USVSTRING_OR_DICT,
-    /* THE SAME §3.6 LENGTH-DIFFERING SPLIT WHERE THE LONGER ENTRY'S TYPE AT THIS POSITION IS A NUMBER — and
-       where, unlike the row above, THE TWO ENTRIES NEVER COEXIST AT ONE ARITY, so no value is ever looked at.
-       CSSOM VIEW §6 Extensions to the Element Interface declares it three times over, and §4 Extensions to the
-       Window Interface three more:
-
-           Promise<undefined> scroll(optional ScrollToOptions options = {});
-           Promise<undefined> scroll(unrestricted double x, unrestricted double y);
-
-       §3.6's effective overload set for that pair has an entry of length 0, one of length 1 (the dictionary)
-       and one of length 2 (the two doubles). Steps 3-4 — argcount is min(maxarg, args), and every entry whose
-       type list is not that long is removed — therefore leave EXACTLY ONE entry at every arity, and step 12
-       never runs: `el.scrollTo(0, 0)` is the numeric entry because it passed two arguments and
-       `el.scrollTo({left: 0})` is the dictionary because it passed one, with nothing about either VALUE
-       consulted. Which is also what makes `el.scrollTo(0)` a TypeError — §3.2.17 step 1 refuses a value that is
-       not undefined, null or an Object — rather than a scroll to x=0, and that is what a browser answers.
-       ITS CONCOLIC RULE IS UNASKED WHERE THE ROW ABOVE'S IS CROSSES, and that is a consequence of the sentence
-       above rather than a second policy: by the time idl_concolic_rule is consulted, a call at the LONGER arity
-       has already had this position rewritten to the number, so the only value this row itself ever describes
-       is a dictionary — a bag of member READS, each yielding another unknown. */
+    /* A §3.6 length split whose two entries never coexist at one arity, so no value is ever consulted: CSSOM
+       View's `scroll(optional ScrollToOptions options = {})` against `scroll(unrestricted double x,
+       unrestricted double y)`. Steps 3-4 leave one entry at every arity, so `el.scrollTo(0)` is the dictionary
+       entry and a TypeError from §3.2.17 step 1. Its concolic rule is UNASKED: by the time it is consulted a
+       longer-arity call has already been rewritten to the number, and a dictionary asks the value nothing. */
     IDL_UNRESTRICTED_DOUBLE_OR_DICT,
-    /* THE SAME §3.6 LENGTH-DIFFERING SPLIT AS THE ROW ABOVE — two entries that NEVER COEXIST AT ONE ARITY, so
-       no value is ever looked at — WHERE THE LONGER ENTRY'S TYPE AT THIS POSITION IS A USVString. Cookie Store
-       API §3.3 "The set() method" is what declares it:
-
-           Promise<undefined> set(USVString name, USVString value);
-           Promise<undefined> set(CookieInit options);
-
-       IT IS NOT IDL_USVSTRING_OR_DICT, AND THAT ROW'S NAME IS THE TRAP — the two differ in the one property
-       that decides whether a VALUE is ever consulted. Window's `postMessage` declares its dictionary position
-       `optional`, so §2.5.8 Overloading gives that entry a tuple at TWO arities and the two entries MEET at one;
-       §3.6 step 4 removes neither there, step 8 sets a distinguishing index, and step 12 reads the page's value
-       — which is why that row answers IDL_CONCOLIC_FORKS. BOTH of §3.3's entries declare EVERY argument
-       REQUIRED, so the effective overload set holds one tuple per entry, at arity 1 and at arity 2, and step 4
-       removes one AT EVERY ARITY: S never holds two entries, step 8 never runs, and there is no step 12 here at
-       all. Declaring the other row would resolve this position from the page's value at arity 1, where §3.6 has
-       already chosen the dictionary outright — so `cookieStore.set("x")` would be read as a cookie NAME where
-       §3.2.17 Dictionary types step 1 — "If jsDict is not an Object and jsDict is neither undefined nor null,
-       then throw a TypeError" — makes a String a TypeError. That is an observable divergence and no audit here
-       would see it.
-       THAT SENTENCE WAS FIRST QUOTED AS `If Type(esDict) is not Undefined, Null or Object, then throw a
-       TypeError`, WHICH IS AN EARLIER EDITION'S WORDING, and the correction is recorded because the retired
-       spelling is the one a reader reconstructs: Web IDL renamed its ES-prefixed variables to JS-prefixed ones,
-       so `esDict` reads exactly like a current name and the committed corpus — which spells it `jsdict` — is
-       what refused it. The CONCLUSION drawn from it is unchanged and was checked against the real text rather
-       than assumed: a String is not an Object and is neither undefined nor null, so step 1 throws either way.
-       A mis-transcription beside a correct clause is a typo and not a wrong argument, which is why only the
-       words moved here.
-       SO IT IS FILED AT IDL_CONCOLIC_UNASKED beside IDL_UNRESTRICTED_DOUBLE_OR_DICT and never with the unions:
-       the arity has rewritten this position to one entry's own type before any rule is asked, so the pair is
-       never the type of a value and a FORKS rule would be a second ask at a site with no second question. */
+    /* The same never-coexisting split with a USVString longer arm: Cookie Store's `set(USVString name,
+       USVString value)` against `set(CookieInit options)`. It is not IDL_USVSTRING_OR_DICT: every argument of
+       both entries is required, so step 4 removes one entry at every arity and step 12 never runs —
+       `cookieStore.set("x")` is the dictionary entry and a TypeError from §3.2.17 step 1, not a cookie name.
+       Its concolic rule is UNASKED for the row above's reason. */
     IDL_USVSTRING_OR_DICT_BY_ARITY,
-    /* THE SAME §3.6 LENGTH-DIFFERING SPLIT WHERE THE DICTIONARY IS ON THE **LONGER** ENTRY, which is the mirror
-       of the two rows above and is why it is its own row rather than one of them read backwards. Web Locks API
-       §3.2 "LockManager class" is where the IDL that declares it is written:
-
-           Promise<any> request(DOMString name, LockGrantedCallback callback);
-           Promise<any> request(DOMString name, LockOptions options, LockGrantedCallback callback);
-
-       §3.6 steps 3-4 come first and are decided by the ARGUMENT COUNT alone: the type lists are TWO and THREE
-       long, so exactly one entry survives at every arity a page can call at and step 12 NEVER RUNS — the same
-       arithmetic as IDL_UNRESTRICTED_DOUBLE_OR_DICT and for the same reason, so no value at this position is
-       ever looked at to choose an entry. At arity 2 this position is the shorter entry's `LockGrantedCallback`;
-       at arity 3 it is the longer entry's `LockOptions`, and position 2 is then the callback.
-       WHICH WAY ROUND IT SITS IS THE WHOLE CONTENT, because idl_split_longer_type answers THE LONGER ENTRY'S
-       TYPE: for the two rows above that is the non-dictionary arm and here it is the DICTIONARY. A row written
-       as those two are would convert the page's OPTIONS OBJECT as a callback at arity 3 and refuse every
-       three-argument call, which is exactly the wrong-entry-wins defect idl_overload_split_optional_from exists
-       for, one field over.
-       ITS CONCOLIC RULE IS UNASKED, by IDL_UNRESTRICTED_DOUBLE_OR_DICT's own argument: by the time
-       idl_concolic_rule is consulted the arity has already rewritten this position to one entry's type, so the
-       only values this row itself ever describes are a callable (a brand check that reads nothing) and a
-       dictionary (a bag of member READS, each yielding another unknown). */
+    /* The same split with the dictionary on the longer entry: Web Locks' `request(DOMString name,
+       LockGrantedCallback callback)` against `request(DOMString name, LockOptions options, LockGrantedCallback
+       callback)`. At arity 2 this position is the callback; at arity 3 it is the dictionary. The direction
+       matters because idl_split_longer_type answers the longer entry's type, which here is the dictionary.
+       Its concolic rule is UNASKED, as for IDL_UNRESTRICTED_DOUBLE_OR_DICT. */
     IDL_CALLBACK_OR_DICT,
-    /* THE SAME §3.6 SPLIT WHERE NEITHER ENTRY IS LONGER — the position the two entries of HTML §9.4.4 Message
-       ports' `MessagePort.postMessage` differ at:
-
-           undefined postMessage(any message, sequence<object> transfer);
-           undefined postMessage(any message, optional StructuredSerializeOptions options = {});
-
-       IT IS NOT THE ROW ABOVE WITH A SEQUENCE ARM, AND THE DIFFERENCE IS WHICH STEP DECIDES. Both type lists
-       are TWO long, so §3.6 step 4 ("remove from S all entries whose type list is not of length argcount")
-       removes NEITHER at any arity this member can be called at — the arity shortcut IDL_USVSTRING_OR_DICT
-       leans on has nothing to shortcut, and the whole decision is step 12's clause chain at the distinguishing
-       argument index. That chain READS THE PAGE'S VALUE, so this position is a rest point.
-
-       EVERY OUTCOME IS ONE OF STEP 12'S CLAUSES, IN THE ALGORITHM'S OWN ORDER:
-         - `undefined` — "if V is undefined, and there is an entry in S whose list of optionality values has
-           'optional' at index i, then remove from S all other entries". The dictionary entry is the one
-           declaring this position optional, so `port.postMessage(m)` and `port.postMessage(m, undefined)` are
-           both `options = {}` with every member at its IDL default.
-         - `null` — the next clause, "if V is null or undefined, and there is an entry that has … a dictionary
-           type": the dictionary again. `port.postMessage(m, null)` therefore transfers nothing rather than
-           throwing.
-         - an Object whose @@iterator is callable — the SEQUENCE clause, whose test is
-           `Let method be ? GetMethod(V, %Symbol.iterator%)`. That is the same operation §3.2.25 step 11.2
-           performs, so it is the same read, the same park and the same resolver; step 14 then hands the method
-           it found to §3.2.21.1's "creating a sequence from an iterable" rather than reading @@iterator twice.
-         - any other Object — the "callback interface type / dictionary type / record type / object" clause:
-           the dictionary. `port.postMessage(m, {})` is an options bag, not a zero-length transfer list.
-         - EVERYTHING ELSE IS A TypeError, from step 12's final "Otherwise: throw a TypeError". Neither entry
-           has a string, numeric, boolean, bigint or `any` type at this position, so no clause below the
-           dictionary one names an entry and there is nothing left to select — `port.postMessage(m, "x")`
-           THROWS where `window.postMessage(m, "x")` names a target origin. That asymmetry is the whole reason
-           this is its own row: an implementation that reuses the string-arm union here invents a transfer list
-           out of a value the standard refuses.
-       The dictionary is named beside the member, as it is for every row of this shape.
-       AND FOR UNKNOWN EXTERNAL INPUT ALL THREE OF THOSE OUTCOMES ARE FORKED — the two entries AND step 12.20's
-       TypeError, which is the world a two-armed fork would drop because a concolic wears an ordinary Object
-       and every test at the resolution site is written over that Object. See idl_concolic_rule for the reason
-       and idl_args.c's resolution site for the ask. */
+    /* A §3.6 split where neither entry is longer: MessagePort's `postMessage(any, sequence<object> transfer)`
+       against `postMessage(any, optional StructuredSerializeOptions options = {})`. Step 4 removes neither, so
+       step 12 decides and reads the page's value (a rest point): undefined (12.2) and null (12.3) take the
+       dictionary; an Object with a callable @@iterator takes the sequence (12.10, the same GetMethod read and
+       resolver as §3.2.25 step 11.2, whose method step 14 reuses); any other Object takes the dictionary
+       (12.11); everything else is step 12.20's TypeError (`port.postMessage(m, "x")` throws).
+       Unknown input forks three ways: the two entries and the TypeError. */
     IDL_SEQUENCE_OBJECT_OR_DICT,
-    /* `sequence<USVString>` — §3.2.21 Sequences' iterator protocol whose ELEMENT type is §3.2.12
-       USVString. It is a row of its own beside IDL_SEQUENCE_DOMSTRING and not a spelling of it, for the one
-       reason §3.2.12 exists: its conversion ends in the SCALAR VALUE STRING replacement, so an unpaired
-       surrogate in an element becomes U+FFFD rather than surviving into whatever reads the list. Declaring it
-       as the DOMString sequence would have been a silent wrong answer for exactly the input §3.2.12 is about,
-       which is the axis no member-list audit can see.
-       ITS FIRST USE IS AS THE SEQUENCE ARM OF A RECORD'S VALUE, not as a member type: File System Access
-       §3.2.1 Accepted file types' `accept` is
-       `record<USVString, (USVString or sequence<USVString>)>`, whose value takes §3.2.25's `? GetMethod(V,
-       %Symbol.iterator%)` arm exactly as a member's union does. */
+    /* `sequence<USVString>` — §3.2.21 with §3.2.12 elements, so an unpaired surrogate in an element becomes
+       U+FFFD. First used as the sequence arm of the record value below. */
     IDL_SEQUENCE_USVSTRING,
-    /* `record<USVString, (USVString or sequence<USVString>)>` — §3.2.23 "Records — record<K, V>"'s
-       *convert a JavaScript value to record* over the one record type this platform declares at a DICTIONARY
-       MEMBER. File System Access §3.2.1 Accepted file types' `FilePickerAcceptType.accept` is it.
-       THE CONVERSION ITSELF IS NOT NEW AND THIS ROW DOES NOT BUILD ONE. core/idl_iter.c's RecordCursor is
-       §3.2.23's algorithm and has been since before this row existed, with two live consumers — Headers'
-       `record<ByteString, ByteString>` and URLSearchParams' `record<USVString, USVString>` — both of which
-       drive it from their OWN step machines at an ARGUMENT position. What had no route was a record reached as
-       a DICTIONARY MEMBER, and that is the whole of what this row adds: the member loop pushes a frame, the
-       frame holds that same cursor, and §3.2.23 is not written a second time.
-       WHY IT MUST BE A MEMBER TYPE AND NOT A WALK IN THE ALGORITHM'S BODY. §3.2.17 converts a dictionary's
-       members in lexicographic order, each with its own `? Get` followed by its own conversion, and `accept`
-       sorts before `description` — so the record's [[OwnPropertyKeys]] and its per-key reads are owed BEFORE
-       `description` is read at all. Left at IDL_ANY and converted in the body, every one of those operations
-       would run after the whole `types` sequence had been walked, which a page with getters observes directly.
-       That is the defect dicttypegate.mjs was built to find, and choosing it deliberately would be worse than
-       the one it found.
-       THE KEY IS §3.2.12 AND THE VALUE IS §3.2.25 over `(USVString or sequence<USVString>)`, whose arm is
-       the same `? GetMethod(V, %Symbol.iterator%)` read every other sequence union in this file resolves
-       through idl_union_seq_arm — one implementation of that step, never a second notion of GetMethod. */
+    /* `record<USVString, (USVString or sequence<USVString>)>` at a dictionary member — Web IDL §3.2.23 Records —
+       record<K, V> (File System Access's `FilePickerAcceptType.accept`). The conversion is core/idl_iter.c's
+       RecordCursor, the same one Headers and URLSearchParams drive; the member loop pushes a frame holding it.
+       It must be a member type, not a walk in the algorithm: §3.2.17 converts members in order, so the
+       record's [[OwnPropertyKeys]] and reads are owed before the next member is read. The value's arm uses
+       idl_union_seq_arm, the one implementation of §3.2.25 step 11.2. */
     IDL_RECORD_USVSTRING_STRING_OR_SEQUENCE,
-    /* A DICTIONARY. Web IDL converts one by READING each declared member IN ORDER and converting each by ITS
-       OWN type — so a dictionary is that member list plus this very machine, not a second kind of thing. A read
-       is one accessor or Proxy trap away from being the page's code, and so is each member's conversion, so
-       both are requests exactly like an argument's. The body receives a plain engine-built object carrying the
-       converted members, which it reads with an ordinary property get because nothing of the page's is on it.
-       The members are declared beside the types — see idl_method_id_dict. */
+    /* A dictionary — §3.2.17: each declared member is read in order and converted by its own type, through this
+       same machine; every read and coercion is a request. The body receives an engine-built object carrying the
+       converted members, read with an ordinary get. Members are declared with idl_method_id_dict. */
     IDL_DICT,
-    /* `D?` WHERE D IS A DICTIONARY — §3.2.17 under §3.2.20 Nullable types — T?'s rule, and it is a row of its
-       own because a nullable dictionary's `null` is the IDL null where a PLAIN dictionary's is a dictionary
-       carrying every default. §3.2.20 step 3 is "Otherwise, if V is null or undefined, then return the IDL
-       nullable type T? value null" and step 4 is "Otherwise, return the result of converting V using the rules
-       for the inner IDL type T"; §3.2.17's own step 1 is "If jsDict is not an Object and jsDict is neither
-       undefined nor null, then throw a TypeError", so the un-nullable type ADMITS null and answers a
-       defaults-only dictionary for it. Those are two different values and a page distinguishes them.
-       Intersection Observer §2.3's `required DOMRectInit? rootBounds` is the member that declares one, and its
-       `required` is what makes the third state visible too: for a dictionary member `undefined` IS absent, so
-       §3.2.17 step 4.1.6 — "Otherwise, if jsMemberValue is undefined and member is required, then throw a
-       TypeError" — refuses `{}` and `{rootBounds: undefined}` alike, while `{rootBounds: null}` is the IDL null
-       and `{rootBounds: {}}` is a DOMRectInit whose four members are absent.
-       THE DICTIONARY IS NAMED BESIDE THE MEMBER (IdlDictMember::dict), exactly as IDL_DICT's nested form names
-       it and as a `sequence<(DOMString or D)>`'s union arm does — one statement of what D is, whether or not
-       the member admits null.
-       IT IS A DICTIONARY-MEMBER TYPE AND NOT YET AN ARGUMENT ONE, which is a narrowing and not an oversight:
-       no member in the platform declares `optional D? x` at a position, and the argument conversion's own
-       "an IDL argument was declared with a type this machine does not convert" is what a position declaring it
-       would reach — loud, and naming the type. What such a position would additionally need is
-       idl_type_is_dictionary's answer for it (§3.6's rule that an omitted DICTIONARY argument is not an absent
-       one), and that is a question about ARGUMENTS which this row, on a member, does not raise. */
+    /* `D?` — §3.2.17 under §3.2.20: null and undefined are the IDL null, where a plain `D` admits them and
+       answers the all-defaults dictionary. Intersection Observer's `required DOMRectInit? rootBounds`: `{}` and
+       `{rootBounds: undefined}` are §3.2.17 step 4.1.6's TypeError, `{rootBounds: null}` is null. The
+       dictionary is IdlDictMember::dict.
+       A dictionary-member type only: an argument position declaring it reaches the "type this machine does not
+       convert" refusal, and would also need idl_type_is_dictionary's answer for §3.6's omitted-dictionary rule. */
     IDL_DICT_NULLABLE,
-    /* `(AddEventListenerOptions or boolean)` — the one union of this shape in the DOM. Its rule is Web IDL
-       §3.2.25 Union types read in the standard's own step order, and the order is the whole of it: step 4 is
-       "If V is null or undefined, then:" over a sub-step reading "If types includes a dictionary type, then
-       return the result of converting V to that dictionary type.", step 11 sends any other Object there too,
-       and ONLY what survives both falls to step 12/18's boolean. So an omitted argument — which §3.6 hands
-       this position as `undefined`, because `optional … = {}` makes it a dictionary and not an absence — is
-       the EMPTY DICTIONARY and never the boolean `false`.
-       THE SENTENCE THAT STOOD HERE — `a value that is NOT an object IS the first declared member's boolean`
-       — IS WRONG BY EXACTLY STEP 4, and it is
-       rewritten rather than deleted because it is re-derivable from DOM §2.7 Interface EventTarget's flatten
-       options alone ("If options is a boolean, then return options") — that algorithm asks about the
-       CONVERTED IDL value, so it presupposes §3.2.25 and cannot be read as replacing it. Named for the rule
-       rather than for the member, because the rule is what the IDL states — the same reason
-       IDL_STRING_UNLESS_CALLABLE is named that way. */
+    /* `(AddEventListenerOptions or boolean)` — §3.2.25 in step order: null and undefined take the dictionary
+       (step 4), any other Object takes it (step 11.4), and only what survives is the boolean (step 12 or 18).
+       So an omitted argument, which `optional … = {}` hands this position as undefined, is the empty
+       dictionary, never `false`. DOM's flatten options then reads `capture` from either arm. */
     IDL_DICT_OR_BOOL_FIRST,
-    /* `(boolean or ScrollIntoViewOptions)` — §3.2.25's SAME TWO ARMS as the row above with the SAME test, and
-       a different destination for the boolean, which is why it is a second row rather than a second caller of
-       that one. The row above bakes in DOM §2.7 Interface EventTarget's flatten options ("If options is a
-       boolean, then return options" — as the `capture` MEMBER), because that is what DOM's own algorithm does
-       with the arm. CSSOM VIEW §6 Extensions to the Element Interface's `scrollIntoView(arg)` reads the
-       boolean ITSELF at its step 6 — "Otherwise, if arg is false, then set block to "end"" — and `true` sets
-       nothing at all, so there is no member for it
-       to be flattened into and inventing one would be a dictionary field no IDL declares.
-       WHICH IS WHY §3.2.25 STEP 4 IS OBSERVABLE HERE AND NOT AT THE ROW ABOVE. Both rows send undefined and
-       null to the DICTIONARY arm, and for `(AddEventListenerOptions or boolean)` that changes nothing a page
-       can see — DOM's flatten leaves `capture` false either way. Here the two arms are two SCROLL POSITIONS:
-       the dictionary arm leaves step 2's "start" while the boolean `false` sets step 6's "end", so
-       `el.scrollIntoView()` and `el.scrollIntoView(null)` land at opposite ends of the element the day the
-       arm is decided by object-ness alone. §6's own steps say so: step 5 is the ScrollIntoViewOptions clause
-       and `optional (boolean or ScrollIntoViewOptions) arg = {}` makes the omitted call a dictionary.
-       SO THE BOOLEAN ARM PLACES THE BOOLEAN and the dictionary arm places the built dictionary, and the BODY
-       tells them apart with `JS_IsBool` — which is §3.2.25's own output ("return the result of converting V to
-       boolean" against "return the result of converting V to that dictionary type") rather than a shape test
-       this file invented. An unknown external input FORKS, for the row above's reason and at the same site. */
+    /* `(boolean or ScrollIntoViewOptions)` — the same two arms and test, but the boolean is placed as itself
+       because CSSOM View's `scrollIntoView` step 6 reads it directly (`false` sets block to "end"). Here step 4
+       is observable: `scrollIntoView()` and `scrollIntoView(null)` take the dictionary and stay at "start". The
+       body tells the arms apart with `JS_IsBool`, which is §3.2.25's own output. Unknown input forks. */
     IDL_BOOL_OR_DICT,
-    /* `(BufferSource or D)` WHERE D IS A DICTIONARY — Web Cryptography API §14.3.9 "The importKey method"'s
-       `(BufferSource or JsonWebKey) keyData`, and the ONLY argument position in the whole corpus with this
-       shape. That is stated as a bound and not as a boast: the row serves one member today and nothing else
-       can reach it, so what it must be right about is that member's two arms and not a family of them.
-       §3.2.25 Union types DECIDES IT IN FOUR CLAUSES, and the order is the whole rule. `BufferSource` is
-       §4.2's `typedef (ArrayBufferView or ArrayBuffer)`, so the union's FLATTENED member types are ArrayBuffer,
-       DataView, the twelve typed arrays and the dictionary. Step 4 "If V is null or undefined, then:" sends
-       both to the DICTIONARY ("If types includes a dictionary type, then return the result of converting V to
-       that dictionary type"); step 6's [[ArrayBufferData]] clause, step 8's [[DataView]] clause and step 9's
-       [[TypedArrayName]] clause take the buffer arm; and step 11 "If V is an Object" sends every REMAINING
-       object to the dictionary. A primitive that is not null or undefined names no clause at all and reaches
-       the algorithm's own trailing TypeError.
-       A SHARED ArrayBuffer IS THE ONE ARM A READER GETS WRONG, and §3.2.25 answers it rather than this file:
-       step 7 is the `IsSharedArrayBuffer(V) is true` clause and its two sub-steps name `SharedArrayBuffer` and
-       `object`, NEITHER of which this union includes — so the clause matches, places nothing, and execution
-       continues to step 11, which sends the SAB to the DICTIONARY. It is not a TypeError and it is not a
-       buffer source. §4.2's typedef excludes a shared buffer, so there is no arm that could take it.
-       WHY IT IS A ROW AND NOT `IDL_BUFFERSOURCE` WITH A TEST IN THE BODY: the two arms differ in what the
-       CONVERSION PERFORMS. The dictionary arm runs §3.2.17's member walk — every member read is a request that
-       can be an accessor or a Proxy trap and can therefore PARK — and the buffer arm reads nothing at all. A
-       body handed the raw value would be running that walk itself, which is the second copy of §3.2.17 this
-       file's own header forbids, and it would run it after the conversion boundary rather than at it.
-       THE ARM IS FORKED FOR UNKNOWN EXTERNAL INPUT AND NEVER TESTED — see idl_concolic_rule, which is the one
-       statement of that. */
+    /* `(BufferSource or D)`, D a dictionary — Web Cryptography's `importKey` `keyData`, the only argument of
+       this shape. §3.2.25: null and undefined take the dictionary (step 4); an ArrayBuffer (6), DataView (8)
+       or typed array (9) takes the buffer arm; a SharedArrayBuffer matches step 7, places nothing (the union
+       names neither SharedArrayBuffer nor object) and so reaches step 11.4's dictionary; any other Object takes
+       the dictionary; any other primitive is step 20's TypeError. A row, not a body test, because the arms
+       differ in what the conversion performs: the dictionary arm runs §3.2.17's walk, which parks.
+       Unknown input forks three ways (see idl_concolic_rule). */
     IDL_BUFFERSOURCE_OR_DICT,
-    /* `(T or DOMString)` where T is an INTERFACE type — the union §4.2.4 writes for every member that takes
-       "a node or some text", and `el.append('hi')` is the ordinary way to write the second half. Its rule is a
-       brand check: an object of the interface's CLASS crosses as itself, anything else is a DOMString. The
-       class is declared beside the type, so this file needs to know nothing about what a Node is. */
+    /* `(I or DOMString)`, I an interface — DOM's "node or text" members (`el.append('hi')`): a value
+       implementing I crosses as itself, anything else is a DOMString. The class is declared beside the type. */
     IDL_STRING_UNLESS_IFACE,
-    /* `(double or T)` WHERE T IS AN INTERFACE TYPE — CSS Typed OM 1 §4.3 Numeric Values:'s
-       `typedef (double or CSSNumericValue) CSSNumberish`, which that section introduces with "Any place that
-       accepts a CSSNumericValue also accepts a raw double", and `CSS.px(1).equals(2)` is the ordinary way a
-       page writes the second half. It is the row directly above with the OTHER arm, and the two are separate
-       rows for the reason every pair here is: the arm a value that is NOT the interface takes IS the type.
-       §3.2.25 Union types DECIDES IT IN TWO CLAUSES AND THE REST OF THAT ALGORITHM IS SKIPPED BY WHAT THE
-       UNION DOES NOT NAME. Its interface clause is reached first — "If V is a platform object, then: If types
-       includes an interface type that V implements, then return the IDL value that is a reference to the
-       object V" — and every value that is not one falls past every Object clause, because this union names no
-       dictionary, no sequence, no record, no callback and no string type, to "If types includes a numeric
-       type, then return the result of converting V to that numeric type".
-       SO THE OTHER ARM IS §3.2.7's RESTRICTED `double`, AND THAT IS OBSERVABLE AT BOTH ENDS OF THE ALGORITHM.
-       §3.2.7 is "Let x be ? ToNumber(V). If x is NaN, +∞, or −∞, then throw a TypeError" — so `equals(null)`
-       is a comparison against +0 (no clause above the numeric one names null, and ToNumber(null) is +0) while
-       `equals(undefined)` is a TypeError, and a declaration that sorted the two arms in a BODY instead would
-       get both of those wrong in one line and would run the page's `valueOf` from a plain C activation
-       besides. The unrestricted spelling is not this row: `(unrestricted double or T)` admits a NaN, and no
-       member of this platform writes one.
-       WHAT UNKNOWN EXTERNAL INPUT DOES HERE IS DECIDED AND NOT FORKED, which is idl_concolic_rule's default
-       CROSSES and is stated here because the neighbouring unions are the opposite. §3.2.25's first clause
-       asks whether V is a PLATFORM OBJECT IMPLEMENTING T, and a concolic is the solver's own value class and
-       implements nothing — so the numeric arm is the arm for every unknown, exactly as it is for every other
-       non-T value, and §3.2's numeric boundary then passes the unknown through as itself. The rows above fork
-       because their arm asks "is V an Object", which a concolic wears; this one does not ask that.
-       The class or predicate is declared beside the type exactly as IDL_STRING_UNLESS_IFACE's is
-       (idl_iface_brand for an interface one class names exactly, idl_arg_iface for one it does not), so this
-       file needs to know nothing about what a CSSNumericValue is. */
+    /* `(double or I)`, I an interface — CSS Typed OM's `CSSNumberish`. §3.2.25 step 5.1 takes a value
+       implementing I; this union names no other Object arm, so everything else reaches step 13.1 or 17's
+       restricted `double` (`equals(null)` compares against 0, `equals(undefined)` is a TypeError).
+       Unknown input crosses (idl_concolic_rule's default): a concolic implements no interface, so the numeric
+       arm is its arm, and the numeric boundary passes it through. The brand is declared as for
+       IDL_STRING_UNLESS_IFACE (idl_iface_brand, or idl_arg_iface for an interface no class names). */
     IDL_DOUBLE_UNLESS_IFACE,
-    /* `(object or DOMString)` — Web Cryptography §14's `typedef (object or DOMString) AlgorithmIdentifier`,
-       and the only union in this platform whose object arm is the IDL type `object` itself. Its rule is the
-       same shape as the two above with a broader test: any Object crosses as itself, and EVERYTHING else —
-       null and undefined included — is the DOMString arm.
-       IT IS NOT IDL_STRING_OR_DICT AND THE DIFFERENCE IS OBSERVABLE. That type's union names a dictionary, so
-       §3.2.25 step 4's clause for null/undefined sends them to the dictionary and a missing `required` member
-       is a TypeError; this union names none, so `digest(null, b)` becomes the four characters "null", which
-       normalizing an algorithm then reports as a "NotSupportedError" — a different exception, arriving through
-       a rejected promise rather than a throw. The dictionary conversion this type does NOT perform is
-       §18.4.4's, run by the member's own algorithm at the step the standard numbers it, which is what keeps a
-       throwing `name` getter a REJECTION (§14.3.5 step 3) rather than a synchronous TypeError. */
+    /* `(object or DOMString)` — Web Cryptography's AlgorithmIdentifier: any Object crosses as itself, and
+       everything else, null and undefined included, is the DOMString arm. Not IDL_STRING_OR_DICT: this union
+       names no dictionary, so `digest(null, b)` normalizes the algorithm "null" and rejects with
+       "NotSupportedError". The algorithm's own dictionary conversion runs later, inside the member, at the step
+       the standard numbers it, which keeps a throwing `name` getter a rejection. */
     IDL_STRING_UNLESS_OBJECT,
     /* `BodyInit?` — Fetch's `(ReadableStream or Blob or BufferSource or FormData or URLSearchParams or
-       USVString)?`. Its rule is a BRAND check like the two above, but against the BUFFER SOURCE shape rather
-       than one class: an ArrayBuffer or any ArrayBufferView crosses as itself, null and undefined are the IDL
-       null, and everything else is the union's USVString arm. Blob, FormData, URLSearchParams and
-       ReadableStream are brand tests beside it, each asked of the component that owns the interface. The body
-       learns nothing either way — §5.1's extraction reads the arm back off the value. */
+       USVString)?`: null and undefined are the IDL null, a buffer source or a value of one of the named
+       interfaces (each tested by the component that owns it) crosses as itself, everything else is the
+       USVString arm. Fetch's extract a body reads the arm back off the value. */
     IDL_BODYINIT_NULLABLE,
-    /* `sequence<BlobPart>` — §3.2.21's iterator-protocol conversion with `(BufferSource or Blob or USVString)`
-       as the element type. Named for the IDL type it IS, the way IDL_BODYINIT_NULLABLE is: the union's brand
-       test lives in the one place the union is stated, and the member that takes it learns nothing.
-       IT IS A DECLARED TYPE and not something a body walks, because Web IDL converts arguments LEFT TO RIGHT —
-       a sequence driven from the body runs after every later argument's conversion, which is observable the
-       moment a later argument is a dictionary with a getter on it. */
+    /* `sequence<BlobPart>` — §3.2.21 with `(BufferSource or Blob or USVString)` elements. A declared type so
+       the walk runs in argument order, before later arguments convert. */
     IDL_SEQUENCE_BLOBPART,
-    /* `(CSSOMString or BufferSource)` — CSS Font Loading §2.1 "The Constructor"'s `source`, and the only union
-       in this platform whose Object arm is reached by an INTERNAL SLOT rather than by Object-ness. §3.2.25
-       Union types decides it in two clauses and the rest of that algorithm is skipped by what the union does
-       NOT name: step 11 "If V is an Object" is entered for every Object, and of its sub-clauses only the
-       buffer-source one can match here, because this union names no dictionary, no sequence, no record, no
-       callback, no frozen array and no interface type — so a plain `{}` falls PAST step 11 to step 15 "If
-       types includes a string type, then return the result of converting V to that type".
-       THE BUFFER ARM CONVERTS RATHER THAN CROSSING, which is why §3.2.26's refusals are performed at this
-       boundary and not in the member's body: step 11's buffer clause returns "the result of converting V to
-       that type", and that conversion is §3.2.26 Buffer source types, whose shared-buffer and resizable-buffer
-       refusals §4.2's typedef does not admit. It is the same idl_buffer_source_refuse call the bare
-       IDL_BUFFERSOURCE row makes, so one typedef has one answer rather than two that can drift.
-       CSSOMString IS DOMString HERE and that is not this row's choice to make — CSSOM §3 leaves the binding to
-       the implementation and core/css/css_serialize.h is where this engine states which it chose, once, for
-       every CSSOM member. This row routes to it rather than restating it.
-       WHAT UNKNOWN EXTERNAL INPUT DOES HERE IS DECIDED AND NOT FORKED, which is idl_concolic_rule's default
-       CROSSES and is stated at the row because the neighbouring unions are the opposite. The unions that fork
-       do so because their arm asks "is V an Object", which a concolic WEARS — solver/concolic.c gives it an
-       ordinary Object so a method on an unknown yields another unknown — so the arm would be decided by a fact
-       about this engine's value class rather than by the page's value. This union's arm asks for an
-       [[ArrayBufferData]] or [[ViewedArrayBuffer]] INTERNAL SLOT, which a concolic has no more than any other
-       slot-less value has: the string arm is the arm for every unknown exactly as it is for every plain
-       object, and §3.2's string boundary then passes the unknown through as itself with its domain and its
-       example intact. That is the same sentence IDL_DOUBLE_UNLESS_IFACE's row already carries about §3.2.25's
-       platform-object clause, arriving at the buffer clause. */
+    /* `(CSSOMString or BufferSource)` — CSS Font Loading's FontFace `source`. §3.2.25 steps 6, 8 and 9 take the
+       buffer arm, which converts through Web IDL §3.2.26 Buffer source types (idl_buffer_source_refuse, as for
+       IDL_BUFFERSOURCE); any other value, a plain Object included, passes step 11 (which names nothing this
+       union has) to step 15's string arm. CSSOMString is DOMString here, as core/css/css_serialize.h states.
+       Unknown input crosses: the buffer arm tests an internal slot a concolic does not have, so the string arm
+       is its arm. */
     IDL_STRING_OR_BUFFERSOURCE,
-    /* `BufferSource` — §4.2's `typedef (ArrayBufferView or ArrayBuffer) BufferSource`, converted by §3.2.26
-       Buffer source types. An ArrayBuffer, a typed array or a DataView crosses as itself and anything else is a
-       TypeError, which is a check the body must not make: written by hand it was right twice and wrong the
-       third time, where a plain object reached JS_GetArrayBufferView and tripped the engine's own "this is a
-       typed array" assertion.
-       THE SECTION NUMBER WAS §3.2.25 HERE AND IN THE CONVERSION, AND §3.2.25 IS `Union types`. BufferSource is
-       a union, so the wrong number read as plausible for as long as nobody opened it — the failure mode
-       CLAUDE.md §Browser half names, where a citation sends the reader to a section that does not say what the
-       code claims. The conversion this row performs is §3.2.26's. */
+    /* `BufferSource` — Web IDL §4.2 BufferSource, converted by §3.2.26: an ArrayBuffer, typed array or DataView
+       crosses as itself, anything else is a TypeError. A shared or resizable buffer is refused
+       (idl_buffer_source_refuse). */
     IDL_BUFFERSOURCE,
-    /* `ArrayBufferView` — §4.1's typedef, converted by §3.2.26 Buffer source types. It is the OTHER ARM of the
-       union above rather than a narrowing of it, and Web Cryptography §10.1.1 The getRandomValues method is
-       what needs it: `ArrayBufferView getRandomValues(ArrayBufferView array)`.
-       THE DIFFERENCE IS OBSERVABLE ON THE FIRST LINE A PAGE WRITES. `crypto.getRandomValues(new ArrayBuffer(8))`
-       is a TypeError from the CONVERSION; `crypto.getRandomValues(new Float64Array(8))` reaches the algorithm
-       and takes §10.1.1 step 1's TypeMismatchError — because §4.1's typedef LISTS Float16Array, Float32Array,
-       Float64Array and DataView among the thirteen view types, so the conversion admits exactly what the
-       algorithm then refuses. Declaring the member IDL_BUFFERSOURCE would collapse those two into one answer,
-       and a feature detection distinguishes them.
-       BOTH ROWS ALSO PERFORM §3.2.26's TWO REFUSALS — a shared buffer and a resizable one, neither of which
-       §4.1 or §4.2 admits — through idl_buffer_source_refuse. That is where the byte-length hazard of a
-       length-tracking view is answered: the conversion keeps one out of every position that did not ask for
-       one, rather than each fill site asserting after the fact that the window it was handed still fits. */
+    /* `ArrayBufferView` — Web IDL §4.1 ArrayBufferView, converted by §3.2.26, with the same two refusals. Web
+       Cryptography's `getRandomValues` needs it: an ArrayBuffer is a TypeError at the conversion, while a
+       Float64Array reaches the algorithm's TypeMismatchError. Refusing resizable buffers here keeps a
+       length-tracking view out of every position that did not ask for one. */
     IDL_ARRAYBUFFERVIEW,
-    /* ONE OF §3.2.26 Buffer source types' TWELVE TYPED ARRAYS — the arm whose brand test is not "is this a
-       view" but "is this THAT view", and the first declared type whose conversion needs a fact no row can
-       carry. §3.2.26's typed-array algorithm reads, in this order:
-         1. "Let T be the IDL type V is being converted to."
-         2. "If V is not an Object, or V does not have a [[TypedArrayName]] internal slot with a value equal to
-            T's name, then throw a TypeError."
-         3. the [AllowShared] refusal, then 4. the [AllowResizable] one — the same two idl_buffer_source_refuse
-            already performs for the two rows above, asked AFTER the brand and never before it.
-       SO `T` IS A PARAMETER OF THE CONVERSION AND NOT A ROW OF THIS LIST: twelve rows would state one rule
-       twelve times and differ only in a constant, which is the per-member line this file exists to remove.
-       The type is declared beside the POSITION instead (idl_typed_array), exactly as
-       an interface type's class is (idl_iface_brand) and an enumeration's value list is (idl_arg_enum): one
-       row stating the RULE, one declaration stating what this position's rule is about.
-       AND THE TWO §3.3 EXTENDED ATTRIBUTES ARE DECLARED WITH IT, because §3.2.26 reads them as CONDITIONS on
-       steps 3 and 4 rather than as a different algorithm. §3.3.1 [AllowResizable] and §3.3.2 [AllowShared] are
-       independent — §3.3.2's own example writes all four combinations of them on one interface — so they are
-       two flags on the position and not a fifth row here, which would have to enumerate the product.
-       Encoding §7.4 Interface TextEncoder is the first, and it is why this row exists rather than a test in a
-       body: `TextEncoderEncodeIntoResult encodeInto(USVString source, [AllowShared] Uint8Array destination)`.
-       A body's own `JS_GetTypedArrayType(argv[1]) != JS_TYPED_ARRAY_UINT8` got step 2 right and asked steps 3
-       and 4 NOTHING, so a length-tracking Uint8Array over a resizable buffer reached a write bounded by a byte
-       length its buffer no longer had. That is the hazard §4.1's and §4.2's rows already keep out of every
-       position that did not ask for one, and it belongs to the TYPE for the same reason: a fill site can only
-       assert after the fact that the window it was handed still fits, and such an assert firing is a defect
-       that already reached the algorithm. */
+    /* One of §3.2.26's typed arrays. The conversion tests [[TypedArrayName]] against T, then the
+       [AllowShared] and [AllowResizable] refusals (Web IDL §3.3.2 [AllowShared], §3.3.1 [AllowResizable]).
+       T and the two flags are parameters of the position, declared with idl_typed_array, rather than twelve
+       rows; the flags are independent, so they are two flags rather than a product of rows. Encoding's
+       `encodeInto(USVString, [AllowShared] Uint8Array destination)` is the first. */
     IDL_TYPED_ARRAY,
-    /* AN INTERFACE TYPE — §3.2.15. `Node root`, `Range sourceRange`, `Node currentNode`: a platform object
-       implementing the interface crosses as itself and ANYTHING else is a TypeError, thrown before the
-       algorithm's step 1. It is a declared type rather than a body's `if` for the reason every other brand test
-       here is: `walker.currentNode = null` must throw, and a body that checks by hand is a body that can forget
-       to. The class is declared beside it with idl_iface_brand, which is what "implementing the interface"
-       means to this engine. */
+    /* An interface type — §3.2.15: a platform object implementing the interface crosses as itself and anything
+       else is a TypeError, before the algorithm's step 1 (`walker.currentNode = null` throws). The class is
+       declared with idl_iface_brand. */
     IDL_INTERFACE,
-    /* `T?` WHERE T IS AN INTERFACE — §3.2.15 under §3.2.20's nullable rule: null AND undefined are the IDL
-       null, and what survives takes the brand test above. WAI-ARIA's `Element? ariaActiveDescendantElement` is
-       the first, and the `?` is the whole of what makes `el.ariaActiveDescendantElement = null` a CLEAR rather
-       than the TypeError the un-nullable type owes. The class is named by idl_iface_brand exactly as it is for
-       the un-nullable one — one statement of what the interface is, whether or not it is nullable. */
+    /* `I?`, I an interface — §3.2.15 under §3.2.20: null and undefined are the IDL null, which is what makes
+       `el.ariaActiveDescendantElement = null` a clear. The class is named as for IDL_INTERFACE. */
     IDL_INTERFACE_NULLABLE,
-    /* A NULLABLE CALLBACK INTERFACE — §3.2.16. `NodeFilter? filter` is the only shape of it here, and its rule
-       is not IDL_CALLBACK's: a callback INTERFACE accepts any object (its operation is read off it by name),
-       so a non-callable object is valid and only a primitive is a TypeError. null and undefined are the IDL
-       null. Declared apart from IDL_CALLBACK because conflating them rejects `{acceptNode(){}}`, which is the
-       ordinary way a page writes a filter. */
+    /* A nullable callback interface — Web IDL §3.2.16 Callback interface types (`NodeFilter? filter`): any
+       object is accepted (its operation is read off it by name), so `{acceptNode(){}}` is valid; only a
+       primitive is a TypeError, and null and undefined are the IDL null. */
     IDL_CALLBACK_INTERFACE_NULLABLE,
-    /* `(File or USVString or FormData)?` — HTML §4.13.7.3's `setFormValue` arguments, and its rule is
-       IDL_BODYINIT_NULLABLE's shape over a different arm list: null and undefined are the IDL null, a File or a
-       FormData crosses as itself, and everything else is the USVString arm. A plain BLOB is NOT one of the arms
-       — the union names File — so it takes the string arm and stringifies, which is the case a hand-written
-       body gets wrong by asking `blob_is`. */
+    /* `(File or USVString or FormData)?` — HTML's `setFormValue`: null and undefined are the IDL null, a File
+       or FormData crosses as itself, everything else is the USVString arm. A plain Blob is not an arm, so it
+       stringifies. */
     IDL_FORMVALUE_NULLABLE,
-    /* §3.6's DISTINGUISHING ARGUMENT INDEX FOR A SPLIT WHOSE TWO ENTRIES DIFFER *BEFORE* THE SHORTER ONE ENDS
-       — `(unsigned long or ImageDataArray)`, which HTML §8.11.1 "The ImageData interface" declares at index 0
-       of both its constructors:
-
-           constructor(unsigned long sw, unsigned long sh, optional ImageDataSettings settings = {});
-           constructor(ImageDataArray data, unsigned long sw, optional unsigned long sh,
-                       optional ImageDataSettings settings = {});
-
-       IT IS NOT IDL_SEQUENCE_OBJECT_OR_DICT WITH A TYPED-ARRAY ARM, AND THE DIFFERENCE IS THE ONE THIS FILE
-       HAD NO FIELD FOR. Every split declared before this one put its distinguishing index at the position the
-       SHORTER entry ends at, so `split_at` served as both and the two were never told apart. Here they are two
-       positions: Web IDL §2.5.8 Overloading's effective overload set gives the pair entries of length 2, 3 and
-       4, the shorter constructor ends at index 2, and the index the types differ at is 0. §2.5.8 requires
-       agreement only "for each index j, where j is less than the distinguishing argument index" — so a member
-       may differ at index 0 and end at index 2, and every assert written on the two coinciding is an assert
-       about the members that happened to exist. See idl_overload_distinguishing_at, which is the field.
-       THE ARITY DECIDES FIRST AND THE VALUE ONLY WHERE THE ARITY LEFT A CHOICE. §3.6 step 8 sets `d` only "If
-       there is more than one entry in S", so at the arity only the longer entry reaches (4 here) step 12 never
-       runs at all and this position is simply that entry's type. The conversion seeds the surviving entry from
-       `argc` before position 0 is reached and this row refines it — which is why the record is a fact about the
-       CALL and not a rewrite of one position.
-       ITS TWO OUTCOMES ARE ALL §3.6 REACHES HERE, and the reason is the chain's tail rather than a count made
-       here. Every clause of step 12 is a condition ending "there is an entry in S that has one of the following
-       types at position i of its type list" followed by a LIST of types. The typed-array clause's condition
-       tests that V has a [[TypedArrayName]] internal slot and its list opens with a typed array type whose name
-       equals that slot's value, so it names the longer entry for a Uint8ClampedArray or a Float16Array; every
-       other value falls to the chain's own numeric fallback, whose list names a numeric type and which the
-       shorter entry's `unsigned long` always satisfies. Step 12.20's TypeError is therefore UNREACHABLE at this
-       position — which is what separates this row from the two above, whose third world is real and whose forks
-       are three-armed.
-       OUTCOME 0 IS THE SHORTER (NUMERIC) ENTRY, per step_fork_run's rule that outcome 0 is what a run with no
-       forking policy takes: `JS_GetTypedArrayType` of a crossed concolic is not a typed array, so the numeric
-       fallback is the arm every body already reached, and the ImageDataArray world is the one the fork adds.
-       AND `UNREACHABLE AT THIS POSITION` IS A CLAIM ABOUT STEP 12 AND WAS READ AS ONE ABOUT THE POSITION,
-       which is the whole of what went wrong here. The clause above is true: where both entries stand, the
-       chain names one of them for every value and never falls through. It is silent about the ARITY path —
-       step 8 sets a distinguishing index only where more than one entry survives steps 3-4, so at the top
-       arity the longer entry stands alone, step 12 never runs, and the value has been tested by NOTHING. The
-       conversion then owes §3.2.25 Union types' own typed-array clause and all five steps of §3.2.26 Buffer
-       source types, and it is the position that throws rather than step 12: `new ImageData({}, 1, 2, {})`
-       crossed a plain Object and aborted the engine at the constructor's own position-0 assert.
-       SO THIS ROW CONVERTS AND DOES NOT MERELY CHOOSE, and the two §3.3 buffer attributes are part of what it
-       converts to — `ImageDataArray` declares neither, so both of §3.2.26's refusals stand at it and a
-       resizable-backed view is kept out of the record that HTML §8.11.1 The ImageData interface sizes once
-       from its byte length. The flags are not declared with idl_typed_array because that row states one `T`
-       and this union has two; they are the pair every position declaring neither attribute has. */
+    /* `(unsigned long or ImageDataArray)` — §3.6's distinguishing argument index for HTML's two ImageData
+       constructors, `(unsigned long sw, unsigned long sh, optional ImageDataSettings settings = {})` and
+       `(ImageDataArray data, unsigned long sw, optional unsigned long sh, optional ImageDataSettings
+       settings = {})`. The entries differ at index 0 but the shorter ends at index 2, so the distinguishing
+       index and the length split are two positions (see idl_overload_distinguishing_at).
+       The arity decides first: at arity 4 only the longer entry stands, step 12 never runs, and this position
+       converts by §3.2.25's typed-array clause and §3.2.26 with both buffer refusals. Where both entries stand,
+       step 12.7 takes the longer entry for a matching typed array and step 12.16's numeric fallback takes the
+       shorter for everything else, so step 12.20's TypeError is unreachable. Outcome 0 is the shorter entry. */
     IDL_ULONG_OR_IMAGE_DATA_ARRAY,
-    /* A POSITION *BEHIND* THE DISTINGUISHING INDEX AT WHICH THE TWO ENTRIES DECLARE DIFFERENT TYPES — §3.6
-       step 15.2's "the type at index i in the type list of the REMAINING entry", which is a question this pool
-       could not ask while it carried one type list per member. HTML §8.11.1's index 2 is the first: the shorter
-       constructor's `optional ImageDataSettings settings = {}` against the longer one's `optional unsigned
-       long sh`.
-       IT READS THE RECORD AND TESTS NOTHING. The entry was settled at the distinguishing index — by the arity
-       where steps 3-4 left one, by the value where step 12 chose — so this position has no question of its own
-       and asking one would be a SECOND answer to it, free to disagree with the first. That is why it is a row
-       here rather than a `(unsigned long or ImageDataSettings)` union: §3.2.25's arm test and §3.6's surviving
-       entry give DIFFERENT observables, and the union's are wrong in both directions. `new ImageData(2, 2, 5)`
-       is a TypeError under §3.6 — the shorter entry survived, §3.2.17 Dictionary types step 1 refuses a 5 —
-       and is a settings-less `sh` of 5 under a union; `new ImageData(u8, 2, {})` is `sh` 0 and then §8.11.1's
-       own "If sh was given and its value is not equal to height" IndexSizeError, and is an all-defaults
-       dictionary under a union. A union is not a weaker statement of this row, it is a different algorithm.
-       IT IS A DICTIONARY TYPE FOR idl_type_is_dictionary AND THAT IS LOAD-BEARING, not bookkeeping: the
-       omitted-optional guard runs BEFORE any split resolves, so a position that can be a dictionary must be in
-       that predicate or `new ImageData(2, 2, undefined)` places §3.6 step 15.4.2's "missing" where §3.2.17
-       gives the all-defaults dictionary. Which is also why a split member's dictionary positions are counted
-       PER ENTRY at declaration — see the ndict check, whose subject is how many can be live in ONE call. */
+    /* A position behind the distinguishing index whose type differs per entry — §3.6 step 15.2's "the type
+       at index i in the type list of the remaining entry" (ImageData's index 2: `ImageDataSettings` against
+       `unsigned long sh`). It reads the entry settled at the distinguishing index and tests nothing; a union
+       would give different answers (`new ImageData(2, 2, 5)` is a TypeError under §3.6). It must be in
+       idl_type_is_dictionary, because the omitted-optional guard runs before any split resolves. */
     IDL_ULONG_OR_DICT_BY_ENTRY,
 } IdlArgType;
 
