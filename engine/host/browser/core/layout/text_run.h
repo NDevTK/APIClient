@@ -183,7 +183,8 @@ void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, cons
    side of `style`'s box, in CSS pixels. Called only at the box's two boundaries (§5.5). There is no side
    argument: the caller emits the opening edge before the content and the closing edge after, and the run's
    break mapping puts each on its line. `size` may be zero; a zero edge still has a position, which decides the
-   line an otherwise-empty inline box is on. */
+   line an otherwise-empty inline box is on. It may be negative (a declared negative margin, CSS 2.2 §8.3
+   "Margin properties"); text_run_measure_finish floors the two answers, so no sum is asked to be positive. */
 void text_run_measure_add_box_edge(TextRunMeasure *m, lxb_dom_element_t *style, CssPx size);
 
 /* Add one forced line break at the current position: HTML §15.3.4 "Phrasing content"'s `br { display-outside:

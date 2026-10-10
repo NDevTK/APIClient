@@ -289,11 +289,6 @@ void text_run_measure_add_box_edge(TextRunMeasure *m, lxb_dom_element_t *style, 
            "an inline box edge was added to a measurement that has already produced its answers. "
            "text_run_measure_finish releases the collection those answers were derived from, so this is one "
            "accumulator being used for two runs");
-    DCHECK(size.px >= 0.0,
-           "css-sizing-3 §2.2's outer-size contribution for one side of an inline box is NEGATIVE. A padding "
-           "and a border width are non-negative by their own properties' `Value:` lines, and §2.2's \"for this "
-           "purpose auto margins are treated as zero\" leaves only a declared negative margin — which is real "
-           "CSS, and is a case this sum has not been derived for rather than one to let through");
     {
         /* One number under both of css-sizing-3 §2.1's constraints, written here so no caller can state a
            second: css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes" resolves an edge's
@@ -851,9 +846,9 @@ static void tr_require_answers(const TextRunMeasure *m)
     DCHECK(m->min_content.px <= m->max_content.px,
            "a text run's MIN-CONTENT inline size came out WIDER than its max-content inline size. css-sizing-3 "
            "§2.1 states the first as the size \"if ALL soft wrap opportunities within the box were taken\" and "
-           "the second as the size \"if NONE\" were, over the same characters — so with every advance "
-           "non-negative the first is a sub-run of the second. The two spellings of the shrink-to-fit formula "
-           "agree only under this relation, so its failure would silently switch which algorithm runs");
+           "the second as the size \"if NONE\" were, and §2.1's floor makes the effective max-content size "
+           "at least the min-content one; `tr_floor_max_content` applies it on both exits of "
+           "text_run_measure_finish, so this is an exit that skipped it");
 }
 
 /* CSS 2.2 §9.4.2's fill and its per-item positions are about a line that exists, so every box on it has one
