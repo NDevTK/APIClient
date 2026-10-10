@@ -4084,6 +4084,12 @@ static const char *HTML =
     "Promise.reject(new Proxy({}, { get: function(){ return 'nonameTrapRan'; },"
     " getOwnPropertyDescriptor: function(){ return { value: 'nonameTrapRan', configurable: true }; } }));"
     "Promise.reject(new TypeError('nonameKind'));"
+    /* A FUNCTION THROWN AS A VALUE carries no `message` and no frames, so it is described by where it was
+       WRITTEN — MEASURED as the largest page-error row of a real application (x12), reading `[object Function]`
+       and naming nothing. The comma keeps the second one ANONYMOUS: a bare function expression as an argument
+       gets no inferred name, and its empty `name` used to compose an empty description the report drops. */
+    "Promise.reject(function nonameFnNamed(){});"
+    "Promise.reject((0, function(){}));"
     "fetch('/api/ceget?v=' + (customElements.get('x-panel') === XPanel"
     " && customElements.get('x-none') === undefined ? 'isget' : 'wrong'));"
     /* A TYPED DICTIONARY MEMBER, converted through the page's own code. `extends` is a DOMString member of
@@ -17624,6 +17630,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&nodealgo_tt, &nodealgo_why, !tf_err_listed(js, "pageErrors", "nonameTrapRan"),
              "§8.1.4.6 the reporter ran a thrown PROXY's trap — every own-property query on a Proxy is the "
              "page's handler, and the report path has no flow base to run one on");
+    fold_row(&nodealgo_tt, &nodealgo_why,
+             tf_err_listed(js, "pageErrors", "a function named `nonameFnNamed` was thrown, defined at "),
+             "§8.1.4.6 a thrown FUNCTION is not described by its definition site — with no message and no frames "
+             "that site is the only thing a reader can open");
+    fold_row(&nodealgo_tt, &nodealgo_why,
+             tf_err_listed(js, "pageErrors", "an anonymous function was thrown, defined at "),
+             "§8.1.4.6 a thrown ANONYMOUS function is not reported — its empty `name` composed an empty "
+             "description, and the report drops a value it has nothing to say about");
     fold_row(&nodealgo_tt, &nodealgo_why, !tf_err_listed(js, "pageErrors", "no own name/message"),
              "§8.1.4.6 some reported value still degenerates to the anonymous description — the row that was "
              "the LARGEST in a real application's page errors and named none of them");

@@ -1179,9 +1179,11 @@ JS_EXTERN JSValue JS_ToScalarValueString(JSContext *ctx, JSValue str);
    the state the engine's own backstop names ("route this site to the ToPrimitive trampoline"). That backstop
    is right, and this is the answer for the one shape of caller that cannot take its advice: a HOST reporting
    what went wrong must not depend on the code that went wrong. Every C embedder reaching it derives the same
-   fallback, so the engine owns it once instead: an object is its `name`/`message`, falling back to its
-   CONSTRUCTOR's name — test262's Test262Error carries only `message` and a custom `toString`, which is exactly
-   the page code this must not run — and anything else is its class via JS_ToObjectString.
+   fallback, so the engine owns it once instead: a function with bytecode is its name and DEFINITION SITE (it
+   carries no message and no frames, so where it was written is all a reader can open); any other object is its
+   `name`/`message`, an empty name counting as none, falling back to its CONSTRUCTOR's name — test262's
+   Test262Error carries only `message` and a custom `toString`, which is exactly the page code this must not
+   run — and anything else is its class via JS_ToObjectString.
    The result is malloc'd when *powned is set and a JS C-string otherwise, which is the only reason the caller
    has to know which; JS_DiagFreeCString takes both and releases the right one. */
 JS_EXTERN const char *JS_DiagCString(JSContext *ctx, JSValueConst v, char **powned);

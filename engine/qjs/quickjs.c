@@ -82984,7 +82984,50 @@ const char *JS_DiagCString(JSContext *ctx, JSValueConst v, char **powned)
         return prim;
     }
 
+    /* A THROWN FUNCTION IS DESCRIBED BY WHERE IT WAS WRITTEN, because it carries nothing else. A function has no
+       `message` and no [[ErrorData]], so the name path below reported a named one as its bare name — which reads
+       as an Error KIND, `foo` beside `TypeError` — and an anonymous one as the EMPTY STRING, which the host's
+       page-error surface drops as "nothing to say": a value thrown and never reported. What survived both was
+       `[object Function]` with no frame, MEASURED as the largest row of `enginePageErrors` on a real
+       application (×12), naming nothing a reader could open. The definition site is a STORED field of the
+       bytecode (the same three Function.prototype's fileName/lineNumber/columnNumber accessors return), so
+       reading it runs no page code. A function with no bytecode — a C function, a bound function, a Proxy —
+       keeps the forms below, which is narrower and honest: a callable Proxy is `[object Function]` because
+       nothing about its target may be read without its traps. */
+    {
+        JSFunctionBytecode *b = JS_GetFunctionBytecode(v);
+        if (b) {
+            JSValue fn = JS_DiagGetData(ctx, v, "name");
+            const char *fns = JS_IsString(fn) ? JS_ToCString(ctx, fn) : NULL;
+            const char *file = b->filename != JS_ATOM_NULL ? JS_AtomToCString(ctx, b->filename) : NULL;
+
+            JS_FreeValue(ctx, fn);
+            need = (fns ? strlen(fns) : 0) + (file ? strlen(file) : 0) + 96;
+            *powned = js_malloc_rt(ctx->rt, need);
+            if (*powned) {
+                if (fns && *fns)
+                    snprintf(*powned, need, "a function named `%s` was thrown, defined at %s:%d:%d",
+                             fns, file && *file ? file : "(no file name)", b->line_num, b->col_num);
+                else
+                    snprintf(*powned, need, "an anonymous function was thrown, defined at %s:%d:%d",
+                             file && *file ? file : "(no file name)", b->line_num, b->col_num);
+            }
+            if (fns) JS_FreeCString(ctx, fns);
+            if (file) JS_FreeCString(ctx, file);
+            if (*powned)
+                return *powned;
+            JS_FreeValue(ctx, JS_GetException(ctx));
+        }
+    }
+
     n = JS_DiagGetData(ctx, v, "name");
+    /* AN EMPTY NAME IS NO NAME. `ns` = "" composed an empty description, which the page-error surface drops, so
+       an object whose `name` is the empty string vanished from the report instead of falling back to its
+       constructor's name or its class. */
+    if (JS_IsString(n) && JS_VALUE_GET_STRING(n)->len == 0) {
+        JS_FreeValue(ctx, n);
+        n = JS_UNDEFINED;
+    }
     if (!JS_IsString(n)) {
         JSValue c = JS_DiagGetData(ctx, v, "constructor");
         JS_FreeValue(ctx, n);
@@ -82992,7 +83035,7 @@ const char *JS_DiagCString(JSContext *ctx, JSValueConst v, char **powned)
         JS_FreeValue(ctx, c);
     }
     m = JS_DiagGetData(ctx, v, "message");
-    ns = JS_IsString(n) ? JS_ToCString(ctx, n) : NULL;
+    ns = JS_IsString(n) && JS_VALUE_GET_STRING(n)->len != 0 ? JS_ToCString(ctx, n) : NULL;   /* the constructor's may be "" too */
     ms = JS_IsString(m) ? JS_ToCString(ctx, m) : NULL;
     JS_FreeValue(ctx, n);
     JS_FreeValue(ctx, m);
