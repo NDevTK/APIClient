@@ -15929,12 +15929,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        statement with the same zero. */
     int hstate_tt = 1;
     const char *hstate_why = NULL;
-    fold_row(&hstate_tt, &hstate_why, !!strstr(js, "hstate?v=other"),
+    fold_row(&hstate_tt, &hstate_why, param_value_is(js, "/api/hstate", "v", "other"),
              "NOT REACHED: the §7.2.5 statement emitted neither arm, so this row says nothing about the "
              "classic history API state's symbol table. Either `history.pushState` threw -- the async form "
              "contains it, so the program below survived and only this row is silent -- or `history.state` "
              "was null, which is §7.4.4 step 7's restore not having run at all");
-    fold_row(&hstate_tt, &hstate_why, !!strstr(js, "hstate?v=fork"),
+    fold_row(&hstate_tt, &hstate_why, param_value_is(js, "/api/hstate", "v", "fork"),
              "§7.2.5's pushState ran and the round trip LOST THE TRIPLE: the arriving `history.state.t` stood "
              "for its example alone, so `=== 'admin'` was DECIDED where this flow forked. The bytes came back "
              "and the table did not -- §7.4.1.1's classic slot pair is the entry's `classicStateSymbols` "
@@ -15955,12 +15955,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the /api/scrign record carries no `isignored` value");
     int navstate_tt = 1;
     const char *navstate_why = NULL;
-    fold_row(&navstate_tt, &navstate_why, !!strstr(js, "navstate?v=other"),
+    fold_row(&navstate_tt, &navstate_why, param_value_is(js, "/api/navstate", "v", "other"),
              "NOT REACHED: the §7.2.6.6 statement emitted neither arm, so this row says nothing about the "
              "navigation API state's symbol table. `navigation.currentEntry` is null while §7.2.6.3's entries "
              "and events are disabled -- not fully active, the initial about:blank, or an opaque origin -- and "
              "this document is none of those, so a null here is about that predicate and not about this row");
-    fold_row(&navstate_tt, &navstate_why, !!strstr(js, "navstate?v=fork"),
+    fold_row(&navstate_tt, &navstate_why, param_value_is(js, "/api/navstate", "v", "fork"),
              "§7.2.6.6's updateCurrentEntry ran and the round trip LOST THE TRIPLE: `getState()` answered a "
              "value standing for its example alone, so `=== 'admin'` was DECIDED where this flow forked. The "
              "pair is the entry's `navigationStateSymbols` beside its `navigationAPIState`, and §7.2.6.5's "
@@ -15976,7 +15976,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "NOT REACHED: the §7.1 `value` setter statement emitted nothing, so this row says nothing about "
              "whether the setter is §4.9's plain set. The assignment itself cannot throw -- the empty string "
              "needs no coercion -- so an absence here is the statements above it having ended the program");
-    fold_row(&clsetempty_tt, &clsetempty_why, !!strstr(js, "clsetempty?v=created"),
+    fold_row(&clsetempty_tt, &clsetempty_why, param_value_is(js, "/api/clsetempty", "v", "created"),
              "§7.1's `value` setter assigned \"\" to an element with NO `class` attribute and created none. The "
              "setter steps are \"set an attribute value for this's element using this's attribute name and the "
              "given value\" and have no early return; §7.1's UPDATE STEPS do, and their step 1 is what returns "
@@ -15984,12 +15984,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "standard does not, so `hasAttribute(\"class\")` reads false where a browser reads true");
     int cltaint_tt = 1;
     const char *cltaint_why = NULL;
-    fold_row(&cltaint_tt, &cltaint_why, !!strstr(js, "cltaint?v=other"),
+    fold_row(&cltaint_tt, &cltaint_why, param_value_is(js, "/api/cltaint", "v", "other"),
              "NOT REACHED: the unknown-input `value` setter statement emitted neither arm, so this row says "
              "nothing about the taint shadow. An unknown reaching the setter is converted by token_bytes to "
              "its SHAPE rather than through a raw coercion, so this is not the C-boundary abort -- it is the "
              "statement not having run");
-    fold_row(&cltaint_tt, &cltaint_why, !!strstr(js, "cltaint?v=fork"),
+    fold_row(&cltaint_tt, &cltaint_why, param_value_is(js, "/api/cltaint", "v", "fork"),
              "`el.classList.value = <an unknown>` ran and the attribute read back CONCRETE: the comparison was "
              "DECIDED where this flow should have forked, so the (element, name) taint shadow holds no source "
              "for this write. §7.1's setter writes ONE value and it is the whole of the attribute, so the "
@@ -16008,12 +16008,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        is right to abort on. Each row's own control rung carries the not-reached reading instead. */
     int cladd_tt = 1;
     const char *cladd_why = NULL;
-    fold_row(&cladd_tt, &cladd_why, !!strstr(js, "claddtaint?v=flat"),
+    fold_row(&cladd_tt, &cladd_why, param_value_is(js, "/api/claddtaint", "v", "flat"),
              "NOT REACHED: the one-token `classList.add(<an unknown>)` statement emitted neither arm, so this "
              "row says nothing about the mutation family's provenance. An unknown reaching `add` is converted "
              "by token_bytes to its SHAPE rather than through a raw coercion, so this is not the C-boundary "
              "abort -- it is the statement not having run");
-    fold_row(&cladd_tt, &cladd_why, !!strstr(js, "claddtaint?v=lone"),
+    fold_row(&cladd_tt, &cladd_why, param_value_is(js, "/api/claddtaint", "v", "lone"),
              "`el.classList.add(<an unknown>)` ran on an element with no `class` attribute and the attribute "
              "read back CONCRETE: the comparison was DECIDED where this flow should have forked, so §7.1's "
              "update steps wrote the argument's shape and no source beside it. The serialized value here is "
@@ -16024,10 +16024,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "is real");
     int claddj_tt = 1;
     const char *claddj_why = NULL;
-    fold_row(&claddj_tt, &claddj_why, !!strstr(js, "claddtaint?v=bare"),
+    fold_row(&claddj_tt, &claddj_why, param_value_is(js, "/api/claddtaint", "v", "bare"),
              "NOT REACHED: the `setAttribute` + `classList.add(<an unknown>)` pair emitted neither arm, so "
              "this row says nothing about the composition. The statements above it are what did not run");
-    fold_row(&claddj_tt, &claddj_why, !!strstr(js, "claddtaint?v=pair"),
+    fold_row(&claddj_tt, &claddj_why, param_value_is(js, "/api/claddtaint", "v", "pair"),
              "`el.classList.add(<an unknown>)` over an element ALREADY CARRYING a concrete token read back "
              "CONCRETE where the one-token rung above it forked, so the write reached §7.1's update steps and "
              "the COMPOSITION is what did not: the serialized value is a concrete run followed by the "
