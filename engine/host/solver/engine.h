@@ -665,206 +665,86 @@ int engine_prov_of_running_path(void);
  * a release fall-through would print garbage. */
 const char *engine_provenance_token(int prov);
 
-/* …AND THE SAME TWO WORDS FOR THE WITNESS MARK, FOR AN ACT THAT IS NOT A PARK. `PENDING_PINNED_*` above is
- * composed at a park off the parking flow's own `flow_path_pinned`; this is the SAME fact about the path that
- * is STANDING, for every request this engine builds by RUNNING THE PAGE'S CODE — core/xhr/xml_http_request.c's
- * §3.5.6 "The send() method" request is the caller it was written for, which had no witness mark at all while
- * the pending line beside it carried one, and the trusted zone's firing decision was told the fact does not
- * travel for a population of requests that is exactly what a forced arm produces.
- *
- * IT READS THE FLOW ITSELF rather than taking one, for `engine_prov_of_running_path`'s reason word for word: a
- * caller that passed a flow could pass a different one, and the fact wanted is about the path standing HERE.
- *
- * THE FLOW-LESS ANSWER IS `unpinned` AND IT IS NOT A CHOICE — IT IS FORCED BY THE NESTING, WHICH IS WORTH
- * STATING BECAUSE THE NEXT READER WILL REACH FOR THE OTHER WORD AND BE RIGHT TO. `pinned` is the SAFE word
- * everywhere else this field is composed: it is a MAY-REST-ON, and a deduped set states `pinned` if ANY
- * member's path did, because under-claiming HERE fires an act where under-claiming a provenance merely grades
- * a reply. Reasoning from that alone gives `pinned` for an act with no path standing, and that pair is
- * ILLEGAL: `engine_prov_of_running_path` answers `derived` on the same state, `path_pinned` is strictly
- * nested inside `path_forced`, and extension/lib/safe-fetch.js's `_firingRefusal` CHECKs exactly that pair —
- * fatal in RELEASE. So the two accessors' flow-less arms are one decision and not two, and the witness's is
- * decided by the provenance's. What makes that safe is that the state is a BROKEN INVARIANT at every caller
- * rather than a case: each one composes a request by running the page's code, the DCHECK below names it, and
- * `unpinned` alone fires nothing — safe-fetch.js's value arm additionally wants an actor of `page` and an
- * origin a person widened for that row.
- *
- * THE ENGINE STATES AND THE ZONE DECIDES, and the zone's THIRD word stays the zone's: `unstated` is what a
- * reader of a record carrying no mark composes for itself, which is how an artifact older than the key reads
- * as a fact about the BUILD instead of making a key absent. Nothing here ever spells it. */
+/* The witness mark (`PENDING_PINNED_*`) for a request built by running the page's code, read off the running
+ * flow; core/xhr/xml_http_request.c's §3.5.6 "The send() method" request is the caller it was written for. It
+ * reads the flow itself, as engine_prov_of_running_path does, so a caller cannot pass a different one.
+ *   With no running flow the answer is `unpinned`, although `pinned` is the safe word elsewhere: `path_pinned`
+ * is nested inside `path_forced`, engine_prov_of_running_path answers `derived` on the same state, and
+ * extension/lib/safe-fetch.js's `_firingRefusal` CHECKs against `pinned` beside `derived`, fatally in release.
+ * A flow-less call is a broken invariant at every caller (DCHECKed here), and `unpinned` alone fires nothing.
+ * The zone's third word, `unstated`, is what a reader composes for a record with no mark; this never spells
+ * it. */
 int engine_pinned_of_running_path(void);
 
-/* THE WITNESS MARK'S WIRE SPELLING — `engine_provenance_token`'s sibling, exported for the same reason and
- * added when the same premise died. This mapping stood as an inline ternary at the two places the pending
- * line's own join writes the field, on the argument that a static with one caller stays a static; a THIRD
- * site had to ask it the moment a request that is not a park carried the mark, and two files spelling one
- * two-word vocabulary is the copy that drifts in the direction that costs — a record this engine calls
- * `unpinned` and another file calls `pinned` is read as whichever the consumer saw first, and the consumer is
- * a firing decision. Fatal and never a DCHECK for `engine_provenance_token`'s reason exactly. */
+/* The witness mark's wire spelling, shared by every writer of the field so the two words are one vocabulary
+ * for the firing decision that reads them. An unknown value is fatal (CHECK), as for engine_provenance_token. */
 const char *engine_pinned_token(int pinned);
 
-/* WHAT THE BYTES ARE FOR, WHICH IS A DIFFERENT QUESTION FROM WHO ASKED — Fetch §2.2.5 "Requests"' DESTINATION,
- * stated verbatim off the request record the park carried (core/fetch/fetch.h) and never derived here.
- * THE TWO FIELDS ARE NOT TWO SPELLINGS OF ONE FACT, and reading them as one is what left a live hole. The
- * INITIATOR is HTML §4.12.1.1 "Processing model"'s `parser document` and says whether a REAL LOAD of this
- * document makes this request; the DESTINATION says whether the reply may be ingested as CODE. An injected
- * `<script src>`, a dynamic `import()` and a plain `fetch()` all report `script` as initiators — they are all
- * parks made by running code — and the first two are code loads while the third is not, so the initiator can
- * never answer the CORB question and a zone that asked it anyway got the answer right for one of the three.
- * ITS VOCABULARY IS THE SPEC'S AND NOT THIS ENGINE'S, which is the point: §2.2.5's destination type is one of
- * "", "audio", "audioworklet", "document", "embed", "font", "frame", "iframe", "image", "json", "manifest",
- * "object", "paintworklet", "report", "script", "serviceworker", "sharedworker", "style", "text", "track",
- * "video", "webidentity", "worker" or "xslt", and this seam carries whichever one the request has rather than
- * a two-valued summary of it — a `<link rel=preload as=font>` says `font` because that is what it is. The
- * EMPTY STRING is a value and not an omission: §2.2.5's "unless stated otherwise it is the empty string" is
- * what `fetch()` and XMLHttpRequest have, so an empty field on the line is the positive statement "data".
- * THE CONSUMER READS IT FOR §2.2.5's SCRIPT-LIKE PREDICATE — "audioworklet", "paintworklet", "script",
- * "serviceworker", "sharedworker" or "worker" — and that predicate is the CORB class. Anything else is data.
- * A THIRD PARK KIND, OR A NEW DESTINATION, THEREFORE COSTS NOTHING HERE AND CRASHES AT THE PRODUCER: the join
- * asserts the value is a destination type, so a park that states something outside the enumeration stops
- * rather than travelling to a zone that would read it as "not script-like" and ingest its reply as data. */
-/* THE ONE TOKEN THIS FILE'S OWN PARKS EMIT, and the only one declared. §8.1.4.2 "Fetching scripts"' classic
-   and module script fetches all create their request with `script`, and the three script parks below are in
-   the solver, so they name it through this. Every OTHER destination is stated by the browser component whose
-   own algorithm names it — `image` at HTML §4.8.4.3.5's potential-CORS request, `document` at a navigation,
-   the EMPTY STRING at `fetch()` and XMLHttpRequest — as the literal that algorithm's step contains, which is
-   where a citation can be checked against the text beside it. A macro for a value this file never writes would
-   be a vocabulary entry with no producer here. */
+/* What the bytes are for: Fetch §2.2.5 "Requests"' destination, stated verbatim off the request record the park
+ * carried (core/fetch/fetch.h), never derived here. It is a different fact from the initiator: an injected
+ * `<script src>`, a dynamic `import()` and a `fetch()` all have initiator `script`, and only the first two
+ * are code loads. The vocabulary is §2.2.5's whole destination enumeration, and the empty string is a value
+ * (data, as for `fetch()` and XMLHttpRequest). The consumer reads §2.2.5's script-like predicate
+ * ("audioworklet", "paintworklet", "script", "serviceworker", "sharedworker", "worker"), which is the CORB
+ * class. The join asserts every value is a destination type, so a new one crashes at the producer rather than
+ * reaching the zone as data.
+ *   Only `script` is declared, because it is the one the solver's own script parks emit (§8.1.4.2 "Fetching
+ * scripts" creates classic and module requests with it); every other destination is the literal written by
+ * the component whose algorithm names it (`image` at HTML §4.8.4.3.5, `document` at a navigation). */
 #define PENDING_DESTINATION_SCRIPT "script"
-/* THE ENUMERATION AND THE SCRIPT-LIKE PREDICATE ARE BOTH STATICS OF solver/engine.c AND NEITHER IS EXPORTED,
-   for `method_is_token`'s reason: every use either has is inside that file. The enumeration answers two
-   asserts (the join refuses to WRITE a value §2.2.5 does not define; the split refuses to BELIEVE one), and
-   script-like answers the join's FOLD — a deduped set states the destination of its strictest member, because
-   one reply satisfies every park in it. That fold is not a policy: it decides what the LINE says, never what
-   is fetched. The CORB DECISION itself is the trusted zone's alone — the engine holds no network policy by
-   construction — and asks the same §2.2.5 predicate once more, in `extension/lib/safe-fetch.js`, over the
-   bytes it actually read. The two are the same question asked by the two parties that each have to answer it,
-   which is not a duplicated table: neither party can take the other's answer, since the engine has no bytes
-   and the zone has no register. */
+/* The destination enumeration and the script-like predicate are statics of solver/engine.c, since every use is
+   there: the join refuses to write a value §2.2.5 does not define, the split refuses to believe one, and the
+   join's fold states a deduped set's strictest destination, because one reply satisfies every park in it. The
+   fold decides what the line says, never what is fetched; the CORB decision is the trusted zone's, which asks
+   the same predicate in `extension/lib/safe-fetch.js` over the bytes it read. */
 
-/* WHAT THE HOST STILL OWES THE FRONTIER'S NETWORK PARKS — one
+/* What the host still owes the frontier's network parks: one
  * `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` line per outstanding
- * request, newline-terminated, "" for none, DEDUPED BY THE PAIR.
- * THIS SENTENCE NAMED FOUR FIELDS AFTER THE PROVENANCE BECAME THE FIFTH, which is the ordinary way a grammar
- * stated in prose beside the function that joins it goes wrong: every reader of the LINE was updated and the
- * one-line description of it was not. engine_pending_split below is the authority on the shape — it is what
- * every host takes the line apart with — and this is its restatement rather than a second grammar.
- *
- * THE METHOD IS PART OF THE REQUEST'S IDENTITY, and this seam used to answer an ADDRESS ALONE. The register
- * has carried the method since the day it carried the whole request (PEND_METHOD), and it was dropped at
- * exactly these two edges: the join listed URLs and engine_provide filled every entry naming the URL. So a page
- * that issues a GET and a POST to one address had them collect each other's bodies — not a missing feature, a
- * WRONG ANSWER, and every @H example value, every branch that reads that body and every @S verdict on that path
- * was derived from a response the page never received. It is the same defect the XHR path was corrected for
- * (SECURITY.md §Network: "a wrong answer, which is worse than an absent one"), one seam over.
- *
- * THE DESTINATION IS ON IT FOR THE SAME REASON THE METHOD IS, and it arrived by the same route: this seam
- * answered the CORB question out of a SIDE LIST that one producer filled — the module loader's chunk register,
- * which named dynamic `import()` targets and nothing else — so a document's own `<script src>` reached the
- * chokepoint with no load class at all and a cross-origin HTML or JSON body served for it was ingested as data
- * and then COMPILED. A list filled by one caller cannot answer for the others, and nothing about it could say
- * so; the destination is a property of the REQUEST (Fetch §2.2.5), every park states it, and the side list is
- * gone rather than kept beside this one.
- *
- * THE CREDENTIALS MODE IS ON IT FOR THE METHOD'S AND THE DESTINATION'S REASON EXACTLY, and it is the field
- * that says WHOSE SESSION PAYS. Fetch §2.2.5 "Requests" gives every request one and only the algorithm that
- * CREATED the request knows which — HTML §2.5.1 "Terminology"'s create a potential-CORS request for an
- * `<img>`, §2.5.4 "CORS settings attributes"' CORS settings attribute credentials mode for a `<script src>`,
- * XHR §3.5.6 "The send() method" from `withCredentials`, Fetch §5.4 "Request class" from `RequestInit` — and
- * those algorithms DISAGREE, so there is no value a consumer could supply that is right for more than one of
- * them. It crosses as §2.2.5's own THREE-VALUED token and never as a boolean, because `same-origin` is a
- * CONDITIONAL answer whose condition is the SOP question SECURITY.md gives to the trusted zone and to nothing
- * else: an engine that collapsed the three to "does this carry cookies" would have had to answer it in the
- * half that holds no network policy. The engine STATES; extension/lib/safe-fetch.js DECIDES, and derives its
- * own boolean there from this token and from its own willingness to spend the session.
- * ITS SPELLING IS core/fetch/fetch.h's `fetch_credentials_token` AND NOBODY ELSE'S — that file says so in as
- * many words, and it is why neither the join, the split nor this header restates the three words.
- *
- * WHY A TAB, AND WHY THAT IS NOT AN INVENTED DELIMITER. No field can contain one. A serialized URL cannot:
- * URL Standard §4.4 URL parsing removes all ASCII tab or newline from its input before anything else, so no
- * URL record can hold one and no serialization can produce one. A method cannot: Fetch §2.2.1 Methods says a
- * method "is a byte sequence that matches the method token production", and RFC 9110 §5.6.2 Tokens excludes
- * HTAB from tchar. A destination cannot: §2.2.5 ENUMERATES its values, and every one of them is ASCII
- * lowercase letters. The join ASSERTS all three rather than trusting them, and it is the same shape
- * engine_host_requests already answers in (`id<TAB>op`) — one seam, one grammar.
- *
- * The buffer is this function's and is valid until the next call. */
+ * request, newline-terminated, "" for none, deduped by (method, url). engine_pending_split is the authority on
+ * the shape. The buffer is this function's and is valid until the next call.
+ *   The method is part of the request's identity, so a GET and a POST to one address never collect each
+ * other's bodies. The destination (Fetch §2.2.5) is on every line so the chokepoint can apply CORB to every
+ * park. The credentials mode is §2.2.5's three-valued token, spelled by core/fetch/fetch.h's
+ * `fetch_credentials_token`: only the algorithm that created the request knows it, and `same-origin` is a
+ * condition the trusted zone resolves (extension/lib/safe-fetch.js), never the engine.
+ *   No field can hold a TAB: URL Standard §4.4 URL parsing strips tabs, a method matches RFC 9110 §5.6.2 Tokens
+ * (Fetch §2.2.1 Methods), and every destination is lowercase ASCII. The join asserts all three. */
 const char *engine_pending_fetches(void);
-/* ONE LINE, SPLIT WHERE IT WAS JOINED — because three hosts each deriving the pair is three places to get it
-   wrong, which is the hand-copy 59d0e42d abolished. `line` is the host's own mutable copy of one line (no
-   newline); each TAB is overwritten with a NUL and the six fields are handed back pointing into it.
-   THE DESTINATION, THE INITIATOR, THE PROVENANCE, THE PINNED MARK AND THE CREDENTIALS MODE ARE OUT-PARAMETERS
-   AND NONE IS
-   OPTIONAL, deliberately: a
-   host that did not want one could pass NULL and would then be a host reading a request whose LOAD CLASS — or
-   whose PROVENANCE — it never asked about, which is the defaulted-field defect wearing a convenience. Two of
-   them are sharp in different ways: a host that skips the load class fetches a script as data, which is the
-   state that field was added to end; a host that skips the provenance fires a request no client makes and
-   carries its reply as an observation, which is what CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE forbids in as
-   many words; and a host that skips the CREDENTIALS MODE decides whose session pays for the fetch by
-   silence, which sends a `<link rel=preload>` that stated `include` out uncredentialed and learns a
-   personalised body as the logged-out one — or, in the other direction, spends the person's cookies on a
-   park whose own algorithm said `omit`. It costs a caller four locals and four membership asserts. */
+/* Split one engine_pending_fetches line where it was joined, so hosts do not each re-derive the grammar. `line`
+   is the host's own mutable copy of one line without its newline; each TAB becomes a NUL and the seven fields
+   are returned pointing into it. Every out-parameter is required (asserted): a host that skipped the
+   destination would fetch a script as data, one that skipped the provenance would carry a forced reply as an
+   observation, and one that skipped the credentials mode would decide by silence whose session pays. A
+   missing TAB is fatal (CHECK). */
 void engine_pending_split(char *line, const char **method, const char **destination,
                           const char **initiator, const char **provenance, const char **pinned,
                           const char **credentials, const char **url);
-/* DELIVER A BODY FOR ONE REQUEST — keyed on `(method, url)`, which is what the flow parked on. Returns how many
-   entries it filled; 0 with nothing matched is the host's pairing being off (or a sale — engine_take_paged_owed),
-   and it is the CALLER that tells those apart because the caller owns the credit. */
+/* Deliver a body for one request, keyed on the `(method, url)` the flow parked on. Returns how many entries it
+   filled; 0 means the host's pairing is off or the record was sold (engine_take_paged_owed), which the caller
+   tells apart because it owns the credit. */
 int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueConst value);
 
-/* REFUSE ONE REQUEST — the same `(method, url)` pair, because a refusal is an answer to the same question, and
- * it returns how many records it newly refused (0 with nothing matched is the host's pairing being off, or a
- * sale, and this function tells those two apart itself).
- *
- * IT IS NOT A NETWORK ERROR AND MUST NEVER BE SPELLED AS ONE. A refusal a REAL BROWSER also makes — a blocked
- * scheme (Fetch §4.3 "Scheme fetch" ends its switch "Return a network error"), a §4.10 "CORS check" failure,
- * a CORB-blocked body — comes through engine_provide as Fetch §5.6 "Fetch methods"' network error, which is
- * the FIDELITY. This entry is for the other kind: a refusal only THIS TOOL makes, where no browser refuses
- * anything and there is therefore no fact about the origin to relay. Handing the flow §5.6's error for one of
- * those tells it the server was unreachable for a request nobody sent, and every branch under the page's
- * `catch` is then explored on an observation that does not exist — and it destroys the property that makes
- * the per-origin widening mean anything, since a flow that has already run its failure path cannot fire the
- * day the origin is widened. The trusted zone grades its own refusal on exactly that axis and states which
- * one it is (extension/lib/safe-fetch.js); a host that re-derived the grade could only ever answer for the
- * rule its re-derivation happened to know about.
- *
- * WHAT IT COSTS AND WHAT PAYS FOR IT. A park alone explores NEITHER arm of `fetch(u).then(ok).catch(err)`,
- * and a declined request is precisely an unconstrained outcome — so this refusal makes the flow FORK: one arm
- * goes on waiting (the success arm, holding no invented reply), the other takes §5.6's network error and runs
- * the page's error path, with its own path marked FORCED so every value it learns carries the weakest grade
- * this vocabulary has. flow_decline_fork builds that pair; this only records the fact, because an arm minted
- * between scheduler steps would clone whichever flow the scheduler last ran.
- *
- * `reason` IS THE ZONE'S OWN WORDS and is copied. It is the only account anybody gets of a request this tool
- * chose not to make, and it is what tells a reader whether a widening would change the answer. */
+/* Refuse one request, keyed on the same `(method, url)` pair; returns how many records it newly refused (0 is a
+ * pairing error or a sale, which this tells apart itself). It is not a network error: a refusal a real browser
+ * also makes (a blocked scheme, Fetch §4.3 "Scheme fetch"; a §4.10 "CORS check" failure; a CORB-blocked body)
+ * arrives through engine_provide as Fetch §5.6 "Fetch methods"' network error. This is for a refusal only this
+ * tool makes, where a network error would be an observation that does not exist and would spend the page's
+ * failure path before the person could widen the origin. The zone grades its own refusal
+ * (extension/lib/safe-fetch.js).
+ *   The refusal makes the flow fork: one arm keeps waiting with no invented reply, the other takes the network
+ * error with its path marked forced. flow_decline_fork builds the pair at a scheduler step, because an arm
+ * minted between steps would clone whichever flow ran last; this only records the fact. `reason` is the zone's
+ * own words and is copied. */
 int engine_decline(JSContext *ctx, const char *method, const char *url, const char *reason);
 
-/* THE SAME REFUSAL FOR A SYNCHRONOUS REQUEST, KEYED ON THE RENDEZVOUS AND NOT ON AN ADDRESS — because the one
- * above provably cannot reach one, and the first thing that needs it is a §7.4 NAVIGATION.
- *
- * `engine_decline` finds its records through `pending_index_find(method, url)`, and `pending_push` deliberately
- * tracks every kind BUT `FLOW_PENDING_HOSTREQ` into that pair index. So a declined navigation matched NOTHING:
- * the refusal was recorded for nobody, the flow stayed parked for the session, and `flow_decline_fork` never
- * saw a record to fork. That is not a gap in the index — a synchronous request has no (method, url) to be
- * keyed by, since its whole identity is the rendezvous id the asking machine holds — so the door is keyed on
- * what the host already has: `qjs_host_requests` answers `id<TAB>op`, and the id is what comes back.
- *
- * IT IS A SECOND ENTRY AND NOT A THIRD `completion`, BY THE TEST `qjs_host_answer` ITSELF APPLIES. That entry
- * makes the completion a PARAMETER rather than a second entry point because a return and a throw are two
- * completions of ONE call — ECMA-262 6.2.4 has exactly those, which is what its own DCHECK says. A decline is
- * not a completion of the operation at all: the operation did not happen. Widening that enum would let a
- * refusal arrive at `engine_host_take` as a value the asking machine consumes, which is the state the assert
- * in `flow_decline_fork` exists to refuse.
- *
- * EXACTLY ONE FLOW'S REGISTER CAN NAME THE ID, which is what makes the walk stop at the first match: an
- * unanswered synchronous request is the one record a fork does NOT share (`engine_sibling_assemble` unshares it
- * and mints a fresh rendezvous, because its answer is computed under the ASKING flow's world). So there is no
- * shared-record hazard here of the kind the pair index's per-register `declineTaken` was written for.
- *
- * WHAT IT WRITES IS THE FACT AND NOTHING ELSE, exactly as the address-keyed one does: `flow_decline_fork` builds
- * the pair, so this may not settle the rendezvous — a machine whose request is DECLINED is not a machine with
- * an answer, and the arm that goes on waiting is the whole of what makes a per-origin widening mean anything.
- * Returns 1 if a record was marked, 0 if no flow is parked on that id. */
+/* The same refusal for a synchronous request, keyed on the rendezvous id from engine_host_requests: such a
+ * request has no (method, url), and pending_push keeps FLOW_PENDING_HOSTREQ out of the pair index, so
+ * engine_decline cannot reach it (a §7.4 navigation is the first case). It is a separate entry, not a third
+ * completion: a decline means the operation did not happen, and a refusal arriving at engine_host_take as a
+ * value is what flow_decline_fork asserts against. Exactly one flow's register can name the id
+ * (engine_sibling_assemble unshares an unanswered synchronous request and mints a fresh rendezvous), so the
+ * walk stops at the first match. It records the fact and does not settle the rendezvous; flow_decline_fork
+ * builds the pair. Returns 1 if a record was marked, 0 if no flow is parked on that id. */
 int engine_host_decline(JSContext *ctx, uint32_t req, const char *reason);
 
 /* Install as JSTimeTravelHooks.gen_fork: a concolic branch inside a synchronously-driven generator body forked
@@ -872,923 +752,169 @@ int engine_host_decline(JSContext *ctx, uint32_t req, const char *reason);
    onto the new sibling's COW delta (so the shared generator object resolves per-flow). */
 void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *cur_gd);
 
-/* How many times the dispatch loop CONTEXT-SWITCHED between flows. The result document reports it because the
-   findings cannot: an interleaving scheduler and a FIFO one agree on an easy page and disagree on every hard
-   one, so the interleave has to be observable on its own. */
+/* How many times the dispatch loop context-switched between flows, reported because an interleaving scheduler
+   and a FIFO one agree on easy pages, so the interleave has to be observable on its own. Then the jobs queued
+   and the jobs run. */
 int  engine_switch_count(void);
 long engine_jobs_queued(void);
 long engine_jobs_run(void);
-/* HOW MANY COMPLETED UNITS OF WORK this instance's flows have been credited — HTML §8.1.4.4 "Calling scripts"
+/* How many completed units of work this instance's flows have been credited: HTML §8.1.4.4 "Calling scripts"
    step 3 of clean up after running script, "if the JavaScript execution context stack is now empty". It is the
-   PRECONDITION for running a queued job, so it is what makes `jobsRun` readable: without it, a run that queued
-   thousands of reactions and ran none says nothing about whether the pump had nothing to do or was never
-   eligible. See the declaration in engine.c for the measurement that made the pair necessary. */
+   precondition for running a queued job, which is what makes `jobsRun` readable. */
 long engine_units_done(void);
 
-/* ---- THE LADDER'S OWN TRAFFIC — HOW MANY STEPS EACH ARM OF flow_step HAS RUN --------------------------------
- *
- * IT IS NOT THE `@COLD` HISTOGRAM AND THE TWO ARE NOT REFINEMENTS OF EACH OTHER. solver/cold.h's `step_units`
- * is a census of the MEMBERS STANDING at the instant it is taken — one bucket per arm, summing to the frontier
- * — so its `run-a-task: 0` says nobody is sitting in that arm right now. This is a count of STEPS over the
- * instance's life, so its `run-a-task: 0` says the ladder has never once reached that arm. Those two zeroes
- * are the OPPOSITE diagnoses of one symptom — an arm that is never entered against an arm that is entered
- * constantly and left again before any census — and they take opposite work. A gauge cannot answer the second
- * question and a lifetime total cannot answer the first, which is why both rows are emitted and neither is
- * derived from the other.
- *
- * IT IS A REPORT AND NEVER A BOUND (§NO BOUNDS). Nothing in the engine reads it to decide anything: no
- * fixpoint over an arm that stopped moving, no no-progress detector, no cap on how often an arm may run, no
- * seen-set over arms. The counters live in engine.c and say the same thing at the site; it is repeated here
- * because a header is where the next reader meets the numbers and a lifetime per-arm total is exactly the
- * shape someone reaches for to build a bound out of.
- *
- * A FILLED STRUCT for EngineFrontierCensus's reason and for one more: the array's extent is
- * solver/step_unit.h's own list, so a caller cannot size it from a second copy of that list and cannot get the
- * size wrong — there is no length argument to be right about. */
+/* Lifetime step traffic per arm of flow_step, filled in one call so every row is one reading. It is not
+ * solver/cold.h's `step_units`, a gauge of members standing in each arm: a zero there says nobody is in that
+ * arm now, a zero here says the ladder never reached it, and the two take opposite work. A report, never a
+ * bound: nothing in the engine reads any row. The array extents are solver/step_unit.h's own list, so a caller
+ * cannot size them from a second copy.
+ * Microsecond rows are int64_t because `long` is 32 bits on wasm32, where a microsecond sum saturates in 35.8
+ * minutes and signed overflow would read as a negative cost; solver/engine.c asserts the width at `g_step_us`.
+ * They are in the slice's own measure (`quantum_thread_us()`, CPU or wall as @QUANTUM says), and a reading is
+ * a ratio within one run, since totals across runs are not comparable. */
 typedef struct {
     long steps;              /* scheduler steps: every entry into flow_step, counted at its own entry */
-    long arms[STEP_UNIT_N];  /* …and how many of them ran each arm, in solver/step_unit.h's order. The two sides
-                                are counted at DIFFERENT points on purpose (the entry, and the scheduler's
-                                convergence point after the step returns), so `sum(arms) == steps` is an
-                                assertion about routing rather than an arithmetic identity — engine.c asserts it
-                                at the convergence point, where it is exact and where the offending step is
-                                still in hand. */
-    /* …AND HOW MANY OF THOSE STEPS DESCENDED THE LADDER AT ALL — the one number a reader of the orphan
-       census's `asked` has never had, and the one that decides which of that zero's readings is available.
-       IT IS NOT DERIVABLE FROM ANY ROW ON THIS DOCUMENT, which is the whole reason it is a field. flow_step's
-       entire work ladder — the routed deliveries, the checkpoint, the reply, the program sequence, the task,
-       the lifecycle, the orphan rungs, the clock-driven sources and every resting arm — sits inside one
-       `if (!f->frame)`, so a step taken on a FRAMED member asks none of those conditions and is invisible in
-       all of them. This counts the steps that entered that block, and there are three reasons a reader cannot
-       compose it out of what is already published:
-         · `unit_mid_program` below is the member's frame AFTER the step, read at the convergence point. A
-           step that enters unframed and COMPILES leaves framed, and one that enters framed and ENDS its frame
-           leaves unframed, so the two readings differ by exactly the arms that change framedness and neither
-           bounds the other. They were 209 and 210 on one measured run and are free to differ by any amount.
-         · Summing the `arms` that live under the `if` needs a per-arm branch label, and solver/step_unit.h
-           declares none — solver/cold.h says so in its own words ("a reader told to read that arm's position
-           in flow_step's chain against `engine_orphan_seed` finds it has no position in that chain at all").
-           A list kept here would be a second copy of flow_step's structure and would drift from it.
-         · `unframed_picks_lifetime` (solver/flow.h) is NOT this number and pairs with it by name, which is
-           the trap. It is raised in flow_credit_pick, whose only caller is engine.c's `best != cur` block, so
-           it counts SWITCH-INS that found an empty JavaScript execution context stack — a member switched in
-           framed that unframes later is one descent this row sees and that one does not. Measured on one live
-           page: 3 against 75.
-       WHAT IT SEPARATES, AND THE TWO TAKE OPPOSITE WORK. `orphansAsked == 0` with this row 0 says the ladder
-       was never descended at all, so the cause is UPSTREAM of every arm in it — members framed, or never
-       handed the thread (solver/cold.h's `stepUnits` `none`) — and no ordering of the arms could have changed
-       it. The same zero with this row LARGE says the ladder was descended and an arm ABOVE the orphan rung
-       took every descent, which is a statement about those arms and is read off `stepUnitRuns` beside it.
-       AND IT IS THE ROW `out_of_programs_at_the_ladder` CAN NO LONGER STAND IN FOR, which is why it is filed
-       beside that family in the document rather than here at the top. That census selects on
-       `script_i == dyn_n`, which WAS the rung's precondition and is no longer: the rung binds to
-       `seq_compiles` — `a program of this flow's own sequence STARTS on this step` — so a member holding a row
-       it cannot run descends the ladder and is counted in no `out_of_programs` row. On a document whose
-       members always hold a row that family reads 0 for a reason that has nothing to do with the ladder.
-       A COUNT OF DESCENTS AND NOT OF ENTRIES, so it is NOT comparable with `steps` above: flow_step's loop
-       body iterates (the turn continuation at the reply delivery), and `steps` is raised once at the
-       function's entry while this is raised on every pass that reaches the block. What it IS comparable with
-       is `engine_orphan_census`'s `asked`, which is raised on the same per-pass basis inside this block — the
-       containment is asserted at engine_step_unit_runs, where both are in one hand.
-       AND THE TWO ARE PER-INSTANCE AND PER-SESSION RESPECTIVELY, WHICH IS STATED RATHER THAN LEFT TO A
-       READER. solver/engine.c releases the orphan pair with the agent and never releases this one, so across
-       a restart `asked` returns to 0 while this keeps climbing. The containment still holds in that direction;
-       what does not hold is reading the pair as one span, exactly as engine/build.mjs already says of the
-       orphan pair against @COLD.
-       A REPORT AND NEVER A BOUND (§NO BOUNDS), for `arms`' reason exactly: nothing in the engine reads it, no
-       arm of any verdict branches on it, and "how many steps got as far as the work ladder" is precisely the
-       shape a no-progress detector would be built from.
-       RETIREMENT: this row goes when solver/step_unit.h declares each arm's side of `if (!f->frame)`, because
-       the descent count is then a sum over `arms` that cannot disagree with flow_step — which is also
-       solver/cold.h's own stated retirement condition for the classes it carries in prose. */
+    long arms[STEP_UNIT_N];  /* …and how many ran each arm, in solver/step_unit.h's order, counted at the
+                                scheduler's convergence point; engine.c asserts `sum(arms) == steps` there */
+    /* Passes through flow_step's work ladder, the `if (!f->frame)` block every non-frame arm sits in, so a
+       step on a framed member is in none of its arms. It is not derivable from published rows:
+       `unit_mid_program` reads the frame after the step, step_unit.h labels no arm's side of the block, and
+       solver/flow.h's `unframed_picks_lifetime` counts switch-ins, not descents. It separates the readings of
+       `orphansAsked == 0`: zero here puts the cause upstream of the ladder, a large value puts it in an arm
+       above the orphan rung. It counts passes, not entries, so it is not comparable with `steps` (the loop body
+       iterates); it contains engine_orphan_census's `asked`, asserted at engine_step_unit_runs. It is per
+       instance while `asked` is per session, so across a restart only the containment holds. */
     long unframed_steps;
-    /* WHAT THE STEPS ABOVE COST, IN THE ONE MEASURE THE SLICE AND THE AGING CHARGE ARE ALREADY DENOMINATED IN
-       — and it is in THIS struct rather than beside any other row because it is over exactly the population
-       `steps` is: one charge per iteration of the scheduler loop that stepped a flow, taken at the line that
-       already computes the delta for `flow_age_running`. A total whose denominator lives on another line, or
-       in another census, is the lifetime-over-instant collapse this file's own rows keep having to correct.
-       WHAT IT IS A TOTAL OF, EXACTLY, because "time per step" reads as if the step were the whole of it and it
-       is not. The readings TELESCOPE — each charge is the clock at the end of this iteration minus the clock at
-       the end of the previous one, or at slice entry for the first — so the quantity covers the PICK
-       (solve_seed_candidates and flow_next_to_run), the CONTEXT SWITCH (both delta swaps) and the step itself,
-       and it EXCLUDES the host's own time between slices, which each slice's fresh reading opens past. It is
-       therefore what one turn of the dispatch loop costs, which is the quantity a reader wants when the
-       question is why a run made so few choices.
-       WHY THE RATIO AND NOT THE TOTAL IS THE READING. §Testing: two passes of one revision on one artifact are
-       a 2x spread apart on this harness, so no count here may be quoted against another run. `step_us / steps`
-       is two lifetime totals of ONE run that move together, so the spread divides out of it — and both sides
-       are in the SLICE's own measure, which is what makes the quotient answerable without knowing whether that
-       measure is CPU or wall (solver/quantum.h's `quantum_measure`, published as `@QUANTUM`). Any sentence
-       that calls this CPU needs that line; the ratio against the slice does not, because the slice is armed on
-       the same clock — which is also why a reader takes the slice off `@QUANTUM` rather than off
-       ENGINE_QUANTUM_MS below: the run's own report belongs to the artifact that produced the total, and a
-       header read afterwards belongs to whatever revision happens to be checked out.
-       WHAT IT SEPARATES, which is the axis nothing in this census could reach. `steps` alone says how many
-       choices a run made and cannot say why so few: a loop whose every turn consumes a whole slice makes about
-       one choice per slice by construction — a granularity floor, not an ordering finding — while a loop whose
-       turns are cheap made few choices because it was given little thread time at all, and those take opposite
-       work. The @WFQ census answers the neighbouring half (what ASKING the order costs, in members walked per
-       scan); this is what a turn costs in the currency the scheduler actually spends.
-       A REPORT AND NEVER A BOUND (§NO BOUNDS), for `arms`' reason exactly: nothing in the engine reads it, no
-       arm of any verdict branches on it, and a per-step time total is precisely the shape a watchdog or a
-       step-cost cap would be built from. Its writer says the same thing at the site.
-       AND IT IS `int64_t` BECAUSE `long` IS 32 BITS ON THE ONE HOST THIS ROW WAS BUILT TO BE READ ON. The two
-       neighbours above are COUNTS of things the engine did and this is an accumulator of a CLOCK, which is a
-       different quantity with a different horizon: the extension's engine is a wasm32 instance, where
-       `__SIZEOF_LONG__` is 4, so a `long` of microseconds saturates at 2147483647 — 35.8 MINUTES of the
-       measure the slice is denominated in. Past that the addition is signed overflow, which is undefined
-       rather than merely wrapped, and the value a reader is handed is NEGATIVE.
-       THE NEGATIVE IS WHY THIS IS A DEFECT AND NOT A LIMIT. `step_us / steps` is compared against the slice,
-       and a negative numerator does not read as broken — it reads as a turn that cost far LESS than a slice,
-       which is the arm that says the loop is not slice-bound and that a small step count is about thread time
-       rather than granularity. So the one reading this row exists to make would silently INVERT on exactly the
-       long runs it was written for, on the only host that ships. §Testing's rule that a measurement a loaded
-       machine can falsify is no measurement is the same rule one layer down: a measurement its own arithmetic
-       can falsify is no measurement either.
-       THE WIDTH IS ASSERTED AT THE ACCUMULATOR (solver/engine.c's `_Static_assert` beside `g_step_us`, and a
-       DCHECK before the one addition), because prose here cannot stop the next edit and a build failure can.
-       result.c prints it through `(long long)`/`%lld` — the idiom the @WFQ census already uses for the notch
-       rows, which are int64_t for this same reason. */
+    /* Thread measure each dispatch-loop turn that stepped a flow cost, charged at the line that computes the
+       delta for flow_age_running. Charges telescope from the previous turn's end (or the slice's entry), so a
+       turn includes its pick (solve_seed_candidates, flow_next_to_run), both delta swaps and the step, and
+       excludes the host's time between slices. `step_us / steps` against the slice separates a slice-bound loop
+       from one given little thread time; take the slice from `@QUANTUM`, the artifact's own report. */
     int64_t step_us;
-    /* …AND THE SPLIT OF IT THIS ROW'S OWN BANNER ASKS FOR AND COULD NOT MAKE. `step_us / steps` against the
-     * slice separates a loop that is SLICE-BOUND from one that was given little thread time, which is the axis
-     * above. It cannot separate the two slice-bound cases, and they take opposite work: a turn whose STEP
-     * overruns the slice is the quantum with no asynchronous source to expire it — on the wasm instance that
-     * ships, nothing can raise the yield bit mid-call, so a straight-line stretch never evaluates the budget —
-     * while a turn whose PICK and SWAP dominate is the ordering and the COW delta costing more than the work
-     * they order. One is solver/quantum.h's transport and the other is the frontier's own shape.
-     * `sched_us` IS EVERYTHING IN THE TURN THAT IS NOT THE STEP, which is its name and not a shortfall: the
-     * charge TELESCOPES, so it carries the previous iteration's tail — the microtask checkpoint, the finish —
-     * with this one's pick and swap. That is the misattribution `step_us` above already declares, and the arm
-     * is named for what it covers so it cannot be read as a pick cost.
-     * TWO ROWS AND NOT A SUBTRACTION: a derived half cannot be checked, and `slice + sched == step` is what a
-     * later edit adding a third phase to the turn breaks loudly instead of absorbing into the remainder. Both
-     * are int64_t for `step_us`' reason exactly — a `long` of microseconds saturates in 35.8 minutes on wasm32
-     * and INVERTS rather than going absent. */
+    /* The split of step_us: `slice_us` is the step's own bracket and `sched_us` everything else in the turn,
+     * which, because charges telescope, includes the previous turn's tail (checkpoint, finish). A step that
+     * overruns the slice points at the quantum's transport; a large pick and swap points at the frontier's
+     * shape. Two rows rather than a subtraction, so `slice_us + sched_us == step_us` (asserted) breaks when a
+     * phase is added. */
     int64_t slice_us;
     int64_t sched_us;
-    /* AND THE DENOMINATOR ALL THREE OF THE ROWS ABOVE HAVE NEVER HAD — the thread measure this instance
-     * has consumed since its dispatch loop first ran, so `step_us / instance_us` is the share of the
-     * engine's own thread that went into dispatch TURNS at all.
-     * WHAT IT SEPARATES, AND IT IS TWO READINGS THAT TAKE OPPOSITE WORK. `step_us` and its two phases are
-     * counts over the turns the loop took and say NOTHING about the turns it did not: a low `step_us / steps`
-     * is equally a loop whose turns are cheap and a loop that was barely entered, and the second is not a
-     * statement about the scheduler at all. Until this row existed the only way to reach it was to compare
-     * `step_us` against a budget the census cannot see — a reader of a run had to know the rlimit its driver
-     * was launched under, which is a fact about the HOST in a document about the engine, and a figure nobody
-     * else can re-derive from the artifact.
-     * BOTH SIDES ARE THE SAME CLOCK, WHICH IS THE ONLY PROPERTY THAT MAKES THE QUOTIENT MEAN ANYTHING. It is
-     * `quantum_thread_us()` — CPU where the host has a CPU clock and wall where it does not — exactly as
-     * `step_us` is, and `quantum_measure()` already names which on the @QUANTUM line. A ratio of two readings
-     * of one clock survives a host that can only measure wall time; a ratio against an rlimit does not,
-     * because an rlimit is PROCESS CPU and this is THREAD measure, and on a host with more than one thread
-     * those are different quantities.
-     * TAKEN IN THE SAME READING AS `steps` AND `step_us`, for the reason this struct exists: between two
-     * accessor calls the loop can step, and a total read one call later than its denominator is the two-
-     * instants collapse §Testing names. The containment `step_us <= instance_us` is asserted where both are
-     * in one hand — every turn's charge is a sub-interval of the span this measures, so a violation is the
-     * baseline having been taken after a turn, or the clock having stopped being monotone.
-     * THE RESIDUAL THAT STOOD HERE IS DISCHARGED BY `loop_us`/`between_slices_us` BELOW, AND IT IS REWRITTEN
-     * RATHER THAN DELETED BECAUSE ITS NEXT-DIFF CLAUSE NAMED A MECHANISM THIS FUNCTION DOES NOT HAVE AND THE
-     * NEXT READER WOULD RE-DERIVE IT THE SAME WAY. It said: build "a second accumulator raised from the
-     * readings `engine_sched_slice` already takes at its entry and at each of its returns". The SPLIT is
-     * right and both halves of that sentence about the tree are wrong. `engine_sched_slice` takes ONE reading
-     * at its entry and takes NO reading at ANY of its returns — the `now` a return leaves behind is the
-     * last POST-STEP reading, so a span closed on it would silently exclude the slice's tail, which is part
-     * of the very population the residual was about. And a charge written at each of those returns is the shape
-     * `engine_sched_step`'s own banner refuses for `quantum_end()`, in as many words: "A `quantum_end()` call
-     * before every return is the shape where one of them is eventually missing". The accumulators are
-     * therefore in the WRAPPER, where the bracket already is and where the body's exits cannot reach them.
-     * AND THE REMAINDER IS NOT THE HOST'S BY SUBTRACTION OF TWO PUBLISHED HALVES, WHICH IS THE SECOND THING
-     * THAT CLAUSE GOT WRONG AND THE ONE THAT WOULD HAVE COST A READING. `instance_us - loop_us` is the host's
-     * thread between slices PLUS the span from the last slice's return to the moment this census was
-     * composed — and a census is composed on the host's own thread at whatever moment a driver asks for it,
-     * so that trailing span can be the whole of a report build. It is charged into `between_slices_us` at the
-     * accessor, from the same clock reading `instance_us` closes on, so the two rows are a PARTITION and the
-     * reader adds rather than subtracts.
-     * A REPORT AND NEVER A BOUND (§NO BOUNDS), for `step_us`' reason and with the same hazard — a measured
-     * share of a thread is exactly what a throttle would be built from, and nothing reads this to decide
-     * anything.
-     * `int64_t` FOR `step_us`' REASON EXACTLY: a `long` of microseconds saturates in 35.8 minutes on wasm32
-     * and INVERTS rather than going absent, and this one measures a span STRICTLY LONGER than that row. */
+    /* Thread measure since this instance's dispatch loop first ran, on the same clock as `step_us`, so
+     * `step_us / instance_us` is the share of the engine's thread spent in turns; `step_us / steps` alone
+     * cannot tell cheap turns from a loop barely entered. Taken in the same reading as `steps` and `step_us`;
+     * `step_us <= instance_us` is asserted. */
     int64_t instance_us;
-    /* …AND THE PARTITION OF IT THE ROW ABOVE COULD NOT MAKE, WHICH IS THE WHOLE OF WHY A SMALL
-     * `step_us / instance_us` HAS NEVER NAMED A COMPONENT. `loop_us` is the thread measure spent INSIDE
-     * `engine_sched_step`'s bracket, summed over every slice; `between_slices_us` is the thread measure that
-     * passed between one slice's return and the next one's entry, plus the span since the last return, which
-     * is the host's. THE TWO SUM TO `instance_us` EXACTLY and that is asserted where all three are in one
-     * hand, so a reader adds two published rows rather than subtracting one from a total and hoping the
-     * remainder is what they think it is.
-     * AND THAT THE OPEN TAIL IS THE HOST'S AT ALL IS A SEPARATE CLAIM AND IS SEPARATELY ASSERTED, because no
-     * arithmetic here can reach it: the tail is closed from the last slice's RETURN, so a census composed
-     * from INSIDE the dispatch loop would charge a running slice's own elapsed time to the host's half — and
-     * the sum would still equal `instance_us`, since the two halves telescope whatever the tail belongs to.
-     * engine_step_unit_runs asserts `!quantum_slice_open()` for that reason; solver/quantum.h's own invariant
-     * ("the shipped ABI may never RETURN to the host holding one") is what makes it true today, and the
-     * assert is what makes it stay true when a caller is added.
-     * WHAT THEY SEPARATE, AND IT IS THE PAIR OF DIAGNOSES THE SHARE ABOVE SUMS. A run whose
-     * `step_us / instance_us` is small is one of two things and they take OPPOSITE work. If `loop_us` is
-     * small too, the engine was BARELY GIVEN THE THREAD: the remainder sits in `between_slices_us`, the
-     * question is the DRIVER — how often it steps, what it does between steps, what the provider and the
-     * parse cost — and no re-pricing of any weight term in this file reaches it. If `loop_us` is LARGE and
-     * `step_us` is still small, the engine had the thread and spent it inside the dispatch loop OUTSIDE a
-     * turn's own bracket, and the question is THIS SCHEDULER: the loop's entry and exit work, the park, the
-     * session close, and every slice that ran no turn at all. §solver/flow.c names the first being dispatched
-     * as the second; these two rows are what stops that being a matter of taste.
-     * AND A SLICE THAT TOOK NO TURN IS THE POPULATION THAT MAKES THAT SECOND ARM REACHABLE AT ALL, which is
-     * not obvious from `step_us`' own banner and is worth stating because it inverts what a reader expects.
-     * The turn charge TELESCOPES from the slice's entry reading, so for a slice that takes at least one turn
-     * the loop's entry work is already ON that first turn's bill and `loop_us - step_us` over it is only the
-     * tail. A slice that takes NO turn charges `step_us` NOTHING and charges `loop_us` its whole duration. So
-     * `loop_us - step_us` running large is, first of all, a statement about slices that answered without
-     * dispatching anybody — which `slices` against `steps` is the reading for.
-     * `slices` IS THE DENOMINATOR BOTH OF THEM WOULD OTHERWISE NOT HAVE, and it is the row `over_arms` names
-     * below as the one nothing raises. A per-slice total with no count of slices is a total whose denominator
-     * lives in another census or in nobody's hand, which is the collapse `step_us`' banner is about; with it,
-     * `loop_us / slices` is what a slice costs and `between_slices_us / slices` is what the host takes
-     * between two of them, both in the slice's own measure and both comparable against `ENGINE_QUANTUM_MS`.
-     * IT IS A COUNT AND NOT A MEAN OF ANYTHING, so it survives the run-to-run spread the way `steps` does
-     * not: quoted alone it is unquotable against another run, and as the denominator of a lifetime total of
-     * ONE run it is what makes the quotient quotable at all.
-     * RAISED IN `engine_sched_step` AND NOT IN `engine_sched_slice`, WHICH IS A CORRECTION TO `over_arms`'
-     * OWN CLAUSE AND NOT A CHOICE. That clause says to raise it "beside `quantum_begin()` in
-     * engine_sched_slice", and `quantum_begin()` is not in `engine_sched_slice` — it is in the WRAPPER, which
-     * is the whole reason the wrapper exists. A reader who obeys the clause literally finds no such line.
-     * A REPORT AND NEVER A BOUND (§NO BOUNDS), for `step_us`' reason and with a sharper hazard than any row
-     * above: a count of slices beside what each one cost is exactly the pair a "the engine is not getting
-     * enough thread, take more of it" policy would be built from. Nothing reads any of the three.
-     * `int64_t` FOR `step_us`' REASON EXACTLY on the two microsecond rows — a `long` of microseconds
-     * saturates in 35.8 minutes on wasm32 and INVERTS rather than going absent — and `long` on `slices`,
-     * which is a count of dispatch slices and shares `steps`' horizon and `steps`' type. */
+    /* The partition of instance_us: `loop_us` is thread measure inside engine_sched_step's bracket over every
+     * slice, `between_slices_us` the measure between one slice's return and the next entry plus the span since
+     * the last return (the host's). `loop_us + between_slices_us == instance_us` and `step_us <= loop_us` are
+     * asserted, and engine_step_unit_runs asserts `!quantum_slice_open()` so the open tail is the host's. A
+     * small `loop_us` means the engine was barely given the thread (look at the driver); a large `loop_us` with
+     * a small `step_us` is time in the loop outside turns, first of all slices that dispatched nobody, which
+     * `slices` against `steps` reads. `slices` is counted in engine_sched_step beside quantum_begin(). */
     int64_t loop_us;
     int64_t between_slices_us;
     long    slices;
-    /* …AND THE PARTITION THE SPLIT ABOVE TURNED OUT TO NEED, WHICH IS THE READING AND NOT A SECOND OPINION.
-     * `slice_us`' banner promises that `step_us / steps` against the slice answers whether the loop is
-     * slice-bound. It does not, because that quotient is a LIFETIME MEAN over a turn population that is not
-     * uniform: read as a SERIES rather than as a terminal value, the MARGINAL cost between consecutive
-     * censuses of one run spans four orders of magnitude — 0.105 ms between two samples and 822 ms between
-     * two others — so the mean is a figure no turn is near, and comparing it against the budget is the
-     * bare-count-over-an-unpartitioned-population defect wearing a ratio.
-     * AND THE DISTRIBUTION IS NOT MERELY WIDE, IT IS A HANDFUL OF OUTLIERS CARRYING ALMOST ALL THE TIME,
-     * which is the shape that decides what this row is worth. Over one whole run — 47 censuses, 13043 turns,
-     * revision 638eb345, one interleaving — FOUR of the 46 windows had a marginal turn at or past the slice
-     * and the other FORTY-TWO ran at 0.1 to 1.5 ms, comfortably inside it. So the loop is not slice-bound in
-     * the way a mean of 56 ms suggests: it is overwhelmingly NOT slice-bound, with a few turns of 155, 222,
-     * 684 and 822 ms — the last being 68 slices in one turn — carrying the run. That is a small population
-     * to go and look at, which a mean can never hand you.
-     * A COROLLARY THAT CORRECTS THE PHASE SPLIT'S OWN HEADLINE: the STEP's share is not a constant. Over the
-     * same run it drifts monotonically from 99.99% to 99.87%, so `sched`'s share GROWS sixteenfold as the run
-     * proceeds — which is what a roughly fixed per-turn cost does once the cheap turns come to dominate the
-     * denominator. The conclusion is unchanged and its stability was overstated: a single quoted percentage
-     * of this pair is a reading of WHERE IN A RUN it was taken. `slice_overruns` is the count of
-     * TURNS whose step alone met or exceeded the budget, so `slice_overruns / steps` is a proper fraction of
-     * a denominator this struct already carries and needs no mean at all.
-     * IT IS THE SAME INEQUALITY quantum_expired() ASKS ON ONE OF THE TWO BRANCHES, AND THE PARAGRAPH THAT SAID
-     * IT WAS BOTH IS REWRITTEN RATHER THAN DELETED BECAUSE IT IS THE CLAIM A READER RE-DERIVES. It read:
-     * "solver/quantum.c tests `quantum_thread_us() - <slice start> >= ENGINE_QUANTUM_MS * 1000` and this tests
-     * the step's own two readings against that same product", and that is the GENERIC branch. The LINUX branch
-     * — the one the native gate compiles, and so the one every number quoted off this row was measured on —
-     * returns `g_fired != 0`, a flag a CLOCK_THREAD_CPUTIME_ID timer sets. The two agree in INTENT and are not
-     * one test: this row compares two clock readings and that branch reads a signal flag, so a delayed or
-     * coalesced delivery moves one and not the other. The conclusion the paragraph drew is unchanged — the row
-     * is not a private opinion about the budget — but it rests on the two being written to the same MARGIN,
-     * never on their being the same expression.
-     * AND THE TAIL CLAUSE NAMED THE WRONG HOST, WHICH INVERTS WHAT A NATIVE OVERRUN MEANS. It called this
-     * count "§scheduler's named transport gap made countable on a host where nothing can raise the yield bit
-     * mid-call" — true of the wasm instance, which has no asynchronous edge, and FALSE of the native host,
-     * whose timer raises the bit mid-call by construction. So a native overrun is not the transport gap: it is
-     * a stretch that offered no raise point WHILE THE BIT WAS RAISABLE, which is the stronger reading and the
-     * one the seam verdict exists for.
-     * AND NEITHER SEAM VERDICT CAN JUDGE THE POPULATION THIS ROW COUNTS, WHICH IS WHY THE ROW KEEPS READING
-     * HIGH BESIDE A SILENT ABORT. Both verdicts in engine_sched_step are ANDed with `g_preempt_asked == pa0`
-     * — ZERO consultations across the WHOLE step — so they can only ever name a step that never offered a
-     * point AND never ended by being preempted. A turn in this row ended at the slice boundary, so the hook
-     * WAS consulted to end it, the conjunct is false, and both verdicts are disarmed AT ANY MARGIN. The CPU
-     * margin is independently too coarse for it: 400 slices against a measured population near 291. MEASURED
-     * on the native smoke at two adjacent revisions, 9e0f14dc and 3864b36a: `resume-program` overran 70 of
-     * 161 and 70 of 152 runs, `start-a-classic-program` 3 of 7 and 3 of 8, total 73 both times over 1521 and
-     * 945 steps, with ZERO @WHY in either log. The quantity the contract is about is the GAP between two
-     * consecutive offers, which this file already computes (`g_max_gap`, closed off with the tail) and prints
-     * without deciding on, because it is WALL and a wall gap cannot tell a seamless stretch from a descheduled
-     * one. On a host quantum_measure_is_cpu() answers for, that objection does not apply and the gap can be
-     * taken in the slice's own measure — which is the same move the CPU verdict already made for the TOTAL,
-     * owed to the quantity the seam is actually about.
-     * RETIREMENT: this record goes when a seam verdict decides on the GAP in the slice's own measure, so a
-     * step that rests once and then runs seamlessly cannot be silent.
-     * A COUNT AND NOT A MAXIMUM. A high-water mark of turn length would saturate early and then plateau, and
-     * a plateau is indistinguishable from a ceiling on a short run; a count only rises with the population it
-     * is drawn from, and the population is printed beside it. */
+    /* Turns whose step alone met or exceeded the slice budget, so `slice_overruns / steps` is a fraction of a
+     * published denominator; the lifetime mean `step_us / steps` hides that a few long turns usually carry the
+     * time. It compares the step's two clock readings against ENGINE_QUANTUM_MS, the margin quantum_expired()
+     * uses, though on Linux quantum_expired() reads a timer-set flag rather than the clock. Neither seam verdict
+     * in engine_sched_step can judge these turns: both require `g_preempt_asked == pa0`, and an overrunning turn
+     * consulted the hook to end. A count, not a maximum, so it cannot plateau like a ceiling. */
     int64_t slice_overruns;
-    /* …AND WHICH ARM EACH OF THOSE TURNS WAS IN, which is the question the count above raises and cannot
-     * answer. `arms` is the same list counting RUNS, so this is that histogram restricted to the turns that
-     * overran, in solver/step_unit.h's order, and `sum(over_arms) == slice_overruns` is asserted where both
-     * are in one hand exactly as `sum(arms) == steps` is. Two histograms over one list, and the pair is the
-     * reading: an arm with many runs and no overruns is cheap however often it is taken, and an arm with
-     * FOUR runs and FOUR overruns is a step that cannot be preempted, which is a different diff in a
-     * different component from a hot arm.
-     * WHY IT IS NOT PER-ARM TIME. A time accumulator per arm would answer "where did the run go", which is a
-     * question about MASS; this answers "which arm cannot rest", which is a question about the TRANSPORT, and
-     * only the second is what §NO BOUNDS' suspend-at-any-depth requirement is about. A count also needs no
-     * second clock reading and partitions a total this struct already publishes, so it can be asserted
-     * rather than believed.
-     * ITS FIRST READING INVERTED THE OBVIOUS ONE, AND THAT IS WHAT THE PAIR ABOVE IS FOR. Ordered by COUNT the
-     * answer was `resume-program`, 55 of the 65 overruns — and that arm runs 2085 times, so its rate is 2.6%
-     * and it is the LEAST interesting of the three. Ordered by RATE the answer is `start-a-classic-program`:
-     * 8 overruns out of TWENTY-FOUR RUNS, one start in three held the thread past the slice. A magnitude and a
-     * rate over one population, naming different arms, which is why the reader that renders this says which
-     * it sorted by.
-     * AND THE SHAPE OF THE DISTRIBUTION IS A SEPARATE FACT FROM EITHER — the overruns are NOT spread with the
-     * work. On that run `deliver-one-reply` took 36% of every turn and `run-a-task` 18.5%, and NEITHER OVERRAN
-     * ONCE; every overrun was in one of three arms and two of those three are a program STARTING or RESUMING.
-     * So the slice is held by particular UNITS OF WORK rather than by the amount of work. An arm's ABSENCE
-     * from the overrun histogram is therefore evidence, and it is the half a reader who looks only at the
-     * non-zero rows never sees.
-     * AND THE MECHANISM THIS PARAGRAPH FIRST GAVE FOR THAT IS RETIRED, REFUTED BY THE SAME RUN'S OWN ROWS —
-     * rewritten rather than deleted, because it is the explanation a reader re-derives in one step and it is
-     * wrong. It said: the only raise sources are the interpreter's own (a back edge, a call, a fork), so a
-     * unit running ENGINE C rather than page bytecode has nothing to raise the request and the budget cannot
-     * be evaluated inside it however long it takes. The raise-kind half is TRUE and checkable — quickjs.h
-     * declares exactly JS_PREEMPT_BACKEDGE, _FORK, _CALL and _HOST, and solver/engine.c's preempt_hook is the
-     * only caller of quantum_expired on the flow path. The CONCLUSION does not follow, and this run refutes
-     * it: a start COMPILES before it executes, and `start-ended-its-frame` — a start that compiled and ran to
-     * completion inside the step — ran 153 TIMES AND OVERRAN NOT ONCE. `deliver-one-reply`, engine C at its
-     * own door, ran 6990 times and overran not once either. The compile is not what holds the slice.
-     * AND THE RATE WAS QUOTED AGAINST THE WRONG DENOMINATOR, WHICH IS WHAT MADE THE WRONG MECHANISM LOOK
-     * NECESSARY. `start-a-classic-program` does not mean "a start"; step_unit.h's own split says it means a
-     * start THAT RETURNED WITH ITS FRAME LIVE, its three frame-clearing outcomes being separate rows. So the
-     * 24 is not the start population: all four start rows sum to 192, and 8 of 192 is 4.2%. "One start in
-     * three" was a fraction of the wrong total, which is this project's own coverage-figure defect committed
-     * at the row that exists to prevent it.
-     * WHAT THE PARTITION ACTUALLY SAYS IS SHARPER THAN EITHER READING, because the two are not two
-     * denominators for one question but TWO POPULATIONS: a start that FINISHED inside the step overran 0 of
-     * 153 times, and a start that was STILL RUNNING when the step ended overran 8 of 24. The overruns sit
-     * where page code was still executing, which is what a stretch between two of the page's OWN raise points
-     * looks like — a long back-edge-free, call-free run — and not where this engine's C is. `resume-program`
-     * at 55 of 2085 is the same population one step later. A unit is not uninterruptible because it is C; it
-     * is uninterrupted because the BYTECODE it is running offered no raise point, and only the page decides
-     * that.
-     * AND IT IS NOT A COUNT OF THE TURNS THAT ENDED ON THE COOPERATIVE QUANTUM, WHICH IS THE READING A
-     * READER HOLDING A FRAME-CLEARING RATE ARRIVES AT AND THE ONE THIS ROW MOST INVITES. preempt_hook's
-     * third clause ends a turn when the quantum is SPENT, so it reads as though that population must be
-     * exactly the turns counted here. The budget is the SLICE's and a slice holds MANY turns:
-     * solver/quantum.c arms the edge once at engine_sched_slice's `quantum_begin()` and the dispatch loop
-     * ends the slice on the same expiry, so at most ONE turn per slice can end on that clause and ITS OWN
-     * delta is whatever was left of the budget when the edge fired — usually far under it, and therefore
-     * not in this row at all. What this row counts is a turn that ALONE met the whole budget, which is the
-     * transport question the paragraphs above are about and is a different population entirely.
-     * WHAT ANSWERS THE OTHER QUESTION IS A COUNT OF SLICES, AND `slices` ABOVE IS IT — THE CLAUSE THAT SAID
-     * NOTHING RAISES ONE IS RETIRED AND ITS COORDINATE WAS WRONG WHEN IT WAS WRITTEN, WHICH IS WORTH MORE
-     * THAN THE RETIREMENT. It said to "raise a slice count beside `quantum_begin()` in engine_sched_slice",
-     * and `quantum_begin()` has never been in `engine_sched_slice`: it is in `engine_sched_step`, whose own
-     * banner says why the bracket is a wrapper at all. The SPLIT was right, the MECHANISM was right, and the
-     * clause named a line that does not exist — which is what a next-diff clause is for and what it is worst
-     * at, because the one reader of it has already decided to do the work.
-     * WHAT THE COUNT BUYS, STATED AS THE BOUND IT IS AND NOT AS AN ANSWER: solver/quantum.c arms the edge
-     * once per slice and the dispatch loop ends the slice on the same expiry, so the quantum-ended
-     * population is bounded above by `slices`, and `steps - slices - <the blocked arms>` is a FLOOR on the
-     * outranked one. STILL NOT COVERED, and it is the same sentence as before with the bound subtracted from
-     * it: how a turn IN ANY GIVEN ARM came to end is still one of three clauses and is still unreadable at
-     * every arm, so the pair above is a statement about the RUN and never about a row. The two that matter
-     * take OPPOSITE work — a quantum-ended turn saying the slice is short for the spans being run (a policy
-     * input this scheduler owns and may tune) and an OUTRANKED turn saying the order moved the thread to a
-     * better-ranked member, which is the WFQ doing what it is for and is not a thing to repair.
-     * HOW ITS ABSENCE SHOWS, unchanged because the per-arm half is unchanged: a reader meeting a low
-     * frame-clearing rate reaches for this row, finds it small, and concludes the slice is not what ends
-     * those turns — which this row cannot support in either direction, because the population it counts is
-     * not the one that question is about. */
+    /* slice_overruns per arm, in solver/step_unit.h's order; `sum(over_arms) == slice_overruns` is asserted
+     * with the turn in hand. Read it as a rate against `arms` as well as a count, and against the arm's real
+     * population: `start-a-classic-program` is only a start that returned with its frame live, one of four
+     * start rows. It says which arm cannot rest, not where time went. It is not the count of turns that ended
+     * on the quantum: a slice holds many turns and at most one ends on that clause, so those are bounded by
+     * `slices`, and how a turn in a given arm ended (quantum, outranked, blocked) is not readable per arm. */
     long over_arms[STEP_UNIT_N];
-    /* …AND WHETHER THE PAGE'S OWN CODE WAS EVEN RUNNING IN THOSE TURNS, WHICH IS THE ONE THING THE ARM
-     * HISTOGRAM ABOVE CANNOT SAY AND THE THING ITS OWN CONCLUSION RESTS ON. `over_arms`' banner reaches a
-     * verdict — "the overruns sit where page code was still executing, which is what a stretch between two of
-     * the page's OWN raise points looks like" — and NOTHING in this struct measures that. It is an inference
-     * from the ARM a turn declared, and an arm is where a step ENDED: `resume-program` and
-     * `start-a-classic-program` both end inside JS_FlowResume whether the time went into the page's bytecode
-     * or into ONE native call that never returned, and those take OPPOSITE work. One is the page choosing a
-     * back-edge-free stretch, which no ordering reaches and which §NO BOUNDS forbids capping; the other is a
-     * C activation that declares no step boundary, which is a step-machine conversion (§C-stack) in whichever
-     * component owns that call.
-     * AND THE EVIDENCE THAT CONCLUSION RESTS ON IS A FIXTURE'S, WHICH A REAL PAGE DISAGREES WITH — RELAYED
-     * AND NOT RE-DERIVED HERE, SO IT IS A CLAIM TO CHECK AND NOT A ROW. `over_arms`' banner reaches its
-     * verdict partly from `deliver-one-reply` running 6990 times on the native smoke and overrunning NOT
-     * ONCE, i.e. engine C at its own door never holding the slice. A reading relayed from gitlab.com/explore
-     * has that same arm overrunning 4 of 43 runs. If that holds, the fixture's zero is a statement about
-     * REPLIES THE FIXTURE SERVES and not about engine C, which is exactly the shape CLAUDE.md's
-     * fixture-workload rule names: a body whose length the page chose is not a quantity a fixture's
-     * denominator contains. The rows below are what settles it either way, on either host, without anybody
-     * having to believe the relay.
-     * WHAT SEPARATES THEM IS ALREADY COMPUTED AND HAS NO READER FOR THIS POPULATION. solver/engine.c samples
-     * `g_preempt_asked` at each turn's start, and the difference across the turn is how many suspend points
-     * the path OFFERED — zero means the turn never reached ONE interpreter raise point. Both seam verdicts in
-     * engine_sched_step are ANDed with `g_preempt_asked == pa0`, so they can only ever name a turn that
-     * offered NO point, and a turn in `slice_overruns` ended at the slice boundary, where the hook WAS
-     * consulted to end it. The CPU verdict additionally requires quantum_measure_is_cpu(), which is FALSE on
-     * the host that ships. So on the shipped host the consultation count is written every turn and read by
-     * nothing that can fire on an overrunning one: CLAUDE.md's computed-writer-with-no-reader defect, with
-     * the value real and the only reader structurally disarmed.
-     * TWO ROWS AND NOT ONE, because a SUM over the overrunning turns can be carried by one chatty turn while
-     * every other one of them offered nothing. `slice_overrun_asks` is the total and
-     * `slice_overrun_seamless` is HOW MANY of those turns offered zero — a count of turns, not of
-     * consultations — so the pair partitions the population by the property that decides the diff rather than
-     * averaging over it. THE TWO ARE EXACTLY EQUIVALENT AT THEIR ENDPOINTS and that is asserted where both
-     * are in one hand: `slice_overrun_asks == 0` if and only if `slice_overrun_seamless == slice_overruns`,
-     * because a turn contributes to the sum precisely when it is not seamless.
-     * IN EVERY BUILD, unlike the seam verdict's own sampling, and the price is ONE READ OF A STATIC per turn
-     * beside the two clock readings the turn already takes — the same argument solver/engine.c already makes
-     * for `g_preempt_asked`'s increment being outside the dev guard, one indirection cheaper. The bracket is
-     * the STEP's and not the turn's: it opens at the same `t_slice0` `slice_us` opens at, so the count is
-     * over exactly the span the overrun test is about and not over the pick and the swap.
-     * THEY DECIDE NOTHING AND BOUND NOTHING (§NO BOUNDS). Nothing reads either to refuse a step, shorten a
-     * slice or demote a flow; a per-turn count of suspend points offered is precisely what a "this flow is
-     * not yielding, take the thread" watchdog would be built from.
-     * AND THE THIRD READING IS THE ONE THE PHASE SPLIT ABOVE CANNOT MAKE, WHICH IS WHY THIS PAIR IS NOT A
-     * RESTATEMENT OF `sched_us`. `sched_us` bounds what the PICK cost — flow_next_to_run runs before the step
-     * bracket opens — and the preempt hook's OWN rescan of the frontier does not land there: it is called
-     * from the interpreter, so an O(members) walk through flow_rival_of is charged to `slice_us`, inside the
-     * very turns this row counts. A reader who takes a small `sched_us` for "the ordering is not the cost"
-     * has bounded the pick and said nothing about the hook. `slice_overrun_seamless == slice_overruns`
-     * settles it outright and in the other direction: flow_rival_of's only caller is that hook, which raises
-     * the consultation count before it rescans, so a turn that offered no consultation performed no rescan
-     * and weighed no member. The ordering is then excluded from those turns by construction rather than by a
-     * bound on a neighbouring row.
-     * HOW THEIR ABSENCE WOULD SHOW, as an observation and not an instance: a reader holding a nonzero
-     * `slice_overruns` reaches for `over_arms`, finds mass in a program arm, and states which of the two
-     * spans held the thread — with no row anywhere in the artifact that could have contradicted them.
-     * RETIREMENT: these two go when a seam verdict can judge a turn that ENDED at the slice boundary, i.e.
-     * when it is no longer conjoined with `g_preempt_asked == pa0`, because the existing reader then names
-     * the same population and these rows are a second copy of it. */
-    uint64_t slice_overrun_asks;      /* suspend points OFFERED, summed over the turns that met the slice */
-    long     slice_overrun_seamless;  /* …and how many of those turns offered NOT ONE */
-    /* …AND IN WHICH ARM THOSE SEAMLESS TURNS WERE, WHICH IS THE JOIN THE TWO ROWS ABOVE AND `over_arms` CANNOT
-     * MAKE AND THE ONE THING THE WHOLE PAIR'S CONCLUSION RESTS ON. `over_arms` is a histogram and
-     * `slice_overrun_seamless` is a SCALAR, so a reader holding one arm at three quarters of all overruns and a
-     * seamless count at three quarters of the same total cannot say whether those are the same turns — and the
-     * two readings take OPPOSITE work, which is this pair's own argument: a seamless stretch is "a C activation
-     * that declares no step boundary, which is a step-machine conversion (§C-stack) in whichever component owns
-     * that call", and a stretch that offered points and ran anyway is "the page choosing a back-edge-free
-     * stretch, which no ordering reaches and which §NO BOUNDS forbids capping". Two components, two diffs, and
-     * until this row the evidence for either was two numbers of similar size.
-     * MEASURED, WHICH IS WHY IT IS A ROW RATHER THAN A CAUTION: over three drives of one release artifact on one
-     * real app, `seed-one-orphan-flow` overran 36 of 55, 100 of 121 and 122 of 140 of its OWN runs — 51%, 72%
-     * and 76% of all overrunning turns — while the seamless scalar read 55%, 75% and 78% of that same total. The
-     * two move together across three passes and nothing could join them.
-     * IT IS A PARTITION OF `slice_overrun_seamless` EXACTLY AND A SUBSET OF `over_arms` PER ARM, and both are
-     * asserted where all of them are in one hand — inside the overrun branch, one statement after the scalar,
-     * from the same turn's arm and the same turn's consultation delta. Asserting at the accessor instead would
-     * learn of a disagreement with the turn that caused it long gone.
-     * LIFETIME COUNTS, never reset, raised in EVERY build — the scalar they partition is raised unconditionally
-     * too, and a partition compiled out in release would print zeros beside a nonzero total and read as turns
-     * that all offered a point rather than as a build that never classified them.
-     * IT DECIDES NOTHING AND BOUNDS NOTHING (§NO BOUNDS), for the scan counters' reason exactly.
-     * HOW ITS ABSENCE SHOWS, as an observation and not an instance: a reader holding a nonzero
-     * `slice_overruns` finds one arm carrying most of them and the seamless scalar carrying a similar share,
-     * and states which of the two spans held the thread — with no row in the artifact that could contradict
-     * them in either direction.
-     * RETIREMENT: this goes when a seam verdict can judge a turn that ENDED at the slice boundary, which is
-     * the condition its own scalar carries, because the existing reader then names the same population per arm
-     * and this is a second copy of it. */
+    /* Suspend points offered over the overrunning turns (the `g_preempt_asked` delta across each turn's step
+     * bracket), and how many of those turns offered none. A seamless overrun is a C activation with no step
+     * boundary, fixed by a step-machine conversion in that component; one that offered points is the page's
+     * own back-edge-free stretch, which is not capped. `slice_overrun_asks == 0` iff `slice_overrun_seamless ==
+     * slice_overruns`, and `slice_overrun_asks <= engine_preempt_asks()`, both asserted. A seamless overrun
+     * also performed no rival rescan, since flow_rival_of runs only after a consultation. Every build. */
+    uint64_t slice_overrun_asks;      /* suspend points offered, summed over the turns that met the slice */
+    long     slice_overrun_seamless;  /* …and how many of those turns offered none */
+    /* slice_overrun_seamless per arm: a partition of it and a subset of `over_arms` per arm, both asserted in
+     * the overrun branch with the turn in hand. Lifetime, every build. */
     long     over_seamless_arms[STEP_UNIT_N];
-    /* …AND HOW MANY POINTS THE NON-SEAMLESS TURNS OF EACH ARM OFFERED, WHICH IS THE ONE QUANTITY
-     * `slice_overrun_asks` DESTROYS BY BEING A SUM. The scalar is a total over every overrunning turn that
-     * offered at least one point, so a turn that asked TWICE and a turn that asked TWO THOUSAND TIMES are one
-     * figure, and `asks / overruns` over the whole population averages across arms whose rates differ by an
-     * order of magnitude. Those two per-turn densities are the two readings §`slice_overrun_asks` leaves open
-     * and cannot separate: a turn that offered a handful of points and then ran for seconds is a long gap
-     * between consultations — the population solver/quantum.h names as closed by a step-machine conversion and
-     * by nothing in that file — while a turn that offered thousands and ran anyway is the page choosing a
-     * stretch no ordering reaches, which §NO BOUNDS forbids capping. PER ARM is what makes the question
-     * answerable at all, because the arms do not share a density: measured over seven real-site drives of two
-     * documents, `deliver-one-reply` overran 4.6-11.3% of its own 401-622 runs while
-     * `evaluate-a-module-program` and `microtask-checkpoint` overran 100% of their 3-6, so one ratio over the
-     * sum is a mean across populations that answer differently.
-     * RAISED IN THE SAME BRANCH AS THE SCALAR AND FROM THE SAME DELTA, one statement apart, so
-     * `sum(over_ask_arms) == slice_overrun_asks` is exact THERE and is asserted there — the same argument
-     * `over_seamless_arms` makes, and the reason neither is asked at the accessor, where a disagreement would
-     * arrive with the turn that caused it long gone. It is the COMPLEMENT of `over_seamless_arms` by the order
-     * of two statements rather than by agreement: a turn adds to one arm's ask sum precisely when it does not
-     * add to that arm's seamless count.
-     * A SUM OF CONSULTATIONS AND NOT A COUNT OF TURNS, which is why its denominator is `over_arms` minus
-     * `over_seamless_arms` and never `over_arms` — a seamless turn contributes zero to this row by
-     * construction, so dividing by every overrunning turn of the arm understates the density of the ones that
-     * actually asked. That is the gauge-and-lifetime split arriving inside one pair, and stating it here is
-     * what stops a reader composing the wrong quotient from two rows that sit side by side.
-     * LIFETIME COUNTS, never reset, raised in EVERY build for `over_seamless_arms`' reason exactly.
-     * A `long` WHERE THE SCALAR IT PARTITIONS IS A `uint64_t`, WHICH IS A NARROWING AND IS CHECKED RATHER THAN
-     * HOPED. The width is not free to choose: solver/result.c composes every step-unit row through ONE
-     * `cold_hist_json`, whose own banner exists to stop a second speller of the row format from drifting, and
-     * that composer takes a `long` array and prints `%ld`. A `uint64_t` partition would therefore force a
-     * SECOND composer for one row — the drift this project refuses — so the row is a `long` and the add
-     * asserts its own headroom at the raise, in the form a DCHECK condition may take, exactly as the
-     * microsecond accumulators do. On the host that ships a `long` is four bytes, so the horizon is about two
-     * billion consultations IN ONE ARM across a frontier that is never reset; the scalar stays 64-bit because
-     * it sums every arm and because narrowing it would be a change to a published row rather than to a new
-     * one. The assert is what makes that sentence a checked claim instead of a remembered one.
-     * IT DECIDES NOTHING AND BOUNDS NOTHING (§NO BOUNDS): a per-arm count of suspend points offered is
-     * precisely what a "this arm is not yielding, take the thread" watchdog would be built from.
-     * HOW ITS ABSENCE SHOWS, as an observation and not an instance: a reader holding an arm at 100% of its own
-     * runs overrunning reaches for `slice_overrun_asks`, divides by `slice_overruns`, and states a per-turn
-     * density that is a mean over every other arm's turns as well — with no row in the artifact that could
-     * contradict them.
-     * RETIREMENT: this goes when a turn's own maximum inter-consultation GAP is published per arm, because the
-     * density this row gives is a proxy for that gap and the gap is what the two readings actually differ on —
-     * which is the condition `slice_overrun_asks`' own banner carries, and the gap is computed in every DEV
-     * build already and read only by a verdict conjoined with `asked == 0`. */
+    /* slice_overrun_asks per arm (`sum == slice_overrun_asks`, asserted in the overrun branch), because arms
+     * differ in density by orders of magnitude. Its denominator is `over_arms - over_seamless_arms`, since a
+     * seamless turn adds nothing. A `long` because solver/result.c composes step-unit rows through one
+     * `cold_hist_json` that takes `long`; the add asserts its headroom. Lifetime, every build. */
     long     over_ask_arms[STEP_UNIT_N];
-    /* …AND THE LONGEST STRETCH INSIDE ONE OF THOSE TURNS DURING WHICH NO SUSPEND POINT WAS OFFERED, WHICH IS
-     * THE ONE QUANTITY THE ROW ABOVE IS A PROXY FOR AND CANNOT BE — AND WHICH IS WORTH SOMETHING DIFFERENT
-     * FROM WHAT THIS BANNER FIRST CLAIMED, BECAUSE THE INTUITIVE ARGUMENT FOR IT IS REFUTED BY THIS ENGINE.
-     * IT READ: `over_ask_arms` divided by its own denominator is a DENSITY, and a density is a MEAN — a turn
-     * that held the thread for seven seconds and consulted the policy nine times reads 9 whether those nine
-     * were evenly spread (nine stretches of about 800 ms, which is NINE spans with no suspend point in them
-     * and therefore nine step-machine conversions' worth of C) or clustered in the first millisecond before
-     * one unbroken 7-second run, which is ONE; those take opposite work and the mean cannot separate them.
-     * IT IS KEPT IN ITS OWN WORDS BECAUSE IT IS THE ARGUMENT A READER RE-DERIVES IN ONE STEP, and the EVENLY
-     * SPREAD world it rests on CANNOT OCCUR HERE. Derived by reading, not relayed: `quantum_expired()` is
-     * MONOTONE within one open slice on BOTH hosts — the generic branch tests a monotone clock against a
-     * `g_slice_start_us` fixed at `quantum_begin`, and the linux branch reads a `g_fired` flag cleared ONLY in
-     * `quantum_begin` and `quantum_end` — and solver/engine.c's preempt_hook has exactly three returns, of
-     * which the only one that can answer FALSE is `return quantum_expired()`. Every consumer of a TRUE in
-     * quickjs.c parks (`goto do_*_park`) or, off the flow base, `DFAIL`s, and a park ENDS THE TURN. So at most
-     * ONE consultation per turn answers TRUE, every consultation that answered FALSE happened before the slice
-     * reached ENGINE_QUANTUM_MS, and an overrunning turn lies inside a slice its own span already met —
-     * therefore EVERY consultation of an overrunning turn falls inside one window of at most
-     * ENGINE_QUANTUM_MS from that slice's opening.
-     * WHICH MAKES THE GAP BOUNDED RATHER THAN FREE: it lies in [span − ENGINE_QUANTUM_MS, span] for every
-     * non-seamless overrunning turn, so a long dark stretch is GUARANTEED on any such turn whose span exceeds
-     * twice the budget and is not news. WHAT THE ROW IS THEREFORE WORTH IS THREE THINGS AND NOT THE ONE ABOVE.
-     * FIRST, and this is what nothing else publishes: to within one budget it is the per-arm MAXIMUM TURN SPAN
-     * of a non-seamless overrunning turn — `over_arms` is deliberately a COUNT and its own banner says WHY IT
-     * IS NOT PER-ARM TIME, so no row anywhere says how long the worst turn of an arm actually was, and a
-     * AND THAT FIRST USE IS NOT THIS BANNER'S ARGUMENT, IT IS A MEASUREMENT THIS TREE MADE WITHOUT IT, which
-     * is better evidence than any reasoning here and is read from the commit rather than recalled: `6813a2a`
-     * WITHDRAWS a per-arm turn span from testing/live-run.js's own banner because the row it was taken from
-     * pools its denominator over every arm, and states what IS derivable per-arm from the rows that exist —
-     * "lower 4 x 12 ms = 48 ms", "upper 64.875 s", "ratio 1352x". That bracket is the hole this row fills: it
-     * answers the same question to within ONE BUDGET instead of within three orders of magnitude. The same
-     * message records why pooling is not a small imprecision there — ask densities of 1.0, 19.3 and 6.0 on
-     * one census line, a nineteenfold spread — which is `over_ask_arms`' own per-arm argument measured. READ
-     * from `git log -1 --format=%B 6813a2a` and not re-derived here, so it is that commit's claim and not
-     * this file's; what this file asserts is only that the row it adds is denominated in the same measure the
-     * bracket is.
-     * SECOND, the
-     * RESIDUE `span − gap` is inside that one budget and says WHERE in the window the offers sat: at the
-     * span the turn went dark immediately, a budget short of it the offers ran to the window's end. THIRD, a
-     * value far above the budget IS the violation g_max_gap's own comment defines — "a step that runs five
-     * seconds between two consecutive offers is the violation, whatever its total" — and a MAXIMUM
-     * establishes it the moment it is OBSERVED, which is the one property a maximum has that a count does not.
-     * THE ONE STATE THAT BREAKS THE DERIVATION IS ALREADY A REPORTED ONE, so this is a bound and not an
-     * absolute: a consumer that DROPS a TRUE instead of acting on it leaves the turn running, after which a
-     * second consultation can answer TRUE and the window argument fails. That is exactly the
-     * `requested > fired` state solver/engine.c's seam message prints and names ("a point was reached, the
-     * preempt was wanted, and it was DROPPED because no driver at that depth adopts the seam"), so a reader
-     * who finds a gap far below `span − ENGINE_QUANTUM_MS` has found that, and not a narrow stretch.
-     * MEASURED, AND IT IS WHY THE DENSITY ALONE IS NOT ENOUGH RATHER THAN WHY IT IS WRONG — RELAYED FROM FIVE
-     * FRESH-BROWSER DRIVES OF ONE DEV ARTIFACT AND NOT RE-DERIVED HERE, SO IT IS A CLAIM TO CHECK. Two
-     * documents sat in OPPOSITE regimes four orders of magnitude apart: three drives of one read 87, 70 and 74
-     * consultations over 9, 9 and 11 overrunning turns with ZERO seamless ones — 6.7 to 9.7 each — while a
-     * drive of the other read 1010142 over its 28 asked turns, about 36000 each. WHAT THAT BUYS AS A BOUND AND
-     * NOT AS A STORY: a turn in this row met the budget, so it ran at least ENGINE_QUANTUM_MS, and nine offers
-     * across it is at most one every 1.3 ms — while the turn's own LENGTH is unbounded above by anything on
-     * this line, which is exactly why the gap is needed and is the half a density can never supply. BOTH
-     * densities are correct and they
-     * name opposite mechanisms, and in NEITHER case does the mean say where the time went: the low-ask regime
-     * is exactly the one where a handful of consultations are consistent with one enormous gap, and it is the
-     * regime the row above was built on.
-     * THE UNIT IS THE SLICE'S OWN MEASURE AND THAT IS THE WHOLE OF THE ROW'S VALUE. A gap counted in
-     * CONSULTATIONS answers nothing — the gap between two consecutive consultations is 1 by definition — and a
-     * gap in WALL milliseconds cannot be compared with anything this scheduler decides on, which is why the
-     * wall gap solver/engine.c already computes is PRINTED and never decided upon. `quantum_thread_us()` is the
-     * currency the slice is denominated in, so a reading off this row is directly comparable with
-     * ENGINE_QUANTUM_MS: "the longest stretch with no consultation was 6400000 us against a 12000 us budget"
-     * is a sentence a reader can act on and "9.7 consultations each" is not.
-     * IT COSTS ONE CLOCK READ PER CONSULTATION AND THAT IS A CHECKED CLAIM RATHER THAN A HOPE. On the generic
-     * and emscripten branch solver/quantum.c's quantum_expired() ALREADY calls quantum_thread_us() — it is
-     * `quantum_thread_us() - g_slice_start_us >= ENGINE_QUANTUM_MS * 1000` — and preempt_hook's last clause is
-     * `return quantum_expired()`, so on the host that ships this is a SECOND read of a clock that hook already
-     * reads per consultation and not a new class of cost. On the native branch quantum_expired() returns a
-     * `volatile sig_atomic_t` flag and the read is genuinely new, in a hook that already performs two
-     * flow_weight calls plus an O(members) rival rescan on a cache miss. Both brackets are free: the turn's two
-     * ends are `t_slice0` and `now`, which engine_sched_step already reads in this same measure in EVERY build.
-     * IN EVERY BUILD, for `slice_overrun_asks`' reason exactly and with a sharper consequence. A gap row
-     * compiled out in release would read ZERO beside a nonzero ask sum, and a zero maximum gap is the
-     * statement that every consultation of every overrunning turn was adjacent to the next — the FLATTERING
-     * reading, and the one that retires the step-machine hypothesis this row exists to test. That is the
-     * under-claim CLAUDE.md names as the direction nobody discovers by acting on, because acting on it means
-     * not looking.
-     * IT IS NOT A PARTITION AND SO ITS IDENTITY IS NOT A SUM, which is the one thing a reader of the three
-     * rows above must not carry over. `sum(over_arms) == slice_overruns` and its two restrictions are
-     * partitions; a sum of MAXIMA is a quantity no turn produced and no reader may compose. What holds is
-     * `max over the arms == slice_overrun_gap_us` — the scalar is the same fold of the same per-turn number
-     * over the same population — asserted inside the overrun branch where the arm, the turn's two clock
-     * readings and the turn's consultation delta are all in one hand, exactly as the three rows above are and
-     * never at the accessor. ONE ASSERT AND NOT TWO: the per-arm containment
-     * `over_gap_arms[i] <= slice_overrun_gap_us` is ENTAILED by that maximum rather than independent of it, so
-     * asserting it beside it would be one fact checked twice and would read as two. That is NOT true of the
-     * three partitions above, where a sum identity holds with one arm's subset standing above its own
-     * population and another's below it, which is exactly why each of those carries a second containment and
-     * this one does not.
-     * ITS DENOMINATOR IS THE SERIES LENGTH AND IT IS ALREADY PUBLISHED, which is what makes a ZERO readable.
-     * A 0 in this row is two states — this arm had no non-seamless overrunning turn at all, or it had some and
-     * every one of their gaps was under a microsecond — and `over_arms[i] - over_seamless_arms[i]` tells them
-     * apart, which is the same denominator `over_ask_arms`' density is taken over. So the discriminator is a
-     * row this struct already carries and this one needs no sentinel.
-     * A MAXIMUM, WHICH `slice_overruns`' OWN BANNER ARGUES AGAINST FOR ITSELF, AND THE DIFFERENCE IS WHAT THE
-     * READING IS COMPARED WITH. That banner says "A COUNT AND NOT A MAXIMUM. A high-water mark of turn length
-     * would saturate early and then plateau, and a plateau is indistinguishable from a ceiling on a short
-     * run", and it is right about a magnitude read against ANOTHER RUN'S magnitude. This one is read against a
-     * COMPILE-TIME CONSTANT: the actionable question is whether any stretch of this arm ran far past the
-     * budget, which is a FLOOR established the moment it is observed and does not get truer with a longer run.
-     * What a reader may NOT do is read it as a ceiling — "gaps never exceed this" is exactly the misreading
-     * CLAUDE.md names, and the series length beside it is what bounds how much evidence the figure is.
-     * A SEAMLESS TURN IS EXCLUDED AND ITS GAP IS A DIFFERENT QUANTITY WEARING THIS NAME. A turn that offered
-     * NOT ONE suspend point has no inter-consultation gap at all: its longest unbroken stretch is its own
-     * whole duration, which is already published as the step phase of `slice_us` and is what
-     * `over_seamless_arms` counts the turns of. Folding the two together would put a turn's LENGTH and a
-     * turn's worst GAP into one row, after which an arm's reading could not be told from its mass.
-     * IT IS NOT THE WALL GAP solver/engine.c ALREADY COMPUTES, AND THE TWO POPULATIONS ARE DISJOINT BY
-     * CONSTRUCTION. That one (`g_max_gap`, `g_last_ask`) is WALL milliseconds, is DEV-only, and is read by
-     * exactly one `DFAILF` whose condition requires the turn's consultation delta to be ZERO — so it reports
-     * the whole-turn stretch of a SEAMLESS turn and is printed deliberately beside the work count, because a
-     * wall quantity is what says whether the box was also loaded. This row is the slice's measure, is raised
-     * in every build, and covers the turns that delta is NONZERO for. Two clocks, two populations, two
-     * purposes, and neither is a second copy of the other.
-     * A `long` WHERE THE SCALAR IS AN `int64_t`, FOR `over_ask_arms`' REASON EXACTLY AND WITH A DIFFERENT
-     * HORIZON. solver/result.c composes every step-unit row through ONE `cold_hist_json`, which takes a `long`
-     * array and prints `%ld`, so a 64-bit partition would force a second speller of that row format. This row
-     * is a MAXIMUM rather than an accumulator, so a `long` of microseconds is not the 35.8-minute saturation
-     * `step_us` is a sum against: the exposure is ONE TURN whose worst gap exceeds about 2147 seconds in the
-     * slice's measure, which is an engine that has hung. The narrowing asserts its own headroom at the raise,
-     * in the form a DCHECK condition may take, before the cast and never after it.
-     * IT DECIDES NOTHING AND BOUNDS NOTHING (§NO BOUNDS), and the hazard is the sharpest of the four: a
-     * per-arm worst gap against the budget is precisely the pair a "this arm has not yielded in N ms, take the
-     * thread" watchdog would be built from. Nothing branches on either half.
-     * HOW ITS ABSENCE SHOWS, as an observation and not an instance: a reader holding an arm whose overrunning
-     * turns all offered points divides the ask sum by them, gets a density of single digits, and states that
-     * the arm consulted the scheduler regularly and ran anyway — with no row in the artifact that could say
-     * those single-digit consultations bracketed one unbroken multi-second stretch instead.
-     * NAMED RESIDUAL — THE ROW IS CORRECT AND ITS ONLY READER IS THE FIXTURE-DRIVEN BUILD VERDICT, WHICH IS
-     * NOT WHERE THE MEASUREMENT THAT MOTIVATED IT CAME FROM. WHAT IS NOT COVERED: the drives this row exists
-     * for were REAL SITES, and `engine/build.mjs`'s `stepUnitOverrunReading` is the one consumer that takes
-     * it — so a build's own smoke prints it and a real-site drive does not. That is NOT a correctness gap and
-     * nothing refuses it: `testing/live-run.js` declares only `rungEntry`, `fetchEdge` and `xhrEdge` taken
-     * WHOLE, so `cold` is a curated list by that driver's own statement and a row it does not carry is its
-     * choice rather than a silent drop. It is a REACH gap, and it is the one CLAUDE.md names for a producer
-     * whose consumer is not the instrument that measures the subject. WHAT THE NEXT DIFF BUILDS: both names
-     * on that driver's cold row lists — `stepUnitOverrunGapArms` beside `stepUnitOverrunAskArms` on its
-     * step-unit object list and `sliceOverrunGapUs` beside `sliceOverrunAsks` on its numeric one — which that
-     * driver reads with a uniform `k in c`, so an artifact older than the row prints `-` under its own
-     * absent-versus-zero rule rather than a 0. HOW ITS ABSENCE SHOWS, as an observation and not an instance:
-     * a reader driving a real app meets an arm whose overrunning turns all offered points, divides the ask
-     * sum by them, and states a per-turn density — with the row that would say whether those consultations
-     * bracketed one unbroken multi-second stretch present in the artifact and absent from the only report
-     * that drive produces. MEASURED ABSENT with the command, so this is a claim and not a recollection:
-     * `grep -cE 'stepUnitOverrunGapArms|sliceOverrunGapUs' testing/live-run.js` answers 0, against
-     * `grep -cE 'stepUnitOverrunAskArms|sliceOverrunAsks'` answering 6 as the armed control and an invented
-     * `zzNoSuchRowEver` answering 0. It is not taken in the same diff because that file is one FOUR peer
-     * commits landed in within the hour this row was written, and it is outside this change's scope.
-     * AND THAT DRIVER IS THE ONE THAT WANTED THIS ROW, WHICH IS WHY THE RESIDUAL IS WORTH MORE THAN A NOTE:
-     * the commit withdrawing a per-arm span for want of one (`6813a2a`) is a commit to THAT FILE, so the
-     * consumer whose banner had to replace a figure with a 1352x bracket is the consumer not carrying the row
-     * that would narrow it to one budget. A producer and a frustrated reader in one tree with nothing joining
-     * them is the write-with-no-reader shape at the one place it costs a reading rather than a byte.
-     * RETIREMENT: this goes when a seam verdict in engine_sched_step can judge a turn whose consultation
-     * delta is NONZERO — i.e. when a verdict decides on THIS gap against the budget rather than on a turn
-     * that offered nothing — because the existing reader then names the same population per arm and this row
-     * is a second copy of it. MEASURED ABSENT with the command rather than asserted, so the condition is not
-     * born met: `grep -c 'g_preempt_asked == pa0' engine/host/solver/engine.c` answers 2, which is BOTH
-     * verdicts in that function carrying the conjunct, against `grep -c ENGINE_SEAMLESS_CPU_US` answering 1
-     * as the armed control and an invented `seamGapVerdict` answering 0. */
+    /* The longest stretch with no suspend point offered, in the slice's own measure, over non-seamless
+     * overrunning turns, overall and per arm; seamless turns are excluded because their stretch is the whole
+     * turn. quantum_expired() is monotone within a slice and a true answer ends the turn, so every consultation
+     * of an overrunning turn falls within ENGINE_QUANTUM_MS of the slice's start and the gap lies in [span -
+     * ENGINE_QUANTUM_MS, span]: to within one budget it is the arm's worst turn span. A gap far below that bound
+     * means a wanted preempt was dropped (the `requested > fired` seam message). A maximum, read as a floor
+     * against the budget and never as a ceiling; `max(over_gap_arms) == slice_overrun_gap_us` is asserted in the
+     * overrun branch. It is not engine.c's dev-only wall `g_max_gap`, which covers seamless turns. The per-arm
+     * row is `long` for `over_ask_arms`' reason, with its headroom asserted. Every build.
+     *   Named residual: testing/live-run.js does not carry `stepUnitOverrunGapArms` or `sliceOverrunGapUs`, so
+     * only a build's own smoke reports them; the next diff adds both to that driver's cold row lists beside the
+     * ask rows; its absence shows as a real-site report quoting a per-turn ask density with no gap row to
+     * contradict it. */
     int64_t  slice_overrun_gap_us;    /* the worst no-suspend-point stretch of any non-seamless overrunning turn */
     long     over_gap_arms[STEP_UNIT_N];
-    /* …AND THE ONE PHASE OF A START STEP THAT `slice_overruns` AND `over_arms` CAN LOCATE TO AN ARM AND
-     * NEVER TO A PHASE. (This sentence said `the two rows above` until two rows were inserted between it and
-     * them — a reference by POSITION resolves to whatever now occupies that position, which is why it
-     * carries their NAMES now.) A start is a COMPILE and then an EXECUTION, and only the second runs
-     * bytecode.
-     * THIS PARAGRAPH'S HEADLINE READ `THAT CANNOT REST AT ANY INPUT SIZE`, and derived it: quickjs raises its
-     * yield request from exactly four kinds of site of which three are the interpreter's own dispatch, so a
-     * parse offered no raise point for its whole length, and its length is `body_n`, the page-chosen quantity
-     * solver/rest_unit.h's bound (1) forbids in a step's cost. It is REWRITTEN RATHER THAN DELETED because
-     * the derivation is still exactly right about the INTERPRETER and a reader will re-derive it. It is no
-     * longer right about the PARSE: JS_FlowCompileStep polls the same hook from the parse's own production
-     * dispatch and hands the parse back through `f->compile`, so a compile now RESTS.
-     * AND THAT MOVED ONE ROW'S SUBJECT AND NOT THE OTHER'S, WHICH IS THE WHOLE OF WHAT A READER OF THIS PAIR
-     * HAS TO KNOW. `classic_compiles` is ONE PER PROGRAM — raised at the stint that finishes a parse — and
-     * `classic_compile_overruns` is ONE PER STINT whose own duration met the slice. They are two counters
-     * raised at DIFFERENT EVENTS, so NEITHER IS A SUBSET OF THE OTHER and their quotient is not a rate: a
-     * program parsed over several overrunning stints contributes several overruns and one compile. The
-     * containment that does hold is against the stint population, which is DERIVED rather than counted
-     * separately, because every stint ends in exactly one of two already-counted arms:
-     *     compile STINTS == classic_compiles + arms[`compile-handed-the-thread-back`]
-     * and `classic_compile_overruns <= that sum` is asserted at engine_step_unit_runs where all three are in
-     * one hand. EVERY ROW HERE IS THE CLASSIC PHASE'S AND SAYS SO IN ITS NAME, which became load-bearing when
-     * §8.1.4.4 "Calling scripts"' MODULE entry gained the same rest seam: a module stint parks into the same
-     * `f->compile` and names `module-compile-handed-the-thread-back`, so it is in NONE of these three rows and
-     * in none of that sum. That is what keeps the line above an EQUALITY — see solver/step_unit.h, where the
-     * decision is recorded at the arm, and note that the module phase has no counters of its own BECAUSE its
-     * entry compiles and evaluates in one call, so there is no span a bracket could time that is a parse. `classic_compile_overruns <= slice_overruns` also still holds by construction and is checked
-     * there; that one additionally rests on a turn reaching the compile at most once, which its own comment
-     * names.
-     * READ AS A PAIR AND AGAINST A THIRD NUMBER, never alone: `classic_compile_overruns` says whether the rest
-     * seam is firing often enough inside a parse for a stint to stay under the slice, and `classic_compile_again`
-     * says whether the compile is REPEATED. Those are three different diffs — the bytecode between the page's
-     * own raise points, a per-flow materialization ceiling, and the GRANULARITY of the parse's rest point — and
-     * a reader holding either row by itself cannot tell them apart.
-     * THE REPEAT CLAUSE READ `classic_compiles AGAINST THE PROGRAMS A DOCUMENT REACHED SAYS WHETHER THE COMPILE
-     * IS REPEATED PER FLOW`, AND THAT IS A DIFFERENCE BETWEEN TWO POPULATIONS OF DIFFERENT WIDTH. It is kept in
-     * its own words because it is the reading two counters printed side by side invite, and because a brief was
-     * written out of it and a lane dispatched on it. `classic_compiles` counts every FLOW and every TIMELINE —
-     * a fork parses every later program of its inherited sequence itself, and an @S candidate session and a
-     * cold-resumed replay re-run the document from the baseline — AND every APPENDED row as well as every seeded
-     * one, which for a modern bundle means dozens of lazy chunks of DISTINCT BYTES. The nearest published
-     * denominator, `root_programs`, is narrower on both axes, so a figure many times it is what a healthy run of
-     * such a page MUST read. The tree records the identical defect one row over for `progStarts` against
-     * `rootPrograms` (solver/flow.c), where the two agreed by coincidence on one document.
-     * WHAT REPLACES IT IS AN OBSERVATION WITH NO DENOMINATOR IN IT. `classic_compile_again` is the parses whose
-     * BYTES some flow of this process had already parsed to completion — the identity being the BODY and not a
-     * hash of the source text, which CLAUDE.md §ONE-global rules out because a minified bundle repeats one-line
-     * bodies and a hash names a SET. It is a FLOOR and `classic_compile_own_decode` is its bound: a reply is
-     * decoded PER DELIVERY, so two arms parked on one external row hold two buffers over one chunk and a repeat
-     * between them is unobservable, which puts the true figure in [`again`, `again + own_decode`].
-     * THE TWO SUBSETS ARE TWO PARTITIONS OF ONE POPULATION AND MAY NOT BE ADDED TO EACH OTHER — a parse can be
-     * both a repeat and a per-flow decode — and each is contained in `classic_compiles`, asserted at
-     * engine_step_unit_runs where all four are in one hand.
-     * WHY A COUNT AND NOT A TIME, which `over_arms` above already argues for its own axis: a count answers
-     * WHICH SPAN DID NOT REST, a time answers WHERE THE RUN WENT, and only the first is what §NO BOUNDS'
-     * suspend-at-any-depth requirement is about.
-     * THEY DECIDE NOTHING AND BOUND NOTHING (§NO BOUNDS): no source is refused for its length, no compile is
-     * capped and no arm is skipped on either reading.
-     * RETIREMENT: they go when the parse is a pull whose GRANULARITY solver/rest_unit.h OWNS. This clause
-     * read `when a compile can REST` apposed to that, as though the two were one condition; a compile can
-     * rest NOW and rest_unit.h declares no JS-production kind, so a reader checking the old clause would
-     * have retired the only rows reporting on the new seam. When the ask moves to rest_unit_items, a stint
-     * that met the slice is an ordinary preempted span and these have nothing left to report. */
-    long classic_compiles;           /* classic program compiles, ONE PER PROGRAM, at flow_step's start site */
-    long classic_compile_overruns;   /* compile STINTS that met the slice — NOT a subset of the row above */
-    long classic_compile_again;      /* …of which the bytes had ALREADY been parsed by some flow: the REPEAT */
-    /* AND WHAT THOSE RE-PARSES COVERED, WHICH IS THE ONLY FORM IN WHICH THE REPEAT IS A COST. A count of
-       repeats says nothing about whether the diff §A-CAPABILITY-MATERIALIZED-PER-FLOW would justify is worth
-       making: twenty repeats of a 200-byte inline script and twenty of a 1.4 MB chunk are the same number and
-       two different answers. int64_t for `step_us`' reason, and the arithmetic is worse — the second of those
-       overflows a four-byte total after about fifteen hundred repeats and reads NEGATIVE, which reads as a
-       cheap engine. Asserted against its own count at engine_step_unit_runs, which is what catches that. */
+    /* The classic compile phase of a start step. A compile rests: JS_FlowCompileStep polls the preempt hook in
+     * the parse's own dispatch and parks through `f->compile` (`compile-handed-the-thread-back`).
+     * `classic_compiles` is one per program, raised when a parse finishes; `classic_compile_overruns` is one
+     * per stint that met the slice, so neither is a subset of the other. Stints are `classic_compiles +
+     * arms[STEP_UNIT_COMPILE_YIELDED]`, and overruns are asserted under that and under `slice_overruns`. Module
+     * compiles are in none of these rows (their stint is `module-compile-handed-the-thread-back`).
+     * `classic_compile_again` counts parses of bytes some flow of this process had already parsed, identity
+     * being the body and not a hash; it is a floor, and `classic_compile_own_decode` (bodies one flow decoded
+     * for its own delivery) bounds it, so the true figure is in [again, again + own_decode]. Both are subsets of
+     * `classic_compiles` and not of each other (asserted). Do not read `classic_compiles` against
+     * `root_programs`: forks, candidates, replays and appended chunks all compile. */
+    long classic_compiles;           /* classic program compiles, one per program, at flow_step's start site */
+    long classic_compile_overruns;   /* compile stints that met the slice; not a subset of the row above */
+    long classic_compile_again;      /* …of which the bytes had already been parsed by some flow: the repeat */
+    /* The bytes those repeats covered, so a repeat can be weighed as a cost; int64_t for `step_us`'s reason, and
+       asserted not below its own count. */
     int64_t classic_compile_again_bytes;
-    long classic_compile_own_decode; /* …whose body ONE flow decoded for its own delivery: the floor's bound */
-    /* AND THE COMPLEMENT OF `classic_compiles`, WITHOUT WHICH THAT ROW FALLING IS UNATTRIBUTABLE — the classic
-     * programs started from a parse another timeline had already finished. A shared parse raises none of the
-     * four rows above: it parses no bytes, so it is not a compile, not a repeat, not a per-flow decode and not
-     * a stint. That is exactly what makes `classic_compiles` alone ambiguous once parses are shared — a
-     * document whose timelines share them reads as a document with fewer programs, which is the reading that
-     * cannot be told from an engine that STOPPED STARTING THEM. Read the two together:
-     *     classic_compiles + classic_parse_shared == the classic programs whose closure was obtained at all
-     * and that sum is what is comparable with a pre-sharing revision's `classic_compiles`, while neither half
-     * is. The mechanism itself, its key and why it is not a cache with an eviction policy are at
-     * solver/dyn_body.h; the repeat this row is the other side of is `classic_compile_again` above.
-     * IT IS A SUBSET OF NOTHING HERE and is not asserted against anything: it is raised in the arm where the
-     * parse does not happen, so it partitions the programs STARTED and not the parses performed, and adding it
-     * to either partition above would be adding answers about different events. What IS asserted at
-     * engine_step_unit_runs is the implication — a share requires that some parse finished — and the gauge
-     * `dyn_body_parses_held` against this row's own total.
-     * `classic_compile_again` STAYS NONZERO BY DESIGN and a reader must not take it as the sharing failing: a
-     * program whose parse FAILED holds nothing (an exception is one flow's completion, not a fact about the
-     * bytes), and a flow already mid-parse of a row that another flow finished in the meantime resumes its own
-     * parse to the end rather than abandoning it. Both really do parse bytes twice.
-     * RETIREMENT: this row goes when `classic_compiles` is no longer read as a count of programs started —
-     * that is, when the census publishes programs STARTED directly and the compile row is read only as a cost.
-     * `prog_starts` is that number for every kind at once, so it is not it. */
+    long classic_compile_own_decode; /* …whose body one flow decoded for its own delivery: the floor's bound */
+    /* Classic programs started from a parse another timeline had already finished (solver/dyn_body.h); they
+     * raise none of the rows above. `classic_compiles + classic_parse_shared` is the classic programs whose
+     * closure was obtained, which is the figure comparable with a pre-sharing revision's `classic_compiles`.
+     * Asserted: a share requires a finished parse, and `dyn_body_parses_held() <= classic_compiles`.
+     * `classic_compile_again` stays nonzero by design: a failed parse holds nothing, and a flow mid-parse when
+     * another finishes completes its own. */
     long classic_parse_shared;       /* classic programs started from a parse another flow had finished */
-    /* AND HOW MANY OF THE STINTS CONTINUED A PARSE RATHER THAN BEGINNING ONE — the row without which
-     * `compile-handed-the-thread-back` cannot say whether a parse handed back is a parse CARRIED FORWARD. The
-     * stint population is already exact (the two arms above), and this partitions it on the one axis that
-     * separates the two readings a small `classic_compiles` admits: subtract it from that arm and what is left
-     * is the parses begun and NOT ENDED, because an ended parse of k stints parks k-1 times and resumes k-1
-     * times while one still in flight parks k times and resumes k-1. Near zero is a seam carrying every parse
-     * forward, so a program count under a document's row count is a BUDGET; large is parses being handed back
-     * and not picked up. The engine's own derivation, the reachability argument for its zero and the reason it
-     * is a count rather than a high-water mark are all at solver/engine.c's g_classic_compile_resumed.
-     * IT IS NOT A SUBSET OF `classic_compiles`, so it is not asserted against it: the two are raised at
-     * DIFFERENT EVENTS — one per stint that continued, one per parse that ended — which is the same
-     * relationship `classic_compile_overruns` has to it and fails the same way if it is read as a rate. What it
-     * IS contained in is the yielded arm, asserted at engine_step_unit_runs where both are in one hand. */
-    long classic_compile_resumed;    /* compile STINTS that CONTINUED a parse — NOT a subset of the programs */
-    /* WHY THE TURNS THAT DID NOT END A UNIT OF WORK DID NOT — the three-state answer behind `_unitsDone`
-     * reading low, and the rows a reader needs before that number means anything at all.
-     *
-     * `_unitsDone` is a GATED count: the dispatch loop credits a unit only when a conjunction of three clauses
-     * holds, so a low reading is consistent with a thread that did nothing AND with a thread that spent every
-     * turn advancing programs it never got to finish. Those take opposite work — the first is a question about
-     * where the turns went, the second is the frame gate showing up in a throughput row — and until these rows
-     * existed the document could not tell them apart, because the refusal side of that gate was counted
-     * nowhere. `mid_program` dominating is the second reading, and it is the expected shape of a forking
-     * frontier: an arm is born holding the frame taken AT its branch, so it is inside a program by
-     * construction.
-     *
-     * THEY ARE IN THIS STRUCT BECAUSE `steps` IS, AND `steps` IS THE DENOMINATOR. The four arms —
-     * these three and the credited one — sum to `steps` exactly, asserted in engine.c at the line the
-     * credited arm is written on, where all four are in one hand. That matters more than tidiness: the
-     * document carries `_unitsDone` and `steps` in two DIFFERENT objects, so a reader composing the split
-     * across them is composing it across two censuses that share no identity, and the assert is the only
-     * thing that makes the composition legitimate. The credited arm is deliberately NOT repeated here — a
-     * second spelling of one number in one document is the drift the record-field gate exists to catch.
-     *
-     * THEY DECIDE NOTHING AND BOUND NOTHING (§NO BOUNDS). No weight term reads them, no fork carries them and
-     * nothing declines work on them; a per-turn refusal count is exactly the shape a watchdog on a flow that
-     * "never finishes anything" would be built from, which is why that is said here as well as at the
-     * counters. A frontier whose members are all mid-program is the design running, not a population to shed. */
+    /* Compile stints that continued a parse rather than beginning one; contained in
+     * arms[STEP_UNIT_COMPILE_YIELDED] (asserted), and that arm minus this is the parses begun and not ended. Near
+     * zero means the seam carries every parse forward; large means parses handed back and not picked up. Raised
+     * at solver/engine.c's g_classic_compile_resumed. */
+    long classic_compile_resumed;    /* compile stints that continued a parse; not a subset of the programs */
+    /* Why turns that did not end a unit of work did not: the refusal arms of the gate behind `_unitsDone`. With
+     * the credited arm they sum to `steps` exactly, asserted in engine.c where the credited arm is written. A
+     * dominant `unit_mid_program` is a forking frontier's expected shape, since an arm is born holding the frame
+     * taken at its branch. */
     long unit_mid_program;      /* …the member held a live frame: inside a program, the trial still running */
     long unit_parked;           /* …the runtime held a parked continuation: suspended on an await or a reply */
     long unit_checkpoint_owed;  /* …the flow still owed its microtask checkpoint: its own reactions unrun */
-    /* HOW MANY DESCENTS REACHED THE CLOCK BOUNDARY — THE DISCRIMINATOR ITS THREE OUTCOME ARMS STRUCTURALLY
-     * CANNOT BE. `queue-rendering-opportunity`, `fire-due-timer` and `start-or-run-an-idle-period` are arms of
-     * `arms` above, raised only when their hook TAKES the step, so each is a census of an OUTCOME over a gated
-     * operation and a 0 there is two opposite things: the rung was reached and the clock legitimately had
-     * nothing due, or no descent ever got far enough to ask it. Those take opposite work — the first is a fact
-     * about the page's own timers and frames, the second a fact about the arms ABOVE this boundary — and
-     * §AN-INVARIANT-OVER-A-GATED-OPERATION says the ask is recorded upstream of every arm that may legitimately
-     * decline. solver/engine.c raises these AT the arm, ahead of the gate, and nothing here is relocated: the
-     * three outcome arms stay exactly where they were, because moving an observation changes what its number
-     * means and leaves the old meaning unread.
-     *
-     * THEY ARE SUFFIX SUMS, WHICH IS WHY THEY ANSWER WHAT `arms` CANNOT AT ANY VALUE. The three rungs are
-     * consecutive arms of ONE `else if` chain: `clock_render_asks` counts every descent that reached that chain
-     * at all, `clock_timer_asks` those the rendering rung did not take, `clock_idle_asks` those the timer rung
-     * did not take either. `arms` is a PARTITION of outcomes, so `arms[k] == 0` says THIS ARM NEVER TOOK A
-     * DISPATCH and never says the arm was not reached — an upper clock arm at 0 with a LOWER one nonzero is
-     * that rung correctly declining every descent it was handed, not a localisation. The cumulative quantity is
-     * the suffix sum, and these are it at the three points a clock rung can be asked.
-     *
-     * THE FOUR IDENTITIES ARE CHECKABLE FROM THE ROWS BESIDE THEM, WHICH IS WHY NO SUM IS PUBLISHED. A second
-     * spelling of one number in one document is the drift the record-field gate exists to catch, and every
-     * operand of all four already lands on the same census line:
-     *     clock_render_asks == the ELEVEN arms of `arms` at or below this boundary (solver/engine.c names them)
+    /* Arrival counts at the clock boundary, raised ahead of each rung's gate, so a zero outcome arm in `arms`
+     * can be told apart from a rung never reached. They are suffix sums over one `else if` chain, asserted at
+     * engine_step_unit_runs:
+     *     clock_render_asks == the eleven arms of `arms` at or below the boundary (listed in solver/engine.c)
      *     clock_timer_asks  == clock_render_asks - arms[STEP_UNIT_RENDERING]
      *     clock_idle_asks   == clock_timer_asks  - arms[STEP_UNIT_TIMER]
      *     clock_render_asks <= unframed_steps
-     * All four are asserted at engine_step_unit_runs, where every operand is in one hand. The last is what
-     * licenses reading these against `unframed_steps` in the document at all: both are raised per PASS through
-     * the same `if (!f->frame)` block — that block's own entry comment predicted this pair — so a descent that
-     * reached the chain is a descent that entered the block, and an ask above it is the chain having been
-     * reached from somewhere else.
-     *
-     * LIFETIME COUNTS, PER INSTANCE, RELEASED BY NOTHING — the same scope as `arms` and `unframed_steps`, which
-     * is what keeps the identities true across a session restart. They may be differenced and accumulated, they
-     * cannot decrease, and a sample below its predecessor is this engine and not the run. The scheduler's
-     * `g_orphan_asks` takes the OPPOSITE scope one rung up (engine_session_close clears it) and is the wrong
-     * precedent to copy here for exactly that reason.
-     * A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on one, no arm is narrowed by one, and no rung
-     * is skipped because one is large.
-     * RETIREMENT: these three go with `unframed_steps` and on its own condition — when solver/step_unit.h
-     * declares each arm's side of `if (!f->frame)` AND of this boundary, the suffix sums are a sum over `arms`
-     * that cannot disagree with flow_step, and neither this triple nor solver/engine.c's hand-written
-     * eleven-unit list has anything left to carry. */
+     * Lifetime and per instance, like `arms`, so the identities survive a session restart. */
     long clock_render_asks;  /* descents that reached the rendering rung: the clock boundary's arrival count */
     long clock_timer_asks;   /* …of which the rendering rung declined: the timer rung's arrival count */
     long clock_idle_asks;    /* …of which the timer rung declined too: the idle rung's arrival count */
 } EngineStepUnitRuns;
 void engine_step_unit_runs(EngineStepUnitRuns *out);
 
-/* ---- WHICH ARM TOOK THE STEP OF A MEMBER HOLDING A RUNNABLE TASK ----------------------------------------
- *
- * THE HISTOGRAM ABOVE CANNOT BE ASKED THIS. `step_unit_runs` is over EVERY step, so an arm cannot be
- * attributed to the members that had a task standing on their own queue — two documents with the same arm
- * histogram and opposite job backlogs are one reading there. These four are raised at the two arms of
- * flow_step that stand above the task arm and CAN be reached with a task runnable, plus the task arm's own two
- * reasons, so a reader holding them can say which arm the backlog is behind instead of inferring it.
- *
- * READ THEM AGAINST `jobsReadyTask` AND `run-a-task` AND NOT ALONE. `jobsReadyTask` is a GAUGE of what waits
- * and these are LIFETIME counts of what was taken instead; `run-a-task` on the @COLD line is the arm's own
- * step count and the last two of these partition it. The four sizes:
- *   `taskHeldDelivLifetime` SIZES A DIFFERENT THING EITHER SIDE OF THE STAMP, AND THE RETIRED WORDING IS
- *     KEPT BECAUSE A READER WHO FINDS THE ROW LARGE RE-DERIVES IT FROM THE ARM'S POSITION IN THE LADDER. It
- *     read: a large one says the networking delivery arm — which is NOT in the arrival order, by its own
- *     header's NOT COVERED clause — is what stands in front of the queue, and the diff is the stamp that
- *     folds it into that order. THE STAMP IS BUILT: a `pending` entry carries PEND_WORK_SEQ and the arm asks
- *     flow_task_precedes with it, so a delivery no longer precedes a QUEUED CALLBACK that arrived first and
- *     the row is now the size of the arm going in front of a YOUNGER task, which is that order WORKING. It
- *     still precedes every ROW, which is the half left open and is the residual stated at the arm.
- *     SO TWO CENSUSES ARE COMPARABLE ON THIS ROW ONLY IF THEIR ARTIFACTS AGREE ABOUT THE STAMP, and no row
- *     emitted anywhere says which of the two quantities a reader is holding — a census written before the
- *     next install reads the old one and the first after it reads the new one, in one column, silently. The
- *     discriminator is therefore outside the census and is the artifact's own stamped revision:
- *     git grep -c PEND_WORK_SEQ <that revision> -- engine/host, asked at BOTH passes before differencing.
- *     SOLVER/ENGINE.C STATES THE MECHANISM AT `g_task_held_deliv` AND IS THE COPY TO READ: it is the RAISE
- *     site, this is the declaration, and a declaration states an intention where a raise states what the
- *     counter got. This copy is the one that went stale when the stamp landed.
- *     RETIREMENT: this record goes when the census emits whether the arrival stamp was COMPILED IN beside
- *     the row, so the two quantities are told apart FROM the document and no out-of-band revision question
- *     is owed — MEASURED ABSENT with the command, so this condition is not born met:
- *     `grep -c taskArrivalStamped engine/host/solver/result.c` answers 0 against `grep -c
- *     taskHeldDelivLifetime engine/host/solver/result.c` answering 2 as the armed control.
- *   a large `taskHeldSeqLifetime` says the arrival comparison is answering NO: the document's remaining rows
- *     are OLDER than what its own code queued, so the sequence goes first. The diff is at that comparison.
- *   `taskArmOlderLifetime` above zero REFUTES both for the steps it counts — the comparison does hand the
- *     queue the thread ahead of a startable row.
- *   `taskArmNoRowLifetime` is the arm reached with no row at all, which on a real page is most of it, and it
- *     is the row that says the sequence is not what excludes those members.
- * ITS IDENTITY is `taskArmOlderLifetime + taskArmNoRowLifetime == run-a-task`, asserted in
- * engine_ladder_task_census where both halves and the histogram are in one hand.
- * LIFETIME, all four, released by nothing. A REPORT AND NEVER A BOUND (§NO BOUNDS) — solver/engine.c states
- * the rest at the counters, including the two populations no row here reaches. */
+/* Which arm took the step of a member that had a runnable task on its own queue: the two arms above the task
+ * arm that can be reached with one, and the task arm's two reasons. Read them against the `jobsReadyTask` gauge
+ * and the `run-a-task` arm; `task_arm_older + task_arm_no_row == run-a-task` is asserted in
+ * engine_ladder_task_census. Lifetime counts, released by nothing; solver/engine.c states the mechanism at the
+ * counters. `task_held_deliv` changed meaning when replies gained PEND_WORK_SEQ (it now counts deliveries
+ * ahead of younger tasks), so compare it only across artifacts that both carry that stamp. */
 typedef struct {
     long task_held_deliv;   /* the reply-delivery arm took a step with a task runnable on the member's queue */
     long task_held_seq;     /* the program-sequence arm took it: `seq_compiles && !job_precedes`, task runnable */
