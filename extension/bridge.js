@@ -1473,25 +1473,18 @@ const CAND_SPREAD = [
   { row: "candVisMax",
     fold: (c, t) => { if (!("candVisMax" in c) || t.visits > c.candVisMax) c.candVisMax = t.visits; } },
 ];
-/* THE ZEROED READING — the ONE statement of which rows a candidate walk produces, so that "the walk ran" is a
-   fact a consumer can check without keeping its own copy of the row names. Populations, exclusions and the
-   unserved count start at 0 because a count of zero is a READING; the spread rows are absent because an
-   extremum over nothing is not a number, and `_candRanked` attaches each on the first member it has. */
+/* The zeroed reading: the one statement of which rows a candidate walk produces. Counts start at 0 because a
+   zero count is a reading; spread rows are absent because an extremum over nothing is not a number, and
+   `_candRanked` attaches each on the first member. */
 function _candCensus() {
   const cen = { cands: 0, candUnserved: 0, exclSub: 0, exclSeedLive: 0, exclSeedParked: 0,
                 exclLive: 0, exclHeld: 0, exclStranded: 0 };
   for (const k of CAND_KINDS) cen[k.pop] = 0;
   return cen;
 }
-/* THE ONE SITE THAT RANKS A CANDIDATE, so a kind's total, its population, its extrema and THE WEIGHT THE PICK
-   COMPARES cannot part. Each arm of the walk used to compute the weight and then count it itself in five
-   lines, which is three copies of one rule and is exactly how the total came to count a kind that the
-   accounting had never heard of. It now takes the ROW and returns the weight, so the terms this census reports
-   are terms of the number the pick actually used — a census that recomputed them beside the pick could
-   describe an order the walk did not take, which is the defect one layer in from the two this record exists
-   to expose. PRESENCE IS THE FIRST-MEMBER TEST rather than a zero sentinel: every spread row exists from the
-   moment the ranked set has a member and not before, which is the record's presence rule enforced where the
-   number is produced instead of restored by an attach pass afterwards. */
+/* The one site that ranks a candidate: it takes the row and returns the weight, so a kind's total, population,
+   extrema and the weight the pick compares cannot part, and the census reports terms of the number the pick
+   used. Spread rows appear on the first member, enforcing the record's presence rule where numbers are made. */
 function _candRanked(cen, kind, row) {
   const d = CAND_KINDS.find((k) => k.kind === kind);
   DCHECK(d !== undefined,
@@ -1518,33 +1511,21 @@ function _candRanked(cen, kind, row) {
   }
   return t.w;
 }
-/* THE POPULATION THE ORDER IS TAKEN OVER, COMPOSED IN ONE PLACE AND HANDED IN. This walk used to read three
-   of its four inputs off module state (`_pool`, `_waiting`, `_seeds`) and take only the cold index as an
-   argument, and the consequence was not a style one: the Level-1 order is composed ENTIRELY in this zone —
-   no engine can see another engine, so no result document can ever carry it — and a walk that reads its own
-   inputs off a module nothing can populate is an order NOTHING CAN ASK A QUESTION OF. Both Level-1 defects
-   found this session were ranks frozen at a constant, both lived in this walk, and neither was visible to
-   anything; a third would be equally invisible for exactly as long as the walk stays unaskable.
-   IT IS A COMPOSER AND NOT AN ACCESSOR PAIR. The privates stay private — exporting them would hand a driver
-   the state and leave the ORDER just as unaskable, since what is under test is the walk over a population and
-   not the fields it reads. Stated once here means the two production call sites cannot disagree about what
-   the Level-1 order is taken over, which was previously true only because both of them took none of it. */
+/* The population the order is taken over, composed in one place and handed in, so the Level-1 order (which
+   exists only in this zone) can be asked over a population a driver supplies. It is a composer, not accessors:
+   what is under test is the walk, so the privates stay private, and both production call sites take the same
+   population. */
 function _candPopulation(idx) {
   return { resident: _pool, waiting: _waiting, seeds: _seeds, idx: idx };
 }
-/* THE POPULATION'S OWN CONTRACT, ASSERTED AT THE DOOR AND AGAINST THE KIND TABLE RATHER THAN A LIST WRITTEN
-   HERE — the same discipline `_level1Record` learned when its accounting assert named two of three kinds and
-   fired on correct code. A member this walk is not handed cannot be distinguished downstream from a member
-   that is empty (see CAND_KINDS' `from`), so the completeness of the population is the one thing that must be
-   checked BEFORE the walk rather than inferred from its census afterwards. */
+/* The population's contract, checked against the kind table before the walk: a member the walk is not handed
+   is indistinguishable downstream from an empty one (see CAND_KINDS' `from`). */
 function _candPopulationCheck(pop) {
   DCHECK(pop !== null && typeof pop === "object",
          "the Level-1 candidate order was asked over no population at all — it ranks the work items that have " +
          "no instance, and the set of them is an input rather than something this walk knows");
-  /* THE RESIDENT SET IS NOT A KIND AND IS ASSERTED APART, because it is not walked FOR candidates — it is
-     what every kind is excluded BY (a live document holds an address; an instance holds a frontier key), so
-     an absent one would not empty the order, it would WIDEN it: every excluded item would silently become a
-     candidate and the exclusion counts that say so would read zero. */
+  /* The resident set is not a kind: it is what every kind is excluded by, so a missing one would widen the
+     order (every excluded item becomes a candidate) rather than empty it. */
   DCHECK(CAND_SHAPES.list(pop.resident),
          "the Level-1 candidate order was asked with no resident set — it is what a candidate is excluded BY, " +
          "so without it a parked frontier whose page a tab already holds is rehydrated beside that tab and " +
@@ -1557,136 +1538,75 @@ function _candPopulationCheck(pop) {
            "absence it actually is: a whole kind of work item leaves the order and the record agrees with " +
            "itself about a walk that never looked");
 }
-/* THE PICK IS SYNCHRONOUS, AND THE INDEX IS WHY IT CAN BE. Its caller must not suspend between choosing a
-   candidate and building its instance: a cluster can be rooted by a concurrent service round (hostNotice's
-   create arm), so a pick made before a suspension and acted on after it would reach engineCreate's
-   one-instance-per-cluster assert with a cluster that has just acquired one. The caller awaits frontierIndex()
-   once and hands the map in; from there this reads only in-memory state. */
-/* IT ANSWERS THE PICK AND THE READING TOGETHER, BECAUSE THE PICK IS A `max` AND A `max` CANNOT SAY WHAT IT WAS
-   TAKEN OVER. Both Level-1 defects this session lived HERE and neither is visible in the winner: a waiting
-   document ranked at a frozen 1.0 still wins when it is the only one, and a cold row dropped out of the order
-   changes only which item is absent. What says both is the SPREAD (`candWMax` against `candWMin` over a
-   population of more than one) and the EXCLUSIONS (`exclLive` counting the weight that left the order because
-   a live document holds the address). So this walk composes its own census — it is the one place the
-   non-resident half of the Level-1 order exists — and `_level1Record` is the one place that stores it.
-   THE COUNTS ARE PRESENT WHENEVER THE WALK RAN AND THE WEIGHTS ONLY OVER A NON-EMPTY POPULATION. That is one
-   rule for every conditional row in this record and it is the same rule solver/result.c's `_wfq` states for
-   `members`: a count of zero is a READING (nothing was waiting), while an extremum over nothing is not a
-   number at all, so emitting `candWMax: 0` there would fabricate a rank for an order that had no members. */
+/* The pick is synchronous, which the index makes possible: a cluster can be rooted by a concurrent service
+   round (hostNotice's create arm), so a pick acted on after a suspension could reach engineCreate's
+   one-instance-per-cluster assert with a cluster that just acquired one. The caller awaits frontierIndex() once
+   and hands the map in. */
+/* It answers the pick and the reading together, because a `max` cannot say what it was taken over: a frozen
+   rank or a row dropped from the order is visible only in the spread (`candWMax` against `candWMin`) and the
+   exclusions (`exclLive`). Counts are present whenever the walk ran; weights only over a non-empty population,
+   the same rule solver/result.c's `_wfq` states for `members`. */
 function _bestCandidate(pop) {
   _candPopulationCheck(pop);
   const { resident, waiting, seeds, idx } = pop;
   const live = new Set();
   for (const e of resident) if (e.msg && e.msg.sourceUrl) live.add(e.msg.sourceUrl);
-  /* WHAT THIS STORE ALREADY KNOWS ABOUT THE ADDRESSES THAT ARE WAITING — the rank a waiting document is
-     entitled to, and the thing this arm used to answer with a constant.
-     WHY THE CONSTANT WAS THE WHOLE ANSWER TO THE SEEDING QUESTION, AND WHY IT WAS "NOTHING". Every waiting
-     document ranked `frontierWeight(FRONTIER_UNSERVED)` — 1.0, unconditionally, however many times that
-     address had already been admitted, fetched, analysed and found to demonstrate nothing new. Once the
-     engine seeds documents from addresses it derived out of a bundle (forced execution from an index page
-     naming the routes no link exposes), that constant is the entire Level-1 answer to "what stops a cycle
-     from dominating": A names B, B names A, and each re-arrival enters at exactly 1.0, tied with every
-     address nobody has ever opened, for ever. §scheduler permits exactly one answer — ranking and starvation
-     — and there was no rank for a starvation to be expressed in.
-     THE HISTORY IS THE ADDRESS'S, NOT THE KEY'S, WHICH IS WHY IT CAN BE ASKED HERE AT ALL. The reason this
-     arm carried a constant is real and is unchanged: a frontier key is `address|bundle`, the bundle half is
-     the ENGINE's own Lexbor <script> scan, and this zone may not guess it (a host-side regex over the markup
-     is exactly what §Architecture forbids), so the host does not yet know WHICH residue this visit resumes.
-     No guess is required to state what the store holds AT AN ADDRESS: every row carries its `sourceUrl`.
-     "This address has been admitted n times across the bundles served there and currently demonstrates F
-     findings" attributes nothing to a key — it is a fact about the ADDRESS, which is the thing being
-     admitted and the thing whose fetch is about to be spent.
-     AND THIS IS WHERE THE OUTBOUND REQUEST'S COST RIDES THE ORDER. A document request spends someone else's
-     server, which is the one asymmetry a document has over a flow, and it is priced by the term that is
-     already here rather than by a constant added beside it: `visits` counts the fetches spent at this
-     address and the reward is divided by them, so an address's rank falls by exactly what it has cost. Nothing
-     here refuses a second fetch — a resumed flow re-derives its examples from CURRENT sources and the
-     re-derivable tier converts storage into precisely this recomputation — it only decides what else the
-     order would rather spend the fetch on first.
-     ONE PASS, AND ONLY OVER THE ADDRESSES IN QUESTION: the cold loop below already walks this index once, so
-     the aggregate is the same order of work and never a per-job scan of the store. */
+  /* What the store already knows about the waiting addresses, which is the rank a waiting document is
+     entitled to. The key's bundle half is the engine's, so the host cannot know which residue a visit resumes,
+     but every row carries its `sourceUrl`: "this address was admitted n times and demonstrates F findings" is a
+     fact about the address being admitted. This is also where a document request's cost rides the order:
+     `visits` counts the fetches spent at the address and divides the reward, so a document cycle (A names B,
+     B names A) sinks instead of re-entering at 1.0 for ever. Nothing refuses a second fetch; the order only
+     prefers other work first. One pass over the index, only for the addresses in question. */
   const waitingAddrs = new Set();
   for (const job of waiting)
     if (!(job.msg.frameId && _isRealOrigin(job.msg.origin))) waitingAddrs.add(job.msg.sourceUrl);
-  /* AND EVERY ADDRESS AN APPLICATION HAS DECLARED IS A PAGE OF ITSELF, which asks this index a question of its
-     own: does this profile ALREADY hold a parked frontier at that address? A declared route with a residue is
-     already a work item — the residue's own admission fetches that document back and resumes its flows against
-     today's server — so the aggregate below is what lets the seed walk leave it to that item instead of
-     spending a second fetch on one address. Same set, same one pass, different question. */
+  /* Declared routes ask the same index whether a parked frontier already exists at their address; one that
+     does is already a work item (its admission fetches the document back), so the seed walk leaves it there. */
   for (const addr of seeds.keys()) waitingAddrs.add(addr);
   const byAddress = new Map();
   if (waitingAddrs.size) for (const row of idx.values()) {
     if (!waitingAddrs.has(row.sourceUrl)) continue;
     const a = byAddress.get(row.sourceUrl);
-    /* SUMMED ACROSS THE BUNDLES SERVED AT ONE ADDRESS, which is a pooled mean and not a mixing of records:
-       each row's `emit` is the surface its last run demonstrated and each row's `visits` is the fetches spent
-       reaching it, so the quotient of the sums is "what one admission of this ADDRESS has been worth",
-       weighted by the admissions each bundle actually received. */
+    /* Summed across the bundles served at one address: a pooled mean, "what one admission of this address has
+       been worth", weighted by the admissions each bundle received. */
     if (a) { a.emit += row.emit; a.visits += row.visits; }
     else byAddress.set(row.sourceUrl, { emit: row.emit, visits: row.visits });
   }
   let best = null;
-  /* THE READING, ACCUMULATED BY THE SAME WALK THAT PICKS. Every `w` below is counted into it exactly once and
-     at the point it is computed, so a candidate the pick considers and the census does not is not a shape this
-     function can be in. */
+  /* The reading is accumulated by the walk that picks: each `w` is counted once where it is computed. */
   const cen = _candCensus();
   for (const job of waiting) {
-    /* A SUB-FRAME NEVER ROOTS A CLUSTER — its embedder names it (see admit), so it is not admissible and is
-       therefore not a candidate. It keeps its place in `_waiting` and is answered by the instance that
-       creates it; nothing here drops it. COUNTED rather than merely skipped: a pool with documents waiting and
-       an empty candidate set has two causes, and only this number tells "every waiting document is a sub-frame
-       whose embedder will name it" from "the order was asked and found nothing at all". */
+    /* A sub-frame never roots a cluster (its embedder names it, see admit), so it is not a candidate; it keeps
+       its place in `_waiting`. It is counted, so "every waiting document is a sub-frame" is told from "the
+       order found nothing". */
     if (job.msg.frameId && _isRealOrigin(job.msg.origin)) { live.add(job.msg.sourceUrl); cen.exclSub++; continue; }
     live.add(job.msg.sourceUrl);
-    /* AN ADDRESS WITH NO ROWS IS A POSITIVE STATEMENT AND IS READ AS ONE, never as a hole a `||` fills: this
-       profile has never served it, which is what `FRONTIER_UNSERVED` says and the one legitimate zero-visit
-       input this weight takes. The two arms are different facts about the address and say so separately. */
+    /* An address with no rows has never been served, which is what `FRONTIER_UNSERVED` states. */
     const known = byAddress.get(job.msg.sourceUrl);
     const w = _candRanked(cen, "doc", known !== undefined ? known : FRONTIER_UNSERVED);
     if (!best || w > best.w) best = { kind: "doc", job, w };
   }
-  /* AND THE ADDRESSES AN APPLICATION DECLARED ARE PAGES OF ITSELF — the third kind of work item, ranked by the
-     SAME weight over the SAME index as the two beside it, which is what "Cold-tail resume is the SAME admission
-     step" means read one kind wider. It carries no bytes; what it costs is one fetch, and that cost is already
-     priced by the weight's own divisor (`visits` counts the fetches spent at this address, so a route that has
-     been explored and demonstrated nothing falls beneath an address nobody has opened after exactly as many
-     admissions as it has shown findings).
-     AN ADDRESS A LIVE OR WAITING DOCUMENT ALREADY HOLDS LEAVES THE ORDER, and it is the same sentence the cold
-     arm below is excluded by: that document IS the exploration of this address, and seating a second instance
-     for it would explore one page twice while the order believed it had spent one fetch. It is COUNTED rather
-     than skipped, because "no route was declared" and "every declared route is already being explored" are two
-     different states and a single zero cannot say which. NOTHING IS DROPPED — the entry stays in `_seeds` and
-     is offered again the moment that document is gone. */
+  /* Declared routes: the third kind, ranked by the same weight over the same index; its cost is one fetch,
+     priced by the weight's `visits` divisor. An address a live or waiting document holds leaves the order
+     (that document is its exploration) and is counted, so "no route declared" and "every route already being
+     explored" differ. Nothing is dropped: the entry stays in `_seeds`. */
   for (const addr of seeds.keys()) {
     if (live.has(addr)) { cen.exclSeedLive++; continue; }
-    /* AND AN ADDRESS THIS PROFILE ALREADY HOLDS A PARKED FRONTIER FOR LEAVES IT TOO, for the same sentence one
-       tier down. That residue's own admission IS a visit to this address — it is rehydrated by the arm below,
-       its document is fetched back, and §Time-travel-resume requires the flows it resumes to "re-derive
-       example VALUES from CURRENT sources" — so a seed ranked beside it is one address fetched twice for one
-       exploration, and the two would then divide the address's own history between them. It is NOT a
-       same-URL check in §NO BOUNDS' sense: nothing is refused and nothing is dropped, the entry keeps its
-       place, and the moment that residue drains (`frontierPut` DELETES an entry whose recipes are empty) this
-       address has no row, no live holder and no exploration — and it is admitted and re-fetched. */
+    /* An address with a parked frontier leaves too: that residue's admission is a visit to it, and a seed
+       beside it would fetch one address twice for one exploration. Nothing is refused; when the residue
+       drains (frontierPut deletes an entry with empty recipes) the address is admitted again. */
     if (byAddress.get(addr) !== undefined) { cen.exclSeedParked++; continue; }
-    /* WHAT IS LEFT IS AN ADDRESS THIS PROFILE HAS NEVER SERVED — no live holder, no waiting document and no
-       row in the store — so `FRONTIER_UNSERVED` is the POSITIVE statement about it rather than a hole a `||`
-       fills, and it is the one legitimate zero-visit input this weight takes. That is the same reading the
-       waiting arm above gives an address with no rows, reached here by exclusion instead of by lookup. */
+    /* What is left has never been served: no live holder, no waiting document, no stored row. */
     const w = _candRanked(cen, "seed", FRONTIER_UNSERVED);
     if (!best || w > best.w) best = { kind: "seed", addr, w };
   }
   for (const row of idx.values()) {
     if (live.has(row.sourceUrl)) {
-      /* THE EXCLUSION MOVES A ROW'S WEIGHT, IT DOES NOT DELETE IT — and deleting it is what it did. A parked
-         entry and the tab that holds its address are ONE work item (the tab's instance resumes that residue
-         itself; rehydrating beside it would replay one document's flows in two instances), so the row leaves
-         this order and the item that stands for it must carry what it was worth. While the waiting arm above
-         answered 1.0, this skip was the second half of one loss running in both directions: an address that
-         has produced nothing was never outranked, and a residue that has produced a great deal was ranked as
-         though it had produced nothing the moment a tab opened its page. Asserted rather than described,
-         because the failure is silent — the row simply is not in the order, and nothing counts what left it.
-         A row excluded because a LIVE INSTANCE holds its address is carried by that engine's own
-         `engineWeight` instead, which is a different mechanism and not this one's to assert. */
+      /* The exclusion moves the row's weight, it does not delete it: a parked entry and the tab holding its
+         address are one work item (the tab's engine resumes the residue), so a waiting document at that address
+         must have been ranked by the row's history. A row excluded because a live instance holds its address is
+         carried by that engine's `engineWeight` instead. */
       DCHECK(!waitingAddrs.has(row.sourceUrl) || byAddress.has(row.sourceUrl),
              "a parked residue was taken out of the Level-1 order because a waiting document holds its " +
              "address, and that document was not ranked by it — the row's weight has left the order with " +
@@ -1695,23 +1615,15 @@ function _bestCandidate(pop) {
       continue;
     }
     if (resident.some((p) => p.fkey === row.key)) { cen.exclHeld++; continue; }
-    /* A STRANDED RESIDUE IS NOT ADMISSIBLE AND IS THEREFORE NOT A CANDIDATE — the same sentence the sub-frame
-       above is excluded by, and the same non-loss. Its document was shed against a proof and its re-derivation
-       has since stopped answering, so there are no bytes for an instance to be built over; offering it here
-       would spend one fetch per round on an address that has already said no. Nothing drops it: its recipes
-       are intact and the next VISIT to this address resumes them through engineRoot's own frontierGet, which
-       reads recipes and never bytes. */
+    /* A stranded residue has no bytes to build an instance over, so it is not a candidate; its recipes remain
+       and the next visit resumes them through engineRoot's frontierGet. */
     if (row.stranded) { cen.exclStranded++; continue; }
     const w = _candRanked(cen, "cold", row);
     if (!best || w > best.w) best = { kind: "cold", row, w };
   }
-  /* THE EXTREMA ARE ATTACHED BY `_candRanked` AT THE MEMBER THAT EARNS THEM, not restored by a pass here.
-     `candDocWMax`, `candSeedWMax` and `candColdWMax` stay apart deliberately: the Level-1 question §scheduler
-     asks is whether a WAITING DOCUMENT, a DECLARED ROUTE or a PARKED FRONTIER is worth the next instance, and
-     one merged extremum states the answer while erasing the comparison that produced it. */
-  /* A WALK THAT RANKED MEMBERS AND PICKED NOTHING IS A COMPARISON THAT NEVER HAPPENED, and it is asserted here
-     rather than left to the caller: `best` is the whole output of this order, so the two disagreeing means the
-     order silently declined to admit an item it had already found admissible. */
+  /* `candDocWMax`, `candSeedWMax` and `candColdWMax` stay apart because the Level-1 question is which kind is
+     worth the next instance, and one merged extremum erases that comparison. */
+  /* A walk that ranked members and picked nothing would be the order silently declining an admissible item. */
   DCHECK((cen.cands > 0) === (best !== null),
          "the Level-1 candidate order ranked " + cen.cands + " item(s) and picked " +
          (best ? "one" : "none") + " — the census and the pick are produced by one walk over one set, so a " +
@@ -1720,17 +1632,12 @@ function _bestCandidate(pop) {
   return { best: best, census: cen };
 }
 
-/* THE NAVIGATION RESPONSE'S HEADER LIST, IN THE ONE FORM THAT CROSSES AN ABI — the HTTP field lines the
-   response delivered, `name: value`, one per line. This is a RELAY and not logic: it restates what the browser
-   already gave this zone, and every decision made from it (which policy container, which sandboxing flags,
-   which agent cluster key) is the engine's, in the browser components that own those standards.
-   NOTHING IS DEFAULTED HERE. `h` is written by every producer that reaches engineCreate — `navigationLoad`'s
-   own reply for a live document, the `{}` a child-document notice starts from, and a cold entry's stored list
-   — so an absent one is a contract that changed rather than "a response with no headers", and the empty
-   object already says the second thing.
-   A value carrying CR or LF would split into a line the engine cannot read; the browser's `Headers` forbids
-   both, so one here means the value did not come off a response and the engine's own CHECK would abort on the
-   fragment. It is asserted at the producer's edge instead, where the name of the offending header survives. */
+/* The navigation response's header list in the form that crosses the ABI: HTTP field lines `name: value`, one
+   per line. A relay, not logic: every decision made from it (policy container, sandboxing flags, agent
+   cluster) is the engine's. Nothing is defaulted; every producer reaching engineCreate writes `h`
+   (navigationLoad's reply, a child notice's `{}`, a cold entry's stored list), and `{}` already states "no
+   headers". A value with CR or LF did not come off a response (`Headers` forbids both) and is asserted here,
+   where the header's name survives. */
 function responseFieldLines(h) {
   DCHECK(h && typeof h === "object",
          "an engine was started with no response header list — HTML §7.5.1 creates a Document from its " +
@@ -1752,33 +1659,20 @@ function responseFieldLines(h) {
   return out.join("\n");
 }
 
-/* ─── DOES THIS DOCUMENT LOAD CARRY THE PERSON'S SESSION? ────────────────────────────────────────────
-   ONE answer, read by every load in this file, so two loads cannot disagree about it in silence.
-   CLAUDE.md §A REAL NAVIGABLE IS A LEGITIMATE INSTRUMENT: "EVERY ONE OF THEM SENDS COOKIES: `safeFetch`
-   supports credentialed loads, and a SAME-ORIGIN navigation carries them, exactly as a browser's does.
-   There is no credential-free context, no partition, no incognito." A SESSION-LESS TAB IS A THIRD THING
-   THAT MODELS NOTHING — not the person's browser and not a clean client — served a bundle the person will
-   never be served, producing findings that do not reproduce for them.
-   THE CONDITION IS THE SPEC'S OWN, NOT A GUARD BOLTED ON BESIDE THE CHOKEPOINT. `safeFetch`'s credentialed
-   reply gate IS Fetch §4.1 "Main fetch"'s readability rule: a response is "basic" — readable — when
-   "request's current URL's origin is same origin with request's origin", and otherwise needs §4.10 "CORS
-   check" to have granted this exact origin a credentialed read, which no document server grants. So asking
-   for a CROSS-origin document WITH cookies would spend the person's session at that host for bytes this
-   zone must then refuse to read: strictly worse than asking without them. Declining is this caller
-   declining to make a request the chokepoint has already said it will not hand back — not a second network
-   policy, which SECURITY.md gives to `safe-fetch.js` alone.
-   THE PRINCIPAL IS THE BROWSER'S AND IS NEVER RE-DERIVED FROM AN ADDRESS. A page can sandbox its own iframe:
-   an ordinary-looking URL and an OPAQUE origin. `_isRealOrigin` — safe-fetch.js's own predicate, shared
-   rather than copied, so the caller and the gate cannot drift — is what makes that document's load
-   uncredentialed, because an opaque origin is same-origin with nothing.
-   ABSENCE IS A POSITIVE STATEMENT: an empty principal is a document with no session to carry (a cold recipe
-   parked before the field existed), never a hole to fill in.
-   WHAT THIS DELIBERATELY IS NOT, NAMED RATHER THAN HEDGED: the CROSS-ORIGIN navigation. A real browser does
-   send cookies to a cross-origin `<iframe src>`. It cannot here because `safeFetch`'s credentialed gate asks
-   whether the REQUESTING principal may read the bytes, while a navigation's reader is a DIFFERENT instance
-   keyed on the RESPONSE's own origin — the bytes never enter the initiator's heap. That is a question the
-   chokepoint has no vocabulary for, and it needs a document load type IN safe-fetch.js whose read principal
-   is the response's origin, not an `if` at this call site. */
+/* ─── Does this document load carry the person's session? ────────────────────────────────────────────
+   One answer, read by every load in this file. A real navigable sends cookies: a same-origin navigation
+   carries them exactly as a browser's does, so the engine is served what the person is served.
+   The condition is Fetch's: a response is readable as "basic" when the request's current URL's origin is same
+   origin with the request's origin (Fetch §4.1 Main fetch); otherwise a credentialed read needs §4.10 CORS
+   check, which no document server grants. Asking cross-origin with cookies would spend the session for bytes
+   the chokepoint must refuse, so this declines to make that request; policy remains safe-fetch.js's.
+   The principal is the browser's, never re-derived from the address: `_isRealOrigin` (safe-fetch.js's own
+   predicate, shared) makes an opaque principal's load uncredentialed, and an empty principal is a document
+   with no session to carry.
+   Named residual: a cross-origin `<iframe src>` navigation carries no cookies here, though a browser sends
+   them. Next diff builds a document load type in safe-fetch.js whose read principal is the response's own
+   origin (the bytes go to a different instance, not the initiator). Absence shows as cross-origin child
+   documents loading in their logged-out form. */
 function navigationCarriesSession(absUrl, principalOrigin) {
   DCHECK(typeof principalOrigin === "string",
          "a document load was asked whether it carries the session with no principal stated at all — every " +
@@ -1788,116 +1682,50 @@ function navigationCarriesSession(absUrl, principalOrigin) {
   return _isRealOrigin(principalOrigin) && originOf(absUrl) === principalOrigin;
 }
 
-/* ─── THE ONE DOCUMENT-LOAD PATH ────────────────────────────────────────────────────────────────────
-   HTML §7.4 "Navigation"'s load, as this host performs it: an ADDRESS goes in and a §7.4.5 "Populating a
-   session history entry" RESPONSE comes out — the bytes a Document is parsed from, the header list its
-   policy container is created from, and the URL its origin is determined over. Every document this engine
-   ever holds arrives through here, and there is no second transport beside it.
-
-   THERE USED TO BE ONE, AND THE FAILURE WAS NOT DUPLICATION. A content script fetched the top document in
-   the PAGE'S OWN REALM with the person's cookies and shipped the bytes, so `lib/safe-fetch.js` — the scheme
-   allowlist, the origin-relative SSRF/PNA guard on the initial AND post-redirect URL, CORB by expected type,
-   the credentialed destructive-path deny list — applied to the engine's own navigations and to nothing that
-   arrived that way. What replaced it is a SEED: an address the ambient observer suggests and this function
-   loads. Everything the old message carried but the address is derived here and derived better — the whole
-   response header list rather than a map assembled in a page realm, Fetch §2.2.6 "Responses"' URL LIST
-   (which only the fetching zone can see), and a refusal that NAMES the rule that refused.
-
-   AND IT CARRIES THE PERSON'S SESSION WHERE A BROWSER'S NAVIGATION WOULD — see `navigationCarriesSession`
-   above, which is where that decision is stated and why. This paragraph used to say the opposite ("it is
-   UNCREDENTIALED, which is a different document and says so"), and it was an honest description of a gap
-   rather than a design: the URL seed replaced a content script that fetched the page's own document WITH
-   the person's cookies, so moving the load to the chokepoint silently swapped the analysed document for the
-   LOGGED-OUT one. §What-the-tool-produces' "learn the LOGGED-IN API surface WHILE LOGGED OUT" is about the
-   BUNDLE — an SPA ships the same JavaScript to a logged-out visitor, which is why forced execution reaches
-   the auth-gated code either way — and it was never an instruction to serve this engine a document the
-   person is not served. §the-symbolic/trust-boundary is unaffected in either direction: server-injected app
-   state is UNKNOWN INJECTED INPUT and the auth gate FORKS, so a personalised SSR's values become examples
-   without ever concretizing the gate.
-
-   TWO OUTCOMES AND THEY ARE PAIRED, never defaulted: `bytes` is a byte sequence and `unavailable` is null, or
-   `bytes` is null and `unavailable` NAMES WHY in the closed vocabulary the popup renders. `bytes: null` is a
-   load that did not load — the navigable still exists and shows an error page, which is what the engine's own
-   child_document reads it as — and it is a real §7.4 outcome rather than a softening.
-   EVERY ONE OF THOSE REASONS IS THE NETWORK'S NOW, AND THAT IS THE VOCABULARY BEING KEPT CLOSED RATHER THAN
-   A REASON BEING LOST. This function used to hold a fourth word of its own — `{kind: "provenance"}`, for a
-   navigation it declined because the address exists only past a forced gate — and the closed vocabulary the
-   popup renders has exactly three. The refusal is the CHOKEPOINT's now (`blocked-signal:destination=value`
-   or whichever row of the person's own control holds it, in the
-   reply record's `statusText`), so it arrives through `kind: "network"` beside `blocked-scheme:` and
-   `blocked-private-from-public`, which is where a reader already looks for WHICH RULE refused a load. "The
-   chokepoint would not" and "this caller would not" were two answers to one question; there is one answerer.
-   EMPTINESS IS NOT JUDGED HERE. An OK response with a zero-length body is a perfectly ordinary empty Document
-   under §7.4.5, and refusing one is a SEED's rule (a document with no bytes cannot be the bundle), stated at
-   the seed rather than imposed on every child navigable a page creates. */
-/* `fromReach` IS HOW THE DOCUMENT ISSUING THIS NAVIGATION WAS ITSELF REACHED, AND IT IS NOT `provenance`.
-   That word is the ENGINE's, about this navigation act; this one is THIS ZONE's, about a load it performed
-   before the issuing document existed, and `safe-fetch.js` reads both because a page this tool chose to open
-   goes on making requests the engine correctly grades `observed`. It is trailing, so no operand shifts, and a
-   caller that omits it composes `undefined` — which `_docReachOf` refuses with a fatal CHECK rather than
-   taking a permissive arm. What the document this load PRODUCES will be reached under is the JOIN of the two
-   (`safeFetchReachJoin`), composed by whoever states that document's analyze record. */
-/* WHAT A CALLER OF A §7.4 LOAD DOES WITH A REFUSAL — A DECLARED WORD, BECAUSE THE BOOLEAN THAT STOOD HERE WAS
-   ONE BIT ANSWERING TWO QUESTIONS AND THERE IS A CALLER AT WHICH THEY DISAGREE. It was `canDecline`, and this
-   file spelled its meaning two different ways in two different sentences: `navigationLoad`'s own contract said
-   it "IS WHETHER THIS CALLER HOLDS A RENDEZVOUS" and `fetchedDocument`'s DCHECK said "whether ITS consumer can
-   carry a refusal". Those are one question for as long as the only caller with an arm for a refusal is the one
-   parked on a rendezvous, and they COME APART at the ROUTE SEED: it holds NO rendezvous, and its arm for a
-   refused load has been landed and running since before the decline existed — `admitSeatLand` drops the seat,
-   spends nothing further and prints the reason, which is exactly what it already did for every other refusal
-   of a seed's load. So `true` there would be a false statement about a rendezvous and `false` is an abort at a
-   caller that HAS an arm. That is CLAUDE.md §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS, and the decline arm below
-   CITES that rule for the split it made between its own two kinds — one caller short of the one it was
-   committing.
-   THE THREE WORDS, AND THE CRASH IS KEYED ON THE THIRD:
-     `rendezvous` — the engine is PARKED on a request id. The refusal is routed to it (engineDeliverDocument →
+/* ─── The one document-load path ────────────────────────────────────────────────────────────────────
+   HTML §7.4 Navigation and session history's load, as this host performs it: an address goes in and a §7.4.5
+   Populating a session history entry response comes out (the bytes a Document is parsed from, the header list
+   its policy container is built from, the URL its origin is determined over). Every document the engine holds
+   arrives here, through lib/safe-fetch.js, so scheme allowlist, SSRF/PNA guard on the initial and
+   post-redirect URL, CORB and the destructive-path deny list apply to every navigation. It carries the
+   session where a browser's navigation would (see navigationCarriesSession).
+   Two paired outcomes, never defaulted: `bytes` is a byte sequence and `unavailable` null, or `bytes` is null
+   and `unavailable` names why in the closed vocabulary the popup renders (status/empty/network). `bytes: null`
+   is a load that did not load: the navigable exists and shows an error page. A third outcome, `declined`, is
+   below. The chokepoint's refusals arrive as `kind: "network"` with the rule in `statusText`
+   (`blocked-signal:`, `blocked-scheme:`, `blocked-private-from-public`).
+   Emptiness is not judged here: an OK zero-length body is an ordinary empty Document; refusing one is a seed's
+   rule, stated at the seed. */
+/* `fromReach` is how the document issuing this navigation was itself reached, distinct from `provenance` (the
+   engine's word about this navigation act); safe-fetch.js reads both. It is trailing, and an omitted one is
+   `undefined`, which `_docReachOf` refuses with a fatal CHECK. The produced document's reach is the join of
+   the two (`safeFetchReachJoin`), composed by whoever states that document's analyze record. */
+/* What a caller of a §7.4 load does with a refusal, as a declared word rather than a boolean, because "holds a
+   rendezvous" and "can carry a refusal" differ at the route seed:
+     `rendezvous` — the engine is parked on a request id; the refusal is routed to it (engineDeliverDocument →
                     HostDecline → engine_host_decline) and the navigable keeps the pre-operation document HTML
-                    §7.3.1.3 "Child navigables"' create-a-new-child-navigable created it holding.
-     `report`     — nothing is provisioned and nothing is parked. The caller drops its WORK ITEM and reports
-                    the chokepoint's own reason verbatim. A seed is this shape by construction: an instance
-                    asked to root itself at an address this zone will not fetch holds no document at all, so
-                    there is no navigable to leave at a pre-operation state and nothing to fabricate.
-     `none`       — this caller has NO arm that can state a load that was NEVER ATTEMPTED, so anything handed
-                    to it becomes a claim that is false. The abort below is the correct answer for it and names
-                    what each such caller would otherwise fabricate. It is keyed on THAT and not on the
-                    rendezvous, because the two notices fabricate a DOCUMENT and the ambient seed fabricates a
-                    REASON — one fact, one word, three callers.
-   THE TEST IS WRITTEN IN THE POSITIVE (`!== "rendezvous" && !== "report"`) SO AN UNSTATED WORD REFUSES BY
-   CONSTRUCTION, which is a thing the boolean could not do. `canDecline` was tested as `!canDecline`, so
-   `undefined` refused correctly and ANY non-empty string — a typo, a stale literal, a field read at the wrong
-   offset — was TRUTHY AND PERMITTED, which is the defaulted-read defect standing where a refusal belongs. */
+                    §7.3.1.3 Child navigables' create-a-new-child-navigable created it holding.
+     `report`     — nothing is provisioned or parked; the caller drops its work item and reports the
+                    chokepoint's reason verbatim (a route seed, via admitSeatLand's seat-drop arm).
+     `none`       — the caller has no arm that can state a load that was never attempted, so a decline aborts
+                    and the message names what each such caller would fabricate.
+   The test is written in the positive (`!== "rendezvous" && !== "report"`), so an unstated or misspelled word
+   refuses by construction. */
 const DOC_REFUSAL_ARMS = Object.freeze(["rendezvous", "report", "none"]);
 async function navigationLoad(u, base, principalUrl, principalOrigin, provenance, fromReach, refusalArm,
                               actor) {
-  /* `refusalArm` IS WHAT THIS CALLER DOES WITH A REFUSAL — see DOC_REFUSAL_ARMS for the three words and for
-     why this is not the boolean it was. It is a REQUIRED positive statement rather than a defaulted one: an
-     unstated word takes the REFUSING arm below exactly as `none` does, so forgetting is not a way to be
-     exempted. */
+  /* `refusalArm` is required; an unstated word takes the refusing arm, exactly as `none` does. */
   DCHECK(DOC_REFUSAL_ARMS.indexOf(refusalArm) >= 0,
          "a §7.4 navigation was loaded stating the refusal arm " + JSON.stringify(refusalArm) + ", which " +
          "is none of the three this zone declares (" + DOC_REFUSAL_ARMS.join("/") + ") — the word says what " +
          "this caller DOES with a refusal, and a caller that does not state it would have this function pick " +
          "for it: a rendezvous it does not hold, a report it cannot write, or an empty document for an " +
          "address nothing ever fetched");
-  /* AND `actor` IS WHOSE ACT THIS NAVIGATION IS, WHICH THIS FUNCTION USED TO ANSWER WITH A LITERAL FOR THREE
-     CALLERS THAT ARE NOT ALL THE SAME KIND. It is CLAUDE.md \u00a7AND-AN-EXEMPTION-SCOPED-BY-WHO-ACTED
-     verbatim: a fact about who acted is a VALUE stated by the site that knows, carried down every frame and
-     asserted where it is relied on, never re-derived — and a literal inside a loader several kinds of
-     caller share is exactly the shape that rule is written from. `safe-fetch.js`'s own `_actorOf` states the
-     rule this was breaking: "A REQUEST THIS TOOL COMPOSED AT A PERSON'S DIRECTION IS STILL `tool`".
-     IT CHANGES NO OUTCOME TODAY AND THAT IS WHAT MAKES IT AUDITABLE, measured rather than argued: the
-     ambient seed fires on the arm keyed on `provenance=observed` AND `doc-reach=observed`, which names no
-     actor at all, so `node testing/egress_arm_probe.mjs`'s vector answers FIRES at `page` and FIRES at
-     `tool`. What moves is the row a PERSON reads on their own egress control — and `actor` is the one
-     signal that registry grades `certain`, "this tool computed it", which is the strongest thing that
-     surface can say, so a false value there is CLAUDE.md \u00a7A-FIELD-A-CONSUMER-DEFAULTS at the one
-     boundary where the consumer is the person.
-     AND THE OWNER'S VALUE ARM ALREADY RESTED ON THE WORD THIS WAS GETTING WRONG, which is why it is not
-     cosmetic: that arm's enumeration says in as many words that "the seed and the residue re-fetch state
-     `tool`", and it was the one caller stating `page`. Nothing fires differently while the seed's
-     provenance is `observed`; the day a seed reaches here on any other grade, the arm would have admitted it.
-     THE VALUE SPACE IS ASKED OF THE CHOKEPOINT AND NEVER COPIED HERE — a second list of the words
-     would be the copy that drifts, and this zone is the one that must not hold one. */
+  /* `actor` is whose act this navigation is, stated by each caller: a child navigable and a declared route are
+     the page's, an ambient seed this tool composed is the tool's (safe-fetch.js's `_actorOf`: a request this
+     tool composed at a person's direction is still `tool`). It is the signal the egress registry grades
+     `certain`, shown on the person's own control, so it must be true. The value space is asked of the
+     chokepoint and never copied here. */
   DCHECK(typeof self.safeFetchSignalUsable === "function" &&
          self.safeFetchSignalUsable("actor", actor) === null,
          "a \u00a77.4 navigation was loaded with an actor word the chokepoint's own registry does not " +
@@ -1906,167 +1734,65 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
          "absent one. It is stated per caller rather than once here because this loader serves a child " +
          "navigable (the page), a route an application declared of itself (the page), and an ambient seed " +
          "this tool composed from an address the person's browser navigated to (the tool)");
-  /* THE ADDRESS THIS LOAD ASKED FOR, RESOLVED ONCE AND UP HERE BECAUSE EVERY ARM BELOW OWES A URL. §7.4.5
-     determines the loaded Document's ORIGIN over the RESPONSE's URL, and a navigable whose load did not load
-     still gets a Document — so "there was no response" is not a reason to answer without one, and the honest
-     URL in that case is the one that was requested. An address that will not parse is a caller's serializer
-     output disagreeing with a URL parser, which is a broken contract rather than a page's doing, so it
-     THROWS: a DFAIL would be a no-op in release and leave every arm below reading `undefined`, which is the
-     defaulted-field defect with a check's name on it. */
+  /* The requested address, resolved once because every arm owes a URL: a navigable whose load did not load
+     still gets a Document, at the URL that was requested. An unparseable address is a caller's serializer
+     disagreeing with the URL parser, a broken contract, so it throws (a DFAIL would leave arms reading
+     `undefined` in release). */
   const abs = new URL(u, base).href;
-  /* THE CHOKEPOINT IS NOT OPTIONAL, AND ITS ABSENCE IS A LOAD ORDER. ast-worker.html loads safe-fetch.js
-     before this file, so a missing `self.safeFetch` is that order broken — answering "a load that did not
-     load" for it would report every document in the session as a navigable showing an error page, which is
-     indistinguishable from a network nobody can reach. */
+  /* The chokepoint is not optional: ast-worker.html loads safe-fetch.js before this file, so its absence is
+     that load order broken. */
   DCHECK(typeof self.safeFetch === "function",
          "a §7.4 navigation was asked for with no network chokepoint installed — lib/safe-fetch.js is loaded " +
          "before this file in ast-worker.html, so its absence is that load order broken and every document " +
          "of this session would report as a load that did not load");
-  /* THE PRIVATE-NETWORK PRINCIPAL IS THE CALLER'S AND IS NEVER RE-DERIVED FROM `u`. safeFetch classifies the
-     SSRF host relative to `opts.pageUrl`, so an address that named ITSELF as its own principal would
-     self-authorize a private target — which is exactly the confused-deputy the guard exists to refuse. */
+  /* The private-network principal is the caller's, never re-derived from `u`: safeFetch classifies the SSRF
+     host relative to `opts.pageUrl`, so an address naming itself as principal would self-authorize. */
   DCHECK(typeof principalUrl === "string" && principalUrl !== "",
          "a §7.4 navigation was asked for with no private-network principal — safeFetch classifies the SSRF " +
          "host relative to it, and a load that supplied its own address as its own principal would let any " +
          "requested URL authorize itself into the user's intranet");
-  /* AND THE CREDENTIALED-READ PRINCIPAL, WHICH IS A SECOND FACT AND NEVER THE FIRST ONE REUSED. `pageUrl`
-     above classifies the SSRF host and is an ADDRESS; `pageOrigin` decides whose authenticated bytes this
-     load may read and is an ORIGIN THE BROWSER STATED. Deriving the second from the first is the exact
-     URL-derivation SECURITY.md's credentialed principal exists to forbid — a sandboxed frame reports an
-     ordinary address and an opaque origin, so parsing the address would hand it same-origin access to its
-     EMBEDDER's authenticated document. They are asserted separately for the same reason they are passed
-     separately. */
+  /* The credentialed-read principal is a second fact: `pageUrl` is an address for the SSRF check, `pageOrigin`
+     is a browser-stated origin deciding whose authenticated bytes may be read. A sandboxed frame reports an
+     ordinary address and an opaque origin, so deriving one from the other would give it its embedder's
+     session. */
   DCHECK(typeof principalOrigin === "string",
          "a §7.4 navigation was asked for with no credentialed-read principal — it is the browser's " +
          "MessageSender.origin for the document this load belongs to, and it is what decides whether the " +
          "person's session travels; `undefined` is a caller that stopped stating it, which would silently " +
          "return every tab to loading the LOGGED-OUT document");
-  /* ── WHO NAMED THIS ADDRESS, WHICH IS THE WHOLE OF WHAT DECIDES WHETHER THE LOAD HAPPENS ────────────────
-     CLAUDE.md §Attacker-sources puts a navigation's entire safety in the choice of address and its entire
-     remaining question in PROVENANCE. A top-level navigation is a GET, which RFC 9110 §9.2.1 "Safe Methods"'
-     safe set contains, so the METHOD half is answered before this function is entered and there is nothing
-     else left.
-     A QUOTATION STOOD HERE AND IT WAS A PARAPHRASE INSIDE QUOTATION MARKS, WHICH BORROWS AN AUTHORITY THE
-     WORDS NEVER EARNED — kept in its own words because a reader re-derives it from that section. It read
-     "an OBSERVED or DERIVED address is navigated freely, a FORCED one is the deliberate per-origin widening,
-     and one whose provenance is NOT ESTABLISHED crashes at the decision rather than proceeding." The
-     SECTION is right, the third clause is right, and the STRING is in no revision of that file:
-     `git show origin/main:CLAUDE.md | grep -c` answers 0 for it against 1 for `deliberate per-origin
-     widening` as a control. THE DERIVED HALF IS ALSO FALSE OF THE DEFAULT ARMS, measured against the real
-     `_firingRefusal` with the facts the call below states: at an unconfigured origin a DERIVED navigation is
-     REFUSED `destination=value`, exactly as a FORCED one is, because §2.2.5's `document` destination is
-     neither script-like nor a subresource and the `value` arm wants a `witness=unpinned` this call correctly
-     states as `unstated`. What moved is the MODEL — §AND-THAT-ABSOLUTE-IS-RETIRED-BY-THE-PROJECT-OWNER made
-     the control per-signal and §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS drew the default at PROGRAM LOADS ONLY,
-     which a navigation is not — so the widening is what carries a navigation at every grade, and a person
-     whose route only the bundle names permits this origin rather than being told the grade decided it.
-     `engine/trusted.mjs`'s `navigate` carries the same correction, because it carried the same sentence.
-     AND THE DECISION IS NOT MADE HERE ANY MORE, WHICH IS THE POINT RATHER THAN A DELEGATION. This function
-     used to hold two things the chokepoint could not: a DCHECK enumerating the three tokens, and an arm that
-     refused a FORCED address outright. Both were the correct policy and both were a SECOND COPY of it — the
-     `document.seed` arm one screen down held a third, and `engine/trusted.mjs` held a fourth that disagreed
-     with all of them. CLAUDE.md puts the firing decision at the one chokepoint, beside the deny list and the
-     credential choice, and `safe-fetch.js` now reads the word this call passes it: `_provenanceOf` is a
-     `CHECK` (fatal in release too, because the arm an unstated grade falls to is the one that spends the
-     network), and `_firingRefusal` is the widening. So the crash §Attacker-sources asks for still happens,
-     once, for BOTH hosts, at the line that opens the socket — and a refused navigation comes back as the
-     chokepoint's own `blocked-signal:` reply record, in the same refusal vocabulary as a blocked scheme,
-     rather than through a shape this file invented for one caller. */
-  /* THE FORCED ARM THAT STOOD HERE IS DELETED WITH THE `unavailable` KIND IT INVENTED, AND BOTH DELETIONS ARE
-     THE SAME CORRECTION. Its reasoning was right and is preserved at `_firingRefusal`, where it now serves
-     every caller of the chokepoint instead of this one; what was wrong was WHERE it stood. Its refusal
-     answered `{kind: "provenance"}`, a fourth word in a vocabulary `serialize.js` and `popup.js` each assert
-     to exactly three — so the one shape it produced could never reach a reader, and the row that renders a
-     page that was not analysed would have aborted on it had a seed ever taken this arm. The chokepoint's
-     refusal is a reply record whose `statusText` is `blocked-signal:<name>=<value>`, which the `status === 0`
-     arm below already turns into `{kind: "network", detail}` — the same field, and the same sentence in the
-     popup, that `blocked-scheme:` and `blocked-private-from-public` are read out of. A refusal this zone
-     makes and a refusal the network makes are two answers to the reader's ONE question ("why is there no
-     document here"), and they belong in one vocabulary. */
+  /* ── Who named this address ─────────────────────────────────────────────────────────────────────────
+     A top-level navigation is a GET, in RFC 9110 §9.2.1 Safe Methods' safe set, so what remains is provenance.
+     The firing decision is not made here: safe-fetch.js reads the word this call passes (`_provenanceOf` is a
+     CHECK, fatal in release) and `_firingRefusal` is the per-origin widening, so the one decision serves both
+     hosts at the line that opens the socket. At an unconfigured origin a derived navigation is refused like a
+     forced one (the default fires program loads only), and the person widens the origin to permit it. A
+     refusal comes back as the chokepoint's `blocked-signal:` reply record. */
   try {
-    // Never `as:"script"` — these bytes are PARSED as a document, not run as code.
-    /* AND IT CARRIES THE SESSION EXACTLY WHERE A BROWSER'S NAVIGATION WOULD. The chokepoint re-decides this
-       independently on the bytes that come back (its credentialed SOP, over the POST-REDIRECT origin), so a
-       load that leaves this origin between the request and the response is refused there and never here:
-       two-sided, a caller stating intent and the one policy point enforcing it, rather than one check
-       trusted twice.
-       ASKING FOR COOKIES ALSO ARMS THE DESTRUCTIVE-PATH DENY LIST, AND IT IS NO LONGER ARMED FOR THE ONE
-       CALLER IT WAS OVER-SCOPED FOR. The paragraph that stood here named the condition exactly — "the list
-       exists because forced execution builds requests no real client makes, and a seeded navigation is a
-       request a real client made SECONDS AGO in this same profile … the condition under which the harm
-       exists is credentialed AND NOT-OBSERVED" — and then said the chokepoint could not see the second half
-       because the token was not passed to it. It is passed now, on the line below, and `safe-fetch.js`
-       scopes both of its destructive checks (the pre-request one and the post-redirect one) to
-       `credentialed && provenance !== "observed"`. So a document whose own address carries one of the
-       list's tokens (`/settings/delete-account`, `/logout`) is LOADED when the person's own browser
-       navigated to it, and still refused when this tool derived or forced the address.
-       THAT IS A LOOSENING AND IT IS THE ONE THIS FIELD EXISTED TO MAKE SAFE. Being over-broad was the deny
-       list's cheap direction and it stays cheap everywhere the harm argument still reaches; what is given up
-       is one refusal whose whole premise — that no real client makes this request — was false of this
-       caller by construction. */
-    /* Fetch §2.2.5's `document` DESTINATION — HTML §7.4.5 "Populating a session history entry" is the
-       navigate algorithm's own fetch, and §2.2.5's table gives that row the destination `document`. It is not
-       script-like, so this load takes no CORB: what reads these bytes is the HTML parser, which is what they
-       are. */
-    /* AND `provenance`, WHICH IS WHAT DECIDES WHETHER THE REQUEST HAPPENS AT ALL. It is the caller's
-       statement about who named this address, relayed verbatim; this function neither tests it nor completes
-       it, because the zone that owns the firing decision is the one that opens the socket. */
-    /* AND FETCH §2.2.5 "Requests"' CREDENTIALS MODE, WHICH FOR A NAVIGATION IS THE SPEC'S OWN LITERAL. HTML
-       §7.4.5 "Populating a session history entry"'s create navigation params by fetching builds "a new
-       request, with … destination `document` … credentials mode `include`", so this is not a policy this
-       zone is choosing — it is what the algorithm performing the navigation says the request IS, stated
-       here because this zone is the party performing it. It is the OTHER half of the credential decision
-       from `credentialed` beside it: that flag is this zone's willingness to spend the session, this token
-       is what the request is, and `safe-fetch.js` composes the two (see `_credentialedOf`). Stating it is
-       what lets that composition REQUIRE a mode wherever the session pays, which is the rule that stops a
-       credential question being answered by silence. */
-    /* AND THE ISSUING DOCUMENT'S REACH GRADE, WHICH IS `fromReach` AND NOT THE JOIN: the chokepoint asks
-       about the document this request was made FROM, and for a navigation that is the one that initiated it.
-       The join names the document these bytes will BECOME, which does not exist yet. */
-    /* `page` — THE ANALYSED DOCUMENT'S OWN CODE INITIATED THIS NAVIGATION, which is the question this row
-       asks. The provenance beside it says what that code's PATH is evidence of and the two are independent:
-       a page navigates itself on a forced arm as readily as on an observed one. */
+    // Never `as: "script"`: these bytes are parsed as a document, not run as code.
+    /* The session is carried where a browser's navigation would carry it; the chokepoint re-decides on the
+       bytes that come back (credentialed SOP over the post-redirect origin), so a load that leaves this origin
+       is refused there. Asking for cookies arms the destructive-path deny list, which safe-fetch.js scopes to
+       `credentialed && provenance !== "observed"`: a document whose address carries a listed token is loaded
+       when the person's browser navigated to it and refused when this tool derived or forced the address. */
+    /* Fetch §2.2.5 Requests' `document` destination, the navigate algorithm's own fetch (HTML §7.4.5). Not
+       script-like, so no CORB: the HTML parser reads these bytes. */
+    /* `provenance` is the caller's statement of who named this address, relayed verbatim; the chokepoint owns
+       the firing decision. */
+    /* `credentials: "include"` is the navigation's own credentials mode (HTML §7.4.5 Populating a session
+       history entry: "destination `document` … credentials mode `include`"); `credentialed` is this zone's
+       willingness to spend the session, and safe-fetch.js's `_credentialedOf` composes the two. */
+    /* `docReach` is `fromReach`, the grade of the document this request was made from (the initiator), not
+       the join, which names the document these bytes will become. */
+    /* `actor` and `provenance` are independent: a page navigates itself on a forced arm as readily as on an
+       observed one. */
     const r = await self.safeFetch(abs, { pageUrl: principalUrl, pageOrigin: principalOrigin,
                                           destination: "document", provenance: provenance,
                                           docReach: fromReach, actor: actor,
-                                          /* `unstated` BECAUSE THIS PROVENANCE IS A VARIABLE. A navigation's
-                                             word comes from `engine_provenance_of_running_path` by way of a
-                                             notice, and a notice is not a park, so no witness mark was ever
-                                             composed for it — see safe-fetch.js's `_pinnedOf` for why
-                                             `unpinned` would be false exactly where it matters and for what
-                                             retires this.
-                                             AND THE PRICE THIS COMMENT CARRIED IS REFUTED BY THE CHOKEPOINT
-                                             ITSELF, KEPT IN ITS OWN WORDS BECAUSE IT IS WHAT A READER
-                                             RE-DERIVES FROM `document`: it read "It changes no outcome:
-                                             `document` is not §2.2.5 SCRIPT-LIKE, so a forced navigation is
-                                             refused either way; what it costs is the specificity of the
-                                             sentence". The premise is right and the conclusion does not
-                                             follow — NOT being script-like is what puts `document` in the
-                                             `value` bucket, which is the FIRST conjunct of safe-fetch.js's
-                                             owner arm, whose third (`actor: page`) the CHILD NAVIGABLE
-                                             and the route-declaration seed state while the ambient seed
-                                             states `tool` — so the arm was one field from
-                                             admitting exactly the population #117 is about.
-                                             AND THAT CLAUSE IS RETIRED BY THE DECISION ITSELF, KEPT IN ITS
-                                             OWN WORDS BECAUSE A READER WHO RE-DERIVES THE `value` BUCKET
-                                             WILL RE-REACH FOR THE WITNESS MARK AS THE LEVER. The project
-                                             owner settled #117 in the affirmative and the table now carries
-                                             a navigation arm OF ITS OWN (`destination=navigation AND
-                                             actor=page AND provenance=derived`), so the population arrives
-                                             through a DIFFERENT arm and the witness mark is one field from
-                                             NOTHING — the lever this comment was pricing has no load left on
-                                             it. MEASURED, as a command rather than a figure:
-                                             `node testing/egress_arm_probe.mjs` asks the real walk with THIS
-                                             vector and answers FIRES, with the FORCED path still REFUSED,
-                                             which is the whole of what the decision bought and the whole of
-                                             what it did not.
-                                             WHAT SURVIVES AND IS WHY THIS PARAGRAPH IS NOT DELETED: the
-                                             premise is still exactly right — NOT being §2.2.5 script-like is
-                                             what puts `document` in the `value` bucket — and the lesson it was
-                                             written to record is that a conclusion drawn from that premise
-                                             ("refused either way") did not follow from it. That reasoning is
-                                             re-derivable from `document` by anybody, and the sentence above is
-                                             what stops them re-deriving it wrongly a second time. */
+                                          /* `unstated`: a navigation's provenance arrives by notice, not by
+                                             park, so no witness mark was composed (see safe-fetch.js's
+                                             `_pinnedOf`). Navigations fire through their own arm
+                                             (`destination=navigation`, `actor=page`, `provenance=derived`),
+                                             so the witness mark carries no decision here. */
                                           pinned: "unstated",
                                           credentials: "include",
                                           credentialed: navigationCarriesSession(abs, principalOrigin) });
@@ -2079,13 +1805,10 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
            "safeFetch answered a document load with no statusText — every refusal it makes carries its REASON " +
            "there (`blocked-scheme:`, `blocked-private-from-public`, `blocked-corb:`), which is the whole of " +
            "what a seeded page that could not be loaded has to tell its reader");
-    /* AND FETCH §2.2.6 "Responses"' URL LIST, WHOSE LAST ITEM IS THE RESPONSE'S URL — "a pointer to the last
-       URL in response's URL list". THIS ZONE IS THE ONLY PARTY THAT SAW THE REDIRECT CHAIN, and the engine
-       determines the Document's origin over exactly this string: a same-origin request that 302s off this
-       origin produces a Document belonging to ANOTHER agent cluster, and a caller handed the requested
-       address instead has no way to know that. It is asserted rather than read past, because the list is
-       empty only for a URL that would not parse — and this call hands safeFetch an already-absolute href, so
-       an empty list here is the chokepoint's contract having changed under a reader that decides a principal. */
+    /* Fetch §2.2.6 Responses' URL list, whose last item is the response's URL. Only this zone saw the redirect
+       chain, and the engine determines the Document's origin over this string: a same-origin request that
+       redirects off-origin yields a Document of another agent cluster. Asserted, since safeFetch was handed an
+       absolute href and an empty list is its contract changing. */
     DCHECK(Array.isArray(r.urlList) && r.urlList.length >= 1 &&
            typeof r.urlList[r.urlList.length - 1] === "string" && r.urlList[r.urlList.length - 1] !== "",
            "safeFetch answered a document load with no Fetch §2.2.6 URL LIST — its last item is the " +
@@ -2093,57 +1816,23 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
            "self-origin and §7.5.1's creationURL over. Without it a redirect off this origin becomes a " +
            "Document created under the principal of the address that was merely requested");
     const finalUrl = r.urlList[r.urlList.length - 1];
-    /* STATUS 0 IS NOT A REPLY. It is the one status no HTTP response has, and it is exactly what the
-       chokepoint answers when the request never went on the wire at all — a blocked scheme, a blocked private
-       target, CORB, a URL that would not parse. The REASON is in `statusText` and it travels: a page that
-       could not be seeded says WHICH rule refused it, which is the whole difference between a report and the
-       silence it replaces. */
-    /* A DECLINE IS NOT AN ERROR PAGE, AND THIS ARM WAS TURNING EVERY REFUSAL INTO ONE. `bytes: null` is read by
-       the engine's `child_document` as a navigable that EXISTS and SHOWS AN ERROR PAGE — a real HTML §7.4
-       outcome, and the right one where the network genuinely refused. Where THIS ZONE declined, no load was
-       attempted at all, and §7.3.1.3 "Child navigables"' create-a-new-child-navigable has already said what
-       the navigable holds in that case: it is created holding the initial `about:blank` and NAVIGATED
-       afterwards, so a navigation that does not happen leaves it at `about:blank`. Those are different
-       documents with different origins — `about:blank` inherits the creator's, an error page is opaque — and
-       every flow the engine forks inside that frame runs under whichever one it was handed.
-       THERE IS NO THIRD ANSWER ON THIS SEAM TODAY, WHICH IS WHY THIS CRASHES RATHER THAN PICKING ONE. The
-       `document.fetch` seam can decline by NOT delivering (the pending register keeps the park), and
-       `engine/trusted.mjs` has the `decline` verb for it. This one cannot: the caller must answer the notice
-       with a load record, and the vocabulary has three words for a load that FAILED and none for a navigation
-       that was never made. Building it is the capability — the navigable stays at its pre-operation
-       `about:blank` and the flow that created it parks — and until it exists this must not silently pick the
-       nearest wrong word, which is what `{kind:"network"}` was. */
+    /* Status 0 is not a reply: the chokepoint answers it when the request never went on the wire (blocked
+       scheme, private target, CORB, unparseable URL), with the reason in `statusText`, which travels. */
+    /* A decline is not an error page. `bytes: null` reads in the engine's `child_document` as a navigable
+       showing an error page (opaque origin), which is right where the network refused. Where this zone
+       declined, no load was attempted, and HTML §7.3.1.3 Child navigables leaves the navigable at the
+       `about:blank` it was created holding, which inherits the creator's origin; flows forked in that frame
+       differ between the two. */
     if (r.refusal) {
       DCHECK(r.refusal.kind === "network" || r.refusal.kind === "decline",
              "safeFetch graded a §7.4 navigation's refusal `" + r.refusal.kind + "`, which is neither word it " +
              "states — and the arm an unknown grade falls to here reports the load as a page whose server " +
              "could not be reached");
-      /* THE DECLINE IS CARRIED TO THE TWO ARMS THAT CAN STATE IT AND CRASHED AT THE ONE THAT CANNOT — and
-         A ROUTE SEED IS NOT ON THE CRASHING LIST, WHICH IS THIS COMMENT'S OWN CLAIM WITHDRAWN. The verdict
-         first, because the retired wording below is what a reader of this file reaches for.
-         ITS RETIRED WORDING IS KEPT BENEATH THE VERDICT BECAUSE A READER WHO RE-DERIVES IT FROM THE
-         RENDEZVOUS WILL WRITE IT AGAIN. It read: "This function serves TWO kinds of caller and only one of
-         them has anything to decline WITH: a child navigable's load is a HOSTREQ, so there is a rendezvous id
-         the engine is parked on and a refusal has somewhere to go; a SEED is this instance's reason for
-         existing, asked for before any flow, with no rendezvous and no navigable to leave at a pre-operation
-         document." And the abort below it said the SEED's remedy was "what the POOL does with a seat whose
-         seed was refused — admitSeatLand's question and not this function's."
-         THE CLAUSE NAMED THE RIGHT OWNER AND THE WRONG WORK, which is the one shape CLAUDE.md
-         §AND-THE-`WHAT-THE-NEXT-DIFF-BUILDS`-CLAUSE rates as EXECUTED rather than caught: `admitSeatLand`
-         ALREADY HELD the arm, and had since before the decline existed. A route seed's load that is
-         unavailable, that lands cross-origin, or that carries no bytes drops the seat and prints why; a
-         DECLINE is a FOURTH member of exactly that population and the cheapest one, because no request was
-         made at all. Nothing had to be DECIDED. What was missing was that the word could not REACH the
-         caller, and that the arm read `unavailable` and `bytes` and never `declined` — so flipping the
-         boolean alone would have traded this abort for a TypeError on `null.length`.
-         AND THE ENUMERATION WAS SHORT BY ONE, DERIVED RATHER THAN RECALLED. It said THREE callers reach this
-         arm; FOUR do, and `git grep -n 'navigationLoad(' extension/bridge.js` beside
-         `git grep -n 'fetchedDocument(' extension/bridge.js` is the whole derivation — three direct callers
-         of the loader (this function's own forward, the route seed, the AMBIENT seed) and three consumers of
-         the forward. The missing one was the AMBIENT seed, and it is the one the old clause's "(1) A SEED"
-         silently conflated with the route seed while prescribing the route seed's remedy for both. They are
-         not one population: one is a pool seat landed on a round, the other is an awaited dispatch with a
-         page-source record of its own. */
+      /* The decline goes to the two arms that can state it (`rendezvous`, `report`) and aborts at `none`, whose
+         three callers would fabricate different things: the `navigable.create` and `navigable.swap` notices
+         (no request id; they would turn a null body into an empty document) and the ambient seed (it can
+         report an unavailability through `onNavigationOutcome` but has no page-source kind for a decline in
+         offscreen-brain.js's `_PAGE_SOURCE_KINDS`). The DFAIL names what to build for each. */
       if (r.refusal.kind === "decline") {
         if (refusalArm !== "rendezvous" && refusalArm !== "report")
           DFAIL("a §7.4 navigation was DECLINED by the chokepoint (" + r.refusal.reason + ") for a caller " +
@@ -2166,93 +1855,68 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
                 "is what answers it. a3a93fd widened the old boolean to all three forward consumers with a " +
                 "literal, which turned a refused child navigable into a silently empty one; fetchedDocument " +
                 "takes the word from its consumer now");
-        /* THE THIRD OUTCOME, AND THE PAIRING ABOVE IS RESTATED RATHER THAN BROKEN: `bytes` is null here as it
-           is for a load that failed, and `unavailable` is ALSO null, because this zone has nothing to say
-           about a response that does not exist. `declined` is the reason, and it is the ONLY field that
-           distinguishes "no load was attempted" from "a load was attempted and failed" — which are two
-           different documents (an `about:blank` the creator's origin owns, against an opaque error page) and
-           therefore two different sets of flows for everything forked inside that frame. */
+        /* The third outcome: `bytes` and `unavailable` are both null, and `declined` is the reason, the only
+           field telling "no load attempted" (creator-origin `about:blank`) from "a load failed" (opaque error
+           page). */
         return { url: finalUrl, headers: {}, bytes: null, unavailable: null, declined: r.refusal.reason };
       }
     }
     if (r.status === 0)
       return { url: finalUrl, headers: {}, bytes: null, declined: null,
                unavailable: { kind: "network", detail: r.statusText } };
-    /* NOT OK IS A LOAD THAT DID NOT LOAD — the navigable still exists and shows an error page. The URL still
-       crosses: a response that failed still came from somewhere, and where it came from is what the Document
-       a browser shows for it is at. A 404/500 error page is NEVER smuggled through as a document. */
+    /* Not OK is a load that did not load: the navigable shows an error page at the URL the response came from.
+       An error response's body is never used as the document. */
     if (!r.ok)
       return { url: finalUrl, headers: {}, bytes: null, declined: null,
                unavailable: { kind: "status", status: r.status } };
-    /* THE BYTES, because a Document is PARSED from a byte sequence — the response's own, not a UTF-8 decode
-       of them: HTML §13.2.3.2 "Determining the character encoding" is the ENGINE's algorithm and this zone
-       owes it the bytes to run it over.
-       AND THE WHOLE HEADER LIST, NOT ONE POLICY PULLED OUT OF IT. Which names matter is the ENGINE's question,
-       in the browser components that own those standards (HTML §7.1.3's opener policy, §7.1.4's embedder
-       policy, §7.5.1's `Origin-Agent-Cluster`); this zone relays what the response carried. */
+    /* The bytes, because a Document is parsed from a byte sequence: HTML §13.2.3.2 Determining the character
+       encoding is the engine's algorithm. And the whole header list: which names matter (opener policy,
+       embedder policy, `Origin-Agent-Cluster`) is the engine's question. */
     return { url: finalUrl, headers: r.headers, bytes: r.body, unavailable: null, declined: null };
   } catch (e) {
-    /* A THROWN fetch IS Fetch §5.6's NETWORK ERROR and it is a real outcome. AN INVARIANT ABORT IS NOT: the
-       asserts above throw through this same catch, and reporting one as a page whose request failed on the
-       wire would hand a broken host contract to the engine wearing a server's clothes. */
+    /* A thrown fetch is a network error (Fetch §5.6 Fetch methods) and a real outcome; an invariant abort
+       thrown through this catch is not, so it is rethrown. */
     RETHROW_FATAL(e);
     return { url: abs, headers: {}, bytes: null, declined: null,
              unavailable: { kind: "network", detail: String((e && e.message) || e) } };
   }
 }
 
-/* HTML §7.1.4 "Cross-origin embedder policies"' EMBEDDER POLICY, AS THIS ZONE RELAYS IT — the ITEM of §7.1.7's
-   policy container that travels beside the CSP list on every path a container takes through here.
-   THIS ZONE DOES NOT INTERPRET IT AND MUST NOT. §7.1.4 names three token strings and the ENGINE is the only
-   party that turns one back into a value; a relay that mapped them here would be a second reading of §7.1.4.1
-   in a language with no enum, and the engine crashes on a token it does not know rather than defaulting. What
-   this zone owes is that the four items reach the other side unchanged and that a caller cannot half-state one.
-   AND ITS ABSENCE IS NOT AN EMPTY VALUE. The CSP list says "there is no container" with an empty SELF-ORIGIN;
-   an embedder policy has no such spelling, because §7.1.7 gives every container one — so a caller with no
-   creator states NEW_EMBEDDER_POLICY, the section's own initial value, in as many words. */
+/* The embedder policy item (HTML §7.1.4 Cross-origin embedder policies) of §7.1.7's policy container, as this
+   zone relays it beside the CSP list. This zone does not interpret it: only the engine maps the tokens back
+   to values, and it crashes on an unknown one. It owes only that the four items arrive unchanged and whole. A
+   caller with no creator states NEW_EMBEDDER_POLICY, the section's initial value, since every container has
+   one and there is no empty spelling. */
 const NEW_EMBEDDER_POLICY = Object.freeze({ value: "unsafe-none", endpoint: "",
                                             reportOnlyValue: "unsafe-none", reportOnlyEndpoint: "" });
 
-/* WHOLE OR NOT AT ALL, which is the same rule the CSP list's two halves are held to and for the same reason:
-   §7.1.7's clone moves every item of a container, so half an item is a clone that arrives having silently
-   replaced the creator's answer with the default. */
+/* Whole or not at all, like the CSP list's two halves: §7.1.7's clone moves every item, so half an item
+   arrives having replaced the creator's answer with the default. */
 function embedderPolicyWhole(e) {
   return !!e && typeof e.value === "string" && e.value !== "" && typeof e.endpoint === "string" &&
          typeof e.reportOnlyValue === "string" && e.reportOnlyValue !== "" &&
          typeof e.reportOnlyEndpoint === "string";
 }
 
-// ---- Engine lifecycle over ONE wasm instance (one document) ----
-/* `docName` is set ONLY for a document another engine CREATED — its name arrived in that engine's
-   navigable.create notice, minted there because HTML §4.8.5 creates a child navigable inside the insertion
-   steps and cannot ask this zone for a name. A root document is named here, by the counter above. */
-/* `topLevelUrl` is HTML §8.1.3.1's TOP-LEVEL CREATION URL for this document's environment. A ROOT document is
-   its own top-level traversable, so its address is it; a document a peer engine CREATED carries its creator's
-   decision on the navigable.create notice. It is a separate argument from the address because one WASM
-   instance is one DOCUMENT regardless of origin — this document may be NESTED in a document of another
-   instance, and §8.1.3.5 decides secure-context from the TOP of that chain. */
-/* PROVISION THE INSTANCE, THEN ROOT IT. Two operations with two failure modes, and separating them is what
-   makes the cleanup a line instead of a rule someone follows: the renderer is a FRAME in this document, so
-   anything that throws after it exists — the init return code, the bundle id, the frontier key's origin, an
-   IndexedDB read, the engine's own abort — leaves an untearable WASM instance parked under a document that
-   never reloads unless the throw takes the frame with it. The old path leaked a Module that the collector
-   eventually took; a frame is not collected.
-   THE RENDERER'S NAME IS THIS INSTANCE'S AGENT CLUSTER. renderer-host.js takes a name and nothing else — it
-   does not compute the key, does not admit and does not rank — and this is the zone that owns that question,
-   so the name it passes in IS the answer (SECURITY.md's `(browsing-context group, origin)`), which is also
-   what makes a frame in the offscreen's DOM identifiable as the instance the pool is talking about. */
+// ---- Engine lifecycle over one wasm instance (one agent cluster) ----
+/* `docName` is set only for a document another engine created: its name arrived in that engine's
+   navigable.create notice (HTML §4.8.5 The iframe element creates a child navigable inside the insertion
+   steps and cannot ask this zone). A root document is named here, by the counter above. */
+/* `topLevelUrl` is the top-level creation URL of HTML §8.1.3.1 Environments. A root document is its own
+   top-level traversable; a document a peer engine created carries its creator's decision on the notice. It is
+   separate from the address because this document may be nested in another instance's document, and HTML
+   §8.1.3.5 Secure contexts decides from the top of that chain. */
+/* Provision the instance, then root it. The renderer is a frame in this document and is never collected, so
+   anything that throws after it exists (init's return code, the bundle id, the key's origin, an IndexedDB
+   read, the engine's abort) must take the frame with it; separating the two operations makes that cleanup
+   one line. The renderer's name is this instance's agent cluster key: renderer-host.js takes a name and
+   computes nothing, so the name this zone passes is the answer, and it identifies the frame. */
 function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inherited, parentNavigable,
                       containerPolicy, ancestorOrigins, creationSandboxFlags, referenced) {
-  /* THE ONE WAY TO OBTAIN AN INSTANCE, ASSERTED RATHER THAN DISCOVERED AS A TypeError. Without this the failure
-     of a load-order change (renderer-host.js is a <script> before this one in ast-worker.html) arrives as
-     "self.rendererLaunch is not a function" inside admit's catch, which reports it as a BOOT ABORT of the
-     engine — a crash record blaming an instance that was never built, for a document that would then be
-     reported as analysed and empty.
-     AND `rendererLaunch` IS NOT `rendererCreate`. The name changed because the direction did: this pool no
-     longer tells renderer-host.js to make a renderer, it asks for one that THE REGISTRY has decided on.
-     `render-process-host.js` holds which agent clusters have an instance, mints the routing id, and refuses a
-     second for a cluster that already has one — fatally, in every build — and renderer-host.js materializes
-     the frame for the id it is given and can mint none of its own. */
+  /* The one way to obtain an instance, asserted rather than met as a TypeError inside admit's catch (which
+     would report a boot abort of an instance never built). render-process-host.js holds which agent clusters
+     have an instance, mints the routing id and refuses a second for one cluster in every build;
+     renderer-host.js materializes the frame for the id it is given. */
   DCHECK(typeof self.rendererLaunch === "function",
          "renderer-host.js is not loaded in this zone — it is what obtains an instance once the registry has " +
          "admitted its agent cluster, so without it every document would be reported as a crashed instance " +
@@ -2262,12 +1926,9 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inhe
          "whether this document's findings are RETURNED to a requester or MERGED to the moat, and it is a " +
          "fact about the call site (a child navigable and a resumed recipe have no requester; an admitted " +
          "document does), so it belongs on the record from the instant the pool can see it");
-  /* HTML §7.1.7 "Policy containers"' CLONE OF THE CREATOR'S, or `null` for a document with no creator. IT IS
-     STATED BY EVERY CALL SITE AND NEVER DEFAULTED HERE, because `null` and "the caller forgot" are the same
-     shape and only one of them is a fact: a create notice always carries a container (the creator has one even
-     when it holds no policies), while a reported root document, a rehydrated recipe and §7.3.2.3's swap have
-     no creator at all. A `?.` or a `|| {}` here would turn the second into the first silently, which is
-     exactly how the CHILD's own address came to answer `'self'`. */
+  /* The clone of the creator's policy container (HTML §7.1.7 Policy containers), or `null` for a document with
+     no creator (a reported root, a rehydrated recipe, a group swap). Stated by every call site and never
+     defaulted: a create notice always carries one, so `null` and "the caller forgot" must stay distinct. */
   DCHECK(inherited === null ||
          (!!inherited && typeof inherited.csp === "string" && typeof inherited.selfOrigin === "string" &&
           inherited.selfOrigin !== "" && embedderPolicyWhole(inherited.embedder)),
@@ -2276,138 +1937,87 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inhe
          "struct of that list AND §7.1.4's embedder policy, so a half of either is a clone that arrives unable " +
          "to resolve `'self'` against anything but this document's own address or claiming `unsafe-none` for a " +
          "creator that opted into cross-origin isolation");
-  /* HTML §7.3.1.3 "Child navigables"' PARENT of the navigable this instance is rooted in, and it is a SEPARATE
-     argument from the container above because it is a separate KIND of fact: §7.1.7's container is five
-     policies and says nothing about a frame tree. §7.3.1.3 defines the term over the link — a navigable "is a
-     child navigable", "which means that its parent is non-null" — so a caller that says nothing is not leaving
-     a field blank, it is declaring a TOP-LEVEL TRAVERSABLE, and SECURITY.md makes the commonest child navigable
-     there is (a cross-origin `<iframe>`) the ROOT of its own instance. `u` is the engine's own encoding for the
-     absence and is what a document with no embedder states; anything else is the identity record the emitting
-     engine wrote, relayed verbatim. THERE IS NO DEFAULT HERE for the reason there is none for the embedder
-     policy: "the caller forgot" and "there is no parent" would be one value, and one of them is a frame
-     reported as a page. */
+  /* The parent of the navigable this instance is rooted in (HTML §7.3.1.3 Child navigables), a separate kind
+     of fact from the container policy. `u` is the engine's encoding for no parent (a top-level traversable);
+     anything else is the identity record the emitting engine wrote, relayed verbatim. SECURITY.md makes a
+     cross-origin `<iframe>` the root of its own instance, so this is how such a root knows it is a child. No
+     default: "the caller forgot" and "no parent" would become one value, reporting a frame as a page. */
   DCHECK(typeof parentNavigable === "string" && parentNavigable !== "",
          "an instance was started with no HTML §7.3.1.3 PARENT NAVIGABLE — every call site knows which of the " +
          "two answers applies (a create notice carries the identity its engine wrote; a reported root, a " +
          "rehydrated recipe and §7.3.2.3's swap have no embedder and state `u`), so an absent one is a caller " +
          "that skipped the question and a document that would present as a top-level page in the only " +
          "instance that holds it");
-  /* AND §7.3.1.3's OTHER LINK — the CONTAINER of that same navigable, which is an ELEMENT and therefore the
-     one thing that cannot cross at all: it lives in the creating instance's tree. What crosses is what it
-     ANSWERED. Permissions Policy §9.5 is "given null or an element (container) and an origin (origin)" and
-     both of those belong to the creator, so §9.5 runs there and this carries its RESULT. `null` is that
-     grammar's own word for "there is no container", which a reported root, a rehydrated recipe and §7.3.2.3's
-     swapped-to context all state — and which is the same fact their `u` parent states one link along.
-     NO DEFAULT, on the parent's rule and with a sharper edge: §9.7 step 1 turns "container is null" into
-     `Enabled` for EVERY supported feature, so "the caller forgot" and "there is no container" collapsing into
-     one value is a cross-origin frame handed its embedder's capabilities. */
+  /* The navigable's container's answer. The container is an element in the creating instance's tree and cannot
+     cross, so the creator runs Permissions Policy §9.5 Create a Permissions Policy for a navigable and this
+     carries the result; `null` is that grammar's "no container". No default: §9.7 Define an inherited policy
+     for feature in container at origin turns a null container into `Enabled` for every feature, which would
+     hand a cross-origin frame its embedder's capabilities. */
   DCHECK(typeof containerPolicy === "string" && containerPolicy !== "",
          "an instance was started with no HTML §7.3.1.3 CONTAINER statement — Permissions Policy §9.5's " +
          "answer for its navigable and `null` are the two things a caller can say, and every call site knows " +
          "which applies (a create notice carries the answer the creating engine computed; a document nothing " +
          "embeds says `null`). An absent one is a caller that skipped the question and a frame that would be " +
          "granted every feature its embedder holds");
-  /* AND HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for the Document this instance
-     will build — a THIRD fact about the same navigable and not a derivation of the two above, because §3.1.3
-     reads things neither of them carries: the PARENT DOCUMENT's own recorded list, that Document's ORIGIN
-     RECORD, and the container element. Two of those cannot cross at all — an element is an object, and an
-     origin RECORD is exactly what a serialization drops, since HTML §7.1.1 decides an opaque origin by
-     IDENTITY while every opaque origin is the three bytes `null`. So §3.1.3 runs once in the creating instance
-     and this carries its RESULT. `none` is that grammar's word for "there are no ancestors", which a reported
-     root, a rehydrated recipe and §7.3.2.3's swapped-to context all state, and which is the same fact their
-     `u` parent states one link along.
-     NO DEFAULT, on the parent's rule and with the container's edge: the EMPTY list is not an absence, it is
-     the positive claim that this Document is at the TOP of its own tree, so "the caller forgot" and "there are
-     no ancestors" collapsing into one value is a cross-origin frame answering `location.ancestorOrigins` with
-     `[]` — a wrong answer no page can tell from a right one, since the member exists to report a tree the
-     reading page cannot otherwise see. */
+  /* The internal ancestor origin objects list (HTML §3.1.3 Ancestor origins) for the Document this instance
+     builds, computed in the creating instance because it reads the parent document's list, its origin record
+     and the container element, none of which survive serialization (an opaque origin is decided by identity).
+     `none` means no ancestors. No default: an empty list claims this Document is at the top of its tree, so a
+     cross-origin frame would answer `location.ancestorOrigins` with `[]`. */
   DCHECK(typeof ancestorOrigins === "string" && ancestorOrigins !== "",
          "an instance was started with no HTML §3.1.3 ANCESTOR ORIGINS statement — the composed list and " +
          "`none` are the two things a caller can say, and every call site knows which applies (a create " +
          "notice carries the list the creating engine composed; a document nothing embeds says `none`). An " +
          "absent one is a caller that skipped the question and a frame that would report itself as the top of " +
          "its own tree");
-  /* AND HTML §7.1.5 "Sandboxing"'s CREATION SANDBOXING FLAG SET for that same navigable — a FOURTH fact, and
-     not an item of the §7.1.7 container beside it: that section gives a container a CSP list, an embedder
-     policy, a referrer policy and two integrity policies, and §7.3.2.1 sets the container and the flag set in
-     different steps out of different algorithms. §7.1.5 reads the embedder ELEMENT's iframe sandboxing flag
-     set and that element's node document's active set, and an element crosses no instance boundary, so the
-     creating engine runs the algorithm and this carries its ANSWER. `none` is that grammar's word for the
-     empty set, which a reported root, a rehydrated recipe and §7.3.2.3's swapped-to context all state.
-     NO DEFAULT, on the ancestor list's rule: the EMPTY set is not an absence but the positive claim that
-     nothing about this frame is sandboxed, so "the caller forgot" and "there are no flags" collapsing into
-     one value is a cross-origin `<iframe sandbox>` running its scripts, submitting its forms and relaxing
-     `document.domain` — every one of which the embedder's own markup forbids, with nothing to say so. */
+  /* The creation sandboxing flag set (HTML §7.1.5 Sandboxing) for that navigable, not an item of the policy
+     container (§7.3.2.1 Creating browsing contexts sets them in different steps). It reads the embedder
+     element's flags, so the creating engine computes it and this carries the answer; `none` is the empty set.
+     No default: an empty set claims nothing is sandboxed, so a cross-origin `<iframe sandbox>` would run
+     scripts and submit forms its embedder forbids. */
   DCHECK(typeof creationSandboxFlags === "string" && creationSandboxFlags !== "",
          "an instance was started with no HTML §7.1.5 CREATION SANDBOXING FLAG SET — the composed set and " +
          "`none` are the two things a caller can say, and every call site knows which applies (a create " +
          "notice carries the set the creating engine computed; a document nothing embeds says `none`). An " +
          "absent one is a caller that skipped the question and a sandboxed frame with its sandbox deleted");
-  /* AND THE ONE FACT OF THIS PROVISIONING THAT IS NOT ABOUT THE DOCUMENT AT ALL — whether some OTHER instance
-     holds a WindowProxy for the document this one is rooted at. It decides whether this instance's timelines
-     may RUN OUT: a referenced document's last flow reports itself host-owed instead of finishing, so a
-     `windowproxy.get`, a delivery or a `w.length` arriving afterwards still has a timeline to be answered in
-     (solver/engine.h's `engine_set_referenced`, reached through `SetReferenced`). Without it a peer this zone
-     provisions runs its scripts, drains, closes its session — and the creator's first cross-origin read
-     arrives at a document with nothing left to run the getter in. The engine names that from the FAR side
-     (engine_route's drained-instance assert, and this file's own `windowproxy.post` branch, which already
-     says "that instance was finalized while a peer still held a WindowProxy for it"), which is the right
-     place for the crash and the wrong place for the fix: an instance exists because SOME OTHER AGENT created
-     its navigable, and the only party that knows that is the one holding the routing table.
-     IT IS ASKED PER CALL SITE BECAUSE THE ANSWER IS NOT THE SAME FOR ALL FIVE, AND "AN ENGINE MINTED THE
-     NAME" IS THE WRONG RULE. HTML §7.1.3.2 "Browsing context group switches due to opener policy" mints a
-     name too, and its own note says the old browsing context "will not be used by the new Document that we
-     are about to create" — so the handle the navigating page still holds answers about the document it
-     HAD, and nothing anywhere holds a proxy for the swapped-TO one.
-     BOTH ERRORS ARE SILENT AND THEY ARE NOT SYMMETRIC. Understating it drains a peer that was about to be
-     read, and the crash lands in the ASKING instance, one boundary from the zone that decided it. Overstating
-     it holds a frontier open until the pool releases the instance, which costs a slot and truncates nothing.
-     That is not a licence to guess high — it is why the answer is stated per arm with its reason, so the next
-     arm has to answer the question rather than inherit an answer. */
+  /* Whether another instance holds a WindowProxy for this document. A referenced document's last flow reports
+     itself host-owed instead of finishing (solver/engine.h's `engine_set_referenced`, via `SetReferenced`), so
+     a later `windowproxy.get`, delivery or `w.length` still has a timeline to be answered in; only the zone
+     holding the routing table knows. It is stated per call site because the answer differs: a group switch
+     (HTML §7.1.3.2 Browsing context group switches due to opener policy) mints a name nothing holds a proxy
+     for. Understating it drains a peer about to be read (the crash lands in the asking instance);
+     overstating holds a frontier open until the pool releases it, costing a slot and truncating nothing. */
   DCHECK(referenced === 0 || referenced === 1,
          "an instance was started without stating whether a peer holds a reference into its document — the " +
          "flag decides whether this instance's timelines may finish, so an unstated one is either a peer that " +
          "drains before it is asked anything or a document held open for a question nobody can ask, and " +
          "neither is visible from here");
   const cluster = clusterKeyOf(msg);
-  /* THE POOL IS THE REGISTER OF WHO HOLDS WHAT, AND ASKING IT IS THE CALLER'S JOB — this asserts they did.
-     Every site that builds an instance has already answered "does this agent cluster have one?" (admit's
-     `hostClusterOf`, the create notice's, and the cold tier's key, which is unique per recipe by construction),
-     so a hit here is a caller that skipped the question or a reservation that did not take. */
+  /* The pool is the register of who holds what; every caller has already asked whether this cluster has an
+     instance (admit's `hostClusterOf`, the create notice's, and the cold tier's per-recipe key). */
   DCHECK(hostClusterOf(cluster) === null,
          "a second instance was started for an agent cluster that already has one (" + cluster + ") — two " +
          "heaps for one similar-origin window agent is the split SECURITY.md's one-instance-per-cluster rule " +
          "exists to forbid, and the pool already held the answer on the line that asked");
-  /* THE DOCUMENT ID IS MINTED HERE, BEFORE THE FIRST AWAIT, because the reservation is answerable by NAME from
-     the instant it exists: `hostHolderOf` is what routes a cross-document message, and a reservation with no
-     name is a document that this zone reports as held by nothing for as long as its instance takes to boot.
-     A LIVE ROOT DOCUMENT IS NAMED BY THE NAME THE BROWSER ALREADY GAVE IT. The counter answered "which
-     document is this?" with a fresh number every time it was asked, so the pool could not tell one document
-     delivered twice (content.js re-ships its CONTENT_SEED when the offscreen brain broadcasts RESHIP) from
-     two documents, and built a second WASM instance for it — two instances behind one principal, which is
-     the one thing SECURITY.md's "one instance per ORIGIN-KEYED AGENT CLUSTER" forbids. A document a peer
-     engine CREATED arrives already named (`docName`, minted in that engine's navigable.create notice); a
-     rehydrated cold recipe has no browser document to name it and takes the counter. */
+  /* The document id is minted before the first await, because the reservation must be answerable by name
+     (`hostHolderOf` routes cross-document messages) from the instant it exists. A live root document keeps the
+     name the browser gave it, so a document delivered twice (content.js re-ships CONTENT_SEED on RESHIP) is
+     recognised rather than given a second instance; a peer-created document arrives named (`docName`); a
+     rehydrated recipe takes the counter. */
   const docId = docName || (msg && msg.documentId ? String(msg.documentId) : String(++nextDocumentId));
   const eng = engineReserve(cluster, docId, msg, cold, referenced);
-  /* THE PROVISIONING ITSELF, WHICH IS THE ONLY PART THAT SUSPENDS, AND THE PROMISE IS WHAT SAYS *WHEN*. It
-     never carries the instance — the caller already holds the record, which is the point — and it settles on
-     BOTH outcomes, because the thing waiting on it is hostSchedule's wait arm and a document that merely
-     failed to boot may not take the Level-1 loop down with it. So an ENGINE abort resolves it: that is a
-     RECORDED outcome, answered on this record's own callers by engineBootFailed, which is also what takes the
-     reservation back out of the pool. The one thing it rejects for is an INVARIANT abort, which is this zone's
-     contract with the engine breaking and must not be reported as a page that failed to analyse.
-     IT IS ASSIGNED BEFORE ANYTHING CAN OBSERVE THE RECORD: the async body runs synchronously to its first
-     await, and this whole function is synchronous, so there is no turn in which the pool holds a reservation
-     nothing can wait on. */
+  /* The provisioning, the only part that suspends. The promise says when, never carries the instance (the
+     caller already holds the record), and settles on both outcomes because hostSchedule's wait arm waits on
+     it: an engine abort resolves it, recorded through engineBootFailed, which also removes the reservation;
+     only an invariant abort rejects. It is assigned before anything can observe the record, since this function
+     is synchronous up to the async body's first await. */
   eng._readyP = (async () => {
     try {
       eng.r = await self.rendererLaunch(cluster);
       await engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, inherited, parentNavigable,
                        containerPolicy, ancestorOrigins, creationSandboxFlags);
-      /* A CLEAR THAT LANDED MID-BOOT TAKES THE FRAME HERE, for the reason serviceFetch takes it there:
-         hostClear cannot destroy a renderer this path has a call outstanding on, so it marks the record and
-         the operation that owns the outstanding call removes the frame when it lands. */
+      /* A Clear that landed mid-boot is honoured here: hostClear cannot destroy a renderer with a call
+         outstanding, so it marks the record and the owner of that call removes the frame. */
       if (eng._dropped) eng.r.destroy();
       _reserveStats.rooted++;
     } catch (e) {
@@ -2417,95 +2027,51 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inhe
   })();
   return eng;
 }
-/* THE POOL SLOT, TAKEN SYNCHRONOUSLY — the whole point of this record existing before the instance does.
-   `hostNotice`'s create arm checked `hostClusterOf` and then AWAITED a document fetch, a frame boot and three
-   ABI round trips before pushing, and detached service rounds run concurrently with admit, so two arrivals for
-   one agent cluster could both pass that check and both build. Two heaps claiming to be one similar-origin
-   window agent is not a duplicated cost: `iframe.contentDocument.body.appendChild(sub)` inserts a node one of
-   them created into a tree the other owns, and a live `frame.contentWindow.onunload` closure is a function
-   object neither can call, so the pair is unrepresentable rather than slow. The window is closed by taking the
-   slot BEFORE the first suspension, so the second arrival finds a record and joins it.
-   IT CARRIES ONLY WHAT IS KNOWN WITHOUT ASKING THE INSTANCE, and nothing is stubbed in beside it. There is no
-   `residentBytes: 0` and no `topWeight: -Infinity` here: the first is the default that makes admission run
-   against memory already spoken for, and the second is the engine's own word for a frontier with no runnable
-   flow (355a03d2) — a drained instance, which is a different thing from one that has not started. Both facts
-   are ABSENT until engineRecordFacts states them, and every reader of either reads the STATE first. */
+/* The pool slot, taken synchronously before any suspension, so two arrivals for one agent cluster cannot both
+   pass the `hostClusterOf` check and both build: two heaps for one similar-origin window agent are
+   unrepresentable (a node inserted across them, a closure neither can call). The second arrival finds the
+   record and joins it. The record carries only what is known without asking the instance: `residentBytes`
+   and `topWeight` are absent until engineRecordFacts states them, and readers check `state` first. */
 function engineReserve(cluster, docId, msg, cold, referenced) {
-  /* `_readyP` IS DECLARED NULL AND FILLED BY engineCreate ON THE VERY NEXT LINE, which is a stated hole rather
-     than a placeholder promise: a stand-in built here would be a second promise that resolves at a different
-     moment than the provisioning does, and the wait arm would then be released by whichever of the two the
-     next reader happened to reach for. The arm asserts it is there. */
-  /* `joinedDocIds` IS THE HOST'S HALF OF main.c's `g_joined_ctx`/`g_joined_dom`, AND IT IS DECLARED EMPTY HERE
-     RATHER THAN CREATED ON THE FIRST JOIN. An instance is an agent CLUSTER and holds one document per realm;
-     `docId` names only the one it was ROOTED at, so every document joined to it afterwards must answer for it
-     in `hostHolderOf` — that is the routing table a `windowproxy.post` to a joined child resolves through, and
-     a list that exists only once something has been joined is a list every reader has to ask about first. */
-  /* THE WIPE GENERATION THIS INSTANCE OBSERVES UNDER, TAKEN BEFORE THE FIRST AWAIT AND CARRIED FOR THE WHOLE
-     RUN. Everything an engine learns, it learns from the page it was rooted at — so the question a merge has to
-     answer is not "was this snapshot taken before the Clear" but "was this INSTANCE running before the Clear",
-     and the answer is the same for every advance it will ever produce. Taken once, here, it also cannot be
-     taken at the wrong TIME: a value read at the merge would be the generation AFTER the wipe, which is the
-     one reading that always agrees.
-     THE TERMINAL PATH ALREADY HAD THIS AND THE INCREMENTAL ONE HAD NOTHING. `_dispatchDocument` captures the
-     epoch before it dispatches and abandons its tail if it moved, so a Clear could not repopulate the store
-     through an analysis that was in the engine when it ran; `onFrontierAdvance` — the 750 ms snapshot merge and
-     the finalize merge of an instance with no live caller — wrote straight into globalStore and (since the
-     merge learned to name its documents) into a DOCUMENT, with no such question asked anywhere. */
+  /* `_readyP` is null here and filled by engineCreate on the next line; a placeholder promise would settle at
+     a different moment from the provisioning. The wait arm asserts it is present. */
+  /* `joinedDocIds` is the host's half of main.c's `g_joined_ctx`/`g_joined_dom`, declared empty: an instance
+     holds one document per realm and `docId` names only the root, so every joined document must answer for it
+     in `hostHolderOf`, the routing table a `windowproxy.post` resolves through. */
+  /* The wipe generation this instance observes under, taken once before the first await: what a merge asks is
+     whether this instance was running before a Clear, which is the same for every advance it produces.
+     `onFrontierAdvance` (the partial-snapshot merge and the finalize merge of an instance with no live caller)
+     compares it, as `_dispatchDocument` does for the terminal path. */
   DCHECK(typeof self.frontierEpoch === "function",
          "the trusted zone states no frontier epoch — it is what tells an advance from this instance apart " +
          "from one observed before the user emptied the store, and without it every finding this engine " +
          "produces would merge into whatever the store holds when it lands");
-  /* `topDocId` IS A DIFFERENT FACT FROM `docId` AND THE TWO MAY NOT BE ONE FIELD. `docId` is the document this
-     instance was ROOTED at and never changes: it is the reservation's identity, what the crash record and the
-     cold recipe are written under, and what `hostHolderOf` answered from the instant the record existed.
-     `topDocId` is which document is the ACTIVE document of this browsing-context group's top-level traversable
-     RIGHT NOW, and a same-origin navigation in the tab changes it — HTML §7.4.6.1 "Updating the traversable"
-     replaces the Document, keeps the navigable. Collapsing them would make a navigated tab report its findings
-     under a document the browser replaced, and would make the reservation's identity move under `finish`. */
-  /* `_resumed` IS DECLARED NULL BECAUSE "NOT YET KNOWN" IS A THIRD STATE AND NOT A ZERO. How many parked flows
-     this session's frontier was seeded with is a fact about how the session BEGAN — `engineRoot`'s `begin`
-     call is the only moment it is decided, and until that call returns there is no answer, only an absence.
-     Zero is a different fact entirely (this zone handed the engine no residue, so it seeded a boot flow), and
-     the two used to be one number: the count was re-derived at every reader out of whichever lines that reader
-     happened to hold, so the incremental snapshot — which is handed exactly ONE line, the @RESULT it just
-     found — reported `0 resumed` for every still-running session there has ever been, however many thousands
-     of flows had come back. A count re-read downstream of the event it counts is a count of the reader's
-     input, and here the reader's input never contained it. */
-  /* `referenced` IS ON THE RESERVATION AND NOT A PARAMETER OF `engineRoot`, because it is a fact about this
-     agent cluster that OUTLIVES the rooting and is asked again afterwards: the create-notice JOIN arm reads it
-     to refuse a peer-referenced document being added to an instance that is entitled to drain, and it is
-     answerable from the instant the record exists rather than from the instant the frame answers. It is
-     STATED here rather than defaulted for engineCreate's reason, and `engineRoot` is the one reader that
-     turns it into the ABI call. */
-  /* AND THE COLD-TIER LOOKUP'S THREE FIELDS, DECLARED NULL FOR `_resumed`'S REASON AND NOT AS A MISS. Which
-     of the six things engineRoot's one frontier read met — and how many entries this document's address holds
-     under OTHER bundle ids, and which bundle id this session keyed on — are facts decided at that read and at
-     no other moment, so until it returns there is no answer and only an absence. A boot that dies before it
-     carries these nulls unchanged, which is itself the answer to WHEN it died; a zero in `_coldOther` would be
-     the positive claim that the store holds nothing else for this address, which a session that never asked
-     did not look for. */
+  /* `topDocId` is which document is currently the active document of this group's top-level traversable;
+     `docId` is the root the instance was reserved for and never changes (the crash record and cold recipe are
+     written under it). A same-origin navigation changes the first (HTML §7.4.6.1 Updating the traversable
+     replaces the Document and keeps the navigable). */
+  /* `_resumed` is null until `begin` decides how many parked flows seeded the frontier; zero is a different
+     fact (no residue handed over, so a boot flow was seeded). */
+  /* `referenced` is on the reservation, not an engineRoot parameter, because it outlives rooting: the
+     create-notice join arm reads it to refuse adding a peer-referenced document to an instance entitled to
+     drain. engineRoot turns it into the ABI call. */
+  /* The cold-tier lookup fields, null until engineRoot's frontier read decides them; a boot that dies first
+     carries the nulls unchanged, which says when it died. */
   const eng = { state: "booting", cluster, docId, topDocId: docId, joinedDocIds: [], msg,
                 groupId: msg && msg.groupId, _resumed: null, referenced,
                 _coldLookup: null, _coldOther: null, _bundleId: null,
                 origin: (msg && msg.origin) || "", _cold: cold, _resolvers: [], _remoteAsked: new Set(),
-                /* THE DOOR'S OWN IN-FLIGHT SET — the requests this zone has ASKED FOR and not yet answered to
-                   the engine, keyed exactly as the seam that answers them is keyed. It is declared in the
-                   literal like every other field for the reason `_egress` states about itself, and it exists
-                   because the engine RE-LISTS a request that carries neither a value nor a refusal on every
-                   round by design (solver/engine.c's `skip` is `!u || PEND_HAVE_VALUE || declined`): a door
-                   that issues without waiting must therefore dedup, or one park becomes one request per
-                   round at somebody's server. `engine/host/wpt_runner.c` drives this same ABI with the same
-                   table and the same two keys — see `engineIssue`. */
+                /* The requests this zone has asked for and not yet answered to the engine, keyed as the
+                   answering seam is keyed. The engine re-lists a request with neither value nor refusal every
+                   round (solver/engine.c's `skip` is `!u || PEND_HAVE_VALUE || declined`), so a door that issues
+                   without waiting must dedup, or one park becomes one request per round. engine/host/wpt_runner.c
+                   drives the same ABI with the same table and keys (see engineIssue). */
                 _inflight: new Map(),
                 _epoch: self.frontierEpoch(), r: null, _readyP: null,
-                /* WHAT THIS ZONE'S EGRESS POLICY WAS ASKED FOR AND WHAT IT REFUSED, PER RULE — declared in the
-                   literal like every other field on this record, so a reader of a run that refused nothing
-                   cannot be handed a missing map to default. `asked` is raised at the CALL and `declined` at
-                   the refusal, both in engineServiceFetch's one loop, so the histogram's sum is bounded by
-                   `asked` and the containment is asserted where the two are in one hand. Both are LIFETIME
-                   counts over this instance's rounds, counting ASK EVENTS and not distinct addresses: an @S
-                   candidate re-fire re-issues an address the engine already parked on, and that is a second
-                   ask. */
+                /* Egress asked and refused, per rule, declared here so a run that refused nothing still carries
+                   the map. `asked` is raised at the call and `declined` at the refusal in engineServiceFetch's
+                   one loop, so the sum is bounded by `asked`. Both are lifetime counts of ask events, not of
+                   distinct addresses (an @S candidate re-fire asks again). */
                 _egress: { asked: 0, declined: Object.create(null) } };
   _pool.push(eng);
   _reserveStats.made++;
@@ -2513,10 +2079,8 @@ function engineReserve(cluster, docId, msg, cold, referenced) {
   if (n > _reserveStats.peakBooting) _reserveStats.peakBooting = n;
   return eng;
 }
-/* A RESERVATION THAT DID NOT BECOME AN INSTANCE LEAVES THE POOL, and it leaves it HERE rather than at each of
-   the three call sites, because a reservation left behind is worse than the race it replaced: every later
-   arrival for that cluster finds it, joins it, and waits forever on a boot that already failed — a phantom
-   holding an agent cluster that will never have an instance, with nothing anywhere to say so. */
+/* A reservation that did not become an instance leaves the pool here, for every call site: one left behind
+   would be joined by every later arrival for that cluster, which would wait for ever on a failed boot. */
 function engineBootFailed(eng, e) {
   const i = _pool.indexOf(eng);
   DCHECK(i >= 0 || eng._dropped,
@@ -2525,24 +2089,15 @@ function engineBootFailed(eng, e) {
          "record and the surviving one will free a frame twice");
   if (i >= 0) _pool.splice(i, 1);
   eng.state = "failed";
-  /* THE FRAME GOES WITH IT. renderer-host.js reclaims its own frame when the boot handshake fails — and frees
-     the agent cluster in the registry on its way out of the launch — so `r` is null exactly when there is
-     nothing to remove; anything that threw after it is this path's to reclaim, and an iframe nobody reaches
-     is a whole WASM instance resident under a document that does not reload. */
+  /* The frame goes with it. renderer-host.js reclaims its own frame (and frees the cluster in the registry)
+     when the boot handshake fails, so `r` is null exactly when there is nothing to remove. */
   if (eng.r) eng.r.destroy();
-  /* ONE INSTANCE FAILING IS ONE CRASH, however many documents were waiting on it — which is why the banner
-     fires once here and the RECORD is built per caller. crashResult bundled the two, so answering N joined
-     callers would have counted N crashes for one aborted boot and the probe's `crashes` would read the number
-     of documents that happened to share a cluster. */
+  /* One instance failing is one crash however many documents were waiting on it: the banner fires once and a
+     record is built per caller. */
   const m = String((e && e.message) || e);
-  /* AND IT POINTS AT ITS CAUSE, exactly as engineCrash's does. A boot that aborts inside the engine rejects on
-     an ABI call, and renderer-host.js attaches the frame's last lines to that rejection (`e.rendererLines`) —
-     which is where the C-side CHECK/DCHECK printed its @WHY ROOT line immediately before abort(). This read
-     `e.message` alone, so the banner and every caller's crash record carried emscripten's "native code called
-     abort()" and the engine's own statement of what was wrong was thrown away at the one line that had it.
-     TWO PRODUCERS, ENUMERATED RATHER THAN DEFAULTED PAST: a rejected ABI call carries the lines, and a failure
-     that never reached one (rendererLaunch itself, or an assert in this zone) has none to carry and its own
-     message IS the whole cause. Anything else on that field is renderer-host writing a shape this cannot read. */
+  /* The cause: a boot that aborts inside the engine rejects an ABI call, and renderer-host.js attaches the
+     frame's last lines (`e.rendererLines`), where the C CHECK/DCHECK printed its @WHY root line. A failure that
+     never reached an ABI call (rendererLaunch, or an assert here) has no lines and its message is the cause. */
   const _rl = e ? e.rendererLines : undefined;
   DCHECK(_rl === undefined || Array.isArray(_rl),
          "a boot failure carried a `rendererLines` that is not a list of the frame's output — it is the only " +
@@ -2555,20 +2110,11 @@ function engineBootFailed(eng, e) {
   eng._resolvers.length = 0;
   _reserveStats.failed++;
 }
-/* HOW MANY PARKED FLOWS THIS SESSION'S FRONTIER WAS SEEDED WITH — READ ONCE, WHERE THE SEEDING HAPPENED.
-   THE PRODUCER IS ALREADY EXACT AND THIS ZONE WAS COLLAPSING IT. solver/cold.c prints `@RESUMED <n>` from
-   inside cold_resume, which solver/engine.c calls ONLY for a non-empty residue, and it DCHECKs `flows > 0`
-   immediately above the print — so on the engine side an ABSENT line and a ZERO are not merely distinguishable,
-   the zero cannot be emitted at all. The host had the two facts and reported one number for both.
-   SO BOTH HALVES ARE ASSERTED AGAINST EACH OTHER RATHER THAN EITHER BEING TRUSTED ALONE. `asked` is this
-   zone's own statement (it composed the `recipes` argument one line above the call), the line is the engine's,
-   and each is a check on the other: a residue handed over that produced no line is a rebuild that silently
-   did nothing, and a line with no residue handed over is a session that resumed a frontier this zone never
-   gave it. Neither has a reading in which continuing is correct.
-   AND THE RELEASE ANSWER FOR AN ASKED-BUT-SILENT SESSION IS `null`, NOT `0`. Release has no DCHECK, so this is
-   the one path where the two states can still meet, and the whole point of the field is that they must not:
-   `null` says the count is not known, which is true, where `0` would say a residue was handed to this engine
-   and it resumed nothing — a claim about the cold tier that nothing observed. */
+/* How many parked flows seeded this session's frontier, read once where the seeding happened. solver/cold.c
+   prints `@RESUMED <n>` from cold_resume, called only for a non-empty residue, after DCHECKing `flows > 0`, so
+   an absent line and a zero are distinct. `asked` (this zone composed the `recipes` argument) and the line are
+   asserted against each other: a residue with no line is a silent rebuild, a line with no residue a resume of
+   a frontier never given. Release answers `null`, not `0`, for asked-but-silent, since the count is unknown. */
 function engineResumeCount(lines, asked) {
   let n = -1;
   for (const raw of lines) {
@@ -2599,15 +2145,10 @@ function engineResumeCount(lines, asked) {
                  "so those flows stand on decision vectors this document was never handed");
   return n >= 0 ? n : (asked ? null : 0);
 }
-/* THE LOCAL IS `rend` AND THE FIELD IS `eng.r`, which is not an inconsistency: the three fetch closures
-   below each bind `const r = await self.safeFetch(...)` — Fetch's reply record — and a renderer named `r` in
-   this scope would be SHADOWED by it inside exactly the functions that deliver bytes into that renderer. The
-   shadow would be silent, because none of them needs the renderer today; the next one that does would reach
-   for `r` and get a Response.
-   IT FILLS THE RESERVATION AND RETURNS NOTHING. The record in the pool is the one every question about this
-   agent cluster has been answered by since the instant provisioning began, so building a second object here
-   would leave the pool holding the reservation while every caller held the instance — one document with two
-   records, which is the defect the reservation exists to close wearing a different hat. */
+/* The local is `rend` and the field `eng.r` because the fetch closures below bind `const r` to Fetch's reply
+   record; a renderer named `r` would be shadowed there. engineRoot fills the reservation and returns nothing:
+   the pool's record is the one every question about this cluster has been answered by since provisioning
+   began, and a second object would give one document two records. */
 async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, inherited, parentNavigable,
                           containerPolicy, ancestorOrigins, creationSandboxFlags) {
   const rend = eng.r;
@@ -2616,126 +2157,66 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          "title is how this zone identifies which instance the pool is talking about, and the pool keys the " +
          "same instance by `cluster`, so two spellings of one identity is a routing table that disagrees with " +
          "the DOM");
-  /* THE ENGINE'S OUTPUT, WHICH IS THE RENDERER'S LINE BUFFER AND NOT A SECOND COPY OF IT. renderer-host.js
-     appends every drained line to this array as each reply lands, so `eng.lines` and `r.lines` are one array:
-     engineCrash's backwards scan for the ROOT @WHY, streamPartial's scan for the last @RESULT and
-     linesToAnalysis all read exactly what the frame printed, in order, with nothing in this realm deciding
-     what to keep. */
+  /* The renderer's line buffer itself: renderer-host.js appends every drained line as each reply lands, so
+     engineCrash's root-@WHY scan, streamPartial's @RESULT scan and linesToAnalysis read what the frame printed,
+     in order. */
   const lines = rend.lines;
-  // PHASE 1 — parse + boot; the engine computes the stable bundle IDENTITY from its Lexbor <script> scan.
-  /* THE WHOLE RESPONSE HEADER LIST CROSSES, not one header out of it. This used to pull
-     `content-security-policy` out of the map and hand the engine that single string, and three things HTML
-     decides about a Document from its response were unreachable behind that shape: §7.1.7's policy container
-     has an EMBEDDER POLICY item (`Cross-Origin-Embedder-Policy`), §7.5.1's creation table gives a Document an
-     OPENER POLICY row (`Cross-Origin-Opener-Policy`), and §7.5.1 reads `Origin-Agent-Cluster` to decide
-     §8.1.2.2's agent cluster key — so `window.originAgentCluster` answered `false` for every document this
-     extension has ever analysed without the question ever being asked. Widening it one header at a time is the
-     wrong shape twice over: several algorithms read different names out of the SAME list, and Fetch's own
-     `get` is what decides what a REPEATED header means (HTML §7.1.4.1 prints a table whose point is that
-     `require-corp, require-corp` FAILS to parse and leaves the policy at `unsafe-none`).
-     SO IT CROSSES AS HTTP FIELD LINES, `name: value` per line, which is a LIST and can say that. The map this
-     zone holds cannot — a repeat has already been combined by the browser's own `Headers` iteration, which is
-     exactly Fetch's `get`, so what the engine receives is one line per name carrying the combined value and
-     its ITEM parse reaches the same verdict a browser's does. The engine parses it back into Fetch's header
-     list (core/fetch/headers.c) and reads it ONCE, into §7.4.2.1 "Supporting concepts"' navigation params,
-     which §7.4.5 "Populating a session history entry" creates from the response (§7.4.6 stood here and is
-     "Applying the history step", which never mentions them). */
+  // Phase 1: parse and boot; the engine computes the bundle identity from its Lexbor <script> scan.
+  /* The whole response header list crosses as HTTP field lines, not single headers: several algorithms read
+     different names from the same list (HTML §7.1.7's embedder policy, §7.5.1 Shared document creation
+     infrastructure's opener policy and `Origin-Agent-Cluster` for §8.1.2.2's agent cluster key), and Fetch's
+     `get` decides what a repeated header means. The browser's `Headers` iteration has already combined repeats
+     as `get` does, so one line per name gives the engine's item parse the browser's verdict. The engine parses
+     it back into a header list (core/fetch/headers.c) and reads it once, into HTML §7.4.2.1 Supporting
+     concepts' navigation params, which §7.4.5 Populating a session history entry creates from the response. */
   const _headers = responseFieldLines(msg && msg.responseHeaders);
-  // THE DOCUMENT ID — the ROOT one, because an instance is an agent CLUSTER and holds one realm per same-origin
-  // document. A flow that scripts a CROSS-ORIGIN iframe or popup writes state in a PEER instance (a same-origin
-  // one is a realm in this same heap and needs no peer at all), and that peer keys its segment of the flow's
-  // world by an id minted here. The offscreen mints it because SECURITY.md makes the offscreen the only zone that knows which
-  // instance holds which document — the same reason it owns the routing. The engine rejects 0.
-  // SCOPE, stated rather than assumed: this counter is unique across the instances ALIVE in this offscreen,
-  // which is exactly the set that can message each other today. It is not yet persisted, because a parked
-  // foreign segment does not yet outlive a session; when segments park, this becomes a persisted allocator.
-  /* AND IT IS MINTED ON THE RESERVATION RATHER THAN HERE, which is why there is no local for it below:
-     `hostHolderOf` routes a cross-document message by this name, and a document whose instance is still
-     booting would otherwise be one this zone reports as held by nothing for the whole of that boot. A second
-     name for it here would be a second answer to "which document is this?" waiting to disagree with the pool's.
-     engineCreate states the provenance rules. */
-  // HTML §8.1.3.1's TOP-LEVEL CREATION URL. THREE PROVENANCES AND ALL THREE ARE BROWSER-STATED, never
-  // derived here: a document a PEER engine created carries its creator's §7.4 decision on the navigable.create
-  // notice (hostNotice below, which passes it as the argument); a document a content script reported carries
-  // the TAB's url, captured from sender.tab.url where the trusted zone receives it; and a REHYDRATED cold
-  // recipe carries what its own session recorded. §8.1.3.5 reads it to decide whether this realm is a SECURE
-  // CONTEXT, which decides which of Web IDL §3.3.13's members exist in it, so the engine refuses an empty one.
+  // The document id is minted on the reservation (engineCreate), so `hostHolderOf` routes to a booting
+  // document. It is unique across the instances alive in this offscreen, the set that can message each other;
+  // it is not persisted because a parked foreign segment does not yet outlive a session.
+  // The top-level creation URL (HTML §8.1.3.1 Environments), always browser-stated: a peer-created document
+  // carries its creator's decision on the navigable.create notice; a content-script report carries the tab's
+  // url from sender.tab.url; a rehydrated recipe carries what its session recorded. HTML §8.1.3.5 Secure
+  // contexts reads it to decide which Web IDL §3.3.13 [SecureContext] members exist, so the engine refuses "".
   const _tlu = topLevelUrl || (msg && msg.topLevelUrl) || "";
-  // NO `code` ARGUMENT: identity and the script inventory are the engine's own Lexbor <script> scan of `html`,
-  // because a concatenation of a page's scripts cannot represent per-script scope and shifts with an inline
-  // script the page did not ship. It used to be passed and cast away on the other side.
-  // THE DOCUMENT'S ADDRESS, NOT ITS ORIGIN. This used to hand over originOf(sourceUrl), so the engine's
-  // HTML §8.1.3.2 "Environment settings objects" API base URL (§4.4 stood here and is "Grouping content")
-  // was the bare origin and every relative URL a bundle built resolved against the site root:
-  // a page at /app/dashboard calling fetch("api/users") was reported as /api/users. The engine derives the
-  // origin from the address itself (§4.7's serialization, which its own url.c implements), so the principal
-  // and the address are one fact from one place instead of two that can disagree.
-  /* qjs_init ANSWERS, and this discarded the answer. Its C body is a wall of CHECKs whose failures abort the
-     instance, so the only value it can return is 0 — which is exactly why reading it costs nothing and why a
-     non-zero would be an entry that started reporting a failure this zone was not listening for. */
-  /* THE DOCUMENT CROSSES AS BYTES, because `qjs_init` takes one thing: a byte sequence and its LENGTH, and
-     because every LIVE document now arrives as the response's own bytes off `navigationLoad` — the seed's
-     §7.4 navigation and a child navigable's load are the same call. It used to cross as EITHER: a content
-     script fetched the top document in the PAGE'S realm and shipped CHARACTERS, so the UNTRUSTED frame was
-     the zone that ran the UTF-8 encode, and HTML §13.2.3.2 "Determining the character encoding" had nothing
-     left to decide by the time the engine saw them. That transport is deleted.
-     THE STRING ARM SURVIVES FOR ONE PRODUCER AND IS NOT DEAD: a cold-tier entry parked by an earlier session
-     may hold its document as characters (frontierDoc asserts exactly these two shapes in the other
-     direction), so this encodes rather than assuming. It is an encode and never a decode, which is the
-     direction that matters: decoding the BYTES into a string on the way would be this zone running §13.2.3.2
-     badly, as UTF-8.
-     THE TWO SHAPES ARE ASSERTED RATHER THAN DEFAULTED PAST. `html || ""` stood here, and it turned "the
-     producer handed over no document at all" into a page that parses to nothing — a successful analysis of an
-     empty document, which reads exactly like a page with no endpoints and no sinks.
-     NOT TRANSFERRED, and the ownership argument is the reason rather than caution: these bytes are ALSO
-     retained by this zone as `eng.html`, which finish() writes to IndexedDB as the cold recipe's copy of the
-     document, so moving the buffer here would leave the cross-session frontier holding a page that parses to
-     nothing. mojom.js states why that is a property of the declared TYPE rather than a flag on this call. */
+  // No `code` reaches qjs_init: identity and the script inventory are the engine's Lexbor <script> scan of
+  // `html`, since a concatenation of scripts cannot represent per-script scope.
+  // The address, not the origin, crosses: it is the API base URL (HTML §8.1.3.2 Environment settings objects)
+  // every relative URL resolves against, and the engine derives the origin from it (its own url.c), so the
+  // principal and the address are one fact.
+  /* qjs_init's return value is read: its C body is CHECKs that abort, so it returns 0, and anything else is an
+     entry reporting a failure this zone must hear. */
+  /* The document crosses as bytes, since `qjs_init` takes a byte sequence and its length, and every live
+     document arrives as the response's own bytes from navigationLoad. The string arm serves a cold-tier entry
+     an earlier session parked as characters; it encodes, never decodes, because decoding would be this zone
+     running HTML §13.2.3.2 Determining the character encoding badly. Both shapes are asserted, never defaulted
+     to "". The buffer is not transferred: `eng.html` keeps it for finish() to write to IndexedDB as the cold
+     recipe's document (mojom.js states this as a property of the declared type). */
   DCHECK(html instanceof Uint8Array || typeof html === "string",
          "a document reached qjs_init as neither a byte sequence nor characters — navigationLoad ships a " +
          "response body and a cold-tier entry may hold characters, so anything else is a producer that " +
          "stopped producing a document, with nothing downstream to notice but an empty finding set");
   const _doc = html instanceof Uint8Array ? html : new TextEncoder().encode(html);
-  /* A 0x00 IN THESE BYTES IS NOT ASSERTED AGAINST ANY MORE, AND THE ASSERT THAT STOOD HERE IS DELETED RATHER
-     THAN WEAKENED. It read `_doc.indexOf(0) < 0` and named the fix — "Give qjs_init a LENGTH beside the
-     pointer (qjs_provide now carries one)" — and that length exists: `qjs_init`/`qjs_join` take `(bytes,
-     len)`, the renderer's byte placement puts both operands in linear memory, and the C entry DCHECKs the
-     guard byte at `bytes[len]` so a length and a C read cannot disagree without crashing.
-     The state it forbade is a state the standard defines: HTML §13.2.3.5 "Preprocessing the input stream" says
-     "The handling of U+0000 NULL characters varies based on where the characters are found … They are either
-     ignored or, for security reasons, replaced with a U+FFFD REPLACEMENT CHARACTER", and the tokenizer has a
-     rule per state (§13.2.5.4 "Script data state" emits a U+FFFD; §13.2.5.1 "Data state" emits the character
-     and §13.2.6.4.7 The "in body" insertion mode ignores it). Measured: three sites of a thirty-site mirror
-     aborted on this defect, one of them on five NULs in its own markup.
-     WHAT IS STILL OWED IS THE OTHER HALF OF THE OLD NOTE — HTML §13.2.3.2 "Determining the character encoding"
-     — and it is a DIFFERENT capability rather than the rest of this one: the engine still decodes these bytes
-     as UTF-8 instead of sniffing them. The length is that algorithm's precondition (sniffing is defined over a
-     byte sequence, and until now there was none), not a piece of it. */
-  /* AND THE ADDRESS IS ASSERTED RATHER THAN DEFAULTED TOO, for the reason the line below it already proves:
-     `(msg && msg.sourceUrl) || ""` stood here, and `originOf("")` is `""` — a frontier key every unidentifiable
-     document would share, so one page's parked residue would resume inside another's engine. The engine's own
-     entry CHECKs that this address parses, so an empty one has always aborted; it aborted one call later, in
-     the process that was handed the hole rather than in the zone that made it. */
+  /* A U+0000 in these bytes is input, not an invariant: HTML §13.2.3.5 Preprocessing the input stream defines
+     how each tokenizer state handles it. `qjs_init`/`qjs_join` take `(bytes, len)` and the C entry DCHECKs the
+     guard byte at `bytes[len]`, so the length and the C read cannot disagree.
+     Named residual: the engine decodes these bytes as UTF-8 rather than running HTML §13.2.3.2 Determining
+     the character encoding. Next diff builds the sniff over this byte sequence. Absence shows as non-UTF-8
+     pages whose text and attribute values arrive mojibaked. */
+  /* The address is asserted, never defaulted: `originOf("")` is "", a frontier key every unidentifiable
+     document would share. The engine's entry CHECKs that it parses; this fails in the zone that made the hole. */
   DCHECK(!!msg && typeof msg.sourceUrl === "string" && msg.sourceUrl !== "",
          "a document reached qjs_init with no address — §4.4's document address is what the engine derives " +
          "this document's ORIGIN from (§4.7's serialization, its own url.c) and what every relative URL the " +
          "bundle builds resolves against, so a document without one is analysed behind no principal at all");
-  /* THE INHERITED CONTAINER, AS TWO WIRE FIELDS AND NOT AS A HEADER. It stands beside `_headers` because it is
-     not part of the response: HTML §7.1.7's clone is what a Document created by a CREATOR gets, and the engine
-     is what decides which of the two lists this Document is created with. The empty pair is the positive
-     statement that there is no creator, which is what `null` means at this function's own boundary. */
-  /* §7.1.4's ITEM RIDES WITH THE LIST. `null` here is a document with NO CREATOR — a root a content script
-     reported, a rehydrated recipe, §7.3.2.3's swapped-to context — and §7.1.7 gives the container such a
-     Document is created with "a new embedder policy", which NEW_EMBEDDER_POLICY spells rather than a `||`
-     filling in a producer's silence. */
+  /* The inherited container as wire fields beside `_headers`, because it is not part of the response: it is
+     HTML §7.1.7's clone for a Document with a creator, and the engine decides which list the Document gets. The
+     empty pair states that there is no creator. */
+  /* The embedder policy item rides with the list. A document with no creator (a reported root, a rehydrated
+     recipe, a group swap) gets "a new embedder policy" (HTML §7.1.7), which NEW_EMBEDDER_POLICY spells. */
   const _initEp = inherited ? inherited.embedder : NEW_EMBEDDER_POLICY;
-  /* AND HTML §7.3.1.3's PARENT NAVIGABLE, WHICH IS NOT PART OF THAT CONTAINER — it rides beside it because it
-     is the other thing only this zone knows about a document it did not root: whether the navigable it is
-     rooting is nested in one another instance holds. engineCreate asserts it; this line is a relay.
-     AND §7.3.1.3's CONTAINER BESIDE IT, which is not part of that container either and is a different KIND of
-     fact from the parent: a parent crosses as an identity the receiver mints a proxy from, while a container
-     is an element that cannot cross, so what crosses is Permissions Policy §9.5's answer over it. Relayed
-     here too — the creating engine computed it and this zone reads none of it. */
+  /* The parent navigable and the container answer are relayed beside the container: they are what only this
+     zone knows about a document it did not root (whether it is nested in another instance's navigable), and
+     engineCreate asserts them. */
   const _init = await rend.renderer.init({
     document: _doc, url: msg.sourceUrl, docId: eng.docId, headers: _headers, topLevelUrl: _tlu,
     inheritedCsp: inherited ? inherited.csp : "",
@@ -2746,123 +2227,70 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
     parentNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags });
   DCHECK(_init.rc === 0, "qjs_init reported a failure this zone has no handling for — the engine's own entry " +
                          "CHECKs every precondition and aborts, so a non-zero return is a contract that changed");
-  /* WHETHER A PEER HOLDS A WINDOWPROXY FOR THIS DOCUMENT, STATED AFTER `Init` AND BEFORE `Begin`, AND BOTH
-     BOUNDS ARE THE C ENTRY'S OWN. It is about THIS instance's document, so there must BE one (the entry
-     asserts `g_ctx`); and it decides whether the LAST timeline may finish, so a frontier that has already
-     been seeded may already have taken that decision and closed over the flows the flag was meant to keep
-     (the entry asserts `!g_begun`). engineCreate holds the reasoning for the answer itself and the
-     reservation carries it, because it is a fact about this instance's PROVISIONING rather than about this
-     rooting — which is also why nothing re-states it after a `Teardown`: `qjs_set_referenced` deliberately
-     survives one, since a peer that held a proxy for this document holds one still.
-     UNCONDITIONAL, INCLUDING FOR THE `0`. A zero is the positive statement that this instance's frontier is
-     entitled to drain, and an instance that is never told is one whose C-side flag is whatever the entry's
-     static initialiser left — the same fact arriving by silence, which is the one shape this seam has already
-     been wrong in once. */
+  /* Whether a peer holds a WindowProxy for this document, stated after `Init` and before `Begin`, the C entry's
+     own bounds: there must be a document (`g_ctx`) and the frontier must not be seeded yet (`!g_begun`), since
+     the flag decides whether the last timeline may finish. It is stated unconditionally, including 0, so the
+     C flag is never left at its static initialiser. `qjs_set_referenced` survives a `Teardown`, so it is not
+     restated after one. */
   await rend.renderer.setReferenced({ referenced: eng.referenced });
-  /* NEVER 0 — document_bundle_id folds an empty scan to 1 precisely so that a 0 cannot mean two things. A 0
-     here would key every unidentifiable document to the SAME frontier entry, so one page's parked residue
-     would resume in another's engine. */
-  /* `>>> 0` BECAUSE THE WIRE CARRIES AN i32. `qjs_bundle_id` returns a C `unsigned` and the wasm hands it back
-     signed, which is what the mojom declares (`int32 bundleId`) rather than hiding behind a type the wire does
-     not have — so the reinterpretation is the READER'S, on the line that needs the unsigned value. */
+  /* Never 0: document_bundle_id folds an empty scan to 1, since a 0 would key every unidentifiable document to
+     one frontier entry. */
+  /* `>>> 0` because the wire carries an i32 (mojom `int32 bundleId`) for a C `unsigned`; the reader
+     reinterprets it. */
   const _bidRaw = (await rend.renderer.getBundleId()).bundleId >>> 0;
   DCHECK(_bidRaw !== 0, "the engine answered a bundle id of 0 — document_bundle_id never returns one, and a 0 " +
                         "collides every document's frontier key with every other's");
   const _bid = _bidRaw.toString(36);
-  /* THE ADDRESS PARSES IN THIS ZONE TOO — asserted here even though the origin is no longer concatenated into
-     the key, because it is the statement the key's ADDRESS half rests on. originOf answers "" for an address
-     this zone cannot parse, and qjs_init has already CHECKed that the engine's own url.c parsed it, so an
-     empty answer means the two parsers disagree about what document this is — under which the pool would key
-     a residue by a string one of them does not consider an address at all. */
+  /* The address parses in this zone too: qjs_init has CHECKed that the engine's url.c parsed it, so an empty
+     origin here means the two parsers disagree about which document the key names. */
   DCHECK(originOf(msg && msg.sourceUrl) !== "",
          "this zone could not serialize an origin from a document address the engine's own url.c accepted — " +
          "the frontier key would name a document by a string the two parsers do not agree is one");
   const fkey = msg.sourceUrl + "|" + _bid;
-  /* ONE READ, AND IT ANSWERS `WHY NOT` BESIDE `WHAT`. This was `frontierGet(fkey)`, whose null is FIVE facts
-     that take opposite work — nothing was asked, the read edge failed, nothing is parked for this address,
-     something is parked under another bundle id, or THIS key is in the store and was not handed back —
-     and a live drive could separate none of them: it read `resumed: 0` and the key the answer
-     turns on was composed on the line above and published nowhere. `COLD_LOOKUP` is the whole set and the
-     paragraph above it is what each word means; this line does not restate them, because a count of a closed
-     set written beside the set is the census that goes wrong the moment a word is added. frontierLookup asks the same key AND, in
-     the same transaction, which keys this store holds for this document's ADDRESS, which is a bounded walk of
-     the store's own primary-key ordering rather than a scan (the key is `address + "|" + bundle`, so one
-     document's entries are contiguous). The three fields below are what a reader of a run meets instead of the
-     silence, and they are written HERE — at the one moment the answer exists — for the reason `_resumed` is. */
+  /* One read that answers why a key missed beside what it found (see COLD_LOOKUP): frontierLookup asks the key
+     and, in the same transaction, the keys stored for this address. The three fields are written here, at the
+     one moment the answer exists. */
   const _look = persist ? await frontierLookup(fkey, msg.sourceUrl) : null;
   const _cl = coldLookupOf(fkey, _look);
   eng._coldLookup = _cl.state; eng._coldOther = _cl.others; eng._bundleId = _bid;
-  /* THE WORD AND THE RESIDUE COME OUT OF ONE READ AND ARE NOT ASSERTED AGAINST EACH OTHER, WHICH IS A CHOICE
-     AND NOT AN OMISSION. `hit` is `_look.entry` being a record and `prior` IS `_look.entry`, so the two sides
-     of that comparison cannot disagree under any value this program can hold — it would read as a check and
-     be a non-check, certifying a pair nothing examined. The read that CAN disagree is inside `coldLookupOf`,
-     where the get's answer meets the key scan's, and that is where the assert stands. */
+  /* The word and the residue come from one read and are not asserted against each other: `hit` is defined by
+     `_look.entry` and `prior` is `_look.entry`, so that comparison cannot fail. The assert that can fail is in
+     `coldLookupOf`. */
   const prior = _look ? _look.entry : null;
-  /* THE RESIDUE THIS SESSION IS ABOUT TO REPLAY BELONGS TO THIS DOCUMENT. The engine seeds its frontier from
-     these recipes INSTEAD of a boot flow, so a residue from another document is not a degraded resume — it is
-     a frontier of flows standing on a path this program never took, with this document's own first flow
-     absent. Under the key as it stands this is an identity; it is written down because it fires the moment a
-     term leaves the key that this comparison still carries, which is exactly how the coarse key came to look
-     sound for as long as it did. */
+  /* The residue belongs to this document: the engine seeds from these recipes instead of a boot flow, so a
+     residue from another document would replay a path this program never took. Under the current key this is
+     an identity; it fires if a term ever leaves the key. */
   DCHECK(!prior || prior.sourceUrl === msg.sourceUrl,
          "the cold tier answered this document's frontier key with a residue parked by a document at a " +
          "DIFFERENT address (" + (prior && prior.sourceUrl) + " vs " + msg.sourceUrl + ") — the engine seeds " +
          "from recipes instead of a boot flow, so this document would be replayed along another one's " +
          "decision vectors and never explored from its own first script");
-  // PHASE 2 — seed the frontier (fresh, or resume parked recipes). The host sets a VALUE yield-floor per
-  // step (the runner-up engine's weight), so this engine yields when it's outranked — no fixed slice.
-  /* THE RESIDUE THIS ZONE IS HANDING OVER, NAMED BEFORE IT IS SENT, because it is one half of a two-sided
-     contract and the other half comes back on the very next line. solver/engine.c seeds a session from the
-     recipes OR from a boot flow and never both, so an EMPTY string here is this zone's own positive statement
-     that nothing was resumed into this session — knowable without asking the engine anything, which is what
-     makes zero a fact rather than a silence. */
+  // Phase 2: seed the frontier, fresh or from parked recipes. The host sets a value yield floor per step (the
+  // runner-up engine's weight), so this engine yields when outranked rather than after a fixed slice.
+  /* The residue handed over, named before it is sent: solver/engine.c seeds from recipes or a boot flow and
+     never both, so "" is this zone's own statement that nothing was resumed. */
   const _residue = (prior && prior.recipes) ? prior.recipes : "";
   await rend.renderer.begin({ recipes: _residue });
-  /* …AND THE ENGINE'S HALF, TAKEN AT THE ONE MOMENT IT EXISTS. `cold_resume` prints `@RESUMED <n>` and every
-     child->parent record drains the process's output with it (mojo.js `_envelope`), so the line rides THIS
-     reply — it is in `lines` the instant the await resolves and it is never printed again. Reading it here,
-     once, is what stops it from being re-derived by consumers that were handed a different slice of the
-     output; `linesToAnalysis` now reads this field instead of scanning for the line, on BOTH of its arms. */
+  /* The engine's half: `cold_resume` prints `@RESUMED <n>`, and every reply drains the output with it (mojo.js
+     `_envelope`), so the line is in `lines` when this await resolves and never again. It is read once here and
+     linesToAnalysis reads the field. */
   eng._resumed = engineResumeCount(lines, _residue !== "");
-  // DEV-ONLY verification hook (a real page never carries this query param): force the RAM-pressure park so
-  // the cross-session round trip (park recipes -> IDB -> restart-keep -> resume) is VERIFIABLE without a 512MB
-  // working set. Keyed off the URL (flows reliably through msg.sourceUrl to here, unlike a cross-context
-  // global). THE QUERY PARAM IS PART OF THE FRONTIER KEY, which it was not while the key was origin+bundle:
-  // the key is the document's ADDRESS plus the bundle id, so `?__forcepark=1` names its own entry and a later
-  // PLAIN visit to the same route resumes nothing. That is the correct reading rather than a cost — the
-  // residue was parked by a document at that address, and a document at a different address is a different
-  // document — and it is what the round trip verifies against: the stored sourceUrl carries the param, so a
-  // rehydration re-derives the same key and the `!(prior && prior.recipes)` guard below still keeps a resumed
-  // session from re-parking forever.
-  // The park is DEFERRED N steps (not requested here, before any step) so it fires MID-EXPLORATION — after
-  // boot + the first flow bursts have RUN, FORKED, and SUSPENDED — exactly like a production RAM-pressure park
-  // (hostSchedule requests park only after engines have stepped, line ~285). Requesting it pre-step parked at
-  // work=1 with EMPTY decvecs (nothing had run), so decvec REPLAY (the whole point of a recipe) went untested;
-  // deferring parks real residue whose recipes carry non-empty decision vectors AND handler-driven async flows.
-  // THE DEFERRAL IS LOAD-BEARING AND NOT AN ARBITRARY DELAY, and the engine side now says exactly why in the
-  // one shape it produces: a park taken before any step writes ONE record, `f-,0` — a flow standing on no
-  // decision segment with no reward — which solver/cold.c's resume rebuilds into a flow indistinguishable from
-  // the boot flow a fresh visit seeds anyway. The round trip would then complete, persist, rehydrate and
-  // report success while having carried NOTHING across it. Two dispatches is the smallest count at which the
-  // boot flow has forked, so the document holds `s…` segment records and the `f…` records name them; that is
-  // the thing under test. If this number is ever changed, the property to preserve is "the park document
-  // contains at least one `s` record", never the count itself.
-  // Only on the INITIAL park (no recipes to resume yet); firing while resuming would re-park the rehydrated
-  // recipes forever (the stored sourceUrl keeps the query param), so a cold/re-visit resume never runs.
+  // Dev-only verification hook (a real page never carries this query param): `?__forcepark=1` forces the
+  // RAM-pressure park, so the cross-session round trip (park recipes, IndexedDB, restart, resume) is verifiable
+  // without a 512MB working set. The param is part of the address and so of the frontier key: that address
+  // names its own entry, and a rehydration re-derives the same key.
+  // The park is deferred two dispatches so it fires mid-exploration, like a production park: a park before any
+  // step writes one record, `f-,0`, which resumes as a flow indistinguishable from a fresh boot flow, so the
+  // round trip would carry nothing. Two is the smallest count at which the boot flow has forked and the park
+  // holds `s…` segment records; the property to preserve is "the park contains at least one `s` record".
+  // Only on the initial park: firing while resuming would re-park the rehydrated recipes for ever.
   let _forceparkSteps = 0;
   if (msg && typeof msg.sourceUrl === "string" && /[?&]__forcepark=1\b/.test(msg.sourceUrl) && !(prior && prior.recipes)) {
     _forceparkSteps = 2;   // park after boot + the first flow burst: flows have RUN + SUSPENDED (real decvecs) but not yet drained
   }
-  /* THE CHOKEPOINT AND THE DOCUMENT'S ADDRESS ARE A LOAD ORDER, NOT A NETWORK CONDITION — asked ONCE, here,
-     and as a crash rather than as an answer. This was `const canFetch = …`, tested at two seams, and each of
-     them answered it with Fetch §5.6 "Fetch methods"' network error: `fetched` returned `null` and the XHR
-     seam returned a status-0 record. Neither is true of anything. `safeFetch` not being a function means this
-     realm loaded `safe-fetch.js` late or not at all, and a document with no `sourceUrl` is a park whose
-     addresses cannot be resolved at all — both are THIS ZONE assembled wrong, and telling the page's code
-     that its server could not be reached converts a wiring defect into a fact about somebody's origin, which
-     the page then explores a whole failure path under. It is also the shape that hides worst: every fetch of
-     every document fails identically and the run reports a page that learned nothing rather than a host that
-     was never ready. */
+  /* The chokepoint and the document's address are a load order, asserted once here as a crash. Answering
+     either with a network error would tell the page's code its server was unreachable and explore a failure
+     path under a wiring defect. */
   DCHECK(typeof self.safeFetch === "function",
          "an engine is being driven in a realm where `safeFetch` is not a function — SECURITY.md puts every " +
          "byte of network through that chokepoint, so this zone cannot answer a single park, and the two " +
@@ -2873,45 +2301,23 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          "against it (`new URL(u, msg.sourceUrl)`), so without one nothing this frontier asks for can be " +
          "named, and answering that with a network error reports an unreachable server for a request this " +
          "zone could not even address");
-  /* THE REPLY RECORD THE ENGINE PARSES, which is the ONE shape every host of this engine delivers —
-     `{status, statusText, headers: [[name, value], …], urlList, computedType}` PLUS the body's BYTES beside
-     it, the same
-     record the C hosts build with fetch_reply_new. It used to hand back the BODY'S BYTES alone, so everything
-     this zone had actually seen was dropped at this line and re-invented on the other side: the engine reported
-     status 200, status message "OK", no headers, and — because Fetch §2.2.6's URL LIST is what `response.url`
-     and `response.redirected` are — no redirect, ever, for any reply. `null` is a NETWORK ERROR (the engine
-     rejects with §5.6's TypeError), which is what a URL this zone must not or cannot fetch honestly is; it is
-     NOT an empty 200.
-     THE BODY IS NOT IN THE RECORD, AND THAT IS THE POINT. §2.2.4 Bodies makes a body's source a BYTE SEQUENCE
-     and JSON cannot carry one: `JSON.stringify` on a Uint8Array answers `{"0":72,"1":101,…}` — a plausible record
-     whose body is not the body. The only ways to put bytes in JSON are to encode them (base64: a CODEC on both
-     sides to get wrong, 4/3 on the wire for bodies that are whole JS bundles, and a second copy of the
-     expanded text held by the parse) or to DECODE them, which is what `resp.text()` was doing and is the whole
-     defect — a UTF-8 decode run in the zone that owns SOP/CORS and owns no semantics, before HTML §8.1.4.2's
-     own decode could look at the charset the response declared. So the record travels as text and the bytes
-     travel as bytes, copied straight into the engine's linear memory. */
-  /* THE REQUEST IS THE PAIR — `method` is half of what the flow parked on, not a hint about the address. It
-     arrives already normalized (Fetch §2.2.1 Methods, "normalize a method"), so `GET` is exactly the set this
-     zone can perform, HEAD included: a HEAD answered with a GET's body is the same substitution.
-     A REQUEST THIS ZONE CANNOT ISSUE IS REFUSED BEFORE THE CALL AND NEVER DOWNGRADED. safeFetch hardcodes
-     `method:"GET"` and reads neither `opts.method` nor `opts.body` (SECURITY.md §Network, "GET only, enforced by
-     ABSENCE"), so fetching a POST's address as a GET and providing those bytes under the POST's key would be
-     the defect this seam's method was added to close, with the pairing now CORRECT: the reply would match the
-     request it names and still be a response the server never gave for it. That is the wrong answer moved one
-     zone up. Nothing state-changing is issued, which is the rule this preserves rather than relaxes.
-     THE REFUSAL IS §5.6 Fetch methods' NETWORK ERROR, WHICH ON THIS SEAM IS SPELLED `null` — the same refusal
-     fetchedXhr makes, in this seam's own grammar rather than in the XHR seam's. There the record always crosses
-     and `status: 0` with no bytes leaves the response the network error §3 starts it as, so `blocked-method:<M>`
-     rides along as a diagnostic that xml_http_request.c's xhr_take_reply returns before ever reading. HERE the
-     record IS the page's Response: core/fetch's delivery rejects with the TypeError only for the JSON `null`,
-     and ANY object is built into a Response, so a status-0 record would RESOLVE `fetch()` with a status no
-     server returns — a reply this zone fabricated. `if (r.status === 0) return null` below already says exactly
-     that about every other refusal safeFetch makes (blocked-scheme, blocked-cors-credentialed, CORB). */
-  /* AND THE REQUEST'S DESTINATION TRAVELS WITH IT, FOR A REASON THE METHOD'S PARAGRAPH ALREADY STATES ABOUT
-     ITSELF: it is half of what this zone must know to perform the request correctly, not a hint. Fetch §2.2.5
-     "Requests" gives every request one; `safe-fetch.js` decides the CORB class from §2.2.5's own script-like
-     predicate over it. It is passed THROUGH rather than reduced to a boolean here, because a boolean is a
-     second vocabulary for a spec field and the zone that decides is the one that should read the value. */
+  /* The reply record the engine parses, the shape every host of this engine delivers:
+     `{status, statusText, headers: [[name, value], …], urlList, computedType}` plus the body's bytes beside it,
+     as the C hosts build with fetch_reply_new. The URL list (Fetch §2.2.6 Responses) is what `response.url`
+     and `response.redirected` read. `null` is a network error (the engine rejects with Fetch §5.6 Fetch
+     methods' TypeError), never an empty 200.
+     The body is not in the record: Fetch §2.2.4 Bodies makes a body's source a byte sequence, which JSON cannot
+     carry without a codec or a decode, and a decode here would run in the zone that owns SOP/CORS and no
+     semantics, before the engine's own decode sees the declared charset. So the record travels as text and the
+     bytes as bytes, copied straight into the engine's linear memory. */
+  /* The request is the (method, url) pair the flow parked on; `method` arrives normalized (Fetch §2.2.1
+     Methods). A method this zone cannot issue is refused before the call and never downgraded: safeFetch is
+     GET only (SECURITY.md), so answering a POST's key with a GET's reply would be a response the server never
+     gave. On this seam the refusal is spelled `null`, because core/fetch builds any object into a Response,
+     so a status-0 record would resolve `fetch()` with a status no server returns. fetchedXhr spells its
+     refusal as a status-0 record, which xml_http_request.c's xhr_take_reply treats as a network error. */
+  /* The request's destination travels with it (Fetch §2.2.5 Requests): safe-fetch.js decides the CORB class
+     from §2.2.5's script-like predicate over it, so it is passed through, not reduced to a boolean. */
   const fetched = async (method, u, destination, provenance, pinned, credentials) => {
     DCHECK(pinned === "pinned" || pinned === "unpinned",
            "a pending request reached the fetch relay carrying no witness mark — solver/engine.h states " +
@@ -2929,177 +2335,89 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and the " +
            "(method, url) pair is what the flow parked on, so a request whose method is unknown can be " +
            "neither refused nor issued");
-    /* AND THE CREDENTIALS MODE, ASSERTED HERE FOR THE DESTINATION'S REASON EXACTLY: it is half of what this
-       zone must know to perform the request correctly rather than a hint, and a caller that omits it is one
-       whose request `safe-fetch.js` would decide the credential question for by silence. It is passed
-       THROUGH and not reduced to a boolean here — that reduction is the chokepoint's, made from this token
-       and from this zone's own willingness, which are two facts and not one (see `_credentialedOf`). */
+    /* The credentials mode is passed through for the same reason; reducing it with this zone's willingness is
+       the chokepoint's job (`_credentialedOf`). */
     DCHECK(typeof credentials === "string" && credentials !== "",
            "a pending request reached the chokepoint with no CREDENTIALS MODE — GetPending answers " +
            "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL`, Fetch §2.2.5 " +
            "\"Requests\" gives every request one, and only the algorithm that created it knows which. A " +
            "caller that drops it hands `safe-fetch.js` a request it can decide nothing about");
-    /* THE METHOD HALF OF THE FIRING QUESTION, ASKED OF THE CHOKEPOINT RATHER THAN RE-DERIVED HERE. This was
-       `if (method !== "GET") return null` — the SAME rule `engine/trusted.mjs` held in its own copy, and the
-       two answered it DIFFERENTLY: that host DECLINED (the flow stays parked) and this one returned Fetch
-       §5.6 "Fetch methods"' network error, which rejects the page's request with a TypeError and resumes it
-       down its failure path having been told the server was unreachable. For a request nobody sent, that is a
-       fact about the origin no observation supports, and every branch below that `catch` is then explored
-       under it. One question, two answers, neither of them the policy — so `safeFetchMethodRefusal` answers it
-       once, in the refusal vocabulary the chokepoint's own reply record carries. */
+    /* The method half of the firing question is asked of the chokepoint (`safeFetchMethodRefusal`), so this
+       host and engine/trusted.mjs answer it once, in the chokepoint's refusal vocabulary, and the flow stays
+       parked rather than being told the server was unreachable. */
     const _mRefusal = self.safeFetchMethodRefusal(method);
     if (_mRefusal) return { refusal: _mRefusal };
-    /* `canFetch` IS GONE FROM THIS TEST AND IS NOW A CRASH AT THE TOP OF THIS FUNCTION'S SCOPE — it was this
-       zone's own load order (the chokepoint absent, the document with no address) reported to the page as a
-       network error, which is a fact about somebody's origin that nothing observed.
-       WHAT IS LEFT IS `hasHole`, AND IT IS STILL A FABRICATED NETWORK ERROR. It is not a refusal of an ACT at
-       all: it is a park the ENGINE emitted carrying an address it never determined, so there is no request to
-       make and nothing for a chokepoint to grade — safe-fetch.js knows nothing about concolic holes and
-       relaying it as a `decline` would be a refusal nobody made. It belongs with §@H's shape rules, where an
-       address the run did not compute is a SHAPE and the honest answer is that this park should never have
-       been listed to a host at all. Left as it stands rather than mis-graded here. */
+    /* A holed address is a park carrying an address the engine never determined, so there is no request to
+       make and nothing for the chokepoint to grade; it is answered as a network error.
+       Named residual: that answer sends the page's code down a failure path for a request nobody could make.
+       Next diff stops the engine listing such a park to a host at all, treating the address as a shape (the
+       @H shape rules). Absence shows as holed addresses that never reach the wire yet whose callers' catch
+       arms are explored. */
     if (hasHole(u)) return null;
     try {
       const abs = new URL(u, msg.sourceUrl).href;
-      // a CODE load: classified by its destination (CORB), never credentialed. Every other destination: opt-in
-      // credentialed -> the AUTHENTICATED logged-in reply (the moat headline), gated by safeFetch's own
-      // SOP/CORS + GET-only. Default off.
-      /* @security-finding  NO `pageOrigin` REACHES THE CHOKEPOINT FROM *HERE*, AND ONE MUST BEFORE
-         `credentialed` IS EVER TURNED ON FOR A LEARNED GET. The DOCUMENT-LOAD path now passes one
-         (`navigationLoad`, from `msg.origin`) and carries the person's session; this path — the reply to a
-         request the analysed bundle made, and the chunk loads beside it — deliberately still does not.
-         THE HALF OF THIS FINDING THAT WAS ABOUT PROVENANCE IS DISCHARGED AND THE REST IS NOT. It read
-         "whether to fire those is a per-origin CONFIGURATION in the trusted zone that does not exist yet";
-         it exists, this call states the word, and `safe-fetch.js`'s `_firingRefusal` answers it — a FORCED
-         park at an origin nobody widened never reaches the wire. What is unchanged is the CREDENTIAL half:
-         this path is uncredentialed, and turning it on is a decision about the CORB class of a same-origin
-         chunk rather than a consequence of the grade.
-         AND THE SENTENCE THAT USED TO CARRY THAT — "`msg.credentialed` is still unwritten, so every read
-         here is still uncredentialed" — WAS FALSE, in the direction this file is most burnt by: a standing
-         claim about the tree, read as a description of the present, believed rather than checked. FOUR sites
-         made it (this paragraph, the one below, `safe-fetch.js`'s `@security-contract` header, and
-         SECURITY.md §Network), and `git grep -n 'credentialed:' extension/bridge.js` answers otherwise —
-         the seed's `AST_ANALYZE` states `credentialed: navigationCarriesSession(loaded.url,
-         seed.principalOrigin)`, the child-navigable, swap and cold-rehydration messages inherit it, and
-         `navigationCarriesSession` is TRUE for the ordinary case: a same-origin seeded navigation.
-         WHAT THAT MADE THIS LINE DO IS THE DEFECT, AND IT IS ONE FIELD ANSWERING TWO QUESTIONS. Written on
-         the analyze message, `credentialed` states whether the DOCUMENT LOAD carried the person's session —
-         which is what the frontier record remembers and what `frontierRederive` re-decides from. Read here,
-         it was answering a different question: whether a LEARNED-GET REPLAY should carry it. The two agreed
-         at the site that introduced the read and part company for every seeded page, and the cost landed
-         silently on the looser one: this call states NO `pageOrigin`, so `safe-fetch.js`'s credentialed SOP
-         has no real origin to be same-origin with and no `ACAO` can ever equal it — every one of those
-         replies was refused `blocked-cors-credentialed:` AFTER the request went out. The person's cookies
-         were spent on replies this zone then discarded, and the credentialed destructive-path deny list was
-         armed over a population whose bytes could not be read either way.
-         SO IT IS STATED `false` RATHER THAN READ, which restores what all four sites already claimed and
-         takes no new decision. It is not a loosening: nothing gains credentials, and the deny list stops
-         covering these replays for the reason `safe-fetch.js` gives for scoping it to the credentialed case
-         at all — "the harm needs the session: an uncredentialed GET to a logout path destroys nothing". What
-         it recovers is real: a reply that was refused unread now comes back as the logged-out view, which is
-         what an uncredentialed learned-GET replay was always documented to be.
-         WHEN IT IS BUILT, THE VALUE TO PASS IS `msg.origin` (the browser's MessageSender.origin, plumbed by
-         _dispatchDocument) and NEVER `originOf(msg.sourceUrl)` — that is the exact URL-derivation the
-         credentialed principal exists to forbid, and it would hand a page's own sandboxed iframe (opaque
-         origin, ordinary-looking address) same-origin access to the EMBEDDER's authenticated bytes. Wiring
-         it also loosens CORB for a genuinely same-origin chunk, which is spec-correct and is a deliberate
-         decision to take at that time, not a side effect of this line. */
-      /* ONE SHAPE FOR EVERY PARK, AND THE BRANCH THAT USED TO BE HERE IS GONE WITH THE KEYWORD IT SELECTED.
-         It read `asScript ? {as:"script"} : {credentialed:…}`, which made this zone decide two things it does
-         not own: WHICH RULE the chokepoint applies (now the request's own destination decides, so a park this
-         loop has never seen is classified without anything here being taught about it) and WHETHER a code load
-         may carry the session. The second was not even faithful — HTML §8.1.4.2's classic script fetch has
-         credentials mode `same-origin`, so a same-origin script load in a browser DOES carry them — and it is
-         a POLICY, which CLAUDE.md puts at the one chokepoint with the firing decision and the deny list. Both
-         facts are handed over and `safe-fetch.js` decides. This sentence used to end "`msg.credentialed` is
-         still never written (see the finding above), so every read here is still uncredentialed" — the second
-         copy of the false claim the finding above now records, and the reason the credential state is STATED
-         on the line below rather than read off a field that answers a different question. */
-      /* AND THE THIRD FACT IS WHAT THE REQUEST IS EVIDENCE OF, RELAYED AND NEVER RE-DERIVED HERE. The engine
-         composed it at the park from HTML §4.12.1.1 "Processing model"'s parser-inserted (a `script` whose
-         parser document is non-null; there is no "parser-inserted flag" — that name belongs to §4.10.18.3
-         "Association of controls and forms") and the parking flow's own
-         `path_forced` (solver/engine.h); nothing in an address could tell this zone the same thing, which is
-         the whole reason it rides the pending line. This zone neither tests it nor defaults it: the chokepoint
-         holds the firing decision, and a value it does not know is fatal there rather than permissive here. */
-      /* UNCREDENTIALED, STATED — see the finding above for why this is a literal and not a read. This call
-         supplies no `pageOrigin`, so asking for cookies here can only ever produce a reply the chokepoint's
-         own credentialed SOP refuses unread; the flag and the principal are two halves of one decision and
-         this path has not taken it. */
-      /* AND THE REQUEST'S OWN CREDENTIALS MODE BESIDE THAT LITERAL, WHICH IS THE OTHER HALF OF ONE
-         DECISION AND NOT A SECOND SPELLING OF THIS ONE. `credentialed: false` is this zone's WILLINGNESS,
-         stated for the reason the finding above gives — this call supplies no `pageOrigin`, so asking for
-         cookies here could only produce a reply the chokepoint's own credentialed SOP refuses unread.
-         `credentials` is what the ALGORITHM said the request is (Fetch §2.2.5 "Requests"), relayed verbatim
-         off the pending line. Their conjunction is `safe-fetch.js`'s, and the mode can only ever narrow it —
-         so relaying it takes no new decision today and is what makes the `omit` parks refusable, and the
-         `include` ones honest, the day the principal above is wired. */
-      /* AND HOW THE DOCUMENT THIS PARK BELONGS TO WAS REACHED — THE ONE FACT THE ENGINE CANNOT STATE, AND
-         THE ONE THE `observed` DEFAULT ARM IS NOW A CONJUNCTION OVER. `provenance` above is the engine's word
-         about the flow's path INSIDE this document; `msg.provenance` is this zone's word about the load that
-         produced the document, performed before the instance existed. A page this zone chose to open goes on
-         making its own `fetch()`es and the engine grades every one of them `observed`, CORRECTLY — so
-         without this the chokepoint would judge the second act with the first act's word, and one permission
-         would cover two populations with the person's surface showing one.
-         NAMED RESIDUAL. WHAT IS NOT COVERED: a same-origin child navigable that JOINS this instance
-         (`engineJoin`) is a second Document in one agent, and this closure holds the message of the document
-         the instance was ROOTED at — so a joined document reached under a weaker grade has its subresources
-         judged under the root's. WHAT THE NEXT DIFF BUILDS: the park's own document name on the pending line
-         beside its provenance, so this lookup is per-Document rather than per-instance; the engine already
-         routes deliveries by that name. HOW ITS ABSENCE WOULD SHOW: at an origin widened for one reach grade
-         and not another, a person watching which requests fire sees a frontier that drains for documents
-         inside one instance and refuses the identical request made from a top-level document reached the
-         same way. */
-      /* AND WHOSE ACT IT IS — `page`, BY THE ONLY CONSTRUCTION THIS FRAME HAS: it exists to answer a park
-         the engine put on its own pending line, and the engine parks on what the analysed document's code
-         does. It is STATED rather than inferred from that sentence, which is the whole of CLAUDE.md
-         §AND-AN-EXEMPTION-SCOPED-BY-WHO-ACTED: a fact about who acted is a value the site that knows types
-         out, and safe-fetch.js asserts it, so this frame being wrong about its own population is loud there
-         rather than a privilege nothing can see. THIS IS THE ROW THE OWNER'S VALUE ARM TURNS ON — with
-         `witness` off the line reading `unpinned`, a data `fetch()` the page made fires here at every
-         origin, and the sweep that is identical to it on every other signal does not. */
+      // Every park takes one shape; the request's own destination decides the chokepoint's rule (CORB for a
+      // code load), and credentials are stated below.
+      /* @security-finding: no `pageOrigin` reaches the chokepoint from this path (replies to requests the
+         analysed bundle made, and chunk loads), so it is stated uncredentialed. The document-load path passes
+         one and carries the session. `msg.credentialed` states whether the document load carried the session
+         (what the frontier record remembers) and is not this question; reading it here made the credentialed SOP
+         refuse every reply unread after spending the person's cookies. Stated `false`, nothing gains credentials,
+         and the deny list's scope to credentialed requests is unchanged (an uncredentialed GET to a logout path
+         destroys nothing).
+         When credentials are built for this path, pass `msg.origin` (MessageSender.origin, plumbed by
+         _dispatchDocument), never `originOf(msg.sourceUrl)`, which would give a sandboxed iframe its embedder's
+         authenticated bytes. That also loosens CORB for a same-origin chunk, a decision to take then. */
+      /* One shape for every park: the destination decides which rule the chokepoint applies and the policy on
+         whether a code load may carry the session is the chokepoint's (HTML §8.1.4.2 Fetching scripts gives a
+         classic script `same-origin` credentials). */
+      /* `provenance` is what the request is evidence of, composed by the engine at the park from HTML §4.12.1.1
+         Processing model's parser-inserted (a script whose parser document is non-null) and the parking flow's
+         `path_forced` (solver/engine.h). Relayed, never re-derived or defaulted: the chokepoint holds the firing
+         decision and an unknown value is fatal there. */
+      /* `credentialed: false` is stated, not read (see the finding above). */
+      /* `credentials` is the request's own mode (Fetch §2.2.5 Requests), relayed off the pending line; its
+         conjunction with `credentialed` is safe-fetch.js's and can only narrow, so it makes `omit` parks
+         refusable and `include` ones honest once the principal above is wired. */
+      /* `docReach` is how the document this park belongs to was reached (`msg.provenance`, this zone's word
+         about the load that produced it), distinct from `provenance` (the engine's word about the flow's path
+         inside the document): a page this tool opened makes requests the engine grades `observed`.
+         Named residual: a same-origin child that joins this instance (`engineJoin`) is judged under the root's
+         `msg.provenance`, since this closure holds the root's message. Next diff carries the park's document
+         name on the pending line so the lookup is per document (the engine already routes by that name). Absence
+         shows, at an origin widened for one grade and not another, as identical requests firing from a joined
+         document and refused from a top-level document reached the same way. */
+      /* `actor: "page"`: this frame answers a park the engine put on its pending line, and the engine parks on
+         what the analysed document's code does. Stated so safe-fetch.js can assert it; with `witness` unpinned it
+         is the row the owner's value arm turns on. */
       const opts = { pageUrl: msg.sourceUrl, destination, provenance, pinned, credentials,
                      actor: "page",
                      docReach: msg.provenance, credentialed: false };
       const r = await self.safeFetch(abs, opts);
-      /* THE CHOKEPOINT'S RECORD IS FIXED — safe-fetch.js returns {ok,status,statusText,headers,body,urlList}
-         on every path it has, including every blocked one. `if (!r || typeof r.body !== "string") return null`
-         was a malformed answer being turned into a NETWORK ERROR, which is a real Fetch outcome the engine
-         acts on: the page's request would report as having failed on the wire when what actually happened is
-         that this zone's own chokepoint answered something it never answers.
-         AND THE BODY IS BYTES, asserted rather than assumed: a string here is safeFetch back to running Fetch
-         §5.2's `text()`, which no assert further down could ever have caught — the bytes it disagrees with
-         would already be gone. */
+      /* The chokepoint's record is fixed: safe-fetch.js returns {ok,status,statusText,headers,body,urlList} on
+         every path, blocked ones included, so a malformed answer is asserted rather than turned into a network
+         error. The body is bytes; a string would mean safeFetch ran `text()` (Fetch §5.3 Body mixin) and the
+         original bytes are gone. */
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number",
              "safeFetch answered with something other than its reply record — the engine builds a Response " +
              "out of this and a page reads status/headers/body off it, and §2.2.4's body source is a BYTE " +
              "SEQUENCE");
-      /* §2.2.6's URL list, straight from the chokepoint that performed the fetch. safeFetch always reports at
-         least the URL it requested — §4.1's "If internalResponse's URL list is empty, then set it to a clone of
-         request's URL list" — and the engine DCHECKs that at both ends, so an empty one is a bug here rather
-         than a response that silently claims never to have redirected. */
+      /* The URL list straight from the chokepoint: it always holds at least the requested URL (Fetch §4.1 Main
+         fetch: an empty internal URL list is set to a clone of the request's), and the engine DCHECKs that too. */
       DCHECK(Array.isArray(r.urlList) && r.urlList.length >= 1,
              "safeFetch answered a reply with no URL list — response.url and response.redirected are read off " +
              "nothing else, and the engine would report every redirect as none");
       DCHECK(r.headers && typeof r.headers === "object",
              "safeFetch answered a reply with no header map — the engine's Headers record is built from it");
-      /* AND THE TYPE THE CHOKEPOINT COMPUTED, which is the one fact on this record the engine may not derive
-         for itself. safeFetch read the bytes and ran the sniff; the renderer is TOLD the answer, exactly as it
-         is told a browser-stated origin rather than handed a URL to parse. It is a STRING on every path,
-         and the empty one is §5.1's "the supplied MIME type is undefined" surviving the sniff — a positive
-         answer — so `undefined` here is a chokepoint that stopped stamping and would reach the engine's own
-         DCHECK one call later, naming the wrong side. */
+      /* The type the chokepoint computed, the one fact on this record the engine may not derive itself:
+         safeFetch ran the sniff and the renderer is told the answer. The empty string is MIME Sniffing §5.1
+         Interpreting the resource metadata's "the supplied MIME type is undefined", a positive answer. */
       DCHECK(typeof r.computedType === "string",
              "safeFetch answered a reply with no computed content type — solver/reply_decode.c reads this " +
              "field instead of re-deriving a type from the raw header, so an absent stamp is a producer that " +
              "failed and never a resource whose type is unknown");
-      /* AND §2.2.6's STATUS MESSAGE, WHOSE EMPTY VALUE IS A REAL ANSWER — which is exactly why `|| ""` could
-         not stand beside it. HTTP/2 and HTTP/3 carry no reason phrase at all, so `""` is what a perfectly
-         ordinary response says, and safeFetch writes the field on every one of its return paths (its blocked
-         arms put the REASON there, which is the only account a page ever gets of a request the chokepoint
-         refused). Defaulting it therefore mapped "this protocol has no reason phrase" and "the chokepoint
-         stopped writing the field" onto the same two bytes, and the second of those is a blocked-by-CORB or
-         blocked-scheme answer arriving at the engine with its explanation deleted. */
+      /* The status message's empty value is a real answer (HTTP/2 and HTTP/3 carry no reason phrase), and the
+         blocked arms put their refusal reason there, so it is asserted, never defaulted. */
       DCHECK(typeof r.statusText === "string",
              "safeFetch answered a reply with no statusText — it is written on every path (the blocked arms " +
              "carry their REFUSAL REASON in it), and an empty string is a legitimate answer from any HTTP/2 " +
