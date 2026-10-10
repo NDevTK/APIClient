@@ -1,75 +1,18 @@
-/* IS THIS DIFF PROSE-ONLY? ASK THE PREPROCESSOR, NOT THE AUTHOR.
+/* Is a diff prose-only? Ask the preprocessor (C) or the parser (JS), not the author.
  *
- * CLAUDE.md requires a large share of this project's diffs to be comment-only: a retired argument is REWRITTEN
- * rather than deleted, an incident is kept at its site, a wrong next-diff clause is recorded where it was
- * written. The evidence offered for such a diff is always the same sentence — `I only added comments` — and that
- * is a claim about the EMITTED PROGRAM which no gate here measures, because a gate measures behaviour and a
- * comment changes none. A green build is consistent with a prose diff AND with a statement you did not notice
- * you were adding, and §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE is the name for a check that cannot tell them
- * apart.
+ *   node engine/prosediff.mjs <path.c|path.js|path.mjs>… [--base <rev>] [--release]
  *
- * WHY IT IS A FILE AND NOT A PARAGRAPH. CLAUDE.md states this pipeline in prose and names the construction that
- * would end it: "this record goes when a prose-only residue in this tree is produced by a committed helper that
- * drops blank lines by construction, so the filter cannot be left out of the pipeline a reader types." Every
- * clause of that prose has been got wrong at least once BY ITS OWN AUTHOR, and each mistake is a stage of the
- * pipeline below rather than a lapse of care:
- *   §A-MEASUREMENT-CAN-OUTLIVE-ITS-INSTRUMENT — the pipeline was typed into a scratch directory, used to verify
- *     a published commit, and reclaimed with the container. An instrument whose output anyone quotes is
- *     COMMITTED, in the same diff as the first quotation of its number.
- *   THE `__FILE__` ARTIFACT — preprocessing two copies at two PATHS makes `__FILE__` differ, and in this tree a
- *     `DCHECKF` expands its own file name, so the raw diff is dominated by an artifact of HOW it was asked. One
- *     measured run reported 232 differing lines of which every one was that, and another reported 1216 because
- *     the normalising substitution lacked a `/g` and a second occurrence survived on the same line.
- *   THE BLANK-LINE HOLE — `clang -E` replaces a comment with its NEWLINES, so a comment's HEIGHT survives into
- *     the output, and a mask over CHARACTERS cannot touch a line that has none. Changing a comment's height is
- *     the MODAL prose diff here, so the recipe's safest input was the one that failed it: 8 differing lines,
- *     every one blank, read as the recipe's own strongest refusal (`a NON-NUMERIC difference is never
- *     admissible`) and therefore as a statement the author had not noticed writing.
- *   THE PARTIAL-SUM HOLE — a stamp below an insertion shifts by every insertion ABOVE it, so a diff with N
- *     insertion hunks leaves the set of CUMULATIVE PARTIAL SUMS of the hunk nets and only the LAST equals NET.
- *     The rule was written as `equal to your NET count` from two SINGLE-HUNK examples, which is the one shape
- *     where a hunk's partial sum IS the net — a cure validated by the absence of the case it cannot see.
- *   INSERTIONS AGAINST NET — `git diff --stat` prints INSERTIONS first, so the number a reader reaches for is
- *     the larger one, and a rewrite-rather-than-delete commit has deletions in it. The residue is then SMALLER
- *     than the figure being checked against, which reads as a shift that does not account for itself.
- * Each of those failed in the ACCUSING direction — toward reporting a correct commit as having emitted code —
- * which §WHEREVER-AN-INSTRUMENT-PARTITIONS-TEXT rates as needing more suspicion than the quiet one, because its
- * output looks like a result.
+ * C: both sides are preprocessed with clang -E against their own tree's headers (the base tree is materialised
+ * from `git archive`), linemarkers and blank lines dropped, paths normalised. Two questions, both required:
+ *   (1) with every integer masked, does any text differ? Nonzero is a statement, expression or datum.
+ *   (2) is every numeric difference a line-stamp shift explained by a cumulative partial sum of the hunk nets?
+ * JS: the non-comment @babel/parser token streams must be identical.
+ * Every path carries a control (one injected statement) that must register, or its answer is VOID.
+ * A header has no translation unit: pass a `.c` that includes it. The working tree is only read.
  *
- * WHAT IT ANSWERS, AND IN WHICH ORDER. Two questions, kept apart, because they are not alike in what a reader
- * may conclude:
- *   (1) IS ANY NON-NUMERIC TEXT DIFFERENT. Answered with every integer masked, so it is decided without
- *       interpreting a single number. Nonzero is a STATEMENT, an expression or a datum, and the lines are
- *       printed.
- *   (2) ARE THE NUMERIC DIFFERENCES ACCOUNTED FOR BY THE LINE SHIFT. The admissible residue is the set of
- *       cumulative partial sums of the per-hunk nets, whose MAXIMUM is the net; a value above the net, or a
- *       value no partial sum explains, is not a line shift.
- * A prose-only claim needs (1) at zero AND (2) accounted. Either one alone is half the check.
- *
- * IT NEVER TOUCHES THE SHARED TREE. Both sides are COPIES in a temp directory — the working tree is READ and
- * never written, because an earlier form of this pipeline swapped the base file into place to preprocess it,
- * which in a shared checkout is a window in which a peer reads a stale file and a crash leaves it there.
- *
- * ITS INCLUDE ROOTS ARE DERIVED FROM `build.mjs`, NEVER LISTED HERE, for §AN-AUDITOR-DERIVES-THE-RULE's reason:
- * a hand-kept copy of the compiler's own flag set is a second copy, and the one that drifts is the copy nobody
- * runs against a compile. It parses the `-I` line that is about to compile the tree and resolves each name from
- * that same file's own `const` definitions, and it THROWS rather than falling back when it cannot — a silent
- * fallback to a stale list is how a residue check comes to preprocess a different program than the build does.
- *
- * THE CONTROL RUNS BY ITSELF AND A CLEAN BILL IS REFUSED WITHOUT IT. §A-CONTROL-ARMS-ONLY-ON-A-SITE: probing an
- * instrument for silence rests on a step nobody performs — DEMONSTRATING THAT THE PROBE ARMS THE CHECK AT ALL —
- * and skipping it makes a zero mean `my input never reached this check`, which renders identically to `this
- * check cannot see this`. So before reporting any file as prose-only, this injects ONE statement into the new
- * copy and requires the pipeline to report it. If the control does not speak, nothing below it is published.
- *
- * NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: a change inside a HEADER, whose emission this
- * cannot see except through a `.c` that includes it — so a header-only diff is reported as `no translation unit`
- * rather than as prose-only, and the honest way to clear one is to run this over a `.c` that includes it.
- * WHAT THE NEXT DIFF BUILDS: resolve each named header to its includers by parsing their `#include` lines and
- * run the residue over those, reporting the union — which needs no new mechanism, only the includer set.
- * HOW ITS ABSENCE WOULD SHOW: a reader passes a `.h` to this, is told there is no translation unit, and either
- * stops (a prose claim nothing checked) or picks an includer by hand and reports a residue over whichever one
- * they happened to choose. */
+ * Named residual: not covered — a `.h` path is declined rather than resolved to its includers; next diff —
+ * parse includers' `#include` lines and report the union; absence shows as a header-only `--prose` claim that is
+ * DECLINED. */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -81,18 +24,8 @@ const ENGINE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(ENGINE, "..");
 const die = (code, ...lines) => { for (const l of lines) process.stderr.write("[prosediff] " + l + "\n");
                                   process.exit(code); };
-/* EVERY SPAWN CARRIES THE BUFFER AND EVERY SPAWN'S `error` IS READ, which is not defensive plumbing — it is the
-   defect this instrument exists to catch, caught by this instrument against itself on its first real run.
-   `spawnSync`'s default `maxBuffer` is ONE MEGABYTE and an exceeded buffer sets `error` to ENOBUFS and returns
-   stdout TRUNCATED, which is the §AND-THE-CHEAPEST-WAY-TO-GET-THAT-LIST-WRONG shape with no caveat line to drop:
-   a `git show` of a large translation unit came back 813 lines short, both sides preprocessed cleanly, and the
-   residue read 817 gained where the pipeline it replaces read 3. The verdict was NOT PROSE-ONLY, which is this
-   check's accusing arm, published against a commit whose three statements it had also correctly named — so the
-   finding looked corroborated by its own first three lines.
-   IT WAS FOUND BY DISAGREEMENT AND BY NOTHING ELSE, which is the part to keep: the preprocessed LINE COUNT of
-   each side is printed on every run for that reason, because a residue is a difference and a difference cannot
-   say which of its two operands is wrong. A reader with one number has no way to see a truncated operand; a
-   reader with both sees 13593 against 14406 and the question answers itself. */
+/* Every spawn uses a large buffer and has its `error` read: an exceeded default buffer truncates stdout
+   silently, which shortens one side of the comparison and reads as a residue. */
 const MAXBUF = 1 << 29;
 const run = (cmd, args, opts = {}) => {
   const r = spawnSync(cmd, args, { cwd: REPO, encoding: "utf8", maxBuffer: MAXBUF, ...opts });
@@ -102,22 +35,15 @@ const run = (cmd, args, opts = {}) => {
   return r;
 };
 
-/* THE COMPILER'S OWN INCLUDE ROOTS, READ OFF THE LINE THAT COMPILES THIS TREE. The `-I` flags are built from
-   four names in build.mjs and each is a `join` of `ENGINE` with a literal, so the resolution is: find the flag
-   line, take its expressions in order, and resolve every identifier from that file's own `const <id> = …`. A
-   shape this cannot parse THROWS, because the alternative — a hand-written list — is the second copy this
-   derivation exists to avoid, and a residue taken against the wrong include set is a residue of a different
-   program. */
+/* The include roots are derived from build.mjs's own `"-I" + …` line, resolving each name through that file's
+   `const` definitions. An unparseable shape throws rather than falling back to a hand-kept list. */
 function includeRoots(engineDir) {
   const src = readFileSync(join(engineDir, "build.mjs"), "utf8");
   const line = src.split("\n").find((l) => /^\s*"-I"\s*\+/.test(l));
   if (!line) die(3, "build.mjs has no `\"-I\" + …` flag line — its shape moved, so the include roots this",
                     "would preprocess with are no longer derivable. Fix THIS parser against that line; do not",
                     "paste a list here, which is the second copy the derivation exists to avoid.");
-  /* SPLIT ON TOP-LEVEL COMMAS ONLY. `"-I" + join(HOST, "browser")` carries a comma INSIDE a call, so a plain
-     `split(",")` hands the resolver the fragment `join(HOST` and it refuses — which is the right failure
-     direction and was the first thing this parser did. Depth-counting is the fix, and the refusal above is what
-     made it visible rather than a wrong root silently reached. */
+  /* Split on top-level commas only: `join(HOST, "browser")` carries a comma inside a call. */
   const exprs = [];
   { let depth = 0, cur = "";
     for (const ch of line) {
@@ -151,16 +77,14 @@ function includeRoots(engineDir) {
   return roots;
 }
 
-/* NORMALISE, IN THE ORDER THE STAGES DEPEND ON. Linemarkers first (they shift under any insertion and re-align
-   `diff` so untouched lines read as changed); BLANK LINES SECOND AND BEFORE THE MASK, because a blank line is
-   not a numeric change and a mask applied first has already classified it as one; the path last of the three,
-   GLOBALLY, since one line can expand `__FILE__` twice. The integer mask is applied on top as a SECOND view
-   rather than in place, so question (1) and question (2) read the same text differently instead of one of them
-   reading text the other has already destroyed. */
+/* Normalisation order matters: linemarkers and blank lines first (a blank line is not a numeric change), then
+   paths globally. The integer mask is a second view used only by question (1). */
 const stripMarkers = (s) => s.split("\n").filter((l) => !/^# [0-9]/.test(l) && l.trim() !== "").join("\n");
 const normPaths = (s, paths) => { for (const p of paths) s = s.split(p).join("NORMALISED"); return s; };
 const maskInts = (s) => s.replace(/[0-9]+/g, "N");
 
+/* The files a translation unit included, read off its own linemarkers, as repo-relative paths. */
+let lastIncludes = new Set();
 function preprocess(file, roots, dev, paths) {
   const r = run("clang", ["-E", "-DAPICLIENT_DEV=" + dev,
                           ...roots.flatMap((x) => ["-I", x]), "-I", dirname(file), file],
@@ -169,13 +93,14 @@ function preprocess(file, roots, dev, paths) {
     die(4, "clang -E failed on " + file + " at -DAPICLIENT_DEV=" + dev,
            (r.stderr || "").split("\n").slice(0, 6).join("\n"),
            "A residue check cannot be read off a file that does not preprocess; fix the compile first.");
+  lastIncludes = new Set();
+  for (const m of r.stdout.matchAll(/^# [0-9]+ "([^"]+)"/gm))
+    if (m[1].startsWith(REPO + "/")) lastIncludes.add(m[1].slice(REPO.length + 1));
   return normPaths(stripMarkers(r.stdout), paths);
 }
 
-/* THE PER-HUNK NETS, AND THE CUMULATIVE PARTIAL SUMS THAT ARE THE ADMISSIBLE RESIDUE. Read off the unified diff
-   rather than off `--numstat`, because `--numstat` gives the FILE's totals and what a line stamp shifts by is
-   the sum of the hunks ABOVE it. The last partial sum is the net; the others are smaller and are equally
-   admissible, which is the clause two single-hunk measurements could not have found. */
+/* A line stamp below a hunk shifts by the sum of the hunk nets above it, so every cumulative partial sum is an
+   admissible delta; the last one is the file's net. */
 function hunkPartialSums(path, base) {
   const d = run("git", ["diff", "-U0", base, "--", path]).stdout || "";
   const sums = [];
@@ -191,17 +116,8 @@ function hunkPartialSums(path, base) {
   return sums;
 }
 
-/* THE DIFF AS COMMANDS AND NEVER AS TWO FLAT LISTS, which is a correctness requirement of question (2) rather
-   than tidiness. A line-stamp shift appears as a CHANGE command whose `<` and `>` blocks pair up inside that
-   command; an inserted statement appears as an APPEND with no `<` side at all. Zipping the two flat lists by
-   index mixes them: the first gained line is then paired with the first lost line regardless of which command
-   each came from, every later pair is off by the number of pure insertions, and the mask test rejects nearly all
-   of them — so a file with BOTH a statement and a stamp shift reported an EMPTY delta set, which reads as `no
-   numeric difference at all` on exactly the diff that has the most of them. Measured on this instrument's own
-   second run, against a file whose three statements it had correctly named one line above.
-   THE FLAT READING WAS CORRECT FOR THE PROSE-ONLY CASE AND THAT IS WHY IT SURVIVED: a comment-only diff produces
-   change commands and nothing else, so the lists align by luck and the delta set is right. §A-CURE-VALIDATED-ON-
-   A-SHORT-EXAMPLE, with the validating case being the one the instrument is mostly pointed at. */
+/* The diff is kept as `diff` commands, not two flat lists: a stamp shift is a change command whose `<` and `>`
+   lines pair inside it, while an inserted statement is an append. Pairing flat lists by index mixes the two. */
 function diffCommands(a, b) {
   const dir = mkdtempSync(join(tmpdir(), "prosediff-"));
   try {
@@ -236,34 +152,15 @@ function main() {
            "  A `.h` has no translation unit of its own — pass a `.c` that includes it (see the residual).",
            "  EXIT: 0 every named path cleared; 1 a FINDING (not prose-only); 5 VOID (a control did not speak);",
            "  6 NOT ASKED (every path DECLINED, so nothing was judged); 2 usage; 3 the include-root derivation;",
-           "  4 a command failed. A DECLINE and a FINDING used to share code 1, so the one caller that reads this",
-           "  status could only say `the claim FAILED` over a path nothing had examined.");
+           "  4 a command failed.");
   const roots = includeRoots(ENGINE);
-  /* THE OLD TRANSLATION UNIT IS PREPROCESSED AGAINST THE OLD TREE'S HEADERS, WHICH IS WHAT THIS CHECK GOT
-     WRONG AND WHICH FAILED IN THE FLATTERING DIRECTION. One `-I` set for both sides preprocesses the BASE
-     `.c` against the CURRENT headers, so a diff that only widens a declared X-list in a header is INVISIBLE
-     from every consumer `.c` and each one reads PROSE-ONLY — and a declared X-list widening is this
-     project's commonest shape, so the blind spot sat over the population this instrument is most often
-     pointed at. MEASURED on one revision pair as a SEPARATING pair rather than argued: the file whose own
-     source changed reported a correct FINDING, and a file whose only change was its header's enum line
-     reported `gained 0, lost 0` and exit 0 while its preprocessed text really did gain `EPA_UNKNOWN_UNPROVEN`.
-     This file's own usage line names the broken instruction — "pass a `.c` that includes it".
-     IT MATERIALISES THE WHOLE TREE RATHER THAN THE NAMED PATHS, because a header's own includes are resolved
-     from the base tree too and a partial copy would resolve the rest forward. It THROWS rather than falling
-     back to the current roots: a fallback here is the silent wrong answer this record is about, and §A-
-     superseded-system-is-DELETED forbids keeping the shape that produced it as a safety net. */
+  /* The base side is preprocessed against the base tree's own headers, materialised whole, so a header-only change
+     is visible from every includer. One include set for both sides would hide it. */
   const baseDir = mkdtempSync(join(tmpdir(), "prosediff-base-"));
-  /* REGISTERED BEFORE THE TREE IS WRITTEN AND NOT AT THE END OF THIS FUNCTION, because `die` calls
-     `process.exit` and there are ten of those — a cleanup placed only before the normal exit is the shape
-     §A-DESTRUCTIVE-STEP-IS-GATED forbids inverted: a tidy-up nothing reaches on the paths that need it.
-     MEASURED on all three exits before this was added: the clean path and the DECLINE path left 0 dirs and a
-     `die` left 1, so the leak was exactly the error paths and only they. `force` so a failure here cannot
-     change the verdict a reader is waiting for. */
+  /* Cleanup is registered before anything is written, so every exit path, including `die`, removes it. */
   process.on("exit", () => rmSync(baseDir, { recursive: true, force: true }));
   {
-    /* `--output` AND NEVER STDOUT, because `run` decodes with `encoding: "utf8"` and a tar is BINARY — the
-       first form of this wrote the mangled string to disk and `tar` refused it, which is the right failure
-       direction and is why this is a path rather than a pipe. */
+    /* `--output`, not stdout: `run` decodes as UTF-8 and a tar is binary. */
     const tf = join(baseDir, "base.tar");
     const ar = run("git", ["archive", "--format=tar", "--output=" + tf, base]);
     if (ar.status !== 0)
@@ -284,15 +181,7 @@ function main() {
 
   let worst = 0, findings = 0, declined = 0, voided = 0, cleared = 0;
   for (const p of paths) {
-    /* A PATH THIS CANNOT ANSWER ABOUT IS DECLINED BY NAME AND NEVER ATTEMPTED, in two kinds, because an
-       attempt would produce an answer. A header has no translation unit; anything that is not C has no
-       preprocessor at all, and `clang -E` on a `.mjs` or a `.js` does not refuse — it returns the text with its
-       `//` comments intact and its `#`-less lines untouched, so the comparison would run, the control would
-       speak, and a VERDICT would be printed over a pipeline that models nothing about how that file executes.
-       That is the §A-PROBE-FOR-LIVENESS shape: a check answering about the wrong artifact is worse than one
-       refusing, because its output looks like a result. Both arms exit nonzero, so a `--prose` claim naming one
-       REFUSES rather than passing vacuously. */
-    /* JavaScript: the program is its token stream, so a comment-only diff leaves the non-comment tokens identical.
+        /* JavaScript: the program is its token stream, so a comment-only diff leaves the non-comment tokens identical.
        A control appends one statement and must change the stream, or the answer is not published. */
     if (/\.m?js$/.test(p)) {
       const sh = run("git", ["show", base + ":" + p]);
@@ -331,6 +220,8 @@ function main() {
       continue;
     }
     if (!p.endsWith(".c")) {
+      /* Anything else is declined rather than attempted: clang -E on a non-C file returns text instead of refusing,
+         and a verdict over it would model nothing. A decline exits nonzero, so a `--prose` claim naming it refuses. */
       const why = p.endsWith(".h")
         ? "NO TRANSLATION UNIT — a header emits nothing on its own, so this cannot answer about it. Pass a `.c`"
           + "\n  that includes it; a silence here is the instrument declining, never a prose-only verdict. See"
@@ -352,14 +243,12 @@ function main() {
       if (sh.status !== 0 || !old)
         die(4, "`git show " + base + ":" + p + "` returned nothing — the path does not exist at that revision");
       writeFileSync(newF, cur); writeFileSync(oldF, old);
-      /* THE CONTROL IS A REAL STATEMENT AT THE REAL FILE'S END, so it shares the whole pipeline with the
-         subject and differs only in carrying something the subject claims not to. A control that shares less
-         than that is a control for a different proposition. */
+      /* The control is a real statement appended to the real file, so it shares the subject's whole pipeline. */
       writeFileSync(ctlF, cur + "\nstatic int apiclient_prosediff_control_" + "sentinel = 1;\n");
       const nm = [newF, oldF, ctlF, join(REPO, p), join(baseDir, p), baseDir, REPO, b];
       const N = preprocess(newF, roots, dev, nm);
-      /* THE BASE SIDE'S OWN ROOTS — see the materialisation above for why one set for both sides is a
-         false clean bill on every header-only change. */
+      const included = lastIncludes;
+      /* The base side uses the base tree's roots (see above). */
       const O = preprocess(oldF, baseRoots, dev, nm);
       const C = preprocess(ctlF, roots, dev, nm);
 
@@ -376,10 +265,14 @@ function main() {
       const rawCmds = diffCommands(O, N);
       const sums = hunkPartialSums(p, base);
       const net = sums.length ? sums[sums.length - 1] : 0;
+      /* A stamp expanded inside an included header shifts by that header's own hunk sums, so each changed header
+         this unit includes contributes its partial sums to the admissible set. */
+      const changedHeaders = (run("git", ["diff", "--name-only", base]).stdout || "").split("\n")
+        .filter((h) => h.endsWith(".h") && included.has(h));
+      const headerSums = new Map(changedHeaders.map((h) => [h, hunkPartialSums(h, base)]));
+      const admissible = new Set([...sums, ...[...headerSums.values()].flat()]);
 
-      /* THE NUMERIC RESIDUE AS A SET OF DELTAS, which is what a line-stamp shift looks like: each differing
-         pair is one stamp and the delta is how far it moved. Composed only over pairs that differ ONLY in their
-         numbers, since a pair whose text also differs is question (1)'s business and not this one's. */
+      /* Numeric residue: for each changed line that differs only in its numbers, the delta of each number. */
       const deltas = new Set();
       for (const c of rawCmds) {
         if (c.op !== "c") continue;                 /* an append or a delete is not a stamp that moved */
@@ -392,7 +285,7 @@ function main() {
             if (gn[k] !== ln[k]) deltas.add(gn[k] - ln[k]);
         }
       }
-      const unexplained = Array.from(deltas).filter((d) => d !== 0 && !sums.includes(d));
+      const unexplained = Array.from(deltas).filter((d) => d !== 0 && !admissible.has(d));
 
       console.log("\n" + p);
       console.log("  PREPROCESSED LINES old=" + O.split("\n").length + " new=" + N.split("\n").length +
@@ -406,6 +299,7 @@ function main() {
       for (const l of masked.lost.slice(0, 6)) console.log("      - " + l.slice(0, 160));
       console.log("  (2) NUMERIC: delta set {" + Array.from(deltas).sort((x, y) => x - y).join(", ") +
                   "} against hunk partial sums {" + sums.join(", ") + "}, net " + net);
+      for (const [h, s] of headerSums) console.log("      included changed header " + h + ": partial sums {" + s.join(", ") + "}");
       if (unexplained.length)
         console.log("      UNEXPLAINED: {" + unexplained.join(", ") + "} — no hunk boundary accounts for these,");
       if (masked.gained.length + masked.lost.length === 0 && !unexplained.length)
@@ -417,20 +311,8 @@ function main() {
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }
-  /* THE BANDS ARE PRINTED APART AND THE EXIT CODE SAYS WHICH ONE DECIDED, which is CLAUDE.md's "a gate states
-     its FINDINGS and its BLIND SPOTS as separate verdicts" owed by the one instrument that sits in the PATH of
-     every publication. A DECLINE used to raise the SAME code as a real finding, and the header's own argument for
-     that is sound as far as it goes — "both arms exit nonzero, so a `--prose` claim naming one REFUSES rather
-     than passing vacuously" — and it is silent about WHICH code, so `publish.mjs` could only say "the claim
-     FAILED" and offer a remedy list of three unrelated causes. For a declined path neither half of that sentence
-     is true: the claim was not wrong, it was NEVER JUDGED, and a reader told their claim may be wrong goes
-     looking for a statement in a diff nothing examined. The refusal is UNCHANGED — a declined path still pushes
-     nothing — and what changes is that the two readings stop sharing one answer.
-     THE PRECEDENCE IS FINDING, THEN VOID, THEN DECLINE, and it is stated rather than left to `Math.max`: a
-     FINDING is a fact about the DIFF and the most actionable thing here; a VOIDED answer is a fact about one
-     path's measurement; a DECLINE is a fact about this INSTRUMENT'S REACH and asks nothing of the diff at all.
-     The counts below are printed whatever the code, so the precedence can never hide a band — which is the
-     half a partition usually loses, and the reason this line prints on the CLEAN day too. */
+  /* Bands are printed on every run. Exit precedence: a FINDING (about the diff), then VOID (a control did not
+     speak), then NOT ASKED (every path declined — about this instrument's reach). */
   console.log("\nBANDS — printed every run, clean day and red day alike, because a precedence that hides a band" +
               " is the folded answer this file exists to refuse:");
   console.log("  cleared  " + cleared + "  prose-only: (1) at zero and (2) accounted");
@@ -444,11 +326,7 @@ function main() {
                : worst === 5 ? "VOID: at least one path's control did not speak"
                : worst === 6 ? "NOT ASKED: every named path was DECLINED, so nothing was judged and nothing is cleared"
                : "see above"));
-  /* NO rmSync HERE. The base tree is a whole checkout of 2000-odd files and leaving one per invocation is the
-     shape CLAUDE.md's own disk-space incident is about — a build that could not START because 1281 abandoned
-     directories had taken the allowance, with the tool that would have freed it inside the thing that could
-     not run. One mechanism removes it, registered at creation, so there is no second copy to drift and no
-     exit path it does not cover (§A-superseded-system-is-DELETED). */
+  /* The base tree is removed by the exit handler registered at its creation. */
   process.exit(worst);
 }
 main();
