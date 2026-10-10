@@ -1,0 +1,4 @@
+/* The ordering's census (`@WFQ`, `_wfq`), composed by solver/result.c's result_wfq_json; solver/flow.h states
+   each row's reading. `members` is present on every composition; the rows of solver/metrics/wfq_frontier.def
+   follow it only while a member stands, since an empty frontier has no order to report (solver/result.h). */
+METRIC(members, "members", GAUGE, "member", AGENT, "solver/flow.c", INT)

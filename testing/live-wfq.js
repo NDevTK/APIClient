@@ -34,6 +34,7 @@ const path = require("path");
 const fs = require("fs");
 const puppeteer = require("puppeteer");
 const { artifactStamp } = require("./artifact_stamp.js");
+const { censusKinds } = require("./census_rows.js");
 
 const LOCK_FILE = process.env.HARNESS_LOCK
   ? path.resolve(process.env.HARNESS_LOCK) : path.join(__dirname, "harness.lock");
@@ -149,21 +150,15 @@ const GAUGES = ["members", "unrun", "neverPicked", "neverPickedGap", "neverPicke
    that reason. */
 const RESULT_C = path.join(__dirname, "..", "engine", "host", "solver", "result.c");
 
-/* THE POPULATION IS TAKEN FROM THE COMPOSER, NEVER FROM A LIST BESIDE IT — engine/build.mjs's `wfqFields()`
-   rule, owed here for the same reason and in BOTH directions. A row this file names that result.c has
-   renamed throws naming the row; a branch-scope row result.c ADDS that this file does not name throws too,
-   because the defect this block closes IS a published row with no reader and a one-way check is how it
-   recurs. Read at startup so it fails before a window of samples is spent. */
+/* THE POPULATION IS TAKEN FROM THE COMPOSER'S DECLARATION, NEVER FROM A LIST BESIDE IT — engine/build.mjs's
+   `wfqFields()` rule, owed here for the same reason and in BOTH directions. A row this file names that the
+   declaration has renamed throws naming the row; a branch-scope row it ADDS that this file does not name throws
+   too, because the defect this block closes IS a published row with no reader and a one-way check is how it
+   recurs. The rows are solver/metrics/wfq.def's and wfq_frontier.def's, read through testing/census_rows.js at
+   startup so it fails before a window of samples is spent. */
 function wfqComposerKeys() {
-  const src = fs.readFileSync(RESULT_C, "utf8");
-  const i = src.indexOf("char *result_wfq_json(void)");
-  if (i < 0) throw new Error("[live-wfq] cannot find `result_wfq_json` in " + RESULT_C + " — this driver " +
-                             "takes its row set from that composer, and a census it cannot read is one " +
-                             "whose rows it would compare as undefined.");
-  const j = src.indexOf("\n}\n", i);
-  if (j < 0) throw new Error("[live-wfq] `result_wfq_json` in " + RESULT_C + " has no closing brace at " +
-                             "column 0 — the span this reader derives its row set from is unbounded.");
-  return new Set([...src.slice(i, j).matchAll(/\\"([A-Za-z_][A-Za-z0-9_]*)\\":/g)].map((m) => m[1]));
+  const c = censusKinds().wfq;
+  return new Set([...c.numeric, ...c.object]);
 }
 
 /* THE KINDS CANNOT BE DERIVED FROM A FORMAT STRING, so they are written here from result.c's own prose

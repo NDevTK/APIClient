@@ -25,6 +25,7 @@ typedef enum { METRIC_REPR_INT, METRIC_REPR_FIXED1, METRIC_REPR_FIXED3, METRIC_R
 typedef enum {
     METRIC_FAMILY_SCENSUS, METRIC_FAMILY_LAYOUT,
     METRIC_FAMILY_RUNG_ENTRY, METRIC_FAMILY_FETCH_EDGE, METRIC_FAMILY_XHR_EDGE,
+    METRIC_FAMILY_WFQ, METRIC_FAMILY_WFQ_FRONTIER,
     METRIC_FAMILY_N
 } MetricFamily;
 #define METRIC_FAMILY_SAMPLED(f) ((f) >= METRIC_FAMILY_RUNG_ENTRY)
@@ -37,6 +38,8 @@ typedef enum {
 #include "solver/metrics/rung_entry.def"
 #include "solver/metrics/fetch_edge.def"
 #include "solver/metrics/xhr_edge.def"
+#include "solver/metrics/wfq.def"
+#include "solver/metrics/wfq_frontier.def"
     METRIC_ROW_N
 } MetricId;
 #undef METRIC
@@ -60,6 +63,12 @@ enum {
 #undef METRICS_DEF_FAMILY
 #define METRICS_DEF_FAMILY METRIC_FAMILY_XHR_EDGE
 #include "solver/metrics/xhr_edge.def"
+#undef METRICS_DEF_FAMILY
+#define METRICS_DEF_FAMILY METRIC_FAMILY_WFQ
+#include "solver/metrics/wfq.def"
+#undef METRICS_DEF_FAMILY
+#define METRICS_DEF_FAMILY METRIC_FAMILY_WFQ_FRONTIER
+#include "solver/metrics/wfq_frontier.def"
 #undef METRICS_DEF_FAMILY
 };
 #undef METRIC

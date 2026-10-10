@@ -456,9 +456,7 @@ static char *errs_json_array(ErrsArray which) {
    end of a buffer, so a hand count hides inside its own slack. */
 
 /* The ordering, composed (see result.h). It decides nothing: it reads flow_wfq_census and renders it;
-   solver/flow.h states each row's reading, and the format string notes the readings that span rows.
-   `valMax - valMin` is read against 1.0, the optimism term's whole range: wider, and the bonus can no longer
-   reorder the frontier's ends. `families` 1 makes `svcFamMin == svcFamMax` an identity of the structure.
+   solver/metrics/wfq.def and wfq_frontier.def declare its rows, their kinds and the readings that span rows.
    The job rows split the cold line's `jobs` total by what each job waits on — the host, the member finishing
    its own program (HTML §8.1.4.4 "Calling scripts" clean up after running script step 3), or rank — and only
    rank is the WFQ's to move, so a zero job count is charged to the ordering only through `jobsReady`. They
@@ -469,49 +467,10 @@ static char *errs_json_array(ErrsArray which) {
    same range, and result_json composes the two adjacently, so the assert could not fail — and a second
    census would raise `g_scan_runs[FLOW_SCAN_CENSUS]`. `framed == members - memUnframed` likewise. It becomes
    assertable when cold_census stops reaching its total that way. */
-/* The kind of every row this composer publishes, read by testing/census_rows.js from source; the kinds and
-   the reader's rules are stated above result_cold_json. Rows folded by this census's walk are gauges at one
-   instant; each free function beside them states lifetime at its declaration. `vt` is a high-water mark
-   (flow.c keeps the larger value), so it plateaus and is not a ceiling. `Life` in a branch row's key names
-   the horizon of the per-bucket quantity, but the row is an extremum or sum over the buckets the walk
-   reached, so it is a gauge and may fall (solver/flow.h). Burn: `brUsLifeSum + brRetiredUsLife ==
-   chargedUsLife` is asserted; a wholly departed bucket's receipt folds into the retired total, so
-   `chargedUsLife` and `brRetiredUsLife` only grow while the `brUs*` gauges fall; a live arm's share is
-   taken against `brHeldUsLife`.
-
-   @kinds-of wfq
-   @kind gauge: members jobsReady jobsFramed jobsOwed jobWGap jobsReadyTask jobsReadyMicro memUnframed visZero
-   @kind lifetime: picksLifetime picksDeparted unframedPicksLifetime readyPicksLifetime
-   @kind lifetime: taskHeldDelivLifetime taskHeldSeqLifetime taskArmOlderLifetime taskArmNoRowLifetime
-   @kind maximum: vt
-   @kind gauge: valMin valMax valTop valZero valArrived valUnplaced selfEmit unrun
-   @kind gauge: neverPicked neverPickedGap neverPickedAtTop picksLive picksMax
-   @kind gauge: svcMax svcMin svcFamMax svcFamMin families silPhases silCarry
-   @kind gauge: visMin visMax topSvc topSvcFam topForgiven nonrewardMax
-   @kind gauge: branches brLiveMax brLiveMin brLiveSum brDepthMax brFanMax brFanSum brFanDepth
-   @kind gauge: brBornLifeMax brBornLifeMin brCrowdLive brCrowdBornLife brCrowdUsLife
-   @kind gauge: brMinterLive brMinterGoneLife brMinterUsLife brUsLifeMax brUsLifeMin
-   @kind gauge: brUsLifeSum brHeldUsLife brEmptyUsLife
-   @kind gauge: cands candUnrun candSvcMax candDecMax decMax distMax wTop wMin candWMax
-   @kind gauge: delivReady delivFramed delivOwed delivWGap delivWGapVis wTopVis
-   @kind gauge: curDeep curDeepLive curDeepWGap epochAwayLive epochAwayWalk
-   @kind lifetime: brRetiredUsLife chargedUsLife scanNextRuns scanNextWeights scanRivalRuns scanRivalWeights
-   @kind lifetime: scanOtherRuns scanOtherWeights scanCensusRuns scanCensusWeights
-   @kind lifetime: preemptAsksLifetime rivalMissGen rivalMissCur rivalMissBoth
-   @kind lifetime: keyArmedLifetime keyStaleGenLifetime keyFirstSeenLifetime keyRunningLifetime
-   @kind lifetime: epochRebuildLifetime epochResetsLifetime starvedPicks starvedPicksIdle
-   @kind lifetime: plateauAsked plateauHeld plateauRuns plateauHeldIdle
-   @kind lifetime: arrivals departures creditsOfferedLifetime creditsPaidLifetime creditsDroppedLifetime
-   @kind lifetime: workDone rankChanges
-   @kind lifetime: keyIndexAskedLifetime keyIndexDifferedLifetime keyIndexDifferedTieLifetime
-   @kind lifetime: keyIndexDifferedStrictLifetime keyIndexBandMembersLifetime keyIndexBandWeighedLifetime
-   @kind gauge: reachBodies reachBodiesRan reachSites reachSitesHit reachSitesSkipped reachSitesUnrun
-   @kind gauge: reachFramed reachAheadTop reachAheadStack reachAheadTopMin reachAheadTopMax reachAheadTopSum
-   @kind lifetime: reachSitesCompiledLifetime reachSitesHitLifetime
-*/
 char *result_wfq_json(void) {
     WfqCensus w;
     NetReachCensus nr;
+    JsonBuf b = { 0 };
 
     flow_wfq_census(&w);
     /* The four arming buckets in one read, since they are a partition (solver/flow.h). After the census,
@@ -611,386 +570,162 @@ char *result_wfq_json(void) {
            "is no longer a question these rows can answer");
     /* An empty frontier says so and nothing else (result.h states why the term rows are absent rather than
        zero). `qjs_result` composes this shape, since a session that drains or parks leaves no members. */
-    if (w.members == 0)
-        return composef("{\"members\":0}");
+    METRIC_SET(members, w.members);
+    if (w.members == 0) {
+        json_buf_raw(&b, "{");
+        metrics_family_members_json(METRIC_FAMILY_WFQ, &b);
+        json_buf_raw(&b, "}");
+        return json_buf_take(&b);
+    }
     /* A member exists, so flow_new named the register's context, whose runtime holds every member's bodies. */
     net_reach_census(pending_ctx(), &nr);
     DCHECKF(nr.members == w.members, "the reach census walked %ld members and the WFQ census %ld, in one "
             "composition that steps nothing", nr.members, w.members);
     DCHECKF(nr.framed <= (long)(w.members - w.mem_unframed), "the reach census read a body frame in %ld "
             "members and the WFQ census found a frame in only %ld", nr.framed, (long)(w.members - w.mem_unframed));
-    return composef(
-                     "{\"members\":%ld,\"valMin\":%.1f,\"valMax\":%.1f,\"valTop\":%.1f,"
-                     /* …and the clock those three are positions on. `vt` is the frontier's virtual time
-                        (solver/flow.h): the queue coordinate of the item in service, where every never-served
-                        account stands. A `valMin` far below `vt` is accounts left behind by a clock that moved on;
-                        a `vt` above the whole band is a clock no member stands at. */
-                     "\"vt\":%.1f,"
-                     /* `valZero` is the ceiling population; `valArrived` the members that emitted nothing, which
-                        since a from-baseline flow enters at the frontier's virtual time includes @S candidate
-                        sessions holding what the leader held. A large `valArrived` at the floor of the band is the
-                        arrival coordinate being left behind. `valUnplaced` is the subset never given the thread,
-                        whose coordinate is still a reading of `vt`: large and far below `vt` is a placement
-                        defect; zero with the same floor is served accounts out-earned, the bandit working.
-                        `valArrived - valUnplaced` is served and still carrying nothing. `selfEmit` asks the same
-                        of one member rather than its account. */
-                     "\"valZero\":%ld,\"valArrived\":%ld,\"valUnplaced\":%ld,\"selfEmit\":%ld,"
-                     "\"unrun\":%ld,"
-                     "\"neverPicked\":%ld,\"neverPickedGap\":%.3f,"
-                     /* …and how wide the plateau is. `neverPickedGap` reads 0.0 for the best of a wide tie and for
-                        a lone near-miss, and 0.0 is also the expected reading of a healthy sweep (the pick returns
-                        one of N tied maxima), so read `neverPicked` as a series. This is N. A gauge, `<=
-                        neverPicked` and nonzero exactly when `neverPickedGap` is 0.000, both asserted in
-                        flow_wfq_census. Beside `visZero` and `jobsFramed` it says which within-family separator
-                        flattened the order: the optimism bonus (frozen while a member is inside a program, since
-                        flow_credit_visit asserts `frame == NULL`) or the own silence (forgiven account-wide at
-                        any arm's emission). */
-                     "\"neverPickedAtTop\":%ld,"
-                     /* …and where the dispatches went (solver/flow.h has the three states). `picksLive / (members
-                        - neverPicked)` near 1: the thread reached a fresh member nearly every time and the
-                        frontier is outgrowing one thread; well above 1: the order re-serves members ahead of
-                        ones it never served; `picksMax` near `picksLive`: one member holds the thread.
-                        `picksLive` and `picksMax` are gauges and may fall; `picksLifetime` is the only counter
-                        and must equal `_switches` (asserted above). */
-                     "\"picksLive\":%lld,\"picksMax\":%lld,\"picksLifetime\":%lld,"
-                     /* …and the half of that counter the frontier no longer holds, so `picksLive + picksDeparted
-                        == picksLifetime` is a partition (asserted at the end of flow_wfq_census) rather than a
-                        gauge subtracted from a counter. It also separates retiring from selling in `departures`
-                        (engine.c asserts `finished + sold + teardown == departures`): flow_finish is reached only
-                        from the `FLOW_STEP_DONE` arm, whose member was switched in by the block that credits
-                        flow_credit_pick, so a finish costs a dispatch. `departures > 0` with this row at zero
-                        proves nothing retired; a nonzero here proves nothing. */
-                     "\"picksDeparted\":%lld,"
-                     /* The seven notch rows (`svcMax`, `svcMin`, `svcFamMax`, `svcFamMin`, `candSvcMax`, `topSvc`,
-                        `topSvcFam`) are quotients `<thread time> / FLOW_SERVICE_US` (flow.c's flow_service_notch
-                        and flow_family_notch), so one increment is one quantum of unforgiven silence — never a
-                        dispatch, step or microsecond; multiply by FLOW_AGE_QUANTUM for the points the weight
-                        charges. Dispatch counts are the `picks*` rows. Gauges: silence since the account's last
-                        forgiveness, which flow_credit_emit zeroes family-wide; `topForgiven` counts those. */
-                     "\"svcMax\":%lld,\"svcMin\":%lld,\"svcFamMax\":%lld,\"svcFamMin\":%lld,\"families\":%ld,"
-                     /* …and what asking the order costs. The notches drop their remainder, but the aging term
-                        divides the sum of two, whose quotient carries a carry bit. `silPhases` is how many
-                        distinct remainders the frontier stands on and `silCarry` how many members are past the
-                        carry boundary; between two generation bumps only that carry moves, and members sharing a
-                        remainder flip together. `silPhases: 1` would mean nothing reorders between bumps, but in
-                        the archived corpus it occurs only at `members == 1` (solver/flow.h). A statement about
-                        what a sub-linear ask must index; no term of flow_weight reads either. `silPhases` counts
-                        keys and `silCarry` is a gauge; neither may be differenced. */
-                     "\"silPhases\":%ld,\"silCarry\":%ld,"
-                     /* The fork-subtree scope between member and family. A bucket is a top-level arm (forked
-                        directly off a family root); deeper branches sum into it (flow.c's residual at FlowAcct
-                        `up`). `branches`, `brLive*` and `brDepthMax` are gauges. `brLiveMax / members` is how
-                        concentrated the frontier is; `brLiveMin` is 0 or 1 while a family root stands.
-                        `brLiveSum == members` is asserted in flow_wfq_census. */
-                     "\"branches\":%ld,\"brLiveMax\":%ld,\"brLiveMin\":%ld,\"brLiveSum\":%ld,"
-                     /* The branch term is `1.0 / sub_born`, so `1/brBornLifeMin - 1/brBornLifeMax` is its span.
-                        `brBornLifeMax` beside `brLiveMax` separates a bucket that mints unboundedly from one
-                        holding a lot now. Mint extrema are over buckets with a live member. */
-                     "\"brBornLifeMax\":%ld,\"brBornLifeMin\":%ld,"
-                     /* `brCrowd*` are the bucket owning `brLiveMax`; the other maxima may belong to different
-                        buckets (the burn maximum is often a departed root holding boot's burn). Compare
-                        `brCrowdLive / members` with `brCrowdUsLife / brHeldUsLife`: at par, branching turned into
-                        thread one for one; near zero, an arm already demoted that nothing retires; above, an
-                        ordinary monopolist. `brCrowdUsLife` 0 with `brCrowdLive > 0` is starvation, not an
-                        unobserved bucket. `brCrowdLive == brLiveMax` is asserted in flow_wfq_census. */
-                     "\"brCrowdLive\":%ld,\"brCrowdBornLife\":%ld,\"brCrowdUsLife\":%lld,"
-                     /* …and the same three for the arm that has taken the most arms (selected by `brBornLifeMax`,
-                        where the crowd is selected by `brLiveMax`; `sub_born = live + sub_gone` makes them one
-                        bucket only while nothing has departed). An arm forking at every position of an unknown
-                        length and letting each finish mints unboundedly and stands narrow. It carries the smallest
-                        branch bonus; compare `brMinterUsLife / brHeldUsLife` with `brMinterLive / members` as for
-                        the crowd. `brMinterGoneLife` (shed count) is published nowhere else. The live count is a
-                        gauge; the shed count and burn are per-bucket lifetime counts read at one instant, since
-                        the bucket selected moves. `brMinterLive + brMinterGoneLife == brBornLifeMax` is asserted
-                        in flow_wfq_census; `brMinterUsLife == brCrowdUsLife` says both selectors name one arm. */
-                     "\"brMinterLive\":%ld,\"brMinterGoneLife\":%ld,\"brMinterUsLife\":%lld,"
-                     /* Burn rows are over every bucket, in the quantum's own measure (@QUANTUM's `isCpu`), so a
-                        raw total is quoted with that line; `brUsLifeMax / chargedUsLife` is how concentrated the
-                        thread is. Asserted in flow_wfq_census: `brHeldUsLife + brEmptyUsLife == brUsLifeSum` and
-                        `brUsLifeSum + brRetiredUsLife == chargedUsLife`. */
-                     "\"brUsLifeMax\":%lld,\"brUsLifeMin\":%lld,"
-                     "\"brUsLifeSum\":%lld,\"brHeldUsLife\":%lld,\"brEmptyUsLife\":%lld,"
-                     "\"brRetiredUsLife\":%lld,\"chargedUsLife\":%lld,"
-                     "\"brDepthMax\":%d,"
-                     /* …and which fork inside a bucket did the minting. A fan is the live members forked directly
-                        off one non-root node (solver/flow.h); `brFanDepth` 1 is the top-level arm minting the
-                        crowd itself, depth D is minting D-1 levels below it. Gauges. `brFanMax / brFanSum` is how
-                        concentrated the deep forking is; `brFanMax: 0` says every fork is top-level.
-                        `brFanMax <= brLiveMax`, asserted in flow_wfq_census. */
-                     "\"brFanMax\":%ld,\"brFanSum\":%ld,\"brFanDepth\":%d,"
-                     "\"visMin\":%lld,\"visMax\":%lld,\"visZero\":%ld,"
-                     "\"cands\":%ld,\"candUnrun\":%ld,\"candSvcMax\":%lld,\"candDecMax\":%ld,\"decMax\":%ld,"
-                     "\"distMax\":%.3f,\"wTop\":%.3f,\"wMin\":%.3f,\"candWMax\":%.3f,"
-                     /* …and the event the two leader notches are a reading between: `topForgiven` counts
-                        forgivenesses of the front account's silence. An emission zeroes both aging halves for
-                        every arm of the account, collapsing the frontier into exactly tied visit tiers that
-                        flow_pick sweeps one member per quantum; if so, `picksMax` tracks this and `picksLive /
-                        picksMax` is the sweep depth. It belongs to whichever account leads, so it may fall on a
-                        change of leader (`valTop` falling beside it). `valTop / topForgiven` is points per
-                        finding. Read `topSvc`, never `topSvcFam`, for a gap: every arm of a family reads one
-                        `fam_us`, which cancels out of `neverPickedGap`. A monopolising leader shows `topSvc`
-                        climbing with gaps closing; a front refilled by fresh arms shows `topSvc` low or
-                        sawtoothing with gaps standing. `nonrewardMax` is flow.c's FLOW_NONREWARD_MAX: `(valTop -
-                        valMin) + nonrewardMax` is the largest gap a non-negative non-reward sum can produce, so a
-                        larger gap is aging, not lift. */
-                     "\"topSvc\":%lld,\"topSvcFam\":%lld,\"topForgiven\":%lld,\"nonrewardMax\":%.3f,"
-                     "\"jobsReady\":%ld,\"jobsFramed\":%ld,\"jobsOwed\":%ld,\"jobWGap\":%.3f,"
-                     /* …and the rank-ready row split by which arm of flow_step can dispatch the job: a microtask
-                        is taken by the checkpoint arm above the program sequence, a task by the arm below it (the
-                        `else` of `a program starts on this step`). With `jobsReady > 0` and `_jobsRun` flat, all
-                        TASK says the sequence arm's exclusion holds the backlog; any `jobsReadyMicro` refutes that
-                        for the jobs it counts. Neither says the jobs would have run (arms above the checkpoint, or
-                        the pick). The two sum to `jobsReady`, asserted in flow_wfq_census and re-asserted by
-                        engine/build.mjs for release (solver/flow.h). */
-                     "\"jobsReadyTask\":%ld,\"jobsReadyMicro\":%ld,"
-                     /* …and `jobsReady`'s denominator: members holding no frame, on the same walk as `members`.
-                        With `jobsReady: 0`, `memUnframed: 0` sends the reader to flow_step (frames not ending),
-                        and `memUnframed > 0` to where jobs are queued. */
-                     "\"memUnframed\":%ld,"
-                     /* …and its lifetime half: dispatches the unframed state ever received, raised in
-                        flow_credit_pick beside `picksLifetime` on the same flow_stack_empty, so contained in it
-                        (asserted in flow_wfq_census and again by engine/build.mjs for release). With `jobWGap: 0`,
-                        zero here with `picksLifetime` large is the order ranking ready holders first while the
-                        dispatch does not take them; above zero is `wTop` not being what the dispatch compares.
-                        With no dispatch at all it is 0 for a third reason (solver/flow.h). */
-                     "\"unframedPicksLifetime\":%lld,"
-                     /* …and the subset of those dispatches reaching a member with a rank-ready job, which turns
-                        that bound into a measurement. With `jobsRun` flat: 0 here and the row above nonzero sends
-                        the reader to flow_pick; above 0 says flow_step declines the job at a higher arm, and
-                        `jobsReadyTask`/`jobsReadyMicro` are next. Raised inside the unframed count's `if` in
-                        flow_credit_pick under the ready arm's three conjuncts; contained by construction and
-                        asserted in flow_wfq_census (solver/flow.h). */
-                     "\"readyPicksLifetime\":%lld,"
-                     /* …and what the ladder did with those dispatches. The first two count the arms above the task
-                        arm reached with a task runnable; the last two partition the task arm's own step count
-                        (asserted in solver/engine.c). Read against `run-a-task` on @COLD; solver/engine.h states
-                        what each sizes and what none reaches (the three arms above delivery, and the depth of the
-                        member's own queue). Lifetime counts beside gauges: one of these falling is a second
-                        writer. */
-                     "\"taskHeldDelivLifetime\":%ld,\"taskHeldSeqLifetime\":%ld,"
-                     "\"taskArmOlderLifetime\":%ld,\"taskArmNoRowLifetime\":%ld,"
-                     "\"delivReady\":%ld,\"delivFramed\":%ld,\"delivOwed\":%ld,\"delivWGap\":%.3f,"
-                     /* …and which term that gap is at the two members it is between: the optimism operand, which
-                        has no row elsewhere, read only where `delivReady` is nonzero (solver/flow.h). Placed after
-                        the gap, not beside `visMin`/`visMax`, which are extrema over the whole frontier. */
-                     "\"delivWGapVis\":%lld,\"wTopVis\":%lld,"
-                     /* …and the same difference against the members furthest through the program table, joining
-                        this line to `programCursors` on @COLD (solver/flow.h). `curDeepWGap` 0.000: a member at
-                        the deepest row is the front of the order, so an unreached tail wants dispatches; positive:
-                        the order ranks less-advanced members ahead, in the same points as `neverPickedGap` and
-                        `nonrewardMax`. `curDeepLive` is the gap's population. Gauges (unlike the monotone
-                        `deepest`/ `deepestLeft`). `curDeep` and `curDeepLive` repeat `programCursors`' top bucket,
-                        computed by a different walk over `Flow.script_i`, so they cross-check when both share
-                        `workDone`. */
-                     "\"curDeep\":%d,\"curDeepLive\":%ld,\"curDeepWGap\":%.3f,"
-                     /* …and what asking the order cost (solver/flow.h's FLOW_SCANS: three entries, counted apart,
-                        in counts not time). Two causes of an unreached tail: too little thread for the members
-                        standing, or thread spent asking. Read `scanNextWeights / steps` against `members` and
-                        `scanRivalRuns` against `forks`: the dispatch loop asks once per step, the preempt hook
-                        once per frontier generation. Spelled out, not nested: two quantities over three entries
-                        partition no total. */
-                     "\"scanNextRuns\":%ld,\"scanNextWeights\":%lld,"
-                     "\"scanRivalRuns\":%ld,\"scanRivalWeights\":%lld,"
-                     "\"scanOtherRuns\":%ld,\"scanOtherWeights\":%lld,"
-                     /* …and what this census itself costs: flow_wfq_census weighs the frontier twice per sample,
-                        once in its own walk (counted here) and once in the flow_best it calls (in `scanOther*`);
-                        the engine asserts the two equal, so a sample costs twice `scanCensusWeights`. Read as
-                        fractions: `scanCensusWeights / scanCensusRuns` is the mean frontier a sample paid for, and
-                        against `scanNextWeights` the share of weighing spent reporting. */
-                     "\"scanCensusRuns\":%ld,\"scanCensusWeights\":%lld,"
-                     /* …and how often the hook was asked. The rival rescan is close to half of all frontier
-                        weighing; this tells a cache that absorbs nothing (repair the cache) from a generation
-                        moving as fast as the hook is consulted (the page branching). `scanRivalRuns /
-                        preemptAsksLifetime` is the miss rate, distinct from rescans per rank change and from
-                        per-step cost; the containment is asserted above. A lifetime counter (never reset in
-                        engine.c), so it may be differenced. */
-                     "\"preemptAsksLifetime\":%llu,"
-                     /* …and which half of the hook's key had moved when it missed. The cache is keyed on a
-                        disjunction — the frontier generation or the incumbent — and raises inside one C call
-                        collapse into one miss at the next poll, so a rate alone cannot say which. A partition, not
-                        three rates: `rivalMissGen` is the order having changed; `rivalMissCur` a walk for a
-                        frontier whose generation stood still, which is not a frontier where nothing moved
-                        (solver/engine.h; `silPhases` prices that repair); `rivalMissBoth` prices either repair,
-                        since removing one invalidator buys nothing where both moved. Lifetime counts in every
-                        build; their sum is asserted equal to `scanRivalRuns` above. */
-                     "\"rivalMissGen\":%llu,\"rivalMissCur\":%llu,\"rivalMissBoth\":%llu,"
-                     /* …and whether the dispatch walk's one assertion was ever asked. flow_pick's member-key
-                        invariant (solver/flow.h's FlowKeyChecks) is a predicted absence, exempting a member on
-                        three arms before comparing. `keyArmedLifetime` is the score and the other three, which
-                        partition the classifications with it, are why: `keyRunningLifetime` is bounded by one
-                        member per scan, `keyFirstSeenLifetime` by one per member created, and
-                        `keyStaleGenLifetime` near the total means the generation moves faster than members are
-                        re-weighed — vacuous rather than held. Lifetime counts of comparisons, never read against
-                        `members`. All four zero beside a nonzero `scan<Entry>Weights` is a release build: the
-                        check is dev-only, and the row is emitted in both builds because engine/build.mjs derives
-                        its required set from this format string. */
-                     "\"keyArmedLifetime\":%lld,\"keyStaleGenLifetime\":%lld,"
-                     "\"keyFirstSeenLifetime\":%lld,\"keyRunningLifetime\":%lld,"
-                     /* …and whether an index over that key would have answered what the comparator answered: the
-                        four rows above score whether the key stands still, these whether it orders, which a
-                        candidate set rests on. `keyIndexAskedLifetime` counts scans that folded the surrogate
-                        against a maximum (the reachability witness); `keyIndexDifferedLifetime` the subset naming
-                        a different member while the assert held, ordinary when two members tie. A zero there
-                        with a large ask means the surrogate picked the same member every time. The
-                        disagreement that matters is not an abort, since flow.c's flow_index_margin declares
-                        the two spellings a derived distance apart; it is the partition on the next row.
-                        Lifetime counts raised under APICLIENT_DEV, so two zeros first question the build. */
-                     "\"keyIndexAskedLifetime\":%ld,\"keyIndexDifferedLifetime\":%ld,"
-                     /* …and which mode each disagreement was. `keyIndexDifferedTieLifetime`: the surrogate read
-                        the comparator's own member at its extremum, losing a distinction (flow.c shows a
-                        margin-carrying candidate set answers it with flow_weight untouched).
-                        `keyIndexDifferedStrictLifetime`: the member on the losing side, a real disagreement and
-                        the tie-identity decision solver/flow.h reserves for the project owner. The mode compares
-                        `sur_w` with the surrogate's reading of the returned member, never that member's weight.
-                        They partition the row above (asserted in flow.c), so a strict count is read as a share.
-                        Lifetime counts under APICLIENT_DEV; `keyIndexAskedLifetime` is the witness. */
-                     "\"keyIndexDifferedTieLifetime\":%ld,\"keyIndexDifferedStrictLifetime\":%ld,"
-                     /* …and what answering it would cost. The design that answers a tie edits flow_weight not at
-                        all: a candidate set of every member within a derived margin of the surrogate's extremum,
-                        re-compared through flow_weight, which flow.c proves contains the comparator's extremum
-                        and asserts returns the same member. `keyIndexBandMembersLifetime` is how many members
-                        the set admitted and `keyIndexBandWeighedLifetime` how many were tested, on the same
-                        walk: their quotient is the share an index would still re-compare (near one saves
-                        nothing). A large share is expected — the band holds every member tied with the maximum
-                        whatever the margin (solver/flow.h) — so it is the order being tied, not a wide margin.
-                        Lifetime counts summed over asks, under APICLIENT_DEV; `keyIndexAskedLifetime` is the
-                        witness. */
-                     "\"keyIndexBandMembersLifetime\":%lld,\"keyIndexBandWeighedLifetime\":%lld,"
-                     /* The away-from-base population and what it costs an index. The `Live` rows are gauges, the
-                        `Lifetime` rows counters. `epochAwayLive` is maintained incrementally at four sites in
-                        solver/flow.c and summed per family at the census's family door; `epochAwayWalk` asks
-                        flow_own_silence of every member. Two maintainers at one instant, so equality is asserted
-                        in flow_wfq_census and checkable here; a difference is a fifth transition site.
-                        `epochRebuildLifetime` is the reading: flow_credit_emit returns a family to base by moving
-                        a generation, so an index over `flow_index_key` rebuilds exactly the members standing away,
-                        and this sums that at each emission (a gauge sample between emissions is a lottery). Read
-                        it against `scanNextWeights`, the walk an index would replace; `epochResetsLifetime` gives
-                        the mean rebuild per emission. Zero resets is a run that never emitted, so read a zero
-                        rebuild against it first. */
-                     "\"epochAwayLive\":%ld,\"epochAwayWalk\":%ld,"
-                     "\"epochRebuildLifetime\":%ld,\"epochResetsLifetime\":%ld,"
-                     /* Whether a pick ever passed over a never-run member, which no gauge can answer. This counts
-                        dispatches where the scan returned an already-dispatched member while a never-dispatched
-                        one stood at exactly the same weight, raised only where `best != seed`, the
-                        displacement engine.c credits flow_credit_pick for. A lifetime counter, read as a
-                        fraction of `picksLifetime`: a handful is flow_pick's strict comparison letting the
-                        incumbent keep a tie, a figure near the dispatches is the order no longer separating
-                        members. On a forking page a newborn arm stands at its parent's weight, so this also
-                        counts every quantum of a multi-quantum program; `starvedPicksIdle` separates those. */
-                     "\"starvedPicks\":%ld,"
-                     /* …and the subset in which the re-dispatched member had nothing to continue — no live frame
-                        and no checkpoint owed, standing at the unit boundary of HTML §8.1.4.4 "Calling scripts"
-                        clean up after running script step 3 — a pass-over with nothing necessary in it. Read this,
-                        not `starvedPicks`, against `picksLifetime`. Raised at the same line under the same
-                        condition, so the subset relation is one evaluation. An upper bound: the thread holder's
-                        parked continuations live in the runtime during its turn (solver/flow.c). */
-                     "\"starvedPicksIdle\":%ld,"
-                     /* …and how deep the plateau is: the pick that keeps the incumbent over a level never-run
-                        member, where the pair above counts the one that displaces it. `plateauHeld / plateauRuns`
-                        is the mean consecutive scans an incumbent held the thread with someone untouched level;
-                        bounded is the queue rotating as the aging term is priced for (flow.h: a tied flow hands
-                        over after one quantum), while `plateauRuns` 1 beside a large `plateauHeld` is one unbroken
-                        hold. `plateauAsked` is the reachability witness; zero beside nonzero `picksLifetime` is a
-                        frontier that drains, and `plateauHeld / plateauAsked` is how tied the frontier is at the
-                        dispatching line. Lifetime counters. `plateauHeldIdle` is an upper bound: an incumbent's
-                        parked continuations are not visible from the pick, and the microtask clause is a queue
-                        walk too costly here in release (flow.c's residual); read it against `jobsQueued`. */
-                     "\"plateauAsked\":%ld,\"plateauHeld\":%ld,"
-                     "\"plateauRuns\":%ld,\"plateauHeldIdle\":%ld,"
-                     /* …and whether the order is deciding anything: the frontier's arrival and departure
-                        processes. `arrivals / picksLifetime` is members minted per dispatch: below 1 the frontier
-                        drains and a `neverPickedAtTop` plateau is the order failing to separate reachable members
-                        (repair flow_weight); above 1 no ordering drains it. Do not read `rankChanges` for this:
-                        frontier_rank_changed has many callers, most of which do not change the membership.
-                        Lifetime counters; `arrivals - departures == members` (a gauge) is asserted in
-                        flow_wfq_census and checkable here. */
-                     "\"arrivals\":%lld,\"departures\":%lld,"
-                     /* …and whether the order was ever offered anything to order by. `valTop`, `topForgiven` and
-                        `selfEmit` read zero both when no detector fired and when every detection happened on host
-                        time with no flow to pay (the root markup inventoried by `qjs_init`'s parse before
-                        `qjs_begin` seeds the frontier). `creditsOfferedLifetime: 0` is the first;
-                        `creditsDroppedLifetime > 0` with `creditsPaidLifetime: 0` the second. Lifetime counters;
-                        offered == paid + dropped is asserted in flow_wfq_census. */
-                     "\"creditsOfferedLifetime\":%lld,\"creditsPaidLifetime\":%lld,"
-                     "\"creditsDroppedLifetime\":%lld,"
-                     /* `workDone` (`engine_work_done()`) dates this census in the clock every other stream of the
-                        run is cadenced by (`fixture_have_answers` samples on it, run_scheduler gates censuses on
-                        it), so rows of two lines are compared only within one sample: the @H sampler fires every
-                        PROBE_SAMPLE_EVERY units from zero, so its first table can be composed at `workDone` 1
-                        while @COLD continues to the end. A lifetime counter: `picksLifetime` and
-                        `scanCensusWeights` against it are per-unit-of-work rates. `rankChanges` is the hook's
-                        rescan denominator: `scanRivalRuns / scanNextRuns` is scan work per step, not cadence,
-                        since a rescan fires on a rank change or an incumbent switch (solver/flow.h). */
-                     "\"workDone\":%ld,\"rankChanges\":%ld,"
-                     /* Request-site reach (solver/net_reach.h; quickjs.h's JS_NetSiteCensus defines a site and
-                        what it cannot see). Sites are bytecode reads of a door's entry name; `reachSites ==
-                        reachSitesHit + reachSitesSkipped + reachSitesUnrun` over live bodies: `Skipped` sits in
-                        a body some flow ran and `Unrun` in a body none ran.
-                        The lifetime pair counts every compiled copy of a body. The member rows: `reachFramed`
-                        members execute a body, `reachAheadTop` of them stand in one holding an unreached site
-                        ahead of the deepest pc (`reachAheadTopMin/Max/Sum` in bytecode bytes over those; 0 when
-                        none), `reachAheadStack` in any frame. Measurement only: nothing orders on it. */
-                     "\"reachBodies\":%lld,\"reachBodiesRan\":%lld,\"reachSites\":%lld,"
-                     "\"reachSitesHit\":%lld,\"reachSitesSkipped\":%lld,\"reachSitesUnrun\":%lld,"
-                     "\"reachSitesCompiledLifetime\":%llu,\"reachSitesHitLifetime\":%llu,"
-                     "\"reachFramed\":%ld,\"reachAheadTop\":%ld,\"reachAheadStack\":%ld,"
-                     "\"reachAheadTopMin\":%ld,\"reachAheadTopMax\":%ld,\"reachAheadTopSum\":%lld}",
-                     w.members, w.val_min, w.val_max, w.val_top, w.vt,
-                     w.val_zero, w.val_arrived, w.val_unplaced, w.self_emit, w.unrun,
-                     w.never_picked, w.never_picked_gap, w.never_picked_at_top,
-                     (long long)w.picks_live, (long long)w.picks_max, (long long)w.picks_lifetime,
-                     (long long)w.picks_departed,
-                     (long long)w.svc_max, (long long)w.svc_min,
-                     (long long)w.svc_fam_max, (long long)w.svc_fam_min, w.families,
-                     w.sil_phases, w.sil_carry,
-                     w.branches, w.br_live_max, w.br_live_min, w.br_live_sum,
-                     w.br_born_max, w.br_born_min,
-                     w.br_crowd_live, w.br_crowd_born, (long long)w.br_crowd_us,
-                     w.br_minter_live, w.br_minter_gone, (long long)w.br_minter_us,
-                     (long long)w.br_us_max, (long long)w.br_us_min,
-                     (long long)w.br_us_sum, (long long)w.br_held_us, (long long)w.br_empty_us,
-                     (long long)w.br_retired_us, (long long)w.charged_us,
-                     w.br_depth_max,
-                     w.br_fan_max, w.br_fan_sum, w.br_fan_depth,
-                     (long long)w.vis_min, (long long)w.vis_max, w.vis_zero,
-                     w.cand_members, w.cand_unrun, (long long)w.cand_svc_max, w.cand_dec_max, w.dec_max,
-                     w.dist_max, w.w_top, w.w_min, w.cand_w_max,
-                     (long long)w.top_svc, (long long)w.top_svc_fam, (long long)w.top_forgiven,
-                     w.nonreward_max,
-                     w.jobs_ready, w.jobs_framed, w.jobs_owed, w.job_w_gap,
-                     w.jobs_ready_task, w.jobs_ready_micro,
-                     w.mem_unframed, (long long)w.unframed_picks_lifetime,
-                     (long long)w.ready_picks_lifetime,
-                     lt.task_held_deliv, lt.task_held_seq, lt.task_arm_older, lt.task_arm_no_row,
-                     w.deliv_ready, w.deliv_framed, w.deliv_owed, w.deliv_w_gap,
-                     (long long)w.deliv_w_gap_vis, (long long)w.w_top_vis,
-                     w.cur_deep, w.cur_deep_live, w.cur_deep_w_gap,
-                     /* Weight counters are 64-bit and run counters are not: a run is raised once per scan, a
-                        weight once per member per scan, and only the latter reaches 2^31. Cast rather than a PRI
-                        macro, since int64_t is `long` natively and `long long` on wasm32. */
-                     flow_scan_runs(FLOW_SCAN_NEXT),  (long long)flow_scan_weights(FLOW_SCAN_NEXT),
-                     flow_scan_runs(FLOW_SCAN_RIVAL), (long long)flow_scan_weights(FLOW_SCAN_RIVAL),
-                     flow_scan_runs(FLOW_SCAN_OTHER), (long long)flow_scan_weights(FLOW_SCAN_OTHER),
-                     flow_scan_runs(FLOW_SCAN_CENSUS), (long long)flow_scan_weights(FLOW_SCAN_CENSUS),
-                     (unsigned long long)engine_preempt_asks(),
-                     (unsigned long long)rm.gen, (unsigned long long)rm.cur, (unsigned long long)rm.both,
-                     (long long)kc.armed, (long long)kc.stale_gen,
-                     (long long)kc.first_seen, (long long)kc.running,
-                     ic.index_asked, ic.index_differed,
-                     ic.differed_tie, ic.differed_strict,
-                     (long long)ic.band_members, (long long)ic.band_weighed,
-                     w.epoch_away_live, w.epoch_away_walk,
-                     flow_epoch_rebuild(), flow_epoch_resets(),
-                     flow_starved_picks(), flow_starved_picks_idle(),
-                     flow_plateau_asked(), flow_plateau_held(),
-                     flow_plateau_runs(), flow_plateau_held_idle(),
-                     (long long)w.arrivals, (long long)w.departures,
-                     (long long)w.credit_calls, (long long)w.credit_paid, (long long)w.credit_dropped,
-                     engine_work_done(), flow_rank_changes(),
-                     (long long)nr.sites.bodies, (long long)nr.sites.bodies_ran, (long long)nr.sites.sites,
-                     (long long)nr.sites.hit, (long long)nr.sites.skipped, (long long)nr.sites.unrun,
-                     (unsigned long long)nr.sites.compiled, (unsigned long long)nr.sites.hit_ever,
-                     nr.framed, nr.ahead_top, nr.ahead_stack, nr.top_min, nr.top_max, nr.top_sum);
+    METRIC_SET_REAL(val_min, w.val_min);
+    METRIC_SET_REAL(val_max, w.val_max);
+    METRIC_SET_REAL(val_top, w.val_top);
+    METRIC_SET_REAL(vt, w.vt);
+    METRIC_SET(val_zero, w.val_zero);
+    METRIC_SET(val_arrived, w.val_arrived);
+    METRIC_SET(val_unplaced, w.val_unplaced);
+    METRIC_SET(self_emit, w.self_emit);
+    METRIC_SET(unrun, w.unrun);
+    METRIC_SET(never_picked, w.never_picked);
+    METRIC_SET_REAL(never_picked_gap, w.never_picked_gap);
+    METRIC_SET(never_picked_at_top, w.never_picked_at_top);
+    METRIC_SET(picks_live, w.picks_live);
+    METRIC_SET(picks_max, w.picks_max);
+    METRIC_SET(picks_lifetime, w.picks_lifetime);
+    METRIC_SET(picks_departed, w.picks_departed);
+    METRIC_SET(svc_max, w.svc_max);
+    METRIC_SET(svc_min, w.svc_min);
+    METRIC_SET(svc_fam_max, w.svc_fam_max);
+    METRIC_SET(svc_fam_min, w.svc_fam_min);
+    METRIC_SET(families, w.families);
+    METRIC_SET(sil_phases, w.sil_phases);
+    METRIC_SET(sil_carry, w.sil_carry);
+    METRIC_SET(branches, w.branches);
+    METRIC_SET(br_live_max, w.br_live_max);
+    METRIC_SET(br_live_min, w.br_live_min);
+    METRIC_SET(br_live_sum, w.br_live_sum);
+    METRIC_SET(br_born_life_max, w.br_born_max);
+    METRIC_SET(br_born_life_min, w.br_born_min);
+    METRIC_SET(br_crowd_live, w.br_crowd_live);
+    METRIC_SET(br_crowd_born_life, w.br_crowd_born);
+    METRIC_SET(br_crowd_us_life, w.br_crowd_us);
+    METRIC_SET(br_minter_live, w.br_minter_live);
+    METRIC_SET(br_minter_gone_life, w.br_minter_gone);
+    METRIC_SET(br_minter_us_life, w.br_minter_us);
+    METRIC_SET(br_us_life_max, w.br_us_max);
+    METRIC_SET(br_us_life_min, w.br_us_min);
+    METRIC_SET(br_us_life_sum, w.br_us_sum);
+    METRIC_SET(br_held_us_life, w.br_held_us);
+    METRIC_SET(br_empty_us_life, w.br_empty_us);
+    METRIC_SET(br_retired_us_life, w.br_retired_us);
+    METRIC_SET(charged_us_life, w.charged_us);
+    METRIC_SET(br_depth_max, w.br_depth_max);
+    METRIC_SET(br_fan_max, w.br_fan_max);
+    METRIC_SET(br_fan_sum, w.br_fan_sum);
+    METRIC_SET(br_fan_depth, w.br_fan_depth);
+    METRIC_SET(vis_min, w.vis_min);
+    METRIC_SET(vis_max, w.vis_max);
+    METRIC_SET(vis_zero, w.vis_zero);
+    METRIC_SET(cands, w.cand_members);
+    METRIC_SET(cand_unrun, w.cand_unrun);
+    METRIC_SET(cand_svc_max, w.cand_svc_max);
+    METRIC_SET(cand_dec_max, w.cand_dec_max);
+    METRIC_SET(dec_max, w.dec_max);
+    METRIC_SET_REAL(dist_max, w.dist_max);
+    METRIC_SET_REAL(w_top, w.w_top);
+    METRIC_SET_REAL(w_min, w.w_min);
+    METRIC_SET_REAL(cand_wmax, w.cand_w_max);
+    METRIC_SET(top_svc, w.top_svc);
+    METRIC_SET(top_svc_fam, w.top_svc_fam);
+    METRIC_SET(top_forgiven, w.top_forgiven);
+    METRIC_SET_REAL(nonreward_max, w.nonreward_max);
+    METRIC_SET(jobs_ready, w.jobs_ready);
+    METRIC_SET(jobs_framed, w.jobs_framed);
+    METRIC_SET(jobs_owed, w.jobs_owed);
+    METRIC_SET_REAL(job_wgap, w.job_w_gap);
+    METRIC_SET(jobs_ready_task, w.jobs_ready_task);
+    METRIC_SET(jobs_ready_micro, w.jobs_ready_micro);
+    METRIC_SET(mem_unframed, w.mem_unframed);
+    METRIC_SET(unframed_picks_lifetime, w.unframed_picks_lifetime);
+    METRIC_SET(ready_picks_lifetime, w.ready_picks_lifetime);
+    METRIC_SET(task_held_deliv_lifetime, lt.task_held_deliv);
+    METRIC_SET(task_held_seq_lifetime, lt.task_held_seq);
+    METRIC_SET(task_arm_older_lifetime, lt.task_arm_older);
+    METRIC_SET(task_arm_no_row_lifetime, lt.task_arm_no_row);
+    METRIC_SET(deliv_ready, w.deliv_ready);
+    METRIC_SET(deliv_framed, w.deliv_framed);
+    METRIC_SET(deliv_owed, w.deliv_owed);
+    METRIC_SET_REAL(deliv_wgap, w.deliv_w_gap);
+    METRIC_SET(deliv_wgap_vis, w.deliv_w_gap_vis);
+    METRIC_SET(w_top_vis, w.w_top_vis);
+    METRIC_SET(cur_deep, w.cur_deep);
+    METRIC_SET(cur_deep_live, w.cur_deep_live);
+    METRIC_SET_REAL(cur_deep_wgap, w.cur_deep_w_gap);
+    METRIC_SET(scan_next_runs, flow_scan_runs(FLOW_SCAN_NEXT));
+    METRIC_SET(scan_next_weights, flow_scan_weights(FLOW_SCAN_NEXT));
+    METRIC_SET(scan_rival_runs, flow_scan_runs(FLOW_SCAN_RIVAL));
+    METRIC_SET(scan_rival_weights, flow_scan_weights(FLOW_SCAN_RIVAL));
+    METRIC_SET(scan_other_runs, flow_scan_runs(FLOW_SCAN_OTHER));
+    METRIC_SET(scan_other_weights, flow_scan_weights(FLOW_SCAN_OTHER));
+    METRIC_SET(scan_census_runs, flow_scan_runs(FLOW_SCAN_CENSUS));
+    METRIC_SET(scan_census_weights, flow_scan_weights(FLOW_SCAN_CENSUS));
+    METRIC_SET(preempt_asks_lifetime, engine_preempt_asks());
+    METRIC_SET(rival_miss_gen, rm.gen);
+    METRIC_SET(rival_miss_cur, rm.cur);
+    METRIC_SET(rival_miss_both, rm.both);
+    METRIC_SET(key_armed_lifetime, kc.armed);
+    METRIC_SET(key_stale_gen_lifetime, kc.stale_gen);
+    METRIC_SET(key_first_seen_lifetime, kc.first_seen);
+    METRIC_SET(key_running_lifetime, kc.running);
+    METRIC_SET(key_index_asked_lifetime, ic.index_asked);
+    METRIC_SET(key_index_differed_lifetime, ic.index_differed);
+    METRIC_SET(key_index_differed_tie_lifetime, ic.differed_tie);
+    METRIC_SET(key_index_differed_strict_lifetime, ic.differed_strict);
+    METRIC_SET(key_index_band_members_lifetime, ic.band_members);
+    METRIC_SET(key_index_band_weighed_lifetime, ic.band_weighed);
+    METRIC_SET(epoch_away_live, w.epoch_away_live);
+    METRIC_SET(epoch_away_walk, w.epoch_away_walk);
+    METRIC_SET(epoch_rebuild_lifetime, flow_epoch_rebuild());
+    METRIC_SET(epoch_resets_lifetime, flow_epoch_resets());
+    METRIC_SET(starved_picks, flow_starved_picks());
+    METRIC_SET(starved_picks_idle, flow_starved_picks_idle());
+    METRIC_SET(plateau_asked, flow_plateau_asked());
+    METRIC_SET(plateau_held, flow_plateau_held());
+    METRIC_SET(plateau_runs, flow_plateau_runs());
+    METRIC_SET(plateau_held_idle, flow_plateau_held_idle());
+    METRIC_SET(arrivals, w.arrivals);
+    METRIC_SET(departures, w.departures);
+    METRIC_SET(credits_offered_lifetime, w.credit_calls);
+    METRIC_SET(credits_paid_lifetime, w.credit_paid);
+    METRIC_SET(credits_dropped_lifetime, w.credit_dropped);
+    METRIC_SET(work_done, engine_work_done());
+    METRIC_SET(rank_changes, flow_rank_changes());
+    METRIC_SET(reach_bodies, nr.sites.bodies);
+    METRIC_SET(reach_bodies_ran, nr.sites.bodies_ran);
+    METRIC_SET(reach_sites, nr.sites.sites);
+    METRIC_SET(reach_sites_hit, nr.sites.hit);
+    METRIC_SET(reach_sites_skipped, nr.sites.skipped);
+    METRIC_SET(reach_sites_unrun, nr.sites.unrun);
+    METRIC_SET(reach_sites_compiled_lifetime, nr.sites.compiled);
+    METRIC_SET(reach_sites_hit_lifetime, nr.sites.hit_ever);
+    METRIC_SET(reach_framed, nr.framed);
+    METRIC_SET(reach_ahead_top, nr.ahead_top);
+    METRIC_SET(reach_ahead_stack, nr.ahead_stack);
+    METRIC_SET(reach_ahead_top_min, nr.top_min);
+    METRIC_SET(reach_ahead_top_max, nr.top_max);
+    METRIC_SET(reach_ahead_top_sum, nr.top_sum);
+    json_buf_raw(&b, "{");
+    metrics_family_members_json(METRIC_FAMILY_WFQ, &b);
+    json_buf_raw(&b, ",");
+    metrics_family_members_json(METRIC_FAMILY_WFQ_FRONTIER, &b);
+    json_buf_raw(&b, "}");
+    return json_buf_take(&b);
 }
 
 /* One row composer for the two state-kind histograms, which differ only in the side of the pair counted.

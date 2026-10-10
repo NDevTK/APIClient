@@ -13,10 +13,10 @@
  * `requireWhole` and `requireFrom`. The row counts per composer:
  *     node -e 'const {censusKinds}=require("./testing/census_rows.js"), a=censusKinds();
  *              for (const k of Object.keys(a)) console.log(k, Object.keys(a[k].kindOf).length)' */
-/* Named residual. Not covered: `wfq` and `cold` still state their kinds in `@kinds-of` comment blocks beside
-   solver/result.c's format strings, read by the comment path below. Next diff: their families in
-   solver/metrics/wfq.def and cold.def, composed through the registry, and this path deleted. Absence shows as:
-   a row added to either composer whose kind is a comment line no compiler or composition reads. */
+/* Named residual. Not covered: `cold` still states its kinds in an `@kinds-of` comment block beside
+   solver/result.c's format string, read by the comment path below. Next diff: its family in
+   solver/metrics/cold.def, composed through the registry, and this path deleted. Absence shows as: a row added
+   to that composer whose kind is a comment line no compiler or composition reads. */
 
 "use strict";
 
@@ -32,17 +32,17 @@ const KIND_TOKENS = { LIFETIME: "lifetime", GAUGE: "gauge", CONSTANT: "constant"
 /* solver/metrics.h's MetricRepr; an OBJECT row is a nested composer's object, every other row a number. */
 const REPRS = ["INT", "FIXED1", "FIXED3", "OBJECT"];
 
-/* The composers, each with the declaration file of its family; a `format` composer is one whose kinds are
-   still comment text beside its format string (the residual above). */
+/* The composers, each with the declaration files of the families it composes, in emission order; a `format`
+   composer is one whose kinds are still comment text beside its format string (the residual above). */
 const COMPOSERS = {
   cold:      { file: "engine/host/solver/result.c",
                from: "char *result_cold_json(void)", to: "\n}\n", shape: "format" },
-  wfq:       { file: "engine/host/solver/result.c",
-               from: "char *result_wfq_json(void)",  to: "\n}\n", shape: "format" },
-  fetchEdge: { def: "engine/host/solver/metrics/fetch_edge.def" },
-  xhrEdge:   { def: "engine/host/solver/metrics/xhr_edge.def" },
+  /* `members` alone on an empty frontier, the second family's rows after it while a member stands. */
+  wfq:       { defs: ["engine/host/solver/metrics/wfq.def", "engine/host/solver/metrics/wfq_frontier.def"] },
+  fetchEdge: { defs: ["engine/host/solver/metrics/fetch_edge.def"] },
+  xhrEdge:   { defs: ["engine/host/solver/metrics/xhr_edge.def"] },
   /* Spliced into `_cold` beside `stepUnitRuns`, as the two edges are spliced beside `epAsks`. */
-  rungEntry: { def: "engine/host/solver/metrics/rung_entry.def" },
+  rungEntry: { defs: ["engine/host/solver/metrics/rung_entry.def"] },
 };
 
 /* A declaration file's rows, in declaration order, which is the order the composer emits them in. Every
@@ -77,6 +77,22 @@ function defRowsFromText(src, label) {
     throw new Error(label + ": a declaration file with no METRIC row — its family emits nothing, and an empty " +
                     "row set would pass every census ever printed.");
   return { kindOf, numeric, object };
+}
+
+/* A composer's rows over its families, refusing a key two of them declare. */
+function composerRowsFromDefs(defs, read, key) {
+  const kindOf = Object.create(null), numeric = [], object = [];
+  for (const d of defs) {
+    const r = defRowsFromText(read(d), d);
+    for (const n of Object.keys(r.kindOf)) {
+      if (n in kindOf)
+        throw new Error(d + ": `" + n + "` is declared by two families the composer `" + key + "` splices.");
+      kindOf[n] = r.kindOf[n];
+    }
+    numeric.push(...r.numeric);
+    object.push(...r.object);
+  }
+  return { key, kindOf, numeric, object };
 }
 
 /* The comment path, for `format` composers only (the residual above). The rows are the key/conversion
@@ -157,8 +173,8 @@ function censusKinds() {
   };
   const out = Object.create(null);
   for (const [key, spec] of Object.entries(COMPOSERS))
-    out[key] = spec.def ? { key, ...defRowsFromText(read(spec.def), spec.def) }
-                        : commentKindsFromText(read(spec.file), key, spec, spec.file);
+    out[key] = spec.defs ? composerRowsFromDefs(spec.defs, read, key)
+                         : commentKindsFromText(read(spec.file), key, spec, spec.file);
   return (memo = out);
 }
 

@@ -1091,11 +1091,11 @@ const causeName = (raw) => {
    line — and THREE of those landed in the hour this function was being written. A required-PRESENCE loop
    cannot notice a row that was never in its list, so every row added over there joins the unchecked half by
    default, is computed on every sample of every run, and is read by nothing.
-   SO THE ROW SET COMES FROM THE COMPOSER THAT DECIDES IT (`censusComposerFields`), which is `hostDefine`'s
-   rule for a constant and `forkCensusName`'s for a spelling, applied to the one fact this file kept a copy of.
-   The contract is unchanged and is now unforgettable: a row solver/result.c stops emitting, or renames, fails
-   at this line instead of being compared as `undefined` — which is FALSE for every input, so the arm reading
-   it can never fire again.
+   SO THE ROW SET COMES FROM THE DECLARATION THE COMPOSER EMITS FROM (`censusDefFields` over
+   solver/metrics/wfq.def and wfq_frontier.def), which is `hostDefine`'s rule for a constant and
+   `forkCensusName`'s for a spelling, applied to the one fact this file kept a copy of. A row the declaration
+   drops or renames fails at this line instead of being compared as `undefined` — which is FALSE for every
+   input, so the arm reading it can never fire again.
    THE PER-ROW READING NOTES THAT STOOD HERE ARE GONE WITH THE LIST, deliberately and not as collateral. Every
    one of them restated a paragraph solver/result.c or solver/flow.h already carries beside the row itself —
    what `topSvc` says that `topSvcFam` cannot, why `visZero` is not `unrun`, what the three candidate rows
@@ -1113,10 +1113,9 @@ const causeName = (raw) => {
    module load, which is the shape that has already left an instrument throwing for every lane in this shared
    tree: `HOST` is a `const` far below this line, so a top-level derivation here would reach it in its temporal
    dead zone and `node --check` would pass on it. */
-const wfqFields = sourceFact(() => censusComposerFields(
-  "solver/result.c", "char *result_wfq_json(void)", "\n}\n",
+const wfqFields = sourceFact(() => censusDefFields(["wfq", "wfq_frontier"],
   "the @WFQ reader states which rows it requires of a census that claims an order, and it takes that set " +
-  "from the composer rather than from a list beside it").numeric);
+  "from the composer's declaration rather than from a list beside it").numeric);
 /* A CONSTANT OF THE ENGINE IS READ FROM THE ENGINE, NEVER RESTATED HERE — the rule `ageQuantum` was written
    for and which now has a second reader (`hungCause`'s census cadence), so it is one function rather than two
    copies of one regex. Throws on an absent or unparseable define, because the alternative is this reader
@@ -1183,6 +1182,29 @@ function censusComposerFields(file, from, to, why) {
                     `at all — ${why}. Every row it publishes is written \`\\"name\\":%…\` in its own format ` +
                     `string, so a composer with none is one whose shape this reader no longer recognises and ` +
                     `an empty required-field list would pass every census ever printed.`);
+  return { numeric, object };
+}
+/* A census composed through solver/metrics.h's registry: its rows are the METRIC lines of the declaration
+   files of the families it composes, in emission order, split by representation (an OBJECT row is a nested
+   composer's object, every other row a number). Every `METRIC(` is one row of the full grammar or a throw, so
+   a row this reader cannot parse is never dropped from the required set. */
+function censusDefFields(families, why) {
+  const numeric = [], object = [];
+  for (const fam of families) {
+    const file = `solver/metrics/${fam}.def`;
+    const code = hostSource(file, why).replace(/\/\*[\s\S]*?\*\//g, " ");
+    const opens = (code.match(/\bMETRIC\s*\(/g) || []).length;
+    let rows = 0;
+    for (const m of code.matchAll(/\bMETRIC\(\s*\w+\s*,\s*"([A-Za-z_][A-Za-z0-9_]*)"\s*,\s*[A-Z]+\s*,\s*"[^"]*"\s*,\s*[A-Z]+\s*,\s*"[^"]*"\s*,\s*([A-Z0-9]+)\s*\)/g)) {
+      rows++;
+      if (numeric.includes(m[1]) || object.includes(m[1]))
+        throw new Error(`[build] engine/host/${file} declares \`${m[1]}\` a second time in one census — ${why}.`);
+      (m[2] === "OBJECT" ? object : numeric).push(m[1]);
+    }
+    if (!rows || rows !== opens)
+      throw new Error(`[build] engine/host/${file} holds ${opens} METRIC( row(s) and ${rows} parse — ${why}, and ` +
+                      `a row this reader cannot read would leave the required set short.`);
+  }
   return { numeric, object };
 }
 /* AND THE HALF A NUMERIC ROW SET CANNOT SPEAK FOR: WHICH OBJECTS THE COMPOSER SPLICES, AND WHETHER THIS FILE
@@ -1424,8 +1446,8 @@ function wfqReading(out) {
   for (const f of fields)
     if (typeof w[f] !== "number")
       throw new Error(`[build] the @WFQ census has no numeric \`${f}\` — this reader requires every row ` +
-                      `solver/result.c's result_wfq_json publishes (${fields.join(", ")}), taken from that ` +
-                      `composer's own format string rather than from a list here, so a renamed or dropped ` +
+                      `solver/result.c's result_wfq_json publishes (${fields.join(", ")}), taken from its ` +
+                      `declaration files rather than from a list here, so a renamed or dropped ` +
                       `row fails at this line instead of being silently compared as \`undefined\` — which is ` +
                       `FALSE for every input, so the arm reading it could never fire again. A census with ` +
                       `\`members: ${w.members}\` states that there WAS an order, so this is not the ` +
@@ -1796,7 +1818,7 @@ function wfqReading(out) {
      checks a scan row is a lifetime count, and excluded from the filter that decides which censuses carry an
      interval — a row this reader was blind to in TWO places at once.
      DERIVED BY THE COMPOSER'S OWN NAMING AND NOT BY A CONVENTION THIS FILE INVENTS: an entry of that enum is
-     published as `scan<Entry>Runs` and `scan<Entry>Weights` in result_wfq_json's format string, so the set is
+     published as `scan<Entry>Runs` and `scan<Entry>Weights` in solver/metrics/wfq_frontier.def, so the set is
      whatever `wfqFields()` returns matching that shape, and a new entry joins both the guard and the filter
      without anybody remembering. `rankChanges` is named beside them because it is the denominator those
      readings are taken against and is a lifetime count under the same argument — it is not a scan row and is
@@ -2205,7 +2227,7 @@ function wfqReading(out) {
            `is the mean depth between two emissions`);
   /* THE BRANCH SCOPE, WHICH WAS ELEVEN EMITTED ROWS WITH NO READER — the write-with-no-reader half of the
      defect this reader's own derived field list closes the other half of. Every one of them is REQUIRED here
-     (wfqFields() takes them from result_wfq_json's format string, so a census omitting one throws above), and
+     (wfqFields() takes them from the @WFQ declaration files, so a census omitting one throws above), and
      not one was ever turned into a sentence. That is not the same defect as a missing field and it is quieter:
      nothing is undefined, nothing defaults, the build is green, and a measurement nobody reads is indistinguishable
      from one nobody took.
