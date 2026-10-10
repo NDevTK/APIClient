@@ -5,8 +5,9 @@
  * value lives in one per-agent block (metrics.c). A raised family's rows are raised by their owners through the
  * macro their kind admits; a sampled family's rows are set by its composer at each composition. A family
  * becomes bytes only through metrics_family_json, which asserts the identities and the row set at composition.
- * The schema (metrics_schema_json) states every row's kind, unit, scope and owner, and JS readers take a
- * family's row set and kinds from it or from the declaration files, never from a list of their own. */
+ * The schema (metrics_schema_json) states the kind, unit, scope and owner of every row composed at the result
+ * document's top level; JS readers take a family's row set and kinds from it or from the declaration files,
+ * never from a list of their own. */
 #ifndef ENGINE_HOST_SOLVER_METRICS_H
 #define ENGINE_HOST_SOLVER_METRICS_H
 #include "core/json_buf.h"
@@ -123,8 +124,14 @@ void metrics_agent_release(void);
 void metrics_family_members_json(MetricFamily family, JsonBuf *b);
 /* The same members as one object. */
 void metrics_family_json(MetricFamily family, JsonBuf *b);
-/* Every family's declaration as one object: {"families":[{"family","rows":[{"key","kind","unit","scope",
-   "owner"}],"identities":[{"rel","sub","sup"}]}]}. A constant of the build. */
+/* The declaration of every family composed at the result document's top level, as one object:
+   {"families":[{"family","rows":[{"key","kind","unit","scope","owner"}],"identities":[{"rel","sub","sup"}]}]}.
+   A constant of the build.
+   Named residual. Not covered: the census families (`_cold`, `_wfq`), whose rows may be absent or objects,
+   which extension/bridge.js's schema assert reads as top-level numbers; testing/census_rows.js reads their
+   kinds from the declaration files. Next diff: each family's census object in the schema, and that assert
+   checking a census family's present rows inside it. Absence shows as: a reader of the document alone cannot
+   name a `_cold` or `_wfq` row's kind. */
 void metrics_schema_json(JsonBuf *b);
 /* The same three as text the caller owns and frees, for a composer that splices with composef or prints. */
 char *metrics_family_members_text(MetricFamily family);

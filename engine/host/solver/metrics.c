@@ -153,18 +153,21 @@ static void cold_members(JsonBuf *b)
 #undef METRIC
 #undef IDENTITY_LE
 
+/* `census` is the census object a family's rows are composed into, NULL for the result document's own top
+   level, where extension/bridge.js asserts every schema row present and numeric. */
 static const struct {
     const char *name;
     void (*members)(JsonBuf *b);
+    const char *census;
 } FAMILIES[METRIC_FAMILY_N] = {
-    [METRIC_FAMILY_SCENSUS]    = { "scensus",    scensus_members },
-    [METRIC_FAMILY_LAYOUT]     = { "layout",     layout_members },
-    [METRIC_FAMILY_RUNG_ENTRY] = { "rung_entry", rung_entry_members },
-    [METRIC_FAMILY_FETCH_EDGE] = { "fetch_edge", fetch_edge_members },
-    [METRIC_FAMILY_XHR_EDGE]   = { "xhr_edge",   xhr_edge_members },
-    [METRIC_FAMILY_WFQ]        = { "wfq",        wfq_members },
-    [METRIC_FAMILY_WFQ_FRONTIER] = { "wfq_frontier", wfq_frontier_members },
-    [METRIC_FAMILY_COLD]       = { "cold",       cold_members },
+    [METRIC_FAMILY_SCENSUS]      = { "scensus",      scensus_members,      NULL },
+    [METRIC_FAMILY_LAYOUT]       = { "layout",       layout_members,       NULL },
+    [METRIC_FAMILY_RUNG_ENTRY]   = { "rung_entry",   rung_entry_members,   "_cold" },
+    [METRIC_FAMILY_FETCH_EDGE]   = { "fetch_edge",   fetch_edge_members,   "_cold" },
+    [METRIC_FAMILY_XHR_EDGE]     = { "xhr_edge",     xhr_edge_members,     "_cold" },
+    [METRIC_FAMILY_WFQ]          = { "wfq",          wfq_members,          "_wfq" },
+    [METRIC_FAMILY_WFQ_FRONTIER] = { "wfq_frontier", wfq_frontier_members, "_wfq" },
+    [METRIC_FAMILY_COLD]         = { "cold",         cold_members,         "_cold" },
 };
 
 static const char *kind_name(MetricKind k)
@@ -354,9 +357,12 @@ void metrics_schema_json(JsonBuf *b)
     json_buf_raw(b, "{");
     json_buf_key(b, "families");
     json_buf_raw(b, "[");
+    const char *fsep = "";
     for (int f = 0; f < METRIC_FAMILY_N; f++) {
         const char *rsep = "", *isep = "";
-        if (f) json_buf_raw(b, ",");
+        if (FAMILIES[f].census) continue;
+        json_buf_raw(b, fsep);
+        fsep = ",";
         json_buf_raw(b, "{");
         json_buf_key(b, "family");
         json_buf_str(b, FAMILIES[f].name);
