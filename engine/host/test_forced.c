@@ -33388,6 +33388,9 @@ static void second_agent_selftest(const char *origin)
     int has_self;
 
     printf("@A2ENTER\n");
+    /* This agent brings up no solver, so it is a browser-only host: the first agent's release withdrew its
+       source overlay, and a platform that mints sources must hear this host's answer before its first realm. */
+    concolic_declare_browser_only();
     rt2 = JS_NewRuntime();
     CHECK(rt2 != NULL, "a second agent's JSRuntime could not be created");
     JS_SetMaxStackSize(rt2, 4 * 1024 * 1024);   /* the value this host gives its first runtime */

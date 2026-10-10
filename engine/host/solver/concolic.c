@@ -4302,9 +4302,13 @@ void concolic_init(JSContext *ctx) {
  * leak detector here sees (not a GC object, not an atom, not counted by JS_DUMP_LEAKS's js_malloc_rt count),
  * and a kept buffer would be sized by a dead runtime's reclaim allocator. The count goes with it because a
  * release build compiles the assert out, and a count over a freed array would be a use-after-free. */
+static void source_overlay_withdraw(void);
+
 void concolic_free(void)
 {
     int i;
+
+    source_overlay_withdraw();
 #if APICLIENT_DEV
     if (g_srcs_n != 0)
         DFAILF("%s did not give back the attacker SOURCE `%s` before the solver's agent state was released. "
@@ -4959,6 +4963,22 @@ void concolic_install_hooks(void)
    that should fork. */
 enum { SOURCE_OVERLAY_UNDECLARED = 0, SOURCE_OVERLAY_BROWSER_ONLY, SOURCE_OVERLAY_EXPLORING };
 static int g_source_overlay;
+
+/* Whether an agent explores, and the hooks that answer it, are that agent's, but the engine's hook table is
+   process-wide: a later agent with no solver would otherwise run with this one's hooks and mint sources into a
+   runtime that never registered the class. concolic_free withdraws both; the next agent declares again. The
+   static base table keeps its initializer for a later concolic_install_hooks. */
+static void source_overlay_withdraw(void)
+{
+    static const JSConcolicHooks none;
+
+    g_hooks.absent = NULL;
+    g_hooks.absent_unresolved = NULL;
+    g_hooks.present = NULL;
+    g_hooks.publish = NULL;
+    g_source_overlay = SOURCE_OVERLAY_UNDECLARED;
+    JS_SetConcolicHooks(&none);
+}
 /* The same answer, for a component that mints a source of its own (see the header). Not folded into
    concolic_source_wrap, which also files the value in the attacker-delivery registry and counts it as attacker
    input: a data block (HTML §4.12.1 The script element) is neither, and counting it would report a page that
