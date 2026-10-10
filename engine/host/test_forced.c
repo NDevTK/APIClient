@@ -4060,6 +4060,30 @@ static const char *HTML =
     "var prs = Promise.reject('rejSYNC'); prs.catch(function(){});"
     "var prh = Promise.reject('rejHANDLED');"
     "Promise.resolve().then(function(){ prh.catch(function(){}); });"
+    /* HTML §8.1.4.6 "Runtime script errors"' extract error information sets its `message` to one of the
+       "implementation-defined values derived from exception" — and FOUR shapes of exception derived the SAME
+       one, because the derivation read OWN properties and a real application keeps neither `name` nor
+       `message` there. A framework's error CLASS puts `message` behind a PROTOTYPE accessor; an ECMAScript
+       error kind puts `name` on its prototype; a hand-built reason puts either behind a getter of its OWN; and
+       a Proxy has no data slot at all. MEASURED on two drives of one real application: the LARGEST row of
+       `enginePageErrors` was the anonymous one, at 10 and 7, naming none of the ten.
+       TWO OF THESE ABORTED THIS ENGINE OUTRIGHT and that is why they are here rather than only the naming
+       ones: `JS_GetOwnSlot` refuses an ACCESSOR and `JS_GetOwnSlotDesc` refuses a PROXY, both with a dev
+       abort, and both were reachable from ONE statement of page JavaScript on the report path — a page holding
+       an abort switch over the trusted engine, which §Offensive-programming forbids because a DCHECK may only
+       stand on a value this codebase COMPUTED. solver/result.c's own paragraph records which read did it.
+       THEY REJECT RATHER THAN THROW because §8.1.4.7's route reaches the console in ONE call with the page's
+       value unchanged, and NOTHING HANDLES THEM so each one is reported. THE ORDER IS THE WITNESS: the Proxy's
+       description is a CLASS read and so carries no token of its own, so what proves its statement ran at all
+       is that `nonameKind` — rejected AFTER it, in this same script — is reported. An abort would have left no
+       document for any row to read. */
+    "class NonameProto { get message(){ return 'nonameProtoGetterRan'; } }"
+    "Promise.reject(new NonameProto());"
+    "Promise.reject(Object.defineProperty({ name: 'nonameOwnAcc' }, 'message',"
+    " { get: function(){ return 'nonameGetterRan'; } }));"
+    "Promise.reject(new Proxy({}, { get: function(){ return 'nonameTrapRan'; },"
+    " getOwnPropertyDescriptor: function(){ return { value: 'nonameTrapRan', configurable: true }; } }));"
+    "Promise.reject(new TypeError('nonameKind'));"
     "fetch('/api/ceget?v=' + (customElements.get('x-panel') === XPanel"
     " && customElements.get('x-none') === undefined ? 'isget' : 'wrong'));"
     /* A TYPED DICTIONARY MEMBER, converted through the page's own code. `extends` is a DOMString member of
@@ -17575,6 +17599,34 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* The uncaught DOMException is NAMED in the report, not "an object with no own name/message". */
     fold_row(&nodealgo_tt, &nodealgo_why, !!strstr(js, "SyntaxError: not a valid custom element name"),
              "an uncaught DOMException is NAMED in the page-error report");
+    /* …AND THE THREE SHAPES THAT ARE NOT A DOMException AND KEEP THEIR NAME SOMEWHERE AN OWN-PROPERTY READ
+       CANNOT SEE. One row each, never folded into one clause, because they are three different derivations and
+       a single 0 over them would name none: the PROTOTYPE accessor (a framework's error class), the error KIND
+       on a prototype (every ECMAScript error), and an OWN accessor on a hand-built reason. The last of those
+       also proves the reporter did NOT CALL the getter — a description that ran the page's code on the path
+       that reports the page's error would be the one thing this surface must never do.
+       THE PROXY HAS NO ROW OF ITS OWN BECAUSE IT CAN HAVE NONE: its description is a CLASS read, so it carries
+       no token nothing else could produce, and a row asserting a string two shapes can answer would be the
+       assert whose two sides cannot disagree. What it gets instead is the NEGATIVE below plus the fact that
+       `TypeError: nonameKind`, rejected after it in the same script, is reported at all. */
+    fold_row(&nodealgo_tt, &nodealgo_why, tf_err_listed(js, "pageErrors", "NonameProto"),
+             "§8.1.4.6 a thrown object whose `message` is a PROTOTYPE accessor is reported as an anonymous "
+             "object — its CONSTRUCTOR's name is a data property and names it");
+    fold_row(&nodealgo_tt, &nodealgo_why, tf_err_listed(js, "pageErrors", "TypeError: nonameKind"),
+             "§8.1.4.6 an uncaught TypeError is reported without its KIND — `name` lives on the prototype, so "
+             "an own-property read sees the message alone and every error kind collapses into its text");
+    fold_row(&nodealgo_tt, &nodealgo_why, tf_err_listed(js, "pageErrors", "nonameOwnAcc"),
+             "§8.1.4.6 a reason whose own `message` is an ACCESSOR is not reported by the own `name` beside "
+             "it — that read used to be a dev ABORT, so a page held a switch over this engine");
+    fold_row(&nodealgo_tt, &nodealgo_why, !tf_err_listed(js, "pageErrors", "nonameGetterRan"),
+             "§8.1.4.6 the reporter CALLED the page's `message` getter — a description that runs the code that "
+             "went wrong is the one thing a host reporting an error may not depend on");
+    fold_row(&nodealgo_tt, &nodealgo_why, !tf_err_listed(js, "pageErrors", "nonameTrapRan"),
+             "§8.1.4.6 the reporter ran a thrown PROXY's trap — every own-property query on a Proxy is the "
+             "page's handler, and the report path has no flow base to run one on");
+    fold_row(&nodealgo_tt, &nodealgo_why, !tf_err_listed(js, "pageErrors", "no own name/message"),
+             "§8.1.4.6 some reported value still degenerates to the anonymous description — the row that was "
+             "the LARGEST in a real application's page errors and named none of them");
     /* §8.4 outerHTML is the same serialiser over the element ITSELF — its own tag and attributes included. */
     fold_row(&nodealgo_tt, &nodealgo_why,
              !!strstr(js, "%3Csection%20data-k%3D%22v%22%3E%3Cp%20class%3D%22q%22%3Ehi%3Cbr%3E%3C%2Fp%3E%3C%2Fsection%3E"),

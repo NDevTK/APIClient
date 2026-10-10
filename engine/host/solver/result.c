@@ -209,52 +209,77 @@ void result_page_error_retract(const char *msg, const char *filename) {
     if (!row->standing && g_err_hook) g_err_hook(msg, filename, RESULT_PAGE_ERROR_RETRACTED);
 }
 
-/* Describe a thrown value WITHOUT running any of the page's code — see result.h. An own slot that is already a
-   string is taken as-is; anything else is described by shape alone. */
+/* Describe a thrown value WITHOUT running any of the page's code — see result.h. It ROUTES to the engine's own
+   describer rather than deriving a second answer, and the two things it adds to that answer are the
+   DOMException internal slots and the throw site's frames.
+   THIS USED TO READ THE PAGE'S OBJECT WITH `JS_GetOwnSlot`, WHICH IS THE WRONG PRIMITIVE FOR AN OPERAND A PAGE
+   AUTHORED AND HAD TWO WAYS OF ABORTING ON ONE. quickjs.h states that call's subject in its own words — "for a
+   component reading a slot IT created … an accessor there says the read landed on an object that is not the one
+   it named" — and a thrown value is the opposite of that: every slot on it is the page's to define. So its
+   accessor arm (a `DFAIL`) and `JS_GetOwnSlotDesc`'s no-Proxy arm (a `DCHECK`) were both reachable from ONE
+   statement of page JavaScript — `Promise.reject(new Proxy({},{}))`, or an own `message` behind a getter — which
+   is §Offensive-programming's page-held abort switch: a `DCHECK` may only stand on a value this codebase
+   COMPUTED, and these stood on bytes a stranger stated.
+   AND THE SAME READ WAS WHY THE REPORT SAID NOTHING. An OWN-property read cannot see `TypeError.prototype.name`
+   or a class's `get message()`, so an uncaught `TypeError('x')` reported the bare `x` with no kind on it and
+   everything whose name and message live on a prototype collapsed into one anonymous row — MEASURED as the
+   LARGEST row of `enginePageErrors` on two drives of one real application, at 10 and 7, naming none of the ten.
+   `JS_DiagCString` is the answer this engine already owns for exactly this question (§8.1.4.6's
+   `extract_error_information` is its other caller): it walks the prototype chain for a DATA property, falls back
+   to the CONSTRUCTOR's name, and answers `[object Class]` when there is neither — never invoking an accessor,
+   never touching a Proxy's traps, and so never aborting on what a page handed it. Two describers of one value
+   drift, and this is the half that had.
+   THE SPEC LICENSES THE CHOICE RATHER THAN DICTATING IT. HTML §8.1.4.6 "Runtime script errors"' extract error
+   information says "Set attributes[message], attributes[filename], attributes[lineno], and attributes[colno] to
+   implementation-defined values derived from exception", and notes that browsers "gather values which are
+   helpful". So a better description is conformant and a worse one is too — which is why this is argued from what
+   a reader can act on and not from a step. */
 void result_error_text(JSContext *ctx, JSValueConst err, char *out, size_t outsz) {
     char *buf = out;
-    JSValue name = JS_UNDEFINED, msg = JS_UNDEFINED, stk = JS_UNDEFINED;
-    const char *ns = NULL, *ms = NULL, *ss = NULL;
-    JSAtom a_name, a_msg;
+    JSValue name, msg, stk;
+    const char *ns = NULL, *ms = NULL, *ss = NULL, *what = NULL;
+    char *owned = NULL;
     int n;
 
     DCHECK(out != NULL && outsz >= 64,
            "a thrown value was described into no buffer, or into one too small to hold a name and a message — "
            "the description is truncated at the caller's size and every caller must give it room to be one");
     *out = 0;
-    if (JS_IsString(err)) {
-        const char *s = JS_ToCString(ctx, err);   /* already a string: no coercion runs */
-        if (s) { snprintf(out, outsz, "%s", s); JS_FreeCString(ctx, s); }
-        return;
+    /* THE ONE SHAPE THE ENGINE'S DESCRIBER ANSWERS WORSE THAN ITS SLOTS, AND THE REASON IT IS ASKED FIRST. A
+       DOMException keeps `name` and `message` behind Web IDL ACCESSORS on its prototype, so `JS_DiagGetData`
+       stops at the getter it may not call and reaches the bare word "DOMException" through `constructor` —
+       where the INTERNAL SLOTS carry `SyntaxError` and the sentence saying what was wrong. That cost a whole
+       debugging cycle once: an aborted sibling flow reported as an anonymous object when it was a
+       NotSupportedError naming exactly what was wrong. A stored value, never an operation. */
+    name = JS_GetDOMExceptionName(ctx, err);
+    msg  = JS_GetDOMExceptionMessage(ctx, err);
+    if (JS_IsString(name)) ns = JS_ToCString(ctx, name);
+    if (JS_IsString(msg))  ms = JS_ToCString(ctx, msg);
+    if (ns && ms && *ms) n = snprintf(buf, outsz, "%s: %s", ns, ms);
+    else if (ns)         n = snprintf(buf, outsz, "%s", ns);
+    else {
+        what = JS_DiagCString(ctx, err, &owned);
+        /* A NULL IS ANSWERED WITH A POSITIVE STATEMENT AND NEVER WITH AN EMPTY ONE, because `result_page_error`
+           DROPS an empty description — a value nothing could describe would become an error this engine never
+           named, which is the fabrication-by-omission this whole surface exists to prevent.
+           A SYMBOL IS THE ONE CAUSE THIS SIDE CAN NAME. It is the only primitive whose ToString throws, which
+           `JS_DiagCString`'s own paragraph records as a page-held wrong answer rather than an invariant. The
+           others — an allocation failure, and a REVOKED Proxy whose `JS_ToObjectString` throws its
+           ValidateNonRevokedProxy TypeError — are not distinguishable from here without reading the context's
+           exception, which is not this function's to read or to clear, so the text claims neither. */
+        if (what)                  n = snprintf(buf, outsz, "%s", what);
+        else if (JS_IsSymbol(err)) n = snprintf(buf, outsz, "a Symbol was thrown");
+        else                       n = snprintf(buf, outsz, "a thrown value whose description this engine "
+                                                            "could not compose");
     }
-    if (!JS_IsObject(err)) { snprintf(out, outsz, "a non-object, non-string value was thrown"); return; }
-
-    a_name = JS_NewAtom(ctx, "name");
-    a_msg  = JS_NewAtom(ctx, "message");
-    if (JS_GetOwnSlot(ctx, &name, err, a_name) <= 0) name = JS_UNDEFINED;
-    if (JS_GetOwnSlot(ctx, &msg,  err, a_msg)  <= 0) msg  = JS_UNDEFINED;
-    JS_FreeAtom(ctx, a_name);
-    JS_FreeAtom(ctx, a_msg);
-    /* A DOMException keeps BOTH behind accessors on its prototype, so the own-property read above finds nothing
-       and the report degenerates to "an object with no own name/message" — for the single most common throw in
-       a DOM engine. That cost a whole debugging cycle: an aborted sibling flow reported as an anonymous object
-       when it was a NotSupportedError naming exactly what was wrong. Read the slots instead. */
-    if (!JS_IsString(name)) { JS_FreeValue(ctx, name); name = JS_GetDOMExceptionName(ctx, err); }
-    if (!JS_IsString(msg))  { JS_FreeValue(ctx, msg);  msg  = JS_GetDOMExceptionMessage(ctx, err); }
     /* WHERE it threw. A genuine Error keeps its stack in the [[ErrorData]] internal slot behind an accessor on
-       Error.prototype, so JS_GetOwnSlot cannot see it and calling the getter would run page code (a page may
+       Error.prototype, so no own-property read can see it and calling the getter would run page code (a page may
        have replaced Error.prepareStackTrace, and this runs from OUTSIDE any flow). JS_GetErrorStackString reads
        the slot directly, which is exactly the "a stored value, never an operation" rule the rest of this
        function follows. Without it a message like "not a function" names a capability and nothing else — the
        whole diagnostic is WHERE, and finding it by hand meant re-serving the library wrapped in a try/catch. */
     stk = JS_GetErrorStackString(ctx, err);
-    if (JS_IsString(name)) ns = JS_ToCString(ctx, name);
-    if (JS_IsString(msg))  ms = JS_ToCString(ctx, msg);
-    if (JS_IsString(stk))  ss = JS_ToCString(ctx, stk);
-    if (ns && ms)      n = snprintf(buf, outsz, "%s: %s", ns, ms);
-    else if (ms)       n = snprintf(buf, outsz, "%s", ms);
-    else if (ns)       n = snprintf(buf, outsz, "%s", ns);
-    else               n = snprintf(buf, outsz, "an object with no own name/message was thrown");
+    if (JS_IsString(stk)) ss = JS_ToCString(ctx, stk);
     if (ss && n > 0 && (size_t)n < outsz) {
         /* the first two frames, on one line — the site and its caller, which is what identifies the call. */
         const char *l1 = ss + strspn(ss, " \t\n"), *l1e = l1 + strcspn(l1, "\n");
@@ -267,10 +292,24 @@ void result_error_text(JSContext *ctx, JSValueConst err, char *out, size_t outsz
     if (ns) JS_FreeCString(ctx, ns);
     if (ms) JS_FreeCString(ctx, ms);
     if (ss) JS_FreeCString(ctx, ss);
+    if (what) JS_DiagFreeCString(ctx, what, owned);
     JS_FreeValue(ctx, name);
     JS_FreeValue(ctx, msg);
     JS_FreeValue(ctx, stk);
 }
+/* NAMED RESIDUAL — A THROWN OBJECT IS DESCRIBED BY ITS KIND AND NEVER BY ITS SHAPE.
+   NOT COVERED: the description is derived from `name`, `message` and `constructor` alone, so every object whose
+   kind is the SAME answers the same string however differently it is built — the property is that no own
+   property other than those three reaches the report. A plain object resolves `Object.prototype.constructor` and
+   is reported as `Object`; one with no prototype at all resolves nothing and reaches `JS_ToObjectString`'s
+   `[object Object]`; and `{status,body}` and `{code,detail}` are indistinguishable in either form.
+   WHAT THE NEXT DIFF BUILDS: the own property KEYS, appended by `JS_DiagCString` in quickjs.c beside the forms
+   it already composes — KEYS and never VALUES, because a value's description is a coercion and that is the
+   page's code on the path that reports the page's error. It belongs in the engine rather than here for the
+   reason this function was just repaired for: that is the canonical describer every C embedder reaches, and a
+   key list composed here would be the second answer again.
+   HOW ITS ABSENCE WOULD SHOW: a real application's `enginePageErrors` carries a row whose whole message is a
+   kind — no colon, no message, no frames — at a count above one, and nothing in it names a property. */
 
 /* THE PAIR A THROWN VALUE KEYS ON, DERIVED ONCE FOR BOTH EDGES. The report and its retraction must compose the
    identical (message, throw site) or no retraction would ever find the row it means to take back, and two
