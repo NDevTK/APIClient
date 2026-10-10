@@ -165,7 +165,7 @@ function defaultTargets(notify = () => {}) {
    * reason: a file the report does not collect is an excluded file and the total looks complete either way. */
   out.push(...walk(join(HERE, "host")));
   out.push(...walk(join(ROOT, "extension")));
-  for (const doc of ["CLAUDE.md", "SECURITY.md"]) {
+  for (const doc of ["CLAUDE.md", "SECURITY.md", "docs/claude-record.md"]) {
     const p = join(ROOT, doc);
     if (existsSync(p)) out.push(p);
   }

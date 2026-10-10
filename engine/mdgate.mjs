@@ -287,6 +287,23 @@ function readBase(rev, path, repo) {
 
 /* ── THE RUN ──────────────────────────────────────────────────────────────────────────────────────────────*/
 const subjectText = readFileSync(SUBJECT, "utf8");
+/* THE SIZE BUDGET. CLAUDE.md is injected whole into every agent at spawn, so its size is paid once per agent
+   per turn and it is the one cost every lane shares. It grew to over a megabyte because every recording rule
+   it held only ever ADDED, and the cure is a construction rather than a convention: the file holds RULES, the
+   incident history lives in docs/claude-record.md (read on demand, never injected), and a landing that pushes
+   the rules file past this budget is refused here. The budget applies only to the rules file itself; a
+   --subject pointed elsewhere is not judged by it. */
+const MD_BUDGET_BYTES = 64 * 1024;
+if (MD_PATH === "CLAUDE.md") {
+  const bytes = Buffer.byteLength(subjectText, "utf8");
+  if (bytes > MD_BUDGET_BYTES) {
+    bad(`REFUSED — CLAUDE.md is ${bytes} bytes against a budget of ${MD_BUDGET_BYTES}. It is injected into ` +
+        `every agent, so its size is paid per agent per turn. State the new lesson as one rule sentence in the ` +
+        `right section and put its incident in the commit message, at the code site, or in docs/claude-record.md.`);
+    process.exit(1);
+  }
+  log(`budget  CLAUDE.md is ${bytes} of ${MD_BUDGET_BYTES} bytes`);
+}
 const subject = readFile(subjectText);
 const base = (BASE_ARG || BASE.sha)
   ? readBase(BASE_ARG ?? BASE.sha, MD_PATH, BASE.repo ?? ROOT)
