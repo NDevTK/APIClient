@@ -26,6 +26,8 @@
 #include <lexbor/dom/dom.h>
 
 #include "quickjs.h"
+#include "core/css/css_length.h"
+#include "core/layout/scrolling_area.h"
 
 /* CSSOM VIEW §6's `enum ScrollLogicalPosition { "start", "center", "end", "nearest" }`, which §6.1's determine
    the scroll-into-view position branches over four ways on each axis. It is an enum here and a string at the
@@ -79,9 +81,9 @@ void element_scrolling_scroll_element(lxb_dom_element_t *el, double x, double y,
 
 /* §6.1's "To SCROLL A TARGET INTO VIEW target … with a scroll behavior behavior, a block flow direction
    position block, an inline base direction position inline, and an optional containing Element to stop
-   scrolling after reaching container", as a cursor over step 2's ancestor walk: `next` runs steps 2.1 to
-   2.4 for at most one scrolling box and answers whether the walk continues, so a step machine can rest
-   between two boxes. The cursor holds only DOM nodes of the running flow, which a fork shares by address.
+   scrolling after reaching container", as a cursor over step 2's ancestor walk: each `next` does one rest
+   unit of work (opening a box, a run of its scrolling area's descendants, or steps 2.2 to 2.4 over it) and
+   answers whether the walk continues, so a step machine can rest inside a box's measurement. The cursor holds only DOM nodes of the running flow, which a fork shares by address.
    `container` is NULL for §6's `container: "all"` and is the target itself for `"nearest"` (`scrollIntoView`'s
    step 5.4). The caller has already run `scrollIntoView`'s step 7: the target has an associated box. */
 typedef enum {
@@ -91,11 +93,30 @@ typedef enum {
     ES_INTO_VIEW_DONE
 } ElementScrollingIntoViewPhase;
 
+/* A scrolling box as §6.1's two position algorithms read it: its edges in client coordinates (CSSOM VIEW
+   §6's `getBoundingClientRect()` space), its own extent, its scrolling area, its current scroll position
+   and its overflow directions. element_scrolling.c states why edges are `CssPx` and positions `double`. */
+typedef struct {
+    lxb_dom_element_t *el;    /* the scroll container, or NULL when this box is the viewport */
+    JSContext *dctx;          /* the realm whose active document this box belongs to */
+    CssPx  lo[2], hi[2];      /* the box's own edges, in client coordinates */
+    CssPx  area[2];           /* §2's scrolling area extent on each axis */
+    CssPx  extent[2];         /* the box's own extent: an element's padding edge, or the viewport's ICB */
+    double cur[2];            /* its current scroll position */
+    bool   ending_at_hi[2];   /* §2's overflow directions: is the ending edge at the larger coordinate */
+} ElementScrollingBox;
+
 typedef struct {
     lxb_dom_element_t *target, *walk, *container;
     lxb_dom_node_t    *doc;
     ScrollLogicalPosition block, inline_pos;
-    ElementScrollingIntoViewPhase phase;
+    ElementScrollingIntoViewPhase phase;   /* where the walk continues once no box is open */
+    /* The box being measured: its scrolling area is walked one rest unit of descendants per `next`, axis by
+       axis, before steps 2.2 to 2.4 run over it. */
+    bool                box_open;
+    int                 axis;
+    ElementScrollingBox box;
+    ScrollingAreaWalk   area;
 } ElementScrollingIntoView;
 
 void element_scrolling_into_view_begin(ElementScrollingIntoView *w, lxb_dom_element_t *target,

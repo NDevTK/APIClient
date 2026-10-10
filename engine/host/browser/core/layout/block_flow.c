@@ -2536,9 +2536,8 @@ CssPx block_flow_child_top(lxb_dom_element_t *el)
        two DIFFERENT lines of one loop — `*want_top` for the box this entry named, `flow_placement_record` for
        every box the walk passes — so they can disagree, and the day they do, a position every box below it on
        the stack was placed against is wrong while both files read as correct. This arms on every ask the
-       record did not answer, which is every FIRST ask of every container, so it is exercised by any document
-       that is painted at all rather than by a case somebody has to think of. */
-    DCHECKF(!flow_placement_pass_is_open() || flow_placement_agrees(el, top),
+       record did not answer, which is every first ask of every container a job lays out. */
+    DCHECKF(!flow_placement_is_held() || flow_placement_agrees(el, top),
             "CSS 2 §9.4.1's walk reported this box's top border edge as %g and the placement record this same "
             "walk wrote holds a different number for it — or holds nothing for it at all. The two come off ONE "
             "loop over ONE child list: `want_top` is written where the walk recognises the box it was asked "

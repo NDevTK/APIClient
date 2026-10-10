@@ -2382,18 +2382,18 @@ char *result_json(JSContext *ctx) {
                              /* …and what the render spent on geometry: lifetime counters of this agent, every one
                                 differenceable. `childTopAsks` counts asks for a box's position under CSS 2.1
                                 §9.4.1 "Block formatting contexts", `childTopServed` those
-                                core/layout/flow_placement.h served from a whole-tree pass's record,
+                                core/layout/flow_placement.h served from a layout job's record,
                                 `childTopWalks` those that ran §9.4.1's walk over the container's whole child list;
                                 the three close, asserted there. A `childTopWalks` growing with the square of a
                                 container's children is one layout per box. `placements / childTopWalks` is what
-                                one walk pays for; `passes` counts whole-tree spans. `origin*` is CSS 2 §8.1 "Box
+                                one walk pays for. `origin*` is CSS 2 §8.1 "Box
                                 dimensions"' border-box origin, derived from the containing block's (§10.1 second
                                 case), in or out of a render; read `originDerived` against a document's depth.
                                 `cbWidth*` is CSS 2.1 §10.1 "Definition of
                                 'containing block'"'s width (fourth case), the extent to `origin*`'s point through
                                 a separate chain. Each `*Asks == *Served + *Derived` closes and is asserted. */
                              "\"_layout\":{\"childTopAsks\":%lld,\"childTopServed\":%lld,"
-                             "\"childTopWalks\":%lld,\"placements\":%lld,\"passes\":%lld,"
+                             "\"childTopWalks\":%lld,\"placements\":%lld,"
                              "\"originAsks\":%lld,\"originServed\":%lld,\"originDerived\":%lld,"
                              "\"cbWidthAsks\":%lld,\"cbWidthServed\":%lld,\"cbWidthDerived\":%lld},"
                              /* What the run spent on css-cascade-5 §4.2 "Cascaded Values".
@@ -2426,7 +2426,7 @@ char *result_json(JSContext *ctx) {
                      (unsigned long long)orphanWalk.walks_full,
                      (unsigned long long)orphanWalk.full_candidates,
                      wfq, cold, heap, swap, forkAt, absent,
-                     place.asks, place.served, place.walks, place.placements, place.passes,
+                     place.asks, place.served, place.walks, place.placements,
                      place.origin_asks, place.origin_served, place.origin_derived,
                      place.cb_width_asks, place.cb_width_served, place.cb_width_derived,
                      casc.asks_life, casc.served_life, casc.resolved_life, casc.passes_life,

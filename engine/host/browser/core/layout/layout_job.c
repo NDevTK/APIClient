@@ -44,6 +44,7 @@ struct LayoutJob {
     uint64_t  gen;       /* starts at 1, so a zeroed slot is never live */
     uint64_t  rests;
     bool      driven;
+    FlowPlacementRecord placement;   /* core/layout/flow_placement.h's three facts, for this job */
 };
 
 /* The job whose activation holds the thread when a driver entered one, and the thread's synchronous job.
@@ -96,6 +97,7 @@ static void lj_memo_shed(LayoutJob *job)
 {
     job->gen++;
     job->memo_used = 0;
+    flow_placement_record_release(&job->placement);
 }
 
 /* ---- the stack ------------------------------------------------------------------------------------------ */
@@ -138,6 +140,7 @@ void layout_job_free(LayoutJob *job)
             "job only after leaving it, and leaving asserts both are zero", job->n, job->drives);
     DCHECK(g_alive > 0, "a layout job was freed with no driven job alive");
     g_alive--;
+    flow_placement_record_release(&job->placement);
     free(job->stack);
     free(job->memo);
     free(job);
@@ -182,7 +185,7 @@ static void *lj_step_clone(JSContext *ctx, void *root, void **cursors[], int ncu
     DCHECK(src != g_entered && src->n == 0,
            "a layout job was forked while its activation holds the thread — a job is entered only inside one "
            "step re-entry, and no fork is taken inside layout");
-    /* The clone is a new job with an empty memo: the memo is re-derivable, so the arm re-derives it. */
+    /* The clone is a new job with an empty memo and record: both are re-derivable, so the arm re-derives them. */
     return layout_job_new();
 }
 
@@ -202,6 +205,12 @@ bool layout_job_holds_thread(void)
 size_t layout_job_alive(void)
 {
     return g_alive;
+}
+
+FlowPlacementRecord *layout_job_placement(void)
+{
+    if (g_entered != NULL) return &g_entered->placement;
+    return g_sync.drives != 0 ? &g_sync.placement : NULL;
 }
 
 /* ---- the drive ------------------------------------------------------------------------------------------ */

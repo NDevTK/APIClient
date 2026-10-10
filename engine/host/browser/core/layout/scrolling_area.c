@@ -390,142 +390,145 @@ static CssPx sa_anon_block_boxes_extreme(lxb_dom_element_t *b, bool vertical, bo
    every box in the document — and `exclude_under` is NULL, because §2's viewport column carries no exclusion
    clause at all. A NULL anchor is the spec's own absence and not a mode switch: there is no ancestor of a
    viewport for a containing block to be, so there is nothing for the test to be asked about. */
-static CssPx sa_descendants_extreme(lxb_dom_element_t *el, lxb_dom_element_t *exclude_under,
-                                    bool vertical, bool ending_at_hi, CssPx seed)
+/* Open the walk over `root`'s descendants, folding `root`'s own two shapes of §9.4.2's context into `seed`
+   first, in the same pair and order the fold asks them below. `root` is not one of its own descendants; the
+   boxes folded here are the anonymous inline boxes around its descendant text nodes, which are. */
+static void sa_walk_open(ScrollingAreaWalk *w, lxb_dom_element_t *root, lxb_dom_element_t *exclude_under,
+                         CssPx seed)
 {
-    lxb_dom_node_t *root = lxb_dom_interface_node(el), *n = root->first_child;
-    char wbuf[160], pbuf[160];
-    /* `el`'s OWN TWO SHAPES OF §9.4.2's CONTEXT first, in the same pair and the same order the walk asks them
-       in below. `el` is not one of its own descendants and this is not a special case for it: the boxes folded
-       here are the anonymous inline boxes around `el`'s descendant TEXT NODES, which ARE descendants, and the
-       box establishing the context they sit on — `el` itself, or one of §9.2.1.1's anonymous block boxes
-       inside it — is simply where §9.4.2 can be asked about them. `el` has a box (the caller's own
-       precondition) so there is no second existence test, and its own subtree is rendered with it. */
-    CssPx best = sa_anon_block_boxes_extreme(el, vertical, ending_at_hi,
-                                             sa_inline_context_extreme(el, vertical, ending_at_hi, seed));
-
-    while (n != NULL) {
-        /* css-display-3 §2.5's `none` is the one answer that reaches past this node — see the banner. */
-        bool descend = n->type != LXB_DOM_NODE_TYPE_ELEMENT || element_view_subtree_has_boxes(n);
-
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT && descend) {
-            lxb_dom_element_t *d = lxb_dom_interface_element(n);
-
-            if (element_view_has_box(n)) {
-                /* THE EXCLUSION IS PER BOX AND IS NOT INHERITED BY THE SUBTREE, which is §2's own sentence:
-                   it excludes "boxes THAT HAVE an ancestor of the element as their containing block", and the
-                   containing block of a box inside an excluded one is that excluded box — not an ancestor of
-                   `el`. So a descendant of an out-of-flow box is IN the scrolling area while the box itself is
-                   out of it, and the inline formatting context an excluded box establishes is folded for the
-                   same reason: the anonymous inline boxes on its lines have IT as their containing block. */
-                if (exclude_under == NULL || !sa_excluded(exclude_under, d)) {
-                    /* WHICH DERIVATION ANSWERS THIS BOX'S MARGIN EDGE is CSS 2.2 §9.2.2's own split between an
-                       inline box and everything else, asked here because §9.4.2 gives the first a SET of
-                       border areas and no `width` or `height` to size one with. */
-                    CssPx e = sa_is_non_replaced_inline(d) ? sa_inline_box_edge(d, vertical, ending_at_hi)
-                                                           : sa_descendant_edge(d, vertical, ending_at_hi);
-
-                    best = ending_at_hi ? css_px_max(best, e) : css_px_min(best, e);
-                }
-                best = sa_inline_context_extreme(d, vertical, ending_at_hi, best);
-                best = sa_anon_block_boxes_extreme(d, vertical, ending_at_hi, best);
-            }
-        } else if (n->type == LXB_DOM_NODE_TYPE_TEXT) {
-            lxb_dom_element_t *parent;
-
-            DCHECKF(n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
-                   "walk root %s, the text node's parent is %s: "
-                   "a TEXT node inside an element's subtree has no element parent — the walk started at an "
-                   "element and descends only through its children, so a text node here belongs to one",
-                   box_subject(el, wbuf, sizeof wbuf), box_subject_node(n->parent, pbuf, sizeof pbuf));
-            parent = lxb_dom_interface_element(n->parent);
-            /* §9.2.2.1's rule answers whether the run is a box at all; collapsible white space is not and
-               contributes nothing. A run that IS a box is on a line box of ONE of the two contexts folded
-               above, and CSS 2.2 §9.2.1 is what makes that exhaustive for a BLOCK CONTAINER: it "either
-               contains only block-level boxes or establishes an inline formatting context", and §9.2.1.1's
-               forcing is what makes the sentence true of a container holding both, by wrapping each maximal
-               run of inline-level children in a box of its own. So the parent being a block container IS the
-               guarantee — the run is either on the element's own context or inside one of its anonymous block
-               boxes, and both were folded when the walk reached it. */
-            if (block_flow_text_child_generates_box(n) && !sa_is_block_container(parent) &&
-                !sa_is_non_replaced_inline(parent))
-                DFAILF("text run's parent %s, walk root %s: "
-                      "CSSOM VIEW §2's scrolling area takes the extreme over \"all of the element's "
-                      "descendants' boxes\", and one of them is the ANONYMOUS INLINE BOX (CSS 2.2 §9.2.2.1 "
-                      "\"Anonymous inline boxes\") holding this text run — but the element this run is a child "
-                      "of is NEITHER A BLOCK CONTAINER BOX NOR A NON-REPLACED INLINE BOX, so neither of the "
-                      "two shapes CSS 2.2 §9.2.1 \"Block-level elements and block boxes\" gives an inline "
-                      "formatting context is here to be asked, and the run has not been folded in. "
-                      "A NON-REPLACED INLINE PARENT IS NOT ONE OF THESE AND USED TO BE, and what it was "
-                      "waiting on is built: §9.2.2.1's own sentence is that \"any text that is DIRECTLY "
-                      "contained inside a block container element (not inside an inline element) must be "
-                      "treated as an anonymous inline element\", so a `<div>a<span>b</span></div>`'s run is on "
-                      "the lines of the nearest block container ANCESTOR and was always folded there — what "
-                      "was missing was the `span`'s OWN margin edge, which `sa_inline_box_edge` above now "
-                      "takes over §9.4.2's fragments. FOUR THINGS ARE KNOWN TO REACH THIS LINE AND EACH NAMES A "
-                      "DIFFERENT MISSING BOX. (1) A `display: contents` parent, whose children css-display-3 "
-                      "§2.5 \"Box "
-                      "Generation: the none and contents keywords\" splices into the grandparent's box list — "
-                      "\"the element must be treated as if it had been replaced in the element tree by its "
-                      "contents\" — so this run's context is the grandparent's and the splice is what is "
-                      "missing; core/layout/block_flow.c's own child walk names the same absence. (2) A FLEX "
-                      "or GRID container parent, whose text is not §9.2.1.1's box at all: css-flexbox-1 §4 "
-                      "\"Flex Items\" says \"each child text sequence is wrapped in an ANONYMOUS BLOCK "
-                      "CONTAINER FLEX ITEM\", css-grid-2 §6 \"Grid Items\" says the same with `grid item` for "
-                      "`flex item`, and both add that a sequence of only white space \"is instead not "
-                      "rendered\" — a different box, generated by a different rule, laid out by a different "
-                      "algorithm. (3) A REPLACED INLINE parent (`<object>x</object>`): CSS 2.2 §3.1 "
-                      "\"Definitions\" says of a replaced element that \"the content of replaced elements is "
-                      "not considered in the CSS rendering model\", so this run generates NO BOX and the "
-                      "missing thing is not a box at all but the SUPPRESSION — the walk should not have "
-                      "descended into it. core/layout/replaced_element.h answers which elements are replaced "
-                      "and in what state; BUILD the child-box suppression over it, in the ONE predicate that "
-                      "decides box existence (core/dom/element_view.h's), so this walk and "
-                      "core/layout/line_box.c's fill stop descending together rather than one at a time. "
-                      "(4) A TABLE BOX or a table-internal parent, whose text is not CSS 2.2 §9.2.1.1 "
-                      "Anonymous block boxes' business but CSS 2.1 §17.2.1 Anonymous table objects': \"If a "
-                      "child C of a 'table' or "
-                      "'inline-table' box is not a proper table child, then generate an anonymous 'table-row' "
-                      "box around C and all consecutive siblings of C that are not proper table children\", and "
-                      "then the NEXT RULE OF THAT SAME SECOND STAGE — not its THIRD stage, which is about a "
-                      "MISPARENTED box outside a table and generates the table itself — wraps that row's "
-                      "non-cell children: \"If a child C of a 'table-row' box is not a 'table-cell', then "
-                      "generate an anonymous 'table-cell' box around C and all consecutive siblings of C that "
-                      "are not 'table-cell' boxes.\" THAT CELL IS GENERATED NOW and this line used to say it "
-                      "was not: core/layout/table_box.h answers §17.2.1's first two stages and reports the "
-                      "anonymous cell as a range of siblings. What the run inside it still lacks is the cell's "
-                      "USED WIDTH, AND §17.5.2 Table width algorithms: the 'table-layout' property IS NO "
-                      "LONGER WHAT IT WAITS ON — that section is built (core/layout/table_width.h) and reports "
-                      "a used width PER GRID COLUMN beside the table's own. What is missing is the step from a "
-                      "column to a CELL: §17.5.2.2 Automatic table layout's final rules are written over \"the "
-                      "'table' or 'inline-table' element\" and state no cell's width at all, and "
-                      "core/layout/used_value.c names that step at its own table-internal arms — wire the arm "
-                      "to the table box above the element and index the column core/layout/table_grid.h "
-                      "assigned it. Until then the cell's line boxes have no available width to be filled "
-                      "into. "
-                      "WHICH OF THE FOUR THIS IS, THE PARENT'S COMPUTED `display` NAMED ABOVE ALREADY SAYS, and "
-                      "it says it ALONE: `contents` is (1); `flex`, `grid`, `inline-flex` and `inline-grid` are "
-                      "(2); `inline` is (3), because reaching this line with `inline` means "
-                      "`sa_is_non_replaced_inline` answered FALSE for a parent whose `display` IS `inline`, "
-                      "which it can only do for a REPLACED one; and `table`, `inline-table`, `table-row`, a row "
-                      "group or `table-column`/`table-column-group` is (4). A SPELLING IN NONE OF THOSE FOUR "
-                      "GROUPS IS ITSELF THE FINDING — this list is what has been reasoned about, not a proof "
-                      "that nothing else reaches here, and a fifth arrival is a fifth missing box to name. "
-                      "THE `display` IS WHY THIS ABORT ASKS NOTHING ELSE: the sentence here used to send its "
-                      "reader on to `replaced_element_of`, and asking that from a crash message would ABORT for "
-                      "an `embed`, a `video`, a `canvas`, an `object`, an `audio` or an `input` — reporting "
-                      "core/layout/replaced_element.c's own gap for exactly case (3), in place of this one",
-                      box_subject(parent, pbuf, sizeof pbuf), box_subject(el, wbuf, sizeof wbuf));
-        }
-        if (descend && n->first_child != NULL) { n = n->first_child; continue; }
-        while (n != root && n->next == NULL) n = n->parent;
-        if (n == root) break;
-        n = n->next;
-    }
-    return best;
+    w->root = root;
+    w->exclude_under = exclude_under;
+    w->best = sa_anon_block_boxes_extreme(root, w->vertical, w->ending_at_hi,
+                                          sa_inline_context_extreme(root, w->vertical, w->ending_at_hi, seed));
+    w->n = lxb_dom_interface_node(root)->first_child;
 }
 
-CssPx scrolling_area_extent_px(lxb_dom_element_t *el, bool vertical)
+/* Fold the next descendant node in tree order into the extreme, and advance the cursor past it. */
+static void sa_walk_fold(ScrollingAreaWalk *w)
+{
+    lxb_dom_node_t *root = lxb_dom_interface_node(w->root), *n = w->n;
+    char wbuf[160], pbuf[160];
+    bool descend;
+
+    DCHECK(n != NULL, "a scrolling area's descendant walk was stepped after it was complete");
+    /* css-display-3 §2.5's `none` is the one answer that reaches past this node — see the banner. */
+    descend = n->type != LXB_DOM_NODE_TYPE_ELEMENT || element_view_subtree_has_boxes(n);
+
+    if (n->type == LXB_DOM_NODE_TYPE_ELEMENT && descend) {
+        lxb_dom_element_t *d = lxb_dom_interface_element(n);
+
+        if (element_view_has_box(n)) {
+            /* THE EXCLUSION IS PER BOX AND IS NOT INHERITED BY THE SUBTREE, which is §2's own sentence:
+               it excludes "boxes THAT HAVE an ancestor of the element as their containing block", and the
+               containing block of a box inside an excluded one is that excluded box — not an ancestor of
+               `el`. So a descendant of an out-of-flow box is IN the scrolling area while the box itself is
+               out of it, and the inline formatting context an excluded box establishes is folded for the
+               same reason: the anonymous inline boxes on its lines have IT as their containing block. */
+            if (w->exclude_under == NULL || !sa_excluded(w->exclude_under, d)) {
+                /* WHICH DERIVATION ANSWERS THIS BOX'S MARGIN EDGE is CSS 2.2 §9.2.2's own split between an
+                   inline box and everything else, asked here because §9.4.2 gives the first a SET of
+                   border areas and no `width` or `height` to size one with. */
+                CssPx e = sa_is_non_replaced_inline(d) ? sa_inline_box_edge(d, w->vertical, w->ending_at_hi)
+                                                       : sa_descendant_edge(d, w->vertical, w->ending_at_hi);
+
+                w->best = w->ending_at_hi ? css_px_max(w->best, e) : css_px_min(w->best, e);
+            }
+            w->best = sa_inline_context_extreme(d, w->vertical, w->ending_at_hi, w->best);
+            w->best = sa_anon_block_boxes_extreme(d, w->vertical, w->ending_at_hi, w->best);
+        }
+    } else if (n->type == LXB_DOM_NODE_TYPE_TEXT) {
+        lxb_dom_element_t *parent;
+
+        DCHECKF(n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
+               "walk root %s, the text node's parent is %s: "
+               "a TEXT node inside an element's subtree has no element parent — the walk started at an "
+               "element and descends only through its children, so a text node here belongs to one",
+               box_subject(w->root, wbuf, sizeof wbuf), box_subject_node(n->parent, pbuf, sizeof pbuf));
+        parent = lxb_dom_interface_element(n->parent);
+        /* §9.2.2.1's rule answers whether the run is a box at all; collapsible white space is not and
+           contributes nothing. A run that IS a box is on a line box of ONE of the two contexts folded
+           above, and CSS 2.2 §9.2.1 is what makes that exhaustive for a BLOCK CONTAINER: it "either
+           contains only block-level boxes or establishes an inline formatting context", and §9.2.1.1's
+           forcing is what makes the sentence true of a container holding both, by wrapping each maximal
+           run of inline-level children in a box of its own. So the parent being a block container IS the
+           guarantee — the run is either on the element's own context or inside one of its anonymous block
+           boxes, and both were folded when the walk reached it. */
+        if (block_flow_text_child_generates_box(n) && !sa_is_block_container(parent) &&
+            !sa_is_non_replaced_inline(parent))
+            DFAILF("text run's parent %s, walk root %s: "
+                  "CSSOM VIEW §2's scrolling area takes the extreme over \"all of the element's "
+                  "descendants' boxes\", and one of them is the ANONYMOUS INLINE BOX (CSS 2.2 §9.2.2.1 "
+                  "\"Anonymous inline boxes\") holding this text run — but the element this run is a child "
+                  "of is NEITHER A BLOCK CONTAINER BOX NOR A NON-REPLACED INLINE BOX, so neither of the "
+                  "two shapes CSS 2.2 §9.2.1 \"Block-level elements and block boxes\" gives an inline "
+                  "formatting context is here to be asked, and the run has not been folded in. "
+                  "A NON-REPLACED INLINE PARENT IS NOT ONE OF THESE AND USED TO BE, and what it was "
+                  "waiting on is built: §9.2.2.1's own sentence is that \"any text that is DIRECTLY "
+                  "contained inside a block container element (not inside an inline element) must be "
+                  "treated as an anonymous inline element\", so a `<div>a<span>b</span></div>`'s run is on "
+                  "the lines of the nearest block container ANCESTOR and was always folded there — what "
+                  "was missing was the `span`'s OWN margin edge, which `sa_inline_box_edge` above now "
+                  "takes over §9.4.2's fragments. FOUR THINGS ARE KNOWN TO REACH THIS LINE AND EACH NAMES A "
+                  "DIFFERENT MISSING BOX. (1) A `display: contents` parent, whose children css-display-3 "
+                  "§2.5 \"Box "
+                  "Generation: the none and contents keywords\" splices into the grandparent's box list — "
+                  "\"the element must be treated as if it had been replaced in the element tree by its "
+                  "contents\" — so this run's context is the grandparent's and the splice is what is "
+                  "missing; core/layout/block_flow.c's own child walk names the same absence. (2) A FLEX "
+                  "or GRID container parent, whose text is not §9.2.1.1's box at all: css-flexbox-1 §4 "
+                  "\"Flex Items\" says \"each child text sequence is wrapped in an ANONYMOUS BLOCK "
+                  "CONTAINER FLEX ITEM\", css-grid-2 §6 \"Grid Items\" says the same with `grid item` for "
+                  "`flex item`, and both add that a sequence of only white space \"is instead not "
+                  "rendered\" — a different box, generated by a different rule, laid out by a different "
+                  "algorithm. (3) A REPLACED INLINE parent (`<object>x</object>`): CSS 2.2 §3.1 "
+                  "\"Definitions\" says of a replaced element that \"the content of replaced elements is "
+                  "not considered in the CSS rendering model\", so this run generates NO BOX and the "
+                  "missing thing is not a box at all but the SUPPRESSION — the walk should not have "
+                  "descended into it. core/layout/replaced_element.h answers which elements are replaced "
+                  "and in what state; BUILD the child-box suppression over it, in the ONE predicate that "
+                  "decides box existence (core/dom/element_view.h's), so this walk and "
+                  "core/layout/line_box.c's fill stop descending together rather than one at a time. "
+                  "(4) A TABLE BOX or a table-internal parent, whose text is not CSS 2.2 §9.2.1.1 "
+                  "Anonymous block boxes' business but CSS 2.1 §17.2.1 Anonymous table objects': \"If a "
+                  "child C of a 'table' or "
+                  "'inline-table' box is not a proper table child, then generate an anonymous 'table-row' "
+                  "box around C and all consecutive siblings of C that are not proper table children\", and "
+                  "then the NEXT RULE OF THAT SAME SECOND STAGE — not its THIRD stage, which is about a "
+                  "MISPARENTED box outside a table and generates the table itself — wraps that row's "
+                  "non-cell children: \"If a child C of a 'table-row' box is not a 'table-cell', then "
+                  "generate an anonymous 'table-cell' box around C and all consecutive siblings of C that "
+                  "are not 'table-cell' boxes.\" THAT CELL IS GENERATED NOW and this line used to say it "
+                  "was not: core/layout/table_box.h answers §17.2.1's first two stages and reports the "
+                  "anonymous cell as a range of siblings. What the run inside it still lacks is the cell's "
+                  "USED WIDTH, AND §17.5.2 Table width algorithms: the 'table-layout' property IS NO "
+                  "LONGER WHAT IT WAITS ON — that section is built (core/layout/table_width.h) and reports "
+                  "a used width PER GRID COLUMN beside the table's own. What is missing is the step from a "
+                  "column to a CELL: §17.5.2.2 Automatic table layout's final rules are written over \"the "
+                  "'table' or 'inline-table' element\" and state no cell's width at all, and "
+                  "core/layout/used_value.c names that step at its own table-internal arms — wire the arm "
+                  "to the table box above the element and index the column core/layout/table_grid.h "
+                  "assigned it. Until then the cell's line boxes have no available width to be filled "
+                  "into. "
+                  "WHICH OF THE FOUR THIS IS, THE PARENT'S COMPUTED `display` NAMED ABOVE ALREADY SAYS, and "
+                  "it says it ALONE: `contents` is (1); `flex`, `grid`, `inline-flex` and `inline-grid` are "
+                  "(2); `inline` is (3), because reaching this line with `inline` means "
+                  "`sa_is_non_replaced_inline` answered FALSE for a parent whose `display` IS `inline`, "
+                  "which it can only do for a REPLACED one; and `table`, `inline-table`, `table-row`, a row "
+                  "group or `table-column`/`table-column-group` is (4). A SPELLING IN NONE OF THOSE FOUR "
+                  "GROUPS IS ITSELF THE FINDING — this list is what has been reasoned about, not a proof "
+                  "that nothing else reaches here, and a fifth arrival is a fifth missing box to name. "
+                  "THE `display` IS WHY THIS ABORT ASKS NOTHING ELSE: the sentence here used to send its "
+                  "reader on to `replaced_element_of`, and asking that from a crash message would ABORT for "
+                  "an `embed`, a `video`, a `canvas`, an `object`, an `audio` or an `input` — reporting "
+                  "core/layout/replaced_element.c's own gap for exactly case (3), in place of this one",
+                  box_subject(parent, pbuf, sizeof pbuf), box_subject(w->root, wbuf, sizeof wbuf));
+    }
+    if (descend && n->first_child != NULL) { w->n = n->first_child; return; }
+    while (n != root && n->next == NULL) n = n->parent;
+    w->n = n == root ? NULL : n->next;
+}
+
+void scrolling_area_walk_element(ScrollingAreaWalk *w, lxb_dom_element_t *el, bool vertical)
 {
     CssPx padding, lo, hi;
     bool ending_at_hi;
@@ -576,16 +579,13 @@ CssPx scrolling_area_extent_px(lxb_dom_element_t *el, bool vertical)
        makes a scrolling area at least as large as the padding box for every element in every document. */
     lo = vertical ? origin.y : origin.x;
     hi = css_px_add(lo, padding);
-    if (ending_at_hi) hi = sa_descendants_extreme(el, el, vertical, true, hi);
-    else              lo = sa_descendants_extreme(el, el, vertical, false, lo);
-    DCHECKF(css_px_sub(hi, lo).px >= padding.px,
-           "%s, %s axis, beginning edge %g, ending edge %g, own padding edge %g: "
-           "an element's scrolling area came out SMALLER than its own padding box. §2's table takes the ending "
-           "edge as an extreme OVER that padding edge, so the padding box is one of the operands of the maximum "
-           "and the result cannot be below it — a smaller answer is the beginning edge and the ending edge "
-           "having been derived from different boxes",
-           box_subject(el, nbuf, sizeof nbuf), vertical ? "block" : "inline", lo.px, hi.px, padding.px);
-    return css_px_sub(hi, lo);
+    w->vertical = vertical;
+    w->ending_at_hi = ending_at_hi;
+    w->viewport = false;
+    w->lo = lo;
+    w->hi = hi;
+    w->floor = padding;
+    sa_walk_open(w, el, el, ending_at_hi ? hi : lo);
 }
 
 /* css-writing-modes-4 §8 "The Principal Writing Mode"' ELEMENT — the one whose used `writing-mode` and
@@ -650,7 +650,7 @@ bool scrolling_area_viewport_ending_edge_at_higher_coordinate(lxb_dom_node_t *do
     return scrolling_area_ending_edge_at_higher_coordinate(sa_principal_writing_mode_element(doc), vertical);
 }
 
-CssPx scrolling_area_viewport_extent_px(lxb_dom_node_t *doc, CssPx icb_extent, bool vertical)
+void scrolling_area_walk_viewport(ScrollingAreaWalk *w, lxb_dom_node_t *doc, CssPx icb_extent, bool vertical)
 {
     lxb_dom_node_t *rootn;
     bool ending_at_hi;
@@ -692,23 +692,72 @@ CssPx scrolling_area_viewport_extent_px(lxb_dom_node_t *doc, CssPx icb_extent, b
        A ROOT WITH NO BOX contributes nothing and neither does anything under it — core/dom/element_view.h's one
        predicate is the same one the walk applies per descendant — so the extreme is over the empty set and the
        area is the ICB. That is §2's answer for a `display: none` root, not a shrug at one. */
+    w->vertical = vertical;
+    w->ending_at_hi = ending_at_hi;
+    w->viewport = true;
+    w->lo = lo;
+    w->hi = hi;
+    w->floor = icb_extent;
+    w->root = lxb_dom_interface_element(rootn);
+    w->n = NULL;
+    w->best = ending_at_hi ? hi : lo;
     if (element_view_has_box(rootn)) {
         lxb_dom_element_t *root = lxb_dom_interface_element(rootn);
         CssPx own = sa_descendant_edge(root, vertical, ending_at_hi);
 
-        if (ending_at_hi) hi = sa_descendants_extreme(root, NULL, vertical, true,  css_px_max(hi, own));
-        else              lo = sa_descendants_extreme(root, NULL, vertical, false, css_px_min(lo, own));
+        sa_walk_open(w, root, NULL, ending_at_hi ? css_px_max(hi, own) : css_px_min(lo, own));
     }
-    DCHECKF(css_px_sub(hi, lo).px >= icb_extent.px,
-           "document element %s, %s axis, beginning edge %g, ending edge %g, ICB extent %g: "
-           "a VIEWPORT's scrolling area came out SMALLER than its initial containing block. §2's viewport row "
-           "takes the ending edge as an extreme OVER the ICB's own edge on that side — \"the bottom-most edge "
-           "of the bottom edge of the initial containing block and the bottom margin edge of all of the "
-           "viewport's descendants' boxes\" — so the ICB extent is one of the operands of the extreme and the "
-           "result cannot be below it. This is the invariant CSSOM VIEW §6's `scrollWidth`/`scrollHeight` "
-           "max(area, viewport) and §4's `scroll()` clamp both rest on, and a smaller answer is the beginning "
-           "edge and the ending edge having been derived from different boxes",
-           box_subject_node(rootn, nbuf, sizeof nbuf), vertical ? "block" : "inline",
-           lo.px, hi.px, icb_extent.px);
+}
+
+bool scrolling_area_walk_done(const ScrollingAreaWalk *w)
+{
+    return w->n == NULL;
+}
+
+void scrolling_area_walk_step(ScrollingAreaWalk *w)
+{
+    sa_walk_fold(w);
+}
+
+CssPx scrolling_area_walk_extent(const ScrollingAreaWalk *w)
+{
+    CssPx lo = w->lo, hi = w->hi;
+    char nbuf[160];
+
+    DCHECK(w->n == NULL, "a scrolling area was read before its descendant walk was complete");
+    if (w->ending_at_hi) hi = w->best;
+    else                 lo = w->best;
+    /* §2's table takes the ending edge as an extreme over the box's own edge on that side (the element's
+       padding edge, the viewport's initial containing block), so the extent cannot be below it; a smaller
+       answer is the two edges having been derived from different boxes. CSSOM VIEW §6's `scrollWidth` max()
+       and §4's `scroll()` clamp rest on this. */
+    DCHECKF(css_px_sub(hi, lo).px >= w->floor.px,
+            "%s %s, %s axis, beginning edge %g, ending edge %g, own extent %g: a scrolling area came out "
+            "smaller than the box it is the scrolling area of",
+            w->viewport ? "the viewport over" : "element", box_subject(w->root, nbuf, sizeof nbuf),
+            w->vertical ? "block" : "inline", lo.px, hi.px, w->floor.px);
     return css_px_sub(hi, lo);
+}
+
+/* NAMED RESIDUAL. Not covered: every caller of these two but CSSOM VIEW §6.1's scroll a target into view
+   (core/dom/element_scrolling.c) drives the walk to completion in one activation, so a flow reading
+   `scrollWidth` or scrolling a viewport cannot rest inside the document walk. Next: those members as step
+   machines stepping the walk, as `scrollIntoView` does. How its absence shows: a flow's slice overrun in
+   `scrollWidth`/`scrollHeight` or §4's `scroll()` on a large document, with `_layoutJobRests` flat. */
+CssPx scrolling_area_extent_px(lxb_dom_element_t *el, bool vertical)
+{
+    ScrollingAreaWalk w;
+
+    scrolling_area_walk_element(&w, el, vertical);
+    while (!scrolling_area_walk_done(&w)) scrolling_area_walk_step(&w);
+    return scrolling_area_walk_extent(&w);
+}
+
+CssPx scrolling_area_viewport_extent_px(lxb_dom_node_t *doc, CssPx icb_extent, bool vertical)
+{
+    ScrollingAreaWalk w;
+
+    scrolling_area_walk_viewport(&w, doc, icb_extent, vertical);
+    while (!scrolling_area_walk_done(&w)) scrolling_area_walk_step(&w);
+    return scrolling_area_walk_extent(&w);
 }

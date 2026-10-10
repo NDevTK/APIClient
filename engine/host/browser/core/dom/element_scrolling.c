@@ -23,6 +23,7 @@
 #include "core/layout/scroll_container.h"
 #include "core/layout/scrolling_area.h"
 #include "core/layout/used_value.h"
+#include "solver/rest_unit.h"
 
 /* THE AXES, NAMED — §6.1 states every one of its steps twice, once per axis, and the two statements are the
    same sentence with `x`/`width`/`left` swapped for `y`/`height`/`top`. Writing them as an index is what lets
@@ -62,17 +63,11 @@ ScrollLogicalPosition element_scrolling_logical_position(const char *keyword)
  * a number this engine stores and reads back, carrying no environment fact, and it is the type
  * `perform_scroll`, `viewport_window_scroll` and `element_view_scroll_position` speak. A requested position
  * that is unknown external input cannot be a `double`; core/dom/element_view.c's setter crashes naming it. */
-typedef struct {
-    lxb_dom_element_t *el;    /* the scroll container, or NULL when this box is the VIEWPORT */
-    JSContext *dctx;          /* the realm whose ACTIVE document this box belongs to */
-    CssPx  lo[2], hi[2];      /* the box's own edges, in client coordinates */
-    CssPx  area[2];           /* §2's SCROLLING AREA extent on each axis */
-    CssPx  extent[2];         /* the box's own extent: an element's padding edge, or the viewport's ICB */
-    double cur[2];            /* its current scroll position */
-    bool   ending_at_hi[2];   /* §2's OVERFLOW DIRECTIONS: is the ending edge at the larger coordinate */
-} EsBox;
+typedef ElementScrollingBox EsBox;
 
-static void es_box_of_element(lxb_dom_element_t *el, JSContext *dctx, EsBox *b)
+/* Every field of an element's box but its scrolling area, which a caller either walks in steps
+   (`es_into_view_measure`) or asks whole (`es_box_of_element`). */
+static void es_box_open_element(lxb_dom_element_t *el, JSContext *dctx, EsBox *b)
 {
     FlowPoint o = flow_padding_box_origin(el);
     int a;
@@ -94,15 +89,22 @@ static void es_box_of_element(lxb_dom_element_t *el, JSContext *dctx, EsBox *b)
 
         b->extent[a] = used_value_padding_edge_px(el, vertical);
         b->hi[a] = css_px_add(b->lo[a], b->extent[a]);
-        b->area[a] = scrolling_area_extent_px(el, vertical);
         b->ending_at_hi[a] = scrolling_area_ending_edge_at_higher_coordinate(el, vertical);
         b->cur[a] = element_view_scroll_position(el, vertical);
     }
 }
 
+static void es_box_of_element(lxb_dom_element_t *el, JSContext *dctx, EsBox *b)
+{
+    int a;
+
+    es_box_open_element(el, dctx, b);
+    for (a = ES_X; a <= ES_Y; a++) b->area[a] = scrolling_area_extent_px(el, a == ES_Y);
+}
+
 /* The viewport's EsBox. Its overflow directions are core/layout/scrolling_area.h's, which answers both columns
    of CSSOM VIEW §2's table, so the fact has one derivation for both of its readers. */
-static void es_box_of_viewport(lxb_dom_node_t *doc, JSContext *dctx, EsBox *b)
+static void es_box_open_viewport(lxb_dom_node_t *doc, JSContext *dctx, EsBox *b)
 {
     int a;
 
@@ -120,8 +122,6 @@ static void es_box_of_viewport(lxb_dom_node_t *doc, JSContext *dctx, EsBox *b)
         b->extent[a] = vertical ? viewport_icb_height(dctx) : viewport_icb_width(dctx);
         b->lo[a] = css_px(0.0);
         b->hi[a] = b->extent[a];
-        b->area[a] = css_px(vertical ? viewport_scrolling_area_height(dctx)
-                                     : viewport_scrolling_area_width(dctx));
         b->ending_at_hi[a] = scrolling_area_viewport_ending_edge_at_higher_coordinate(doc, vertical);
         b->cur[a] = viewport_window_scroll(dctx, vertical);
     }
@@ -344,6 +344,7 @@ void element_scrolling_into_view_begin(ElementScrollingIntoView *w, lxb_dom_elem
     w->block = block;
     w->inline_pos = inline_pos;
     w->phase = ES_INTO_VIEW_ANCESTORS;
+    w->box_open = false;
 }
 
 /* Step 2.2 to step 2.4 for one scrolling box, and whether the walk ends after it. */
@@ -355,11 +356,56 @@ static bool es_into_view_visit(ElementScrollingIntoView *w, const EsBox *b, cons
     return false;
 }
 
+/* Begin the descendant walk of the open box's scrolling area on `w->axis`. The viewport's row is the one
+   core/frame/viewport.c's `viewport_scrolling_area_*` asks, over the same initial containing block. */
+static void es_area_begin(ElementScrollingIntoView *w)
+{
+    bool vertical = w->axis == ES_Y;
+
+    if (w->box.el != NULL) scrolling_area_walk_element(&w->area, w->box.el, vertical);
+    else                   scrolling_area_walk_viewport(&w->area, w->doc, w->box.extent[w->axis], vertical);
+}
+
+/* Open a scrolling box (`el` NULL for the viewport) and begin its first area walk. */
+static void es_into_view_open(ElementScrollingIntoView *w, lxb_dom_element_t *el, JSContext *dctx)
+{
+    if (el != NULL) es_box_open_element(el, dctx, &w->box);
+    else            es_box_open_viewport(w->doc, dctx, &w->box);
+    w->axis = ES_X;
+    w->box_open = true;
+    es_area_begin(w);
+}
+
+/* One rest unit of the open box's area walks, or, once both are complete, the visit. The descendants are
+   the rest unit's items (REST_UNIT_LAYOUT_DESCENDANTS), and the bracket measures them against the slice. */
+static bool es_into_view_measure(ElementScrollingIntoView *w, const char *behavior)
+{
+    if (!scrolling_area_walk_done(&w->area)) {
+        size_t k, n = rest_unit_items(REST_UNIT_LAYOUT_DESCENDANTS);
+
+        rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+        for (k = 0; k < n && !scrolling_area_walk_done(&w->area); k++) scrolling_area_walk_step(&w->area);
+        rest_unit_end();
+        return true;
+    }
+    /* The viewport's area is the bare number core/frame/viewport.c answers. */
+    w->box.area[w->axis] = w->box.el != NULL ? scrolling_area_walk_extent(&w->area)
+                                             : css_px(scrolling_area_walk_extent(&w->area).px);
+    if (w->axis == ES_X) {
+        w->axis = ES_Y;
+        es_area_begin(w);
+        return true;
+    }
+    w->box_open = false;
+    return es_into_view_visit(w, &w->box, behavior);
+}
+
 bool element_scrolling_into_view_next(ElementScrollingIntoView *w, const char *behavior)
 {
     JSContext *dctx;
 
     DCHECK(w->phase != ES_INTO_VIEW_DONE, "§6.1's ancestor walk was continued after it ended");
+    if (w->box_open) return es_into_view_measure(w, behavior);
     dctx = document_active_realm_of(w->doc);
     DCHECK(dctx != NULL,
            "§6.1's ancestor walk is inside a Document that is no navigable's ACTIVE document. The walk starts at "
@@ -371,22 +417,18 @@ bool element_scrolling_into_view_next(ElementScrollingIntoView *w, const char *b
            and the flat tree is where boxes nest. The target itself is not in the set, so the walk advances
            before it tests. */
         for (w->walk = css_parent_element(w->walk); w->walk != NULL; w->walk = css_parent_element(w->walk)) {
-            EsBox b;
-
             if (!scroll_container_is(w->walk)) continue;
-            es_box_of_element(w->walk, dctx, &b);
-            return es_into_view_visit(w, &b, behavior);
+            es_into_view_open(w, w->walk, dctx);
+            return true;
         }
         w->phase = ES_INTO_VIEW_VIEWPORT;
     }
     if (w->phase == ES_INTO_VIEW_VIEWPORT) {
         /* The viewport is the outermost scrolling box of every document and always one: §2 gives it its own
            column of the scrolling-area table, so it has no scroll-container question to pass. */
-        EsBox b;
-
-        es_box_of_viewport(w->doc, dctx, &b);
         w->phase = ES_INTO_VIEW_CONTAINER;
-        return es_into_view_visit(w, &b, behavior);
+        es_into_view_open(w, NULL, dctx);
+        return true;
     }
     DCHECK(w->phase == ES_INTO_VIEW_CONTAINER, "§6.1's ancestor walk resumed in a phase it does not have");
     /* Out of the document, through HTML §7.3.1.3 "Child navigables"' container. No parent is the top-level
@@ -425,12 +467,7 @@ bool element_scrolling_into_view_next(ElementScrollingIntoView *w, const char *b
         w->walk = ce;
         w->doc = lxb_dom_interface_node(lxb_dom_interface_node(ce)->owner_document);
         w->phase = ES_INTO_VIEW_ANCESTORS;
-        if (scroll_container_is(ce)) {
-            EsBox b;
-
-            es_box_of_element(ce, document_active_realm_of(w->doc), &b);
-            return es_into_view_visit(w, &b, behavior);
-        }
+        if (scroll_container_is(ce)) es_into_view_open(w, ce, document_active_realm_of(w->doc));
     }
     return true;
 }

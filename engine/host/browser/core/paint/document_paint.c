@@ -13,7 +13,6 @@
 #include "core/css/css_cascade_pass.h"   /* css-cascade-5 §4.2's record, opened around the same walk */
 #include "core/frame/viewport.h"
 #include "core/graphics/raster_surface.h"
-#include "core/layout/flow_placement.h"
 #include "core/layout/layout_job.h"
 #include "core/paint/box_paint.h"
 #include "core/paint/display_list.h"
@@ -158,37 +157,17 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
         count->complete = true;
     } else {
         display_list_init(&dl);
-        /* CSS 2.1 §9.4.1 "Block formatting contexts"' PLACEMENT PASS, OPENED HERE BECAUSE THIS IS THE ONE
-           ENTRY THAT WALKS THE WHOLE TREE FOR GEOMETRY. §E.2's walk asks where every box it offers SITS, and
-           §9.4.1's answer for one box comes out of a walk that establishes the position of every in-flow
-           child of that box's containing block — so without a pass the walk below runs one whole
-           containing-block layout per ask and discards all but one of its answers each time.
-           THE SPAN IS THIS WALK AND NOT THE RASTER BELOW IT, which is a span chosen by what reads the
-           DOCUMENT rather than by what is convenient to bracket: `display_list_raster` consumes marks that
-           are already four numbers each and asks the tree nothing, so holding a record across it would widen
-           the window this component's own assertions have to cover for no answer served.
-           NO PAGE CODE RUNS INSIDE IT, which is the premise the record is sound on and which is not left as a
-           sentence: core/layout/flow_placement.h names the three places that premise is asserted, and one of
-           them is a crash at the DOM attribute chokepoint rather than a check here. */
-        /* css-cascade-5 §4.2 "Cascaded Values"' RECORD, OPENED AROUND THE SAME WALK AND FOR THE SAME
-           REASON — this is the one entry that asks the cascade about every element in the document, and it
-           asks about most of them many times over. The span is the WALK and not the raster beneath it,
-           which is the span core/layout/flow_placement.h chose and for the identical argument: the raster
-           consumes marks that are already numbers and asks the cascade nothing, so holding a record across
-           it would widen the window this component's own assertions have to cover for no answer served.
-           IT IS OPENED OUTSIDE CSS 2.1 §9.4.1 "Block formatting contexts"' PASS RATHER THAN INSIDE IT
-           because the geometry walk READS the cascade — core/layout/flow_position.c re-derives
-           CSS 2 §10.1 "Definition of 'containing block'"'s equation out of computed values at every
-           origin it serves — so a cascade record that closed first would leave the last of those asks
-           paying full price for no reason. The two spans are nested and not merely adjacent. */
+        /* A layout job around the walk (core/layout/layout_job.h): CSS 2.1 §E.2 "Painting order" asks where
+           every box it offers sits, and the job's records (each box's §9.4.1 contribution, its stack position,
+           its border-box origin, its containing block's width) let one walk of a container answer every later
+           ask about its children. The span is the walk and not the raster beneath it, which asks the tree
+           nothing. css-cascade-5 §4.2 "Cascaded Values"' record is opened around the same walk, outside the
+           job, because the geometry walk reads the cascade at every origin it serves.
+           NAMED RESIDUAL. Not covered: the paint is host time and not a step machine, so the job runs to
+           completion in this one activation and never rests. Next: the rendering update's paint as a flow
+           that drives this job and yields between stacking contexts. How its absence shows: `_layoutJobRests`
+           does not move across a paint however large the document. */
         css_cascade_pass_open();
-        flow_placement_pass_open();
-        /* A LAYOUT JOB AROUND THE SAME WALK, so CSS 2.1 §9.4.1's contribution of each box is computed once
-           per paint rather than once per outermost ask (core/layout/layout_job.h). NAMED RESIDUAL. Not
-           covered: the paint is host time and not a step machine, so the job runs to completion in this one
-           activation and never rests. Next: the rendering update's paint as a flow that drives this job and
-           yields between stacking contexts. How its absence shows: `_layoutJobRests` does not move across a
-           paint however large the document. */
         job = layout_job_new();
         layout_job_enter(job);
         /* CSS 2.1 §E.2 "Painting order" over the ROOT's stacking context. CSS 2.1 §9.9.1 "Specifying the stack
@@ -209,15 +188,11 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
            canvas" included, because it is laid first. Rasterizing only a COMPLETE walk would throw that away
            and report the same empty surface for a document that painted nothing and one that painted all but
            its last box. */
-        /* THE PASS CLOSES WITH THE WALK, WHETHER OR NOT THE WALK FINISHED. `complete` false is a painter that
-           met an operand it could not compute and STOPPED, and it returns normally — so a close placed after
-           the raster would still run, and a close placed on the complete arm alone would leave the record
-           standing for the next paint to open on top of. There is no arm between these two lines. */
+        /* The job and the cascade record close with the walk whether or not it finished: `complete` false is a
+           painter that stopped and returned normally, and a close on the complete arm alone would leave both
+           standing for the next paint. */
         layout_job_leave(job);
         layout_job_free(job);
-        flow_placement_pass_close();
-        /* AND THE CASCADE RECORD CLOSES WITH IT, ON THE SAME ARM AND WITH NOTHING BETWEEN THESE TWO
-           LINES — see the comment above for why it opened outside and therefore closes outside. */
         css_cascade_pass_close();
         display_list_raster(&dl, dpr, out, &rc);
         count->marks = rc.marks;

@@ -1,7 +1,8 @@
 /* A layout job: the evaluator layout questions (core/layout/layout_question.h) are asked through. It owns
- * the stack of open questions, a memo of answered ones, and the accounting of how many question bodies one
- * C activation hosts. It is the analogue of LayoutNG's layout-result cache, scoped to one job rather than
- * hung on a box, because layout here is per-flow state with no box tree to hang it on. */
+ * the stack of open questions, a memo of answered ones, core/layout/flow_placement.h's placement record, and
+ * the accounting of how many question bodies one C activation hosts. It is the analogue of LayoutNG's
+ * layout-result cache, scoped to one job rather than hung on a box, because layout here is per-flow state
+ * with no box tree to hang it on. */
 
 /* The stack replaces C frames. A question is pushed when asked. Its body either completes (the entry is
  * popped and, for LAYOUT_Q_BF_BOX, memoized) or asks a question the job defers: that question is pushed
@@ -31,12 +32,13 @@
  * `scrollIntoView`, with `_layoutJobRests` flat. */
 
 /* NAMED RESIDUAL, the drive is not a rest point. Not covered: "not yet" propagates only through
- * core/layout/block_flow.c's stack walk, so every drive is an entry of that file and computes what it
- * deferred inside the same activation; a driven job rests only between its driver's own stages. Next: the
- * callers of a drive propagate "not yet" in turn, starting with the path the fixture reaches
- * (core/layout/scrolling_area.c's descendant walk, then core/layout/flow_position.c's origin), until the
- * drive is the step machine itself. How its absence shows: `_layoutBfDeferred` rises while `_layoutJobRests`
- * counts only one rest per scrolling box. */
+ * core/layout/block_flow.c's stack walk, so every drive computes what it deferred inside the same
+ * activation. A driven job rests only where its driver's own cursor does: between scrolling boxes, and
+ * between runs of REST_UNIT_LAYOUT_DESCENDANTS nodes of a scrolling area's walk (core/dom/element_scrolling.c),
+ * so one node's derivation still runs to completion. Next: the callers of a drive propagate "not yet" in turn,
+ * starting with the scrolling area's per-node edge (core/layout/flow_position.c's origin), until the drive is
+ * the step machine. How its absence shows: the REST_UNIT_LAYOUT_DESCENDANTS bracket's CPU assert naming one
+ * unit that overran the slice on a document whose nodes are deep. */
 
 /* NAMED RESIDUAL, cycles that cross no question kind. Not covered: the layout call graph has recursion
  * cycles that pass through none of the three kinds (intrinsic sizes, line-box atomic extents, the
@@ -59,6 +61,7 @@
 
 #include "check.h"
 #include "core/css/css_length.h"
+#include "core/layout/flow_placement.h"
 #include "core/layout/layout_question.h"
 
 typedef struct LayoutJob LayoutJob;
@@ -88,7 +91,8 @@ void layout_job_leave(LayoutJob *job);
    before it and served after it are what the census counts as served across a rest. */
 void layout_job_rested(LayoutJob *job);
 
-/* A driven job held in a step state. The clone answers a job with an EMPTY memo: the memo is re-derivable,
+/* A driven job held in a step state. The clone answers a job with an empty memo and placement record: both
+   are re-derivable,
    so a forked arm re-derives it rather than sharing or copying it. A job has no interior pointers a machine
    holds, so a declarer passes no cursors. */
 extern const JSStepTreeOps layout_job_step_ops;
@@ -98,6 +102,11 @@ extern const JSStepTreeOps layout_job_step_ops;
    assert against both; nothing branches on them. */
 bool layout_job_holds_thread(void);
 size_t layout_job_alive(void);
+
+/* The placement record (core/layout/flow_placement.h) of the job that holds it now: a driven job's while it
+   is entered, the synchronous job's while a drive is open, and NULL otherwise. The record is the job's and
+   is released with its memo. */
+FlowPlacementRecord *layout_job_placement(void);
 
 /* ---- the drive ------------------------------------------------------------------------------------------ */
 

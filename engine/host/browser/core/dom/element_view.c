@@ -799,16 +799,17 @@ static char *ev_scroll_keyword(JSContext *ctx, JSValueConst v, const char *membe
  * Step 9 is optional in the spec's own word and there is no user to attend. Step 10's promise is resolved
  * for core/dom/element_scrolling.h's reason: every scroll here is an instant one. */
 
-/* Step 8 is §6.1's ancestor walk, one scrolling box per re-entry of EV_SIV_BOX. Each box's layout questions
- * are asked through the job this state owns, so its memo serves the boxes after it, and the machine rests
- * between two boxes with the job alive: the flow is parked inside its own member call, where it writes
- * nothing, so the memo stays valid across the rest (layout_job.h). */
+/* Step 8 is §6.1's ancestor walk, one cursor unit per re-entry of EV_SIV_BOX: opening a scrolling box, a
+ * run of REST_UNIT_LAYOUT_DESCENDANTS nodes of its scrolling area, or steps 2.2 to 2.4 over it
+ * (core/dom/element_scrolling.h). Every layout question is asked through the job this state owns, so its
+ * memo and placement record serve every later unit, and the machine rests between units with the job alive:
+ * the flow is parked inside its own member call, where it writes nothing, so both stay valid (layout_job.h). */
 #define EV_SIV_STAGES(X) \
     X(EV_SIV_ARGS, "CSSOM VIEW §6 \"Extensions to the Element Interface\" scrollIntoView(arg) steps 1-7 (the " \
                    "four defaults, the argument, and the termination for an element with no box)") \
     X(EV_SIV_BOX,  "CSSOM VIEW §6 \"Extensions to the Element Interface\" scrollIntoView(arg) step 8 (scroll a " \
-                   "target into view: CSSOM VIEW §6.1 \"Element Scrolling Members\" step 2 over one scrolling " \
-                   "box)")
+                   "target into view: CSSOM VIEW §6.1 \"Element Scrolling Members\" step 2, one unit of its " \
+                   "ancestor walk)")
 enum { IDL_STEP_STAGE_BASE(EV_SIV_STAGES) EV_SIV_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const EV_SIV_STEPS[] = { EV_SIV_STAGES(JS_STEP_STAGE_LABEL) NULL };
 

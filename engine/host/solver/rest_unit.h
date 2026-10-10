@@ -79,7 +79,7 @@
 #include <stddef.h>
 
 /* THE ITEM A REST UNIT IS COUNTED IN. Each name says what ONE item is, because the cost bound differs per
-   kind and a shared name would hide that: three of these are counted in items whose size the DOCUMENT chooses,
+   kind and a shared name would hide that: four of these are counted in items whose size the DOCUMENT chooses,
    and the multiplier a policy may safely apply is a different question for those than for the one whose item
    is a fixed amount of work. Adding a kind means adding its default and its cost sentence in rest_unit.c,
    which does not compile until both exist. */
@@ -109,7 +109,13 @@ typedef enum {
        sizes (a container's children), so this is the construct's shape again. The drive is not yet a
        scheduler rest point, so this number decides C stack per activation and replay cost rather than the
        delay of a due suspension; bound (2) applies to it once a drive returns to the scheduler. */
-    REST_UNIT_LAYOUT_QUESTIONS
+    REST_UNIT_LAYOUT_QUESTIONS,
+    /* ONE DESCENDANT NODE FOLDED INTO A SCROLLING AREA — CSSOM VIEW §2 "Terminology"'s extreme over "all of the
+       element's descendants' boxes", walked by core/layout/scrolling_area.h's cursor. The rest point is a
+       scheduler one: core/dom/element_scrolling.c's scroll a target into view yields after each unit. COST: one
+       node's margin edge, whose derivation climbs its ancestors and lays out what it asks, so the document
+       sizes it; bound (2) is asserted by the bracket around each unit. */
+    REST_UNIT_LAYOUT_DESCENDANTS
 } RestUnitKind;
 
 /* HOW MANY ITEMS OF `kind` ONE REST POINT COVERS. Always >= 1 (asserted): the offer to rest survives every

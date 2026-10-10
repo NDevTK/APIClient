@@ -58,6 +58,11 @@
    activation's layout frames to 32 bodies; between those the value is free. */
 #define REST_UNIT_LAYOUT_QUESTIONS_N   32u
 
+/* ONE DESCENDANT FOLDED INTO A SCROLLING AREA, 32 per rest point. The floor is the cost of asking, which a
+   single node's edge does not amortize; the ceiling is bound (2), asserted by the bracket the walk's driver
+   opens around each unit, so a document whose 32 nodes overrun the slice says so by name. */
+#define REST_UNIT_LAYOUT_DESCENDANTS_N   32u
+
 size_t rest_unit_items(RestUnitKind kind)
 {
     size_t n = 0;
@@ -67,6 +72,7 @@ size_t rest_unit_items(RestUnitKind kind)
     case REST_UNIT_XML_CONSTRUCTS:   n = REST_UNIT_XML_CONSTRUCTS_N;   break;
     case REST_UNIT_SUBTREE_REMOVALS: n = REST_UNIT_SUBTREE_REMOVALS_N; break;
     case REST_UNIT_LAYOUT_QUESTIONS: n = REST_UNIT_LAYOUT_QUESTIONS_N; break;
+    case REST_UNIT_LAYOUT_DESCENDANTS: n = REST_UNIT_LAYOUT_DESCENDANTS_N; break;
     }
     /* NOT A `default:` ARM — the switch is exhaustive over RestUnitKind, so a kind added to the header with no
        number here does not compile rather than silently reaching the crash below. What lands here is a value

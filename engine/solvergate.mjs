@@ -1241,9 +1241,9 @@ const DROP = new Map([
                    tree that checks the composition path has not acquired a geometry ask — if it ever reddens
                    THERE, result.c's render path has started asking layout questions, which is a finding
                    rather than a gate fault.
-                   BY CONSTRUCTION AND NOT FROM A MEASUREMENT, stated as what was READ. flow_placement_pass_open
-                   has exactly one caller, core/paint/document_paint.c, and nothing this driver invokes reaches
-                   it, so `passes` and `placements` are 0 here under every schedule; and no document in
+                   BY CONSTRUCTION AND NOT FROM A MEASUREMENT, stated as what was READ. The placement record is
+                   held by a layout job (core/layout/layout_job.h), so `placements` counts whatever this driver's
+                   documents lay out and differs with the schedule; and no document in
                    engine/tests/solver names getBoundingClientRect, getClientRects, offsetTop, offsetLeft,
                    offsetWidth, offsetHeight, clientTop or scrollTop. Nobody may read this row as evidence that
                    a `_layout` mismatch was ever observed here — it is a classification made for the mechanism
