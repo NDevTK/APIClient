@@ -1,7 +1,5 @@
-/* THE SUBJECT OF A LAYOUT CRASH. See box_subject.h for why it is a component, for why nothing here may assert,
-   for the ownership contract, and for the one residual this file's totality rests on.
-   THERE IS NO `#include "check.h"` IN THIS FILE AND THAT IS THE MECHANISM, not an omission: a helper a
-   `DFAILF` calls must not be able to abort, and a file that cannot name the macro cannot grow one later. */
+/* The subject of a layout crash; see box_subject.h. This file deliberately does not include `check.h`, so a
+   helper a `DFAILF` calls cannot grow an abort. */
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>

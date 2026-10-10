@@ -1,5 +1,4 @@
-/* CSS 2.1 §17.4 Tables in the visual formatting model — the table wrapper box. See table_wrapper.h for the
-   contract, for §17.4's declaration split, and for which of the wrapper's own numbers are still §17.5's. */
+/* CSS 2.1 §17.4 Tables in the visual formatting model: the table wrapper box. See table_wrapper.h. */
 #include <stdbool.h>
 #include <string.h>
 
@@ -28,10 +27,7 @@ bool table_wrapper_is_block_level(const char *display)
 
 bool table_wrapper_owns_property(const char *name)
 {
-    /* §17.4's list, verbatim and closed: "The computed values of properties 'position', 'float', 'margin-*',
-       'top', 'right', 'bottom', and 'left' on the table element are used on the table wrapper box and not the
-       table box". `margin-*` is the four longhands; the four offsets are named individually by the section
-       itself, so this table is the sentence and not a reading of it. */
+    /* §17.4's closed list; `margin-*` is the four longhands. */
     static const char *const WRAPPER[] = {
         "position", "float",
         "margin-top", "margin-right", "margin-bottom", "margin-left",
@@ -42,11 +38,7 @@ bool table_wrapper_owns_property(const char *name)
     DCHECK(name != NULL, "CSS 2.1 §17.4's declaration split was asked about a NULL property name");
     for (i = 0; i < COUNTOF(WRAPPER); i++)
         if (strcmp(name, WRAPPER[i]) == 0) return true;
-    /* "all other values of non-inheritable properties are used on the table box and not the table wrapper
-       box" — so every name outside the list above belongs to the table box, and there is no third answer for
-       this predicate to have. The INHERITED properties the sentence excludes are the caller's to keep out
-       (see the header): they are inherited by both boxes from the same parent, so the question does not arise
-       for them and a `false` here would read as "the table box's alone", which is wrong in a way nothing
-       downstream could see. */
+    /* "all other values of non-inheritable properties are used on the table box". Inherited properties are
+       the caller's to keep out (see the header); a false for one would wrongly read as "the table box's". */
     return false;
 }

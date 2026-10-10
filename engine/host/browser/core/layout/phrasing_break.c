@@ -1,5 +1,4 @@
-/* HTML §15.3.4 "Phrasing content"'s two line-breaking `display-outside` declarations. See phrasing_break.h for
-   why the answer is HTML's rather than the cascade's, and for why the namespace is part of the test. */
+/* HTML §15.3.4 "Phrasing content"'s two line-breaking `display-outside` declarations; see phrasing_break.h. */
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
