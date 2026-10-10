@@ -3680,28 +3680,21 @@ async function engineServiceHostRequests(eng) {
        and the engine's counter starts at 1, so 0 or NaN would answer a call site that does not exist. */
     DCHECK(Number.isInteger(id) && id > 0,
            "an owed host request carries no usable id — an answer is routed by that number alone");
-    /* A CROSS-AGENT OPERATION IS NOT ANSWERED BY THIS ZONE AT ALL — it is ASKED OF A PEER, which is the one
-       shape neither of the two branches below has. §7.2.5.1's `otherW.length` is the child-navigable count of
-       the PEER's active document and the four internal methods a lent object performs ([[Get]], [[Set]],
-       [[Delete]], [[Call]]) run the peer's own code, so an answer computed here would be this document's frames
-       reported as the other's, or a write that never happened. This zone does the one thing only it can:
-       SECURITY.md makes the offscreen the only zone that knows which instance holds which document, so it
-       carries the record there and carries the completion back.
-       A PREFIX AND NOT A LIST, so an operation added to remote_object.c reaches its instance with nothing here
-       to remember: every one of them names its target document in the same field and differs only in what the
-       peer resolves, never in who resolves it.
-       NOTHING IS ANSWERED INSIDE THE ASK. The peer answers BY RUNNING A PROGRAM as a flow on its own frontier,
-       so the completion arrives later through that instance's notices (hostNotice above) — which is also what
-       lets the answer suspend, park and resume like every other flow instead of blocking this zone. */
+    /* A cross-agent operation is not answered by this zone: it is asked of the peer holding the document.
+       `otherW.length` (HTML §7.2.2.2 Indexed access on the Window object) counts the peer's child navigables,
+       and the internal methods a lent object performs ([[Get]], [[Set]], [[Delete]], [[Call]]) run the peer's
+       code, so an answer computed here would be wrong. This zone carries the record to the holder (SECURITY.md:
+       only it knows which instance that is) and the completion back.
+       Matched by prefix, not a list, so an operation added to remote_object.c needs nothing here: each names
+       its target document in the same field. Nothing is answered inside the ask; the peer answers by running a
+       program as a flow, and the completion arrives through its notices (hostNotice). */
     if (op.startsWith("windowproxy.get\t") || op.startsWith("object.")) {
-      /* AN UNANSWERED REQUEST IS RE-REPORTED EVERY STEP (engine_host_requests deliberately does not dedupe:
-         two identical questions from two flows are two questions), so asking on every sighting would perform
-         the peer's operation once per step forever — each one a program with the page's own side effects. */
+      /* An unanswered request is re-reported every step (engine_host_requests does not dedupe), so asking on
+         every sighting would perform the peer's operation once per step. */
       if (eng._remoteAsked.has(id)) continue;
       const holder = hostHolderOf(op.split("\t")[1]);
-      /* NOT A SLOW ANSWER, A MISSING INSTANCE: the navigable.create notice naming that document was dropped,
-         or the instance holding it was finalized while a peer still held a reference into it. Left alone the
-         asking flow parks forever with its snapshot intact, which is correct and invisible — so it is said. */
+      /* A missing instance, not a slow answer: the create notice was dropped, or the holder was finalized while
+         a peer still referenced it. Left alone the flow parks invisibly, so it is asserted. */
       DCHECK(holder !== null, "a cross-agent operation named a document no instance in this pool holds — the " +
                               "create notice for it was dropped, or that instance was finalized while a peer " +
                               "still held a WindowProxy or a lent object of it");
@@ -3712,48 +3705,34 @@ async function engineServiceHostRequests(eng) {
       const token = "op" + (_nextRemoteToken++);
       _remoteOps.set(token, { asker: eng, req: id });
       eng._remoteAsked.add(id);
-      /* THE ASK IS RECORDED BEFORE IT IS MADE, and with an await under it that is no longer a matter of style.
-         `_remoteAsked` and `_remoteOps` are both written above this line because the call below suspends: an
-         unanswered request is re-reported by qjs_host_requests on every step, so a round that started the ask
-         and recorded it afterwards would let the next round see the same id unrecorded and perform the peer's
-         operation — a program, with the page's own side effects — a second time. */
+      /* The ask is recorded before the suspending call, so the next round, re-listing the same id, does not
+         perform the operation again. */
       await holder.r.renderer.perform({ token, record: op });
       did++;
       continue;
     }
-    // XHR §3.5.6's fetch is the SECOND thing this zone can genuinely answer, and for the identical reason: it
-    // is a network fetch, and safeFetch is the one chokepoint SECURITY.md allows it through. The record carries
-    // the whole request — method, headers and body — because the chokepoint decides SOP, CORS, method and
-    // credentials and cannot decide about a method it was never told. A flow parked on one is SUSPENDED at the
-    // exact line the page wrote `send()` on, which is what a synchronous XMLHttpRequest is.
+    // The XMLHttpRequest fetch (XHR §3.5.6 The send() method) is the other answer this zone can give: a network
+    // fetch through safeFetch. The record carries method, headers and body because the chokepoint decides SOP,
+    // CORS, method and credentials. The flow stays suspended at its `send()` line, which is what a synchronous
+    // XMLHttpRequest is.
     if (op.startsWith("xhr.send\t")) {
-      /* ISSUED AND NOT AWAITED, FOR THE PENDING SEAM'S REASON AND THROUGH THE SAME PRIMITIVE. `fetchedXhr`
-         reaches the same `safeFetch` and therefore the same `_readBody`, so a response the server never ends
-         held this round exactly as one on the other seam did — and `XMLHttpRequest.send()` is half of the
-         two-line reproduction of that freeze. The KEY IS THE REQUEST ID and not a `(method, url)` pair, which
-         is `wpt_runner.c`'s own split (`wpt_request_asked_id` beside `wpt_request_asked`): this answer is
-         delivered against `engine_host_answer`'s request id, and `engine_host_requests` deliberately does not
-         dedupe, so two identical questions from two flows are two questions with two ids.
-         THE FLOW STAYS SUSPENDED AT THE LINE THE PAGE WROTE `send()` ON EITHER WAY, which is what a
-         synchronous XMLHttpRequest is — what changes is that its SIBLINGS now get the thread while it waits. */
+      /* Issued, not awaited, through the same door as the pending seam, since `fetchedXhr` reaches the same
+         `_readBody`. Keyed on the request id, not a (method, url) pair (wpt_runner.c's `wpt_request_asked_id`
+         beside `wpt_request_asked`): the answer is delivered against `engine_host_answer`'s id, and two
+         identical questions from two flows are two ids. Sibling flows run while it waits. */
       did += engineIssue(eng, "xhr\n" + id,
         () => eng.fetchedXhr(op.slice("xhr.send\t".length)),
-        // 0 IS THE NORMAL COMPLETION. An answer is a completion record and not a value (ECMA-262 6.2.4): this
-        // zone fetched bytes rather than running another instance's program, so it has nothing to have thrown
-        // in. A relayed cross-agent operation answers with 1 and the thrown value, which is what lets the
-        // asking page's `try`/`catch` around it run.
+        // Completion 0 is normal (ECMA-262 §6.2.4 The Completion Record Specification Type): this zone fetched
+        // bytes and ran no program that could throw. A relayed cross-agent operation answers 1 with the thrown
+        // value, so the asking page's `try`/`catch` runs.
         (r) => engineAnswer(eng, id, r.meta, r.bytes));
       continue;
     }
     if (!op.startsWith("document.fetch\t")) continue;
-    /* `document.fetch<TAB><provenance><TAB><url>` — SPLIT ONCE, AT THE FIRST TAB AFTER THE VERB, so the
-       ADDRESS IS THE REMAINDER. A URL cannot contain a tab (URL Standard §4.4 "URL parsing" removes every
-       ASCII tab from its input before anything else and the C0 control percent-encode set escapes one
-       everywhere it could reappear), and the vocabulary in front of it is three words of ASCII lowercase
-       letters, so this grammar has exactly one place it can be taken apart and this is it.
-       IT IS INDEXED RATHER THAN `split("\t")`-ed for that same reason in reverse: splitting on every tab and
-       taking the last field would answer correctly for an address that has none and silently pick the tail of
-       one that does, which is the shape a reader that can never be told it is wrong has. */
+    /* `document.fetch<TAB><provenance><TAB><url>`, split once at the first tab after the verb so the address
+       is the remainder. A URL cannot contain a tab (URL Standard §4.4 URL parsing strips them, and the C0
+       control percent-encode set escapes one), and the provenance is a lowercase word. Indexed rather than
+       split on every tab, which would silently take the tail of a malformed record. */
     const fetchArgs = op.slice("document.fetch\t".length);
     const fetchTab = fetchArgs.indexOf("\t");
     DCHECK(fetchTab > 0 && fetchTab < fetchArgs.length - 1,
@@ -3762,15 +3741,12 @@ async function engineServiceHostRequests(eng) {
            "solver/engine.h's three tokens, the address as an absolute serialization), so a record with one " +
            "tab is this zone and that job no longer sharing a grammar, and the address read out of it would " +
            "be a provenance token");
-    /* ISSUED AND NOT AWAITED, FOR THE XHR SEAM'S REASON EXACTLY: a document load reaches the same `safeFetch`
-       and the same `_readBody`, so a server that holds a document's body open held this round — and a page
-       states one with `location.href` or an `iframe src`. Keyed on the REQUEST ID for the same reason that seam
-       is. The navigable that asked stays parked on its load, which is what a navigation in flight is; every
-       other flow in the document keeps running. */
+    /* Issued, not awaited, for the XHR seam's reason (a page states a document load with `location.href` or an
+       `iframe src`, and its body may never end), keyed on the request id. The asking navigable stays parked on
+       its load; every other flow keeps running. */
     did += engineIssue(eng, "doc\n" + id,
-      /* `rendezvous` \u2014 THE ONE CONSUMER OF THIS FORWARD THAT HOLDS ONE. `engineDeliverDocument` reads
-         `r.declined` and routes it to `hostDecline` against the id the engine is parked on, so a refusal has
-         somewhere to go and the navigable keeps the `about:blank` \u00a77.3.1.3 created it holding. */
+      /* `rendezvous`: engineDeliverDocument routes `r.declined` to `hostDecline` against the id the engine is
+         parked on, so the navigable keeps the `about:blank` HTML §7.3.1.3 created it holding. */
       () => eng.fetchedDocument(fetchArgs.slice(fetchTab + 1), fetchArgs.slice(0, fetchTab),
                                 /*refusalArm*/"rendezvous"),
       (r) => engineDeliverDocument(eng, id, r));
@@ -3778,43 +3754,29 @@ async function engineServiceHostRequests(eng) {
   }
   return did;
 }
-/* THE DOCUMENT LOAD'S DELIVERY, which is the body of the branch above unchanged — a named function for the
-   reason `engineDeliverReply` is one: the answer is handed over against the id it was fetched under. */
+/* The document load's delivery, named so the answer is handed over against the id it was fetched under. */
 async function engineDeliverDocument(eng, id, r) {
-  // JSON, because the answer carries its TYPE across this seam: a null body is a load that did not load, and
-  // the string "null" is a one-word document. The BODY is not in that JSON — a Document is parsed from a
-  // BYTE SEQUENCE, and this seam carries one (HostAnswer's `array<uint8>?` body).
-  /* HTML §7.4.5 "Populating a session history entry"'s answer: the RESPONSE'S URL, its HEADER LIST as the HTTP field lines it delivered, and the
-     document as BYTES. It carried one extracted policy (`{csp}`) — see fetchedDocument. The field-line form
-     is the one a header list crosses this ABI in and is exactly what qjs_init takes, so a navigated Document
-     and a rooted one are built from the identical shape by the identical parse.
-     THE URL IS FETCH §2.2.6's RESPONSE URL AND NOT THE ADDRESS THE ENGINE ASKED FOR. Everything HTML §7.4.5
-     decides about the incoming Document — its origin, and therefore which agent cluster it belongs to at
-     all — is written over the response's URL, and a redirect is what makes the two different. Only this zone
-     saw the chain, so only this zone can state it. */
+  // JSON, so the answer carries its type (a null body is a load that did not load, "null" is a document); the
+  // body crosses as bytes beside it (HostAnswer's `array<uint8>?`), since a Document is parsed from bytes.
+  /* The answer of HTML §7.4.5 Populating a session history entry: the response's URL, its header list as HTTP
+     field lines (the form qjs_init takes, so a navigated and a rooted Document are built from one shape), and
+     the document as bytes. The URL is the response's (Fetch §2.2.6 Responses), not the requested address:
+     §7.4.5 determines the Document's origin, and so its agent cluster, over it, and only this zone saw the
+     redirect chain. */
   DCHECK(typeof r.url === "string" && r.url !== "",
          "the document load answered no RESPONSE URL — fetchedDocument states one on every arm, including " +
          "the ones where the load did not load, because §7.4.5 determines a Document's origin over it and a " +
          "navigable whose load failed still gets a Document");
-  /* A REFUSAL IS NOT AN ANSWER, SO IT GOES TO THE OTHER ENTRY — and that is the whole of the §7.4 decline on
-     this side. `HostAnswer` settles the rendezvous: the parked machine takes the value and NAV_LOAD_CREATE runs
-     over it, which is right for a load that failed (a navigable showing an error page is a real §7.4 outcome)
-     and a fabrication for a load nobody made. `HostDecline` records the refusal on the same rendezvous instead,
-     and the engine's `flow_decline_fork` builds the pair CLAUDE.md §Solver-half requires: one arm goes on
-     waiting — holding no value, so the document load yields for ever and the navigable keeps the initial
-     `about:blank` §7.3.1.3 "Child navigables" created it holding, which is what fires the day the origin is
-     widened — and the other takes §5.6's network error and becomes the error-page document, with its path
-     marked FORCED so every value it learns carries the weakest grade this vocabulary has.
-     BOTH OUTCOMES ARE EXPLORED, which is why this is not a narrowing of the arm it replaces: the error page was
-     the only answer before and it is still one of the two. What is new is the world in which the frame was never
-     navigated at all, and that is the world a browser is in when this tool declines to spend the network. */
+  /* A refusal goes to the other entry. `HostAnswer` settles the rendezvous and NAV_LOAD_CREATE runs over the
+     value, right for a failed load (an error page is a real navigation outcome) and false for a load nobody
+     made. `HostDecline` records the refusal on the same rendezvous, and the engine's `flow_decline_fork` forks:
+     one arm keeps waiting with no value (the navigable keeps the `about:blank` HTML §7.3.1.3 Child navigables
+     created it holding, and fires once the origin is widened), the other takes the network error and becomes
+     the error-page document with its path marked forced. Both worlds are explored. */
   if (r.declined) {
     const matched = await eng.r.renderer.hostDecline({ request: id, reason: r.declined });
-    /* AND A REFUSAL NOBODY WAS PARKED ON IS WORTH REPORTING RATHER THAN SWALLOWING, for the reason the
-       address-keyed `Decline` gives: the asking flow CAN legitimately be gone by the time this zone decides, so
-       a zero is not an error — but this zone issued the load against an id the engine had just published, so a
-       zero here means the pairing between `GetHostRequests` and this answer has drifted, and every later refusal
-       would be recorded for nobody with the machine still parked. */
+    /* A refusal matching no parked flow is asserted: this zone issued the load against an id the engine had
+       just published, so a miss means `GetHostRequests` and this answer have drifted. */
     DCHECK(matched && matched.matched === 1,
            "the engine was parked on no flow for a document load this zone had just been asked for — the id " +
            "came off `GetHostRequests` and is answered here against the same id, so a miss is this zone and the " +
@@ -3823,35 +3785,22 @@ async function engineDeliverDocument(eng, id, r) {
   }
   await engineAnswer(eng, id, { url: r.url, headers: responseFieldLines(r.headers) }, r.bytes);
 }
-/* THE SAME TWO CHANNELS FOR A SYNCHRONOUS ANSWER. Two of the requests this zone can genuinely answer carry a
-   fetched BODY — XHR §3.5.6's fetch and HTML §7.4.5 "Populating a session history entry"'s document load —
-   and a body is a byte sequence for the
-   same reason a reply's is. `bytes === null` says this answer has none, which is what every other request kind
-   is: an answer that is a number or a document NAME has no bytes beside it. The trailing 0 is ECMA-262 6.2.4's
-   NORMAL completion — this zone fetched bytes rather than running another instance's program, so it has
-   nothing to have thrown in. */
+/* The two channels for a synchronous answer. The document load and the XHR fetch carry a fetched body as bytes;
+   every other answer (a number, a document name) has `bytes === null`. Completion 0 is ECMA-262 §6.2.4's
+   normal completion: this zone fetched bytes and ran no program that could throw. */
 async function engineAnswer(eng, id, meta, bytes) {
   await eng.r.renderer.hostAnswer({ request: id, answer: JSON.stringify(meta), completion: 0, body: bytes });
 }
 async function engineFinalize(eng) {
-  /* ASK THE ENGINE FOR ITS RESULT — the ABI entry that exists for exactly this and had NO CALLER anywhere in
-     the extension. The only place the production engine ever printed an @RESULT was qjs_emit_partial, and
-     streamPartial CONSUMES that line as it merges it, so a session's findings reached this function only when
-     a partial happened to be left over: a page that finished before the first 750 ms cadence produced a
-     result with no document in it at all, which `result || {}` then turned into a successful analysis
-     reporting no endpoints and no sinks. It is asked BEFORE teardown, because the document is built out of
-     the context teardown frees, and it is the same call qjs_emit_partial makes.
-     A CRASHED instance is not asked: its memory is what aborted, so re-entering it would only produce a
-     second abort. What it had already PRINTED is a different thing from what it still holds — the lines are
-     in this zone's buffer, and the last unconsumed snapshot among them is read below like any other. */
+  /* Ask the engine for its result (qjs_result, the same composition qjs_emit_partial makes), before teardown,
+     since the document is built from the context teardown frees. Without it a page that finished before the
+     first partial cadence would have no document. A crashed instance is not asked (its memory is what aborted);
+     the lines it already printed are in this zone's buffer and read below. */
   if (!eng._crashed) {
     let json = null;
-    /* AN ENGINE ABORT IS A RECORDED OUTCOME AND A HOST INVARIANT FAILURE IS NOT, which every catch around an
-       ABI call now has to say out loud: an ABI call rejects for BOTH — the frame's own abort travels as the
-       rejection engineCrash is written against, and this zone's own contract failures (a call made into a
-       renderer whose connection is dead, a record the mojo validator refused) travel as apiclientFatal.
-       Reporting the second as the engine's crash would blame the instance for this zone's broken contract, and
-       would discard a page's findings for it. */
+    /* An engine abort is a recorded outcome; a host invariant failure is not. An ABI call rejects for both (the
+       frame's abort, or this zone's contract failure as apiclientFatal), and reporting the second as the
+       engine's crash would blame the instance and discard the page's findings. */
     try { json = (await eng.r.renderer.getResult()).result; }
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "result", e); }
     if (!eng._crashed) {
@@ -3861,78 +3810,48 @@ async function engineFinalize(eng) {
       if (json) eng.lines.push("@RESULT " + json);
     }
   }
-  /* THE OUTSTANDING RENDEZVOUS GO WITH THE INSTANCE THAT ASKED, and this is the line that makes the map's
-     never-delete-on-answer rule safe: a completion relayed into a torn-down instance is a call into a renderer
-     that no longer exists — a frame this function has already removed, which renderer-host.js refuses at the
-     seam rather than posting into a closed port. Dropping them here is not dropping the ANSWER — the engine's own engine_host_answer already treats
-     a request whose flow is gone as an answer nobody is waiting on. */
+  /* Outstanding rendezvous go with the asking instance: a completion relayed into a torn-down instance would be
+     a call into a removed frame. The engine's engine_host_answer already treats a request whose flow is gone as
+     unanswered by anyone. */
   for (const [token, to] of _remoteOps) if (to.asker === eng) _remoteOps.delete(token);
-  /* AND THE OUTSTANDING REQUESTS GO THE SAME WAY, FOR THE RENDEZVOUS MAP'S REASON: a reply delivered into a
-     torn-down instance is a call into a renderer this function has already removed. Dropping them is not
-     dropping an ANSWER — the flows that were parked on them went with the instance, and their addresses are in
-     the residue this finalize has just written, so a resumed recipe re-issues the request against CURRENT
-     sources, which is what §Time-travel-resume requires of one anyway. The promises still settle into records
-     nothing reads; they hold no frame and no port. */
+  /* Outstanding requests go the same way: the flows parked on them went with the instance, and their addresses
+     are in the residue just written, so a resumed recipe re-issues them against current sources. The promises
+     still settle into records nothing reads. */
   eng._inflight.clear();
-  /* A CRASHED INSTANCE IS NOT TORN DOWN, and this used to try. `qjs_teardown` is the engine walking its own
-     gc_obj_list to report leaks — a FINDING about a runtime that ran — and an instance whose linear memory is
-     the thing that aborted has no such finding to give. Across this boundary it is worse than pointless: the
-     renderer is dead after one failed call (renderer.html cannot serve another), so the attempt would abort in
-     THIS zone on renderer-host's own assert and be reported as a second engine crash on top of the first.
-     THE FRAME GOES REGARDLESS, and that is the whole cleanup: the retained qjs_init arguments, the module and
-     its linear memory die with the document, so there is no free list on either side of this seam. It is also
-     the only thing that reclaims an instance — a Module was collected once nothing referenced it, an iframe
-     left in this document is not. */
+  /* A crashed instance is not torn down: `qjs_teardown` walks the engine's gc_obj_list to report leaks, a
+     finding about a runtime that ran, and a dead renderer cannot serve another call (renderer-host's assert
+     would report a second crash). The frame is removed regardless; that is the whole cleanup, since the
+     module, its linear memory and every retained qjs_init argument die with it, and an iframe left in this
+     document is never collected. */
   if (!eng._crashed) {
     try { await eng.r.renderer.teardown(); }
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "teardown", e); }
   }
   eng.r.destroy();
-  /* THE DISCARD THAT STOOD HERE WAS NEVER A DISCARD, AND ITS COMMENT SAID OTHERWISE IN SO MANY WORDS: "nothing
-     downstream (cache, popup, moat) ever consumes a crashed engine's output". It does. `streamPartial` merges
-     every 750 ms snapshot into the cumulative moat as it takes it, so by the time an instance aborts, every
-     endpoint and every @S sink it had emitted is ALREADY in globalStore — the four lines below could not
-     un-observe them, and un-merging is not a thing this zone can do anyway (a merged endpoint has no owner to
-     give it back to). What they actually did was hide those findings from the DOCUMENT that learned them: the
-     brain writes `tab._astResults = [analysis]` off this record, so a page that learned a real endpoint and
-     then crashed reported `fetchCallSites: []` — a false clean bill on the one surface a user reads, produced
-     by the code that was trying to be careful. MEASURED on a mirrored vuejs.org: globalStore held
-     `GET media.bitterbrains.com/banners` while its own document reported no endpoints and no sinks.
-     THE FINDINGS STAY AND THE RUN IS LABELLED. `_run` is on the record from linesToAnalysis, on every arm, so
-     the completeness claims a crash DOES invalidate are refused where each of them is made: no cost counters
-     in the run log (above), no frontier write (finish), and a per-document crash marker the popup renders. */
+  /* A crashed run's findings stay and the run is labelled: streamPartial has already merged every snapshot into
+     the cumulative store, and hiding them from the analysis would show the document that learned them as
+     clean. The completeness claims a crash invalidates are refused where each is made: no cost counters in the
+     run log, no frontier write (finish), and a per-document crash marker the popup renders. */
   const result = linesToAnalysis(eng.lines, eng.msg, eng._crashed ? "crashed" : "complete", eng);
   result._fkey = eng.fkey; result._prior = eng.prior;   // engine-computed key + parked entry -> persisted below
   return result;
 }
-/* A WASM Aborted() is the engine CRASHING — a should-never-happen. It stays scoped to this engine (one page's
-   crash must not throw and kill the whole multi-engine scheduler serving the user's other tabs), but it must
-   be IMPOSSIBLE to overlook: a LOUD console.error banner, a persistent batch flag, a `_run:"crashed"` record
-   on the analysis every consumer reads, and no completeness claim anywhere (no counters, no frontier write).
-   NOT a quiet @E buried in resolverErrors — that is how the g_optaint teardown leak hid for so long.
-   WHAT IS NOT DISCARDED IS WHAT THE ENGINE ALREADY OBSERVED — see engineFinalize for why the discard this
-   comment used to claim was never one. A crash halts trust in the RUN, not in the endpoints it recorded
-   before it died and already merged. */
-function crashBanner(stage, m) {   // LOUD + a persistent batch flag; EVERY abort path (create/step/teardown) routes here — no crash is ever quiet
-  /* TWO SWALLOWING CATCHES ARE GONE FROM THESE TWO LINES, and with them the `|| 0` that made the counter
-     create itself. Neither operation can throw — an increment of a declared number and a console write — so
-     each `catch (_) {}` could only ever have hidden the ONE thing that matters here: that this is the crash
-     path, and a crash that fails to announce itself is exactly the outcome this function exists to prevent.
-     The counter is declared at load beside _engineLog, so a reader can tell "no engine has crashed" from
-     "bridge.js is not in this zone". */
+/* A WASM abort is the engine crashing. It stays scoped to this engine, so one page cannot kill the scheduler
+   serving other tabs, but it is impossible to overlook: a console.error banner, a persistent crash count, a
+   `_run:"crashed"` record every consumer reads, and no completeness claim anywhere (no counters, no frontier
+   write). What the engine already observed is not discarded (see engineFinalize). */
+function crashBanner(stage, m) {   // every abort path (create, step, teardown) routes here, so no crash is quiet
+  /* Neither operation can throw (an increment of a declared number, a console write), so nothing here is
+     caught: the crash path must always announce itself. The counter is declared at load, so "no crash"
+     differs from "bridge.js not loaded". */
   self._engineCrashOccurred++;
   console.error("\n==== ENGINE CRASH (" + stage + ") — WASM ABORTED, run marked crashed, NOT swallowed ====\n" + m + "\n");
 }
-// The C-side CHECK/DCHECK emits its @WHY/@E ROOT line (phase/cond/at/reason) to stderr -> sink -> the frame's
-// line buffer IMMEDIATELY before abort(). A bare emscripten Aborted() message ("native code called abort()") is
-// terse and useless on its own, so every crash path surfaces that root line IN the loud banner — a crash must
-// POINT AT ITS CAUSE, not just announce itself (this is what forced grepping the reason out of the result
-// during debugging).
-/* ONE SCAN, BECAUSE THERE IS ONE QUESTION. It stood inside engineCrash alone, so the CREATE path — the only
-   path whose whole failure is inside the engine's own boot — announced itself with the abort message and
-   nothing else, and a real @WHY that the frame had already printed cost a full day's wrong diagnosis. The two
-   callers differ only in WHERE the lines come from (a live engine's buffer, or the ones renderer-host attaches
-   to the rejection of the call that aborted), which is an argument and not a second copy of this loop. */
+// The C-side CHECK/DCHECK prints its @WHY/@E root line (phase/cond/at/reason) to the frame's line buffer
+// immediately before abort(), so every crash path puts that root line in the banner and the crash record:
+// emscripten's "native code called abort()" alone names no cause.
+/* One scan for both callers, which differ only in where the lines come from: a live engine's buffer, or the
+   lines renderer-host attaches to the rejection of the call that aborted. */
 function rootWhyLine(lines) {
   for (let i = lines.length - 1; i >= 0; i--) {
     const ln = String(lines[i]);
@@ -3944,62 +3863,33 @@ function engineCrash(eng, stage, e) {
   const m = String((e && e.message) || e);
   eng._crashed = true;
   const root = rootWhyLine(eng.lines);
-  const err = root ? (m + " | ROOT: " + root) : m;   // the crash RECORD carries its cause (netdiff/result-visible), not only the console banner
+  const err = root ? (m + " | ROOT: " + root) : m;   // the crash record carries its cause, not only the console banner
   eng.lines.push('@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(err) + "}");
   crashBanner(stage, err);
 }
-// A crash BEFORE the engine object exists (creation/boot abort). LOUD, and `_run:"crashed"` — never a quiet
-// "degenerate result" the reviewer reads as a boring empty page. There are no findings to discard here: the
-// instance aborted before it ran a line of the page, which is the one crash that genuinely has nothing to say.
-/* THE BANNER IS NO LONGER PART OF THIS FUNCTION, and the split is what one aborted boot costs: `crashBanner`
-   increments the crash COUNT, and a reservation may have several documents attached to it (a RESHIP
-   re-delivery, a sub-frame, a second arrival that joined it while it booted), each of which needs its OWN
-   record because each is answering a different caller. Bundled, answering N callers counted N crashes for one
-   instance that failed to boot, and the probe's `crashes` would have read the number of documents that
-   happened to share a cluster. engineBootFailed banners once and calls this per caller. */
-/* `eng` IS THE RESERVATION THAT FAILED, AND IT IS PASSED BECAUSE A BOOT DOES NOT ALWAYS DIE BEFORE `begin`.
-   `engineBootFailed` covers everything `engineRoot` throws, and `begin` is in the middle of it — so a
-   reservation reaching here may already have been handed a residue and already have been told how many flows
-   came back. Passing `null` would have thrown that away and reported the ONE run where a resumed frontier
-   aborted as a run whose resume state was never known, which is the reading that hides exactly the failure a
-   cold-tier rebuild is most likely to cause. A reservation that died EARLIER still carries the `null` its own
-   literal declared, so this hands the honest answer on both halves without asking which one it is. */
+// A crash before the engine ran a line of the page (a creation or boot abort): `_run:"crashed"`, never a quiet
+// empty result.
+/* The banner is not part of this function: engineBootFailed banners once per instance and calls this once per
+   waiting caller (a RESHIP re-delivery, a sub-frame, a document that joined while it booted), each answering a
+   different caller, so N callers do not count N crashes. */
+/* `eng` is the reservation that failed, passed because a boot can die after `begin`: it may already have been
+   handed a residue and told how many flows came back. A reservation that died earlier carries its declared
+   `null`. */
 function crashRecord(stage, m, msg, eng) {
-  /* NO RESULT DOCUMENT IS EXPECTED HERE, and this is the only caller that may say so: the instance aborted
-     before it could answer, so its absence is the crash rather than a broken contract. */
-  /* The empties are `linesToAnalysis`'s own, on the arm that has no document to read — not four assignments
-     over a record it just built, which is how the two producers of a crash record drifted apart in the first
-     place. `_run:"crashed"` is what every consumer reads; there is no second marker beside it. */
-  /* AND IT OWNS NO RUN ROW, which is the same split as the banner one line up. This is called PER WAITING
-     CALLER for one instance that never booted, and each caller is a different DOCUMENT with a different
-     address — so the records cannot share a row, and each states the run that document did not get. The
-     instance-level fact (one abort) is the crash COUNT, which is incremented once. */
+  /* No result document is expected: the instance aborted before it could answer. The record goes through
+     linesToAnalysis's own no-document arm, so both crash producers share one shape. It owns no run row: each
+     waiting caller is a different document, and the instance-level fact (one abort) is the crash count. */
   return linesToAnalysis(['@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}"], msg, "crashed", eng);
 }
 
-/* MACROTASK yield (worker/offscreen). Between engine quanta the host MUST return to the event loop with a
-   MACROtask (not just an awaited microtask, which the message queue never interleaves with) so the ONE worker
-   thread services its message port — triage/GET_STATE evals, postMessage from the offscreen, other timers —
-   while a lone engine keeps exploring its byte-identical frontier across qjs_step re-entries. MessageChannel is
-   sub-ms, and HTML §8.7 "Timers"' own timer initialisation steps say
-   "If nestingLevel is greater than 5, and timeout is less than 4, then set timeout to 4" — a third of a 12ms
-   quantum, which would dominate it. §NO BOUNDS: a thread-yield, not a cap.
-
-   AND THE `setTimeout` ARM THAT USED TO STAND UNDER THIS WAS A FALLBACK AND IS DELETED RATHER THAN KEPT, WHICH IS WORTH
-   RECORDING BECAUSE IT READ AS A CAPABILITY CHECK AND BECAUSE THE PARAGRAPH ABOVE IT ALREADY SAID WHY IT WAS WRONG. It was
-   `const _macroChan = (typeof MessageChannel !== "undefined") ? new MessageChannel() : null;` with `macroYield` taking
-   `setTimeout(res, 0)` on the null arm. §C-stack's test settles which it was in one question: delete the thing a predicate
-   selects AGAINST and ask whether the predicate is still needed — delete the `setTimeout` arm and the `typeof` test has no
-   consumer at all, so it was never routing. **AND THE TWO ARMS WERE NOT TWO SPELLINGS OF ONE ANSWER, WHICH THE COMMENT
-   DIRECTLY ABOVE THEM STATED AND NOTHING ACTED ON**: the clamp is a THIRD of this quantum, so a run that took the second arm
-   returned the thread to the event loop three times later than the slice asked, on every yield, for the whole run — and
-   nothing in any output said which arm it had taken. That is §A-FIELD-A-CONSUMER-DEFAULTS exactly: not a wrong number but a
-   PLAUSIBLE one, a run that completes and reports and whose slice was never the slice. The forcing function is the crash.
-
-   IT IS A `CHECK` AND NOT A `DCHECK` BECAUSE THERE IS NO ROUTE BEHIND IT. check.js's law puts an always-fatal assertion where
-   the engine must not PROCEED even in production, and with the fallback gone there is nothing to proceed with: the host would
-   have no macrotask to return to the event loop on, so a lone engine would never service its port, which is the freeze
-   §scheduler names the cooperative quantum to prevent. A DCHECK here would be compiled out in exactly the build that ships. */
+/* Macrotask yield. Between engine quanta the host returns to the event loop with a macrotask (an awaited
+   microtask never interleaves with the message queue), so the one thread services its message port while a
+   lone engine keeps exploring across qjs_step re-entries. MessageChannel is sub-millisecond, while HTML §8.7
+   Timers clamps a nested zero-delay timer ("If nestingLevel is greater than 5, and timeout is less than 4, then
+   set timeout to 4"), a third of the quantum. This is a thread yield, not a cap.
+   There is no `setTimeout` fallback: it would silently make every slice three times late. It is a CHECK, not a
+   DCHECK, because without a macrotask source a lone engine would never service its port in the build that
+   ships. */
 const PARTIAL_MS = 750;   // incremental-merge cadence: a hot engine surfaces its current findings this often
 CHECK(typeof MessageChannel !== "undefined",
       "this realm has no MessageChannel, so the host has no sub-millisecond macrotask to return to its event loop on " +
@@ -4011,166 +3901,63 @@ const _macroChan = new MessageChannel();
 function macroYield() {
   return new Promise((res) => { _macroChan.port1.onmessage = () => res(); _macroChan.port2.postMessage(0); });
 }
-/* ─── THE LEVEL-1 CENSUS ─────────────────────────────────────────────────────────────────────────────────
-   THE ORDER THE HOST TOOK, WRITTEN WHERE IT WAS TAKEN. Level-2's census rides the result document because the
-   engine composes it; Level-1's cannot, and that is structural rather than an omission — this order is
-   composed out of `engineWeight` per HOT INSTANCE and `frontierWeight` per waiting address and cold row, and
-   no engine can see another engine. So it is written here, in the trusted zone, at the pick.
-
-   THE UNIT IS A ROUND, NOT A PICK, AND A PICK WOULD BE THE WRONG UNIT FOR THREE REASONS. (1) A pick is a
-   `max`, and the defects this instrument exists to expose are not properties of the winner: a rank frozen at a
-   constant is a property of the SPREAD (every loser tied with the winner), and a weight deleted from the order
-   is a property of what is ABSENT — a per-pick record states neither. (2) One round asks the order in two
-   places (`hostSchedule`'s scan over the resident set, and `_bestCandidate` over everything that is not
-   resident), and the Level-1 question §scheduler actually poses — is a non-resident item worth more than the
-   RAM a resident one holds — is a comparison BETWEEN them, so a per-pick record would split one order into two
-   records whose relationship is expressed nowhere. (3) `hostSchedule` is rank-advance-re-rank: the round IS
-   the unit in which the order is a consistent set of numbers (every weight in it was recorded by the last
-   round with that instance and nothing suspends inside the scan), and any finer unit reports readings taken
-   across a suspension as one ordering.
-
-   THREE FACTS, KEPT APART BY PRESENCE AND NEVER BY A ZERO — the same discipline solver/result.h states for
-   `_wfq` and for the same reason: a full row of zeroes is a reading of an order that did not exist, and a
-   reader taking it would conclude "nothing orders this" about a scheduler that simply had nothing to order.
-     · `self._level1 === undefined` — this file did not load; the relay is broken.
-     · `self._level1 === null`      — no round has completed in this session.
-     · `cands` ABSENT               — the round never ASKED the non-resident order (it spent its advance on a
-                                      navigation, or on SEATING a document a previous round's fetch had already
-                                      landed, or a reservation or a document-load in flight held admission and
-                                      the resident set was under the floor, so neither arm asked). `booting` and
-                                      `loading` are what say WHICH of those held it, so a `cands`-absent round
-                                      is never three reasons behind one silence.
-     · `cands: 0`                   — the order WAS asked and ranked nothing; `exclSub`/`exclLive`/`exclHeld`/
-                                      `exclStranded` stand beside it and say what was taken out of it.
-     · `cands: n` with rows         — a reading.
-   ONE RULE COVERS EVERY CONDITIONAL ROW: a COUNT is present whenever the walk that produces it ran, because a
-   count of zero is a reading; a WEIGHT is present only over a NON-EMPTY population, because an extremum over
-   nothing is not a number. `wRunner` obeys it too — the runner-up's population is the rankable set minus one.
-
-   A ROUND HAS NO SINGLE INSTANT, SO EACH ROW NAMES ITS OWN AND THE DIFFERENCES BETWEEN THEM ARE FACTS. The
-   candidate half is read when the order is ASKED, at the top of the round; the resident half is read at the
-   RANK, after the admission; and `pool`/`booting`/`waiting`/`atFloor` are read HERE, when the round ends. So
-   `candDocs: 1` beside `waiting: 0` is not two rows disagreeing — it is the round having SEATED that document,
-   which is the one thing an admission does, and the difference is the only place it is visible. Collapsing
-   them to one instant is not available (a round is a sequence of suspensions by construction) and pretending
-   to it would be worse: it would report the pre-admission pool as the pool that was ranked.
-
-   `-Infinity` NEVER CROSSES INTO THIS RECORD, AND THAT IS NOT A ROUNDING. `engine_top_weight` answers
-   -Infinity as the engine's POSITIVE statement that its frontier holds no runnable flow (see
-   engineRecordFacts), so it is a SENTENCE and not a magnitude: folding it into `wMin` would report a resident
-   order whose bottom is 0.3 as one whose bottom is unbounded. It is reported as the population it names,
-   `drained`, and the weight extrema are readings of the RANKABLE engines. This also keeps every value here a
-   finite number, which matters because the reader is reached through `chrome.runtime.sendMessage`, whose
-   message is documented as JSON-ifiable — a -Infinity would arrive as `null` and the consumer's own shape
-   assert would fire on a value this producer never wrote. */
+/* ─── The Level-1 census ─────────────────────────────────────────────────────────────────────────────────
+   The order the host took, written where it was taken: it is composed from `engineWeight` per hot instance and
+   `frontierWeight` per waiting address and cold row, and no engine can see another, so no result document can
+   carry it. The unit is a round, not a pick: a frozen rank or a deleted weight shows only in the spread and
+   in what is absent; one round asks both the resident scan and `_bestCandidate`, whose comparison is the
+   Level-1 question; and nothing suspends inside the scan, so a round's weights are consistent.
+   Presence, never a zero, separates the states: `self._level1 === undefined` (file not loaded), `null` (no
+   round yet), `cands` absent (the round never asked the non-resident order; `booting` and `loading` say
+   what held admission), `cands: 0` (asked, ranked nothing; the `excl*` rows say what was taken out), and
+   `cands: n` with rows (a reading). Counts are present whenever their walk ran, weights only over a
+   non-empty population; `wRunner` follows that too. Each row is read at its own instant (candidates when
+   asked, the resident half at the rank, pool counts at round end), so `candDocs: 1` beside `waiting: 0` is the
+   round having seated that document. `-Infinity` never enters: it is the engine's statement that nothing is
+   runnable, reported as the `drained` population, and the record must be JSON-safe for
+   `chrome.runtime.sendMessage`. */
 let _level1Round = 0;
-/* THE DISTRIBUTION OVER ROUNDS, WHICH IS WHAT MAKES A SINGLE OVERWRITTEN RECORD READABLE AT ALL. `_level1`
-   holds the LAST round, so every per-round row on it is a GAUGE at an instant THIS LOOP CHOSE — and the
-   instant it chooses is the worst one for the question the record is most often asked. A round that steps an
-   engine and takes the yield arm sets `state = "fetching"` and then records from its own `finally`, so a
-   terminal round of a drive that was still exploring reports `hot: 0` BY CONSTRUCTION, every single time,
-   whatever the drive did. MEASURED: one gitpod pass, 60s dwell, `pool: 1, booting: 0, loading: 0, hot: 0` at
-   round 34 — a reading consistent with an engine that was unrankable all drive AND with one that was hot in
-   every round but the last, and the row cannot separate them.
-   SO THE SHAPES ARE COUNTED OVER THE LIFETIME AND RIDE EVERY RECORD, which is the §A-GAUGE-AND-A-LIFETIME-
-   COUNTER pair stated as two rows rather than inferred from one: the gauge says where the loop IS and these
-   say what it has BEEN DOING, and only the second can answer "was the engine rankable" over a drive.
-   THEY ARE AN EXACT PARTITION AND THE ASSERT IS WHAT KEEPS THEM ONE: a round assigns `rd.shape` at the single
-   point it leaves the body and `_level1Record` is the ONLY incrementer, so the six cannot drift from each
-   other or from `round` — and a round that leaves by a THROW arrives here with no shape and is counted as
-   `rThrew`, which is a reading rather than a hole in the sum. Counting at the exits instead would have made
-   every future exit a place to forget, which is the shape of defect this project keeps paying for. */
+/* The distribution over rounds. `_level1` holds the last round, a gauge at an instant this loop chose, and a
+   round that steps an engine and takes the yield arm records `hot: 0` by construction. So round shapes are
+   counted over the lifetime and ride every record: the gauge says where the loop is, these say what it has
+   been doing. They are an exact partition: a round assigns `rd.shape` at its single exit and `_level1Record`
+   is the only incrementer; a round that leaves by a throw has no shape and is counted as `rThrew`. */
 const _level1Shapes = { rNoPool: 0, rIdle: 0, rWaited: 0, rReleased: 0, rFinished: 0, rServiced: 0,
-                        /* A ROUND THAT LEFT BY A THROW, AND A ROUND WHOSE EXIT NAMED A SHAPE THIS PARTITION HAS
-                           NO ARM FOR, ARE TWO ARMS AND NOT ONE. The second is unreachable until somebody adds
-                           an exit, and it exists because the DCHECK that names that edit is COMPILED OUT in
-                           release: without it the release build would increment a key that is not here, read
-                           `undefined`, store NaN, and hand the popup a non-finite row — so the arm is what
-                           keeps the sum exact in the build that cannot assert. Folding it into `rThrew` would
-                           have been the two-facts-one-number shape in the one place this record exists to
-                           refuse it. */
+                        /* A round that left by a throw (`rThrew`) and one whose exit named a shape with no arm
+                           (`rUnknown`) are two arms. The second is reachable only in release, where the DCHECK
+                           naming a new exit is compiled out; without it the increment would key a missing name
+                           and store NaN. */
                         rUnknown: 0, rThrew: 0 };
 const _LEVEL1_SHAPE_KEY = { nopool: "rNoPool", idle: "rIdle", waited: "rWaited",
                             released: "rReleased", finished: "rFinished", serviced: "rServiced" };
-/* AND THE ONE ARM THAT IS TWO POPULATIONS, SPLIT BY THE ENGINE'S OWN WORD FOR WHICH IT IS. `rServiced` counts
-   every round that ended in a service round, and the yield arm is reached for TWO step codes whose benches mean
-   OPPOSITE things about this loop. ENGINE_STEP_STALLED is the engine stating that its frontier holds nothing
-   runnable, so taking it out of the hot set is what §scheduler prescribes in as many words — "a fetching engine
-   is skipped so one doc's wait never stalls another's" — and the round is then entitled to wait on bytes.
-   ENGINE_STEP_YIELD is the engine stating that it has a runnable frontier and hit a slice boundary, and the
-   bench it gets is IDENTICAL, which is the thing nothing in this tree could measure: §ONE-WFQ-policy says
-   level 1 "runs the top until its best flow no longer outranks the runner-up", and an engine that leaves the
-   rankable set after one step cannot be run on however far above the runner-up it is.
-   SO THE TWO READINGS OF ONE NUMBER ARE A CORRECT MECHANISM AND A CANDIDATE DEFECT, AND THEY TAKE OPPOSITE
-   WORK. A high `rServiced/round` is the statement that nearly every round benched an engine, and it is
-   consistent with a pool whose every member is legitimately waiting on a body AND with a pool being
-   round-robined past an order that had already picked a winner. That is the three-states-behind-one-answer
-   shape CLAUDE.md §a-bare-count-over-a-population-you-have-not-partitioned refuses, and the discriminator was
-   in a local variable at the moment the shape was assigned and thrown away. The derivation, rather than a
-   figure that rots on the next drive: `SITES=apps.tsv node report.mjs` from `testing/corpus`, which DERIVES
-   its own pass set (a named set is `--named`, and a bare filename is refused; the `<census files>` placeholder
-   this line used to carry was a hand-chosen scope wearing a derivation's clothes, and CLAUDE.md records it
-   answering `0` for a field 110 of 119 passes carry)
-   prints `<rounds ending in a fetch service>serv/pool<n>` per pass in its ENGINE SPAN block.
-   AND THE BENCH IS NOT WHAT COSTS THE SECONDS, WHICH IS RECORDED HERE SO THE NEXT READER OF THESE TWO ROWS
-   DOES NOT SPEND A DIFF ON IT. The obvious next move — keep a YIELDing engine rankable while its payment is in
-   flight — was refuted by arithmetic over the same corpus before these rows were landed, and the refutation
-   needs no new instrument. At pool 1 this loop has nothing else to step, so it WAITS on exactly this bench's
-   own latency and `betweenSlicesUs / slices` measures it directly: 8ms, 12ms, 14ms and 63ms over the four
-   pool-1 gitpod rows. The SAME CODE runs at pool >= 2, where that figure is 2.1 to 8.5 SECONDS, and it does
-   not scale with pool (pool 2 reads ~5s and pool 9 reads ~5s). So removing the yield bench can return at most
-   the bench's own latency, which is under one percent of the gap it would be offered to explain, and the
-   remainder is the OTHER pool members' own slices — which is a question about why there are seven instances of
-   one document, not about this arm. It also carries a correctness objection in its own right: a YIELDing engine
-   left in the hot set is re-picked next round (it is the top), so `ops.step` would be issued CONCURRENTLY with
-   that engine's own in-flight `serviceFetch` on one renderer port, with `engineRecordFacts` running from two
-   async chains and one of them mutating `eng._inflight` while the other reads it.
-   RETIREMENT -- THAT CONDITION WAS BORN MET AND IS RE-KEYED, AND THE RETIRED WORDING IS KEPT BECAUSE A READER
-   WHO RE-DERIVES IT FROM `_level1Record`'S OWN ROWS WILL WRITE IT AGAIN. It read: "this record goes when the
-   pool publishes the SEAT KIND of each member, because the question these rows exist to refine stops being
-   'which bench' and becomes 'why is this pool seven engines of one document', which no row in this file can
-   answer today". The last clause is FALSE and was false when it was written: `rendererPoolProbe` has published
-   `reservations` all along -- `rooted` (an ambient dispatch rooting a cluster), `seeded` (an address an
-   application declared), `navigated` (a top replaced in a cluster that had one), `rehydrated` (a cold residue),
-   `joinedBooting`/`joinedRooted` (a document attaching to an agent that already has an instance) -- which IS
-   the seat-kind partition, as lifetime counters, one command from a live drive. What is true is narrower and is
-   about a READER rather than about this file: `testing/corpus/site.mjs` composes the census out of
-   `self._level1` and asks `rendererPoolProbe` for none of it, so the archived corpus cannot answer it and a
-   lane reading censuses concludes the row does not exist. That is CLAUDE.md §A-RETIREMENT-CONDITION-IS-
-   GRAMMATICALLY-FUTURE-TENSE caught by its own prescription -- grep the mechanism a condition names AT THE
-   MOMENT YOU WRITE IT -- and the grep that found it was `grep -n _reserveStats extension/bridge.js` against an
-   invented sibling reading zero.
-   RETIREMENT: this record goes when the corpus census carries that `reservations` block beside `hostRound`, so
-   "seven engines of one document" is a row somebody reads rather than a question a lane has to drive for.
-   IT IS ITS OWN OBJECT AND NOT TWO MORE ARMS OF `_level1Shapes`, because those sum to `round` by construction
-   and are asserted to; these sum to ONE of them. A partition of an arm is not an arm.
-   NOTHING HERE DECIDES ANYTHING, AND THE ARM ABOVE STILL DOES NOT READ A STEP CODE TO CHOOSE A BEHAVIOUR —
-   see the paragraph at `rd.shape = "serviced"`, which argues that the two codes differ in what they say about
-   RANK and that rank is answered by `engine_top_weight` rather than by a second question asked here. That
-   argument is untouched: the code is COUNTED and never branched on, so there is still exactly one answer to
-   the question of what a service round does. */
+/* The one arm that is two populations, split by the engine's own step code. `rServiced` counts every round
+   that ended in a service round, reached for ENGINE_STEP_STALLED (nothing runnable, so leaving the hot set is
+   right) and for ENGINE_STEP_YIELD (a runnable frontier at a slice boundary, benched identically, though Level 1
+   should run the top until its best flow no longer outranks the runner-up). The two readings take opposite
+   work, so they are counted apart; `testing/corpus`'s report.mjs prints them per pass in its ENGINE SPAN block.
+   Keeping a yielding engine rankable while its payment is in flight would issue `ops.step` concurrently with
+   that engine's own in-flight `serviceFetch` on one renderer port, with `eng._inflight` mutated from two async
+   chains, so it is not a simple change.
+   The seat-kind partition that explains a pool of many engines for one document is `rendererPoolProbe`'s
+   `reservations` lifetime counters; the corpus census (`testing/corpus/site.mjs`) does not yet record them.
+   This is its own object, not two more `_level1Shapes` arms, because those sum to `round` and these sum to one
+   of them. It counts the code and never branches on it (see the paragraph at `rd.shape = "serviced"`). */
 const _level1Serviced = { rServicedYield: 0, rServicedStalled: 0,
-                          /* AND A CODE THIS PARTITION HAS NO ARM FOR, WHICH IS AN ARM AND NOT A DEFAULT, for
-                             exactly `rUnknown`'s reason one object up: the DCHECK that names the edit is
-                             COMPILED OUT in release, so without this a widened step enumeration would be
-                             counted as a YIELD — a fabricated reading of the one row that exists to separate
-                             a correct bench from a defective one — or would key a name that is not here and
-                             store NaN. The sum assert covers all three, so the arm is what keeps the
-                             partition exact in the build that cannot assert. */
+                          /* A code with no arm is an arm, for `rUnknown`'s reason: without it a widened step
+                             enumeration would be counted as a yield, or store NaN, in the build that cannot
+                             assert. */
                           rServicedUnknown: 0 };
 const _LEVEL1_STEP_KEY = { 2: "rServicedYield", 3: "rServicedStalled" };
 function _level1Record(pool, rd) {
-  /* THE SHAPE IS COUNTED BEFORE THE ROW IS COMPOSED, so `round` and the arms are read at one instant and the
-     identity below is over one set of numbers rather than over two. An empty shape is a round that left the
-     body by a THROW: every normal exit assigns one, so the fallback is a POSITIVE statement and not a default. */
+  /* The shape is counted before the row is composed, so `round` and the arms are one instant. An empty shape is
+     a round that left by a throw (every normal exit assigns one), counted as `rThrew`. */
   DCHECK(rd.shape === "" || _LEVEL1_SHAPE_KEY[rd.shape] !== undefined,
          "the Level-1 round recorded shape `" + rd.shape + "`, which this partition has no arm for — the arms " +
          "sum to `round` by construction, so an unknown shape is a new exit added to the loop without a row, " +
          "and the dev build refuses it here rather than letting release carry it as `rUnknown` unread");
   _level1Shapes[rd.shape === "" ? "rThrew" : (_LEVEL1_SHAPE_KEY[rd.shape] || "rUnknown")]++;
-  /* COUNTED AT THE SAME INSTANT AS THE ARM IT REFINES, for the reason stated over the line above: `round` and
-     every distribution riding this record are read once, so the partition below cannot be taken across a
-     mutation of the arm it is asserted against. */
+  /* The service partition is counted at the same instant as the arm it refines; shape and step code are
+     assigned on the same two lines, so they are a biconditional. */
   DCHECK((rd.shape === "serviced") === (rd.stepCode !== null),
          "the Level-1 round recorded a service round with no step code, or a step code with no service round — " +
          "the engine's own {YIELD, STALLED} answer is assigned on the same two lines as the shape, so a " +
@@ -4185,15 +3972,12 @@ function _level1Record(pool, rd) {
     _level1Serviced[_LEVEL1_STEP_KEY[rd.stepCode] || "rServicedUnknown"]++;
   }
   const r = { round: ++_level1Round, pool: pool.length, booting: _bootingCount(),
-              /* AND THE SEATS WHOSE DOCUMENT IS STILL ON THE NETWORK, WHICH IS A SECOND REASON ADMISSION WAS
-                 NOT ASKED AND THEREFORE A SECOND ROW. Folded into `booting` it would say a reservation was
-                 provisioning when none was; left out it would leave `cands` absent beside `atFloor: 0` and
-                 `booting: 0`, which reads as a round that asked nothing for no reason at all. */
+              /* Seats whose document is still on the network: a second reason admission was not asked, so a
+                 second row (folded into `booting` it would claim a reservation that does not exist). */
               loading: _loadingCount(),
               waiting: _waiting.length, hot: rd.hot === null ? 0 : rd.hot.n,
-              /* WHICH OF THE TWO ARMS COULD HAVE ASKED THE ORDER, AND THE ONLY THING THAT MAKES
-                 `candWMax` AGAINST `wMin` READ AS A DECISION RATHER THAN AS A COINCIDENCE OF TWO NUMBERS:
-                 under the floor the comparison is admission's, at it the comparison is eviction's. */
+              /* Which arm could have asked the order: under the floor the comparison is admission's, at it
+                 eviction's. */
               atFloor: _atRamFloor() ? 1 : 0 };
   if (rd.hot !== null && rd.hot.n > 0) {
     r.drained = rd.hot.drained;
@@ -4201,65 +3985,38 @@ function _level1Record(pool, rd) {
     if (rank > 0) { r.wTop = rd.hot.wTop; r.wMin = rd.hot.wMin; }
     if (rank > 1) r.wRunner = rd.hot.wRunner;
   }
-  /* THE NON-RESIDENT HALF ARRIVES WHOLE OR NOT AT ALL — see `_bestCandidate`, which composes it in one walk.
-     `candAsk` rides with it because a round can legitimately ask the order twice (an admission that reaches
-     the RAM floor is followed by an eviction that asks again over the pool the admission changed), and a
-     record that reported the later reading without saying so would present two instants as one. */
+  /* The non-resident half arrives whole or not at all (`_bestCandidate` composes it in one walk). `candAsk`
+     rides with it because a round can ask the order twice (an admission that reaches the RAM floor is followed
+     by an eviction asking over the changed pool), and the record says so. */
   if (rd.cand !== null) {
     for (const k of Object.keys(rd.cand)) r[k] = rd.cand[k];
     r.candAsk = rd.candAsk;
   }
-  /* THE PRODUCER ASSERTS ITS OWN GRAMMAR HERE, WHICH IS THE OPPOSITE SPLIT FROM `_wfq` AND FOR THE SAME REASON.
-     There this zone RELAYS a document another program composed, so it asserts the SHAPE and never the names —
-     a name list would be a third copy of solver/flow.h's. Here this zone IS the composer, so the names are
-     already stated once, above, and what a consumer must not do is re-state them: popup.js renders whatever
-     rows arrive and asserts only the shape, so a row added here reaches a human unedited. */
+  /* The producer asserts its own grammar here, the opposite split from `_wfq`: this zone composes this record,
+     so its names are stated once above, and popup.js renders whatever rows arrive and asserts only the shape. */
   for (const k of Object.keys(r))
     DCHECK(typeof r[k] === "number" && Number.isFinite(r[k]),
            "the Level-1 census composed a non-finite `" + k + "` — every row of it is a population count, a " +
            "0/1 state or a weight over a non-empty population, and the one value that is legitimately not a " +
            "number (an engine's -Infinity for a drained frontier) is reported as the `drained` COUNT rather " +
            "than folded into an extremum, so a non-finite here is a term that lost its presence rule");
-  /* THE ONE-INSTANT HALF OF THIS, AND THE HALF THAT WAS NEVER A RELATION AT ALL. `booting` and `pool` are
-     read on the same line above, so a booting count that outruns the pool IS a reading taken across a
-     mutation, which is what this says. `hot` is not: it is the round's own scan, taken before the step, and
-     this record's whole doctrine is stated three paragraphs up — "a round has no single instant, so each row
-     names its own AND THE DIFFERENCES BETWEEN THEM ARE FACTS". `hot: 1` beside `pool: 0` is the round having
-     FINALIZED that engine, which is the one thing a terminal round does; the paragraph's own example is the
-     mirror of it (`candDocs: 1` beside `waiting: 0` is the round having SEATED a document).
-     SO THIS CLAUSE ASSERTED THAT THE ROUND HAD MUTATED NOTHING, WHICH EVERY TERMINAL ROUND MUTATES BY DESIGN.
-     `finish` splices the engine out of the pool and `_level1Record` runs from the round's own `finally`
-     afterwards, so a pool whose members were all hot — one tab, the ordinary case — reached this with hot 1
-     and pool 0 and aborted, out of an exit that is EVERY exit, taking the Level-1 scheduler down on the round
-     that COMPLETED a document. It is the same defect shape as the accounting sum that named two of three
-     kinds: an instrument built so a census could not go quiet, killing the loop it measures, on correct code.
-     The relation it wanted is structural and holds where it is computed — `hot` is a FILTER of `pool`, a
-     subset at the line that makes it, with nothing there left to assert. */
-  /* AND THE TWO NOT-YET-AN-INSTANCE POPULATIONS ARE ASSERTED AS ONE STATEMENT RATHER THAN AS TWO `<=`s,
-     because what makes them readable together is that they are DISJOINT: a pool member holds exactly one
-     state, so their sum is a subset of the pool and a sum that outruns it is a seat counted in both — which is
-     the one failure a per-row bound cannot see and which would make `loading` look like a reason admission was
-     held when the reservation beside it was the reason. All three are read on the same line above. */
-  /* AND THE LIFETIME DISTRIBUTION RIDES EVERY RECORD, UNCONDITIONALLY, because it is not a reading of
-     anything this round walked — it is what every round before it did, and its whole value is that it survives
-     being read at an instant the loop chose. */
+  /* `hot` is the round's scan taken before the step and is not bounded by `pool`: a terminal round finalizes
+     the engine (finish splices it out) before this runs in the round's `finally`, so `hot: 1` beside `pool: 0`
+     is a completed document. `booting` and `pool` are read together, and `hot` is a filter of `pool` where it
+     is computed, so nothing between `hot` and `pool` is asserted. */
+  /* `booting` and `loading` are disjoint pool members (one state each), so their sum, read on the same line as
+     `pool`, is asserted not to outrun it; a seat counted in both would make `loading` look like the reason. */
+  /* The lifetime distribution rides every record unconditionally: it is what every earlier round did. */
   for (const k of Object.keys(_level1Shapes)) r[k] = _level1Shapes[k];
   for (const k of Object.keys(_level1Serviced)) r[k] = _level1Serviced[k];
-  /* THE ARMS SUM TO `round` AND THAT IS ASSERTED RATHER THAN DOCUMENTED, which is the one property that makes
-     them readable as a partition instead of as seven numbers that happen to sit together. A reader who sees
-     `rServiced` at 3 against `round` at 34 is entitled to conclude the other 31 rounds were NOT service rounds
-     only if nothing can be in two arms or in none; this is what says so, and it fires on the one way that
-     breaks — a new exit from the loop body with no `rd.shape` on it, which arrives here as a silent `rThrew`. */
+  /* The arms sum to `round`, asserted: this function is the only incrementer and every exit assigns a shape, so
+     a disagreement is a new exit with none, which would otherwise arrive as a silent `rThrew`. */
   DCHECK(Object.keys(_level1Shapes).reduce((n, k) => n + _level1Shapes[k], 0) === r.round,
          "the Level-1 round shapes sum to " +
          Object.keys(_level1Shapes).reduce((n, k) => n + _level1Shapes[k], 0) + " against " + r.round +
          " round(s) — this function is the ONLY incrementer and every exit of the round body assigns a shape, " +
          "so a sum that disagrees is an exit that assigns none being counted as a throw, or a second caller");
-  /* AND THE ONE ARM'S PARTITION SUMS TO THAT ARM, which is the whole of what makes the two rows readable as a
-     split of `rServiced` rather than as two numbers that happen to sit beside it. One assignment site, one
-     incrementer, one instant — so a disagreement is a service round counted into the arm by something other
-     than the line that states its code, and a reader differencing the pair against `rServiced` would be
-     attributing the remainder to a bench nobody took. */
+  /* And the service partition sums to `rServiced`: one assignment site, one incrementer, one instant. */
   DCHECK(r.rServicedYield + r.rServicedStalled + r.rServicedUnknown === r.rServiced,
          "the Level-1 census splits " + r.rServiced + " service round(s) into " + r.rServicedYield +
          " yield, " + r.rServicedStalled + " stalled and " + r.rServicedUnknown + " unknown — these are one " +
@@ -4282,11 +4039,8 @@ function _level1Record(pool, rd) {
   DCHECK(!("wTop" in r) || r.wMin <= r.wTop,
          "the Level-1 census reports a resident order whose bottom outranks its top — these are the extrema " +
          "of one scan over one array of weights, so an inversion is two scans over two sets");
-  /* THE NON-RESIDENT HALF ARRIVES WHOLE, ASSERTED AGAINST THE WALK'S OWN ROW SET RATHER THAN AGAINST A LIST
-     KEPT HERE. This named two of the eight rows `_candCensus` declares — the two somebody thought of — so it
-     was a check that passed for exactly the shapes it was meant to reject: an exclusion row added to the walk
-     and dropped on the way here would have been an order reporting that it excluded nothing. `_candCensus()`
-     is the one statement of which rows a walk that RAN produces, so this cannot go stale. */
+  /* The non-resident half is asserted whole against `_candCensus()`'s own row set, the one statement of which
+     rows a walk that ran produces, so an exclusion row added to the walk cannot be dropped silently. */
   for (const k of Object.keys(_candCensus()))
     DCHECK(("cands" in r) === (k in r),
            "the Level-1 census carries part of the non-resident order — `" + k + "` and the total are one " +
@@ -4300,13 +4054,8 @@ function _level1Record(pool, rd) {
          "the Level-1 census says the non-resident order was asked " + r.candAsk + " time(s) in one round — " +
          "there are exactly two arms that ask it (admission under the floor, eviction at it) and each asks " +
          "at most once, so anything else is an ask this record did not see and whose reading it is not holding");
-  /* THE POPULATIONS ACCOUNT FOR THE TOTAL, SUMMED OVER THE DECLARED KINDS AND NEVER OVER A SUM WRITTEN HERE.
-     `cands === candDocs + candCold` stood here after a THIRD kind — an address an application declared is a
-     page of itself — was already being ranked into the total, so this assert fired on healthy code at the
-     first bundle that named a route it does not link, from the round's own `finally`, which is every exit:
-     the instrument built so a frozen rank could not hide killed the scheduler it was measuring. A sum over
-     CAND_KINDS is the same statement that cannot be left behind, and it is still a real check — a kind
-     counted into the total by something other than `_candRanked` has no population and fails here. */
+  /* The populations account for the total, summed over CAND_KINDS so a new kind cannot be left out; a kind
+     counted into the total by anything but `_candRanked` has no population and fails here. */
   DCHECK(!("cands" in r) || r.cands === CAND_KINDS.reduce((n, k) => n + r[k.pop], 0),
          "the Level-1 census ranked " + r.cands + " candidate(s) and its populations account for " +
          CAND_KINDS.map((k) => k.pop).join(" + ") + " of them — every work item with no instance is one of " +
@@ -4322,12 +4071,9 @@ function _level1Record(pool, rd) {
          "the Level-1 census reports a candidate order whose lowest-ranked item outranks its highest — one " +
          "walk produces both, so an inversion is the spread being taken over a different set from the pick, " +
          "and the spread is what can show a rank frozen at a constant");
-  /* THE SPREAD ROWS ARE READINGS OF THE SAME SET, AND THE THING THAT MAKES THEM ONE READING IS ASSERTED. A
-     candidate that has never been served contributes reward 0 and the full optimism bonus, so `candUnserved`
-     is a subset of the ranked population and it is exactly the population `candVisMax === 0` describes when it
-     is ALL of it. Without this the two rows could be taken over different walks and the popup's discriminator
-     — a tie at the entry value is the order's floor, a tie above an item with history is a frozen rank —
-     would be composed of two facts about two sets. */
+  /* The spread rows read one set: a never-served candidate contributes reward 0 and the full bonus, so
+     `candUnserved` is a subset of the ranked population and equals it exactly when `candVisMax === 0`. That
+     pair is what tells an order at its entry value (every item unserved, a tie at 1.0) from a frozen rank. */
   DCHECK(!("cands" in r) || (r.candUnserved <= r.cands &&
                              (r.cands === 0 || (r.candVisMax === 0) === (r.candUnserved === r.cands))),
          "the Level-1 census reports " + r.candUnserved + " never-served candidate(s) of " + r.cands +
@@ -4338,31 +4084,23 @@ function _level1Record(pool, rd) {
   self._level1 = r;
 }
 
-/* THE PURE SCHEDULER POLICY (no wasm knowledge — engine ops are injected, so this is unit-testable with
-   mock engines). Each iteration: ADMIT waiting documents up to the RAM cap (ops.admit gates creation — no
-   instance is built until a slot is free), then advance the highest-weight HOT engine and re-rank. Before
-   stepping it the host sets its VALUE yield-floor to the RUNNER-UP engine's weight (ops.setFloor), so the
-   engine runs until it's outranked then yields HOT — no fixed slice count (a banned step-cap). Slots turn
-   over because each engine self-parks to the cold tier (IDB recipe) under RAM pressure (ops.requestPark). */
+/* The scheduler policy, with engine ops injected so it is testable with mock engines. Each iteration admits
+   waiting documents while there is headroom (`ops.admit` gates creation), then advances the highest-weight hot
+   engine and re-ranks. Before stepping it the host sets the engine's value yield floor to the runner-up's
+   weight (`ops.setFloor`), so the engine runs until outranked and yields hot, with no fixed step count. At the
+   RAM floor `ops.evictee` chooses an engine to park to the cold tier (`ops.requestPark`). */
 async function hostSchedule(pool, ops) {
   for (;;) {
-    /* THE ROUND'S READING, COLLECTED BY THE ROUND AND WRITTEN ONCE. Declared before the body and published in
-       `finally` so that EVERY exit records — the two `break`s, the `continue` that waits on a reservation, and
-       a round that dies inside an op (which records the half it had reached, and whose other half is then
-       ABSENT rather than zero, which is what `_hostDead` beside it is read against). One write site is the
-       whole of "one census, one place": there is no arrangement of this loop in which the order is taken and
-       nothing records it, which is precisely how a Level-1 rank frozen at a constant survived. */
-    /* `stepCode` IS NULL FOR EVERY ROUND THAT DID NOT SERVICE, AND THAT IS A POSITIVE STATEMENT RATHER THAN A
-       HOLE: the only arm that assigns it is the one that assigns `shape = "serviced"`, on the same two lines, so
-       the two are a biconditional and `_level1Record` asserts it. A round that leaves by a THROW anywhere ahead
-       of that arm arrives with both absent, which is `rThrew` and is already a reading. */
+    /* The round's reading, collected by the round and written once in `finally`, so every exit records: the
+       `break`s, the `continue` that waits, and a round that dies inside an op (which records the half it reached;
+       the other half is absent, read against `_hostDead`). */
+    /* `stepCode` is null for every round that did not service; it is assigned on the same lines as
+       `shape = "serviced"`, and `_level1Record` asserts the biconditional. */
     const rd = { hot: null, cand: null, candAsk: 0, shape: "", stepCode: null };
     try {
-    if (ops.admit) rd.cand = await ops.admit();   // gate creation to cap: seat waiting docs into freed slots
-    /* ADMISSION ANSWERS WITH THE ORDER IT TOOK, OR WITH THE POSITIVE `null` THAT SAYS IT TOOK NONE. `undefined`
-       is neither — it is an admission arm that stopped answering, and it would reach the record as a
-       half-filled candidate half rather than as an absent one, which is the one distinction this census is
-       built to keep. Asserted at the seam and not at the composer, where the caller's identity is gone. */
+    if (ops.admit) rd.cand = await ops.admit();   // seat waiting documents into freed slots
+    /* Admission answers with the order it took, or `null` where it took none; `undefined` would be an arm that
+       stopped answering, asserted here where the caller is known. */
     DCHECK(rd.cand === null || (rd.cand && typeof rd.cand === "object" && Number.isInteger(rd.cand.cands)),
            "the admission op answered the round with something that is not a candidate-order reading — it " +
            "returns the census `_bestCandidate` composed, or null where it never asked the order, and an " +
@@ -4371,22 +4109,13 @@ async function hostSchedule(pool, ops) {
     if (!pool.length) { rd.shape = "nopool"; break; }
     const hot = pool.filter((e) => e.state === "hot");
     if (!hot.length) {   // every live engine is mid-something: wait for the earliest to become hot, then re-rank
-      rd.hot = { n: 0, drained: 0 };   // a rankable set of none is a READING; the census omits the weights, not the row
-      /* THREE STATES REACH THIS ARM AND THEY ARE ONE KIND OF THING: not rankable YET, on a promise that says
-         when. An engine awaiting a reply body is one; a RESERVATION whose instance is still being provisioned
-         is the second, and it was missing. Without it an empty hot set with a booting engine in the pool fell
-         through to the `break` below — and the pool is NOT empty (the reservation is in it), so _hostKick's
-         `finally` re-entered immediately: a full-speed spin through admit on a condition that only the boot
-         it refused to wait for could change.
-         THE THIRD IS AN ADMISSION WHOSE DOCUMENT IS STILL ON THE NETWORK (`loading`), AND ADDING IT IS WHAT
-         MOVED A REMOTE BODY OFF THIS ROUND. `ops.admit()` used to AWAIT a declared route's §7.4 navigation and a
-         shed residue's re-derivation, one level above any service round, so a seeded address whose server holds
-         its body open froze THIS LOOP rather than one instance: no engine ranked, stepped or serviced again for
-         the rest of the session, including every instance that was perfectly healthy, and the census stopped
-         being written at all because no round began. The fetch is a pool member now, so the round returns, the
-         hot set is ranked and stepped, and only when NOTHING is rankable does the loop wait here — on a promise
-         that resolves whether the bytes arrive or the load refuses. Nothing is bounded: the wait is the same
-         wait a reservation gets, and the next iteration re-asks. */
+      rd.hot = { n: 0, drained: 0 };   // a rankable set of none is a reading; the census omits the weights, not the row
+      /* Three states reach this arm, each not rankable yet with a promise saying when: an engine awaiting a reply
+         body, a reservation being provisioned, and an admission whose document is still on the network
+         (`loading`). Without the second the loop would spin through admit while a boot was outstanding; the third
+         is why a remote body that never ends no longer freezes this loop (the fetch is a pool member, so the hot
+         set keeps being ranked and stepped). The wait is unbounded and resolves whether the bytes arrive or the
+         load refuses; the next iteration re-asks. */
       const pending = pool.filter((e) => e.state === "fetching" || e.state === "booting" ||
                                          e.state === "loading");
       if (!pending.length) { rd.shape = "idle"; break; }
@@ -4399,22 +4128,11 @@ async function hostSchedule(pool, ops) {
       await Promise.race(pending.map((e) => e._readyP));
       continue;
     }
-    /* Level-1 WFQ pick + the RUNNER-UP's weight (the value yield floor). ONE reading per engine: every weight
-       here is a number the last round with that instance recorded, so asking three times per comparison — which
-       this did, `ops.weight(best)` twice inside a loop over `ops.weight(e)` — bought nothing but the chance for
-       one pass to rank against two different answers.
-       AND THE SCAN NO LONGER COUNTS THE WINNER AS ITS OWN RUNNER-UP. Seeded with `best = hot[0]` and then
-       visiting hot[0] again, the first iteration fell through to `else if (w > runner)` and set runner to BEST'S
-       OWN weight; whenever the highest-value engine happened to be first in the pool, the floor handed to
-       ops.setFloor was that engine's own top weight rather than the next engine's. The engine compares each
-       running flow against that floor (engine.c: `flow_weight(cur) < g_yield_floor`), so the winner yielded the
-       thread at its first back-edge below its own best flow — to a document worth strictly less — which is the
-       Level-1 interleave inverted, silently, on exactly the arrangement where the pick was already right. */
-    /* MATERIALIZED, WHICH IS WHAT MAKES "ONE READING PER ENGINE" STRUCTURAL RATHER THAN A PROPERTY OF HOW THIS
-       LOOP HAPPENS TO BE WRITTEN. The census below is a second question of the same set, and asking
-       `ops.weight` again for it would reintroduce exactly the defect the paragraph above records: two passes
-       ranking against two answers. Every number this round reports about the resident order comes out of this
-       one array. */
+    /* The Level-1 pick and the runner-up's weight (the value yield floor), from one reading per engine (each
+       weight is what the last round with that instance recorded). The scan starts at index 1, so the winner is
+       never counted as its own runner-up: the engine yields when `flow_weight(cur) < g_yield_floor`
+       (engine.c), and its own top weight as the floor would hand the thread to a lesser document. */
+    /* Materialized, so the census below reads the same answers the pick ranked against. */
     const ws = hot.map((e) => ops.weight(e));
     let best = hot[0], bestW = ws[0], runner = -Infinity;
     for (let i = 1; i < hot.length; i++) {
@@ -4422,11 +4140,9 @@ async function hostSchedule(pool, ops) {
       if (w > bestW) { runner = bestW; best = hot[i]; bestW = w; }
       else if (w > runner) runner = w;
     }
-    /* THE READING OF THE RESIDENT ORDER, TAKEN OVER THE RANKABLE ENGINES. `-Infinity` is an engine's own word
-       for a frontier holding no runnable flow, so it is counted (`drained`) and never folded into an extremum;
-       `wRunner` is the SECOND-highest rankable weight, which is the value yield floor the winner is handed
-       whenever nothing is drained. `_level1Record` attaches each of these only over a population that has
-       members — see the presence rule stated there. */
+    /* The reading of the resident order over rankable engines: `-Infinity` (no runnable flow) is counted as
+       `drained`, never an extremum, and `wRunner` is the second-highest rankable weight. `_level1Record` attaches
+       each only over a non-empty population. */
     let _rk = 0, _top = 0, _min = 0, _second = 0;
     for (const w of ws) {
       if (!Number.isFinite(w)) continue;            // drained: a sentence, counted as one, never an extremum
@@ -4439,27 +4155,17 @@ async function hostSchedule(pool, ops) {
       _rk++;
     }
     rd.hot = { n: hot.length, drained: hot.length - _rk, wTop: _top, wMin: _min, wRunner: _second };
-    /* THE RANKING ITSELF IS STILL SYNCHRONOUS, WHICH IS WHY IT IS STILL A RANKING. Every `ops.weight` above is
-       a number the last round with that instance RECORDED (8196a0e7), so the whole scan runs on one consistent
-       set of values with no suspension in it. The three calls below DO suspend — each is a message to a frame —
-       and the pick they act on is therefore as of the top of this iteration, which is exactly what the policy
-       says it is: rank, advance the winner, re-rank. Nothing between here and the step can change the set, because
-       the only thing that moves an engine between hot and fetching is this loop, and a detached service round
-       touches only the engine it belongs to (which is not in `hot`). */
-    if (ops.setFloor) await ops.setFloor(best, hot.length > 1 ? runner : -1e300);   // outranked-by-runner-up => yield; lone engine => run on
-    /* Normally step `best` (the highest-value engine). At the RAM floor, step the engine the ONE order says
-       must give up its memory — after flagging it to PARK, which evicts it to the IDB cold tier (residue ->
-       replay recipes) so the work item that outranks it can have the RAM. Parking needs a step (the flag is
-       read inside qjs_step) and `best` never steps that engine, so it is targeted directly.
-       THE CONDITION THAT USED TO SELECT IT IS DELETED, AND IT WAS THE DEADLOCK. `hot.length > 1` said a LONE
-       over-budget engine is never parked because "no slot contention, it runs to completion" — and on a real
-       site an engine does not run to completion. A wasm Memory never shrinks, so the first instance to touch
-       the floor closed admission for the whole extension for the rest of the session: measured at pool = 1,
-       residentBytes 539,820,032 against a 512 MiB floor, 142 documents waiting, and topWeight and
-       residentBytes byte-identical over six minutes. §scheduler: "STARVE means deprioritize-and-page
-       (resumable, cross-session), NEVER terminate" — and the cold tier exists precisely so that the ONLY
-       engine can still yield its residue. There is no count in the question any more: `ops.evictee` asks the
-       one Level-1 order whether anything that is NOT resident is worth more than the worst thing that IS. */
+    /* The ranking is synchronous: every weight was recorded by an earlier round, so the scan has no suspension.
+       The calls below suspend, so the pick is as of the top of this iteration, which is the policy (rank,
+       advance, re-rank). Only this loop moves an engine between hot and fetching, and a detached service round
+       touches only its own engine, which is not in `hot`. */
+    if (ops.setFloor) await ops.setFloor(best, hot.length > 1 ? runner : -1e300);   // outranked by the runner-up => yield; a lone engine runs on
+    /* Normally step `best`. At the RAM floor, step the engine the one order says must give up its memory, after
+       flagging it to park (evicted to the cold tier as replay recipes) so the item that outranks it gets the
+       RAM; parking needs a step (the flag is read inside qjs_step), so that engine is targeted directly. A lone
+       engine is evictable too: a wasm Memory never shrinks, so exempting it would let the first instance at the
+       floor close admission for the session. `ops.evictee` asks whether anything not resident is worth more than
+       the worst resident engine. */
     let target = best;
     DCHECK(typeof ops.evictee === "function" && typeof ops.requestPark === "function",
            "the pool was driven with no eviction op — the RAM floor is answered by the WFQ giving up the " +
@@ -4469,14 +4175,9 @@ async function hostSchedule(pool, ops) {
            "the pool was driven with no release op — a Clear cannot take the frame of an engine this round " +
            "has a call outstanding on, so this round is what gives it back, and without it every Clear during " +
            "an analysis leaves a whole WASM instance resident under a document that does not reload");
-    /* AND THE ORDER IT ASKED, IF IT ASKED ONE. Admission asks the non-resident order where there is headroom
-       and eviction asks it at the floor, so a round usually asks it ONCE — but not always, and the exclusivity
-       that looks obvious here is FALSE: `admit` can seat a document and the instance it boots can be what puts
-       the working set at the floor, so the very next line asks the same order again over a pool that has
-       changed underneath it. The record holds the LATER reading, because that is the one the eviction
-       comparison (`cand.w > engineWeight(worst)`) was actually made against — and `candAsk` states that the
-       round asked twice, so a superseded reading is never a silent one. An assert that the two are exclusive
-       would have fired on healthy code at exactly the RAM pressure this instrument exists to watch. */
+    /* The order it asked, if any. Usually a round asks once, but `admit` can seat a document whose instance puts
+       the working set at the floor, so eviction asks again over the changed pool; the record holds the later
+       reading (the one `cand.w > engineWeight(worst)` was made against) and `candAsk` says it was asked twice. */
     const ev = await ops.evictee(hot);
     DCHECK(ev && typeof ev === "object" && "evict" in ev && "cand" in ev,
            "the eviction op answered the round with something other than the pair it decides — the engine " +
