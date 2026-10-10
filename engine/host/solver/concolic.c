@@ -3006,33 +3006,20 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
     int i;
 
     DCHECK(c != NULL, "the concolic call handler ran on something that is not a concolic value");
-    /* `this_val` IS THE RECEIVER, AND THIS IS WHAT MAKES THAT TRUE. quickjs.h's JSClassDef states that under
-       JS_CALL_FLAG_CONSTRUCTOR this parameter is new.target instead, and that a constructor call happens only
-       where the object's constructor bit is set — which this class never sets. So the invariant holds by
-       construction and is asserted rather than branched on: a guard that silently declined the constructor
-       case would be a narrowing nobody could find, while the day something sets the bit this names the exact
-       line that has to learn the difference. */
+    /* `this_val` is the receiver: under JS_CALL_FLAG_CONSTRUCTOR it would be new.target, but quickjs.h's
+       JSClassDef makes a constructor call only where the object's constructor bit is set, which this class
+       never sets. Asserted rather than branched on, so the day something sets the bit this names the line. */
     DCHECK(!(flags & JS_CALL_FLAG_CONSTRUCTOR),
            "a concolic value was called as a CONSTRUCTOR — this class never sets the constructor bit, so "
            "`this_val` here is the receiver and nothing else, and a new.target arriving in that slot would "
            "be filed as the object a page's own predicate tested");
-    /* THE ARGUMENTS ARE PART OF THE CALL'S IDENTITY, AND THEREFORE PART OF ITS SHAPE. `x.startsWith("/api")`
-       and `x.startsWith("javascript:")` are two gates over one source, and a call identity that dropped its
-       arguments made the second DECIDED by the first — the same collapse the relational operator's missing
-       operand made, reached by another route.
-       THE SHAPE DROPPED THEM FOR LONGER THAN THE IDENTITY DID, AND THAT WAS THE SAME DEFECT ONE FIELD OVER.
-       shapef's own banner already states the rule this line now obeys — a shape "is ALSO the field path an @S
-       candidate is injected at", so two derivations sharing one shape share one injection address — and it was
-       written there about TRUNCATION, which was fixed. This was the identical loss by OMISSION: `h.slice(1)`
-       and `h.slice(2)` composed two identities and ONE shape `{location.hash}.slice()`, so keyname_record's
-       assert fired the moment both were used as property keys, and with the assert compiled out the two
-       distinct unknown keys bought ONE atom and landed in ONE slot on the page's own object. Reproduced at
-       origin/main 9c757178 in four lines, and the same document answered `Object.keys(o).length === 1`.
-       IT IS ALSO THE HONEST DISPLAY, which is why this is a repair rather than a disambiguator bolted on:
-       §@H asks for "the expression the run actually built", and the page wrote the argument.
-       An argument this engine cannot spell (a plain object) makes the whole identity absent, so both arms of
-       every branch over the result stay — and it renders "?", which is the one pair this rule cannot separate;
-       see the NAMED RESIDUAL at keyname_record. */
+    /* The arguments are part of the call's identity and therefore of its shape. `x.startsWith("/api")` and
+       `x.startsWith("javascript:")` are two gates over one source, and a shape is also the field path an @S
+       candidate is injected at and the atom keyname_record buys: `h.slice(1)` and `h.slice(2)` must not share
+       `{location.hash}.slice()`, or two distinct unknown keys land in one slot on the page's object. It is also
+       the true display: the page wrote the argument. An argument this engine cannot spell (a plain object)
+       makes the whole identity absent and renders "?", the one pair this rule cannot separate (see the named
+       residual at keyname_record). */
     {
         char *args = NULL;
         for (i = 0; i < argc; i++) {
@@ -3053,73 +3040,40 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
     ident = concolic_ident_compose("()", f, argc + 1);
     for (i = 0; i < argc; i++) free(owned[i]);
     free(owned); free(f);
-    /* The RESULT of calling an unknown is a new injection identity — nothing here knows what the call returned,
-       so a candidate substitutes at the call — and it is NOT new bytes: whatever carried the callee's bytes in
-       carried these. This is the derivation the reported defect walked through (`{location.hash}.slice()`). */
+    /* The result of calling an unknown is a new injection identity (nothing here knows what the call returned,
+       so a candidate substitutes at the call), and not new bytes: whatever carried the callee's bytes in
+       carried these. */
     r = concolic_derived(ctx, shape, shape, c->root, c->root_whose, ident, JS_UNDEFINED);
-    /* AND THE PREDICATE THE PAGE JUST WROTE, IF THIS RESULT CAN NAME ONE. `if (path.startsWith("/api"))` is
-       a gate over `path` exactly as `path === "/api"` is; it determines no VALUE, so it pins nothing and
-       carries no bound, and until this line it carried nothing at all — a parameter a prefix check gated
-       rendered with the same bytes as one nothing had ever tested, which §Solver-half calls a wrong report
-       rather than a partial one. (The `!`-spelled gate reaches no branch at all, for a reason one opcode
-       upstream of this file — concolic.h's residual at concolic_strpred names it.)
-       The three facts that make it nameable are asked for here and each absence is
-       a positive statement: no `member` on the callee means the page called the unknown ITSELF rather than a
-       method of it (`x("/api")`, whose receiver is undefined and about which nothing is claimed); a receiver
-       that is not an unknown, or whose shape is the unnameable `{}`, has no hole a report could print it
-       under; and an argument this engine cannot spell — a plain object, a function — makes the whole
-       predicate absent, exactly as an unspellable member makes an identity absent, because a claim missing
-       one of its operands is a different claim.
-       IT DOES NOT LOOK AT WHAT THE METHOD IS. Nothing here knows or asks what `startsWith` means, and no
-       consumer of the record re-implements one: what travels is the name the page wrote, the arguments it
-       passed and the answer the run got. That is the line between this and the recorded transform-expression
-       §Re-execution forbids — a transform is a rule for COMPUTING a value, and this is a predicate that was
-       EVALUATED. */
-    /* A CANDIDATE RE-FIRE IS ASKED FIRST, and it is the reason this tests `r` and not just its operands.
-       concolic_derived hands back the attacker's PAYLOAD — a real String — where this call's identity is the
-       source under substitution, so the value there is not a concolic and has no predicate to carry. Stamping
-       one would DCHECK on a NULL opaque during exactly the run @S exists to perform. It is also the right
-       answer rather than a guard: the domain is what an @H record states about a parameter, and a verify run
-       is not building one (endpoint.c suppresses its requests wholesale for the same reason). */
+    /* …and the predicate the page just wrote, if this result can name one. `if (path.startsWith("/api"))`
+       gates `path` as `path === "/api"` does, but determines no value, so it pins nothing and carries no bound.
+       (A `!`-spelled gate reaches no branch here; concolic.h's residual beside concolic_strpred names why.)
+       Each absence below is a positive statement: no `member` means the page called the unknown itself
+       (`x("/api")`); a receiver that is not an unknown, or is shaped `{}`, has no hole to print; and an
+       unspellable argument makes the whole predicate absent, since a claim missing an operand is a different
+       claim. Nothing here interprets the method: what travels is the name, the arguments and the arm the run
+       took, a predicate that was evaluated rather than a rule for computing a value.
+       A candidate re-fire is tested first (`concolic_is(r)`): concolic_derived hands back the attacker's
+       payload, a real String with no record to stamp, and a verify run builds no @H domain (endpoint.c
+       suppresses its requests for the same reason). */
     if (concolic_is(r) && c->member && concolic_is(this_val)) {
         char *subj = concolic_hole_key(concolic_shape_c(this_val));
         if (subj) {
             char **spelled = NULL;
             int ok = 1;
-            /* NAMED RESIDUAL - A REGEX GATE FILES NOTHING, and it is the third of the three domain kinds
-               CLAUDE.md's @H names by name ("range/prefix/regex"). The drop below is RIGHT and is not what is
-               narrow: a claim missing one of its operands is a different claim, so `x.startsWith(someObject)`
-               has no statement to file. What is narrower than the spec is the CLASSIFICATION that reaches it.
-               operand_kind answers CONCOLIC_LIT_NONE for every Object, and its comment says why - a value
-               whose only name would be its ADDRESS. A RegExp is the one such operand with a SECOND name
-               source, exactly as literal_ident's intrinsic arm has one: the pattern and flags the page itself
-               wrote, which carry no address and so survive the park a resumed flow replays through.
-               WHAT IS NOT COVERED: a call over an unknown RECEIVER whose argument is a RegExp. The gate is
-               evaluated and the branch forks, the receiver's hole is named, and the observation is discarded -
-               so endpoint.c omits `predicates`, and that omission is read everywhere as the positive statement
-               "no call predicate survived every observed path" on a path where one did. A PINNED receiver
-               never reaches here (the real builtin runs over real bytes), so the loss is exactly the unpinned
-               population.
-               WHAT THE NEXT DIFF BUILDS: an entry point in engine/qjs answering a RegExp's [[OriginalSource]]
-               and [[OriginalFlags]] off the internal slots, for operand_kind and literal_tok to spell a kind
-               by. It does NOT exist today - quickjs.h exports JS_IsRegExp and no accessor for either slot -
-               and it belongs there rather than here because those slots are JSRegExp's private fields.
-               AND regexp_site_hash IS NOT THAT ENTRY POINT, WHICH IS SAID HERE BECAUSE IT READS THE SAME TWO
-               SLOTS AND A READER WHO FINDS IT WILL THINK THE CLAUSE ABOVE HAS GONE STALE. It folds them into a
-               64-BIT SITE for a creation name, and a hash cannot serve this residual for the reason
-               JS_IntrinsicName is text: the spelling a domain files is READ BY A PERSON and is compared
-               against the bytes a page wrote, so `/^\/api\//i` and a hex digest are not two renderings of one
-               answer. What it does settle is the placement half - the slots really are reachable only from
-               inside quickjs, and that is where this next diff goes too.
-               IT MAY NOT BE REACHED THROUGH A PROPERTY GET, which is the trap this clause exists to close:
-               ECMAScript §22.2.6.17 "RegExp.prototype.toString ( )" composes the literal out of Get of
-               `source` and Get of `flags`, and §22.2.6.4 "get RegExp.prototype.flags" is itself a series of
-               Gets - each overridable on a subclass, so either would run the page's own code from a C
-               activation with no flow base under it, which is the abort operand_kind's own comment names.
-               §22.2.6.13 "get RegExp.prototype.source" is the one that reads the slots.
-               HOW ITS ABSENCE SHOWS: an @H param whose receiver hole IS named renders `validValues` and no
-               `predicates` key at all, while the flow's fork count moves at that same branch - a parameter a
-               regex gate narrowed, reported with the bytes of one nothing ever tested. */
+            /* Named residual: a regex gate files nothing. Dropping a predicate with an unspellable argument
+               is right; what is narrow is the classification. operand_kind answers CONCOLIC_LIT_NONE for every
+               Object, but a RegExp has a second name source, the pattern and flags the page wrote.
+               Not covered: a call over an unknown receiver whose argument is a RegExp; the branch forks and the
+               hole is named, but the observation is discarded, and endpoint.c's missing `predicates` reads as
+               "no call predicate survived" (a pinned receiver runs the real builtin, so only unpinned ones lose).
+               Next diff: an engine/qjs entry point answering a RegExp's [[OriginalSource]] and [[OriginalFlags]]
+               off its internal slots, for operand_kind and literal_tok to spell; quickjs.h exports only
+               JS_IsRegExp, and the slots are JSRegExp's private fields. regexp_site_hash reads the same slots
+               but folds them into a 64-bit site, and a domain spelling is read by a person against the page's
+               bytes. It must not go through a property Get: §22.2.6.17 RegExp.prototype.toString ( ) and
+               §22.2.6.4 get RegExp.prototype.flags are Gets a subclass can override, running page code with no
+               flow base. How its absence shows: an @H param with a named receiver hole renders `validValues`
+               and no `predicates` key while the fork count moves at that branch. */
             if (argc) {
                 spelled = reclaim_calloc((size_t)argc, sizeof *spelled);
                 CHECK(spelled, "concolic: OOM spelling the arguments a gate passed over an unknown");
@@ -3137,27 +3091,14 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
     return r;
 }
 
-/* ORDERING over an unknown is unknown. < <= > >= coerce with ToPrimitive, which a concolic cannot satisfy —
-   it is an object whose coercion answers with another concolic — so the operator threw TypeError and took the
-   whole program with it: `document.cookie.indexOf("role=admin") >= 0` explored NEITHER arm, losing both the
-   session path and the anonymous one. The result is a concolic BOOL, so the branch forks exactly as an equality
-   gate does; it carries no {op,tok} constraint because an ordering does not PIN a value the way `=== 'admin'`
-   does — it narrows a domain, and the arm that is taken says which way.
-   IT CARRIES ITS OPERATOR AND BOTH OPERANDS ALL THE SAME, and dropping them was a soundness bug and not a
-   simplification. The equality hook above composed `{src, op, tok}`; this one composed nothing but the
-   operand's SOURCE, so every ordering over one source was one predicate: in one flow `parseInt(gCS(a).width)
-   < 700` and `parseInt(gCS(b).width) < 300` produced the same key and the second was DECIDED by the first,
-   pruning an arm the flow's constraint does not contradict. `x < 700` and `x > 700` were one fact too.
-   ORDERING IS NOT SYMMETRIC, so the operands keep the order the program wrote them: `x < 700` and `700 < x`
-   are two predicates and neither may answer the other.
-   AND IT NOW STATES ITS BOUND, which is the other half of §Solver-half's two-facts rule and the half the
-   identity above cannot carry. An identity only tells predicates APART; a report has to SAY what one requires.
-   `rel169` is a fact this run observed and could not print, so a parameter gated by `> 5` rendered with the
-   same bytes as one nothing had ever tested — the exact asymmetry that made an equality's false arm a wrong
-   report rather than a partial one, arriving on the second-most-frequent gate class in a real bundle.
-   IT INVENTS NO VALUE. What is recorded is the relation the page wrote, the literal the page wrote, and the
-   arm this run took; §@H's "never invent `6` for `x > 5`" is about the VALUE, and no value is determined here
-   — the emission stays a domain-annotated shape. */
+/* Ordering over an unknown is unknown. < <= > >= coerce with ToPrimitive, which a concolic cannot satisfy, so
+   without this `document.cookie.indexOf("role=admin") >= 0` would throw and explore neither arm. The result is
+   a concolic bool that forks like an equality gate; it pins nothing, because an ordering narrows a domain.
+   Its identity is the operator and both operands in the order written: `x < 700`, `x > 700` and `700 < x` are
+   different predicates, and `parseInt(gCS(a).width) < 700` must not decide `parseInt(gCS(b).width) < 300`.
+   It also states its bound, so a parameter gated by `> 5` is reported as bounded. It invents no value: what
+   is recorded is the relation, the literal the page wrote and the arm taken; the emission stays a
+   domain-annotated shape. */
 int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
     JSValue a = sp[-2], b = sp[-1];
     int ca = concolic_is(a), cb = concolic_is(b);
@@ -3166,14 +3107,11 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
     int w;
 
     if (!ca && !cb) return 0;
-    /* THE OPERATOR ARRIVES AS THE ENGINE'S OWN OPCODE FOR IT (see the hook's contract in quickjs.h), which is
-       an identity and not a name. The IDENTITY keeps the raw opcode — the four operators need only stay TOLD
-       APART for the constraint key, and re-spelling them there would put a second encoding beside this file's
-       one. The NAME is asked of solver/rel_op.h, which reads it off the engine's own opcode table.
-       IT IS ASKED HERE, ON EVERY ORDERING, and not down beside the one branch that uses it: rel_op_of_opcode
-       is what catches the host's rebuild of the opcode table drifting from quickjs.c's, and an assert placed
-       under the numeric-operand test would only fire on a bundle that happens to compare against a literal —
-       so a drifted build could run a whole document naming no relation and reporting nothing wrong. */
+    /* The operator arrives as the engine's own opcode (see the hook's contract in quickjs.h). The identity keeps
+       the raw opcode, since the key only has to tell the four apart; the name comes from solver/rel_op.h,
+       which reads the engine's opcode table. Asked on every ordering, not only beside the branch that uses it,
+       because rel_op_of_opcode is what catches the host's copy of the opcode table drifting from quickjs.c's,
+       and an assert under the numeric-operand test would fire only on bundles comparing against a literal. */
     rel = rel_op_of_opcode(op);
     w = snprintf(opid, sizeof opid, "rel%d", op);
     DCHECK(w > 0 && (size_t)w < sizeof opid, "a relational operator's id did not fit its own buffer");
@@ -3183,17 +3121,13 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
         JSValue res = pred_new(ctx, opid, concolic_src_c(opq), concolic_root_c(opq), root_whose_of(opq),
                                ident_of_operand(ctx, a), ident_of_operand(ctx, b),
                                OPCMP_NONE, CMP_ALGO_NONE, CONCOLIC_LIT_NONE, NULL, NULL);
-        /* A BOUND EXISTS ONLY WHERE THE RELATION'S OWN MEANING IS DETERMINED, and §7.2.12 IsLessThan is what
-           decides that. Step 3 takes the STRING comparison when px and py are BOTH Strings and the numeric
-           one otherwise, so a concrete side that is a Number puts the comparison on the numeric path whatever
-           the unknown turns out to be — and a concrete side that is a String leaves the page performing
-           either a lexicographic or a numeric comparison depending on a value this engine does not have.
-           Stating a bound there would be naming which comparison the page ran, which is the same invention as
-           naming a value, so it is left absent.
-           NON-FINITE IS THE SAME ANSWER FOR A DIFFERENT REASON: `x < Infinity` narrows nothing, `x < NaN` is
-           false for every x (§7.2.12 answers undefined and §13.10.1 turns that into false), and neither
-           Infinity nor NaN is a JSON number a report could carry. */
-        /* Where neither holds, the predicate still forks and only the BOUND is absent. */
+        /* A bound exists only where the relation's meaning is determined, which §7.2.12 IsLessThan ( x, y,
+           leftFirst ) decides: it compares as Strings only when both primitives are Strings, so a Number on
+           the concrete side fixes the numeric path, while a String leaves the page performing a lexicographic
+           or numeric comparison depending on the unknown. Stating a bound there would name which comparison
+           the page ran, so it is absent. Non-finite likewise: `x < Infinity` narrows nothing, `x < NaN` is
+           false for every x, and neither is a JSON number a report could carry. The predicate still forks;
+           only the bound is absent. */
         if (!concolic_is(other) && JS_IsNumber(other)) {
             double num = 0;
             int gotn = JS_ToFloat64(ctx, &num, other);
@@ -3203,9 +3137,8 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
             if (gotn == 0 && isfinite(num)) {
                 char *subj = concolic_hole_key(concolic_shape_c(opq));
                 char *txt = subj ? literal_tok(ctx, other, NULL) : NULL;
-                /* NORMALISED SUBJECT-LEFT EXACTLY ONCE. `700 < x` is `x > 700`; recording the relation as
-                   written would make every consumer downstream re-derive which operand the page put first,
-                   and the first one to forget reports the bound inverted. */
+                /* Normalised subject-left exactly once: `700 < x` is `x > 700`, so no consumer has to re-derive
+                   which operand the page wrote first. */
                 if (txt) pred_set_bound(res, ca ? rel : rel_op_mirror(rel), txt, num, subj);
                 free(txt);
                 free(subj);
@@ -3217,24 +3150,13 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
     return 1;
 }
 
-/* `typeof` an unknown is UNKNOWN. A concolic is a real object of a host class, and that class is callable so
-   `document.cookie.indexOf(...)` works — which made typeof report "function" and a bundle testing
-   `typeof x === "function"` take an arm decided by the solver's representation rather than the value. The
-   answer is a concolic STRING carrying the same source, so the comparison after it forks like every other gate
-   over an unknown. */
 static char *cstr_dup(JSContext *ctx, JSValueConst v);   /* defined with the + hook below */
 
-/* §7.1.4 ToNumber ( arg ) AND §7.1.19 ToString ( arg ) OVER UNKNOWN INPUT — answered where the operator
- * computes, never at the conversion boundary, which owes C a real primitive.
- *
- * The RESULT keeps the SOURCE, so `-location.hash` still forks a later branch and still solves at a later sink;
- * a value that collapsed to NaN or "[object Object]" here would end the exploration at the first coercion, which
- * is exactly what §Solver means by opacity surviving coercion.
- *
- * The EXAMPLE propagates by RUNNING THE REAL OP on the operands' examples — the engine actually negates, actually
- * multiplies — which is what makes this the concolic TRIPLE rather than a taint label with a derived note. When
- * an operand has no example there is nothing concrete to run and the result is example-free, which is the honest
- * answer: @H never invents. */
+/* §7.1.4 ToNumber ( arg ) and §7.1.19 ToString ( arg ) over unknown input, answered where the operator
+ * computes, never at the conversion boundary, which owes C a real primitive. The result keeps the source, so
+ * `-location.hash` still forks a later branch and solves at a later sink: opacity survives coercion. The
+ * example propagates by running the real op on the operands' examples; when an operand has none, the result
+ * has none. */
 static const char *carith_name(int op, int *unary)
 {
     *unary = (op <= JS_CARITH_DEC);
@@ -3259,14 +3181,13 @@ static const char *carith_name(int op, int *unary)
     }
 }
 
-/* WHICH OF THE TWO REAL OPERATIONS THIS OPERATOR IS. §6.1.6.1's numeric methods split cleanly in two: most
-   compute over the Number itself, and seven begin by narrowing their operands to 32 bits — §6.1.6.1.2
-   Number::bitwiseNOT ( number ), §6.1.6.1.9 Number::leftShift ( x, y ), §6.1.6.1.10 Number::signedRightShift
-   ( x, y ), §6.1.6.1.11 Number::unsignedRightShift ( x, y ) and §6.1.6.1.16 NumberBitwiseOp ( op, x, y ). A
-   double is the wrong carrier for the second group: §7.1.8 ToInt32 ( arg ) is "Let int be ? ToIntegerOrInfinity
-   (arg). Return 𝔽(ToFixedSizeInteger(int, signed, 32))", which is defined for every Number including the
-   infinities, while a C cast of a double outside the int32 range is undefined behaviour. So the engine's OWN
-   §7.1.8/§7.1.9 run on the example and the result is an exact integer JSValue. */
+/* Which of the two real operations this operator is. Most of §6.1.6.1 The Number Type's methods compute over
+   the Number; seven narrow their operands to 32 bits first: §6.1.6.1.2 Number::bitwiseNOT ( number ),
+   §6.1.6.1.9 Number::leftShift ( x, y ), §6.1.6.1.10 Number::signedRightShift ( x, y ), §6.1.6.1.11
+   Number::unsignedRightShift ( x, y ) and §6.1.6.1.16 NumberBitwiseOp ( op, x, y ) for &, | and ^. A double is
+   the wrong carrier there: §7.1.8 ToInt32 ( arg ) is defined for every Number including the infinities, while
+   a C cast outside the int32 range is undefined behaviour. So the engine's own §7.1.8 ToInt32 ( arg ) and
+   §7.1.9 ToUint32 ( arg ) run on the example and the result is an exact integer JSValue. */
 static int carith_is_32bit(int op)
 {
     return op == JS_CARITH_NOT || (op >= JS_CARITH_AND && op <= JS_CARITH_SHR);
@@ -3292,9 +3213,9 @@ static int carith_apply(int op, double a, double b, double *out)
     }
 }
 
-/* THE SEVEN 32-BIT OPERATIONS, run on the operands' EXAMPLES by the engine's own conversions. `exa`/`exb` are
-   borrowed; `*out` is a new owned JSValue on success. Returns 0 when a conversion threw — an example that
-   cannot convert produces NO example, which is the honest answer rather than a fabricated number. */
+/* The seven 32-bit operations, run on the operands' examples by the engine's own conversions. `exa`/`exb` are
+   borrowed; `*out` is a new owned JSValue on success. Returns 0 when a conversion threw: an example that cannot
+   convert produces no example. */
 static int carith_apply32(JSContext *ctx, int op, JSValueConst exa, JSValueConst exb, JSValue *out)
 {
     int32_t ia = 0, ib = 0;
@@ -3306,8 +3227,8 @@ static int carith_apply32(JSContext *ctx, int op, JSValueConst exa, JSValueConst
            "pushed a binary window for a unary operator");
 
     if (op == JS_CARITH_SHR) {
-        /* §6.1.6.1.11: "Let leftNumber be ! ToUint32(x)." — the ONE operator whose left side is unsigned, which
-           is why >>> carries its own id instead of sharing >>'s. */
+        /* §6.1.6.1.11: "Let leftNumber be ! ToUint32(x)." The one operator whose left side is unsigned, hence its own
+           id. */
         if (JS_ToUint32(ctx, &ua, exa) || JS_ToUint32(ctx, &ub, exb)) return 0;
         sc = ub % 32;   /* §6.1.6.1.11: "Let shiftCount be ℝ(rightNumber) modulo 32." */
         *out = JS_NewUint32(ctx, ua >> sc);
@@ -3356,16 +3277,14 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
            "are one fact (JS_CARITH_*'s unary ids come first) and the identity composition reads the arity "
            "from carith_name while the stack effect reads it from nops");
     src = ca ? concolic_src_c(a) : concolic_src_c(b);
-    /* THE SET OF THE OPERANDS' ROOTS AND NOT THE FIRST ONE'S — see derived_root_join. `src` stays the
-       first unknown operand's because it is a DIFFERENT FACT: a candidate is injected at ONE source
-       read, and seeding one per declaring member is the mechanism the refusals downstream name. */
+    /* The set of the operands' roots (derived_root_join). `src` stays the first unknown operand's, a different
+       fact: a candidate is injected at one source read. */
     ops[0] = a;
     ops[1] = b;   /* JS_UNDEFINED for a unary operator, which carries no root and is skipped by the walk */
     root = derived_root_join(ops, nops);
 
-    /* THE OPERATOR AND ITS OPERANDS ARE THE IDENTITY, and the ARITY is part of it too: `carith_name` spells
-       negation and subtraction both `-`, and a one-member composition can never write the same bytes as a
-       two-member one. Without this `x` and `x*2` were one fact and `if (x) … if (x*2)` decided each other. */
+    /* The operator and its operands are the identity, and so is the arity: `carith_name` spells negation and
+       subtraction both `-`, and a one-member composition never writes a two-member one's bytes. */
     if (unary) {
         const char *f[1];
         char *ia = ident_of_operand(ctx, a);
@@ -3376,13 +3295,9 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
     } else {
         const char *f[2];
         char *ia = ident_of_operand(ctx, a), *ib = ident_of_operand(ctx, b);
-        /* derived_operand_shape AND NOT A SECOND SPELLING OF IT. This was `ca ? shape(a) : cstr_dup(ctx, a)`,
-           which is that function hand-rolled, minus the KIND and plus a hazard: cstr_dup is an unconditional
-           JS_ToCString, so `x * obj` sent §7.1.19 ToString step 10 to ToPrimitive and ran the page's own
-           valueOf from a C activation with no flow base under it — the same call operand_kind's own banner
-           records taking four real bundles' engine instances down at concolic_cmp_hook. Routing to the one
-           speller fixes both at once: `x * 2` and `x * "2"` are two identities and are now two shapes, and an
-           operand this engine refuses to spell renders `?` instead of running the page's code. */
+        /* derived_operand_shape, the one speller, rather than a hand-rolled JS_ToCString: that would run the
+           page's own valueOf from C for `x * obj` (§7.1.19 ToString ( arg ) sends an Object to ToPrimitive),
+           and it would render `x * 2` and `x * "2"` alike. An operand this engine refuses to spell renders `?`. */
         char *sa = derived_operand_shape(ctx, a);
         char *sb = derived_operand_shape(ctx, b);
         shape = shapef("%s%s%s", sa, name, sb);
@@ -3392,15 +3307,14 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
         free(ia); free(ib);
     }
 
-    /* RUN THE REAL OP on the examples when there are any — the concrete half of the triple. */
+    /* Run the real op on the examples when there are any: the concrete half of the triple. */
     {
         JSValue exa = ca ? concolic_example(ctx, a) : JS_DupValue(ctx, a);
         JSValue exb = nops == 2 ? (cb ? concolic_example(ctx, b) : JS_DupValue(ctx, b)) : JS_UNDEFINED;
 
-        /* AN EXAMPLE IS A PRIMITIVE. Every conversion below is §7.1.4 ToNumber, whose object case is
-           "Let primitiveValue be ? ToPrimitive(arg, number)" — running the page's valueOf from this C frame,
-           which has no flow base under it. A source or a derivation that attached an OBJECT example put a value
-           here that only crashes, so the assert names the producer rather than the coercion. */
+        /* An example is a primitive. Every conversion below is §7.1.4 ToNumber ( arg ), whose object case runs
+           ToPrimitive and so the page's valueOf from this C frame; the assert names the producer that attached
+           an object example. */
         DCHECK(!JS_IsObject(exa) && !JS_IsObject(exb),
                "a concolic carries an OBJECT as its concrete example — an example is the value the engine "
                "COMPUTED, so it is a primitive; ToNumber over an object one reaches ToPrimitive from C");
@@ -3421,10 +3335,9 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
                 if (oka && okb && carith_apply(op, da, db, &out))
                     example = JS_NewFloat64(ctx, out);
             }
-            /* A CONVERSION THAT THREW LEFT ITS EXCEPTION STANDING IN THE CONTEXT, and the operator is about to
-               return 1 — a success — so the page's very next statement would have thrown a TypeError it never
-               wrote. The example is dropped (@H never invents) and the throw is dropped with it, because the
-               throw belongs to a coercion the PROGRAM did not perform. */
+            /* A conversion that threw left its exception on the context while the operator is about to return
+               success, so the page's next statement would throw a TypeError it never wrote. The example is
+               dropped and the throw with it: it belongs to a coercion the program did not perform. */
             if (JS_IsUndefined(example) && JS_HasException(ctx))
                 JS_FreeValue(ctx, JS_GetException(ctx));
         }
@@ -3441,12 +3354,10 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
     return 1;
 }
 
-/* §7.1.19 ToString ( arg ) over unknown input: unknown, source kept, example computed by actually stringifying
-   the example when there is one.
-   IT IS THE ANSWER FOR 22.1.1.1 String ( value ) AND FOR NOTHING ELSE, which is what the shape says: `String(x)`
-   is the algorithm whose RESULT is the coercion. A builtin that merely CONSUMES the string derives its own
-   result instead, named by its own operation — concolic_builtin_hook, reached from the engine's one shared
-   ToString sub-sequence (JS_STEP_UNKNOWN). Two derivations, not two spellings of one. */
+/* §7.1.19 ToString ( arg ) over unknown input: unknown, source kept, example computed by stringifying the
+   example when there is one. It is the answer for §22.1.1.1 String ( value ) only, whose result is the
+   coercion; a builtin that merely consumes the string derives its own result named by its own operation
+   (concolic_builtin_hook, reached from the engine's shared ToString sub-sequence, JS_STEP_UNKNOWN). */
 JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
     const char *src, *root, *sh, *f[1];
     char *shape, *ident;
@@ -3471,30 +3382,18 @@ JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
     return r;
 }
 
-/* §7.1.2 ToBoolean ( arg ) OVER UNKNOWN INPUT, and §13.5.7 Logical NOT Operator ( ! ) with it — see the hook's
- * contract in quickjs.h for why the operator answers at all.
+/* §7.1.2 ToBoolean ( arg ) over unknown input, and §13.5.7 Logical NOT Operator ( ! ) with it (quickjs.h's
+ * hook contract says why the operator answers at all).
  *
- * THE WHOLE OF THE DESIGN IS THAT THE RESULT IS A NEW VALUE WITH AN OLD PREDICATE. It is a new VALUE because a
- * program holds it (`var q = !p`), passes it, concatenates it — so it needs an identity of its own or `"" + !p`
- * and `"" + p` would compose to one derivation. It is an old PREDICATE because a branch over it asks exactly
- * the question a branch over the operand asks: `if (!p)` is `if (p)` with the arms swapped, and §7.1.2 is
- * applied on both sides alike. Those two facts are the two fields — `ident` for derivations, `br_key`/`br_neg`
- * for the branch — and keeping them apart is what buys the feasible-refinement a fresh `("!", p)` constraint
- * key would have thrown away: with one key, a flow that decided `p` DECIDES `!p` instead of forking a second
- * time over one predicate and then standing on two arms that contradict each other.
+ * The result is a new value with an old predicate. A new value, because a program holds and concatenates it,
+ * so `"" + !p` and `"" + p` need different identities (`ident`). An old predicate, because `if (!p)` is
+ * `if (p)` with the arms swapped (`br_key`/`br_neg`), so a flow that decided `p` decides `!p` instead of
+ * forking again. `!!x` composes back: the inner call gives `br_key = ident(x), br_neg = 1`, the outer
+ * `br_neg = 0`, so `if (!!x)`, `if (Boolean(x))` and `if (x)` are one constraint entry.
  *
- * `!!x` COMPOSES BACK, which is the test that the polarity is a parity and not a wrapper. The inner call gives
- * `br_key = ident(x), br_neg = 1`; the outer reads those and gives `br_key = ident(x), br_neg = 0`. So
- * `if (!!x)`, `if (Boolean(x))` and `if (x)` are ONE constraint entry, which is what they are in the program.
- *
- * THE EXAMPLE IS THE REAL OPERATION RUN ON THE OPERAND'S — §Solver-half's only sound propagation. §7.1.2 has
- * no ToPrimitive step, so running it re-enters nothing: an object is true, a string is its length. A value
- * carrying no example produces none, which is the positive statement decide_real_arm reads as "nothing this
- * run observed says which arm is real".
- *
- * IT MINTS THROUGH concolic_alloc AND NOT concolic_derived, for pred_new's reason exactly: this is a BOOLEAN
- * the operator computed, so an @S candidate substitution here would answer a predicate with the attacker's
- * payload string. */
+ * The example is the real operation on the operand's; §7.1.2 has no ToPrimitive step, so it re-enters
+ * nothing. No example in, none out, which decide_real_arm reads as "nothing observed says which arm is real".
+ * Minted through concolic_alloc, not concolic_derived, for pred_new's reason: this is a computed boolean. */
 JSValue concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate) {
     const char *src, *root, *sh, *bkey, *f[2];
     char *shape, *ident;
@@ -3509,9 +3408,8 @@ JSValue concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate) {
     root = concolic_root_c(v);
     sh   = concolic_shape_c(v);
     shape = shapef(negate ? "!%s" : "Boolean(%s)", sh ? sh : "{}");
-    /* THE POLARITY IS IN THE IDENTITY because `!p` and `Boolean(p)` are OPPOSITE values and a derivation off
-       one must never compose to the other's key. It is NOT in the branch key, which is the same predicate for
-       both — the two fields disagree here on purpose, and that disagreement is the mechanism. */
+    /* The polarity is in the identity, because `!p` and `Boolean(p)` are opposite values, and not in the
+       branch key, which is the same predicate for both. */
     f[0] = negate ? "!" : "ToBoolean"; f[1] = concolic_ident_c(v);
     ident = concolic_ident_compose("tb", f, 2);
     ex = concolic_example(ctx, v);
@@ -3528,38 +3426,26 @@ JSValue concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate) {
     free(shape);
     rc = JS_GetOpaque(r, g_concolic_class);
     DCHECK(rc != NULL, "a ToBoolean result was minted as something that is not a concolic value");
-    /* THE BRANCH KEY AND ITS POLARITY, WRITTEN TOGETHER — the operand's own branch key, so a chain of
-       negations keys the innermost predicate and never a tower of wrappers. An operand this engine cannot
-       spell leaves BOTH absent, which is the sound answer: no key, no polarity, and every branch over the
-       result keeps both arms. */
+    /* The branch key and its polarity, written together: the operand's own branch key, so a chain of negations
+       keys the innermost predicate. An operand this engine cannot spell leaves both absent, and every branch
+       over the result keeps both arms. */
     bkey = concolic_branch_ident_c(v);
     if (bkey) {
         rc->br_key = strdup(bkey);
         CHECK(rc->br_key, "concolic: OOM recording the predicate a negation is the complement of");
         rc->br_neg = (signed char)(concolic_branch_neg(v) ^ negate);
     }
-    /* …AND THE OBSERVATION THE OPERAND CARRIES, VERBATIM — see pred_carry_through_not for why it is not
-       inverted here and why the arm is where the negation lives. */
+    /* …and the observation the operand carries, verbatim (pred_carry_through_not says why the negation lives in
+       the arm). */
     pred_carry_through_not(r, v);
     return r;
 }
 
-/* A BUILTIN OVER AN UNKNOWN OPERAND — see the hook's contract in quickjs.h. The shape records WHICH operation
-   produced it, so an @H shape reads as the expression the page actually wrote and an @S search knows which
-   source to solve for.
-   THIS IS NOT EXAMPLE-FREE, AND THE SENTENCE THAT SAID SO OUTLIVED THE PARAMETER THAT REFUTES IT. The header
-   used to state that this engine does not yet run the operation on the operand's example — while the signature
-   already TOOK one and the body fifteen lines down already said it "is what the operator got by RUNNING THE
-   REAL OPERATION on this operand's own example". Two paragraphs of one comment contradicting each other is the
-   stale-claim failure at its shortest range, and the wrong half was the one a reader meets FIRST: it reads as
-   a completed statement about the engine, so nobody greps, and a caller that could have run its real operation
-   passes JS_UNDEFINED because the comment told it there was no point. Which operators DO run it is a fact
-   about their call sites and is stated at each of them, never here — a list here would be the next sentence to
-   go stale. What is true of THIS function is only its contract: it derives from the operand and attaches
-   whatever example it is handed, JS_UNDEFINED included, and never computes or predicts one itself. */
 
-/* SEE concolic.h — the VALUE twin of concolic_new_rel, over an ORDERED operand list, and the one speller
-   concolic_builtin_hook is the n == 1 case of. */
+/* See concolic.h: the value twin of concolic_new_rel, over an ordered operand list. concolic_builtin_hook is its
+   n == 1 case. The shape records which operation produced the value, so an @H shape reads as the expression
+   the page wrote. It derives from the operands and attaches whatever example the caller hands it, JS_UNDEFINED
+   included; it never computes one. */
 JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst *operands, int n,
                              JSValue example)
 {
@@ -3576,45 +3462,21 @@ JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst 
                    "which is concolic_new's question and carries a provenance this entry has no operand to "
                    "take one from");
     DCHECK(operands != NULL, "a derivation was minted with an operand count and no operands");
-    /* AN OBJECT EXAMPLE IS NOT REFUSED HERE, AND THE ASSERT THAT USED TO REFUSE ONE IS RETIRED RATHER THAN
-       MOVED. It read "an example is the value the caller COMPUTED by running the real operation on the
-       operands' own examples, so it is a primitive; a later §7.1.4 ToNumber over an object one reaches
-       ToPrimitive from C" — and every clause of that is true of a COERCION and none of it is true of this
-       function, which runs no coercion at all. It composes a shape and an identity and hands the example to
-       concolic_derived to store.
-       IT WAS THE ONLY COPY OF THAT ARGUMENT STANDING ANYWHERE BUT AT A COERCION. The others are
-       concolic_arith_hook's, over the operands it is about to put through §7.1.4 ToNumber; this file's `+`
-       hook's, over §13.15.3 step 1.c's two primitives; and quickjs.c's two, over the JS_ToInt32 and the
-       numeric comparison each of them is standing in front of. Each of those guards a conversion it performs
-       on the next line and each of them stays. This one guarded a store.
-       AND IT MADE THE DERIVED PATH DISAGREE WITH THE SOURCE PATH ABOUT A STATE THIS CLASS IS BUILT ON.
-       concolic_new attaches an object example with no assert, because a server-injected record's example IS an
-       object — example_slot reads its slots, concolic_exotic_own_names walks it with
-       JS_GetOwnPropertyNames, concolic_exotic_delete removes members from it, and every one of those is what
-       models a record at all. Two seams over one primitive, one asserting and one not, and the silent one had
-       been exercised on the whole population of injected state without firing.
-       WHAT FIRED IT was §25.5.2 JSON.parse ( text [ , reviver ] ) over an unknown text: js_json_parse_vfini
-       derives its completion from the source and attaches what the real codec made of that source's example,
-       which for a text whose example is `{"limit":7}` is an Object — the one concrete thing the run performed
-       the real parse to obtain, and the value `page.limit` is then read back out of. (Its own comment argues
-       for exactly that and is not quoted here: a run of this tree's prose in quotation marks under a spec
-       citation is indistinguishable, to citegen and to a reader, from a sentence claimed to be the spec's.) The
-       comparison path already refuses an object example at its own door for its own reason (example_comparable,
-       which declines the identity of a value this engine minted); nothing else here coerces one. */
+    /* An object example is accepted: this function runs no coercion, it only stores the example. A record's
+       example is legitimately an object (concolic_new attaches one for server-injected state, and §25.5.2
+       JSON.parse ( text [ , reviver ] ) over an unknown text attaches the parsed record), which example_slot,
+       concolic_exotic_own_names and concolic_exotic_delete then model. The object refusals stand at the
+       coercions themselves: concolic_arith_hook, the `+` hook and example_comparable. */
     for (i = 0; i < n; i++)
         if (concolic_is(operands[i])) { first = i; break; }
-    /* NO OPERAND IS UNKNOWN, so the caller already has the answer and there is nothing to derive — the same
-       answer concolic_builtin_hook gives for a known operand, and the reason this is JS_UNINITIALIZED rather
-       than a mint: a derivation over wholly concrete operands would put a fork in the frontier over a question
-       the engine can already answer. */
+    /* No operand is unknown, so the caller already has the answer (as concolic_builtin_hook says for a known
+       operand): a derivation over concrete operands would put a fork in the frontier over an answerable
+       question. */
     if (first < 0) { JS_FreeValue(ctx, example); return JS_UNINITIALIZED; }
-    /* See concolic.h: the FIRST UNKNOWN operand's, which is the rule concolic_arith_hook applies to the
-       interpreter's own binary arithmetic. THAT SENTENCE USED TO COVER `root` TOO and no longer does — a root is
-       the SET of the operands', on the line below, and the two parted company because they are two facts. */
+    /* `src` is the first unknown operand's (see concolic.h), concolic_arith_hook's rule. */
     src = concolic_src_c(operands[first]);
-    /* THE SET OF THE OPERANDS' ROOTS AND NOT THE FIRST ONE'S — see derived_root_join. `src` stays the
-       first unknown operand's because it is a DIFFERENT FACT: a candidate is injected at ONE source
-       read, and seeding one per declaring member is the mechanism the refusals downstream name. */
+    /* `root` is the set of all operands' roots (derived_root_join), a different fact: a candidate is injected
+       at one source read. */
     root = derived_root_join(operands, n);
 
     parts = malloc((size_t)n * sizeof *parts);
@@ -3624,14 +3486,12 @@ JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst 
         parts[i] = derived_operand_shape(ctx, operands[i]);
         fields[i] = ident_of_operand(ctx, operands[i]);   /* OWNED; NULL is an unspellable operand */
     }
-    /* THE OPERATION IS THE LAST FIELD AND THE OPERANDS COME FIRST, which is concolic_builtin_hook's own order
-       written out — so its two-field `(ident, op)` is literally this composition at n == 1 and no key that
-       entry has ever minted moves. A different order here would be a second namespace for one question. */
+    /* The operation is the last field and the operands come first, so concolic_builtin_hook's n == 1 call
+       composes `(ident, op)` and the two entries share one namespace. */
     fields[n] = op;
     ident = concolic_ident_compose("b", fields, n + 1);
-    /* THE SHAPE. One operand renders as a method ON that operand, which is what every derivation minted before
-       this entry existed already reads as; two or more render as the operation APPLIED to them, because a
-       result that no one operand is the subject of has no subject to hang a method off. */
+    /* The shape: one operand renders as a method on it; two or more render as the operation applied to them,
+       since no one operand is the subject. */
     if (n == 1) {
         shape = shapef("%s.%s()", parts[0], op);
     } else {
@@ -3642,8 +3502,7 @@ JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst 
         }
         shape = shapef("%s(%s)", op, args);
     }
-    /* `example` is what the CALLER got by RUNNING THE REAL OPERATION on the operands' own examples. It is
-       never computed here and never predicted. */
+    /* `example` is what the caller got by running the real operation on the operands' own examples. */
     r = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape,
                          root_whose_or_unstated(derived_root_whose(operands, n)), ident, example);
     free(root);
@@ -3657,39 +3516,23 @@ JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst 
 
 JSValue concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op, JSValue example) {
     if (!concolic_is(v)) { JS_FreeValue(ctx, example); return JS_UNINITIALIZED; }
-    /* ONE OPERAND, THROUGH THE ONE SPELLER. This body composed `("b", {ident, op})` and the shape
-       `{x}.op()` itself; both are now concolic_new_derived's n == 1 case, byte for byte, so a component that
-       reaches for the several-operand entry with one operand and a component that reaches for this one compose
-       the same key instead of two keys for one derivation. */
+    /* One operand, through the one speller: a component calling concolic_new_derived with one operand and one
+       calling this compose the same key. */
     return concolic_new_derived(ctx, op, &v, 1, example);
 }
 
-/* THE BYTES A DOM MEMBER NEEDS FROM AN ARGUMENT THAT MAY BE UNKNOWN — a selector, an attribute name, a class
-   token, an element id. Every one of those call sites did JS_ToCString under a comment saying "a real string by
-   now: the declaration converted it", and that comment is FALSE for a concolic: the IDL boundary passes unknown
-   input through as itself on purpose, so the coercion crashed and `document.querySelector(location.hash)` ended
-   the document. An unknown NAME denotes its SHAPE, which is the same rule the key_name hook already states for
-   `obj[x]` and the same one setAttribute already applies to an unknown VALUE: a real string, stable per source,
-   so two lookups through one source agree. OWNED either way, so the call site keeps one free path and does not
-   grow a branch.
-   THAT SENTENCE ENDED "and two sources never collide" AND IS REWRITTEN RATHER THAN DELETED, because the
-   reasoning that produced it is what a reader re-derives: a shape is 1:1 with a value exactly while the
-   identity separates every pair the shape does, which is keyname_record's rule, and where the identity is
-   ABSENT that rule is satisfied vacuously and the shape is 1:N. So two sources CAN collide here, and the
-   `obj[x]` half it cited no longer states the claim unqualified — keyname_atom is what .key_name spends for
-   that population now, and this accessor spends the bare shape.
-   NAMED RESIDUAL — AN UNSPELLABLE NAME IS STILL 1:N AT THIS ACCESSOR. NOT COVERED:
-   `el.setAttribute(h.slice({}), "a")` and `el.setAttribute(h.slice({z:1}), "b")` compose one shape, so the
-   second write lands on the attribute the first named and the element carries ONE of them — the same
-   collapse keyname_record states for a property slot, over the DOM's name-taking members instead.
-   WHAT THE NEXT DIFF BUILDS: this accessor routed through keyname_atom, so a name and a property key composed
-   from one value are the SAME bytes by construction rather than by two spellers agreeing — which is also what
-   stops the split from being observable as a disagreement between them. It is a separate diff because a name
-   from here is PARSED (a selector, a class token) where a property key is not, so the byte that discriminates
-   has to be shown not to change how one parses before it may be spent here.
-   HOW ITS ABSENCE WOULD SHOW: a document whose attribute name or selector is derived through an Object or a
-   Symbol operand reports fewer attributes than it set, with no abort anywhere, while the property-key half of
-   the same expression reports the number it wrote. */
+/* The bytes a DOM member needs from an argument that may be unknown: a selector, an attribute name, a class
+   token, an element id. The IDL boundary passes unknown input through as itself, so a bare JS_ToCString would
+   crash `document.querySelector(location.hash)`. An unknown name denotes its shape: a real string, stable per
+   source, so two lookups through one source agree. Owned either way, so the call site keeps one free path.
+   Where the identity is absent the shape is 1:N, so two sources can collide here (keyname_atom, which
+   .key_name spends for that population, is not used by this accessor).
+   Named residual. Not covered: `el.setAttribute(h.slice({}), "a")` and `el.setAttribute(h.slice({z:1}), "b")`
+   compose one shape, so the element carries one attribute. Next diff: route this accessor through
+   keyname_atom so a name and a property key from one value are the same bytes; separate because a name here
+   is parsed (a selector, a class token), so the discriminating byte must be shown not to change the parse.
+   How its absence shows: a document whose attribute name or selector is derived through an Object or Symbol
+   operand reports fewer attributes than it set, while the property-key half reports the number it wrote. */
 const char *concolic_name_cstr(JSContext *ctx, JSValueConst v) {
     if (concolic_is(v)) {
         const char *sh = concolic_shape_c(v);
@@ -3701,44 +3544,28 @@ const char *concolic_name_cstr(JSContext *ctx, JSValueConst v) {
     return JS_ToCString(ctx, v);
 }
 
-/* THE NAMES THIS FILE HAS SPENT AN UNKNOWN ON — what makes the inverse below possible, and the reason one has
-   to exist at all.
-   `concolic_key_name_hook` buys an ATOM with a value's PROVENANCE and its DOMAIN, and ECMAScript prices that
-   correctly: §6.1.7 The Object Type says "A property key is either a String or a Symbol.", so a key IS bytes
-   and an unknown cannot be one. The purchase is FINAL and CORRECT at every site that wanted bytes — a lookup,
-   an atom a builtin consumes, a `@WHY` message's display form. It is a LOSS at the one shape of site that
-   wanted a VALUE: an ENUMERATION hands the name back to the page, and a value that was unknown and is now a
-   real string forks nothing (`k === "admin"` compares two concrete strings and prunes an arm no constraint
-   contradicts) and reports itself as computed — §@H one step worse than the case it names, because nothing
-   marks these bytes as a shape at all.
-   SO THE MINT WRITES DOWN WHAT IT SPENT. FOUR STRINGS AND NO JSValue, deliberately: a table of live values
-   would be a GC root whose lifetime this component does not own, and §State-isolation's rule about platform
-   data a flow queues is about exactly this shape — a global holding heap pointers reverts nothing at a context
-   switch and parks as nothing. The four are what `concolic_alloc` takes, so the restore is a RE-MINT through
-   the one derivation door rather than a second constructor.
-   IT IS NOT PER-FLOW STATE AND MUST NOT BE CAPTURED. The map from a value to its shape is a pure function of
-   the value, so two flows minting one unknown record ONE entry and neither can disagree with the other. What
-   is per-flow is the SLOT the name goes on, and that is an ordinary property write the COW delta already
-   carries. It is AGENT state, released with the sources and the paths at concolic_free. */
-/* THE ATOM AND THE SHAPE ARE TWO FIELDS BECAUSE THEY ANSWER TWO QUESTIONS, and they were one field for as
-   long as they were one string. The ATOM is the bytes the PAGE holds — what an enumeration hands back, what
-   the inverse below is looked up by — and the SHAPE is the @H provenance a report renders. They are the same
-   string for every value this engine can spell; keyname_atom makes them differ for exactly the population
-   whose shape cannot name it, and merging them would have put that discriminator into every rendered
-   provenance while keying the table on a name two values can share. One bit answering two questions is the
-   defect this file names at concolic_shape_of; this is the same split over a record. */
-/* `root_whose` IS A COLUMN AND NOT A DERIVED FACT, for the reason the `root` beside it is one: this table
-   re-mints a value whose ORIGINAL is gone, so a fact the re-mint cannot recover from the row is a fact the
-   restored value does not carry. A rebuilt key that answered an empty mask beside a real root would crash
-   at concolic_alloc's pair assert, and one that answered UNSTATED would say nothing could speak for a
-   provenance this table is holding the answer for. */
+/* The names this file has spent an unknown on, which makes the inverse below possible. `concolic_key_name_hook`
+   buys an atom with a value's provenance and domain, because §6.1.7 The Object Type says "A property key is
+   either a String or a Symbol." That is right where bytes were wanted (a lookup, an atom a builtin consumes,
+   a `@WHY` display) and a loss where an enumeration hands the name back to the page: a real string forks
+   nothing and reports itself as computed. So the mint records what it spent, and the inverse re-mints it.
+   Strings only, no JSValue: a table of live values would be a GC root this component does not own and would
+   revert nothing at a context switch. The fields are what `concolic_alloc` takes, so the restore re-mints
+   through the one derivation door.
+   Not per-flow state and never captured: the map from a value to its name is a pure function of the value, so
+   two flows minting one unknown record one entry. The slot the name goes on is an ordinary property write the
+   COW delta carries. Agent state, released at concolic_free. */
+/* The atom and the shape answer two questions: the atom is the bytes the page holds (what an enumeration hands
+   back and the inverse looks up), the shape is the @H provenance a report renders. They are the same string
+   for every value this engine can spell; keyname_atom makes them differ exactly where the shape cannot name
+   the value. `root_whose` is a column because the re-mint cannot recover it: an empty mask beside a real root
+   fails concolic_alloc's pair assert, and UNSTATED would deny a provenance this row holds. */
 typedef struct { char *atom, *shape, *src, *root, *ident; unsigned root_whose; } KeyName;
 static KeyName *g_keynames; static int g_keynames_n, g_keynames_cap;
-static int *g_keynames_hash; static int g_keynames_hash_cap;   /* the index (shape -> idx+1) */
+static int *g_keynames_hash; static int g_keynames_hash_cap;   /* the index (atom -> idx+1) */
 
-/* KEYED ON THE ATOM AND NOT ON THE SHAPE, because the one caller that looks anything up here has the PAGE's
-   bytes in hand and nothing else (concolic_key_value_hook), and because two values may share a shape while
-   the whole point of the atom is that they do not share one. */
+/* Keyed on the atom, not the shape: the one caller that looks anything up (concolic_key_value_hook) has only
+   the page's bytes, and two values may share a shape while the atom exists so they do not share one. */
 static int keyname_find(const char *atom) {
     uint32_t m, h;
     if (!g_keynames_hash) return -1;
@@ -3757,9 +3584,8 @@ static void keyname_hash_put(int idx) {   /* caller guarantees room */
 static void keyname_hash_rebuild(void) {
     int i, nc = 16;
     int *nh;
-    /* SIZED IN A LOCAL AND PUBLISHED AFTER — cons_hash_rebuild's rule, for its reason: the allocation can sell
-       a flow (solver/reclaim.h), and a `cap` advertising the new size over the old table is an out-of-bounds
-       read for anything that looks a name up while the sale runs. */
+    /* Sized in a local and published after, for cons_hash_rebuild's reason: the allocation can sell a flow
+       (solver/reclaim.h). */
     while (nc < g_keynames_n * 2) nc *= 2;
     nh = reclaim_realloc(g_keynames_hash, (size_t)nc * sizeof(int));
     CHECK(nh, "concolic: OOM indexing the names spent on unknown keys");
@@ -3767,13 +3593,11 @@ static void keyname_hash_rebuild(void) {
     memset(g_keynames_hash, 0, (size_t)g_keynames_hash_cap * sizeof(int));
     for (i = 0; i < g_keynames_n; i++) keyname_hash_put(i);
 }
-/* ABSENT ON BOTH SIDES IS ONE FACT AND NOT A MISS: `src` and `root` are NULL together for a value with no
-   provenance, and `ident` is NULL for one this engine cannot spell, so a comparison that treated NULL as
-   unequal-to-everything would report ONE value as two and the assertion below would fire on agreement.
-   COMPILED WITH ITS ONE READER, which is why the `#if` is here and around the assert below rather than being
-   left to the macro: a release DCHECK is `(void)sizeof(cond)` — type-checked and never evaluated — so the name
-   must still RESOLVE in a build that emits no call to it, and a static function in that state is exactly what
-   -Wunneeded-internal-declaration reports. The pair is dev-only together or neither is. */
+/* Absent on both sides is one fact, not a miss: `src` and `root` are NULL together for a value with no
+   provenance and `ident` is NULL for one this engine cannot spell, so NULL must equal NULL or the assertion
+   below fires on agreement. Compiled only with its one reader: a release DCHECK is `(void)sizeof(cond)`, which
+   still needs the name to resolve but emits no call, and -Wunneeded-internal-declaration would report the
+   unused static. */
 #if APICLIENT_DEV
 static int keyname_str_same(const char *a, const char *b) { return a ? (b && !strcmp(a, b)) : !b; }
 #endif
@@ -3786,81 +3610,23 @@ static void keyname_record(const char *atom, const char *shape, const char *src,
     int i = keyname_find(atom);
 
     if (i >= 0) {
-        /* ONE ATOM, ONE VALUE — the claim this engine's whole slot model rests on, asserted at the one place
-           a second value can arrive under a name the first already holds. IT WAS "ONE SHAPE, ONE VALUE" WHILE
-           THE ATOM WAS THE SHAPE, and the rename is the whole of what keyname_atom changed here: the shape is
-           still compared (a second entry differing in it under one atom is a finding of its own), and it is
-           no longer what the table is keyed by, because the population whose shape cannot name it is exactly
-           the population that was arriving twice under one name. quickjs.h states it in prose at
-           .key_name ("two writes through the same unknown source land in the SAME slot, two different sources
-           in different ones"), concolic.h repeats it and concolic_name_cstr repeats it again, and until this
-           line nothing checked any of them.
-           IT IS AN INVARIANT AND NOT A PREFERENCE, because the restore below is a FUNCTION OF THE SHAPE: two
-           values under one name make it answer one of them for a key that was the other, which does not
-           de-taint a value — it MIS-ATTRIBUTES one, so a sink reached through the second source is reported
-           against the first and its @S candidate is solved at an address that never fed it. Two concrete
-           strings would be the smaller error.
-           WHERE THE FIX GOES IF IT FIRES, which is never here. This paragraph named ONE function —
-           concolic_new_derived — and that was wrong, in exactly the way CLAUDE.md predicts a remedy clause is
-           wrong: the SPEC half held and the claim about THIS TREE did not. It was refuted by reading the
-           spellers rather than the named line. concolic_new_derived is not the speller that fires and was
-           never the only one; THE RULE IS THE THING, and it is checked at every speller that composes a shape
-           and an identity out of one operand list:
-
-               A SHAPE MUST SEPARATE EVERY PAIR OF OPERANDS ITS IDENTITY SEPARATES,
-               WHEREVER THE SHAPE IS AN EXPRESSION.
-
-           The second line is not a hedge on the first, it is the boundary the sweep found, and stating the
-           rule without it would be an absolute one counterexample retires. concolic_add_hook's shape is NOT
-           an expression: it is the STRING the concatenation produced, which is what makes `"/api/" + x` render
-           `/api/{x}` — the @H provenance the endpoint surface is composed of. So `x + 5` and `x + "5"` are two
-           identities under one shape THERE and must stay that way; that pair belongs to the residual below and
-           not to any speller. Every other site in this file renders an expression and owes the rule outright.
-
-           The one that actually fired is concolic_call, which spelled `%s()` over the CALLEE ALONE while
-           composing `()` over the callee AND every argument — so `h.slice(1)` and `h.slice(2)` were two
-           identities under one shape. Reproduced at origin/main 9c757178 in four lines of page script, and
-           the fix is at that speller. derived_operand_shape carried a smaller instance of the same loss at
-           the leaf (§7.1.19 ToString spells the Number 5 and the String "5" alike while the identity separates
-           them by kind); it is now kind-faithful and sits beside ident_of_operand so the pair reads as one
-           rule.
-           concolic_key_read_hook was a THIRD: it spelled `{}` for the OBJECT while composing the object's
-           identity into `[]`, so `__FLAGS[k]` and `__NEXT_DATA__[k]` were two identities under one shape. A
-           draft of this paragraph claimed that site was exempt because an ordinary object has no identity
-           either; that is true of an ordinary object and FALSE of an unknown RECORD, which has one — and the
-           four-line document proving it fired this assert. The claim was written, then checked, then refuted,
-           which is the only reason it is not still standing here as an exemption.
-           concolic_typeof_hook was a FOURTH: it spelled `typeof %s` over the operand's SRC, which every
-           derivation off one source inherits, so `typeof (x+1)` and `typeof (x+2)` were one shape — and it
-           was the wrong display besides, naming the source where the page wrote the derived value.
-           concolic_arith_hook was a FIFTH, by hand-rolling derived_operand_shape's job as `cstr_dup`: the same
-           loss of the kind, plus an unconditional JS_ToCString that ran the page's own valueOf from a C
-           activation with no flow base under it. All five now route through the two spellers that sit
-           together, which is what makes the rule checkable by reading one place instead of five.
-
-           NAMED RESIDUAL — THE ONE PAIR NO SHAPE CHANGE REACHES, and it is the case this assert is BLIND to
-           rather than the case it catches. Where an operand is an Object or a Symbol, concolic_ident_compose
-           makes the WHOLE identity absent, so two genuinely different derivations carry ident == NULL, equal
-           src and equal root: every field this assert compares AGREES, the assert passes, and the two still
-           buy one atom and land in ONE slot. Measured on the artifact of 9c757178:
-           `o[h.slice({})] = "a"; o[h.slice({z:1})] = "b";` emitted `Object.keys(o).length` as 1 and read `b`
-           back through the first key, with no abort anywhere.
-           THAT ANSWER IS keyname_atom AND THE CLAUSE THAT ASKED FOR IT IS REWRITTEN RATHER THAN DELETED,
-           because its reasoning is what a reader re-derives. It read: "not a finer shape — there is none,
-           because the identity is absent too — but an ANSWER for a key whose value has no spellable identity
-           at all. That is a question about what .key_name may spend, not about what a speller renders." Both
-           halves held. What .key_name spends for this population is now the shape PLUS the site the page's
-           own code was standing at when the value first bought an atom, memoized on the record, and the
-           reason that may land while the object namer cannot is at keyname_atom: an atom is not a constraint
-           key, so a coarse one merges two SLOTS where a coarse constraint key would let one flow's fact
-           decide another flow's read — and this population's atom is already coarse, so a site can only
-           SPLIT and never merge.
-           WHAT IS LEFT IS ONE PAIR AND THE ASSERT IS STILL BLIND TO IT: two unspellable values whose FIRST
-           purchase is at ONE site — a loop writing `o[f(a[i])]` over unnameable `a[i]`. Its next diff is the
-           per-flow ordinal beside the site, which keyname_atom states with its own three clauses.
-           HOW THE REMAINDER SHOWS: a page that writes an unknown key inside a LOOP still loses members off
-           its own object — `Object.keys(o).length` short by one per collision — while this assert stays
-           silent, because every field it compares still agrees. The two-line form above no longer does. */
+        /* One atom, one value: the claim the slot model rests on (quickjs.h's .key_name: "two writes through the
+           same unknown source land in the SAME slot, two different sources in different ones"), asserted where
+           a second value can arrive under a name the first holds. An invariant, because the restore is a
+           function of the atom: two values under one name would mis-attribute a sink reached through the
+           second source to the first, and solve its candidate at an address that never fed it.
+           If it fires, the fix is at whichever speller composed the value. The rule every speller owes:
+           a shape separates every pair of operands its identity separates, wherever the shape is an
+           expression. concolic_add_hook's shape is not an expression but the string the concatenation produced
+           (`/api/{x}`), so `x + 5` and `x + "5"` share one shape there by design. The expression spellers are
+           concolic_call, derived_operand_shape, concolic_key_read_hook, concolic_typeof_hook and
+           concolic_arith_hook, all routed through derived_operand_shape and ident_of_operand. */
+        /* Named residual: the assert is blind where the identity is absent (an Object or Symbol operand):
+           every field it compares agrees, yet the values differ. keyname_atom separates most of that
+           population by first-purchase site. Not covered: two unspellable values first purchased at one site,
+           a loop writing `o[f(a[i])]`. Next diff: the per-flow ordinal beside the site (keyname_atom's
+           residual). How its absence shows: a page writing an unknown key inside a loop loses members off its
+           own object (`Object.keys(o).length` short by one per collision) while this assert stays silent. */
 #if APICLIENT_DEV
         DCHECK(keyname_str_same(g_keynames[i].shape, shape) &&
                keyname_str_same(g_keynames[i].src, src) &&
@@ -3898,90 +3664,45 @@ static void keyname_record(const char *atom, const char *shape, const char *src,
     else keyname_hash_put(g_keynames_n - 1);
 }
 
-/* THE ONE BYTE THAT PUTS A DISCRIMINATED ATOM IN ITS OWN NAMESPACE — US (0x1f), a byte no speller in this
-   file produces, chosen for decide.c's FORK_SITE_PREFIX reason exactly: a shape carries the PAGE's own text
-   (a string literal it wrote, a member name it chose), so no PRINTABLE separator is this file's to reserve
-   and reserving one would be a claim about what a document may contain.
-   A SHAPE THAT ALREADY CARRIES IT IS A REFUSAL AND NOT AN ASSERT. A page may write \x1f into a string that
-   reaches a shape, and those are the page's bytes: an abort over them would hand any document a switch
-   (§WHOSE-BYTES-STATE-THE-VALUE). Such a purchase keeps exactly the atom it bought before this line existed,
-   which is ABSENCE rather than a wrong name; and if the two populations ever do meet under one string,
-   keyname_record's "one shape, one value" assert is what reports it, because the pair then differs in `src`
-   or `root` or `ident` and that is the comparison it already makes. */
+/* The one byte that puts a discriminated atom in its own namespace: US (0x1f), produced by no speller in this
+   file, for decide.c's FORK_SITE_PREFIX reason: a shape carries the page's own text, so no printable separator
+   is this file's to reserve. A shape already carrying it is refused, not asserted, since a page may write
+   \x1f: such a purchase keeps its plain shape atom (an absence, not a wrong name), and if the two populations
+   ever meet under one string, keyname_record's assert reports it, because `src`, `root` or `ident` differ. */
 #define KEYNAME_SITE_SEP '\x1f'
 
-/* THE ATOM AN UNSPELLABLE KEY IS SPENT ON — its shape, PLUS WHERE THE PAGE'S OWN CODE WAS STANDING when this
- * value first bought one. BORROWED from the record (or the caller's own `sh`), never owned here.
+/* The atom an unspellable key is spent on: its shape plus where the page's own code stood when this value
+ * first bought one. Borrowed from the record (or the caller's `sh`), never owned here.
  *
- * WHY THE SHAPE ALONE IS NOT AN ANSWER FOR THIS POPULATION, AND IS ONE FOR EVERY OTHER. An atom is bought
- * with a shape, and a shape is 1:1 with a value exactly while the rule at keyname_record holds — a shape
- * separates every pair the IDENTITY separates. Where the identity is ABSENT it separates NOTHING, so the
- * rule is satisfied vacuously and the shape is 1:N: `o[h.slice({})] = "a"; o[h.slice({z:1})] = "b";` spells
- * one shape, buys one atom, lands in one slot, and `Object.keys(o).length` comes back 1 with `b` readable
- * through the key that was `a`. That is the wrong-identity half of this file's own trade — "Absence costs
- * forks; a wrong identity costs the arm" — arriving as a page losing a member of its own object.
+ * The shape is 1:1 with a value only while it separates every pair the identity separates; where the identity
+ * is absent it is 1:N, so `o[h.slice({})] = "a"; o[h.slice({z:1})] = "b";` would buy one atom for two values.
+ * The site splits that population without a namer: an atom is not a constraint key (keyname_record carries the
+ * value's `ident` verbatim and concolic_key_value_hook re-mints with it), so a coarse atom merges slots, never
+ * constraints. Two atoms here are equal only where both the shapes and the first-purchase sites are, so it is
+ * strictly finer and can lose no slot a page had.
+ * The site is a program fact, not an address: JS_RunningSiteHash folds a body locator with the frame's byte
+ * offset, so a replay at the same line composes the same bytes. Memoised at the first purchase, so `o[k]` on
+ * two lines stays one slot. With no page frame standing there is no site and the purchase keeps its shape;
+ * a reserved token would seat all host-time purchases on one hash.
  *
- * AND THE ANSWER IS A SPLIT RATHER THAN A NAME, WHICH IS WHY IT MAY LAND WITHOUT THE NAMER. An atom is not a
- * constraint key: keyname_record's entry carries the value's `ident` VERBATIM and concolic_key_value_hook
- * re-mints with it, so a coarse atom merges two SLOTS where a coarse constraint key would let one flow's
- * fact decide another flow's read. §Solver-half's refusal of a site WITHOUT an ordinal — "three iterations of
- * one loop would name one object, so iteration 1's constraint would refine 2 and 3 and ARMS WOULD BE LOST" —
- * is a statement about a CONSTRAINT and does not transfer here, and the direction is the opposite one: a
- * coarse atom is what this population already has, so a site that separates SOME of it can only split.
- *
- * STRICTLY FINER, WHICH IS THE WHOLE SOUNDNESS ARGUMENT AND IS PROVABLE BY READING RATHER THAN BY RUNNING.
- * Two atoms composed here are equal only where the two shapes are equal AND the two first-purchase sites
- * are, so every pair this returns as equal was already equal; no pair that was distinct becomes equal. It
- * can therefore LOSE no slot a page had, and it can only stop two values sharing one.
- *
- * THE SITE IS A PROGRAM FACT AND NOT AN ADDRESS, which is the requirement §Time-travel-resume states rather
- * than uniqueness-in-a-heap: JS_RunningSiteHash folds a body locator (script, position, body text) with the
- * frame's own byte offset, so a replay standing at the same line composes the same bytes where an address is
- * reused by js_malloc and survives no park.
- *
- * MEMOIZED AT THE FIRST PURCHASE, which is what keeps `o[k]` on two lines ONE slot. Recomputing per purchase
- * would name the SITE and not the VALUE, and a value written under one key at two sites would split a slot a
- * real browser keeps whole — a fidelity loss this file would be introducing rather than removing.
- *
- * NO PAGE FRAME IS STANDING IS ABSENCE AND CARRIES NO RESERVED TOKEN. JS_RunningSiteHash returns WHETHER a
- * page frame is standing precisely so that the whole of host time and the initial parse is not seated on a
- * hash a real site can also fold to; a token for it here would re-create that, and every purchase made
- * outside page code would share it. Such a purchase keeps the shape, which is what it bought before.
- *
- * NAMED RESIDUAL — TWO VALUES FIRST PURCHASED AT ONE SITE STILL SHARE AN ATOM, which is a loop writing
- * `o[f(a[i])]` over unnameable `a[i]`: one line, N objects, one slot. NOT COVERED: that pair, and no other —
- * two sites separate, a spellable identity never reached this function, and a purchase outside page code is
- * unchanged. WHAT THE NEXT DIFF BUILDS: the CREATING FLOW'S OWN COUNT OF PRIOR PURCHASES AT THIS SITE beside
- * the site, which is the same (site, ordinal) pair literal_ident's residual names for the object namer and
- * is a fact about the executed prefix, so a replay reproduces it by reproducing the prefix and a fork carries
- * it as it carries every other prefix quantity — it is per-flow state and therefore belongs to the constraint
- * chain rather than to this agent-lifetime table, which is the one design question it has to answer.
- * AND THE DESIGN QUESTION THAT CLAUSE NAMES HAS BEEN ANSWERED ELSEWHERE, WHICH IS WORTH THE LINE BECAUSE IT
- * IS THE ONLY PART OF IT A READER WOULD OTHERWISE RE-DERIVE: a per-flow mint counter rides the PinBlob beside
- * the pins and the delivery bit, is inherited by a fork at the branch, is restored to 0 for a flow the cold
- * tier resumes (which replays the document and re-mints the same sequence), and is spent by
- * concolic_mint_ordinal_hook. So the vehicle is the constraint chain's blob exactly as this clause predicted;
- * what this function still needs is a counter keyed BY SITE rather than the single monotone one that serves
- * the object namer, because a purchase's ordinal must be the count at THIS site for two sites to stay apart.
- * HOW ITS ABSENCE WOULD SHOW: a document that writes an unknown key inside a loop reports fewer own property
- * names than it wrote, with the keyname table holding ONE entry whose shape ends in a single site. */
+ * Named residual. Not covered: two values first purchased at one site (`o[f(a[i])]` over unnameable `a[i]`
+ * in a loop). Next diff: the creating flow's count of prior purchases at this site beside the site; it is
+ * per-flow, so it rides the PinBlob like the mint counter, but keyed by site. How its absence shows: a document
+ * writing an unknown key in a loop reports fewer own property names than it wrote, with one keyname entry. */
 static const char *keyname_atom(JSContext *ctx, JSValueConst key, const char *sh)
 {
     Concolic *c = g_concolic_class ? JS_GetOpaque(key, g_concolic_class) : NULL;
     uint64_t site;
 
-    /* A SPELLABLE IDENTITY NEEDS NOTHING FROM THIS FUNCTION — its shape already separates every pair the
-       identity does, which is the rule, and adding a site would split a slot that rule keeps whole. */
+    /* A spellable identity needs nothing here: its shape already separates every pair the identity does, and
+       a site would split a slot the rule keeps whole. */
     if (!c || c->ident) return sh;
     if (c->key_atom) return c->key_atom;
     if (strchr(sh, KEYNAME_SITE_SEP)) return sh;      /* the page's own bytes — see the separator */
     if (!JS_RunningSiteHash(ctx, &site)) return sh;   /* no page frame: there is no site to name it by */
     c->key_atom = shapef("%s%c%016llx", sh, KEYNAME_SITE_SEP, (unsigned long long)site);
-    /* THE SENTINEL AND THE CONDITION IT STANDS FOR, ASSERTED WHERE BOTH ARE IN ONE HAND. `key_atom` is
-       written HERE and nowhere else, so "this value bought a discriminated atom" and "this value has no
-       spellable identity" are one fact — and a record carrying one without the other would be a value whose
-       atom says it could not be named while its identity says it could, which is the pair every later
-       purchase of it reads. */
+    /* `key_atom` is written here and nowhere else, so "bought a discriminated atom" and "has no spellable
+       identity" are one fact, asserted where both are in hand. */
     DCHECK(c->key_atom != NULL && c->ident == NULL,
            "a value bought a site-discriminated atom while carrying a spellable identity — the two are one "
            "fact written at one line, so a record holding both is one whose shape already separates what "
@@ -3989,28 +3710,23 @@ static const char *keyname_atom(JSContext *ctx, JSValueConst key, const char *sh
     return c->key_atom;
 }
 
-/* THE NAME an unknown key denotes: its own SHAPE, as a real string. Stable per source, so every key-taking
-   operation agrees with every other — see the contract at JS_ToPropertyKeyInternal. */
+/* The name an unknown key denotes: its own shape as a real string, stable per source, so every key-taking
+   operation agrees (see the contract at JS_ToPropertyKeyInternal). */
 JSValue concolic_key_name_hook(JSContext *ctx, JSValueConst key) {
     const char *sh, *atom;
     if (!concolic_is(key)) return JS_UNINITIALIZED;
     sh = concolic_shape_c(key);
-    /* …AND THE SHAPE IS NOT THE ATOM WHERE THE SHAPE CANNOT NAME THE VALUE — see keyname_atom. The two are
-       the same string for every value this engine can spell, which is every value the rule at keyname_record
-       is about; they differ for exactly the population that rule is vacuous over. */
+    /* …and the atom differs from the shape only where the shape cannot name the value (keyname_atom). */
     atom = keyname_atom(ctx, key, sh ? sh : "{}");
-    /* WHAT THIS TRADE COSTS IS WRITTEN DOWN AS IT IS SPENT — see the table above. The atom is bytes, the
-       value was an unknown, and the only place that trade can be undone is the one place it is made. IT IS
-       THE ATOM AND NOT THE SHAPE THAT IS RECORDED, because the record is what concolic_key_value_hook
-       inverts BY THE BYTES THE PAGE HANDS BACK: recording the shape while spending the atom would be a write
-       with no reader standing next to a read with no writer, and a restored key would answer nothing. */
+    /* What this trade costs is recorded as it is spent, the one place it can be undone. The atom is recorded,
+       not the shape, because concolic_key_value_hook inverts by the bytes the page hands back. */
     keyname_record(atom, sh ? sh : "{}", concolic_src_c(key), concolic_root_c(key), root_whose_of(key),
                    concolic_ident_c(key));
     return JS_NewString(ctx, atom);
 }
 
-/* JSConcolicHooks.key_value — the trade above, UNDONE where a property name is handed back to the program as a
-   VALUE. See that member for why the engine asks, and the table above for what is recorded. */
+/* JSConcolicHooks.key_value: the trade above, undone where a property name is handed back to the program as a
+   value (that member says why the engine asks). */
 JSValue concolic_key_value_hook(JSContext *ctx, JSValueConst name)
 {
     const char *s;
@@ -4019,10 +3735,8 @@ JSValue concolic_key_value_hook(JSContext *ctx, JSValueConst name)
 
     if (!JS_IsString(name)) return JS_UNINITIALIZED;
     s = JS_ToCString(ctx, name);
-    /* ASSERTED AND NOT TAKEN FOR A MISS. A NULL here is an allocation failure inside the conversion of a value
-       that already IS a string, and it renders identically to "no unknown was ever minted under this name" —
-       so the one arrival this lookup cannot distinguish from its ordinary answer is the one that silently
-       de-taints a key. It is the same reason concolic_deliver asserts its payload rather than defaulting it. */
+    /* Checked, not taken for a miss: a NULL is an allocation failure over a value that is a string, and it
+       would read exactly like "no unknown was minted under this name", silently de-tainting the key. */
     CHECK(s != NULL,
           "concolic: the bytes of a delivered property name could not be read — a name this file minted for "
           "an unknown key would then answer as an ordinary string and the key's provenance and domain would "
@@ -4032,22 +3746,17 @@ JSValue concolic_key_value_hook(JSContext *ctx, JSValueConst name)
     if (i < 0) return JS_UNINITIALIZED;
     ident = g_keynames[i].ident ? strdup(g_keynames[i].ident) : NULL;
     CHECK(!g_keynames[i].ident || ident, "concolic: OOM re-minting an unknown key's identity");
-    /* THROUGH concolic_derived AND NOT concolic_alloc, which is what makes a restored key reach an @S
-       candidate: that entry is the one door every mint goes through ("Minting is the one place every source
-       goes through, whichever way it is reached"), so a name restored while a substitution is installed for
-       its source delivers the attacker's payload exactly as the original read did, and a name restored with
-       none re-mints the value the original read produced.
-       EXAMPLE-FREE, which is a positive statement and not a dropped field: which property the attacker names
-       is exactly what is not known, so §@H has nothing to carry here — the same rule concolic_key_read_hook
-       states about the value such a key reads. */
+    /* Through concolic_derived, not concolic_alloc, because that is the door every source mint goes through:
+       a name restored while a substitution is installed for its source delivers the payload as the original
+       read did, and otherwise re-mints the value the read produced. Example-free: which property the attacker
+       names is exactly what is not known (concolic_key_read_hook states the same of the value it reads). */
     return concolic_derived(ctx, g_keynames[i].shape, g_keynames[i].src, g_keynames[i].root,
                             g_keynames[i].root_whose, ident, JS_UNDEFINED);
 }
 
-/* `obj[x]` WITH AN UNKNOWN KEY. Not a coercion of the operand: nothing about x says WHICH slot was meant, so
-   the read's result is unknown and the honest answer is a concolic that keeps the key's source — a gate on the
-   value still forks, and a sink still solves for the key that would reach it. Example-free on purpose: which
-   property the attacker names is exactly what is not known, and @H never invents one. */
+/* `obj[x]` with an unknown key. Nothing about x says which slot was meant, so the result is a concolic that
+   keeps the key's source: a gate on the value still forks, and a sink still solves for the key that would
+   reach it. Example-free on purpose: which property the attacker names is what is not known. */
 JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst key) {
     const char *src, *root, *f[2];
     char *shape, *ident, *io, *ik;
@@ -4056,18 +3765,11 @@ JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst ke
     if (!concolic_is(key)) return JS_UNINITIALIZED;
     src = concolic_src_c(key);
     root = concolic_root_c(key);
-    /* WHICH OBJECT WAS READ IS HALF THE IDENTITY: `a[x]` and `b[x]` are two reads and one must not decide the
-       other. An ordinary object has no identity that survives the park a resumed flow replays through, so the
-       composition is ABSENT there and every branch over the result keeps both arms.
-       AND IT IS HALF THE SHAPE FOR THE SAME REASON, WHICH THIS LINE SPELLED `{}` FOR AND DID NOT SAY. The
-       object was in the identity and NOT in the display, so two unknown RECORDS read with one unknown key —
-       `__FLAGS[k]` and `__NEXT_DATA__[k]` — composed two identities under the one shape `{}[{x}]`; used as
-       property keys those bought ONE atom, which keyname_record asserts against and which, with the assert
-       compiled out, is one slot for two members. Reproduced on the artifact of origin/main 9c757178.
-       derived_operand_shape IS THE SPELLER and not a `%s` of concolic_shape_c, because it is the twin of the
-       ident_of_operand call directly below: an unknown renders as its own shape, a spellable primitive as the
-       literal the page wrote, and an ordinary object as `?` — which is the honest display for the operand
-       whose identity is absent, and the one pair this rule cannot separate. */
+    /* Which object was read is half the identity and half the shape: `a[x]` and `b[x]` are two reads, and two
+       unknown records read with one key (`__FLAGS[k]`, `__NEXT_DATA__[k]`) must not share one shape or they
+       buy one atom. An object with no name source has no identity, so the composition is absent there and
+       every branch over the result keeps both arms. derived_operand_shape is the speller, twin of the
+       ident_of_operand call below: such an object renders `?`, the one pair the shape rule cannot separate. */
     io = ident_of_operand(ctx, obj);
     ik = ident_of_operand(ctx, key);
     { char *os = derived_operand_shape(ctx, obj);
@@ -4082,17 +3784,19 @@ JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst ke
     return r;
 }
 
+/* `typeof` an unknown is unknown. A concolic is a host object of a callable class (so `x.indexOf(...)` works),
+   so a plain typeof would answer "function" and `typeof x === "function"` would take an arm decided by the
+   solver's representation. The answer is a concolic carrying the operand's root, so the comparison after it
+   forks. */
 JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
     const char *sh, *f[1];
     char *shape, *ident;
     JSValue r;
 
     if (!concolic_is(v)) return JS_UNINITIALIZED;
-    /* THE OPERAND'S SHAPE AND NOT ITS SRC, which is what concolic_tostr_hook eight lines up already does and
-       what this line did not. A src is inherited by every derivation off one source — `x+1` and `x+2` carry
-       x's — so spelling the display off it made `typeof (x+1)` and `typeof (x+2)` ONE shape over two
-       identities, which is one property atom for two values at keyname_record. It was also simply the wrong
-       display: `typeof {location.hash}` names the source, and the page wrote typeof of the derived value. */
+    /* The operand's shape, not its src: every derivation off one source inherits the src, so `typeof (x+1)`
+       and `typeof (x+2)` would share a shape over two identities, and the page wrote typeof of the derived
+       value. */
     sh = concolic_shape_c(v);
     shape = shapef("typeof %s", sh ? sh : "{}");
     f[0] = concolic_ident_c(v);
@@ -4102,57 +3806,35 @@ JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
     return r;
 }
 
-/* `x in concolic` / property existence: a concolic collection "has" any key (so a membership gate still runs). */
+/* `x in concolic` / property existence: a concolic collection "has" any key, so a membership gate still runs. */
 static int concolic_exotic_has(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     (void)ctx; (void)atom;
     return JS_GetOpaque(obj, g_concolic_class) != NULL;
 }
 
-/* ── THE RECORD'S OWN SURFACE ────────────────────────────────────────────────────────────────────────────────
+/* ── The record's own surface ────────────────────────────────────────────────────────────────────────────────
  *
- * A KEY THE PAGE NAMES AND A REQUEST TO ENUMERATE ARE TWO DIFFERENT QUESTIONS, and the answers above are the
- * first kind. [[Get]] and [[HasProperty]] are handed a NAME the page wrote, so "unknown, and here is a derived
- * unknown for it" is both honest and the whole of the exploration: `if (blk.props.pageProps.user)` forks on a
- * member the payload does not hold, which is what reaches the logged-in arm. ECMAScript §10.1.11
- * [[OwnPropertyKeys]] ( ) is asked with NO name at all — the program is asking the record to enumerate ITSELF
- * — so there is no name to be honest about, and every key answered that the record does not hold is a
- * FABRICATED field in exactly §@H's sense ("must NEVER INVENT"), performed by a `for..in`.
+ * A key the page names and a request to enumerate are different questions. [[Get]] and [[HasProperty]] are
+ * handed a name the page wrote, so a derived unknown for it is the true answer (`if (blk.props.pageProps.user)`
+ * forks on a member the payload does not hold, which reaches the logged-in arm). §10.1.11 [[OwnPropertyKeys]]
+ * ( ) asks with no name, so every key the record does not hold would be a fabricated field. The own surface is
+ * therefore the example's: the record the server sent this visitor, an observation like a held member's bytes.
  *
- * SO THE OWN SURFACE IS THE EXAMPLE'S, AND ONLY THE EXAMPLE'S. That is not a weaker answer than [[Get]]'s, it
- * is an answer to a different question: the example is the record the server actually sent this visitor, so
- * its key set is an OBSERVATION exactly as a held member's bytes are, and a key it does not hold is a key this
- * run observed the record not to have.
+ * [[GetOwnProperty]] is installed beside [[OwnPropertyKeys]] because every consumer needs both: §20.1.2.19
+ * Object.keys ( obj ) and §14.7.5.9 EnumerateObjectProperties ( obj ) run §7.3.23 EnumerableOwnProperties
+ * ( obj, kind ), and §7.3.25 CopyDataProperties ( target, source, excludedItems ) and §20.1.2.1 Object.assign
+ * ( target, ...sources ) also take the keys then test [[Enumerable]] per key. Answering only the first drops
+ * every key at the second.
  *
- * FOUR SPELLINGS REACH IT AND EVERY ONE OF THEM NEEDS BOTH HALVES, which is why [[GetOwnProperty]] is
- * installed beside [[OwnPropertyKeys]] and not after it. §20.1.2.19 Object.keys ( obj ) and §14.7.5.9
- * EnumerateObjectProperties ( obj ) run §7.3.23 EnumerableOwnProperties ( obj, kind ), and §7.3.25
- * CopyDataProperties ( target, source, excludedItems ) — the object spread — and §20.1.2.1 Object.assign (
- * target, ...sources ) run the same two steps: `obj.[[OwnPropertyKeys]]()`, then `obj.[[GetOwnProperty]](key)`
- * for the [[Enumerable]] test. A class answering only the first has every key dropped at the second (the C key
- * walk drops it under JS_GPN_ENUM_ONLY, the resumable cursor drops it as "gone between the snapshot and the
- * read"), so the report is the same empty list either way and nothing says a capability is missing.
- *
- * THE VALUE IS THE ONE [[Get]] ANSWERS, never the example's own bytes. §Solver's trust boundary is explicit
- * that a loaded `features.admin:false` must not concretize the gate over it; a descriptor carrying the raw
- * example would concretize it through `Object.getOwnPropertyDescriptor`, through
- * `Object.defineProperties(t, Object.getOwnPropertyDescriptors(cfg))`, and through every C consumer of the
- * descriptor — the same loss the spread and the assign would suffer if their `Get` did not go through
- * concolic_exotic_get. One value, one derivation, one place.
- *
- * §6.1.7.3 Invariants of the Essential Internal Methods DECIDES THE ATTRIBUTES rather than taste. Its
- * [[GetOwnProperty]] note: "if a property is described as a data property and it may return different values
- * over time, then either or both of the [[Writable]] and [[Configurable]] attributes must be true even if no
- * mechanism to change the value is exposed" — and this one does, because each read mints the derivation
- * afresh. So CONFIGURABLE and WRITABLE are the spec's answer and not a choice; only ENUMERABLE is read off the
- * example, where it is an observation about the record. (Nothing in this file is the PROXY's §10.5.5 /
- * §10.5.11 — those are §10.5 Proxy Object Internal Methods and Internal Slots, a different exotic object whose
- * invariants are enforced by re-checking a trap's result. A concolic has no handler; it maintains §6.1.7.3
- * Invariants of the Essential Internal Methods directly, which is what that clause requires of "any
- * implementation provided exotic objects".)
- */
+ * The value is the one [[Get]] answers, never the example's bytes, or `Object.getOwnPropertyDescriptor` would
+ * concretize a loaded `features.admin:false`. §6.1.7.3 Invariants of the Essential Internal Methods decides the
+ * attributes: a data property that may return different values over time must be [[Writable]] or
+ * [[Configurable]], and each read mints afresh, so both are set; only [[Enumerable]] is read off the example.
+ * A concolic has no Proxy handler (§10.5 Proxy Object Internal Methods and Internal Slots); it maintains §6.1.7.3
+ * directly, as that clause requires of implementation-provided exotic objects. */
 
-/* ANSWER FROM REAL SLOTS ONLY — see concolic.h. A plain static like every other in this file: the host is one
-   agent per instance and nothing here is entered from a second thread. */
+/* Answer from real slots only (see concolic.h). A plain static: the host is one agent per instance and nothing
+   here is entered from a second thread. */
 static int g_slots_only;
 
 void concolic_slots_only_begin(void)
@@ -4169,12 +3851,10 @@ void concolic_slots_only_end(void)
     g_slots_only = 0;
 }
 
-/* Does `obj` carry a REAL own slot for `atom` — the ordinary layer under this class's own surface? The mode is
-   what makes the question answerable at all: with the exotic hook armed, quickjs's [[GetOwnProperty]] answers
-   1 for a shape slot AND for an example member, and the two are exactly what has to be told apart.
-   IT IS NOT DEV-ONLY ANY MORE. It was, when its only caller was the disjointness assert below; the unknown-
-   member materialisation asks the same question to decide whether it has anything to do, and that runs in every
-   build. One speller for one question, rather than an assert's copy and a live copy that can disagree. */
+/* Whether `obj` carries a real own slot for `atom`, the ordinary layer under this class's own surface. The mode
+   makes the question answerable: with the exotic hook armed, QuickJS's [[GetOwnProperty]] answers 1 for both a
+   shape slot and an example member. Runs in every build: the unknown-member materialisation and the
+   disjointness assert both ask it. */
 static int concolic_has_own_slot(JSContext *ctx, JSValueConst obj, JSAtom atom)
 {
     int r;
@@ -4187,8 +3867,8 @@ static int concolic_has_own_slot(JSContext *ctx, JSValueConst obj, JSAtom atom)
     return r > 0;
 }
 
-/* §10.1.5 [[GetOwnProperty]] ( propertyKey ) over the record — reached only after quickjs's ordinary lookup
-   found no slot, so a member the flow has MATERIALISED (see the define below) never arrives here. */
+/* §10.1.5 [[GetOwnProperty]] ( propertyKey ) over the record, reached only after QuickJS's ordinary lookup
+   found no slot, so a member the flow has materialised (see the define below) never arrives here. */
 static int concolic_exotic_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom atom)
 {
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
@@ -4197,7 +3877,7 @@ static int concolic_exotic_get_own(JSContext *ctx, JSPropertyDescriptor *desc, J
 
     if (!c)
         return 0;
-    /* THE DELTA READS STORAGE AND THIS CLASS HAS NONE FOR ITS MEMBERS — concolic.h states the whole of it. */
+    /* The delta reads storage, and this class has none for its members (see concolic.h). */
     if (g_slots_only)
         return 0;
     if (!example_slot(ctx, c->example, atom, &ev, &eflags))
@@ -4206,17 +3886,14 @@ static int concolic_exotic_get_own(JSContext *ctx, JSPropertyDescriptor *desc, J
         JS_FreeValue(ctx, ev);
         return 1;
     }
-    /* The example's own bytes are NOT the answer — they ride the derivation as its EXAMPLE, which is what
-       concolic_exotic_get composes. An ACCESSOR member arrives here with no value for the same reason
-       example_slot gives, and is still reported as a data property: what the page's getter would compute is
-       unknown, and an unknown is what this class answers with. */
+    /* The example's own bytes are not the answer: they ride the derivation as its example. An accessor member
+       has no value (example_slot) and is still reported as a data property, since what the getter would
+       compute is unknown. */
     JS_FreeValue(ctx, ev);
-    /* …AND THE ATTRIBUTES ARE THE RECORD'S FOR AN OBJECT EXAMPLE AND §10.4.3's FOR A STRING ONE, which is one
-       question and not two: the forced C|W says every member of a RECORD is one this class can materialise
-       (the define below takes it out of the example and defines it on the object), and a String's own members
-       are fixed — §10.4.3.5 step 10 makes an index non-writable and non-configurable and §10.4.3.4 step 8
-       makes `length` all three false — so forcing them here would report a member the define is about to
-       refuse, and the two internal methods would disagree about one record. */
+    /* The attributes are the record's for an object example and §10.4.3's for a String one: every member of a
+       record can be materialised (the define below moves it onto the object), so C|W is forced; a String's
+       members are fixed (§10.4.3.5 step 10, §10.4.3.4 step 8), and forcing them would report a member the
+       define is about to refuse. */
     desc->flags = JS_IsString(c->example)
                       ? (eflags & (JS_PROP_ENUMERABLE | JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE))
                       : ((eflags & JS_PROP_ENUMERABLE) | JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
@@ -4226,12 +3903,10 @@ static int concolic_exotic_get_own(JSContext *ctx, JSPropertyDescriptor *desc, J
     return 1;
 }
 
-/* THE ENUMERATION'S QUESTION, MINTED ONCE — see concolic.h for what it is and why the fork cannot live at the
-   internal method below. The identity is the record's own, under §10.1.11's name, so two consumers asking
-   about ONE record ask ONE question and a flow's record of it decides that question and no neighbour's. A
-   record this engine cannot spell composes no identity, which is the same positive statement `ident` makes
-   everywhere else — no key, nothing decided from it — and the internal method says so at its own site rather
-   than being handed a predicate that silently answers -1 forever. */
+/* The enumeration's question, minted once (concolic.h says why the fork cannot live at the internal method).
+   The identity is the record's own under §10.1.11's name, so two consumers asking about one record ask one
+   question. A record this engine cannot spell composes no identity, and the internal method says so at its
+   own site. */
 static JSValue own_keys_pred(JSContext *ctx, const Concolic *c)
 {
     const char *f[1];
@@ -4241,8 +3916,7 @@ static JSValue own_keys_pred(JSContext *ctx, const Concolic *c)
     ident = concolic_ident_compose("[[OwnPropertyKeys]]", f, 1);
     if (!ident)
         return JS_UNINITIALIZED;
-    /* NOT a source read (concolic_alloc, never concolic_derived): this is a boolean about the record, so an @S
-       candidate substituted into it would answer a question with a payload. */
+    /* Not a source read (concolic_alloc, never concolic_derived): a boolean about the record. */
     return concolic_alloc(ctx, "{cmp}", NULL, NULL, 0u, ident, JS_UNDEFINED);
 }
 
@@ -4250,27 +3924,21 @@ JSValue concolic_own_keys_pred(JSContext *ctx, JSValueConst record)
 {
     Concolic *c = g_concolic_class ? JS_GetOpaque(record, g_concolic_class) : NULL;
 
-    /* THE ONE ANSWER, REACHED TWO WAYS, AND IT IS ONE FACT: this enumeration has no question in it. An
-       ordinary object's key set is its shape; a record whose EXAMPLE is present has the example's, which is an
-       OBSERVATION about the payload this visitor was served and is answered by the internal method below. Only
-       an example-free record has an unknown key set, and the condition here is written the same way the method
-       below writes it so the asker and the reader cannot disagree about which records carry the question. */
+    /* No question for an ordinary object (its key set is its shape) or a record with an example (its key set is
+       the example's, answered by the internal method below). Only an example-free record has an unknown key
+       set; the condition matches the method's so the asker and the reader agree. */
     if (!c || !JS_IsUndefined(c->example))
         return JS_UNINITIALIZED;
     return own_keys_pred(ctx, c);
 }
 
-/* THE NAME OF THE RECORD'S n-TH UNKNOWN OWN MEMBER — see concolic.h. Two spellers and no third: the identity
-   and the display form come from concolic_new_derived, and the conversion from that value to a real property
-   key is the engine's own JS_ValueToAtom, which is where §7.1.21 ToPropertyKey ( arg )'s answer for an unknown
-   key lives (the key's shape, through .key_name). Composing the string here instead would be a second copy of
-   both rules, and the one that drifts is the copy no read goes through.
-   `#n` AND NOT `>n`: the chain's per-position QUESTION is spelled `[[OwnPropertyKeys]]>n` by the engine, and
-   this is a different question about the same position — what the member is CALLED, not whether it exists — so
-   it is a different key by construction rather than by luck.
-   A CANDIDATE RUN LEGITIMATELY ANSWERS A STRING HERE: concolic_new_derived goes through concolic_derived,
-   which substitutes the attacker's payload for a derivation over the source under test, and a member named by
-   that payload is exactly what the re-fire is for. JS_ValueToAtom takes either. */
+/* The name of the record's n-th unknown own member (see concolic.h). The identity and display come from
+   concolic_new_derived and the conversion to a property key is the engine's JS_ValueToAtom, where §7.1.21
+   ToPropertyKey ( arg )'s answer for an unknown key lives (its shape, through .key_name); composing the string
+   here would copy both rules. `#n`, not `>n`: the engine spells the per-position question
+   `[[OwnPropertyKeys]]>n`, and what the member is called is a different question about the same position.
+   A candidate run may answer a String here (concolic_derived substitutes the payload), and a member named by
+   the payload is what the re-fire is for; JS_ValueToAtom takes either. */
 static JSAtom own_member_atom(JSContext *ctx, JSValueConst record, int n)
 {
     char op[40];
@@ -4282,9 +3950,8 @@ static JSAtom own_member_atom(JSContext *ctx, JSValueConst record, int n)
           "concolic: an unknown member's name did not fit its operation buffer — a truncated one names two "
           "positions with one string, so the record would hold one member where the flow decided two");
     key = concolic_new_derived(ctx, op, &record, 1, JS_UNDEFINED);
-    /* ASSERTED AND NOT BRANCHED PAST: both callers have already established that `record` is one of this
-       class's values, and concolic_new_derived answers JS_UNINITIALIZED for exactly one reason — no operand is
-       unknown — so this cannot hold unless the caller and this file disagree about what the operand is. */
+    /* Asserted, not branched past: both callers establish that `record` is this class's value, and
+       concolic_new_derived answers JS_UNINITIALIZED only when no operand is unknown. */
     DCHECK(!JS_IsUninitialized(key),
            "an unknown member was named over a value this class does not hold — the callers are the "
            "enumeration's own-member chain and its own arm-1 assertion, both of which run only for a record "
@@ -4303,9 +3970,8 @@ int concolic_own_key_mint(JSContext *ctx, JSValueConst record, int n)
 
     if (!c)
         return 0;
-    /* THE SAME CONDITION concolic_own_keys_pred ASKS, written the same way, because the two are one decision:
-       a record whose EXAMPLE is present has a key set this run OBSERVED, so there is no unknown member to name
-       and no question was ever minted for the caller to be standing on. */
+    /* The same condition as concolic_own_keys_pred, written the same way: a record with an example has an
+       observed key set, so no question was minted for the caller to stand on. */
     DCHECK(JS_IsUndefined(c->example),
            "a record whose example holds its key set was asked to materialise an UNKNOWN member — its key set "
            "is an observation about the payload this visitor was served, so the caller forked over a question "
@@ -4314,35 +3980,26 @@ int concolic_own_key_mint(JSContext *ctx, JSValueConst record, int n)
     atom = own_member_atom(ctx, record, n);
     if (atom == JS_ATOM_NULL)
         return -1;
-    /* ALREADY MATERIALISED, WHICH IS THE ORDINARY CASE AND NOT AN ERROR. The name is a function of the record
-       and `n` alone, so a second enumeration in this flow replays the same arms and arrives back at the member
-       this flow already made. Re-defining it would replace a value the page may have written since, and on a
-       record the page has frozen it would be refused outright — a refusal about a member that is already there
-       and already correct.
-       NAMED RESIDUAL — a [[Delete]] of a materialised member is UNDONE by the next enumeration of that record
-       in the same flow. §10.1.10 [[Delete]] ( propertyKey ) removes a configurable slot, and these are
-       configurable (§6.1.7.3 requires it of a data property whose value may differ over time), so the slot goes;
-       the flow's recorded answers do not, and the chain replays them and defines the member again. WHAT THE
-       NEXT DIFF BUILDS: a per-flow record of how many of this record's unknown members this flow has already
-       PERFORMED, so the chain resumes past them instead of replaying from position 0. Where that lives is the
-       work and not a detail — this class keeps no delta-captured C state at all (nothing here calls
-       cow_capture_host_record, and the header's slots-only argument is that the delta records SLOTS), so a
-       plain field on the Concolic would be state a context switch does not swap, and the count has to sit
-       somewhere the delta already carries. HOW ITS ABSENCE SHOWS: `for (k in x) delete x[k]` followed by a
-       second enumeration of `x` lists the deleted member again, and `k in x` answers true after the delete. */
+    /* Already materialised is the ordinary case: the name is a function of the record and `n`, so a second
+       enumeration in this flow replays the same arms to the same member. Re-defining it would replace a value
+       the page may have written since, and a frozen record would refuse it.
+       Named residual. Not covered: a [[Delete]] of a materialised member (configurable, per §6.1.7.3) is undone
+       by the next enumeration in the same flow, because the chain replays its recorded answers from position 0.
+       Next diff: a per-flow count of this record's unknown members already performed, so the chain resumes past
+       them; it must live where the COW delta already carries state, since this class keeps no delta-captured C
+       state (nothing here calls cow_capture_host_record). How its absence shows: `for (k in x) delete x[k]`
+       followed by a second enumeration lists the deleted member again, and `k in x` answers true. */
     if (concolic_has_own_slot(ctx, record, atom)) {
         JS_FreeAtom(ctx, atom);
         return 1;
     }
-    /* THE MEMBER'S VALUE IS THE ONE A READ OF THAT NAME ANSWERS, through the same entry every other read of
-       this record goes through — one derivation and one identity, so `for (k in r) r[k]` and a later
-       `r[<that name>]` are the same value and an @S candidate substituted for the member reaches both. */
+    /* The member's value is the one a read of that name answers, through the same entry: `for (k in r) r[k]`
+       and a later `r[<that name>]` are one value, and a candidate substituted for the member reaches both. */
     val = concolic_exotic_get(ctx, record, atom, record);
-    /* JS_PROP_NO_EXOTIC because this IS the class's own materialisation: routing it back through
-       concolic_exotic_define_own would ask this class what it reports about a member it is in the middle of
-       making. The attributes are the ones concolic_exotic_get_own reports for every member of a record, which
-       is what §6.1.7.3 Invariants of the Essential Internal Methods requires of a data property that "may
-       return different values over time". */
+    /* JS_PROP_NO_EXOTIC because this is the class's own materialisation, which must not ask this class what it
+       reports about a member it is making. The attributes are those concolic_exotic_get_own reports, as §6.1.7.3
+       Invariants of the Essential Internal Methods requires of a data property that "may return different
+       values over time". */
     r = JS_DefinePropertyValue(ctx, record, atom, val, JS_PROP_C_W_E | JS_PROP_NO_EXOTIC);
     JS_FreeAtom(ctx, atom);
     if (r < 0)
@@ -4354,11 +4011,10 @@ int concolic_own_key_mint(JSContext *ctx, JSValueConst record, int n)
     return 1;
 }
 
-/* §10.1.11 [[OwnPropertyKeys]] ( ) over the record. quickjs MERGES what this returns with the object's
-   ordinary keys and dedups neither, so the two lists must be DISJOINT — §6.1.7.3 Invariants of the Essential
-   Internal Methods states "The returned List must not contain any duplicate entries". That is maintained by
-   the define below, which takes a member OUT of the example as it materialises it into the shape, and
-   asserted here rather than filtered for. */
+/* §10.1.11 [[OwnPropertyKeys]] ( ) over the record. QuickJS merges this list with the object's ordinary keys and
+   dedups neither, so the two must be disjoint (§6.1.7.3 Invariants of the Essential Internal Methods: "The
+   returned List must not contain any duplicate entries"). The define below maintains that by taking a member
+   out of the example as it materialises it, and the tail asserts it. */
 static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj)
 {
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
@@ -4370,77 +4026,36 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
     if (!c)
         return 0;
     if (JS_IsUndefined(c->example)) {
-        /* NO EXAMPLE IS NOT AN EMPTY RECORD, and answering the empty List AS A FACT makes them one. An empty
-           example is the positive statement "the payload this visitor was served holds no members"; no example
-           at all is unknown input, whose key set is unknown — and the empty List says the first about the
-           second, which is the defaulted-read defect one layer out: `Object.keys(x).length === 0` is then
-           DECIDED for a program branching on a record the run never saw.
-           SO IT IS ANSWERED AS AN ARM AND NEVER AS A FACT, and the arm is the FLOW'S OWN. The question is
-           concolic.h's `concolic_own_keys_pred`, asked by the CONSUMER — which is where it can be asked,
-           because a fork needs a resume point and this internal method is reached from inside a C activation
-           that has none — and this is where the recorded answer is read back. CONCRETIZE ON THE DECISION, the
-           same rule a browser component's C read follows where the page's own `if` over the same unknown is a
-           fork: take the arm this flow committed to rather than answering with something the sibling arm
-           contradicts.
-           THE READ HANDS OVER THE VALUE AND NEVER REBUILDS THE KEY. solver/decide.h states why at
-           decide_value_arm: the constraint key's FORMAT lives in one file, and a component that spelled its
-           own would file this question under a second name that no consumer's fork could ever answer. */
+        /* No example is not an empty record: answering the empty List as a fact would decide
+           `Object.keys(x).length === 0` for a record the run never saw. So it is answered as the flow's own arm.
+           The question (`concolic_own_keys_pred`) is asked by the consumer, which has a resume point to fork at;
+           this internal method, reached from a C activation, reads the recorded answer back: concretize on the
+           decision. It hands over the value and never rebuilds the key, whose format lives in one file
+           (decide.h's decide_value_arm). */
         JSValue pred = own_keys_pred(ctx, c);
         int arm = decide_value_arm(pred);
 
         JS_FreeValue(ctx, pred);
         if (arm == 0)
-            return 0;   /* THIS FLOW'S decided world: the record holds no own member this run can name. */
+            return 0;   /* this flow's decided world: the record holds no own member this run can name */
         if (arm == 1) {
-            /* THE ARM WHERE THE RECORD HOLDS MEMBERS ANSWERS THE EMPTY EXOTIC LIST TOO, AND THAT IS NOT THE
-               TWO ARMS COLLAPSING. What this hook contributes is the members the EXAMPLE holds, and there is
-               no example; the members the flow decided on are ORDINARY SLOTS on the record by the time this
-               runs, materialised by concolic_own_key_mint, so quickjs's own key walk has already listed them
-               and adding them here would be the duplicate §6.1.7.3 Invariants of the Essential Internal
-               Methods forbids ("The returned List must not contain any duplicate entries"). The two arms
-               differ in what the RECORD holds, which is what the caller sees; they do not differ in what this
-               hook owes on top of it.
-               AND IT IS NOT ASSERTED HERE, WHICH IS A DECISION AND NOT AN OMISSION. The assert a reader
-               reaches for — on this arm the record carries a slot for member 0 — is FALSE OF CORRECT
-               RUNS: the members are configurable, so `delete x[k]` removes one and the record legitimately
-               carries none while this arm still stands. It is also not free, because naming member 0 MINTS a
-               derivation, and concolic_derived is the observation site an @S candidate's delivery is recorded
-               at — an assert that mints would write a ladder rung for a substitution nobody delivered, which
-               is an instrument corrupting the measurement it is watching. What does assert the arm is the
-               engine's own chain, at every position, in every build. */
+            /* The arm where the record holds members also answers the empty exotic list: there is no example,
+               and the members the flow decided on are ordinary slots by now (concolic_own_key_mint), already
+               listed by QuickJS's key walk; listing them again would duplicate them. Not asserted: on correct
+               runs `delete x[k]` can leave the record with none while this arm stands, and naming member 0
+               would mint a derivation at the site where an @S delivery is recorded. The engine's own chain
+               asserts the arm at every position. */
             return 0;
         } else {
-            /* -1 is "this flow has not been asked", which is a fact about the CONSUMER and not about the
-               record: whichever spelling reached this internal method did so without first forking on the
-               record's key set, so there is no arm to answer with and the empty List would be the fabricated
-               fact again.
-               THE REMEDY THIS CRASH USED TO NAME WAS ALREADY BUILT, AND THAT IS RECORDED HERE RATHER THAN
-               QUIETLY CORRECTED. It said to "ask concolic_own_keys_pred over the record and fork on it before
-               requesting §10.1.11", and the engine's own own-keys step machine does exactly that: it calls
-               JSConcolicHooks.own_keys_pred, forks the boolean through the step driver, runs the
-               unknown-member chain on the true arm and only then issues the request. A reader following the
-               sentence would have built a second copy of a mechanism this tree has — the failure CLAUDE.md's
-               §A-DFAIL-OUTLIVES-THE-ABSENCE names, where the spec half stays right and the claim about the
-               tree goes wrong — so what the crash names now is the ROUTING and the naming, which are the two
-               things that are actually absent.
-               TWO STATES REACH IT AND THEY TAKE DIFFERENT WORK, AND THE CRASH SAYS WHICH, because the
-               discriminator is IN HAND here and a remedy naming an action with no object is what CLAUDE.md's
-               §AN-ASSERT-THAT-NAMES-A-REMEDY calls a crash nobody can act on. `c->ident` decides it outright,
-               and for the same reason own_keys_pred does: that function composes the question's key from this
-               exact field and answers JS_UNINITIALIZED when concolic_ident_compose refuses an unspellable
-               member, so a NULL here is the seam HAVING DECLINED and a non-NULL here is the seam HAVING NEVER
-               BEEN ASKED. The two sites read the field the same way on purpose — the asker and the reader may
-               not disagree about which records carry the question. (i) A consumer that reaches this internal
-               method WITHOUT the step machine — an engine-side key walk, or any call spelling that does not
-               go through the seam that asks the hook — has no arm because nothing asked for one; that one is
-               ROUTED, not built. (ii) A record this engine cannot SPELL composes no identity, so
-               concolic_own_keys_pred answers JS_UNINITIALIZED, the seam correctly declines to fork a question
-               with no key, and the arm is absent by construction; that one is literal_ident's named residual
-               (a page-created object is named by its creation site plus the creating flow's count of prior
-               creations there), and until it exists the ask must not be reachable for such a record. */
+            /* -1: this flow has not been asked, a fact about the consumer: whatever reached this internal
+               method did not first fork on the record's key set (the engine's own-keys step machine does,
+               through JSConcolicHooks.own_keys_pred). `c->ident` says which of two states this is, read the
+               way own_keys_pred reads it. (i) Named: the question would have been minted, so a consumer
+               reached here without the step machine and must be routed onto it. (ii) Unnamed: the seam
+               correctly declined to fork a question with no key, so the arm is absent by construction; what is
+               missing is a name source for the record's class (literal_ident's named residual). */
             if (!c->ident) {
-                /* (ii) THE RECORD CANNOT BE SPELLED, so own_keys_pred minted no predicate and the seam had
-                   nothing to fork. The absence is by construction and no routing reaches it. */
+                /* (ii) The record cannot be spelled: no predicate, nothing for the seam to fork. */
                 DFAILF("an unknown with NO EXAMPLE was asked to enumerate itself and THIS ENGINE CANNOT SPELL "
                        "THE RECORD (its identity is absent), so concolic_own_keys_pred minted no predicate and "
                        "the own-keys seam correctly declined to fork a question with no key. The empty List "
@@ -4453,8 +4068,7 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
                        "as one object and LOSES arms. This record reads shape=%s root=%s",
                        c->shape ? c->shape : "(none)", c->root ? c->root : "(none)");
             } else {
-                /* (i) THE RECORD IS NAMED, so own_keys_pred WOULD have minted one — the question was never
-                   asked, which is a fact about the CONSUMER and not about the record. */
+                /* (i) The record is named, so the question was never asked; a fact about the consumer. */
                 DFAILF("an unknown with NO EXAMPLE was asked to enumerate itself and this flow holds no ARM "
                        "for its enumeration, THOUGH THE RECORD IS NAMED (%s) — so concolic_own_keys_pred "
                        "would have minted the predicate, and whatever reached this internal method did so "
@@ -4489,17 +4103,11 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
         return 0;
     }
     if (JS_IsString(c->example)) {
-        /* §10.4.3.3 [[OwnPropertyKeys]] ( ) OVER A STRING EXAMPLE — its step 5, "For each integer i such
-           that 0 ≤ i < length, in ascending order", whose one sub-step appends ToString of each, and then
-           the object's other own string keys, of which a String has exactly one: `length`. The empty List a
-           DFAIL used to stand in for is FALSE for a non-empty string — `Object.keys(x).length === 0` would be
-           DECIDED for a value the run had every character of — which is why this is the answer and not a
-           report of a missing capability.
-           THE RECORD HAS NO ORDINARY SLOTS TO COLLIDE WITH, which is what keeps quickjs's merge free of the
-           duplicate §6.1.7.3 Invariants of the Essential Internal Methods forbids: the only writer that could
-           put one there is the define below, and it REFUSES every member of a String example because
-           §10.4.3.5 makes them non-configurable. The shared assertion at the tail of this function is what
-           says so on every walk rather than here on trust. */
+        /* §10.4.3.3 [[OwnPropertyKeys]] ( ) over a String example: step 5, "For each integer i such that
+           0 ≤ i < length, in ascending order", then the other own string keys, of which a String has one,
+           `length`. The empty List would be false for a non-empty string. No ordinary slot can collide: the
+           define below refuses every member of a String example (§10.4.3.5 makes them non-configurable), and
+           the tail assertion checks it on every walk. */
         int64_t units = string_example_units(ctx, c->example), k;
 
         n = (uint32_t)(units + 1);
@@ -4539,22 +4147,18 @@ have_keys:
     return 0;
 }
 
-/* §10.1.6 [[DefineOwnProperty]] ( propertyKey, propertyDesc ) — reached only when the ordinary own-property
- * scan found nothing, so this is §10.1.6.3 ValidateAndApplyPropertyDescriptor with `current` = whatever THIS
- * class reported, and the attributes the incoming descriptor does not restate are CURRENT'S, not false.
+/* §10.1.6 [[DefineOwnProperty]] ( propertyKey, propertyDesc ), reached only when the ordinary own-property scan
+ * found nothing: §10.1.6.3 ValidateAndApplyPropertyDescriptor with `current` = what this class reported, so
+ * attributes the incoming descriptor does not restate are current's, not false.
  *
- * WITHOUT IT THE WRITE PATH SILENTLY NARROWS EVERY HELD MEMBER. §10.1.9.2 OrdinarySetWithOwnDescriptor step
- * 2.c performs `Receiver.[[DefineOwnProperty]](P, { [[Value]]: V })` once [[GetOwnProperty]] has reported the
- * member writable — a descriptor with a VALUE and no attributes — and quickjs's ordinary define has no
- * `current` to merge it against here, so `cfg.region = "x"` on a member the payload HOLDS would materialise a
- * NON-ENUMERABLE, NON-WRITABLE, NON-CONFIGURABLE slot: the member drops out of Object.keys and the next write
- * to it throws. That is a regression this class's own [[GetOwnProperty]] creates, so this is where it is paid.
+ * Needed by the write path: §10.1.9.2 OrdinarySetWithOwnDescriptor ( obj, propertyKey, value, receiver,
+ * ownDesc ) step 2.h performs `receiver.[[DefineOwnProperty]](propertyKey, valueDesc)` with only a [[Value]],
+ * and without a `current` to merge against, `cfg.region = "x"` on a held member would make it
+ * non-enumerable, non-writable and non-configurable.
  *
- * AND MATERIALISING TAKES THE MEMBER OUT OF THE EXAMPLE, which is the whole of how the two key lists stay
- * disjoint. The example is not a pristine copy of the server's payload — it is the record's CONCRETE STATE,
- * and a page that overwrites a member has changed that state, so the server's byte for it is no longer what
- * the record holds. The removal is an ordinary property delete on the example, so the COW delta captures it on
- * the object that owns the storage and a context switch puts it back, exactly as it does the slot. */
+ * Materialising takes the member out of the example, which keeps the two key lists disjoint. The example is
+ * the record's concrete state, and a page overwriting a member changed it. The removal is an ordinary property
+ * delete, so the COW delta captures it and a context switch restores it with the slot. */
 static int concolic_exotic_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValueConst val,
                                       JSValueConst getter, JSValueConst setter, int flags)
 {
@@ -4565,27 +4169,17 @@ static int concolic_exotic_define_own(JSContext *ctx, JSValueConst obj, JSAtom p
     if (!c || !concolic_exotic_get_own(ctx, &cur, obj, prop))
         return JS_DefineProperty(ctx, obj, prop, val, getter, setter, flags | JS_PROP_NO_EXOTIC);
 
-    /* A STRING EXAMPLE'S OWN MEMBERS ARE NOT MATERIALISABLE AND THE DEFINE IS REFUSED. §10.4.3.2
-       [[DefineOwnProperty]] ( propertyKey, propertyDesc ) step 2 sends a member StringGetOwnProperty answers
-       for to IsCompatiblePropertyDescriptor against that descriptor, which for a non-configurable,
-       non-writable current accepts only a descriptor that changes nothing — and current's [[Value]] here is a
-       freshly minted derived unknown, so no incoming value can be SameValue with it. The refusal is also the
-       only sound answer this class HAS: the write path below materialises a member by deleting it from the
-       example, and there is no character to take out of a String primitive.
-       IT THROWS OR ANSWERS FALSE BY THE CALLER'S RULE, not by this file's. `Object.defineProperty` asks with
-       JS_PROP_THROW and `'use strict'; x[0] = 'z'` with JS_PROP_THROW_STRICT against the running frame, both
-       of which live inside quickjs, so JS_RefuseOrThrowTypeError is the one spelling that answers both — the
-       same edge window.c, storage.c and idl_indexed.c already refuse through.
-       NAMED RESIDUAL — the code is CORRECT for every define that CHANGES something and NARROWER than
-       §10.4.3.2 step 2's compatibility test, which ACCEPTS a define that changes nothing.
-         NOT COVERED: `Object.defineProperty(x, "0", {enumerable: true})` — a descriptor with no [[Value]]
-           restating attributes the member already has, which IsCompatiblePropertyDescriptor answers true for.
-         WHAT THE NEXT DIFF BUILDS: that comparison, over `cur.flags` and the incoming `flags`, accepting only
-           where every field the descriptor STATES already matches current's — which is the same merge the
-           `nf` block below performs for a record's member, read as a test instead of as an assignment.
-         HOW ITS ABSENCE SHOWS: that call throwing a TypeError where a browser returns the object. It cannot
-           show for a define carrying a value, because SameValue against a freshly minted derived unknown is
-           false whatever the page passed. */
+    /* A String example's own members are not materialisable, so the define is refused. §10.4.3.2
+       [[DefineOwnProperty]] ( propertyKey, propertyDesc ) step 2 sends such a member to
+       IsCompatiblePropertyDescriptor, which for a non-configurable, non-writable current accepts only a define
+       that changes nothing, and current's [[Value]] here is a fresh derived unknown no incoming value equals.
+       There is also no character to delete from a String primitive. It throws or answers false by the caller's
+       rule (JS_PROP_THROW, JS_PROP_THROW_STRICT), which JS_RefuseOrThrowTypeError answers.
+       Named residual. Not covered: a define that restates only attributes the member already has
+       (`Object.defineProperty(x, "0", {enumerable: true})`), which IsCompatiblePropertyDescriptor accepts.
+       Next diff: that comparison over `cur.flags` and `flags`, accepting where every stated field matches, the
+       `nf` merge below read as a test. How its absence shows: that call throwing a TypeError where a browser
+       returns the object; never for a define carrying a value. */
     if (JS_IsString(c->example)) {
         JS_FreeValue(ctx, cur.value);
         return JS_RefuseOrThrowTypeError(ctx, flags, "property is not configurable");
@@ -4601,14 +4195,14 @@ static int concolic_exotic_define_own(JSContext *ctx, JSValueConst obj, JSAtom p
     if (!(nf & (JS_PROP_HAS_GET | JS_PROP_HAS_SET))) {
         if (!(nf & JS_PROP_HAS_WRITABLE))
             nf |= JS_PROP_HAS_WRITABLE | (cur.flags & JS_PROP_WRITABLE);
-        /* A define that restates no VALUE keeps current's — `Object.defineProperty(cfg, "region",
+        /* A define that restates no value keeps current's: `Object.defineProperty(cfg, "region",
            {enumerable:false})` must not turn a held member into `undefined`. */
         if (!(nf & JS_PROP_HAS_VALUE)) {
             nf |= JS_PROP_HAS_VALUE;
             val = cur.value;
         }
     }
-    /* OUT OF THE EXAMPLE BEFORE INTO THE SHAPE, so no window exists in which both lists name it. */
+    /* Out of the example before into the shape, so no window exists in which both lists name it. */
     ret = JS_DeleteProperty(ctx, c->example, prop, 0);
     DCHECK(ret > 0, "a member this class reported could not be removed from the example it was read out of — "
                     "the example's own slots are the ones JSON.parse and the reply decoders build, all of them "
@@ -4619,11 +4213,10 @@ static int concolic_exotic_define_own(JSContext *ctx, JSValueConst obj, JSAtom p
     return ret;
 }
 
-/* §10.1.10 [[Delete]] ( propertyKey ) — reached only when the ordinary own-property scan found nothing. The
-   descriptor this class reports is CONFIGURABLE, so §10.1.10.1 step 4 makes a member the example holds one
-   [[Delete]] must actually REMOVE, and the only place it exists is the example. Without this, `delete
-   cfg.region` answered true and Object.keys went on listing `region` — [[Delete]] and [[OwnPropertyKeys]]
-   disagreeing about one record. */
+/* §10.1.10 [[Delete]] ( propertyKey ), reached only when the ordinary own-property scan found nothing. This
+   class reports members as configurable, so §10.1.10.1 OrdinaryDelete ( obj, propertyKey ) step 3 requires a
+   member the example holds to be removed, and the example is the only place it exists; otherwise `delete
+   cfg.region` would answer true while Object.keys still listed `region`. */
 static int concolic_exotic_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
@@ -4633,14 +4226,11 @@ static int concolic_exotic_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
     if (!c || !example_slot(ctx, c->example, prop, &ev, &eflags))
         return 1;   /* nothing there to remove, which [[Delete]] reports as success */
     JS_FreeValue(ctx, ev);
-    /* §10.1.10.1 OrdinaryDelete step 4: a member whose [[Configurable]] is false is not removed and the
-       method answers FALSE. Every own member of a String example is one (§10.4.3.1 step 8, StringCreate step
-       6), and this is asked before the removal below because that removal is a property delete on the example
-       and a String primitive has no property to delete — `delete x[0]` would otherwise reach JS_DeleteProperty
-       with a non-object and fire the assert written for a frozen record. The answer is a bare false rather
-       than a refusal-or-throw: §13.5.1.2 Runtime Semantics: Evaluation's `delete UnaryExpression` step 4.f —
-       "If deleteStatus is false and ref.[[Strict]] is true, throw a TypeError exception" — is what raises the
-       strict-mode TypeError, from the operator and not from the internal method. */
+    /* §10.1.10.1 step 4: a non-configurable member is not removed and the answer is false. Every own member of
+       a String example is one (§10.4.3.5 step 10, §10.4.3.4 step 8), and a String primitive has no property to
+       delete, so this is asked before the removal below. A bare false, not a throw: §13.5.1.2 Runtime
+       Semantics: Evaluation step 4.f ("If deleteStatus is false and ref.[[Strict]] is true, throw a TypeError
+       exception") raises the strict-mode TypeError from the operator. */
     if (JS_IsString(c->example))
         return 0;
     DCHECK(!JS_IsProxy(c->example),
@@ -4652,58 +4242,30 @@ static int concolic_exotic_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
     return ret;
 }
 
-/* §10.1.1 [[GetPrototypeOf]] ( ) OVER AN UNKNOWN — AND WHY THE ANSWER IS NOT A CONCRETE ONE.
+/* §10.1.1 [[GetPrototypeOf]] ( ) over an unknown, and why the answer is not a concrete one.
  *
- * WHAT THIS CLASS ANSWERED BEFORE THE HOOK EXISTED, AND WHY NOTHING REPORTED IT. A concolic is an ordinary
- * JSObject minted through JS_NewObjectClass, and this class registers no class_proto — so its objects carry a
- * NULL [[Prototype]], which JS_GetPrototype reads straight off the shape and hands the page as JS_NULL. That
- * is a FABRICATION in §Attacker-sources' exact sense: nothing was observed about the value, and `null` is not
- * "unknown", it is the positive claim that this value HAS NO PROTOTYPE. It is also the one answer that makes
- * an ordinary prototype-chain walk THROW instead of fork, so it did not merely mislead a report — it killed
- * the program that would have produced one, and it did so silently, because `null` is a legal answer that no
- * assert anywhere had a reason to question.
+ * This class registers no class_proto, so without this entry its objects would answer JS_NULL: a positive
+ * claim that the value has no prototype, which nothing observed, and the one answer that makes a prototype
+ * walk throw instead of fork. An operator with no concolic arm collapses opacity to its ordinary path's
+ * concrete answer; opacity survives ToNumber, and a chain link is the same rule one internal method over.
  *
- * THE DEFECT SHAPE, which is the part that stays true: an operator with no concolic arm collapses opacity to
- * whichever concrete answer its ordinary path already held. §Solver states the rule for the coercions —
- * opacity survives ToNumber, so control flow keeps forking rather than collapsing to NaN — and a chain link is
- * that same rule one internal method over. `operand_kind` above already records what a prototype walk costs
- * when it does not fork; this is the walk's other half.
+ * The answer is a derivation over the receiver, memoised (see the `proto` field for why holding it matters).
  *
- * THE ANSWER IS A DERIVATION OVER THE RECEIVER, MEMOISED. See the `proto` field for why holding it is not an
- * optimisation: the page can compare two answers, and §10.4.7.2 SetImmutablePrototype ( obj, proto ) step 2
- * compares one of them against a value it was given, so an answer that differs per call is wrong twice over.
+ * It does not terminate on its own, so the link walk's fork lands with it. §7.3.21 OrdinaryHasInstance ( ctor,
+ * instance ) step 6 repeats 6.a "Set instance to ? instance.[[GetPrototypeOf]]()", 6.b "If instance is null,
+ * return false" and 6.c "If SameValue(proto, instance) is true, return true", decided in C with no fork, so a
+ * chain of derived unknowns reaches neither. A real chain is finite of unknown length, so "how long" is a
+ * question asked at the walk, which alone holds `proto`. It has three completions, not two: the chain ends
+ * here, this link is proto, or neither; a boolean would drop the world where `e instanceof Object` is true.
+ * js_instanceof_step declares three.
  *
- * IT DOES NOT TERMINATE ON ITS OWN, WHICH IS WHY THE LINK WALK'S FORK LANDS WITH IT. §7.3.21
- * OrdinaryHasInstance ( ctor, instance )'s step 6 asks instance.[[GetPrototypeOf]]() per link and stops on
- * null or on SameValue — both decided in C, with no fork — so a chain of derived unknowns reaches neither and
- * the walk runs for ever. The truthful model is not an infinite chain: a real chain is FINITE of unknown
- * length, so "how long" is a QUESTION and never a bound, and the question is asked at the walk. It is asked
- * there and not here because only the walk holds `proto`, which is half of what step 6.c compares.
+ * §10.4.7.2 SetImmutablePrototype ( obj, proto ), reached from JS_SetPrototypeInternal, crashes rather than
+ * answering: its step 2 SameValue between two Objects can never hold for a derived `current`, so it would
+ * refuse a write Chrome accepts. No case there is handled correctly, so it is a DCHECK, not a named residual;
+ * it names the ask to build (the same two-completion question as step 6.c).
  *
- * AND THAT QUESTION HAS THREE ANSWERS AND NOT TWO. §7.3.21's step 6 is a Repeat whose body is exactly three
- * steps — 6.a "Set instance to ? instance.[[GetPrototypeOf]]()", 6.b "If instance is null, return false",
- * 6.c "If SameValue(proto, instance) is true, return true" — so one iteration over an unknown link has three
- * feasible completions: the chain ENDS here, this link IS proto, and neither. An earlier statement of this
- * design said "is this link the end?" and therefore "a concolic bool", and a bool is a two-way partition of a
- * three-way question: it names 6.b and 6.c at once and then cannot say which, and a two-arm fork keeping only
- * 6.b DELETES the world in which `e instanceof Object` is TRUE — which on a server-injected record is the
- * world a real session is standing in. The completions had been enumerated from the branch of the text rather
- * than from what the page can observe. js_instanceof_step declares three.
- *
- * THE THIRD DOOR IS §10.4.7.2, reached from JS_SetPrototypeInternal, AND IT CRASHES RATHER THAN ANSWERING.
- * Its step 2 SameValue is a pointer test between two Objects, so a derived unknown as `current` can never
- * satisfy it: `Object.setPrototypeOf` over an unknown would report the write as refused, and its throwing
- * form would raise a TypeError, at a line real Chrome does not refuse at. It is NOT a named residual, and the
- * distinction is this file's own mechanical test rather than a preference — a residual is for code that is
- * CORRECT and narrower, and there is no case that door handles correctly today, so the answer beneath it is
- * WRONG and the rule is that wrong code crashes. Giving this entry an answer is what MADE it wrong: before,
- * the door aborted here on the way past, and a diff that fixes a fabrication must not quietly convert someone
- * else's abort into a plausible answer. The DCHECK now stands at that site, naming the ask to build — the
- * same two-completion question step 6.c asks, with nothing else attached, so it is one ask and not a walk.
- *
- * IT RUNS NONE OF THE PAGE'S CODE, which the entry's contract requires rather than suggests: it is reached
- * from JS_GetPrototype, whose C callers have no flow base to suspend into. The mint is an allocation and a
- * composition; neither calls anything of the page's. */
+ * It runs none of the page's code, as the entry's contract requires: JS_GetPrototype's C callers have no flow
+ * base to suspend into, and the mint is an allocation and a composition. */
 static JSValue concolic_exotic_get_prototype(JSContext *ctx, JSValueConst obj) {
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
 
@@ -4712,21 +4274,18 @@ static JSValue concolic_exotic_get_prototype(JSContext *ctx, JSValueConst obj) {
                       "object answering to it with no record is one this file did not mint");
     if (!c)
         return JS_NULL;
-    /* DERIVED ONCE AND HELD. The operand is the RECEIVER, so the answer's identity is composed from this
-       value's own — which is what makes two asks about one record one question, here and at the outcome seam
-       the link walk asks through. */
+    /* Derived once and held. The operand is the receiver, so the answer's identity is composed from this
+       value's own, and two asks about one record are one question here and at the link walk's seam. */
     if (JS_IsUninitialized(c->proto))
         c->proto = concolic_new_derived(ctx, "[[GetPrototypeOf]]", &obj, 1, JS_UNDEFINED);
-    /* concolic_new_derived answers JS_UNINITIALIZED for exactly one reason — NO operand is unknown — and the
-       operand here is the receiver, which reached this entry through this class's own exotic table. So the
-       sentinel surviving the mint is that dispatch having delivered a value that is not one of ours, and it
-       must be said HERE: JS_GetPrototype's own check would report only that the answer is neither an Object
-       nor null, which is true of the sentinel and names nothing. */
+    /* concolic_new_derived answers JS_UNINITIALIZED only when no operand is unknown, and the receiver reached
+       this entry through this class's own exotic table; said here because JS_GetPrototype's own check would
+       report only that the answer is neither an Object nor null. */
     DCHECK(!JS_IsUninitialized(c->proto),
            "the derivation of an unknown's prototype answered the no-unknown-operand sentinel over a receiver "
            "this class's own exotic table dispatched on");
-    /* A NEW REFERENCE, because [[GetPrototypeOf]] is a spec internal method whose callers own what it returns —
-       JS_GetPrototype's do, and so does §10.4.7.2 step 1's. The memo keeps its own. */
+    /* A new reference: [[GetPrototypeOf]]'s callers own what it returns (JS_GetPrototype's, and §10.4.7.2 step
+       1's). The memo keeps its own. */
     return JS_DupValue(ctx, c->proto);
 }
 
@@ -4738,44 +4297,29 @@ static JSClassExoticMethods g_concolic_exotic = {
     .get_property = concolic_exotic_get,
     .get_prototype = concolic_exotic_get_prototype,
     .has_property = concolic_exotic_has,
-    /* The lookup is a slot read of this value's own example and a derivation composed in this file — no page
-       code, by construction, which is what lets the engine's own accessor walk and its COW slot read run it
-       from C. */
+    /* The lookup is a slot read of this value's own example and a derivation composed in this file, so it runs
+       no page code by construction, which lets the engine's accessor walk and COW slot read run it from C. */
     .get_own_property_no_user_code = true,
 };
 
-/* HOW MANY VALUES THE SOURCE OVERLAY HAS MINTED — see concolic_source_wrap for what the number is for. Reset
-   with the agent, which makes it the AGENT'S number and not one document's.
-   THE SENTENCE HERE PROMISED A GUARANTEE THIS RESET DOES NOT GIVE — that the row is "a fact about ONE
-   document's run", reported "per document", and that "a counter that survived would make the second page in
-   an instance report the first one's reading". The last names as PREVENTED a state the tree exhibits: the
-   second page in an instance arrives through `qjs_join`, which joins a LIVE agent and calls no `_init`, so
-   this counter DOES survive into it and `_sourceReads` DOES sum both documents. That is correct — an instance
-   is an origin-keyed agent cluster — and it is the reading the retired sentence denied. It is rewritten here
-   rather than dropped because re-deriving "the report is per document" restores the promise along with it.
-   READ OFF THE CALLS AND NEVER OFF A HOST: `concolic_init` is an agent's bring-up, `qjs_init` refuses a
-   second rooting with an always-fatal `CHECK(g_dom == NULL)`, and the native runner builds one top-level
-   document per process — its cross-origin child is a FORKED process re-executed with `--document`, and its
-   same-origin one is `wpt_child_realm`, which calls no `_init` either.
-   RETIRED BY a second `concolic_init` reached within one agent, or a host that roots two agents in one
-   process; both are one grep (`git grep -n 'concolic_init' -- engine/host`), and either would show as
-   `_sourceReads` FALLING between two `qjs_result` calls of one instance. That boundary and that retirement
-   condition are `_candidates`' and `_absent`'s too — result.c's grouping paragraph derives the whole block.
-   DECLARED HERE, ABOVE ITS FIRST USE, and not beside the overlay flag it belongs with three hundred lines
-   down: `concolic_init` zeroes it, so a declaration after that line does not compile at all. The accessor
-   stays beside the overlay, where the reader looking for "who mints these" will be. */
+/* How many values the source overlay has minted (concolic_source_wrap says what for). Reset with the agent, so
+   it is the agent's number, not one document's: a second page joining a live agent through `qjs_join` calls no
+   `_init`, so `_sourceReads` sums both documents, which is right for an origin-keyed agent cluster.
+   concolic_init is an agent's bring-up: `qjs_init` refuses a second rooting with `CHECK(g_dom == NULL)`, and the
+   native runner builds one top-level document per process (a cross-origin child is a forked `--document`
+   process; a same-origin one is `wpt_child_realm`, which calls no `_init`). A second `concolic_init` within one
+   agent, or a host rooting two agents in one process, would break that, and would show as `_sourceReads`
+   falling between two `qjs_result` calls of one instance; `_candidates` and `_absent` share the boundary
+   (result.c's grouping paragraph). Declared above its first use because concolic_init zeroes it; the
+   accessor stays beside the overlay. */
 static long g_source_reads;
 
 void concolic_init(JSContext *ctx) {
     JSRuntime *rt = JS_GetRuntime(ctx);
-    g_source_reads = 0;   /* the agent's, not one document's: see the counter's declaration above */
-    /* THE WHOSE-MASK HOLDS ONE BIT PER DECLARED MEMBER AND THE RECORD'S FIELD IS WHAT BOUNDS HOW MANY THERE
-       MAY BE — asserted where both are in one hand, because a member added past the width of that field would
-       shift a bit out and answer NO for a provenance a mint had stated. The failure would be silent and in the
-       direction §What-the-tool-produces' bar reads as a positive claim: the member that fell off is the one
-       whose rows stop being distinguishable from every other. It is checked at init rather than at the mint so
-       the cost is once per agent and the report names the LIST rather than whichever value happened to be
-       minted first. */
+    g_source_reads = 0;   /* the agent's, not one document's: see the counter's declaration */
+    /* The whose-mask holds one bit per declared member, and the record's field bounds how many there may be: a
+       member past its width would shift out and answer no for a provenance a mint stated. Checked once per
+       agent, where both are in hand. */
     DCHECK(CONCOLIC_WHOSE_COUNT <= (int)(sizeof(unsigned) * 8),
            "concolic.h's CONCOLIC_ROOT_WHOSE declares more members than the Concolic record's `root_whose` "
            "mask has bits — the member past the width would shift out, so concolic_root_whose_any would answer "
@@ -4793,28 +4337,16 @@ void concolic_init(JSContext *ctx) {
     }
 }
 
-/* THE HOLDER'S END OF THE SOURCE REGISTRY — solver/engine.h's release column, run after the whole platform.
+/* The holder's end of the source registry: solver/engine.h's release column, run after the whole platform.
  *
- * THE ROWS ARE NOT FREED HERE. Each is a CLAIM whose claimant gives it back at its own release, and every one
- * of those releases is a row on core/platform.h's third column — which platform_agent_free runs BEFORE the
- * solver's. So an empty registry here is a checked statement about the CLAIMANTS, and a non-empty one names
- * the one that did not finish rather than leaving a strdup'd row that answers a later agent's delivery
- * question for a document that no longer exists.
+ * The rows are not freed here. Each is a claim its claimant gives back at its own release, on core/platform.h's
+ * release column, which platform_agent_free runs before the solver's, so an empty registry here is a checked
+ * statement about the claimants. The assert names the component from the row, so this file names nobody.
  *
- * IT NAMES THE COMPONENT OUT OF THE DATA, which is the whole reason the row carries its claimant. The obvious
- * message here lists the claimants and how many rows each owes, and that list is the stale-`DFAIL` failure
- * mode CLAUDE.md describes: it stays true about the CONTRACT and goes wrong about THIS TREE the first time a
- * component is added, renamed or moved, while reading as authoritative to whoever the abort sends looking. The
- * row knows who owns it, so the assert reads it and this file names nobody.
- *
- * WHAT THIS OWNS IS THE ARRAY UNDER THEM, and it is freed rather than merely emptied. They are two different
- * facts: `g_srcs_n` is what every lookup reads, and `g_srcs`/`g_srcs_cap` is a plain `malloc`'d buffer that no
- * detector this tree has can see — not gc_obj_list (not a GC object), not the atom walk (not an atom), not
- * JS_DUMP_LEAKS's malloc_count (it counts js_malloc_rt). A release that reset the count and kept the buffer is
- * exactly the fetch_free shape core/agent_state.h records, one layer down: the next agent's first declaration
- * grows a capacity a dead runtime's reclaim allocator sized. The COUNT goes with the buffer for a harder
- * reason than symmetry — a release build compiles the assert above out, and a count left standing over a freed
- * array is a use-after-free at the next lookup rather than a leak. */
+ * The array under them is this component's and is freed, not merely emptied: `g_srcs` is a plain malloc no
+ * leak detector here sees (not a GC object, not an atom, not counted by JS_DUMP_LEAKS's js_malloc_rt count),
+ * and a kept buffer would be sized by a dead runtime's reclaim allocator. The count goes with it because a
+ * release build compiles the assert out, and a count over a freed array would be a use-after-free. */
 void concolic_free(void)
 {
     int i;
@@ -4830,10 +4362,10 @@ void concolic_free(void)
     free(g_srcs);
     g_srcs = NULL;
     g_srcs_n = g_srcs_cap = 0;
-    /* THE INSTALLED @S SUBSTITUTION IS THIS COMPONENT'S OWN COPY, not the flow's. concolic_set_candidate strdups
-       both halves out of the running flow at every switch, so the last flow to run leaves a pair behind that
-       the frontier's own release cannot reach — flow_registry_free frees the FLOW's strings, which were never
-       these. Freed rather than asserted null, because nothing orders the last switch against this call. */
+    /* The installed @S substitution is this component's own copy: concolic_set_candidate strdups it from the
+       running flow at every switch, so the last flow leaves a pair that flow_registry_free (which frees the
+       flow's strings) cannot reach. Freed, not asserted null, since nothing orders the last switch against
+       this call. */
     free(g_cand_src);
     free(g_cand_payload);
     g_cand_src = g_cand_payload = NULL;
