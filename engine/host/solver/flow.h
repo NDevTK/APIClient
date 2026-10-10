@@ -612,411 +612,183 @@ JSValue flow_world_commit_fork(JSContext *ctx, const Flow *parent);
  * against, so the two always cover one document. */
 long    flow_world_commit_rows_written(void);
 
-/* THIS FLOW'S JOB QUEUE, AND EVERYTHING THAT EVER HAPPENS TO IT — declared beside the field for the reason the
- * delivery queue's four are: the queue has MORE THAN ONE client (engine.c enqueues, picks and drops; cold.c
- * counts) and a second client reading the Array's shape is always the one missing the assert. A record is
- * never edited after it is pushed, which is what lets a fork SHARE the entries and hand each arm its own Array.
- *
- * WHAT A RECORD IS, and why each part of it is there:
- *   - THE CALLEE, NAMED. A JSJobFunc is a static of the interpreter (promise_reaction_job,
- *     js_promise_resolve_thenable_job, js_dynamic_import_job, and host_call_job for every platform edge), so
- *     the host cannot enumerate them and names them by ARRIVAL instead — an ordinal into a table this file
- *     keeps. The point is not that the ordinal is portable (it is NOT: it is minted in arrival order within
- *     one session, which is the session-local-name defect cold.c refuses for a rendezvous token and for a
- *     WorldId generation), it is that NOTHING IN THE RECORD IS A POINTER. What a park would still have to
- *     write is then a NAME, and the reason it cannot is the next line rather than this one.
- *   - THE ARGUMENTS, as ordinary elements. This is what a park cannot carry and what makes the queue
- *     un-parkable today: a promise reaction's arguments ARE the reaction's capability functions, a delivered
- *     message's are the event init record holding a WindowProxy, and none of them has an identity outside this
- *     session — the same sentence cold.h writes about the pending register's `resolve`. A replay regenerates
- *     them for every job whose CAUSE is inside the replayed program, which is all of them except one; see
- *     cold_park_flow for the exception and for what closes it.
- *   - THE ENQUEUING REALM'S GLOBAL OBJECT, which is the key HTML §7.5.10 "Destroying documents"'s destroy a
- *     document step 5 uses: a task whose document has been destroyed is removed WITHOUT running. It is the
- *     realm's global rather than its JSContext* because the record must hold no pointer, and holding it as
- *     a REFERENCE also closes what the borrowed pointer left open — a realm freed without the drop hook
- *     running left every job of it holding a dangling key the next §7.5.10 walk would compare against.
- *   - WHETHER IT IS A TASK, which is not a label: the event loop performs a microtask checkpoint between one
- *     task and the next, so a task may not run while this flow still holds a microtask.
- *   - ITS HANDLE — the name the RUNTIME issued at the enqueue (quickjs.h's JSTaskHandle), which is the only
- *     thing that can find this record again. HTML's toggle task trackers (§4.11.4 "The dialog element" step 1
- *     of queue a dialog toggle event task: "Remove element's dialog toggle task tracker's task from its task
- *     queue"; §4.11.1 "The details element" holds the same tracker) coalesce N transitions in one turn into
- *     ONE event by taking the still-queued task back off the queue, and a queue whose entries have no identity
- *     cannot obey that sentence. HELD AS A JS NUMBER, which is exact for every handle a runtime can issue:
- *     js_task_handle_new DCHECKs the monotone counter never reaches 2^53 precisely because the OTHER end of
- *     this name is an element's tracker slot, and a slot is a JS value. So the record and the tracker speak
- *     one representation with no conversion between them that could round. The alternatives were weighed and
- *     are worse for reasons that are not taste: a STRING allocates at every push and compares by content at
- *     every walk, for a value that is an integer; a TWO-WORD PAIR adds a split/join rule to every reader of
- *     the record to cover a range the runtime asserts is unreachable — a rule with no reachable input is a
- *     rule nothing can exercise. JS_TASK_HANDLE_NONE is the never-issued value and is what a record pushed by
- *     something other than the runtime's enqueue path honestly carries; it names nothing, so nothing finds it.
- *   - WHEN IT ARRIVED, on the ONE clock this flow's program sequence is also stamped by (`dyn_run`, and
- *     flow.c's g_work_seq). This is the field flow_step's task ladder compares, and it is what turns
- *     HTML §8.1.7.3 "Processing model" step 2.1's choice of queue from an ARM ORDER into a fact about the
- *     work:
- *     §8.1.7.1 "Definitions" partitions tasks by SOURCE and a flow's arrays partition them by CARRIER, so
- *     any order taken over the carriers starves whichever one is below and cannot order a source that landed
- *     in both. Over arrival neither is possible — the set of items older than a given one is fixed at its
- *     birth, and within one source arrival order IS queue order. HELD AS A JS NUMBER for the HANDLE bullet's
- *     reason and read through the same accessor, which asserts the round trip: a stamp that stopped being
- *     exact would order two work items by a value that is neither one's arrival.
- *   - WHERE THE WORK CAME FROM. A job the replaying program causes is regenerated by the replay; a job caused
- *     by something OUTSIDE it is not, and the only such job in this engine is the one a routed cross-document
- *     delivery becomes (engine.c's flow_deliver, which brackets the conversion with flow_job_external_begin /
- *     _end). Recorded at the push, so an entry stays immutable, and read only by the park.
- *
- * Every mutation runs inside cow_engine_write_begin/end, for pending.h's reason exactly: this is the
- * SCHEDULER's record about a flow rather than state a page wrote, and it is mutated from inside whichever
- * flow's delta happens to be applied — a routed delivery and engine_unload_document's fan-out both push onto
- * a queue that is NOT the running flow's. A delta that captured any of it would put a dropped job back on the
- * queue, or take a pushed one off it, the moment a sibling switched in. */
+/* This flow's job queue and every operation on it, declared beside the field because engine.c enqueues, picks
+ * and drops while cold.c counts, and one owner keeps the shape assert. A record is never edited after it is
+ * pushed, so a fork shares the entries and hands each arm its own Array. A record holds no pointer:
+ *   - the callee, named by an arrival ordinal into a table this file keeps, because a JSJobFunc is a static of
+ *     the interpreter (promise_reaction_job, js_dynamic_import_job, host_call_job, …). The ordinal is
+ *     session-local, so it is not yet parkable;
+ *   - the arguments, as ordinary elements. They have no identity outside this session (a reaction's capability
+ *     functions, an event init holding a WindowProxy), which is what keeps the queue un-parkable; a replay
+ *     regenerates every job whose cause is inside the replayed program (see cold_park_flow for the exception);
+ *   - the enqueuing realm's global object, the key of HTML §7.5.10 "Destroying documents" step 5 (a task whose
+ *     document was destroyed is removed without running), held as a reference so a freed realm cannot dangle;
+ *   - whether it is a task: the event loop performs a microtask checkpoint between tasks;
+ *   - its JSTaskHandle, the runtime's name for it, held as a JS number (js_task_handle_new asserts < 2^53) so it
+ *     matches an element's tracker slot exactly; JS_TASK_HANDLE_NONE names nothing;
+ *   - its arrival stamp on the clock `dyn_run` shares (g_work_seq), as a checked JS number;
+ *   - whether it came from outside the replayed program (flow_job_external_begin/end). */
+/* Mutations run inside cow_engine_write_begin/end for pending.h's reason: this is the scheduler's record about a
+ * flow, and a routed delivery or engine_unload_document's fan-out pushes onto a queue that is not the running
+ * flow's, so a captured delta would restore a dropped job or remove a pushed one at a switch. */
 int  flow_job_pending(const Flow *f);
-/* DOES IT STILL HOLD A MICROTASK? The checkpoint is over exactly when it does not — a task on the queue is the
-   NEXT turn of the event loop and not part of this checkpoint, which is the same distinction the pick makes. */
+/* Does it still hold a microtask? The checkpoint ends when it does not; a queued task is the next turn of the
+   event loop, not part of this checkpoint. */
 int  flow_job_microtask(const Flow *f);
-/* AND HOW MANY OF EACH KIND — the same walk, counting rather than short-circuiting. BOTH halves are returned
-   because the reading is a PARTITION: a half derived by subtracting the other from `flow_job_pending` makes
-   the identity that states it an assertion whose two sides cannot disagree. See the `jobs_ready_task` bullet
-   below for what the pair answers and why it is asked of admitted members only. */
+/* How many of each kind. Both halves are returned, because deriving one by subtracting the other from
+   flow_job_pending would make the partition identity unfalsifiable. See the census's `jobs_ready_task`. */
 void flow_job_kinds(const Flow *f, int *task_out, int *micro_out);
-/* APPEND, with `argv` dup'd into the record. `task` picks which of HTML §8.1.7 "Event loops"' two queues.
-   `handle` is the name the runtime issued for this callback (see the record's HANDLE bullet above), carried
-   into the record because the host that TOOK the job is then the only thing that can find it again. */
+/* Append, with `argv` dup'd into the record. `task` picks which of HTML §8.1.7 "Event loops"' two queues.
+   `handle` is the runtime's name for the callback, so the host that took the job can find it again. */
 void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueConst *argv, int task,
                    JSTaskHandle handle);
-/* THE NEXT ARRIVAL STAMP — one monotone counter for the instance, issued to BOTH of a flow's task carriers:
-   a `jobs` record takes one at flow_job_push, a `dyn` row takes one as its `dyn_run` (and a second, at the
-   same creation, as the NAME `dyn_id` that never moves). See flow.c's g_work_seq
-   for why the two must share a clock and why an order over arrival is the one order §8.1.7.1 "Definitions"
-   and §8.1.7.3 "Processing model" step 2.1 admit that no page can starve. It is NOT a bound and nothing
-   branches on its VALUE — only two stamps are ever compared with each other. */
+/* The next arrival stamp: one monotone counter per instance, issued to both of a flow's task carriers (a `jobs`
+   record at flow_job_push; a `dyn` row's `dyn_run`, and its `dyn_id` at creation). flow.c's g_work_seq says why
+   the two share a clock: an order over arrival is the one §8.1.7.1 "Definitions" and §8.1.7.3 "Processing
+   model" step 2.1 admit that no page can starve. Not a bound; only two stamps are ever compared. */
 uint64_t flow_work_seq_next(void);
-/* DOES THIS FLOW HOLD A TASK OLDER THAN THE ROW AT ITS CURSOR — §8.1.7.3 step 2.1's choice, asked by
-   flow_step's ladder and answered from the stamps rather than from which array holds what. `row_seq` is the
-   cursor row's `dyn_run` — its arrival as a RUNNABLE work item and never its NAME, which for a row whose
-   bytes came back late is a far older number and was what excluded every job of a real page's flow (see
-   `dyn_run`). The caller reads it because only the caller has established there IS a row (the sequence arm's
-   `seq_compiles`). Answers 0 whenever no task may begin at all — a DYN_POS_IMMEDIATE row at
-   the cursor, an outstanding microtask, an empty queue — each of which is a rule of the standard rather than
-   a guard, and each of which is argued at the definition. */
+/* Does this flow hold a task older than the row at its cursor? §8.1.7.3 step 2.1's choice, answered from the
+   stamps. `row_seq` is the cursor row's `dyn_run` (its arrival as a runnable item, never its name); the caller
+   passes it because only the caller has established that a row exists (`seq_compiles`). Answers 0 when no task
+   may begin: a DYN_POS_IMMEDIATE row at the cursor, an outstanding microtask, or an empty queue. */
 int flow_task_precedes(const Flow *f, uint64_t row_seq);
-/* THE PICK, WHICH IS HTML §8.1.7.3 "Processing model"'s MICROTASK CHECKPOINT AND NOT A FIFO POP — the
-   oldest microtask if there is one, else the oldest task. Removed from the queue and returned OWNED; a plain
-   FIFO ran `setTimeout(f, 0)` in the middle of a promise chain, which is the one ordering the event loop
-   exists to forbid. */
+/* The pick, which is HTML §8.1.7.3 "Processing model"'s microtask checkpoint and not a FIFO pop: the oldest
+   microtask if there is one, else the oldest task. Removed from the queue and returned owned. */
 JSValue flow_job_take(JSContext *ctx, Flow *f);
-/* RUN ONE — the callee called with its own arguments. The record's shape has exactly one reader and this is
-   it, so a caller holds an opaque entry and never an argument vector. Returns the callee's result, owned. */
+/* Run one entry: the callee called with its own arguments. The record's only reader, so callers hold an opaque
+   entry. Returns the callee's result, owned. */
 JSValue flow_job_run(JSContext *ctx, JSValueConst entry);
-/* HTML §7.5.10 "Destroying documents", destroy a document step 5, for ONE flow: remove every job whose
-   enqueuing realm is `realm`, WITHOUT running it.
-   Returns how many went. */
+/* HTML §7.5.10 "Destroying documents", destroy a document step 5, for one flow: remove every job whose
+   enqueuing realm is `realm`, without running it. Returns how many went. */
 int  flow_job_drop_realm(JSContext *ctx, Flow *f, JSContext *realm);
-/* THE OTHER REMOVAL — BY NAME rather than by document, for ONE flow: take the job called `handle` off this
-   flow's queue WITHOUT running it, and answer whether one was there (0 or 1). This is quickjs.h's
-   JSJobRemoveHook for a host that took ownership of the job, and the one it exists for is HTML §4.11.4 "The
-   dialog element"'s "Remove element's dialog toggle task tracker's task from its task queue".
-   FINDING NOTHING IS AN ORDINARY ANSWER and the reason the name is a monotone integer nobody re-issues: the
-   task may already have run, may be the one running right now, or may have gone with its document — a handle
-   outlives what it names, so 0 is what "already run" means and is never an error.
-   IT IS ASKED OF ONE FLOW, AND THAT IS A DESIGN STATEMENT rather than a convenience — see the caller in
-   engine.c: a fork gives each arm its own Array naming the SAME records, so after a branch two flows hold two
-   queued copies of one handle. Each arm's tracker names the copy in its own timeline. */
+/* Remove the job named `handle` from this flow's queue without running it; returns 0 or 1. This is quickjs.h's
+   JSJobRemoveHook for a host that owns its jobs, used by HTML §4.11.4 "The dialog element"'s "Remove element's
+   dialog toggle task tracker's task from its task queue". Finding nothing is ordinary: the task may have run, be
+   running, or have gone with its document. Asked of one flow because after a fork each arm holds its own queued
+   copy of one handle, and each arm's tracker names the copy in its own timeline. */
 int  flow_job_remove(Flow *f, JSTaskHandle handle);
-/* THE ARM'S OWN QUEUE — a new Array naming the parent's RECORDS. The array is per-flow (each arm runs its jobs
-   at its own rate under its own delta); the records are shared, because none of them ever changes. */
+/* The arm's own queue: a new Array naming the parent's records, which are shared because none ever changes. */
 JSValue flow_job_fork(JSContext *ctx, const Flow *parent);
-/* THE WORK THIS FLOW'S QUEUE HOLDS THAT A REPLAY WOULD NOT RE-CAUSE — see the record's last bullet. Read by
-   the park, which may not write it down and may not silently drop it either. */
+/* How much of this flow's queue a replay would not re-cause. Read by the park, which may neither write it down
+   nor silently drop it. */
 int  flow_job_external(const Flow *f);
-/* THE BRACKET THAT MARKS IT. Everything enqueued between these two calls came from outside the replayed
-   program. Nests nowhere: a delivery is made from flow_step with no frame, so no second conversion can be in
-   flight, and that is asserted rather than counted. */
+/* Bracket marking work enqueued from outside the replayed program (engine.c's flow_deliver). Never nested: a
+   delivery is made from flow_step with no frame, which is asserted. */
 void flow_job_external_begin(void);
 void flow_job_external_end(void);
 
-/* HOW MANY CROSS-AGENT OPERATIONS THIS FLOW HAS BEEN ASKED AND NOT YET STARTED — the length of `perform_q`,
-   asked here rather than read at the call sites so the queue's shape has one reader. 0 for the JS_UNDEFINED an
-   untouched flow carries, which is nearly all of them, so the scheduler's pick stays a tag test. */
+/* How many cross-agent operations this flow has been asked and not yet started: the length of `perform_q`,
+   with one reader of its shape. 0 for an untouched flow, so the scheduler's pick stays a tag test. */
 int flow_perform_pending(const Flow *f);
 
-/* DOES THIS FLOW STILL OWE A PEER AN ANSWER — asked of the QUEUE and of the PROGRAM ROWS together, because an
-   operation is in one or the other from the moment it arrives until its program's completion is sent. Both
-   halves are load-bearing and neither alone is the invariant: an entry still queued is a question nobody has
-   performed, and a row still holding a token is a question performed and never answered. Every site that ends
-   a flow reads this, because a token that dies with the flow is a flow in ANOTHER instance suspended at the
-   line that asked, forever, and nothing on this side would ever say so. */
+/* Does this flow still owe a peer an answer? Asked of the queue and the program rows together, because an
+   operation is in one or the other from arrival until its completion is sent: a queued entry is unperformed,
+   and a row holding a token is performed and unanswered. Every site that ends a flow reads it, because a token
+   that dies with the flow leaves a flow in another instance suspended forever. */
 int flow_owes_answer(const Flow *f);
 
 /* The WFQ priority of a flow (higher = run sooner). Pure function of the flow's reward/aging/visit state. */
 double flow_weight(const Flow *f);
 
-/* §scheduler'S REWARD TERM AS THE ORDER READS IT — this flow's FORK FAMILY's accumulated emitted value, not the
- * member's own `val`, which ranks nothing (see the field). It is exported because two consumers outside flow.c
- * have to name the quantity flow_weight is actually a function of and the family node is private to that file:
- * the scheduler's ranked-state cache, which asserts that the value yield only fires when a term of the weight
- * MOVED — a cache keyed on the member's own ledger would go on agreeing while the rank changed underneath it —
- * and the cold tier, whose recipe carries (path, reward) across a session and must carry the reward the
- * resumed frontier will be ordered by. Departed flows read 0.0: their account is gone and so is their rank. */
+/* The reward term as the order reads it: this flow's fork family's accumulated emitted value, not the member's
+ * own `val`. Exported because the family node is private to flow.c and two consumers must name the quantity
+ * flow_weight depends on: the scheduler's ranked-state cache, which asserts that the value yield fires only
+ * when a weight term moved, and the cold tier, whose recipe carries (path, reward). Departed flows read 0.0. */
 double flow_reward(const Flow *f);
 
-/* …AND THE ONE WRITER OF IT THAT IS NEITHER AN EMISSION NOR AN ARRIVAL — the cold tier's rebuild, REPLACING
- * the account a from-baseline flow was placed at with the one the session that parked it wrote down. A resumed
- * member is not a newcomer, so it does not enter at the frontier's virtual time; it comes back at its own.
- * It is not exported for anyone else: a caller that wanted to SET a reward wants flow_credit_emit, which is a
- * ledger entry and is paid once per observation. See flow.c. */
+/* The cold tier's rebuild only: replace the account a from-baseline flow was placed at with the reward the
+ * parking session wrote down, so a resumed member returns at its own coordinate rather than the frontier's
+ * virtual time. Anyone else wanting to raise a reward wants flow_credit_emit, a ledger entry. */
 void flow_restore_reward(Flow *f, double val);
 
-/* THIS FLOW COMPLETED A UNIT OF WORK — the optimism term's "visit", credited by the scheduler at the ONE point
- * that can see the whole of a step: after flow_step returns, when the flow is left BETWEEN units. It is a
- * scheduler statement rather than a flow_step one because flow_step returns from a dozen arms and half of them
- * leave the flow suspended in the middle of a program, which is not a completed trial; the caller already
- * computes that predicate for HTML §8.1.7.3 "Processing model"'s end-of-checkpoint steps and this is the same
- * boundary. Asserted at its site: a flow inside a program may not be credited one, because the whole reason the
- * term is a unit count is that thread time inside a program is exactly what it must NOT measure. */
+/* This flow completed a unit of work: the optimism term's visit. Credited by the scheduler after flow_step
+ * returns, the one point that sees whole steps, when the flow is left between units (the same boundary as
+ * HTML §8.1.7.3 "Processing model"'s end-of-checkpoint steps). Asserts the flow is not inside a program, since
+ * thread time inside a program is what the term must not measure. */
 void flow_credit_visit(Flow *f);
 
-/* THE SCHEDULER HANDED THIS MEMBER THE THREAD — the one writer of `picks` (see the field for why a DISPATCH
- * count is the only statement about a member that an emission cannot erase). It is credited at the single
- * point every dispatch converges on, the context switch itself, so a new call shape cannot forget to route:
- * there is no route to remember. A member that keeps the thread across consecutive steps is credited ONCE,
- * which is what the row is about — `picks == 0` is "never chosen", not "not chosen lately". */
+/* The scheduler handed this member the thread: the one writer of `picks`, credited at the context switch every
+ * dispatch converges on. A member keeping the thread across consecutive steps is credited once, so
+ * `picks == 0` means never chosen. */
 void flow_credit_pick(Flow *f);
 
-/* WHAT THE ORDERING IS MADE OF — the census that turns "the WFQ's value ordering" from a claim into a number.
+/* The census of what the ordering is made of. flow_weight is reward + optimism - aging, and the optimism term's
+ * whole range is 1.0 (one emission), so a member a point below another in reward is outranked however long it
+ * waits, until aging (FLOW_AGE_RATE per microsecond of silence) brings the top down. The reward spread therefore
+ * decides whether the optimism term can still order anything; this struct measures it and the other terms.
  *
- * The engine already reports how much work is happening (@PROGRESS's switches/forks) and how much of it
- * RETIRES (@COLD's `finished`), and a run in which both climb while the fixture's own probe table stops
- * advancing is a run in which every member of the frontier is doing something that emits nothing. Neither
- * stream can say WHY, because neither reads either term the pick is made of, and the shape of the question is
- * specific: flow_weight is reward + optimism − aging, and THE OPTIMISM TERM'S ENTIRE RANGE IS 1.0 — one
- * emission. A member whose reward is a point below another's is therefore outranked no matter how long it has
- * waited, and it is reached only by the aging term, which gives back FLOW_AGE_RATE per microsecond the other
- * flow AND its chain burn without emitting. The reward SPREAD over the frontier is the whole of whether the
- * optimism term can still order anything, and nothing measured it.
+ * Read the populations precisely: `val_zero` (family reward exactly 0) is empty inside a busy period by
+ * construction, because an unplaced from-baseline account's reward is the frontier's virtual time (flow.c's
+ * FlowAcct `placed`) until it is first served. The members that earned none of their rank are
+ * `members - self_emit`. Within one family that count describes the document's branching; with `families > 1`
+ * and a reward spread it is one account outranking another whose members cannot act.
+ * The weights themselves are reported (`w_top` and the gaps), since the order is their sum.
  *
- * `val_zero` NAMES A POPULATION THE ARRIVAL RULE DELETED, AND THE ROW IS KEPT PRECISELY TO SAY SO. It used to
- * be the from-baseline population — a candidate session, a joined document's boot flow, the first flow — on
- * the reasoning that such a flow "enters at reward 0 (flow_add's zeros), so its weight is at most 1.0 for its
- * whole life". That stopped being true the moment flow.c's arrival rule stopped writing a zero there, and the
- * mechanism has since been corrected once more in a way this row must not be read against the old version of:
- * the arrival ASSIGNS NOTHING AT ALL now. A from-baseline flow founds an account that is UNPLACED, and an
- * unplaced account's reward IS the frontier's virtual time (flow.c's FlowAcct `placed`), re-read at every
- * pick until the dispatch that first gives it the thread freezes it. So such a flow does not merely enter at
- * the incumbent's reward — it STAYS at the frontier's clock until it is served, which is the difference
- * between a one-time copy and a relation and is why this row cannot be non-zero for a member the order is
- * holding. So inside a
- * busy period this row is 0 BY CONSTRUCTION — it can be non-zero only before the first pick, where SFQ's v(0)
- * is 0 — and a reader that tests it for "is there a population down at the bottom" is testing for a set the
- * arrival rule made empty. That is not a hypothetical reading. The pairing this file cites the other way round
- * one screen up (`valZero:12` beside `cands:12`, the twelve candidate sessions that were never picked) reads
- * `valZero:0` beside `cands:2997` on that same fixture now, with the reward SPREAD at 168 points and every
- * other term's range at or below 1.0 — so the one discriminator that could have named the reward term as the
- * order was permanently false on the run where it was the answer.
- *
- * THE POPULATION IS `members - self_emit` INSTEAD, and the two rows are not interchangeable. That difference
- * is how many members have earned NONE of the reward they are ranked on, and it is what a reader wants when it
- * asks WHOSE reward the order is. A candidate is in that set for the reason it used to be in `val_zero`'s: it
- * records no endpoints by design (endpoint_suppress), so the only thing that can raise its account above what
- * it was placed at is the very sink it is trying to reach.
- * AND IT MEANS SOMETHING DIFFERENT NOW THAT THE REWARD IS THE FORK FAMILY'S, WHICH IS WORTH SAYING BECAUSE THE
- * ROW READS THE SAME. It used to say how much of the order was INHERITANCE — every arm holding a copy of a
- * prefix nobody standing there had earned — and a high count was the ordering defect itself. Held on the
- * account, the reward is no longer copied to anybody, so a member that has emitted nothing is not carrying a
- * rank it did not earn; it is standing in a family that did. The count is then a fact about the DOCUMENT's
- * branching rather than about the scheduler: how many live arms one producing account is spread over. What
- * makes it a finding again is the pairing — `members - self_emit` at the whole frontier WITH `families > 1`
- * and a reward spread, which is one account outranking another while none of the second's members can act.
- *
- * AND IT REPORTS THE WEIGHTS THEMSELVES, which is a reversal of what this comment used to say. It said the
- * census "calls flow_weight for nothing at all — it reports the two terms, never their sum", on the reasoning
- * that the terms are what a rank is MADE of. The terms are; the ORDER is the sum, and leaving the sum out
- * meant every reading of this census had to re-derive flow_weight by hand from `val` and a service notch. That
- * is not a theoretical cost: a reading of `valMax - valMin > 1` was taken here as "the reward term is ordering
- * the frontier" on a run whose `valTop` was 0.0 — the spread existed and was not what the pick read, and the
- * arithmetic that would have shown it (a val=3 member at 448 notches is at weight -2.37, below a from-baseline
- * flow at 1.0) was done by hand, three exchanges later, by someone who already had both terms in front of them.
- * The sum the pick actually uses is one call per member and it removes the re-derivation entirely.
- *
- * PURE MEASUREMENT: one scan, no reference taken, nothing mutated — safe between scheduler steps, which is
- * where the progress stream asks it. It decides NOTHING; every member keeps its weight and its place. */
+ * Pure measurement: one scan, no reference taken, nothing mutated, safe between scheduler steps. It decides
+ * nothing. A single sample characterises an instant, never a run. */
 typedef struct {
     long members;      /* live members of the frontier — the denominator for every count below */
-    /* THE REWARD TERM'S RANGE OVER THE FRONTIER. A spread above 1.0 is the statement that the optimism bonus
-       can no longer reorder its ends — its entire range is one emission, and it must stay that way or a
-       PROMISE outweighs a FINDING (flow.c's flow_distance says the same of the fitness comparator).
-       AND AGING DOES NOT "REACH THE BOTTOM", WHICH IS WHAT THIS ROW USED TO SAY. The aging is a charge for
-       thread time CONSUMED, so it is subtracted from the flow being SERVED and from the family serving it: it
-       cannot lift a member that consumes nothing, and the bottom of a frontier is made of exactly those. The
-       ends therefore meet only by the TOP coming down, which is a derived quantity and not a property of the
-       term — `(val_top - val_min + 1) / FLOW_AGE_QUANTUM` quanta of silence, counted as the top's own service
-       plus its FAMILY's since any arm of that family last emitted (flow_silence_notch), and reset to zero by
-       every one of those emissions (flow_credit_emit). So on a frontier whose leading family is still
-       emitting there is no spread at which the two ends converge, and reading this row as "aging will get
-       there eventually" is reading a term that only ever pushes the tail further away. WHAT THE ORDER IS
-       ACTUALLY MADE OF is then this spread against `self_emit`: flow.c's flow_nonreward BOUNDS every term of
-       the order except the reward, so the reward gap is the only quantity that can put a never-run member
-       behind the flow the pick returns, and `self_emit` says whether that gap is something the members earned
-       or something they were handed. The bound is asked of ONE member rather than of a pair — flow_pick's
-       comment says why the pair form could not be asked at all once a frontier stopped emitting — so this row
-       is read against a claim that holds on every frontier and not only on a freshly productive one.
-       IT IS THE FORK FAMILY'S REWARD, READ PER MEMBER, AND THAT IS WHAT THE SPREAD NOW MEANS. The reward is
-       held on the account the aging is charged to (flow.c's FlowAcct `val`), so every arm of one family reads
-       one number and a frontier that is ONE family — which a real page's is, every flow descending from the
-       boot flow — has a spread of exactly ZERO here whatever it does. That is not the row going blind; it is
-       the row saying that within a family the guarantee flow_pick's third assertion is tight in holds
-       outright, because the gap it is tight in is identically zero. A NON-ZERO spread is therefore a statement
-       about several ACCOUNTS — several documents, several @S searches, a resumed frontier's rebuilt recipes —
-       and is read beside `families` below, which says how many there are. Read as a per-member reward it was
-       something else entirely: a per-CHAIN prefix, differing between arms by what their common parent emitted
-       between their two branches, unbounded against every other term's range of 1.0, and therefore the whole
-       of the order on exactly the frontier where it named nothing anybody had done. */
+    /* The family reward's range over the frontier, read per member. A spread above 1.0 means the optimism bonus
+       can no longer reorder its ends. Aging is subtracted only from the flow being served and its family, so it
+       cannot lift a member that consumes nothing: the ends meet only by the top coming down, after
+       `(val_top - val_min + 1) / FLOW_AGE_QUANTUM` quanta of the top's own plus family silence
+       (flow_silence_notch), which every emission of that family resets.
+       flow.c's flow_nonreward bounds every other term, so the reward gap is the only quantity that can put a
+       never-run member behind the pick's choice; read it against `self_emit`. A one-family frontier has a
+       spread of exactly zero, so a non-zero spread is a statement about several accounts (documents, @S
+       searches, resumed recipes), read beside `families`. */
     double val_min;
     double val_max;
     double val_top;    /* …and flow_best's family's, so the top of the order is named rather than inferred */
-    /* THE FRONTIER'S VIRTUAL TIME AT THE INSTANT OF THE CENSUS — flow.c's `g_vt`, SFQ's v(t), which is the
-       queue coordinate of the item in service and therefore the coordinate every account that has never been
-       served is standing at. It is NOT a reading of the walk and is assigned unconditionally, like
-       `nonreward_max` beside it, so an empty frontier reports the clock rather than a zero that would read as
-       one.
-       IT IS THE SUBJECT `val_min` HAS ALWAYS BEEN MISSING. A pinned floor is a statement about the clock or
-       about the members, and which one it is cannot be recovered from the floor alone: `val_min` far below
-       `vt` says accounts are being LEFT BEHIND by a clock that has moved on; `val_min` tracking `vt` says the
-       floor is where the queue actually stands. The pair is also the cheapest tell that this quantity has
-       stopped being a clock at all — `vt` above `val_max` is a clock leading a frontier no member is standing
-       at, and `vt` frozen while `val_max` climbs is the one-time copy this row was added to end. */
+    /* The frontier's virtual time at the census (flow.c's `g_vt`, SFQ's v(t)): the coordinate of the item in
+       service and of every never-served account. Assigned unconditionally, so an empty frontier reports the
+       clock. With `val_min` it says whether accounts are left behind (`val_min` far below `vt`) or the floor is
+       where the queue stands; `vt` above `val_max` or frozen while `val_max` climbs means it stopped being a
+       clock. */
     double vt;
-    /* MEMBERS WHOSE FORK FAMILY'S WHOLE REWARD IS ZERO — the population whose weight ceiling is 1.0, which is
-       an ARITHMETIC fact about the reward and is what this row is for. It used to be described as "has emitted
-       nothing" as well, and those were one population until a from-baseline flow started being PLACED at the
-       frontier's virtual time: an arrived account has emitted nothing and holds whatever the leader held, so it
-       is outside this row and inside the next one. Two questions, one bit, and the reward-band verdict needs
-       the other one — see flow.c's FlowAcct for the split that separates them. */
+    /* Members whose fork family's whole reward is zero: the population whose weight ceiling is 1.0. An arrived
+       account has emitted nothing but holds the leader's coordinate, so it is outside this row (see
+       `val_arrived`). */
     long val_zero;
-    /* …AND THE POPULATION THAT ACTUALLY EMITTED NOTHING, which no row could name while the reward was one
-       field. It is `earned == 0` at family scope: members standing entirely on the coordinate their account
-       ARRIVED at, having produced nothing of their own since. That is the @S candidate session, the joined
-       document's boot flow and the cold-resumed recipe — every from-baseline door — and it is exactly the
-       population a pinned `val_min` beside a climbing `val_max` is a statement about. Read it with those two:
-       a large count here whose accounts sit at the FLOOR of the reward band is the arrival coordinate being
-       left behind by accounts that earn past it. THAT SENTENCE USED TO END "and no term of the order
-       re-relates it", and `val_unplaced` below is the row that says whether it still applies to a given
-       reading: the arrival is a CONTINUING relation now (flow.c's FlowAcct `placed`), so an account is held at
-       the clock until it is first served and can be left behind only AFTER that. A large `val_arrived` at the
-       floor with `val_unplaced` at zero is accounts that have been served and out-earned — the bandit working;
-       the same reading with `val_unplaced` large is the relation itself having stopped working, which is a
-       different defect and a different fix. `self_emit` beside it is the same question asked of ONE MEMBER
-       rather than of its account, and the pair separates a family coasting on an ancestor's findings from a
-       family that has none. */
+    /* Members whose account has `earned == 0`: standing on the coordinate it arrived at, having produced nothing
+       since. This is every from-baseline door (the @S candidate session, a joined document's boot flow, a
+       cold-resumed recipe). With `val_unplaced` at zero, a large count at the reward floor is accounts served
+       and out-earned (the bandit working); with `val_unplaced` large it is the placement relation failing.
+       `self_emit` asks the same question of one member rather than its account. */
     long val_arrived;
-    /* …AND THE SUBSET OF THAT POPULATION WHOSE COORDINATE IS STILL A READING OF THE FRONTIER'S CLOCK RATHER
-       THAN A TAG OF ITS OWN — accounts that have never once held the thread (flow.c's FlowAcct `placed`). The
-       two rows are one question asked before and after the only event that changes the answer, and the pair is
-       what makes `val_min` readable: an account is unplaced exactly while its reward IS `vt`, so a `val_min`
-       far below `vt` with a large count HERE is the ordering failing to reach members it is holding at the
-       clock, while the same `val_min` with this row at zero is a frontier of accounts that have all been
-       served and have simply been out-earned. Those are opposite work — the first is a placement defect and
-       the second is the bandit doing its job — and no single row can tell them apart.
-       `val_arrived - val_unplaced` IS THE OTHER HALF AND IS THE MORE INTERESTING ONE ONCE THE FIRST IS ZERO:
-       accounts that HAVE been given the thread and have emitted nothing with it, which is the population §@S
-       means by "a near-miss is mutated toward the gap; a dead candidate starves". */
+    /* The subset of `val_arrived` never yet given the thread, whose coordinate is still a reading of the clock
+       (flow.c's FlowAcct `placed`). An unplaced account's reward is `vt`, so `val_min` far below `vt` with a
+       large count here is the order failing to reach members it holds at the clock. `val_arrived -
+       val_unplaced` is accounts served that emitted nothing: the @S "dead candidate starves" population. */
     long val_unplaced;
-    long self_emit;    /* members with val > 0: they emitted something THEMSELVES rather than standing on an
+    long self_emit;    /* members with val > 0: they emitted something themselves rather than standing on an
                           account an ancestor filled. Zero here while `finished` climbs is work that advances no
-                          statement. It is a plain test and no longer a subtraction, because nothing is
-                          inherited to subtract. */
-    long unrun;        /* members standing at ZERO OWN SILENCE (flow.c's flow_own_silence) — never charged for
-                          the thread since their fork family last emitted. It is that reading and NOT the raw
-                          `Flow.cpu`, and the difference is what this row was measured being wrong about: read
-                          off the field it was nonzero at exactly TWO of 71 censuses — both while the frontier
-                          was under a thousand members — and ZERO for every one after that, on a run reaching
-                          3480, because a fork copies the parent's burn and nothing but a dispatch ever
-                          cleared it. It counts a member of a family that has just PRODUCED as one that has
-                          never run, which is why `never_picked` below exists.
-                          IT IS NOT flow_pick'S OWN DEFINITION, which is what this row used to claim: the
-                          pick's `unrun` is the population whose weight is at least 1.0, and that needs every
-                          term of the weight at zero (visit count, own service, family service), not one of
-                          them. This is the broader set on purpose — read against `vis_max` below it separates
-                          "nothing has been charged yet" from "nothing has FINISHED anything", which is the
-                          distinction the pair exists to make — but a reader taking it for the assert's
-                          population would be reading a superset. */
-    /* MEMBERS THE SCHEDULER HAS NEVER HANDED THE THREAD, AND HOW FAR THE BEST OF THEM STANDS BEHIND THE FRONT.
-       §scheduler's razor forbids a resume that "drops, starves, skips, reorders, or forgets ANY flow", and
-       STARVES is the only one of the five with no row anywhere in this struct — every other candidate (`unrun`,
-       `vis_zero`, `svc_min`, flow_pick's own `unrun`) is a term of the weight, and flow_credit_emit resets the
-       SILENCE ones for the whole emitting family, so each of those counts a member that has just PRODUCED
-       something — and every arm standing beside it — as one that has never run. `vis_zero` is the exception
-       since the emitter's per-member visit zero went, and it still cannot answer this: a member that finished
-       nothing may have been dispatched into a program that never ends, which is a resume-seam defect wearing
-       the same row. `picks == 0` is
-       the population, and it cannot be moved by anything the member did, because it did nothing.
-       THE PAIR IS THE READING AND NEITHER HALF IS ONE ALONE, which is the same shape `jobs_ready`/`job_w_gap`
-       already takes one row down. The COUNT says such members exist; only the GAP — in the order's own points,
-       against the weight flow_pick actually returned — says whether the ordering is what is keeping them out.
-       A large gap with a large count is the WFQ working: those members are genuinely outranked and the aging
-       term is the thing that will reach them.
-       AND A GAP AT ZERO IS NOT THE OPPOSITE VERDICT — THIS BLOCK SAID IT WAS, AND THE SENTENCE IS RETIRED HERE
-       RATHER THAN DELETED, because the reading it licensed is one a reader re-derives. It said a gap at or near
-       ZERO beside a non-zero count was the razor's own state: members standing at the front of the order that
-       the pick is nonetheless not returning, starvation rather than ordering, a defect in the DISPATCH rather
-       than in the weight. It does not follow, and the refutation is in flow_pick. The comparison there is
-       STRICT and the incumbent is the SEED, so on a frontier carrying a large EQUAL-WEIGHT cohort — the
-       ordinary state of a one-family page, since every member of a family reads one reward through one pointer
-       and an emission zeroes that family's silence at every arm at once — the pick returns ONE of N tied maxima
-       and the other N-1 stand, at that instant, exactly at the front with `picks == 0`. Zero is then the
-       EXPECTED reading of a healthy sweep, and this row cannot tell that state from the one the retired
-       sentence named. solver/result.c carries the measurement that retired it and the retirement did not reach
-       this block, which is how the stale sentence went on being quoted from here as the tree's standing verdict:
-       six runs of the native fixture, 212 censuses, sixty-three samples at exactly 0.000, spread across every
-       run including ones whose ladder drained all the way to the orphan seed.
-       WHAT ENDS THE TIE IS NOT A DISPATCH RULE AND MUST NOT BECOME ONE, which is the half a reader reaching for
-       a non-strict comparison here has already skipped. Relaxing flow_pick to `>=` would not implement
-       §scheduler's "a never-run flow is never starved" — nothing is ranked AHEAD of a tied member, so there is
-       no starvation for it to cure — it would hand the thread away on equality at every opcode, which is the
-       switch-per-opcode the seed exists to stop. The incumbent's hold ends because it is STRICTLY DEMOTED, and
-       two independent writers do that unconditionally: flow_credit_visit advances `visits` at the end of every
-       completed unit of work, dropping the optimism term from 1/(1+v) to 1/(2+v); and flow_age_running charges
-       the running flow's OWN silence, which advances flow_silence_notch and drops the weight by
-       FLOW_AGE_QUANTUM for a flow that completes no unit at all. The FAMILY half of that charge lands on every
-       arm through one pointer and cancels out of this gap (see `top_svc_fam` below); the OWN half is charged to
-       the dispatched flow alone, so it is exactly the term that breaks the tie in the waiting member's favour.
-       SO THE FINDING IS IN THE SERIES AND NOWHERE ELSE, and it is a THROUGHPUT statement rather than an ordering
-       one: `never_picked` climbing across consecutive censuses while `members` grows is the tail not being
-       reached. A single sample of this row — of any row here — characterises an instant and never a run. Left at
-       0.0 when the population is empty, so a reader takes the two together (build.mjs reads the series). */
+                          statement. */
+    long unrun;        /* members at zero own silence (flow.c's flow_own_silence, never raw `Flow.cpu`): not
+                          charged since their fork family last emitted, so it includes every arm of a family that
+                          just produced (`never_picked` counts the never-dispatched). A superset of flow_pick's
+                          `unrun`, which needs every non-reward term at zero; read against `vis_max` it separates
+                          "nothing charged yet" from "nothing finished". */
+    /* Members never handed the thread, and how far the best of them stands behind the front in the order's own
+       points (the gap is 0.0 when the population is empty). `picks == 0` is the starved population: unlike
+       `unrun`, `vis_zero` or `svc_min`, nothing the member did can move it.
+       A gap of zero is not starvation: flow_pick's comparison is strict and the incumbent is the seed, so on a
+       tied cohort (ordinary on a one-family page) the pick returns one of N tied maxima and the rest stand at the
+       front with `picks == 0`. The tie is ended by strict demotion, not by a dispatch rule: flow_credit_visit
+       lowers the optimism term at each completed unit, and flow_age_running charges the running flow's own
+       silence by FLOW_AGE_QUANTUM steps. Relaxing the pick to `>=` would switch at every opcode.
+       The finding is in the series: `never_picked` climbing across censuses while `members` grows is the tail
+       not being reached (build.mjs reads the series). */
     long never_picked;
     double never_picked_gap;
-    /* HOW MANY OF THEM STAND AT EXACTLY THE FRONT — the N of the retired sentence above, which that sentence
-       NAMES and this struct could not supply. The refutation it carries is that a gap of 0.0 is the EXPECTED
-       reading of a healthy sweep, because the pick returns "ONE of N tied maxima and the other N-1 stand, at
-       that instant, exactly at the front with `picks == 0`"; with N unreported, a plateau of three and a
-       plateau of six hundred are the same two digits on the same line. Those are not shades of one state.
-       Three is a sweep in progress. Six hundred is an order whose within-family terms have stopped separating
-       anything, so what returns the pick is the member's POSITION in flow.c's `g_flows` array and the weight
-       is deciding nothing at all — and §scheduler's one WFQ is then a comparator standing beside the ordering
-       rather than being it.
-       IT IS A COUNT AND THE ROW ABOVE IT IS A DISTANCE, WHICH IS WHY NEITHER SUBSTITUTES FOR THE OTHER.
-       `never_picked_gap` is a reading of ONE member — the most-favoured starved one — so it is silent about
-       how many stand with it, and it is silent in exactly the direction that decides the repair: the best of a
-       six-hundred-wide plateau and the best of a lone near-miss both read 0.0. This is that plateau's width,
-       restricted to the population §scheduler's never-starved sentence is actually about.
-       WHAT THE TWO WITHIN-FAMILY TERMS ARE, so a reader can price the number rather than only rank it. On a
-       ONE-FAMILY frontier — every flow descending from the boot flow, which flow.c's `FlowAcct.val` calls the
-       ordinary case — the reward and the FAMILY half of the aging are common offsets that cancel out of every
-       comparison between members, so members are separated by the optimism bonus and their OWN silence and by
-       nothing else. The bonus is 1/(1+`visits`), and `visits` is raised only by flow_credit_visit, which
-       asserts `frame == NULL`: a member INSIDE a program cannot advance it, and a fork copies its parent's, so
-       a chain of framed arms reads ONE bonus for all of them. The own silence is forgiven for the whole
-       account at any arm's emission (flow.c's `FlowAcct.emit_gen`), so every member the thread has not been
-       handed since that emission reads ZERO of it. This row is how many members those two facts have left the
-       order unable to tell apart, and read beside `vis_zero` and `jobs_framed` it says which of the two did it.
-       A GAUGE, NEVER DIFFERENCED, exactly like `never_picked` beside it and for its reason: a member that is
-       chosen leaves this population and every member born since joins it, so the series falls as well as
-       rises. `never_picked_at_top <= never_picked` by construction, and it is non-zero exactly when
-       `never_picked_gap` is 0.0 — both asserted at the end of flow_wfq_census, which is what gives this row a
-       reader in every dev build and what stops the pair coming to be about two different sets. */
+    /* How many never-picked members stand exactly at the front (weight == `w_top`): the N of the tie above. A
+       small N is a sweep in progress; a large N is an order whose within-family terms no longer separate
+       anything, so `g_flows` position decides the pick. On a one-family frontier the reward and the family
+       aging cancel, leaving the optimism bonus (raised only by flow_credit_visit, which asserts `frame == NULL`,
+       and copied by a fork) and the own silence (forgiven for the whole account at an emission); read beside
+       `vis_zero` and `jobs_framed` to see which left them tied.
+       A gauge, never differenced. flow_wfq_census asserts `never_picked_at_top <= never_picked`, and that it is
+       non-zero exactly when `never_picked_gap` is 0.0. */
     long never_picked_at_top;
     /* HOW THE DISPATCHES THAT DID HAPPEN WERE DISTRIBUTED, WHICH IS THE OTHER HALF OF THE PAIR ABOVE AND TAKES
        OPPOSITE WORK FROM IT. `never_picked` says a tail exists and `never_picked_gap` says how far behind it
