@@ -108,6 +108,7 @@
 #include "core/css/css_font_src.h"
 #include "core/css/css_keyframes.h"
 #include "core/css/css_logical.h"
+#include "core/css/css_match_result.h"   /* the author origin's matched declarations, one result per element */
 #include "core/css/css_pending_substitution.h"
 #include "core/css/css_math.h"
 #include "core/css/css_page.h"
@@ -1295,59 +1296,30 @@ static void cssd_inline_collect(lxb_dom_element_t *el, const char *name, const c
  * file held a second one, so "does this element match this selector" had two implementations that could
  * disagree — and the arena is scratch either way: the match cleans its own pools before it returns. */
 
-/* ---- THE SHEET, PARSED ONCE PER CONTENT -----------------------------------------------------------------
+/* ---- The sheet, parsed once per content -----------------------------------------------------------------
  *
- * THE DEFECT IS NOT A SLOW PARSER, IT IS ONE TEXT PARSED ONCE PER ASK. The walk below rebuilds a sheet's
- * serialization out of its rule objects and then hands that text to lexbor to get back the selector lists
- * and declaration blocks those rules were parsed FROM — a round trip CSSOM §6.4's objects force, because a
- * rule holds the SERIALIZATION lexbor produced for it and nothing else. The round trip runs per
- * (element, property): css-cascade-5 §7.2 "Inheritance" climbs to the root and css-logical-1 §4
- * "Flow-Relative Box Model Properties" makes two further climbs a PREREQUISITE of every box-model
- * resolution, so one box-model read on a deep document re-parses every author sheet once per ancestor per
- * property. core/css/css_cascade_pass.h removes the repeated (element, property) ASK and is silent about
- * this, because its record is keyed on the question and this cost is paid on every MISS.
+ * The match-result build below hands each held sheet's emission to lexbor to get back the selector lists and
+ * declaration blocks its rules were parsed from, a round trip CSSOM §6.4's objects force because a rule holds
+ * only the serialization lexbor produced for it. This table holds one parse per sheet position and serves it
+ * while the emission is byte-identical to the one it was parsed from; it removes the arena create, the parse
+ * and the arena destroy from every build after the first.
  *
- * IT IS KEYED ON THE BYTES, WHICH IS WHAT MAKES IT IMPOSSIBLE FOR ONE FLOW TO BE SERVED ANOTHER FLOW'S
- * PARSE RATHER THAN MERELY UNLIKELY. The standing objection to holding a lexbor arena at all is stated at
- * `cssd_parse_block` — one arena per parse, `so nothing outlives the read that asked for it, which is what
- * keeps this free of state the flow machinery would have to swap` — and core/css/css_style_declaration.h
- * states the same rule for rule OBJECTS, which are handed out as text because they `park to the IDB cold
- * tier and fork per flow, and a rule named by a pointer into a freed arena can do neither`. Both are about
- * (Those two runs are BACKTICKED and not quoted: they are THIS TREE'S OWN PROSE being shown, and the
- * citation auditor anchors a quotation on the nearest preceding citation — which here is a CSS standard —
- * so quoting them would report two verbatim sentences of this file as a fabricated spec quotation.)
- * state named by an OBJECT, whose content differs per flow while its identity does not. This table is named
- * by CONTENT: an entry is served only when the emission the caller just built is byte-identical to the
- * emission the entry was parsed from, and `lxb_css_stylesheet_parse` is a function of that text and of
- * nothing else — the parser's own arena is swapped in and out around each parse and its selector record is
- * asserted unchanged after it. So a hit and a miss produce the same stylesheet, and there is no difference
- * for a flow to observe. Two flows whose sheets differ emit different text, miss, and each parse their own;
- * two flows alternating on one slot thrash it, which is correct and is exactly today's cost.
+ * It is keyed on content, so no flow can be served another flow's parse: `lxb_css_stylesheet_parse` is a
+ * function of the text alone (the parser's arena is swapped in and out around each parse and its selector
+ * record is asserted unchanged after it), so a hit and a miss produce the same stylesheet. Two flows whose
+ * sheets differ emit different text and each parse their own; two alternating on one slot thrash it.
  *
- * ONE ENTRY PER SHEET POSITION IS WHAT KEEPS IT FROM BEING THE ACCUMULATION `cssd_parse_block` REFUSES. A
- * parser-lifetime arena would hold every sheet this engine ever parsed; a slot holds ONE parse and destroys
- * it the instant that slot's content changes, so the table's whole size is one parsed copy of the sheet set
- * the document actually has — which is what a browser holds anyway (Blink's StyleSheetContents is the same
- * fact, built once per content and shared). It is NOT flow state under CLAUDE.md's
- * §PLATFORM-DATA-A-FLOW-QUEUES-IS-A-JS-VALUE: nothing here is captured into the COW delta, no rule and no
- * sheet names it, every entry is DERIVED from an emission any flow can rebuild, and dropping the whole table
- * at any instant changes no answer. It is the re-derivable tier of §Time-travel-resume rather than a cap or
- * a floor.
+ * One entry per position bounds it to one parsed copy of the sheet set the document has, as Blink's
+ * StyleSheetContents is. It is not flow state: nothing here is captured into the COW delta, no rule or sheet
+ * names it, every entry is derived from an emission any flow can rebuild, and dropping the table at any
+ * instant changes no answer.
  *
- * The emission that is the key is core/css/css_author_sheets.h's, built once per root by a layout job; what
- * this table removes is the arena create, the full CSS parse of that text, and the arena destroy.
+ * The round-trip assertions run at every build, against the freshly emitted `view.n` and `view.layer`, so a
+ * parse from different bytes than the emission beside it fires at its first use. A sheet whose text does not
+ * parse leaves its slot empty and is re-parsed at every build; caching the failure would be a second thing to
+ * invalidate for no answer served.
  *
- * THE ROUND-TRIP ASSERTIONS ARE UNWEAKENED AND STILL RUN PER ASK, which is worth saying because a cached
- * parse sounds like it would move them: they live in the rule-matching loop below, which walks the cached
- * stylesheet against the FRESHLY EMITTED `view.n` and `view.layer` on every ask, so a parse that had somehow
- * come from different bytes than the emission beside it fires them at the first ask rather than at the first
- * parse.
- *
- * A SHEET WHOSE TEXT DOES NOT PARSE LEAVES ITS SLOT EMPTY and is re-parsed on every ask, exactly as it is
- * today. Caching the failure would be a second thing to invalidate for no answer served.
- *
- * RETIREMENT: this table goes when a CSSOM §6.4 rule owns a parsed form that survives its own serialization
- * — there is then no text to re-parse and no key to hold. */
+ * RETIREMENT: this table goes when a CSSOM §6.4 rule owns a parsed form that survives its own serialization. */
 typedef struct {
     char                 *text;  /* OWNED — the emission this parse is OF, and the whole of the key */
     size_t                len;
@@ -1371,6 +1343,9 @@ static void cssd_sheet_parse_drop(CssdSheetParse *e)
                "a cached sheet parse was dropped while the CSS parser was still pointing at its arena — the "
                "next parse would allocate out of freed memory. Every parse in this file sets the parser's "
                "arena and takes it back before it returns, so find the one that returned without doing so");
+        /* The arena is destroyed outright: `lxb_css_stylesheet_create` ref-increments the memory it is handed
+           and `lxb_css_stylesheet_destroy` only decrements it, so the arena the stylesheet, its rules and its
+           selectors are allocated from is what releases them. */
         lxb_css_memory_destroy(e->mem, true);
     }
     free(e->text);
@@ -1462,38 +1437,32 @@ static lxb_css_stylesheet_t *cssd_sheet_parsed(uint32_t si, const char *text, si
     return sst;
 }
 
-/* @LOGICAL — THE ONE PARSER IS NOT RE-ENTRANT AND A NESTED RESOLUTION IS NOW REACHABLE. The AUTHOR-ORIGIN sheet walk below drives
-   `g_parser` — it sets the parser's arena around each parse it has to make — and it owns the per-sheet parse
-   table above, whose slots it REPLACES when a sheet's emission has changed, destroying the arena the
-   previous parse lived in. css-logical-1 §4 "Flow-Relative Box Model Properties"'s pairing made the cascade
-   ask for a computed `writing-mode` in the middle of resolving some other property, which is a second
-   resolution and therefore a second walk. The bracket that asserts they do not nest is at the CALL, in
-   `cssom_cascaded_value`, because that is where the ordering which keeps them apart is written and this body
-   has two exits. */
+/* The match-result build below drives `g_parser` (it sets the parser's arena around each parse it makes) and
+   replaces a slot of the parse table above when a sheet's emission has changed, destroying the arena the slot's
+   previous parse lived in. css-logical-1 §4 "Flow-Relative Box Model Properties"'s pairing asks for a computed
+   `writing-mode` in the middle of resolving another property, which is a second resolution and so possibly a
+   second build. The bracket asserting the two do not nest is at the call, in `cssom_cascaded_value`, where the
+   ordering that keeps them apart is written. */
 static bool g_collecting_sheets = false;
 
-/* EVERY AUTHOR-ORIGIN DECLARATION OF `name` ON `el`, added to `cascade` — not the one that wins. css-cascade-5
-   §6.1's sort is over the whole list at once and css-cascade-5 §7.3's roll-backs re-run it with a part removed,
-   so a collector that kept only a running best would have thrown away exactly what both need. `*pseq` is the
-   document-order counter css-cascade-5 §6.1's Order of Appearance reads, carried across the sheets so it is one
-   sequence and not one per sheet, and bumped per RULE so it also names the rule css-cascade-5 §7.3.6's
-   `revert-rule` removes.
-   NAMED RESIDUAL, the match per miss. Not covered: every rule of every held sheet is matched against `el`
-   once per (element, property) the record misses. Next: the job holds each element's matched rules. How its
-   absence shows: selector_match_node counts per descendant that are a multiple of the record's misses. */
-static void cssd_author_collect(lxb_dom_element_t *el, const char *name, const char *partner,
-                                CssCascade *cascade, const CssAuthorSheets *sheets, uint32_t *pseq)
+/* The author origin's match result for `el` under `sheets` (core/css/css_match_result.h), owned by the caller:
+   every longhand declaration of every style rule whose selector matches `el`, with the rule's position in the
+   set's emission counted across sheets and the declaration's index in its rule's collapsed block. */
+static CssMatchResult *cssd_match_result_build(lxb_dom_element_t *el, const CssAuthorSheets *sheets)
 {
     lxb_dom_node_t *self = lxb_dom_interface_node(el);
-    uint32_t k;
+    CssMatchResult *m = css_match_result_create(el, sheets);
+    uint32_t k, seq = 0;
 
     for (k = 0; k < css_author_sheets_count(sheets); k++) {
         const CssAuthorSheet *sheet = css_author_sheets_at(sheets, k);
         const CssRuleCascadeSheet *view = &sheet->view;
         lxb_css_stylesheet_t *sst;
 
-        /* The selector lists and declaration blocks this emission parses back to, which is a parse only when
-           this sheet position's emission has changed since the last ask (the parse table above). */
+        /* The selector lists and declaration blocks this emission parses back to; a parse only when this sheet
+           position's emission has changed since the last build (the parse table above). The table's arena owns
+           the stylesheet, and nothing kept here points into it: every value taken from a matched rule is
+           copied. */
         sst = cssd_sheet_parsed(sheet->si, view->text, strlen(view->text));
         if (sst && sst->root && sst->root->type == LXB_CSS_RULE_LIST) {
             lxb_css_rule_t *r;
@@ -1504,83 +1473,70 @@ static void cssd_author_collect(lxb_dom_element_t *el, const char *name, const c
                 lxb_css_selector_specificity_t spec = 0;
                 const CssLayerNode *layer;
                 CssDecls rd = { 0 };
-                uint32_t at_rule = back++;
-                int at;
+                uint32_t at_rule = back++, j;
 
-                /* THE ROUND TRIP IS ASSERTED PER RULE, NOT PER SHEET. Every rule the emission wrote must come
-                   back as exactly one rule AT THE SAME INDEX, because the index is what names its cascade
-                   layer: a rule that re-parsed as two while its neighbour re-parsed as none keeps a total
-                   right and shifts every layer after it, which is the silent version of the whole sheet
-                   cascading in the wrong order. The layer entry is NULL for exactly the non-style rules the
-                   emission writes (an `@namespace`), so the two questions answer each other. */
+                /* The round trip is asserted per rule: each emitted rule parses back as exactly one rule at the
+                   same index, because the index names its cascade layer. The layer entry is NULL for exactly
+                   the non-style rules the emission writes (an `@namespace`), so the two answer each other. */
                 DCHECK(at_rule < view->n,
-                       "a CSS style sheet's rules did not ROUND-TRIP: the rule objects serialized to a text "
-                       "that parses back to MORE rules than went in. A rule holds the SERIALIZATION lexbor "
-                       "produced for it, so re-parsing it must yield exactly what it came from — find which "
-                       "rule's text does not, and fix the serializer that wrote it");
+                       "a CSS style sheet's rules did not round-trip: the rule objects serialized to a text "
+                       "that parses back to more rules than went in. A rule holds the serialization lexbor "
+                       "produced for it, so find which rule's text does not re-parse to itself and fix the "
+                       "serializer that wrote it");
                 if (at_rule >= view->n) break;
                 layer = view->layer[at_rule];
                 DCHECK((r->type == LXB_CSS_RULE_STYLE) == (layer != NULL),
-                       "a CSS style sheet's rules did not ROUND-TRIP IN ORDER: the rule at this index parses "
-                       "back as a different KIND of rule than the one the author cascade emitted there. The "
-                       "emission records a cascade layer for a style rule and nothing for an `@namespace`, so "
-                       "a disagreement means the rules have shifted and every rule after this one would be "
-                       "cascaded in a neighbour's layer");
+                       "a CSS style sheet's rules did not round-trip in order: the rule at this index parses "
+                       "back as a different kind of rule than the one the author cascade emitted there, so "
+                       "every rule after it would be cascaded in a neighbour's layer");
                 if (r->type != LXB_CSS_RULE_STYLE || !st->selector || !st->declarations) continue;
-                /* NO `decided` AND NO `out_undet` — THE CASCADE'S WALK CANNOT KEEP AN ARM, and passing NULL
-                   is how it says so rather than how it forgets to. This is a plain C loop: there is no rest
-                   point in it, so a fork here would be built against no resume point and solver/engine.c's
-                   `engine_prepare_fork` refuses that by name. selector_match_node's abort is what that NULL
-                   reaches, and its message names the declaration to build — JS_CFUNC_STEP_DEF over this walk,
-                   after which this call passes the record `document.c`'s already does. */
+                /* No `decided` and no `out_undet`: this is a plain C loop with no rest point, so it cannot
+                   keep an arm, and selector_match_node aborts naming the declaration to build
+                   (JS_CFUNC_STEP_DEF over this walk) if a match would fork. */
                 if (!selector_match_node(self, st->selector, &spec, NULL, NULL)) continue;
-                /* THE RULE'S OWN §6.6 DECLARATIONS, which is the same list its `rule.style` reports and the
-                   same one an inline block is read through — expanded to longhands and collapsed to one per
-                   property. A rule declaring a property twice has already been resolved by the collapse's own
-                   two criteria, so what arrives here is one declaration per property — which is also why one
-                   counter can be both css-cascade-5 §6.1's order of appearance and css-cascade-5 §7.3.6's
-                   identity of the rule. */
+                /* The rule's own §6.6 declarations, expanded to longhands and collapsed to one per property,
+                   so every declaration of one rule shares `seq + at_rule` (css-cascade-5 §6.1's Order of
+                   Appearance, and §7.3.6 `revert-rule`'s rule identity) and is ordered within it by its
+                   index. css-logical-1 §4's pair is two names in one such block. */
                 cssd_decls_from_list(st->declarations, view->text, strlen(view->text), &rd);
-                /* @LOGICAL — BOTH MEMBERS OF css-logical-1 §4's PAIR ARE TAKEN FROM THIS ONE BLOCK, in ONE
-                   pass and with each declaration's own index in it. The index is css-cascade-5 §6.1's Order
-                   of Appearance at the granularity a block has: two names in one rule share `*pseq +
-                   at_rule` — which is that rule's identity for css-cascade-5 §7.3.6's `revert-rule` — and
-                   css-logical-1 §4's worked example turns on which of them the author wrote second.
-                   A SECOND WALK FOR THE PARTNER WOULD BE WRONG AND NOT MERELY WASTEFUL: every rule of the
-                   second walk would carry a LATER `*pseq` than every rule of the first, so the partner would
-                   win every tie in the document regardless of where it was written. */
-                at = cssd_decls_index(&rd, name);
-                if (at >= 0 && rd.v[at].value)
-                    css_cascade_add(cascade, CSS_ORIGIN_AUTHOR, rd.v[at].important, false, layer,
-                                    (uint32_t)spec, *pseq + at_rule, (uint32_t)at, rd.v[at].value);
-                if (partner != NULL) {
-                    int pat = cssd_decls_index(&rd, partner);
-
-                    if (pat >= 0 && rd.v[pat].value)
-                        css_cascade_add(cascade, CSS_ORIGIN_AUTHOR, rd.v[pat].important, false, layer,
-                                        (uint32_t)spec, *pseq + at_rule, (uint32_t)pat, rd.v[pat].value);
-                }
+                for (j = 0; j < rd.n; j++)
+                    if (rd.v[j].value)
+                        css_match_result_add(m, rd.v[j].name, rd.v[j].value, rd.v[j].important, layer,
+                                             (uint32_t)spec, seq + at_rule, j);
                 cssd_decls_free(&rd);
             }
             DCHECK(back == view->n,
-                   "a CSS style sheet's rules did not ROUND-TRIP: the rule objects serialized to a text that "
-                   "parses back to FEWER rules than went in. A rule holds the SERIALIZATION lexbor produced "
-                   "for it, so re-parsing it must yield exactly what it came from — find which rule's text "
-                   "does not, and fix the serializer that wrote it rather than tolerating the drift");
+                   "a CSS style sheet's rules did not round-trip: the rule objects serialized to a text that "
+                   "parses back to fewer rules than went in. A rule holds the serialization lexbor produced "
+                   "for it, so find which rule's text does not re-parse to itself and fix the serializer");
         }
-        /* THE ARENA IS THE ONE OWNER AND IT IS THE PARSE TABLE'S, NOT THIS LOOP'S. The reason it is freed
-           OUTRIGHT rather than through lexbor's own destroy is unchanged and is why that call appears
-           nowhere here: `lxb_css_stylesheet_create` REF-INCREMENTS the memory it is handed (to 2, since
-           `lxb_css_memory_init` starts it at 1) and `lxb_css_stylesheet_destroy` only ref-DECREMENTS (back
-           to 1), so that destroy frees nothing at all. The stylesheet, its rules and its selectors are all
-           allocated FROM the arena, so destroying the arena is what releases them — which the table does
-           when it replaces a slot and at `cssom_free`. Nothing this loop keeps points into it: every value
-           it takes out of a matched rule is copied. */
-        /* css-cascade-5 §6.1's Order of Appearance across SHEETS: "declarations from style sheets independently linked by the
-           originating document are treated as if they were concatenated in linking order", so the next sheet's
-           first rule follows this sheet's last one rather than restarting. */
-        *pseq += view->n;
+        /* css-cascade-5 §6.1's Order of Appearance across sheets: "declarations from style sheets independently
+           linked by the originating document are treated as if they were concatenated in linking order". */
+        seq += view->n;
     }
+    css_match_result_finish(m, seq);
+    return m;
+}
+
+/* Every author-origin declaration of `name` and of css-logical-1 §4's `partner` in `m`, added to `cascade`,
+   not the one that wins: css-cascade-5 §6.1's sort is over the whole list and §7.3's roll-backs re-run it
+   with a part removed. The author origin is first in Order of Appearance, so `*pseq` arrives at zero and
+   leaves at the set's span, the position the element-attached declarations follow. */
+static void cssd_author_collect(const CssMatchResult *m, const char *name, const char *partner,
+                                CssCascade *cascade, uint32_t *pseq)
+{
+    uint32_t i;
+
+    DCHECKF(*pseq == 0, "the author origin was collected at Order of Appearance position %u — it is the "
+                        "first contributor, so the positions its match result carries start at zero", *pseq);
+    for (i = 0; i < css_match_result_count(m); i++) {
+        const CssMatchedDeclaration *d = css_match_result_at(m, i);
+
+        if (strcmp(d->name, name) != 0 && (partner == NULL || strcmp(d->name, partner) != 0)) continue;
+        css_cascade_add(cascade, CSS_ORIGIN_AUTHOR, d->important, false, d->layer, d->specificity, d->seq,
+                        d->decl_order, d->value);
+    }
+    *pseq = css_match_result_span(m);
 }
 
 /* ---- CSS Syntax's "parse a stylesheet's contents", for CSSOM §6.4's rule objects --------------------------
@@ -2134,7 +2090,7 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
  *     HTML §15.3.7 "Lists"' `dir, dl, menu, ol, ul { margin-block: 1em }`, for the companion-rule reason
  *     above. WHAT THE NEXT DIFF BUILDS: a UA rule whose key is a SELECTOR compiled through
  *     core/dom/selector_match.h's `selector_list_compile` and matched with `selector_match_node` — which
- *     `cssd_author_collect` above already runs once per element per rule — so this table's `{tag, prop}` key
+ *     `cssd_match_result_build` above already runs once per element per rule — so this table's `{tag, prop}` key
  *     becomes the degenerate shape of one; the §15.3.8 `table > tr` comment below names the same diff.
  *     HTML §15.3.3 "Flow content"'s `dialog { margin: auto; padding: 1em }`, which is NINE declarations of one
  *     rule whose parts decide each other: `position: absolute`, `width: fit-content` and `height: fit-content`
@@ -2339,8 +2295,8 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
        confined to a tree the HTML parser does not build — HTML §13.2.6.4.9 The "in table" insertion mode
        answers a `"tr"` start tag by "Insert an HTML element for a "tbody" start tag token with no attributes,
        then switch the insertion mode to "in table body". Reprocess the current token." The next diff gives this
-       layer core/dom/selector_match.h's matcher, which `cssd_author_collect` above already runs once per
-       element per rule, so a UA rule becomes a SELECTOR and this table's `{tag, prop}` key becomes the
+       layer core/dom/selector_match.h's matcher, which `cssd_match_result_build` above already runs once
+       per element per rule, so a UA rule becomes a SELECTOR and this table's `{tag, prop}` key becomes the
        degenerate shape of one — which is also what `cssd_ua_display_conditional` below stops being. Its absence
        shows as a script-built `table.appendChild(tr)` row of two or more cells whose §17.5.3 height is measured
        through the baseline procedure while a browser measures it as the tallest cell box. */
@@ -3213,10 +3169,11 @@ char *cssom_initial_value(const char *name)
 char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
 {
     CssAuthorSheets *sheets;
+    CssMatchResult *match;
     lxb_dom_node_t *root;
     CssLayerOrder *order;
     CssCascade *cascade;
-    bool sheets_owned = false;
+    bool sheets_owned = false, match_owned = false;
     const char *partner, *ua, *pua;
     uint32_t seq = 0;
     bool ua_important = false, pua_important = false;
@@ -3275,13 +3232,13 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
        into — a use-after-free whose symptom is nowhere near the edit, which is why the resource asserts it
        rather than a comment describing the ordering. */
     DCHECK(!g_collecting_sheets,
-           "the AUTHOR-ORIGIN sheet walk was re-entered. It owns `g_parser` and the per-sheet parse table "
-           "the arenas live in, and an inner walk whose sheet emits DIFFERENT text for a slot the outer "
-           "walk is reading REPLACES that slot and destroys its arena — so the outer walk would go on "
-           "reading a stylesheet, its rules and its selectors out of freed memory. The only "
-           "nested resolution on this path is css-logical-1 §4's PREREQUISITE — the computed `writing-mode` "
-           "and `direction` the pairing above is derived from — and it is ordered ahead of this call for "
-           "exactly this reason; a second nested read added below it is what this crash names");
+           "the author origin's match-result build was re-entered. It owns `g_parser` and the per-sheet parse "
+           "table the arenas live in, and an inner build whose sheet emits different text for a slot the "
+           "outer build is reading replaces that slot and destroys its arena, so the outer build would go on "
+           "reading a stylesheet, its rules and its selectors out of freed memory. The only nested resolution "
+           "on this path is css-logical-1 §4's prerequisite (the computed `writing-mode` and `direction` the "
+           "pairing above is derived from), ordered ahead of this call for exactly this reason; a second "
+           "nested read added below it is what this crash names");
     g_collecting_sheets = true;
     /* The author origin's sheet set for the element's root: the job's, or one built for this resolution
        alone (core/css/css_author_sheets.h). Its sealed layer order is the one this cascade sorts by. */
@@ -3291,8 +3248,14 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
         sheets_owned = !css_cascade_pass_author_hold(sheets);
     }
     order = css_author_sheets_order(sheets);
+    /* The element's match result under that set: the job's, or one built for this resolution alone
+       (core/css/css_match_result.h). It is the only selector matching this cascade does. */
+    if (!css_cascade_pass_match_ask(el, sheets, &match)) {
+        match = cssd_match_result_build(el, sheets);
+        match_owned = !css_cascade_pass_match_hold(match);
+    }
     cascade = css_cascade_create(order);
-    cssd_author_collect(el, name, partner, cascade, sheets, &seq);
+    cssd_author_collect(match, name, partner, cascade, &seq);
     g_collecting_sheets = false;
     /* css-cascade-5 §6.1's ELEMENT-ATTACHED STYLES: "declarations that are attached directly to an element (such as the
        contents of a style attribute) rather than indirectly mapped by means of a style rule selector take
@@ -3369,6 +3332,8 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
        each is defined by a fact only the sort holds. */
     out = css_cascade_value(cascade);
     css_cascade_free(cascade);
+    /* The result borrows the set's layer nodes, so it goes first. */
+    if (match_owned) css_match_result_free(match);
     if (sheets_owned) css_author_sheets_free(sheets);
     /* …and the answer, reported whether or not a record is held: the census counts the question and the
        resolution at the same event, and a held record decides only the storage. `out` is borrowed here; this

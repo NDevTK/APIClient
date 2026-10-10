@@ -11,6 +11,7 @@
 #include "check.h"
 #include "core/css/css_author_sheets.h"
 #include "core/css/css_cascade_pass.h"
+#include "core/css/css_match_result.h"
 #include "core/layout/layout_job.h"   /* the record of the job whose activation holds the thread */
 
 /* One entry per (element, property), holding two facts about the pair: its cascaded value and its computed
@@ -36,6 +37,9 @@ static long long g_resolved;
 static long long g_computed_asks;
 static long long g_computed_served;
 static long long g_computed_resolved;
+static long long g_match_asks;
+static long long g_match_served;
+static long long g_match_built;
 
 /* The initial capacity, which decides only when the table is rebuilt at twice the size and never which
    questions are answered; a document that asks for more gets a bigger table, without limit. */
@@ -107,6 +111,13 @@ void css_cascade_record_release(CssCascadeRecord *r)
     r->tab = NULL;
     r->cap = 0;
     r->used = 0;
+    /* A held match result borrows a held sheet set's layer nodes, so the results go first. */
+    for (i = 0; i < r->match_cap; i++)
+        if (r->match[i] != NULL) css_match_result_free(r->match[i]);
+    free(r->match);
+    r->match = NULL;
+    r->match_cap = 0;
+    r->match_used = 0;
     for (i = 0; i < r->author_n; i++) css_author_sheets_free(r->author[i]);
     free(r->author);
     r->author = NULL;
@@ -149,6 +160,84 @@ bool css_cascade_pass_author_hold(struct CssAuthorSheets *sheets)
         r->author_cap = cap;
     }
     r->author[r->author_n++] = sheets;
+    return true;
+}
+
+/* An element's slot in the match table: its address, whose low bits are all alignment, through splitmix64's
+   finalizer. Answers the slot holding `el`'s result or the first empty one, for the read and the write alike. */
+static size_t cp_match_probe(struct CssMatchResult **tab, size_t cap, const lxb_dom_element_t *el)
+{
+    uint64_t h = (uint64_t)(uintptr_t)el;
+    size_t i;
+
+    h ^= h >> 30; h *= 0xbf58476d1ce4e5b9ULL;
+    h ^= h >> 27; h *= 0x94d049bb133111ebULL;
+    h ^= h >> 31;
+    i = (size_t)h & (cap - 1);
+    while (tab[i] != NULL && css_match_result_element(tab[i]) != el) i = (i + 1) & (cap - 1);
+    return i;
+}
+
+static void cp_match_grow(CssCascadeRecord *r)
+{
+    size_t cap = r->match_cap ? r->match_cap * 2 : CP_CAP0, i;
+    struct CssMatchResult **tab = calloc(cap, sizeof *tab);
+
+    CHECK(tab != NULL, "css-cascade-pass-oom: the record's match results could not be grown");
+    for (i = 0; i < r->match_cap; i++)
+        if (r->match[i] != NULL)
+            tab[cp_match_probe(tab, cap, css_match_result_element(r->match[i]))] = r->match[i];
+    free(r->match);
+    r->match = tab;
+    r->match_cap = cap;
+}
+
+bool css_cascade_pass_match_ask(lxb_dom_element_t *el, const struct CssAuthorSheets *sheets,
+                                struct CssMatchResult **out)
+{
+    CssCascadeRecord *r = layout_job_cascade();
+    size_t i;
+
+    DCHECK(el != NULL && sheets != NULL && out != NULL,
+           "a match result was asked of the record for no element, under no sheet set or with nowhere to put it");
+    g_match_asks++;
+    if (r == NULL || r->match_cap == 0) return false;
+    i = cp_match_probe(r->match, r->match_cap, el);
+    if (r->match[i] == NULL) return false;
+    /* The record holds one sheet set per root and no tree write moves an element between roots while it is
+       held, so the set this result was matched under is the one its root resolves under now. */
+    DCHECK(css_match_result_sheets(r->match[i]) == sheets,
+           "the record served an element's match result built under a different sheet set than the one its "
+           "root now resolves under — the set a held result borrows was replaced or the element changed roots "
+           "while the record was held");
+    *out = r->match[i];
+    g_match_served++;
+    return true;
+}
+
+bool css_cascade_pass_match_hold(struct CssMatchResult *m)
+{
+    CssCascadeRecord *r = layout_job_cascade();
+    const struct CssAuthorSheets *sheets;
+    bool set_held = false;
+    size_t i;
+
+    DCHECK(m != NULL, "a match result was offered to the record as nothing");
+    g_match_built++;
+    if (r == NULL) return false;
+    sheets = css_match_result_sheets(m);
+    for (i = 0; i < r->author_n; i++)
+        if (r->author[i] == sheets) set_held = true;
+    DCHECK(set_held,
+           "a match result was offered to the record under a sheet set the record does not hold — its layer "
+           "nodes would be freed with that set at the end of the one resolution while the result is served on");
+    if (r->match_used * 2 >= r->match_cap) cp_match_grow(r);
+    i = cp_match_probe(r->match, r->match_cap, css_match_result_element(m));
+    DCHECK(r->match[i] == NULL,
+           "a second match result was offered for an element the record already holds one for — its one "
+           "caller asks before it builds");
+    r->match[i] = m;
+    r->match_used++;
     return true;
 }
 
@@ -270,6 +359,11 @@ void css_cascade_pass_census(CssCascadePassCensus *out)
             "css_computed_value asks the record and on a miss computes and records with no return between, so "
             "a gap is an arm that answered without saying which outcome it was",
             g_computed_asks, g_computed_served, g_computed_resolved);
+    DCHECKF(g_match_asks == g_match_served + g_match_built,
+            "the match-result census does not close: %lld asks against %lld served and %lld built. "
+            "cssom_cascaded_value asks the record and on a miss builds and offers the result with no return "
+            "between, so a gap is an arm that matched without saying which outcome it was",
+            g_match_asks, g_match_served, g_match_built);
     out->asks_life = g_asks;
     out->served_life = g_served;
     out->resolved_life = g_resolved;

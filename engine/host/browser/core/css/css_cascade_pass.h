@@ -7,7 +7,10 @@
  * "Flow-Relative Box Model Properties" makes `writing-mode`, `direction` and `text-orientation`, all inherited,
  * a prerequisite of cascading every margin, padding, border and inset. Both are one answer asked by many
  * callers, so the record is keyed on the question and sits at the one function every asker reaches.
- * `node engine/layout_cost.mjs <native binary>` measures the shapes this collapses. */
+ * `node engine/layout_cost.mjs <native binary>` measures the shapes this collapses. Beside the answers it holds
+ * two inputs of the cascade that do not depend on the property: the author origin's sheet set per root and its
+ * match result per element, so every miss after an element's first sorts declarations and matches no selector.
+ * Both are functions of the inputs the validity argument below fixes. */
 
 /* Validity. The record holds answers about the document the job's flow sees. Its inputs are asserted not to
  * move while it is held: tree and attribute writes at solver/dom_cow.c's write entries; every CSSOM write that
@@ -42,11 +45,14 @@
    first entry; `release` frees every string it owns and leaves it empty. */
 struct CpEntry;
 struct CssAuthorSheets;
+struct CssMatchResult;
 typedef struct {
     struct CpEntry          *tab;
     size_t                   cap, used;
     struct CssAuthorSheets **author;      /* one per root resolved under, owned */
     size_t                   author_n, author_cap;
+    struct CssMatchResult  **match;       /* power-of-two table keyed by element, NULL slot empty; owned */
+    size_t                   match_cap, match_used;
 } CssCascadeRecord;
 void css_cascade_record_release(CssCascadeRecord *r);
 
@@ -75,10 +81,20 @@ void css_cascade_pass_computed_record(lxb_dom_element_t *el, const char *name, c
 bool css_cascade_pass_author_ask(const lxb_dom_node_t *root, struct CssAuthorSheets **out);
 bool css_cascade_pass_author_hold(struct CssAuthorSheets *sheets);
 
+/* The author origin's match result for `el` (core/css/css_match_result.h) under `sheets`, the set its root
+   resolves under. `ask` answers the held result, borrowed, or false; on false the caller builds one and
+   offers it to `hold` with no return between the two, which takes it and answers true when a record is held
+   and on false leaves it with the caller, who frees it after its one resolution. A held result borrows a
+   sheet set the record holds. Both are counted whether or not a record is held. */
+bool css_cascade_pass_match_ask(lxb_dom_element_t *el, const struct CssAuthorSheets *sheets,
+                                struct CssMatchResult **out);
+bool css_cascade_pass_match_hold(struct CssMatchResult *m);
+
 /* The census, in solver/result.c's vocabulary. Every field is a lifetime counter of this agent and says so
    in its name. `asks_life` counts cascaded values asked for, `served_life` those the record answered and
    `resolved_life` those that ran the cascade; `asks_life == served_life + resolved_life` is asserted. The
-   `computed_*` rows are the same three for the computed value and close the same way. */
+   `computed_*` rows are the same three for the computed value and close the same way. The match result's
+   asks, served and built close the same way and are asserted here; they are not rows yet. */
 typedef struct {
     long long asks_life;
     long long served_life;
