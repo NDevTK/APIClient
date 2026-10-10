@@ -424,30 +424,19 @@ void solve_init(JSContext *ctx) {
     JS_FreeValue(ctx, g);
 }
 
-/* THE ONE PLACE A SINK BECOMES PENDING — find-or-create, answering WHICH of the two it did. The distinction is
-   load-bearing and used to be spelled as a `tried` test at the seeder: only a NEWLY detected sink opens a
-   search (its class's written-down vectors, or its context probe), because a resumed parked candidate is
-   already ONE of that search's flows and re-opening it would seed the whole search a second time.
-   NAMED FOR WHAT IT ANSWERS AND NOT FOR THE ARRAY IT LIVES IN, because `pending_entry` is already a name:
-   pending.h's reply register owns it, and flow.h puts that declaration in front of this file. The compiler
-   caught the duplicate, but the collision was the smaller half of the problem — "pending" means the replies a
-   flow is waiting on in one component and a detected-but-unsolved sink in this one, and one word carrying two
-   meanings across two vocabularies is how a set of names goes wrong. What this returns is one sink's SEARCH. */
-/* THE SEARCH FOR A (source, class) IF THERE IS ONE — the READ half, separate from sink_search because
-   find-or-CREATE is the wrong primitive for a caller that is merely observing: a lookup that created one would
-   fabricate a search with no breakouts, no path and nothing to seed, and every later reader of g_pending would
-   take it for a detected sink.
-   THE ARGUMENT THAT USED TO STAND HERE WAS ONE ABOUT PAYMENT — "opening a search is an EVENT (it credits the
-   running flow)" — AND THAT IS NO LONGER A PROPERTY OF THIS CALL. The credit moved to where the OBSERVATION
-   is, which is detection opening the search (add_pending), because creating the array slot and opening the
-   search are two facts and the cold tier makes them come apart. Creating one now costs nothing and is still
-   wrong, for the reason above; a reader who re-derives the payment argument will find it at the open. */
+/* The search for (source, class), or NULL. This is the read half, separate from sink_search because a lookup
+   that created an entry would fabricate a search with no breakouts, no path and nothing to seed, which every
+   later reader of g_pending would take for a detected sink. */
 static Cand *search_of(const char *src, int sink) {
     for (int i = 0; i < g_pending_n; i++)
         if (g_pending[i].sink == sink && !strcmp(g_pending[i].src, src)) return &g_pending[i];
     return NULL;
 }
 
+/* Find or create the search for (source, class), saying in `*created` which it did. Creating the slot is not
+   opening the search: only detection opens one (add_pending), because a cold resume re-registers a candidate
+   of a search an earlier session opened. Named for what it returns, since `pending_entry` is pending.h's
+   reply register. */
 static Cand *sink_search(const char *src, int sink, int *created) {
     Cand *e;
 
@@ -457,101 +446,30 @@ static Cand *sink_search(const char *src, int sink, int *created) {
     for (int i = 0; i < g_pending_n; i++)
         if (g_pending[i].sink == sink && !strcmp(g_pending[i].src, src)) return &g_pending[i];
     if (g_pending_n >= g_pending_cap) { g_pending_cap = g_pending_cap ? g_pending_cap * 2 : 8; g_pending = realloc(g_pending, (size_t)g_pending_cap * sizeof(Cand)); CHECK(g_pending, "solve: OOM pending"); }
-    /* THE WHOLE SLOT AT ONCE, AND A PER-FIELD LIST IS THE WRONG PRIMITIVE RATHER THAN A LIST WITH A HOLE IN
-       IT. `g_pending` is realloc'd and never zeroed, so the grow above hands back a slot holding whatever the
-       allocator had, and the answer to that used to be thirty-five assignments under a header saying EVERY
-       field. It was wrong about one of them for as long as it stood: `ends` was never assigned, so `candEnds`
-       reported allocator memory and the `DCHECK(e->ends < e->tried)` at the raise stood on an operand this
-       file had never written. A list is thirty-five obligations a reader discharges by hand, it grows with the
-       struct, and NOTHING FAILS WHEN ONE IS MISSED — which is why it is gone rather than lengthened by one.
-       MEASURED AT 9ccc3bc9, IN TWO STAGES OF ONE BUILD THAT DISAGREE, which is the whole argument:
-         the native smoke emitted 18 `candEnds` values, 12 reading 0 and SIX reading 3 — a value no flow of
-         those searches had raised, since `3` recurred at every affected row, which is one allocator slot
-         replicated across realloc'd entries rather than six independent accidents. NO abort anywhere in that
-         log, because the check is at the WRITER (solve_flow_end) and the garbage is read at the EMIT, so a
-         search none of whose candidates has ended is never asked the question at all;
-         the COLD-PARK session, which is where candidate flows END, hit it on its first one. That stage's log
-         carries exactly ONE `@WHY` and it is its terminal line — `cond:"e->ends < e->tried"` at solve.c:3039
-         — the session DIED ON SIGABRT and the build FAILED on it. `3 < 1` is false, so a HEALTHY engine
-         aborted; a garbage value that had landed BELOW `tried` would instead have stayed SILENT on a
-         genuinely broken invariant. Both directions, one unwritten field.
-       AND THE SAME ASSERT FIRED AGAIN AT THE COMMIT THAT WROTE THE FIELD, WITH `ends` CORRECTLY ZERO, WHICH IS
-       A SECOND DEFECT AND NOT A FAILED FIX. Measured at 12a8b0a, stamp `assertRegime dev` and `dirty: []`: the
-       emitted rows carrying `candEnds` above their own `tried` went to ZERO with the witness armed — the
-       initialisation WORKED — and the cold-park session died on the same line anyway. That separates the two:
-       the rows were the unwritten operand, and the abort is the INVARIANT ITSELF being false, a candidate
-       session being a tree of flows while `tried` counts seeds. The second was invisible while the first was
-       live, which is the shape CLAUDE.md names — a defect downstream of another inherits its symptom the day
-       that one is fixed, and a counter that recovers without the capability is a SECOND defect rather than a
-       failed fix. Reading them as one defect seen from two sides was wrong and was written down here; see the
-       field's declaration for what replaced the check.
-       A COMPOUND LITERAL ASSIGNED WHOLESALE IS C's OWN ANSWER and not a mechanism this file invents: every
-       member the initializer does not name is zero-initialised BY THE LANGUAGE, so the compiler writes all
-       thirty-five and an omission is UNSPELLABLE rather than audited. The spelling follows the one already in
-       this engine (idl_args.c's `g_gattr[g_gattr_n] = (IdlGlobalAttr){…}`, realm.c's `(JSClassDef){…}`) rather
-       than a file-scope blank, which keeps `strdup(src)` inside the same expression that writes the slot.
-       WHAT IS LEFT TO NAME IS EXACTLY THE MEMBERS WHOSE BLANK IS NOT 0, AND THERE IS A THIRD ONE THE LITERAL
-       CANNOT CARRY. `surv_at`/`surv_out` are -1 and are named here. `deliv`'s blank is ALL ONES —
-       solve_delivered_all is a `memset(d->ok, 1, sizeof d->ok)` — and 256 designators is not something anybody
-       should write, so the solve_delivered_all call is PART OF THIS BIRTH rather than a step after it, and the
-       DCHECK on solve_delivered_ok that follows it is what says so. Adding a fourth such member is the one
-       edit that must be made HERE.
-       AND `calloc`/`memset` AT THE GROW IS NOT THIS FIX, WHICH IS WHAT A READER WILL REACH FOR BECAUSE IT
-       LOOKS LIKE THE SAME ONE. Zeroing the array KEEPS THE LIST AND HIDES ITS HOLES: a field left out of it
-       would then read 0 instead of garbage, so the next omission is a plausible datum where this one was a
-       loud one — the §A-FIELD-A-CONSUMER-DEFAULTS direction, and strictly worse than what was measured above,
-       since the cold-park stage CRASHED and told us while a zeroed slot would have reported `candEnds:0` for
-       ever and been believed. The literal has no holes to hide, because the assignment writes every member;
-       that is the difference between the two and it is the whole of it. Zeroing also leaves `surv_at`/`surv_out`
-       exposed, their blank being -1, so every argument below would still be owed for them. Garbage is loud; a
-       plausible zero is not.
-       AND A GARBAGE NONZERO IN THIS STRUCT IS NEVER A MISREPORTED QUANTITY — the one argument the thirty-five
-       statements were all restating, kept here once instead of at each of them, because a reader who re-derives
-       it will re-introduce the list. Four kinds, and every one of their blanks is 0:
-         a LATCH (`reach_credited`, `escape_credited`, `opened`, `resumed`, `resumed_withdrawn`) spends a rung
-           this search has never been paid, or EXCUSES the very arrival add_pending's own assert exists to
-           catch — that function reads `resumed_withdrawn` as the positive statement that a withdrawal
-           accounts for an entry nothing has tried;
-         a RATCHET (`surv_run`/`surv_len`, `replay_pm`, `replay_arms`/`replay_of`) makes every real observation
-           compare against a maximum nothing reached, so it never moves again and reads as a candidate that
-           consumed none of its own path for the rest of the session;
-         an OBSERVATION-EVER-MADE flag (`substituted`, `sink_strings`, `ends`) states that a substitution
-           happened, or a sink ran, or a candidate finished, for a search that has never once held the thread;
-         a SIZE (`reinject_len`) read as "did this search have a recorded path at all" states that arms were
-           offered to candidates that were offered none.
-       WHAT THIS LINE DOES NOT DO IS LEARN THE ROOT, and that argument is not about zeroing so it survives
-       whole: this is find-or-create over (source, class) and its three callers reach the root by three
-       different routes. Detection reads it off the value that arrived (add_pending); a parked candidate coming
-       back from the cold tier takes it out of the record it was rebuilt from (solve_resume_candidate); the
-       third — a candidate arriving at its own sink — has no route to one at all and asserts that it CREATED
-       nothing, so the NULL this literal writes is one no reader can reach. Both CREATING callers state the
-       root before the entry is visible to anybody, which is exactly what emit_delivery's assert holds them
-       to. */
+    /* The whole slot at once. `g_pending` is realloc'd and never zeroed, so a new slot holds allocator memory. A
+       compound literal assigned wholesale zero-initialises every member it does not name, so an omitted member
+       is unspellable rather than audited. Zeroing at the grow instead would turn a missed member into a
+       plausible 0 rather than loud garbage, and would still leave the -1 members to name.
+       Every latch, ratchet, observation count and size in Cand has blank 0. The members named are those whose
+       blank is not 0: `surv_at`/`surv_out` here, and `deliv`, whose blank is all ones and which the
+       solve_delivered_all call below writes as part of this birth. A further such member is the one edit that
+       must be made here.
+       The root is not learned here. The creating callers reach it by their own routes (add_pending off the
+       value, solve_resume_candidate off the park record) and state it before the entry is visible; the third
+       caller, candidate_search, asserts that it created nothing. */
     e = &g_pending[g_pending_n++];
     *e = (Cand){
         .src = strdup(src),
         .sink = sink,
-        /* THE OFFSETS OF A RUN THAT DOES NOT EXIST YET — -1 and not 0, for the reason FilterObs gives about
-           its own pair: 0 is a real offset, so a zeroed pair states that a run this search has never observed
-           begins at the candidate's first byte. */
+        /* No run has been observed yet: -1 rather than 0, as in FilterObs, because 0 is a real offset. */
         .surv_at = -1, .surv_out = -1,
     };
     CHECK(e->src, "solve: OOM pending");
-    /* EVERYTHING DELIVERS UNTIL SOMETHING CONTRADICTS IT — the sound-only direction (solve_filter.h): a search
-       that has been told nothing keeps every arm, exactly as a branch whose domain permits both outcomes keeps
-       both.
-       THE PERMISSIVE FILL IS ALL THIS LINE CAN HONESTLY DO, and the narrowing is not deferred to a run alone:
-       the root's carrier refuses some bytes outright and that is knowable without any run, but the root is not
-       known HERE — this is find-or-create over (source, class), whose callers reach the root by routes of their
-       own, which is exactly what the literal's NULL root says. cand_learn_root is where that fact arrives, so
-       cand_learn_root is where the declaration's half of this table is seeded.
-       AND IT IS ASSERTED, BECAUSE THIS IS THE ONE MEMBER THE LITERAL ABOVE CANNOT STATE. Every other blank in
-       Cand is 0 and the assignment writes it; this table's blank is all ONES, so a missing fill is no longer
-       the loud garbage it used to be — it is an all-zero table, which refuses EVERY byte, withdraws every
-       candidate at both doors and reads as a search whose payloads were all contradicted. That is precisely
-       the plausible-datum direction the paragraph above refuses `calloc` for, so the one member that direction
-       can still reach gets a check rather than a sentence. Asked through solve_delivered_ok, which is the
-       predicate the two doors themselves ask, over the bytes a breakout is built from. */
+    /* Everything delivers until something contradicts it, the sound-only direction (solve_filter.h): a search
+       told nothing keeps every arm. The root's carrier refusals are knowable without a run, but the root is
+       not known here, so cand_learn_root seeds that half. Asserted, because this is the one member the literal
+       cannot state: a missing fill is an all-zero table, which refuses every byte, withdraws every candidate at
+       both doors and reads as a search whose every payload the root contradicted. */
     solve_delivered_all(&e->deliv);
     DCHECK(solve_delivered_ok(&e->deliv, "<>\"'&"),
            "a freshly opened @S search refused bytes a breakout is made of — the birth above writes every "
@@ -562,29 +480,22 @@ static Cand *sink_search(const char *src, int sink, int *created) {
     return e;
 }
 
-/* ADD A BREAKOUT TO THIS SINK'S SEARCH, deduped by its TEXT. A probe run reaches one sink as often as the page
-   writes it (a loop over innerHTML), and two occurrences of the source can land in the same tokenizer state,
-   so the same constructed escape arrives more than once — and each duplicate would otherwise be a whole extra
-   re-run of the page that can only reproduce a result already had. */
+/* Add a candidate to a search, deduped by its text: a probe run reaches one sink as often as the page writes
+   it, two occurrences can land in one state, and a duplicate would cost a whole re-run of the page that can
+   only reproduce a result already had. */
 static void push_breakout(Cand *e, const char *payload, int kind) {
     DCHECK(e && payload && *payload, "a breakout was queued onto no sink, or with no bytes in it");
-    /* THE KIND IS STATED BY THE PUSHER AND ASSERTED HERE, because it is the one fact about these bytes that
-       cannot be recovered from them afterwards. Every reader below acts on it — the seeder declines to
-       withdraw an instrument, the arrival assert asks whether the bytes could have been BUILT by this search,
-       the report splits `probes` from attacks — so a third value, or a zero left by a caller that did not
-       think about it, would put an entry in a state every one of those readers answers differently for. */
+    /* The kind is the pusher's statement and cannot be recovered from the bytes afterwards. The seeder, the
+       arrival assert and the report each answer differently for a probe and an escape, so a third value is
+       refused. */
     DCHECK(kind == CAND_PROBE || kind == CAND_ESCAPE,
            "a candidate was queued as neither an instrument nor an attack — a probe is inert and is never "
            "withdrawn and never counted as an arrival, an escape is the opposite on all three, and there is no "
            "third thing for this list to hold");
-    /* DEDUPED BY TEXT, AND THE KIND IS PART OF WHAT THAT SETTLES. Two producers can reach the same bytes — a
-       written-down vector and a derivation, or a derivation re-run under a narrowed table — and a duplicate
-       would otherwise be a whole extra re-run of the page that can only reproduce a result already had. An
-       entry keeps the kind it was FIRST pushed with, which is sound because the two producers that can collide
-       are both escape producers: a probe is built out of this file's own locators (derive_probe, bytes_probe)
-       and no derivation emits one, so a collision between an instrument and an attack is not reachable. It is
-       asserted rather than assumed, because that argument is about the locator vocabulary and a class added
-       later owns its own. */
+    /* An entry keeps the kind it was first pushed with. The producers that can collide (a written-down vector,
+       a derivation, a re-derivation under a narrowed table) all push escapes, while a probe is built from this
+       file's own locators, which no derivation emits. Asserted, because that argument rests on the locator
+       vocabulary and a class added later owns its own. */
     for (int i = 0; i < e->npl; i++)
         if (!strcmp(e->pl[i].bytes, payload)) {
             DCHECK(e->pl[i].kind == kind,
@@ -599,17 +510,14 @@ static void push_breakout(Cand *e, const char *payload, int kind) {
         e->pl = realloc(e->pl, (size_t)e->plcap * sizeof(CandPayload));
         CHECK(e->pl, "solve: OOM recording a breakout for a sink search");
     }
-    /* AND THE SAME BIRTH FOR THE BREAKOUT ITSELF, for sink_search's reason: `pl` is realloc'd and never
-       zeroed, its three members happened to be stated, and a fourth added tomorrow would read whatever the
-       allocator held with nothing to say so. `surv` is the per-candidate half of the survival pair and its
-       blank is 0, so the literal names only the two this call computes. */
+    /* Born whole, for sink_search's reason: `pl` is realloc'd and never zeroed. `surv` has blank 0, so the
+       literal names only what this call computes. */
     e->pl[e->npl] = (CandPayload){ .bytes = strdup(payload), .kind = kind };
     CHECK(e->pl[e->npl].bytes, "solve: OOM recording a breakout for a sink search");
     e->npl++;
 }
 
-/* HOW MANY OF THIS SEARCH'S CANDIDATES ARE INSTRUMENTS — the report's `probes`, READ OFF THE LABELS rather
-   than off a leading count, so it states what the entries ARE and not where they happen to sit. */
+/* How many of this search's candidates are probes, read off their labels: the report's `probes`. */
 static int cand_probes(const Cand *e) {
     int n = 0;
     DCHECK(e != NULL, "the probe count was asked of no search");
@@ -617,15 +525,10 @@ static int cand_probes(const Cand *e) {
     return n;
 }
 
-/* …AND WHETHER ONE OF THEM IS THE DELIVERY PROBE — read off the entries this search HOLDS rather than by
-   re-deciding add_pending's rule for pushing one. That rule has two terms (the class derives, and the source
-   declares a percent-encode set) and a second copy of it here would be the third statement of one fact, of
-   which the copy nobody runs against reality is the one that drifts. The partition is the probe's own locator,
-   which is the SAME one observe_delivery routes the observation on, so there is one rule and this reads it.
-   IT IS WHAT MAKES `deliveryProbed` ABSENT RATHER THAN ZERO for a search that has no such probe — a
-   single-context class states its vectors at detection and runs none, and a derived search over server-injected
-   page state has no byte whose arrival is in question. A 0 for either would say "the probe never arrived" about
-   a search that has no probe, which is the reading `witnessed` and `fires` are absent for. */
+/* Does this search hold the delivery probe? Read off its entries by the probe's own locator, the partition
+   observe_delivery routes on, rather than by restating add_pending's rule for pushing one. It makes
+   `deliveryProbed` absent rather than 0 for a search that has no such probe: a single-context class, or a
+   source that declares no percent-encode set. */
 static int cand_has_delivery_probe(const Cand *e) {
     DCHECK(e != NULL, "the delivery-probe question was asked of no search");
     for (int i = 0; i < e->npl; i++)
@@ -634,32 +537,25 @@ static int cand_has_delivery_probe(const Cand *e) {
     return 0;
 }
 
-/* HAS THIS SEARCH CONSTRUCTED AN ESCAPE? — the question `npl > nprobe` was the arithmetic for. It is a
-   statement about what the list HOLDS, so it is answered by asking the entries, and it is then true in every
-   order the two producers can arrive in rather than only in the one the leading count was taken in. */
+/* Has this search constructed an escape? Asked of the entries, so it holds whatever order the producers push in. */
 static int cand_has_escape(const Cand *e) {
     DCHECK(e != NULL, "the escape question was asked of no search");
     for (int i = 0; i < e->npl; i++) if (e->pl[i].kind == CAND_ESCAPE) return 1;
     return 0;
 }
 
-/* WHAT KIND OF THING THESE EXACT BYTES ARE TO THIS SEARCH, or 0 for bytes this session's record does not hold.
-   THE ZERO IS A POSITIVE STATEMENT AND ITS ONE LEGITIMATE PRODUCER IS THE COLD TIER: a resumed candidate's
-   payload rides the resumed FLOW rather than this session's record (solve.h, on `payloads` being empty beside
-   a non-zero `tried`), so it has no row here unless this session's own derivation independently constructed
-   the same bytes — in which case it is the same payload, one row, which is what deduping by text means.
-   Every caller of this therefore reads the zero against `Flow.cand_resumed` and never as "not found". */
+/* The kind of these exact bytes in this search's record, or 0 for bytes it does not hold. The cold tier is the
+   one legitimate producer of 0: a resumed candidate's payload rides the flow rather than this record (solve.h,
+   on `payloads` being empty beside a non-zero `tried`), unless this session derived the same bytes, which is
+   then the same row. Callers read 0 against Flow.cand_resumed, never as "not found". */
 static int cand_kind_of(const Cand *e, const char *bytes) {
     DCHECK(e != NULL && bytes != NULL, "a candidate's kind was asked of no search, or about no bytes");
     for (int i = 0; i < e->npl; i++) if (!strcmp(e->pl[i].bytes, bytes)) return e->pl[i].kind;
     return 0;
 }
 
-/* CAN THIS SEARCH ACCOUNT FOR THE BYTES THAT JUST ARRIVED AT ITS SINK? — breakout_arrived's whole condition,
-   held as ONE call so it can be spelled inside the DCHECK. A release build type-checks a DCHECK's condition
-   and never evaluates it, so written as a local read before the assert this scan would run on the shipped
-   arrival path for a check that build does not make; written as the condition it costs exactly nothing there.
-   It is side-effect-free, which is what a DCHECK condition must be (check.h). */
+/* Can this search account for the bytes that just arrived at its sink? breakout_arrived's condition, as one
+   side-effect-free call so it can sit inside the DCHECK and cost nothing in a release build (check.h). */
 static int cand_arrival_is_attack(const Cand *e, const Flow *f) {
     int kind;
     DCHECK(e != NULL && f != NULL && f->cand_payload != NULL,
@@ -669,12 +565,9 @@ static int cand_arrival_is_attack(const Cand *e, const Flow *f) {
     return kind == CAND_ESCAPE || (kind == 0 && f->cand_resumed);
 }
 
-/* THE FIRST OF A SOURCE'S DECLARED BYTES THAT ITS OWN DELIVERY TABLE REFUSES, or 0 — the whole of
-   cand_learn_root's two-sided check, held as ONE call so it can be spelled inside the DCHECKF rather than run
-   as a loop the shipped build would walk for an assert it does not make (the same shape and the same reason as
-   cand_arrival_is_attack). Side-effect-free, which is what a DCHECK condition must be (check.h). 0 is not a
-   byte a component can declare: bytes_probe indexes the set by one decimal digit appended to its token, so a
-   NUL in it would end the probe string, and every declared set in the tree is printable by construction. */
+/* The first of a source's declared bytes its delivery table refuses, or 0: cand_learn_root's two-sided check as
+   one side-effect-free call, for cand_arrival_is_attack's reason. 0 is never a declared byte, since bytes_probe
+   writes each declared byte into a NUL-terminated probe and every declared set is printable. */
 static int declared_byte_refused(const SolveDelivered *d, const char *enc) {
     int i;
     for (i = 0; enc && enc[i]; i++)
@@ -682,17 +575,14 @@ static int declared_byte_refused(const SolveDelivered *d, const char *enc) {
     return 0;
 }
 
-/* THE SEARCH LEARNS HOW THE ATTACKER'S BYTES ARRIVE — once, from the value that arrived.
-   THIS USED TO REST ON A ROOT BEING INHERITED UNCHANGED THROUGH EVERY DERIVATION, so that two values with one
-   injection identity could not have entered by two routes, AND THAT PREMISE IS NOW FALSE. A derivation over
-   several operands UNIONS their roots (solver/concolic.h's derived_root_join) while taking `src` from the
-   first, so `x` and `x + location.search` carry ONE injection identity and TWO roots — the second having
-   genuinely entered through two components.
-   SO THE ASSERT STOPS BEING A RESTATEMENT OF A STRUCTURAL FACT AND BECOMES THE REFUSAL THIS SEARCH OWES: one
-   envelope states one percent-encode set and one address component, so a search handed two roots has no honest
-   single answer and may not pick one. It stays, and what retires it is the mechanism the two other refusals
-   over this same gap name (root_declared_row's and concolic_deliver's) — one candidate seeded per declaring
-   member, each carrying its own envelope, and the one that FIRES emitted. */
+/* The search learns how its attacker bytes arrive, from the value that arrived. One envelope states one
+   percent-encode set and one address component, so a second, different root is refused. A derivation over
+   several operands unions their roots (concolic.h's derived_root_join) while taking `src` from the first, so
+   one injection identity can bring two roots here.
+   Named residual: not covered — an injection identity whose value entered through two components; next diff —
+   one candidate seeded per declaring member, each carrying its own envelope, and the one that fires emitted
+   (the remedy root_declared_row and concolic_deliver also name); absence shows as this assert firing on a
+   value composed from two attacker sources. */
 static void cand_learn_root(Cand *e, const char *root) {
     DCHECK(e && root, "a sink search was told how its bytes arrive by nothing, or was told nothing");
     if (!e->root) { e->root = strdup(root); CHECK(e->root, "solve: OOM recording a sink's delivery root"); }
@@ -702,34 +592,18 @@ static void cand_learn_root(Cand *e, const char *root) {
            "entered through two components — and one envelope states one percent-encode set and one address "
            "component, so the report would carry whichever detection "
            "ran last");
-    /* …AND THE DELIVERY TABLE TAKES THE HALF OF ITS ANSWER THAT NO RUN CAN GIVE IT, HERE, because this is the
-       one moment the root becomes known and BOTH of the search's doors pass through it — detection
-       (add_pending) and the cold tier's rebuild (solve_resume_candidate). The `return` that stood on the
-       first branch is gone for exactly that reason: on a found entry this call is the equality assert, and it
-       must still be the seed, or the search whose slot a resume created would be seeded by whichever door
-       happened to run second.
-       WHAT IT SEEDS IS NOT THE DECLARED ENCODE SET, and the distinction is concolic.c's to make rather than
-       this file's — which is why this is a call and not a table. §@S(2) is measured, so what the browser
-       percent-encodes on the way IN is a PRIOR (a page that decodes its own fragment receives the byte, and
-       this engine already fires a markup PoC through that round trip) and only a run settles it. What a
-       CONSTRAINED carrier refuses is not a prior: the byte never enters the page's program in any form, so no
-       page-side transform recovers it and no run can widen it. The registry owns the column both halves are
-       read from, so the registry answers, and this line asks.
-       ORDER MATTERS AND IS WHY IT IS AT THE TOP OF ITS CALLERS: add_pending pushes a class's written-down
-       vectors and its probes AFTER this, and solve_seed_candidates withdraws an escape the table refuses — so
-       the table is complete before anything is queued against it rather than being narrowed underneath a list
-       that was built while everything still delivered.
-       IT IS NOT A MEASUREMENT AND DOES NOT PRETEND TO BE ONE: `deliv_seen` stays where it was, so
-       `sourceDelivers` still reports only what a probe RAN and observed, and a declaration-narrowed table is
-       not emitted as a measured set. */
-    /* THE TWO-SIDED HALF, AND IT IS NOT A RESTATEMENT OF THE CALL — it reads the OTHER column of the same row.
-       A carrier that refuses a byte its own row also DECLARES would be a declaration contradicting itself
-       (root_carrier: the row lists the PRINTABLE bytes the production excludes, and the refusal covers
-       everything outside printable US-ASCII, so the two cannot name one byte), and the cost of that landing
-       quietly is the instrument itself: the delivery probe is BUILT out of the declared bytes (bytes_probe),
-       so a seed that cleared one would have solve_seed_candidates withdraw the probe that was going to measure
-       it — a search that can never learn the thing its own report is about. Asked only where the seed FIRED,
-       so it is a question about a state that exists rather than one that cannot arise. */
+    /* The delivery table takes the half no run can give it here, at the one moment the root becomes known,
+       which both doors pass through (add_pending, solve_resume_candidate); on a found entry this call still
+       seeds. What is seeded is not the declared encode set: what the browser percent-encodes is a prior that
+       only a run settles (a page may decode its own fragment), while a byte a constrained carrier refuses never
+       enters the page's program and no run can widen it. concolic.c owns that column, so it answers. The
+       callers push vectors and probes after this, so the table is complete before anything is queued against
+       it. `deliv_seen` is untouched: a declaration-narrowed table is not a measurement. */
+    /* The other column of the same row: a carrier must not refuse a byte its row also declares, since the
+       declared set is the printable bytes the production excludes and the refusal is everything outside
+       printable US-ASCII. A seed that cleared a declared byte would leave the delivery probe built from it
+       unable to learn anything about that byte, because the table only narrows. Asked only where the seed
+       fired. */
     if (concolic_source_carrier_bytes(e->root, &e->deliv))
         DCHECKF(declared_byte_refused(&e->deliv, concolic_source_encodes(e->root)) == 0,
                 "an @S source's carrier refuses byte 0x%02X while the same row DECLARES it as one the "
@@ -740,14 +614,10 @@ static void cand_learn_root(Cand *e, const char *root) {
                 (unsigned)declared_byte_refused(&e->deliv, concolic_source_encodes(e->root)));
 }
 
-/* HAS THIS SEARCH ALREADY FIRED? — DERIVED from the finding store rather than latched beside it, because that
-   store IS where a fire is recorded (record_sink) and a second copy of one fact is the copy that drifts. The
-   comparison is record_sink's own dedup comparison, which is what makes the two unable to disagree.
-   IT REPLACES A PROXY THE COLD TIER FALSIFIES. "Is this search closed" was read two ways, both of them sound
-   for a search this session DETECTED and neither for one it RESUMED: off `reinject == NULL`, which a resumed
-   search is BORN holding, and off `cand_has_escape`, which a resumed search never holds at all because its
-   payload rides the resumed FLOW and has no row in `pl` (cand_kind_of says so in its own note). Asked of the
-   fire itself, the question has one answer for both doors. */
+/* Has this search fired? Derived from the finding store, where a fire is recorded (record_sink), with
+   record_sink's own dedup comparison, so the two cannot disagree. Asked of the fire rather than of `reinject`
+   or cand_has_escape, both of which a cold-resumed search falsifies: it is born without a path, and its
+   payload rides the flow with no row in `pl`. */
 static int search_solved(const Cand *e) {
     DCHECK(e != NULL && e->src != NULL,
            "the solved question was asked of no search, or of one with no injection identity — the finding "
@@ -758,45 +628,12 @@ static int search_solved(const Cand *e) {
     return 0;
 }
 
-/* THE SEARCH TAKES THE PATH OF A FLOW STANDING AT ITS SINK — the ONE capture, reached from the TWO doors at
-   which a flow demonstrably stands there having got there with this source, rather than from the one door a
-   cold-resumed session never takes.
-   THE SECOND DOOR IS THIS SEARCH'S OWN CONTEXT PROBE COMING BACK. add_pending is a DETECTION and a verifying
-   flow does not detect, so in a session whose only arrivals at this sink are RESUMED CANDIDATES the capture
-   never happened and `reinject` stayed NULL for the life of the search. `search_seeds` reads that NULL, and
-   record_sink is entitled to make it read that way — its own words are "CLEARING IT IS WHAT CLOSES THE
-   SEARCH". So a resumed search was BORN in the state a fired one is LEFT in, and nothing anywhere told the
-   two apart: the value that means CLOSED is also the value a fresh entry starts at.
-   WHAT IT COST WAS THE WHOLE OUTPUT OF A RESUMED SEARCH. queue_derived's first line is `if (!search_seeds(e))
-   return;`, so every escape the derivation constructed from the resumed probe's witness was dropped in
-   silence; derive_from_witness's own assert caught it in dev, and in release the report stated
-   `probes == payloads`, which solve.h defines as the positive statement that this source can carry no exit
-   from the state its bytes landed in — a false-safe @S verdict on a resumed search. MEASURED on a park/resume
-   pair, 3/3 with zero spread: the park control never reaches that assert and the resume always does, and a
-   residue cut to the parked ESCAPE candidates alone resumes clean and FIRES while one cut to the parked
-   CONTEXT-PROBE candidates alone reproduces — which is what says the door is the witness arrival rather than
-   the candidate arm.
-   IT IS SOUND FOR THE REASON THE FIRST DOOR IS, AND THE FIELD ALREADY STATED IT: "Both demonstrably reach this
-   sink with this source, which is the only property a replayed path has to have." A resumed candidate flow
-   standing at this sink is one more such flow, and the field's own note calls that no new capability at all —
-   "the one cold_resume performs every time it brings one back".
-   IT CANNOT RE-OPEN A SEARCH THAT FIRED, which is the one thing a second door must not do. The probe's OTHER
-   arms keep arriving after a fire (queue_derived says so), so a capture guarded only on `reinject == NULL`
-   would hand a closed search a fresh path and it would seed again. The guard is therefore the FIRE, asked of
-   the store, so record_sink's release stays the closure rather than becoming one of two things that have to
-   agree.
-   IT PUSHES NOTHING, which is what keeps it out of solve_resume_candidate's way: that door declines to call
-   add_pending precisely because opening a search SEEDS it, and a resumed search's probes are already running
-   as flows. This takes the path and only the path. */
-/* DECLARED HERE AND DEFINED BELOW, because the closure question is asked ABOVE its definition — by
-   add_pending's tail — and a second spelling of `e->reinject != NULL` at that site would be a third answer to
-   a question this file has an accessor for. */
+/* Declared here because add_pending, above the definition, asks whether a search still seeds. */
 static int search_seeds(const Cand *e);
 
-/* THE COPY/FREE PAIR OVER ONE PrincipalGate'S ROWS — see the `PrincipalGate` typedef for why the copy exists
-   at all (both halves of what concolic.c hands over are borrowed from things a search outlives). What a ROW
-   owns is concolic.c's to say and is never re-spelled here; these two own the ARRAY around the rows, which is
-   the same division endpoint.c's `param_pred_copy`/`param_pred_free` make over the same row type. */
+/* Copy and free one PrincipalGate's rows. What a row owns is concolic.c's (concolic_pred_copy /
+   concolic_pred_release); these own the array, the same division endpoint.c's param_pred_copy /
+   param_pred_free make over the same row type. */
 static ConcolicPred *gate_pred_copy(const ConcolicPred *src, int n) {
     ConcolicPred *out;
     int i;
@@ -816,8 +653,8 @@ static void gate_pred_free(ConcolicPred *p, int n) {
     free(p);
 }
 
-/* ONE PRINCIPAL'S DEMANDS, ARRIVING OFF concolic.c's WALK. It appends rather than replaces, because the walk
-   calls back once per principal the path tested and their demands CONJOIN — see the `pg` field. */
+/* One principal's demands, called back by concolic_principal_preds once per principal the path tested. It
+   appends, because the demands of one path conjoin. */
 static void cand_gate_row(void *user, const char *src, const ConcolicPred *pred, int n) {
     Cand *e = (Cand *)user;
     PrincipalGate *a;
@@ -837,53 +674,44 @@ static void cand_gate_row(void *user, const char *src, const ConcolicPred *pred,
     e->npg++;
 }
 
-/* §Attacker-sources' PAIR, DECIDED FOR THE PATH EVERY CANDIDATE OF THIS SEARCH REPLAYS — the verdict AND the
-   evidence, written together at the one moment the flow that froze that path exists. */
+/* Decide what the path every candidate of this search replays demanded of an attacker's principal: the verdict
+   and its evidence, written together while the flow that froze the path exists. */
 static void cand_learn_principal_gates(Cand *e) {
     DCHECK(e != NULL, "the demands of a path were decided for no search");
     DCHECK(e->pg_demand == PG_UNEXAMINED && e->npg == 0,
            "a search's principal demands were decided twice — this runs past the ONE capture's own two "
            "returns, so a second verdict describes a path this search no longer stands on, exactly as a second "
            "recorded length would");
-    /* THE UNFORGEABLE ARM IS STATED AND NOT LEFT AS AN EMPTY SET, AND THAT IS NOT A RESTATEMENT OF detect_sink'S
-       SUPPRESSION. That one stops a DETECTION from opening a search at all, and this capture has a SECOND door
-       — the arrival of a resumed search's own context probe (derive_from_witness, reached through
-       solve_eval_sink's VERIFYING branch) — whose flow is a candidate replaying a recorded path rather than a
-       detection, and which that suppression never sees.
-       WHAT IT COSTS IF THE TWO ARE FOLDED IS A FALSE POC AND NOT A MISSING ONE. A path's demands CONJOIN, so a
-       flow that pinned `origin === "https://evil.example"` and also tested `origin.startsWith("https://")` has
-       made one demand an attacker cannot meet and one they can; reporting the second alone — or reporting an
-       empty set, which a consumer reading `npg == 0` cannot tell from "demanded nothing" — states a satisfiable
-       identity for a path that is unsatisfiable, and §Attacker-sources names exactly that outcome as forbidden:
-       "never a false PoC, never a dropped real one". The pinned path is not dropped either: this is the same
-       SUPPRESSED verdict detect_sink counts, said out loud at the one door that cannot count it, and the sink
-       stays reportable through any sibling flow that reaches it without the demand. */
+    /* A pinned principal is stated as PG_UNFORGEABLE rather than left as an empty set. detect_sink's suppression
+       stops a detection from opening a search, but this capture also has the witness door (derive_from_witness,
+       a resumed search's own context probe), which that suppression never sees. A path's demands conjoin, so
+       reporting only its forgeable ones, or an empty set a consumer cannot tell from "demanded nothing", would
+       state a satisfiable identity for an unsatisfiable path. The sink stays reportable through any sibling
+       flow that reaches it without the demand. */
     if (concolic_principal_pinned()) { e->pg_demand = PG_UNFORGEABLE; return; }
     concolic_principal_preds(cand_gate_row, e);
-    /* …AND THE REMAINING TWO ARMS ARE READ OFF THE WALK'S OWN ANSWER RATHER THAN ASKED AGAIN. The walk calls
-       back exactly where it found a demand, so `npg` after it IS which of the two this path is — and deriving
-       the verdict here is what keeps the enum and the rows from being two producers that can disagree. */
+    /* The walk calls back exactly where it found a demand, so `npg` is now the verdict; deriving it here keeps
+       the enum and the rows from being two producers that can disagree. */
     e->pg_demand = e->npg ? PG_FORGEABLE : PG_NONE;
 }
 
+/* Take the re-injection path of the flow standing at this search's sink: the one capture, reached from two
+   doors. One is detection (add_pending). The other is this search's own context probe coming back
+   (derive_from_witness), the only door a cold-resumed session reaches, since a verifying flow does not
+   detect; without it a resumed search never held a path and queue_derived dropped every escape derived from
+   its witness. Either flow demonstrably reached this sink with this source, which is the only property a
+   replayed path needs. It cannot re-open a fired search, because the guard is the fire itself
+   (search_solved), and it pushes nothing, which keeps solve_resume_candidate's door free of seeding. */
 static void cand_learn_path(Cand *e) {
     DCHECK(e != NULL, "a re-injection point was taken for no search");
     if (e->reinject) return;       /* the one capture has happened, at whichever door reached it first */
     if (search_solved(e)) return;  /* a solved search seeds no further candidates — see record_sink */
     e->reinject = decide_freeze_path();
-    /* AND HOW MANY ARMS THAT PATH HOLDS, TAKEN HERE BECAUSE THIS IS WHERE THE PATH EXISTS AND IS OWNED. It is
-       a SIZE fixed from this instant (decide.h's `entries`), it is the whole of what `runwayArms` reports,
-       and it is stored rather than re-derived because record_sink gives the blob back at the fire — a length
-       read at the emitter would be 0 for exactly the searches that succeeded.
-       IT PROMOTES NOTHING, WHICH IS A QUESTION THIS LINE HAD TO ANSWER RATHER THAN A REASSURANCE: the
-       accessor's null guard is an always-fatal CHECK, so a NULL blob here would be a release-mode abort where
-       a DCHECK is the only thing that looks today. decide_freeze_path cannot hand one over — it CHECKs its own
-       allocation and returns that pointer unconditionally — so the argument is non-NULL by construction and
-       this call adds no failure mode to a release build.
-       AND A CHAIN OF ZERO LENGTH IS A LEGITIMATE ANSWER AND NOT ONE TO ASSERT AGAINST. A flow that has
-       decided nothing freezes a blob whose segment is absent, which the accessor reports as 0 entries — that
-       is exactly the `runwayArms:0` reading, so a DCHECK demanding a nonzero here would abort on the one
-       state this field was added to be able to state. */
+    /* And the path's length, taken here where the path exists: it is what `runwayArms` reports, and record_sink
+       gives the blob back at the fire, so a length read later would be 0 for the searches that succeeded.
+       decide_freeze_path CHECKs its allocation and never returns NULL, so the accessor's own CHECK adds no
+       release failure mode. A length of 0 is a legitimate answer, from a flow that decided nothing: the
+       `runwayArms:0` reading. */
     {
         long arms = 0;
         DCHECK(e->reinject_len == 0,
@@ -899,92 +727,35 @@ static void cand_learn_path(Cand *e) {
                "the reading the whole pair turns on");
         e->reinject_len = (int)arms;
     }
-    /* …AND WHAT THAT PATH DEMANDED OF AN ATTACKER'S PRINCIPAL, TAKEN IN THE SAME BREATH AS THE PATH AND FOR
-       THE SAME REASON: this is the one moment the flow that froze it exists, and both the registry's name and
-       the constraint row are BORROWED from things that do not outlive it. Reading either at the emitter would
-       be a read of a flow that is gone — which is what `cand_delivers` and `runwayArms` are each latched
-       against, one field over.
-       INSIDE THE ONE CAPTURE'S GUARD BY CONSTRUCTION, because the two returns above it are the path's and this
-       runs past them: a search that already holds a path holds the demands of that same path, and a solved one
-       takes no further candidates. A second write here would describe a path this search no longer stands on,
-       which is the sentence the length's own assert makes. */
+    /* And what that path demanded of an attacker's principal, taken now because the registry name and the
+       constraint rows are borrowed from this flow. It runs past the capture's two returns, so a search that
+       already holds a path already holds that path's demands. */
     cand_learn_principal_gates(e);
 }
 
-/* A DETECTED SINK OPENS ITS SEARCH. A single-context class states its breakouts; every other class states the
-   probe whose run the derivation reads its context from. */
+/* A detected sink opens its search: a single-context class states its breakouts, any other class the probes
+   whose runs its derivation reads. */
 static void add_pending(const char *src, const char *root, int sink) {
     int created = 0;
     Cand *e = sink_search(src, sink, &created);
     const SinkClass *sc;
 
-    /* BEFORE THE EARLY RETURN, because most detections FIND this entry rather than create it: a source reaches
-       one sink as often as the page writes it, and a cold-resumed candidate opens the search before any
-       exploration flow of this session has re-reached it. On a found entry this call is the EQUALITY assert,
-       which is the whole of what says the two ends of the tier agree about how these bytes arrive. */
+    /* Before the early returns, because most detections find this entry rather than create it; on a found entry
+       this is the equality assert that says both ends of the cold tier agree on how these bytes arrive. */
     cand_learn_root(e, root);
-    /* OPENING A SEARCH IS A PROPERTY OF THE SEARCH, NOT OF WHO MADE THE SLOT, and this line used to be
-       `if (!created) return;` — the same defect as the leading probe count, one level up and with worse
-       consequences. Two independent producers reach g_pending: DETECTION, which is the only one that can open
-       a search (it is the one moment a flow stands at the sink holding the value that arrived, which is what
-       the probe and the re-injection point are both taken from), and a COLD RESUME, which registers a
-       candidate of a search opened in an earlier session. `created` conflates "this call made the array slot"
-       with "this call opened the search", and those come apart in exactly one order — the one the cold tier
-       makes STRUCTURAL, since cold_resume runs at engine init and detection cannot run before a flow does. In
-       that order the resume created the slot, so detection returned HERE: no context probe, no written-down
-       vectors, no re-injection point, `search_seeds` false for ever. The session's search for that sink could
-       then construct nothing, derive nothing and seed nothing, and the report said `payloads:[]` — which
-       solve.h defines as the positive statement that this source can carry no exit from the state its bytes
-       landed in. A silent wrong verdict produced by arrival order.
-       ASKED OF THE ENTRY, it is right in both orders: whichever door made the slot, the first DETECTION opens
-       the search, and the second and hundredth return here as they always did. */
+    /* Opening is a property of the search, not of who made the slot. In a resuming session cold_resume runs at
+       engine init and creates the slot before any detection, so a `created` test here would leave the search
+       with no probe, no vectors and no path, and the report would say `payloads:[]`. */
     if (e->opened) return;
-    /* …AND A SEARCH THAT HAS ALREADY FIRED IS NOT OPENED EITHER — a SECOND fact about the search, not a
-       second spelling of the first. `opened` answers "has detection been here", and the cold tier makes a
-       search able to FINISH before this session's first detection ever arrives: solve_resume_candidate
-       registers a parked candidate at engine init, that candidate reaches the sink and FIRES, and record_sink
-       closes the search — all of it before an exploration flow of this session has re-reached the same eval.
-       SOLVED-AND-UNOPENED is the one combination the latch above cannot express, and it is the cold tier's
-       normal state rather than a corner of it.
-       EVERY OTHER CONSUMER OF A SOLVED SEARCH IN THIS FILE ALREADY DECLINES, AND THIS WAS THE ONE THAT DID
-       NOT: cand_learn_path returns rather than taking a path ("a solved search seeds no further candidates"),
-       queue_derived and solve_seed_candidates return on search_seeds, and record_sink discards a duplicate
-       PoC for the pair at its own top. Opening a closed search bought NOTHING and cost three things — a
-       flow_credit_emit for an observation carrying no value of information, since the finding is already
-       emitted and standing here again learns nothing new; a context probe pushed onto a list the seeder will
-       never walk; and an `opened` latch on a search nobody will act on — and then asserted below a
-       re-injection point record_sink's release has taken back BY DESIGN. What this restores is agreement
-       between the two arrival orders: detection-first already returned at the latch above without paying or
-       pushing, and the cold order now does the same.
-       MEASURED at 938fd7c9, `--cold-resume` over four cuts of ONE park document, total separation and the
-       same binary throughout. The full residue and a cut to the parked ESCAPES alone abort at the tail assert
-       below holding `reinject` NULL and `reinject_len` 0 — the search fired before any path was ever
-       captured. A cut to the parked CONTEXT PROBES alone aborts there holding `reinject` NULL and
-       `reinject_len` 1 — a path WAS taken, at the witness door, and record_sink gave it back at the fire of
-       the escape the derivation built from that probe's own witness. A cut to NO candidates at all never
-       reaches the assert and runs on to @RESULT. Two routes into one state: in both aborting cases g_sinks
-       held this entry's own (class, source) carrying the PoC `';X9()//`, which is search_solved's comparison
-       satisfied.
-       IT IS NOT A SEEN-SET AND TRUNCATES NOTHING, for search_seeds' reason exactly: what closes a search is
-       EMITTED OUTPUT — a fire-verified PoC for this exact (source, sink) — which §NO BOUNDS names as the one
-       thing allowed to prove a flow is done. The detecting flow goes on running, its arm is not pruned, and
-       the arrival is still counted upstream in detect_sink, which raises `reached`/`tainted` before this
-       function is called at all.
-       RETIREMENT: this record goes when these two returns are ONE question asked of one derived fact — has
-       this detection anything to open — so that a third state cannot be admitted by forgetting a predicate. */
+    /* A search that already fired is not opened either. The cold tier can finish a search before this session's
+       first detection, when a resumed candidate fires before any exploration flow re-reaches the sink; opening
+       it would pay a credit for nothing new, push a probe nobody seeds and then assert a path record_sink has
+       taken back. This is not a seen-set: what closes a search is emitted output, the detecting flow runs on,
+       and detect_sink has already counted the arrival. */
     if (search_solved(e)) return;
-    /* …AND THE ONLY OTHER DOOR THAT CAN HAVE MADE THE SLOT SAYS SO IN ITS OWN NUMBERS. A detection opening a
-       search on an entry it did not create means some other producer made that entry, and there is exactly one
-       — solve_resume_candidate.
-       IT ACCOUNTS FOR ITS RECORDS IN TWO NUMBERS AND NOT ONE, AND THIS ASSERT USED TO NAME ONLY THE FIRST. It
-       read `created || e->tried > 0` under the argument that the rebuild "raises `tried` for every candidate
-       it rebuilds", and that argument is retired: a record whose payload the root's carrier positively refuses
-       is WITHDRAWN, which creates the slot — the delivery table has to exist before anything can be refused
-       against it — and raises `resumed_withdrawn` instead. Under the old spelling the first such record made
-       every later detection of that sink abort on an assert that was right about its own rule and wrong about
-       the tree. Both terms are here because both are real evidence of the same producer, and neither is a
-       widening: a third door (a future writer into g_pending that neither detects nor resumes nor withdraws)
-       still shows up here rather than quietly acquiring a probe and a path it has no claim to. */
+    /* A detection opening an entry it did not create means the cold tier made it, which leaves one of two
+       numbers: a resumed record raises `tried`, a withdrawn one raises `resumed_withdrawn`. Any other entry was
+       made by a third door. */
     DCHECK(created || e->tried > 0 || e->resumed_withdrawn > 0,
            "a sink search is being opened on an entry this detection did not create and no cold-resumed "
            "candidate accounts for — g_pending has two writers, detection and the cold tier's rebuild, and the "
@@ -993,62 +764,30 @@ static void add_pending(const char *src, const char *root, int sink) {
            "there by a third door and is about to be handed a context probe and a re-injection point on behalf "
            "of a search nobody opened");
     e->opened = 1;
-    /* THE RE-INJECTION POINT IS A FACT ABOUT THE SEARCH, NOT ABOUT THE DERIVATION, so it is taken HERE — at the
-       one moment a flow is standing at this sink holding the value that reached it. The field's own comment
-       used to say this was the DERIVED classes' problem and that a single-context class "states its vectors at
-       DETECTION, so its candidates are seeded when the frontier is small and one of them fires". The first half
-       is true and the second does not follow, and the cost is measurable on the shipped artifact: a document
-       with K independent concolic gates in front of one sink creates 2^K exploration flows, and EVERY candidate
-       with no path re-searches that same tree for the one arm that arrives. Measured on extension/lib/qjs at
-       e718ef9f, K=10: the eval and markup sinks each created 2049 flows = 1 + 2^10 explored + 2^10 forked by
-       the CONTEXT PROBE, while the derived breakout — which already holds a path, frozen by queue_derived —
-       forked NONE. At K=8 the URL sink created 768 = 2^8 + 2 x 2^8, because it has two written-down vectors and
-       neither replayed. So the probe pays the traversal in full for every class, and pays it at the moment the
-       search opens, which is the whole of what a `reached:0` beside a growing `turns` reports.
-       IT IS THE SAME BLOB AND THE SAME SOUNDNESS ARGUMENT the field already states: a candidate run substitutes
-       a CONCRETE value at the source, so branches on it are decided by running the real predicate and never
-       from the vector — the recorded arms only replay the decisions the payload does not make. What differs is
-       WHOSE path it is: the detecting flow's rather than the probe's. Both demonstrably reach this sink with
-       this source, which is the only property a replayed path has to have.
-       THIS IS THE ONLY CAPTURE AND IT IS NO LONGER THE ONLY DOOR ONTO IT. queue_derived's `if (!e->reinject)
-       e->reinject = decide_freeze_path()` is gone, so there is one freeze, one owner and one release rather
-       than two sites that had to agree about which path wins — and the capture itself now lives in
-       cand_learn_path, which BOTH doors call: this one, and the arrival of a resumed search's own context
-       probe. A session whose only arrivals at this sink are RESUMED CANDIDATES never reaches this line at
-       all, and that is the whole of what the second door is for. */
+    /* The re-injection path is taken here for every class, at the moment a flow stands at this sink holding the
+       value that reached it: a candidate with no path re-forks the document's whole gate tree (2^K flows behind
+       K gates) whatever seeded it. It is the detecting flow's path, sound for every candidate for the reason
+       given at Cand.reinject. cand_learn_path is the one capture; derive_from_witness is its other door. */
     DCHECK(flow_running() != NULL,
            "an attacker source reached a sink with no flow running — a concolic value is minted by a flow and "
            "carried by one, so there is no route to this line from outside the scheduler, and the path about to "
            "be frozen would be whatever chain the previously-switched-in flow left behind");
-    /* AND THE FLOW THAT MADE THE OBSERVATION IS THE ONE PAID FOR IT. This credit — "a NEW
-       attacker-source-reaches-sink: value-of-information for the running flow" — used to sit on the CREATE, in
-       sink_search, which is the same conflation the `opened` latch above ends: a cold resume creating the slot
-       is not an observation of anything (it re-registers a search a previous session opened), and cold_resume
-       runs at engine init where there is no running flow at all — so in that order the credit was dropped on
-       the floor and the exploration flow that later did the real detecting was paid nothing for it. The
-       observation is the OPEN, so the credit is at the open. Below the assert above rather than beside the
-       latch, so that "no flow is running here" aborts as the invariant it is instead of being spent as a
-       silently-skipped payment. */
+    /* The flow that made the observation is paid for it. The credit is at the open rather than at the slot's
+       creation, because a cold resume creating the slot observes nothing and runs with no flow; it sits below
+       the assert so a missing flow aborts instead of silently skipping the payment. */
     flow_credit_emit(1.0);
     cand_learn_path(e);
     sc = sink_class(sink);
-    /* A SINGLE-CONTEXT CLASS'S WRITTEN-DOWN VECTORS ARE ATTACKS, which is what `probes:0` beside a non-empty
-       list states and what used to be spelled by leaving `nprobe` at 0 for this arm. Said rather than
-       implied: the seeder withdraws a contradicted one of these and the report marks it, both of which are
-       correct for a vector and wrong for an instrument. */
+    /* A single-context class's written-down vectors are attacks: the seeder may withdraw a contradicted one, and
+       the report marks it. */
     if (sc->vectors) { for (int c = 0; sc->vectors[c]; c++) push_breakout(e, sc->vectors[c], CAND_ESCAPE); }
     else {
-        /* THE INSTRUMENTS, LABELLED AS INSTRUMENTS. They used to be told apart by being pushed FIRST and
-           counted, which required this to be the one moment nothing else had been pushed; the label carries
-           the fact instead, so it survives an entry this call did not create. */
+        /* The probes, labelled as probes, so the label rather than the push order carries the fact. */
         push_breakout(e, derive_probe(sc->derive), CAND_PROBE);
-        /* AND THE DELIVERY PROBE BESIDE IT, for the class that DERIVES and only for it. That is routing and
-           not an exception: the table it fills is read by a derivation choosing between two spellings of one
-           exit transition, so a class whose breakouts are WRITTEN DOWN has nothing to read it, and a probe for
-           one would be a document re-run whose answer no construction consults.
-           IT IS SKIPPED WHERE THE SOURCE DECLARES NOTHING, which is a fact and not an omission: server-injected
-           page state (`window.__FLAGS`) is written by the attacker directly, no component percent-encodes it,
-           and there is no byte whose arrival is in question. */
+        /* And the delivery probe, only for a deriving class: its table is read by a derivation choosing between
+           spellings of one exit, which a class with written-down vectors does not have. Skipped where the source
+           declares no percent-encode set, such as server-injected page state (`window.__FLAGS`), since no byte's
+           arrival is then in question. */
         {
             const char *enc = concolic_source_encodes(root);
             if (enc && *enc) {
@@ -1058,10 +797,7 @@ static void add_pending(const char *src, const char *root, int sink) {
             }
         }
     }
-    /* ASKED THROUGH `search_seeds`, WHICH IS THIS FILE'S ONE SPELLING OF IT. queue_derived and
-       solve_seed_candidates both route to it and this site spelled `e->reinject != NULL` for itself, which is
-       a third answer to a question that has an accessor — the shape that drifts the day "does this search
-       still seed" grows a second term. */
+    /* Asked through search_seeds, this file's one spelling of the question. */
     DCHECK(e->npl > 0 && search_seeds(e),
            "a search was opened with no candidate to run or with no path to run it on — the class states one of "
            "the two breakout sources (solve_init asserts the exclusive or) and this call is the one moment a "
@@ -1072,28 +808,14 @@ static void add_pending(const char *src, const char *root, int sink) {
 }
 
 static void record_sink(int cls, const char *source, const char *poc) {
-    /* A finding is a pending sink that SOLVED, so the two lists are one list in two states — the parked-search
-       emit subtracts one from the other by (sink, source) and a finding with no pending twin would report as
-       both fired and parked. Asserted at the origin because a future detector that records a PoC without first
-       calling add_pending would otherwise corrupt the report rather than crash.
-       AND THE TWIN IS WHERE THE DELIVERY ROOT COMES FROM. A fire is observed at the marker, where the value
-       that carried the attacker's bytes was concrete a long time ago — there is nothing left to read a root
-       off — so the finding takes the one its own search learned at detection. It is the same fact, and it is
-       held once. */
-    /* BOTH ARE `CHECK`, BECAUSE BOTH ARE DEREFERENCED TWO LINES DOWN AND A DCHECK IS NOT THERE IN RELEASE.
-       The `(twin && twin->root) ? … : NULL` these replaced was wrong for the reason the paragraph below gives,
-       and deleting it was right — but it had been carrying the null guard, so in release the strdup below went
-       straight through a NULL `twin`. A guard whose removal turns a dev-mode abort into a production segfault
-       is a universal invariant (check.h: data integrity, must not PROCEED), not a should-never-happen; the two
-       allocations on the next line already carry CHECK for the same reason. */
+    /* A finding is a pending search that solved, so the two lists are one list in two states: the parked emit
+       subtracts findings by (class, source), and a finding with no pending twin would report as both fired and
+       parked. The twin also supplies the delivery root, because at the marker the value that carried the bytes
+       is long since concrete. Both checks are CHECK because both pointers are dereferenced below in release. */
     Cand *twin = search_of(source, cls);
     CHECK(twin != NULL, "an @S finding was recorded for a sink that was never detected as pending");
-    /* AND IT HAS ONE, WHICH IS A STATEMENT ABOUT THE SEARCH AND NOT A HOPE ABOUT THIS FINDING. Both doors into
-       g_pending state the root — detection reads it off the value, a cold resume takes it out of the park
-       record — so a NULL here names a third door rather than a search that happens not to know. It was a
-       `(twin && twin->root) ? … : NULL` while the second door did not exist, and that ternary was the quiet
-       half of the same defect: the loud half aborted in emit_delivery naming the missing field, while this one
-       stored a FIRE-VERIFIED PoC with no envelope and said nothing at all. */
+    /* Both doors into g_pending state the root (detection off the value, a cold resume off the park record), so
+       a NULL here names a third door. */
     CHECK(twin->root != NULL,
            "the search behind a fire-verified @S PoC never learned how its bytes arrive — the finding is the "
            "strongest thing this half of the tool emits, and without the root §S(d)'s reproduction envelope "
@@ -1102,46 +824,27 @@ static void record_sink(int cls, const char *source, const char *poc) {
     for (int i = 0; i < g_sinks_n; i++) if (g_sinks[i].cls == cls && !strcmp(g_sinks[i].source, source)) return;
     if (g_sinks_n >= g_sinks_cap) { g_sinks_cap = g_sinks_cap ? g_sinks_cap * 2 : 8; g_sinks = realloc(g_sinks, (size_t)g_sinks_cap * sizeof(Finding)); CHECK(g_sinks, "solve: OOM @S store"); }
     Finding *f = &g_sinks[g_sinks_n++];
-    /* THE WHOLE SLOT AT ONCE, FOR sink_search's REASON AND NOT BECAUSE ANYTHING HERE WAS WRONG. `g_sinks` is
-       realloc'd and never zeroed exactly as the pending array is, and this record's four members were all
-       stated — which is luck rather than a property, since nothing failed when the pending array's thirty-fifth
-       was not. A member added to Finding tomorrow would read allocator memory and no check anywhere would
-       notice; a member added to this literal reads 0 unless it is named. Every blank here is 0 or NULL, so the
-       literal names only what is computed. */
+    /* Born whole, for sink_search's reason: `g_sinks` is realloc'd and never zeroed. Every blank here is 0 or
+       NULL, so the literal names only what is computed. */
     *f = (Finding){
         .cls = cls,
         .source = strdup(source ? source : "?"),
         .poc = strdup(poc),
         .root = strdup(twin->root),
     };
-    /* THE THREE ALLOCATIONS OF THE ONE RECORD THAT MUST SURVIVE, and none of them was checked before. A NULL
-       here is not a lost finding, it is a CORRUPT one: `solved` strcmps the source to decide whether to also
-       emit the sink as a parked search, and solve_json_array writes the poc straight into the report. Every
-       neighbouring allocation — the store's own realloc one line up, the pending entry, each breakout — has
-       carried a CHECK all along. The root's clause is now the same clause as the other two, because the root
-       is now as unconditional as they are. */
+    /* A half-stored finding is a corrupt one, not a lost one: `solved` strcmps the source, and solve_json_array
+       writes the PoC and the root straight into the report. */
     CHECK(f->source && f->poc && f->root,
           "solve: OOM storing a fire-verified @S PoC — the finding is the proof, and a half-stored one corrupts "
           "every later read of the report rather than losing it. The delivery ROOT is part of that proof: §S(d) "
           "requires every emitted PoC to carry its reproduction envelope, and a finding that lost its root "
           "reports as one no navigation reaches");
-    /* AND THE FLOW THAT PROVED IT IS PAID FOR IT. sink_search already credits a sink merely being DETECTED,
-       which is the weakest @S observation there is, while the strongest — a fire-verified PoC, the thing this
-       half of the tool exists to produce — credited nothing at all. That is not only an inconsistency inside
-       this file: a candidate flow records no endpoints by design (endpoint_suppress), so before this line its
-       reward was zero for its whole life and it competed on the optimism term alone, which is capped at 1.0,
-       against exploring flows whose reward is unbounded. The flow that just proved an exploit is the last one
-       a WFQ should be aging out. */
+    /* The flow that proved the exploit is paid for it, as add_pending pays the detection. A candidate flow
+       records no endpoints (endpoint_suppress), so without this its reward would rest on the optimism term. */
     flow_credit_emit(1.0);
-    /* AND THE SEARCH'S RE-INJECTION POINT IS GIVEN BACK, because this is the moment it stops being useful and
-       starts being a ceiling. The blob pins the frozen decision segment the detection reached this sink on, and
-       every segment below it, for as long as the search holds it; a solved search seeds no further candidates,
-       so from here it is a prefix of the fork tree kept alive by nothing but a pointer nobody will read.
-       CLEARING IT IS WHAT CLOSES THE SEARCH, not merely what keeps solve_free from releasing it twice. The
-       sentence above used to be a claim about behaviour with nothing performing it — the probe's other arms go
-       on arriving at this sink after a fire, and each breakout they derived was seeded for another full
-       document re-run. search_seeds READS this NULL, so the release and the closure are one act at one site
-       rather than a comment and a hope. */
+    /* Give back the re-injection point: the blob pins the frozen segment and every segment below it, and a
+       solved search seeds nothing further. Clearing it is what closes the search, since search_seeds reads this
+       NULL; the probe's other arms keep arriving after a fire and would otherwise be seeded again. */
     if (twin->reinject) { decide_blob_free(twin->reinject); twin->reinject = NULL; }
 }
 
