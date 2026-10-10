@@ -3559,7 +3559,13 @@ void idl_dict_walk_visit(JSContext *ctx, IdlDictWalk *w, IdlConvFrame *frames, i
    of a dictionary nobody is converting. */
 static void idl_dict_walk_reset_cursors(IdlDictWalk *w)
 {
-    iter_cursor_init(&w->lvl.seq);
+    /* NOT THE SEQUENCE CURSOR. That record holds REFERENCES (its iterator, `next`, the last result and the last
+       element), so re-planting it is a memset of live values, and whether that is sound depends on whether they
+       were already discharged — which differs between the two callers. idl_dict_walk_clear frees first and plants
+       after; the argument machine's result runs BEFORE tramp_step_state_free_1 discharges the declaration, so a
+       plant there zeroed a cursor abandoned mid-walk before the visit could free it. MEASURED on a real
+       application (gitpod): iter_cursor_init's own empty-slot assert fired at this line from idl_args_result on
+       the teardown path and killed the renderer. */
     w->lvl.seq_n = 0;
     w->lvl.seq_phase = 0;
     w->lvl.uni_phase = IDL_UNI_ASK;
@@ -3573,6 +3579,7 @@ void idl_dict_walk_clear(JSContext *ctx, IdlDictWalk *w, IdlConvFrame *frames, i
 {
     idl_dict_walk_visit(ctx, w, frames, frames_cap, JS_StepFreeVisitor());
     w->lvl.src = w->lvl.out = w->lvl.mv = w->lvl.seq_list = JS_UNDEFINED;
+    iter_cursor_init(&w->lvl.seq);   /* the visit above released it, so this plant is over a clear slot */
     idl_dict_walk_reset_cursors(w);
 }
 
@@ -6217,7 +6224,8 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
        in-flight statement — `started` above all, because a §3.2.17 conversion abandoned mid-member (a throw
        from a `toString`, a flow dropped) leaves it set, and the walk's own start refuses to begin over one that
        is. It is cleared here and not freed here: the values it names are the driver's to discharge, through the
-       one `visit` that named them. */
+       one `visit` that named them — which is why the SEQUENCE CURSOR is left exactly as it stands: it is one of
+       those values, and the driver's free visitor writes JS_UNDEFINED into each slot it releases. */
     idl_dict_walk_reset_cursors(&s->dw);
     s->ce_threw = 0;
     return r;
