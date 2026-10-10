@@ -298,51 +298,49 @@ int idl_number_of(JSContext *ctx, IdlArgType t, JSValueConst v, double *out)
     return 1;
 }
 
-/* §3.2.18's ENUMERATION check, over the string ToString produced. Returns -1 with a TypeError live. */
-static int idl_enum_check(JSContext *ctx, JSValueConst v, const char *const *values, const char *member)
+/* Whether the string ToString produced is one of the enumeration's values. 1 yes, 0 no, -1 with an exception
+   live (the string could not be read). */
+static int idl_enum_has(JSContext *ctx, JSValueConst v, const char *const *values)
 {
     const char *s = JS_ToCString(ctx, v);
-    int i;
+    int i, has = 0;
 
     DCHECK(values != NULL, "an IDL_ENUM member was declared with no value list — the list IS the type");
     if (!s) return -1;
-    for (i = 0; values[i]; i++)
-        if (!strcmp(s, values[i])) { JS_FreeCString(ctx, s); return 0; }
+    for (i = 0; values[i] && !has; i++) has = !strcmp(s, values[i]);
+    JS_FreeCString(ctx, s);
+    return has;
+}
+
+/* §3.2.18's ENUMERATION check, over the string ToString produced. Returns -1 with a TypeError live. */
+static int idl_enum_check(JSContext *ctx, JSValueConst v, const char *const *values, const char *member)
+{
+    const char *s;
+    int has = idl_enum_has(ctx, v, values);
+
+    if (has != 0) return has > 0 ? 0 : -1;
+    s = JS_ToCString(ctx, v);
+    if (!s) return -1;
     JS_ThrowTypeError(ctx, "'%s' is not a valid value for the enumeration member %s", s, member);
     JS_FreeCString(ctx, s);
     return -1;
 }
 
-/* WEB IDL §3.2.18 ENUMERATION TYPES OVER UNKNOWN EXTERNAL INPUT — the same section as the check above, asked of
- * a value whose bytes this flow does not know, and the reason it is a FORK rather than a coercion is that the
- * type's domain is FINITE AND DECLARED. Web IDL §3.2.18 Enumeration types is "If S is not one of E's
- * enumeration values, then throw a TypeError" followed by "Return the enumeration value of type E that is equal
- * to S", so the worlds the conversion can complete in are the N strings `values` lists and that one refusal —
- * every one of them a real String this engine mints here, which is what makes an enumeration answerable where a
- * `DOMString` is not.
- * See idl_args.h's idl_concolic_rule for why crossing is not the cure and for the numbering.
+/* Web IDL §3.2.18 Enumeration types over an unknown: a fork rather than a coercion, because the type's domain is
+ * finite and declared. The conversion completes in one of the N strings `values` lists, or in the one world
+ * where S is not one of them; the strings reaching that world differ in nothing behind this boundary observes,
+ * so one arm stands for all of them, and dropping it would delete a world nothing contradicted.
+ * See idl_args.h's idl_concolic_rule for why crossing is not the cure.
  *
- * N+1 AND NOT N, AND NOT ONE PER NON-MEMBER STRING. The refusal is a world the page reaches — the conversion
- * throws before the member's algorithm runs at all — so dropping it would delete a world nothing contradicted;
- * and the strings that reach it differ in nothing behind this boundary observes, so one arm is all of them.
- *
- * `real` IS STATED ONLY WHERE THE OPERAND CARRIES A STRING EXAMPLE, and JS_OUTCOME_REAL_UNSTATED otherwise —
- * which is a positive statement and not a shrug: both arms still run and neither is marked forced. The example
- * is compared, never coerced. Running §3.2.18 step 1's ToString on an example that is not already a String
- * would be the page's `toString`, which is a REQUEST and cannot be issued from inside a fork declaration, so
- * this asks the one question it can answer with no code of the page's running.
- *
- * `op` IS THE CALLER'S AND NAMES THE SITE, because one machine makes many of these asks: a dictionary declaring
- * two enumeration members, or a member declaring two enumeration arguments, would otherwise give them one
- * fork_ask_key and a resume would consume one ask's answer at the other's call site. `subject` names what the
- * §3.2.18 refusal is about, for the same reason — the TypeError a page catches says which member or which
- * argument, exactly as idl_enum_check's does for a value the page determined.
- *
- * `over` is BORROWED for the length of the request, so the caller holds it where the SIBLING'S SNAPSHOT carries
- * it. Returns JS_STEP_FORK (the caller returns it), 0 once *pout is the chosen enumeration value (owned by the
- * caller), or -1 with §3.2.18 step 2's TypeError pending. */
+ * What the not-a-value world does belongs to the caller: §3.2.18 step 2 throws a TypeError (idl_enum_refuse),
+ * while §3.7.6 Attributes' setter returns undefined without running the setter (idl_setter_enum_ignored).
+ * `real` is stated only from a String example; ToString on any other example would run the page's code, which
+ * a fork declaration cannot issue. `op` names the site, so two enumeration asks in one machine get distinct
+ * fork_ask_keys. `over` is borrowed for the length of the request.
+ * Returns JS_STEP_FORK (the caller returns it), or 0 with either *pout the chosen value (owned by the caller)
+ * and *not_a_value false, or *pout undefined and *not_a_value true; -1 on OOM. */
 static int idl_enum_fork(JSContext *ctx, JSStepHdr *hdr, JSValueConst over, const char *op,
-                         const char *const *values, const char *subject, JSValue *pout)
+                         const char *const *values, JSValue *pout, bool *not_a_value)
 {
     int n = 0, real = JS_OUTCOME_REAL_UNSTATED, arm = 0, r;
     JSValue ex;
@@ -356,16 +354,15 @@ static int idl_enum_fork(JSContext *ctx, JSStepHdr *hdr, JSValueConst over, cons
     DCHECK(n > 0, "an enumeration declared an EMPTY value list — §3.2.18 step 2 would then refuse every string "
                   "there is, so the type names no world the conversion can complete in");
 
-    /* WHICH ARM A REAL SESSION TAKES, from the example the value already carries — §3.2.18's own membership
-       test, run on a String this flow holds rather than on the unknown. An example that is not a String says
-       nothing here (step 1 would have to run the page's code to make one), and neither does no example. */
+    /* The arm a real session takes, by §3.2.18's own membership test on the String example the value carries;
+       real == n is the not-a-value arm. */
     ex = concolic_example(ctx, over);
     if (JS_IsString(ex)) {
         const char *c = JS_ToCString(ctx, ex);
         CHECK(c != NULL, "OOM reading the string example of a value §3.2.18 is about to fork over");
         for (real = 0; real < n && strcmp(c, values[real]) != 0; real++)
             ;
-        JS_FreeCString(ctx, c);   /* real == n is the refusal arm, which is the arm that example takes */
+        JS_FreeCString(ctx, c);
     }
     JS_FreeValue(ctx, ex);
 
@@ -373,18 +370,21 @@ static int idl_enum_fork(JSContext *ctx, JSStepHdr *hdr, JSValueConst over, cons
     if (r) return r;
     DCHECK(arm >= 0 && arm <= n,
            "§3.2.18's fork came back standing at an arm the enumeration does not have — the completions are "
-           "the declared values and step 2's one TypeError, and there is no world outside them");
-    if (arm == n) {
-        /* Web IDL §3.2.18 Enumeration types step 2 — "If S is not one of E's enumeration values, then throw
-           a TypeError". The string is not spellable on this arm, so the message names the SUBJECT where
-           idl_enum_check names the value; what a page catches is the same TypeError from the same step at the
-           same point in the algorithm. */
-        JS_ThrowTypeError(ctx, "the value of %s is not one of the enumeration's values", subject);
-        return -1;
-    }
+           "the declared values and the one world where S is not among them");
+    *not_a_value = arm == n;
+    if (*not_a_value) { *pout = JS_UNDEFINED; return 0; }
     *pout = JS_NewString(ctx, values[arm]);
     if (JS_IsException(*pout)) { *pout = JS_UNDEFINED; return -1; }
     return 0;
+}
+
+/* Web IDL §3.2.18 Enumeration types step 2, "If S is not one of E's enumeration values, then throw a
+   TypeError", on the fork's not-a-value arm. The string is not spellable there, so the message names the
+   member or argument `subject` describes. Returns -1 with the TypeError live. */
+static int idl_enum_refuse(JSContext *ctx, const char *subject)
+{
+    JS_ThrowTypeError(ctx, "the value of %s is not one of the enumeration's values", subject);
+    return -1;
 }
 
 /* THE POOL IS CHUNKED, AND HAS NO CEILING. It was one fixed array sized "for the whole platform surface", which
@@ -430,7 +430,10 @@ typedef struct {
 } IdlArgIface;
 
 typedef struct {
-    IdlSetter  setter;      /* set instead of `body` for an attribute setter */
+    IdlSetter  setter;      /* set instead of `body` for a plain attribute setter */
+    /* Web IDL §3.7.6 Attributes: this member is an attribute's setter, plain or step. Its enumeration
+       conversion ignores a non-value (idl_setter_enum_ignored) where every other position throws. */
+    bool       attribute_setter;
     bool       null_to_empty;
     IdlBody    body;
     /* THE DECLARED TYPES, ALLOCATED, one per position the IDL lists. It was `IdlArgType[IDL_MAX_DECLARED]`
@@ -3388,12 +3391,16 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
                      dm->name, (unsigned)dm->level, idl_dict_where(w));
             {
                 JSValue chosen = JS_UNDEFINED;
+                bool not_a_value = false;
                 char subj[128];
 
-                snprintf(subj, sizeof subj, "member `%s` of %s", dm->name, idl_dict_where(w));
-                r = idl_enum_fork(ctx, hdr, w->mv, walk->ask, dm->values, subj, &chosen);
+                r = idl_enum_fork(ctx, hdr, w->mv, walk->ask, dm->values, &chosen, &not_a_value);
                 if (r > 0) return r;   /* parked ON THIS MEMBER's own conversion, or forked at it */
-                if (r < 0) return -1;  /* §3.2.18 step 2's TypeError, on the refusal arm */
+                if (r < 0) return -1;
+                if (not_a_value) {
+                    snprintf(subj, sizeof subj, "member `%s` of %s", dm->name, idl_dict_where(w));
+                    return idl_enum_refuse(ctx, subj);
+                }
                 JS_FreeValue(ctx, w->mv);
                 w->mv = chosen;
             }
@@ -3742,6 +3749,18 @@ static int idl_ce_finish(JSContext *ctx, JSIdlArgsState *s, JSValue in, JSValue 
         return JS_STEP_ABRUPT;
     }
     return JS_STEP_DONE;
+}
+
+/* Web IDL §3.7.6 Attributes, the attribute setter's step 4.6 for an enumeration type: "If S is not one of the
+   enumeration's values, then return undefined." The setter's algorithm does not run and nothing is thrown;
+   the machine finishes through the same [CEReactions] exit every member takes. */
+static int idl_setter_enum_ignored(JSContext *ctx, JSIdlArgsState *s, JSValue **out_cb, int *out_argc)
+{
+    DCHECK(idl_member(s->hdr.arg)->attribute_setter,
+           "§3.7.6's enumeration no-op was taken by a member that is not an attribute setter; every other "
+           "position throws §3.2.18 step 2's TypeError");
+    s->result = JS_UNDEFINED;
+    return idl_ce_finish(ctx, s, JS_UNDEFINED, out_cb, out_argc);
 }
 
 /* THE SLOWEST SINGLE STEP of any IDL member this scheduler-step ran, because a step machine's whole contract
@@ -5945,6 +5964,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                composed into the conversion's own scratch buffer, which is where an outstanding fork's `op` has
                to live — see IdlDictWalk::ask, and see it for why one buffer serves all three asks. */
             JSValue chosen = JS_UNDEFINED;
+            bool not_a_value = false;
             char subj[96];
 
             JS_FreeValue(ctx, cb_result);
@@ -5955,10 +5975,15 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                    "idl_arg_enum is where a position states it");
             snprintf(s->dw.ask, sizeof s->dw.ask,
                      "Web IDL §3.2.18 enumeration argument %d of %s", s->i + 1, m->name);
-            snprintf(subj, sizeof subj, "argument %d", s->i + 1);
-            r = idl_enum_fork(ctx, &s->hdr, a, s->dw.ask, idl_arg_enum_values(m, ti), subj, &chosen);
+            r = idl_enum_fork(ctx, &s->hdr, a, s->dw.ask, idl_arg_enum_values(m, ti), &chosen, &not_a_value);
             if (r > 0) return r;   /* parked ON THIS ARGUMENT, or forked at it */
-            if (r < 0) return JS_STEP_ABRUPT;   /* §3.2.18 step 2's TypeError, on the refusal arm */
+            if (r < 0) return JS_STEP_ABRUPT;
+            if (not_a_value && m->attribute_setter) return idl_setter_enum_ignored(ctx, s, out_cb, out_argc);
+            if (not_a_value) {
+                snprintf(subj, sizeof subj, "argument %d", s->i + 1);
+                idl_enum_refuse(ctx, subj);
+                return JS_STEP_ABRUPT;
+            }
             *slot = chosen;
             goto placed;
         }
@@ -5969,11 +5994,14 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         if (r > 0) return r;          /* parked ON THIS ARGUMENT; the resume comes back to it */
         if (r < 0) return JS_STEP_ABRUPT;
         if (t == IDL_BYTESTRING && idl_bytestring_check(ctx, *slot) < 0) return JS_STEP_ABRUPT;
-        /* §3.2.18's ENUMERATION, AT A POSITIONAL ARGUMENT — the same check the dictionary path makes, over the
-           string ToString produced, against the list the declaration named. It is here rather than in a body
-           because it is part of the TYPE: `history.scrollRestoration = "bogus"` is a TypeError from the
-           conversion, before the setter's algorithm runs at all, and a body performing it would be one body's
-           private copy of a rule every enumeration member has. */
+        /* §3.2.18's enumeration at a position, over the string ToString produced, against the declaration's
+           list. It is part of the type, so it is here and not in a body. An attribute setter is the one place
+           the rule differs: `history.scrollRestoration = "bogus"` is ignored, not a TypeError. */
+        if (t == IDL_ENUM && m->attribute_setter) {
+            int has = idl_enum_has(ctx, *slot, idl_arg_enum_values(m, ti));
+            if (has < 0) return JS_STEP_ABRUPT;
+            if (!has) return idl_setter_enum_ignored(ctx, s, out_cb, out_argc);
+        }
         if (t == IDL_ENUM && idl_enum_check(ctx, *slot, idl_arg_enum_values(m, ti), "argument") < 0)
             return JS_STEP_ABRUPT;
         if (t == IDL_USVSTRING) {
@@ -7112,6 +7140,7 @@ int idl_setter_id_step(JSContext *ctx, IdlArgType type, bool null_to_empty, cons
     int id = idl_method_id_step(ctx, &type, 1, NULL, 0, decl, magic);
     /* the pool entry idl_method_id_step just filled. A step setter is delivered as a ONE-ARGUMENT call, so its
        body reads argv[0]; what it needs from the setter form is the type's null rule. */
+    idl_member(g_n - 1)->attribute_setter = true;
     idl_member(g_n - 1)->null_to_empty = null_to_empty;
     return id;
 }
@@ -7145,8 +7174,9 @@ int idl_setter_id(JSContext *ctx, IdlArgType type, bool null_to_empty, IdlSetter
     int id = idl_method_id(ctx, &type, 1, NULL, magic);
     /* the pool entry idl_method_id just filled — a setter differs only in which body it runs and in the
        null-to-empty rule its type carries. */
-    idl_member(g_n - 1)->setter        = body;
-    idl_member(g_n - 1)->null_to_empty = null_to_empty;
+    idl_member(g_n - 1)->setter           = body;
+    idl_member(g_n - 1)->attribute_setter = true;
+    idl_member(g_n - 1)->null_to_empty    = null_to_empty;
     return id;
 }
 

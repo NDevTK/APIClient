@@ -145,10 +145,9 @@ static JSValue js_hist_get(JSContext *ctx, JSValueConst this_val, int magic)
 }
 
 /* §7.2.5's scrollRestoration SETTER: "set this's relevant global object's navigable's active session history
-   entry's scroll restoration mode to the given value". The value has already been checked against the
-   ScrollRestoration enumeration by the declared IDL_ENUM type, so an invalid one threw a TypeError before this
-   body was entered — which is what makes `history.scrollRestoration = "bogus"` a TypeError and not a silent
-   no-op. A router setting it to "manual" is the ordinary use. */
+   entry's scroll restoration mode to the given value". The declared IDL_ENUM type means this body only sees
+   "auto" or "manual": Web IDL §3.7.6 Attributes returns before the setter runs for any other string, so
+   `history.scrollRestoration = "bogus"` is ignored, not a TypeError. */
 static JSValue js_hist_set_scroll_restoration(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     const char *s;

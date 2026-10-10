@@ -2165,7 +2165,7 @@ void session_history_set_scroll_restoration(JSContext *ctx, const char *mode)
 
     DCHECK(mode != NULL && (!strcmp(mode, "auto") || !strcmp(mode, "manual")),
            "§7.2.5's scrollRestoration setter was handed a value the ScrollRestoration enumeration does not "
-           "have — the member declares IDL_ENUM, so Web IDL has already refused anything else with a TypeError");
+           "have — the member declares IDL_ENUM, so Web IDL §3.7.6's setter returns before this for any other string");
     e = sh_active_entry(ctx);
     JS_SetPropertyStr(ctx, e, SH_E_SCROLL, JS_NewString(ctx, mode));
     JS_FreeValue(ctx, e);

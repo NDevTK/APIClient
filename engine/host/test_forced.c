@@ -4102,6 +4102,12 @@ static const char *HTML =
     " var n = 0; for (var i = 0; i < 120; i++) n += i; return n === 7140 ? 'button' : 'bad'; } }; } }); }"
     " catch (e) { ceext = 'isext'; }"
     "fetch('/api/ceext?v=' + ceext);"
+    /* Web IDL §3.7.6 Attributes: an enumeration attribute's setter ignores a string outside the enumeration —
+       no TypeError, and the attribute keeps its value. An argument position still throws; ceext above is one. */
+    "var scrign = 'wrong';"
+    "try { history.scrollRestoration = 'manual'; history.scrollRestoration = 'bogus';"
+    " scrign = history.scrollRestoration === 'manual' ? 'isignored' : 'changed'; } catch (e) { scrign = 'threw'; }"
+    "fetch('/api/scrign?v=' + scrign);"
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
     "fetch('/api/whoami?tt=' + getBodyAttr('data-tt'));"   /* DOM ATTR READ-BACK after the fork: per-flow -> admin flow reads ttADMIN, public flow reads ttPUBLIC */
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
@@ -17453,6 +17459,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "/api/ceuni",      "isuni"   },
         { "/api/ceget",      "isget"   },
         { "/api/ceext",      "isext"   },   /* a DOMString dictionary member, read AND coerced as requests */
+        { "/api/scrign",     "isignored" }, /* §3.7.6 an enumeration setter ignores a non-value */
         { "/api/cedeep",     "isdeep"  },   /* the insertion steps walk the SUBTREE, and insertBefore runs them */
         { "/api/cegone",     "isgone"  },   /* …and the removing steps run disconnectedCallback */
         { "/api/ceattr",     "data-w"  },   /* attributeChangedCallback, for the OBSERVED name only */
