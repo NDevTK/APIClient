@@ -1,415 +1,186 @@
-/* The DISPATCH LOOP — drains the WFQ frontier. Each flow is the page's scripts run as ONE preemptible program
- * (JS_FlowNew), replaying the flow's decision vector; the first flow is the empty vector. A concolic branch
- * inside a run forks a sibling flow (decide.c); the loop keeps running the highest-value flow until the
- * frontier is empty. There is NO separate boot executor — the scripts ARE the first flow.
- *
- * A @S candidate re-fire is a FLOW seeded onto this same frontier (solve_seed_candidates), not a separate
- * executor: one scheduler runs exploration and verification alike. */
+/* The dispatch loop: drains the WFQ frontier. A flow runs the page's scripts in document order, each its own
+ * preemptible program (JS_FlowNew, never concatenated) sharing globals and the flow's COW delta, and replays
+ * the flow's decision vector; the first flow is the empty vector. A concolic branch forks a sibling flow
+ * (decide.c), and the loop keeps running the highest-value flow until the frontier is empty. Boot is the first
+ * flow, and an @S candidate re-fire is a flow seeded onto the same frontier (solve_seed_candidates), so one
+ * scheduler runs exploration and verification alike. */
 #ifndef ENGINE_HOST_SOLVER_ENGINE_H
 #define ENGINE_HOST_SOLVER_ENGINE_H
 
-#include <stddef.h>   /* size_t — every program crosses this header as (text, LENGTH); see engine_queue_fetched_script */
-#include <stdint.h>   /* int64_t — EngineStepUnitRuns' `step_us` is a MICROSECOND accumulator and its width is
-                         load-bearing rather than incidental; the paragraph at that field says why, and this
-                         include is what stops the width from depending on whichever header happened to be
-                         pulled in ahead of this one. */
+#include <stddef.h>   /* size_t: every program crosses this header as (text, length) */
+#include <stdint.h>   /* int64_t: EngineStepUnitRuns' `step_us` is a microsecond accumulator; included here so
+                         its width does not depend on include order */
 
 #include <lexbor/dom/dom.h>
 
 #include "core/fetch/fetch.h"
-#include "core/loader/script_type.h"   /* which of §8.1.4.4's two algorithms runs entry i — see `types` below */
-#include "core/timing/task_source.h"   /* HTML §8.1.7.1's `source` field — which task source, if any, queued a row */
-#include "solver/step_unit.h"          /* the arms of flow_step — EngineStepUnitRuns is one count per arm */
+#include "core/loader/script_type.h"   /* ScriptType: which HTML §8.1.4.4 run algorithm runs a row */
+#include "core/timing/task_source.h"   /* TaskSource: the HTML §8.1.7.1 task source, if any, that queued a row */
+#include "solver/step_unit.h"          /* the arms of flow_step; EngineStepUnitRuns counts per arm */
 #include "quickjs.h"
 
-/* A FLOW BY TAG ONLY — solver/flow.h owns the definition and this header does not need it: the one entry below
-   that names a flow takes it through and hands it straight back. Declared rather than included so the engine's
-   own public surface does not drag the scheduler's private record into every host that reads it. */
+/* Declared, not included: solver/flow.h owns the definition, and the entries here that name a flow only pass
+   it through, so the engine's public surface does not pull in the scheduler's private record. */
 struct Flow;
 
-/* Run the page's scripts as one code flow: each script `bodies[i]` is its OWN program (JS_FlowNew — faithful
-   per-<script> scope, NEVER concatenated), run in document order, sharing globals + the flow's COW delta. */
-
-/* WHERE IN THE FLOW'S OWN PROGRAM SEQUENCE A QUEUED PROGRAM LANDS. It is a SPEC fact about the operation that
- * caused the program, not a scheduling preference, which is why the CALLER states it and the queue never
- * guesses — the same sentence engine_queue_into already makes about which flow and which document.
- *   DYN_POS_APPEND IS THE TAIL, AND EVERY TASK TAKES IT — but not everything that takes it is a task, which
- * is the half this said the other way round. A `javascript:` navigation (HTML §7.4.2.2 "Beginning navigation"
- * queues a global task on the navigation and traversal task source to reach §7.4.2.3.2) and a lazy chunk's
- * reply ARE tasks and a task queue is FIFO, so the tail is where they go; a document's own sequence being
- * filled one entry at a time is not a task at all and takes the tail because HTML §4.12.1.1 fixes its order. Which of
- * the two a row is, is the row's TaskSource and is stated at each entry below.
- *   §8.7 Timers's STRING HANDLER USED TO BE IN THIS LIST AND IS NOT A ROW ANY MORE. §8.7 creates and runs it
- * inside step 9's task, so core/timing/timer.c runs the program on the firing flow's own trampoline and queues
- * nothing here; the entry that took it is gone with it, and the paragraph standing where that entry did says
- * why.
- *   DYN_POS_IMMEDIATE is where a program the RUNNING program caused runs. HTML §4.12.1.1 "Processing model"
- * ends "prepare the script element" with "Otherwise, immediately execute the script element el, even if other
- * scripts are already executing"; ECMAScript §19.2.1.1 PerformEval pushes evalContext, evaluates the body,
- * pops it, and returns that completion INTO the call expression. Both say the caused program runs before the
- * next thing the sequence holds — never after everything it holds.
- *   THE DEFAULT USED TO BE APPEND AND WAS NEVER STATED, and that is how a proof this solver had ALREADY
- * CONSTRUCTED became conditional on the flow draining the whole rest of the document. §@S records a finding at
- * the marker precisely so nothing waits for a flow to reach completion (solver/solve.c says so at js_x9); a
- * fired PoC placed at the tail of an unbounded sequence reintroduces exactly that wait one layer down, where
- * no assert was looking. A kill, a park or an eviction then loses the proof FIRST, and reports it as a search
- * that has not solved — the one verdict §@S forbids being arrived at by omission. */
+/* Where a queued program lands in its flow's program sequence. The caller states it because it is a spec fact
+ * about the operation that caused the program, never a scheduling preference; there is no default.
+ *   DYN_POS_APPEND is the tail. Every task takes it, since a task queue is FIFO: a `javascript:` navigation
+ * (HTML §7.4.2.2 "Beginning navigation") and a lazy chunk's reply. A document's own script sequence also takes
+ * it, though it is not a task, because HTML §4.12.1.1 fixes its order. Each entry below states its TaskSource.
+ *   DYN_POS_IMMEDIATE runs a program the running program caused before anything else the sequence holds: HTML
+ * §4.12.1.1 "Processing model"'s "immediately execute the script element el, even if other scripts are already
+ * executing", and ECMAScript §19.2.1.1 PerformEval, which returns its completion into the call expression.
+ * Defaulting such a program to the tail would make an @S proof already fired wait on the flow draining the
+ * rest of an unbounded sequence, so a kill, park or eviction would lose it. */
 typedef enum { DYN_POS_APPEND, DYN_POS_IMMEDIATE } DynPos;
 
-/* Queue a script body to run in the CURRENT flow after the current script, sharing its globals + COW delta.
-   Because a load sits behind a branch, the ONE BFS discovers different lazy scripts on different arms — lazy
-   loading is not a separate system, just more code the flow runs and forks through. The body is copied; the
-   queue is per-run and drained by the flow that owns it.
-   `doc` NAMES WHICH DOCUMENT'S PROGRAM IT IS, which is WHERE IT IS COMPILED (solver/flow.h's `dyn_doc`). An
-   instance is an ORIGIN-KEYED AGENT CLUSTER, so this is a child navigable's document as often as the
-   session's, and a program compiled in the wrong realm is closed over the wrong Window — it defines the
-   child's globals on its creator and reads the creator's back as the child's. There is no default: the caller
-   knows which document's code it is holding, and a scheduler that guessed would guess the same way for every
-   document this agent has.
-   IT IS A TASK, so it is DYN_POS_APPEND and cannot be asked for anything else. The one script source that is
-   NOT a task has its own entry further below.
-   AND IT IS A CLASSIC SCRIPT, which is HTML §8.1.4.4 "Calling scripts"'s answer for a program with no
-   `<script>` element behind it rather than a default this entry picks: a lazy chunk's reply is the body an
-   already-running program asked for. A row that DOES have an element behind it states which of §8.1.4.4's two
-   algorithms runs it.
-
-   IT IS ITS OWN ENTRY BECAUSE HTML §8.1.4.1 "Scripts"'s BASE URL IS ITS OWN ANSWER, and an entry that could
-   not express the difference answered it once for two callers. That field's own definition is the whole rule:
-   "Null or a base URL used for resolving module specifiers. When non-null, this will either be the URL from
-   which the script was obtained, for external scripts, or the document base URL of the containing document,
-   for inline scripts." So NULL in the row's address column is not an absent value — it is the positive
-   statement "the document's", read at the compile — and a program whose bytes came from a RESPONSE has an
-   address that no consumer can re-derive from the document it ran in. Merged, the fetched case took the inline
-   answer: a chunk served from /chunk/x.js compiled under the DOCUMENT's address, so the throw site §8.1.4.6
-   "Runtime script errors" reports named the page rather than the chunk, a nested `import('./y.js')` resolved
-   against the page, and — because the compile reads a missing address as `JS_EVAL_FLAG_INLINE_SCRIPT` — every
-   record the chunk published was filed as state the server rendered against THIS visitor's credentials, which
-   is the opposite of what a subresource served identically to everybody is. */
-/* HTML §8.7 "Timers"'s STRING HANDLER HAS NO ENTRY HERE, AND THAT IS THE ANSWER RATHER THAN A GAP. §8.7 puts
-   the create and the run at the EXPIRY, inside step 9's task (substeps 9.8.7-9.8.8), so the program is
-   compiled with JS_EVAL_FLAG_TRAMP_CLOSURE and run by that task's own step machine on the firing flow's
-   trampoline chain — core/timing/timer.c. Queued as a row here instead, at the SET, it put the TIMER TASK
-   SOURCE in BOTH of a flow's queues at once (its Function arm's task reaches `jobs` through
-   JS_EnqueueCallTask), which HTML §8.1.7.1 "Definitions" forbids: "For each event loop, every task source must
-   be associated with a specific task queue." It also lost the handler's LENGTH — the entry's shape was a bare
-   `const char *`, so `setTimeout("\0…")` was read to the first NUL — which the conversion in timer.c now
-   carries end to end. */
-/* …AND A PROGRAM WHOSE BYTES CAME FROM A RESPONSE — a lazy chunk, a body an already-running program asked for.
-   `url` IS §8.1.4.1's base URL and is REQUIRED, which is the half the merged entry could not state. §8.1.4.2
-   "Fetching scripts" creates the script with the response's URL, so a fetched program always has one: an entry
-   reached with none is a caller that has the bytes and threw away where they came from, which is unrecoverable
-   here (the document's address is a different script's answer, not a weaker form of this one).
-   `body_n` IS THE PROGRAM'S LENGTH for ECMAScript §11.1's reason above — a decoded response body may hold a
-   U+0000 and a browser runs the whole of it.
-   ITS SOURCE IS §8.1.7.4 "Generic task sources"' NETWORKING TASK SOURCE — "This task source is used for
-   features that trigger in response to network activity", and this row exists because a response arrived.
-   Stated at the definition rather than taken as a parameter, for the reason the type below is: this entry is
-   one spec step, and a caller that reached it has a response in hand. */
+/* Queue a program whose bytes came from a response (a lazy chunk's reply) to run in the running flow after the
+   current program, sharing its globals and COW delta. Lazy loading is not a separate system: a load sits
+   behind a branch, so different arms discover different chunks. The body is copied.
+   `doc` names the document whose realm compiles the program (solver/flow.h's `dyn_doc`). An instance is an
+   origin-keyed agent cluster, so it may be a child navigable's document; the caller always knows which.
+   `url` is the HTML §8.1.4.1 "Scripts" base URL and is required: §8.1.4.2 "Fetching scripts" creates the
+   script with the response's URL, which error reports and nested `import()` resolve against. A NULL address
+   means "the document's" (an inline script's answer) and the compile then sets JS_EVAL_FLAG_INLINE_SCRIPT.
+   `body_n` is the length: a decoded response may hold U+0000 (ECMAScript §11.1 "Source Text").
+   The row is a classic script (no element behind it, HTML §8.1.4.4 "Calling scripts") on HTML §8.1.7.4's
+   networking task source, so it takes DYN_POS_APPEND.
+   HTML §8.7 "Timers" string handlers are not queued here: core/timing/timer.c compiles and runs them inside the
+   timer task on the firing flow's trampoline, which keeps the timer task source on one queue. */
 void engine_queue_fetched_script(uint32_t doc, const char *body, size_t body_n, const char *url);
-/* …AND THE ROW A `<script>` ELEMENT PUT THERE, at the same position and carrying one more fact. HTML §4.12.1.1
-   "Processing model"'s "execute the script element" ends in a switch on the ELEMENT's type — "classic" runs the
-   classic script, "module" runs the module script — so the row carries `stype` and flow_step routes it to
-   §8.1.4.4's run-a-classic-script or run-a-module-script. Three seams reach it, and they are the three ways a
-   Document of this agent that is NOT the session's gets its inline programs: a child navigable's
-   (core/frame/navigable.c), a joined one's (engine_join_document) and an element page code INSERTED
-   (core/html/html_script.c). Each of those aborted outright on `<script type=module>` before this existed.
-   THE TAIL IS ITS POSITION, and that is §4.12.1.1's own answer for every destination a module or an external
-   script reaches: the when-parsed list and the in-order-as-soon-as-possible list hold their elements in order,
-   and the as-soon-as-possible SET has no position at all (§13.2.7 waits for it only before the load event). The
-   one destination that is not the tail is `immediately execute the script element`, which §4.12.1.1 reaches
-   only for an inline CLASSIC script — the entry below.
-   AND ITS SOURCE IS NONE, WHICH IS A STATEMENT AND NOT A GAP. Nothing queues a task to run an element's
-   inline program: the parse that reached the element runs it, and §8.1.7.1 "Definitions" describes a parse as
-   work a task DOES rather than as a task apiece. The tail is where it goes because HTML §4.12.1.1 fixed its order
-   against the scripts written around it, not because a task queue is FIFO. */
-/* `el` IS THAT ELEMENT, and the row carries it for the same reason it carries the type: "execute the script
-   element" is a switch on EL, and its "classic" arm sets that document's §3.1.7 `currentScript` to it for the
-   whole of the run. The run is a WORK ITEM here — it starts in one scheduler step and completes in another —
-   so nothing at the completion could re-derive which element it was, and a C save/restore bracket around the
-   compile would set the slot for whichever flow was running when the NEXT program started. See solver/flow.h's
-   `dyn_el`. */
-/* `body_n` IS THE PROGRAM'S LENGTH and is not `strlen(body)`: an element page code INSERTED carries whatever
-   was assigned to its `.textContent`, which never went through HTML §13.2.5.4 "Script data state" (the state
-   that turns a U+0000 into a U+FFFD), so its text may hold a NUL that a parsed document's inline script
-   provably cannot. The DOM already answers the length — DOM §4.11 "Interface Text"'s child text content fills
-   one (core/dom/text_content.h) — and dropping it was how an injected chunk ran as a prefix of itself. */
+/* Queue a `<script>` element's inline program at the tail of the running flow's sequence. HTML §4.12.1.1
+   "Processing model"'s "execute the script element" switches on the element's type, so the row carries
+   `stype` and flow_step routes it to §8.1.4.4's classic or module run. Callers are the three ways a document
+   other than the session's gets inline programs: a child navigable (core/frame/navigable.c), a joined
+   document (engine_join_document) and an element page code inserted (core/html/html_script.c).
+   The tail is §4.12.1.1's position for parsed scripts and for every module or external destination; only an
+   inline classic script a page inserted runs in place (engine_queue_script_immediate). The task source is
+   TASK_SOURCE_NOT_A_TASK: the parse that reached the element runs it.
+   `el` is the element. The classic arm sets the document's §3.1.7 `currentScript` to it for the whole run, and
+   the run spans scheduler steps, so the row carries it (solver/flow.h's `dyn_el`).
+   `body_n` is the length, not strlen: an inserted element's `.textContent` never passed HTML §13.2.5.4
+   "Script data state", so it may hold a NUL; DOM §4.11 "Interface Text"'s child text content supplies it. */
 void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, ScriptType stype,
                                  lxb_dom_element_t *el);
-/* …AND THE ONE THAT IS NOT. HTML §4.12.1.1 "Processing model": an inline classic script whose element a page
-   INSERTED reaches the end of "prepare the script element" — "Otherwise, immediately execute the script
-   element el, even if other scripts are already executing" — and "execute the script element" then runs the
-   classic script right there. So it takes the slot AFTER the program that inserted it rather than the tail,
-   and nothing the sequence already holds may run in between. Separate from the two entries above rather than a
-   flag on it, because the two are different spec steps and the four callers of that one must not be able to
-   pick this by accident.
-   THE TYPE IS CLASSIC AND IS NOT A PARAMETER: §4.12.1.1 reaches this step only for what falls past "If el's
-   type is `classic` and el has a src attribute, or el's type is `module`", so every module — inline or not —
-   has already gone to one of the three lists by then. An inline module has a graph to LOAD before its result
-   exists, which is why the standard does not run it in place. */
-/* `el` IS THE ELEMENT THE PAGE INSERTED, and `body_n` ITS PROGRAM'S LENGTH — both for the reasons
-   engine_queue_element_script states, and the length for that entry's exactly: this element's text is a page's
-   own string, not a tokenizer's output. */
-/* ITS SOURCE IS NONE AND THIS IS THE ENTRY THE WORD WAS COINED FOR: "immediately execute the script element"
-   runs inside the algorithm that prepared it, so there is no task and nothing to give a source to. A row
-   here that named one would be a task asked to interpose ahead of tasks already queued, which is why the
-   queueing point asserts the pair rather than either half. */
+/* Queue an inline classic script a page inserted to run immediately: HTML §4.12.1.1 "Processing model" ends
+   "prepare the script element" with "Otherwise, immediately execute the script element el, even if other
+   scripts are already executing". It takes the slot after the inserting program (DYN_POS_IMMEDIATE) and
+   nothing already in the sequence runs in between. It is a separate entry so callers of the tail entry cannot
+   pick it by accident. The type is always classic: every module has gone to one of §4.12.1.1's lists before
+   this step. `el` and `body_n` are as for engine_queue_element_script. The task source is
+   TASK_SOURCE_NOT_A_TASK because no task runs it, and engine_queue_into asserts that a task never takes
+   DYN_POS_IMMEDIATE. */
 void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n, lxb_dom_element_t *el);
-/* THE SAME POSITION IN THE SAME SEQUENCE, FOR A SCRIPT WHOSE SOURCE IS AN ADDRESS. HTML §4.12.1.1 fixes an external
-   script's position against the scripts written around it — a `pending parsing-blocking script` blocks the
-   tokenizer (§13.2.6.4.8), and the `list of scripts that will execute when the document has finished parsing`
-   runs IN ORDER (§13.2.7) — so the entry occupies that position with only its URL, the flow WAITS there, and the
-   host's reply becomes the program in the slot. Without it a document's external scripts could only park on
-   their replies and run in ARRIVAL order, which is why an inline script after a `<script src>` used to abort.
-   `url` is already resolved: §8.1.3.2 "Environment settings objects"' API base URL belongs to the document
-   whose element it is (§4.4 stood here and is "Grouping content"), so only the
-   caller can resolve it. The ASAP SET does not come here — it has no position, so it parks with
-   engine_pending_script_url and runs when its reply drains.
-   `stype` IS THE ELEMENT'S, and it survives the reply: §8.1.4.2 "Fetching scripts" decodes a module's bytes as
-   UTF-8 whatever the response says and a classic script's through the response's charset label, and §8.1.4.4
-   then runs the source with the matching one of its two algorithms. The row keeps its ADDRESS across that
-   replacement too — §8.1.4.2 creates the script with the RESPONSE'S URL, which is the base a nested
-   `import('./chunk.js')` resolves against and, for a module, the module map KEY. */
-/* `el` IS THE ELEMENT WHOSE `src` THIS IS — see engine_queue_element_script. It survives the reply exactly as
-   the type and the address do: the row is the element's program whether its bytes have arrived or not. */
-/* ITS SOURCE IS NONE, AND THE REASON IS THAT THIS ROW IS A POSITION RATHER THAN A TASK. HTML §4.12.1.1 fixes where an
-   external script runs among the scripts written around it, and this entry is that place being held; the
-   NETWORKING task the response eventually queues is a different work item, and the register it lands on is
-   what serves it (flow_deliver_one_reply's arm above the sequence). Calling the held slot a networking task
-   would put one source on two carriers by naming, which is the thing this value exists to make visible.
-   THE REQUEST ITSELF IS ISSUED BY THIS CALL AND NOT BY THE FLOW REACHING THE SLOT — HTML §4.12.1.1
-   "Processing model" step 33 fetches when the element is prepared and step 35 only decides where the result
-   executes, so an entry queued here is on the wire from this moment while the position it holds is still
-   HTML §4.12.1.1's. solver/engine.c states the whole argument at the park it routes to. */
-/* `parser_inserted` IS WHETHER `el` IS PARSER-INSERTED — HTML §4.12.1.1 "Processing
-   model"'s `parser document` being non-null — and it is a
-   PARAMETER for `html_script_prepare`'s reason exactly: the party that inserted the element is the only one
-   that can answer. It is carried to the park this entry routes to and is one of the two facts the request's
-   PROVENANCE is composed from (solver/pending.h's `pending_prov_compose`) — it is NOT re-derivable at that
-   park, because core/html/html_script.h's element slot is UNSTATED for a LOADED document's own markup, which
-   is precisely the population that IS parser-inserted. */
+/* Hold an external `<script src>`'s position in the running flow's sequence. HTML §4.12.1.1 fixes its order
+   against its neighbours (a pending parsing-blocking script, §13.2.6.4.8; the list of scripts that execute
+   when parsing finishes, run in order by §13.2.7), so the row holds only the URL, the flow waits at it, and
+   the reply becomes the program in that slot. The request is issued by this call, not when the flow reaches
+   the slot: §4.12.1.1 step 33 fetches at prepare time and step 35 only decides where the result runs. The
+   as-soon-as-possible set has no position and uses engine_pending_script_url.
+   `url` is already resolved against the element's document, which only the caller knows. `stype` and `el`
+   survive the reply: §8.1.4.2 "Fetching scripts" decodes a module as UTF-8 and a classic script by its
+   charset, and creates the script with the response's URL (the base for nested `import()` and a module's map
+   key). `parser_inserted` is whether `el` has a non-null parser document; only the inserting party knows it,
+   it cannot be re-derived at the park (core/html/html_script.h leaves it unstated for a loaded document's own
+   markup), and it feeds the request's provenance (solver/pending.h's `pending_prov_compose`). The task source
+   is TASK_SOURCE_NOT_A_TASK: the row is a position, and the reply's networking task is delivered separately. */
 void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype, lxb_dom_element_t *el,
                                 int parser_inserted);
-/* An @S CANDIDATE, queued as the program it would be if it fired. Same queue, one difference: it is ALLOWED not
-   to compile, because most breakouts do not fit most sink contexts and a candidate that does not parse simply
-   never fires. A page script that does not compile still asserts.
-   `pos` IS THE SINK'S OWN SEMANTICS AND NOT THE SOLVER'S PREFERENCE, which is the whole reason it is a
-   parameter here. An eval sink IS ECMAScript §19.2.1.1 PerformEval, so its code runs inside the call
-   expression — IMMEDIATE. A markup sink's auto-firing `onerror`/`onload` and a URL sink's `javascript:`
-   navigation are TASKS, so they take the tail like every other task — APPEND. §@S's "the firing vector is
-   chosen per sink from its real semantics" is the same sentence about the same table. */
-/* `body_n` IS THE CANDIDATE'S LENGTH, and here the pair is load-bearing for the SOLVER rather than for
-   fidelity: a candidate is constructed out of attacker-shaped bytes (a `%00` percent-decoded from a hash, a
-   U+0000 a JSON reply carried), so reading it to its first NUL fires a program the search did not choose and the
-   "no hit" that follows is a verdict about a payload nobody built. */
-/* AND ITS SOURCE IS THE SOLVER'S OWN, WHICH IS NOT ONE OF §8.1.7.1's AND MUST NOT BE MADE TO LOOK LIKE ONE.
-   No algorithm of the standard queued this program: the solver did, to see whether a constructed input reaches
-   a sink. Giving it a task source would order it against the page's real tasks by a fact nobody observed —
-   §@H's own line between a value the code determined and a value invented to satisfy a gate, one layer up. The
-   position is what the sink genuinely decides and it is already `pos`. */
+/* Queue an @S candidate, in the session's document, as the program it would be if it fired. Unlike a page
+   script it may fail to compile: most breakouts do not fit most sink contexts, and one that does not parse
+   never fires.
+   `pos` is the sink's own semantics: an eval sink is ECMAScript §19.2.1.1 PerformEval (DYN_POS_IMMEDIATE); a
+   markup sink's auto-firing handler and a URL sink's `javascript:` navigation are tasks (DYN_POS_APPEND).
+   `body_n` is the length: a candidate is built from attacker-shaped bytes that may hold a NUL, and truncating
+   it would fire a program the search did not choose.
+   The task source is TASK_SOURCE_SOLVER_CANDIDATE, which is not an HTML §8.1.7.1 source, so the candidate is
+   never ordered against the page's real tasks by a fact nobody observed. */
 void engine_queue_candidate(const char *body, size_t body_n, DynPos pos);
-/* A `javascript:` URL's SCRIPT SOURCE, queued as the program HTML §7.4.2.3.2's evaluate-a-javascript:-URL runs.
-   Same queue, and it is the same thing — code the page caused to run — but it differs from a page <script> at
-   both ends of that program's life, which is why it is its own entry point rather than a third caller of the
-   one above.
-     It is ALLOWED NOT TO COMPILE. "Create a classic script" with a syntax error produces a script whose
-   evaluation is an abrupt completion, which the caller turns into a null newDocument and a navigation that does
-   not happen — a page's `javascript:{{{` does nothing at all, where a <script> that will not parse is this
-   engine's own assert.
-     Its COMPLETION VALUE DECIDES A NAVIGATION. A <script>'s is unobservable; this one's is step 9's whole
-   condition — "if evaluationStatus.[[Value]] is a String", the Document is REPLACED by an HTML parse of that
-   string. The scheduler is the only place that value exists, so that is where the engine says it cannot yet act
-   on one.
-     `doc` is the TARGET NAVIGABLE'S ACTIVE DOCUMENT, which step 5 names as the settings object the classic
-   script is created with — the realm it is compiled in, and not always the session's. */
-/*   `body_n` is what STEP 3 produced. "Let scriptSource be the UTF-8 decoding of the percent-decoding of
-   encodedScriptSource" — URL §1.3 "Percent-encoded bytes"'s percent-decode reaches all 256 byte values, so
-   `javascript:a=%00` is a source text with a U+0000 in it and ECMAScript §11.1 "Source Text" permits one. */
-/* ITS SOURCE IS §8.1.7.4's NAVIGATION AND TRAVERSAL TASK SOURCE, WHICH §7.4.2.2 "Beginning navigation" STATES
-   OUTRIGHT. Its step 21 is "Queue a global task on the navigation and traversal task source given navigable's
-   active window to navigate to a javascript: URL"; this row is that task's program, so the task source is the
-   row's and the tail is where a task goes.
-   AND THAT SOURCE IS ON TWO OF A FLOW'S CARRIERS, WHICH IS THE ONE THING THE DECLARATION IS HERE TO SHOW. The
-   document-load job of the same section reaches `jobs` through JS_EnqueueCallTask (core/frame/navigable.c),
-   this row reaches `dyn`, and §8.1.7.1 "Definitions" requires one queue per source precisely so that "the user
-   agent would never process events from any one task source out of order". This is the shape §8.7 Timers's
-   string handler had before its create and its run moved to the expiry, arriving a second time through a
-   different section — so the enumeration is what had to exist first, and it now does: a source reaches a
-   carrier iff a producer on that carrier names it, and a grep for this enumerator is the whole answer for
-   `dyn`.
-   THE CLAUSE THAT STOOD HERE IS SPENT AND IS REWRITTEN RATHER THAN DELETED, BECAUSE A READER WHO RE-DERIVES
-   IT FROM THE PARAGRAPH ABOVE WILL GO AND BUILD IT AGAIN. It read: WHAT THE NEXT DIFF BUILDS is the same
-   declaration on the OTHER carrier — a TaskSource carried by JS_EnqueueCallTask to the host's job-enqueue hook
-   and recorded on the job, exactly as that hook's `is_task` already travels, so the split is an ASSERT at the
-   two queueing points rather than this paragraph. THE CARRIAGE AND THE ASSERT ARE BUILT: quickjs.h declares
-   `JSTaskSource` on both JS_EnqueueCallTask and JSJobEnqueueHook, and solver/engine.c's engine_enqueue_job
-   asserts it at the one site that takes ownership of a queued callback, exactly as engine_queue_into asserts
-   it at the one site that creates a row. So the enumeration this paragraph wanted is a grep for the
-   enumerator on BOTH carriers, and the answer is that NETWORKING and NAVIGATION_AND_TRAVERSAL each reach both.
-   THE REPAIR HALF IS SUPERSEDED RATHER THAN DONE, AND BY A WIDER ONE. `whichever carrier the source ends up on
-   alone` is core/timing/task_source.h's `a source is in ONE queue`, and moving a producer discharges
-   §8.1.7.1 "Definitions" for the ONE source moved while leaving the next author of a producer to get it right
-   again. What landed instead is one ARRIVAL CLOCK across the carriers (solver/flow.c's g_work_seq: a row's
-   stamp is its `dyn_id`, a queued callback's is written at flow_job_push), and flow_step's task ladder orders
-   by it — which discharges the rule for every source at once, including a source no producer has written yet,
-   because within one source arrival order IS queue order however each item is carried.
-   WHAT IS STILL OPEN IS THE THIRD CARRIER. A `pending` register entry carries no stamp, so the networking
-   task source's delivery arm stands ABOVE the arrival race rather than in it — that arm's own paragraph in
-   solver/engine.c states the NOT COVERED clause and what its absence looks like in a census.
-   HOW ITS ABSENCE SHOWS, and it needs no assert to be seen: a flow that has queued a document load and a
-   `javascript:` navigation in one turn runs them in an order fixed by which arm of flow_step stands above the
-   other, so writing the two statements the other way round does not put the two effects the other way round.
-   That is the pair of orderings no arrangement of two arms can both serve, and it is observable from page
-   code with nothing but an `<iframe>` and a `location` write. */
+/* Queue a `javascript:` URL's script source as the program HTML §7.4.2.3.2's evaluate-a-javascript:-URL runs.
+   It may fail to compile: "create a classic script" with a syntax error yields an abrupt completion and a
+   navigation that does not happen. Its completion value decides a navigation (step 9: a String replaces the
+   Document with an HTML parse of it), and the scheduler is the only place that value exists.
+   `doc` is the target navigable's active document (step 5's settings object), not always the session's.
+   `body_n` is step 3's percent-decoded length; URL §1.3 "Percent-encoded bytes" can yield U+0000.
+   The task source is HTML §8.1.7.4's navigation and traversal source (§7.4.2.2 "Beginning navigation" step
+   21), which also reaches `jobs` through JS_EnqueueCallTask (core/frame/navigable.c). One arrival clock
+   across carriers (solver/flow.c's g_work_seq) orders flow_step's task ladder, which keeps §8.1.7.1's
+   per-source order whichever carrier an item rides.
+   Reply deliveries are stamped on the same clock (solver/pending.h's PEND_WORK_SEQ) but still precede every
+   row of the sequence; that residual is stated at the delivery arm in solver/engine.c. */
 void engine_queue_javascript_url(uint32_t doc, const char *body, size_t body_n);
-/* A HOST INSTRUMENT'S PROGRAM, MADE A WORK ITEM OF EVERY LIVE TIMELINE — and the one queueing entry on this
- * header whose program the PAGE did not cause to run.
- *   WHAT IT IS FOR. A driver outside this engine (testing/render_diff.js's ONE collector, and anything else
- * shaped like it) needs a JS VALUE computed in a document's realm, with this engine's unknowns standing on
- * their concrete examples. There is no other route: the Console Standard's printer renders an object as the
- * literal `[object]` and a concolic as its SHAPE, so it carries neither; and the fetch/@H surface carries
- * shapes and examples as TEXT in a URL, where the Number 0 and the String "0" are one byte sequence — and it
- * is the product's own finding surface, so an artifact riding it is a measurement wearing a finding's clothes.
- *   WHY IT IS A ROW AND NOT AN EVALUATION. The host calls this between two steps, where no flow is running and
- * no slice is open; preempt_hook asserts by name that the policy may not be consulted there, so a JS_Eval on
- * this path would abort at the first suspend point the program reached. The ask is recorded, the SCHEDULER
- * runs the program, and the answer comes back on the register below. That is the same division qjs_request_park
- * already makes and it is the only one this engine has.
- *   EVERY LIVE TIMELINE, because the DOM is per-flow: one question has N true answers and a channel with one
- * slot would silently pick one. Each answer names the WORLD that produced it.
- *   ITS COMPLETION VALUE IS READ AND ITS THROW IS NOT. The value is dumped (solver/value_dump.h); a throw is a
- * capability this engine does not have met by the host's own text over the page's platform, so it reports as
- * this document's page error and the dev build aborts at it. That is the forcing function, not a loss.
- *   IT IS AN INSTRUMENT SEAM AND A PRODUCTION HOST DOES NOT CALL IT. The program it runs is evaluated in the
- * analysed document's realm, so it can WRITE there like any other script; what makes that sound is that the
- * text is the trusted zone's own and never a stranger's, and what makes it honest is that a zone analysing a
- * page for findings has no reason to add a program to it. */
+/* Run a host instrument's program in every live timeline of the session's document and record its completion
+ * value. A driver outside the engine (testing/render_diff.js's collector) needs a JS value computed in a
+ * document's realm with unknowns on their concrete examples; the console printer cannot carry one, and the
+ * fetch/@H surface is the product's finding surface.
+ *   It is a queued row (TASK_SOURCE_NOT_A_TASK), not an evaluation, because the host calls it between steps
+ * where preempt_hook asserts the policy may not be consulted; the scheduler runs it and engine_take_dumps
+ * returns the answers. Every live timeline gets it because the DOM is per-flow, and each answer names its
+ * world. Requires a live session. `program` is copied.
+ *   The value is dumped (solver/value_dump.h); a throw reports as the document's page error and aborts the dev
+ * build. The program runs in the analysed realm and can write there, so it is trusted-zone text only, and a
+ * production host does not call this. */
 void engine_request_dump(const char *program);
-/* The dumps recorded since the last call, newline-joined and DRAINED by the call; "" when there are none.
- * Each record is `<world><TAB><json>` — the world in `world_name`'s spelling (`doc:session:serial`, the HEAD
- * of solver/world.h's grammar and no ancestry), and the JSON one LINE by construction (value_dump.h). A record
- * per timeline that ran the program, in the order they completed.
- * THIS LINE USED TO SAY `world_serialize`'s SPELLING and is rewritten rather than deleted, because the reason
- * for the vector is a real one and will be re-derived: an ancestry is what lets a PEER materialize a segment,
- * and a driver materializes nothing. Serializing also MARKS the world as having crossed, which puts a world
- * nobody holds into the ancestry of every later vector and onto the death register `qjs_world_gone` drains.
- * The whole argument is at flow_emit_dump. */
+/* Drain the dumps recorded since the last call, newline-joined, or "" when there are none. The engine owns the
+ * returned buffer until the next call. Each record is `<world><TAB><json>`: the world in `world_name`'s
+ * spelling (`doc:session:serial`, the head of solver/world.h's grammar with no ancestry) and the JSON on one
+ * line (value_dump.h), one record per timeline in completion order. It is not `world_serialize`'s spelling
+ * because serializing marks a world as having crossed (see flow_emit_dump). */
 const char *engine_take_dumps(void);
-/* AN IMAGE OF EVERY LIVE TIMELINE, ASKED HERE AND TAKEN BY THE HOST ITSELF — @PERWORLD.
- *   THE ASK IS NOT THE RENDER, AND THE SPLIT IS §Architecture'S RATHER THAN A CONVENIENCE. The solver holds no
- * painter and must not grow one: a document's ink is core/paint/document_paint.h's and the register that keeps
- * it is the host's (main.c's `g_paint`). So this entry does not produce a picture and does not call anybody who
- * does. What it does is mark every member of the frontier as owing one, and the SCHEDULER discharges a mark by
- * RETURNING THE THREAD with that member switched in — at which point the host's own `qjs_paint` renders the
- * world it is standing in, exactly as it renders today. Nothing about the painter changes; what changes is
- * WHICH world the host is handed.
- *   AND THE MOMENT IS THE CLOSING EDGE OF A TURN, NEVER ITS OPENING ONE, WHICH IS A FACT A HOST HAS TO KNOW
- * BEFORE IT DECIDES WHEN TO ASK. A member is "switched in with its deltas applied" at both ends of every turn
- * it takes, and only the closing end can hold anything that member DID: the discharge is therefore taken
- * where the member finishes (engine.c's FLOW_STEP_DONE arm, with the finish deferred across the return
- * because flow_finish is what unapplies the deltas) or where a slice-end yield hands the host that same
- * standing member. It USED TO BE the opening edge, and the cost of that was exact rather than theoretical:
- * the earliest a host may ask is before its first `qjs_step` — this entry's own DCHECK requires a live
- * frontier — so the member alive at the ask had run nothing, its deltas were EMPTY, and the image was
- * byte-identical to the `baseline` one the same run writes at session close. A host asking at the only moment
- * it is guaranteed to be able to ask got a copy of the picture it already had, under a world's name.
- *   SO AN ASK MADE EARLY IS ANSWERED LATE, AND THAT IS THE POINT. A mark laid down before the first step is
- * spent at the end of that member's first turn, not at its start; a host that wants a specific mid-run world
- * asks while that world is live, exactly as before.
- *   IT IS THE ANSWER TO A REACH PROBLEM AND NOT A RENDERING ONE. main.c's `qjs_paint` already names the gap in
- * its own residual: a host reaches this engine only between two steps, so the only worlds it can render are the
- * ones the scheduler happened to leave standing at a yield, and the `if (__FLAGS.admin)` sibling — the picture
- * this engine exists to be able to take and a browser cannot — is reachable "only by luck". A yield DOES leave
- * a member switched in with its COW and DOM deltas applied (engine_sched_slice holds it in a static across the
- * return, and asserts it is still a member when it picks it back up); what no host could do was say WHICH.
- *   NOTHING IS PROMOTED, REORDERED OR SWITCHED IN BY THIS. The mark is not in flow_weight, not in the eligible
- * set and not in the pick's filter: a marked member is picked exactly when it would have been picked anyway,
- * and the yield is taken at the moment the WFQ has ALREADY put it in front. That is the whole reason the ask
- * lives here rather than in a host entry that chooses a flow and switches it in — flow_switch_in writes the
- * record of what a member was ranked on when it took the thread (the record preempt_hook's assertion reads), so
- * a switch performed for a picture would forge a ranking for a pick the WFQ never made.
- *   THE MEMBERS ALIVE AT THE ASK IS NOT A QUESTION THIS ENGINE ANSWERS ANY MORE, and the entry that answered
- * it is deleted rather than kept. `engine_request_paint` marked the members standing at the call and nothing
- * forked after it; once the driver moved to the entry below, it had no caller anywhere. main.c holds the
- * record of what went and what would justify bringing it back, at the ABI entry that wrapped it.
- *   WHAT THE DELETION DOES NOT RETRACT is the reasoning that produced it, because a reader re-derives it. A
- * mark is ONE BIT, spent at a member's END or FREE at any yield it is standing for, so laying it down twice
- * writes a bit the member already has. The one member that may NOT be re-marked is the one whose finish this
- * session DEFERRED for a picture: it is still in the frontier, its world has already ended, and the
- * deferred-finish path asserts against exactly that state in as many words. `paint_mark_standing_members`
- * skips that member, the assert stays, and the party that knows a finish is deferred is this one rather than
- * a host that has no entry reporting it.
- */
-/* ONE PICTURE PER WORLD, FOR EVERY WORLD THIS RUN MINTS FROM HERE ON — `paint_mark_standing_members` alone
- * photographs a FRONTIER and this entry photographs a RUN, and they are different questions rather than two
- * strengths of one.
- *   IT IS `paint_mark_standing_members` PLUS `flow_new`, and it has to be both. The walk names the members
- * standing now — on a document that has not stepped, that is the boot flow, which no mint-side mark can ever
- * reach because it was born before the ask. The mint names every member born afterwards — which is every
- * forked arm, and is the population §Boot's `if (__FLAGS.admin)` sibling lives in and the one this whole
- * mechanism exists for.
- *   IT IS ONE-WAY, and flow.h's `flow_paint_every_world` says why: a mode that could be turned off would let a
- * run write a world-named image for some arms and not others, with nothing in the artifact to say which, so a
- * directory that reads as a document's complete set of worlds would be a sample of them.
- *   THE COST IS ONE EXTRA RETURN PER MEMBER THAT EVER ENDS and one §E.2 painting-order walk per return, paid on
- * the thread the engine ages its members in. That is @PERWORLD's stated price rather than an overrun of it: the
- * quantity that grows without limit is the number of worlds PHOTOGRAPHED, which §NO BOUNDS requires to grow,
- * and the per-member price is O(1) and paid once. A member that never ends never pays it, which is the same
- * fact as a member that never runs again and is the frontier's own answer about it. */
+/* Photograph every world this run mints from now on (@PERWORLD). The solver holds no painter: this marks the
+ * members standing now (paint_mark_standing_members, which reaches the boot flow) and makes flow_new mark every
+ * later member (flow_paint_every_world). The scheduler discharges a mark by returning the thread with that
+ * member switched in, and the host's own `qjs_paint` (main.c) renders it. Requires a live session with a
+ * non-empty frontier.
+ *   The return is taken at the closing edge of the member's turn, because only that edge holds what the member
+ * did: engine.c's FLOW_STEP_DONE arm (flow_finish, which unapplies the deltas, is deferred across the return)
+ * or a slice-end yield that leaves the member standing. An ask made before the first step is answered at the
+ * end of that member's first turn.
+ *   A mark changes no ranking: it is not in flow_weight, the eligible set or the pick's filter, and a switch-in
+ * made for a picture would forge flow_switch_in's ranking record. A mark is one bit, so re-marking is a no-op,
+ * except that a member whose finish is deferred for a picture is skipped and the deferred-finish path asserts
+ * against it. It is one-way (see flow_paint_every_world) so an image directory is never a silent sample of a
+ * run's worlds. Each member that ends costs one extra return and one painting-order walk. */
 void engine_request_paint_every_world(void);
-/* Park the running flow on a <script src> WITH NO POSITION TO HOLD: the host fetches it, and the reply becomes
-   this flow's next program rather than a promise's value. Two kinds of element are that — one a page INJECTED,
-   and a member of HTML §4.12.1.1's `set of scripts that will execute as soon as possible`, which is a SET (§13.2.7
-   waits for it only before the load event, so arrival order is a correct order). An element whose position
-   HTML §4.12.1.1 does fix takes a slot instead: engine_queue_docscript_url.
-   `stype` travels with the park for the reason it travels with the row above: the reply is a PROGRAM, and
-   §4.12.1.1's "execute the script element" switches on the element's type to decide which of §8.1.4.4's two
-   algorithms runs it. `<script type=module src>` injected by page code is how a modern bundle loads a chunk. */
-/* `el` travels with the park for the same reason `stype` does, and the park is where it would OTHERWISE BE
-   LOST: the flow leaves the insertion steps with the node in hand and comes back to a URL and a reply, so the
-   element rides the register (solver/pending.h's `scriptEl`) and the drain puts it on the row. */
-/* `parser_inserted` travels for engine_queue_docscript_url's reason exactly, and this entry is why the flag
-   could never have been the park's KIND: an element reaches THIS door — §4.12.1.1's `set of scripts that will
-   execute as soon as possible` — whenever it has an `async` attribute, which a PARSER-inserted `<script async
-   src>` has, so one kind holds both answers. */
+/* Park the running flow on a `<script src>` with no position to hold: an element a page inserted, or a member
+   of HTML §4.12.1.1's set of scripts that will execute as soon as possible (§13.2.7 waits for that set only
+   before the load event, so arrival order is a correct order). The host fetches it and the reply becomes this
+   flow's next program. An element whose position §4.12.1.1 fixes uses engine_queue_docscript_url.
+   `stype` travels with the park because "execute the script element" switches on it; `el` rides the register
+   (solver/pending.h's `scriptEl`) onto the row the drain makes; `parser_inserted` is as for
+   engine_queue_docscript_url, and is not the park's kind because a parser-inserted `<script async src>` also
+   comes here. */
 void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype, lxb_dom_element_t *el,
                                int parser_inserted);
-/* THE DOCUMENT'S LOAD LIFECYCLE, owned by the browser layer and asked by the scheduler. Called once per stage
-   per flow when that flow has run everything the document gave it: stage 0 fires DOMContentLoaded, stage 1
-   fires load. Returns how many listener tasks it scheduled. Registered by the host that owns a Document; a
-   scheduler with no document (the solver fixture) simply never has one. */
-/* The event loop's timer step (timer.h). Registered by the timer component; asked when a flow is idle. */
+/* The event loop's timer step (timer.h), registered by the timer component and asked when a flow is idle. The
+   browser components below register hooks for the same reason: the scheduler may not depend on the browser
+   half. */
 void engine_set_timer_hook(int (*fn)(JSContext *ctx));
-/* HTML §8.1.7.3's IN-PARALLEL half — the rendering task source (rendering.h). Registered by the rendering
-   component for the reason the timer step is registered rather than named: the scheduler may not depend on the
-   browser half. Asked at the same moment and immediately BEFORE the timer step, because the two are due at
-   moments on the ONE virtual clock and this one defers to a timer that expires first. */
+/* HTML §8.1.7.3's in-parallel half, the rendering task source (rendering.h). Asked immediately before the timer
+   step: both are due on the one virtual clock, and this one defers to a timer that expires first. */
 void engine_set_rendering_hook(int (*fn)(JSContext *ctx));
-/* THE EVENT LOOP'S IDLE RUNG — Cooperative Scheduling of Background Tasks §5.1 Start an idle period algorithm
-   and §5.2 Invoke idle callbacks algorithm (core/scheduling/idle_callback.h). Registered by that component for
-   the reason the two above are registered rather than named: the scheduler may not depend on the browser half.
-   Asked BELOW both of them, and that is the standard's own position rather than a preference — §5.1's note is
-   "The algorithm is called by the event loop processing model when it determines that the event loop is
-   OTHERWISE IDLE", so a rendering opportunity and a due timer are both work an idle period must not run ahead
-   of. Answers 1 when it started a period or queued one callback. */
+/* The event loop's idle rung: Cooperative Scheduling of Background Tasks §5.1 Start an idle period algorithm
+   and §5.2 Invoke idle callbacks algorithm (core/scheduling/idle_callback.h). Asked below rendering and timers,
+   because §5.1's note runs it when the event loop is "otherwise idle". Answers 1 when it started a period or
+   queued one callback. */
 void engine_set_idle_hook(int (*fn)(JSContext *ctx));
+/* The document load lifecycle (core/dom/document.c's document_lifecycle_step), asked when a flow has run
+   everything its documents gave it. Each call advances one document's HTML §13.2.7 stage (DOMContentLoaded or
+   load) and answers 1, or answers 0 when every document of the agent is complete. One claimant at a time
+   (asserted); NULL releases the slot. A scheduler with no document (the solver fixture) has no hook. */
 void engine_set_document_done_hook(int (*fn)(JSContext *ctx));
-/* HTML §4.6.8.20 Link type "preload"'s browsing-context-connected time for the elements a PARSE produced
-   (html_link.h). Registered by the link component for the reason the two above are registered rather than
-   named. Asked AHEAD of everything else a flow could do, which is a spec position and not a preference: a
-   browser connects those elements during tree construction, so their requests precede every script of that
-   document. It exists at all because §4.2.4.3 "Fetching and processing a resource from a link element" ends in
-   a fetch with no task and no microtask in front of it, and a fetch parks on a FLOW — so the walk that finds
-   the elements (which for a session's own document runs at the pre-boot baseline) can only inventory them. */
+/* HTML §4.6.8.20 Link type "preload"'s browsing-context-connected time for the elements a parse produced
+   (html_link.h). Asked ahead of everything else a flow could do: a browser connects them during tree
+   construction, so their requests precede every script of the document. The baseline walk that finds them can
+   only inventory them, because §4.2.4.3 "Fetching and processing a resource from a link element" ends in a
+   fetch, and a fetch parks on a flow. */
 void engine_set_link_connected_hook(int (*fn)(JSContext *ctx));
-/* THE END OF A MICROTASK CHECKPOINT — HTML §8.1.7.3's "perform a microtask checkpoint", the step that runs
-   once the microtask queue has drained and before the checkpoint flag is cleared. It is a SCHEDULER fact and
-   nothing else can answer it: the checkpoint is over exactly when the flow that just ran a unit of work holds
-   no microtask, which is a property of the frontier and not of any call site.
-   Registered by the browser component that owns the steps HTML invokes there, for the same reason the timer
-   step is registered rather than named — the scheduler may not depend on the browser half. Today's one caller
-   is Indexed Database §2.7.1's "cleanup Indexed Database transactions", which is what deactivates a
-   transaction a script created and left active; its own note ("the steps are run at most once for each
-   transaction") is why asking at every step costs nothing. */
+/* The end of a microtask checkpoint: HTML §8.1.7.3's "perform a microtask checkpoint" step after the microtask
+   queue drains and before the flag clears, asked when the flow that just ran a unit of work holds no
+   microtask. Registered by the component that owns the steps HTML runs there: Indexed Database §2.7.1
+   "cleanup Indexed Database transactions", whose at-most-once-per-transaction note makes asking at every step
+   free. */
 void engine_set_checkpoint_hook(void (*fn)(JSContext *ctx));
 
 /* WHERE A SIBLING COMES BACK — the one thing a prepared fork needs that the decision seam cannot derive, so
