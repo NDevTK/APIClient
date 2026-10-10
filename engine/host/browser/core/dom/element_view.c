@@ -25,6 +25,7 @@
 #include "core/geometry/dom_rect.h"
 #include "core/geometry/dom_rect_list.h"
 #include "core/idl_args.h"
+#include "core/layout/layout_job.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/scroll_container.h"
@@ -752,24 +753,12 @@ resolved:
 
 /* ---- §6's `scrollIntoView()` ------------------------------------------------------------------------------ */
 
-/* ONE ENUM-VALUED PIECE OF §6's `scrollIntoView` ARGUMENT, as the keyword its algorithm branches on. OWNED.
- * The declaration has already run §3.2.18's enumeration check, so what arrives is one of the values the IDL
- * lists — or unknown external input, which is the one case this cannot answer and says so.
- * WHY A CONCOLIC IS A CRASH HERE AND NOT A PASS-THROUGH, AND WHY IT IS A DIFFERENT QUESTION FROM THE ONE THE
- * SCROLL MEMBERS BESIDE THIS ONE ASK. What stood here contrasted the two by saying that an unknown `left`/`top`
- * needs no arm because §6.1's clamp lands every value of the domain where the box already is — a derivation
- * that §2's viewport row and §3.1's perform a scroll retired, and that those members no longer make: an
- * unknown POSITION is now CARRIED to the step that scrolls and decided there (`ScrollRequest`,
- * `scroll_request_resolve`). So the contrast is not between a real derivation and a missing one. It is
- * between a VALUE and a QUESTION, which is CLAUDE.md's own line and the reason the two owe different
- * mechanisms: a scroll position is a value with a domain whose fork belongs at the page's own branch over it,
- * while `block` is an ENUMERATION whose domain is finite and declared, so its worlds are the members
- * themselves. `block: "start"` and `block: "end"` align opposite edges of the target against opposite edges of
- * the scrolling box, and on a box with real slack one of them is the position the box already has and the
- * other is not — one terminates and the other performs a scroll. Picking either would delete a world, and
- * §3.2.18's own conversion is where that fork belongs (core/idl_args.h's `idl_concolic_rule` answers
- * IDL_CONCOLIC_FORKS for IDL_ENUM and `idl_enum_fork` is the ask); what this dictionary member lacks is a
- * `JSStepHdr` to ask it from, which is what makes this member a step machine (JS_CFUNC_STEP_DEF). */
+/* One enumeration-valued member of §6's `scrollIntoView` argument, as the keyword its algorithm branches on.
+ * Owned by the caller. §3.2.18's check has already run, so what arrives is a value the IDL lists or unknown
+ * external input. An unknown keyword is a crash rather than a pass-through because `block` is an enumeration
+ * whose worlds are its members: "start" and "end" align opposite edges, so picking either deletes a world.
+ * The fork belongs at §3.2.18's conversion (core/idl_args.h's `idl_concolic_rule` answers IDL_CONCOLIC_FORKS
+ * for IDL_ENUM; `idl_enum_fork` is the ask), which this member, now a step machine, can make. */
 static char *ev_scroll_keyword(JSContext *ctx, JSValueConst v, const char *member)
 {
     const char *s;
@@ -781,8 +770,8 @@ static char *ev_scroll_keyword(JSContext *ctx, JSValueConst v, const char *membe
               "ALIGNMENT: `block` of \"start\" aligns the target's beginning edge with the scrolling box's and "
               "\"end\" aligns the ending edges, which are two different scroll positions and not two spellings "
               "of one. So neither arm may be picked and both must run. BUILD the fork at the value's own "
-              "resolution site: make this member a step machine (`JS_CFUNC_STEP_DEF`) so it carries a "
-              "`JSStepHdr`, and ask `step_fork_run` over the enumeration's values with outcome 0 the IDL's own "
+              "resolution site: this member is a step machine, so hand its `JSStepHdr` to this function and "
+              "ask `step_fork_run` over the enumeration's values with outcome 0 the IDL's own "
               "DEFAULT — which is step_fork_run's one numbering rule, since outcome 0 is what a run with no "
               "forking policy takes. core/dom/abort.c states the same conversion for the same reason");
     DCHECK(JS_IsString(v),
@@ -799,139 +788,155 @@ static char *ev_scroll_keyword(JSContext *ctx, JSValueConst v, const char *membe
     return owned;
 }
 
-/* §6's `scrollIntoView(arg)` STEPS, IN ORDER. Steps 1 to 4 are the four defaults the IDL also writes, and they
- * are the initialisers below rather than a second statement of them — `= "auto"`, `= "start"`, `= "nearest"`
- * and a null container are what the algorithm says and what the declaration places.
+/* §6's `scrollIntoView(arg)`, as a step machine that drives one layout job (core/layout/layout_job.h).
  *
- * STEP 7 IS THE REAL TERMINATION AND IT IS THE COMMON CASE, which is why this member is answerable at all: "if
- * the element does not have any associated box, or is not available to user-agent features, then return a
- * resolved Promise and abort the remaining steps". The first disjunct is element_view.h's one predicate, and it
- * covers a disconnected element, an element of a document nothing is presenting, a `<template>`'s contents and
- * anything whose computed `display` is `none` — most of what a lazy-loading bundle calls this on.
- * THE SECOND DISJUNCT IS DERIVED AND ASSERTED, NOT ASSUMED. "Available to user-agent features" is a property of
- * SKIPPED CONTENTS, which css-contain-2 §4 "Suppressing An Element's Contents Entirely: the content-visibility
- * property" states for the `hidden` value — "the skipped contents must not be accessible to user-agent
- * features, such as find-in-page, tab-order navigation, etc." — and contents are skipped only under a computed
- * `content-visibility` of `hidden` or an unrevealed `auto`. This engine's cascade
- * carries no such property at all — core/css/css_computed_value.h's own entry crashes for a property it does
- * not model — so no element's contents are skipped and every element with a box is available. The DCHECK below
- * is the two-sided form of that: the day `content-visibility` enters the cascade (HTML §15.3.1's UA rule for
- * `hidden=until-found` is the first declaration that would put it there, and core/css/css_style_declaration.c
- * already declines to emit it for want of a property to emit into), it fires and this branch has to be written.
- *
- * STEP 9 — "optionally perform some other action that brings the element to the user's attention" — is
- * OPTIONAL in the spec's own word and there is no user to attend, which is a headless answer the spec licenses
- * rather than a stub: nothing is elided, because the sentence permits doing nothing.
- *
- * THE PROMISE IS RESOLVED FOR core/dom/element_scrolling.h's REASON, which is a derivation and not a shrug —
- * and it is a DIFFERENT derivation now. Every scroll this user agent performs is an INSTANT one, because §3.1
- * step 5's smooth arm is gated on honoring css-overflow-3 §4.1's `scroll-behavior` and this cascade declares no
- * such property, so each perform-a-scroll in the ancestor walk has resolved its own promise before it returns.
- * WHAT STOOD HERE WAS THAT EVERY PATH EITHER PERFORMS NO SCROLL — THE VIEWPORT HAVING ONE VALID POSITION AND AN
- * ELEMENT WHOSE SCROLLING AREA EQUALS ITS PADDING BOX HAVING ONE TOO — OR CRASHES; the viewport half of that is
- * retired. So `ancestorPromises` holds only resolved promises and §6.1's scroll a target into view STEP 5 —
- * "Resolve scrollPromise when all Promises in ancestorPromises have settled." — is satisfied at creation.
- * IT WAS CITED HERE AS STEP 4, WHICH IS OFF BY ONE: that algorithm's steps are the ancestorPromises set, the
- * ancestor loop, the new promise, the return-and-run-in-parallel, and the resolve — five, with the resolve
- * last. The neighbouring step 4 is the one that RETURNS scrollPromise, so the wrong number named the step that
- * hands the promise out rather than the one that settles it. */
-static JSValue js_ev_scroll_into_view(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                      int magic)
+ * Steps 1 to 4 are the four defaults the IDL also writes (`"auto"`, `"start"`, `"nearest"`, a null
+ * container), so they are the initialisers below. Step 7 is the common termination: "if the element does not
+ * have any associated box, or is not available to user-agent features, then return a resolved Promise and
+ * abort the remaining steps". Its second disjunct is a property of skipped contents (css-contain-2 §4
+ * "Suppressing An Element's Contents Entirely: the content-visibility property"), and this cascade carries no
+ * `content-visibility`, so nothing is skipped; a DCHECK fires the day the property enters the cascade.
+ * Step 9 is optional in the spec's own word and there is no user to attend. Step 10's promise is resolved
+ * for core/dom/element_scrolling.h's reason: every scroll here is an instant one. */
+
+/* Step 8 is §6.1's ancestor walk, one scrolling box per re-entry of EV_SIV_BOX. Each box's layout questions
+ * are asked through the job this state owns, so its memo serves the boxes after it, and the machine rests
+ * between two boxes with the job alive: the flow is parked inside its own member call, where it writes
+ * nothing, so the memo stays valid across the rest (layout_job.h). */
+#define EV_SIV_STAGES(X) \
+    X(EV_SIV_ARGS, "CSSOM VIEW §6 \"Extensions to the Element Interface\" scrollIntoView(arg) steps 1-7 (the " \
+                   "four defaults, the argument, and the termination for an element with no box)") \
+    X(EV_SIV_BOX,  "CSSOM VIEW §6 \"Extensions to the Element Interface\" scrollIntoView(arg) step 8 (scroll a " \
+                   "target into view: CSSOM VIEW §6.1 \"Element Scrolling Members\" step 2 over one scrolling " \
+                   "box)")
+enum { IDL_STEP_STAGE_BASE(EV_SIV_STAGES) EV_SIV_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const EV_SIV_STEPS[] = { EV_SIV_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    ElementScrollingIntoView walk;   /* the ancestor walk's cursor: DOM nodes, which a fork shares by address */
+    LayoutJob *job;                  /* owned, declared through layout_job_step_ops; NULL until step 8 */
+    char       behavior[16];         /* §4's ScrollBehavior keyword, one of the three the enumeration admits */
+} EvScrollIntoViewState;
+
+static void ev_siv_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    ScrollLogicalPosition block = SCROLL_LOGICAL_START, inline_pos = SCROLL_LOGICAL_NEAREST;
-    lxb_dom_element_t *container = NULL;   /* step 4 */
-    char *behavior = strdup("auto");       /* step 1 */
-    EvTarget t;
+    EvScrollIntoViewState *s = st;
 
-    (void)magic;
-    CHECK(behavior != NULL, "§6's `scrollIntoView` could not hold its own default `behavior` keyword");
-    ev_target(this_val, &t);
-    DCHECK(argc == 1,
-           "§6 declares `scrollIntoView(optional (boolean or ScrollIntoViewOptions) arg = {})` — one argument, "
-           "with the default materialized by the argument machine — so a body seeing any other count is a "
-           "declaration that grew without this");
-    /* STEP 5 AGAINST STEP 6, decided by which arm of `(boolean or ScrollIntoViewOptions)` the conversion took.
-       §3.2.25 converts V to exactly one of the two types and IDL_BOOL_OR_DICT places what it converted, so the
-       question here is the union's own OUTPUT and not a shape test performed a second time on the page's
-       value — which is what `JS_IsObject` on a concolic would have been. */
-    if (JS_IsBool(argv[0])) {
-        /* Step 6 — "Otherwise, if arg is false, then set block to "end"". `true` sets nothing, so
-           `el.scrollIntoView(true)` and `el.scrollIntoView()` agree on every value §6 computes — BY TWO
-           DIFFERENT ROUTES, and the sentence that stood here named only one of them. An OMITTED argument does
-           not reach this branch at all: `optional (boolean or ScrollIntoViewOptions) arg = {}` makes the
-           position a dictionary, and Web IDL §3.2.25 Union types step 4 sends its `undefined` (and an
-           explicit `null`) to the dictionary arm below, where steps 1-4's "auto"/"start"/"nearest"/null are
-           what ScrollIntoViewOptions' own declared defaults place. They agreed by ACCIDENT while the union
-           read undefined as a non-object and handed this branch a `false`, which set `block` to "end" — the
-           opposite alignment — for every `el.scrollIntoView()` there has ever been. */
-        if (!JS_ToBool(ctx, argv[0])) block = SCROLL_LOGICAL_END;
-    } else if (concolic_is(argv[0])) {
-        free(behavior);
-        DFAIL("CSSOM VIEW §6's `scrollIntoView` reached its body with UNKNOWN EXTERNAL INPUT that the §3.2.25 "
-              "union placed on the BOOLEAN arm, and step 6 reads that boolean: `false` sets `block` to \"end\" "
-              "while `true` leaves it at \"start\", which are opposite alignments and two different scroll "
-              "positions. The union's ARM was already forked by the conversion (IDL_BOOL_OR_DICT is "
-              "IDL_CONCOLIC_FORKS); what is missing is the fork over the boolean's own VALUE, which belongs at "
-              "this step. BUILD it the way `ev_scroll_keyword` names — this member as a step machine "
-              "(`JS_CFUNC_STEP_DEF`) with `step_fork_run` over two outcomes, outcome 0 being `true` because "
-              "that is the arm a run with no forking policy takes and it is the one that leaves every default "
-              "in place");
-    } else {
-        JSValue v;
-
-        DCHECK(JS_IsObject(argv[0]),
-               "§6's `scrollIntoView` reached the DICTIONARY arm of `(boolean or ScrollIntoViewOptions)` with "
-               "something that is neither the engine-built options object nor unknown external input — "
-               "`optional … arg = {}` means an omitted argument IS a dictionary carrying every member's "
-               "default, which the argument machine materializes");
-        /* Step 5.1 */
-        v = idl_dict_get(ctx, argv[0], "behavior");
-        free(behavior);
-        behavior = ev_scroll_keyword(ctx, v, "behavior");
-        JS_FreeValue(ctx, v);
-        /* Step 5.2 */
-        v = idl_dict_get(ctx, argv[0], "block");
-        { char *k = ev_scroll_keyword(ctx, v, "block");
-          block = element_scrolling_logical_position(k); free(k); }
-        JS_FreeValue(ctx, v);
-        /* Step 5.3 */
-        v = idl_dict_get(ctx, argv[0], "inline");
-        { char *k = ev_scroll_keyword(ctx, v, "inline");
-          inline_pos = element_scrolling_logical_position(k); free(k); }
-        JS_FreeValue(ctx, v);
-        /* Step 5.4 — "if the container dictionary member of options is 'nearest', set container to THE
-           ELEMENT". The container is the element itself and not its parent: §6.1's step 2.4 stops the ancestor
-           walk once the scrolling box is a shadow-including inclusive ancestor of `container`, and the FIRST
-           ancestor scrolling box already is one — which is exactly what "nearest" means. */
-        v = idl_dict_get(ctx, argv[0], "container");
-        { char *k = ev_scroll_keyword(ctx, v, "container");
-
-          DCHECK(strcmp(k, "all") == 0 || strcmp(k, "nearest") == 0,
-                 "§6's `enum ScrollIntoViewContainer { \"all\", \"nearest\" }` admits two values and the "
-                 "declaration's §3.2.18 check rejects every other, so a third here is the declaration and this "
-                 "read having come apart");
-          if (strcmp(k, "nearest") == 0) container = lxb_dom_interface_element(t.node);
-          free(k); }
-        JS_FreeValue(ctx, v);
-    }
-    /* STEP 7 */
-    DCHECK(!css_computed_models("content-visibility"),
-           "css-contain-2's `content-visibility` is in this engine's cascade now, so CSSOM VIEW §6's "
-           "`scrollIntoView` step 7 has a disjunct this member does not decide: \"or IS NOT AVAILABLE TO "
-           "USER-AGENT FEATURES\", which css-contain-2 §4 \"Suppressing An Element's Contents Entirely: the "
-           "content-visibility property\" states over SKIPPED CONTENTS — an element inside a subtree whose computed "
-           "`content-visibility` is `hidden`, or `auto` while not relevant to the user. Until the property "
-           "existed, every element's value was the initial `visible` and nothing was skipped, which is why this "
-           "member could answer the disjunct by derivation. BUILD the flat-tree walk over the computed value "
-           "and terminate here for a skipped element; §6's `checkVisibility` wants the same walk");
-    if (!t.has_box) { free(behavior); return ev_resolved_promise(ctx); }
-    /* STEP 8 */
-    element_scrolling_scroll_target_into_view(lxb_dom_interface_element(t.node), behavior, block, inline_pos,
-                                              container);
-    free(behavior);
-    /* STEPS 9 AND 10 */
-    return ev_resolved_promise(ctx);
+    v->tree(ctx, (void **)&s->job, NULL, 0, &layout_job_step_ops);
 }
+
+static int js_ev_scroll_into_view_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                       JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    EvScrollIntoViewState *s = st;
+    bool more;
+
+    (void)cb_result; (void)out_cb; (void)out_argc;
+    STEP_DISPATCH(EV_SIV_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(EV_SIV_ARGS);
+    {
+        ScrollLogicalPosition block = SCROLL_LOGICAL_START, inline_pos = SCROLL_LOGICAL_NEAREST;
+        lxb_dom_element_t *container = NULL;   /* step 4 */
+        const char *behavior = "auto";         /* step 1 */
+        char *owned = NULL;
+        EvTarget t;
+
+        ev_target(hdr->this_val, &t);
+        DCHECK(argc == 1,
+               "§6 declares `scrollIntoView(optional (boolean or ScrollIntoViewOptions) arg = {})` — one "
+               "argument, with the default materialized by the argument machine — so a body seeing any other "
+               "count is a declaration that grew without this");
+        /* Step 5 against step 6, decided by which arm of `(boolean or ScrollIntoViewOptions)` the
+           conversion took: §3.2.25 converts V to exactly one of the two, and IDL_BOOL_OR_DICT places it. */
+        if (JS_IsBool(argv[0])) {
+            /* Step 6: "Otherwise, if arg is false, then set block to "end"". An omitted argument never
+               reaches here: §3.2.25 step 4 sends undefined and null to the dictionary arm. */
+            if (!JS_ToBool(ctx, argv[0])) block = SCROLL_LOGICAL_END;
+        } else if (concolic_is(argv[0])) {
+            DFAIL("CSSOM VIEW §6's `scrollIntoView` reached its body with UNKNOWN EXTERNAL INPUT that the §3.2.25 "
+                  "union placed on the BOOLEAN arm, and step 6 reads that boolean: `false` sets `block` to "
+                  "\"end\" while `true` leaves it at \"start\", which are opposite alignments and two different "
+                  "scroll positions. The union's ARM was already forked by the conversion (IDL_BOOL_OR_DICT is "
+                  "IDL_CONCOLIC_FORKS); what is missing is the fork over the boolean's own VALUE, which belongs "
+                  "at this stage: ask `step_fork_run` over two outcomes, outcome 0 being `true` because that is "
+                  "the arm a run with no forking policy takes and it leaves every default in place");
+        } else {
+            JSValue v;
+
+            DCHECK(JS_IsObject(argv[0]),
+                   "§6's `scrollIntoView` reached the DICTIONARY arm of `(boolean or ScrollIntoViewOptions)` "
+                   "with something that is neither the engine-built options object nor unknown external input "
+                   "— `optional … arg = {}` means an omitted argument IS a dictionary carrying every member's "
+                   "default, which the argument machine materializes");
+            v = idl_dict_get(ctx, argv[0], "behavior");                         /* step 5.1 */
+            owned = ev_scroll_keyword(ctx, v, "behavior");
+            behavior = owned;
+            JS_FreeValue(ctx, v);
+            v = idl_dict_get(ctx, argv[0], "block");                            /* step 5.2 */
+            { char *k = ev_scroll_keyword(ctx, v, "block");
+              block = element_scrolling_logical_position(k); free(k); }
+            JS_FreeValue(ctx, v);
+            v = idl_dict_get(ctx, argv[0], "inline");                           /* step 5.3 */
+            { char *k = ev_scroll_keyword(ctx, v, "inline");
+              inline_pos = element_scrolling_logical_position(k); free(k); }
+            JS_FreeValue(ctx, v);
+            /* Step 5.4: "nearest" sets container to the element itself, because §6.1's step 2.4 stops the
+               walk once the scrolling box is a shadow-including inclusive ancestor of container, and the
+               first ancestor scrolling box already is one. */
+            v = idl_dict_get(ctx, argv[0], "container");
+            { char *k = ev_scroll_keyword(ctx, v, "container");
+
+              DCHECK(strcmp(k, "all") == 0 || strcmp(k, "nearest") == 0,
+                     "§6's `enum ScrollIntoViewContainer { \"all\", \"nearest\" }` admits two values and the "
+                     "declaration's §3.2.18 check rejects every other, so a third here is the declaration and "
+                     "this read having come apart");
+              if (strcmp(k, "nearest") == 0) container = lxb_dom_interface_element(t.node);
+              free(k); }
+            JS_FreeValue(ctx, v);
+        }
+        DCHECKF(strlen(behavior) < sizeof s->behavior,
+                "§4's ScrollBehavior keyword `%s` does not fit the state's copy — the enumeration's three values "
+                "are what §3.2.18 admits, and each is shorter than the copy", behavior);
+        strcpy(s->behavior, behavior);
+        free(owned);
+        /* Step 7 */
+        DCHECK(!css_computed_models("content-visibility"),
+               "css-contain-2's `content-visibility` is in this engine's cascade now, so CSSOM VIEW §6's "
+               "`scrollIntoView` step 7 has a disjunct this member does not decide: \"or IS NOT AVAILABLE TO "
+               "USER-AGENT FEATURES\", which css-contain-2 §4 \"Suppressing An Element's Contents Entirely: the "
+               "content-visibility property\" states over SKIPPED CONTENTS. BUILD the flat-tree walk over the "
+               "computed value and terminate here for a skipped element; §6's `checkVisibility` wants the same "
+               "walk");
+        if (!t.has_box) {
+            *presult = ev_resolved_promise(ctx);
+            return JS_STEP_DONE;
+        }
+        element_scrolling_into_view_begin(&s->walk, lxb_dom_interface_element(t.node), block, inline_pos,
+                                          container);
+        s->job = layout_job_new();
+        hdr->stage = EV_SIV_BOX;
+    }
+
+    STEP_ARM(EV_SIV_BOX);
+    layout_job_enter(s->job);
+    more = element_scrolling_into_view_next(&s->walk, s->behavior);
+    layout_job_leave(s->job);
+    if (more) {
+        layout_job_rested(s->job);
+        return JS_STEP_YIELD;
+    }
+    /* Steps 9 and 10 */
+    *presult = ev_resolved_promise(ctx);
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl EV_SCROLL_INTO_VIEW_STEP = {
+    js_ev_scroll_into_view_step, sizeof(EvScrollIntoViewState), ev_siv_visit, NULL,
+    "CSSOM VIEW §6 \"Extensions to the Element Interface\" scrollIntoView(arg), over CSSOM VIEW §6.1 \"Element "
+    "Scrolling Members\" scroll a target into view",
+    EV_SIV_STEPS
+};
 
 /* ---- §6's `scrollWidth` and `scrollHeight` --------------------------------------------------------------- */
 
@@ -1694,11 +1699,11 @@ void element_view_init(JSContext *ctx)
     idl_this_iface(element_is, "Element");
     g_id_scroll          = ev_declare_scroll(ctx, EV_SCROLL_ABSOLUTE);
     g_id_scroll_by       = ev_declare_scroll(ctx, EV_SCROLL_RELATIVE);
-    g_id_scroll_into_view = idl_method_id_dict(ctx, EV_SCROLL_INTO_VIEW_ARGS, 1,
+    g_id_scroll_into_view = idl_method_id_step(ctx, EV_SCROLL_INTO_VIEW_ARGS, 1,
                                                EV_SCROLL_INTO_VIEW_OPTIONS,
                                                (int)(sizeof EV_SCROLL_INTO_VIEW_OPTIONS /
                                                      sizeof EV_SCROLL_INTO_VIEW_OPTIONS[0]),
-                                               js_ev_scroll_into_view, 0);
+                                               &EV_SCROLL_INTO_VIEW_STEP, 0);
     /* §3.7 Interfaces' implementation-check step 3 for the LAST of §6's six operations — declared beside its
        own type list rather than in ev_declare_scroll, because this member is not one of the two that helper
        makes and idl_this_iface names the member declared LAST. */

@@ -17,12 +17,13 @@ typedef enum { METRIC_LIFETIME, METRIC_GAUGE, METRIC_MAXIMUM, METRIC_CONSTANT, M
 /* Whose life a row's value spans: AGENT rows are zeroed with the agent (metrics_agent_release). */
 typedef enum { METRIC_SCOPE_AGENT } MetricScope;
 /* One member per declaration file. */
-typedef enum { METRIC_FAMILY_SCENSUS, METRIC_FAMILY_N } MetricFamily;
+typedef enum { METRIC_FAMILY_SCENSUS, METRIC_FAMILY_LAYOUT, METRIC_FAMILY_N } MetricFamily;
 
 #define IDENTITY_LE(sub, sup)
 #define METRIC(id, key, kind, unit, scope, owner) METRIC_ID_##id,
 typedef enum {
 #include "solver/metrics/scensus.def"
+#include "solver/metrics/layout.def"
     METRIC_ROW_N
 } MetricId;
 #undef METRIC
@@ -30,6 +31,7 @@ typedef enum {
 #define METRIC(id, key, kind, unit, scope, owner) METRIC_KIND_OF_##id = METRIC_##kind,
 enum {
 #include "solver/metrics/scensus.def"
+#include "solver/metrics/layout.def"
 };
 #undef METRIC
 #undef IDENTITY_LE

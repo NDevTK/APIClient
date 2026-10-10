@@ -368,97 +368,111 @@ static bool es_stop_after(const EsBox *b, lxb_dom_node_t *doc, lxb_dom_element_t
     return shadow_root_is_shadow_including_inclusive_ancestor(box_node, lxb_dom_interface_node(container));
 }
 
-void element_scrolling_scroll_target_into_view(lxb_dom_element_t *target, const char *behavior,
-                                               ScrollLogicalPosition block, ScrollLogicalPosition inline_pos,
-                                               lxb_dom_element_t *container)
+void element_scrolling_into_view_begin(ElementScrollingIntoView *w, lxb_dom_element_t *target,
+                                       ScrollLogicalPosition block, ScrollLogicalPosition inline_pos,
+                                       lxb_dom_element_t *container)
 {
-    lxb_dom_element_t *walk;
-    lxb_dom_node_t *doc;
-    JSContext *dctx;
-
     DCHECK(target != NULL, "§6.1's scroll a target into view was invoked with no target");
     DCHECK(element_view_has_box(lxb_dom_interface_node(target)),
            "§6.1's scroll a target into view was reached for an element with no associated box — "
            "`scrollIntoView`'s own step 7 returns a resolved Promise for exactly that element, so the caller's "
            "order has come apart");
-    doc = lxb_dom_interface_node(lxb_dom_interface_node(target)->owner_document);
-    walk = target;
-    for (;;) {
-        dctx = document_active_realm_of(doc);
-        DCHECK(dctx != NULL,
-               "§6.1's ancestor walk is inside a Document that is no navigable's ACTIVE document. The walk "
-               "starts at an element WITH A BOX, which is defined over the document being presented, and it "
-               "leaves a document only through a container element that is itself in a presented one");
-        /* STEP 2's ORDER, "in order of INNERMOST TO OUTERMOST scrolling box", is the ancestor chain read
-           upward. It is the FLAT TREE's chain (core/css/css_computed_value.h's `css_parent_element`) and not
-           the node tree's, because a scrolling box is a BOX and the flat tree is where boxes nest: a shadow
-           host's `overflow: auto` scrolls the boxes its shadow tree generates, and the node-tree parent of a
-           slotted child is not the element whose scrolling box contains it.
-           THE TARGET ITSELF IS NOT IN THE SET — §6.1 says "each ANCESTOR element or viewport" — which is why
-           this loop advances before it tests. */
-        for (walk = css_parent_element(walk); walk != NULL; walk = css_parent_element(walk)) {
+    w->target = target;
+    w->walk = target;
+    w->doc = lxb_dom_interface_node(lxb_dom_interface_node(target)->owner_document);
+    w->container = container;
+    w->block = block;
+    w->inline_pos = inline_pos;
+    w->phase = ES_INTO_VIEW_ANCESTORS;
+}
+
+/* Step 2.2 to step 2.4 for one scrolling box, and whether the walk ends after it. */
+static bool es_into_view_visit(ElementScrollingIntoView *w, const EsBox *b, const char *behavior)
+{
+    es_visit(w->target, b, behavior, w->block, w->inline_pos);
+    if (!es_stop_after(b, w->doc, w->container)) return true;
+    w->phase = ES_INTO_VIEW_DONE;
+    return false;
+}
+
+bool element_scrolling_into_view_next(ElementScrollingIntoView *w, const char *behavior)
+{
+    JSContext *dctx;
+
+    DCHECK(w->phase != ES_INTO_VIEW_DONE, "§6.1's ancestor walk was continued after it ended");
+    dctx = document_active_realm_of(w->doc);
+    DCHECK(dctx != NULL,
+           "§6.1's ancestor walk is inside a Document that is no navigable's ACTIVE document. The walk starts at "
+           "an element with a box, which is defined over the document being presented, and it leaves a "
+           "document only through a container element that is itself in a presented one");
+    if (w->phase == ES_INTO_VIEW_ANCESTORS) {
+        /* "Each ancestor element or viewport that establishes a scrolling box", innermost first, over the flat
+           tree's chain (core/css/css_computed_value.h's `css_parent_element`), because a scrolling box is a box
+           and the flat tree is where boxes nest. The target itself is not in the set, so the walk advances
+           before it tests. */
+        for (w->walk = css_parent_element(w->walk); w->walk != NULL; w->walk = css_parent_element(w->walk)) {
             EsBox b;
 
-            if (!scroll_container_is(walk)) continue;
-            es_box_of_element(walk, dctx, &b);
-            es_visit(target, &b, behavior, block, inline_pos);
-            if (es_stop_after(&b, doc, container)) return;
+            if (!scroll_container_is(w->walk)) continue;
+            es_box_of_element(w->walk, dctx, &b);
+            return es_into_view_visit(w, &b, behavior);
         }
-        {
-            /* THE VIEWPORT IS THE OUTERMOST SCROLLING BOX OF EVERY DOCUMENT and is always one — §2 states the
-               scrolling area of "a viewport or element" and gives the viewport its own column, so unlike an
-               element it has no scroll-container question to pass. */
-            EsBox b;
+        w->phase = ES_INTO_VIEW_VIEWPORT;
+    }
+    if (w->phase == ES_INTO_VIEW_VIEWPORT) {
+        /* The viewport is the outermost scrolling box of every document and always one: §2 gives it its own
+           column of the scrolling-area table, so it has no scroll-container question to pass. */
+        EsBox b;
 
-            es_box_of_viewport(doc, dctx, &b);
-            es_visit(target, &b, behavior, block, inline_pos);
-            if (es_stop_after(&b, doc, container)) return;
-        }
-        /* OUT OF THE DOCUMENT — HTML §7.3.1.3 "Child navigables"' CONTAINER, which is where the walk continues
-         * and where step 2.1's same-origin check has a false arm.
-         * THE THREE ANSWERS ARE THREE DIFFERENT FACTS AND ARE KEPT APART. A navigable with no PARENT is the
-         * top-level traversable: the walk has visited every scrolling box there is and ENDS. A navigable with a
-         * parent whose container ELEMENT is in this heap is a SAME-ORIGIN child — SECURITY.md keys an instance
-         * on `(browsing-context group, origin)`, so the element being reachable IS the same-origin answer — and
-         * the walk continues at that element. A navigable with a parent and NO local container element is a
-         * CROSS-ORIGIN child whose container belongs to another instance, which is §6.1 step 2.1's "abort any
-         * remaining iteration of this loop", and it is asserted to be that rather than assumed: the serialized
-         * remote container is the positive statement that the element exists somewhere else. */
-        {
-            JSValueConst proxy = document_window_proxy(dctx);
-            JSValue parent = window_proxy_parent_navigable(dctx, proxy);
-            JSValue el_v;
-            lxb_dom_element_t *ce;
+        es_box_of_viewport(w->doc, dctx, &b);
+        w->phase = ES_INTO_VIEW_CONTAINER;
+        return es_into_view_visit(w, &b, behavior);
+    }
+    DCHECK(w->phase == ES_INTO_VIEW_CONTAINER, "§6.1's ancestor walk resumed in a phase it does not have");
+    /* Out of the document, through HTML §7.3.1.3 "Child navigables"' container. No parent is the top-level
+       traversable, and the walk has visited every scrolling box. A parent whose container element is in this
+       heap is a same-origin child (SECURITY.md keys an instance on its origin), and the walk continues at
+       that element. A parent with no local container element is a cross-origin child: CSSOM VIEW §6.1's scroll
+       a target into view step 2.1, "abort any remaining iteration of this loop", asserted by the remote
+       container's record. */
+    {
+        JSValueConst proxy = document_window_proxy(dctx);
+        JSValue parent = window_proxy_parent_navigable(dctx, proxy);
+        JSValue el_v;
+        lxb_dom_element_t *ce;
 
-            if (JS_IsUndefined(parent)) { JS_FreeValue(dctx, parent); return; }
+        if (JS_IsUndefined(parent)) {
             JS_FreeValue(dctx, parent);
-            el_v = window_proxy_container(dctx, proxy);
-            if (!element_of_value(el_v)) {
-                DCHECK(window_proxy_remote_container(proxy) != NULL,
-                       "§6.1's ancestor walk found a CHILD navigable with no container element in this heap and "
-                       "no record of a remote one either. HTML §7.3.1.3 gives every child navigable a container "
-                       "-- 'the navigable container whose content navigable is navigable' -- so the element is "
-                       "in this instance or in another one, and a third answer is the two records having come "
-                       "apart");
-                JS_FreeValue(dctx, el_v);
-                return;   /* step 2.1: not same origin — abort any remaining iteration */
-            }
-            ce = element_of_value(el_v);
+            w->phase = ES_INTO_VIEW_DONE;
+            return false;
+        }
+        JS_FreeValue(dctx, parent);
+        el_v = window_proxy_container(dctx, proxy);
+        if (!element_of_value(el_v)) {
+            DCHECK(window_proxy_remote_container(proxy) != NULL,
+                   "§6.1's ancestor walk found a CHILD navigable with no container element in this heap and no "
+                   "record of a remote one either. HTML §7.3.1.3 gives every child navigable a container -- 'the "
+                   "navigable container whose content navigable is navigable' -- so the element is in this "
+                   "instance or in another one, and a third answer is the two records having come apart");
             JS_FreeValue(dctx, el_v);
-            /* The container element is an ancestor of the target in exactly §6.1's sense, so the walk resumes
-               with IT rather than with its parent — an `<iframe style="overflow:auto">` is a scroll container
-               whose scrolling box contains the child document's own box. */
-            walk = ce;
-            doc = lxb_dom_interface_node(lxb_dom_interface_node(ce)->owner_document);
-            if (scroll_container_is(ce)) {
-                EsBox b;
+            w->phase = ES_INTO_VIEW_DONE;
+            return false;
+        }
+        ce = element_of_value(el_v);
+        JS_FreeValue(dctx, el_v);
+        /* The container element is an ancestor of the target in §6.1's sense, so the walk resumes with it: an
+           `<iframe style="overflow:auto">` is a scroll container whose box contains the child document's. */
+        w->walk = ce;
+        w->doc = lxb_dom_interface_node(lxb_dom_interface_node(ce)->owner_document);
+        w->phase = ES_INTO_VIEW_ANCESTORS;
+        if (scroll_container_is(ce)) {
+            EsBox b;
 
-                es_box_of_element(ce, document_active_realm_of(doc), &b);
-                es_visit(target, &b, behavior, block, inline_pos);
-                if (es_stop_after(&b, doc, container)) return;
-            }
+            es_box_of_element(ce, document_active_realm_of(w->doc), &b);
+            return es_into_view_visit(w, &b, behavior);
         }
     }
+    return true;
 }
 
 /* CSSOM VIEW §3.1 "Scrolling"'s PERFORM A SCROLL, ASKED AS A CAPABILITY — see element_scrolling.h for the

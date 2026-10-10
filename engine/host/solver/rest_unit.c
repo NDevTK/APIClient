@@ -51,6 +51,13 @@
    chose that subtree. */
 #define REST_UNIT_SUBTREE_REMOVALS_N   1u
 
+/* ONE LAYOUT QUESTION BODY above its drive: how many nested bodies one C activation hosts before an ask is
+   deferred. The floor is the replay a deferral costs: the deferring bodies re-run from their start once the
+   deferred question is answered, so a unit of one replays a parent once per child. The ceiling is the C
+   stack one activation spends on nested bodies. 32 replays a body once per 32 levels of nesting and keeps an
+   activation's layout frames to 32 bodies; between those the value is free. */
+#define REST_UNIT_LAYOUT_QUESTIONS_N   32u
+
 size_t rest_unit_items(RestUnitKind kind)
 {
     size_t n = 0;
@@ -59,6 +66,7 @@ size_t rest_unit_items(RestUnitKind kind)
     case REST_UNIT_INPUT_BYTES:      n = REST_UNIT_INPUT_BYTES_N;      break;
     case REST_UNIT_XML_CONSTRUCTS:   n = REST_UNIT_XML_CONSTRUCTS_N;   break;
     case REST_UNIT_SUBTREE_REMOVALS: n = REST_UNIT_SUBTREE_REMOVALS_N; break;
+    case REST_UNIT_LAYOUT_QUESTIONS: n = REST_UNIT_LAYOUT_QUESTIONS_N; break;
     }
     /* NOT A `default:` ARM — the switch is exhaustive over RestUnitKind, so a kind added to the header with no
        number here does not compile rather than silently reaching the crash below. What lands here is a value

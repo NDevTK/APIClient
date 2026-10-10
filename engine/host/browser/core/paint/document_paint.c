@@ -14,6 +14,7 @@
 #include "core/frame/viewport.h"
 #include "core/graphics/raster_surface.h"
 #include "core/layout/flow_placement.h"
+#include "core/layout/layout_job.h"
 #include "core/paint/box_paint.h"
 #include "core/paint/display_list.h"
 #include "core/paint/display_list_raster.h"
@@ -65,6 +66,7 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
     char                  *display;
     bool                   boxless;
     int                    w = 0, h = 0;
+    LayoutJob             *job;
 
     DCHECK(ctx != NULL, "a document was asked what it looks like with no realm to ask it in — CSS 2.1 §2.3.1 "
                         "\"The canvas\"'s region is a fact about the VIEWPORT this document is presented on, "
@@ -181,6 +183,14 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
            paying full price for no reason. The two spans are nested and not merely adjacent. */
         css_cascade_pass_open();
         flow_placement_pass_open();
+        /* A LAYOUT JOB AROUND THE SAME WALK, so CSS 2.1 §9.4.1's contribution of each box is computed once
+           per paint rather than once per outermost ask (core/layout/layout_job.h). NAMED RESIDUAL. Not
+           covered: the paint is host time and not a step machine, so the job runs to completion in this one
+           activation and never rests. Next: the rendering update's paint as a flow that drives this job and
+           yields between stacking contexts. How its absence shows: `_layoutJobRests` does not move across a
+           paint however large the document. */
+        job = layout_job_new();
+        layout_job_enter(job);
         /* CSS 2.1 §E.2 "Painting order" over the ROOT's stacking context. CSS 2.1 §9.9.1 "Specifying the stack
            level: the 'z-index' property"'s first sentence makes the root element form the root stacking
            context, which is box_paint's precondition satisfied by the operand rather than by a test here —
@@ -203,6 +213,8 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
            met an operand it could not compute and STOPPED, and it returns normally — so a close placed after
            the raster would still run, and a close placed on the complete arm alone would leave the record
            standing for the next paint to open on top of. There is no arm between these two lines. */
+        layout_job_leave(job);
+        layout_job_free(job);
         flow_placement_pass_close();
         /* AND THE CASCADE RECORD CLOSES WITH IT, ON THE SAME ARM AND WITH NOTHING BETWEEN THESE TWO
            LINES — see the comment above for why it opened outside and therefore closes outside. */

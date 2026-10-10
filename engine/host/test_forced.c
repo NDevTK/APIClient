@@ -20970,6 +20970,13 @@ static int fixture_have_answers(void) {
         printf("@SCENSUS %s\n", sc);
         free(sc);
     }
+    /* …and core/layout/layout_job.h's census, for the same reason: `_layoutServedAcrossRest` above zero is a
+       layout job that rested inside its member call and served its memo after resuming. */
+    {
+        char *lj = metrics_family_text(METRIC_FAMILY_LAYOUT);
+        printf("@LAYOUTJOB %s\n", lj);
+        free(lj);
+    }
     /* …AND THE SAME FOR THE OTHER SURFACE, FOR THE SAME REASON AND WITH THE SAME ARGUMENT. §What-the-tool-
        produces makes orphan-invoke the headline ("a sniffer shows what FIRED; this shows what the bundle CAN do
        but didn't"), and solver/engine.h's census is the pair that says whether this engine ever got to it:

@@ -86,14 +86,11 @@
  *     tension and the entry is what keeps them from becoming so: the child contributes nothing to this box's
  *     height, AND where it would have gone is a reading of the very walk that decided to skip it.
  *
- * NOTHING IS STORED, FOR used_value.h's REASON, RESTATED BECAUSE THIS COMPONENT IS WHERE IT WOULD FIRST BE
- * TEMPTING TO BREAK IT. A layout is per-flow state — two flows with different DOMs have different boxes — so a
- * cached box tree is shared state the COW delta does not swap, and a stale one is a geometry from another
- * flow's document. Every answer here is DERIVED PER READ from the running flow's own tree and its own cascade,
- * which makes it per-flow by construction with no capture to write. The cost is that a subtree is walked once
- * per question asked of it; the day that is the bottleneck the cache is per-flow state and needs
- * solver/cow.h's `cow_capture_host_record` at its accessor, exactly as a browser component's own C record
- * does — used_value.h holds the residual, and why this clause used to name solver/dom_cow.h.
+ * WHAT IS HELD, AND FOR HOW LONG. A layout is per-flow state, so nothing here outlives a layout job
+ * (core/layout/layout_job.h): §9.4.1's contribution of a box is a question the job memoizes for its own
+ * lifetime, and the job is either one member call's (it rests only inside that flow's own call, where the
+ * flow writes nothing) or the thread's synchronous job, emptied when its outermost drive ends. Every other
+ * answer is derived per read from the running flow's own tree and cascade.
  *
  * A HEIGHT IS A `CssPx` FOR used_value.h's REASON AND THE PROPAGATION IS FREE. Every operand of the walk is
  * already a used value carrying the set of environment facts it derives from — a percentage margin resolves
@@ -250,21 +247,10 @@ BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, BoxTreeChild
    REMEMBERED. A caller that asks this per unit of work asks it once per unit of work; where that is a check
    rather than a computation, `#if APICLIENT_DEV` is what keeps a release build from paying for a proof it
    will not read.
-   THE REASON THAT USED TO BE GIVEN FOR IT WAS WIDER THAN THE RULE IT SUPPORTS, AND THE CORRECTION IS WRITTEN
-   HERE BECAUSE A READER WILL OTHERWISE RE-DERIVE THE WIDE ONE. It read, and the run is shown rather than
-   quoted so that nothing judges this tree's own prose against a standard: `There is no memo and there must`
-   `not be one: a remembered answer is state about a tree the cascade can change under it, and core/layout`
-   `holds none.` The first half is exactly right and is the reason this entry has none — a caller that asks it per
-   line box asks it inside a walk that may itself be re-entered, and there is no span this file owns over
-   which the answer could be held. The second half was a claim about the DIRECTORY and it is the half that
-   rots: core/layout/flow_placement.h now holds §9.4.1's stack positions, and it is admissible for the one
-   property this entry's answer lacks — a SPAN with two ends in one function, over which the document is
-   asserted not to change, holding NOTHING before it opens and NOTHING after it closes. So the line is not
-   "layout remembers nothing" but "nothing is held without a span that says when it is empty", and a proposal
-   to hold THIS answer is a proposal to name such a span for it.
+   It is not held because it is not a layout question (core/layout/layout_question.h): it is asked per line
+   box inside a walk that may be re-run, and only a question kind has an entry and a memo in the job.
    RETIREMENT: this paragraph goes when §9.5.1's placement is built and this entry's callers ask about a
-   PLACED float rather than about the context holding one, because the walk is then part of the layout that
-   produces the float's box and there is no per-line-box proof of absence left to price. */
+   PLACED float rather than about the context holding one. */
 lxb_dom_element_t *block_flow_context_first_float(lxb_dom_element_t *el);
 
 /* ---- CSS 2.2 §9.2.1.1 "Anonymous block boxes"' BOX LIST, IN CONTENT ORDER --------------------------------

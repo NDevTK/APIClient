@@ -1221,9 +1221,11 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                    "box, so CSSOM VIEW §3.1 \"Scrolling\"'s perform a scroll — which is built "
                    "(core/dom/perform_scroll.h) — has somewhere to put it. The algorithm step 4 calls is "
                    "already exported "
-                   "(core/dom/element_scrolling.h's element_scrolling_scroll_target_into_view), so what is "
-                   "missing is a stage of this machine AFTER §6.6.4's focusing steps, with `scrollIntoView`'s "
-                   "own step 7 — the target has an associated box — asked first");
+                   "as a cursor (core/dom/element_scrolling.h's element_scrolling_into_view_begin/_next), so "
+                   "what is missing is a stage of this machine AFTER §6.6.4's focusing steps that drives it one "
+                   "scrolling box per re-entry inside a layout job, as core/dom/element_view.c's "
+                   "`scrollIntoView` does, with `scrollIntoView`'s own step 7 — the target has an associated "
+                   "box — asked first");
             s->allow_win = JS_DupValue(ctx, document_window_proxy(doc));
             STEP_GOTO(hdr->stage, FOC_ALLOW, &s->fphase, &s->ua_phase, NULL);
             continue;

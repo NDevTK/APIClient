@@ -9,6 +9,7 @@
 #include "core/dom/document.h"   /* document_record_release — a destroyed document hands back its record */
 #include "core/layout/flow_placement.h"   /* the geometry span an attribute write may not land inside — see dom_attr_capture */
 #include "core/css/css_cascade_pass.h"   /* …and the CASCADE span, which the same write also moves */
+#include "core/layout/layout_job.h"   /* a layout job's memo, which every write below may invalidate */
 #include "core/dom/attr_list.h"   /* §4.9's attribute-list algorithms — what the delta restores an attribute THROUGH */
 #include "core/dom/name_intern.h"   /* a node's names are per-DOCUMENT state, so kind 8 moves them with the pointer */
 #include "core/dom/node_heap.h"     /* …and its BYTES are the agent's, which is why kind 8 asserts and moves nothing */
@@ -191,6 +192,16 @@ static void dom_note_created_attr(lxb_dom_attr_t *a);   /* fwd: the chokepoint i
  * outer's stale capacity over it writes past the end of the array it just built. Asserted at the OPEN, which
  * is the origin; the depth is what makes the balance checkable at the close. */
 static int g_dom_capturing;
+
+/* A layout job's memo (core/layout/layout_job.h) is computed from the document; a write made while a job's
+   activation holds the thread would leave answers it already served computed from a tree that is gone.
+   Layout writes nothing, so a write here is a component calling a mutator from inside layout. A macro, so
+   the crash names the write entry. */
+#define DOM_WRITE_OUTSIDE_LAYOUT() \
+    DCHECK(!layout_job_holds_thread(), \
+           "a DOM write was made while a layout job's activation holds the thread — layout reads the tree " \
+           "and the cascade and writes neither, and the job's memo is valid only while neither moves; find " \
+           "the mutator called from inside layout and take it out of the walk")
 
 static void dom_capture_begin(void) {
     DCHECK(g_dom_capturing == 0,
@@ -948,6 +959,7 @@ static void dom_attr_capture(lxb_dom_element_t *el, const char *ns, const char *
        PASS is in the wrong place — the fix is where the pass opens and closes, never a re-check here. It sits
        ahead of the capture gate on purpose: a write performed while capture is off is the same write to the
        cascade. */
+    DOM_WRITE_OUTSIDE_LAYOUT();
     DCHECK(!flow_placement_pass_is_open(),
            "an attribute was written while CSS 2.1 §9.4.1 \"Block formatting contexts\"' placement pass was "
            "open. That pass holds every box position a whole-tree geometry walk has established, and it is "
@@ -1338,6 +1350,7 @@ uint64_t dom_cow_version(void) { return g_dom_version; }
 /* Remove a node that the baseline may own. Capture its position FIRST, then detach — the same order the
    attribute and insert chokepoints use, so a removal cannot bypass the per-flow delta either. */
 void dom_cow_remove_child(lxb_dom_node_t *node) {
+    DOM_WRITE_OUTSIDE_LAYOUT();
     if (!node) return;
     g_dom_version++;
     /* BEFORE the detach, because "was it connected" has no answer afterwards. */
@@ -2119,6 +2132,7 @@ void dom_cow_set_node_document(lxb_dom_node_t *node, lxb_dom_document_t *doc) {
 }
 
 void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len) {
+    DOM_WRITE_OUTSIDE_LAYOUT();
     lxb_dom_character_data_t *cd;
     if (!node) return;
     DCHECK(node->type == LXB_DOM_NODE_TYPE_TEXT || node->type == LXB_DOM_NODE_TYPE_COMMENT,
@@ -2149,6 +2163,7 @@ void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len) {
 /* HTML §13.2.6.1 "Creating and inserting nodes"'s "insert a character" step 3 — see dom_cow.h for why this is
    its own entry point and why unapplying it is a value restore rather than a node removal. */
 void dom_cow_append_text_data(lxb_dom_node_t *node, const char *data, size_t len) {
+    DOM_WRITE_OUTSIDE_LAYOUT();
     lxb_dom_character_data_t *cd;
     lexbor_mraw_t *text;
 
@@ -2459,6 +2474,7 @@ bool dom_cow_owns_tree_construction(void)
 }
 
 void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
+    DOM_WRITE_OUTSIDE_LAYOUT();
     g_dom_version++;
     dom_insert_capture(child);   /* record the insertion FIRST so it reverts per-flow (detached on unapply) */
     lxb_dom_node_insert_child(parent, child);
@@ -2478,6 +2494,7 @@ void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
    unapply time rather than at capture time, so this differs from append only in the Lexbor call — which is
    exactly why insertBefore must come through here and not reach lxb_dom_node_insert_before directly. */
 void dom_cow_insert_before(lxb_dom_node_t *ref, lxb_dom_node_t *child) {
+    DOM_WRITE_OUTSIDE_LAYOUT();
     g_dom_version++;
     dom_insert_capture(child);
     lxb_dom_node_insert_before(ref, child);
@@ -2506,6 +2523,7 @@ static lxb_dom_node_t *g_move_in_flight;
 #endif
 
 void dom_cow_move_out(lxb_dom_node_t *node) {
+    DOM_WRITE_OUTSIDE_LAYOUT();
     DCHECK(node != NULL, "§4.2.3's move was asked to take nothing out of a tree — `node` is non-nullable in the "
                          "algorithm's own signature");
     DCHECK(node->parent != NULL,
@@ -2523,6 +2541,7 @@ void dom_cow_move_out(lxb_dom_node_t *node) {
 }
 
 void dom_cow_move_in(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref) {
+    DOM_WRITE_OUTSIDE_LAYOUT();
     DCHECK(parent != NULL && node != NULL, "§4.2.3's move was asked to put nothing anywhere");
     DCHECK(node->parent == NULL,
            "§4.2.3 move step 19/20 ran on a node that is still in a tree — step 13's detach is what makes the "
@@ -2547,6 +2566,11 @@ void dom_cow_move_in(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_
    failure it closes, and for the named residual it leaves. The captures are byte-for-byte the chokepoint's,
    so a baseline write time-travels exactly like any other write and only the §4.2.3 record is absent. */
 void dom_cow_append_baseline(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
+    DCHECKF(layout_job_alive() == 0,
+            "a host-time BASELINE write was made while %zu layout jobs are alive — a driven job rests inside a "
+            "flow's member call with a memo computed from the baseline this write changes, so its resume "
+            "would serve answers about a tree that is gone; write the baseline before any flow runs",
+            layout_job_alive());
     DCHECK(parent != NULL && child != NULL, "a baseline tree write was asked to put nothing anywhere");
     DCHECK(!quantum_slice_open(),
            "a BASELINE tree write was made while a flow held the thread — this entry exists for HOST TIME, "
@@ -2567,6 +2591,11 @@ void dom_cow_append_baseline(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
 }
 
 void dom_cow_remove_baseline(lxb_dom_node_t *node) {
+    DCHECKF(layout_job_alive() == 0,
+            "a host-time BASELINE write was made while %zu layout jobs are alive — a driven job rests inside a "
+            "flow's member call with a memo computed from the baseline this write changes, so its resume "
+            "would serve answers about a tree that is gone; write the baseline before any flow runs",
+            layout_job_alive());
     if (!node) return;
     DCHECK(!quantum_slice_open(),
            "a BASELINE tree removal was made while a flow held the thread — see dom_cow_append_baseline for "

@@ -1,47 +1,23 @@
-/* CSSOM VIEW §6.1 "Element Scrolling Members" — the three ALGORITHMS §6's members end in, split out of
+/* CSSOM VIEW §6.1 "Element Scrolling Members": the three algorithms §6's members end in, split out of
  * core/dom/element_view.c because they are not members of anything.
  *
- * §6 IS A LIST OF IDL MEMBERS AND §6.1 IS A LIST OF ALGORITHMS OVER BOXES, and the boundary is the spec's own.
- * §6's `scrollTop` setter, its `scroll()`/`scrollTo()`/`scrollBy()` and its `scrollIntoView()` each run eight or
- * nine steps of ARGUMENT and DOCUMENT questions — is this the root element, is the document in quirks mode, is
- * the body potentially scrollable, what did the dictionary carry — and then hand off to one of these three:
- *
- *   SCROLL AN ELEMENT (or pseudo-element) element to x,y — the clamp into §2's scrolling area and one
- *     perform-a-scroll. §6's setter's step 11 and its scroll members' step 11 both end here.
- *   DETERMINE THE SCROLL-INTO-VIEW POSITION of a target, with a block position, an inline position and a
- *     SCROLLING BOX — the alignment of the target's bounding border box against that box's four flow-relative
- *     edges.
- *   SCROLL A TARGET INTO VIEW — the walk over "each ancestor element or viewport that establishes a scrolling
+ *   Scroll an element (or pseudo-element) element to x,y: the clamp into §2's scrolling area and one perform
+ *     a scroll; §6's setter's step 11 and its scroll members' step 11 end here.
+ *   Determine the scroll-into-view position of a target against one scrolling box.
+ *   Scroll a target into view: the walk over "each ancestor element or viewport that establishes a scrolling
  *     box, in order of innermost to outermost", running the algorithm above once per box.
  *
- * WHY THE SPLIT IS WORTH A FILE. The two scroll-into-view algorithms are the only things in this engine that
- * reason about a scrolling box that is NOT the receiver of the call: they walk out of the element, out of its
- * document, and (for a same-origin child navigable) out into the container element's own ancestors. That is a
- * different contract from every member of §6, which answers about ONE element, and mixing the two put a
- * multi-document walk inside a file whose every other function opens with the same four questions about one
- * element's node document.
- *
- * WHY BOTH ENTRIES RETURN `void` WHILE §6.1 RETURNS A PROMISE, AND WHY THAT IS NOW A DIFFERENT ARGUMENT. The
- * caller answers the page with a RESOLVED promise, and that is honest because EVERY SCROLL THIS USER AGENT
- * PERFORMS IS AN INSTANT ONE: §3.1 step 5's smooth arm is gated on the user agent honoring css-overflow-3
- * §4.1's `scroll-behavior` property, this cascade declares no such property, and an instant scroll has finished
- * updating by the time §3.1 returns — so step 7.2 resolves the promise before the algorithm ends.
- * core/dom/perform_scroll.h states that derivation once and asserts it once. WHAT STOOD HERE INSTEAD WAS THAT
- * EVERY PATH THROUGH THESE ENTRIES EITHER PERFORMS NO SCROLL AT ALL OR CRASHES, WITH §3.1 BEING THE THING
- * NOTHING IN THIS ENGINE REACHED; §3.1 is written and the viewport route runs it for real, which retires that.
- * (Retired prose is restated in CAPITALS and never in quotation marks — a quoted sentence beside a section
- * number is a SPEC quotation, and citegen.mjs reads it as one.) §6.1's scroll a target into view's own last
- * step, its STEP 5 — "Resolve scrollPromise when all Promises in ancestorPromises have settled." — is
- * therefore a resolved promise over a set of resolved promises. The day a scroll can take TIME this file grows
- * a promise-returning shape and its callers stop minting one; that day is the smooth scroll's, not an
- * element's.
- *
- * A SMOOTH SCROLL IS NEVER ONGOING, AND THAT TOO IS DERIVED — from the same sentence and no longer from the
- * absence of a caller. Three of §6.1's steps read "or box has an ongoing smooth scroll" as a second disjunct
- * beside "position is not the same as the current scroll position", and this engine answers the disjunct FALSE
- * for every box because §3.1's step 5 is the only thing that starts one and its smooth arm is unreachable here.
- * THE REASON THAT STOOD HERE WAS THAT NO BOX HAD EVER REACHED §3.1 AT ALL, which is exactly what this file's
- * viewport route now does. */
+ * The two scroll-into-view algorithms reason about scrolling boxes that are not the receiver of the call:
+ * they walk out of the element, out of its document and, for a same-origin child navigable, into the
+ * container element's ancestors. Every member of §6 answers about one element, which is why the walk is a
+ * file of its own. */
+
+/* No entry here returns a promise. Every scroll this user agent performs is an instant one: §3.1 step 5's
+ * smooth arm is gated on honoring css-overflow-3 §4.1's `scroll-behavior`, which this cascade does not
+ * declare, so §3.1 step 7.2 resolves each scroll's promise before the algorithm returns and §6.1's scroll a
+ * target into view step 5 resolves a set of resolved promises. core/dom/perform_scroll.h states and asserts
+ * that once. For the same reason no box ever has an ongoing smooth scroll, so the three steps of §6.1 that
+ * read "or box has an ongoing smooth scroll" answer that disjunct false. */
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_ELEMENT_SCROLLING_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_ELEMENT_SCROLLING_H
 
@@ -108,14 +84,29 @@ void element_scrolling_scroll_element(lxb_dom_element_t *el, double x, double y,
 
 /* §6.1's "To SCROLL A TARGET INTO VIEW target … with a scroll behavior behavior, a block flow direction
    position block, an inline base direction position inline, and an optional containing Element to stop
-   scrolling after reaching container".
-   `container` is NULL for §6's `container: "all"` and is the TARGET ITSELF for `"nearest"` — that is
-   `scrollIntoView`'s own step 5.4 ("if the container dictionary member of options is 'nearest', set container
-   to the element") and not a convention invented here.
-   The caller has already run `scrollIntoView`'s step 7: the target has an associated box. */
-void element_scrolling_scroll_target_into_view(lxb_dom_element_t *target, const char *behavior,
-                                               ScrollLogicalPosition block, ScrollLogicalPosition inline_pos,
-                                               lxb_dom_element_t *container);
+   scrolling after reaching container", as a cursor over step 2's ancestor walk: `next` runs steps 2.1 to
+   2.4 for at most one scrolling box and answers whether the walk continues, so a step machine can rest
+   between two boxes. The cursor holds only DOM nodes of the running flow, which a fork shares by address.
+   `container` is NULL for §6's `container: "all"` and is the target itself for `"nearest"` (`scrollIntoView`'s
+   step 5.4). The caller has already run `scrollIntoView`'s step 7: the target has an associated box. */
+typedef enum {
+    ES_INTO_VIEW_ANCESTORS = 1,   /* the ancestor elements of `walk` within `doc` */
+    ES_INTO_VIEW_VIEWPORT,        /* `doc`'s viewport */
+    ES_INTO_VIEW_CONTAINER,       /* out of `doc`, through its navigable's container */
+    ES_INTO_VIEW_DONE
+} ElementScrollingIntoViewPhase;
+
+typedef struct {
+    lxb_dom_element_t *target, *walk, *container;
+    lxb_dom_node_t    *doc;
+    ScrollLogicalPosition block, inline_pos;
+    ElementScrollingIntoViewPhase phase;
+} ElementScrollingIntoView;
+
+void element_scrolling_into_view_begin(ElementScrollingIntoView *w, lxb_dom_element_t *target,
+                                       ScrollLogicalPosition block, ScrollLogicalPosition inline_pos,
+                                       lxb_dom_element_t *container);
+bool element_scrolling_into_view_next(ElementScrollingIntoView *w, const char *behavior);
 
 /* CAN A SCROLLING BOX IN THIS REALM'S DOCUMENT BE AT A POSITION OTHER THAN THE ONE THIS ENGINE DERIVES —
  * CSSOM VIEW §3.1 "Scrolling"'s PERFORM A SCROLL ("when a user agent is to perform a scroll of a scrolling box

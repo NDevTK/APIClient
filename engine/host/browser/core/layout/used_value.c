@@ -23,7 +23,7 @@
 #include "core/layout/flow_placement.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/intrinsic_size.h"
-#include "core/layout/layout_question.h"
+#include "core/layout/layout_job.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/table_border_collapse.h"
 #include "core/layout/table_box.h"
@@ -4187,22 +4187,15 @@ typedef struct {
 static UvSized uv_sized(lxb_dom_element_t *el, UvBox box, bool vertical)
 {
 #if APICLIENT_DEV
-    /* The chain node is on THIS frame, like `used_value_px`'s — layout_question.h says why the chain is
-       intrusive and why a heap mirror of these frames would be the worse of two copies. */
-    LayoutQuestionOpen open;
+    size_t open;   /* this question's entry on the job's stack; release stacks none */
 #endif
     UvSized r;
     UvLimits lim;
 
-    /* THE SINGLE EXIT BELOW IS WHAT MAKES THE CLOSE UNMISSABLE, and it is a `goto` rather than a forwarder
-       ON PURPOSE. §10.4's flex return and its table return are both early, so the alternative shapes were a
-       close at each of three returns — three chances to drop one, caught only by `LAYOUT_QUESTION_CLOSE`'s
-       LIFO assert after the fact — or the split this file already uses at `used_value_px`/`uv_px_ask`, a
-       guarding forwarder over a renamed body. THE FORWARDER IS THE ONE TO REFUSE HERE: it costs a C FRAME
-       PER ASK at -O0, and the number this component exists to publish is C FRAMES PER LEVEL OF NESTING, so
-       the instrument would move the census it is the instrument for. A label costs none. */
+    /* The single exit below closes the question on every path; §10.4's flex and table returns are early, so
+       they jump to it. A guarding forwarder would cost a C frame per ask. */
     r.len = css_computed_length(el, vertical ? "height" : "width");
-    LAYOUT_QUESTION_OPEN(&open,
+    LAYOUT_QUESTION_OPEN(open,
                          layout_question(LAYOUT_Q_UV_SIZED, el, vertical ? "height" : "width",
                                          (unsigned) box + 1u),
                          "THE REPEAT IS THIS BOX'S OWN FINAL PASS STANDING AS ITS OWN INPUT, and the two "
@@ -4271,7 +4264,7 @@ static UvSized uv_sized(lxb_dom_element_t *el, UvBox box, bool vertical)
            "max(min, max)\". A used value below the floor here means the two steps ran in the wrong order or "
            "step 3's own re-run did not take");
 done:
-    LAYOUT_QUESTION_CLOSE(&open);
+    LAYOUT_QUESTION_CLOSE(open);
     return r;
 }
 
@@ -4431,200 +4424,33 @@ static CssPx uv_px_ask(lxb_dom_element_t *el, const char *name)
     return out;
 }
 
-/* ---- THE USED-VALUE GRAPH IS ACYCLIC, ASSERTED AT THE ASK ----------------------------------------------
-   A used value is a FUNCTION OF THE DOCUMENT, so `used_value_px(el, name)` asked while the same pair is
-   already open is a rule reading a term it is a term of: there is no fixed point to reach and nothing
-   between the two occurrences made progress. Today that ends on the stack guard page — a SIGSEGV with no
-   `@WHY` at all, which a harness reads as a run that produced no abort — and the cycle is recoverable only
-   from a core dump. `uv_abs_margins`' banner above records the one that was found that way.
-
-   THE CHAIN, THE CYCLE TEST AND THE ARGUMENT FOR BOTH ARE core/layout/layout_question.h's, AND THAT MOVE IS
-   THE POINT RATHER THAN A TIDY-UP. This entry's question is a (element, property) PAIR, and the cluster it is
-   an entry to recurses over (element, QUESTION) pairs whose question is not always a property name — so a
-   record that can only spell THIS entry's pair can only ever be threaded at THIS entry, and the chain has to
-   be able to name a question before a resolver can push one. What used to sit here was that record with its
-   type welded to its one site; what is here now is the same record over a NAMED question, which is the work
-   stack's element type.
-
-   WHY THE PAIR IS (ELEMENT, PROPERTY) AND WHY THIS IS THE SITE. This entry answers the ten physical
-   box-model lengths its own `DFAIL` above enumerates, and its answer is a function of exactly that pair,
-   so the pair IS the question; the measured cycle's own identity was one box's `margin-top`. The
-   FUNCTION-level alternative is weaker and the difference was measured rather than argued: the
-   used-value cluster is ONE strongly connected component, and removing any single function from it
-   leaves most of the component still mutually recursive. Re-derive that rather than trusting this
-   sentence — a call-graph SCC over core/layout and core/css, cut one node at a time.
-
-   WHY A RE-ENTRY HERE IS ALWAYS A DEFECT AND NEVER THE ENGINE WORKING. The rules in this file that need a
-   term of their own box reach it INTERNALLY and never through this entry — `uv_block_auto_width` calls
-   `uv_margin` rather than asking for `margin-left`, and `used_value_block_level_content_px` spells out
-   css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' conversion in its own words rather
-   than calling `uv_content_size`, saying at its own site that the helper "re-enters `used_value_px`".
-   The one shape that would otherwise close a cycle through here is a percentage that resolves against a
-   basis its own box is an input to, and
-   css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes" already resolves that against
-   ZERO in
-   core/layout/intrinsic_size.c. So arrival here is an ASK, and an ask that is its own input.
-
-   AND THE CHAIN IS ONE FRAME IN SIX, WHICH IS MEASURED AND NOT AN ESTIMATE — it is worth knowing before
-   anyone builds a resolver out of it, because it prices the granularity such a resolver could resume at.
-   Counting C frames with gdb breakpoints on this binary, over `<div>`-nested documents of depth N:
-
-       N =  4 -> 40 layout frames on the stack, 7 of them this entry (17.5%)
-       N =  8 -> 64 layout frames on the stack, 11 of them this entry (17.2%)
-       N = 12 -> 88 layout frames on the stack, 15 of them this entry (17.0%)
-
-   which is 6N + 16 frames of which N + 3 are recorded at THIS entry, so this entry's share is a CONSTANT
-   sixth at every depth rather than something that improves on a real page. `uv_sized` is a second of the six
-   and is recorded too now, which is arithmetic over the SAME table and not a second measurement — the census
-   has not been re-run, and a reader who wants it re-run needs gdb and a native build. IT IS QUOTABLE AGAINST
-   A REVISION, AND NOT BY AN ARTIFACT STAMP — engine/gate_revision.mjs prints `the compiled cone (…) is CLEAN
-   at that revision — this number is quotable against it`, engine/build.mjs passes it a cone that CONTAINS
-   `engine/host`, and it is printed at top level before the first compiler runs, so the NATIVE target is
-   covered like every other. Run it in a freeze anyway (`engine/frozen_snapshot.sh`, which that gate's own
-   dirty arm names) — not to obtain a revision but to make the cone clean BY CONSTRUCTION in a checkout
-   several lanes are editing — and read the `[rev]` line rather than assuming it.
-   THE PARAGRAPH THAT STOOD HERE SAID THE OPPOSITE AND IS WRITTEN OUT BECAUSE ITS METHOD IS THE REUSABLE
-   PART. It said the native binary is uncertified, reasoning from `stampArtifact` sitting under
-   `if (ABI_LINK.code === 0)`. That observation is TRUE and the conclusion does not follow: an artifact STAMP
-   is about BYTES IN THE OUTPUT and the cone gate is about THE SOURCES THAT WERE LINKED, and for a census it
-   is the second that decides. The error was reading a mechanism off a `why` string — a DIAGNOSTIC for the
-   stamp — instead of off the line that certifies. THE TELL WAS FREE AND ARITHMETIC: two tree-wide greps for
-   two halves of one sentence returned two file lists, engine/gate_revision.mjs was the ONLY file in BOTH,
-   and the other one got opened. When two searches for one sentence intersect in one file, that file is the
-   answer.
-   THE FIRST COLUMN IS THE LARGER FINDING AND IT IS THE REASON
-   THIS COMPONENT EXISTS: laying out a document costs SIX C FRAMES PER LEVEL OF NESTING and nothing bounds the
-   nesting, so the C stack is a function of the document — which is not a thing a browser does, and is the
-   SIGSEGV-with-no-`@WHY` above arriving by DEPTH rather than by repetition. Re-derive both columns rather than
-   quoting them: gdb, `break used_value_px` with a `bt` command, and count the frames whose names belong to
-   core/layout.
-
-   NAMED RESIDUAL. WHAT IS NOT COVERED: every cycle that closes without crossing THIS entry, `uv_sized` OR
-   `bf_box` — a PROPERTY, which is what a reader can test a candidate against, and the COUNT beside it is a
-   figure from the cut ranking rather than a re-derivation. That ranking put the residual after this third
-   kind at SEVEN, against the twenty-one the second one left and the sixty before it, and it is quoted with
-   the caveat the method paragraph below states for every figure in this banner: the ranking is not in the
-   tree, so a reader who needs the number runs the SCC again rather than taking this one. So the chain still records the
-   ASKS and not the LAYOUTS: between two consecutive nodes of it C frames come and go with nothing anywhere
-   naming them, and C-stack exhaustion by DEPTH rather than by repetition is not a repeated pair and does not
-   fire here.
-   THE SECOND KIND IS BUILT AND WHAT ASKED FOR IT WAS WRONG IN TWO PLACES, recorded here because a residual's
-   next-diff clause is the half a reader cannot check by fetching anything and is read exactly once, by
-   someone who has already decided to do the work. (1) It called this cut `the best second cut there is`, and the
-   cut ranking gives a THREE-WAY TIE at twenty-one — `fx_hypothetical_cross` and
-   `used_value_block_level_content_px` do exactly as well, and the reason to prefer `uv_sized` is not the
-   number but that it is the one of the three whose question a CALLER already holds in its own argument
-   registers. (2) Its encoding half named the AXIS as the operand needing a one-based `code` because it is a
-   `bool`; the reason is right, the operand is not, and layout_question.h's own paragraph on this kind states
-   why. NEITHER ERROR WAS ABOUT THE SPEC AND BOTH WERE ABOUT THIS TREE, which is the split to expect.
-   WHAT WAS CHECKED BEFORE DECLARING IT, because the clause asked for a REFUSAL if the arm turned out
-   re-entrant and a reader repeating that check should not have to re-find the answer: §10.4's three steps
-   call `uv_pass_size` for one (element, box, axis) up to three times SEQUENTIALLY — each assignment returns
-   before the next runs — so they close no cycle at this kind. The two sites that spell
-   `uv_abs_solve(el, uv_sized(...).len, vertical)` are safe for a second reason worth keeping: the argument is
-   evaluated first, so the `uv_sized` node is CLOSED before `uv_abs_solve` opens. And of this kind's four
-   asking sites, three pass the element's own `uv_box_kind` while `used_value_block_level_content_px` passes
-   `UV_BOX_BLOCK_FLOW` for a box it has just asserted is a `UV_BOX_ITEM` — which is why the box type is a
-   PARAMETER of the question and not derived from the element.
-   HOW THE NUMBERS ARE RE-DERIVED, as a method rather than a figure: a call-graph SCC over core/layout and
-   core/css, cut one node at a time, ranking each cut by the largest SCC that remains. A SOURCE-TEXT extractor
-   answers 133 for the whole cluster where the census that first reported it answered 132, and that one-node
-   disagreement is the instrument rather than the tree — a text extractor cannot see an edge through a
-   function pointer (so its cycle set is a FLOOR) and can invent one from a name that is not a call (so its
-   node set is not a ceiling). engine/check_recursion.mjs's LLVM IR is the exact edge set for direct calls and
-   needs a compile; the cut ranking is not in it. Every figure in this banner is quoted with that
-   caveat or not quoted.
-   NOT `bf_layout`, WHICH THIS RESIDUAL NAMED AS THE NEXT KIND AND WHICH THE ARM CHECK REFUSES. The ranking
-   does make CSS 2.1 §9.4.1 "Block formatting contexts"' walk the best third cut — twenty-one to SIX, against
-   seven for `bf_box` and nine for the next three, with nothing tied at six or seven — and the cut number is
-   not what decides a kind. THE QUESTION DOES NOT FIT THE TYPE, and that is a refusal rather than an
-   inconvenience: `bf_layout`'s tuple is (element, WANT, pass), where `want` is a SECOND ELEMENT — the box the
-   walk is looking for, which is how `block_flow_child_top` asks one container for one child's position — and
-   `LayoutQuestion` holds ONE element. `pass` would fit `code` one-based; `want` has nowhere to go.
-   AND DROPPING IT IS NOT MERELY LOSSY, IT ABORTS A CORRECT DOCUMENT. Two walks of ONE container looking for
-   TWO DIFFERENT children are different questions that would render and compare as one, and they are reachable
-   one inside the other: `bf_layout` asks `used_value_px` of its OWN subject for `margin-top` and
-   `margin-bottom`, and from that ask `uv_px_ask` -> `uv_abs_margins` -> `uv_abs_solve` ->
-   `flow_static_position` -> `flow_border_box_origin` -> `fp_border_box_origin_compute` reaches
-   `block_flow_child_top` and a second walk. The same ask reaches `block_flow_auto_height` (a `want` of NULL)
-   and both baseline entries (a different `pass`), so all three of this kind's discriminators vary INSIDE an
-   open walk. A kind that cannot spell a discriminator its own callers vary is the one shape
-   core/layout/layout_question.h names as turning a working engine into an abort.
-   `bf_box` IS THAT THIRD KIND AND IT IS BUILT, at core/layout/block_flow.c, with `name` NULL and `code` the
-   pass ONE-BASED — load-bearing for the same reason `UV_BOX_INLINE` was, since `BF_BASELINE_NONE` is 0 and is
-   the pass every ordinary render runs. It costs ONE function against `bf_layout` and it is the cut whose
-   question this type can say. THE CLAUSE THAT NAMED IT IS THEREFORE RETIRED AND ITS ARM CHECK IS KEPT, because
-   the reading is what a reader re-derives and the remedy string at that entry now depends on it: the two
-   routes are each ACCOUNTED FOR — one by construction, one by a spec-mandated guard — and that was never the
-   same as CLEARED. What follows is what a reading could settle before the kind landed.
-   THE ROUTE THIS RESIDUAL NAMED IS REFUTED, AND STRUCTURALLY. It went `bf_box` -> `bf_box_compute` -> the
-   `uv_abs_solve` chain -> `block_flow_child_top(cb, el)` -> `bf_layout(cb, el, …)` -> that walk reaching `el`
-   -> `bf_box(el, pass)`. It cannot start: `bf_box`'s ONLY caller is `bf_layout`, that walk admits only
-   `BLOCK_FLOW_CHILD_BLOCK`, and core/layout/block_flow.c's `bf_element_child` classifies a computed
-   `position` of `absolute` or `fixed` as NO_BOX — quoting §9.3.1 and §10.6.3 at that line for why. So a
-   `bf_box` subject is an IN-FLOW BLOCK-LEVEL box always, `uv_box_kind` of one is never `UV_BOX_ABS`, and the
-   abs-margin arm the whole chain hangs from is unreachable from that entry's own `margin-top` ask.
-   WHAT WAS LEFT IS THE ASCENDING ONE — a PERCENTAGE height resolving against a containing block whose own
-   height is the walk already open — AND §10.7 BREAKS IT IN ITS OWN WORDS. The last gate of
-   `used_value_containing_block_height` refuses a basis when the containing block's height behaves as auto,
-   which is that section's SECOND conjunct read as a predicate. The gate is a real break rather than a
-   deferral, which is the part worth checking and was: the predicate reaches the cascade and an ancestor walk
-   and NOTHING in this cluster — no used-value entry, no `bf_` entry — so it cannot itself become the
-   recursion it exists to stop.
-   AND THE `bf_box_agrees` ASYMMETRY CUTS NEITHER WAY, which is the opposite of what it looks like. A memo HIT
-   runs that predicate under a `DCHECKF`, so the DEV build re-enters the used-value cluster exactly where the
-   release build returns from the record — and a chain node is dev-only, so it would be open across a path
-   release never runs. That reads as a reason to move the node to `bf_box_compute`, and it is not: the three
-   non-leaf entries `bf_box_agrees` can reach are ALL in `bf_box_compute`'s own set, so the memo-MISS path —
-   which BOTH builds take — reaches everything the hit path does. The asymmetry is in WHEN the chain is
-   exercised and never in WHAT it can reach, so the node belongs at `bf_box`, where a memo hit costs a check
-   that could already have fired one call later.
-   IT IS NOW DECLARED, AND WHAT LICENSED IT WAS THE `uv_sized` KIND'S PREDICTION BEING SCORED — the thing
-   that blocked it was ORDER and never SHAPE, which is the half a reader carries across wrongly. The clause
-   above refuses `bf_layout` because its tuple carries a SECOND ELEMENT and the type holds one; `bf_box` was
-   then CHOSEN for not having that problem, so its two-pointer refusal is the reason it exists and cannot
-   also be the reason it waited. Measured: that carry was made once, by a coordinator quoting `bf_layout`'s
-   signature correctly and inferring the same blocker for `bf_box`, whose own signature refutes it in a line.
-   HOW THE PREDICTION WAS SCORED, and the witness is a CONSERVATION IDENTITY rather than an absence, which is
-   what makes it readable at all: `node engine/layout_cost.mjs <native binary> 6`, run inside a frozen
-   snapshot at 5acd99d3 with the chain's own entries added to `PROBES`, has `layout_question_repeat`,
-   `layout_question_push` and `layout_question_pop` EQUAL at every cell of all three shapes — 3714 asks at
-   the deepest fixture. `DFAILF` aborts, so a single fire would leave `push` SHORT of `repeat`; the LIFO
-   close would leave `pop` short of `push`. The subject really ran and is not inferred from a neighbour:
-   `uv_sized` itself reads 570 there, and `objdump` of it shows the `call layout_question_repeat` the DEV arm
-   compiles to, so the zero is a reading and not a path nobody took.
-   AND THE WITNESS COVERS ONE OF THE THREE ROUTES THE ARM CHECK CLEARED, STATED BECAUSE A PREDICTION SCORED
-   OVER THE WRONG POPULATION READS EXACTLY LIKE ONE SCORED OVER THE RIGHT ONE. On that same run
-   `uv_pass_size` EQUALS `uv_sized` at every cell — so §10.4/§10.7 ran STEP 1 ONLY and the two re-runs that
-   could re-enter never happened — while `uv_abs_margins`, `used_value_abs_offset_px`,
-   `used_value_block_level_content_px` and `uv_table_used_width` all read ZERO in every shape, which are
-   BOTH of the shapes this kind's own remedy names as the two it exists to catch. What is scored is the
-   ordinary block-flow ask at scale, and the fixtures are three plain `<div>` documents. A document carrying
-   a `max-width`, an absolutely positioned box or a flex item is what would score the rest; naming that here
-   is cheaper than re-deriving which routes a run happened to take.
-   HOW ITS ABSENCE WOULD SHOW: a terminal SIGSEGV on a real document with no `@WHY` line anywhere in the run
-   and a backtrace that is one short frame cycle repeated to the guard page, whose repeated frames include
-   none of this function, `uv_sized` and `bf_box`. ------------------------------------------------------ */
+/* ---- the used-value graph is acyclic, asserted at the ask ------------------------------------------------
+   A used value is a function of the document, so `used_value_px(el, name)` asked while the same pair is open
+   is a rule reading a term it is a term of, with no fixed point to reach. The pair is a
+   LAYOUT_Q_USED_VALUE_PX question on the layout job's stack (core/layout/layout_job.h), opened and closed by
+   this frame in dev builds, and the cycle test there turns what would end on the stack guard page as a
+   SIGSEGV with no @WHY into a DFAIL naming the stack.
+   The pair is (element, property) because this entry answers the ten physical box-model lengths its own
+   DFAIL enumerates, as a function of exactly that pair. A rule that needs a term of its own box reaches it
+   internally (`uv_block_auto_width` calls `uv_margin`; `used_value_block_level_content_px` spells out
+   css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"'s conversion), and css-sizing-3 §5.2.1
+   "Intrinsic Contributions of Percentage-Sized Boxes" resolves a self-referential percentage against zero
+   in core/layout/intrinsic_size.c, so an arrival here is an ask, and a repeat is a defect. */
 CssPx used_value_px(lxb_dom_element_t *el, const char *name)
 {
 #if APICLIENT_DEV
-    /* THE CHAIN NODE LIVES ON THIS FRAME, so the chain is exactly as deep as the recursion and has no
-       capacity of its own — see layout_question.h for why that is the design and why a heap-owned mirror of
-       these frames would be the worse of two copies rather than a step toward replacing them. At
-       -DAPICLIENT_DEV=0 the two macros below expand to nothing, this declaration is not compiled, and the
-       release frame is the size it was before any of this existed. */
-    LayoutQuestionOpen open;
+    size_t open;   /* this question's entry on the job's stack; release stacks none */
 #endif
     CssPx answer;
 
-    LAYOUT_QUESTION_OPEN(&open, layout_question(LAYOUT_Q_USED_VALUE_PX, el, name, 0),
-                         "FIX IT AT THE RULE THAT RE-ENTERS AND BY CONSTRUCTION, never by a limit: read the "
-                         "chain for the one link whose operand the calling frame ALREADY HOLDS and split it "
+    LAYOUT_QUESTION_OPEN(open, layout_question(LAYOUT_Q_USED_VALUE_PX, el, name, 0),
+                         "Fix it at the rule that re-enters and by construction, never by a limit: read the "
+                         "stack for the one link whose operand the calling frame already holds and split it "
                          "off there, which is what CSS 2.1 §10.6.4 \"Absolutely positioned, non-replaced "
                          "elements\"' two margins are — the `margin-top` that walk went looking for was "
                          "sitting in `uv_abs_solve`'s own `r.m_before`.");
     answer = uv_px_ask(el, name);
-    LAYOUT_QUESTION_CLOSE(&open);
+    LAYOUT_QUESTION_CLOSE(open);
     return answer;
 }
 

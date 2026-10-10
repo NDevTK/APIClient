@@ -1,0 +1,193 @@
+/* A layout job: the evaluator layout questions (core/layout/layout_question.h) are asked through. It owns
+ * the stack of open questions, a memo of answered ones, and the accounting of how many question bodies one
+ * C activation hosts. It is the analogue of LayoutNG's layout-result cache, scoped to one job rather than
+ * hung on a box, because layout here is per-flow state with no box tree to hang it on. */
+
+/* The stack replaces C frames. A question is pushed when asked. Its body either completes (the entry is
+ * popped and, for LAYOUT_Q_BF_BOX, memoized) or asks a question the job defers: that question is pushed
+ * suspended and the asking bodies return "not yet" up to the nearest drive, each leaving its entry on the
+ * stack as suspended. The drive computes the stack from the top down on a fresh C stack, then re-runs its
+ * own walk, which finds every completed answer in the memo. A body that returned "not yet" is re-run from
+ * its start; it keeps nothing but the memoized answers of the questions it asked.
+ *
+ * The interruption is a typed return, not a non-local exit: frames between an ask and its drive hold heap
+ * temporaries and process-wide brackets across their calls (table grids, line fragments, measurement
+ * buffers, the paint passes), so only a frame that propagates "not yet" explicitly may be unwound. */
+
+/* Which job. A job its driver entered (`layout_job_enter`) is current for that activation. Otherwise the
+ * thread's synchronous job is: it serves every layout entry that does not drive a job, and its memo is
+ * emptied when its outermost drive ends, so nothing it holds outlives the activation that computed it.
+ *
+ * Memo validity. An answer is a function of the document, the cascade and the viewport. No DOM write may
+ * happen while a job's activation holds the thread (asserted at solver/dom_cow.c's write entries), and a
+ * driven job rests only inside its own flow's member call, where that flow writes nothing and every other
+ * flow's writes stay in that flow's delta. A host-time baseline write while a driven job is alive is
+ * refused at solver/dom_cow.c for the same reason. */
+/* NAMED RESIDUAL, the synchronous job. Not covered: every layout entry but CSSOM VIEW §6's
+ * `scrollIntoView` (core/dom/element_view.c) and the paint (core/paint/document_paint.c) runs on the
+ * thread's synchronous job, which never rests, so a page's flow cannot be preempted while one of those
+ * entries lays out. Next: each such member becomes a step machine that owns a driven job, as
+ * `scrollIntoView` does. How its absence shows: a flow's slice overrun inside a layout member that is not
+ * `scrollIntoView`, with `_layoutJobRests` flat. */
+
+/* NAMED RESIDUAL, the drive is not a rest point. Not covered: "not yet" propagates only through
+ * core/layout/block_flow.c's stack walk, so every drive is an entry of that file and computes what it
+ * deferred inside the same activation; a driven job rests only between its driver's own stages. Next: the
+ * callers of a drive propagate "not yet" in turn, starting with the path the fixture reaches
+ * (core/layout/scrolling_area.c's descendant walk, then core/layout/flow_position.c's origin), until the
+ * drive is the step machine itself. How its absence shows: `_layoutBfDeferred` rises while `_layoutJobRests`
+ * counts only one rest per scrolling box. */
+
+/* NAMED RESIDUAL, cycles that cross no question kind. Not covered: the layout call graph has recursion
+ * cycles that pass through none of the three kinds (intrinsic sizes, line-box atomic extents, the
+ * containing-block origin, margins with a size operand), and their frames still nest on the C stack within
+ * one body, unbounded by REST_UNIT_LAYOUT_QUESTIONS. Next: a question kind at each cut of those cycles.
+ * How its absence shows: a deep document's C stack grows with its depth along a frame cycle that names no
+ * `bf_box`, `uv_sized` or `used_value_px`. */
+
+/* NAMED RESIDUAL, replay. Not covered: a body that returned "not yet" re-runs from its start, recomputing
+ * everything it does between asks (its own cascade reads and its anonymous block boxes' line layout). Next:
+ * the stack walk's loop state staged in the entry, so a resumed body continues at the child it stopped at.
+ * How its absence shows: `_layoutBfReplays` beside `_layoutBfDeferred`, one replay per deferring body. */
+
+#ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_LAYOUT_JOB_H
+#define ENGINE_HOST_BROWSER_CORE_LAYOUT_LAYOUT_JOB_H
+#include <stdbool.h>
+#include <stddef.h>
+
+#include "quickjs-step.h"
+
+#include "check.h"
+#include "core/css/css_length.h"
+#include "core/layout/layout_question.h"
+
+typedef struct LayoutJob LayoutJob;
+
+/* What LAYOUT_Q_BF_BOX answers: CSS 2.1 §9.4.1's contribution of one box to its parent's stack, with
+   CSS 2.1 §8.3.1's two adjoining runs as their extrema and CSS 2.2 §10.8.1's baseline for the asked pass. */
+typedef struct {
+    CssPx content_h, border_h;
+    CssPx top_pos, top_neg, bottom_pos, bottom_neg;
+    CssPx baseline;
+    bool  collapse_through, is_table_wrapper, has_line_box;
+} LayoutBfAnswer;
+
+/* ---- driven jobs ---------------------------------------------------------------------------------------- */
+
+/* A job a driver owns across its activations. `free` asserts the job is not entered and its stack empty. */
+LayoutJob *layout_job_new(void);
+void layout_job_free(LayoutJob *job);
+
+/* Make `job` current for one activation, and give the thread back. `enter` asserts no job's activation
+   holds the thread; `leave` asserts the stack is empty and no drive is open, which is what makes a rest
+   point taken after it carry nothing but the memo. */
+void layout_job_enter(LayoutJob *job);
+void layout_job_leave(LayoutJob *job);
+
+/* The driver took a rest point with `job` alive (a step machine returned JS_STEP_YIELD). Answers memoized
+   before it and served after it are what the census counts as served across a rest. */
+void layout_job_rested(LayoutJob *job);
+
+/* A driven job held in a step state. The clone answers a job with an EMPTY memo: the memo is re-derivable,
+   so a forked arm re-derives it rather than sharing or copying it. A job has no interior pointers a machine
+   holds, so a declarer passes no cursors. */
+extern const JSStepTreeOps layout_job_step_ops;
+
+/* Whether a job's activation holds the thread (an entered job, or the synchronous job inside a drive or with
+   a question open), and how many driven jobs are alive. Read by solver/dom_cow.c's write entries, which
+   assert against both; nothing branches on them. */
+bool layout_job_holds_thread(void);
+size_t layout_job_alive(void);
+
+/* ---- the drive ------------------------------------------------------------------------------------------ */
+
+/* A drive is a frame that cannot propagate "not yet" to its caller, so it computes every question deferred
+   beneath it before it returns. `begin` takes the current job (the synchronous one when none is entered)
+   and marks the stack; `next` hands back the topmost suspended question above the mark, now computing, or
+   answers false when none is left; `end` asserts the stack is back at the mark. */
+typedef struct {
+    LayoutJob *job;
+    size_t     base;
+    unsigned   nest;
+} LayoutJobDrive;
+
+void layout_job_drive_begin(LayoutJobDrive *d);
+bool layout_job_drive_next(LayoutJobDrive *d, LayoutQuestion *q, size_t *at);
+void layout_job_drive_end(LayoutJobDrive *d);
+
+/* ---- LAYOUT_Q_BF_BOX ------------------------------------------------------------------------------------ */
+
+typedef enum {
+    LAYOUT_ASK_ANSWERED,   /* `*out` holds the memoized answer; nothing was pushed */
+    LAYOUT_ASK_OPENED,     /* pushed computing at `*at`: the caller runs the body and answers or suspends it */
+    LAYOUT_ASK_DEFERRED    /* pushed suspended at `*at`: the caller returns "not yet" */
+} LayoutAsk;
+
+/* Ask a BF_BOX question. Asserts a drive is open: every ask has one beneath it on the C stack. The question
+   is deferred when the drive already hosts rest_unit_items(REST_UNIT_LAYOUT_QUESTIONS) computing bodies. */
+LayoutAsk layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out, size_t *at);
+
+/* The computing body at `at` completed: asserts it is the top, pops and memoizes it. */
+void layout_job_bf_answer(size_t at, const LayoutBfAnswer *answer);
+
+/* The computing body at `at` returned "not yet": asserts every entry above it is suspended and suspends it. */
+void layout_job_suspend(size_t at);
+
+/* ---- the open chain, for the kinds that are not stacked in release ------------------------------------- */
+
+/* Push a computing question that its own frame pops, and pop it. The kinds asked through these never
+   suspend: no frame between them and their drive propagates "not yet". */
+size_t layout_job_open(LayoutQuestion q);
+void layout_job_close(size_t at);
+bool layout_job_top_is(size_t at);
+
+/* How many entries down the identical question is already on the current job's stack, 1 for the top, 0 for
+   none; and the stack rendered top first, stopping after `frames` entries. Both are total: a DFAILF message
+   reaches them. A question with no element is never a repeat, because its own entry asserts its operands. */
+unsigned layout_question_repeat(LayoutQuestion q);
+const char *layout_question_chain(unsigned frames, char *buf, size_t cap, bool *cut);
+
+/* The cycle test, expanded at each asking site so the DFAILF names that site. `remedy` is the kind's own
+   sentence about what to do with a cycle in it. */
+#if APICLIENT_DEV
+#define LAYOUT_QUESTION_REPEAT_CHECK(question, remedy) do {                                                  \
+    LayoutQuestion lq_q_ = (question);                                                                       \
+    unsigned lq_up_ = layout_question_repeat(lq_q_);                                                         \
+                                                                                                             \
+    if (lq_up_ != 0) {                                                                                       \
+        char lq_ask_[LAYOUT_QUESTION_ASK_CAP];                                                               \
+        char lq_chain_[LAYOUT_QUESTION_CHAIN_CAP];                                                           \
+        bool lq_cut_ = false;                                                                                \
+        const char *lq_at_ = layout_question_ask(lq_q_, lq_ask_, sizeof lq_ask_);                            \
+        const char *lq_c_ = layout_question_chain(lq_up_, lq_chain_, sizeof lq_chain_, &lq_cut_);            \
+                                                                                                             \
+        DFAILF("%s is its own input: the identical question is already open %u entries down the job's "     \
+               "stack, so there is no fixed point to reach. The stack, top first: %s%s. %s A depth cap "     \
+               "would answer nothing: a deep box tree passes this check, and the repetition is the defect",  \
+               lq_at_, lq_up_, lq_c_, lq_cut_ ? " <- …" : "", (remedy));                                     \
+    }                                                                                                        \
+} while (0)
+#else
+#define LAYOUT_QUESTION_REPEAT_CHECK(question, remedy) ((void) 0)
+#endif
+
+/* A question its own frame opens and closes, stacked in dev builds only. `at` is a `size_t` on the asking
+   frame. The close is checked at the site that opened, so a frame that returned without closing is named. */
+#if APICLIENT_DEV
+#define LAYOUT_QUESTION_OPEN(at, question, remedy) do {                                                      \
+    LAYOUT_QUESTION_REPEAT_CHECK((question), (remedy));                                                      \
+    (at) = layout_job_open((question));                                                                      \
+} while (0)
+#define LAYOUT_QUESTION_CLOSE(at) do {                                                                       \
+    DCHECK(layout_job_top_is((at)),                                                                          \
+           "a layout question is being closed by a frame whose entry is not the top of the job's stack, so " \
+           "a frame between them returned without closing its own; close at every return of the entry that " \
+           "opened");                                                                                        \
+    layout_job_close((at));                                                                                  \
+} while (0)
+#else
+#define LAYOUT_QUESTION_OPEN(at, question, remedy)  ((void) 0)
+#define LAYOUT_QUESTION_CLOSE(at)                   ((void) 0)
+#endif
+
+#endif

@@ -79,7 +79,7 @@
 #include <stddef.h>
 
 /* THE ITEM A REST UNIT IS COUNTED IN. Each name says what ONE item is, because the cost bound differs per
-   kind and a shared name would hide that: two of these are counted in items whose size the DOCUMENT chooses,
+   kind and a shared name would hide that: three of these are counted in items whose size the DOCUMENT chooses,
    and the multiplier a policy may safely apply is a different question for those than for the one whose item
    is a fixed amount of work. Adding a kind means adding its default and its cost sentence in rest_unit.c,
    which does not compile until both exist. */
@@ -102,7 +102,14 @@ typedef enum {
     /* ONE TOP-LEVEL CHILD REMOVED from the partial tree a failed XML parse left standing, which §7.5.3 permits
        a user agent to replace with an inline report. COST: one subtree, whose size the document chooses —
        the same shape as the construct above and for the same reason. */
-    REST_UNIT_SUBTREE_REMOVALS
+    REST_UNIT_SUBTREE_REMOVALS,
+    /* ONE LAYOUT QUESTION BODY open on the C stack above its job's drive (core/layout/layout_job.h). The rest
+       point is the return to the drive: an ask made while the drive already hosts this many bodies is
+       deferred, and the drive computes it on a fresh C stack. COST: one body, whose own walk the document
+       sizes (a container's children), so this is the construct's shape again. The drive is not yet a
+       scheduler rest point, so this number decides C stack per activation and replay cost rather than the
+       delay of a due suspension; bound (2) applies to it once a drive returns to the scheduler. */
+    REST_UNIT_LAYOUT_QUESTIONS
 } RestUnitKind;
 
 /* HOW MANY ITEMS OF `kind` ONE REST POINT COVERS. Always >= 1 (asserted): the offer to rest survives every

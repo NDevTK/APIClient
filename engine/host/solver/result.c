@@ -2256,6 +2256,8 @@ char *result_json(JSContext *ctx) {
            top level, and the schema that declares them, which a reader takes the row set and kinds from. On
            the document because the renderer does not tee stdout. */
         char *scensus = metrics_family_members_text(METRIC_FAMILY_SCENSUS);
+        /* …and core/layout/layout_job.h's census, solver/metrics/layout.def's rows, spliced the same way. */
+        char *layoutm = metrics_family_members_text(METRIC_FAMILY_LAYOUT);
         char *schema = metrics_schema_text();
         /* …and what this instance did with the records a peer sent it — see engine.h for why the pair travels
            together and why a host's routed count is not comparable to a page's handler invocations. */
@@ -2333,7 +2335,7 @@ char *result_json(JSContext *ctx) {
                              "\"_routedZeroDelivery\":%ld,"
                              "\"_routedTasksFired\":%ld,\"_routedTasksTargetOrigin\":%ld,"
                              "\"_routedTasksTargetGone\":%ld,\"_routedTasksThrew\":%ld,"
-                             "%s,\"_metricsSchema\":%s,"
+                             "%s,%s,\"_metricsSchema\":%s,"
                              /* …and the frontier's order at composition — result.h says why it rides here and what
                                 its two shapes mean. One nested object, because its rows are mostly readings of an
                                 instant. The nesting separates subsystems, never kinds. Every `_`-prefixed sibling
@@ -2387,14 +2389,12 @@ char *result_json(JSContext *ctx) {
                                 one walk pays for; `passes` counts whole-tree spans. `origin*` is CSS 2 §8.1 "Box
                                 dimensions"' border-box origin, derived from the containing block's (§10.1 second
                                 case), in or out of a render; read `originDerived` against a document's depth.
-                                `box*` is CSS 2.1 §10.6.3's contribution to a parent, taken over the one baseline
-                                pass the record serves (§10.8.1). `cbWidth*` is CSS 2.1 §10.1 "Definition of
+                                `cbWidth*` is CSS 2.1 §10.1 "Definition of
                                 'containing block'"'s width (fourth case), the extent to `origin*`'s point through
                                 a separate chain. Each `*Asks == *Served + *Derived` closes and is asserted. */
                              "\"_layout\":{\"childTopAsks\":%lld,\"childTopServed\":%lld,"
                              "\"childTopWalks\":%lld,\"placements\":%lld,\"passes\":%lld,"
                              "\"originAsks\":%lld,\"originServed\":%lld,\"originDerived\":%lld,"
-                             "\"boxAsks\":%lld,\"boxServed\":%lld,\"boxDerived\":%lld,"
                              "\"cbWidthAsks\":%lld,\"cbWidthServed\":%lld,\"cbWidthDerived\":%lld},"
                              /* What the run spent on css-cascade-5 §4.2 "Cascaded Values".
                                 core/css/css_cascade_pass.h states the two shapes that compound: §7.2 inheritance
@@ -2419,7 +2419,7 @@ char *result_json(JSContext *ctx) {
                      routedDelivered, routedRefused, routedZeroDelivery,
                      routedEnds[ROUTED_TASK_FIRED], routedEnds[ROUTED_TASK_TARGET_ORIGIN],
                      routedEnds[ROUTED_TASK_TARGET_GONE], routedEnds[ROUTED_TASK_THREW],
-                     scensus, schema,
+                     scensus, layoutm, schema,
                      orphansDriven, orphansAsked,
                      orphanExits.memo, orphanExits.empty, orphanExits.took,
                      (unsigned long long)orphanWalk.walks, (unsigned long long)orphanWalk.entries,
@@ -2428,12 +2428,12 @@ char *result_json(JSContext *ctx) {
                      wfq, cold, heap, swap, forkAt, absent,
                      place.asks, place.served, place.walks, place.placements, place.passes,
                      place.origin_asks, place.origin_served, place.origin_derived,
-                     place.box_asks, place.box_served, place.box_derived,
                      place.cb_width_asks, place.cb_width_served, place.cb_width_derived,
                      casc.asks_life, casc.served_life, casc.resolved_life, casc.passes_life,
                      quantum,
                      cold_park_json());
         free(scensus);
+        free(layoutm);
         free(schema);
     }
     free(eps);

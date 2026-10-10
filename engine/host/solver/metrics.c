@@ -22,6 +22,9 @@ static const MetricRow ROWS[METRIC_ROW_N] = {
 #define METRICS_DEF_FAMILY METRIC_FAMILY_SCENSUS
 #include "solver/metrics/scensus.def"
 #undef METRICS_DEF_FAMILY
+#define METRICS_DEF_FAMILY METRIC_FAMILY_LAYOUT
+#include "solver/metrics/layout.def"
+#undef METRICS_DEF_FAMILY
 };
 #undef METRIC
 #undef IDENTITY_LE
@@ -31,6 +34,7 @@ typedef struct { MetricId sub, sup; } MetricIdentity;   /* value(sub) <= value(s
 #define IDENTITY_LE(sub, sup) { METRIC_ID_##sub, METRIC_ID_##sup },
 static const MetricIdentity IDENTITIES[] = {
 #include "solver/metrics/scensus.def"
+#include "solver/metrics/layout.def"
 };
 #undef IDENTITY_LE
 #undef METRIC
@@ -61,6 +65,11 @@ static void scensus_members(JsonBuf *b)
     const char *sep = "";
 #include "solver/metrics/scensus.def"
 }
+static void layout_members(JsonBuf *b)
+{
+    const char *sep = "";
+#include "solver/metrics/layout.def"
+}
 #undef METRIC
 #undef IDENTITY_LE
 
@@ -69,6 +78,7 @@ static const struct {
     void (*members)(JsonBuf *b);
 } FAMILIES[METRIC_FAMILY_N] = {
     [METRIC_FAMILY_SCENSUS] = { "scensus", scensus_members },
+    [METRIC_FAMILY_LAYOUT]  = { "layout",  layout_members },
 };
 
 static const char *kind_name(MetricKind k)
