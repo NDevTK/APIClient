@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Engine Diagnostics</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body class="dev-page">
+    <header>
+      <h1>Engine Diagnostics</h1>
+      <div class="toolbar">
+        <button id="dev-refresh" type="button">Refresh</button>
+      </div>
+    </header>
+    <section id="dev-host-order" class="deep-status"></section>
+    <!-- check.js first, so every later script asserts; dom-builder.js before anything that renders. -->
+    <script src="check.js"></script>
+    <script src="lib/dom-builder.js"></script>
+    <script src="lib/dev-host-order.js"></script>
+    <script src="dev.js"></script>
+  </body>
+</html>
