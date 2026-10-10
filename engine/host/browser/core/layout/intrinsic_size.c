@@ -899,8 +899,8 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
        Properties"' "the inner size is always floored at zero" would hide (§3.1, not §3.3, whose floor is a
        step of the `border-box` conversion). */
     DCHECK(out.min_content.px >= 0.0 && out.max_content.px >= 0.0,
-           "css-sizing-3 §5.1's intrinsic inline sizes came out NEGATIVE. Each is a sum of advance measures, "
-           "every one of which is a non-negative OpenType 'hmtx' advanceWidth times a non-negative computed "
-           "`font-size`, so a negative here is arithmetic that lost a sign rather than a document");
+           "css-sizing-3 §5.1's intrinsic inline sizes came out NEGATIVE. Both arms answer a maximum taken "
+           "from zero (core/layout/text_run.c's lines, `is_block_context`'s child contributions), so a "
+           "negative margin can lower a term but not the answer; this is an arm that stopped starting there");
     return out;
 }

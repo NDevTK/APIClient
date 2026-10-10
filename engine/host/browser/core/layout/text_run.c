@@ -680,6 +680,16 @@ static void tr_atomic_nbsp_tailoring(TextRunMeasure *m, const uint32_t *cps)
     }
 }
 
+/* css-sizing-3 §2.1 "Auto Box Sizes": "If the ideal max-content size would be smaller than the min-content
+   size (e.g. due to the use of negative margins) the effective max-content size is floored by the min-content
+   size." A negative margin box (an atomic inline's, or an inline box edge) lowers a max-content line's sum and
+   not the widest min-content segment, so the floor is live on page input. Both answers are maxima over lines
+   from text_run_measure_init's zero, so a line of negative extent answers zero. */
+static void tr_floor_max_content(TextRunMeasure *m)
+{
+    m->max_content = css_px_max(m->max_content, m->min_content);
+}
+
 void text_run_measure_finish(TextRunMeasure *m)
 {
     uint32_t *cps;
@@ -702,8 +712,9 @@ void text_run_measure_finish(TextRunMeasure *m)
            boundaries do not introduce a forced line break or soft wrap opportunity in the flow" leaves nowhere
            to break, so there is one line and both of css-sizing-3 §2.1's answers are its size, independent of
            any width. `splits` stays false, which tells the fill's caller it has no available width to derive. */
-        m->max_content = tr_line_size(m, 0, m->count, TEXT_RUN_SIZE_MAX_CONTENT);
-        m->min_content = tr_line_size(m, 0, m->count, TEXT_RUN_SIZE_MIN_CONTENT);
+        m->max_content = css_px_max(m->max_content, tr_line_size(m, 0, m->count, TEXT_RUN_SIZE_MAX_CONTENT));
+        m->min_content = css_px_max(m->min_content, tr_line_size(m, 0, m->count, TEXT_RUN_SIZE_MIN_CONTENT));
+        tr_floor_max_content(m);
         return;
     }
     cps = malloc(m->ncps * sizeof *cps);
@@ -792,6 +803,7 @@ void text_run_measure_finish(TextRunMeasure *m)
            "answers over the whole ITEM collection, so a run's tail was collected and never measured. The last "
            "line runs to `count` rather than to a break position exactly so that a box edge after the final "
            "character is still on a line; a short answer here is that mapping and this walk disagreeing");
+    tr_floor_max_content(m);
     /* The code points are not read again: every walk over this run asks the action at a position, and an
        advance is read off the item, which carries the element the code point belongs to. */
     free(cps);
@@ -819,13 +831,10 @@ void text_run_measure_release(TextRunMeasure *m)
     m->ncps = 0;
 }
 
-/* The relation between the two answers, asserted where they are read because it is about the pair.
-   css-sizing-3 §2.1 takes more soft wrap opportunities for min-content, so while every summed size is
-   non-negative each min-content line is a sub-run of some max-content line and cannot exceed the widest.
-   Advances and edges are asserted non-negative; an atomic inline's margin box may be negative
-   (`text_run_measure_add_atomic` admits negative margins), and for such a run the relation is not derived.
-   CSS 2.2 §10.3.5's `min(max(preferred minimum width, available width), preferred width)` and css-sizing-3
-   §2.1's `clamp(min-content, stretch-fit, max-content)` agree only while it holds. */
+/* The relation between the two answers, asserted where they are read because it is about the pair, and
+   established by `tr_floor_max_content` on both exits of `text_run_measure_finish`. CSS 2.2 §10.3.5's
+   `min(max(preferred minimum width, available width), preferred width)` and css-sizing-3 §2.1's
+   `clamp(min-content, stretch-fit, max-content)` agree only while it holds. */
 static void tr_require_answers(const TextRunMeasure *m)
 {
     DCHECK(m != NULL, "css-sizing-3 §2.1's intrinsic inline sizes were read from no measurement");

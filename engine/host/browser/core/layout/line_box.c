@@ -1025,9 +1025,11 @@ CssPx line_box_content_height(lxb_dom_element_t *style, BlockFlowRun run, LineBo
        distinction §8.3.1 needs. Both baselines are the same zero for the same reason. */
     *first_baseline = r.first_baseline;
     *last_baseline = r.last_baseline;
-    /* Asserted: the first existing line's baseline is not below the last's. They are one number for a one-line
-       box, and each is the running position at its line (which only advances: §9.4.2's "line boxes are
-       stacked with no vertical separation … and they never overlap") plus that line's maximum `A'`. */
+    /* Asserted: the first existing line's baseline is not below the last's. Each is the running position at its
+       line plus that line's maximum `A'`, and the position advances by the previous line's maximum `A'` plus
+       maximum `D'`. A `D'` may be negative (a `line-height` under the font's extent), so the order rests on
+       §10.8.1's strut, which every line carries: the next baseline exceeds this one by at least the strut's
+       `A' + D'`, its non-negative `line-height`. */
     DCHECK(!r.any || r.first_baseline.px <= r.last_baseline.px + 1e-9 * (1.0 + (r.last_baseline.px < 0.0 ?
                                                                                -r.last_baseline.px :
                                                                                r.last_baseline.px)),
