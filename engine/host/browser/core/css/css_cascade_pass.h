@@ -1,16 +1,20 @@
-/* css-cascade-5 §4.2 "Cascaded Values"' answer for one (element, property), held by a layout job
- * (core/layout/layout_job.h) for the job's lifetime.
+/* A layout job's record of the cascade's per-element answers, held for the job's lifetime
+ * (core/layout/layout_job.h): the author origin's sheet set per root, and per element its match result
+ * (core/css/css_match_result.h), its cascaded values (core/css/css_cascaded_style.h) and its computed values
+ * (core/css/css_computed_style.h).
  *
- * css-cascade-5 §6 "Cascading" is a function of the element and the property and of nothing about who asks,
- * and layout asks for the same pair over and over for two reasons that compound: css-cascade-5 §7.2
- * "Inheritance" makes a read of an inherited property climb to the parent, and css-logical-1 §4
- * "Flow-Relative Box Model Properties" makes `writing-mode`, `direction` and `text-orientation`, all inherited,
- * a prerequisite of cascading every margin, padding, border and inset. Both are one answer asked by many
- * callers, so the record is keyed on the question and sits at the one function every asker reaches.
- * `node engine/layout_cost.mjs <native binary>` measures the shapes this collapses. Beside the answers it holds
- * two inputs of the cascade that do not depend on the property: the author origin's sheet set per root and its
- * match result per element, so every miss after an element's first sorts declarations and matches no selector.
- * Both are functions of the inputs the validity argument below fixes. */
+ * Every answer is a function of the element and of inputs the validity argument below fixes, and layout asks
+ * for each over and over: css-cascade-5 §7.2 "Inheritance" makes a read of an inherited property read the
+ * parent, and css-logical-1 §4 "Flow-Relative Box Model Properties" makes `writing-mode`, `direction` and
+ * `text-orientation` a prerequisite of cascading every margin, padding, border and inset. An ask made while no
+ * job holds a record opens a drive on the synchronous job for its own length (css_computed_style_hold_begin),
+ * so a record is held for every ask. */
+
+/* NAMED RESIDUAL, undriven asks. Not covered: an ask that no driven job or open drive holds a record for gets
+ * one for its own length, so consecutive undriven asks of one element each collect and resolve its whole
+ * cascade again. Next: those layout entries driving a job (layout_job.h's synchronous-job residual). How its
+ * absence shows: `_cascade.resolvedLife` near half of `asksLife` on a run with no `scrollIntoView` and no
+ * paint. */
 
 /* Validity. The record holds answers about the document the job's flow sees. Its inputs are asserted not to
  * move while it is held: tree and attribute writes at solver/dom_cow.c's write entries; every CSSOM write that
@@ -18,19 +22,7 @@
  * the custom element state `:defined` matches on, each at its own write through css_cascade_record_is_held().
  * A driven job rests only inside its own flow's member call, where that flow writes nothing and other flows'
  * writes stay in their deltas; the environment a media query reads is the realm's viewport, fixed per job.
- * It does not re-derive an answer at a hit, because that is re-running the cascade it exists to skip; the
- * shared probe is what keeps a slot answering only its own pair. */
-
-/* Beside the cascaded values the record holds each element's computed values (core/css/css_computed_style.h),
- * which end css-cascade-5 §7.2 "Inheritance"'s climb at the parent; a computed value's ask opens the
- * synchronous job's record when none is held, so it is driven whoever asks.
- * NAMED RESIDUAL, undriven asks. Not covered: outside a driven job the record is held only while the
- * synchronous job has a drive open, so most asks of a layout entry that drives no job resolve the cascade.
- * Next: those entries driving a job (layout_job.h's synchronous-job residual). How its absence shows:
- * `_cascade.servedLife` far below `asksLife` on a run with no `scrollIntoView` and no paint. */
-
-/* RETIREMENT: the per-(element, property) entries go when the cascade emits an element's cascaded values in one
-   pass, which is core/css/css_computed_style.h's one-cascade-pass residual. */
+ * It does not re-derive an answer at a hit, because that is re-running the cascade it exists to skip. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_CASCADE_PASS_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_CASCADE_PASS_H
 
@@ -39,62 +31,53 @@
 
 #include <lexbor/dom/dom.h>
 
-/* The record's storage, owned by a layout job. `tab` is a power-of-two table, NULL with `cap` 0 before the
-   first entry; `release` frees every string it owns and leaves it empty. */
-struct CpEntry;
+/* The record's storage, owned by a layout job. `elem` is a power-of-two table keyed by element, NULL with
+   `elem_cap` 0 before the first entry; `release` frees everything it holds and leaves it empty. */
+struct CpElement;
 struct CssAuthorSheets;
 struct CssMatchResult;
+struct CssCascadedStyle;
 struct CssComputedStyle;
 typedef struct {
-    struct CpEntry          *tab;
-    size_t                   cap, used;
     struct CssAuthorSheets **author;      /* one per root resolved under, owned */
     size_t                   author_n, author_cap;
-    struct CssMatchResult  **match;       /* power-of-two table keyed by element, NULL slot empty; owned */
-    size_t                   match_cap, match_used;
-    struct CssComputedStyle **style;      /* power-of-two table keyed by element, NULL slot empty; owned */
-    size_t                   style_cap, style_used;
+    struct CpElement        *elem;        /* one slot per element asked about, owned */
+    size_t                   elem_cap, elem_used;
 } CssCascadeRecord;
 void css_cascade_record_release(CssCascadeRecord *r);
 
 /* Whether the current job holds a record. Read by the write chokepoints of every cascade input, which
-   assert it is not, and by nothing that decides what to compute. */
+   assert it is not, and by the asks below, which require it. */
 bool css_cascade_record_is_held(void);
 
-/* The ask, counted whether or not a record is held. Answers true and writes `*out` when the record holds the
-   pair; the value is an owned copy the caller frees as it frees the cascade's own answer, and NULL is an
-   answer ("if the output of the cascade is an empty list, there is no cascaded value"). False means the
-   caller owes the cascade and reports its answer with `css_cascade_pass_record`. */
-bool css_cascade_pass_ask(lxb_dom_element_t *el, const char *name, char **out);
-
-/* The cascade that ask cost, reported by the one caller on its false arm with no return between the two.
-   `value` is borrowed; the record copies it. Counted whether or not a record is held. */
-void css_cascade_pass_record(lxb_dom_element_t *el, const char *name, const char *value);
-
 /* The author origin's sheet set for `root` (core/css/css_author_sheets.h). `ask` answers the held set,
-   borrowed, or false. On false the caller builds one and offers it to `hold`, which takes it and answers true
-   when a record is held; on false the caller still owns it and frees it after its one resolution. */
+   borrowed, or false; on false the caller builds one and hands it to `hold`, which takes it. */
 bool css_cascade_pass_author_ask(const lxb_dom_node_t *root, struct CssAuthorSheets **out);
-bool css_cascade_pass_author_hold(struct CssAuthorSheets *sheets);
+void css_cascade_pass_author_hold(struct CssAuthorSheets *sheets);
 
-/* The author origin's match result for `el` (core/css/css_match_result.h) under `sheets`, the set its root
-   resolves under. `ask` answers the held result, borrowed, or false; on false the caller builds one and
-   offers it to `hold` with no return between the two, which takes it and answers true when a record is held
-   and on false leaves it with the caller, who frees it after its one resolution. A held result borrows a
-   sheet set the record holds. Both are counted whether or not a record is held. */
+/* The author origin's match result for `el` under `sheets`, the set its root resolves under. `ask` answers
+   the held result, borrowed, or false; on false the caller builds one and hands it to `hold` with no return
+   between the two. A held result borrows a sheet set the record holds. */
 bool css_cascade_pass_match_ask(lxb_dom_element_t *el, const struct CssAuthorSheets *sheets,
                                 struct CssMatchResult **out);
-bool css_cascade_pass_match_hold(struct CssMatchResult *m);
+void css_cascade_pass_match_hold(struct CssMatchResult *m);
+
+/* `el`'s cascaded style, borrowed, or NULL when the record holds none yet; on NULL the caller collects one,
+   hands it to `hold` and then resolves it, with no return between. A held style borrows the layer order of
+   a sheet set the record holds. */
+struct CssCascadedStyle *css_cascade_pass_cascaded_ask(lxb_dom_element_t *el);
+void css_cascade_pass_cascaded_hold(struct CssCascadedStyle *s);
 
 /* The held computed style record of `el` (core/css/css_computed_style.h), created empty at its first ask and
    borrowed until the record is released; NULL when no record is held. */
 struct CssComputedStyle *css_cascade_pass_style(lxb_dom_element_t *el);
 
 /* The census, in solver/result.c's vocabulary. Every field is a lifetime counter of this agent and says so
-   in its name. `asks_life` counts cascaded values asked for, `served_life` those the record answered and
-   `resolved_life` those that ran the cascade; `asks_life == served_life + resolved_life` is asserted. The
-   `computed_*` rows are core/css/css_computed_style.h's asks, served and derived, over every shape. The match
-   result's asks, served and built close the same way and are asserted here; they are not rows yet. */
+   in its name. `asks_life` counts cascaded values asked for, `served_life` those an element's held cascaded
+   style answered and `resolved_life` those that resolved the element's cascaded style first;
+   `asks_life == served_life + resolved_life` is asserted. The `computed_*` rows are
+   core/css/css_computed_style.h's asks, served and derived, over every shape. The match result's asks, served
+   and built close the same way and are asserted here; they are not rows yet. */
 typedef struct {
     long long asks_life;
     long long served_life;

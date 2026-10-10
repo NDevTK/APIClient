@@ -6,7 +6,7 @@
  * The set is a function of the root's sheet objects, their rules and the realm's viewport (a conditional group
  * rule's condition and a sheet's media), and of nothing about the element being resolved. A layout job holds
  * one per root it resolves under (core/css/css_cascade_pass.h states why those inputs do not move while it
- * does); outside a job each resolution builds its own and frees it. */
+ * does). */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_AUTHOR_SHEETS_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_AUTHOR_SHEETS_H
 

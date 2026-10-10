@@ -1,6 +1,7 @@
 /* @LOGICAL — css-writing-modes-4 §6 "Abstract Box Terminology"'s mapping, and css-logical-1 §4's groups.
    The contract, and why this is at the cascade rather than at the used value, is in css_logical.h. */
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -249,21 +250,44 @@ static LgDirection logical_used_direction(lxb_dom_element_t *el, LgWritingMode w
     return out;
 }
 
+/* The table's two indexes, built once per process by css_logical_init from the immutable rows: by name, a
+   power-of-two open-addressed table at most half full whose slot holds a row plus one (zero is empty); and by
+   (group, role), the row plus one. */
+#define LG_INDEX_CAP 256u
+#define LG_GROUP_N   ((unsigned)CSS_LOGICAL_GROUP_OVERFLOW + 1u)
+#define LG_ROLE_N    ((unsigned)LG_INLINE_DIM + 1u)
+_Static_assert(LG_N(LG_PROP) * 2 <= LG_INDEX_CAP, "css-logical-1 §4's name index must stay at most half full");
+static uint8_t g_lg_by_name[LG_INDEX_CAP];
+static uint8_t g_lg_by_role[LG_GROUP_N][LG_ROLE_N];
+
+static uint32_t logical_hash(const char *name)
+{
+    uint32_t h = 0x811c9dc5u;
+    const unsigned char *p;
+
+    for (p = (const unsigned char *)name; *p != '\0'; p++) {
+        h ^= *p;
+        h *= 0x01000193u;
+    }
+    return h;
+}
+
 static int logical_row_of(const char *name)
 {
-    unsigned i;
+    uint32_t i;
 
-    for (i = 0; i < LG_N(LG_PROP); i++)
-        if (strcmp(LG_PROP[i].name, name) == 0) return (int)i;
+    DCHECK(g_lg_by_role[CSS_LOGICAL_GROUP_MARGIN][LG_TOP] != 0,
+           "css-logical-1 §4's group table was asked before css_logical_init built its indexes");
+    for (i = logical_hash(name) & (LG_INDEX_CAP - 1); g_lg_by_name[i] != 0; i = (i + 1) & (LG_INDEX_CAP - 1))
+        if (strcmp(LG_PROP[g_lg_by_name[i] - 1].name, name) == 0) return g_lg_by_name[i] - 1;
     return -1;
 }
 
 static const char *logical_name_of(CssLogicalGroup group, LgRole role)
 {
-    unsigned i;
+    unsigned at = g_lg_by_role[group][role];
 
-    for (i = 0; i < LG_N(LG_PROP); i++)
-        if (LG_PROP[i].group == group && LG_PROP[i].role == role) return LG_PROP[i].name;
+    if (at != 0) return LG_PROP[at - 1].name;
     /* `logical_init` asserts every group holds one row per role of its kind, so a miss here is that
        invariant broken after the table was checked. */
     DFAIL("css-logical-1 §4's pairing reached a group with no member for the role it mapped to. Every group "
@@ -375,7 +399,8 @@ const char *css_logical_partner_of(lxb_dom_element_t *el, const char *longhand)
 
 void css_logical_init(void)
 {
-    unsigned wm, dir, i, j, g;
+    unsigned wm, dir, i, g;
+    bool built;
 
     /* css-writing-modes-4 §6.4's four flow-relative sides map ONTO the four physical ones in every column of
        the table: they are the four sides of one box named twice over, so a column in which two of them land
@@ -436,14 +461,26 @@ void css_logical_init(void)
                "abstract ones, and it holds neither set. A group with a missing member answers no partner "
                "for the properties that are present, so their declarations cascade alone");
     }
-    /* NO NAME APPEARS TWICE. The lookup is a linear scan that stops at the first match, so a second row for
-       one property is a row that can never be read and a disagreement nothing would report. */
-    for (i = 0; i < LG_N(LG_PROP); i++)
-        for (j = i + 1; j < LG_N(LG_PROP); j++)
-            DCHECK(strcmp(LG_PROP[i].name, LG_PROP[j].name) != 0,
-                   "one property name has TWO rows in css-logical-1 §4's group table — css-logical-1 §4 says "
-                   "\"(Each longhand property can belong to at most one logical property group.)\", and the "
-                   "second row is unreachable behind the first");
+    /* THE INDEXES, and the two invariants they rest on: NO NAME APPEARS TWICE — css-logical-1 §4 says "(Each
+       longhand property can belong to at most one logical property group.)" — and no (group, role) cell twice,
+       which with the per-group count asserted above makes the partner lookup a total function. Every instance
+       initialises the component and the rows are immutable, so the first builds them and the rest find them. */
+    built = g_lg_by_role[CSS_LOGICAL_GROUP_MARGIN][LG_TOP] != 0;
+    for (i = 0; !built && i < LG_N(LG_PROP); i++) {
+        uint32_t at = logical_hash(LG_PROP[i].name) & (LG_INDEX_CAP - 1);
+
+        while (g_lg_by_name[at] != 0) {
+            DCHECK(strcmp(LG_PROP[g_lg_by_name[at] - 1].name, LG_PROP[i].name) != 0,
+                   "one property name has TWO rows in css-logical-1 §4's group table, and the second would be "
+                   "unreachable behind the first");
+            at = (at + 1) & (LG_INDEX_CAP - 1);
+        }
+        g_lg_by_name[at] = (uint8_t)(i + 1);
+        DCHECK(g_lg_by_role[LG_PROP[i].group][LG_PROP[i].role] == 0,
+               "two rows of css-logical-1 §4's group table hold one role in one group, so the partner that role "
+               "maps to would be whichever row came first");
+        g_lg_by_role[LG_PROP[i].group][LG_PROP[i].role] = (uint8_t)(i + 1);
+    }
     /* THE THREE PROPERTIES THE MAPPING ITSELF READS ARE IN NO GROUP, and this is the assert that keeps the
        recursion finite rather than a comment claiming it is. css-logical-1 §4: "It also requires that
        writing-mode, direction, and text-orientation be computed as a prerequisite for cascading together the

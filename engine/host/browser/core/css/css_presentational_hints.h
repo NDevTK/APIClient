@@ -13,8 +13,8 @@
  *
  * AND IT IS COMPUTED PER ELEMENT FROM THAT ELEMENT'S OWN ATTRIBUTES, which a sheet cannot express at all:
  * §15.3.2's body margins are a table of FOUR ATTRIBUTES read in order with a fallback, not a selector. That is
- * also why the answer is derived per read like every other layer of this cascade — the attributes are per-flow
- * DOM state, and a hint cached anywhere would be shared state the flow machinery does not swap.
+ * also why the declarations are collected per element and held only as long as the element's cascaded style,
+ * which a layout job holds: the attributes are per-flow DOM state, asserted not to move while one is held.
  *
  * A HINT'S DECLARATION IS THE PROPERTY HTML WRITES AND THE CASCADE IS OVER LONGHANDS, and those are routinely
  * not the same name: HTML §15.3.8 Tables writes `text-align: center`, which css-text-4 §7.1 makes a shorthand.
@@ -33,8 +33,9 @@
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_PRESENTATIONAL_HINTS_H
 #include <lexbor/dom/dom.h>
 
-/* THE DECLARED VALUE this origin gives `name` on `el`, as the text a specified value is read from, or NULL when
-   no hint of this origin sets that property on that element. OWNED: the caller frees. */
-char *css_presentational_hint(lxb_dom_element_t *el, const char *name);
+/* Every declaration this origin gives `el`, handed to `sink` as a longhand and the text its specified value is
+   read from, each borrowed for the call. A longhand is declared at most once. */
+typedef void (*CssHintSink)(void *ud, const char *longhand, const char *value);
+void css_presentational_hints_collect(lxb_dom_element_t *el, CssHintSink sink, void *ud);
 
 #endif

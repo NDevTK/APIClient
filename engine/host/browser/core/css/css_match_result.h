@@ -4,9 +4,9 @@
  *
  * Matching is a function of the element, its tree and the sheet set, and not of the property being resolved,
  * so a layout job's record holds one per element (core/css/css_cascade_pass.h states why those inputs do not
- * move while it does) and every property's cascade reads it; outside a job each resolution builds one and
- * frees it. The builder is cssom_cascaded_value's, in core/css/css_style_declaration.c, which owns the parse
- * the selectors and declaration blocks come from. */
+ * move while it does), and the element's cascaded style (core/css/css_cascaded_style.h) is collected from it
+ * once. The builder is in core/css/css_style_declaration.c, which owns the parse the selectors and declaration
+ * blocks come from. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_MATCH_RESULT_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_MATCH_RESULT_H
 

@@ -14,50 +14,34 @@
 #include "core/frame/window_proxy.h"
 #include "core/html/enumerated_attribute.h"   /* the ASCII match HTML §15.3.8's rules are stated over */
 
-static char *hint_strdup(const char *s)
-{
-    char *out = strdup(s);
-
-    CHECK(out != NULL, "cssom: OOM building a presentational hint's value — a dropped one reads as the property "
-                       "being undeclared by this origin, which for a body margin is the initial value 0 and not "
-                       "the 8px HTML §15.3.2 gives a page with no margin attributes at all");
-    return out;
-}
-
-/* THE DECLARATION `property: value` AS THIS ORIGIN'S ANSWER FOR THE LONGHAND `name`, or NULL where that
-   declaration does not set it. NULL is a real answer here and the common one — a hint sets one property and
-   the cascade asks this component about every property it resolves.
-   THE PROPERTY IS THE ONE HTML'S RENDERING SECTION WRITES, WHICH IS ROUTINELY A SHORTHAND, AND THE CASCADE IS
-   OVER LONGHANDS ONLY. `cssom_cascaded_value` asserts that, so a row spelling a shorthand would be a
-   declaration no read can ever reach — the write-with-no-reader shape, silent because the property still has
-   an initial value to answer with. The expansion is therefore DERIVED from the component that owns each
-   shorthand's grammar (core/css/css_shorthand.h) rather than restated here as a list of longhand names: a
-   second copy of `text-align: center` sets `text-align-all` AND resets `text-align-last` would be one fact
-   with two sources, and the one that drifts is the copy no grammar runs against.
-   AN EXPANSION THAT ANSWERS NOTHING FOR A LONGHAND THE SHORTHAND SETS IS THIS FILE'S OWN BUG AND CRASHES.
-   `css_shorthand_component` returns NULL for a value its grammar rejects, which for an AUTHOR declaration is
-   css-cascade-5 §6's dropped declaration — but every value reaching here is one this file typed out of a
-   standard, so a rejection means the ROW is wrong and the hint silently declares nothing. */
-static char *hint_declaration(const char *property, const char *value, const char *name)
+/* THE DECLARATION `property: value`, handed to `sink` as the longhands it sets. The property is the one
+   HTML's rendering section writes, which is routinely a shorthand, and the cascade is over longhands only, so
+   the expansion is derived from the component that owns each shorthand's grammar (core/css/css_shorthand.h)
+   rather than restated here as longhand names: one fact, one source. Every value reaching here is one this
+   file typed out of a standard, so a longhand the grammar answers nothing for is a wrong row, and crashes. */
+static void hint_declaration(const char *property, const char *value, CssHintSink sink, void *ud)
 {
     const char *const *longhands;
     unsigned n = 0, i;
-    char *out;
 
-    if (strcmp(property, name) == 0) return hint_strdup(value);
     longhands = css_shorthand_longhands(property, &n);
-    if (longhands == NULL) return NULL;   /* a longhand row that is simply not the property being asked for */
-    for (i = 0; i < n; i++)
-        if (strcmp(longhands[i], name) == 0) break;
-    if (i == n) return NULL;
-    out = css_shorthand_component(property, value, name);
-    DCHECKF(out != NULL,
-            "a presentational hint row declares `%s: %s`, which is a shorthand of `%s`, and the shorthand's own "
-            "grammar rejects that value — so this origin declares NOTHING for a property HTML's rendering "
-            "section says it declares, and the cascade answers the initial value with nothing to say the hint "
-            "was never expanded. The ROW is what is wrong: fix its value to one the property's grammar admits",
-            property, value, name);
-    return out;
+    if (longhands == NULL) {
+        sink(ud, property, value);
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        char *out = css_shorthand_component(property, value, longhands[i]);
+
+        DCHECKF(out != NULL,
+                "a presentational hint row declares `%s: %s`, which is a shorthand of `%s`, and the shorthand's "
+                "own grammar rejects that value — so this origin declares NOTHING for a property HTML's "
+                "rendering section says it declares. The ROW is what is wrong: fix its value to one the "
+                "property's grammar admits",
+                property, value, longhands[i]);
+        if (out == NULL) continue;
+        sink(ud, longhands[i], out);
+        free(out);
+    }
 }
 
 /* HTML §2.3.4.2 "Non-negative integers"' RULES FOR PARSING NON-NEGATIVE INTEGERS, which §15.2's "maps to the
@@ -436,29 +420,26 @@ static lxb_dom_element_t *img_dimension_attribute_source(lxb_dom_element_t *el)
     return el;
 }
 
-char *css_presentational_hint(lxb_dom_element_t *el, const char *name)
+/* HTML §15.3.2's page margins for `el`, when it is its document's body element: each row's value to both of
+   its properties. */
+static void hint_page_margins(lxb_dom_element_t *el, CssHintSink sink, void *ud)
 {
-    lxb_dom_node_t *node = lxb_dom_interface_node(el);
+    lxb_dom_node_t *node = lxb_dom_interface_node(el), *doc;
     const lxb_char_t *tag;
     size_t taglen = 0;
     unsigned i, k;
 
-    DCHECK(el != NULL && name != NULL,
-           "the presentational hint origin was asked to declare with no element or no property name");
+    /* "given a body element" — §4.3.1's body element OF ITS DOCUMENT, which is what a page means by one: a
+       `<body>` left detached, a second one an author wrote, and the `<frameset>` document_body_of also
+       answers for are none of them that element. */
+    tag = lxb_dom_element_local_name(el, &taglen);
+    if (!tag || taglen != 4 || memcmp(tag, "body", 4) != 0) return;
+    if (!node->owner_document) return;
+    doc = lxb_dom_interface_node(node->owner_document);
+    if (document_body_of(doc) != node) return;
     for (i = 0; i < sizeof(PAGE_MARGIN) / sizeof(PAGE_MARGIN[0]); i++) {
-        lxb_dom_node_t *doc;
+        bool found = false;
 
-        if (strcmp(PAGE_MARGIN[i].properties[0], name) != 0 &&
-            strcmp(PAGE_MARGIN[i].properties[1], name) != 0)
-            continue;
-        /* "given a body element" — §4.3.1's body element OF ITS DOCUMENT, which is what a page means by one: a
-           `<body>` left detached, a second one an author wrote, and the `<frameset>` document_body_of also
-           answers for are none of them that element. */
-        tag = lxb_dom_element_local_name(el, &taglen);
-        if (!tag || taglen != 4 || memcmp(tag, "body", 4) != 0) return NULL;
-        if (!node->owner_document) return NULL;
-        doc = lxb_dom_interface_node(node->owner_document);
-        if (document_body_of(doc) != node) return NULL;
         /* §15.3.2's THREE SOURCES PER PROPERTY, in the table's own order: the body element's own attribute,
            its legacy spelling, and the body element's CONTAINER FRAME ELEMENT's attribute — which carries the
            first spelling again, on a different element. One loop, because "the FIRST attribute that exists
@@ -484,42 +465,62 @@ char *css_presentational_hint(lxb_dom_element_t *el, const char *name)
             /* "The FIRST attribute that exists maps to the pixel length property", so the search stops at the
                one that is PRESENT whether or not it parses, and an unparseable one falls to the default rather
                than on to the next source. */
-            if (!html_parse_non_negative_integer(v, vlen, &digits, &dlen))
-                return hint_strdup(PAGE_MARGIN_DEFAULT);
-            {
+            if (html_parse_non_negative_integer(v, vlen, &digits, &dlen)) {
                 char *out = malloc(dlen + 3);
 
                 CHECK(out != NULL, "cssom: OOM building a presentational hint's pixel length");
                 memcpy(out, digits, dlen);
                 memcpy(out + dlen, "px", 3);
-                return out;
+                sink(ud, PAGE_MARGIN[i].properties[0], out);
+                sink(ud, PAGE_MARGIN[i].properties[1], out);
+                free(out);
+                found = true;
             }
+            break;
         }
         /* "If none of the attributes for a property are found, or if the value of the attribute that was
            found cannot be parsed successfully, then a default value of 8px is expected to be used." */
-        return hint_strdup(PAGE_MARGIN_DEFAULT);
+        if (!found) {
+            sink(ud, PAGE_MARGIN[i].properties[0], PAGE_MARGIN_DEFAULT);
+            sink(ud, PAGE_MARGIN[i].properties[1], PAGE_MARGIN_DEFAULT);
+        }
     }
+}
+
+void css_presentational_hints_collect(lxb_dom_element_t *el, CssHintSink sink, void *ud)
+{
+    lxb_dom_node_t *node = lxb_dom_interface_node(el);
+    const lxb_char_t *tag;
+    size_t taglen = 0;
+    unsigned i;
+
+    DCHECK(el != NULL && sink != NULL, "the presentational hint origin was collected for no element or into "
+                                       "no sink");
+    hint_page_margins(el, sink, ud);
     /* THE `@namespace "http://www.w3.org/1999/xhtml"` LINE THE ROWS BELOW SHARE, asked once because every one
        of them is ATTRIBUTE-GATED: a `td` or an `img` in another namespace can carry an `align` or a `width`
        attribute, where a foreign element only ever meets a type-name UA rule by its own local name. §15.4.3's
        two dimension paragraphs name HTML elements outright ("an img element", "embed, iframe, object, and
        video elements"), so the same line governs them. */
-    if (node->ns != LXB_NS_HTML) return NULL;
+    if (node->ns != LXB_NS_HTML) return;
     tag = lxb_dom_element_local_name(el, &taglen);
-    if (tag == NULL) return NULL;
+    if (tag == NULL) return;
     /* HTML §15.4.3's MAPPING OF THE TWO ATTRIBUTES HTML §4.8.17 "Dimension attributes" DEFINES. The CSS
        property and the content attribute share a spelling, so `name` is read for both — a coincidence of this
        one row rather than a rule, and a row whose two names differed would have to carry them separately. */
-    if (strcmp(name, "width") == 0 || strcmp(name, "height") == 0) {
+    {
+        static const char *const DIMENSIONS[] = { "width", "height" };
         lxb_dom_element_t *src = NULL;
         const char *const *t;
 
         if (taglen == 3 && memcmp(tag, "img", 3) == 0) src = img_dimension_attribute_source(el);
         for (t = DIM_ATTR_TAGS; src == NULL && *t != NULL; t++)
             if (strlen(*t) == taglen && memcmp(*t, tag, taglen) == 0) src = el;
-        if (src != NULL) {
+        for (i = 0; src != NULL && i < 2; i++) {
+            const char *name = DIMENSIONS[i];
             const lxb_char_t *v;
             size_t vlen = 0;
+            char *dim;
 
             v = lxb_dom_element_get_attribute(src, (const lxb_char_t *)name, strlen(name), &vlen);
             /* Lexbor answers NULL both for an ABSENT attribute and for one PRESENT WITH AN EMPTY VALUE, and
@@ -535,14 +536,13 @@ char *css_presentational_hint(lxb_dom_element_t *el, const char *name)
                    "input or the code point at position within input is not an ASCII digit, then return "
                    "failure\" — so a parser that answers for the empty string makes "
                    "`<img width>` and `<img>` take different §15.2 arms with one spelling between them");
-            if (v == NULL) return NULL;
+            if (v == NULL) continue;
             /* NULL is §15.2's own answer for a value that does not parse: the hint is simply not declared by
                this origin, and the property keeps what the UA sheet or its initial value gives it. */
-            return html_parse_dimension_value(v, vlen);
+            dim = html_parse_dimension_value(v, vlen);
+            if (dim != NULL) sink(ud, name, dim);
+            free(dim);
         }
-        /* Not an element §15.4.3 names — FALL THROUGH rather than return, because another row of this file
-           may yet declare `width` (HTML §15.3.8's `col`, `td` and `table` mappings are not here) and an early
-           return would shadow it silently. */
     }
     /* HTML §15.3.8 Tables' `align` HINT. */
     {
@@ -553,7 +553,7 @@ char *css_presentational_hint(lxb_dom_element_t *el, const char *name)
            rules do not tell those apart either: no keyword it names is the empty string, so `align=""` takes
            no hint by the same route an absent `align` does. */
         v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"align", 5, &vlen);
-        if (v == NULL) return NULL;
+        if (v == NULL) return;
         for (i = 0; i < sizeof(ALIGN_HINT) / sizeof(ALIGN_HINT[0]); i++) {
             const char *const *t;
             const HintKeyword *kw;
@@ -567,15 +567,16 @@ char *css_presentational_hint(lxb_dom_element_t *el, const char *name)
                    HTML §2.3.3 Keywords and enumerated attributes' comparison because that is where this engine
                    writes it ONCE; a fold spelled out again here would be the hand-rolled `strcasecmp`-shaped
                    loop that component's own header records itself as having replaced in four places. */
-                if (enumerated_attribute_keyword_match(kw->keyword, (const char *)v, vlen))
-                    return hint_declaration(ALIGN_HINT[i].property, kw->value, name);
+                if (enumerated_attribute_keyword_match(kw->keyword, (const char *)v, vlen)) {
+                    hint_declaration(ALIGN_HINT[i].property, kw->value, sink, ud);
+                    return;
+                }
             /* HTML §15.3.8 states one rule per value and no fallback, so an `align` whose value it does not
                name is an element with no hint rather than one with a defaulted hint. The element cannot be
                in the other rule set — the two tag lists are disjoint — so the search is over. */
-            return NULL;
+            return;
         }
     }
     /* Every other hint HTML defines is a row this file does not have yet, and a property no row names is not
        declared by this origin — which is a different statement from being declared with a default. */
-    return NULL;
 }

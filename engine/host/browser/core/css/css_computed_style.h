@@ -6,12 +6,9 @@
  * value instead of climbing, and each (element, property) is derived once per job. The record is re-derivable:
  * it is released with the job, and a forked job starts without one. An ask while no job holds a record opens
  * the synchronous job's record for that ask (css_computed_style_hold_begin), so an undriven answer shares its
- * ancestors' values for its own derivation and keeps none of them after it. */
+ * ancestors' values for its own derivation and keeps none of them after it. A value is derived on its first
+ * ask, from the element's cascaded style (core/css/css_cascaded_style.h), which is resolved once per element. */
 
-/* NAMED RESIDUAL, one cascade pass. Not covered: a value is derived on its first ask, each through its own
- * per-property cascade over the element's match result. Next: the cascade emitting every longhand's cascaded
- * value for an element in one sort, and the record filled from it. How its absence shows: cascade resolutions
- * per element in the hundreds where the element's matched declarations number a few. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_COMPUTED_STYLE_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_COMPUTED_STYLE_H
 
