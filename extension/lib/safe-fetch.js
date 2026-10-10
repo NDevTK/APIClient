@@ -2791,67 +2791,32 @@ function _destructiveToken(u) {
   }
 }
 
-/* §2.2.6's URL LIST, OVER THE FINAL HREF ITS CALLER ALREADY COMPUTED — not over `resp`, and
-   that is the same "one question, one answer" rule the fetch below is built on rather than a
-   tidying. This took the Response and re-read `resp.url` for itself inside two swallowing
-   catches, so the address the ENGINE decides a document's origin from (`bridge.js` reads this
-   list's last item and keys an agent cluster on it) was a SECOND reading of the same fact,
-   arrived at separately from the one every gate in this file judges. Two strings for one
-   question is how they come to disagree, and the swallows meant a disagreement would have
-   read as "nothing redirected". Both catches were unreachable besides — Fetch §5.5 "Response
-   class" gives neither getter a failure step: "The redirected getter steps are to return true
-   if this's response's URL list's size is greater than 1; otherwise false." */
+/* Fetch §2.2.6 "Responses"' URL list, as far as script may see it: Fetch §5.5 "Response class" exposes only
+   the first and last URL, so the list is [requested] or [requested, landed]. It is built from the landed
+   href the caller already computed, so the address `bridge.js` keys a document's agent cluster on is the
+   string every gate here judged. `resp.redirected` decides the length rather than `finalHref !== requested`,
+   because a 3xx that lands back on its own address still grew the list. */
 function _urlList(requested, finalHref, redirected) {
   return redirected ? [requested, finalHref] : [requested];
 }
 
-/* §5.3's BODY, READ AS THE SEQUENCE OF CHUNKS IT ARRIVES IN RATHER THAN AS ONE AWAIT — and the reason is the
-   gate ladder above it rather than a preference about how bytes are moved. This was
-   `new Uint8Array(await resp.arrayBuffer())`, which is Fetch §5.3 "Body mixin"'s consume-body run to
-   completion, and that is the DEGENERATE CASE of this loop: every chunk is accumulated and the assembled
-   sequence is byte-identical, so every gate below and every caller reads exactly what it read before whether
-   a sink is stated or not. An incremental delivery — a `text/event-stream` that never ends, a progressive
-   `responseText`, a `ReadableStream` off a `fetch` body — is this loop RELEASING each chunk to `opts.onChunk`
-   as it arrives, and the whole of what makes that admissible is WHERE the loop sits: BELOW every gate that
-   reads the response HEAD and ABOVE the one gate that reads the BODY.
-
-   WHICH GATES READ WHICH, BECAUSE A LATER DIFF RESTS ON IT AND IT IS STATED NOWHERE ELSE. The scheme
-   allowlist, both private-host checks (initial and post-redirect), both destructive-path checks, both
-   provenance refusals and the credentialed SOP all read the REQUEST or the response HEAD — the header map and
-   the landed URL — and every one of them has already run by the time this is called. EXACTLY ONE gate reads
-   the body, and it is CORB, scoped to `_isScriptLike` of the request's destination.
-
-   SO A CHUNK RELEASED FROM INSIDE THIS LOOP HAS NOT PASSED CORB, AND THAT IS A DIFFERENT DECISION RATHER THAN
-   A WEAKER ONE. `_sniff` answers over the first 4096 bytes and then, where that prefix will not parse, over
-   the WHOLE body — and the second arm is the one that classifies most real JSON, because a JSON document
-   longer than 4096 bytes fails the prefix parse by construction. A first-chunk sniff cannot reach that arm at
-   all, and the arm it does reach answers `protected: false`, which is CORB's ALLOW arm and `_computedType`'s
-   empty string. The classification therefore does not degrade loudly: it degrades toward admitting a
-   cross-origin data body into a code loader, and toward a record stating that the resource has no type. So a
-   script-like destination is NOT STREAMABLE, and that is a REFUSAL rather than a partial answer to a question
-   CORB asks of the whole resource: `_bodyGated` derives the set from `_isScriptLike`, and the entry answers
-   `blocked-stream-body-gated:<destination>` before the request is made. The DCHECK at the head of this
-   function is that same rule asserted where the release actually happens.
-
-   AND `computedType` IS THE ONE HEAD FIELD THAT IS BODY-DERIVED, which is the other half of the same fact
-   and is what this seam does NOT answer. `status`, `statusText`, the header map and the URL list are all
-   answerable the instant `fetch` returns; the computed type is the sniff's, so a head delivered BEFORE its
-   body cannot carry one, and `core/fetch/fetch.c` DCHECKs its presence on the reply record. A sink here is
-   therefore handed BYTES while its caller still holds no head — enough for a consumer that parses a byte
-   stream, and not enough for one that must announce a connection before it may dispatch. That is a fact about
-   the RECORD rather than about this loop, and it is the next subproblem rather than a gap in this one.
-
-   THE CHUNKS ARE FOREIGN OBJECTS AND ARE NEVER `instanceof`-TESTED. `engine/trusted.mjs` runs this file in a
-   vm context whose `fetch` is the OUTER realm's, so a chunk this reader yields is that realm's `Uint8Array`
-   and not this one's — the same cross-realm question that file already names about values travelling the
-   other way. `%TypedArray%.prototype.set` is an internal-slot check rather than a realm check, so the
-   accumulation is realm-agnostic, while an `instanceof` here would answer false for a perfectly good chunk. */
+/* Fetch §5.3 "Body mixin"'s body, read chunk by chunk. With no sink this is consume body run to completion
+   and the assembled bytes are identical; with `opts.onChunk` each chunk is also released as it arrives.
+   Where this runs relative to the gates decides what a released chunk has passed. Before it: the scheme
+   allowlist, the userinfo refusal, both private-host checks, both destructive-path checks and both firing
+   refusals. After it: CORB, the one gate that reads the body, and the credentialed SOP/CORS check, which
+   reads only headers but is placed after the read. So a released chunk has passed neither. No caller states
+   `onChunk` today; a credentialed one would release bytes the SOP check may then refuse.
+   A script-like destination is therefore not streamable: `_sniff` classifies most JSON only from the whole
+   body (a prefix of a document longer than 4096 bytes does not parse), so a first-chunk answer would be
+   CORB's allow arm. The entry refuses `blocked-stream-body-gated:` instead. `computedType` is derived from
+   the body, so a head delivered before the body cannot carry one.
+   Chunks may come from another realm (`engine/trusted.mjs` runs this file in a vm context with the outer
+   `fetch`), so they are never `instanceof`-tested; `%TypedArray%.prototype.set` reads internal slots and
+   accumulates them whatever their realm. */
 async function _readBody(resp, sink, gated) {
-  /* THE PRECONDITION ASSERTED AT THE CONSUMER, WHICH IS WHERE IT BITES. The entry refuses a body-gated
-     request that asked for chunks and returns before this is reached, so this cannot fire today — and it is
-     here for the case that rule is written for: a route added later reaches the release point instead of
-     silently widening the old answer. Deleting the entry refusal makes THIS fire rather than making a
-     cross-origin data body stream into a code loader. */
+  /* The entry refuses a body-gated request that asked for chunks, so this cannot fire through it; it is here
+     so a later route that skips that refusal aborts at the release point instead of streaming. */
   DCHECK(!(sink !== undefined && gated),
          "a body-gated request reached the chunk release point — CORB is the one gate in this file that reads " +
          "the BODY, a first-chunk sniff answers it the OPPOSITE way for any JSON document over 4096 bytes, and " +
@@ -2862,78 +2827,34 @@ async function _readBody(resp, sink, gated) {
          "safeFetch was asked for incremental delivery with an `onChunk` that is not callable — the sink is a " +
          "value this zone composes at its own call site, never one the untrusted engine states, so a " +
          "non-function is this zone's contract broken and would throw mid-body with the request already spent");
-  /* A RESPONSE WITH NO BODY IS NOT AN EMPTY ONE, AND THE PLATFORM STATES WHICH THIS IS. Fetch §5.3 "Body
-     mixin" — "The body getter steps are to return null" where there is none — and §2.2.3 "Statuses" says when
-     that arises: "A null body status is a status that is 101, 103, 204, 205, or 304." There is no reader to
-     take, and the `arrayBuffer()` this replaces answered a zero-length sequence for exactly this case, so this
-     arm is what keeps the loop byte-identical with the await it replaces rather than a guard over a hole. */
-  /* A SINK STATED OVER A RESPONSE WITH NO BODY IS CALLED ZERO TIMES, which is the honest report and not a
-     hole: there are no chunks, so there is nothing to release, and the completed record still answers the
-     empty byte sequence below. A sink that must tell "no body" from "not yet" reads the returned record. */
+  /* No body is not an empty body. Fetch §5.3 "Body mixin"'s body getter returns null where there is none,
+     which a §2.2.3 "Statuses" null body status (101, 103, 204, 205, 304) produces. The answer is the empty
+     byte sequence, as `arrayBuffer()` gives, and a sink is called zero times; a sink that must tell "no body"
+     from "not yet" reads the returned record. */
   if (resp.body === null) return _NO_BYTES();
   var reader = resp.body.getReader();
   var parts = [], total = 0, step, chunk, i, out, off;
-  /* NO BOUND, DELIBERATELY — no chunk cap, no total-size cap, no read count, no timeout. CLAUDE.md §NO
-     BOUNDS: a bound here truncates a reply, and a truncated reply is a WRONG answer about a server rather
-     than a smaller one, which every gate below and the engine's learning both then read as what was served.
-     The floor is the platform's own memory, which is where a floor belongs.
-     AND WHAT IS UNBOUNDED IS THE WAIT AND NOT ONLY THE SIZE, WHICH IS A FACT ABOUT THIS FUNCTION'S CALLER
-     RATHER THAN ABOUT THIS LOOP, AND IS THE HALF A LANE WIRING `onChunk` UP DOES NOT SEE FROM HERE. This loop
-     is CORRECT and the sentence above is not weakened: a deadline could only truncate a reply that was merely
-     slow. What the argument does not say is that the loop's completion is what a SERVICE ROUND is awaiting —
-     `bridge.js`'s `engineServiceFetch` walks the engine's pending list SEQUENTIALLY and awaits `eng.fetched`
-     per line, each of which awaits `safeFetch`, which awaits this. A body the server never ends therefore
-     never resolves that round, and `hostSchedule` restores an instance's `hot` state only in that round's
-     own `.then` — so the document leaves the rankable set for the rest of the session and its engine never
-     steps again. Its flows are not outranked and not paged: they are unreachable, and where it is the only
-     live engine the scheduler waits on `Promise.race` over that same unresolved round.
-     THE SINK IS THEREFORE NECESSARY AND NOT SUFFICIENT, AND THAT ORDERING IS THE POINT. Releasing each chunk
-     as it arrives gives a consumer the bytes in time; it does not give the consumer a TURN in which to read
-     them, because the turn is what the await is holding. A lane that wires this sink to the engine and stops
-     has built a producer whose reader cannot run, and for a body that ends — which is every finite chunked
-     reply and what a fixture serves — it is whole and correct, so the two populations must be reported apart.
-     WHAT THE DOOR OWES, AND THE PRECEDENT IS IN THIS TREE RATHER THAN IN AN ARGUMENT:
-     `engine/host/wpt_runner.c` drives the same ABI with a `g_inflight` table — it ISSUES without blocking its
-     and refuses to re-issue a `(method, url)` already in flight. The second half is load-bearing here: the
-     engine RE-LISTS a request that carries neither a value nor a refusal on every round, by design, so a
-     door that leaves a streaming request running must dedup its own in-flight set or it will issue the same
-     request again each round.
-     AND THAT ROUND NO LONGER AWAITS THIS LOOP, WHICH RETIRES THE PARAGRAPH ABOVE FOR EVERY DOOR INSIDE A
-     SERVICE ROUND — kept verbatim because it is the reading a lane wiring `onChunk` up re-derives from the
-     scheduler's own promises, and every clause of it was true when written. `bridge.js` ISSUES every park
-     through an in-flight table (`engineIssue`) and DELIVERS it on a later round, which is the shape
-     `engine/host/wpt_runner.c`'s `g_inflight` and `engine/trusted.mjs`'s `answered` map already had: the
-     pending seam, `xhr.send` and `document.fetch` all return at once, so an instance stays rankable while a
-     server holds a reply open and the flows that are not parked on it keep being stepped. A body with no end is
-     still read by this loop for as long as the server talks, which is correct and is why no deadline was the
-     answer.
-     WHAT IS STILL AWAITED IS ONE LEVEL UP AND IS NAMED AT ITS OWN SITE RATHER THAN HERE: `hostSchedule`'s own
-     `ops.admit()` awaits a SEED's `navigationLoad`, so a seeded address that holds its body open freezes the
-     LEVEL-1 LOOP rather than one instance, which is worse and is a subproblem of its own.
-     AND THE SINK IS STILL NECESSARY-AND-NOT-SUFFICIENT, ONE STEP ALONG: a consumer now has a TURN in which to
-     read a chunk, and what it still has no way to receive is the HEAD — `computedType` is the sniff's, so a
-     head delivered before its body cannot carry one, which is the paragraph above this one and is unchanged.
-     RETIREMENT: this record goes when a chunk released here reaches a consumer that acts on it before the body
-     ends, because the ordering this paragraph exists to state is then spent rather than merely unblocked. */
+  /* No bound: no chunk cap, size cap, read count or timeout. A cap truncates a reply, and a truncated reply
+     is a wrong answer about the server rather than a smaller one; the floor is the platform's memory.
+     The wait is unbounded too, so a body the server never ends keeps this call pending for as long as the
+     server talks. A door that must stay responsive does not await it inside a scheduling round: `bridge.js`
+     issues parks through an in-flight table (`engineIssue`), delivers them on a later round, and so never
+     re-issues a request the engine re-lists while it is in flight. A sink gives a consumer the bytes in
+     time; it does not give it the head, since `computedType` needs the whole body. */
   for (;;) {
     step = await reader.read();
     if (step.done) break;
     chunk = step.value;
-    /* THE PLATFORM'S CONTRACT, ASSERTED ON THE SHAPE AND NEVER ON THE CONTENT. The bytes are a stranger's and
-       nothing here may assert about them; that this reader yields a BYTE VIEW is this host's own contract, and
-       a chunk that is not one corrupts SILENTLY rather than loudly — `length` of a string is a character count
-       and `set` would read it as a sequence of zeroes without complaint. It is a DCHECK because no input can
-       reach it: a server states the bytes and never their carrier, so this asserts this host's own logic,
-       which is what a DCHECK is for. `ArrayBuffer.isView` and not `instanceof`, for the cross-realm reason
+    /* The bytes are a stranger's and are never asserted on; that the reader yields a byte view is this host's
+       contract. A non-view would corrupt silently (`set` reads a string as zeroes). No input reaches this,
+       since a server states bytes and never their carrier. `ArrayBuffer.isView` for the cross-realm reason
        above. */
     DCHECK(ArrayBuffer.isView(chunk),
            "the response body reader yielded a chunk that is not a byte view — the bytes themselves are a " +
            "stranger's and are never asserted on, but the SHAPE of a chunk is this host's contract, and a " +
            "non-view accumulates as zeroes into the body that every gate below and the engine read as the reply");
-    /* RELEASED BEFORE IT IS ACCUMULATED, because timeliness is the whole of what a sink buys — a consumer
-       handed the chunk only after the loop ends is the `await` this replaced, wearing a callback. The
-       accumulation continues underneath it either way, so the record every gate below reads is the same
-       record whether a sink was stated or not: incremental delivery ADDS a reader, and removes none. */
+    /* Released before it is accumulated, because timeliness is what a sink is for. Accumulation continues
+       either way, so every gate below reads the same record whether or not a sink was stated. */
     if (sink !== undefined) sink(chunk);
     parts.push(chunk);
     total += chunk.byteLength;
@@ -2946,155 +2867,59 @@ async function _readBody(resp, sink, gated) {
 
 async function safeFetch(url, opts) {
   opts = opts || {};
-  /* THE REQUEST'S SHAPE IS CHECKED BEFORE THE REQUEST IS MADE, which is the difference between an abort and a
-     network round trip followed by an abort.
-     THIS SENTENCE USED TO READ "both of these are about the CORB class", and the pair it named was a
-     `DCHECK(!("as" in opts))` beside `_destinationOf` — one dead keyword refused by name, which is a rule
-     with a hole for every option nobody happened to think of. What stands here now is the general form of
-     it: the fields this file READS are a closed set, so a caller's statement it will not read is REFUSED
-     rather than dropped. The CORB class is one thing that goes wrong that way; a caller's belief that it
-     sent a verb is the other. Both are asked at the entry rather than beside the rule they feed,
-     which runs only after the bytes are already back. */
+  /* The option set this file reads is closed, so a caller's statement it will not read is refused at the
+     entry rather than dropped after the bytes are back. */
   _refuseUnreadOptions(opts);
-  /* CAPTURED RATHER THAN ASKED TWICE, for the reason the provenance below states in its own words: a field
-     two gates re-derive is a field two gates can disagree about, and this one now feeds the signal vector
-     BOTH firing gates read. */
+  /* Every fact the firing walk decides from is read once, here, and passed down. The request is judged
+     twice (before the wire and after a redirect), and a fact re-read at each gate is one the two can
+     disagree about. Reading them at the entry also makes each CHECK fire on every path, not only on paths
+     that reach the firing question. */
   var destination = _destinationOf(opts);
-  /* AND WHAT THE REQUEST IS EVIDENCE OF, ASKED AT THE SAME DOOR AND FOR THE SAME REASON: it is a field this
-     zone DECIDES from, its absent and invented values take the permissive arm, and the decision it feeds
-     happens before any byte moves. Read ONCE here and passed down, never re-read at the two gates below — a
-     field consulted twice is a field two gates can disagree about. */
   var provenance = _provenanceOf(opts);
-  /* …AND THE WITNESS MARK BESIDE IT, AT THE SAME DOOR AND FOR THE SAME THREE REASONS: this zone DECIDES from
-     it, its absent and invented values take the permissive arm, and the decision it feeds happens before any
-     byte moves. Read HERE rather than at the gate so a caller that states no mark aborts on every path
-     through this function and not only on the ones that reach the firing question — an assert that fires for
-     some callers and not others is one whose coverage is an accident of which arm a request took. */
   var pinnedMark = _pinnedOf(opts);
-  /* AND HOW THE DOCUMENT THIS REQUEST WAS MADE FROM WAS REACHED, AT THE SAME DOOR AND FOR THE SAME REASONS —
-     see `_docReachOf`. It is read HERE and not at the two gates below for the reason every fact above it is:
-     the request is judged twice, before the wire and again after a redirect, and a fact re-read at each gate
-     is a fact the two gates can disagree about. */
   var docReach = _docReachOf(opts);
-  /* AND WHOSE ACT THIS REQUEST IS, AT THE SAME DOOR AND FOR THE SAME REASONS — see `_actorOf`. It is read
-     HERE rather than at the gate for the reason every fact above it is: the request is judged twice, before
-     the wire and again after a redirect, and a fact re-read at each gate is a fact the two gates can
-     disagree about. Reading it here is also what makes the `CHECK` fire on EVERY path through this
-     function rather than only on the ones that reach the firing question — an assert whose coverage is an
-     accident of which arm a request took is one that will be missing exactly where a caller forgot. */
   var actor = _actorOf(opts);
-  /* AND WHETHER THE PERSON'S SESSION PAYS FOR IT, DERIVED ONCE AT THE SAME DOOR — see `_credentialedOf`,
-     which is also where the one option this file reads from the UNTRUSTED zone is refused a place on a
-     cookie-bearing request. It was derived below, beside the deny list; one derivation is what stops the
-     credential mode and the invariant scoped BY the credential mode from being two reads that can differ. */
+  /* Derived once, above every gate it scopes; `_credentialedOf` also refuses a header list on a
+     cookie-bearing request. */
   var credentialed = _credentialedOf(opts);
   var parsed;
   try { parsed = new URL(String(url)); }
-  // No URL at all, so there is no URL list either — « » is the honest report, and
-  // the engine's `response.url` is then the empty string the spec names for it.
-  /* NETWORK, because a browser agrees: the URL constructor throwing is URL Standard §6.1 "URL class"' own
-     failure, and a request whose URL cannot be parsed never becomes a request at all. */
+  /* Network: a string the URL Standard §6.1 "URL class" constructor refuses never becomes a request in a
+     browser either. There is no URL, so the URL list is empty and the engine's `response.url` is "". */
   catch (e) { return _refused("network", "bad-url", [], {}); }
-  /* NETWORK, and this is the arm Fetch §4.3 "Scheme fetch" names in as many words — its switch ends "Return a
-     network error", and `file:` is "left as an exercise for the reader. When in doubt, return a network
-     error." A page fetching `file:///etc/passwd` gets §5.6's TypeError in Chrome, so the flow's failure path
-     is where a real browser puts it too. */
+  /* Network: Fetch §4.3 "Scheme fetch" ends its switch with "Return a network error", so a page fetching
+     `file:` gets §5.6's TypeError in a browser too. This allowlist keeps a crafted URL off local and extension
+     resources. */
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
     return _refused("network", "blocked-scheme:" + parsed.protocol, [parsed.href], {});
-  /* AND AN ADDRESS THAT CARRIES ITS OWN AUTHORITY IN ITS USERINFO, WHICH IS A FACT ABOUT THE URL AND NOT A
-     POLICY QUESTION. URL Standard §4.2 "URL miscellaneous": "A URL includes credentials if its username or
-     password is not the empty string." Fetch §5.4 "Request class" refuses one outright — "If parsedURL
-     includes credentials, then throw a TypeError" — and §5.6 "Fetch methods" says what a page sees, because
-     that constructor runs inside `fetch()`: "Let requestObject be the result of invoking the initial value of
-     Request as constructor with input and init as arguments. If this throws an exception, reject p with it
-     and return p", which is the same rejection §5.6 gives a network error ("If response is a network error,
-     then reject p with a TypeError").
-     NETWORK AND NOT DECLINE, ON THIS FILE'S OWN DISCRIMINATOR: a real browser performing this same request
-     rejects it identically, so §5.6's network error IS the faithful answer and the flow's failure path is
-     where a real page's would be. No widening reopens it and none should — this is what the transport is.
-     WITHOUT THIS LINE THE `fetch` BELOW THROWS AND THE REFUSAL HAS NO RECORD AT ALL. Nothing on this path
-     catches that TypeError, so the address is neither fired nor reported: no `blocked-` row, no grade, no
-     `statusText` — and §Attacker-sources says a derived-and-unfired request "is not a gap in the report, it
-     IS the report". Every other arm of this function answers with a record; this address answered with an
-     exception, which is the one outcome a caller cannot tell from this zone being broken.
-     IT IS A REFUSAL AND NOT A ROW OF THE EGRESS REGISTRY, WHICH IS THE PART A READER WILL OTHERWISE RE-OPEN.
-     Userinfo is the one form of URL-carried authority this zone can compute with CERTAINTY rather than as
-     `url-authority`'s lower bound, so that row looks like where it belongs. A signal is a fact a person may
-     PERMIT, and this address cannot be sent at any setting — so a checkbox over it would be a control with
-     one outcome, promising a widening that could never fire, and `_urlAuthorityMarker` would be answering
-     `present` for a population the walk beneath it never reaches.
-     THE REDIRECT CASE IS THE BROWSER'S AND IS DELIBERATELY NOT RE-ASKED BELOW: `redirect: "follow"` means
-     Fetch §4.5 "HTTP-redirect fetch" has already run, and it returns a network error when "request's mode is
-     `cors`, locationURL includes credentials, and request's origin is not same origin with locationURL's
-     origin" — which is every http(s) target of a `fetch()` made from this extension's own origin.
-     THE REASON NAMES NO GROUND, ALONE AMONG THE `blocked-` REASONS HERE, BECAUSE THE GROUND IS THE SECRET.
-     `statusText` travels to the engine and into a person's report; the URL list still carries `parsed.href`,
-     which the caller handed in and therefore already holds.
-     RETIREMENT: this record goes when no reader can re-derive a `url-authority` row for userinfo from the
-     paragraphs around it — which is to say when a value no setting can permit is unspellable in that
-     registry, and this paragraph has nothing left to be wrong about. */
+  /* Network: URL Standard §4.2 "URL miscellaneous" — "A URL includes credentials if its username or password
+     is not the empty string" — and Fetch §5.4 "Request class" throws a TypeError for one, which `fetch()`
+     rejects with (§5.6 "Fetch methods"). A browser refuses this request identically and no widening reopens
+     it. Without this line the `fetch` below would throw and the address would leave no record at all.
+     It is a refusal and not an egress signal: a signal is something a person may permit, and this cannot be
+     sent at any setting. A redirect to a userinfo URL is refused by the browser itself (Fetch §4.5
+     "HTTP-redirect fetch": cors mode, credentials in locationURL, cross-origin), so it is not re-asked.
+     The reason names no ground because the ground is the secret; the URL list carries the href the caller
+     already holds. */
   if (parsed.username !== "" || parsed.password !== "")
     return _refused("network", "blocked-url-credentials", [parsed.href], {});
-  /* AND WHETHER THIS REPLY MAY BE HANDED OVER A PIECE AT A TIME — asked HERE, of the REQUEST, before the
-     target is judged and long before the wire, because it is a fact about what the caller asked for and about
-     this file's own gates rather than anything a server will say. See `_bodyGated` for the measurement that
-     makes it a refusal instead of a partial answer.
-     IT IS THE REFUSAL AND NOT A FLAG. Serving a body-gated request whole while its caller asked for chunks
-     would be CLAUDE.md's §A-FLAG-THAT-REPORTS-AN-OUTCOME exactly — an announcement standing in for the work —
-     and it fails in the direction that matters: the caller believes it is streaming, and the one gate that
-     needed the whole body is the one it stopped waiting for. A caller that asked for something this file will
-     not do is told so, in the same `blocked-<rule>:<ground>` vocabulary every other refusal here uses. */
+  /* Decline: a script-like destination cannot be streamed (see `_bodyGated`), and no browser refuses a
+     streamed script, so only this tool declines. Serving it whole to a caller that asked for chunks would
+     leave that caller believing it streamed past the one gate that needs the whole body. */
   if (opts.onChunk !== undefined && _bodyGated(opts))
     return _refused("decline", "blocked-stream-body-gated:" + _destinationOf(opts), [parsed.href], {});
-  // Origin-relative SSRF (see header). The PRINCIPAL is the analysed DOCUMENT's OWN
-  // address, passed PER CALL as opts.pageUrl — NOT a shared global: two grinds run
-  // concurrently in one worker, so a worker-global principal would let one page's
-  // origin contaminate another's fetch. It is the browser's `MessageSender.url` for
-  // that document and NEVER `sender.tab.url`, which this comment named until now: the
-  // tab's address is the address of the TOP of the tab, and using it here is the exact
-  // bug SECURITY.md records fixing — a sub-frame in a tab whose top is
-  // http://localhost/ inherits that PRIVATE classification and reaches the user's
-  // intranet on its embedder's behalf. `sender.tab.url` still travels, as
-  // `topLevelUrl`, for HTML §8.1.3.1's top-level creation URL; it is not a fetch
-  // principal. A cross-origin script uses the origin of the PAGE it is loaded into
-  // (gstatic.com JS in google.com acts as google.com), never the asset's own host.
-  // Block a PRIVATE target only when the page principal is NOT itself private.
-  /* THREE STATES USED TO ARRIVE HERE AS ONE, which is worth ending at a security
-     decision even though all three fail closed. `opts.pageUrl || ""` followed by
-     `try { new URL(_po).hostname } catch (e) {}` handed the EMPTY HOST to an ABSENT
-     principal, to an UNPARSEABLE one, and to a perfectly valid one that simply names
-     no host — and `_isPrivateHost("")` answers false for all three, so "our contract
-     is broken" and "this document has no server" were reported as one public
-     classification with nothing able to tell them apart.
-     TWO OF THEM ARE THIS ZONE'S CONTRACT BROKEN, and the discriminator is the one this
-     file already states seventy lines down: WHO DETERMINES THE VALUE. `opts.pageUrl` is
-     never on the wire — SECURITY.md deleted every principal-shaped field an untrusted
-     zone could send, so this one has no argument to travel in — which makes it always
-     `_browserFacts`' `url`, minted in the trusted zone out of `MessageSender` and
-     already DCHECKed there as a non-empty string. Every call site takes it from that
-     mint: four in `bridge.js`, where `navigationLoad` asserts the same fact again at
-     its own door, and one in `lib/discovery-probe.js`, whose automatic discovery sweep
-     reads `doc.url` off the DocData that `handleContentMessage` stamps FROM that mint
-     and asserts it before building its fetch fn. (That sentence said "all four call
-     sites are in `bridge.js`" and stopped being true the day the sweep was moved off
-     the page-context relay onto this chokepoint — a claim about the call graph, which
-     a diff can falsify without touching the line that makes it.) So an absent or
-     unparseable principal is OUR bug and it asserts. This is NOT the hostile input SECURITY.md refuses to abort on:
-     that is `CONTENT_SEED`'s page-suggested address, which is dropped closed, and it is
-     a different value that never reaches this argument.
-     DCHECK AND NOT CHECK, because the release question is only whether we may PROCEED —
-     and with the guard below an unparsed principal still classifies as public and still
-     blocks every private target, so release has a safe answer and does not need to
-     abort. That guard is also what keeps this DCHECK from becoming load-bearing in the
-     build that compiles it out: a bare `.hostname` would trade a dev abort for a
-     release TypeError inside the chokepoint.
-     THE THIRD IS A REAL INPUT AND IS NOW A POSITIVE STATEMENT RATHER THAN A HOLE.
-     `manifest.json` sets `match_about_blank` and `match_origin_as_fallback` on the
-     content script, so a document whose own address is `about:blank` — or a `data:` /
-     `blob:` document — does reach the mint, passes its non-empty check, parses, and
-     states NO HOST. A principal that names no server is not a private-network
-     principal. That is an answer about what the address SAYS, so it classifies public
-     here deliberately, and the code now reads it as the statement it is. */
+  /* Origin-relative SSRF. The principal is the analysed document's own browser-stated address, passed per
+     call as `opts.pageUrl` (its `MessageSender.url`, never `sender.tab.url`, so a sub-frame of a tab whose top
+     is localhost does not inherit a private classification). It is per call, not a global, because the
+     trusted zone interleaves many renderers. A cross-origin script acts with the origin of the page it is
+     loaded into, never its own host. A private target is refused only when the principal is not private.
+     `opts.pageUrl` is never on the wire: the trusted zone composes it (in the extension, from
+     `_browserFacts`' `url`, minted from `MessageSender` and DCHECKed non-empty there). So an absent or
+     unparseable principal is this zone's bug and is DCHECKed; with the DCHECKs compiled out it classifies
+     public, which still refuses every private target.
+     A principal that parses and names no host (`about:blank`, `data:`, `blob:`, reachable through the content
+     script's `match_about_blank` and `match_origin_as_fallback`) is input; it names no server, so it is not a
+     private-network principal. */
   DCHECK(typeof opts.pageUrl === "string" && opts.pageUrl !== "",
          "the network chokepoint was asked to classify an SSRF target with no page principal (`" +
          opts.pageUrl + "`) — the principal is the analysed document's OWN browser-stated address, " +
@@ -3107,491 +2932,201 @@ async function safeFetch(url, opts) {
          "the page principal handed to the SSRF classifier is not a parseable URL (`" + opts.pageUrl +
          "`) — the browser states this address and this zone only carries it, so a string a URL parser " +
          "refuses is our copy of it corrupted rather than anything the analysed page did");
-  /* A principal that PARSES and names no host is the third state above, read as the positive statement
-     it is: no server, therefore not private. The `!!_pageUrl &&` is the release guard the paragraph
-     above names — with the DCHECKs compiled out, an unparseable principal lands here as "public",
-     which is the same fail-closed answer this line has always given it. */
+  /* `!!_pageUrl &&` is the release arm under the DCHECKs above: an unparseable principal classifies public,
+     which is this gate's fail-closed answer. */
   var _pagePrivate = !!_pageUrl && _isPrivateHost(_pageUrl.hostname);
-  /* NETWORK. This gate exists because the extension's host permissions BYPASS the browser's own answer, so
-     what it does is REINSTATE it: a public page reaching the person's intranet is refused by Private Network
-     Access, and by Fetch §4.10 "CORS check" besides, both of which reach the page as a network error. */
+  /* Network: host permissions bypass the browser's own answer, and this reinstates it. Private Network
+     Access, and Fetch §4.10 "CORS check" besides, refuse a public page a private host. */
   if (_isPrivateHost(parsed.hostname) && !_pagePrivate)
     return _refused("network", "blocked-private-from-public", [parsed.href], {});
-  /* AND THE PERSON'S STANDING SENTENCE IS WAITED FOR RATHER THAN ASSUMED — see `_EXPLORED_STATING`. This
-     is the line that makes the assert inside `_firingRefusal` a check on a CONSTRUCTION rather than a
-     property of whichever entry a request arrived through: a chokepoint is by definition every asker, so a
-     wait here covers every door this zone has and every one it grows. It is placed after the gates that
-     refuse a request on facts about ITSELF — an address that will not parse, a scheme this zone cannot
-     speak, a private target from a public page — because those owe the person's policy nothing and waiting
-     for it would delay a refusal that was never going to depend on it.
-     IT IS SKIPPED ONCE THE TABLE IS STATED, so the steady state costs one already-false test and no
-     microtask; `_EXPLORED_STATED` never goes back to false, which is what makes that safe to read once. */
+  /* The person's stated table is awaited, not assumed (see `_EXPLORED_STATING`); waiting at the chokepoint
+     covers every door this zone has. It comes after the gates that refuse a request on facts about itself,
+     which owe the policy nothing. Once the table is stated the test is false and costs no microtask, and
+     `_EXPLORED_STATED` never returns to false. */
   if (!_EXPLORED_STATED && _EXPLORED_STATING !== null) await _EXPLORED_STATING;
-  /* THE FIRING DECISION, BEFORE THE REQUEST EXISTS — see `_firingRefusal`. It is placed after the
-     well-formedness gates and before the credential one because that is the order the questions are
-     answerable in: an address that will not parse, names a scheme this zone cannot speak, or points into the
-     person's intranet is refused on facts about ITSELF, while this one is about WHOSE ACT it is and is the
-     first gate that needed a field to be carried here to be askable at all.
-     THE REFUSAL NAMES THE GRADE, exactly as `blocked-scheme:` and `blocked-destructive:` name theirs. A
-     reader of a request that did not happen needs WHICH RULE refused it, and `forced` in this position is the
-     whole account: the origin is not widened for exploration and the address is reported instead. */
-  /* DECLINE, AND THIS IS THE ARM THE WHOLE GRADE EXISTS FOR. No browser refuses this — there is no server
-     behaviour here at all, only this zone declining to ASK, because the address stands on an arm a gate was
-     forced onto. So there is nothing to hand a flow back, and §@S says exactly what that state is: a search
-     not yet solved, a PARKED flow, never a verdict. Parking is also what makes the widening MEAN anything —
-     the flow fires the day `safeFetchWiden` is told about this origin, which a flow that has already run its
-     failure path cannot do. */
+  /* The firing decision, before the request exists (see `_firingRefusal`). Decline: no browser refuses this;
+     this tool declines to spend the act. The flow parks rather than running its failure path, so it fires
+     the day the origin is widened, and the address is still reported. The reason names the signal and value
+     that refused. */
   var _ptok = _firingRefusal({ url: parsed, destination: destination, provenance: provenance,
                                pinned: pinnedMark, docReach: docReach, actor: actor,
                                credentialed: credentialed, headers: opts.headers });
   if (_ptok)
     return _refused("decline", "blocked-signal:" + _ptok, [parsed.href], {});
-  // opts.credentialed: replay a learned GET with the user's COOKIES to fetch the REAL
-  // authenticated reply (the logged-in API surface), instead of a useless 401. Still
-  // GET-only (method is forced below) so a well-designed server performs no account
-  // action. The reply is gated by our OWN SOP/CORS check after the fetch (see below) —
-  // the browser's does not apply to an extension fetch with host_permissions.
-  /* THE FLAG ITSELF IS DERIVED AT THE ENTRY (`_credentialedOf`) AND READ HERE. It used to be derived on this
-     line, which put the one fact three rules below are scoped by downstream of the door where the request's
-     shape is judged — and left the invariant that IS scoped by it (no bundle-stated header list on a
-     cookie-bearing request) with nowhere early enough to stand. One derivation, above every gate that reads
-     it, is the same rule this file already applies to the landed URL and to `provenance`. */
-  // THE DENY LIST, BEFORE THE REQUEST EXISTS — see _destructiveToken. Scoped to the
-  // credentialed case because that is half of where the harm is: without the person's
-  // cookies a logout path ends no session. The refusal names the token so it is
-  // attributable, exactly as `blocked-scheme:` and `blocked-corb:` name their ground.
-  /* AND THE SECOND HALF IS THE PROVENANCE, WHICH THIS GATE HAS BEEN WAITING FOR. The
-     list's own paragraph states the harm exactly: "Forced execution builds requests NO
-     REAL CLIENT MAKES", and "a GET that ends the person's session mid-analysis is a CSRF
-     we committed against our own user". Both halves of that sentence are load-bearing and
-     only one of them was askable here, so the gate stood over the whole credentialed
-     population — including the one caller for which the first half is FALSE BY
-     CONSTRUCTION. `observed` is solver/engine.h's "a real load of this document makes
-     exactly this request", and the ambient seed is that in its strongest form: the address
-     is the one the browser ACTUALLY NAVIGATED TO, so the person's own browser performed
-     this exact credentialed GET seconds ago in this same profile. Refusing to repeat it
-     prevents no state change — the state change already happened, by the person's own act
-     — and costs the analysis the document they are looking at, reported unanalysed with a
-     token in place of a reason anybody would recognise.
-     THIS IS A LOOSENING AND IS NAMED AS ONE. The list's cheap direction is being over-broad
-     and its expensive one is being loosened by accident, so the condition is narrowed to
-     exactly the population the harm argument covers and to nothing wider: a credentialed
-     request THIS TOOL originated (`derived`, `forced`) is still refused on a destructive
-     path, on the initial URL and again after a redirect. What changes is only the request
-     the person had already made. */
+  /* The destructive-path deny list, before the request exists (see `_destructiveToken`). It is scoped to
+     credentialed requests, because without cookies a logout path ends no session, and to provenance other
+     than `observed`. An `observed` credentialed request is the ambient seed: the person's own browser just
+     made this exact request in this profile, so refusing to repeat it prevents nothing. A credentialed
+     `derived` or `forced` request is refused on a destructive path here and again after a redirect.
+     Decline, and permanent: no widening reopens this list. A browser would send this request; this tool will
+     not send it with the person's session. */
   if (credentialed && provenance !== "observed") {
-    /* DECLINE, AND IT IS THE PERMANENT ONE — no widening reopens this list, which is the case the grade above
-       argues does not need a third word. A browser would send this request; this tool will not send it with
-       the person's session. So there is no observation to relay, and a network error here would be the same
-       lie the provenance arm makes, told about a request the server would have answered. */
     var _dtok = _destructiveToken(parsed);
     if (_dtok)
       return _refused("decline", "blocked-destructive:" + _dtok, [parsed.href], {});
   }
   var init = { method: "GET", credentials: credentialed ? "include" : "omit", redirect: "follow" };
-  /* THE CALLER'S HEADER LIST — AND IT IS NOT "ANALYZER PROBE HEADERS ONLY", WHICH IS WHAT THIS COMMENT SAID.
-     SECURITY.md §Network corrects it by name: on the XHR path `fetchedXhr` forwards the analysed BUNDLE's
-     own header list, so the values here come from the zone this one does not trust. That is within the model
-     for the request this file actually issues — an uncredentialed GET, whose forbidden header names the
-     browser strips, to a host the page could ask itself — and it is refused outright on a cookie-bearing one
-     (`_credentialedOf`), which is where the correction stops being a note and becomes a rule.
-     Auth headers are never ADDED here; cookies, in credentialed mode, are the browser's own, attached by
-     `credentials:"include"` and gated by the SOP/CORS check below. */
+  /* The caller's header list. On the XHR path it is the analysed bundle's own list, which is within the model
+     for the request this file issues (an uncredentialed GET whose forbidden header names the browser strips)
+     and is refused on a cookie-bearing one by `_credentialedOf`. This file never adds auth headers; cookies,
+     in credentialed mode, are the browser's own and are gated by the SOP/CORS check below. */
   if (opts.headers) init.headers = opts.headers;
   if (opts.signal) init.signal = opts.signal;
   var resp = await fetch(parsed.href, init);
-  /* THE URL THE BYTES CAME FROM, PARSED ONCE, ABOVE EVERY GATE THAT JUDGES IT. Fetch §2.2.5
-     "Requests": "A request has an associated current URL. It is a pointer to the last URL in
-     request's URL list" — and §4.1 "Main fetch" gives a response the readable "basic" tainting
-     on "request's current URL's origin is same origin with request's origin", never on the
-     address that was merely requested. `redirect: "follow"` means the chain has already been
-     walked by the time this line runs, so "where we asked" and "where it came from" are two
-     different facts, and FOUR readers below need the second one.
-     THEY EACH USED TO DERIVE IT FOR THEMSELVES, INSIDE A `try`/`catch` OF THEIR OWN, AND THAT
-     IS THE DEFECT THIS BLOCK EXISTS TO END. The private-host re-check parsed `resp.url` under
-     `catch (e) {}`, the destructive-path re-check parsed it again under another, and
-     `_finalHref`/`_finalOrigin` were computed a third and fourth time under two more, seventy
-     lines further down. Every one of those arms was a SKIP: an address this zone could not
-     parse silently disabled the gate standing over it, so a credentialed reply arrived with
-     no `blocked-` row anywhere and read exactly like an address that legitimately matched
-     nothing. Fail-open, four times, for one unanswerable question.
-     AND THE SECOND CATCH SWALLOWED AN INVARIANT ABORT. `_destructiveToken` asserts its own
-     percent-decode termination; on this side an assert is a THROW, so `catch (e) {}` around
-     the call turned a broken decoder into a permitted request — which is precisely the defect
-     `check.js` wrote `RETHROW_FATAL` for and records having already paid for once.
-     SO IT IS ASKED ONCE, AND AN UNANSWERABLE ANSWER IS A REFUSAL RATHER THAN A SKIP. An empty
-     `resp.url` is not unanswerable and is not a hole: §5.5 "Response class" gives `url` "the
-     empty string if this's response's URL is null", i.e. no redirect information at all, so the URL
-     the bytes came from IS the address requested — which the pre-request deny list and the
-     initial private-host check have already judged. That is a positive statement, so `parsed`
-     is the answer rather than a default filling a gap.
-     WHY A REFUSAL AND NOT AN ASSERT, WHICH IS THE WHOLE OF THE FAILURE-MODE QUESTION: the
-     discriminator is WHO DETERMINES THE VALUE. `_destructiveToken`'s argument is determined by
-     this zone's own code, so a bad one is our contract broken and CHECK is right. `resp.url`
-     is determined by the SERVER's redirect chain, and SECURITY.md says what an assert on a
-     value the other side picks costs — "a DCHECK on a hostile input hands any web renderer an
-     abort of the only trusted zone in the extension". Both directions fail closed; only one of
-     them lets a server end the analysis. The request is already sent by the time this runs, so
-     refusing costs an ingest and nothing else. */
+  /* The URL the bytes came from, parsed once above every gate that judges it. Fetch §2.2.5 "Requests": "A
+     request has an associated current URL. It is a pointer to the last URL in request's URL list", and §4.1
+     "Main fetch" bases readability on that URL's origin, not on the address requested. With `redirect:
+     "follow"` the chain is already walked, so every post-fetch gate reads `_finalUrl`.
+     An empty `resp.url` is §5.5 "Response class"' "the empty string if this's response's URL is null", so the
+     landed URL is the requested one, already judged; `parsed` is that answer, not a default.
+     A landed URL this zone cannot parse is refused rather than skipped, so no gate is silently disabled. It
+     is a refusal and not an assert because the server's redirect chain determines it, and an assert on a
+     value the other side picks would hand a server an abort of the trusted zone. */
   var _finalUrl = parsed;
   if (resp.url) {
     var _fu = null;
-    /* A URL that will not parse is a REAL OUTCOME the constructor is defined to report this
-       way — URL Standard §6.1 "URL class": "Let parsedURL be the result of running the API URL
-       parser on url with base, if given. If parsedURL is failure, then throw a TypeError" — so
-       this catch HAS a job and is not a swallow. It opens by letting an invariant abort travel
-       on, which is the one thing a catch in this zone must never absorb. */
+    /* URL Standard §6.1 "URL class": "If parsedURL is failure, then throw a TypeError", so this catch has a
+       job; it rethrows an invariant abort first. */
     try { _fu = new URL(resp.url); }
     catch (e) { RETHROW_FATAL(e); _fu = null; }
-    /* NETWORK. The request went out and the browser answered with an address this zone's own URL parser
-       refuses, so what is unusable is the RESPONSE — "this zone tried and the reply cannot be read" is what a
-       network error says, and no policy of ours declined anything. */
+    /* Network: the reply arrived and cannot be read; no policy of ours declined anything. */
     if (!_fu)
       return _refused("network", "blocked-final-url-unparseable", [parsed.href], {});
     _finalUrl = _fu;
   }
-  /* AND THE ENTRY ALLOWLIST IS COMPLETE AFTER A REDIRECT WITHOUT BEING RE-ASKED — ASSERTED HERE RATHER THAN
-     ARGUED, BECAUSE THE ARGUMENT IS WHAT A READER RE-DERIVES AND THEY RE-DERIVE IT WRONG. The scheme test is
-     the one gate in this function that reads `parsed` and is never re-pointed at the landed address: the
-     only `protocol` read that DECIDES a request is that one. That is a property to READ and deliberately
-     not a count, since the count would have to include this very paragraph. Beside `_readBody`'s
-     `WHICH GATES READ WHICH` enumeration, where every other name carries a `both` or reads `_finalOrigin`,
-     that asymmetry reads as a hole. It is not one, because the BROWSER refuses the targets this gate
-     excludes:
-     Fetch §4.5 "HTTP-redirect fetch" step 6 is "If locationURL's scheme is not an HTTP(S) scheme, then
-     return a network error", and this function's `redirect: "follow"` means that has already run at every
-     hop by the time this line does. So `file:`, `data:`, `blob:` and `chrome-extension:` are unreachable as
-     a redirect target at any depth. The DCHECK is that sentence made falsifiable: a firing means the
-     platform guarantee this gate's one-sidedness rests on no longer holds and the allowlist owes an arm
-     here.
-     DCHECK AND NOT CHECK, ON THIS FILE'S OWN DISCRIMINATOR — WHO DETERMINES THE VALUE. A server only
-     PROPOSES a `Location`; it is the browser that accepts or refuses one, so a landed scheme is a platform
-     guarantee and not the hostile input `blocked-final-url-unparseable` refuses on, and it is asserted
-     exactly as this function's `resp.status !== 0` DCHECK is asserted on Fetch's default `cors` mode. */
+  /* The scheme allowlist reads only the requested URL, and that is complete after a redirect: Fetch §4.5
+     "HTTP-redirect fetch" step 6, "If locationURL's scheme is not an HTTP(S) scheme, then return a network
+     error", has run at every hop. A DCHECK because the browser, not the server, decides the landed scheme; a
+     firing means that guarantee no longer holds and the allowlist owes a post-redirect arm. */
   DCHECK(_finalUrl.protocol === "https:" || _finalUrl.protocol === "http:",
          "the landed URL names a scheme the entry allowlist refuses, which " +
          "Fetch §4.5 \"HTTP-redirect fetch\" step 6 makes unreachable as a redirect target — that gate " +
          "runs on the initial URL " +
          "ONLY because the browser refuses a non-HTTP(S) locationURL, so a firing here means that is no " +
          "longer true and the allowlist owes a post-redirect arm: " + _finalUrl.protocol);
-  /* AND THE QUESTION A READER IS ACTUALLY HOLDING WHEN THEY REACH FOR A POST-REDIRECT SCHEME TEST IS MIXED
-     CONTENT, WHICH IS A DIFFERENT QUESTION AND IS NOT THIS ZONE'S — SO WHAT THEY HAVE FOUND HERE IS A
-     DECISION AND NOT A GAP. The gap they came for is REAL: an `https` request that lands on `http` is judged
-     for mixed content by nothing, because this engine asks
-     Mixed Content §4.4 "Should fetching request be blocked as mixed content?" BEFORE the wire
-     (Fetch §4.1 "Main fetch" step 7, reached through `fetch_main_blocked`) and nothing asks that section's
-     step 20 response-side disjunct. It is a NAMED RESIDUAL already, at core/fetch/mixed_content.h, whose
-     three members land together and whose call site is `flow_deliver_one_reply` — and that residual's own
-     absence clause names this allowlist, which is the route by which a reader arrives here.
-     SPELLING IT HERE AS A SCHEME TEST WOULD BE WRONG IN BOTH DIRECTIONS, WHICH IS WHY THE SECOND COPY IS NOT
-     WORTH MAKING.
-     Mixed Content §4.5 "Should response to request be blocked as mixed content?" allows on four conditions
-     and this zone can compute one of them. Its first is
-     Mixed Content §4.3 "Does settings prohibit mixed security contexts?", whose subject is the analysed
-     document's settings object and its ancestor navigables — which this zone does not hold, so a gate here
-     would refuse a plain `http:` page its OWN `http:` subresources: the population that section answers
-     "does not restrict" for, and the one every default arm of the egress policy exists to let through. Its
-     second is not a scheme test either:
-     Secure Contexts §3.1 "Is origin potentially trustworthy?" returns trustworthy where a host "matches one
-     of the CIDR notations 127.0.0.0/8 or ::1/128", so `protocol !== "https:"` would refuse a redirect to
-     loopback that a browser allows and that this file's own private-host rule is written to permit. Its
-     fourth is the top-level navigation exemption — destination `document` with no parent browsing context —
-     and `navigationLoad` is exactly that, while this zone holds no navigable and cannot state it.
-     WHAT THIS ZONE OWES THAT RESIDUAL IS ALREADY SHIPPED AND NEEDS NO DIFF: `urlList` on the record this
-     function returns is Fetch §2.2.6 "Responses"' response URL list, whose LAST item is the `response's url`
-     that Mixed Content §4.5 judges, and this is the only zone that can report it.
-     RETIREMENT: this record goes when the Mixed Content §4.5 residual at core/fetch/mixed_content.h no
-     longer names this file's scheme allowlist in its absence clause. */
-  /* AND THE HREF IS TAKEN OFF THAT SAME RECORD RATHER THAN OFF `resp.url` AGAIN, which is
-     what makes "one answer" true of the string that LEAVES this function and not only of the
-     gates inside it: `bridge.js` reads the URL list's last item and decides a Document's
-     agent cluster from it, so a second reading of `resp.url` would be a different string
-     deciding a principal from the one the gates judged. It is the SAME bytes either way —
-     Fetch §5.5 "Response class" hands back the response's URL "serialized with exclude
-     fragment set to true", and re-serializing an already-serialized fragment-less URL is
-     the identity — which is why this is a structural guarantee rather than a normalization. */
+  /* An `https` request landing on `http` is mixed content, which is not this zone's question. The engine asks
+     Mixed Content §4.4 "Should fetching request be blocked as mixed content?" before the wire; the
+     response-side §4.5 "Should response to request be blocked as mixed content?" is a named residual at
+     core/fetch/mixed_content.h. A scheme test here would be wrong both ways: §4.5 depends on §4.3 "Does
+     settings prohibit mixed security contexts?" over the document's settings and ancestors, which this zone
+     does not hold; Secure Contexts §3.1 "Is origin potentially trustworthy?" treats loopback as trustworthy;
+     and a top-level navigation is exempt. What this zone owes that residual is `urlList`, whose last item is
+     the response URL §4.5 judges. */
+  /* The href that leaves this function comes off the same record, so the URL list's last item (which
+     `bridge.js` decides an agent cluster from) is the string the gates judged. Fetch §5.5 "Response class"
+     serializes the URL with fragments excluded, so re-serializing it is the identity. */
   var _finalHref = _finalUrl.href;
   var _finalOrigin = _finalUrl.origin;
-  /* IS THE LANDED RESOURCE SAME-ORIGIN WITH THE PAGE PRINCIPAL — ONE QUESTION, ONE ANSWER, COMPUTED
-     HERE BECAUSE BOTH POST-FETCH GATES ASK IT AND THEY MUST NOT BE ABLE TO DISAGREE. The block above
-     ended four private derivations of the landed URL; this ends the last derivation of the COMPARISON
-     over it. CORB asked it through a helper that took `_finalHref` and re-parsed it under a `catch` of
-     its own, and the credentialed SOP asked it again inline over `_finalOrigin` — the same question,
-     answered twice, from two parses, with two failure arms. The helper's catch was unreachable (its
-     argument was the `.href` of a URL object, which a URL parser cannot refuse) and its arm was
-     fail-closed, so this is dead code rather than a hole; it is deleted rather than commented because
-     the assumption it hid — that the two gates judge the SAME origin — is now structural instead of
-     something a reader has to verify. A body CORB exempts as same-origin and the credentialed gate
-     refuses as cross-origin is the disagreement that can no longer be written.
-     THE REASONING THE DELETED HELPER CARRIED, KEPT: `_finalOrigin` is a network resource's own origin,
-     which IS its URL's origin. `pageOrigin` is the AUTHORITATIVE browser origin of the loading document
-     (`MessageSender.origin`), passed in and NEVER url-parsed — a sandboxed frame reports an ordinary
-     address and an OPAQUE origin, so parsing its address would fabricate a tuple origin it does not
-     have and hand it same-origin access to its embedder's credentialed document. No real `pageOrigin`
-     -> not same-origin -> strict CORB and a credentialed read that needs CORS, which an opaque origin
-     can never be granted (ACAO cannot equal it). That is the fail-closed direction in both gates.
-     THE PAGE ORIGIN IS ALSO READ ONCE, for the same reason: the credentialed gate compares ACAO against
-     it, and a second spelling of the principal beside the one the same-origin test used is how those
-     two stop being about one origin. */
+  /* Is the landed resource same-origin with the page principal: one answer, read by both CORB's exemption and
+     the credentialed SOP, so the two cannot disagree. `pageOrigin` is the browser-stated
+     `MessageSender.origin` and is never parsed from a URL: a sandboxed frame has an ordinary address and an
+     opaque origin, and parsing the address would fabricate a tuple origin with same-origin access to its
+     embedder. An opaque or absent principal is same-origin with nothing, so it gets strict CORB and a
+     credentialed read that needs CORS, which it can never be granted (ACAO cannot equal it). */
   var _pageOrigin = opts.pageOrigin || "";
   var _resourceSameOrigin = _isRealOrigin(_pageOrigin) && _isRealOrigin(_finalOrigin) &&
                             _finalOrigin === _pageOrigin;
-  // SSRF-via-redirect: the initial-URL check can't see a 30x to the intranet.
-  // Re-validate the FINAL url (redirects were followed) BEFORE reading the body,
-  // so a public page's request that landed on a private host never feeds internal
-  // data into the analysis. (Modern Chrome's Private Network Access also gates the
-  // request itself for extension fetches; this stops the data from being ingested.)
-  // Where nothing redirected `_finalUrl` IS `parsed`, so this re-asks a question already
-  // answered above rather than skipping one — the same answer, never an unasked gate.
-  /* NETWORK, by the same argument the pre-request private-host check carries: PNA and CORS both refuse a
-     public page a private host's bytes, and both reach the page as a network error. */
+  /* Network: SSRF via redirect. The initial check cannot see a 3xx into the intranet, so the landed host is
+     re-judged before the body is read, and a public page's request that landed on a private host never feeds
+     internal data into the analysis. PNA and CORS both refuse this in a browser. Without a redirect
+     `_finalUrl` is `parsed` and this re-asks the same question. */
   if (_isPrivateHost(_finalUrl.hostname) && !_pagePrivate)
     return _refused("network", "blocked-private-redirect", [parsed.href], {});
-  /* THE DENY LIST AGAIN ON THE FINAL URL, AND WHAT IT CAN AND CANNOT DO. `redirect:
-     "follow"` means a 30x into a destructive path was ALREADY followed by the time this
-     runs, so unlike the pre-request check this one cannot un-send anything — it refuses
-     to INGEST, which is exactly the shape and exactly the limit of the private-host
-     check immediately above it, and it is placed here for the same reason.
-     That is not a hole being papered over: following a redirect the SERVER chose is the
-     server's own behaviour, and a person who navigated to the initial address would have
-     been carried to the same place. The harm this file exists to prevent is INITIATING a
-     request the person never would, and that decision is the pre-request check. What is
-     left here is refusing to build analysis on the reply. */
+  /* The deny list again, on the landed URL. The redirect has already been followed, so this cannot unsend
+     anything; it refuses to ingest. Following a redirect the server chose is the server's behaviour, and the
+     act this list guards is initiating the request, which the pre-request check decided. */
   if (credentialed && provenance !== "observed") {
-    /* DECLINE, AND THE FACT THAT THE REQUEST ALREADY WENT OUT DOES NOT MOVE IT. The server was reachable and
-       answered; a network error would state the opposite, which is a lie about the world with a reply sitting
-       right there to contradict it. What this zone is doing is refusing to build analysis on that reply, and
-       a refusal to INGEST is a decline whatever side of the wire it is made on. */
+    /* Decline even though the request went out: the server answered, and a network error would say it did
+       not. Refusing to ingest is a decline on either side of the wire. */
     var _rtok = _destructiveToken(_finalUrl);
     if (_rtok)
       return _refused("decline", "blocked-destructive-redirect:" + _rtok,
                       _urlList(parsed.href, _finalHref, resp.redirected), {});
   }
-  /* AND THE FIRING DECISION AGAIN ON THE FINAL URL, WITH THE SAME SHAPE AND THE SAME LIMIT
-     AS THE TWO GATES ABOVE IT. `redirect: "follow"` means a 30x off the widened origin was
-     ALREADY followed by the time this runs, so this cannot un-send anything — it refuses to
-     INGEST, and the argument the destructive re-check makes for that is this one's too:
-     following a redirect the SERVER chose is the server's own behaviour, and what is left
-     here is refusing to build analysis on the reply. What makes it worth refusing: a
-     widening is a sentence about ONE HOST — "at this host, fire what the bundle reaches past
-     a forced gate" — and a reply that came from somewhere else is a reply about a server
-     nobody said that about, carried under a grade the person granted to a different one. */
-  /* DECLINE, for the reason the destructive re-check states one line up, and with the widening still live: a
-     person who widens the LANDED origin makes this same load fire, and a flow that has run its failure path
-     is not there to fire. */
-  /* AND THIS CALL IS WHERE A SIGNATURE WIDENING WENT MISSING, RECORDED AT THE LINE RATHER THAN IN A REPORT,
-     BECAUSE THE NEXT READER OF THIS FUNCTION IS THE ONE WHO WILL OTHERWISE REPEAT IT. `_firingRefusal` grew
-     from two parameters to four; THREE call sites were updated and THIS one was not, so it passed an
-     `undefined` destination and an `undefined` witness mark into a function whose FIRST statement is a
-     `CHECK` — fatal in dev AND release — requiring both. Every gate between the `fetch` above and this line
-     returns only from inside an `if`, so an ORDINARY SUCCESSFUL REPLY reached it: the app's own lazy chunk,
-     the one load this policy exists never to refuse, aborted the trusted zone with `@E CHECK failed: the
-     firing question was asked without the two fields that decide it`. Verified by executing that revision's
-     own file against a stubbed 200, not by reading it.
-     THE DEFECT SHAPE IS THE PART THAT OUTLIVES THE INCIDENT AND IT IS CLAUDE.md's OWN: a fix that widens a
-     contract falsifies every site stating the old one, so its code delta is not its size — and here the
-     widened contract was ASSERTED, which converted a silently-dropped argument into a fatal on the success
-     path rather than into a wrong answer. Two things follow. A signature widening greps for its own callers
-     in the same diff, by NAME and with no path, and counts them. And an assert added at a function's entry
-     is an assert added to every caller, including the ones the diff did not open.
-     IT IS NOT REACHABLE BY THAT ROUTE AGAIN: the facts arrive as ONE OBJECT, so a new signal is a new KEY
-     that a caller omits and `_firingRefusal`'s own `CHECK` names, rather than a new POSITION that shifts
-     every operand after it. That is the same argument `safeFetchFiringRefusal` carries for taking one.
-     THE URL IS THE LANDED ONE AND NOT THE REQUESTED ONE, which matters for more than the origin now: a 30x
-     onto a presigned or token-bearing address is exactly the case `url-authority` exists to see, and reading
-     the requested address here would answer that row about a URL the bytes did not come from. */
+  /* The firing decision again, on the landed URL, with the same limit: it refuses to ingest. A widening is a
+     statement about one host, and a reply from another host is about a server nobody permitted. The landed
+     URL is also what `url-authority` must read: a 3xx onto a presigned or token-bearing address is the case
+     that row exists for. Decline, so a person who widens the landed origin makes this load fire. The facts
+     travel as one object, so a new signal is a key a caller omits and a CHECK names, never a shifted
+     positional argument. */
   var _rptok = _firingRefusal({ url: _finalUrl, destination: destination, provenance: provenance,
                                 pinned: pinnedMark, docReach: docReach, actor: actor,
                                 credentialed: credentialed, headers: opts.headers });
   if (_rptok)
     return _refused("decline", "blocked-signal-redirect:" + _rptok,
                     _urlList(parsed.href, _finalHref, resp.redirected), {});
-  /* THE HEADERS, WITH NOTHING BETWEEN THEM AND THE TWO GATES THAT READ THEM. This walk stood
-     inside `catch (e) {}`, whose arm was an EMPTY header map — and an empty map is not an
-     absent input to the rules below, it is a wrong one: CORB then judges a body labelled with
-     nothing, and the credentialed CORS check reads an absent `Access-Control-Allow-Origin`.
-     Fetch §5.5 "Response class" — "The headers getter steps are to return this's headers" —
-     hands back the `Headers` of §5.1 "Headers class", whose iteration can throw only what the
-     callback throws, and this callback lowercases a string; so the arm was unreachable as well
-     as wrong. Unwrapped, a producer that ever stopped answering one aborts here instead of
-     handing a security decision a header map this zone invented. */
+  /* The headers, unwrapped. Fetch §5.5 "Response class"' headers getter returns this's headers, whose
+     iteration throws only what the callback throws; an invented empty map would have CORB judge an unlabelled
+     body and the SOP read an absent `Access-Control-Allow-Origin`. */
   var headers = {};
   resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; });
-  /* §2.2.5's BODY, READ AS THE BYTE SEQUENCE IT IS — after both SSRF checks (the
-     initial URL above, and the post-redirect final URL immediately above this), which
-     is where they were and where they must stay: nothing internal is ingested before
-     the target is judged. `_readBody` runs Fetch §5.3 "Body mixin"'s "consume
-     body" to completion over the response's own stream, with NO decode after it — §5.3
-     defines that algorithm and both methods over it, and §5.2 "BodyInit unions", which
-     stood here, is the EXTRACT that runs in the other direction — which is the whole
-     difference from the `text()` this used to be: what the engine receives is what the
-     server sent, and every standard that has an opinion about how those bytes become
-     characters gets to hold it.
-     WHY IT IS A LOOP AND NOT THE `await resp.arrayBuffer()` IT WAS — which answers the
-     identical byte sequence — is the head/body gate boundary argued at `_readBody`:
-     every gate above this line reads the request or the response HEAD, the one gate
-     below it reads the BODY, and this is where the two halves of a reply part. */
+  /* The body, as bytes, after both SSRF checks, so nothing internal is ingested before the target is judged.
+     There is no decode: the engine decodes with the response's charset and BOM (see the header), so it
+     receives exactly what the server sent. CORB, the one gate reading the body, and the credentialed SOP run
+     below (see `_readBody`). */
   var body = await _readBody(resp, opts.onChunk, _bodyGated(opts));
-  /* THE ONE SNIFF, AND THE ONE TYPE IT PRODUCES. Both readers below are handed THIS
-     pass: the CORB gate reads `protected` and the record reads `type`. That is what
-     "safeFetch is the only source of sniffing" means as a shape rather than as a
-     rule someone follows — there is no second call to make, on this path or on any
-     other, so a second answer cannot exist to disagree with the first.
-     ABSENCE IS READ AS A POSITIVE STATEMENT, never filled in: a response with no
-     `Content-Type` is MIME Sniffing §5.1 "Interpreting the resource metadata"'s
-     "the supplied MIME type is undefined", which is what `_computedType` reads a
-     missing header as, and is a different input from the empty string a `|| ""`
-     would manufacture. */
+  /* The one sniff and the one type: CORB reads `protected` and the record reads `type`, so no second answer
+     exists to disagree. A missing `Content-Type` is MIME Sniffing §5.1 "Interpreting the resource metadata"'s
+     "the supplied MIME type is undefined", and is passed as absent. */
   var _nosniff = _determineNosniff(headers["x-content-type-options"]);
   var _sn = _sniff(body);
   var _computed = _computedType(headers["content-type"], _nosniff, _sn);
-  /* THE TWO GATES BELOW READ `_finalHref` / `_finalOrigin` / `_resourceSameOrigin`, WHICH THE
-     BLOCK ABOVE THE FIRST POST-FETCH GATE COMPUTED — and that placement is the fix, not a
-     preference. They used to be derived HERE, below the two post-fetch gates, while those gates
-     each re-derived the same fact for themselves; the two gates below then read `parsed`, the
-     requested address, so a SAME-ORIGIN request that 302'd to another host was CORB-exempt
-     as "same-origin" and passed the credentialed SOP as same-origin, and the other host's
-     cookie-bearing reply was handed back readable. One question, one answer, computed once
-     — and computed ABOVE the first reader, so no gate can be reached before it exists.
-     THE COMPARISON MOVED UP WITH THE VALUES IT IS OVER, and that was the residue of the same
-     fix rather than a separate one: the addresses were computed once here while the SAME-ORIGIN
-     TEST over them was still asked twice — once by a CORB helper that re-parsed `_finalHref`,
-     once inline by the credentialed gate. Two derivations of one security question is the shape
-     the paragraph above is about, whatever it is a derivation OF. */
-  // CORB policy BY THE REQUEST'S DESTINATION (opts.destination, Fetch §2.2.5). A
-  // SCRIPT-LIKE destination is bytes that will RUN as code under QuickJS control, so
-  // the body must be JS-typed or same-origin; every other destination ("" for a
-  // `fetch()`, "image", "font", "style" …) is data and is exempt. Whether the result
-  // later REACHES QuickJS is the caller's documented contract, not enforced here
-  // (safeFetch returns bytes; the engine boundary is downstream).
-  //
-  // IT USED TO BE `opts.as === "script"` OVER A LOAD-TYPE KEYWORD THIS FILE INVENTED
-  // ("script"/"sourcemap"/other), AND THE KEYWORD WAS THE HOLE. A caller had to KNOW a
-  // load was code and say so, which meant the classification lived wherever a caller
-  // happened to compute it — for the extension, in a side list only the module loader
-  // filled, so a document's own `<script src>` arrived here with no `as` at all and a
-  // cross-origin HTML or JSON body served for it was returned to be compiled. The
-  // destination is a property of the request that the engine states at every park, so
-  // there is no longer a caller that can forget to classify: `opts.as` is GONE rather
-  // than accepted alongside, and the entry asserts on a caller still passing it,
-  // because silently ignoring the old key is exactly a code load fetched as data.
-  /* AND IT IS EVERY REPLY TO SUCH A REQUEST, WHICH `&& resp.ok` MADE UNTRUE. That conjunct stood here with no
-     reasoning beside it — the one decision in this file that carried none — and what it did was skip the gate
-     entirely whenever the server answered outside 200-299: identical cross-origin `text/html` at
-     `destination:"script"` is refused `blocked-corb:protected-type:text/html` at 200 and, at 404, was returned
-     whole with no CORB verdict at all. NOTHING IN THE RULE THIS GATE RELAYS ASKS ABOUT A STATUS. Fetch §2.10
-     "Should response to request be blocked due to its MIME type?" — the one rule in Fetch that refuses a body
-     to a SCRIPT-LIKE destination — reads the header list, the destination and the essence, and no status:
-     its whole text is "let mimeType be the result of extracting a MIME type from response's header list", the
-     failure arm, "let destination be request's destination", the script-like test with its `audio`/`image`/
-     `video`/`text/csv` arms, and "return allowed". So the conjunct was not a narrower reading of the browser's
-     answer; it was a second rule, and one no document states.
-     THE HARM IS NOT COMPILATION AND DOES NOT DEPEND ON IT. What CORB keeps out is a cross-origin data body
-     entering the process that runs the attacker's bundle, and SECURITY.md makes that process the renderer this
-     zone hands bytes to — so a 404 whose body is the site's authenticated error page was crossing that boundary
-     on the server's say-so. That the same bytes ALSO reached a compiler is the engine's own half, and it is
-     fixed where HTML §8.1.4.2 "Fetching scripts" puts it (`script_fetch_status_ok`, and the delivery in
-     solver/engine.c that now asks it) rather than here — the two halves are independent, and neither is the
-     other's guard.
-     REMOVING IT CANNOT WIDEN ANYTHING: this gate only ever REFUSES, so the conjunct's whole effect was to stop
-     it firing. What it can do is refuse a load it did not refuse before, and every such load is one §8.1.4.2
-     answers `onComplete` given null for anyway — so the page sees `error` at its element either way, which is
-     the outcome a browser gives it. */
+  /* CORB by the request's destination (Fetch §2.2.5). A script-like destination is bytes that will run as
+     code under QuickJS, so a cross-origin body must be JavaScript-typed; every other destination ("" for a
+     `fetch()`, "image", "font", "style" …) is data and exempt. Whether the bytes later reach QuickJS is the
+     caller's contract; this returns bytes.
+     The gate applies to every reply, whatever the status. Fetch §2.10 "Should response to request be blocked
+     due to its MIME type?" reads the header list, the destination and the essence, never a status, and an
+     authenticated error page is exactly the cross-origin data CORB keeps out of the renderer's process. The
+     engine's separate refusal of a non-ok script (HTML §8.1.4.2 "Fetching scripts", `script_fetch_status_ok`)
+     keeps a refused response from becoming a program; neither rule is the other's guard. */
   if (_isScriptLike(_destinationOf(opts))) {
-    // The DECLARED essence is what CORB's two tables are stated over — the rule is
-    // "was this labelled as data", and the sniff is the separate confirmation step
-    // for a body whose label lied.
+    // The declared essence is what CORB's tables are stated over; the sniff confirms a body whose label lied.
     var _declared = String(headers["content-type"] == null ? "" : headers["content-type"])
       .split(";")[0].trim().toLowerCase();
     var _deny = _corbDeniesScript(_declared, _nosniff, _sn, _resourceSameOrigin);
-    // The rule that decided rides the status message with what this file computed the
-    // resource to be, which is where every other refusal already puts its ground
-    // (`blocked-scheme:https:`).
-    /* NETWORK, because the browser refuses this load too — Chromium's CORB, and ORB after it, exist precisely
-       to stop a cross-origin data body reaching a code loader, and an ORB-blocked script load reaches the page
-       as Fetch §5.6's network error. This zone applies the rule only because a host-permission fetch bypasses
-       the browser's copy of it, so the grade is the browser's answer relayed rather than a policy of ours.
-       ONE ARM OF `_corbDeniesScript` DIVERGES AND IT IS NAMED RATHER THAN GLOSSED: `same-origin-protected`
-       refuses a page its OWN HTML as script text, which a browser would hand over — the load would then die
-       at COMPILE with a SyntaxError instead of on the wire with `onerror`. That is a browser-half fidelity
-       residual (the wrong failure event, not a fabricated one), and it is not a decline: no policy of ours
-       declined the act, and parking a flow on a load a browser completes would be the opposite error. */
+    /* The deciding rule rides the status message with the computed type, as every refusal names its ground.
+       Network: Chromium's CORB, and ORB after it, refuse this load too, and an ORB-blocked script load reaches
+       the page as Fetch §5.6's network error; this zone applies the rule only because a host-permission fetch
+       bypasses the browser's copy.
+       Named residual. Not covered: `same-origin-protected` refuses a page its own HTML or JSON as script
+       text, which a browser hands over and then fails at compile. Next diff: return same-origin bytes and let
+       the engine's compile fail them. Its absence shows as a same-origin script load ending in an `error`
+       event where Chrome reports a SyntaxError. */
     if (_deny)
       return _refused("network", "blocked-corb:" + _deny + ":" + _computed,
                       _urlList(parsed.href, _finalHref, resp.redirected), headers);
   }
-  // OWN SOP/CORS for a CREDENTIALED reply. The browser does NOT apply the same-origin
-  // policy to an extension fetch with host_permissions (it can read any origin), so
-  // when cookies are attached we MUST enforce SOP + CORS HERE on the bytes before
-  // returning them — else a malicious bundle could record a cross-origin endpoint and
-  // exfiltrate the user's authenticated data from any site they are signed into.
-  //   • SOP:  same-origin to the page principal (opts.pageUrl) is readable.
-  //   • CORS: a CROSS-origin credentialed read is allowed ONLY if the server granted
-  //           the page's EXACT origin a credentialed read — Access-Control-Allow-Origin
-  //           == that origin (never "*") AND Access-Control-Allow-Credentials == true.
-  // This is precisely the browser's credentialed-CORS rule, re-implemented because the
-  // host-permission fetch bypasses it. Blocked reads return no body (the request was a
-  // GET, so nothing was mutated; we simply refuse to hand the bundle the bytes).
+  /* Own SOP/CORS for a credentialed reply. The browser does not apply the same-origin policy to an extension
+     fetch with host permissions, so when cookies are attached this zone enforces it on the bytes before
+     returning them; otherwise a bundle could record a cross-origin endpoint and read the person's
+     authenticated data from any site they are signed into.
+       SOP:  a resource same-origin with the page principal (`opts.pageOrigin`) is readable.
+       CORS: a cross-origin credentialed read needs `Access-Control-Allow-Origin` equal to that exact origin
+             (never `*`) and `Access-Control-Allow-Credentials: true`.
+     A refused read returns no body; the request was a GET, so what is refused is the bytes. */
   if (credentialed) {
-    // SAME-ORIGIN principal = the BROWSER-provided origin (opts.pageOrigin, from
-    // MessageSender.origin), authoritative and NEVER re-derived from a URL string:
-    // a sandboxed frame reports a normal URL but an OPAQUE "null" origin, so
-    // parsing the URL would wrongly grant it same-origin access to the embedder's
-    // credentialed data. An opaque origin ("null" / "null:<uuid>" / empty — incl. a
-    // mixed-origin buffer's minted token) is UNIQUE per the spec → never same-origin
-    // with ANYTHING → a credentialed cross-origin read that needs CORS, which an
-    // opaque origin can never be granted (ACAO can't equal it). No pageOrigin ->
-    // "" -> fail closed.
-    // BOTH `_pageOrigin` AND THE SAME-ORIGIN ANSWER ARE READ, NOT RECOMPUTED. They are
-    // the ones the block above `_finalHref` computed, over `_finalOrigin` and not
-    // `parsed.origin`; this gate asking the question a second time for itself is what
-    // let it and CORB disagree about one origin, and is what that block ended.
+    /* `_pageOrigin` and `_resourceSameOrigin` are read, not recomputed: they are over `_finalOrigin`, so a
+       same-origin request that redirected cross-origin is cross-origin here and at CORB alike. An opaque or
+       absent principal is same-origin with nothing and can never match ACAO, so it fails closed. */
     if (!_resourceSameOrigin) {
       var _acao = headers["access-control-allow-origin"] || "";
       var _acac = (headers["access-control-allow-credentials"] || "").toLowerCase();
       // Fetch §4.10 "CORS check": ACAO must byte-match the request's own origin (`*` is
       // refused once credentials mode is "include") and ACAC must be `true`.
       if (!_isRealOrigin(_pageOrigin) || _acao !== _pageOrigin || _acac !== "true")
-        /* AND THE REFUSAL NAMES THE ORIGIN THAT FAILED THE CHECK, because after the fix
-           above this is the arm a same-origin credentialed load that LANDED somewhere
-           else comes out of, and "blocked" with no ground sends its reader hunting
-           which of three rules fired. Every other refusal in this file already names
-           one (`blocked-scheme:https:`, `blocked-corb:<rule>:<type>`,
-           `blocked-destructive:<token>`); this was the last that did not.
-           AND THE `|| "unparseable"` THAT STOOD HERE IS GONE WITH THE STATE IT NAMED. It was
-           written when `_finalOrigin` came out of a `catch (e) {}` that could leave it empty;
-           an address this zone cannot parse is now its own refusal above
-           (`blocked-final-url-unparseable`) and never reaches this line, so the default's arm
-           is unreachable and keeping it would be a second name for a state that no longer
-           exists — the one thing a reader of a refusal message must not be handed. */
-        /* NETWORK, and this one is the browser's own rule almost verbatim: Fetch §4.10 "CORS check" failing
-           makes §4.4 "HTTP fetch" "return a network error", which §5.6 turns into the page's TypeError. This
-           zone runs the check only because a host-permission fetch bypasses the browser's, so the flow's
-           failure path is exactly where a real browser would put it.
-           THE HEADERS ARE `{}` HERE AND `headers` AT CORB, WHICH IS DELIBERATE. CORB refuses a body whose own
-           label is the evidence; this refuses a CROSS-ORIGIN credentialed read the server never granted, and
-           handing its response headers back is handing over part of the very thing the check refused. */
+        /* Network: Fetch §4.10 "CORS check" failing makes §4.4 "HTTP fetch" "return a network error". The
+           reason names the landed origin that failed. Headers are `{}` here, unlike CORB's refusal: this
+           refuses a cross-origin read the server never granted, and its headers are part of that read. */
         return _refused("network", "blocked-cors-credentialed:" + _finalOrigin,
                         _urlList(parsed.href, _finalHref, resp.redirected), {});
     }
   }
-  /* AND THE TYPE THIS ZONE COMPUTED TRAVELS WITH THE BYTES. `computedType` is the
-     whole of what "safe-fetch tells the renderer the guessed content type" means:
-     the renderer is handed an answer rather than the evidence, exactly as it is
-     handed a browser-stated origin on a delivered message rather than a URL to parse.
-     engine/host/solver/reply_decode.c reads this field and DCHECKs its presence — an
-     absent stamp is a producer that failed, never a type called "unknown". */
-  /* AND `refusal: null` IS A POSITIVE STATEMENT, WHICH IS WHY IT IS WRITTEN AND NOT LEFT OFF. It says THIS
-     REQUEST REACHED THE WIRE AND THE REPLY BELOW IS WHAT CAME BACK — including an HTTP error status, which is
-     a server's answer and never a refusal of ours. A record that simply omitted the field would make "the
-     chokepoint permitted this" and "the chokepoint stopped grading" the same absence, and the second of those
-     is a decline arriving at a host as a reply.
-     THE TWO SIGNALS ARE BOUND SO THEY CANNOT DRIFT. `status: 0` is the one status no HTTP response has and it
-     is what every refusal answers; a graded refusal is the same fact stated in a vocabulary. Asserting the
-     equivalence here is what stops a future arm from carrying one without the other — a refusal with a real
-     status would be ingested as a reply, and a status-0 reply would be a network error nothing declined.
-     `mode` is unset on the request below, so Fetch's default `cors` applies and there is no opaque filtered
-     response to answer 0 legitimately. */
+  /* The type this zone computed travels with the bytes, so the renderer is handed an answer rather than
+     evidence (`core/fetch/fetch.c` asserts its presence on the reply record). `refusal: null` is the positive
+     statement that the request reached the wire and this is the reply, including an HTTP error status.
+     Status 0 is what every refusal answers and no HTTP response has; `mode` is unset, so Fetch's default
+     `cors` applies and no opaque filtered response can answer 0, which is what the DCHECK below binds. */
   DCHECK(resp.status !== 0,
          "the wire answered with status 0, which is the one status no HTTP response has and which every " +
          "refusal in this file answers with — `mode` is unset so Fetch's default `cors` applies and an " +
@@ -3600,48 +3135,20 @@ async function safeFetch(url, opts) {
            urlList: _urlList(parsed.href, _finalHref, resp.redirected), computedType: _computed,
            refusal: null };
 }
-/* THE CHOKEPOINT AND THE POLICY THAT DECIDES WHETHER IT FIRES, INSTALLED TOGETHER — because they are one
-   thing and a host that could obtain one without the other would be a host holding half the contract. Both
-   hosts reach them the same way: `engine/trusted.mjs` runs this file in a vm context and reads them off it,
-   `ast-worker.html` loads it into the offscreen document before bridge.js.
-   `safeFetchPermit` IS THE POLICY'S ONE INPUT and it takes a person's answer to ONE ROW — one signal, one
-   value, one origin, allowed or not — because the control is per-signal and a batch would make the table a
-   person reads back a summary of their act rather than the policy now in force. `safeFetchWiden` is the
-   coarse form of the same sentence, "all of it here", which is what a command line means and what the
-   popup's one click means; `safeFetchUnwiden` is the person taking a whole origin back, because a permission
-   with no withdrawal is not a preference. `safeFetchEgressStated` is the host restoring what an earlier
-   session granted, once, before anything may ask — the two fields above are why it exists — and it ANSWERS
-   which stored entries it could not carry forward, so a permission that stopped existing is said out loud
-   rather than left to be noticed. `safeFetchEgressStating` is the half of that a host with an ASYNCHRONOUS
-   store needs: the restore is a read, the read has a window, and a request arriving inside it may neither be
-   refused from an empty table nor answered by stating one — so the host hands over the READ and `safeFetch`
-   awaits it. That pair is what moves the guarantee from a DOOR (a list somebody maintains, and a list this
-   zone has already been wrong about) to the CHOKEPOINT, which is every asker by construction.
-   `safeFetchEgressTable` is that answer's other half: what a host persists,
-   in exactly the shape the restore takes, so the round trip is a contract rather than two writers.
-   `safeFetchWidenable` and `safeFetchSignalUsable` are the SAME tests `safeFetchPermit` aborts on, exported
-   so a surface with a person in front of it can REFUSE WITH THE REASON instead of aborting the zone over a
-   sandboxed document or a row this build no longer declares. `safeFetchFiringRefusal` is the same answer for
-   a caller whose act is not a fetch; `safeFetchSignals`, `safeFetchPermitted`, `safeFetchSignalVector` and
-   `safeFetchDefaultArms` are what a surface RENDERS — the registry, one origin's permissions row by row,
-   what a given request's facts compute to, and what fires without anybody saying so — and
-   `safeFetchWidenedOrigins` is what a caller asserting an absence reads. None of them is a second policy:
-   every one resolves to `_firingRefusal`, to `_signalVector`, or to a predicate one of those compares
-   against, which is the only thing in this project that answers the firing question. A surface that computed
-   any of them for itself would be the second copy this whole parameter exists to end.
-   `safeFetchMethodRefusal` IS THE OTHER HALF OF THE SAME QUESTION and is installed beside them for the same
-   reason: the method decides whether an act may be spent (RFC 9110 §9.2.1 "Safe Methods") and this file
-   answers it by ABSENCE, so a host that cannot see the answer writes its own — which both of them did, with
-   two different grades. It answers in the SAME refusal vocabulary the reply record's `refusal` field carries,
-   so a host has ONE shape to read whether the refusal came before the fetch or out of it.
-   THERE IS DELIBERATELY NO `safeFetchDestructiveRefusal` HERE, AND ITS ABSENCE IS A DECISION RATHER THAN
-   AN OVERSIGHT. One was exported and read by `lib/schema.js`'s page-context relay, and both halves were
-   removed: the deny list is a floor under requests THIS FILE COMPOSES AND FIRES ON ITS OWN, and the relay
-   carries requests an OPERATOR composed at a surface that showed them the bytes. A token list may refuse
-   this file's own autonomy cheaply — a wrong deny costs one unfired request the report still carries in
-   full — and may never overrule a human's explicit act, where the same wrong deny is the tool vetoing its
-   operator on a substring they never saw. So the list stays scoped INSIDE `safeFetch`, and a reader who
-   finds the other transport ungated has found the thing that was taken out on purpose. */
+/* The chokepoint and the policy that decides whether it fires, installed together so no host holds half the
+   contract. `engine/trusted.mjs` runs this file in a vm context and reads them off it; `ast-worker.html`
+   loads it into the offscreen document before `bridge.js`.
+   Writers: `safeFetchPermit` (one signal, one value, one origin), `safeFetchWiden` and `safeFetchUnwiden` (a
+   whole origin), `safeFetchEgressStated` (the host's one restore, answering the entries it dropped) and
+   `safeFetchEgressStating` (the restore's read, which every request awaits). `safeFetchEgressTable` is what a
+   host persists, in the shape the restore takes. For a surface: `safeFetchWidenable` and
+   `safeFetchSignalUsable` (the tests `safeFetchPermit` aborts on, so a surface can refuse with the reason),
+   `safeFetchSignals`, `safeFetchPermitted`, `safeFetchSignalVector`, `safeFetchDefaultArms` and
+   `safeFetchWidenedOrigins`. `safeFetchFiringRefusal` and `safeFetchMethodRefusal` answer for an act that is
+   not a fetch, in the reply record's refusal vocabulary. Every one resolves to `_firingRefusal`,
+   `_signalVector` or a predicate they compare against, so none is a second policy.
+   There is no exported destructive-path check: the deny list is a floor under requests this file composes
+   and fires on its own, and never overrules an operator's explicit act through the page-context relay. */
 if (typeof self !== "undefined") {
   self.safeFetch = safeFetch;
   self.safeFetchMethodRefusal = safeFetchMethodRefusal;
@@ -3659,9 +3166,6 @@ if (typeof self !== "undefined") {
   self.safeFetchDefaultArms = safeFetchDefaultArms;
   self.safeFetchFiringRefusal = safeFetchFiringRefusal;
   self.safeFetchWidenedOrigins = safeFetchWidenedOrigins;
-  /* THE GRADE ALGEBRA, EXPORTED BECAUSE BOTH HOSTS COMPOSE A CHILD DOCUMENT'S REACH AND ONE ANSWER IS THE
-     POINT — see `safeFetchReachJoin`. It is not a network policy and does not belong to the chokepoint by
-     that argument; it is the ORDERING of the vocabulary this file declares, and a host that wrote its own
-     would be the second copy of a rule nothing checks. */
+  /* The reach-grade ordering, exported so both hosts compose a child document's reach with one answer. */
   self.safeFetchReachJoin = safeFetchReachJoin;
 }
