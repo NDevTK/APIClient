@@ -71,8 +71,9 @@ enum { METRIC_UNDECIDED = 0, METRIC_DECIDED_SET, METRIC_DECIDED_ABSENT };
 
 /* The agent's block. `value` holds integer rows, `real` real rows and `object` the borrowed text of object
    rows; `composed` and `composed_real` are each row as its family's last composition read it, which is what a
-   lifetime or maximum row is checked against; `decided` is a sampled row's decision for the next composition;
-   `live` is set between init and release. All zero is the pre-agent state. */
+   lifetime or maximum row is checked against once `seen` marks it composed in this agent (a sampled row's
+   first reading is its baseline, which may be below zero, as `deepest`'s -1 is before any program starts);
+   `decided` is a sampled row's decision for the next composition; `live` is set between init and release. All zero is the pre-agent state. */
 typedef struct {
     long long     value[METRIC_ROW_N];
     double        real[METRIC_ROW_N];
@@ -80,6 +81,7 @@ typedef struct {
     long long     composed[METRIC_ROW_N];
     double        composed_real[METRIC_ROW_N];
     unsigned char decided[METRIC_ROW_N];
+    unsigned char seen[METRIC_ROW_N];
     int           live;
 } MetricsAgent;
 static MetricsAgent g_agent;
@@ -312,18 +314,19 @@ static void compose_check(MetricFamily family)
         if (ROWS[i].family != family || !row_present(i)) continue;
         monotone = ROWS[i].kind == METRIC_LIFETIME || ROWS[i].kind == METRIC_MAXIMUM;
         if (ROWS[i].repr == METRIC_REPR_INT) {
-            DCHECKF(!monotone || g_agent.value[i] >= g_agent.composed[i],
+            DCHECKF(!monotone || !g_agent.seen[i] || g_agent.value[i] >= g_agent.composed[i],
                     "the %s row `%s` fell from %lld to %lld between two compositions of one agent — a %s row "
                     "is only raised, and only its scope's end lowers it", FAMILIES[family].name, ROWS[i].key,
                     g_agent.composed[i], g_agent.value[i], kind_name(ROWS[i].kind));
             g_agent.composed[i] = g_agent.value[i];
         } else if (ROWS[i].repr != METRIC_REPR_OBJECT) {
-            DCHECKF(!monotone || g_agent.real[i] >= g_agent.composed_real[i],
+            DCHECKF(!monotone || !g_agent.seen[i] || g_agent.real[i] >= g_agent.composed_real[i],
                     "the %s row `%s` fell from %f to %f between two compositions of one agent — a %s row is "
                     "only raised, and only its scope's end lowers it", FAMILIES[family].name, ROWS[i].key,
                     g_agent.composed_real[i], g_agent.real[i], kind_name(ROWS[i].kind));
             g_agent.composed_real[i] = g_agent.real[i];
         }
+        g_agent.seen[i] = 1;
     }
 }
 
