@@ -147,7 +147,9 @@ bool css_computed_transform_list(lxb_dom_element_t *el, CssTransformList *out);
    one), against the realm the ELEMENT'S OWN DOCUMENT is the active document of — never the running realm, since
    an iframe's initial containing block is 300 CSS pixels wide and its parent's is 1280. The absolute arm is a
    `CssPx` and carries the environment fact it derives from; the percentage and keyword arms carry the number
-   and the text, as specified. Nothing is owned: the keyword rides the struct. */
+   and the text, as specified. Nothing is owned: the keyword rides the struct. The answer is the element's
+   computed style record's (core/css/css_computed_style.h), as `css_computed_line_height`'s and
+   `css_computed_border_spacing`'s are. */
 CssLength css_computed_length(lxb_dom_element_t *el, const char *name);
 
 /* IS THAT COMPUTED LENGTH THE KEYWORD `keyword` — the question CSS 2.1 §10 "Visual formatting model details"'s

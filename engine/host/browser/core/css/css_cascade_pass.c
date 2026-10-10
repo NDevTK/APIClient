@@ -11,6 +11,7 @@
 #include "check.h"
 #include "core/css/css_author_sheets.h"
 #include "core/css/css_cascade_pass.h"
+#include "core/css/css_computed_style.h"
 #include "core/css/css_match_result.h"
 #include "core/layout/layout_job.h"   /* the record of the job whose activation holds the thread */
 
@@ -118,6 +119,12 @@ void css_cascade_record_release(CssCascadeRecord *r)
     r->match = NULL;
     r->match_cap = 0;
     r->match_used = 0;
+    for (i = 0; i < r->style_cap; i++)
+        if (r->style[i] != NULL) css_computed_style_free(r->style[i]);
+    free(r->style);
+    r->style = NULL;
+    r->style_cap = 0;
+    r->style_used = 0;
     for (i = 0; i < r->author_n; i++) css_author_sheets_free(r->author[i]);
     free(r->author);
     r->author = NULL;
@@ -163,17 +170,23 @@ bool css_cascade_pass_author_hold(struct CssAuthorSheets *sheets)
     return true;
 }
 
-/* An element's slot in the match table: its address, whose low bits are all alignment, through splitmix64's
-   finalizer. Answers the slot holding `el`'s result or the first empty one, for the read and the write alike. */
-static size_t cp_match_probe(struct CssMatchResult **tab, size_t cap, const lxb_dom_element_t *el)
+/* An element's home slot in a per-element table: its address, whose low bits are all alignment, through
+   splitmix64's finalizer. */
+static size_t cp_element_slot(const lxb_dom_element_t *el, size_t cap)
 {
     uint64_t h = (uint64_t)(uintptr_t)el;
-    size_t i;
 
     h ^= h >> 30; h *= 0xbf58476d1ce4e5b9ULL;
     h ^= h >> 27; h *= 0x94d049bb133111ebULL;
     h ^= h >> 31;
-    i = (size_t)h & (cap - 1);
+    return (size_t)h & (cap - 1);
+}
+
+/* The slot holding `el`'s match result or the first empty one, for the read and the write alike. */
+static size_t cp_match_probe(struct CssMatchResult **tab, size_t cap, const lxb_dom_element_t *el)
+{
+    size_t i = cp_element_slot(el, cap);
+
     while (tab[i] != NULL && css_match_result_element(tab[i]) != el) i = (i + 1) & (cap - 1);
     return i;
 }
@@ -239,6 +252,45 @@ bool css_cascade_pass_match_hold(struct CssMatchResult *m)
     r->match[i] = m;
     r->match_used++;
     return true;
+}
+
+/* The same for the computed style table. */
+static size_t cp_style_probe(struct CssComputedStyle **tab, size_t cap, const lxb_dom_element_t *el)
+{
+    size_t i = cp_element_slot(el, cap);
+
+    while (tab[i] != NULL && css_computed_style_element(tab[i]) != el) i = (i + 1) & (cap - 1);
+    return i;
+}
+
+static void cp_style_grow(CssCascadeRecord *r)
+{
+    size_t cap = r->style_cap ? r->style_cap * 2 : CP_CAP0, i;
+    struct CssComputedStyle **tab = calloc(cap, sizeof *tab);
+
+    CHECK(tab != NULL, "css-cascade-pass-oom: the record's computed style table could not be grown");
+    for (i = 0; i < r->style_cap; i++)
+        if (r->style[i] != NULL)
+            tab[cp_style_probe(tab, cap, css_computed_style_element(r->style[i]))] = r->style[i];
+    free(r->style);
+    r->style = tab;
+    r->style_cap = cap;
+}
+
+struct CssComputedStyle *css_cascade_pass_style(lxb_dom_element_t *el)
+{
+    CssCascadeRecord *r = layout_job_cascade();
+    size_t i;
+
+    DCHECK(el != NULL, "a computed style record was asked of the cascade record for no element");
+    if (r == NULL) return NULL;
+    if (r->style_used * 2 >= r->style_cap) cp_style_grow(r);
+    i = cp_style_probe(r->style, r->style_cap, el);
+    if (r->style[i] == NULL) {
+        r->style[i] = css_computed_style_create(el);
+        r->style_used++;
+    }
+    return r->style[i];
 }
 
 bool css_cascade_record_is_held(void) { return layout_job_cascade() != NULL; }

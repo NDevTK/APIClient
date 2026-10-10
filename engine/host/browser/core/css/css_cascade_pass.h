@@ -22,11 +22,10 @@
  * shared probe is what keeps a slot answering only its own pair. */
 
 /* The computed value (css_computed_value's text answer) is held beside the cascaded one under the same key,
- * which ends css-cascade-5 §7.2 "Inheritance"'s climb at the first answered ancestor. The length-, line-height-
- * and border-spacing-shaped entries of core/css/css_computed_value.h are not held: each answers a `CssPx`
- * carrying an environment fact a string cannot. NAMED RESIDUAL, those entries. Not covered: their climbs still
- * run per ask. Next: a `CssPx`-valued fact under the same key. How its absence shows: css_computed_length
- * counts per descendant that grow with the document's depth.
+ * which ends css-cascade-5 §7.2 "Inheritance"'s climb at the first answered ancestor. Beside the string entries
+ * the record holds each element's typed computed values (core/css/css_computed_style.h), which every length-,
+ * line-height- and border-spacing-shaped ask reads; its asks open the synchronous job's record when none is
+ * held, so they are driven whoever asks.
  * NAMED RESIDUAL, undriven asks. Not covered: outside a driven job the record is held only while the
  * synchronous job has a drive open, so most asks of a layout entry that drives no job resolve the cascade.
  * Next: those entries driving a job (layout_job.h's synchronous-job residual). How its absence shows:
@@ -46,6 +45,7 @@
 struct CpEntry;
 struct CssAuthorSheets;
 struct CssMatchResult;
+struct CssComputedStyle;
 typedef struct {
     struct CpEntry          *tab;
     size_t                   cap, used;
@@ -53,6 +53,8 @@ typedef struct {
     size_t                   author_n, author_cap;
     struct CssMatchResult  **match;       /* power-of-two table keyed by element, NULL slot empty; owned */
     size_t                   match_cap, match_used;
+    struct CssComputedStyle **style;      /* power-of-two table keyed by element, NULL slot empty; owned */
+    size_t                   style_cap, style_used;
 } CssCascadeRecord;
 void css_cascade_record_release(CssCascadeRecord *r);
 
@@ -89,6 +91,10 @@ bool css_cascade_pass_author_hold(struct CssAuthorSheets *sheets);
 bool css_cascade_pass_match_ask(lxb_dom_element_t *el, const struct CssAuthorSheets *sheets,
                                 struct CssMatchResult **out);
 bool css_cascade_pass_match_hold(struct CssMatchResult *m);
+
+/* The held computed style record of `el` (core/css/css_computed_style.h), created empty at its first ask and
+   borrowed until the record is released; NULL when no record is held. */
+struct CssComputedStyle *css_cascade_pass_style(lxb_dom_element_t *el);
 
 /* The census, in solver/result.c's vocabulary. Every field is a lifetime counter of this agent and says so
    in its name. `asks_life` counts cascaded values asked for, `served_life` those the record answered and

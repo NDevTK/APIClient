@@ -10,6 +10,7 @@
 #include "check.h"
 #include "core/css/css_cascade_pass.h"   /* the layout job's record of computed values */
 #include "core/css/css_color.h"
+#include "core/css/css_computed_style.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_image.h"
@@ -17,6 +18,7 @@
 #include "core/css/css_logical.h"
 #include "core/css/css_pending_substitution.h"
 #include "core/css/css_property_applies.h"
+#include "core/css/css_property_id.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_transform_function.h"
@@ -1111,9 +1113,8 @@ static CssLength css_border_width_inherited(lxb_dom_element_t *el, int side, Css
     return inherited;
 }
 
-static CssLength computed_border_width(lxb_dom_element_t *el, const char *name, char *spec)
+static CssLength computed_border_width(lxb_dom_element_t *el, const char *name, int side, char *spec)
 {
-    int side = css_border_side_of(name, "width");
     CssLength len;
     unsigned i;
 
@@ -1139,34 +1140,6 @@ static CssLength computed_border_width(lxb_dom_element_t *el, const char *name, 
            "admitted it rather than absolutized here");
     len.px = css_length_snap_line_width(css_cv_realm(el), len.px);
     return len;
-}
-
-/* The ten physical box-model lengths, the four sizing limits and the four INSETS — one list, because every
-   one of them takes the same computed-value rule above: CSS 2.1 §9.3.2 "Box offsets: `top`, `right`,
-   `bottom`, `left`" gives all four of the last group `Computed value: for `length` the absolute value;
-   otherwise for `percentage` the percentage as specified; otherwise `auto``, which is that rule word for word.
-   THE SECOND REASON THE COMMENT HERE USED TO GIVE IS ABOUT THE LIMITS ALONE and is kept because it is the one
-   that decides membership for THEM: core/layout/used_value.c reads `min-*`/`max-*` to run CSS 2.1 §10.4's and
-   §10.7's clamp. The insets are not read by that clamp and are not box-model lengths either; what puts them
-   here is only the shared `Computed value:` line, and a reader who takes the clamp as the criterion would
-   leave them out — which is what `css_computed_length` aborting for `left` was.
-   THEY DO NOT BECOME A `used_value_px` GROUP BY BEING HERE, and the two questions must not be conflated:
-   §9.3.2's computed value is a cascade fact, while an inset's USED value is CSS 2.1 §9.4.3's pair for a
-   relatively positioned box and §10.3.7's / §10.6.4's constraint equation for an absolutely positioned one —
-   neither of which is a per-property read. `used_value_abs_offset_px` is the entry for the second. */
-static bool css_models_length(const char *name)
-{
-    static const char *const LENGTHS[] = {
-        "margin-top", "margin-right", "margin-bottom", "margin-left",
-        "padding-top", "padding-right", "padding-bottom", "padding-left",
-        "width", "height", "min-width", "max-width", "min-height", "max-height",
-        "top", "right", "bottom", "left",
-    };
-    unsigned i;
-
-    for (i = 0; i < sizeof(LENGTHS) / sizeof(LENGTHS[0]); i++)
-        if (strcmp(LENGTHS[i], name) == 0) return true;
-    return false;
 }
 
 /* ---- css-fonts-4 §2.5 "Font size: the font-size property" ------------------------------------------------- */
@@ -1330,46 +1303,12 @@ static char *computed_text_align(lxb_dom_element_t *el, const char *name, char *
 
 /* ---- the computed value ----------------------------------------------------------------------------------- */
 
+/* Which properties are length-shaped, and why each is, is core/css/css_property_id.h's table. */
 bool css_computed_models_length(const char *name)
 {
-    DCHECK(name != NULL, "the computed-value model question was asked about a NULL property name");
-    /* `font-size` IS length-valued and is deliberately NOT in the list above: css-fonts-4 §2.5's computed
-       value is `an absolute length` with no percentage arm and no keyword arm, which is a DIFFERENT rule from
-       the one every member of that list shares, and folding it in would hand it to `computed_length` whole.
-       `baseline-shift` IS in the same shape as that list and is deliberately not IN it either, for the
-       opposite reason: css-inline-3 §4.2.3 "Post-Alignment Shift: the baseline-shift longhand" gives it
-       "the specified keyword or a computed <length-percentage> value", which IS `computed_length`'s rule
-       whole — a keyword arm, a percentage carried as specified, an absolute length absolutized — so it needs
-       no rule of its own and takes the generic one. What it does not share is that list's SECOND sentence:
-       it is not one of the ten physical box-model lengths nor one of the four sizing limits, so
-       core/layout/used_value.c does not read it for §10.4's clamp, and putting it there would make a true
-       sentence about the group false of a member.
-       ITS PERCENTAGE MUST SURVIVE TO THE COMPUTED VALUE, which is where §4.2.3 and CSS 2.2 §10.8 "Line height
-       calculations: the 'line-height' and 'vertical-align' properties" disagree and where the generic rule is
-       the RIGHT one rather than merely the convenient one. §10.8 gives `vertical-align` a `Computed value:` of
-       "for <percentage> and <length> the absolute length" over percentages that "refer to the 'line-height' of
-       the element itself"; §4.2.3's percentages "refer to the USED VALUE of line-height", and a used value is
-       not one any cascade step holds — it is what CSS 2 §10.8's own line-box calculation produces. Resolving
-       one here would be this engine answering with a number no step of it has computed. */
-    /* `flex-basis` IS THE THIRD PROPERTY IN THAT POSITION and is here for `baseline-shift`'s exact reason.
-       css-flexbox-1 §7.2.3 "The flex-basis property" gives it a `Computed value:` line of "specified keyword
-       or a computed <length-percentage> value" — the same three arms `computed_length` already runs, word for
-       word — so it needs no rule of its own; and it is NOT in the list above because that list's second
-       sentence is about the ten physical box-model lengths and the four sizing limits, which
-       core/layout/used_value.c reads for CSS 2.1 §10.4's clamp. A flex basis is not one of those: §9.9.3 "Flex
-       Item Intrinsic Size Contributions" clamps a contribution "by the item's min/max MAIN size", which is a
-       different pair of properties from this one, so putting `flex-basis` in the group would make a true
-       sentence about the group false of a member.
-       ITS KEYWORD ARM IS WIDER THAN `width`'s BY EXACTLY ONE, which is why the grammar lives in
-       core/css/css_shorthand.c beside the shorthand that writes it rather than being read off `width`: §7.2.3's
-       `Value:` line is `content | <'width'>`, and css-sizing-3 §3.2 "Sizing Values: the
-       <length-percentage [0,∞]>, auto | none, stretch, min-content, max-content, and fit-content values" adds
-       the rest by reference — "The flex-basis property hereby also gains these new keywords, as its values are
-       defined by reference to <'width'>". Every one of those is a keyword `computed_length` carries unchanged, which is what makes
-       this one entry enough for all of them. */
-    return css_models_length(name) || css_border_side_of(name, "width") >= 0 ||
-           strcmp(name, "font-size") == 0 || strcmp(name, "baseline-shift") == 0 ||
-           strcmp(name, "flex-basis") == 0;
+    CssPropertyId id = css_property_id_of(name);
+
+    return id != CSS_PROPERTY_INVALID && css_property_shape(id) == CSS_COMPUTED_SHAPE_LENGTH;
 }
 
 bool css_computed_models(const char *name)
@@ -1572,25 +1511,25 @@ static void css_cv_modelled(lxb_dom_element_t *el, const char *name)
             name);
 }
 
-CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
+/* The `border-*-width` row's side in CSS_BORDER_SIDES' order, or -1 for any other row. */
+static int cv_border_width_side(CssPropertyId id)
 {
-    int side;
+    _Static_assert(CSS_PROPERTY_BORDER_RIGHT_WIDTH == CSS_PROPERTY_BORDER_TOP_WIDTH + 1 &&
+                       CSS_PROPERTY_BORDER_BOTTOM_WIDTH == CSS_PROPERTY_BORDER_TOP_WIDTH + 2 &&
+                       CSS_PROPERTY_BORDER_LEFT_WIDTH == CSS_PROPERTY_BORDER_TOP_WIDTH + 3,
+                   "core/css/css_property_id.h lists the border widths in CSS_BORDER_SIDES' order");
+    if (id < CSS_PROPERTY_BORDER_TOP_WIDTH || id > CSS_PROPERTY_BORDER_LEFT_WIDTH) return -1;
+    return (int)(id - CSS_PROPERTY_BORDER_TOP_WIDTH);
+}
+
+/* The derivation of one length-shaped computed value, made on its first ask in a hold. */
+static CssLength cv_length(lxb_dom_element_t *el, CssPropertyId id)
+{
+    const char *name = css_property_name(id);
+    int side = cv_border_width_side(id);
     char *cascaded;
 
-    DCHECKF(css_computed_models_length(name),
-           "`%s`: css_computed_length was asked for a property whose `Computed value:` line is not a LENGTH. "
-           "For a KEYWORD one — `display`, `float`, `position`, `box-sizing`, `direction`, `writing-mode`, "
-           "`alignment-baseline`, `baseline-source`, `caption-side`, `table-layout`, `border-collapse`, an "
-           "overflow axis or a `border-*-style` — there is nothing to absolutize and nothing for a `CssPx` to "
-           "carry, so `css_computed_value` is the entry and asking this one would report a keyword as the "
-           "number zero. For `line-height` the line is a UNION of three shapes (css-inline-3 §5.1), which "
-           "neither of those entries can carry; `css_computed_line_height` is its own. For `border-spacing` it "
-           "is TWO absolute lengths (CSS 2.1 §17.6.1 \"The separated borders model\"), and this entry answers "
-           "ONE `CssLength` with nowhere to put the second, so it would report the horizontal spacing as the "
-           "whole of the property; `css_computed_border_spacing` answers the pair",
-           name);
     css_cv_modelled(el, name);
-    side = css_border_side_of(name, "width");
     cascaded = css_cv_cascaded(el, name);
     switch (css_defaulting_of(name, cascaded)) {
     case CSS_DEFAULTING_DECLARED:
@@ -1627,9 +1566,36 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
            "§7.1 produced no INITIAL value for a length-valued property this component models — every one of "
            "them is in lexbor's registry with an initial value, or in css_style_declaration.c's table of the "
            "eight border longhands the registry does not carry");
-    if (side >= 0) return computed_border_width(el, name, cascaded);
-    if (strcmp(name, "font-size") == 0) return computed_font_size(el, cascaded);
+    if (side >= 0) return computed_border_width(el, name, side, cascaded);
+    if (id == CSS_PROPERTY_FONT_SIZE) return computed_font_size(el, cascaded);
     return computed_length(el, name, cascaded);
+}
+
+CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
+{
+    CssPropertyId id = css_property_id_of(name);
+    CssComputedStyleHold hold;
+    CssComputedValue v;
+
+    DCHECKF(id != CSS_PROPERTY_INVALID && css_property_shape(id) == CSS_COMPUTED_SHAPE_LENGTH,
+           "`%s`: css_computed_length was asked for a property whose `Computed value:` line is not a LENGTH. "
+           "For a KEYWORD one — `display`, `float`, `position`, `box-sizing`, `direction`, `writing-mode`, "
+           "`alignment-baseline`, `baseline-source`, `caption-side`, `table-layout`, `border-collapse`, an "
+           "overflow axis or a `border-*-style` — there is nothing to absolutize and nothing for a `CssPx` to "
+           "carry, so `css_computed_value` is the entry and asking this one would report a keyword as the "
+           "number zero. For `line-height` the line is a UNION of three shapes (css-inline-3 §5.1), which "
+           "neither of those entries can carry; `css_computed_line_height` is its own. For `border-spacing` it "
+           "is TWO absolute lengths (CSS 2.1 §17.6.1 \"The separated borders model\"), and this entry answers "
+           "ONE `CssLength` with nowhere to put the second, so it would report the horizontal spacing as the "
+           "whole of the property; `css_computed_border_spacing` answers the pair",
+           name);
+    css_computed_style_hold_begin(&hold);
+    if (!css_computed_style_ask(el, id, &v)) {
+        v.length = cv_length(el, id);
+        css_computed_style_answer(el, id, &v);
+    }
+    css_computed_style_hold_end(&hold);
+    return v.length;
 }
 
 /* The keyword arm of the entry above, asked as a question. See css_computed_value.h for why it is one entry
@@ -1668,7 +1634,7 @@ static bool line_height_is_number(const char *v, double *out)
     return true;
 }
 
-CssLineHeight css_computed_line_height(lxb_dom_element_t *el)
+static CssLineHeight cv_line_height(lxb_dom_element_t *el)
 {
     CssLineHeight out = { CSS_LINE_HEIGHT_NORMAL, 0.0, { 0.0, CSS_ENV_NONE, NULL } };
     lxb_dom_element_t *parent;
@@ -1752,9 +1718,23 @@ CssLineHeight css_computed_line_height(lxb_dom_element_t *el)
     return out;
 }
 
+CssLineHeight css_computed_line_height(lxb_dom_element_t *el)
+{
+    CssComputedStyleHold hold;
+    CssComputedValue v;
+
+    css_computed_style_hold_begin(&hold);
+    if (!css_computed_style_ask(el, CSS_PROPERTY_LINE_HEIGHT, &v)) {
+        v.line_height = cv_line_height(el);
+        css_computed_style_answer(el, CSS_PROPERTY_LINE_HEIGHT, &v);
+    }
+    css_computed_style_hold_end(&hold);
+    return v.line_height;
+}
+
 /* ---- CSS 2.1 §17.6.1 "The separated borders model"'s `border-spacing` ------------------------------------- */
 
-CssBorderSpacing css_computed_border_spacing(lxb_dom_element_t *el)
+static CssBorderSpacing cv_border_spacing(lxb_dom_element_t *el)
 {
     CssBorderSpacing out;
     lxb_dom_element_t *parent;
@@ -1846,6 +1826,20 @@ CssBorderSpacing css_computed_border_spacing(lxb_dom_element_t *el)
     out.horizontal = h.px;
     out.vertical = v.px;
     return out;
+}
+
+CssBorderSpacing css_computed_border_spacing(lxb_dom_element_t *el)
+{
+    CssComputedStyleHold hold;
+    CssComputedValue v;
+
+    css_computed_style_hold_begin(&hold);
+    if (!css_computed_style_ask(el, CSS_PROPERTY_BORDER_SPACING, &v)) {
+        v.border_spacing = cv_border_spacing(el);
+        css_computed_style_answer(el, CSS_PROPERTY_BORDER_SPACING, &v);
+    }
+    css_computed_style_hold_end(&hold);
+    return v.border_spacing;
 }
 
 /* css-transforms-1 §3 "The transform Property"'s SECOND ARM — `Computed value: as specified, but with lengths

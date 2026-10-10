@@ -1,0 +1,55 @@
+/* One element's computed values (css-cascade-5 §4.4 "Computed Values"), typed per its property's `Computed
+ * value:` line and indexed by core/css/css_property_id.h's id. Blink's ComputedStyle under its own name.
+ *
+ * A layout job holds one per element in its cascade record (core/css/css_cascade_pass.h states why the
+ * cascade's inputs do not move while it does), so css-cascade-5 §7.2 "Inheritance" reads the parent's held
+ * value instead of climbing, and each (element, property) is derived once per job. The record is re-derivable:
+ * it is released with the job, and a forked job starts without one. An ask while no job holds a record opens
+ * the synchronous job's record for that ask (css_computed_style_hold_begin), so an undriven answer shares its
+ * ancestors' values for its own derivation and keeps none of them after it. */
+
+/* NAMED RESIDUAL, one cascade pass. Not covered: a value is derived on its first ask, each through its own
+ * per-property cascade over the element's match result. Next: the cascade emitting every longhand's cascaded
+ * value for an element in one sort, and the record filled from it. How its absence shows: cascade resolutions
+ * per element in the hundreds where the element's matched declarations number a few. */
+#ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_COMPUTED_STYLE_H
+#define ENGINE_HOST_BROWSER_CORE_CSS_CSS_COMPUTED_STYLE_H
+
+#include <stdbool.h>
+
+#include <lexbor/dom/dom.h>
+
+#include "core/css/css_computed_value.h"
+#include "core/css/css_property_id.h"
+#include "core/layout/layout_job.h"
+
+/* One computed value; the arm is css_property_shape(id)'s. */
+typedef union {
+    CssLength        length;          /* CSS_COMPUTED_SHAPE_LENGTH */
+    CssLineHeight    line_height;     /* CSS_COMPUTED_SHAPE_LINE_HEIGHT */
+    CssBorderSpacing border_spacing;  /* CSS_COMPUTED_SHAPE_BORDER_SPACING */
+} CssComputedValue;
+
+typedef struct CssComputedStyle CssComputedStyle;
+
+/* An empty record for `el`, and its release. Owned by the cascade record that holds it. */
+CssComputedStyle *css_computed_style_create(lxb_dom_element_t *el);
+void css_computed_style_free(CssComputedStyle *s);
+lxb_dom_element_t *css_computed_style_element(const CssComputedStyle *s);
+
+/* The bracket every ask is made inside. `begin` opens a drive on the synchronous job when no record is held,
+   so one is; `end` closes it, which sheds that record. Nothing pushed inside may outlive `end`. */
+typedef struct {
+    LayoutJobDrive drive;
+    bool           opened;
+} CssComputedStyleHold;
+void css_computed_style_hold_begin(CssComputedStyleHold *h);
+void css_computed_style_hold_end(CssComputedStyleHold *h);
+
+/* Inside a hold: answers true and writes `*out` when `el`'s record holds `id`. False marks the pair as being
+   derived, and its one caller derives it and reports it with `answer` with no return between the two; asking
+   a pair already being derived is a derivation that depends on itself, and crashes. */
+bool css_computed_style_ask(lxb_dom_element_t *el, CssPropertyId id, CssComputedValue *out);
+void css_computed_style_answer(lxb_dom_element_t *el, CssPropertyId id, const CssComputedValue *v);
+
+#endif /* ENGINE_HOST_BROWSER_CORE_CSS_CSS_COMPUTED_STYLE_H */
