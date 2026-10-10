@@ -15,6 +15,7 @@
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
 #include "core/layout/intrinsic_size.h"
+#include "core/layout/layout_job.h"   /* the line box record of the job whose activation holds the thread */
 #include "core/layout/line_box.h"
 #include "core/layout/phrasing_break.h"
 #include "core/layout/replaced_element.h"
@@ -815,9 +816,8 @@ static CssPx lb_available_width(lxb_dom_element_t *style, LineBoxAvailableWidth 
 /* ---- §9.4.2's content, collected and distributed — the half every answer below shares ----------------------
    One collection and one fill per question, shared by every answer, for core/layout/text_run.h's reason: the
    fill is a function of where [UAX14] says the run may break, so two collections could disagree about which
-   line a box is on. The caller owns `*lines` and owes `m` exactly one `text_run_measure_release`; it is a
-   static because the collection must live as long as the `TextRunLine`s index it, a property of the
-   caller's loop. */
+   line a box is on. The caller owns `*lines` and owes `m` exactly one `text_run_measure_release`, because the
+   collection must live as long as the `TextRunLine`s index it; `lb_fill_init` below is its one caller. */
 static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun run,
                       LineBoxAvailableWidth avail, TextRunLine **lines)
 {
@@ -936,6 +936,265 @@ static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun 
     return n;
 }
 
+/* ---- one fill per layout job -------------------------------------------------------------------------------
+   A fill, with the per-line facts every reduction reads, is held by the current layout job's record
+   (`layout_job_line_boxes`) for the job's lifetime, so a container's line boxes are laid out once per job however
+   many of its descendants, passes and reductions ask. The key is every operand `lb_fill` reads besides the tree
+   and the cascade: `style`, the run's two bounds, and the stated width (a derived width is `style`'s own used
+   content width, so it adds nothing). No baseline pass is an operand: both baselines come out of one reduction.
+   The tree and the cascade are constant for the job's lifetime (core/layout/layout_job.h's validity argument).
+   With no record held, the fill is the caller's and `lb_layout_end` releases it. */
+typedef struct {
+    LbExtent e;
+    bool     exists;
+    CssPx    top;   /* §9.4.2's stacking position at this line box's top edge */
+} LbLineFacts;
+
+typedef struct {
+    TextRunMeasure m;
+    TextRunLine   *lines;
+    size_t         n;
+    LbLineFacts   *facts;     /* one per line, NULL until `lb_fill_facts` */
+    CssPx         *align;     /* one per line, read where `aligned` */
+    bool          *aligned;
+} LbFill;
+
+typedef struct LbEntry {
+    lxb_dom_element_t *style;   /* NULL is empty; nothing is removed, so there are no tombstones */
+    lxb_dom_node_t    *after, *end;
+    bool               stated;
+    double             px;      /* the stated width; 0 when not `stated` */
+    LbFill            *fill;    /* owned, allocated apart so a consumer's pointer survives the table's growth */
+    bool               rechecked;
+} LbEntry;
+
+static void lb_fill_init(LbFill *f, lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail)
+{
+    f->lines = NULL;
+    f->n = lb_fill(&f->m, style, run, avail, &f->lines);
+    f->facts = NULL;
+    f->align = NULL;
+    f->aligned = NULL;
+}
+
+static void lb_fill_release(LbFill *f)
+{
+    free(f->lines);
+    free(f->facts);
+    free(f->align);
+    free(f->aligned);
+    text_run_measure_release(&f->m);
+}
+
+/* §10.8's extent of every line box and §9.4.2's stacking position of each ("line boxes are stacked with no
+   vertical separation"; a zero-height line box advances by nothing). Every line at once, because every
+   reduction that reads one reads all of them. Published only once complete. */
+static const LbLineFacts *lb_fill_facts(LbFill *f, lxb_dom_element_t *style)
+{
+    LbLineFacts *v;
+    CssPx top = css_px(0.0);
+    size_t i;
+
+    if (f->facts != NULL || f->n == 0) return f->facts;
+    v = malloc(f->n * sizeof *v);
+    CHECK(v != NULL, "out of memory holding CSS 2.2 §10.8's line box extents for one inline formatting context");
+    for (i = 0; i < f->n; i++) {
+        v[i].exists = false;
+        v[i].e = lb_line_extent(style, &f->m, f->lines[i], &v[i].exists);
+        v[i].top = top;
+        if (v[i].exists) top = css_px_add(top, css_px_add(v[i].e.above, v[i].e.below));
+    }
+    f->facts = v;
+    return v;
+}
+
+static CssPx lb_align_offset(lxb_dom_element_t *style, const TextRunMeasure *m, TextRunLine line,
+                             size_t index, size_t n);
+
+/* css-text-4 §7.1's offset of line `i`, derived on first read: `lb_align_offset` reads a used width only where
+   it is an operand, and a line no caller places never asks. */
+static CssPx lb_fill_align(LbFill *f, lxb_dom_element_t *style, size_t i)
+{
+    DCHECK(i < f->n, "a line box's alignment was asked for a line the fill does not have");
+    if (f->align == NULL) {
+        f->align = malloc(f->n * sizeof *f->align);
+        f->aligned = calloc(f->n, sizeof *f->aligned);
+        CHECK(f->align != NULL && f->aligned != NULL,
+              "out of memory holding css-text-4 §7.1's line offsets for one inline formatting context");
+    }
+    if (!f->aligned[i]) {
+        f->align[i] = lb_align_offset(style, &f->m, f->lines[i], i, f->n);
+        f->aligned[i] = true;
+    }
+    return f->align[i];
+}
+
+static size_t lb_key_slot(lxb_dom_element_t *style, BlockFlowRun run, double px, size_t cap)
+{
+    uint64_t h = (uint64_t)(uintptr_t)style * 0x9E3779B97F4A7C15ull, bits;
+
+    memcpy(&bits, &px, sizeof bits);
+    h ^= (uint64_t)(uintptr_t)run.after * 0xC2B2AE3D27D4EB4Full;
+    h ^= (uint64_t)(uintptr_t)run.end * 0x165667B19E3779F9ull;
+    h ^= bits * 0x27D4EB2F165667C5ull;
+    h ^= h >> 31;
+    h *= 0xbf58476d1ce4e5b9ull;
+    h ^= h >> 29;
+    return (size_t)h & (cap - 1);
+}
+
+/* The slot `style`'s run at `avail` occupies, or the empty slot it would be inserted at. A stated width is
+   compared by its bits, so the key is the number the fill was handed. */
+static size_t lb_key_probe(const LbEntry *tab, size_t cap, lxb_dom_element_t *style, BlockFlowRun run,
+                           bool stated, double px)
+{
+    size_t i = lb_key_slot(style, run, px, cap);
+
+    while (tab[i].style != NULL &&
+           (tab[i].style != style || tab[i].after != run.after || tab[i].end != run.end ||
+            tab[i].stated != stated || memcmp(&tab[i].px, &px, sizeof px) != 0))
+        i = (i + 1) & (cap - 1);
+    return i;
+}
+
+static void lb_record_grow(LineBoxRecord *r)
+{
+    size_t cap = r->cap != 0 ? r->cap * 2 : 64, i;
+    LbEntry *tab = calloc(cap, sizeof *tab);
+
+    CHECK(tab != NULL, "the layout job's line box record could not grow");
+    for (i = 0; i < r->cap; i++) {
+        BlockFlowRun run;
+
+        if (r->tab[i].style == NULL) continue;
+        run.after = r->tab[i].after;
+        run.end = r->tab[i].end;
+        tab[lb_key_probe(tab, cap, r->tab[i].style, run, r->tab[i].stated, r->tab[i].px)] = r->tab[i];
+    }
+    free(r->tab);
+    r->tab = tab;
+    r->cap = cap;
+}
+
+void line_box_record_release(LineBoxRecord *r)
+{
+    size_t i;
+
+    DCHECKF(r->asks == r->served + r->built,
+            "a layout job's line box record does not close: %lld asks against %lld served and %lld fills; every "
+            "ask is served from the record or fills and records, so a gap is a return between the two",
+            r->asks, r->served, r->built);
+    DCHECKF(r->built >= 0 && (size_t)r->built == r->used,
+            "a layout job's line box record holds %zu entries after %lld fills; each fill records exactly one "
+            "new key", r->used, r->built);
+    for (i = 0; i < r->cap; i++) {
+        if (r->tab[i].style == NULL) continue;
+        lb_fill_release(r->tab[i].fill);
+        free(r->tab[i].fill);
+    }
+    free(r->tab);
+    memset(r, 0, sizeof *r);
+}
+
+#if APICLIENT_DEV
+/* NaN equals itself here: one derivation run twice over one document agrees with itself. */
+static bool lb_same_px(CssPx a, CssPx b)
+{
+    return a.px == b.px || (a.px != a.px && b.px != b.px);
+}
+
+/* A served fill re-derived and compared at its first serve: a key that omits an operand of `lb_fill` answers
+   a second asker with the first asker's lines. The facts are compared where the entry holds them. */
+static void lb_fill_recheck(const LbFill *held, lxb_dom_element_t *style, BlockFlowRun run,
+                            LineBoxAvailableWidth avail)
+{
+    LbFill fresh;
+    char sbuf[160];
+    size_t i;
+
+    lb_fill_init(&fresh, style, run, avail);
+    DCHECKF(fresh.n == held->n,
+            "%s: a layout job served a fill of %zu line boxes for a context that fills to %zu now, so the line "
+            "box record's key omits an operand of the fill", box_subject(style, sbuf, sizeof sbuf), held->n,
+            fresh.n);
+    for (i = 0; i < fresh.n; i++)
+        DCHECKF(fresh.lines[i].from == held->lines[i].from && fresh.lines[i].to == held->lines[i].to &&
+                    lb_same_px(fresh.lines[i].size, held->lines[i].size),
+                "%s, line box %zu: a layout job served items [%zu, %zu) at %g px where a fresh fill puts "
+                "[%zu, %zu) at %g px, so the line box record's key omits an operand of the fill",
+                box_subject(style, sbuf, sizeof sbuf), i, held->lines[i].from, held->lines[i].to,
+                held->lines[i].size.px, fresh.lines[i].from, fresh.lines[i].to, fresh.lines[i].size.px);
+    if (held->facts != NULL) {
+        const LbLineFacts *v = lb_fill_facts(&fresh, style);
+
+        for (i = 0; i < fresh.n; i++)
+            DCHECKF(v[i].exists == held->facts[i].exists && lb_same_px(v[i].e.above, held->facts[i].e.above) &&
+                        lb_same_px(v[i].e.below, held->facts[i].e.below) &&
+                        lb_same_px(v[i].top, held->facts[i].top),
+                    "%s, line box %zu: a layout job served CSS 2.2 §10.8's extent (%g above, %g below, top %g) "
+                    "where a fresh derivation gives (%g, %g, %g)", box_subject(style, sbuf, sizeof sbuf), i,
+                    held->facts[i].e.above.px, held->facts[i].e.below.px, held->facts[i].top.px,
+                    v[i].e.above.px, v[i].e.below.px, v[i].top.px);
+    }
+    lb_fill_release(&fresh);
+}
+#endif
+
+/* The fill of `style`'s run at `avail`: the current job's when it holds a record, otherwise built into `local`.
+   The caller reads it and ends every `lb_layout` with one `lb_layout_end`. */
+static LbFill *lb_layout(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail, LbFill *local)
+{
+    LineBoxRecord *r = layout_job_line_boxes();
+    double px = avail.stated ? avail.px.px : 0.0;
+    LbFill *f;
+    size_t i;
+
+    DCHECK(style != NULL && local != NULL, "CSS 2.2 §9.4.2's line boxes were asked for with no element");
+    if (r == NULL) {
+        lb_fill_init(local, style, run, avail);
+        return local;
+    }
+    r->asks++;
+    if (r->cap != 0) {
+        i = lb_key_probe(r->tab, r->cap, style, run, avail.stated, px);
+        if (r->tab[i].style != NULL) {
+            f = r->tab[i].fill;
+            r->served++;
+#if APICLIENT_DEV
+            if (!r->tab[i].rechecked) {
+                r->tab[i].rechecked = true;
+                lb_fill_recheck(f, style, run, avail);
+            }
+#endif
+            return f;
+        }
+    }
+    f = malloc(sizeof *f);
+    CHECK(f != NULL, "out of memory holding one inline formatting context's line boxes");
+    lb_fill_init(f, style, run, avail);
+    /* Probed again after the fill, which records an atomic inline's own line boxes inside it. */
+    if (r->used * 2 >= r->cap) lb_record_grow(r);
+    i = lb_key_probe(r->tab, r->cap, style, run, avail.stated, px);
+    DCHECK(r->tab[i].style == NULL,
+           "an inline formatting context's fill recorded its own key while it was being filled, so its line "
+           "boxes are an operand of themselves");
+    r->tab[i].style = style;
+    r->tab[i].after = run.after;
+    r->tab[i].end = run.end;
+    r->tab[i].stated = avail.stated;
+    r->tab[i].px = px;
+    r->tab[i].fill = f;
+    r->tab[i].rechecked = false;
+    r->used++;
+    r->built++;
+    return f;
+}
+
+static void lb_layout_end(LbFill *f, LbFill *local)
+{
+    if (f == local) lb_fill_release(local);
+}
+
 /* ---- §9.4.2's line boxes, reduced once ---------------------------------------------------------------------
    The two distances CSS 2.2 measures down one inline formatting context, and whether it has a line box at
    all, on one pass over one fill. §10.6.3's first bullet wants the bottom edge of the last line box and
@@ -950,22 +1209,20 @@ static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun 
    callers read `any` first. */
 static LbLines lb_reduce(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail)
 {
-    TextRunMeasure m;
-    TextRunLine *lines = NULL;
+    LbFill local, *f = lb_layout(style, run, avail, &local);
+    const LbLineFacts *facts = lb_fill_facts(f, style);
     LbLines out;
-    size_t n, i;
+    size_t i;
 
     out.height = css_px(0.0);
     out.first_baseline = css_px(0.0);
     out.last_baseline = css_px(0.0);
     out.any = false;
-    n = lb_fill(&m, style, run, avail, &lines);
-    for (i = 0; i < n; i++) {
-        bool exists = false;
-        LbExtent e = lb_line_extent(style, &m, lines[i], &exists);
+    for (i = 0; i < f->n; i++) {
+        LbExtent e = facts[i].e;
         CssPx lh;
 
-        if (!exists) continue;
+        if (!facts[i].exists) continue;
         lh = css_px_add(e.above, e.below);
         DCHECK(lh.px >= 0.0,
                "CSS 2.2 §10.8's step 3 produced a NEGATIVE height for one line box. It is \"the distance "
@@ -990,10 +1247,7 @@ static LbLines lb_reduce(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvai
            heights, with no gap term. */
         out.height = css_px_add(out.height, lh);
     }
-    free(lines);
-    /* The measurement ends here: every line above named its boxes by an index into the collection, so `lines`
-       and its items live together for the loop. core/layout/text_run.h asserts a read after this. */
-    text_run_measure_release(&m);
+    lb_layout_end(f, &local);
     return out;
 }
 
@@ -1061,10 +1315,9 @@ static CssPx lb_widest_line(const TextRunLine *lines, size_t n)
 void line_box_content_span(lxb_dom_element_t *style, BlockFlowRun run,
                            bool vertical, CssPx *lo, CssPx *hi)
 {
-    TextRunMeasure m;
-    TextRunLine *lines = NULL;
-    CssPx top = css_px(0.0);
-    size_t n, i, j;
+    LbFill local, *f;
+    const LbLineFacts *facts;
+    size_t i, j;
 
     DCHECK(lo != NULL && hi != NULL,
            "CSS 2.2 §9.4.2's line boxes were asked where their boxes reach with nowhere to report one of the "
@@ -1076,7 +1329,7 @@ void line_box_content_span(lxb_dom_element_t *style, BlockFlowRun run,
        invent an overflow. */
     *lo = css_px(0.0);
     *hi = css_px(0.0);
-    n = lb_fill(&m, style, run, line_box_available_width_derived(), &lines);
+    f = lb_layout(style, run, line_box_available_width_derived(), &local);
     if (!vertical) {
         /* §9.4.2's inline axis: "In general, the left edge of a line box touches the left edge of its
            containing block and the right edge touches the right edge of its containing block", and css-text-4
@@ -1084,7 +1337,7 @@ void line_box_content_span(lxb_dom_element_t *style, BlockFlowRun run,
            of a line box are too long to fit within it, then the contents are start-aligned: any content that
            doesn't fit overflows the line box's end edge." So the one operand is the content box's start edge
            (line_box.h states the theorem). */
-        CssPx widest = lb_widest_line(lines, n);
+        CssPx widest = lb_widest_line(f->lines, f->n);
 
         if (lb_computed_is(style, "direction", "rtl")) {
             /* The start edge is line-right, so content grows toward the lower coordinate and the line box's
@@ -1102,22 +1355,22 @@ void line_box_content_span(lxb_dom_element_t *style, BlockFlowRun run,
                    "refused — asserted rather than read as \"not rtl\", which would quietly mean `ltr`");
             *hi = css_px_max(*hi, widest);
         }
-        free(lines);
-        text_run_measure_release(&m);
+        lb_layout_end(f, &local);
         return;
     }
     /* §9.4.2's block axis is a maximum over the boxes, not the stack's bottom: a line box's edges include the
        strut, and CSSOM View §2's extreme is over "the element's descendants' boxes", of which the strut ("we
        call that imaginary box a 'strut'") is not one. A container whose `line-height` exceeds its content's
        has line boxes taller than anything in them. */
-    for (i = 0; i < n; i++) {
-        bool exists = false;
-        LbExtent e = lb_line_extent(style, &m, lines[i], &exists);
+    facts = lb_fill_facts(f, style);
+    for (i = 0; i < f->n; i++) {
+        LbExtent e = facts[i].e;
+        CssPx top = facts[i].top;
 
         /* A not-existing line box is "treated as zero-height … for the purposes of determining the positions of
-           any elements inside of them", so it advances the stack by nothing. */
-        if (!exists) continue;
-        for (j = lines[i].from; j < lines[i].to; j++) {
+           any elements inside of them", so it advances the stack by nothing (`LbLineFacts.top`). */
+        if (!facts[i].exists) continue;
+        for (j = f->lines[i].from; j < f->lines[i].to; j++) {
             /* The baseline is `top + e.above`: `e.above` is the line's maximum `A'`, and every box hangs its own
                `A'` above and `D'` below that one line. */
             LbExtent b;
@@ -1129,18 +1382,13 @@ void line_box_content_span(lxb_dom_element_t *style, BlockFlowRun run,
                and an atomic inline has its own used width and height (CSS 2.1 §10.3.2;
                core/layout/scrolling_area.c). Deriving them from `A'` and `D'` would give a rectangle smaller
                than the rendered one. */
-            if (!text_run_measure_item_is_text(&m, j)) continue;
-            b = lb_strut_extent(text_run_measure_item_style(&m, j));
+            if (!text_run_measure_item_is_text(&f->m, j)) continue;
+            b = lb_strut_extent(text_run_measure_item_style(&f->m, j));
             *lo = css_px_min(*lo, css_px_sub(css_px_add(top, e.above), b.above));
             *hi = css_px_max(*hi, css_px_add(css_px_add(top, e.above), b.below));
         }
-        /* §9.4.2: "line boxes are stacked with no vertical separation (except as specified elsewhere) and they
-           never overlap": the sum §10.6.3's distance is, carried as a running position because a span needs
-           where each line starts. */
-        top = css_px_add(top, css_px_add(e.above, e.below));
     }
-    free(lines);
-    text_run_measure_release(&m);
+    lb_layout_end(f, &local);
 }
 
 /* ---- css-text-4 §7.1's alignment of one line box's content --------------------------------------------------
@@ -1284,11 +1532,10 @@ static LineBoxGlyph *lb_glyphs_room(LineBoxGlyph *v, size_t n, size_t *cap)
 
 size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph **out)
 {
-    TextRunMeasure m;
-    TextRunLine *lines = NULL;
+    LbFill local, *f;
+    const LbLineFacts *facts;
     LineBoxGlyph *v = NULL;
-    CssPx top = css_px(0.0);
-    size_t n, i, j, ng = 0, cap = 0;
+    size_t i, j, ng = 0, cap = 0;
 
     DCHECK(style != NULL && out != NULL,
            "CSS 2.1 §E.2 \"Painting order\"'s step 7.2.1 text was asked for with no element whose properties "
@@ -1300,43 +1547,34 @@ size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph 
        `line_box_inline_fragments`' two: this entry is handed the establishing container itself, so
        css-writing-modes-4 §7.3 "Orthogonal Flows" has no second element to compare here. */
     lb_require_horizontal_tb(style);
-    n = lb_fill(&m, style, run, line_box_available_width_derived(), &lines);
-    for (i = 0; i < n; i++) {
-        bool exists = false;
-        LbExtent e = lb_line_extent(style, &m, lines[i], &exists);
-        CssPx height = exists ? css_px_add(e.above, e.below) : css_px(0.0);
+    f = lb_layout(style, run, line_box_available_width_derived(), &local);
+    facts = lb_fill_facts(f, style);
+    for (i = 0; i < f->n; i++) {
         /* The line's baseline, `e.above` (its maximum `A'`) below its top edge: the coordinate
            `line_box_inline_fragments` and `lb_reduce` use, read at a third point of the same stack. */
-        CssPx baseline = css_px_add(top, e.above);
-        CssPx align = css_px(0.0);
-        bool have_align = false;
+        CssPx baseline = css_px_add(facts[i].top, facts[i].e.above);
 
-        for (j = lines[i].from; j < lines[i].to; j++) {
+        for (j = f->lines[i].from; j < f->lines[i].to; j++) {
+            CssPx align;
+
             /* The other three kinds are refused by `text_run_measure_item_cp`, whose message says what a forced
                break's U+000A and an atomic's U+FFFC are for; this is the test every line walk makes. */
-            if (!text_run_measure_item_is_text(&m, j)) continue;
-            /* css-text-4 §7.3's distribution, read once per line and only where a character is placed, so a
-               context whose lines all collapsed away never asks `lb_align_offset` for a computed `direction` and
-               `text-align` (a crash surface, as core/layout/scrolling_area.c's origin read is). */
-            if (!have_align) {
-                align = lb_align_offset(style, &m, lines[i], i, n);
-                have_align = true;
-            }
+            if (!text_run_measure_item_is_text(&f->m, j)) continue;
+            /* css-text-4 §7.3's distribution, read only where a character is placed, so a context whose lines
+               all collapsed away never asks `lb_align_offset` for a computed `direction` and `text-align` (a
+               crash surface, as core/layout/scrolling_area.c's origin read is). */
+            align = lb_fill_align(f, style, i);
             v = lb_glyphs_room(v, ng, &cap);
-            v[ng].cp = text_run_measure_item_cp(&m, j);
-            v[ng].style = text_run_measure_item_style(&m, j);
+            v[ng].cp = text_run_measure_item_cp(&f->m, j);
+            v[ng].style = text_run_measure_item_style(&f->m, j);
             /* The offset is `text_run_measure_line_offset` at this item, the walk `TextRunLine.size` is taken by,
                so a glyph's position and its line's width describe one text; no advance is accumulated here. */
-            v[ng].origin_x = css_px_add(align, text_run_measure_line_offset(&m, lines[i], j));
+            v[ng].origin_x = css_px_add(align, text_run_measure_line_offset(&f->m, f->lines[i], j));
             v[ng].baseline_y = baseline;
             ng++;
         }
-        /* §9.4.2's stacking ("no vertical separation"), with a zero-height line advancing by nothing, which is
-           why the extent is read for every line and not only for those that place a character. */
-        top = css_px_add(top, height);
     }
-    free(lines);
-    text_run_measure_release(&m);
+    lb_layout_end(f, &local);
     *out = v;
     return ng;
 }
@@ -1774,13 +2012,14 @@ static bool lb_atomic_item(const TextRunMeasure *m, lxb_dom_element_t *el, size_
 size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
                                  LineBoxFragment **out)
 {
-    TextRunMeasure m;
-    TextRunLine *lines = NULL;
+    LbFill local, *f;
+    const LbLineFacts *facts;
+    const TextRunLine *lines;
     /* NULL so the first growth is the same call as every later one (`realloc(NULL, n)` is `malloc(n)`). */
     LineBoxFragment *frags = NULL;
     LbContext ctx;
     lxb_dom_element_t *style;
-    CssPx top, lead, trail;
+    CssPx lead, trail;
     CssPx before = css_px(0.0), after = css_px(0.0), drop = css_px(0.0), extent = css_px(0.0);
     /* §10.8.1's split of this box's margin box at its own baseline, zero for a box the section gives no
        baseline, so the atomic composition below is one arithmetic over both shapes. */
@@ -1902,8 +2141,9 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
         size_t lo_item, hi_item;
         bool has_open, has_close, present;
 
-        top = ctx.box[b].origin_y;
-        n = lb_fill(&m, style, ctx.box[b].run, line_box_available_width_derived(), &lines);
+        f = lb_layout(style, ctx.box[b].run, line_box_available_width_derived(), &local);
+        n = f->n;
+        lines = f->lines;
         DCHECK(n >= 1,
                "CSS 2.2 §9.4.2's fill produced NO line box for one of CSS 2.2 §9.2.1.1 \"Anonymous block boxes\"' "
                "boxes. \"Line boxes are created as needed to hold inline-level content\" and the section generates "
@@ -1919,37 +2159,38 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
         if (atomic) {
             /* `lb_atomic_item` leaves `lo_item` untouched when there is no item here, so the `+ 1` is inside the
                arm that established it. */
-            present = lb_atomic_item(&m, el, lines[n - 1].to, &lo_item);
+            present = lb_atomic_item(&f->m, el, lines[n - 1].to, &lo_item);
             if (present) hi_item = lo_item + 1;
             has_open = has_close = true;
         } else {
-            present = lb_box_items(&m, el, lines[n - 1].to, ctx.box[b].run,
+            present = lb_box_items(&f->m, el, lines[n - 1].to, ctx.box[b].run,
                                    &lo_item, &hi_item, &has_open, &has_close);
         }
-        if (!present) { free(lines); text_run_measure_release(&m); continue; }
+        if (!present) { lb_layout_end(f, &local); continue; }
         /* One entry per line of this box, appended to the earlier boxes' fragments; `nf + n` is an upper
            bound, so the array is grown to it rather than counted twice. */
         frags = realloc(frags, (nf + n) * sizeof *frags);
         CHECK(frags != NULL, "out of memory reporting CSSOM VIEW §6's box fragments. There is one entry per line "
                              "box of one formatting context and the fragments are a subset of them, so a failure "
                              "here is the physical floor");
+        facts = lb_fill_facts(f, style);
         for (i = 0; i < n; i++) {
-            bool exists = false;
-            LbExtent e = lb_line_extent(style, &m, lines[i], &exists);
-            CssPx height = exists ? css_px_add(e.above, e.below) : css_px(0.0);
+            LbExtent e = facts[i].e;
+            /* §9.4.2's stacking position, seeded at this box's own top content edge. */
+            CssPx top = css_px_add(ctx.box[b].origin_y, facts[i].top);
 
             if (lines[i].from < hi_item && lines[i].to > lo_item) {
                 size_t lo = lines[i].from > lo_item ? lines[i].from : lo_item;
                 size_t hi = lines[i].to < hi_item ? lines[i].to : hi_item;
-                CssPx align = lb_align_offset(style, &m, lines[i], i, n);
+                CssPx align = lb_fill_align(f, style, i);
                 /* The offset along the line is inside the box holding it, and `ctx.box[b].origin_x` is that box's
                    inline-start content edge inside the container: zero by §9.2.1.1's initial values under
                    §10.3.3, added for the reason `LbContext` gives, and read per box because a split element's
                    fragments are on several boxes. */
                 CssPx start = css_px_add(ctx.box[b].origin_x,
-                                         css_px_add(align, text_run_measure_line_offset(&m, lines[i], lo)));
+                                         css_px_add(align, text_run_measure_line_offset(&f->m, lines[i], lo)));
                 CssPx end = css_px_add(ctx.box[b].origin_x,
-                                       css_px_add(align, text_run_measure_line_offset(&m, lines[i], hi)));
+                                       css_px_add(align, text_run_measure_line_offset(&f->m, lines[i], hi)));
                 /* The line's baseline, its maximum `A'` (`e.above`) below its top, from which every box on it
                    hangs its content area. */
                 CssPx baseline = css_px_add(top, e.above);
@@ -2005,14 +2246,8 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
                 }
                 nf++;
             }
-            /* §9.4.2: "line boxes are stacked with no vertical separation (except as specified elsewhere) and
-               they never overlap", and a line "treated as zero-height ... for the purposes of determining the
-               positions of any elements inside of them" advances by nothing; a box on such a line still has a
-               position, the one the next line starts from. */
-            top = css_px_add(top, height);
         }
-        free(lines);
-        text_run_measure_release(&m);
+        lb_layout_end(f, &local);
     }
     free(ctx.box);
     DCHECK(nf >= 1,

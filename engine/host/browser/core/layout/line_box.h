@@ -46,9 +46,11 @@
    sequence; css-lists-3 §3.5 "Positioning Markers: The list-style-position property" puts it on the line only
    at `inside` ("The ::marker is an inline element at the start of the list item’s contents"). At the initial
    `outside` it "is placed outside the principal block box" and `lb_child` lays nothing for it; an `inside`
-   marker aborts at core/layout/block_flow.c's classification.
-   Nothing is stored, for core/layout/used_value.h's reason: a cached line box is per-flow state
-   solver/dom_cow.h does not swap. Every answer is derived per read from the running flow's own tree. */
+   marker aborts at core/layout/block_flow.c's classification. */
+
+/* A context's fill and its per-line facts are held by the current layout job (`LineBoxRecord`), whose lifetime
+   sees no DOM write (core/layout/layout_job.h), so each context is laid out once per job. With no job holding a
+   record, every answer is derived per read. */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -85,6 +87,16 @@ LineBoxAvailableWidth line_box_available_width_derived(void);
    property" floors every inner size at zero, and css-flexbox-1 §9.7 "Resolving Flexible Lengths" floors "its
    content-box size at zero"); the walk asserts it. */
 LineBoxAvailableWidth line_box_available_width_stated(CssPx px);
+
+/* A layout job's line box record: one fill per (`style`, run, stated width), owned by the job and released
+   with its memo. `release` asserts `asks == served + built` and one entry per fill, and frees every fill. */
+struct LbEntry;
+typedef struct {
+    struct LbEntry *tab;     /* a power-of-two table, NULL with `cap` 0 before the first fill */
+    size_t          cap, used;
+    long long       asks, served, built;
+} LineBoxRecord;
+void line_box_record_release(LineBoxRecord *r);
 
 /* CSS 2.2 §10.6.3's first bullet for the block container that establishes one inline formatting context, "the
    distance from its top content edge to the first applicable of the following", whose first bullet is "the

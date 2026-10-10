@@ -47,6 +47,7 @@ struct LayoutJob {
     LayoutJobDriver driver;
     FlowPlacementRecord placement;   /* core/layout/flow_placement.h's three facts, for this job */
     CssCascadeRecord    cascade;     /* core/css/css_cascade_pass.h's cascaded values, for this job */
+    LineBoxRecord       line_boxes;  /* core/layout/line_box.h's fills, for this job */
 };
 
 /* The job whose activation holds the thread when a driver entered one, and the thread's synchronous job.
@@ -101,6 +102,7 @@ static void lj_memo_shed(LayoutJob *job)
     job->memo_used = 0;
     flow_placement_record_release(&job->placement);
     css_cascade_record_release(&job->cascade);
+    line_box_record_release(&job->line_boxes);
 }
 
 /* ---- the stack ------------------------------------------------------------------------------------------ */
@@ -149,6 +151,7 @@ void layout_job_free(LayoutJob *job)
     g_alive--;
     flow_placement_record_release(&job->placement);
     css_cascade_record_release(&job->cascade);
+    line_box_record_release(&job->line_boxes);
     free(job->stack);
     free(job->memo);
     free(job);
@@ -229,6 +232,12 @@ CssCascadeRecord *layout_job_cascade(void)
 {
     if (g_entered != NULL) return &g_entered->cascade;
     return g_sync.drives != 0 ? &g_sync.cascade : NULL;
+}
+
+LineBoxRecord *layout_job_line_boxes(void)
+{
+    if (g_entered != NULL) return &g_entered->line_boxes;
+    return g_sync.drives != 0 ? &g_sync.line_boxes : NULL;
 }
 
 /* ---- the drive ------------------------------------------------------------------------------------------ */

@@ -1,6 +1,6 @@
 /* A layout job: the evaluator layout questions (core/layout/layout_question.h) are asked through. It owns
  * the stack of open questions, a memo of answered ones, core/layout/flow_placement.h's placement record,
- * core/css/css_cascade_pass.h's cascaded-value record, and the accounting of how many question bodies one C activation hosts. It is the analogue of LayoutNG's
+ * core/css/css_cascade_pass.h's cascaded-value record, core/layout/line_box.h's line box record, and the accounting of how many question bodies one C activation hosts. It is the analogue of LayoutNG's
  * layout-result cache, scoped to one job rather than hung on a box, because layout here is per-flow state
  * with no box tree to hang it on. */
 
@@ -64,6 +64,7 @@
 #include "core/css/css_cascade_pass.h"
 #include "core/layout/flow_placement.h"
 #include "core/layout/layout_question.h"
+#include "core/layout/line_box.h"
 
 typedef struct LayoutJob LayoutJob;
 
@@ -113,6 +114,8 @@ size_t layout_job_alive(void);
 FlowPlacementRecord *layout_job_placement(void);
 /* The same for css-cascade-5 §4.2's cascaded-value record (core/css/css_cascade_pass.h). */
 CssCascadeRecord *layout_job_cascade(void);
+/* The same for CSS 2.2 §9.4.2's line box record (core/layout/line_box.h). */
+LineBoxRecord *layout_job_line_boxes(void);
 
 /* ---- the drive ------------------------------------------------------------------------------------------ */
 
