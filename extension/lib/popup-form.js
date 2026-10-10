@@ -7,7 +7,7 @@ function buildFormFields(schema, initialData = null) {
   container.innerHTML = "";
 
   if (schema.method && (schema.method.description || schema.method.scopes?.length)) {
-    const info = el("div", "card");
+    const info = domElement("div", { class: "card" });
     info.style.marginBottom = "8px";
     let html = "";
     if (schema.method.description) {
@@ -28,7 +28,7 @@ function buildFormFields(schema, initialData = null) {
   const _rh = (schema.method && schema.method.requiredHeaders)
     || (schema.endpoint && schema.endpoint.requiredHeaders);
   if (_rh && Object.keys(_rh).length > 0) {
-    const hsec = el("div", "form-section");
+    const hsec = domElement("div", { class: "form-section" });
     let hh = '<div class="form-section-label">Required Headers <span class="card-meta">(learned)</span></div>';
     for (const [hn, hv] of Object.entries(_rh)) {
       /* THE HEADER VOCABULARY IS ASSERTED, NOT PATTERN-MATCHED. `hv.kind === "literal"` on an untranslated
@@ -96,7 +96,7 @@ function buildFormFields(schema, initialData = null) {
          "emit, so two arriving means one of those doors was bypassed and this panel would have to " +
          "choose which of several contradictory claims to show a reviewer");
   if (_bs || _bsh || _bex) {
-    const bsec = el("div", "form-section");
+    const bsec = domElement("div", { class: "form-section" });
     let bh = '<div class="form-section-label">Request Body <span class="card-meta">(learned)</span></div>';
     if (_bex) {
       /* A BYTE-COMPOSED PAYLOAD, AND THE CLAIM IS NEITHER OF THE OTHER TWO. These bytes are what the payload
@@ -158,7 +158,7 @@ function buildFormFields(schema, initialData = null) {
   }
 
   if (schema.parameters && Object.keys(schema.parameters).length > 0) {
-    const section = el("div", "form-section");
+    const section = domElement("div", { class: "form-section" });
     section.innerHTML = '<div class="form-section-label">URL Parameters</div>';
     /* EVERY `param.*` BELOW IS READ AS ITSELF, because lib/send.js's `resolveEndpointSchema` now declares the
        WHOLE parameter record from BOTH of its producers — the discovery-doc branch and the AST-learned
@@ -294,7 +294,7 @@ function buildFormFields(schema, initialData = null) {
   }
 
   if (schema.requestBody?.fields?.length > 0) {
-    const section = el("div", "form-section");
+    const section = domElement("div", { class: "form-section" });
     const label = schema.requestBody.schemaName
       ? `Request Body (${esc(schema.requestBody.schemaName)})`
       : "Request Body";
@@ -526,7 +526,7 @@ function _drainBuildQueue(queue) {
 
 function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   depth = depth || 0;
-  const wrapper = el("div", "form-field");
+  const wrapper = domElement("div", { class: "form-field" });
   wrapper.style.paddingLeft = depth * 16 + "px";
 
   /* EVERY `fieldDef.*` BELOW IS READ AS ITSELF. lib/field-def.js is the ONE definition of this record and
@@ -570,7 +570,7 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   const _untraversed = _isMessage && fieldDef.label !== "repeated" &&
                        (_kids === null || _kids.length === 0) && !_capturedObject;
 
-  const labelEl = el("label", "form-field-label");
+  const labelEl = domElement("label", { class: "form-field-label" });
   /* `displayName: null` MEANS "render the wire name" — the GraphQL variables tree is the one producer that
      writes an alias, and every other one states its absence. The caller's positional `name` is a genuine
      ALTERNATIVE and not a filler: `_buildMessageStep` passes a captured body's own key for a field the
@@ -730,7 +730,7 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   wrapper.appendChild(labelEl);
 
   if (fieldDef.description) {
-    const desc = el("div", "field-description");
+    const desc = domElement("div", { class: "field-description" });
     desc.textContent = fieldDef.description;
     wrapper.appendChild(desc);
   }
@@ -741,7 +741,7 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
      OBSERVED set and the select above is the DECLARED one, so a field that has both renders the declared
      one and nothing is doubled. */
   if (fieldDef._astValidValues !== null && fieldDef._astValidValues.length > 0 && fieldDef.enum === null) {
-    const valHint = el("div", "field-ast-values");
+    const valHint = domElement("div", { class: "field-ast-values" });
     valHint.innerHTML = '<span class="ast-values-label">Values found in JS:</span> '
       + fieldDef._astValidValues.map(v => '<span class="ast-value-chip">' + esc(String(v)) + '</span>').join(' ');
     valHint.addEventListener("click", function(e) {
@@ -768,7 +768,7 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
      force to reach, which no document can contradict and which a `<select>` cannot express — so hiding it
      behind a declaration would delete the observation rather than avoid doubling it. */
   if (fieldDef._astForcedValues !== null && fieldDef._astForcedValues.length > 0) {
-    const forcedHint = el("div", "field-ast-values field-ast-forced");
+    const forcedHint = domElement("div", { class: "field-ast-values field-ast-forced" });
     forcedHint.innerHTML = '<span class="ast-values-label ast-forced-label">Reached only by FORCING a gate '
       + '(a request no client makes):</span> '
       + fieldDef._astForcedValues.map(v => '<span class="ast-value-chip ast-value-chip-forced">'
@@ -787,7 +787,7 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
     // `events: [{ts: 1, kind: "x"}, {ts: 2, kind: "y"}]` had no UI at all
     // and the popup fell back to the raw textarea, defeating the form
     // editor. Matches the encodeFormToJson repeated-message path.
-    const listContainer = el("div", "form-repeated-list form-repeated-message-list");
+    const listContainer = domElement("div", { class: "form-repeated-list form-repeated-message-list" });
     listContainer.dataset.fieldType = fieldDef.type;
 
     // Repeated-message branch — enqueue each item onto the build
@@ -799,7 +799,7 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
     }
     wrapper.appendChild(listContainer);
 
-    const addBtn = el("button", "btn-small");
+    const addBtn = domElement("button", { class: "btn-small" });
     addBtn.textContent = "+ Add item";
     addBtn.type = "button";
     addBtn.dataset.formAddRepeated = "1";
@@ -825,7 +825,7 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
        describe". Dropping the wrapper here reaches the same wire, one layer earlier, for a field the
        researcher was never given a way to fill. */
     wrapper.dataset.messageFields = _kids === null ? "undescribed" : "none";
-    const note = el("div", "field-untraversed");
+    const note = domElement("div", { class: "field-untraversed" });
     const takes = fieldDef.messageType !== null ? fieldDef.messageType : null;
     note.textContent = _kids === null
       ? (takes !== null
@@ -835,7 +835,7 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
          " is described as having no fields of its own, so nothing is sent from this row.");
     wrapper.appendChild(note);
   } else if (fieldDef.label === "repeated" && fieldDef.type !== "message") {
-    const listContainer = el("div", "form-repeated-list");
+    const listContainer = domElement("div", { class: "form-repeated-list" });
     listContainer.dataset.fieldType = fieldDef.type;
 
     if (Array.isArray(initialValue) && initialValue.length > 0) {
@@ -847,7 +847,7 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
     }
     wrapper.appendChild(listContainer);
 
-    const addBtn = el("button", "btn-small");
+    const addBtn = domElement("button", { class: "btn-small" });
     addBtn.textContent = "+ Add";
     addBtn.type = "button";
     addBtn.dataset.formAddRepeated = "1";
@@ -868,7 +868,7 @@ function _buildRepeatedMessageItem(fieldDef, category, depth, itemValue) {
 }
 
 function _buildRepeatedItemStep(fieldDef, category, depth, itemValue, queue) {
-  const itemWrapper = el("div", "form-repeated-item form-message-group");
+  const itemWrapper = domElement("div", { class: "form-repeated-item form-message-group" });
   const summary = document.createElement("div");
   summary.className = "form-repeated-item-summary";
   /* THE SUMMARY NAMES THE MESSAGE IF THERE IS ONE TO NAME. `messageType: null` MEANS this repeated item
@@ -877,7 +877,7 @@ function _buildRepeatedItemStep(fieldDef, category, depth, itemValue, queue) {
      fallbacks past a hole. */
   summary.textContent = fieldDef.messageType !== null ? fieldDef.messageType
     : (fieldDef.name !== "" ? fieldDef.name : "item");
-  const removeBtn = el("button", "btn-small");
+  const removeBtn = domElement("button", { class: "btn-small" });
   removeBtn.textContent = "×";
   removeBtn.type = "button";
   removeBtn.title = "Remove item";
@@ -885,7 +885,7 @@ function _buildRepeatedItemStep(fieldDef, category, depth, itemValue, queue) {
   summary.appendChild(removeBtn);
   itemWrapper.appendChild(summary);
 
-  const childContainer = el("div", "form-message-children");
+  const childContainer = domElement("div", { class: "form-message-children" });
   /* `children: null` MEANS this field is not a message, so it declares NO fields for an item to render —
      which is a statement about the schema and not a gap: the item's own captured keys are rendered by the
      loop below either way, and that is the whole content of an item whose shape nothing described. */
@@ -948,7 +948,7 @@ function _buildMessageStep(fieldDef, category, depth, initialValue, hasSchema, q
        : (fieldDef.name !== "" ? fieldDef.name : "message"))
     : (fieldDef.name !== "" ? fieldDef.name : "object");
   details.appendChild(summary);
-  const childContainer = el("div", "form-message-children");
+  const childContainer = domElement("div", { class: "form-message-children" });
   /* A CHILD INHERITS THE MESSAGE IT CAME FROM, and where this field names none (`messageType: null`) it
      inherits whatever schema THIS field renames under — which may itself be `null`, meaning the children
      have no rename target either. Reading the chain as three statements rather than as two fallbacks is

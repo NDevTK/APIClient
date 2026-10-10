@@ -296,6 +296,8 @@
          Object.prototype. Loaded straight after check.js because a file that keys such a map without it
          throws ReferenceError at the mint, which is the loud failure rather than the quiet one. -->
     <script src="lib/stranger-keyed.js"></script>
+    <!-- The popup's one DOM builder; every library below that builds elements builds through it. -->
+    <script src="lib/dom-builder.js"></script>
     <!-- lib/field-def.js FIRST among the libraries: it is the ONE definition of the Send panel's field
          record, and every producer below (discovery.js, openapi-import.js, popup-gql.js, popup-form.js)
          builds through it. A realm that loads a producer without it does not assert LESS — it asserts

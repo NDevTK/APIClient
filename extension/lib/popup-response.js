@@ -228,16 +228,16 @@ function renderResultBody(result) {
   }
 }
 
-function addHeaderRow(initialKey = "", initialValue = "") {
+// One editable header row. Both arguments are strings: "" for a blank row, a captured header otherwise.
+function addHeaderRow(initialKey, initialValue) {
   const list = document.getElementById("send-headers-list");
-  const row = el("div", "header-row");
-  row.innerHTML =
-    `<input class="header-key" type="text" placeholder="Header-Name" value="${esc(initialKey)}" />` +
-    `<input class="header-val" type="text" placeholder="value" value="${esc(initialValue)}" />` +
-    `<button class="btn-remove-header" type="button" title="Remove">&times;</button>`;
-  row
-    .querySelector(".btn-remove-header")
-    .addEventListener("click", () => row.remove());
+  const remove = domElement("button", { class: "btn-remove-header", type: "button", title: "Remove" }, ["\u00d7"]);
+  const row = domElement("div", { class: "header-row" }, [
+    domElement("input", { class: "header-key", type: "text", placeholder: "Header-Name", value: initialKey }),
+    domElement("input", { class: "header-val", type: "text", placeholder: "value", value: initialValue }),
+    remove,
+  ]);
+  remove.addEventListener("click", () => row.remove());
   list.appendChild(row);
 }
 
@@ -455,12 +455,6 @@ function esc(s) {
   const d = document.createElement("div");
   d.textContent = String(s);
   return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;").replace(/`/g, "&#96;");
-}
-
-function el(tag, className) {
-  const e = document.createElement(tag);
-  if (className) e.className = className;
-  return e;
 }
 
 function renderPbTree(rootNodes, rootSchema = null, rootFallbackSchemaId = "", rootDoc = null) {

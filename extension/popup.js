@@ -426,7 +426,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document
     .getElementById("btn-add-header")
-    .addEventListener("click", addHeaderRow);
+    .addEventListener("click", () => addHeaderRow("", ""));
   document.getElementById("btn-gql-add-op").addEventListener("click", () => {
     gqlSaveCurrentOp();
     gqlState.ops.push({ query: "", variables: null, operationName: null, extensions: null });
