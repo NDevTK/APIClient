@@ -30341,29 +30341,6 @@ static JSOpKeyed *js_op_keyed_clone(JSContext *ctx, const JSOpKeyed *ok)
     return n;
 }
 
-static bool ta_write_needs_toprim(JSContext *ctx, JSValueConst target, JSValueConst key, JSValueConst val)
-{
-    JSObject *p;
-    if (JS_VALUE_GET_TAG(val) != JS_TAG_OBJECT) return false;
-    if (JS_VALUE_GET_TAG(target) != JS_TAG_OBJECT) return false;
-    p = JS_VALUE_GET_OBJ(target);
-    if (!is_typed_array(p->class_id)) return false;
-    switch (JS_VALUE_GET_TAG(key)) {
-    case JS_TAG_INT:
-    case JS_TAG_FLOAT64:
-        return true;
-    case JS_TAG_STRING: {
-        JSAtom a = JS_ValueToAtom(ctx, key);   /* a STRING key: interning it runs nothing */
-        int num;
-        if (a == JS_ATOM_NULL) { JS_FreeValue(ctx, JS_GetException(ctx)); return false; }
-        num = JS_AtomIsNumericIndex(ctx, a);
-        JS_FreeAtom(ctx, a);
-        return num > 0;
-    }
-    default:
-        return false;   /* a symbol, a bool, null/undefined: an ordinary set */
-    }
-}
 /* The same question the interpreter's write site asks, in the form the KEYED ENTRY can ask it: the entry has
    resolved the key to an atom already, so the canonical-numeric-index test is a property of that atom and needs
    no second conversion. `recv` is the entry's resolved receiver, UNINITIALIZED meaning "the object itself" —
@@ -42983,6 +42960,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     gp_val = s->cb_value;
                     if (s->cb_pending == 10) {
                         gp_atom = JS_ATOM_length; gp_op = GP_SET;   /* the closing Set(A,"length",len) */
+                    } else if (s->cb_pending == 14) {
+                        /* a TypedArray element's Set(target, k, value, true) — see ta_elem_set */
+                        DCHECK(s->ta_k <= JS_ATOM_MAX_INT,
+                               "a TypedArray target longer than an int atom can name — build the heap-atom write");
+                        gp_obj = s->ta_target;
+                        gp_atom = __JS_AtomFromUInt32((uint32_t)s->ta_k); gp_op = GP_SET;
                     } else {
                         DCHECK(s->cb_pending == 9,
                                "the consume machine's element-write arm was entered with no write in flight");
@@ -42993,17 +42976,17 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     goto do_getprop_tramp;
                 }
                 if (st == 5) {
-                    /* THE ToPrimitive arm. Two phases use it and the flag already in flight says which — a
-                       TypedArray element write coerces with hint NUMBER (10.4.5.16 step 1), fromEntries'
-                       ToPropertyKey with hint STRING. Both are the page's @@toPrimitive/valueOf, and both used to
-                       run from C. */
+                    /* THE ToPrimitive arm, for the coercions this machine performs itself: GetSetRecord's size
+                       and LengthOfArrayLike's length with hint NUMBER, GroupBy's and fromEntries' ToPropertyKey
+                       with hint STRING. A TypedArray element's coercion is not one of them — ta_elem_set hands
+                       the whole Set to the keyed entry — and the default arm below refuses it. */
                     tp_outer = s; tp_outer_kind = CONT_ITER_CONSUME;
                     if (s->setrec_pending) {
                         DCHECK(s->setrec_ph == 1, "GetSetRecord's ToPrimitive arm entered outside the size phase");
                         tp_value = s->cb_value; tp_hint = HINT_NUMBER;   /* ToNumber(rawSize) */
                     } else if (s->cb_pending == 13) {
                         tp_value = s->ent_key; tp_hint = HINT_STRING;    /* GroupBy's ToPropertyKey(key) */
-                    } else if (s->cb_pending == 5 || s->cb_pending == 8) {
+                    } else if (s->cb_pending == 8) {
                         tp_value = s->cb_value; tp_hint = HINT_NUMBER;
                     } else {
                         DCHECK(s->ent_pending && s->ent_ph == 2,
@@ -87191,19 +87174,19 @@ static const JSTrampStepDef js_array_fromasync_def = {
    at the definition no pointer names this, and js_call_c_function's JS_CFUNC_consume arm is the one backstop for a
    call site that was never routed. */
 
-/* 23.2.2.1 step 5.d.iv / 5.b: Set(target, k, value, true) into the TypedArray being built. That [[Set]] begins
-   with ToNumber (ToBigInt for the 64-bit classes), which for an OBJECT value is the page's @@toPrimitive/valueOf —
-   so `Int8Array.from([{valueOf(){ while(x){} }}])` drove a user body from C. Park it for the ToPrimitive arm
-   instead; on the way back the value is a primitive and the [[Set]] runs nothing.
-   Returns 1 = parked (propagate step code 5), 0 = written, -1 = threw. Consumes v either way. */
+/* 23.2.2.1 step 5.d.iv / 5.b and 23.2.5.1's InitializeTypedArrayFrom{List,ArrayLike}: Set(target, k, value, true)
+   into the TypedArray being built. A primitive stores with nothing to invoke. An object — the page's own or an
+   unknown standing for external input — is handed to the keyed entry as a GP_SET (step code 10, cb_pending 14),
+   which owns both cases of 10.4.5.18 TypedArraySetElement: an object's ToNumber/ToBigInt runs on the tramp, and an
+   unknown is stored as its example under a span without being coerced. This machine coerces nothing itself: a
+   tramp ToPrimitive answers an unknown with the unknown, so a private coercion never reaches a primitive.
+   Returns 1 = the Set is in flight, 0 = written, -1 = threw. Consumes v either way. */
 static int ta_elem_set(JSContext *ctx, JSIterConsume *s, JSValue v)
 {
-    JSValue idx = js_int64(s->ta_k);
-    bool needs = ta_write_needs_toprim(ctx, s->ta_target, idx, v);
-    JS_FreeValue(ctx, idx);
-    if (needs) {
-        DCHECK(!s->cb_pending, "a callback round-trip is already in flight on this state");
-        s->cb_value = v; s->cb_pending = 5;
+    if (JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT) {
+        DCHECK(!s->cb_pending && JS_IsUndefined(s->cb_value),
+               "a TypedArray element Set was issued with another round-trip still in flight on this state");
+        s->cb_value = v; s->cb_pending = 14;
         return 1;
     }
     if (JS_SetPropertyInt64(ctx, s->ta_target, s->ta_k, v) < 0) return -1;   /* consumes v */
@@ -87576,17 +87559,25 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
             s->cb_value = fret; s->ta_have_el = 1;
             goto ta_map_loop;
         }
-        if (which == 5 || which == 3) {
-            /* 5 = the element's ToPrimitive settled, so `fret` is the primitive the [[Set]] wanted; 3 = the mapfn
-               returned, so `fret` is the mapped element (which may itself need coercing). Either way the write
-               belongs to the map/set phase, which RESUMES ITSELF — returning 1 here would drive the source's
-               .next() again, and the source is exhausted by then, so every element cost the page's iterator one
-               extra spurious call (Int8Array.from(src, fn) over two elements called next 5 times, not 3). */
+        if (which == 14) {
+            /* the element's Set(target, k, value, true) landed through the keyed entry: the element is written
+               and the walk advances by exactly one index, which is the only way this phase moves. */
+            DCHECK(s->ta_phase == 3 && s->ta_k < s->k,
+                   "a TypedArray element Set landed outside the map/set phase or past the source's length");
+            JS_FreeValue(ctx, value);   /* the Set BORROWED it */
+            JS_FreeValue(ctx, fret);
+            s->ta_k++;
+            goto ta_map_loop;
+        }
+        if (which == 3) {
+            /* the mapfn returned, so `fret` is the mapped element. The write belongs to the map/set phase, which
+               RESUMES ITSELF — returning 1 here would drive the source's .next() again, and the source is
+               exhausted by then, so every element would cost the page's iterator one extra call. */
             int w;
             JS_FreeValue(ctx, value);
             w = ta_elem_set(ctx, s, fret);   /* consumes fret */
             if (w < 0) return -1;
-            if (w == 1) return 5;
+            if (w == 1) return 10;
             goto ta_map_loop;
         }
         if (which == 2) {   /* Array.from's mapfn: the RESULT is the element to append */
@@ -87669,7 +87660,7 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
             if (JS_IsUndefined(s->mapfn)) {
                 int w = ta_elem_set(ctx, s, v);   /* consumes v */
                 if (w < 0) return -1;
-                if (w == 1) return 5;             /* the element is an object: coerce it on the tramp first */
+                if (w == 1) return 10;            /* an object element: its Set goes through the keyed entry */
                 continue;
             }
             /* mapfn(kValue, k) is USER CODE: hand it to the shared callback drive so its body runs on the tramp. */
