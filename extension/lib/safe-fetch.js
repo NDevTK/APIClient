@@ -1346,10 +1346,8 @@ function _urlList(requested, finalHref, redirected) {
 /* Fetch §5.3 "Body mixin"'s body, read chunk by chunk. With no sink this is consume body run to completion
    and the assembled bytes are identical; with `opts.onChunk` each chunk is also released as it arrives.
    Where this runs relative to the gates decides what a released chunk has passed. Before it: the scheme
-   allowlist, the userinfo refusal, both private-host checks, both destructive-path checks and both firing
-   refusals. After it: CORB, the one gate that reads the body, and the credentialed SOP/CORS check, which
-   reads only headers but is placed after the read. So a released chunk has passed neither. No caller states
-   `onChunk` today; a credentialed one would release bytes the SOP check may then refuse.
+   allowlist, the userinfo refusal, both private-host checks, both destructive-path checks, both firing
+   refusals and the credentialed SOP/CORS check. After it: CORB, the one gate that reads the body.
    A script-like destination is therefore not streamable: `_sniff` classifies most JSON only from the whole
    body (a prefix of a document longer than 4096 bytes does not parse), so a first-chunk answer would be
    CORB's allow arm. The entry refuses `blocked-stream-body-gated:` instead. `computedType` is derived from
@@ -1617,10 +1615,36 @@ async function safeFetch(url, opts) {
      body and the SOP read an absent `Access-Control-Allow-Origin`. */
   var headers = {};
   resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; });
+  /* Own SOP/CORS for a credentialed reply. The browser does not apply the same-origin policy to an extension
+     fetch with host permissions, so when cookies are attached this zone enforces it on the bytes before
+     returning them; otherwise a bundle could record a cross-origin endpoint and read the person's
+     authenticated data from any site they are signed into.
+       SOP:  a resource same-origin with the page principal (`opts.pageOrigin`) is readable.
+       CORS: a cross-origin credentialed read needs `Access-Control-Allow-Origin` equal to that exact origin
+             (never `*`) and `Access-Control-Allow-Credentials: true`.
+     A refused read returns no body; the request was a GET, so what is refused is the bytes. */
+  if (credentialed) {
+    /* `_pageOrigin` and `_resourceSameOrigin` are read, not recomputed: they are over `_finalOrigin`, so a
+       same-origin request that redirected cross-origin is cross-origin here and at CORB alike. An opaque or
+       absent principal is same-origin with nothing and can never match ACAO, so it fails closed. */
+    if (!_resourceSameOrigin) {
+      var _acao = headers["access-control-allow-origin"] || "";
+      var _acac = (headers["access-control-allow-credentials"] || "").toLowerCase();
+      // Fetch §4.10 "CORS check": ACAO must byte-match the request's own origin (`*` is
+      // refused once credentials mode is "include") and ACAC must be `true`.
+      if (!_isRealOrigin(_pageOrigin) || _acao !== _pageOrigin || _acac !== "true")
+        /* Network: Fetch §4.10 "CORS check" failing makes §4.4 "HTTP fetch" "return a network error". The
+           reason names the landed origin that failed. Headers are `{}` here, unlike CORB's refusal: this
+           refuses a cross-origin read the server never granted, and its headers are part of that read. */
+        return _refused("network", "blocked-cors-credentialed:" + _finalOrigin,
+                        _urlList(parsed.href, _finalHref, resp.redirected), {});
+    }
+  }
   /* The body, as bytes, after both SSRF checks, so nothing internal is ingested before the target is judged.
      There is no decode: the engine decodes with the response's charset and BOM (see the header), so it
-     receives exactly what the server sent. CORB, the one gate reading the body, and the credentialed SOP run
-     below (see `_readBody`). */
+     receives exactly what the server sent. It is read after the credentialed SOP/CORS check above, which needs
+     only headers (Fetch §4.4 "HTTP fetch" runs the CORS check on the response before its body is delivered),
+     and before CORB, the one gate that reads the body (see `_readBody`). */
   var body = await _readBody(resp, opts.onChunk, _bodyGated(opts));
   /* The one sniff and the one type: CORB reads `protected` and the record reads `type`, so no second answer
      exists to disagree. A missing `Content-Type` is MIME Sniffing §5.1 "Interpreting the resource metadata"'s
@@ -1653,31 +1677,6 @@ async function safeFetch(url, opts) {
     if (_deny)
       return _refused("network", "blocked-corb:" + _deny + ":" + _computed,
                       _urlList(parsed.href, _finalHref, resp.redirected), headers);
-  }
-  /* Own SOP/CORS for a credentialed reply. The browser does not apply the same-origin policy to an extension
-     fetch with host permissions, so when cookies are attached this zone enforces it on the bytes before
-     returning them; otherwise a bundle could record a cross-origin endpoint and read the person's
-     authenticated data from any site they are signed into.
-       SOP:  a resource same-origin with the page principal (`opts.pageOrigin`) is readable.
-       CORS: a cross-origin credentialed read needs `Access-Control-Allow-Origin` equal to that exact origin
-             (never `*`) and `Access-Control-Allow-Credentials: true`.
-     A refused read returns no body; the request was a GET, so what is refused is the bytes. */
-  if (credentialed) {
-    /* `_pageOrigin` and `_resourceSameOrigin` are read, not recomputed: they are over `_finalOrigin`, so a
-       same-origin request that redirected cross-origin is cross-origin here and at CORB alike. An opaque or
-       absent principal is same-origin with nothing and can never match ACAO, so it fails closed. */
-    if (!_resourceSameOrigin) {
-      var _acao = headers["access-control-allow-origin"] || "";
-      var _acac = (headers["access-control-allow-credentials"] || "").toLowerCase();
-      // Fetch §4.10 "CORS check": ACAO must byte-match the request's own origin (`*` is
-      // refused once credentials mode is "include") and ACAC must be `true`.
-      if (!_isRealOrigin(_pageOrigin) || _acao !== _pageOrigin || _acac !== "true")
-        /* Network: Fetch §4.10 "CORS check" failing makes §4.4 "HTTP fetch" "return a network error". The
-           reason names the landed origin that failed. Headers are `{}` here, unlike CORB's refusal: this
-           refuses a cross-origin read the server never granted, and its headers are part of that read. */
-        return _refused("network", "blocked-cors-credentialed:" + _finalOrigin,
-                        _urlList(parsed.href, _finalHref, resp.redirected), {});
-    }
   }
   /* The type this zone computed travels with the bytes, so the renderer is handed an answer rather than
      evidence (`core/fetch/fetch.c` asserts its presence on the reply record). `refusal: null` is the positive
