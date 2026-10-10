@@ -10,6 +10,7 @@
 #include "solver/solve.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
+#include "solver/net_reach.h"   /* how far the frontier stands from the request sites it has not run */
 #include "solver/world.h"   /* what the cross-instance seam materialized here — see world_segment_stats */
 #include "solver/concolic.h"
 #include "solver/metrics.h"    /* the @S arrival census and the schema it is declared in */
@@ -509,9 +510,13 @@ static char *errs_json_array(ErrsArray which) {
    @kind lifetime: workDone rankChanges
    @kind lifetime: keyIndexAskedLifetime keyIndexDifferedLifetime keyIndexDifferedTieLifetime
    @kind lifetime: keyIndexDifferedStrictLifetime keyIndexBandMembersLifetime keyIndexBandWeighedLifetime
+   @kind gauge: reachBodies reachBodiesRan reachSites reachSitesHit reachSitesSkipped reachSitesUnrun
+   @kind gauge: reachFramed reachAheadTop reachAheadStack reachAheadTopMin reachAheadTopMax reachAheadTopSum
+   @kind lifetime: reachSitesCompiledLifetime reachSitesHitLifetime
 */
 char *result_wfq_json(void) {
     WfqCensus w;
+    NetReachCensus nr;
 
     flow_wfq_census(&w);
     /* The four arming buckets in one read, since they are a partition (solver/flow.h). After the census,
@@ -613,6 +618,12 @@ char *result_wfq_json(void) {
        zero). `qjs_result` composes this shape, since a session that drains or parks leaves no members. */
     if (w.members == 0)
         return composef("{\"members\":0}");
+    /* A member exists, so flow_new named the register's context, whose runtime holds every member's bodies. */
+    net_reach_census(pending_ctx(), &nr);
+    DCHECKF(nr.members == w.members, "the reach census walked %ld members and the WFQ census %ld, in one "
+            "composition that steps nothing", nr.members, w.members);
+    DCHECKF(nr.framed <= (long)(w.members - w.mem_unframed), "the reach census read a body frame in %ld "
+            "members and the WFQ census found a frame in only %ld", nr.framed, (long)(w.members - w.mem_unframed));
     return composef(
                      "{\"members\":%ld,\"valMin\":%.1f,\"valMax\":%.1f,\"valTop\":%.1f,"
                      /* …and the clock those three are positions on. `vt` is the frontier's virtual time
@@ -915,7 +926,20 @@ char *result_wfq_json(void) {
                         `scanCensusWeights` against it are per-unit-of-work rates. `rankChanges` is the hook's
                         rescan denominator: `scanRivalRuns / scanNextRuns` is scan work per step, not cadence,
                         since a rescan fires on a rank change or an incumbent switch (solver/flow.h). */
-                     "\"workDone\":%ld,\"rankChanges\":%ld}",
+                     "\"workDone\":%ld,\"rankChanges\":%ld,"
+                     /* Request-site reach (solver/net_reach.h; quickjs.h's JS_NetSiteCensus defines a site and
+                        what it cannot see). Sites are bytecode reads of a door's entry name; `reachSites ==
+                        reachSitesHit + reachSitesSkipped + reachSitesUnrun` over live bodies: `Skipped` sits in
+                        a body some flow ran and `Unrun` in a body none ran.
+                        The lifetime pair counts every compiled copy of a body. The member rows: `reachFramed`
+                        members execute a body, `reachAheadTop` of them stand in one holding an unreached site
+                        ahead of the deepest pc (`reachAheadTopMin/Max/Sum` in bytecode bytes over those; 0 when
+                        none), `reachAheadStack` in any frame. Measurement only: nothing orders on it. */
+                     "\"reachBodies\":%lld,\"reachBodiesRan\":%lld,\"reachSites\":%lld,"
+                     "\"reachSitesHit\":%lld,\"reachSitesSkipped\":%lld,\"reachSitesUnrun\":%lld,"
+                     "\"reachSitesCompiledLifetime\":%llu,\"reachSitesHitLifetime\":%llu,"
+                     "\"reachFramed\":%ld,\"reachAheadTop\":%ld,\"reachAheadStack\":%ld,"
+                     "\"reachAheadTopMin\":%ld,\"reachAheadTopMax\":%ld,\"reachAheadTopSum\":%lld}",
                      w.members, w.val_min, w.val_max, w.val_top, w.vt,
                      w.val_zero, w.val_arrived, w.val_unplaced, w.self_emit, w.unrun,
                      w.never_picked, w.never_picked_gap, w.never_picked_at_top,
@@ -967,7 +991,11 @@ char *result_wfq_json(void) {
                      flow_plateau_runs(), flow_plateau_held_idle(),
                      (long long)w.arrivals, (long long)w.departures,
                      (long long)w.credit_calls, (long long)w.credit_paid, (long long)w.credit_dropped,
-                     engine_work_done(), flow_rank_changes());
+                     engine_work_done(), flow_rank_changes(),
+                     (long long)nr.sites.bodies, (long long)nr.sites.bodies_ran, (long long)nr.sites.sites,
+                     (long long)nr.sites.hit, (long long)nr.sites.skipped, (long long)nr.sites.unrun,
+                     (unsigned long long)nr.sites.compiled, (unsigned long long)nr.sites.hit_ever,
+                     nr.framed, nr.ahead_top, nr.ahead_stack, nr.top_min, nr.top_max, nr.top_sum);
 }
 
 /* One row composer for the two state-kind histograms, which differ only in the side of the pair counted.

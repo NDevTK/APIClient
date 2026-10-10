@@ -418,6 +418,12 @@ struct JSRuntime {
     bool orphan_takes_memo_valid;
     JSOrphanBornFn *orphan_born;
     void *orphan_born_opaque;
+    /* The request-site census (JS_NetSiteCensus): every live body holding a site, linked through its
+       `net_site_link`, and two lifetime counts over every body this runtime compiled. Nothing branches on
+       them; they are a measurement. */
+    struct list_head net_site_bodies;
+    uint64_t net_sites_compiled;
+    uint64_t net_sites_hit;
     JSMallocFunctions mf;
     JSMallocState malloc_state;
     JSArenaState arena_state;
@@ -1365,7 +1371,10 @@ typedef struct JSFunctionBytecode {
        js_document_container_grant, which is where JSObject.doc_built is handed out.
        See JS_EVAL_FLAG_INLINE_SCRIPT for what the two halves are and why they differ. */
     uint8_t from_inline_script : 1;
-    /* XXX: 1 bit available */
+    /* This body has executed in some flow: set at `restart:` beside `entered` and nowhere else. `entered` also
+       means a body the orphan walk or the born hook scheduled, so this is the half of it that ran. Read by the
+       request-site census (JS_NetSiteCensus); nothing branches on it. */
+    uint8_t ran : 1;
     uint8_t *byte_code_buf; /* (self pointer) */
     int byte_code_len;
     JSAtom func_name;
@@ -1401,6 +1410,14 @@ typedef struct JSFunctionBytecode {
        no state to decode and nothing downstream can tell the two apart, which is the property a sentinel is
        usually missing. */
     uint64_t locator;
+    /* This body's request sites (js_net_sites_build), sorted by `pc` and owned; NULL with a zero count when it
+       has none. A site is an OP_get_var whose spelling the host claimed as a network door's entry, and `hit`
+       is set the first time any flow executes it. It is shared across flows on purpose: it answers "has some
+       flow reached it", a census no flow reads. The body is on `rt->net_site_bodies` through `net_site_link`
+       exactly while the count is nonzero. */
+    struct JSNetSite { uint32_t pc; uint8_t hit; } *net_sites;
+    int net_site_count;
+    struct list_head net_site_link;
 #if APICLIENT_DEV
     /* THE OPERAND DEPTH AT EVERY OPCODE OF THIS BODY — kept instead of thrown away, because it is the only
        thing that can say WHICH opcode left the operand stack at the wrong height.
@@ -3705,6 +3722,7 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     init_list_head(&rt->gc_obj_list);
     init_list_head(&rt->gc_zero_ref_count_list);
     init_list_head(&rt->gc_ctx_sweep_list);
+    init_list_head(&rt->net_site_bodies);
     rt->gc_phase = JS_GC_PHASE_NONE;
 
 #ifdef ENABLE_DUMPS // JS_DUMP_LEAKS
@@ -4658,6 +4676,9 @@ void JS_FreeRuntime(JSRuntime *rt)
            "any more. `[gcleak]` above counts them by class; `[gcroot]` counts, and the dump beside it names, "
            "the ones still held from OUTSIDE the heap once every reference the heap makes of itself has been "
            "subtracted — those are the culprits and everything else is what they reach");
+    DCHECK(!list_empty(&rt->gc_obj_list) || list_empty(&rt->net_site_bodies),
+           "the heap is empty and the request-site list still links a body — every member is a live "
+           "function bytecode, so free_function_bytecode released one without unlinking it");
 
     /* THE MACHINES NOBODY FINISHED. Declared here and defined with the census itself, for the reason the GC
        object namer above is declared here: this report runs in JS_FreeRuntime, which sits above the step
@@ -34856,6 +34877,29 @@ static void js_throw_callee_not_a_function(JSContext *ctx, JSFunctionBytecode *b
                                            JSValueConst func, JSValueConst receiver,
                                            int argc, int callee_slot, bool is_method);
 
+/* The OP_get_var at `pc` of `b` executed: if it is one of the body's request sites, mark it reached and count
+   its first reach. Every opcode runs after `restart:` marks the body ran, which the census relies on. */
+static void js_net_site_hit(JSRuntime *rt, JSFunctionBytecode *b, uint32_t pc)
+{
+    int lo = 0, hi = b->net_site_count - 1;
+
+    DCHECK(b->ran, "a body executed an opcode without restart: having marked it ran");
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        if (b->net_sites[mid].pc < pc) {
+            lo = mid + 1;
+        } else if (b->net_sites[mid].pc > pc) {
+            hi = mid - 1;
+        } else {
+            if (!b->net_sites[mid].hit) {
+                b->net_sites[mid].hit = 1;
+                rt->net_sites_hit++;
+            }
+            return;
+        }
+    }
+}
+
 /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
 static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                JSValueConst this_obj, JSValueConst new_target,
@@ -35650,6 +35694,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
        trampoline's pushes (do_tramp_call, the construct push, the apply reshape), and the coroutine resume —
        so the mark cannot be missed by a call shape nobody thought of. See JSFunctionBytecode.entered. */
     b->entered = 1;
+    b->ran = 1;
     /* AND IT IS STANDING SOMEWHERE, from this instant. The frame is born with a NULL cur_pc — three separate
        birth sites write that NULL — and until the body reached an opcode that happened to store one, a stack
        trace taken through it had no position to report; upstream rendered that as "(missing)" in one walk and
@@ -46939,6 +46984,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 JSProperty *pr;
                 JSAtom atom;
                 JSWithHas *wh;
+                if (unlikely(b->net_site_count) && opcode == OP_get_var)
+                    js_net_site_hit(rt, b, (uint32_t)(pc - 1 - b->byte_code_buf));
                 atom = get_u32(pc);
                 pc += 4;
                 sf->cur_pc = pc;
@@ -56528,6 +56575,13 @@ typedef struct JSFunctionDef {
     int annexb_var_count;
     int annexb_var_size;
     JSAnnexBFuncVar *annexb_vars;
+
+    /* The spellings variable resolution reported as a network door's entry (the reports that set
+       `spells_net_entry`): `base` is the free identifier and `member` the adjacent field, or JS_ATOM_NULL for
+       the bare name. Distinct pairs, atoms owned; js_net_sites_build reads them against the final bytecode. */
+    struct JSNetSpelling { JSAtom base, member; } *net_spell;
+    int net_spell_count;
+    int net_spell_size;
 
     DynBuf byte_code;
     int last_opcode_pos; /* -1 if no last opcode */
@@ -71795,6 +71849,40 @@ static void free_bytecode_atoms(JSRuntime *rt,
 
 #ifndef QJS_DISABLE_PARSER
 
+/* Records one spelling the host claimed as a door's entry for this body, once per distinct pair. The atoms
+   are duplicated because js_net_sites_build reads them after pass 3, which may have dropped the only
+   occurrence (dead code) and with it the bytecode's own reference. */
+static void js_net_spell_add(JSContext *ctx, JSFunctionDef *fd, JSAtom base, JSAtom member)
+{
+    struct JSNetSpelling *e;
+    int i;
+
+    DCHECK(base != JS_ATOM_NULL, "a door spelling was recorded with no identifier");
+    for (i = 0; i < fd->net_spell_count; i++)
+        if (fd->net_spell[i].base == base && fd->net_spell[i].member == member)
+            return;
+    CHECK(!js_resize_array(ctx, (void **)&fd->net_spell, sizeof(fd->net_spell[0]), &fd->net_spell_size,
+                           fd->net_spell_count + 1),
+          "out of memory recording a request-site spelling");
+    e = &fd->net_spell[fd->net_spell_count++];
+    e->base = JS_DupAtom(ctx, base);
+    e->member = member == JS_ATOM_NULL ? JS_ATOM_NULL : JS_DupAtom(ctx, member);
+}
+
+static void js_net_spell_free(JSContext *ctx, JSFunctionDef *fd)
+{
+    int i;
+
+    for (i = 0; i < fd->net_spell_count; i++) {
+        JS_FreeAtom(ctx, fd->net_spell[i].base);
+        if (fd->net_spell[i].member != JS_ATOM_NULL)
+            JS_FreeAtom(ctx, fd->net_spell[i].member);
+    }
+    js_free(ctx, fd->net_spell);
+    fd->net_spell = NULL;
+    fd->net_spell_count = fd->net_spell_size = 0;
+}
+
 /* Release ONE function definition's own storage, its children already gone. Split from the tree walk below for
    the reason the walk had to stop being a recursion: the depth is the SOURCE's function nesting, and
    `"function f(){".repeat(n)` makes n whatever it likes. */
@@ -71802,6 +71890,7 @@ static void js_free_function_def_one(JSContext *ctx, JSFunctionDef *fd)
 {
     int i;
 
+    js_net_spell_free(ctx, fd);
     free_bytecode_atoms(ctx->rt, fd->byte_code.buf, fd->byte_code.size,
                         fd->use_short_opcodes);
     dbuf_free(&fd->byte_code);
@@ -73247,8 +73336,10 @@ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
            and the bit answers whether ANY of them is there. */
         if (g_concolic.global_named &&
             g_concolic.global_named(JS_AtomGetStr(ctx, gn_buf, sizeof(gn_buf), var_name),
-                                    op == OP_scope_get_var_undef))
+                                    op == OP_scope_get_var_undef)) {
             s->spells_net_entry = true;
+            js_net_spell_add(ctx, s, var_name, JS_ATOM_NULL);
+        }
         /* AND THE PROPERTY SPELLING OF THE SAME ENTRY, WHICH IS A SECOND FACT ABOUT THE SAME OCCURRENCE AND NOT
            A SECOND OCCURRENCE. `window.requestIdleCallback` raises the report above for `window` — which is
            what the base IS, a free identifier resolved against the global object — and nothing at all for the
@@ -73270,8 +73361,10 @@ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
                ORDER has no such distinction to preserve, so an OR here is right and a second bit would be two
                names for one question. */
             if (g_concolic.global_member_named(JS_AtomGetStr(ctx, gn_buf, sizeof(gn_buf), var_name),
-                                               JS_AtomGetStr(ctx, mn_buf, sizeof(mn_buf), next_field)))
+                                               JS_AtomGetStr(ctx, mn_buf, sizeof(mn_buf), next_field))) {
                 s->spells_net_entry = true;
+                js_net_spell_add(ctx, s, var_name, next_field);
+            }
         }
     }
 
@@ -76117,6 +76210,64 @@ static int js_create_function_pre(JSContext *ctx, JSFunctionDef *fd)
     return -1;
 }
 
+/* Whether the OP_get_var at `p` of final bytecode `buf` reads a spelling this body's resolution reported:
+   its atom is a recorded bare name, or a recorded base whose member the next opcode reads by name
+   (OP_get_field or OP_get_field2, the adjacency next_field_atom tested in pass 2). */
+static bool js_net_site_spelled(const JSFunctionDef *fd, const uint8_t *buf, uint32_t len, uint32_t p)
+{
+    JSAtom atom = get_u32(buf + p + 1);
+    uint32_t q = p + short_opcode_info(OP_get_var).size;
+    int i;
+
+    for (i = 0; i < fd->net_spell_count; i++) {
+        const struct JSNetSpelling *e = &fd->net_spell[i];
+        if (e->base != atom)
+            continue;
+        if (e->member == JS_ATOM_NULL)
+            return true;
+        if (q + 5 <= len && (buf[q] == OP_get_field || buf[q] == OP_get_field2) && get_u32(buf + q + 1) == e->member)
+            return true;
+    }
+    return false;
+}
+
+/* Builds `b`'s request-site table from its final bytecode, in pc order, and links `b` on the runtime's list.
+   Pass 3 drops dead code, so a spelling whose every occurrence was unreachable yields no site. A census, not
+   a result: no consumer of this table decides anything. */
+static void js_net_sites_build(JSContext *ctx, JSFunctionBytecode *b, const JSFunctionDef *fd)
+{
+    const uint8_t *buf = b->byte_code_buf;
+    uint32_t len = (uint32_t)b->byte_code_len, p;
+    int n, pass;
+
+    DCHECKF(fd->net_spell_count == 0 || b->spells_net_entry,
+            "a body recorded %d door spellings and does not carry spells_net_entry; both are written by the "
+            "same two reports in resolve_scope_var", fd->net_spell_count);
+    if (fd->net_spell_count == 0)
+        return;
+    for (pass = 0; pass < 2; pass++) {
+        n = 0;
+        for (p = 0; p < len; p += short_opcode_info(buf[p]).size) {
+            DCHECKF(short_opcode_info(buf[p]).size > 0 && p + short_opcode_info(buf[p]).size <= len,
+                    "the final bytecode decode stopped at byte %u of %u", p, len);
+            if (buf[p] != OP_get_var || !js_net_site_spelled(fd, buf, len, p))
+                continue;
+            if (pass)
+                b->net_sites[n] = (struct JSNetSite){ .pc = p, .hit = 0 };
+            n++;
+        }
+        if (pass || n == 0)
+            break;
+        b->net_sites = js_malloc(ctx, (size_t)n * sizeof(b->net_sites[0]));
+        CHECK(b->net_sites != NULL, "out of memory building a body's request-site table");
+    }
+    if (n == 0)
+        return;
+    b->net_site_count = n;
+    ctx->rt->net_sites_compiled += (uint64_t)n;
+    list_add_tail(&b->net_site_link, &ctx->rt->net_site_bodies);
+}
+
 /* Everything AFTER the children exist: this definition's own code generation, which reads fd->cpool — the slots
    its children's results were written into. Frees `fd` on both paths, exactly as the recursive version did. */
 static JSValue js_create_function_post(JSContext *ctx, JSFunctionDef *fd)
@@ -76228,6 +76379,8 @@ static JSValue js_create_function_post(JSContext *ctx, JSFunctionDef *fd)
        facts belong to the SCRIPT and ride down the nest, and this one belongs to THIS body's own text. A nested
        function that spells a door's entry name says nothing about the body that declares it. */
     b->spells_net_entry = fd->spells_net_entry;
+    js_net_sites_build(ctx, b, fd);
+    js_net_spell_free(ctx, fd);
     b->eval_origin = fd->eval_origin;   /* HANDED OVER, like filename above; the def no longer owns it */
     fd->eval_origin = JS_ATOM_NULL;
     b->line_num = fd->line_num;
@@ -76404,6 +76557,10 @@ static void free_function_bytecode(JSRuntime *rt, JSFunctionBytecode *b)
     JS_FreeAtomRT(rt, b->eval_origin);
     js_free_rt(rt, b->pc2line_buf);
     js_free_rt(rt, b->source);
+    if (b->net_site_count) {
+        list_del(&b->net_site_link);
+        js_free_rt(rt, b->net_sites);
+    }
 #if APICLIENT_DEV
     js_free_rt(rt, b->stack_level_tab);   /* NULL for a body the bytecode reader built — see the field */
 #endif
@@ -113131,6 +113288,111 @@ uint32_t JS_OrphanGen(JSRuntime *rt) { return rt->orphan_gen; }
    `orphansDriven` and not this one cannot tell an order that fired from one whose preferred population was
    empty. It is the ORDER's own reachability witness and nothing branches on it. */
 uint64_t JS_OrphanPreferredTakes(JSRuntime *rt) { return rt->orphan_preferred_takes; }
+
+/* See quickjs.h. One walk of the bodies that hold sites, so every gauge is one instant. */
+void JS_NetSiteCensus(JSRuntime *rt, JSNetSiteCensus *out)
+{
+    struct list_head *el;
+
+    memset(out, 0, sizeof(*out));
+    out->compiled = rt->net_sites_compiled;
+    out->hit_ever = rt->net_sites_hit;
+    list_for_each(el, &rt->net_site_bodies) {
+        JSFunctionBytecode *b = list_entry(el, JSFunctionBytecode, net_site_link);
+        int64_t hit = 0;
+        int i;
+
+        DCHECKF(b->net_site_count > 0, "a body with %d request sites is on the site list", b->net_site_count);
+        for (i = 0; i < b->net_site_count; i++)
+            hit += b->net_sites[i].hit;
+        out->bodies++;
+        out->sites += b->net_site_count;
+        out->hit += hit;
+        if (b->ran) {
+            out->bodies_ran++;
+            out->skipped += b->net_site_count - hit;
+        } else {
+            DCHECKF(hit == 0, "a body that never ran has %lld reached request sites; js_net_site_hit runs only "
+                    "inside an activation, after restart: marks the body ran", (long long)hit);
+            out->unrun += b->net_site_count;
+        }
+    }
+    DCHECKF(out->hit + out->skipped + out->unrun == out->sites,
+            "the request-site partition sums to %lld over %lld sites",
+            (long long)(out->hit + out->skipped + out->unrun), (long long)out->sites);
+    DCHECKF((uint64_t)out->hit <= out->hit_ever && (uint64_t)out->sites <= out->compiled,
+            "live request sites exceed the lifetime counts: %lld reached of %llu ever, %lld live of %llu "
+            "compiled", (long long)out->hit, (unsigned long long)out->hit_ever, (long long)out->sites,
+            (unsigned long long)out->compiled);
+}
+
+/* The body a frame executes, or NULL for a frame that runs none (a call root, a native callee). */
+static const JSFunctionBytecode *net_frame_body(const JSStackFrame *sf)
+{
+    JSObject *p;
+
+    if (sf->is_call_root || JS_VALUE_GET_TAG(sf->cur_func) != JS_TAG_OBJECT)
+        return NULL;
+    p = JS_VALUE_GET_OBJ(sf->cur_func);
+    return js_class_has_bytecode(p->class_id) ? p->u.func.function_bytecode : NULL;
+}
+
+/* Folds one frame of a parked chain into `out`, deepest first. A frame with no body or no pc is not one. */
+static void net_ahead_frame(const JSFunctionBytecode *b, const uint8_t *pc, JSNetSiteAhead *out)
+{
+    uint32_t off;
+    int i;
+
+    if (!b || !pc)
+        return;
+    DCHECKF(pc >= b->byte_code_buf && pc <= b->byte_code_buf + b->byte_code_len,
+            "a parked frame's pc stands %lld bytes from the start of a %d-byte body",
+            (long long)(pc - b->byte_code_buf), b->byte_code_len);
+    off = (uint32_t)(pc - b->byte_code_buf);
+    out->frames++;
+    for (i = 0; i < b->net_site_count; i++)
+        if (b->net_sites[i].pc >= off && !b->net_sites[i].hit)
+            break;
+    if (i == b->net_site_count)
+        return;
+    out->frames_ahead++;
+    if (out->frames == 1) {
+        out->top_ahead = 1;
+        out->top_bytes = b->net_sites[i].pc - off;
+    }
+}
+
+/* See quickjs.h. Reads only: the chain is the one JS_FlowResume re-enters. */
+void JS_FlowNetSiteAhead(const JSValue *flow, JSNetSiteAhead *out)
+{
+    const JSAsyncFunctionState *s = (const JSAsyncFunctionState *)flow;
+    TrampFrame *t;
+
+    DCHECK(flow != NULL, "JS_FlowNetSiteAhead was asked about no flow at all");
+    memset(out, 0, sizeof(*out));
+    t = s->tramp_top;
+    if (!t) {
+        if (s->frame.cur_sp != NULL)
+            net_ahead_frame(net_frame_body(&s->frame), s->frame.cur_pc, out);
+        return;
+    }
+    /* An anchor has no body (`b` NULL); an async generator's live frame is in its generator data, which
+       tramp_live_sf does not answer for. Below the deepest, each frame is read from its callee's caller
+       record, the pair a deep resume restores. */
+    if (t->b && t->cont_kind != CONT_AGEN_DRIVE && t->cont_kind != CONT_AGEN_CREATE)
+        net_ahead_frame(t->b, tramp_live_sf(t)->cur_pc, out);
+    for (; t; t = t->up) {
+        const JSFunctionBytecode *body;
+
+        DCHECK(t->caller_sf != NULL, "a parked heap frame records no caller frame to resume into");
+        body = net_frame_body(t->caller_sf);
+        DCHECK(!body || body == t->caller_b,
+               "a parked frame's caller record names a body other than the caller frame's own function; a "
+               "deep resume restores the two together");
+        net_ahead_frame(body, t->caller_sf->cur_pc, out);
+    }
+}
+
 /* …AND WHAT THE WALK BEHIND IT COST, AS FOUR NUMBERS AND NEVER AS A QUOTIENT. The two means a reader wants
    (`entries / walks`, `full_candidates / walks_full`) have different denominators and one of them can be zero,
    so composing either here would hand back a figure whose denominator the caller cannot see — which is the

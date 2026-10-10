@@ -3103,6 +3103,31 @@ JS_EXTERN uint64_t JS_OrphanHash(JSContext *ctx, JSValueConst fn);
    offset, never a pc2line resolution, which makes it reproducible within a BUILD and not across two of them.
    See the definition's named residual for what that costs and what replaces it. */
 JS_EXTERN int JS_RunningSiteHash(JSContext *ctx, uint64_t *out);
+/* The request-site census, a measurement of reach and never an order or a result. A site is an OP_get_var in
+   final bytecode whose spelling `JSConcolicHooks.global_named` or `.global_member_named` claimed as a door's
+   entry (`fetch`, `window.fetch`), so dead code holds none. It cannot see a member door (`navigator.sendBeacon`,
+   an element's `src`), a computed or optional-chain spelling, or a name only a `with` call reads; a binding
+   that shadows the global still counts. `compiled` and `hit_ever` are lifetime counts over every body this
+   runtime compiled. The rest are gauges over live bodies at one instant, `sites == hit + skipped + unrun`:
+   `skipped` are unreached sites in bodies some flow ran, `unrun` sites in bodies none ran (a scheduled orphan
+   not yet driven among them). A body compiled twice holds two sets of sites, and source not yet compiled (a
+   later script, an unloaded chunk) holds none. */
+typedef struct {
+    uint64_t compiled, hit_ever;
+    int64_t bodies, bodies_ran, sites, hit, skipped, unrun;
+} JSNetSiteCensus;
+JS_EXTERN void     JS_NetSiteCensus(JSRuntime *rt, JSNetSiteCensus *out);
+/* Where a parked flow stands relative to those sites. `frames` counts the frames on its stack that execute a
+   body and hold a pc; `frames_ahead` those whose body holds an unreached site at or after that pc;
+   `top_ahead` says the deepest counted frame is one, and `top_bytes` is its bytecode distance to that site.
+   Forward and within one body: a site behind the pc that a loop revisits, or inside a callee, is not seen.
+   An async generator's own deepest frame is skipped, so its caller reads as the deepest. A flow with no
+   frame (between units, or holding only parked continuations) reads all zero. */
+typedef struct {
+    int frames, frames_ahead, top_ahead;
+    uint32_t top_bytes;
+} JSNetSiteAhead;
+JS_EXTERN void     JS_FlowNetSiteAhead(const JSValue *flow, JSNetSiteAhead *out);
 /* THE NAME OF AN INTRINSIC OF THIS REALM — the OTHER name source a value can have, for the creator kind
    JS_OrphanHash's composition cannot reach. A locator built from a script, a position and a body's text names
    nothing for `Array.prototype`: no page created it. An intrinsic is a SINGLETON of its realm, so the SLOT it
