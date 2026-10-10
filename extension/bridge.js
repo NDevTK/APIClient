@@ -2422,23 +2422,13 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
              "safeFetch answered a reply with no statusText — it is written on every path (the blocked arms " +
              "carry their REFUSAL REASON in it), and an empty string is a legitimate answer from any HTTP/2 " +
              "response, so an absent one cannot be defaulted without erasing the difference");
-      /* STATUS 0 IS NOT A REPLY. It is the one status no HTTP response has, and it is exactly what the
-         chokepoint answers when the request never went on the wire at all (bad URL, blocked scheme, blocked
-         private target, CORB). This comment's own rule — «`null` is a NETWORK ERROR, which is what a URL this
-         zone must not or cannot fetch honestly is» — names that case, and the record was crossing anyway: the
-         page saw a real reply whose status was a number no server returns, instead of §5.6's TypeError. */
-      /* AND WHICH KIND OF NOT-A-REPLY IT IS, WHICH THE CHOKEPOINT STATES AND THIS ZONE MAY NOT WORK OUT.
-         `status === 0` says a request did not produce a reply; it does not say WHY, and the two why's take
-         opposite actions. A refusal a real browser also makes (a `file:` scheme, a CORS failure, a CORB-blocked
-         script) IS Fetch §5.6's network error, and handing the flow one is the FIDELITY. A refusal only this
-         tool makes — the firing policy declining to spend an act, the destructive deny list refusing to send a
-         session-ending GET — has no browser behind it, so a network error FABRICATES a fact about the origin
-         and the flow explores its whole failure path under it. §@S names the honest state: search-not-yet-
-         solved, a PARKED flow, never a verdict.
-         THE GRADE IS READ OFF THE RECORD AND NEVER RE-DERIVED. `safe-fetch.js` applied the rule, so it is the
-         only zone that knows which one fired without asking the policy a second time — and a consumer that
-         MATCHED `statusText` would be a second copy of that policy written in a format nothing checks. This is
-         the same move `computedType` is: the zone that decided tells the renderer what it decided. */
+      /* Status 0 is not a reply: the chokepoint answers it when the request never went on the wire (bad URL,
+         blocked scheme, private target, CORB), and it crosses as `null`, the network error. */
+      /* Which kind of non-reply it is, stated by the chokepoint (`refusal.kind`) and never re-derived from
+         `statusText`. A refusal a browser also makes (a `file:` scheme, a CORS failure, CORB) is a network
+         error, which is fidelity. A refusal only this tool makes (the firing policy, the destructive deny list)
+         has no browser behind it, so it is a `decline`: the flow stays parked rather than being told the origin
+         failed. */
       DCHECK((r.status === 0) === (r.refusal !== null),
              "safeFetch answered with a status and a refusal that disagree — `status: 0` is the one status no " +
              "HTTP response has and is what every refusal answers, and `refusal` is the same fact graded, so " +
@@ -2456,73 +2446,36 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
         if (r.refusal.kind === "decline") return { refusal: r.refusal };
       }
       if (r.status === 0) return null;
-      /* TWO PIECES OF ONE REPLY, because they cross on two channels — `meta` is the JSON qjs_provide parses
-         and `bytes` is what it copies into the engine's heap beside it. They are handed over together so a
-         caller cannot deliver one without the other. */
+      /* Two pieces of one reply crossing on two channels: `meta` is the JSON qjs_provide parses and `bytes` is
+         copied into the engine's heap beside it. Returned together so neither is delivered without the other. */
       return { meta: { status: r.status, statusText: r.statusText, headers: Object.entries(r.headers),
                        urlList: r.urlList, computedType: r.computedType },
                bytes: r.body };
     } catch (e) {
-      /* A THROWN fetch IS §5.6's network error and `null` is how it crosses. AN INVARIANT ABORT IS NOT: the
-         asserts above throw through this same catch, and returning null for one would deliver a broken host
-         contract to the engine disguised as a page whose request failed on the wire. */
+      /* A thrown fetch is a network error and crosses as `null`; an invariant abort thrown through this catch
+         is not, so it is rethrown. */
       RETHROW_FATAL(e);
       return null;
     }
   };
-  // HTML §7.4.5 "Populating a session history entry"'s RESPONSE, for a child navigable this engine created —
-  // THE SAME `navigationLoad` the SEED that rooted this instance came through, which is what "one
-  // document-load path" means as a shape rather than as a rule someone follows. `fetched` above cannot serve
-  // this: it returns the body alone, and answering a child document with no policy is how a page whose CSP
-  // kills a sink gets reported as exploitable. A load that does not load answers `bytes: null`, which is a
-  // navigable that still exists showing an error page, exactly as the engine's own child_document reads it.
-  // THE PRINCIPAL IS THE INITIATING DOCUMENT'S, NOT THE TARGET'S: this load was initiated by the document
-  // this instance holds, so `msg.sourceUrl` is what safeFetch classifies the SSRF host relative to.
-  // `unavailable` is the loader's REASON and this caller has no reader for it — a child navigable's page
-  // does not appear in the popup's page-source row; `bytes: null` is the whole of what the engine reads.
-  // AND THE CREDENTIALED-READ PRINCIPAL IS THE INITIATING DOCUMENT'S TOO — `msg.origin`, browser-stated for
-  // a live document and the origin of the URL THIS zone fetched for one it provisioned. A same-origin child
-  // navigable therefore carries the session exactly as this document's own load did; a cross-origin one does
-  // not, which is the residual `navigationCarriesSession` names.
-  /* AND `provenance` IS THE ENGINE'S STATEMENT ABOUT WHO NAMED THE ADDRESS, RELAYED AND NEVER RE-DERIVED HERE.
-     It rides every record that reaches this function — the `document.fetch` request, the `navigable.create`
-     notice and §7.1.3.2's `navigable.swap` — because it is a fact about the PATH the engine ran and there is
-     nothing in an address that could tell this zone the same thing. That is the whole reason this parameter
-     exists rather than being defaulted: an address alone cannot distinguish a frame a person's own session
-     would have loaded from one that exists because a gate was forced, and this zone was fetching both, with
-     cookies, for as long as the record said nothing. */
-  /* AND `refusalArm` IS THIS CALLER'S AND NOT THIS FUNCTION'S, WHICH IS THE REGRESSION THIS PARAMETER REPAIRS
-     AND IT WAS MINE. `navigationLoad`'s `refusalArm` says WHAT A CALLER DOES WITH A REFUSAL, and this function
-     serves THREE consumers of which exactly ONE is parked on a rendezvous: `document.fetch` is answered through
-     `engineDeliverDocument`, which routes a refusal to the id the engine is parked on, while `navigable.create`
-     and `navigable.swap` are NOTICES with no id to refuse. Passing one literal for all three was the same
-     shared-literal shape as the `actor` word one parameter over, in the same function family, and it widened a
-     capability to two consumers that had none.
-     WHAT IT COST IS A SILENT EMPTY DOCUMENT WHERE A LOUD ABORT USED TO BE. Before the decline existed every
-     refused navigation hit a `DFAIL`, so a declined create could not happen; after it, the create arm's
-     `loaded.bytes === null ? new Uint8Array(0) : loaded.bytes` and the swap arm's identical line turned a load
-     NOTHING ATTEMPTED into a child provisioned as an EMPTY DOCUMENT. That is CLAUDE.md
-     §A-FIELD-A-CONSUMER-DEFAULTS exactly, and the direction is the worst one: an empty document is a
-     PLAUSIBLE DATUM, so a frame the chokepoint refused reads as a frame the server served nothing for, and
-     every flow forked inside it explores a document no visitor is ever shown.
-     IT IS A PRECONDITION AND NOT A GUARD, by §C-stack's own test: delete the decline and this question
-     still has to be asked, because `navigationLoad` has always had callers with different arms and only ever
-     asked one of them. `none` here reaches that function's standing `DFAIL`, which is the pre-decline behaviour
-     restored at the two sites that can state nothing and nowhere else.
-     AND THE WORD IS THE LOADER'S OWN VOCABULARY RATHER THAN A SECOND BOOLEAN, so a consumer that acquires an
-     arm says which one it has instead of flipping a bit whose meaning this file spelled two ways. The three
-     words and the argument for them are at DOC_REFUSAL_ARMS; this parameter only relays.
-     FOUND BY A LANE READING THE TREE, not by a run — and then confirmed here by reading the two
-     fabrication lines. No drive has ever reached them: no corpus row documents an iframe and no control fixture
-     contains one, which is the subject this entry still has no witness for. */
-  /* AND THIS FORWARD'S LIST IS NARROWER THAN THE LOADER'S, WHICH IS THE WHOLE POINT OF ASSERTING IT HERE AS
-     WELL. `DOC_REFUSAL_ARMS` has three words and this function has three consumers, and not one of them
-     `report`s: `document.fetch` parks on a rendezvous and the two notices provision a document. A `report`
-     arriving here would be HONOURED by the loader — it would hand back a declined record — and then
-     FABRICATED by whichever notice asked for it, which is exactly the silent empty document this parameter
-     exists to prevent, reached THROUGH the parameter. So the two words this forward can serve are enumerated
-     rather than deferred to the shared vocabulary, and a consumer that one day drops a WORK ITEM widens this
-     list deliberately instead of inheriting a capability it has no arm for. */
+  // The response (HTML §7.4.5 Populating a session history entry) for a child navigable this engine created,
+  // through the same navigationLoad as the seed that rooted this instance. `fetched` cannot serve it: a child
+  // document needs its header list, since a document with no policy would report CSP-blocked sinks as
+  // exploitable. Both principals are the initiating document's: `msg.sourceUrl` for the SSRF classification
+  // and `msg.origin` for the credentialed read, so a same-origin child carries the session as this document's
+  // own load did. `unavailable` has no reader here (a child's page is not in the popup's page-source row).
+  /* `provenance` is the engine's statement of who named the address, carried by every record reaching this
+     function (the `document.fetch` request, the `navigable.create` and `navigable.swap` notices), relayed
+     and never re-derived: an address cannot tell a frame the person's session would load from one that exists
+     because a gate was forced. */
+  /* `refusalArm` is the consumer's, not this function's: `document.fetch` is answered through
+     engineDeliverDocument, which routes a refusal to the rendezvous the engine is parked on, while
+     `navigable.create` and `navigable.swap` are notices with no id to refuse and state `none`. A shared
+     literal would let a notice turn a declined load into an empty document, a plausible datum for a frame
+     the chokepoint refused. */
+  /* This forward serves only `rendezvous` and `none`: no consumer of it drops a work item, so a `report` would
+     be honoured by the loader and then fabricated into a document by the notice that asked. A consumer that
+     gains such an arm widens this list deliberately. */
   const fetchedDocument = async (u, provenance, refusalArm) => {
     DCHECK(refusalArm === "rendezvous" || refusalArm === "none",
            "a §7.4 document load was asked for stating the refusal arm " + JSON.stringify(refusalArm) +
@@ -2533,11 +2486,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "replaced");
     const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance, msg.provenance,
                                    refusalArm, /*actor*/"page");
-    /* …AND THE REFUSAL CROSSES WITH THEM, which is the one field this function used to drop. `unavailable` is
-       still not carried and the comment above still holds for it — a child navigable's page does not appear in
-       the popup's page-source row, so its REASON has no reader there. `declined` is a different fact with a
-       different reader: engineDeliverDocument routes it to the rendezvous instead of answering it, so the
-       navigable keeps the `about:blank` it was created holding rather than being handed an error page. */
+    /* `declined` crosses (engineDeliverDocument routes it to the rendezvous, so the navigable keeps the
+       `about:blank` it was created holding); `unavailable` does not, since nothing here reads it. */
     DCHECK(refusalArm === "rendezvous" || r.declined === null,
            "a §7.4 document load came back DECLINED for a consumer whose refusal arm is `" +
            String(refusalArm) + "`" +
@@ -2552,47 +2502,35 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "the ANSWER path and the engine would park on a rendezvous nothing would ever refuse");
     return { url: r.url, headers: r.headers, bytes: r.bytes, declined: r.declined };
   };
-  /* THE ROUTING TABLE IS THE POOL. `docId` is which document this instance holds and `origin` is the value
-     this zone stamps on everything it sends — both are read only by the notice router below, which is the
-     only thing that may know either: SECURITY.md makes this zone the one that knows which instance holds
-     which document, and the one that may state a sender's origin. */
-  // XHR §3.5.6's fetch, through the SAME chokepoint every other byte goes through. `rec` is the engine's own
-  // JSON record — method, url, headers, body — and the answer is the reply shape the engine's fetch_reply_new
-  // builds, so a null body is the network error §3.5.6's "handle errors" turns into an `error` event.
+  /* The routing table is the pool. `docId` (which document this instance holds) and `origin` (the value
+     stamped on everything it sends) are read only by the notice router below: SECURITY.md makes this zone
+     the one that knows which instance holds which document and the one that may state a sender's origin. */
+  // The XMLHttpRequest fetch (XHR §3.5.6 The send() method) through the same chokepoint. `rec` is the
+  // engine's JSON request record (method, url, headers, body); the answer is the reply shape fetch_reply_new
+  // builds, and a null body is the network error §3.5.6's handle errors turns into an `error` event.
   const fetchedXhr = async (rec) => {
     let q = null;
-    /* THE REQUEST RECORD IS THE ENGINE'S, and it crosses as JSON so it carries its types — a header list is a
-       list and a body is a string or null. Text that will not parse is xml_http_request.c writing something
-       other than the record it declares, so it aborts here rather than becoming an `error` event on the page's
-       XHR: the page would see a server that refused it, which is a lie about whose code was wrong. */
+    /* The request record is the engine's, crossing as JSON so it carries its types; unparseable text is
+       xml_http_request.c writing something other than its record, so it aborts rather than becoming an
+       `error` event on the page's XHR. */
     try { q = JSON.parse(rec); }
     catch (e) { DFAIL("the engine's xhr.send record is not JSON: " + String(e && e.message || e)); }
     DCHECK(q && typeof q === "object" && typeof q.url === "string" && q.url,
            "the engine's xhr.send record names no URL — the chokepoint decides SOP, CORS, method and " +
            "credentials, and cannot decide about a request it was never told");
-    // Release: the DCHECK above is stripped, and every read below is of a record this proves exists.
+    // Release: the DCHECK above is stripped, so a missing record answers a network error here.
     if (!q || typeof q.url !== "string") return { meta: { status: 0, statusText: "", headers: [] }, bytes: null };
-    /* THE METHOD IS PART OF THE REQUEST'S IDENTITY, so a request whose method this zone cannot issue is
-       REFUSED and never DOWNGRADED. safeFetch hardcodes `method:"GET"` and reads neither `opts.method` nor
-       `opts.body` (SECURITY.md's "GET only, enforced by ABSENCE"), so handing it a POST used to answer the
-       page with the reply to a GET of the same address — a response the server never gave for that request,
-       which every @H example value and every @S verdict downstream is then derived from. A wrong answer is
-       worse than an absent one: `blocked-method:<M>` is the same refusal shape as `blocked-scheme:` and
-       `blocked-cors-credentialed`, and with no bytes beside it the engine's xhr_take_reply leaves the
-       response the network error §3 starts it as, which §3.5.6's "handle errors" turns into the `error`
-       event. Nothing state-changing is issued, which is the rule this preserves rather than relaxes.
-       GET IS THE WHOLE SET, HEAD INCLUDED: a HEAD answered with a GET's body is the same substitution.
-       The method arrives already normalized (Fetch §2.2.1 Methods, "normalize a method", which XHR §3.5.1
-       The open() method runs), so `GET` is exactly the requests this zone can perform. */
+    /* The method is part of the request's identity: a method this zone cannot issue is refused, never
+       downgraded. safeFetch is GET only (SECURITY.md), so a POST answered with a GET's reply would be a
+       response the server never gave, from which every @H example and @S verdict would derive. The method
+       arrives normalized (Fetch §2.2.1 Methods; XHR §3.5.1 The open() method runs "normalize a method"), so
+       GET, HEAD included, is exactly what this zone can perform. */
     DCHECK(typeof q.method === "string" && q.method !== "",
            "the engine's xhr.send record names no method — xhr_request_op writes one on every record, and a " +
            "request whose method is unknown cannot be refused OR issued");
-    /* AND THE REFUSAL IS THE CHOKEPOINT'S GRADE, NOT A THIRD COPY OF THE RULE. `if (q.method !== "GET")` stood
-       here beside the identical test in `fetched` and a third in `engine/trusted.mjs` — one question, three
-       places, and the paragraph above is careful about the SUBSTITUTION (a POST answered with a GET's body)
-       while saying nothing about what the page is told INSTEAD, which is the network error §3.5.6's handle
-       errors makes of it. No browser refuses a POST, so that is a fabricated fact about the origin, and it is
-       the most frequent one this zone tells: every page that POSTs an XHR gets it. */
+    /* The refusal is the chokepoint's grade (`safeFetchMethodRefusal`), shared with `fetched` and
+       engine/trusted.mjs. This seam can answer it only with the page's `error` event, which no browser would
+       produce for a POST, so it aborts in dev; the release arm below answers the network error. */
     const _xhrMethodRefusal = self.safeFetchMethodRefusal(q.method);
     if (_xhrMethodRefusal) {
       DFAIL("an XMLHttpRequest was DECLINED by the chokepoint (" + _xhrMethodRefusal.reason + ") and this " +
@@ -2604,43 +2542,19 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
             "resumed down its failure path");
       return { meta: { status: 0, statusText: _xhrMethodRefusal.reason, headers: [] }, bytes: null };
     }
-    /* AND THE SAME LOAD-ORDER TEST IS GONE FROM HERE TOO, for the same reason and with one seam's worth more
-       damage: this answered with a status-0 record and an EMPTY `statusText`, which XMLHttpRequest §3.5.6
-       "The send() method"'s handle errors turns into the page's `error` event with no account of itself
-       anywhere — a zone that was never ready, reported as a server that could not be reached, with the field
-       that would have named the rule left blank. It is asserted once at the top of this function's scope. */
     try {
       const abs = new URL(q.url, msg.sourceUrl).href;
-      /* THE CREDENTIALS MODE IS PART OF THE REQUEST'S IDENTITY TOO, AND IT IS REFUSED RATHER THAN DOWNGRADED —
-         the method paragraph's own argument, one field over, and the field it rests on was being written by
-         the engine and read by nothing.
-         XHR §3.5.6 The send() method sets the request's credentials mode from §3.5.4 The withCredentials
-         getter and setter: "If this's cross-origin credentials is true, then `include`; otherwise
-         `same-origin`" — which is exactly what xml_http_request.c writes on the record. safeFetch performs an
-         UNCREDENTIALED fetch, and for a CROSS-ORIGIN `include` request that is not a weaker fetch, it is a
-         DIFFERENT ONE: Fetch's CORS check under credentials mode "include" refuses `Access-Control-Allow-
-         Origin: *` and additionally requires `Access-Control-Allow-Credentials: true` (safe-fetch.js
-         implements both), while the same request uncredentialed sails through a `*`. So a page whose XHR real
-         Chrome answers with a network error was being handed a 200 and a body — and every @H example value
-         and every @S verdict derived from that reply is derived from a response no browser would deliver.
-         A wrong answer is worse than an absent one; `blocked-credentialed-cross-origin` is the same refusal
-         shape as `blocked-method:` and `blocked-scheme:`, and with no bytes beside it xhr_take_reply leaves
-         the response the network error §3 starts it as, which §3.5.6's "handle errors" turns into `error` —
-         which is what the page would have seen.
-         IT IS SCOPED TO CROSS-ORIGIN AND THAT IS THE WHOLE OF THE SCOPE. Same-origin, "include" and
-         "same-origin" attach the identical cookies, so a same-origin XHR is not made wrong by
-         `withCredentials`; it is subject to SECURITY.md's cookies-omitted-by-default, which is a deliberate
-         standing choice about this zone and not a substitution this record can see.
-         THIS DOES NOT TURN CREDENTIALS ON AND CANNOT. `q.credentials` is still NOT mapped onto
-         `opts.credentialed` — that flag is the trusted zone's decision to replay a learned GET with the user's
-         cookies, and taking it from the page's `withCredentials` would let the analysed bundle turn credential
-         attachment on for itself. The field is read only in the REFUSING direction, which is the one direction
-         an untrusted bundle cannot exploit: the worst it can do with it is decline its own request.
-         IT IS NOW ALSO RELAYED AS `opts.credentials`, WHICH IS NOT THAT FLAG AND DOES NOT BECOME IT. That
-         option is Fetch §2.2.5 "Requests"' credentials mode — a STATEMENT about what the request is —
-         and `safe-fetch.js` composes it with `credentialed` in the one direction this paragraph already
-         argues is safe: it can refuse and it cannot grant. So the sentence above still holds word for word,
-         and the field has a reader for the first time on both sides of the seam rather than only here. */
+      /* The credentials mode is part of the request's identity too, refused rather than downgraded. XHR
+         §3.5.6 The send() method sets it from §3.5.4 The withCredentials getter and setter (`include` if
+         cross-origin credentials is true, otherwise `same-origin`), which xml_http_request.c writes on the
+         record. safeFetch's fetch here is uncredentialed, and for a cross-origin `include` request that is a
+         different fetch: Fetch's CORS check under `include` refuses `Access-Control-Allow-Origin: *` and needs
+         `Access-Control-Allow-Credentials: true`, so it is refused with `blocked-credentialed-cross-origin`,
+         which the page sees as the `error` event a browser would also give. Same-origin `include` and
+         `same-origin` attach the same cookies and are not refused.
+         The page's `withCredentials` never turns credentials on: `q.credentials` is relayed as
+         `opts.credentials` (Fetch §2.2.5 Requests' credentials mode, a statement about the request) and
+         safe-fetch.js composes it with `credentialed`, so it can refuse and never grant. */
       DCHECK(q.credentials === "include" || q.credentials === "same-origin",
              "the engine's xhr.send record names no credentials mode this zone speaks (`" + q.credentials +
              "`) — XHR §3.5.6 The send() method computes exactly two, and xhr_request_op writes one on every " +
@@ -2649,80 +2563,30 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       if (q.credentials === "include" && new URL(abs).origin !== new URL(msg.sourceUrl).origin)
         return { meta: { status: 0, statusText: "blocked-credentialed-cross-origin", headers: [] },
                  bytes: null };
-      /* @security-finding  `headers` COMES FROM THE UNTRUSTED BUNDLE and IS read by the chokepoint: within
-         the model (uncredentialed GET to a public host, forbidden header names stripped by the browser), but
-         it is why safeFetch's "analyzer probe headers only" comment is no longer the whole truth, and it must
-         be re-decided the day credentialed mode is turned on. Only what the chokepoint reads is passed, so
-         there is nothing left here for it to drop in silence. */
-      /* XMLHttpRequest's destination is Fetch §2.2.5's EMPTY STRING — its row of that section's own table,
-         the `connect-src` one it shares with `fetch()`. Stated rather than left off: "" is the answer, and a
-         call that says nothing is a call whose CORB class was decided by silence. */
-      /* AND WHAT THE REQUEST IS EVIDENCE OF, WHICH THIS SEAM WAS THE LAST ONE NOT TO STATE. Every request an
-         XMLHttpRequest makes is made by RUNNING THE PAGE'S CODE, so it is exactly the population a forced arm
-         produces — and it reached the chokepoint with no grade at all while the pending line beside it carried
-         one. The engine composes it at the record (`xhr_request_op` → `engine_provenance_of_running_path`),
-         which answers `derived` or `forced` and never `observed`, because `observed`'s first conjunct is HTML
-         §4.12.1 "The script element"'s parser-inserted flag and there is no parser behind an XHR.
-         ASSERTED AND NEVER DEFAULTED, in the direction §@H makes asymmetric: taking `derived` for a record
-         that stopped stating one would fire a request whose values may exist only past a gate, and carry its
-         reply as evidence about a server nobody asked. The chokepoint CHECKs the vocabulary again — fatal in
-         release, where this DCHECK is not — so this assert's job is to name the PRODUCER while the C record
-         is the thing that changed. */
+      /* @security-finding: `headers` come from the untrusted bundle and are read by the chokepoint. That is
+         within the model for an uncredentialed GET to a public host (the browser strips forbidden header names),
+         and must be re-decided the day this path is credentialed. Only what the chokepoint reads is passed. */
+      /* An XMLHttpRequest's destination is the empty string (Fetch §2.2.5 Requests), stated so its CORB class
+         is not decided by silence. */
+      /* What the request is evidence of: the engine composes it at the record (`xhr_request_op` →
+         `engine_provenance_of_running_path`), `derived` or `forced` and never `observed`, since no parser
+         inserted an XHR (HTML §4.12.1 The script element). Asserted, never defaulted: `derived` for a record that
+         stopped stating one could fire a request whose values exist only past a gate. The chokepoint CHECKs the
+         vocabulary again in release; this names the producer. */
       DCHECK(q.provenance === PROVENANCE_OBSERVED || q.provenance === PROVENANCE_DERIVED ||
              q.provenance === PROVENANCE_FORCED,
              "the engine's xhr.send record states the provenance `" + q.provenance + "`, which is none of " +
              "the three solver/engine.h declares — xhr_request_op writes one on every record from " +
              "engine_provenance_of_running_path, and the firing decision is made from it, so an absent or " +
              "unknown one is a producer that stopped stating what its request is evidence of");
-      /* AND THE MODE THE RECORD ALREADY CARRIED, RELAYED RATHER THAN DROPPED. XHR §3.5.6 "The send()
-         method" sets the request's credentials mode from §3.5.4's `withCredentials`, the engine states it
-         on this record, this zone DCHECKs its vocabulary above — and it stopped there, which is the
-         write-with-no-reader half of a broken contract. It is passed as `credentials`, which is a STATEMENT
-         about the request, and NOT as `credentialed`, which is this zone's own decision to spend the
-         session: the two are composed at the chokepoint and the statement can only ever narrow. Relaying it
-         takes no new decision and gives the refusal below a fact to be about.
-         THAT CLAUSE ENDED "and is still false here", WHICH WAS TRUE AND WAS NOT STATED ANYWHERE THE DOOR
-         COULD READ. `credentialed` was the one option this call omitted, and `_credentialedOf`'s `!!undefined`
-         supplied the `false` — so the fact was carried by a coercion rather than by this site, and the
-         egress surface's `cookies` row, which it grades `certain`, rested on a value nobody had stated. It
-         is a literal below now, and the door `DCHECK`s that every caller states one. */
-      /* AND THE WITNESS MARK, RELAYED OFF THE RECORD RATHER THAN STATED HERE — THE DIFF safe-fetch.js's
-         `_pinnedOf` RESIDUAL NAMED, ARRIVING. `xhr_request_op` writes a `pinned` key now, taken from
-         `engine_pinned_of_running_path` on the same line as the grade beside it, so this seam no longer has to
-         say that the fact does not travel: it says what the engine said.
-         THE CLAUSE THIS REPLACES IS KEPT BECAUSE ITS REASONING IS SOUND AND A READER WILL RE-DERIVE IT. It
-         read: "the engine composes `pinned`/`unpinned` at a PARK, off the parking flow's own
-         `flow_path_pinned`; an `xhr.send` record is not a park and carries `engine_provenance_of_running_path`'s
-         word alone. `unpinned` here would be FALSE exactly where it matters — a flow that pinned a witness has
-         `path_forced` set by the nesting, so precisely the records that say `forced` are the ones whose address
-         may hold our bytes — and `pinned` would be a wrong sentence the other way." Every word of that was true
-         of a record with no mark on it, and what changed is the RECORD and not the argument: the engine's own
-         `flow_path_pinned` is what answers now, at the instant the request is created, so neither wrong
-         sentence has to be written.
-         `in` AND NEVER A `||`, FOR `endpointFactHistogram`'s REASON ONE FUNCTION-SCOPE UP AND FOR ONE MORE
-         THAT IS THIS SEAM'S OWN. An ABSENT key is an artifact older than the key and is a fact about the
-         BUILD — this zone is interpreted from the tree and the engine is live only after a build, so the two
-         halves of this landing deploy at different instants by construction — while a PRESENT one is a fact
-         about the address. And the default a `||` would supply is the WORST of the three words: `unpinned` is
-         what safe-fetch.js's value arm FIRES on, so a build older than the key would spend acts on every XHR
-         address the analysed page composes, which is precisely the widening a person has not granted.
-         `unstated` STAYS THIS ZONE'S WORD AND THE ENGINE NEVER SPELLS IT, which is what keeps `_pinnedOf`'s
-         third-word paragraph true: the engine states the two words it can compute, and the word for "this act
-         does not carry the fact" is composed HERE, by the reader that found no mark.
-         AND THE ASSERT SITS INSIDE THE PRESENT ARM, WHICH IS NOT A STYLE CHOICE — A FIRST DRAFT OF THIS SEAM
-         PUT IT AFTER THE COMPOSITION AND IT FIRED ON THE ABSENCE THE COMPOSITION HAD JUST HANDLED. Written as
-         `var m = "pinned" in q ? q.pinned : "unstated"` with a vocabulary assert beneath it, the assert admits
-         the engine's two words and `unstated` is neither, so the ONE state this zone composes for an artifact
-         older than the key is the state the assert refuses — and this zone is interpreted from the tree while
-         the engine is live only after a build, so that assert fires in the half that IS live, on the first XHR
-         the SHIPPED engine produces, which is CLAUDE.md §A-CROSS-BOUNDARY-DIFF's worst-of-three state reached
-         by the very check added to make the contract explicit. The tell was in the assert's own message: it
-         names a MAPPING DISAGREEMENT (`states the witness mark X, which is neither token engine.h declares`)
-         and in the absent case X is `undefined`, so the sentence describes a branch the assert is not in —
-         one predicate answering two questions, one line under the ternary that had already told them apart.
-         So the two questions stay two: the `in` test answers IS THERE A MARK and the assert answers IS IT A
-         MARK THIS READER KNOWS, and the second is asked only where the first said yes. This is
-         `endpointFactHistogram`'s own shape and the borrowing is deliberate rather than incidental. */
+      /* `credentials` is relayed (see above) and `credentialed: false` is stated as a literal, since the egress
+         surface grades the `cookies` row `certain` and the door asserts every caller states one. */
+      /* The witness mark is relayed off the record: `xhr_request_op` writes `pinned` from
+         `engine_pinned_of_running_path` beside the grade. `in`, never `||`: an absent key is an older build (this
+         JS ships before the engine is rebuilt), and the default a `||` would supply, `unpinned`, is the word
+         safe-fetch.js's value arm fires on. An absent key is answered `unstated`, a word the engine never spells.
+         The vocabulary assert sits inside the present arm, because `unstated` is not one of the engine's two
+         tokens and the assert must not judge the absence the `in` test already handled. */
       var _xhrPinned;
       if (!("pinned" in q)) {
         _xhrPinned = "unstated";
@@ -2735,23 +2599,10 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
                "it FIRES on, so a mark nothing can be read as may not be relayed as one");
         _xhrPinned = q.pinned;
       }
-      /* AND THE DOCUMENT'S OWN REACH GRADE BESIDE IT, for the reason `fetched` states in full one function
-         up: an XHR is a request the page made, so the engine grades it `observed` whatever this zone did to
-         reach the page — and the chokepoint's default arm asks both. */
-      /* AND `page` FOR THE ACTOR, WHICH IS TRUE AND IS NOW ENOUGH — TOGETHER WITH THE MARK ABOVE — TO MAKE
-         THIS FIRE. Every request an XMLHttpRequest makes is made by RUNNING THE PAGE'S CODE, which is the same
-         population as the `fetch()` relay one function up, and the owner's rule does not distinguish them; the
-         witness mark is what decides it, and this seam states a real one now. So an XHR whose path pinned
-         nothing, to an origin a person permitted for that row, FIRES where it was refused before, and one whose
-         path pinned a witness is refused exactly as such a `fetch()` is.
-         THE CLAUSE THIS REPLACES IS KEPT BECAUSE IT NAMES THE COST OF THE OTHER ANSWER. It read: "What keeps
-         this refused is the WITNESS mark above, which is honestly `unstated` because this record's provenance
-         is a variable that can be `forced`; so the arm that admits the page's `fetch()` cannot admit its XHR
-         until `engine_pinned_of_running_path()` puts a real mark on this record." Both halves were true, and
-         the second is the diff that has landed — so what the arm refused was never the XHR but the ABSENCE of
-         the fact about it, which is the distinction that makes this a mark arriving rather than a permission
-         widening. safe-fetch.js's value arm enumerates both doors it admits now, and a person reading what
-         they permitted sees two rows rather than one. */
+      /* `docReach` is the document's own reach grade, for the reason `fetched` gives. */
+      /* `actor: "page"`: every XHR is made by running the page's code, the same population as the `fetch()`
+         relay. With a real witness mark, an XHR whose path pinned nothing fires at an origin the person
+         permitted for that row, and one whose path pinned a witness is refused, as such a `fetch()` is. */
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, destination: "",
                                             provenance: q.provenance, pinned: _xhrPinned,
                                             docReach: msg.provenance, actor: "page",
@@ -2762,29 +2613,19 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
              "safeFetch answered an XHR with something other than its reply record — §3.5.6's response is " +
              "built from it and the page reads status, statusText and every header off that, and §2.2.4's " +
              "body source is a BYTE SEQUENCE");
-      /* AND §3.5.6's STATUS MESSAGE, ASSERTED FOR THE REASON `fetched` GIVES ONE LINE-FOR-LINE: `""` is what
-         an HTTP/2 response legitimately reports, so a `|| ""` beside it says the same two bytes for a real
-         answer and for a chokepoint that stopped writing the field — and on the arms where safeFetch REFUSED
-         the request, this field carries the whole reason it refused. */
+      /* The status message is asserted for `fetched`'s reason: "" is a legitimate HTTP/2 answer and the
+         refusal arms carry their reason there. */
       DCHECK(typeof r.statusText === "string",
              "safeFetch answered an XHR with no statusText — XMLHttpRequest §3.6.3 `The statusText getter`'s `statusText` getter is " +
              "read straight off it, and the chokepoint writes one on every path including the refusals whose " +
              "reason it is");
-      /* THE BYTES BESIDE THE RECORD, for the reason `fetched` states: §3.6.6's "get a text response" DECODES
-         the received bytes with the FINAL encoding, and until those bytes crossed as bytes that algorithm was
-         decoding a re-encoding of this zone's own UTF-8 guess. `responseType = "arraybuffer"` handed the page
-         the same round trip in place of the server's bytes. */
-      /* AND THE GRADE, WHICH THIS SEAM CAN READ AND CANNOT YET ACT ON. XMLHttpRequest §3.5.6 "The send()
-         method"'s HANDLE ERRORS ("Handle errors for this. If this's response is a network error, then return")
-         turns a status-0 record with no bytes into the page's `error` event, which is right where a real
-         browser would also have failed — a `file:` scheme, a CORS failure, a CORB-blocked body. It is a LIE
-         where THIS ZONE declined: the page's `onerror` runs, `xhr.status` reads 0, and every branch under that
-         handler is explored on a fact about the origin no observation supports, for a request nobody sent.
-         THERE IS NO DECLINE CHANNEL HERE AND THAT IS THE CAPABILITY, NOT AN OVERSIGHT. `document.fetch` parks
-         by leaving the pending register entry unpaid; an `xhr.send` is a HOST REQUEST answered by
-         `engineAnswer(eng, id, …)`, and an unanswered host request is re-reported by `qjs_host_requests` on
-         every step — so declining by silence is a spin, not a park. Holding the request open needs the engine
-         side that `perform` already has for a cross-agent operation, and this seam does not have it. */
+      /* The bytes cross beside the record, for `fetched`'s reason: XHR §3.6.6 Response body decodes the received
+         bytes with the final encoding, and `responseType = "arraybuffer"` needs the server's own bytes. */
+      /* A decline is graded but cannot yet be acted on: XHR §3.5.6 The send() method's handle errors turns a
+         status-0 record into the page's `error` event, right where a browser also fails and false where this
+         zone declined. There is no decline channel: an `xhr.send` is a host request answered by
+         `engineAnswer(eng, id, …)`, and an unanswered one is re-reported by `qjs_host_requests` every step, so
+         declining by silence would spin. The DFAIL names what to build. */
       if (r.refusal) {
         DCHECK(r.refusal.kind === "network" || r.refusal.kind === "decline",
                "safeFetch graded an XHR's refusal `" + r.refusal.kind + "`, which is neither word it states");
@@ -2798,18 +2639,9 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
                 "relayed `perform` is held, with the flow SUSPENDED at the line the page wrote `send()` on — " +
                 "not answered, and not re-reported into a spin by qjs_host_requests");
       }
-      /* AND WHAT THIS ZONE COMPUTED THE RESOURCE TO BE, WHICH IT HAD ALREADY DECIDED AND WAS NOT SENDING.
-         `safeFetch` read the bytes and ran the sniff for this request exactly as it does for the one
-         `fetched` relays — the field is on `r` either way — and this return dropped it, so the renderer got
-         an XMLHttpRequest's reply with no type on it at all. SECURITY.md and CLAUDE.md §Architecture make
-         this zone the only one that may answer that question, so the engine could not fill the gap: a
-         renderer that re-derives a type from a raw header is a second voice on a decision taken one hop
-         earlier by the side that could see the body. It is the read-with-no-writer half of a broken contract
-         with the halves swapped — `fetch_reply_computed_type` is written, asserted and reachable, and this
-         producer simply never spoke — which is why nothing anywhere reported it.
-         ASSERTED HERE FOR `fetched`'s REASON, one function up: `""` is §5.1's "the supplied MIME type is
-         undefined" surviving the sniff, a POSITIVE answer, so `undefined` is a chokepoint that stopped
-         stamping and must not become a resource whose type is unknown. */
+      /* The type the chokepoint computed, relayed as `fetched` does: this zone is the only one that may answer
+         it (safeFetch saw the body and ran the sniff), and solver/reply_decode.c reads `computedType` rather than
+         re-deriving a type. "" is MIME Sniffing §5.1's undefined supplied type, a positive answer. */
       DCHECK(typeof r.computedType === "string",
              "safeFetch answered an XHR with no computed content type — solver/reply_decode.c reads this " +
              "field instead of re-deriving a type from the raw header, so an absent stamp is a producer " +
@@ -2818,55 +2650,35 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
                        computedType: r.computedType },
                bytes: r.body };
     } catch (e) {
-      /* §3.5.6's "handle errors": a THROWN fetch is the network error that becomes the page's `error` event.
-         An invariant abort is not one and travels on.
-         NO `body` IN THE RECORD. The bytes cross BESIDE the JSON and `bytes: null` is the whole statement that
-         this answer has none; a `body` key inside the record is the second spelling `fetch_reply_set_body`
-         DCHECKs against, and it would abort the day one of these paths carried bytes. */
+      /* A thrown fetch is the network error that becomes the page's `error` event (XHR §3.5.6 handle errors);
+         an invariant abort is rethrown. No `body` key in the record: `bytes: null` states there are none, and a
+         second spelling is what `fetch_reply_set_body` DCHECKs against. */
       RETHROW_FATAL(e);
       return { meta: { status: 0, statusText: "", headers: [] }, bytes: null };
     }
   };
-  /* THE PRINCIPAL IS BROWSER-STATED, NEVER PARSED OFF THE ADDRESS. This read `originOf(msg.sourceUrl)`, and a
-     document's address does not determine its origin: a page that sandboxes its own iframe
-     (`<iframe sandbox="allow-scripts" src="/widget.html">`) gives that document an OPAQUE origin while its
-     address still reads `https://site/widget.html`. The offscreen already has the authoritative answer —
-     `_senderOrigin(sender)` from the browser's MessageSender, which SECURITY.md requires precisely because
-     "a page can sandbox its own iframe, giving it an opaque ("null") origin whose URL still looks normal" —
-     and _dispatchDocument hands it over as `msg.origin`. Parsing the address instead re-fabricated the tuple origin
-     the browser had already refused to give that document, and then STAMPED it on every message the document
-     posts (hostNotice below), which is the one field a bundle's cross-origin check is written against.
-     A document this zone provisioned itself carries the origin of the URL THIS zone fetched (hostNotice sets
-     it); "" belongs to a rehydrated recipe that predates the field, and the stamp site refuses it rather than
-     inventing one. */
-  /* `_resolvers` IS A LIST BECAUSE ONE DOCUMENT MAY BE ASKED FOR MORE THAN ONCE while a single instance holds
-     it (the RESHIP re-delivery). Every caller waiting on this document is answered by the ONE engine's
-     finalize; a second engine is never built to give a second caller its own copy. */
-  /* `cluster` IS THIS INSTANCE'S IDENTITY and `docId` is only which document it is ROOTED at. They used to be
-     the same field, and that is the whole defect: an instance is an ORIGIN-KEYED AGENT CLUSTER holding one
-     realm per same-origin document (main.c's `engine_child_realm`), so the document it was started from names
-     it no more than a tree is named by its root. `groupId` is kept beside the key because a document this
-     instance CREATES inherits its creator's browsing-context group and the key alone cannot be taken apart. */
-  /* `_remoteAsked` IS THIS INSTANCE'S OWN — the request ids of cross-agent operations already carried to the
-     peer that holds the object. It belongs to the engine and not to the zone's token map because the question
-     it answers is "has THIS instance's request already been asked", and an unanswered request is re-reported by
-     qjs_host_requests on every single step; asking again would perform the peer's operation — a program, with
-     the page's own side effects — once per step. */
-  /* `r` IS THE INSTANCE. It replaces the `M` handle and the `ptrs` free list together: a pointer an ABI call
-     RETAINED (five of qjs_init's arguments) lives as long as the module does, the module dies with the frame, and
-     the frame is removed at finalize — so there is nothing left in this realm to free, and nothing in this
-     realm that can read an untrusted instance's memory. */
+  /* The principal is browser-stated, never parsed off the address: a page that sandboxes its own iframe gives
+     that document an opaque origin while its address looks ordinary. _dispatchDocument hands over
+     `_senderOrigin(sender)` (from MessageSender) as `msg.origin`, and hostNotice stamps it on every message the
+     document posts. A document this zone provisioned carries the origin of the URL this zone fetched; "" is a
+     rehydrated recipe predating the field, and the stamp site refuses it. */
+  /* `_resolvers` is a list because one document may be asked for more than once while one instance holds it
+     (the RESHIP re-delivery); the one engine's finalize answers every waiting caller. */
+  /* `cluster` is this instance's identity and `docId` only the document it was rooted at: an instance is an
+     origin-keyed agent cluster holding one realm per same-origin document (main.c's `engine_child_realm`).
+     `groupId` is kept beside the key because a document this instance creates inherits its group. */
+  /* `_remoteAsked` holds the request ids of cross-agent operations already carried to the peer that holds the
+     object. It is per instance because an unanswered request is re-reported by qjs_host_requests every step,
+     and asking again would run the peer's operation, with the page's side effects, once per step. */
+  /* `r` is the instance. A pointer an ABI call retained lives as long as the module, which dies with the frame
+     removed at finalize, so nothing in this realm is freed by hand or can read the instance's memory. */
   eng.lines = lines; eng.fkey = fkey; eng.prior = prior; eng.persist = persist;
   eng.fetched = fetched; eng.fetchedDocument = fetchedDocument; eng.fetchedXhr = fetchedXhr;
   eng.code = code; eng.html = html; eng._forceparkSteps = _forceparkSteps;
-  /* AND THE DOCUMENT'S OWN REACH GRADE, ASSERTED HERE BECAUSE THIS IS THE ONE DOOR EVERY INSTANCE GOES
-     THROUGH AND THE THREE CLOSURES BOUND TWO LINES ABOVE ALL READ IT. `fetched`, `fetchedDocument` and
-     `fetchedXhr` state it to the chokepoint on every request this document ever makes, so a composer that
-     left it off would abort in `_docReachOf` at whichever park happened to run first — a crash naming the
-     chokepoint for a record five functions away. Asserted at the ORIGIN it names the composer instead: the
-     ambient seed, a declared route, a child navigable, a swapped-to document, or a cold rehydration.
-     IT IS NOT SCOPED TO RUNS THAT PERSIST, which is what the park-time assert below it used to be. A run
-     that parks nothing still makes requests, and the grade decides whether they fire. */
+  /* The document's reach grade, asserted at the one door every instance passes, because the three closures
+     above state it on every request; failing here names the composer (ambient seed, declared route, child
+     navigable, swapped-to document, cold rehydration) rather than the chokepoint at whichever park runs
+     first. It applies to runs that persist nothing too, since their requests still fire by it. */
   DCHECK(msg.provenance === PROVENANCE_OBSERVED || msg.provenance === PROVENANCE_DERIVED ||
          msg.provenance === PROVENANCE_FORCED,
          "a document is being rooted with the reach grade `" + String(msg.provenance) + "`, which is none of " +
@@ -2881,53 +2693,26 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          "cross-document delivery's origin from and what finish() writes the cold recipe out of, so two " +
          "records for one document is a message stamped with one document's principal and persisted under " +
          "another's address");
-  /* THE FIRST ROUND'S RECORD, TAKEN BEFORE THIS INSTANCE IS RANKABLE. `qjs_begin` above is what seeded the
-     frontier, so this line is the earliest moment a top-flow weight exists at all — and it is earlier than the
-     moment this record leaves the `booting` state, which is what makes "an engine the ranking has never heard
-     from" a state that cannot occur rather than a case to default. THE ORDER IS THE INVARIANT: the two facts
-     are written first and the state that makes them readable is written second, so there is no instant at
-     which the ranking or the RAM floor can see a hot engine that has not reported. */
+  /* The first round's record, taken before this instance is rankable: `qjs_begin` above seeded the frontier, so
+     a top-flow weight now exists, and the facts are written before the state that makes them readable, so the
+     ranking and RAM floor never see a hot engine that has not reported. */
   await engineRecordFacts(eng);
   eng.state = "hot";
 }
-/* A SECOND DOCUMENT OF AN AGENT CLUSTER JOINS THE INSTANCE THAT IS ALREADY RUNNING THAT CLUSTER. It is the same
-   arguments `qjs_init` takes, stated by this zone for the same reasons, and it is a DIFFERENT operation
-   from rooting: the runtime, the class registrations, the world registry and the frontier already exist, so
-   what this adds is a Lexbor tree in the agent's own arenas, a realm through main.c's engine_child_realm, and
-   that document's scripts seeded on the ONE frontier. Provisioning a second instance instead is the split
-   SECURITY.md's `(browsing-context group, origin)` key exists to forbid — two heaps for one similar-origin
-   window agent, in which `iframe.contentDocument.body.appendChild(x)` is unrepresentable.
-   THE INSTANCE MUST ALREADY BE ROOTED AND SEEDED, which is what `qjs_join`'s own two asserts say (`g_dom`,
-   `g_begun`): a document joined between those two calls would be parsed, given a realm, and never execute a
-   line — indistinguishable from a document that had no scripts. So a caller holding a RESERVATION waits for it
-   the way the delivery branch does, and this asserts what it waited for.
-   IT IS NOT A PLACE THE SAME DOCUMENT MAY ARRIVE TWICE. The engine interns documents by NAME, and a name it
-   already holds fires main.c's own `world_doc_hosted` assert — but only if the two arrivals SPELL the document
-   the same way, which is exactly what the caller's `hostHolderOf` question decides here. Two spellings of one
-   document would pass both checks and build a second tree, a second realm and a second run of that document's
-   scripts inside one agent, so the name is asserted to be unheld across the WHOLE pool before it crosses. */
-/* THE DOCUMENT'S BYTES ARE A PARAMETER AND NOT A FIELD OF `msg`, WHICH IS THE WHOLE OF WHAT THIS ENTRY GOT
-   WRONG. It read `msg.pageHtml`, and the two callers hold that fact in two different places: a child
-   announced by a peer engine arrives on a message this zone BUILT with `pageHtml` on it, while a TAB
-   NAVIGATION arrives on the ambient AST_ANALYZE message — whose own entry asserts, in this file, that
-   `msg.pageHtml === undefined`, because "a seed is an address and never bytes". The bytes for that caller are
-   on the waiting job (`_waiting.push({ html: loaded.bytes, msg, … })`), which is exactly where engineCreate's
-   admission arm already reads them from.
-   SO THE TWO ASSERTS COULD NOT BOTH BE SATISFIED ON ONE PATH, and the swap arm below was UNREACHABLE WITHOUT
-   ABORTING from the day it was written. That arm exists to end an abort — its own comment says the case "USED
-   TO BE THE ABORT THAT KILLED THE SCHEDULER FOR THE REST OF THE SESSION" — and it went on killing it one
-   assert later, on `a joined document arrived as neither a byte sequence nor characters`, for every top
-   document navigated in a cluster that already had an instance. `_hostDead` is set once and never cleared, so
-   the cost is not one page: every document arriving afterwards is answered by `_hostKicksRefused++` and the
-   extension learns nothing for the rest of the browser session. Measured on play.grafana.org at head
-   64b09d1e: run 0 analysed the page, run 1 (the same URL, same browser) died here, run 2 was refused before
-   it began — `testing/live-run.js` printed the cause verbatim off the run record.
-   IT IS A PARAMETER RATHER THAN A SECOND READ AT THE SWAP SITE because a caller that must remember to put a
-   field on somebody else's message is a caller that can forget, and the forgetting is invisible: `pageHtml`
-   is not part of the AST_ANALYZE contract, so nothing on that path is even entitled to hold it. Stated as an
-   argument, the operation takes its input WITH it (CLAUDE.md §AN-OPERATION-THAT-BECOMES-A-WORK-ITEM-TAKES-ITS-
-   INPUTS-WITH-IT), the assert below stands on the thing the caller actually said, and the shape matches
-   engineCreate's, whose second parameter is the same fact for the same reason. */
+/* A second document of an agent cluster joins the instance already running it, with the same arguments
+   `qjs_init` takes. It adds a Lexbor tree in the agent's arenas, a realm through main.c's engine_child_realm,
+   and that document's scripts seeded on the one frontier; a second instance would be the two-heap split
+   SECURITY.md's (browsing-context group, origin) key forbids.
+   The instance must already be rooted and seeded (`qjs_join` asserts `g_dom` and `g_begun`), or the document
+   would never run a line; a caller holding a reservation waits for it, and this asserts the state.
+   The same document may not arrive twice: the engine interns documents by name (main.c's `world_doc_hosted`
+   assert), and two spellings of one document would pass that, so the name is asserted unheld across the
+   whole pool. */
+/* The document's bytes are a parameter, not a field of `msg`: a peer-announced child arrives on a message this
+   zone built with `pageHtml`, while a tab navigation arrives on the ambient AST_ANALYZE message, which asserts
+   `pageHtml === undefined` (a seed is an address), with its bytes on the waiting job. As a parameter the
+   operation takes its input with it, the assert stands on what the caller said, and the shape matches
+   engineCreate's. */
 async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, parentNavigable, containerPolicy,
                           ancestorOrigins, creationSandboxFlags) {
   DCHECK(eng.state === "hot" || eng.state === "fetching",
@@ -2947,47 +2732,39 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
          "agent cluster and SECURITY.md makes the instance the principal, so this would put two origins behind " +
          "one credentialed-read principal; the engine's own CHECK aborts on it, and this zone computed the " +
          "cluster key that sent it here");
-  /* HTML §7.3.1.3's PARENT, on the same rule engineCreate states and with the same two answers. A JOINED
-     document is not exempt from the question and is one of the shapes that makes it interesting: a same-origin
-     document nested through a CROSS-ORIGIN one belongs to this cluster and to another instance's frame tree at
-     once, so its navigable is a child navigable whose parent this zone is the only party that can name. */
+  /* The parent navigable, on engineCreate's rule. A same-origin document nested through a cross-origin one
+     belongs to this cluster and to another instance's frame tree at once, and only this zone can name its
+     parent. */
   DCHECK(typeof parentNavigable === "string" && parentNavigable !== "",
          "a document was joined with no HTML §7.3.1.3 PARENT NAVIGABLE — a navigable either has a parent or " +
          "is a top-level traversable and both are facts a host states, so an absent one is a caller that " +
          "skipped the question and a nested document that would answer `parent === self` inside the only " +
          "instance that holds it");
-  /* AND §7.3.1.3's CONTAINER, on engineCreate's rule and interesting here for the same shape: a same-origin
-     document nested through a cross-origin one has BOTH of its §7.3.1.3 links in another instance, so
-     Permissions Policy §9.5's answer for its navigable is a fact only that instance could compute. */
+  /* The container answer, on engineCreate's rule: for such a document both HTML §7.3.1.3 links are in another
+     instance, so only that instance could compute Permissions Policy §9.5's answer. */
   DCHECK(typeof containerPolicy === "string" && containerPolicy !== "",
          "a document was joined with no HTML §7.3.1.3 CONTAINER statement — §9.5's answer for its navigable " +
          "and `null` are the two facts a host states, so an absent one is a caller that skipped the question " +
          "and a nested document granted every feature its embedder holds, through §9.7 step 1's null-container "+
          "arm");
-  /* AND §3.1.3's ANCESTOR ORIGINS, on engineCreate's rule and interesting here for that same shape one
-     algorithm along: a same-origin document nested through a cross-origin one has EVERY ancestor in another
-     instance, so §3.1.3's three inputs — the parent Document's own recorded list, its ORIGIN RECORD and the
-     container element — are all facts only that instance could read. */
+  /* The ancestor origins, on engineCreate's rule: every ancestor of such a document is in another instance,
+     which alone can read HTML §3.1.3's inputs. */
   DCHECK(typeof ancestorOrigins === "string" && ancestorOrigins !== "",
          "a document was joined with no HTML §3.1.3 ANCESTOR ORIGINS statement — the composed list and " +
          "`none` are the two facts a host states, so an absent one is a caller that skipped the question and " +
          "a nested document that would answer `location.ancestorOrigins` with `[]` while sitting inside " +
          "somebody else's frame tree");
-  /* AND §7.1.5's CREATION SANDBOXING FLAG SET, on the same rule and reachable here for a reason worth saying
-     outright: a JOIN is a SECOND cross-origin document of one agent cluster, and `<iframe sandbox=
-     "allow-same-origin allow-scripts" src="https://cdn/…">` is exactly that — `allow-same-origin` keeps the
-     child's tuple origin (so it clusters with the other documents of that host) while fourteen of §7.1.5's
-     flags stay set. A join that took the empty set would delete that sandbox with no header anywhere to
-     disagree. The one flag that cannot arrive here is SANDBOXED ORIGIN, which forces a fresh OPAQUE origin
-     that is same origin with nothing and therefore shares a cluster with no document at all; main.c asserts
-     that rather than this zone re-deriving it. */
+  /* The creation sandboxing flags, on the same rule. A join is reachable with a sandbox: `<iframe
+     sandbox="allow-same-origin allow-scripts" src="https://cdn/…">` keeps the child's tuple origin (so it
+     clusters with that host's documents) while most HTML §7.1.5 Sandboxing flags stay set. The sandboxed
+     origin flag cannot arrive here (it forces an opaque origin that clusters with nothing); main.c asserts
+     that. */
   DCHECK(typeof creationSandboxFlags === "string" && creationSandboxFlags !== "",
          "a document was joined with no HTML §7.1.5 CREATION SANDBOXING FLAG SET — the composed set and " +
          "`none` are the two facts a host states, so an absent one is a caller that skipped the question and " +
          "a sandboxed frame joined with its scripts, its forms and its `document.domain` unsandboxed");
-  /* THE SAME ONE SHAPE THE ROOT'S DOCUMENT TAKES, and for the same reason: `content.mojom.Renderer.Join`
-     declares `array<uint8>` because `qjs_join` has main.c's byte-identical signature, so the two operations
-     take ONE contract and a change to what a document arrives with reaches both. */
+  /* The same shape the root's document takes: `content.mojom.Renderer.Join` declares `array<uint8>` because
+     `qjs_join` has main.c's byte-identical signature, so both operations take one contract. */
   DCHECK(html instanceof Uint8Array || typeof html === "string",
          "a document was joined with no BYTES — every live document is navigationLoad's response body and a " +
          "cold-tier one may hold characters, so anything else is a document this agent would hold as nothing " +
@@ -2995,18 +2772,12 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
          "zone built, and a tab navigation carries it on the waiting job (`_waiting`'s `html`), never on the " +
          "AST_ANALYZE message — whose own entry asserts `pageHtml === undefined` because a seed is an address");
   const _doc = html instanceof Uint8Array ? html : new TextEncoder().encode(html);
-  /* THE SAME 0x00 THE ROOT'S DOCUMENT NO LONGER ASSERTS AGAINST, deleted here with it and for the one reason:
-     `qjs_join` takes `(bytes, len)` now, so a joined document carrying a NUL parses whole and the tokenizer
-     applies its own per-state rule to that byte (§13.2.5.4 "Script data state" emits a U+FFFD; §13.2.5.1
-     "Data state" emits the character and §13.2.6.4.7 The "in body" insertion mode ignores it). The two entries
-     take ONE contract — main.c's signatures are byte-identical — so a change to what a document arrives with
-     reaches both, which is exactly what this pair of asserts existed to keep true. */
-  /* HTML §7.1.7's CLONE OF THE CREATOR'S CONTAINER, relayed off the same create notice that sent this
-     document here — the two entries take ONE contract, so what a document arrives with reaches both. A join
-     ALWAYS carries one where there IS a creator, and the pair is EMPTY where there is not — which is the case
-     a cross-document navigation of a top-level traversable brings here (§7.4.6.1), and the reason this reads
-     the pair rather than demanding a self-origin. There is still no `null` arm: engineRoot takes one because
-     its callers include a rehydrated recipe that has no message at all, and every caller here has a message. */
+  /* A NUL in a joined document is input, as for the root: `qjs_join` takes `(bytes, len)` and the tokenizer
+     applies its per-state rule (HTML §13.2.3.5 Preprocessing the input stream). */
+  /* The clone of the creator's container, off the create notice that sent this document. The pair is empty
+     where there is no creator: a cross-document navigation of a top-level traversable (HTML §7.4.6.1
+     Updating the traversable) joins a Document whose container comes from its own response. There is no
+     `null` arm: engineRoot takes one for a rehydrated recipe with no message, and every caller here has one. */
   DCHECK(!!inherited && typeof inherited.csp === "string" && typeof inherited.selfOrigin === "string" &&
          (inherited.selfOrigin !== "" || inherited.csp === "") && embedderPolicyWhole(inherited.embedder),
          "a document was joined with a CSP list and no SELF-ORIGIN for it — CSP §2.2 \"Policies\" makes a list " +
@@ -3030,40 +2801,23 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
   DCHECK(_join.rc === 0,
          "qjs_join reported a failure this zone has no handling for — the engine's own entry CHECKs " +
          "every precondition and aborts, so a non-zero return is a contract that changed");
-  /* THE NAME ENTERS THE ROUTING TABLE ONLY ONCE THE ENGINE HOLDS IT. Between the call and this line the
-     document is one this zone would answer for and the instance would not, which is the direction that is
-     safe: a delivery in that window is refused by the post branch's assert rather than routed into an agent
-     that has never heard the name. */
+  /* The name enters the routing table only once the engine holds it; a delivery in between is refused by the
+     post branch's assert rather than routed to an agent that has never heard the name. */
   eng.joinedDocIds.push(docName);
-  /* THE ROUND ENDS HERE, SO IT RECORDS. A join is the second-biggest thing this zone ever copies into an
-     instance's linear memory (a whole document) and it seeds that document's scripts as flows on the frontier
-     — so both Level-1 facts have moved, and the ranking that picks next must see them. This is the same
-     statement engineRoot makes on its last line and the service round makes on its way out. */
+  /* The round ends here, so it records: a join copies a whole document in and seeds its scripts as flows, so
+     both Level-1 facts moved. */
   await engineRecordFacts(eng);
 }
-/* THE DOCUMENT A NAVIGATION REPLACED — HTML §7.4.6.1 "Updating the traversable"'s DEACTIVATE A DOCUMENT FOR A
-   CROSS-DOCUMENT NAVIGATION, and the other half of engineJoin above. The two are ONE navigation: the browser
-   loaded a new Document into a navigable of this agent and the old one stopped being active, so the instance
-   is told both halves, in the standard's own order (§7.4.6.1 unloads `displayedDocument` given `targetEntry's
-   document`, so the incoming Document exists first).
-
-   IT IS NOT §7.3.1.6 "Navigable destruction", WHICH IS THE NUMBER THIS ZONE'S OWN ABORT MESSAGE USED TO NAME.
-   §7.3.1.6 destroys a NAVIGABLE — a container removed, a traversable closed — and a navigation destroys none:
-   the navigable is exactly what survives, and what changes is which Document is ACTIVE in it. The two meet one
-   step down, at §7.5.9 "Unloading documents"' "if oldDocument's salvageable state is false, then destroy
-   oldDocument" and the §7.5.10 "Destroying documents" it reaches, which is why the engine serves both entries
-   from one machine. A wrong section number is worse than none because it reads as authoritative, and that one
-   was the standing instruction for what to build next.
-
-   ONLY THIS ZONE KNOWS IT. A navigation the real browser performed leaves no trace inside the instance's heap:
-   the outgoing document's scripts are still queued, its flows are still parked, its Window still answers. What
-   crosses is the browser's own document id and nothing else — every other fact about that document is already
-   in the agent, because the agent is where it was rooted or joined.
-
-   IT SEEDS AND DOES NOT WAIT. The engine attaches the unload to every one of its live timelines and returns;
-   each of them fires that document's `pagehide` and `unload` listeners under its own delta when the scheduler
-   next runs it, which is real surface (a `sendBeacon` in an unload handler is an endpoint this tool exists to
-   find) and is preemptible and parkable like every other job. No flow is dropped, starved or paged for it. */
+/* The document a navigation replaced: HTML §7.4.6.1 Updating the traversable deactivates the old document for
+   a cross-document navigation, the other half of engineJoin. Both halves are told to the instance in the
+   standard's order (the incoming Document exists first). It is not §7.3.1.6 Navigable destruction: the
+   navigable survives and only the active Document changes; the two meet at HTML §7.5.9 Unloading documents
+   ("if oldDocument's salvageable state is false, then destroy oldDocument") and §7.5.10 Destroying documents,
+   which is why the engine serves both entries from one machine.
+   Only this zone knows the navigation happened, and only the browser's document id crosses. The call seeds and
+   does not wait: the engine attaches the unload to every live timeline, each fires that document's `pagehide`
+   and `unload` listeners under its own delta when next scheduled (an unload `sendBeacon` is an endpoint), and
+   nothing is dropped. */
 async function engineUnload(eng, docName, incomingDocName) {
   DCHECK(eng.state === "hot" || eng.state === "fetching",
          "a document was reported replaced to an instance in state `" + eng.state + "` — §7.5.9's unload is a " +
@@ -3078,15 +2832,10 @@ async function engineUnload(eng, docName, incomingDocName) {
          "routes a document to an instance and what records which documents each one holds, so a name that " +
          "is in neither `docId` nor `joinedDocIds` is this table and the agent disagreeing about what is in " +
          "the agent, and the engine's own `world_doc_hosted` assert is what it would reach");
-  /* THE ORDER OF THE TWO HALVES IS CHECKED HERE AND NOWHERE ELSE, and it moved here rather than being
-     dropped. HTML §7.4.6.1 "Updating the traversable" unloads `displayedDocument` GIVEN `targetEntry`'s
-     document, so the incoming Document exists before the outgoing one is deactivated — and this zone is the
-     only party that knows both halves belong to one navigation, because it is the party that performed it.
-     THE ENGINE NO LONGER CHECKS IT AND MUST NOT: it used to, by requiring the incoming name to be a document
-     it held, which is precisely wrong for the navigation this ordering matters most for — a cross-origin
-     incoming Document loads into a PEER instance, so the agent being asked to unload will never hold it.
-     What the engine takes is the outgoing name alone, which is also the only realm HTML §7.5.9 "Unloading
-     documents" step 6 queues the operation in. */
+  /* The order of the two halves is checked here, by the party that performed the navigation. The engine does
+     not check it and must not: a cross-origin incoming Document loads into a peer instance, so the agent asked
+     to unload never holds it. The engine takes only the outgoing name, the realm HTML §7.5.9 Unloading
+     documents queues the operation in. */
   DCHECK(typeof incomingDocName === "string" && incomingDocName !== "" && incomingDocName !== docName,
          "a navigation was reported with no INCOMING document, or with one document named as both halves — " +
          "HTML §7.4.6.1 replaces a navigable's active document WITH ANOTHER, so a report with only an " +
@@ -3096,55 +2845,28 @@ async function engineUnload(eng, docName, incomingDocName) {
          "a navigation named an INCOMING document this instance has not joined (" + incomingDocName + ") — " +
          "engineJoin is what puts it in the agent and is what pushes the name here, so this is the two halves " +
          "of one navigation called in the wrong order");
-  /* THE NAME IS NOT REMOVED FROM `joinedDocIds`, AND THAT IS NOT AN OVERSIGHT. §7.5.10 destroys the DOCUMENT,
-     not the realm: the engine still interns that name, still answers for it, and a peer's route to it must
-     still resolve here — to an instance that reports it as a destroyed navigable, which is the true answer and
-     the one §7.2.2.1's `closed` is read for. Splicing it out would make `hostHolderOf` say no instance holds
-     the name, and the very next arrival spelling that document would try to JOIN it and hit the engine's
-     one-realm-per-document CHECK. */
+  /* The name stays in `joinedDocIds`: HTML §7.5.10 destroys the document, not the realm, so the engine still
+     interns the name and a peer's route must resolve here to an instance that reports a destroyed navigable
+     (what HTML §7.2.2.1's `closed` reads). Removing it would let the next arrival re-join that name and hit
+     the engine's one-realm-per-document CHECK. */
   await eng.r.renderer.unload({ docId: docName });
-  /* THE ROUND ENDS HERE, SO IT RECORDS — engineJoin's reason exactly: an unload attaches a job to every live
-     timeline, so the frontier this instance's Level-1 weight is computed from has moved. */
+  /* The round ends here, so it records: an unload attaches a job to every live timeline. */
   await engineRecordFacts(eng);
 }
-/* THE LEVEL-1 RANKING'S TWO FACTS, RECORDED WHERE THE INSTANCE ANSWERS THEM RATHER THAN READ WHERE THE RANKING
-   NEEDS THEM. Both were SYNCHRONOUS reaches into the module on every ranking pass — a `qjs_top_weight` ccall
-   per comparison, and an `M.HEAPU8.length` per engine per admission check — and neither survives the boundary
-   renderer-host.js puts between this zone and an instance: a sandboxed opaque-origin frame answers by
-   postMessage, so on the line that ranks there is no value to read and no way to ask for one. So the host
-   RECORDS. Every round this zone has with an instance ends here, and the ranking reads a number it already
-   holds. That prediction has now been paid: the pool's engines ARE renderers, this function's two reads are
-   an awaited ABI call and a field off the reply record it answered on, and not one of its callers moved.
-   THE NUMBERS ARE AS OF THE LAST ROUND, AND hostSchedule IS BUILT SO THAT IS THE RIGHT TIME. It ranks, advances
-   the winner, and re-ranks — so the engine that just did work is the one whose numbers are freshest, and an
-   engine that did none has numbers that cannot have moved, because nothing but a round with this zone changes
-   either fact. That is also why the recording sites are the three ROUNDS (seed, step, service) and not the
-   ccalls inside them: a round is what the boundary makes atomic.
-   THERE IS NO UNVISITED ARM HERE, AND THAT IS NOT AN OMISSION. §scheduler's "a UCB optimism bonus ∝ 1/(visits+1)
-   so a never-run flow is never starved" is implemented once, in solver/flow.c's flow_weight, where a never-run
-   flow stands at its reward plus the full 1.0 bonus; a freshly seeded frontier's boot flow carries it and
-   qjs_top_weight reports it. Level-1 therefore INHERITS level-2's optimism instead of restating it, which is
-   what "ONE WFQ policy at both levels" means — and restating it here would additionally be a branch on a state
-   the producer cannot be in, since qjs_top_weight DCHECKs `g_begun` (main.c) and qjs_begin is what sets it. */
+/* The Level-1 ranking's two facts (top-flow weight and working set), recorded at the end of every round this
+   zone has with an instance (seed, step, service), because an instance behind the frame boundary answers only
+   by message and there is no value to read on the line that ranks. hostSchedule ranks, advances the winner and
+   re-ranks, so the engine that just worked has the freshest numbers and one that did none has numbers that
+   cannot have moved.
+   There is no unvisited arm: solver/flow.c's flow_weight gives a never-run flow its reward plus the full 1.0
+   bonus and qjs_top_weight reports it, so Level 1 inherits Level 2's optimism (one WFQ at both levels);
+   qjs_top_weight DCHECKs `g_begun`, which qjs_begin sets. */
 async function engineRecordFacts(eng) {
-  /* -INFINITY IS AN ANSWER, NOT A BROKEN ONE. `engine_top_weight` is
-     `flow_next_to_run(NULL) ? flow_weight(b) : -1.0/0.0` (solver/engine.c), so negative infinity is the
-     engine's POSITIVE statement that its frontier holds no runnable flow — and it is the RIGHT statement,
-     because that is precisely the value that ranks below every real weight in the comparisons below. THAT
-     SENTENCE PREDATES THE C THAT MAKES IT TRUE: the engine asked flow_best, which ranks EVERY member including
-     the ones parked on this very host, so an engine whose whole frontier was waiting published the weight of a
-     flow it could not run — it burned no CPU, so that weight never aged, so the evictee pick below could never
-     reach it. Demanding a finite number here rejected the producer's own vocabulary:
-     every drained engine aborted its round, was destroyed and re-provisioned, and aborted again — 43279 crashes
-     against 0 completed runs on a single fixture page, with the pool still reporting a live framed renderer, so
-     nothing about the shape of the pool said anything was wrong.
-     NaN AND +INFINITY ARE STILL BROKEN and are still asserted, which is what makes this a narrowing of the
-     contract rather than its removal: NaN is the case §qjs_set_yield_floor's own comment calls out — every
-     comparison against it is false, so the top flow never yields and the Level-1 interleave silently stops —
-     and +Infinity is a weight no flow_weight can produce. The check that matters is the one that can fire.
-     THE RANKING NEEDS NO ARM FOR IT. `-Infinity < x` is true for every real weight, so a drained engine sorts
-     last by arithmetic rather than by a branch, and the step that follows retires it through the DONE path it
-     was always going to take. */
+  /* -Infinity is an answer: `engine_top_weight` is `flow_next_to_run(NULL) ? flow_weight(b) : -1.0/0.0`
+     (solver/engine.c), the engine's statement that no flow is runnable, and it sorts below every real weight
+     by arithmetic, so a drained engine ranks last and its next step retires it through DONE. NaN and +Infinity
+     are broken and asserted: every comparison against NaN is false (the top flow would never yield), and no
+     flow_weight produces +Infinity. */
   const _rank = await eng.r.renderer.getTopWeight();
   const w = _rank.weight;
   DCHECK(Number.isFinite(w) || w === -Infinity,
@@ -3153,13 +2875,9 @@ async function engineRecordFacts(eng) {
          "Level-1 ranking comparison against a NaN is false, so the pool would pick by array order and call " +
          "it value-of-information");
   eng.topWeight = w;
-  /* THE WORKING SET AS THE FRAME STATED IT ON THE VERY CALL ABOVE, read off that call's own reply. There is no
-     HEAPU8 in this realm to read — that is the whole point of the boundary — so `workingSetBytes` is a DECLARED
-     REPLY FIELD of every `content.mojom.Renderer` method, validated by the transport at both ends. Taking it
-     from the reply just awaited is the freshest statement that exists and no extra round trip could improve on
-     it: a call is the only thing that can grow that memory, so the moment a call answers is the moment the
-     number changed. WASM memory is a whole number of 64 KiB pages by definition, so anything else is not the
-     view over this instance's memory. */
+  /* The working set as the frame stated it on the call above: `workingSetBytes` is a declared reply field of
+     every `content.mojom.Renderer` method, and only a call can grow the memory, so the reply just awaited is
+     the freshest value. WASM memory is a whole number of 64 KiB pages. */
   const b = _rank.workingSetBytes;
   DCHECK(Number.isInteger(b) && b > 0 && b % 65536 === 0,
          "an instance reported a working set that is not a whole number of WASM pages (" + b + ") — HEAPU8 is " +
@@ -3167,18 +2885,10 @@ async function engineRecordFacts(eng) {
          "outside that is a view onto something other than this engine's memory");
   eng.residentBytes = b;
 }
-/* THE LEVEL-1 WFQ'S ONE INPUT, read off the record. A NaN would order this engine against every other by a
-   comparison that is false in both directions, so the pool's pick would depend on array order — a fairness
-   invariant silently replaced by whichever engine happened to be first; that is asserted above, where the
-   engine answers it. What is asserted HERE is that there is an answer at all, because an absent number and a
-   stale one are different things and only one of them may be ranked. */
-/* AND A NON-HOT ENGINE IS NOT RANKED LOW, IT IS NOT RANKED. `if (eng.state !== "hot") return -Infinity` stood
-   here and was dead in both directions: hostSchedule ranks the HOT set it filtered a line earlier, so nothing
-   ever reached it — and if anything had, -Infinity is the wrong answer to give. 355a03d2 established that
-   -Infinity is the ENGINE's own word for a frontier holding no runnable flow, so answering it for a
-   RESERVATION would report an instance that has not started as one that has finished, and the step that
-   follows a bottom-ranked engine is the DONE path: a booting engine would be finalized before it existed. The
-   two states are distinguished by not answering for either. */
+/* The Level-1 WFQ's one input, read off the record. The finite-or-`-Infinity` shape is asserted where the
+   engine answers it; here only presence and state are. A non-hot engine is not ranked at all: hostSchedule
+   ranks the hot set it filtered, and answering `-Infinity` (the engine's word for a drained frontier) for a
+   reservation would send a booting engine down the DONE path. */
 function engineWeight(eng) {
   DCHECK(eng.state === "hot",
          "the Level-1 ranking was asked for the weight of an engine in state `" + eng.state + "` — it ranks " +
@@ -3190,37 +2900,21 @@ function engineWeight(eng) {
          "an absent one is a round that stopped recording rather than an engine with nothing to do");
   return eng.topWeight;
 }
-/* ONE DELIVERY, both channels, so no call site can carry the record and forget the bytes. `rep` is what
-   `fetched` answered: `null` for §5.6's network error (the JSON `null` the engine rejects with a TypeError),
-   or `{meta, bytes}`.
-   THE PLACEMENT MOVED INTO THE FRAME AND `engineBodyBytes` IS DELETED WITH IT. It malloc'd into `M.HEAPU8`,
-   handed qjs_provide a [ptr, len] pair and freed the block afterwards — the exact algorithm the renderer's
-   byte placement now performs (the mojom declares this body's bytes NOT retained, which is what makes the free
-   after the call the declared behaviour), on the only side of the boundary that can address that memory, with the
-   same "one extra byte so a zero-length body still has an address of its own" and the same `null` meaning THIS
-   ANSWER CARRIES NO BODY AT ALL. Keeping a copy here would have been a second placement over a heap this realm
-   no longer has a view of.
-   THESE BYTES ARE THE ONES WHOSE OWNERSHIP WOULD ALLOW A MOVE, AND THE REASON THEY ARE STILL COPIED CHANGED.
-   safeFetch mints them per call and this delivery is their only consumer, so nothing in this realm holds a
-   second reference the way `eng.html` does for a document load — the ownership argument is sound. What used to
-   stop it was the transport: `bodies` was one list shared by every argument shape, so the relay would have had
-   to carry a transfer list naming WHICH entries were owned. That reason is gone with the envelope, and the one
-   that stands is stronger. mojo.js builds a message's transfer list from the DECLARED TYPES, which is what
-   makes `handle<message_pipe>` a real pipe pass, and Mojo's `array<uint8>` is a copied byte sequence; the type
-   for bytes that MOVE is `mojo_base.mojom.BigBuffer`. So a move is a second declared byte type, not a flag on
-   this call — and it must be, because `Init`'s document is a parameter of the same spelling whose bytes this
-   zone RETAINS. One type meaning two ownerships is exactly what a validator cannot check. */
-/* AND IT IS DELIVERED AGAINST THE REQUEST, WHICH IS THE PAIR. `qjs_provide` takes the method first, in the
-   order a request line states them (RFC 9112 §3 Request Line), because the engine's pending register is keyed
-   on both halves: a delivery named by the address alone settled whichever request was parked on that address
-   first, so a page issuing a GET and a POST to one address had them collect each other's bodies. */
+/* One delivery, both channels, so no call site carries the record and forgets the bytes. `rep` is what
+   `fetched` answered: `null` for a network error (the JSON `null` the engine rejects with a TypeError), or
+   `{meta, bytes}`. The renderer places the bytes in linear memory (one extra byte so an empty body still has
+   an address; `null` means no body) and frees them after the call, as the mojom declares the body not
+   retained.
+   The bytes are copied, not transferred: mojo.js builds a transfer list from declared types, Mojo's
+   `array<uint8>` is a copied byte sequence, and a moved buffer would be `mojo_base.mojom.BigBuffer`. A move is
+   therefore a second declared type, never a flag on this call, because `Init`'s document has the same
+   spelling and its bytes this zone retains. */
+/* Delivered against the request, which is the pair: `qjs_provide` takes the method first, as a request line
+   states it (RFC 9112 §3 Request Line), because the engine's pending register is keyed on both, so a GET and a
+   POST to one address cannot collect each other's bodies. */
 async function engineProvide(eng, method, url, rep) {
-  /* AND A DECLINE MAY NOT ARRIVE HERE AT ALL, which is what makes the wrong pairing impossible rather than
-     discouraged. A `provide` SETTLES the parked request, and `reply: "null"` settles it with Fetch §5.6's
-     network error; there is no spelling of `provide` that means "this zone declined and the flow should stay
-     parked", because the way to say that is NOT TO CALL THIS. So a declined answer reaching this function is a
-     caller that read the grade and delivered anyway, and it would settle the flow with the exact lie the grade
-     exists to prevent. */
+  /* A decline may not arrive here: `provide` settles the park, and `reply: "null"` settles it with a network
+     error. A decline is delivered through engineDecline, which keeps the flow parked. */
   DCHECK(!(rep && rep.refusal),
          "a DECLINED request reached the delivery seam — `provide` settles the park, and settling it with a " +
          "network error tells the flow the server was unreachable for a request this zone chose not to send. " +
@@ -3233,15 +2927,10 @@ async function engineProvide(eng, method, url, rep) {
   await eng.r.renderer.provide({ method, url, reply: JSON.stringify(rep === null ? null : rep.meta),
                                  body: rep === null ? null : rep.bytes });
 }
-/* THE OTHER ANSWER, ON THE SAME PAIR — this zone stating it will not make the request at all.
-   IT IS NOT A DELIVERY WITH A DIFFERENT PAYLOAD AND MUST NEVER BE SPELLED AS ONE, which is why the assert one
-   function up refuses a refusal at `provide` rather than translating it. `provide` hands over a RESPONSE and
-   settles the park; there is no response here, and the JSON `null` that would stand in is Fetch §5.6 "Fetch
-   methods"' network error — a fact about the origin that nothing observed. What the engine does with this is
-   the part a chokepoint may not buy by mis-grading: the flow keeps its park AND forks the arm that runs the
-   page's `catch`, so the wait is preserved and the failure path is explored, neither at the other's expense.
-   THERE ARE NO BYTES BESIDE IT, and that is the shape rather than an omission: every other record on this
-   interface that carries a payload carries it because something produced one. Nothing was fetched. */
+/* The other answer on the same pair: this zone stating it will not make the request. It is not a delivery
+   with a different payload, which is why engineProvide refuses a refusal. The engine keeps the flow's park and
+   forks an arm that runs the page's `catch`, so the wait is preserved and the failure path explored. No bytes
+   accompany it, since nothing was fetched. */
 async function engineDecline(eng, method, url, reason) {
   DCHECK(typeof method === "string" && method !== "" && typeof url === "string" && url !== "",
          "a refusal was relayed naming no request — it is keyed on the (method, url) pair exactly as a reply " +
@@ -3251,21 +2940,14 @@ async function engineDecline(eng, method, url, reason) {
          "the only account of it anybody gets and it is what says whether a widening would change the answer");
   await eng.r.renderer.decline({ method, url, reason });
 }
-/* ONE LINE, SPLIT IN ONE PLACE — the mirror of the engine's own `engine_pending_split`, which exists because
-   three C hosts each finding the TAB for themselves is three places for the grammar to drift; a fourth host in
-   another language is not an exception to that. The delimiter is unambiguous by two specs and neither half can
-   contain one: URL Standard §4.4 URL parsing has the basic URL parser remove every ASCII tab or newline from
-   its input before anything else, and Fetch §2.2.1 Methods makes a method a byte sequence matching the method
-   token production, whose tchar (RFC 9110 §5.6.2 Tokens) is VCHAR-only and excludes HTAB.
-   IT IS A `CHECK` AND THE ENGINE'S SPLITTER IS ONE FOR THE SAME REASON: the release path has no defined answer.
-   A line this splitter cannot take apart is delivered against a method nobody asked for — the wrong answer this
-   whole seam exists to make impossible — and NEVER against an assumed `GET`, which is the one guess that looks
-   right for as long as the page issues nothing else. */
-/* IT SPLITS ON THE TAB RATHER THAN COUNTING INDEXES, because one field of this line is legitimately EMPTY:
-   Fetch §2.2.5 "Requests" makes the destination "" unless stated otherwise, and that is what a `fetch()` has.
-   A test written as `tab2 > tab + 1` reads an empty field as a malformed line, which would refuse every plain
-   fetch the engine ever parked — so the shape assert is over the FIELD COUNT and the two ends, which is what
-   the grammar actually promises. */
+/* One pending line, split in one place, mirroring the engine's `engine_pending_split` so the grammar cannot
+   drift across hosts. The TAB delimiter is unambiguous: URL Standard §4.4 URL parsing strips every ASCII tab
+   or newline from its input first, and a method is a token (Fetch §2.2.1 Methods) whose tchar (RFC 9110 §5.6.2
+   Tokens) excludes HTAB. It is a CHECK, as the engine's splitter is, because the release path has no defined
+   answer: a mis-split line would be delivered against a method nobody asked for, and never against an assumed
+   `GET`. */
+/* It splits on the TAB rather than counting indexes because the destination field is legitimately empty
+   (Fetch §2.2.5 Requests: "" for a `fetch()`), so the shape assert is over the field count and the two ends. */
 function pendingRequest(line) {
   const f = line.split("\t");
   CHECK(f.length === 7 && f[0] !== "" && f[6] !== "",
@@ -3276,41 +2958,22 @@ function pendingRequest(line) {
   const destination = f[1];
   const initiator = f[2];
   const provenance = f[3];
-  /* …AND WHETHER THE ADDRESS MAY REST ON A WITNESS THE ENGINE CHOSE — solver/engine.h's `pinned`/`unpinned`,
-     composed at the park from solver/flow.h's `path_pinned` and NESTED inside the provenance beside it. This
-     zone relays it and decides nothing from it: `safe-fetch.js` reads it with the destination, which is where
-     every other risk decision in this project lives. */
+  /* Whether the address may rest on a witness the engine chose: solver/engine.h's `pinned`/`unpinned`,
+     composed at the park from solver/flow.h's `path_pinned`. Relayed; safe-fetch.js decides from it with the
+     destination. */
   const pinned = f[4];
   const credentials = f[5];
-  /* THREE FIELDS AND THREE QUESTIONS, AND THE ONE THIS ZONE ACTS ON IS THE DESTINATION. Fetch §2.2.5
-     "Requests" gives every request one, the engine states it at each park off the request record, and
-     `safe-fetch.js` decides the CORB class by asking §2.2.5's own SCRIPT-LIKE predicate of it. That question
-     used to be answered from the INITIATOR, and before that from a side list of module specifiers, and neither
-     could answer it: an injected `<script src>`, a dynamic `import()` and a plain `fetch()` all report the
-     initiator `script`, and the side list named only the third kind of park its own producer created.
-     THE INITIATOR IS HTML §4.12.1.1 "Processing model"'s parser-inserted flag (solver/engine.h) and it says
-     something else entirely — whether a REAL LOAD of this document makes this request — which is a question
-     about evidence and not about ingestion. Nothing here branches on it now that the destination has arrived.
-     THE PROVENANCE IS CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's OBSERVED / DERIVED / FORCED, composed at
-     the park from that same flag and from whether the parking flow's path had taken an arm its own concrete
-     example contradicts (solver/flow.h's `path_forced`). This comment used to say that split was a thing the
-     line could not state; it states it now, and what remains is the DECISION — this zone still fires every
-     line uncredentialed, and SECURITY.md §Network names that as its own standing open item ("that vocabulary
-     … is the next subproblem"). The per-origin policy belongs in `safe-fetch.js` with every other risk
-     decision, never here and never in the engine; `engine/trusted.mjs` is the zone that decides it today, for
-     the native host, and its narrowness is stated there rather than copied here.
-     THE MEMBERSHIP CHECKS ARE THE CONTRACT'S READER and fire the day a vocabulary drifts — for the two fixed
-     token fields, whose vocabularies are two and three values long. The DESTINATION's is Fetch §2.2.5's own
-     enumeration of two dozen and it is not restated here either, but the REASON this comment used to give for
-     that was WRONG and is the hole it left. It said "the engine refuses to emit a value outside it (its join
-     and its splitter both assert it against one table)" — and both of those are DCHECKs, compiled out in
-     release, in the zone SECURITY.md calls attacker-controlled, on the far side of a mojo boundary. So this
-     zone held no check at all on the one field of this line an INGESTION is decided from, while holding two on
-     the fields nothing is decided from. The enumeration is asserted where the decision is instead:
-     `safe-fetch.js`'s `_destinationOf` refuses anything outside §2.2.5 with a CHECK, before the request goes
-     out, because `_isScriptLike` answers false for every value it does not recognise — so an invented token
-     and an absent one take the identical, permissive arm. Asserting it there rather than here is what makes it
-     one check for BOTH hosts: `engine/trusted.mjs` loads that file verbatim and reads the same line. */
+  /* The destination (Fetch §2.2.5 Requests) is what this zone acts on: safe-fetch.js decides the CORB class
+     with §2.2.5's script-like predicate over it. The initiator is HTML §4.12.1.1 Processing model's
+     parser-inserted (solver/engine.h), whether a real load of the document makes this request; nothing here
+     branches on it. The provenance (observed, derived, forced) is composed at the park from that flag and the
+     parking flow's `path_forced`; the per-origin firing decision is safe-fetch.js's, never this zone's or the
+     engine's.
+     Membership checks here cover the small fixed vocabularies. The destination's enumeration is refused where
+     the decision is made: safe-fetch.js's `_destinationOf` CHECKs it before the request goes out (its
+     `_isScriptLike` answers false for an unknown value, so an invented token would take the permissive arm),
+     and engine/trusted.mjs loads that file verbatim, so one check covers both hosts. The engine's own asserts
+     on this field are DCHECKs on the untrusted side and cannot be relied on. */
   CHECK(initiator === "parser" || initiator === "script",
         "GetPending stated an initiator this zone does not know: `" + initiator + "` — solver/engine.h " +
         "declares exactly `parser` and `script`, and a third value would be answered by whichever arm a " +
@@ -3325,55 +2988,23 @@ function pendingRequest(line) {
         "whether an ACT MAY BE SPENT on an address that may be one this engine composed, so an unknown word " +
         "would take that policy's permissive arm. `unstated` is safe-fetch.js's word for an act that carries " +
         "no mark at all and is never one a pending line may state");
-  /* AND THE FOURTH FIELD IS FETCH §2.2.5 "Requests"' CREDENTIALS MODE, WHICH IS THE ONE THIS ZONE ACTS ON
-     BESIDE THE DESTINATION — it says WHOSE SESSION PAYS. Only the algorithm that CREATED the request knows
-     it (§2.5.1's create a potential-CORS request for an `<img>`, §2.5.4's CORS settings attribute credentials
-     mode for a `<script src>`, §5.4's `RequestInit` for a `fetch()`), and those algorithms disagree, so there
-     is no value this zone could supply. It is RELAYED and never re-derived here, exactly as the provenance
-     is: `safe-fetch.js` composes it with this zone's own willingness and holds every `if` about it.
-     THE MEMBERSHIP CHECK IS THERE AND NOT HERE, for the reason the destination's is — an unknown word is
-     fatal at the door that decides (`_credentialedOf`), which is one check for BOTH hosts, since
-     `engine/trusted.mjs` loads that same file verbatim. What is asserted here is the LINE'S SHAPE, which is
-     this splitter's own contract. */
+  /* The credentials mode (Fetch §2.2.5 Requests) says whose session pays. Only the algorithm that created the
+     request knows it (an `<img>`'s potential-CORS request, a `<script src>`'s CORS settings attribute, a
+     `fetch()`'s `RequestInit`), so it is relayed, never re-derived; its membership is checked at the deciding
+     door (`_credentialedOf`), one check for both hosts. Here only the line's shape is asserted. */
   return { method: f[0], destination, initiator, provenance, pinned, credentials, url: f[6] };
 }
-/* THE DOOR THAT DOES NOT AWAIT A BODY WITH NO END, WHICH IS THE WHOLE OF WHY THESE THREE FUNCTIONS EXIST.
-   A ROUND USED TO BE THE WAIT. `engineServiceFetch` walked the pending list SEQUENTIALLY and awaited
-   `eng.fetched` per line, each of which awaits `safeFetch`, which awaits `_readBody`, whose reader loop breaks
-   only on `step.done` — and `hostSchedule` restores an instance's rankable `hot` state only in that round's own
-   `.then`. So a response the server never ENDS took the document out of the rankable set FOR THE REST OF THE
-   SESSION: its flows were not outranked and not paged, they were unreachable, and where it was the only live
-   engine the loop waited on `Promise.race` over that same unresolved round. Reached with no EventSource
-   anywhere — nothing installs that interface — by an ordinary `fetch()` or `XMLHttpRequest.send()` to an
-   endpoint that holds its body open, which is one line of a page's own code.
-   IT IS NOT FIXED WITH A DEADLINE, AND THAT IS NOT A PREFERENCE. CLAUDE.md §NO BOUNDS: a bound decides work
-   will not happen, and a timeout here would trade the freeze for a TRUNCATION — a wrong answer about a server
-   rather than a smaller one, which every gate in `safe-fetch.js` and the engine's own learning then read as
-   what was served. `safe-fetch.js` states the same rule at `_readBody` and reaches `fetch` with a signal at
-   exactly one line that no caller in this zone states. A body with no end is a legitimate thing for a server
-   to serve; the defect is the DOOR, and the door is what changes.
-   THE SHAPE IS `engine/host/wpt_runner.c`'s AND IS NOT INVENTED HERE. That host drives this same ABI with a
-   `g_inflight` table: `wpt_issue_pending` ISSUES every park and returns how many it started WITHOUT waiting
-   ("It does not wait, and that is the whole of the change: the answer arrives at wpt_net_pump, on whichever
-   later slice boundary the bytes land"), and `wpt_request_asked` refuses to re-issue a `(method, url)` already
-   in flight. It keeps the record until the reply has been DELIVERED rather than until the bytes land, which is
-   load-bearing and is the one part easy to get wrong: a landed-but-undelivered request is still on the engine's
-   pending list, so a table that forgot it at the socket would re-issue it on the very next round.
-   AND THE ENGINE OWES NOTHING FOR THIS. A streaming arm on its join would be a second answer to a question
-   this host owns; the re-listing is the design, and a host that dedups answers it correctly.
-   AND THE SAME SHAPE IS ALREADY IN THIS LANGUAGE, IN THE OTHER HOST THAT LOADS `safe-fetch.js` VERBATIM.
-   `engine/trusted.mjs`'s `track`/`answered` pair is this table: a key means "AN ANSWER IS OWED AND HAS NOT BEEN
-   WRITTEN", and it is "released by the write that pays it, never by the work completing, because the child
-   re-announces the moment it is let go and an early release would have this zone fetch the same address twice
-   for one park" — the release rule above, reached independently. That file's own comment names this one as the
-   host that differed ("extension/bridge.js — the SHIPPED pump — holds no such memo and answers every line of
-   every bill"), which was true and is what this closes.
-   THE TWO KEYS ARE TWO KEYS FOR `wpt_runner.c`'s REASON, WORD FOR WORD: a network park is `(method, url)` and
-   a host request is its id. `trusted.mjs` makes the same split and tells its two kinds apart by a TAB, derived
-   from RFC 9110 §5.6.2 "Tokens" and URL Standard §4.4 "URL parsing"; these are PREFIXED instead, which is the
-   same distinction made by construction rather than by a property of the operands, for the reason this file
-   prefixes `cold:` and `seed:` onto a group id: two namespaces that can collide are one namespace, and an id
-   that spells itself like a method would otherwise be a dedup against the wrong request. */
+/* The door that does not await a body with no end. A round used to wait on each pending fetch in turn, and a
+   response the server never ends (one `fetch()` or XHR to an endpoint that holds its body open) kept the
+   document out of the rankable set for the session. No deadline is added: a timeout would truncate a
+   legitimate response into a wrong answer, so the door changes instead.
+   The shape is engine/host/wpt_runner.c's `g_inflight` table (`wpt_issue_pending` issues without waiting;
+   `wpt_request_asked` refuses to re-issue a key in flight), and engine/trusted.mjs's `track`/`answered` pair
+   is the same table. A record stays until its reply is delivered, not until bytes land: a landed but
+   undelivered request is still on the engine's pending list and would otherwise be re-issued next round.
+   Two key namespaces, as in wpt_runner.c: a network park is `(method, url)` and a host request is its id,
+   kept apart by prefixes, as `cold:` and `seed:` prefix group ids, so an id spelled like a method cannot dedup
+   against the wrong request. */
 function engineIssue(eng, key, start, deliver) {
   DCHECK(typeof key === "string" && key !== "",
          "a request was issued with no in-flight key — the key is what refuses to re-issue a park the engine " +
@@ -3383,34 +3014,26 @@ function engineIssue(eng, key, start, deliver) {
          "called exactly once and only when this key is not already in flight, and `deliver` is what a later " +
          "round hands the answer to, so an issue missing either is a request nobody will ever answer");
   if (eng._inflight.has(key)) return 0;
-  /* THE RECORD IS PUT IN THE MAP BEFORE THE CALL IS MADE, for the reason `_remoteAsked` is written above its
-     own await a few hundred lines down: the call below suspends, and an unanswered request is re-reported on
-     every round, so a round that started the ask and recorded it afterwards would let the NEXT round see the
-     same key unrecorded and issue it again. */
+  /* The record enters the map before the call suspends, so the next round, re-listing the same request,
+     sees it in flight. */
   const rec = { landed: false, value: undefined, error: null, settled: null, deliver };
   eng._inflight.set(key, rec);
-  /* `settled` NEVER REJECTS, AND THE ERROR IS CARRIED RATHER THAN THROWN HERE. This promise is what the round
-     below waits on when there is nothing else to do, so a rejecting one would be an unhandled rejection with
-     no round holding it. An invariant abort out of `eng.fetched` — every assert in the reply builders throws
-     through it — is recorded and RETHROWN at the delivery, inside the round, so it still travels to
-     `hostSchedule`'s own failure arm exactly as it did when the round awaited the call directly. */
+  /* `settled` never rejects; the error is carried and rethrown at delivery inside the round, so an invariant
+     abort out of `eng.fetched` still reaches hostSchedule's failure arm and there is no unhandled rejection. */
   rec.settled = start().then(
     (v) => { rec.landed = true; rec.value = v; },
     (e) => { rec.landed = true; rec.error = e; });
-  /* AND THE ROUND CAN WAIT ON IT, ASSERTED IN `hostSchedule`'s WAIT ARM'S OWN WORDS AND FOR ITS OWN REASON: an
-     outstanding request this round cannot wait on is one the loop spins on or abandons, and both are silent. It
-     can only fail if `start` threw SYNCHRONOUSLY, which none of the three callers can (each returns an `async`
-     function's promise) — so this asserts that contract where it is relied on rather than where it is kept. */
+  /* The round can wait on it (hostSchedule's wait arm relies on that). It fails only if `start` threw
+     synchronously, which none of the callers can, since each returns an async function's promise. */
   DCHECK(rec.settled && typeof rec.settled.then === "function",
          "a request was issued whose starter did not answer a promise — the round waits on this when the " +
          "frontier has nothing runnable, and a non-promise there resolves the wait immediately and turns the " +
          "stall arm into the full-speed spin it exists to prevent");
   return 1;
 }
-/* THE OTHER HALF, AND IT IS THE HALF THE ENGINE'S PARK IS ACTUALLY WAITING FOR. Answers how many registers it
-   filled, which is progress this host made and therefore not a stall — `wpt_net_pump`'s own return value and
-   for its reason. The record leaves the in-flight set HERE and not when the bytes landed, so a reply that has
-   arrived and not yet been handed over still refuses a re-issue of its own park. */
+/* The delivering half, which the engine's park is waiting for. It returns how many registers it filled,
+   progress like `wpt_net_pump`'s return. The record leaves the in-flight set here, not when bytes land, so a
+   landed reply not yet handed over still refuses a re-issue. */
 async function engineDeliverLanded(eng) {
   let n = 0;
   for (const key of [...eng._inflight.keys()]) {
@@ -3423,20 +3046,11 @@ async function engineDeliverLanded(eng) {
   }
   return n;
 }
-/* ONE ROUND: issue what the engine is newly parked on, act on what it owes, deliver what has landed — and the
-   engine is rankable again the moment those three are done rather than when a stranger's server finishes
-   talking.
-   THE WAIT AT THE END IS NOT THE WAIT THAT WAS DELETED, AND THE DIFFERENCE IS THE ENGINE'S OWN STATEMENT.
-   `qjs_step` answered ENGINE_STEP_STALLED for this engine, which means its frontier holds nothing runnable at
-   all: there is no flow this round could be starving by suspending, and the alternative is a full-speed spin
-   through `macroYield` (a MessageChannel, so with no clamp under it) on a condition only a reply can change —
-   which is the shape this loop's own wait arm was added to end for a booting reservation. A STALL IS THE ONLY
-   STATE IN WHICH IT FIRES: an engine with runnable work returns from here immediately, which is the entire
-   defect this door exists to close, and it fires only when this round ALSO made no progress of its own.
-   IT IS AN INFINITE WAIT AND NEVER A DEADLINE, for `wpt_net_pump(ctx, 1)`'s reason at the same point in that
-   host's loop: §NO BOUNDS. A document whose every flow is parked on a body with no end waits, correctly, and
-   costs no other document anything — it is not in the hot set while it waits, so every other engine ranks and
-   steps past it. */
+/* One round: issue what the engine newly parked on, act on what it owes, deliver what has landed; the engine
+   is rankable again as soon as these finish. The final wait fires only when `qjs_step` answered
+   ENGINE_STEP_STALLED (nothing runnable at all) and the round made no progress, so it starves no flow and
+   replaces a full-speed spin through `macroYield`. It is unbounded, never a deadline (as `wpt_net_pump(ctx,
+   1)`): the waiting document is out of the hot set, so every other engine keeps stepping. */
 async function engineServiceFetch(eng, stalled) {   // one round: issue, act, deliver — never await a body
   DCHECK(typeof stalled === "boolean",
          "a service round was driven without the engine's own stall statement — `qjs_step` answers " +
@@ -3451,62 +3065,33 @@ async function engineServiceFetch(eng, stalled) {   // one round: issue, act, de
     await engineDeliverLanded(eng);
   }
 }
-async function engineIssuePending(eng) {   // ISSUE every parked REQUEST; the answer is delivered by a later round
-  /* THE REPLY'S METADATA CROSSES AS TEXT AND CARRYING ITS TYPE — JSON, exactly as qjs_host_answer's answer
-     does. A bare string could not say `null` for a network error without it being the four characters "null",
-     and could not carry the URL list, the status or the headers at all. Its BODY crosses as BYTES beside it,
-     because JSON can say none of the 256 values a byte has without first running an algorithm over them, and
-     the algorithm this zone used to run (Fetch §5.3 "Body mixin"'s `text()`, a UTF-8 decode — §5.2 stood here
-     and is "BodyInit unions", the EXTRACT that runs the other way) destroyed exactly the evidence
-     HTML §8.1.4.2's classic-script decode exists to read. */
-  /* THERE IS ONE OWED LIST AND IT CARRIES ITS OWN CLASS. This loop used to read a SECOND list beside it —
-     `GetChunks`, the module loader's register of specifiers — to decide which replies were CODE, and the
-     second list is deleted with the question it half-answered. It could only ever name the parks ITS OWN
-     producer created, so a document's own `<script src>` and an injected one reached the chokepoint with no
-     class at all and a cross-origin HTML or JSON body served for one of them was ingested as data and then
-     COMPILED. Fetch §2.2.5 "Requests" gives a request a DESTINATION; it is on the pending line beside the
-     method, every park states it, and `safe-fetch.js` asks §2.2.5's script-like predicate of it.
-     THE SECOND LIST WAS ALSO A HAZARD IN ITS OWN RIGHT, which is why "read it but never answer it" had to be
-     written down: every address in it was already a GetPending line (the loader recorded the specifier at the
-     moment it PARKED the load), so paying it would have answered a request that already carries a reply —
-     engine_provide's answered-twice DFAIL, a live abort on every dynamic `import()`. A fact about a request
+async function engineIssuePending(eng) {   // issue every parked request; a later round delivers the answer
+  /* The reply's metadata crosses as JSON text (as qjs_host_answer's does), so it can say `null` and carry the
+     URL list, status and headers; its body crosses as bytes beside it, since decoding it (Fetch §5.3 Body
+     mixin's `text()`) would destroy what the engine's own decode reads. */
+  /* There is one owed list and each line carries its own class: the destination (Fetch §2.2.5 Requests) on the
+     pending line decides whether a reply is code, via safe-fetch.js's script-like predicate, so a document's
+     own `<script src>` and an injected one are classified like a dynamic `import()`. A fact about a request
      belongs on the request. */
   const requests = owedList("GetPending", (await eng.r.renderer.getPending()).requests);
-  /* AND THE PROVENANCE TRAVELS WITH THE REQUEST IT BELONGS TO. It was DESTRUCTURED AWAY HERE — this loop read
-     three of the line's five fields and dropped the fourth on the floor, so the one zone CLAUDE.md makes the
-     sole owner of the firing decision ("`safeFetch` decides, from the provenance the request declares beside
-     its method and credential state") was the only zone in the path that could not see it. The engine composed
-     it, the splitter above CHECKed it, and then it stopped here: every park was fired, at every grade, and the
-     check that validated the word was validating a field with no reader. */
-  /* HOW MANY REQUESTS THIS ROUND STARTED, which is `wpt_issue_pending`'s own return value and for its reason:
-     it is progress this host made, so the round above knows it has something outstanding to wait on rather
-     than a reason to spin. */
+  /* The provenance travels with its request to safe-fetch.js, the sole owner of the firing decision. */
+  /* How many requests this round started, as `wpt_issue_pending` returns: progress, so the round has something
+     outstanding to wait on. */
   let issued = 0;
   for (const line of requests) {
     const { method, destination, provenance, pinned, credentials, url } = pendingRequest(line);
-    /* THE ASK, RAISED BEFORE THE GATE AND NEVER AFTER IT. CLAUDE.md §AN-INVARIANT-OVER-A-GATED-OPERATION is
-       exact about this: a census read off the OUTCOME of a gated operation cannot tell a request nobody made
-       from one the gate correctly refused, and the whole point of the pair below is that those two are the
-       readings a person has to choose between. Raised AT THE CALL — which is now the starter a few lines down
-       rather than this line, and the paragraph beside it says why — `declined: {}` beside `asked: 47` is the positive
-       statement THE POLICY REFUSED NOTHING — so a run with no API surface is a finding about the DRIVING —
-       while `asked: 0` is the statement that this loop never ran, which is silent about the policy rather
-       than clean about it. Those three states rendered as one number is what this row exists to end. */
-    /* THE PAIR THE ENGINE PARKED ON IS THE DEDUP KEY, BECAUSE IT IS THE KEY THE ANSWER IS DELIVERED UNDER —
-       `engine_provide` and `engine_decline` are both keyed on it, and `engine_pending_fetches` dedups over it
-       for the same reason ("several flows park on the same request and engine_provide fills every entry naming
-       it"). The RAW address off the line and never the absolute one `fetched` resolves: the absolute URL is
-       what goes on the wire and the parked pair is what comes back. */
+    /* The ask is counted at the call, before the gate, so the census separates a request nobody made from one
+       the gate refused: `declined: {}` beside a nonzero `asked` says the policy refused nothing (an empty
+       surface is then about the driving), while `asked: 0` says this loop never ran. */
+    /* The dedup key is the pair the engine parked on, the key the answer is delivered under (`engine_provide`
+       and `engine_decline` key on it, and `engine_pending_fetches` dedups over it). It uses the raw address off
+       the line, never the absolute URL `fetched` resolves. */
     const key = "fetch\n" + method + "\n" + url;
-    /* AN ENTRY STAYS LISTED UNTIL IT IS ANSWERED, and this round visits the list at every slice rather than
-       once per answer — so without this the page's one `fetch` would become one REQUEST PER ROUND at the
-       server, which is `wpt_issue_pending`'s own sentence about the same list. */
+    /* An entry stays listed until answered and this visits the list every slice, so without the dedup one
+       page `fetch` would become one request per round. */
     if (eng._inflight.has(key)) continue;
-    /* THE ASK IS STILL RAISED AT THE CALL AND STILL EXACTLY ONCE PER REQUEST — inside the starter, which
-       `engineIssue` invokes only for a key that is not already in flight, so a re-listed request does not
-       count a second ask and the containment against the declined histogram is untouched. Raising it in this
-       loop instead would count one park once per round for as long as its bytes took to arrive, and a
-       `declined: {}` beside an inflated `asked` is no longer the positive statement the pair exists to make. */
+    /* The ask is raised inside the starter, which `engineIssue` invokes only for a key not in flight, so a
+       re-listed request is counted once and the containment with the declined histogram holds. */
     issued += engineIssue(eng, key,
       () => { eng._egress.asked++;
               return eng.fetched(method, url, destination, provenance, pinned, credentials); },
@@ -3514,28 +3099,16 @@ async function engineIssuePending(eng) {   // ISSUE every parked REQUEST; the an
   }
   return issued;
 }
-/* WHAT A LANDED ANSWER MEANS ON THE PENDING SEAM, which is the body of the old loop unchanged: this is the
-   `deliver` half of one issue and the arguments it closes over are the request's own, so the reply cannot be
-   handed over against a pair it was not fetched under. */
+/* What a landed answer means on the pending seam: the `deliver` half of one issue, closing over the request's
+   own pair, so the reply cannot be handed over against a pair it was not fetched under. */
 async function engineDeliverReply(eng, method, url, answer) {
-  /* A DECLINE IS ITS OWN DELIVERY, AND DELIVERING NOTHING WAS ONLY HALF OF IT. The park was right — the
-     engine's register keys on (method, url), `provide` clears the entry, and leaving it there is the flow
-     STAYING PARKED, which is what §@S requires of a search not yet solved and what lets the request fire the
-     day the origin is widened. What silence could not do is tell the ENGINE anything, and two things follow
-     from that and both are defects. The engine re-lists an unanswered request on EVERY round, so a refusal
-     relayed as silence is re-offered and re-refused for the rest of the session — a spin rather than a park,
-     which is exactly what `bridge.js`'s XHR seam already records about declining by not answering. And the
-     page's `catch` arm is never explored: a declined request is an outcome NOTHING OBSERVED, so whether the
-     server would have answered 200, 500 or nothing at all is unconstrained, and §Solver-half says both
-     feasible arms run. A park suspends in front of both.
-     SO IT IS SAID OUT LOUD, ON ITS OWN METHOD. `Decline` carries the same PAIR `Provide` does — a refusal
-     answers the same question a reply answers — and the chokepoint's own words with it: the engine records
-     the refusal, stops listing the request, keeps one arm WAITING with no reply invented for it, and forks
-     the other to run the page's failure path with its path marked FORCED. `blocked-signal:cookies=yes` and
-     `blocked-destructive:logout` are different sentences to the person reading a frontier that will not
-     drain — the first names the ROW OF THEIR OWN CONTROL that holds it and would make this fire if they
-     ticked it, the second names a refusal nothing reopens — and both are addresses DERIVED IN FULL AND REPORTED, which §Attacker-sources says is
-     not a gap in the report but IS the report. */
+  /* A decline is its own delivery, on its own method. `Decline` carries the same pair `Provide` does with the
+     chokepoint's reason: the engine records the refusal, stops listing the request (silence would be
+     re-offered and re-refused every round), keeps one arm waiting with no reply invented, and forks the other
+     to run the page's failure path marked forced, since a declined request's outcome is unobserved and both
+     arms are feasible. The reason names either a row of the person's own control that would make it fire
+     (`blocked-signal:cookies=yes`) or a refusal nothing reopens (`blocked-destructive:logout`); the address
+     is derived in full and reported. */
   if (answer !== null && answer.refusal) {
     DCHECK(typeof answer.refusal.reason === "string" && answer.refusal.reason !== "",
            "a declined request carries no reason — the reason is the only account a person gets of a park " +
@@ -3545,48 +3118,29 @@ async function engineDeliverReply(eng, method, url, answer) {
            "refusal a real browser performing this same request also makes, so it is Fetch §5.6 \"Fetch " +
            "methods\"' network error and belongs on `Provide` as the JSON `null`; relaying it here would " +
            "leave the flow parked on a failure that IS a fact about the origin");
-    /* AND IT IS STILL SAID TO THE PERSON, NOT ONLY TO THE ENGINE. The refusal rides the engine's record now,
-       which is what makes the park and the fork possible — and nothing in this extension renders that record,
-       so relaying it only through the wire would store the one account anybody gets of a request this tool
-       chose not to make and show it to nobody. Two channels, two readers: the engine acts on the refusal,
-       this line is where a person reading a frontier that will not drain is told WHICH RULE holds it. */
+    /* It is also told to the person: nothing in the extension renders the engine's record, so this line is
+       where a person reading a frontier that will not drain learns which rule holds it. */
     console.warn("[bridge] " + method + " " + url + " — " + answer.refusal.reason +
                  ". This zone DECLINED to make the request: the flow stays PARKED rather than being told " +
                  "the server was unreachable, and one arm is forked to explore the page's failure path");
-    /* AND IT IS COUNTED, KEYED ON THE WHOLE TOKEN, WHICH IS WHY NOTHING HERE PARSES ONE. `safe-fetch.js`
-       composed `blocked-signal:<name>=<value>` out of the signal it walked and the value it read, so the
-       token IS the structured fact and a histogram over it is per-signal BY CONSTRUCTION — a signal added
-       to `_SIGNALS` appears here with nothing on this path edited, which is the property `cold` already has
-       and the reason `_firingRefusal` is exported rather than restated. Splitting the token to "read the
-       signal out of it" is the one thing forbidden: the chokepoint's own record says a consumer that
-       MATCHED `statusText` would be writing a second copy of that policy in a format nothing checks, and
-       `engine_decline` declines to match on it for exactly that reason.
-       THE CARDINALITY IS BOUNDED AND THAT IS A PROPERTY OF THE DECLINE FAMILY RATHER THAN OF THIS LINE. The
-       five arms that grade `decline` compose their tokens out of closed sets — the eleven `_SIGNALS` names
-       against their stated values, `_DESTRUCTIVE`'s word list, Fetch §2.2.5's destination words — so no
-       address and no origin can reach this map. The `network` family is not counted here and is not a hole
-       this row fills: those are refusals A REAL BROWSER ALSO MAKES, so `blocked-corb:` and
-       `blocked-cors-credentialed:` are facts about the origin rather than about this tool's policy, and two
-       of them carry an origin in the token.
-       IT IS A PLAIN INSERT AND NOT A DEFAULTED READ. `d[tok] || 0` would be the shape §A-FIELD-A-CONSUMER-
-       DEFAULTS bans one name over; a first occurrence is stated rather than filled in. */
+    /* Counted per whole token, never parsed: safe-fetch.js composes `blocked-signal:<name>=<value>` from the
+       signal it walked, so the histogram is per signal by construction, and matching `statusText` would be a
+       second copy of the policy. The decline family's tokens come from closed sets (`_SIGNALS` and their
+       values, `_DESTRUCTIVE`'s words, Fetch §2.2.5's destinations), so no address or origin reaches this map.
+       The `network` family (refusals a browser also makes, some carrying an origin) is not counted here. A
+       first occurrence is inserted, never read through a default. */
     const _tok = answer.refusal.reason;
     if (!(_tok in eng._egress.declined)) eng._egress.declined[_tok] = 0;
     eng._egress.declined[_tok]++;
     await engineDecline(eng, method, url, answer.refusal.reason);
-    /* `return` AND NOT `continue`: this is one answer being delivered rather than one iteration of a walk over
-       the owed list, and the decline IS the whole delivery for this request. */
+    /* `return`: the decline is the whole delivery for this request. */
     return;
   }
   await engineProvide(eng, method, url, answer);
 }
-/* EVERY OWED LIST CROSSES THE SAME WAY — newline-joined records, or "" for none — so it is SPLIT in one place
-   that says so. IT NO LONGER MAKES THE CALL, and that is the typing: it used to take an ABI entry NAME and
-   relay it through a generic `fn` string, which is precisely the shape that let a caller ask for anything and
-   let nothing check the answer. The caller now names the method and mojom declares the reply's type, so the
-   `String(x == null ? "" : x)` this function opened with is gone with it — a NULL pointer becoming the four
-   characters "null" and then one bogus record (a URL nothing is parked on, which the engine's own qjs_provide
-   DFAILs on one call later, naming the wrong side) is a shape the validator refuses before it arrives. */
+/* Every owed list crosses the same way, newline-joined records or "" for none, and is split here. The caller
+   names the mojom method and mojom declares the reply's type, so a NULL cannot become the text "null" and one
+   bogus record. */
 function owedList(method, s) {
   DCHECK(typeof s === "string",
          "content.mojom.Renderer." + method + " answered with something that is not text — every owed list " +
