@@ -2565,6 +2565,7 @@ enum {   /* the STEPDEF_* ids used at the registration sites */
        numbering: STEPDEF_STR_HTML_BASE is thirteen CONTIGUOUS ids and a host component's registration is
        STEPDEF_COUNT + n, so an id inserted mid-enum renumbers both populations for a tidier neighbourhood. */
     STEPDEF_STR_TOLOCALELOWER, STEPDEF_STR_TOLOCALEUPPER,
+    STEPDEF_TA_FROMLIKE,
     STEPDEF_COUNT
 };
 #define HINT_NONE    2
@@ -31516,12 +31517,11 @@ static JSIterConsume *js_iter_consume_new(JSContext *ctx)
            || ((kind_) == CONT_CONSUME_NEXT_GET && JS_IsUndefined(((const JSIterConsume *)(st_))->next)), \
            "a JSIterConsume link's kind disagrees with its record: 51 is the nextMethod read and the "    \
            "record holds no nextMethod until that read lands")
-/* new TypedArray(source)'s view between §23.2.5.1 step 6.a.i's AllocateTypedArray and its buffer attach: the
-   iterable collect (ta_phase 0) or the array-like LengthOfArrayLike (4). Both attach sites assert it. */
+/* new TypedArray(source)'s view between §23.2.5.1 step 6.a.i's AllocateTypedArray and its buffer attach, which
+   on this machine is the iterable collect (ta_phase 0); the attach site and the array-like hand-off assert it. */
 static bool js_ta_view_unattached(const JSIterConsume *s)
 {
-    return s->ta_classid != 0 && !s->ta_isfrom && !JS_IsUndefined(s->ta_target)
-        && (s->ta_phase == 0 || s->ta_phase == 4);
+    return s->ta_classid != 0 && !s->ta_isfrom && !JS_IsUndefined(s->ta_target) && s->ta_phase == 0;
 }
 /* A sibling's own copy of a consumer, for every walk that forks one: the generator-drive frame arm and the
    requester walk. The result and the iterator stay shared objects, isolated per flow by the COW delta; every
@@ -33310,6 +33310,23 @@ typedef struct JSArrayFromLike {
     int64_t len, k;
     JSValue cb[4];       /* [thisArg, mapfn, element, index] — BORROWED views, or [ctor, len] for the Construct */
 } JSArrayFromLike;
+
+/* The array-like arm of the two TypedArray algorithms that walk one by index: 23.2.5.1.5
+   InitializeTypedArrayFromArrayLike (`new TA(arrayLike)`, over the view the constructor already allocated) and
+   23.2.2.1 %TypedArray%.from steps 8-13 (over a target it constructs). Built by the iterator consumer's hand-off
+   when GetMethod(source, @@iterator) is undefined, never by a call site. */
+typedef struct JSTAFromLike {
+    JSStepHdr hdr;       /* MUST be first: the generic step driver casts the state to JSStepHdr * */
+    JSValue items;       /* the array-like, ToObject(source) (owned) */
+    JSValue target;      /* new TA: the unattached view; from: UNDEFINED until Construct(ctor) answers (owned) */
+    JSValue ctor;        /* from: the receiver it constructs; UNDEFINED for new TA (owned) */
+    JSValue mapfn, this_arg;   /* from: the mapper and its thisArg, UNDEFINED when absent (owned) */
+    JSValue el;          /* the element held across its read, its mapper call and its Set (owned) */
+    int64_t len, k;
+    int classid;         /* new TA: the class AllocateTypedArrayBuffer sizes the buffer for */
+    uint8_t isfrom;
+    JSValue cb[4];       /* request views: [thisArg, mapper, element, index] or [ctor, length] — BORROWED */
+} JSTAFromLike;
 
 #define ARRAYFLAT_FLAT    0
 #define ARRAYFLAT_FLATMAP 1
@@ -42316,28 +42333,54 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             ret_val = JS_UNDEFINED;
                             goto do_step_step;
                         }
-                        /* 23.2.2.1 step 6 / 23.2.5.1 step 5.c: a TypedArray consumer with NO iterator takes the
-                           ARRAY-LIKE algorithm, and it is the SAME machine — the source becomes the list and the
-                           walk starts at LengthOfArrayLike instead of a collect. Nothing observable has happened
-                           to undo: the collect array is private, and neither the receiver's Construct nor the
-                           buffer allocation has run. */
+                        /* 23.2.2.1 steps 7-13 / 23.2.5.1 step 6.b.v: a TypedArray consumer with NO iterator takes
+                           the ARRAY-LIKE algorithm, which is the index walk STEPDEF_TA_FROMLIKE performs — so its
+                           LengthOfArrayLike is step_length_run, the one sub-sequence that decides how long an
+                           unknown array-like is. The consumer hands over its view (or the receiver it will
+                           construct), its mapper, its requester and its operand shape, and is torn down; the
+                           collect list is private, so nothing observable has happened to undo. */
                         if (nullish && tramp_consume_kind == CONT_ITER_CONSUME
                             && (((JSIterConsume *)tramp_consume_state)->ta_isfrom
                                 || ((JSIterConsume *)tramp_consume_state)->ta_classid != 0)) {
                             JSIterConsume *fs = (JSIterConsume *)tramp_consume_state;
+                            JSTAFromLike *tf;
                             JSValue src6 = JS_ToObject(ctx, iterable);
                             if (JS_IsException(src6)) {
                                 tramp_consume_acquired = JS_EXCEPTION;
                                 goto do_consume_deliver_iterator;
                             }
-                            JS_FreeValue(ctx, fs->r);   /* the empty collect list */
-                            fs->r = src6;
-                            fs->k = 0; fs->ta_k = 0; fs->ta_phase = 4;
+                            DCHECK(fs->ta_isfrom ? JS_IsUndefined(fs->ta_target) : js_ta_view_unattached(fs),
+                                   "a TypedArray consumer reached the array-like hand-off with a target its "
+                                   "algorithm does not hold there: TypedArray.from constructs one later, and "
+                                   "new TypedArray(arrayLike) holds its allocated, unattached view");
+                            tf = tramp_step_state_new(ctx, tramp_step_def_by_id(STEPDEF_TA_FROMLIKE),
+                                                      JS_UNDEFINED, 0, NULL, JS_UNDEFINED);
+                            if (unlikely(!tf)) {
+                                JS_FreeValue(ctx, src6);
+                                tramp_consume_acquired = JS_EXCEPTION;
+                                goto do_consume_deliver_iterator;
+                            }
+                            tf->items = src6;
+                            tf->target = fs->ta_target;           fs->ta_target = JS_UNDEFINED;
+                            tf->ctor = fs->ta_isfrom ? fs->adder : JS_UNDEFINED;
+                            if (fs->ta_isfrom) fs->adder = JS_UNDEFINED;
+                            tf->mapfn = fs->mapfn;                fs->mapfn = JS_UNDEFINED;
+                            tf->this_arg = fs->mapfn_this;        fs->mapfn_this = JS_UNDEFINED;
+                            tf->el = JS_UNDEFINED;
+                            tf->len = 0; tf->k = 0;
+                            tf->classid = fs->ta_classid;
+                            tf->isfrom = fs->ta_isfrom;
+                            tf->hdr.outer = fs->outer;            tf->hdr.outer_kind = fs->outer_kind;
+                            fs->outer = NULL;                     fs->outer_kind = CONT_NONE;
+                            tf->hdr.orig_cfirst = fs->orig_cfirst;
+                            tf->hdr.orig_cargc = fs->orig_cargc;
+                            tf->hdr.orig_is_tail = fs->orig_is_tail;
+                            js_iter_consume_end(ctx, fs); js_free_rt(rt, fs);
                             tramp_consume_state = NULL; tramp_consume_kind = CONT_NONE;
                             tramp_consume_iterable = JS_UNDEFINED;
-                            cont_st = fs;
-                            ret_val = JS_UNINITIALIZED;
-                            goto do_iter_consume_step;
+                            cont_st = tf;
+                            ret_val = JS_UNDEFINED;
+                            goto do_step_step;
                         }
                         /* GetIteratorFlattenable (Iterator.from) vs GetIterator (every other consumer) — the ONE
                            step where the two abstract operations differ. Flattenable with an ABSENT @@iterator
@@ -42931,8 +42974,6 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         gp_obj = s->setlike;
                         gp_atom = (s->setrec_ph == 0) ? JS_ATOM_size
                                 : (s->setrec_ph == 2) ? JS_ATOM_has : JS_ATOM_keys;
-                    } else if (s->cb_pending == 7) {
-                        gp_obj = s->r; gp_atom = JS_ATOM_length;   /* LengthOfArrayLike's Get half */
                     } else if (s->cb_pending == 6) {
                         DCHECK(s->ta_k <= JS_ATOM_MAX_INT,
                                "a TypedArray source longer than an int atom can name — build the heap-atom read");
@@ -42977,17 +43018,16 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 if (st == 5) {
                     /* THE ToPrimitive arm, for the coercions this machine performs itself: GetSetRecord's size
-                       and LengthOfArrayLike's length with hint NUMBER, GroupBy's and fromEntries' ToPropertyKey
-                       with hint STRING. A TypedArray element's coercion is not one of them — ta_elem_set hands
-                       the whole Set to the keyed entry — and the default arm below refuses it. */
+                       with hint NUMBER, GroupBy's and fromEntries' ToPropertyKey with hint STRING. A TypedArray
+                       element's coercion is not one of them (ta_elem_set hands the whole Set to the keyed entry),
+                       nor is an array-like's length (STEPDEF_TA_FROMLIKE owns that walk), and the default arm
+                       below refuses both. */
                     tp_outer = s; tp_outer_kind = CONT_ITER_CONSUME;
                     if (s->setrec_pending) {
                         DCHECK(s->setrec_ph == 1, "GetSetRecord's ToPrimitive arm entered outside the size phase");
                         tp_value = s->cb_value; tp_hint = HINT_NUMBER;   /* ToNumber(rawSize) */
                     } else if (s->cb_pending == 13) {
                         tp_value = s->ent_key; tp_hint = HINT_STRING;    /* GroupBy's ToPropertyKey(key) */
-                    } else if (s->cb_pending == 8) {
-                        tp_value = s->cb_value; tp_hint = HINT_NUMBER;
                     } else {
                         DCHECK(s->ent_pending && s->ent_ph == 2,
                                "the consume machine's ToPrimitive arm was entered with no coercion in flight");
@@ -87174,7 +87214,19 @@ static const JSTrampStepDef js_array_fromasync_def = {
    at the definition no pointer names this, and js_call_c_function's JS_CFUNC_consume arm is the one backstop for a
    call site that was never routed. */
 
-/* 23.2.2.1 step 5.d.iv / 5.b and 23.2.5.1's InitializeTypedArrayFrom{List,ArrayLike}: Set(target, k, value, true)
+/* 23.2.4.1 TypedArrayCreateFromConstructor steps 2-4 over the object step 1's Construct produced:
+   ValidateTypedArray, then — the argument list being one Number — the out-of-bounds and length checks against
+   `len`. An immutable buffer is refused too, since every caller goes on to write each element. 0, or -1 thrown. */
+static int ta_create_from_ctor_check(JSContext *ctx, JSValueConst ta, int64_t len)
+{
+    int64_t tlen = js_typed_array_get_length_unsafe(ctx, ta);
+    if (tlen < 0) return -1;
+    if (typed_array_is_immutable(JS_VALUE_GET_OBJ(ta))) { JS_ThrowTypeErrorImmutableArrayBuffer(ctx); return -1; }
+    if (tlen < len) { JS_ThrowTypeError(ctx, "TypedArray length is too small"); return -1; }
+    return 0;
+}
+
+/* 23.2.2.1 step 6.e.iv and 23.2.5.1.4 InitializeTypedArrayFromList: Set(target, k, value, true)
    into the TypedArray being built. A primitive stores with nothing to invoke. An object — the page's own or an
    unknown standing for external input — is handed to the keyed entry as a GP_SET (step code 10, cb_pending 14),
    which owns both cases of 10.4.5.18 TypedArraySetElement: an object's ToNumber/ToBigInt runs on the tramp, and an
@@ -87532,27 +87584,6 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
             JS_FreeValue(ctx, fret);
             return 1;
         }
-        if (which == 7 || which == 8) {
-            /* 7 = Get(source, "length") returned; 8 = the ToPrimitive of that result settled. ToLength on a
-               PRIMITIVE runs nothing, so the rest of LengthOfArrayLike finishes here and the create phase follows. */
-            int64_t len;
-            JS_FreeValue(ctx, value);
-            if (which == 7 && JS_VALUE_GET_TAG(fret) == JS_TAG_OBJECT) {
-                s->cb_value = fret; s->cb_pending = 8;
-                return 5;
-            }
-            if (JS_ToLengthFree(ctx, &len, fret) < 0) return -1;
-            s->k = len; s->ta_k = 0;
-            if (s->ta_isfrom) { s->ta_phase = 1; return 4; }   /* -> step 7's TypedArrayCreateFromConstructor */
-            /* new TypedArray(arrayLike), 23.2.5.1 step 5.c.ii InitializeTypedArrayFromArrayLike: the object was
-               allocated at step 6.a.i, so only its buffer is sized — no user constructor is involved. */
-            DCHECK(js_ta_view_unattached(s),
-                   "the TypedArray was not allocated before its source was read, or it stands in a phase "
-                   "js_ta_view_unattached does not name, so a fork here would share the view");
-            if (js_typed_array_alloc_len(ctx, s->ta_target, s->ta_classid, s->k) < 0) return -1;
-            s->ta_phase = 3;
-            goto ta_map_loop;
-        }
         if (which == 6) {   /* the source element just read: hand it to the map/set phase */
             DCHECK(JS_IsUndefined(value), "the indexed read parks nothing on cb_value before it runs");
             JS_FreeValue(ctx, value);
@@ -87614,17 +87645,10 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
         }
     }
     if (s->ta_phase) {
-        /* 23.2.2.1 step 5.c/5.d, AFTER the whole collect. Never entered by any other sink. */
-        if (s->ta_phase == 4) {
-            /* step 6 LengthOfArrayLike, for the ARRAY-LIKE source that skips the collect entirely. Get(src,
-               "length") is the page's code for an accessor or a Proxy, and ToLength on its result can be another
-               @@toPrimitive — so both halves run on the tramp, and js_get_length64 at the entry (which did them
-               from C) is gone. */
-            if (JS_VALUE_GET_TAG(res) != JS_TAG_UNINITIALIZED) JS_FreeValue(ctx, res);
-            DCHECK(!s->cb_pending, "a round-trip is already in flight on this state");
-            s->cb_pending = 7;
-            return 6;
-        }
+        /* 23.2.2.1 steps 6.c-6.e, AFTER the whole collect. Never entered by any other sink; the array-like arm is
+           STEPDEF_TA_FROMLIKE's, which the acquire hands the source to. */
+        DCHECK(s->ta_phase >= 1 && s->ta_phase <= 3,
+               "a TypedArray consumer stands in a phase its iterable algorithm does not have");
         if (s->ta_phase == 1) {   /* 5.c: Construct(C, «len») — the arm runs it on the tramp */
             if (JS_VALUE_GET_TAG(res) != JS_TAG_UNINITIALIZED) JS_FreeValue(ctx, res);
             return 4;
@@ -87632,13 +87656,9 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
         if (s->ta_phase == 2) {
             /* the construct settled: `res` IS the new object. TypedArrayCreateFromConstructor finishes with
                ValidateTypedArray plus, because a length argument was passed, the [[ArrayLength]] >= len check. */
-            int64_t tlen;
             if (JS_VALUE_GET_TAG(res) == JS_TAG_UNINITIALIZED) { JS_ThrowTypeError(ctx, "constructor returned nothing"); return -1; }
             s->ta_target = res;
-            tlen = js_typed_array_get_length_unsafe(ctx, s->ta_target);
-            if (tlen < 0) return -1;
-            if (typed_array_is_immutable(JS_VALUE_GET_OBJ(s->ta_target))) { JS_ThrowTypeErrorImmutableArrayBuffer(ctx); return -1; }
-            if (tlen < s->k) { JS_ThrowTypeError(ctx, "TypedArray length is too small"); return -1; }
+            if (ta_create_from_ctor_check(ctx, s->ta_target, s->k) < 0) return -1;
             s->ta_phase = 3;
         } else if (JS_VALUE_GET_TAG(res) != JS_TAG_UNINITIALIZED) {
             JS_FreeValue(ctx, res);   /* the map callback re-enters with no iterator result */
@@ -92170,6 +92190,15 @@ static const JSTrampStepDef js_array_flatMap_def   = { sizeof(JSArrayFlat), js_a
 static const char *const js_array_fromlike_steps[];
 static const JSTrampStepDef js_array_fromlike_def  = { sizeof(JSArrayFromLike), js_array_fromlike_step, js_array_fromlike_fini, 0, .visit = js_array_fromlike_visit,
                         .algorithm = "23.1.2.1 Array.from, over an array-like source", .steps = js_array_fromlike_steps };
+static int js_ta_fromlike_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
+static JSValue js_ta_fromlike_fini(JSContext *ctx, void *st, bool take_result);
+static void js_ta_fromlike_visit(JSContext *ctx, void *st, JSStepVisit *v);
+static const char *const js_ta_fromlike_steps[];
+static const JSTrampStepDef js_ta_fromlike_def = { sizeof(JSTAFromLike), js_ta_fromlike_step, js_ta_fromlike_fini, 0,
+                        .visit = js_ta_fromlike_visit,
+                        .algorithm = "23.2.5.1.5 InitializeTypedArrayFromArrayLike / 23.2.2.1 %TypedArray%.from, "
+                                     "over an array-like source",
+                        .steps = js_ta_fromlike_steps };
 static const char *const js_primargs_steps[];
 /* `algo` IS THE BUILTIN'S OWN ALGORITHM AND THERE IS NO SHARED DEFAULT, because this machine can now COMPLETE
    an algorithm rather than only coerce for it: a declared argument that is unknown external input ends the
@@ -94501,6 +94530,7 @@ static const JSTrampStepDef *const js_tramp_step_defs[STEPDEF_COUNT] = {
     [STEPDEF_ARRAY_FLAT]      = &js_array_flat_def,
     [STEPDEF_ARRAY_FLATMAP]   = &js_array_flatMap_def,
     [STEPDEF_ARRAY_FROMLIKE]  = &js_array_fromlike_def,
+    [STEPDEF_TA_FROMLIKE]     = &js_ta_fromlike_def,
     [STEPDEF_MATH_ABS] = &js_math_abs_def,
     [STEPDEF_MATH_FLOOR] = &js_math_floor_def,
     [STEPDEF_MATH_CEIL] = &js_math_ceil_def,
@@ -96176,6 +96206,112 @@ static JSValue js_array_fromlike_fini(JSContext *ctx, void *st, bool take_result
     JSArrayFromLike *s = st;
     JSValue r = take_result ? s->arr : JS_UNDEFINED;
     if (take_result) s->arr = JS_UNDEFINED;
+    return r;
+}
+
+/* ---- the TypedArray array-like walk as a step machine (see JSTAFromLike) ---- */
+/* Its length is step_length_run's, so an unknown length is decided where every other index walk decides one: a
+   per-position outcome chain whose worlds are the lengths ToLength can produce, before the buffer is sized. */
+#define TFL_STAGES(X) \
+    X(TFL_LENGTH,      "23.2.5.1.5 step 1 / 23.2.2.1 step 9 (length is LengthOfArrayLike(arrayLike))") \
+    X(TFL_CREATE,      "23.2.5.1.5 step 2 (AllocateTypedArrayBuffer(obj, length)) / 23.2.2.1 step 10 " \
+                       "(targetObj is TypedArrayCreateFromConstructor(ctor, <<length>>)) - the dispatch") \
+    X(TFL_CONSTRUCTED, "23.2.4.1 steps 2-4 (ValidateTypedArray and the length check on the constructed targetObj)") \
+    X(TFL_GET,         "23.2.5.1.5 steps 4.a-4.b / 23.2.2.1 steps 12.a-12.b (kValue is Get(arrayLike, Pk)) - " \
+                       "and the dispatch of step 12.c.i's Call") \
+    X(TFL_MAPPED,      "23.2.2.1 step 12.c.i (mappedValue is Call(mapper, thisArg, <<kValue, k>>))") \
+    X(TFL_SET,         "23.2.5.1.5 step 4.c / 23.2.2.1 step 12.e (TypedArraySetElement(targetObj, k, mappedValue))")
+enum { TFL_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_ta_fromlike_steps[] = { TFL_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_ta_fromlike_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSTAFromLike *s = st;
+    int r;
+
+    DCHECK(s->isfrom ? !JS_IsUndefined(s->ctor) : (JS_IsUndefined(s->ctor) && !JS_IsUndefined(s->target)),
+           "the TypedArray array-like walk was built without the operand its algorithm starts from — from "
+           "constructs its target with the receiver, new TypedArray(arrayLike) fills the view it was handed");
+    if (s->hdr.stage == TFL_LENGTH) {
+        r = step_length_run(ctx, &s->hdr, s->items, cb_result, &s->len, out_cb, out_argc);
+        cb_result = JS_UNDEFINED;
+        if (r) return r < 0 ? -1 : r;
+        s->hdr.stage = TFL_CREATE;
+    }
+    if (s->hdr.stage == TFL_CREATE) {
+        if (s->isfrom) {
+            /* 23.2.4.1 step 1, Construct(ctor, «𝔽(length)»): the receiver is the page's constructor. */
+            s->cb[0] = s->ctor;   /* borrowed: this state owns the receiver */
+            s->cb[1] = js_int64(s->len);
+            *out_cb = s->cb; *out_argc = 1;
+            s->hdr.stage = TFL_CONSTRUCTED;
+            return 4;
+        }
+        DCHECK(JS_VALUE_GET_TAG(s->target) == JS_TAG_OBJECT
+               && JS_VALUE_GET_OBJ(s->target)->class_id == s->classid,
+               "AllocateTypedArrayBuffer was asked for a view whose class is not the one this walk sizes");
+        if (js_typed_array_alloc_len(ctx, s->target, s->classid, s->len) < 0) return -1;
+        s->hdr.stage = TFL_GET;
+    }
+    if (s->hdr.stage == TFL_CONSTRUCTED) {
+        DCHECK(JS_IsUndefined(s->target), "TypedArray.from's target is constructed exactly once");
+        s->target = cb_result;
+        cb_result = JS_UNDEFINED;
+        if (ta_create_from_ctor_check(ctx, s->target, s->len) < 0) return -1;
+        s->hdr.stage = TFL_GET;
+    }
+    for (;;) {
+        if (s->hdr.stage == TFL_GET) {
+            if (s->k >= s->len) return 0;
+            r = step_getidx_run(ctx, &s->hdr, s->items, s->k, cb_result, &s->el, out_cb, out_argc);
+            cb_result = JS_UNDEFINED;
+            if (r) return r < 0 ? -1 : r;
+            if (!JS_IsUndefined(s->mapfn)) {
+                s->cb[0] = s->this_arg;   /* borrowed views of what this state owns */
+                s->cb[1] = s->mapfn;
+                s->cb[2] = s->el;
+                s->cb[3] = js_int64(s->k);
+                *out_cb = s->cb; *out_argc = 2;
+                s->hdr.stage = TFL_MAPPED;
+                return 3;
+            }
+            s->hdr.stage = TFL_SET;
+        }
+        if (s->hdr.stage == TFL_MAPPED) {
+            JS_FreeValue(ctx, s->el);
+            s->el = cb_result;   /* the mapped value replaces the element */
+            cb_result = JS_UNDEFINED;
+            s->hdr.stage = TFL_SET;
+        }
+        DCHECK(s->hdr.stage == TFL_SET, "the TypedArray array-like walk resumed in a stage its loop does not name");
+        /* the keyed entry owns 10.4.5.18: an object's ToNumber runs on the tramp, an unknown is stored as its
+           example under a span. The element is BORROWED across the write and released once it lands. */
+        r = step_setidx_run(ctx, &s->hdr, s->target, s->k, s->el, cb_result, out_cb, out_argc);
+        cb_result = JS_UNDEFINED;
+        if (r) return r < 0 ? -1 : r;
+        JS_FreeValue(ctx, s->el); s->el = JS_UNDEFINED;
+        s->k++;
+        s->hdr.stage = TFL_GET;
+    }
+}
+
+/* WHAT THIS MACHINE OWNS (JSTrampStepDef.visit). */
+static void js_ta_fromlike_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSTAFromLike *s = st;
+    v->val(ctx, &s->items);
+    v->val(ctx, &s->target);
+    v->val(ctx, &s->ctor);
+    v->val(ctx, &s->mapfn);
+    v->val(ctx, &s->this_arg);
+    v->val(ctx, &s->el);
+}
+
+static JSValue js_ta_fromlike_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSTAFromLike *s = st;
+    JSValue r = take_result ? s->target : JS_UNDEFINED;
+    if (take_result) s->target = JS_UNDEFINED;
     return r;
 }
 
