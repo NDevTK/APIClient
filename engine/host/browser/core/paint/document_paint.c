@@ -10,7 +10,6 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
-#include "core/css/css_cascade_pass.h"   /* css-cascade-5 §4.2's record, opened around the same walk */
 #include "core/frame/viewport.h"
 #include "core/graphics/raster_surface.h"
 #include "core/layout/layout_job.h"
@@ -159,16 +158,14 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
         display_list_init(&dl);
         /* A layout job around the walk (core/layout/layout_job.h): CSS 2.1 §E.2 "Painting order" asks where
            every box it offers sits, and the job's records (each box's §9.4.1 contribution, its stack position,
-           its border-box origin, its containing block's width) let one walk of a container answer every later
-           ask about its children. The span is the walk and not the raster beneath it, which asks the tree
-           nothing. css-cascade-5 §4.2 "Cascaded Values"' record is opened around the same walk, outside the
-           job, because the geometry walk reads the cascade at every origin it serves.
+           its border-box origin, its containing block's width, css-cascade-5 §4.2 "Cascaded Values"' answers)
+           let one walk of a container answer every later ask about its children. The span is the walk and
+           not the raster beneath it, which asks the tree nothing.
            NAMED RESIDUAL. Not covered: the paint is host time and not a step machine, so the job runs to
            completion in this one activation and never rests. Next: the rendering update's paint as a flow
            that drives this job and yields between stacking contexts. How its absence shows: `_layoutJobRests`
            does not move across a paint however large the document. */
-        css_cascade_pass_open();
-        job = layout_job_new();
+        job = layout_job_new(LAYOUT_JOB_PAINT);
         layout_job_enter(job);
         /* CSS 2.1 §E.2 "Painting order" over the ROOT's stacking context. CSS 2.1 §9.9.1 "Specifying the stack
            level: the 'z-index' property"'s first sentence makes the root element form the root stacking
@@ -188,12 +185,10 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
            canvas" included, because it is laid first. Rasterizing only a COMPLETE walk would throw that away
            and report the same empty surface for a document that painted nothing and one that painted all but
            its last box. */
-        /* The job and the cascade record close with the walk whether or not it finished: `complete` false is a
-           painter that stopped and returned normally, and a close on the complete arm alone would leave both
-           standing for the next paint. */
+        /* The job closes with the walk whether or not it finished: `complete` false is a painter that stopped
+           and returned normally, and a close on the complete arm alone would leave it standing. */
         layout_job_leave(job);
         layout_job_free(job);
-        css_cascade_pass_close();
         display_list_raster(&dl, dpr, out, &rc);
         count->marks = rc.marks;
         count->spans = rc.spans;

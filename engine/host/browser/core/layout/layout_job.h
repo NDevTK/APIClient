@@ -1,6 +1,6 @@
 /* A layout job: the evaluator layout questions (core/layout/layout_question.h) are asked through. It owns
- * the stack of open questions, a memo of answered ones, core/layout/flow_placement.h's placement record, and
- * the accounting of how many question bodies one C activation hosts. It is the analogue of LayoutNG's
+ * the stack of open questions, a memo of answered ones, core/layout/flow_placement.h's placement record,
+ * core/css/css_cascade_pass.h's cascaded-value record, and the accounting of how many question bodies one C activation hosts. It is the analogue of LayoutNG's
  * layout-result cache, scoped to one job rather than hung on a box, because layout here is per-flow state
  * with no box tree to hang it on. */
 
@@ -61,6 +61,7 @@
 
 #include "check.h"
 #include "core/css/css_length.h"
+#include "core/css/css_cascade_pass.h"
 #include "core/layout/flow_placement.h"
 #include "core/layout/layout_question.h"
 
@@ -78,7 +79,11 @@ typedef struct {
 /* ---- driven jobs ---------------------------------------------------------------------------------------- */
 
 /* A job a driver owns across its activations. `free` asserts the job is not entered and its stack empty. */
-LayoutJob *layout_job_new(void);
+typedef enum {
+    LAYOUT_JOB_STEP = 1,   /* owned by a step machine's state; it may rest */
+    LAYOUT_JOB_PAINT       /* owned by a paint, which runs it to completion in one activation */
+} LayoutJobDriver;
+LayoutJob *layout_job_new(LayoutJobDriver driver);
 void layout_job_free(LayoutJob *job);
 
 /* Make `job` current for one activation, and give the thread back. `enter` asserts no job's activation
@@ -91,10 +96,9 @@ void layout_job_leave(LayoutJob *job);
    before it and served after it are what the census counts as served across a rest. */
 void layout_job_rested(LayoutJob *job);
 
-/* A driven job held in a step state. The clone answers a job with an empty memo and placement record: both
-   are re-derivable,
-   so a forked arm re-derives it rather than sharing or copying it. A job has no interior pointers a machine
-   holds, so a declarer passes no cursors. */
+/* A driven job held in a step state. The clone answers a job with an empty memo and empty records: all are
+   re-derivable, so a forked arm re-derives them rather than sharing or copying them. A job has no interior
+   pointers a machine holds, so a declarer passes no cursors. */
 extern const JSStepTreeOps layout_job_step_ops;
 
 /* Whether a job's activation holds the thread (an entered job, or the synchronous job inside a drive or with
@@ -107,6 +111,8 @@ size_t layout_job_alive(void);
    is entered, the synchronous job's while a drive is open, and NULL otherwise. The record is the job's and
    is released with its memo. */
 FlowPlacementRecord *layout_job_placement(void);
+/* The same for css-cascade-5 §4.2's cascaded-value record (core/css/css_cascade_pass.h). */
+CssCascadeRecord *layout_job_cascade(void);
 
 /* ---- the drive ------------------------------------------------------------------------------------------ */
 

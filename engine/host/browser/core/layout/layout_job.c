@@ -44,7 +44,9 @@ struct LayoutJob {
     uint64_t  gen;       /* starts at 1, so a zeroed slot is never live */
     uint64_t  rests;
     bool      driven;
+    LayoutJobDriver driver;
     FlowPlacementRecord placement;   /* core/layout/flow_placement.h's three facts, for this job */
+    CssCascadeRecord    cascade;     /* core/css/css_cascade_pass.h's cascaded values, for this job */
 };
 
 /* The job whose activation holds the thread when a driver entered one, and the thread's synchronous job.
@@ -98,6 +100,7 @@ static void lj_memo_shed(LayoutJob *job)
     job->gen++;
     job->memo_used = 0;
     flow_placement_record_release(&job->placement);
+    css_cascade_record_release(&job->cascade);
 }
 
 /* ---- the stack ------------------------------------------------------------------------------------------ */
@@ -119,7 +122,7 @@ static size_t lj_push(LayoutJob *job, LayoutQuestion q, LjState state)
 
 /* ---- driven jobs ---------------------------------------------------------------------------------------- */
 
-LayoutJob *layout_job_new(void)
+LayoutJob *layout_job_new(LayoutJobDriver driver)
 {
     LayoutJob *job = calloc(1, sizeof *job);
 
@@ -127,7 +130,11 @@ LayoutJob *layout_job_new(void)
     job->gen = 1;
     job->driven = true;
     g_alive++;
-    METRIC_ADD(jobs_driven, 1);
+    switch (driver) {
+    case LAYOUT_JOB_STEP:  METRIC_ADD(jobs_step, 1);  break;
+    case LAYOUT_JOB_PAINT: METRIC_ADD(jobs_paint, 1); break;
+    }
+    job->driver = driver;
     return job;
 }
 
@@ -141,6 +148,7 @@ void layout_job_free(LayoutJob *job)
     DCHECK(g_alive > 0, "a layout job was freed with no driven job alive");
     g_alive--;
     flow_placement_record_release(&job->placement);
+    css_cascade_record_release(&job->cascade);
     free(job->stack);
     free(job->memo);
     free(job);
@@ -172,6 +180,8 @@ void layout_job_rested(LayoutJob *job)
 {
     DCHECK(job != NULL && job->driven && job != g_entered,
            "a layout job was reported resting while it is entered — a driver leaves its job before it yields");
+    DCHECK(job->driver == LAYOUT_JOB_STEP,
+           "a paint's layout job was reported resting — a paint runs its job to completion");
     job->rests++;
     METRIC_ADD(job_rests, 1);
 }
@@ -185,8 +195,10 @@ static void *lj_step_clone(JSContext *ctx, void *root, void **cursors[], int ncu
     DCHECK(src != g_entered && src->n == 0,
            "a layout job was forked while its activation holds the thread — a job is entered only inside one "
            "step re-entry, and no fork is taken inside layout");
-    /* The clone is a new job with an empty memo and record: both are re-derivable, so the arm re-derives them. */
-    return layout_job_new();
+    /* The clone is a new job with an empty memo and records: all are re-derivable, so the arm re-derives them. */
+    DCHECK(src->driver == LAYOUT_JOB_STEP,
+           "a paint's layout job was forked — a paint is host time and holds no step state");
+    return layout_job_new(LAYOUT_JOB_STEP);
 }
 
 static void lj_step_destroy(JSContext *ctx, void *root)
@@ -211,6 +223,12 @@ FlowPlacementRecord *layout_job_placement(void)
 {
     if (g_entered != NULL) return &g_entered->placement;
     return g_sync.drives != 0 ? &g_sync.placement : NULL;
+}
+
+CssCascadeRecord *layout_job_cascade(void)
+{
+    if (g_entered != NULL) return &g_entered->cascade;
+    return g_sync.drives != 0 ? &g_sync.cascade : NULL;
 }
 
 /* ---- the drive ------------------------------------------------------------------------------------------ */

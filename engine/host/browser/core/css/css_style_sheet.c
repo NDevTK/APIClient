@@ -35,7 +35,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/agent_state.h"
-#include "core/css/css_cascade_pass.h"   /* the render record a cascade-input write may not land inside */
+#include "core/css/css_cascade_pass.h"   /* the layout job's record a cascade-input write may not land inside */
 #include "core/css/css_rule.h"
 #include "core/css/css_rule_list.h"
 #include "core/css/css_style_sheet.h"
@@ -133,19 +133,19 @@ static CssStyleSheetData *sheet_of(JSValueConst v)
 static void sheet_set_at(JSContext *ctx, CssStyleSheetData *s, JSValue *slot, JSValue v,
                          const char *file, int line)
 {
-    /* A CASCADE INPUT MOVING INSIDE A RENDER — see core/css/css_cascade_pass.h. A sheet's own slots are
-       what CSSOM §6.2's collection hands the author cascade: its rule list, its media object, the node
-       it hangs off. The ADDRESS this function already carries is what makes one check here name the
+    /* A cascade input moving while a layout job holds its record — see core/css/css_cascade_pass.h. A
+       sheet's own slots are what CSSOM §6.2's collection hands the author cascade: its rule list, its
+       media object, the node it hangs off. The ADDRESS this function already carries is what makes one check here name the
        WRITE rather than this line — the same reason cow.h gives for threading it at all. */
-    DCHECKF(!css_cascade_pass_is_open(),
+    DCHECKF(!css_cascade_record_is_held(),
             "%s:%d wrote a CSS style sheet record slot while css-cascade-5 §4.2 \"Cascaded Values\"' "
-            "record was open for a render. A sheet's rule list and its media object ARE the author "
+            "record was held by a layout job. A sheet's rule list and its media object ARE the author "
             "origin css-cascade-5 §6.2 \"Cascading Origins\" names, read for the element's own root, and "
             "`dom_cow_version` does not advance for either — so every cascaded value this render already "
             "served was sorted over the sheet this write is replacing, and nothing else in this engine "
-            "can see it happen. The span is core/paint/document_paint.c's CSS 2.1 §E.2 \"Painting "
-            "order\" walk and nothing in it may write: find what did, and either take it out of the walk "
-            "or move the pass inside it",
+            "can see it happen. "
+            "Layout reads the cascade and writes none of its inputs: find the write reached from inside "
+            "a layout job's activation (core/layout/layout_job.h) and take it out of the walk",
             file, line);
     cow_record_set_at(ctx, s, &SHEET_REC, slot, v, file, line);
 }
@@ -358,19 +358,19 @@ void css_style_sheet_set_disabled(JSValueConst sheet, bool disabled)
     CssStyleSheetData *s = sheet_of(sheet);
 
     DCHECK(s != NULL, "the disabled flag was written on something that is not a CSS style sheet");
-    /* A CASCADE INPUT MOVING INSIDE A RENDER — see core/css/css_cascade_pass.h. The record that
-       span holds is sound only while the cascade's inputs stand still, and `dom_cow_version` does not
+    /* A cascade input moving while a layout job holds its record — see core/css/css_cascade_pass.h. The
+       record is sound only while the cascade's inputs stand still, and `dom_cow_version` does not
        advance for this one, so the crash is HERE, at the write, rather than a re-check on the read
        side that would run after the picture was drawn. */
-    DCHECK(!css_cascade_pass_is_open(),
-           "CSSOM §6.1's DISABLED FLAG was written while css-cascade-5 §4.2 \"Cascaded Values\"' record was open "
-           "for a render. The author cascade skips a disabled sheet entirely, and every cascaded value "
+    DCHECK(!css_cascade_record_is_held(),
+           "CSSOM §6.1's DISABLED FLAG was written while css-cascade-5 §4.2 \"Cascaded Values\"' record was held "
+           "by a layout job. The author cascade skips a disabled sheet entirely, and every cascaded value "
            "this render has already "
            "served was the winner of a cascade over the sheet graph this write is replacing — "
            "nothing else in this engine can see that happen, because the tree version does not move "
-           "for it. The span is core/paint/document_paint.c's CSS 2.1 §E.2 \"Painting order\" walk "
-           "and nothing in it may write: find what did, and either take it out of the walk or move "
-           "the pass inside it");
+           "for it. "
+           "Layout reads the cascade and writes none of its inputs: find the write reached from inside "
+           "a layout job's activation (core/layout/layout_job.h) and take it out of the walk");
     s->disabled = disabled;
 }
 

@@ -915,7 +915,7 @@ static int js_ev_scroll_into_view_step(JSContext *ctx, JSStepHdr *hdr, void *st,
         }
         element_scrolling_into_view_begin(&s->walk, lxb_dom_interface_element(t.node), block, inline_pos,
                                           container);
-        s->job = layout_job_new();
+        s->job = layout_job_new(LAYOUT_JOB_STEP);
         hdr->stage = EV_SIV_BOX;
     }
 

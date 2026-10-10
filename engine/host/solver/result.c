@@ -2399,16 +2399,14 @@ char *result_json(JSContext *ctx) {
                              /* What the run spent on css-cascade-5 §4.2 "Cascaded Values".
                                 core/css/css_cascade_pass.h states the two shapes that compound: §7.2 inheritance
                                 makes an inherited read climb, and css-logical-1 §4 makes two inherited properties
-                                a prerequisite of every box-side cascade. All four are lifetime counts, so the
+                                a prerequisite of every box-side cascade. All three are lifetime counts, so the
                                 suffix says so; the record's live size is not among them because it could not be.
                                 `asksLife == servedLife + resolvedLife` is asserted by css_cascade_pass_census
-                                before copying. `passesLife` tells a never-consulted record (no caller) from one
-                                whose keys never repeat. css_cascade_pass_open has one caller,
-                                core/paint/document_paint.c, so off a paint — every path the shipped extension
-                                takes — `passesLife` and `servedLife` are 0; a nonzero `servedLife` is quoted with
-                                the driver that painted. */
+                                before copying. The record is a layout job's, so `servedLife` counts answers
+                                reused inside one job: a driven one (`scrollIntoView`, a paint) or a drive of the
+                                synchronous one. */
                              "\"_cascade\":{\"asksLife\":%lld,\"servedLife\":%lld,"
-                             "\"resolvedLife\":%lld,\"passesLife\":%lld},"
+                             "\"resolvedLife\":%lld},"
                              /* …and what all of the above was denominated in: a property of the host that decides
                                 whether two of these documents may be compared at all. result.h and
                                 solver/quantum.h state the argument; nothing in this file composes it. */
@@ -2429,7 +2427,7 @@ char *result_json(JSContext *ctx) {
                      place.asks, place.served, place.walks, place.placements,
                      place.origin_asks, place.origin_served, place.origin_derived,
                      place.cb_width_asks, place.cb_width_served, place.cb_width_derived,
-                     casc.asks_life, casc.served_life, casc.resolved_life, casc.passes_life,
+                     casc.asks_life, casc.served_life, casc.resolved_life,
                      quantum,
                      cold_park_json());
         free(scensus);

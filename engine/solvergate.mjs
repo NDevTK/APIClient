@@ -1279,18 +1279,10 @@ const DROP = new Map([
                    tree that checks the composition path has not acquired a CASCADE ask — if it ever reddens
                    THERE, composing a result document has started reading computed style, which is a finding
                    rather than a gate fault.
-                   BY CONSTRUCTION AND NOT FROM A MEASUREMENT, stated as what was READ, because this object's
-                   rows are all ZERO here and a reader is owed the reason rather than the coincidence.
-                   `css_cascade_pass_open` has exactly one caller, core/paint/document_paint.c, and nothing
-                   this driver invokes reaches it, so `passesLife` and `servedLife` are 0 under every schedule
-                   and `asksLife == resolvedLife` holds trivially; and NO document in engine/tests/solver
-                   names getComputedStyle, getPropertyValue, cssText or a `.style.` read, so `asksLife` is 0
-                   as well. NOBODY MAY READ THIS ROW AS EVIDENCE THAT A `_cascade` MISMATCH WAS EVER OBSERVED
-                   HERE, and nobody may read the zeros as evidence about the engine: it is a classification
-                   made for the mechanism, against a corpus that asks the cascade nothing. The run that makes
-                   these rows speak is a real bundle through testing/harness.js, where a page's own
-                   getComputedStyle raises `asksLife` while `passesLife` stays 0 — which is the residual in
-                   css_cascade_pass.h made measurable rather than argued.
+                   What was READ, not measured: the record is a layout job's (core/layout/layout_job.h), so
+                   `servedLife` counts answers reused inside one job's drives, and no document in
+                   engine/tests/solver names getComputedStyle, getPropertyValue, cssText or a `.style.` read.
+                   Nobody may read this row as evidence that a `_cascade` mismatch was ever observed here.
                    RETIREMENT: this row goes when css_cascade_pass.h's own retirement lands — the cascade
                    PRODUCING a computed-style object that a render reads — because a cascaded value is then a
                    field of that object rather than a function re-derived per ask, this census has no

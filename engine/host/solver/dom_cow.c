@@ -7,7 +7,6 @@
 #include "check.h"        /* CHECK — an OOM here corrupts DOM isolation, fatal in every build */
 #include "solver/dom_cow.h"
 #include "core/dom/document.h"   /* document_record_release — a destroyed document hands back its record */
-#include "core/css/css_cascade_pass.h"   /* …and the CASCADE span, which the same write also moves */
 #include "core/layout/layout_job.h"   /* a layout job's memo, which every write below may invalidate */
 #include "core/dom/attr_list.h"   /* §4.9's attribute-list algorithms — what the delta restores an attribute THROUGH */
 #include "core/dom/name_intern.h"   /* a node's names are per-DOCUMENT state, so kind 8 moves them with the pointer */
@@ -947,21 +946,11 @@ static void dom_attr_capture(lxb_dom_element_t *el, const char *ns, const char *
     DomUndo u;
 
     /* An attribute write is a style write and `g_dom_version` does not move for it: `class`, `style` and every
-       presentational attribute reach the cascade without touching the tree's shape. The layout job's records
-       are made exclusive with it at the write, ahead of the capture gate, because a write performed while
-       capture is off is the same write to the cascade. */
+       presentational attribute reach the cascade (css-cascade-5 §6 "Cascading", including §6.5 "Precedence of
+       Non-CSS Presentational Hints") without touching the tree's shape. The layout job's records, cascaded
+       values included, are made exclusive with it at the write, ahead of the capture gate, because a write
+       performed while capture is off is the same write to the cascade. */
     DOM_WRITE_OUTSIDE_LAYOUT();
-    /* The same write is a cascade input (css-cascade-5 §6 "Cascading", including §6.5 "Precedence of Non-CSS
-       Presentational Hints"), and css-cascade-5 §4.2's record (core/css/css_cascade_pass.h) is held over the
-       paint's walk by a span of its own, so it is asserted against by name. */
-    DCHECK(!css_cascade_pass_is_open(),
-           "an attribute was written while css-cascade-5 §4.2 \"Cascaded Values\"' record was open for a "
-           "render. That record holds the declaration that won the cascade for every (element, property) the "
-           "walk has asked about, and `dom_cow_version` does not advance for an attribute — so a `style`, a "
-           "`class` or a presentational attribute replaced here leaves every value already served cascaded "
-           "against declarations that are gone, and nothing else in this engine can see it happen. The span "
-           "is core/paint/document_paint.c's CSS 2.1 §E.2 \"Painting order\" walk and nothing in it may "
-           "write: find what did, and either take it out of the walk or move the pass inside it");
     if (!g_dom_capture) return;
     dom_capture_begin();   /* `a`, `cur` and `prefix` are the tree's, held across four allocations that can sell */
     a = dom_attr_get_ns(el, ns, local);
