@@ -1,5 +1,5 @@
-/* CSS 2 §9.4.1 "Block formatting contexts" — a box's position. See flow_position.h for the coordinate space,
-   for why the root element is the one box that is answered, and for what each other box is waiting on. */
+/* CSS 2 §9.4.1 "Block formatting contexts": a box's position. See flow_position.h for the coordinate space,
+   which boxes are placed by which section, and what is still refused. */
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,37 +24,15 @@
 #include "core/layout/table_wrapper.h"
 #include "core/layout/used_value.h"
 
-/* THE SUBJECT OF EVERY CRASH IN THIS FILE, WHICH IS A BOX AND NOT A PLACE.
-   §AN-ASSERT-THAT-NAMES-A-REMEDY's test is to count the call sites that can reach an abort and to make the
-   ADDRESS part of the assert once that number is larger than one would read by hand. Measured by reverse
-   reachability over every `.c` file under engine/host: `flow_border_box_origin` is reached from 73 call sites
-   over 46 functions in 9 files, 7 of them outside core/layout — every CSSOM VIEW §6 member that asks for a
-   position or an extent, §7's scroll algorithms, a Range's client rects, IntersectionObserver's update and the
-   rendering step. So it is.
-   AND THAT COUNT UNDERSTATES IT, because ONE call site reaches this file once per BOX IN THE DOCUMENT rather
-   than once. core/layout/scrolling_area.c's descendant walk asks `flow_border_box_origin` for every
-   descendant's margin edge, and core/dom/element_view.c's `ev_scroll_extent` runs the VIEWPORT's walk — over
-   the document element's whole subtree — before its step 6 has-a-box guard, which is the step everyone reads
-   as coming first. So one `element.scrollWidth` places every box in the document, and the caller a frame list
-   names says nothing whatever about WHICH of them had no rule.
-   WHICH ADDRESS IS THE QUESTION, and core/layout/line_box.c answered it for the same shape. A `__FILE__`/
-   `__LINE__` threaded from those callers arrives through `sa_descendant_edge`, `fp_line_box_origin` and
-   `flow_padding_box_origin` — a handful of forwarding functions for the whole tree, which is the capture point
-   that rule names as the WRONG one — and it would still not say which box has no rule. Every remedy the aborts
-   below state names a computed `display`, `position`, `float` or `writing-mode` and a module to build, so the
-   address their reader is standing in front of is the ELEMENT and that value.
-   THE COMPOSITION ITSELF IS core/layout/box_subject.h's, which is where the argument that it must be TOTAL now
-   lives, together with the ownership contract and the `%.*s` rule. Two things this file owes that component:
-   `box_subject_computed` is reached instead of `fp_computed_is` below, whose own DCHECK is correct where this
-   file reads a property to compute geometry with and would REPLACE the defect being reported where it reads
-   one to name a box; and `replaced_element_of` is reached from no message here, for the sharper form of the
-   same reason — it ABORTS by name for an `embed`, a `video`, a `canvas`, an `object`, an `audio` and an
-   `input`, so a message asking it whether this box is replaced would report core/layout/replaced_element.c's
-   gap for precisely the boxes whose own gap is being reported.
-   THE ONE ASSERT BELOW WHOSE SUBJECT IS A NODE rather than a box is the containing-block one, whose whole
-   question is what this element's PARENT is — §10.1's first case is the root element's alone and
-   core/layout/used_value.c decides the root by that parent being the Document — so `box_subject_node` is what
-   it asks and "(no element)" would be a wrong answer there rather than a missing one. */
+/* Every crash in this file names the box, not the call site: `flow_border_box_origin` is reached from many
+   CSSOM View members, and one `element.scrollWidth` places every box in the document (core/layout/
+   scrolling_area.c's descendant walk; core/dom/element_view.c's `ev_scroll_extent`), so a frame list does not
+   say which box had no rule. A `__FILE__`/`__LINE__` threaded from callers would arrive through a few
+   forwarding functions and still not name it. Every remedy names a computed `display`, `position`, `float` or
+   `writing-mode`, so the message names the element and that value via core/layout/box_subject.h (which must
+   be total; see there). Messages use `box_subject_computed`, not `fp_computed_is` (whose DCHECK would replace
+   the reported defect), and never ask `replaced_element_of` (which aborts for several element kinds). The
+   containing-block assert names a node (`box_subject_node`), since its question is the element's parent. */
 static bool fp_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
 {
     char *v = css_computed_value(el, name);
@@ -71,14 +49,11 @@ static bool fp_computed_is(lxb_dom_element_t *el, const char *name, const char *
     return same;
 }
 
-/* §9.4.1's TWO RULES ARE STATED IN PHYSICAL AXES — "laid out one after the other, VERTICALLY" and "each box's
-   LEFT outer edge touches the LEFT edge of the containing block" — and those are the physical axes of a
-   `horizontal-tb` writing mode and of no other. css-writing-modes-4 §3.2 "Block Flow Direction: the
-   writing-mode property" is what makes the block flow direction a property at all, and §7.4 "Flow-Relative
-   Mappings" is what re-states §9.4.1's rules over the flow-relative axes so a vertical mode can be laid out.
-   THE VALUE IS READABLE NOW, WHICH IS WHY THIS IS AN ASSERT AND NOT A SILENCE: this component stacked
-   downwards for every box while nothing could read the property, and a `vertical-rl` box got a coordinate
-   computed by the wrong rule with nothing to say so. */
+/* §9.4.1's two rules are stated in physical axes ("laid out one after the other, vertically"; "each box's left
+   outer edge touches the left edge of the containing block"), those of `horizontal-tb` only. css-writing-modes-4
+   §3.2 "Block Flow Direction: the writing-mode property" makes the block flow direction a property, and §7.4
+   "Flow-Relative Mappings" restates the rules over flow-relative axes. Another mode is refused rather than
+   placed by the wrong rule. */
 static void fp_require_horizontal_tb(lxb_dom_element_t *el)
 {
     char nbuf[160], wbuf[64];
@@ -102,17 +77,16 @@ static void fp_require_horizontal_tb(lxb_dom_element_t *el)
 }
 
 /* "The containing block in which the root element lives is a rectangle called the initial containing block"
-   (§10.1) — the element whose parent is the Document itself, which is the same test core/layout/used_value.c
-   makes for the base case of its own recursion. */
+   (§10.1): the element whose parent is the Document, the same test core/layout/used_value.c uses as its base
+   case. */
 static bool fp_is_root(const lxb_dom_node_t *n)
 {
     return n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_DOCUMENT;
 }
 
-/* THE INITIAL CONTAINING BLOCK'S WIDTH, asked of the ELEMENT'S own document and never of a running realm — an
-   iframe's ICB is 300 CSS pixels wide and its parent's is 1280. The caller has established that the element has
-   a box, which is defined over the document being presented, so the viewport exists here rather than being
-   checked for a second time. */
+/* The initial containing block's width, from the element's own document, never a running realm (an iframe's
+   ICB is 300 CSS pixels wide, its parent's 1280). Having a box implies a presented document, so the viewport
+   is asserted, not checked. */
 static CssPx fp_icb_width(lxb_dom_element_t *el)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el);
@@ -135,19 +109,12 @@ static CssPx fp_icb_width(lxb_dom_element_t *el)
     return viewport_icb_width(dctx);
 }
 
-/* §9.4.1's HORIZONTAL RULE, which is one rule with two answers: "each box's left outer edge touches the left
-   edge of the containing block (for right-to-left formatting, right edges touch)". WHICH ONE APPLIES IS THE
-   CONTAINING BLOCK'S COMPUTED `direction`, which core/layout/used_value.h answers with §10.1's own first-case
-   exception folded in ("the 'direction' property of the initial containing block is the same as for the root
-   element").
-   THE TWO ANSWERS ARE NOT A SLACK APART — they are the SAME DISTANCE measured from opposite edges, and stating
-   them that way is what makes the rule one rule. In `ltr` the box's left MARGIN edge is at the containing
-   block's left content edge, so its border box begins one `margin-left` in. In `rtl` its right margin edge is
-   at the right content edge, so its border box begins at the block's width less its own `margin-right` and
-   less its border box's width. Where §10.3.3's constraint equation held exactly — every `width: auto` box in
-   normal flow, and every over-constrained box now that used_value.c recomputes the ignored margin — the two
-   answers COINCIDE, which is the agreement this function used to assert and no longer needs to: an
-   over-constrained `rtl` box now differs from an `ltr` one exactly where the spec says it does. */
+/* §9.4.1's horizontal rule, one rule with two answers: "each box's left outer edge touches the left edge of the
+   containing block (for right-to-left formatting, right edges touch)". The containing block's computed
+   `direction` decides (core/layout/used_value.h, with §10.1's "the 'direction' property of the initial
+   containing block is the same as for the root element"). In `ltr` the border box begins one `margin-left` in;
+   in `rtl` at the block's width less `margin-right` less the border box's width. Where §10.3.3's equation holds
+   they coincide; an over-constrained `rtl` box differs exactly where the spec says. */
 static CssPx fp_left_offset(lxb_dom_element_t *el, CssPx cb_width)
 {
     if (!used_value_containing_block_is_rtl(el)) return used_value_px(el, "margin-left");
@@ -155,81 +122,35 @@ static CssPx fp_left_offset(lxb_dom_element_t *el, CssPx cb_width)
                       used_value_border_edge_px(el, false));
 }
 
-/* CSS 2 §8.1's edges between a box's BORDER box and its PADDING box, and between that and its CONTENT box, on
- * the leading side of one axis, are `used_value_leading_border_px` and `used_value_leading_edge_px`.
- *
- * THEY ARE READ FROM core/layout/used_value.h AND WERE ONCE COMPOSED HERE, AND THE DIFFERENCE IS NOT TIDINESS.
- * What stood here read `border-top-width`/`border-left-width` off the cascade and added
- * `used_value_px(el, "padding-*")` beside it — two computed values, composed by a caller that had no way to
- * ask whether the box HAS them. CSS 2.1 §17 Tables says it does not, for five of §17.2 The CSS table model's
- * ten box types: §17.6.1 The separated borders model refuses a row, row group, column or column group box a
- * border outright, §8.4 "Padding properties: 'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
- * and 'padding'"' Applies-to line refuses those same four a padding, and §17.6.2 The collapsing border model
- * says of a table box that "in this model, a table does not have padding (but does have margins)" and makes
- * its border widths halves of the collapsed borders at the grid's edges rather than the declared value. So
- * `fp_table_row_origin` below placed every row of a `border-collapse: collapse` table by a padding the table
- * does not have and a border twice the one §17.6.2 gives it — a whole-table offset with nothing to say so,
- * because both operands were real lengths the author really wrote.
- * THE FIX IS THE ENTRY AND NOT A BRANCH HERE. Four call sites composed the pair and a fifth composed the
- * border alone; a §17 branch at each would have been the same routing decision written five times over a
- * difference none of them can see. */
+/* CSS 2 §8.1's edges between a box's border, padding and content boxes on the leading side of one axis are
+ * `used_value_leading_border_px` and `used_value_leading_edge_px`, read from core/layout/used_value.h rather
+ * than composed from computed values here. CSS 2.1 §17 says some boxes lack them: §17.6.1 The separated
+ * borders model gives row, row group, column and column group boxes no border, §8.4 "Padding properties:
+ * 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', and 'padding'" gives them no padding, and
+ * §17.6.2 The collapsing border model says "in this model, a table does not have padding (but does have
+ * margins)" with half-borders. Those entries route by box kind and border model, once for every caller. */
 
-/* CSS 2.1 §17.5 Visual layout of table contents' PLACEMENT OF A ROW BOX AND OF A CELL BOX, which is §17.5's
- * rules 1 and 5 and §17.6.1 The separated borders model's spacing turned into the coordinates this file
- * reports, and NOT §9.4.1's two rules — neither box is stacked after its siblings by its margins, because CSS
- * 2.1 §17.5 Visual layout of table contents' opening sentence says "Internal table elements do not have
- * margins."
+/* CSS 2.1 §17.5 Visual layout of table contents' placement of row, row group and cell boxes: rules 1, 2 and 5
+ * with §17.6.1's spacing, not §9.4.1's rules ("Internal table elements do not have margins.").
  *
- * WHERE THE EDGES ARE IS THE SECTION'S OWN SENTENCE AND NOT A CHOICE. §17.5's last paragraph: "In the
- * separated borders model, the edges coincide with the border edges of cells. (And thus, in this model, there
- * may be gaps between the rows, columns, row groups or column groups, corresponding to the 'border-spacing'
- * property.)" So a row's top border edge is the top border edge of the cells anchored in its grid row, and its
- * left border edge is the left border edge of the cells in the first grid column. CSS 2.1 §17.6.1 The
- * separated borders model places those: "The distance between the table border and the borders of the cells
- * on the edge of the table is the table's padding for that side, plus the relevant border spacing distance."
- * Measured from the table box's CONTENT edge — which is past that padding — the first cell border is exactly
- * one border-spacing in, on each axis.
+ * The edges are §17.5's last paragraph: "In the separated borders model, the edges coincide with the border
+ * edges of cells. (And thus, in this model, there may be gaps between the rows, columns, row groups or column
+ * groups, corresponding to the 'border-spacing' property.)" §17.6.1: "The distance between the table border
+ * and the borders of the cells on the edge of the table is the table's padding for that side, plus the
+ * relevant border spacing distance", so from the table box's content edge the first cell border is one spacing
+ * in on each axis.
  *
- * THE SPACINGS ARE READ OFF THE TWO ALGORITHMS' ANSWERS AND NEVER OFF THE PROPERTY, which is the rule
- * core/layout/table_width.h and core/layout/table_height.h each state about their own `spacing` field: a second
- * read of `border-spacing` would be a second place for CSS 2.1 §17.6.1 The separated borders model's
- * "Computed value: two absolute lengths" to be resolved, free to disagree with the one the columns and rows
- * were laid out under. IT IS ALSO WHY §17.6.2 The collapsing border model NEEDS NO REFUSAL HERE. Each
- * `spacing` is the algorithm's own cell-spacing TERM and not the `border-spacing` property, and §17.6.2 gives
- * that property no meaning ("Borders are centered on the grid lines between the cells" — there is no distance
- * between adjoining cell borders to separate), so the term the two algorithms answer with is ZERO under the
- * collapsing model. The sums below then place the first cell's border edge AT the table box's content edge,
- * which is exactly where §17.5 Visual layout of table contents' last paragraph puts it in that model — the row
- * edges "coincide with the hypothetical grid lines on which the borders of the cells are centered" and "the
- * rows together exactly cover the table, leaving no gaps". So ONE arithmetic is correct in both models
- * precisely because it reads the ANSWERS; a second read of the property would have needed a branch here and
- * would have been the place the two models came apart.
- *
- * THE TABLE BOX'S OWN ORIGIN IS THE WRAPPER'S, AND THAT IS ASSERTED RATHER THAN ASSUMED. §17.4 Tables in the
- * visual formatting model gives the table element's `margin-*` to the WRAPPER and everything else to the table
- * box, and its parenthesis gives each box the initial value of what it does not get — so the wrapper has no
- * border and no padding, the table box has no margin, and with no caption between them the table box's border
- * edge IS the wrapper's content edge, which is the point `flow_border_box_origin` answers for a table element.
- * A CAPTION BREAKS EXACTLY THAT and is refused by name below. */
+ * Spacings come from core/layout/table_width.h's and table_height.h's answers, never the property, and are
+ * zero under §17.6.2, where edges "coincide with the hypothetical grid lines on which the borders of the cells
+ * are centered"; one arithmetic serves both models. The table box's origin is the wrapper's: §17.4 gives the wrapper the element's margins and initial border
+ * and padding, and the table box the reverse, so with no caption the table box's border edge is the wrapper's
+ * content edge (asserted below). A caption breaks that and is refused. */
 
-/* THE ONE TABLE LAYOUT BOTH PLACEMENTS ARE READ OUT OF, gathered once rather than per box kind. §17.5's rules
-   1 and 5 place a ROW and a CELL at rectangles of the SAME grid, and each coordinate is that rectangle turned
-   into a distance from the TABLE BOX's content edge — so two copies of this preamble would be two places for
-   §17.5.2 Table width algorithms: the 'table-layout' property's columns and §17.5.3 Table height algorithms'
-   rows to be built, free to be built over a different grid than the rectangle was read out of.
-   NOTHING IS STORED BETWEEN CALLS, and the reason is narrower than the one that used to be given here. It
-   read: `for the reason core/layout/block_flow.h states of every layout in this directory: a layout is`
-   `per-flow state, so a cached grid is shared state solver/dom_cow.h's delta does not swap and a stale one`
-   `is another flow's document.` The hazard is exactly right and the SCOPE was a claim about the directory:
-   core/layout/flow_placement.h now holds two of this file's own answers, and holds them soundly, because it
-   has a SPAN — two ends in one function, empty outside it, with solver/dom_cow.h's number asserted across it
-   and the style axis closed at the write. This grid has no such span: it is built inside one placement and
-   discarded with it, and giving it one would mean deciding where a table's layout begins and ends, which is
-   a question §17.5 answers and this preamble does not. So the rule is not that nothing may be stored, it is
-   that nothing is stored without a span that says when it is empty — and this frame has no span to be held
-   under, not merely no cache.
-   RETIREMENT: this paragraph goes when a table's layout is a phase with two ends of its own, because the
-   frame is then held under that phase and the sentence has nothing left to warn against. */
+/* The one table layout every table placement reads, gathered once so columns (§17.5.2 Table width algorithms:
+   the 'table-layout' property) and rows (§17.5.3 Table height algorithms) are built over the grid the rectangle
+   came from. Built inside one placement and discarded with it: unlike core/layout/flow_placement.h, which
+   holds answers under a pass with two ends and solver/dom_cow.h's number asserted across it, a table's layout
+   has no such span, so nothing is kept. */
 typedef struct {
     lxb_dom_element_t *table;
     FlowPoint          origin;    /* the TABLE box's border-box origin, which §17.4 makes the wrapper's */
@@ -238,8 +159,7 @@ typedef struct {
     TableUsedHeights   heights;
 } FpTableFrame;
 
-/* `el` IS THE BOX BEING PLACED and not the table — it is what the two refusals below name, because a reader
-   of either is standing in front of the box whose position was asked for and not in front of the table. */
+/* `el` is the box being placed, not the table: the refusals below name it. */
 static void fp_table_frame_build(lxb_dom_element_t *el, FpTableFrame *out)
 {
     lxb_dom_element_t **captions = NULL;
@@ -270,8 +190,7 @@ static void fp_table_frame_build(lxb_dom_element_t *el, FpTableFrame *out)
                "core/layout/block_flow.c owns that walk and names what it still lacks. BUILD it there and this "
                "arm becomes a sum over the captions §17.4.1 puts above the table box",
                box_subject(el, nbuf, sizeof nbuf), box_subject(out->table, tbuf, sizeof tbuf), ncaptions);
-    /* §17.4's wrapper is what §9.4.1 stacks, so the table element's own origin is an ordinary recursion into
-       this file's entry and not a second rule. */
+    /* §17.4's wrapper is what §9.4.1 stacks, so the table element's origin is an ordinary recursion. */
     out->origin = flow_border_box_origin(out->table);
     table_grid_build(out->table, &out->grid);
     table_widths(out->table, &out->grid, &out->widths);
@@ -285,20 +204,14 @@ static void fp_table_frame_release(FpTableFrame *f)
     table_grid_release(&f->grid);
 }
 
-/* WHICH END OF THE TABLE §17.5's LOGICAL COLUMN 0 IS PAINTED AT. It is rule 3's own sentence rather than a
-   reading taken here — "A column box occupies one or more columns of grid cells. Column boxes are placed next
-   to each other in the order they occur. The first column box may be either on the left or on the right,
-   depending on the value of the 'direction' property of the table." — and rule 5 states the same fact about
-   the placement it constrains: "(This constraint holds if the 'direction' property of the table is 'ltr'; if
-   the 'direction' is 'rtl', interchange \"left\" and \"right\" in the previous two sentences.)"
-   IT IS THE TABLE'S OWN COMPUTED `direction` AND NOT THE CONTAINING BLOCK'S, which both sentences say in the
-   same four words ("the 'direction' property of the table"). That is why
-   core/layout/used_value.h's `used_value_containing_block_is_rtl` is the WRONG entry here and reaching for it
-   would be the quiet kind of wrong: it answers §9.4.1's horizontal rule, whose subject is the block a box is
-   laid out IN, while this is a fact about the TABLE whose grid the box is placed in — and `direction` is
-   INHERITED (css-writing-modes-4 §2.1 "Specifying Directionality: the direction property"), so the two agree
-   on every table that declares none of its own and disagree only where a document actually exercises the
-   difference. */
+/* Which end of the table §17.5's logical column 0 is painted at: rule 3, "The first column box may be either on
+   the left or on the right, depending on the value of the 'direction' property of the table.", and rule 5,
+   "(This constraint holds if the 'direction' property of the table is 'ltr'; if the 'direction' is 'rtl',
+   interchange \"left\" and \"right\" in the previous two sentences.)"
+   It is the table's own computed `direction`, not the containing block's
+   (`used_value_containing_block_is_rtl` answers §9.4.1's question). `direction` is inherited
+   (css-writing-modes-4 §2.1 "Specifying Directionality: the direction property"), so the two differ only where
+   a document sets it on the table. */
 static bool fp_table_direction_is_rtl(lxb_dom_element_t *table)
 {
     char *d = css_computed_value(table, "direction");
@@ -325,40 +238,19 @@ static bool fp_table_direction_is_rtl(lxb_dom_element_t *table)
     return rtl;
 }
 
-/* ONE RECTANGLE OF GRID CELLS TURNED INTO THE BORDER-BOX CORNER OF THE BOX THAT OCCUPIES IT — §17.5's rules 1
- * and 5 as ONE arithmetic, because they place two boxes at rectangles of the same grid and differ only in
- * WHICH rectangle. Rule 1 gives a ROW "one row of grid cells", which is every column of its own grid row;
- * rule 5 gives a CELL "a rectangular box, one or more grid cells wide and high", which
- * core/layout/table_grid.h has already placed. A ROW IS THEREFORE NOT A SPECIAL CASE OF THIS FUNCTION, IT IS
- * THE RECTANGLE `[0, ncols)` — and that is what makes this one function rather than two that would each have
- * to be right about §17.6.1's spacing separately.
+/* One rectangle of grid cells turned into the border-box corner of the box occupying it: §17.5's rules 1, 2
+ * and 5 as one arithmetic. A row is the rectangle `[0, ncols)` of its grid row ("one row of grid cells"); a cell
+ * is core/layout/table_grid.h's rectangle ("one or more grid cells wide and high").
  *
- * THE COLUMN AXIS IS NOT A MIRROR OF THE ROW AXIS AND `direction` IS THE WHOLE DIFFERENCE. This grid numbers
- * its columns in §17.5's own LOGICAL order (core/layout/table_grid.h says so of its own `col`), and rules 3
- * and 5 put logical column 0 at the LEFT under `ltr` and at the RIGHT under `rtl` — see
- * `fp_table_direction_is_rtl` above for both sentences. The block axis has no such question: rule 1 stacks the
- * rows "from top to bottom in the order they occur in the source document", with no property to interchange
- * the two ends.
+ * Columns are numbered in logical order, and rules 3 and 5 put column 0 left under `ltr`, right under `rtl`
+ * (`fp_table_direction_is_rtl`); rows always stack "from top to bottom in the order they occur in the source
+ * document". The `rtl` arm mirrors the column index, summing the columns after the rectangle, rather than
+ * subtracting from the table's `content` width: that would depend on `content` matching `columns`, which holds
+ * only to rounding and fails for a zero-column table. Both arms then read `columns` and `spacing` alike, and a
+ * row's x is identical under both values.
  *
- * THE `rtl` ARM IS THE INTERCHANGE PERFORMED ON THE COLUMN INDEX AND NOT AS A SUBTRACTION FROM THE TABLE'S
- * CONTENT WIDTH, and the two are not equivalent in the way that matters here. Reading the rectangle's RIGHT
- * edge as `content` less the spacings and columns before it, and then stepping back by the box's own width,
- * would make every `rtl` coordinate depend on core/layout/table_width.h's `content` field agreeing with its
- * `columns` — an identity that component asserts only to within its distribution's own rounding, and one that
- * legitimately FAILS for a zero-column table, where `content` is a declared width or CAPMIN with no spacing in
- * it at all. Mirroring the INDEX instead makes the `rtl` sum the same prefix sum over the columns AFTER the
- * rectangle, so both arms read the same two operands (`columns` and `spacing`) in the same order and neither
- * reads `content`. IT ALSO MAKES RULE 1's "A ROW NEEDS NO SUCH ARM" A CONSEQUENCE RATHER THAN AN ASSUMPTION:
- * a whole-grid-row rectangle has no columns before it and none after it, so both arms sum over an EMPTY range
- * and a row's x is BYTE-IDENTICAL under the two `direction` values — where the subtraction form would have
- * differed from the `ltr` answer by an ulp and left a real disagreement and a rounding artifact looking the
- * same.
- *
- * THE BLOCK COORDINATE IS THE ANCHOR ROW'S IN BOTH CASES, which is §17.5's own sentence for a cell — "The top
- * row of this rectangle is in the row specified by the cell's parent" — read together with that section's last
- * paragraph putting the row edges at the cells' border edges in the separated model and exactly covering the
- * table in the collapsing one. So a cell's top border edge IS its row's, and there is one vertical sum rather
- * than a second rule for the box that spans rows. */
+ * The block coordinate is the anchor row's ("The top row of this rectangle is in the row specified by the
+ * cell's parent"), since a cell's top border edge is its row's. */
 static FlowPoint fp_table_grid_origin(const FpTableFrame *f, size_t row, size_t col, size_t colspan)
 {
     FlowPoint p = { { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL } };
@@ -379,18 +271,12 @@ static FlowPoint fp_table_grid_origin(const FpTableFrame *f, size_t row, size_t 
            "asserts its own column count against the grid's — so a rectangle outside it is a grid and a "
            "placement that were carried apart, and the prefix sum below would read a used width that is not "
            "this table's");
-    /* §17.5.3's OWN PREFIX SUM, ASKED RATHER THAN RE-SPELLED. `table_row_used_block_offset`
-       (core/layout/table_height.h) is the distance from the table box's content edge to the TOP EDGE of grid
-       row `row` — `row` used row heights and `row + 1` of §17.5.3's cell-spacing term — and that component
-       states why the one arithmetic is right under both of §17.6's border models: the term is the ALGORITHM's
-       and never the `border-spacing` property, so it is §17.6.1 The separated borders model's leading spacing
-       and ZERO under §17.6.2 The collapsing border model. A loop here would be a second spelling of terms that
-       belong to `TableUsedHeights`, free to come apart from the answer the rows were laid out under — the
-       defect `table_cell_vertical_edges` is exported one axis over to prevent. */
+    /* §17.5.3's prefix sum, asked of core/layout/table_height.h's `table_row_used_block_offset` (row heights
+       and §17.5.3's spacing term, zero under §17.6.2), not re-spelled here. */
     y = css_px_add(css_px_add(f->origin.y, used_value_leading_edge_px(f->table, true)),
                    table_row_used_block_offset(&f->heights, row));
-    /* The same on the inline axis, over the columns §17.5's rules 3 and 5 put BEFORE this rectangle — which
-       under `rtl` are the ones logically after it. */
+    /* The same on the inline axis, over the columns rules 3 and 5 put before this rectangle (under `rtl`, the
+       ones logically after it). */
     x = css_px_add(css_px_add(f->origin.x, used_value_leading_edge_px(f->table, false)), f->widths.spacing);
     if (fp_table_direction_is_rtl(f->table))
         for (j = col + colspan; j < f->widths.ncols; j++)
@@ -403,8 +289,7 @@ static FlowPoint fp_table_grid_origin(const FpTableFrame *f, size_t row, size_t 
     return p;
 }
 
-/* §17.5's RULE 1 — "Each row box occupies one row of grid cells" — which is the rectangle spanning every
-   column of the row's own grid row, handed to the one placement above. */
+/* §17.5's rule 1, "Each row box occupies one row of grid cells": every column of the row's grid row. */
 static FlowPoint fp_table_row_origin(lxb_dom_element_t *el)
 {
     FpTableFrame f;
@@ -414,10 +299,8 @@ static FlowPoint fp_table_row_origin(lxb_dom_element_t *el)
 
     fp_table_frame_build(el, &f);
     if (!table_grid_row_of(&f.grid, el, &row)) {
-        /* THE FRAME IS RELEASED BEFORE THE CRASH AND `f.table` SURVIVES IT — `fp_table_frame_release` frees the
-           three layouts' arrays and owns no element, so the message below still names the table it walked to.
-           The release is not decoration: `DFAILF` is compiled out in release, where this arm falls through to
-           the zero point above. */
+        /* The frame is released before the crash (it owns no element, so `f.table` survives): `DFAILF` compiles
+           out in release and this arm falls through to the zero point. */
         fp_table_frame_release(&f);
         DFAILF("%s: CSS 2.1 §17.5 Visual layout of table contents' rule 1 placed NO grid row for this ROW box "
                "in %s's grid, which is the table box CSS 2.1 §17.2's own nesting puts it inside. The two walks "
@@ -434,10 +317,8 @@ static FlowPoint fp_table_row_origin(lxb_dom_element_t *el)
     return p;
 }
 
-/* §17.5's RULE 5 — "Each cell is thus a rectangular box, one or more grid cells wide and high" — which
-   core/layout/table_grid.h has already placed, handed to the one placement above. THE CELL BRINGS ITS OWN
-   RECTANGLE AND NOTHING ELSE: everything that made a row placeable is the same table's, so what separated
-   the two boxes was never an operand but the RECTANGLE, and this entry is the rectangle read back. */
+/* §17.5's rule 5, "Each cell is thus a rectangular box, one or more grid cells wide and high", using
+   core/layout/table_grid.h's rectangle. */
 static FlowPoint fp_table_cell_origin(lxb_dom_element_t *el)
 {
     FpTableFrame f;
@@ -448,7 +329,7 @@ static FlowPoint fp_table_cell_origin(lxb_dom_element_t *el)
     fp_table_frame_build(el, &f);
     cell = table_grid_cell_of(&f.grid, el);
     if (cell == NULL) {
-        /* Released before the crash for the reason `fp_table_row_origin` above states. */
+        /* Released before the crash, as in `fp_table_row_origin`. */
         fp_table_frame_release(&f);
         DFAILF("%s: CSS 2.1 §17.5 Visual layout of table contents' rule 5 placed NO cell for this CELL box in "
                "%s's grid, which is the table box CSS 2.1 §17.2's own nesting puts it inside. The two walks "
@@ -465,37 +346,19 @@ static FlowPoint fp_table_cell_origin(lxb_dom_element_t *el)
     return p;
 }
 
-/* §17.5's RULE 2 — "A row group occupies the same grid cells as the rows it contains" — which is the rectangle
- * spanning every column of the group's own RUN of grid rows, handed to the one placement above. A GROUP AND A
- * ROW HAVE THE SAME INLINE EXTENT AND THE SAME x, and that is rule 1's doing rather than a shortcut: rule 1
- * gives a row every column of its grid row, so rule 2's union over the group's rows is every column too —
- * which is why core/layout/used_value.c answers both boxes' inline size from one function that reads no row.
- * What separates them is the block axis, where a group covers a RUN and a row covers one row.
+/* §17.5's rule 2, "A row group occupies the same grid cells as the rows it contains": every column of the
+ * group's run of grid rows. A group and a row share their inline extent and x (rule 1 gives a row every column),
+ * which is why core/layout/used_value.c answers both widths from one function.
  *
- * RULE 2's EMPTY UNION IS A RECORDED CHOICE AND THIS IS ITS SITE. `<tbody></tbody>` is a real row group box
- * containing no row, so rule 2's union over its rows is empty and §17.5's last paragraph names it no edges —
- * it places the row group edges at "the border edges of cells" under §17.6.1 The separated borders model and
- * at "the hypothetical grid lines on which the borders of the cells are centered" under §17.6.2 The collapsing
- * border model, and this box has no cell in either. core/layout/table_grid.h answers which grid LINE it stands
- * on (`table_grid_empty_row_group_line` — the count of grid rows §17.2 The CSS table model's display order
- * places before it, which is a fact and not a choice), and the choice made HERE is that the line becomes the
- * SAME distance a row starting there would have: `table_row_used_block_offset` at that line, which is the TOP
- * BORDER EDGE of the cells in the next grid row.
- * THE ALTERNATIVE IS THE OTHER SIDE OF ONE `border-spacing` — the BOTTOM border edge of the cells in the
- * previous grid row — and the two differ by exactly that one distance under §17.6.1 and are IDENTICAL under
- * §17.6.2, where the term is zero. WHAT DECIDES BETWEEN THEM IS CONTINUITY IN THE OPERATION THE BOX IS DEFINED
- * BY: rule 2 defines a group's placement by the rows it contains, so giving a row to an empty group must not
- * MOVE the group. Under the choice taken it does not — the line the empty group stood on is exactly the grid
- * row that row now occupies, at every line including the last and including a table with no rows at all, where
- * the distance is §17.6.1's one leading spacing. Under the alternative every empty group would jump by one
- * `border-spacing` the moment it stopped being empty. A REAL BROWSER MAY DISAGREE AND ONLY ONE THING WOULD
- * SAY SO: `getBoundingClientRect().top` on an empty `<tbody>` of a table that declares a vertical
- * `border-spacing`; the height is the zero core/layout/table_height.h records and the table's own geometry
- * does not move, since the group holds no row.
- * THERE IS NO REFUSAL ARM HERE and that is not an omission: `table_grid_row_group_of` asserts the wrong-table
- * walk at its own site and answers NULL for exactly one cause, and `table_grid_empty_row_group_line` asserts
- * that its group really is one this table's box generation reaches. Both crashes name the component whose walk
- * came apart, which is where a reader has to stand. */
+ * Rule 2's empty union is a recorded choice, made here. `<tbody></tbody>` has no cell, so §17.5's last
+ * paragraph names it no edges. core/layout/table_grid.h's `table_grid_empty_row_group_line` gives the grid line
+ * it stands on (a fact); this chooses that the line is the distance a row starting there would have
+ * (`table_row_used_block_offset`), the next row's top border edge. The alternative, the previous row's bottom
+ * border edge, is one `border-spacing` higher under §17.6.1 and identical under §17.6.2. This one keeps the
+ * group in place when a row is added to it. A browser may differ only in `getBoundingClientRect().top` on an
+ * empty `<tbody>` with a vertical `border-spacing`.
+ * No refusal arm: `table_grid_row_group_of` asserts the wrong-table walk and `table_grid_empty_row_group_line`
+ * asserts the group is this table's. */
 static FlowPoint fp_table_row_group_origin(lxb_dom_element_t *el)
 {
     FpTableFrame f;
@@ -511,79 +374,39 @@ static FlowPoint fp_table_row_group_origin(lxb_dom_element_t *el)
     return p;
 }
 
-/* WHICH BOX TYPES §9.4.1 PLACES, asked HERE and not left to whichever component this one calls next. The two
- * rules §9.4.1 states — "boxes are laid out one after the other, vertically, beginning at the top of a
- * containing block" and "each box's left outer edge touches the left edge of the containing block" — are
- * written about a BLOCK-LEVEL box in a block formatting context, and they say nothing whatever about a box of
- * any other type. This used to test the one value `inline`, on the reading that everything else this engine
- * could compute a `display` for was block-level; core/css/css_style_declaration.c's UA sheet now answers
- * `inline-block` for `input`, `button`, `select`, `textarea` and `marquee` and the eight table-internal types
- * for a table's own children, so that reading is gone and the rest would have fallen through to the two rules
- * below and come out with an x and a y for a box neither rule describes.
+/* Whether a box is on a line box, asked here before §9.4.1's rules, which are written about block-level boxes
+ * in a block formatting context. The UA sheet gives `inline-block` to `input`, `button`, `select`, `textarea`
+ * and `marquee` and table-internal types to a table's children, none of which §9.4.1's two rules place. The
+ * invariant is asserted here, at the child's own position question, rather than relying on block_flow.c
+ * refusing the child at its parent's height walk.
  *
- * A CRASH TWO COMPONENTS AWAY IS NOT THE SAME ASSERT. Every one of these does still abort today — the walk in
- * core/layout/block_flow.c classifies the same child and refuses it — but that is a crash at the box's PARENT,
- * naming the parent's height walk, for a question that was asked about the CHILD's position. The invariant
- * belongs where it is born (CLAUDE.md §Offensive programming), and it is the only thing standing between a
- * release build and a coordinate computed from the wrong rule.
- *
- * §9.4.1 IS NOT ASKED ABOUT A BOX THAT DOES NOT EXIST, which is the caller's own first step (flow_position.h),
- * so `none` and `contents` are a DCHECK rather than an arm: reaching here with either means the predicate that
- * decides box existence and this one disagree. */
+ * `none` and `contents` are a DCHECK (in `fp_require_placeable`): the caller has established a box exists. */
 static bool fp_is_on_a_line_box(lxb_dom_element_t *el)
 {
-    /* THE QUESTION IS THE BOX'S LEVEL AND NOT WHETHER IT IS REPLACED, which is what this predicate used to
-       answer and is the reason a replaced element crashed here. CSS 2.1 §9.2.2 "Inline-level elements and
-       inline boxes" puts BOTH kinds on the line: a non-replaced `display: inline` element "generates an inline
-       box", and an inline-level box that is not one — "such as replaced inline-level elements, inline-block
-       elements, and inline-table elements" — is an ATOMIC inline-level box that "participate[s] in [its]
-       inline formatting context as a single opaque box". §9.4's two normal-flow formatting contexts are
-       alternatives decided by exactly that level, so both leave through §9.4.2 and neither is placed by
-       §9.4.1's two rules.
-       WHAT SEPARATES THEM IS THE FRAGMENT'S SHAPE AND core/layout/line_box.h OWNS IT: an inline box is
-       delimited by its two EDGE items and split across as many line boxes as it spans, a replaced element by
-       the ONE run item css-text-3 §5.5 "Line Breaking Details" collects for "each replaced element or other
-       atomic inline". One answer, one component, and this file composes the coordinate out of it either way.
-       THE `inline-block` COMES THROUGH HERE TOO, AND IT IS THE SAME SENTENCE THAT PUTS IT HERE. §9.2.2 names
-       it in the list that defines the class — "such as replaced inline-level elements, inline-block elements,
-       and inline-table elements" — so it is on a line box for exactly the reason a replaced `display: inline`
-       element is, and core/layout/line_box.h delimits its fragment by the same single item index. WHAT USED TO
-       KEEP IT OUT WAS NOT ITS LEVEL BUT A MISSING NUMBER, and the number now exists: §10.8.1 "Leading and
-       half-leading" puts a non-replaced `inline-block`'s baseline INSIDE the box ("The baseline of an
-       'inline-block' is the baseline of its last line box in the normal flow, unless it has either no in-flow
-       line boxes or if its 'overflow' property has a computed value other than 'visible', in which case the
-       baseline is the bottom margin edge"), so its margin box hangs BELOW the line's baseline rather than
-       resting on it, and `line_box_inline_fragments` reads that split (`lb_atomic_extent`) instead of assuming
-       the bottom margin edge. BOTH KINDS OF `inline-block` take this arm: CSS 2.2 §10.3.10 "'Inline-block',
-       replaced elements in normal flow" is one sentence long — "Exactly as inline replaced elements." — and
-       core/layout/used_value.c asks `replaced_element_of` on its `auto` arm BEFORE it asks `uv_box_kind`, so
-       the replaced half is sized by §10.3.2 and §10.6.2 with nothing here to arrange.
-       THE THREE REMAINING ATOMIC INLINE-LEVEL BOXES DO NOT COME THROUGH HERE, and it is no longer their
-       `display` that stops them but a MODULE this engine does not have: an `inline-table`, an `inline-flex`
-       and an `inline-grid` leave through `fp_require_placeable` below, which names what each still needs. A
-       REPLACED element whose `display` is `block` is not inline-level at all: §9.2.1 makes it a block box and
-       §9.4.1's two rules DO place it, so it takes the induction at the end of this function, with §10.3.4's
-       and §10.6.2's used extents under it. */
+    /* The question is the box's level. CSS 2.1 §9.2.2 "Inline-level elements and inline boxes" puts both kinds on
+       the line: a non-replaced `display: inline` element "generates an inline box", and inline-level boxes
+       "such as replaced inline-level elements, inline-block elements, and inline-table elements" are atomic,
+       participating "as a single opaque box". core/layout/line_box.h owns the fragment shape (two edge items,
+       or one atomic item).
+       An `inline-block` comes through here: line_box.h hangs its margin box from its own baseline, which
+       §10.8.1 "Leading and half-leading" puts inside the box ("The baseline of an 'inline-block' is the
+       baseline of its last line box in the normal flow, unless it has either no in-flow line boxes or if its
+       'overflow' property has a computed value other than 'visible', in which case the baseline is the bottom
+       margin edge"; `lb_atomic_extent`). A replaced `inline-block` is the same (CSS 2.2 §10.3.10: "Exactly as
+       inline replaced elements."), sized by used_value.c's replaced arm first.
+       `inline-table`, `inline-flex` and `inline-grid` leave through `fp_require_placeable`, each needing a
+       module's number. A replaced element with `display: block` is block-level (§9.2.1) and takes the
+       induction, with §10.3.4's and §10.6.2's extents. */
     return fp_computed_is(el, "display", "inline") || fp_computed_is(el, "display", "inline-block");
 }
 
-/* CSS 2 §9.4.2 "Inline formatting contexts"' PLACEMENT of a box on a line — "boxes are laid out horizontally,
-   one after the other, beginning at the top of a containing block", broken into line boxes whose width the
-   containing block decides. It answers a NON-REPLACED inline box's fragments and an ATOMIC inline-level box's
-   one fragment through the same entry, because §9.4.2 places both and core/layout/line_box.h owns the one
-   difference between them (a range of two edge items, or one atomic item's own index). The atomic half is
-   every shape this engine can measure: a REPLACED element, and both halves of the `inline-block` CSS 2.2
-   §10.3.9 and §10.3.10 divide between.
-   ITS ORIGIN IS ITS FIRST FRAGMENT'S, and that is §9.4.2's own consequence rather than a choice among several:
-   "when an inline box exceeds the width of a line box, it is SPLIT into several boxes and these boxes are
-   distributed across several line boxes", so the box has as many border areas as it has fragments and exactly
-   one of them begins first in content order. CSSOM VIEW §7's `offsetTop`/`offsetLeft` and §6's
-   `getBoundingClientRect` both want that one; §6's `getClientRects` wants them ALL and does not come through
-   here — core/dom/element_view.c asks core/layout/line_box.h for the list directly, so this entry answering
-   the first is not this component deciding the others do not matter.
-   THE FRAME IS THE ESTABLISHING BOX'S CONTENT BOX, which core/layout/line_box.h reports in and which is the
-   same second case of §10.1 the block-level arm below composes: that box's own origin (this function, one
-   level up) plus CSS 2 §8.1's leading border and padding. */
+/* CSS 2 §9.4.2 "Inline formatting contexts"' placement of a box on a line ("boxes are laid out horizontally,
+   one after the other, beginning at the top of a containing block"), for a non-replaced inline box's fragments
+   and an atomic inline-level box's one fragment (a replaced element, or either kind of `inline-block`, CSS 2.2
+   §10.3.9 and §10.3.10). core/layout/line_box.h owns the difference.
+   The frame is the establishing box's content box: its origin (this function, one level up) plus CSS 2 §8.1's
+   leading border and padding, as §10.1's second case composes it below. CSSOM View §6's `getClientRects` asks
+   core/layout/line_box.h for the whole list via core/dom/element_view.c. */
 size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out)
 {
     lxb_dom_element_t *style = NULL;
@@ -605,10 +428,9 @@ size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out)
            "having been broken between the two files",
            box_subject(el, ebuf, sizeof ebuf), box_subject(style, sbuf, sizeof sbuf), n,
            frags == NULL ? " and no fragment array" : "");
-    /* §10.1's SECOND CASE, composed exactly as the block-level arm below composes it: the establishing box's
-       own origin (this function, one level up — which is where a float, an out-of-flow ancestor or a vertical
-       writing mode crashes by its own section) plus CSS 2 §8.1's leading border and padding, which is the
-       difference between that box's BORDER edge and the CONTENT edge core/layout/line_box.h measures from. */
+    /* §10.1's second case, as the block-level arm composes it: the establishing box's origin (where a float, an
+       out-of-flow ancestor or a vertical mode crashes by its own section) plus §8.1's leading border and
+       padding, the gap between its border edge and the content edge line_box.h measures from. */
     o = flow_border_box_origin(style);
     left = css_px_add(o.x, used_value_leading_edge_px(style, false));
     top = css_px_add(o.y, used_value_leading_edge_px(style, true));
@@ -626,10 +448,8 @@ size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out)
     return n;
 }
 
-/* THE ORIGIN OF A BOX §9.4.2 PLACES, WHICH IS ITS FIRST FRAGMENT'S CORNER FOR BOTH SHAPES OF SUCH A BOX. An
-   inline box has one border area per fragment and exactly one begins first in content order; an ATOMIC
-   inline-level box is CSS 2.1 §9.2.2's "single opaque box" and has exactly one, so the same index answers both
-   and no caller has to know which it is holding. */
+/* The origin of a box §9.4.2 places: its first fragment's corner, which is also an atomic inline-level box's
+   only one ("single opaque box"), so callers need not know which they hold. */
 static FlowPoint fp_line_box_origin(lxb_dom_element_t *el)
 {
     FlowRect *rects = NULL;
@@ -644,12 +464,9 @@ static FlowPoint fp_line_box_origin(lxb_dom_element_t *el)
 
 static void fp_require_placeable(lxb_dom_element_t *el)
 {
-    /* NEITHER `table-row`, NOR `table-cell`, NOR ANY OF §17.2's THREE ROW GROUP DISPLAYS IS ON THIS LIST, AND
-       THEIR ABSENCE IS THE PLACEMENT AND NOT AN OVERSIGHT: CSS 2.1 §17.5's rules 1, 2 and 5 place all three
-       box types, and each leaves through `fp_table_row_origin`, `fp_table_row_group_origin` or
-       `fp_table_cell_origin` above exactly as a box on a line box leaves through `fp_line_box_origin`. What is
-       left here is the two COLUMN boxes, which need a mapping that does not exist in either direction, and the
-       CAPTION, which §17.4 Tables in the visual formatting model takes out of the grid entirely. */
+    /* Rows, cells and row groups are placed by §17.5's rules 1, 2 and 5 above and are not listed. Left: column
+       and column-group boxes (no mapping from element to grid column) and the caption, which §17.4 Tables in
+       the visual formatting model takes out of the grid. */
     static const char *const TABLE_INTERNAL[] = {
         "table-column-group", "table-column", "table-caption",
     };
@@ -658,15 +475,9 @@ static void fp_require_placeable(lxb_dom_element_t *el)
     bool table_internal = false, inline_level;
     unsigned i;
 
-    /* THERE IS NO GUARD UNDER THIS ASSERT, AND THE REASON IS A PROPERTY OF THE ENTRY RATHER THAN A PREFERENCE.
-       `css_computed_value(el, "display")` cannot answer NULL: it routes `display` through `computed_display`,
-       which dereferences the specified value at its own first `strcmp` — so a NULL would fault THERE and never
-       reach this line — and every one of that function's return paths is either the specified string itself or
-       a `css_cv_strdup`, which CHECKs its allocation. A `if (d == NULL) return;` here was therefore dead in
-       both builds while reading as the thing standing between this file and a null, which is worse than
-       either: in dev the assert already aborts, and in release it silently declined to place a box for a state
-       that cannot arise. A pointer whose non-nullness the callee establishes is asserted here and guarded
-       nowhere — the guard's only effect was to make the assert look recoverable. */
+    /* No guard under this assert: `css_computed_value(el, "display")` cannot return NULL (its `computed_display`
+       dereferences the specified value first, and every return is that string or a CHECKed `css_cv_strdup`),
+       so a guard would be dead and only make the assert look recoverable. */
     DCHECKF(d != NULL, "%s: the cascade produced no computed `display` for an element whose box is being placed",
             box_subject(el, nbuf, sizeof nbuf));
     DCHECKF(strcmp(d, "none") != 0 && strcmp(d, "contents") != 0,
@@ -680,24 +491,14 @@ static void fp_require_placeable(lxb_dom_element_t *el)
            box_subject(el, nbuf, sizeof nbuf));
     for (i = 0; i < sizeof(TABLE_INTERNAL) / sizeof(TABLE_INTERNAL[0]); i++)
         if (strcmp(d, TABLE_INTERNAL[i]) == 0) table_internal = true;
-    /* NEITHER `inline` NOR `inline-block` IS IN THIS LIST, and that is what makes this function's name true: a
-       box whose computed `display` is either one is PLACED now, by §9.4.2 through core/layout/line_box.h, and
-       it leaves through `fp_line_box_origin` before this classification is asked — a non-replaced inline box
-       out of its two edge items, and every ATOMIC inline-level box this engine can measure out of the one
-       atomic item that carries it. What is left here is the atomic inline-level boxes CSS 2.1 §9.2.2
-       "Inline-level elements and inline boxes" separates from an inline box AND for which a MODULE outside CSS
-       2.1 §10 owns a number §9.4.2's line cannot be filled without. */
+    /* `inline` and `inline-block` are placed by §9.4.2 (`fp_line_box_origin`) before this is asked. What is left
+       is atomic inline-level boxes (CSS 2.1 §9.2.2 "Inline-level elements and inline boxes") whose module
+       outside CSS 2.1 §10 owns a number the line needs. */
     inline_level = strcmp(d, "inline-table") == 0 || strcmp(d, "inline-flex") == 0 ||
                    strcmp(d, "inline-grid") == 0;
-    /* THE STRING IS RELEASED BEFORE EITHER CRASH AND NEITHER CRASH READS IT AGAIN. `DFAIL` is compiled out in
-       release, so a `free` beside one is a `free` the release build FALLS THROUGH — freeing inside the loop and
-       carrying on comparing would be a use-after-free there, and freeing in each arm would be a double free at
-       the end. The classification is decided first, the buffer is released once, and the two arms then hold
-       nothing.
-       AND THE TWO CRASHES NAME THE `display` WITHOUT READING `d`, which is why this rule survived their gaining
-       an address: `box_subject` asks the cascade for its own copy and releases it inside itself, so the arms
-       still hold nothing after the free above. Folding `d` into either message to save that second read is the
-       use-after-free this paragraph is about, arriving through the part of the line that looks like prose. */
+    /* The string is released before either crash and neither reads it: `DFAIL` compiles out in release, so a
+       `free` beside one would be a use-after-free or double free there. The messages name the `display`
+       through `box_subject`, which reads and frees its own copy; folding `d` in would reintroduce the bug. */
     free(d);
     if (table_internal)
         DFAILF("%s: "
@@ -793,50 +594,29 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "own sentence above, which is a position inside CSS 2.1 §17.5.3 Table height algorithms' rows. "
               "Then this box reaches the line and this arm deletes",
               box_subject(el, nbuf, sizeof nbuf));
-    /* What is left is a box CSS 2.1 §9.2.1 'Block-level elements and block boxes' makes block-level, which is
-       what the two rules below are written about. A `table` is one of them and stays on this path: §17.4
-       'Tables in the visual formatting model' says the table wrapper box is block-level for `display: table`
-       and inline-level for `display: inline-table`, so the wrapper's own origin is §9.4.1's and what §17.5
-       owns is everything INSIDE it — which is the arm above, plus the `table-caption` §17.4 renders as a
-       normal block box inside the table WRAPPER box and therefore not over this containing-block chain. */
+    /* What is left is block-level (CSS 2.1 §9.2.1 'Block-level elements and block boxes'), which §9.4.1's rules
+       describe. A `table` stays here: §17.4 'Tables in the visual formatting model' makes the wrapper
+       block-level for `display: table`, so its origin is §9.4.1's and §17.5 owns what is inside it. */
 }
 
-/* ---- CSS 2.1 §10.3.7's and §10.6.4's STATIC POSITION, AS A COORDINATE --------------------------------------
- * core/layout/block_flow.h answers where §9.4.1's stack would have reached the HYPOTHETICAL box, in its own
- * containing block's frame. What those two sections ask for is that distance measured from a DIFFERENT
- * rectangle — the one §10.1's third or fourth case gives the box now that it is out of flow — so the static
- * position is the difference between two origins and this file is where both of them exist.
+/* ---- CSS 2.1 §10.3.7's and §10.6.4's static position, as a coordinate --------------------------------------
+ * core/layout/block_flow.h answers where §9.4.1's stack would have put the hypothetical box, in its own
+ * containing block's frame; the sections want that distance from §10.1's third or fourth rectangle, so the
+ * static position is a difference of two origins.
  *
- * THE TWO AXES ARE NOT THE SAME DERIVATION AND WRITING THEM AS ONE WOULD INVENT A WALK. §9.4.1 states two
- * rules and only the vertical one is a stack: "boxes are laid out one after the other, VERTICALLY, beginning
- * at the top of a containing block", which is the walk block_flow.h reads out; and "each box's LEFT OUTER EDGE
- * touches the left edge of the containing block (for right-to-left formatting, right edges touch)", which is
- * not a walk at all — a block-level box's inline-axis margin edge is its containing block's own content edge,
- * whatever its siblings did. So the horizontal static position needs no hypothetical placement and asks for
- * none.
+ * Only the vertical rule is a stack; the horizontal rule ("each box's left outer edge touches the left edge of
+ * the containing block") puts the margin edge at the block's content edge whatever the siblings did. `trailing`
+ * is §10.3.7's `right` with its sign, for an `rtl` containing block only, never on the block axis.
  *
- * `trailing` IS §10.3.7's `right` AND ITS SIGN IS THE SECTION'S OWN, which is the opposite of the leading
- * one's: "the static position for 'right' is the distance from the RIGHT edge of the containing block to the
- * right margin edge of the same hypothetical box… the value is POSITIVE if the hypothetical box is to the
- * LEFT of the containing block's edge". It is asked for only where §10.3.7 asks for it — an `rtl`
- * static-position containing block — and never on the block axis, because §10.6.4 names `top` in both of the
- * entries that use a static position and has no `bottom` arm at all.
- *
- * NAMED RESIDUAL — THE HYPOTHETICAL BOX'S OWN INLINE SIZE IS NOT SOLVED, AND §9.4.1's RULE IS WHY THAT IS
- * EXACT RATHER THAN NARROW. The rule places a MARGIN EDGE against a containing block edge, and a margin edge
- * needs no width; the `rtl` arm needs the containing block's own content width, which `used_value_content_px`
- * answers, and still no width of the hypothetical box. WHAT IS NOT COVERED: a hypothetical box whose
- * §10.3.3 equation would not put its margin edge at that edge — an `auto` horizontal margin, which §10.3.3's
- * rules 2 and 4 turn into SLACK and which centres the box. WHAT THE NEXT DIFF BUILDS: §10.3.3's own solve
- * over the hypothetical box, whose `width` term is the shrink-to-fit or the declared length the box would
- * have had in flow. HOW ITS ABSENCE WOULD SHOW: an absolutely positioned box with `margin-left: auto` and no
- * declared `left` sits at its static-position containing block's leading content edge, where a browser puts
- * it at the centre of that rectangle. */
+ * Named residual: the hypothetical box's inline size is not solved. Exact while its margin edge touches the
+ * containing block's edge (no width needed; `rtl` uses the block's `used_value_content_px`). Not covered: an
+ * `auto` horizontal margin, which §10.3.3's rules 2 and 4 turn into slack that centres the box. Next: §10.3.3's
+ * solve over the hypothetical box with its in-flow `width`. Absence shows as an absolutely positioned box with
+ * `margin-left: auto` and no declared `left` sitting at the leading content edge, where a browser centres it. */
 
-/* §10.1's THIRD and FOURTH cases turned into a coordinate — the LEADING edge of the rectangle the absolutely
-   positioned box's offsets are stated against, in the initial containing block's space, and its EXTENT on the
-   axis asked for. The extent is read from `used_value_containing_block_width` (and its block-axis twin
-   through §10.6.4's own equation) at the caller, so what this answers is the origin alone. */
+/* §10.1's third and fourth cases as a coordinate: the leading edge, on the axis asked, of the rectangle an
+   absolutely positioned box's offsets are stated against, in the ICB's space. The extent is the caller's
+   (`used_value_containing_block_width`, or §10.6.4's block-axis twin). */
 static CssPx fp_abs_cb_leading(lxb_dom_element_t *el, bool vertical, bool for_static_position)
 {
     lxb_dom_element_t *anc = NULL;
@@ -846,26 +626,18 @@ static CssPx fp_abs_cb_leading(lxb_dom_element_t *el, bool vertical, bool for_st
 
     switch (used_value_abs_containing_block(el, &anc)) {
     case USED_VALUE_ABS_CB_INITIAL:
-        /* §10.1's own words for the initial containing block: "anchored at the canvas origin", which IS this
-           component's coordinate space (see the header). Its leading edge is that origin on both axes. */
+        /* §10.1: the initial containing block is "anchored at the canvas origin", this component's origin. */
         return css_px(0.0);
     case USED_VALUE_ABS_CB_VIEWPORT:
-        /* css-position-3 §2.1 "Containing Blocks of Positioned Boxes" makes a fixed box's containing block
-           "the layout viewport … as a result, fixed boxes do not move when the document is scrolled", and
-           CSSOM VIEW §4 states the viewport's own position in THIS space: `scrollX` is "the x-coordinate,
-           RELATIVE TO THE INITIAL CONTAINING BLOCK ORIGIN, of the left of the viewport". So the viewport's
-           leading edge is the scroll position, and the two sentences together are what makes a fixed box move
-           WITH the viewport rather than against the document.
-           §10.3.7's OWN SENTENCE ABOUT THIS IS NOT THIS ONE AND MUST NOT BE FOLDED IN: "for the purposes of
-           calculating the STATIC POSITION, the containing block of fixed positioned elements is the initial
-           containing block instead of the viewport, and all scrollable boxes should be assumed to be scrolled
-           to their origin". That is a rule about the HYPOTHETICAL box's frame, applied at the caller below,
-           and `for_static_position` is that rule: the ICB and the viewport are the same SIZE (§10.1: the
-           ICB "has the dimensions of the viewport") and differ only in where they sit, so the whole of
-           §10.3.7's sentence is this one branch. Its second half — "all scrollable boxes should be assumed to
-           be scrolled to their origin" — needs nothing here: `flow_padding_box_origin` answers in the initial
-           containing block's space and subtracts no scroll offset from any ancestor, so a box inside a
-           scrolled one is already reported as if it were at its origin. */
+        /* css-position-3 §2.1 "Containing Blocks of Positioned Boxes": a fixed box's containing block is "the
+           layout viewport … as a result, fixed boxes do not move when the document is scrolled", and CSSOM
+           View §4's `scrollX` is "relative to the initial containing block origin, of the left of the
+           viewport". So the viewport's leading edge is the scroll position.
+           For a static position §10.3.7 says instead "the containing block of fixed positioned elements is the
+           initial containing block instead of the viewport, and all scrollable boxes should be assumed to be
+           scrolled to their origin": the ICB has "the dimensions of the viewport", so that is
+           `for_static_position` returning the origin. Its second half holds already:
+           `flow_padding_box_origin` subtracts no ancestor scroll offset. */
         if (for_static_position) return css_px(0.0);
         n = lxb_dom_interface_node(el);
         DCHECKF(n->owner_document != NULL,
@@ -880,9 +652,8 @@ static CssPx fp_abs_cb_leading(lxb_dom_element_t *el, bool vertical, bool for_st
                box_subject(el, nbuf, sizeof nbuf));
         return css_px(viewport_window_scroll(dctx, vertical));
     case USED_VALUE_ABS_CB_PADDING_EDGE: {
-        /* §10.1's FOURTH case: "the containing block is formed by the PADDING EDGE of the ancestor" —
-           `flow_padding_box_origin` is that edge and is derived from this same file's border-box origin, so
-           an ancestor this component cannot place crashes there naming its own section. */
+        /* §10.1's fourth case: "the containing block is formed by the padding edge of the ancestor", which
+           `flow_padding_box_origin` is (so an unplaceable ancestor crashes there by its own section). */
         FlowPoint o;
 
         DCHECKF(anc != NULL,
@@ -914,40 +685,33 @@ CssPx flow_static_position(lxb_dom_element_t *el, bool vertical, bool trailing)
     spcb = block_flow_static_position_containing_block(el);
     o = flow_border_box_origin(spcb);
     if (vertical) {
-        /* §9.4.1's VERTICAL rule, read out of the walk that implements it. The offset is from the
-           static-position containing block's TOP CONTENT EDGE, so §8.1's leading border and padding of that
-           box are what nests it inside the border box origin above — the same composition §10.1's second case
-           makes for a box that IS in flow, and the reason this file adds them rather than block_flow.h. */
+        /* §9.4.1's vertical rule from the walk that implements it, measured from the static-position containing
+           block's top content edge, so its §8.1 leading border and padding are added here, as §10.1's second
+           case does for an in-flow box. */
         edge = css_px_add(css_px_add(o.y, used_value_leading_edge_px(spcb, true)),
                           block_flow_static_child_top(el));
     } else if (!trailing) {
-        /* §9.4.1's HORIZONTAL rule: "each box's left outer edge touches the left edge of the containing
-           block". The left OUTER edge is §8.1's margin edge, which is what §10.3.7 asks for, so the
-           hypothetical box's is its containing block's own left content edge and no placement is needed. */
+        /* §9.4.1's horizontal rule: "each box's left outer edge touches the left edge of the containing block".
+           The outer edge is §8.1's margin edge, what §10.3.7 asks for, so it is the block's left content edge. */
         edge = css_px_add(o.x, used_value_leading_edge_px(spcb, false));
     } else {
-        /* …"(for right-to-left formatting, right edges touch)", which is the same sentence's other half: the
-           hypothetical box's RIGHT margin edge is at the static-position containing block's right content
-           edge, which is its left one plus that box's own content width. */
+        /* "(for right-to-left formatting, right edges touch)": the right margin edge is at the block's right
+           content edge, its left one plus its content width. */
         edge = css_px_add(css_px_add(o.x, used_value_leading_edge_px(spcb, false)),
                           used_value_content_px(spcb, false));
     }
     cb_edge = fp_abs_cb_leading(el, vertical, true);
     if (!trailing) return css_px_sub(edge, cb_edge);
-    /* §10.3.7's `right` is measured from the containing block's RIGHT edge and is POSITIVE when the box is to
-       the LEFT of it, so the subtraction runs the other way and the rectangle's own extent is added to its
-       leading edge to reach that edge. §10.1's fourth case makes the extent the ancestor's PADDING box, which
-       is exactly what `used_value_containing_block_width` composes. */
+    /* §10.3.7's `right` is measured from the containing block's right edge, positive leftwards, so the
+       subtraction is reversed and the rectangle's extent (the ancestor's padding box under §10.1's fourth
+       case, `used_value_containing_block_width`) is added to reach that edge. */
     return css_px_sub(css_px_add(cb_edge, used_value_containing_block_width(el)), edge);
 }
 
-/* CSS 2 §9.3.2 "Box offsets: `top`, `right`, `bottom`, `left`"' PLACEMENT of an absolutely positioned box —
-   the two offsets §10.3.7 and §10.6.4 solved, over the rectangle §10.1's third or fourth case gave the box.
-   §10.3.7's constraint equation puts the box's leading BORDER edge at the containing block's leading edge
-   plus the used offset plus the used margin, and that sum is all there is to it: no ancestor's border and
-   padding are added, because §10.1's FOURTH case already names the PADDING edge as the rectangle and
-   `fp_abs_cb_leading` answers that edge rather than a content one. That is the one difference between this
-   composition and §10.1's second case below, and it is why the two do not share an arm. */
+/* CSS 2 §9.3.2 "Box offsets: `top`, `right`, `bottom`, `left`"' placement of an absolutely positioned box:
+   §10.3.7's equation puts its leading border edge at the containing block's leading edge plus the used offset
+   plus the used margin. No ancestor border or padding is added, because §10.1's fourth case is already the
+   padding edge (`fp_abs_cb_leading`); that is the difference from §10.1's second case below. */
 static FlowPoint fp_abs_origin(lxb_dom_element_t *el)
 {
     FlowPoint p;
@@ -961,45 +725,29 @@ static FlowPoint fp_abs_origin(lxb_dom_element_t *el)
     return p;
 }
 
-/* CSS 2.2 §9.4.3 "Relative positioning"' TRANSLATION ON ONE AXIS, OR ZERO WHERE THE SECTION DOES NOT APPLY.
-   THE ZERO IS A POSITIVE STATEMENT AND NOT A DEFAULT PAST A MISSING VALUE. §9.3.1's positioning scheme
-   decides which section places a box before any placement rule runs, and §9.4.3 is the one stated over a box
-   that "has been laid out according to the normal flow or floated" and is then "shifted relative to this
-   position". A box whose `position` is not `relative` is not shifted BY THAT SECTION — it is not a box whose
-   shift this file failed to find — so the translation is zero and `used_value_rel_offset_px` is never asked.
-   ONE TEST AND TWO READERS. The composition below and `fp_origin_agrees` above must add the SAME term or the
-   record stops satisfying its own equation, so the question is asked in one place rather than spelled at
-   both; that is the same reason §10.1's second case is composed once and re-derived once rather than twice. */
+/* CSS 2.2 §9.4.3 "Relative positioning"'s translation on one axis, or zero where the section does not apply.
+   §9.4.3 is stated over a box that "has been laid out according to the normal flow or floated" and is then
+   "shifted relative to this position"; a box whose `position` is not `relative` is not shifted by it. The
+   composition and `fp_origin_agrees` below must add the same term, so it is asked in one place. */
 static CssPx fp_relative_offset(lxb_dom_element_t *el, bool vertical)
 {
     if (!fp_computed_is(el, "position", "relative")) return css_px(0.0);
     return used_value_rel_offset_px(el, vertical);
 }
 
-/* §10.1's SECOND CASE, RE-DERIVED FROM THE RECORD, FOR AN ASSERTION AND FOR NOTHING ELSE — the check
-   core/layout/flow_placement.h's §10.1 section is written around.
-   IT IS TWO ANSWERS OFF TWO LINES AND THEY CAN DISAGREE. The recorded point was written by the arm below;
-   this reads the CONTAINING BLOCK'S point out of the same record, the box's own stack position out of the
-   OTHER record core/layout/block_flow.c fills, the two edge terms out of the CASCADE, and CSS 2.2 §9.4.3's
-   translation out of core/layout/used_value.h — four sources, one of which is a different component and two
-   of which are not records at all.
-   §9.4.3's TERM IS THE EQUATION'S FOURTH AND WAS ADDED WITH THE SHIFT ITSELF. The recorded point is the
-   normal-flow placement PLUS this box's own relative translation, so a re-derivation stating only §10.1's
-   three terms was correct exactly while no box in this engine was ever shifted — which was the whole of
-   §9.4.3's absence — and would now report every relatively positioned box as a record that has come
-   apart. A recorded point that no longer satisfies its own equation is the record answering for a box it
-   does not hold, or a computed value that moved inside a span nothing else can see move.
-   IT READS THE ANCESTOR RATHER THAN ASKING FOR IT, which is what keeps it O(1) and non-recursive: calling
-   the entry would trigger that entry's own check, and a check that recomputes through the checked entry is
-   exponential in depth. `flow_placement_origin_peek` counts nothing and recurses nowhere.
-   IT ANSWERS TRUE WHERE IT CANNOT SPEAK — no pass, a point from another arm, an ancestor or a stack position
-   this pass does not hold — and those are not silent passes: each is a state in which this file has no
-   second route to the number, which is exactly what `derived_from` being NULL records. */
-/* TWO LENGTHS' EXAMPLES, COMPARED FOR AN ASSERTION AND FOR NOTHING ELSE — the same private comparison
-   core/layout/flow_placement.c holds and for the same reason: a public equality over a `CssPx` is a
-   predicate a caller can branch on, and §Solver-half forbids a C branch on a concolic's EXAMPLE because it
-   deletes the arm the other world takes. Inside a `DCHECK` there is no arm to delete. NaN equals itself
-   here, because two runs of one derivation that both produced NaN agree. */
+/* §10.1's second case re-derived from the record, for an assertion only (the check core/layout/
+   flow_placement.h's §10.1 section is written around). It reads the containing block's recorded point, the
+   box's stack position from core/layout/block_flow.c's record, the edges from the cascade, and §9.4.3's
+   translation from core/layout/used_value.h, so it can disagree with the recorded point. A disagreement means
+   the record answered for a box it does not hold, or a computed value moved inside the pass.
+   It peeks rather than asks (`flow_placement_origin_peek` counts and recurses nowhere), keeping it O(1):
+   asking would trigger the ancestor's check, exponential in depth. It answers true where it cannot speak (no
+   pass, another arm's point, an ancestor or stack position not held), which `derived_from` being NULL
+   records. */
+/* Two lengths' examples compared, for an assertion only (as in core/layout/flow_placement.c): a public equality
+   over `CssPx` would let a caller branch on a concolic value's example and lose the other world's arm. Inside a
+   `DCHECK` there is no arm to lose. NaN equals itself here: two runs of one derivation both giving NaN
+   agree. */
 static bool fp_same_example(CssPx a, CssPx b)
 {
     return a.px == b.px || (a.px != a.px && b.px != b.px);
@@ -1016,40 +764,34 @@ static bool fp_origin_agrees(lxb_dom_element_t *el, const lxb_dom_element_t *cb,
     x = css_px_add(css_px_add(o.x, used_value_leading_edge_px((lxb_dom_element_t *)cb, false)),
                    fp_left_offset(el, used_value_containing_block_width(el)));
     y = css_px_add(css_px_add(o.y, used_value_leading_edge_px((lxb_dom_element_t *)cb, true)), top);
-    /* CSS 2.2 §9.4.3's TERM, WHICH IS PART OF THE EQUATION AND NOT A CORRECTION TO IT. The recorded point is
-       the normal-flow placement PLUS this box's own relative translation (see `flow_border_box_origin`), so a
-       re-derivation that stopped at §10.1's three terms would report every relatively positioned box in the
-       document as a record that no longer satisfies its equation. The ANCESTOR's translation needs no term
-       here: `o` is the containing block's own RECORDED point, which already carries it. */
+    /* CSS 2.2 §9.4.3's term is part of the equation: the recorded point includes this box's relative
+       translation (see `flow_border_box_origin`). The ancestor's needs no term: `o` is its recorded point,
+       which carries it. */
     x = css_px_add(x, fp_relative_offset(el, false));
     y = css_px_add(y, fp_relative_offset(el, true));
     return fp_same_example(x, rec.x) && fp_same_example(y, rec.y);
 }
 
-/* CSS 2 §8.1 "Box dimensions"' BORDER BOX, PLACED THROUGH §10.1's CASES — the origin itself, with the
-   arm it took reported to its caller. `*cb_out` is the containing
-   block for §10.1's SECOND case and stays NULL for every other arm, which is the one thing the record needs
-   to know about how a point was produced — see core/layout/flow_placement.h. */
+/* CSS 2 §8.1 "Box dimensions"' border box, placed through §10.1's cases. `*cb_out` is the containing block for
+   §10.1's second case and stays NULL for every other arm, which is all the record needs to know about how a
+   point was produced (core/layout/flow_placement.h). */
 static FlowPoint fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_dom_element_t **cb_out)
 {
     FlowPoint p = { { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL } };
     lxb_dom_node_t *n;
     lxb_dom_element_t *cb;
     FlowPoint o;
-    /* `vbuf` holds a computed value at two sites and a NODE NAME at the third, so it is sized for the wider of
-       the two rather than for the value it happens to carry first. */
+    /* `vbuf` holds a computed value at two sites and a node name at the third, so it is sized for the wider. */
     char nbuf[160], vbuf[160];
 
     DCHECK(el != NULL, "a border box's position was asked for with no element");
     n = lxb_dom_interface_node(el);
 
-    /* §9.4.1 PLACES BOXES IN NORMAL FLOW, so a box that is not in one leaves through its own section first —
-       §9.3's positioning scheme is what decides which, and it decides it before any placement rule applies. */
-    /* CSS 2 §9.3.1 takes an ABSOLUTELY POSITIONED box out of normal flow, so §9.4.1's placement does not
-       apply to it at all: its position is §9.3.2's `top`/`right`/`bottom`/`left` resolved against the
-       containing block §10.1's third and fourth cases give it, and §10.6.4 solves the vertical pair the same
-       way §10.3.7 solves the horizontal one. Both sections fall back on the STATIC POSITION for their `auto`
-       cases, which is why this is a CONSUMER of §9.4.1's flow layout and not an alternative to it. */
+    /* §9.4.1 places boxes in normal flow; §9.3's positioning scheme sends other boxes to their own sections
+       first. */
+    /* CSS 2 §9.3.1 takes an absolutely positioned box out of normal flow: its position is §9.3.2's offsets over
+       §10.1's third or fourth case, solved by §10.3.7 and §10.6.4, whose `auto` cases use the static
+       position, so this consumes §9.4.1's flow layout. */
     if (fp_computed_is(el, "position", "absolute") || fp_computed_is(el, "position", "fixed"))
         return fp_abs_origin(el);
     if (!fp_computed_is(el, "float", "none"))
@@ -1087,22 +829,13 @@ static FlowPoint fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_d
               "ANSWERED rather than refused, since the ordering it corrects is then visible in the tree",
               box_subject(el, nbuf, sizeof nbuf), box_subject_computed(el, "float", vbuf, sizeof vbuf));
     fp_require_horizontal_tb(el);
-    /* §9.4's TWO NORMAL-FLOW FORMATTING CONTEXTS ARE ALTERNATIVES, and which one places a box is its own
-       inline-or-block LEVEL — §9.4.1 is written about a block-level box and §9.4.2 about the boxes on a line.
-       A box on a line therefore leaves through its own section HERE, before the classification below, exactly
-       as a float and an out-of-flow box leave through theirs above: the two rules at the end of this function
-       are §9.4.1's and say nothing about a box on a line box. */
+    /* §9.4's two normal-flow contexts are alternatives chosen by level, so a box on a line leaves through
+       §9.4.2 here, like floats and out-of-flow boxes above. */
     if (fp_is_on_a_line_box(el)) return fp_line_box_origin(el);
-    /* CSS 2.1 §17.5 Visual layout of table contents PLACES A ROW BOX AND A CELL BOX, and they leave HERE for
-       the reason a box on a line box does: §9.4.1's two rules are not an approximation of §17.5's grid, they
-       are a different algorithm over a different containing rectangle, so neither may fall through to them.
-       THEY ARE FIVE LINES AND ONE ANSWER — `fp_table_grid_origin` places a rectangle of grid cells and rules
-       1, 2 and 5 differ only in which rectangle — so a reader who takes them for three placements will build
-       the next one again. §17.2's THREE row group displays are ONE box type and are spelled out rather than
-       classified through `table_box_kind_is_row_group` because that predicate is stated over a `TableBoxKind`
-       and this test is stated over the computed `display` string, exactly as the two above it are; routing
-       through the enum would put a second classification of the same six values in this file.
-       The other THREE table-internal boxes still crash below, each naming what §17.5 leaves it waiting on. */
+    /* CSS 2.1 §17.5 Visual layout of table contents places row, cell and row group boxes, which must not fall
+       through to §9.4.1's rules; all go through `fp_table_grid_origin`. The three row group displays are
+       spelled as strings, like the tests above, rather than routed through `table_box_kind_is_row_group`'s
+       enum. The other three table-internal boxes are refused in `fp_require_placeable`. */
     if (fp_computed_is(el, "display", "table-row")) return fp_table_row_origin(el);
     if (fp_computed_is(el, "display", "table-cell")) return fp_table_cell_origin(el);
     if (fp_computed_is(el, "display", "table-row-group") ||
@@ -1111,12 +844,10 @@ static FlowPoint fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_d
         return fp_table_row_group_origin(el);
     fp_require_placeable(el);
 
-    /* §10.1's FIRST CASE, which is §9.4.1's base case as well: the root element's containing block is the ICB,
-       "anchored at the canvas origin", so both of §9.4.1's rules reduce to this box's own two margins.
-       VERTICALLY, "boxes are laid out one after the other, vertically, beginning at the top of a containing
-       block" — there is no preceding sibling, so the box begins at the ICB's top, and §8.3.1 'Collapsing
-       margins' states that "margins of the root element's box do not collapse", so the distance from that top
-       to the border edge is the root's OWN used `margin-top` and not a collapsed one. */
+    /* §10.1's first case, §9.4.1's base case: the root's containing block is the ICB, "anchored at the canvas
+       origin", so both rules reduce to its own margins. With no preceding sibling it begins at the ICB's top,
+       and "margins of the root element's box do not collapse" (§8.3.1 'Collapsing margins'), so the vertical
+       distance is its own used `margin-top`. */
     if (fp_is_root(n)) {
         p.x = fp_left_offset(el, fp_icb_width(el));
         /* §9.4.1's vertical rule at the top of the containing block, with §8.3.1's root-element exception. */
@@ -1124,15 +855,11 @@ static FlowPoint fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_d
         return p;
     }
 
-    /* §10.1's SECOND CASE, and §9.4.1's inductive step: the containing block is "the CONTENT EDGE of the
-       nearest block container ancestor box", so this box's origin is that box's origin plus its own top and
-       left border and padding — the two edges CSS 2 §8.1 nests between a border box and a content box — plus
-       what §9.4.1 puts between the content edge and this box. HORIZONTALLY that is the same left-outer-edge
-       touching the root arm above states, over the containing block's width rather than the ICB's. VERTICALLY
-       it is core/layout/block_flow.h's walk: the used height of every preceding in-flow sibling with §8.3.1's
-       collapsing between them, which is the one subproblem §10.6.3's content-based height was waiting on too.
-       THE RECURSION TERMINATES AT THE ROOT, whose containing block is §10.1's first case — the ICB, which is
-       no element's box — so `used_value_containing_block` answering NULL is exactly the arm above. */
+    /* §10.1's second case, §9.4.1's inductive step: the containing block is "the content edge of the nearest
+       block container ancestor box", so the origin is that box's origin plus its leading border and padding
+       (§8.1) plus §9.4.1's offsets: horizontally the same touching rule over the containing block's width,
+       vertically core/layout/block_flow.h's stack (preceding in-flow siblings' used heights with §8.3.1's
+       collapsing). It terminates at the root, whose containing block (the ICB) is no element's box. */
     cb = used_value_containing_block(el);
     DCHECKF(cb != NULL,
            "%s, parent %s: "
@@ -1144,22 +871,16 @@ static FlowPoint fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_d
     p.x = css_px_add(css_px_add(o.x, used_value_leading_edge_px(cb, false)),
                      fp_left_offset(el, used_value_containing_block_width(el)));
     p.y = css_px_add(css_px_add(o.y, used_value_leading_edge_px(cb, true)), block_flow_child_top(el));
-    /* THE ONE ARM WITH A SECOND ROUTE TO ITS OWN NUMBER, REPORTED AS SUCH. Every other arm above derives its
-       point some other way and leaves `*cb_out` NULL, which is the record saying that this file has no
-       equation to check it against rather than a caller inferring one. */
+    /* The one arm with a second route to its number, reported through `*cb_out`; the others leave it NULL. */
     *cb_out = cb;
     return p;
 }
 
-/* CSS 2 §8.1 "Box dimensions"' BORDER-BOX ORIGIN, ASKED OF THE PASS FIRST.
-   THE COST THIS REMOVES IS A RECURSION AND NOT A WALK, which is why a remembered return value is the right
-   instrument here and the wrong one one component over — core/layout/flow_placement.h argues both halves.
-   §10.1's second case derives a box's point from its CONTAINING BLOCK's, so the body above climbs the chain
-   on every ask: over a document N levels deep, N boxes asked about a constant number of times each cost
-   O(N) apiece and the total is quadratic in DEPTH. With the pass answering, a climb terminates at the first
-   ancestor already derived, so a whole pass derives one point per box.
-   OUTSIDE A PASS NOTHING IS HELD AND NOTHING IS ANSWERED, so a page reading `offsetTop` between two renders
-   gets the same freshly-climbed number it always did. */
+/* CSS 2 §8.1 "Box dimensions"' border-box origin, asked of the pass first. The cost removed is a recursion:
+   §10.1's second case climbs the containing-block chain per ask, quadratic in depth over a document; within a
+   pass a climb stops at the first ancestor already derived (core/layout/flow_placement.h explains why
+   remembering suits a recursion but not a walk). Outside a pass nothing is held, so `offsetTop` between two
+   renders climbs afresh. */
 FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
 {
     FlowPoint                p;
@@ -1185,39 +906,25 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
         return p;
     }
     p = fp_border_box_origin_compute(el, &cb);
-    /* CSS 2.2 §9.4.3 "Relative positioning", APPLIED HERE BECAUSE IT IS A SHIFT OF A PLACEMENT AND NOT A
-       PLACEMENT RULE: "Once a box has been laid out according to the normal flow or floated, it may be
-       shifted relative to this position." Every arm of the composition above answers §9.4.1's, §9.4.2's,
-       §17.5's or §10.1's placement, and §9.4.3 is stated over ALL of them — so it is one term at the one
-       point they converge rather than an addition repeated down each arm, and a new arm cannot forget it.
-       THE RECORD CARRIES THE SHIFTED POINT, WHICH IS WHAT MAKES THE RECURSION CORRECT. §10.1's second case
-       composes a box's origin from its containing block's, so a descendant of a relatively positioned box
-       inherits that box's translation through this same entry with no term of its own — which is why
-       `position: relative` on a parent moves its `position: absolute` child too: `fp_abs_cb_leading`'s
-       §10.1 fourth case reads `flow_padding_box_origin` of that ancestor, and that is this point.
-       §9.4.3's SENTENCE ABOUT THE FOLLOWING BOX HOLDS BY CONSTRUCTION AND IS NOT A CASE HANDLED HERE:
-       "Offsetting a box (B1) in this way has no effect on the box (B2) that follows: B2 is given a position
-       as if B1 were not offset and B2 is not re-positioned after B1's offset is applied." A following
-       sibling's stack position is `block_flow_child_top`, which core/layout/block_flow.c
-       derives from used heights and §8.3.1's collapsing margins and which calls no entry in this file at all
-       — so a sibling's offset is not an input it could read. THAT IS A PROPERTY OF THE OTHER COMPONENT AND
-       NOT OF THIS LINE: a diff that gave the stack walk a border-box origin would break §9.4.3's sentence
-       here with nothing in this file changing.
-       THE TABLE-INTERNAL ARMS TAKE THIS TERM AND THE SECTION PERMITS IT. §9.3.1's `position` value table says
-       "The effect of 'position:relative' on table-row-group, table-header-group, table-footer-group,
-       table-row, table-column-group, table-column, table-cell, and table-caption elements is undefined." That
-       is LATITUDE and not a rule to do nothing, so applying the general term to them is conformant, is what
-       user agents do, and is one behaviour rather than a special case no fixture could exercise. */
+    /* CSS 2.2 §9.4.3 "Relative positioning", applied once here because it shifts any placement: "Once a box has
+       been laid out according to the normal flow or floated, it may be shifted relative to this position."
+       The record carries the shifted point, so descendants inherit the translation through §10.1's second
+       case, and a `position: absolute` child of a relative parent moves too (`fp_abs_cb_leading` reads that
+       parent's `flow_padding_box_origin`).
+       "Offsetting a box (B1) in this way has no effect on the box (B2) that follows" holds because
+       `block_flow_child_top` derives from used heights and §8.3.1 and calls nothing in this file; a stack walk
+       that read a border-box origin would break it without this file changing.
+       Table-internal boxes take the term too: §9.3.1 says "The effect of 'position:relative' on
+       table-row-group, table-header-group, table-footer-group, table-row, table-column-group, table-column,
+       table-cell, and table-caption elements is undefined", which permits it, as browsers do. */
     p.x = css_px_add(p.x, fp_relative_offset(el, false));
     p.y = css_px_add(p.y, fp_relative_offset(el, true));
     flow_placement_origin_record(el, p, cb);
     return p;
 }
 
-/* CSS 2 §8.1 "Box dimensions"' PADDING BOX ORIGIN — the border box origin above moved inward by the ONE leading
-   border on each axis. It is a second ENTRY and not a second answer: both coordinates come from
-   `flow_border_box_origin`, so a box this component cannot place crashes there, by its own section, before a
-   padding edge is ever asked for. */
+/* CSS 2 §8.1 "Box dimensions"' padding box origin: the border box origin moved inward by the leading border on
+   each axis, derived from `flow_border_box_origin` so an unplaceable box crashes there first. */
 FlowPoint flow_padding_box_origin(lxb_dom_element_t *el)
 {
     FlowPoint p = flow_border_box_origin(el);
